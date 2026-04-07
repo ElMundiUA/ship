@@ -22,6 +22,8 @@ jobs:
       contents: read
     outputs:
       image: ${{ steps.set-image.outputs.image }}
+      # Immutable tag for Bunny (matches docker/metadata type=sha prefix=sha- format=short)
+      deploy_image_tag: ${{ steps.deploy-tag.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
 
@@ -48,6 +50,13 @@ jobs:
           tags: |
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
             type=sha,prefix=sha-,format=short
+
+      - name: Resolve deploy tag (SHA, not latest)
+        id: deploy-tag
+        run: |
+          short="${GITHUB_SHA:0:7}"
+          echo "tag=sha-${short}" >> "$GITHUB_OUTPUT"
+          echo "Bunny will deploy **sha-${short}** (same tag pushed to the registry)." >> "$GITHUB_STEP_SUMMARY"
 
       - uses: docker/build-push-action@v5
         with:
@@ -89,7 +98,7 @@ jobs:
           SHIP_MC_APP_NAME: ${{ vars.SHIP_MC_APP_NAME || 'ship-docs' }}
           DOCKER_IMAGE_NAME: ${{ vars.DOCKER_IMAGE_NAME || 'dekus/ship-docs' }}
           MC_CONTAINER_NAME: ${{ vars.BUNNY_CONTAINER_NAME || 'Container-1' }}
-          IMAGE_TAG: latest
+          IMAGE_TAG: ${{ needs.build-push.outputs.deploy_image_tag }}
         run: node scripts/bunny-ship-docs.mjs ensure
 
       - name: Point container at new image (Bunny action)
@@ -98,7 +107,7 @@ jobs:
           app_id: ${{ steps.mc.outputs.app_id }}
           api_key: ${{ secrets.BUNNY_MAIN_API_KEY || secrets.BUNNYNET_API_KEY }}
           container: ${{ steps.mc.outputs.mc_container_name }}
-          image_tag: latest
+          image_tag: ${{ needs.build-push.outputs.deploy_image_tag }}
 
       # PATCH image tag alone may not roll pods; explicit deploy triggers rollout.
       - name: Trigger Magic Container deploy (rollout)
