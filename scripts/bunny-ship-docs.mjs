@@ -186,7 +186,16 @@ async function ensure() {
         throw new Error(`Create app ${created.status}: ${created.text}`);
       }
     }
-    if (!created.ok) throw new Error(`Create app ${created.status}: ${created.text}`);
+    if (!created.ok) {
+      const hint =
+        created.status === 500
+          ? " Bunny often returns 500 here for account/billing/API issues (not invalid JSON). " +
+            "Workaround: create a Magic Container app named \"" +
+            appName +
+            "\" in the Bunny dashboard (or set repo variable BUNNY_APP_ID), then re-run this workflow."
+          : "";
+      throw new Error(`Create app ${created.status}: ${created.text}${hint}`);
+    }
     appId = String(created.json?.id || "");
     if (!appId) throw new Error(`Create app: no id in response: ${created.text}`);
 

@@ -60,10 +60,12 @@ docker run --rm -p 8080:8080 ship-docs:local
 |----------|---------|
 | `DOCKER_IMAGE_NAME` | Default `dekus/ship-docs` |
 | `DOCKERHUB_USERNAME` | Default `dekus` |
-| `BUNNY_APP_ID` | After first successful run, you can paste the app id from the job log to skip re-listing (optional optimisation) |
+| `BUNNY_APP_ID` | Magic Container **application id** (UUID). If `POST …/mc/apps` returns **500** from Bunny’s side, create the app once in **Dashboard → Magic Containers** (name must match `SHIP_MC_APP_NAME`, default `ship-docs`) **or** paste its id here — the script then skips create and only deploys/updates image. |
 | `BUNNY_CONTAINER_NAME` | Container template name inside the app — default **`ship`** (must match workflow + script) |
 | `SHIP_MC_APP_NAME` | Magic Container app name — default **`ship-docs`** (ASCII, no spaces) |
 | `BUNNY_REGION_IDS` | Optional — comma regions for `allowedRegionIds` (default `DE,UK,US`) |
+
+**Troubleshooting — `Create app 500` on first deploy:** the workflow uses a minimal, OpenAPI-shaped body; repeated **HTTP 500** on `POST https://api.bunny.net/mc/apps` is a **Bunny platform/account** response (billing, Magic Containers entitlement, or transient outage), not a bad payload from this repo. **Workaround:** create the app manually with display name **`ship-docs`** (or set **`BUNNY_APP_ID`**), then push again — listing apps works without creating.
 
 **DNS for `ship.elmundi.com`:** after a green deploy, open the workflow **summary** on GitHub — it lists the default Bunny host and CNAME steps. In short: in Bunny, add **custom hostname** `ship.elmundi.com` on the app endpoint; at DNS, **`CNAME` `ship` → target Bunny shows** (use their exact value, not guessed).
 
