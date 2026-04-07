@@ -1,0 +1,81 @@
+# Ship — MkDocs + Material (English only; *.uk.md excluded)
+# Repo: https://github.com/ElMundiUA/ship — build: pip install -r requirements-docs.txt && mkdocs serve
+# Production: https://ship.elmundi.com
+
+site_name: Ship — The Framework That Ships Software
+site_url: https://ship.elmundi.com/
+site_description: >-
+  Ship — governed SDLC automation: tracker, scheduler, deterministic picks, versioned prompts.
+  Documentation v1.0.0.
+site_author: Denys Kuzin
+copyright: Copyright &copy; 2026 Denys Kuzin. All rights reserved.
+
+repo_url: https://github.com/ElMundiUA/ship
+edit_uri: edit/main/docs/
+
+docs_dir: docs
+site_dir: site
+
+exclude_docs: |
+  archive/**
+  **/*.uk.md
+
+extra:
+  doc_version: "1.0.0"
+  generator: false
+
+hooks:
+  - hooks/d2_prebuild.py
+
+theme:
+  name: material
+  language: en
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.tracking
+    - navigation.expand
+    - toc.integrate
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: teal
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: teal
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+extra_css:
+  - stylesheets/extra.css
+
+markdown_extensions:
+  - admonition
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.details
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+
+plugins:
+  - search:
+      lang: en
+
+nav:
+  - Start here: index.md
+  - Part I — Framework: framework/index.md
+  - Part II — Prompts & workflows: prompts-workflows/index.md
+  - Part III — Tools: tools/index.md
+  - Part IV — Examples:
+      - ElMundi (reference deployment): examples/elmundi/index.md

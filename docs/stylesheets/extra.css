@@ -1,0 +1,125 @@
+/* Docs version chip (see mkdocs.yml extra.doc_version) */
+.md-header__topic {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+/* Sync with mkdocs.yml → extra.doc_version */
+.md-header__topic::after {
+  content: "docs v1.0.0";
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--md-primary-fg-color) 35%, transparent);
+  color: var(--md-primary-fg-color);
+  background: color-mix(in srgb, var(--md-primary-fg-color) 12%, transparent);
+}
+
+/* SDLC board (HTML in framework chapter “The system”, inlined on framework/index.md) */
+.ship-sdlc-board {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.6rem;
+  margin: 1.25rem 0 1.5rem;
+  font-size: 0.9375rem;
+  line-height: 1.5;
+}
+
+@media (max-width: 76.25em) {
+  .ship-sdlc-board {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 44.9375em) {
+  .ship-sdlc-board {
+    grid-template-columns: 1fr;
+  }
+}
+
+.ship-sdlc-col {
+  margin: 0;
+  min-width: 0;
+  border: 1px solid var(--md-default-fg-color--lightest, rgba(0, 0, 0, 0.12));
+  border-radius: 0.5rem;
+  overflow: hidden;
+  background: var(--md-default-bg-color);
+}
+
+.ship-sdlc-col__title {
+  margin: 0;
+  padding: 0.55rem 0.75rem;
+  font-size: 1.02rem;
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: 0.01em;
+  border-bottom: 1px solid var(--md-default-fg-color--lightest, rgba(0, 0, 0, 0.1));
+}
+
+.ship-sdlc-col__body {
+  padding: 0.65rem 0.75rem 0.8rem;
+}
+
+.ship-sdlc-col__body p {
+  margin: 0 0 0.5rem;
+  font-size: 0.9375rem;
+}
+
+.ship-sdlc-col__body p:last-child {
+  margin-bottom: 0;
+}
+
+.ship-sdlc-col__body code {
+  font-size: 0.88em;
+}
+
+/* Human lanes — warm header */
+.ship-sdlc-col--human .ship-sdlc-col__title {
+  background: color-mix(in srgb, #ff9800 22%, var(--md-default-bg-color));
+  color: var(--md-default-fg-color);
+}
+
+.ship-sdlc-col--human .ship-sdlc-col__body {
+  background: color-mix(in srgb, #ff9800 8%, var(--md-default-bg-color));
+}
+
+/* Agent-heavy lanes — cool green header */
+.ship-sdlc-col--auto .ship-sdlc-col__title {
+  background: color-mix(in srgb, #43a047 22%, var(--md-default-bg-color));
+  color: var(--md-default-fg-color);
+}
+
+.ship-sdlc-col--auto .ship-sdlc-col__body {
+  background: color-mix(in srgb, #43a047 8%, var(--md-default-bg-color));
+}
+
+/* Long-form reading: cap line length on wide layouts (mobile/tablet unchanged) */
+@media (min-width: 76.25em) {
+  .md-content__inner.md-typeset {
+    box-sizing: border-box;
+    max-width: 48rem;
+    margin-inline: auto;
+  }
+}
+
+/* Extra “chapter breath” above section headings (excludes SDLC card titles) */
+.md-content__inner.md-typeset h2 {
+  margin-top: 2.25rem;
+}
+
+.md-content__inner.md-typeset h3:not(.ship-sdlc-col__title) {
+  margin-top: 1.6rem;
+}
+
+/*
+ * Optional wrapper for manual chapter blocks in Markdown, e.g. <div class="ship-chapter" markdown="1">...</div>
+ * Keeps default flow; extend here only if you need chapter-specific spacing beyond h2/h3 rules above.
+ */
+.ship-chapter {
+  scroll-margin-top: 0.5rem;
+}

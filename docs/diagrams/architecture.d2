@@ -1,0 +1,50 @@
+# ElMundi automation — system context (D2)
+# Render: d2 architecture.d2 architecture.svg
+
+direction: down
+
+classes: {
+  linear: {style.fill: "#e8eaf6"; style.stroke: "#3949ab"}
+  gha: {style.fill: "#e3f2fd"; style.stroke: "#1565c0"}
+  cursor: {style.fill: "#fff3e0"; style.stroke: "#ef6c00"}
+  human: {style.fill: "#f3e5f5"; style.stroke: "#7b1fa2"}
+}
+
+human: Human & policy {
+  class: human
+  backlog: Backlog (manual triage)
+  todo: Todo + project filters
+}
+
+linear: Linear (system of record) {
+  class: linear
+  pre: Project «ElMundi pre-release»
+  td: Project «ElMundi tech debt»
+  sec: Project «ElMundi security»
+}
+
+gha: GitHub Actions (orchestrator) {
+  class: gha
+  sdlc: linear-agent-sdlc-scheduled.yml
+  audit: linear-agent-daily-audits.yml
+  heal: workflow-self-heal.yml
+  pick: pick-*.mjs (deterministic selection)
+  snyk: Snyk test (deps)
+}
+
+cursor: Cursor Cloud Agent {
+  class: cursor
+  api: Agents API
+  run: Isolated branch + tools
+}
+
+human.todo -> linear.pre: Issues in scope
+gha.sdlc -> gha.pick
+gha.pick -> cursor.api: issue id + prompt bundle
+cursor.run -> linear: Comments, states, PRs
+gha.audit -> cursor.api: tech / QA (issue=NONE)
+gha.audit -> gha.snyk
+gha.snyk -> cursor.api: Snyk JSON if vuln > 0
+cursor.run -> linear.td: Audit findings
+cursor.run -> linear.sec: Security tickets
+gha.heal -> cursor.api: On CI findings + config

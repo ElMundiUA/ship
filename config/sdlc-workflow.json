@@ -1,0 +1,51 @@
+{
+  "version": "2.0",
+  "description": "SDLC automation: 6-column Linear board + Cursor Automations",
+  "workflow": {
+    "columns": 6,
+    "statuses": [
+      { "name": "Backlog", "type": "backlog", "color": "#95a2b3", "position": 0 },
+      { "name": "Todo", "type": "unstarted", "color": "#26b5ce", "position": 1 },
+      { "name": "In Progress", "type": "started", "color": "#5e6ad2", "position": 2 },
+      { "name": "In Review", "type": "started", "color": "#0d9488", "position": 3 },
+      { "name": "Done", "type": "completed", "color": "#22c55e", "position": 4 },
+      { "name": "Blocked", "type": "unstarted", "color": "#6b7280", "position": 5 }
+    ],
+    "transitions": [
+      "Backlog → Todo",
+      "Todo → In Progress",
+      "In Progress → In Review",
+      "In Review → In Progress",
+      "In Review → Done",
+      "* → Blocked"
+    ],
+    "stateMapping": {
+      "Clarification": "Todo",
+      "Spec Ready": "Todo",
+      "Ready for Dev": "Todo",
+      "In Development": "In Progress",
+      "PR Opened": "In Review",
+      "Fixing Checks": "In Progress",
+      "Preview Validation": "In Review",
+      "Fixing Preview": "In Progress",
+      "QA Testing": "In Review",
+      "Human Validation": "In Review"
+    }
+  },
+  "labels": {
+    "routing": ["ready:developer", "ready:qa", "ready:human"],
+    "stage": ["stage:intake", "stage:developer"],
+    "exception": ["needs:clarification", "human:review-required", "auto:failed", "auto:retry", "infra:deployment"]
+  },
+  "automations": {
+    "A1": { "name": "Intake", "trigger": "Linear Issue Created", "runOnce": true },
+    "A2": { "name": "Clarification", "trigger": "GitHub schedule :25 UTC even hours", "runOnce": false },
+    "A3": { "name": "BA/Spec", "trigger": "GitHub schedule :40 UTC even hours", "runOnce": false },
+    "A4": { "name": "Developer", "trigger": "GitHub linear-agent-sdlc-scheduled.yml" },
+    "A5": { "name": "PR Self-Review", "trigger": "GitHub PR" },
+    "A6": { "name": "Check Recovery", "trigger": "Webhook" },
+    "A7": { "name": "Preview Validation", "trigger": "Webhook" },
+    "A10": { "name": "Human Handoff", "trigger": "GitHub SDLC grid", "runOnce": false },
+    "A11": { "name": "Retry Sweep", "trigger": "Schedule 6h" }
+  }
+}

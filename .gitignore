@@ -1,0 +1,11 @@
+site/
+.venv-docs/
+node_modules/
+.env
+.env.*
+!.env.example
+
+.DS_Store
+artifacts/
+hooks/__pycache__/
+**/__pycache__/
