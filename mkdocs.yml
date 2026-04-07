@@ -6,7 +6,7 @@ site_name: Ship — The Framework That Ships Software
 site_url: https://ship.elmundi.com/
 site_description: >-
   Ship — governed SDLC automation: tracker, scheduler, deterministic picks, versioned prompts.
-  Documentation v1.0.0.
+  Documentation v0.6.0.
 site_author: Denys Kuzin
 copyright: Copyright &copy; 2026 Denys Kuzin. All rights reserved.
 
@@ -21,7 +21,7 @@ exclude_docs: |
   **/*.uk.md
 
 extra:
-  doc_version: "1.0.0"
+  doc_version: "0.6.0"
   generator: false
 
 hooks:

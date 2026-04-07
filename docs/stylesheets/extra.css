@@ -8,7 +8,7 @@
 
 /* Sync with mkdocs.yml → extra.doc_version */
 .md-header__topic::after {
-  content: "docs v1.0.0";
+  content: "docs v0.6.0";
   font-size: 0.65rem;
   font-weight: 600;
   letter-spacing: 0.04em;

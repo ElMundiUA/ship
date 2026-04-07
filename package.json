@@ -1,7 +1,7 @@
 {
   "name": "linear-agent",
-  "version": "1.0.0",
-  "description": "Linear + GitHub Actions + Cursor Cloud Agent tooling (docs v1.0.0)",
+  "version": "0.6.0",
+  "description": "Linear + GitHub Actions + Cursor Cloud Agent tooling (docs v0.6.0)",
   "main": "index.js",
   "directories": {
     "doc": "docs"

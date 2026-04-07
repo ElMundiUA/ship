@@ -5,7 +5,7 @@
 This repository (**[ElMundiUA/ship](https://github.com/ElMundiUA/ship)**) is the **standalone** framework package (manual + Node CLI + `cloud-prompts/` + `scripts/`). It was extracted from the ElMundi monorepo path `tools/linear-agent/`; **[ElMundiUA/elmundi](https://github.com/ElMundiUA/elmundi)** may keep that path as a **mirror** until it switches to a submodule or version pin of **ship**.
 
 **Docs (live):** [ship.elmundi.com](https://ship.elmundi.com) when deployed.  
-**Package / docs version:** `1.0.0` — keep in sync with `mkdocs.yml` → `extra.doc_version` and `docs/stylesheets/extra.css` header chip.
+**Package / docs version:** `0.6.0` — keep in sync with `mkdocs.yml` → `extra.doc_version` and `docs/stylesheets/extra.css` header chip.
 
 ## Documentation (MkDocs)
 

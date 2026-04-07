@@ -1,6 +1,6 @@
 # Ship
 
-**Version** 1.0.0 — see [Documentation versioning](#documentation-versioning).
+**Version** 0.6.0 — see [Documentation versioning](#documentation-versioning).
 
 **Ship** is the framework; this site is the manual. It is meant to read like a **short book** — opinionated, mostly **linear**, and **split on purpose** into parts you open from the top tabs.
 
@@ -59,7 +59,7 @@ The **Ship** package lives in **[ElMundiUA/ship](https://github.com/ElMundiUA/sh
 
 **ElMundi** still wires it inside **[ElMundiUA/elmundi](https://github.com/ElMundiUA/elmundi)** under `tools/linear-agent/` (mirror until we submodule or pin **ship**). **Ship** as a **pattern** does not depend on either path. **Examples → ElMundi** does — it is “how that monorepo runs Ship today.”
 
-**Version** 1.0.0 (header chip) — see [Documentation versioning](#documentation-versioning) on this page.
+**Version** 0.6.0 (header chip) — see [Documentation versioning](#documentation-versioning) on this page.
 
 ### Also on this site
 
@@ -148,7 +148,7 @@ Prefer **operational** measures over magic ROI slides:
 
 ### Current version
 
-- **1.0.0** — shown in the site header chip (`docs v1.0.0`), referenced from this page (**Ship**) and [Legal & copyright](legal-copyright.md). Canonical site URL: `mkdocs.yml` → `site_url` (https://ship.elmundi.com/).
+- **0.6.0** — shown in the site header chip (`docs v0.6.0`), referenced from this page (**Ship**) and [Legal & copyright](legal-copyright.md). Canonical site URL: `mkdocs.yml` → `site_url` (https://ship.elmundi.com/).
 - Source of truth: `mkdocs.yml` → `extra.doc_version` (keep **in sync** with the chip in `docs/stylesheets/extra.css`).
 
 ### Policy (practical)

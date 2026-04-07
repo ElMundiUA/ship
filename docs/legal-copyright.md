@@ -4,7 +4,7 @@
 
 **Year:** 2026  
 
-**Documentation version:** 1.0.0 (see site header chip and `mkdocs.yml` / `extra.doc_version`).
+**Documentation version:** 0.6.0 (see site header chip and `mkdocs.yml` / `extra.doc_version`).
 
 ## Customer-facing packs
 
