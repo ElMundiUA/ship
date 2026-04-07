@@ -1,0 +1,23 @@
+# Keep build context small — Dockerfile only needs docs/, hooks/, mkdocs.yml, requirements-docs.txt
+.git
+.github
+.venv-docs
+site
+node_modules
+dist
+**/__pycache__
+*.pyc
+.DS_Store
+.env
+.env.*
+artifacts
+examples
+cloud-prompts
+prompts
+src
+config
+scripts
+package.json
+package-lock.json
+tsconfig.json
+*.ts
