@@ -1,0 +1,82 @@
+# ElMundi reference — delivery lane: Linear columns × SDLC grid (D2)
+# Render: d2 sdlc-linear-states.d2 sdlc-linear-states.svg
+#
+# Colours aligned with documentation/diagrams/architecture.d2
+
+direction: right
+
+classes: {
+  human: {
+    style.fill: "#f3e5f5"
+    style.stroke: "#7b1fa2"
+    style.stroke-width: 2
+  }
+  linear: {
+    style.fill: "#e8eaf6"
+    style.stroke: "#3949ab"
+    style.stroke-width: 2
+  }
+  grid: {
+    style.fill: "#fff3e0"
+    style.stroke: "#ef6c00"
+    style.stroke-width: 2
+  }
+  terminal: {
+    style.fill: "#eceff1"
+    style.stroke: "#546e7a"
+    style.stroke-width: 2
+  }
+}
+
+human: Human gate {
+  class: human
+  bl: Backlog
+  note: |md
+    **No pick** from this column — triage only
+  |
+}
+
+board: Linear (delivery project) {
+  class: linear
+  td: Todo
+  ip: In Progress
+  ir: In Review
+  dn: Done
+  bk: Blocked
+}
+
+schedule: SDLC grid (UTC, even hours) {
+  class: grid
+  in: ":10 intake"
+  cl: ":25 clarification"
+  ba: ":40 BA"
+  dv: ":55 developer"
+}
+
+human.bl -> board.td: Promote to Todo
+
+board.td -> schedule.in: Pick pool
+board.td -> schedule.cl: Pick pool
+board.td -> schedule.ba: Pick pool
+board.td -> schedule.dv: Pick when ready for dev
+
+schedule.in -> board.td: Update labels, stay on Todo
+schedule.cl -> board.td: After answers, stay on Todo
+schedule.ba -> board.td: Spec + handoff, stay on Todo
+
+schedule.dv -> board.ip: cli start · branch fix ISSUE auto
+
+board.ip -> board.ir: PR opened
+board.ir -> board.dn: Shipped
+
+board.td -> board.bk: Stop
+board.ip -> board.bk: Stop
+
+legend: Label hints (happy path) {
+  style.fill: "#fafafa"
+  style.stroke: "#9e9e9e"
+  style.stroke-width: 1
+  a: "intake → needs clarification or stage intake"
+  b: "BA → ready for developer on Todo"
+  c: "developer → In Progress only after pick"
+}

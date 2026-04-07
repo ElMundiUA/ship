@@ -1,308 +1,211 @@
 # Prompts & workflows
 
-This chapter exists because behaviour and wording drift together. You can wire Linear, GitHub Actions, and a cloud agent correctly and still watch the loop go sideways when the *instructions* live only in someone’s head or in a product UI that forgets to version itself. Mature Ship adoptions treat prompts the same way they treat workflow YAML: **git is the source of truth**, PRs are the review room, and “we fixed it in chat” is a waypoint — not the finish line.
+This part of the manual is about **words that become behaviour**. Wire Linear, GitHub Actions, and a cloud agent perfectly, and you can still lose the plot when instructions live only in chat, a SaaS text box, or someone’s memory. Mature Ship adoptions treat prompts like workflow YAML: **git is the source of truth**, pull requests are the review room, and “we fixed it in Cursor” is a waypoint—not the system of record.
 
-**Framework** says what must stay true about automation. **Tools** names the adapters. **Here** we spell out how prompts and workflow *patterns* evolve without turning the repo into a graveyard of one-off hacks: start thin, let a scheduled or manual run prove where the text lied, patch once at human speed, then **promote** the lesson into `prompts/cloud-agent/` so the **next cron tick** inherits it. That is how tonight’s thread becomes tomorrow’s run — with a diff you can blame and roll back.
+**Framework** says what must stay true. **Tools** names the adapters. **Here** we describe how prompt text evolves without turning the repo into a graveyard of one-off hacks—and how that evolution **starts small on purpose**.
 
-A delivery slot picks a ticket and the agent misreads a label guard; you reproduce in inline chat, land a one-line clarification, open a small PR against `developer.md`, merge, and the following morning’s grid no longer argues with the board. Intake keeps guessing on hollow tickets until you tighten the **stop** language in `intake.md` after a real clarification comment on Linear — same loop: chat proves the fix, the file makes it durable. An audit role files a finding without a path or log pointer; you adjust `tech-architect.md` once, and the next **daily audit** cadence stops emitting vibes-as-tickets. Platform noise is different: `workflow-self-heal.md` stays narrow because the temptation to “just be heroic” in prose is how headless runs start editing product code you did not mean to hand them.
+**Jump:** [Start with a skeleton](#iterating-on-prompts) · [State flow (ElMundi)](#elmundi-sdlc-flow) · [Full `prompts/cloud-agent/` files](#prompt-catalog) · [Workflow patterns](#workflow-patterns)
 
-The habit underneath is almost boring on purpose — **boring survives reality**. Prompts sit next to the code and workflows they steer. When reality punches a hole, you fix **interactively** once, then **write the lesson back** so headless runs do not depend on who is online.
-
----
-
-## Read this first
-
-[Iterating on prompts](#iterating-on-prompts) — the piece everyone skips, then regrets skipping.
+Concrete filenames, cron minutes, and secrets stay in **[Examples → Reference org](../examples/elmundi/index.md)**. This page names **habits** and shows **real prompt files** from this package (the same ones ElMundi wires in production).
 
 ---
 
-## Catalogs
+## Start with a skeleton, not a cathedral {#iterating-on-prompts}
 
-- [Prompt catalog](#prompt-catalog) — roles and files in `prompts/cloud-agent/`.  
-- [Workflow patterns](#workflow-patterns) — what each **class** of YAML is for (concrete filenames stay under **Examples**).
+### The trap of the “final” prompt
 
----
+The mistake everyone makes is the same mistake as big-bang automation: sitting down to write the **perfect** prompt in one session. You produce a wall of rules—half of them untested, half of them wrong for your repo—and no story for how they stay true when the board, the tests, or the product changes next month. The model will happily obey contradictory instructions; the failure mode is not disobedience, it is **confidence**.
 
-## Where the files actually are
+We do the opposite. You ship a **base**: enough structure that a headless run can attempt the job under **clear guards** (tracker state, branch contract, what “done” means for this role, when to **stop**). If the first draft is longer than a screen, **cut** it. Depth is not virtue; **testability** is. The grid and the ticket timeline will teach you where the text lied; your job is to listen and **grow** the prompt in thin layers, each layer merged like code.
 
-In this package: `prompts/cloud-agent/` at the repo root (or the same path inside a vendored copy).  
-Skills embedded by the launch path live under `.cursor/skills/` — keep them **short**; link out to this manual for depth.
+### What the base must answer
 
----
+A minimum prompt does not need poetry. It needs four kinds of clarity, usually in plain bullets:
 
-## Iterating on prompts {#iterating-on-prompts}
+**Scope** — one sentence on what this role is allowed to do—and what is explicitly out of bounds (no merge, no promote, no drive-by refactors).
 
-### The mistake everyone makes
+**Preconditions** — which project, column or state, and labels must be true before the agent acts. If this is missing, you will debug “mood” instead of **guards**.
 
-Sitting down to write the **final** prompt in one session. You get a wall of rules, half of them wrong, and no story for how they stay true when the repo moves.
+**Reporting** — how the run leaves traces: comment marker pattern, PR title shape, branch name. Auditability is not optional; it is how the next human knows what happened.
 
-We do the opposite.
+**Stops** — when to pause and ask a human instead of guessing: hollow ticket, ambiguous acceptance criteria, tests failing for reasons outside this change.
 
----
+Everything else—edge cases, style guides, long examples—is **seasoning**. Add seasoning **after** at least one real run proves which corner actually hurts.
 
-### The loop (four steps)
+### Let one run be the teacher
 
-#### 1. Ship a **minimum** prompt
+The second step is not “brainstorm more rules.” It is: let the **schedule** run once (or fire `workflow_dispatch` for a single issue) and watch the run **end-to-end**. Note what the agent did, skipped, or misunderstood; pair **ticket timeline** with **workflow run** so the story is reconstructable. If you cannot pair them, stop—you are not ready to tune wording; your audit trail is broken.
 
-Enough for the agent to **attempt** the job under clear guards (tracker state, branch name, tests to run, files it may touch). If it is longer than a screen, **cut** it.
+Then fix **interactively** at human speed: inline agent, small patch, small explanation. **One** misunderstanding per iteration. Prefer a concrete example from *this* repository over abstract lecture. If the real fix is a **policy** change—new label, tighter pick—change tracker or pick **before** you add another paragraph to the prompt.
 
-**Good minimum prompts answer**
+### Write the lesson back
 
-- **What** is in scope for this role (one sentence).  
-- **Where** state must be before you start (project + state + labels).  
-- **How** you report back (ticket comment pattern, PR title pattern).  
-- **When** you must **stop** and ask a human (ambiguous ticket, missing spec, failing tests you did not introduce).
-
-**Bad minimum prompts**
-
-- “Be smart.”  
-- “Follow best practices.”  
-- “Refactor as needed.” (Needed *according to whom*?)
-
----
-
-#### 2. Let the schedule run (or fire manually)
-
-Watch **one** run end-to-end. Capture:
-
-- what it did,  
-- what it skipped,  
-- what it misunderstood,  
-- which **ticket** and **workflow run** to pair in the timeline.
-
-If you cannot pair them, stop — your audit story is broken before you tune wording.
-
----
-
-#### 3. Fix **interactively** when something breaks
-
-Open the ticket or log, reproduce in **Copilot / inline agent** mode: small patch, small explanation. This is **human speed** — cheap and precise.
-
-**Rules of thumb**
-
-- Fix **one** misunderstanding per iteration.  
-- Prefer **concrete** examples from *this* repo over abstract lecture.  
-- If the fix requires a **policy** change (new guard, new label), change **pick** or tracker **before** you patch the prompt again.
-
----
-
-#### 4. **Write the lesson back** into `prompts/cloud-agent/*.md`
-
-The interactive fix is **not** the system of record. The **markdown in the repo** is. Merge the wording so the next **headless** run inherits the behaviour.
+The interactive fix is not durable until it lives in **`prompts/cloud-agent/*.md`** (for scheduled Cursor Cloud runs). Open a PR, link the ticket that exposed the gap, and merge to the branch your schedules checkout—usually `main`. Reviewers should ask: does this rule **overfit** one weird ticket, or does it generalise? Chat is fast; **merged markdown** is what `cloud-agent-launch.mjs` actually reads.
 
 !!! note
-    Chat is fast; **merged** `prompts/cloud-agent/*.md` is what the launch path actually reads. If you skip the PR, the next scheduled run will happily repeat the bug.
-
-**Definition of done**
-
-- PR with prompt diff, linked to the ticket that exposed the bug.  
-- Reviewer checks: does this rule **overfit** one ticket, or does it generalise?  
-- Merged to the branch your schedules actually checkout (usually `main`).
-
-That is how tonight’s chat becomes tomorrow’s automation.
-
----
+    If you skip the PR, the next cron tick will happily repeat the bug. That is not the model forgetting—it is you forgetting where the source of truth lives.
 
 ### Why git matters
 
-If the prompt is only in a SaaS UI, you cannot:
+If the prompt lives only in a vendor UI, you cannot **diff** it, **blame** it, or **roll back** when a clever rule blows up production. You also cannot prove what text ran last Tuesday. Treat prompts as **config code**—same review bar as `*.yml`.
 
-- **diff** it in a PR,  
-- **blame** who changed a guard,  
-- **roll back** when a “clever” rule blows up production,  
-- prove **what** ran last Tuesday.
+### Order of operations when something breaks
 
-Treat prompts like **config code** — same review bar as `*.yml`.
-
----
-
-### Pair with workflow changes
-
-Sometimes the bug is not the prompt — it is **when** the job runs or **which** issue gets picked.
-
-**Order of operations**
+Often the bug is not the prompt—it is **what** got picked or **how** the agent was launched.
 
 1. Fix **pick** / cron / project guards if the wrong work is selected.  
-2. Fix **launch** wiring if the agent never sees the right branch or env.  
+2. Fix **launch** wiring if the agent never sees the right branch, ref, or secrets.  
 3. Then tighten **prompt** wording.
 
-See [Workflow patterns](#workflow-patterns) for intent; [Examples → Workflows catalog](../examples/elmundi/index.md#workflows-catalog) for filenames.
-
----
+See [Workflow patterns](#workflow-patterns) for intent; **[Workflows catalog](../examples/elmundi/index.md#workflows-catalog)** for filenames in the reference org.
 
 ### Anti-patterns we have actually seen
 
-- **No user story** — “be smart” is not a requirement.  
-- **Silent retries** without logging to the ticket — you lose auditability.  
-- **One mega-prompt** for every role — split by **role file** (`intake`, `developer`, …).  
-- **Copy-pasting** a novel-length policy from Notion — it will drift the day someone edits Notion.  
-- **Testing only in chat** — chat lies cheerfully; CI tells the truth.
+**No user story** — “be smart” is not a requirement. **Silent retries** without ticket comments destroy auditability. **One mega-prompt** for every role makes diffs unreadable; split by **role file** (`intake`, `developer`, …). **Pasting** a novel from Notion guarantees drift the day someone edits Notion. **Testing only in chat** — chat lies cheerfully; CI and scheduled runs tell the truth.
+
+The habit underneath is almost boring on purpose: **boring survives reality**. When reality punches a hole, fix interactively once, then **write the lesson back** so headless runs do not depend on who is online.
 
 ---
 
-### Where the files live
+## ElMundi reference: states, labels, and the delivery graph {#elmundi-sdlc-flow}
 
-In this monorepo: `prompts/cloud-agent/` (see [Prompt catalog](#prompt-catalog)). **Onboarding** playbooks for coding agents live in **`prompts/onboarding/`** — see [Adoption → Overview](../adoption/index.md).
+The diagram is the **pretty view** of the same wiring spelled out in **[Examples → ElMundi → SDLC scheduled](../examples/elmundi/index.md#sdlc-scheduled)**: human-only **Backlog**, automation picking only **Todo** in the delivery project, four roles on the **even-hour UTC grid** (`:10` intake → `:25` clarification → `:40` BA → `:55` developer), and **developer** as the only role that moves a card to **In Progress** after pick + `cli start` + the `fix/<ISSUE>-auto` branch. The **legend** box on the diagram names the label-shaped milestones in plain language (without colons in edge labels, so the graph stays readable).
 
-**Skills** under `.cursor/skills/` are embedded by the launch script — keep them **short** and link out to deeper docs when needed.
+![ElMundi reference — Linear delivery board × SDLC grid](../diagrams/sdlc-linear-states.svg)
 
----
+**Columns (canonical names for that wiring):**
 
-## Prompt catalog {#prompt-catalog}
+| # | Status | Meaning |
+|---|--------|---------|
+| 1 | **Backlog** | Human triage only; no SDLC pick |
+| 2 | **Todo** | Intake → clarification → BA → (with `ready:developer`) developer |
+| 3 | **In Progress** | Implementation after developer pick + `cli start` |
+| 4 | **In Review** | PR, preview, QA |
+| 5 | **Done** | Complete |
+| 6 | **Blocked** | Stop |
 
-Files live in **`prompts/cloud-agent/`** in the repository. `_base.md` is shared scaffolding; others are **one role per file** so diffs stay reviewable.
+**Label-shaped milestones on the happy path (simplified):** intake may set `needs:clarification` or `stage:intake`; after BA, **`ready:developer`** on **Todo** is the gate for the developer pick. Exact pick scripts and filters live beside the workflows in the example chapter—this page stays the **story**; that chapter stays the **receipts**.
 
-**How to change them safely:** [Iterating on prompts](#iterating-on-prompts).
-
-**`prompts/catalog/`** holds optional A‑series drafts (human reference); **`cloud-agent-launch.mjs` only reads `prompts/cloud-agent/`** — promote edits there for scheduled runs.
-
----
-
-### Shared
-
-| File | Role | Lane |
-|------|------|------|
-| `_base.md` | Shared rules, tone, cross-cutting guardrails (what every headless run must assume about the repo). | All |
-
-**Guidance:** if a rule truly applies everywhere, it belongs here. If it is specific to implementation, keep it in the role file so you do not widen blast radius.
+Daily **audit** roles (tech / QA / security) use **separate** Linear projects and **no** delivery-queue pick; see **[Daily audits](../examples/elmundi/index.md#daily-audits)**.
 
 ---
 
-### Delivery lane
+## Full prompts (`prompts/cloud-agent/`) {#prompt-catalog}
 
-| File | Role | What “good” looks like |
-|------|------|-------------------------|
-| `intake.md` | First pass on new **Todo** work | Triage, initial scope, explicit questions — **stops** instead of guessing when the ticket is hollow. |
-| `clarification.md` | Clarify scope / questions | Surfaces unknowns with crisp asks; updates ticket for humans to answer. |
-| `ba.md` | Analysis / acceptance shape | Turns fuzzy intent into testable acceptance notes **without** inventing product decisions. |
-| `developer.md` | Implementation + tests + PR | Branch + PR contract honoured; tests run or explicitly called out; no drive-by refactors outside scope. |
+This section is **one page inside one page**: the map below plus the **complete** markdown files as they ship in the repository—no ellipses, no “see repo for the rest.” MkDocs pulls them in with **`--8<--`** so the manual and git cannot silently diverge.
 
-**Culture:** delivery prompts **move** scoped work. They do not **merge** it and do not **promote** it unless you explicitly gave that mandate (we recommend you do not).
+Placeholders such as `{{ISSUE}}`, `{{BASE}}`, and `{{SKILLS_CONTEXT}}` are filled by **`runtime/scripts/cloud-agent-launch.mjs`** at run time; treat them as part of the contract, not as typos.
 
----
+**How to change them safely:** [Start with a skeleton](#iterating-on-prompts). **Optional A-series drafts** under `prompts/catalog/` are human reference only; **`cloud-agent-launch.mjs` reads `prompts/cloud-agent/`**—promote edits there when the schedule should inherit them.
 
-### Platform
+| Bucket | File | Role |
+|--------|------|------|
+| Shared | `_base.md` | Global rules for all Cloud Agent runs |
+| Delivery | `intake.md` | First pass on **Todo** work — triage, questions, **stop** when hollow |
+| Delivery | `clarification.md` | Follow-up when humans answer (or nudge if still stuck) |
+| Delivery | `ba.md` | Spec shape, AC, `ready:developer` when appropriate |
+| Delivery | `developer.md` | Implement, test, **one** PR, **In Review** |
+| Platform | `workflow-self-heal.md` | Minimal pipeline fixes; narrow scope |
+| Audit | `tech-architect.md` | Architecture / tech-debt findings with paths |
+| Audit | `qa-architect.md` | Test-strategy gaps with file paths |
+| Audit | `security-officer.md` | Snyk-grounded issues only |
 
-| File | Role | Lane |
-|------|------|------|
-| `workflow-self-heal.md` | Pipeline health / CI follow-up | Platform |
+**Adding a new role:** decide **which project** receives output, **which schedule** fires it, **what guards** stop the run, and **what artefact** proves success. If you cannot answer, you are adding noise—not a prompt.
 
-**Guidance:** keep this prompt **narrow** — diagnose, link artifacts, suggest minimal fix. Platform prompts become dangerous when they try to be hero developers.
+**Skills** under `.cursor/skills/` are embedded by the launch path—keep them **short**; link out to this manual for depth. **Onboarding** playbooks live in **`prompts/onboarding/`** — see **[Adoption → Overview](../adoption/index.md)**.
 
----
+### Full file contents {#elmundi-prompt-samples}
 
-### Audit lane
+### Shared base — `_base.md`
 
-| File | Role | What “good” looks like |
-|------|------|-------------------------|
-| `tech-architect.md` | Architecture audit | Findings tied to paths, logs, or metrics — not vibes. |
-| `qa-architect.md` | QA audit | Risk-grounded notes; respects existing test strategy. |
-| `security-officer.md` | Security / dependency audit | Grounded in scanner output (e.g. Snyk JSON) — **no fabrication** tickets. |
+Cross-cutting rules for every headless role (queue boundaries, Linear as the human channel, idempotency, branch contract, audit markers).
 
-**Culture:** audit prompts **surface evidence**. They do not compete with delivery for “who ships fastest.”
+--8<-- "prompts/cloud-agent/_base.md"
 
----
+### Delivery lane — `intake.md`
 
-### Adding a new role
+--8<-- "prompts/cloud-agent/intake.md"
 
-Before you add `new-hat.md`, answer:
+### Delivery lane — `clarification.md`
 
-1. **Which tracker project** receives its output?  
-2. **Which schedule** fires it — delivery grid, audit grid, or something else?  
-3. **What stops** the role from running (guards)?  
-4. **What artefact** proves it did the right thing?
+--8<-- "prompts/cloud-agent/clarification.md"
 
-If you cannot answer, you are not adding a prompt — you are adding noise.
+### Delivery lane — `ba.md`
+
+--8<-- "prompts/cloud-agent/ba.md"
+
+### Delivery lane — `developer.md`
+
+--8<-- "prompts/cloud-agent/developer.md"
+
+### Platform — `workflow-self-heal.md`
+
+--8<-- "prompts/cloud-agent/workflow-self-heal.md"
+
+### Daily audit — `tech-architect.md`
+
+--8<-- "prompts/cloud-agent/tech-architect.md"
+
+### Daily audit — `qa-architect.md`
+
+--8<-- "prompts/cloud-agent/qa-architect.md"
+
+### Daily audit — `security-officer.md`
+
+--8<-- "prompts/cloud-agent/security-officer.md"
 
 ---
 
 ## Workflow patterns {#workflow-patterns}
 
-YAML files differ by **intent**. This page names the **patterns** — the *why* — so you can design your own filenames without copying ours by accident.
+YAML files differ by **intent**. This section names the **patterns**—the *why*—so you can choose your own filenames without copying ours by accident.
 
-**Concrete filenames** for the reference org live in [Examples → Workflows catalog](../examples/elmundi/index.md#workflows-catalog).
-
----
+**Concrete filenames** for the reference org: **[Workflows catalog](../examples/elmundi/index.md#workflows-catalog)**.
 
 ### Scheduled delivery grid
 
 **Intent:** cron ticks for ordered SDLC roles on the **delivery** lane. Each tick: **pick** (deterministic) → **maybe** launch agent.
 
-**Invariants**
-
-- One **delivery** role per time slot (unless you have a documented exception — exceptions rot).  
-- Pick runs **before** any expensive step.  
-- “No ticket qualified” exits **zero** — green, quiet.
-
-**When to split workflows** per role vs one workflow with matrix: operational taste — keep logs readable for on-call.
-
----
+**Invariants:** one **delivery** role per time slot; pick runs before expensive steps; “no ticket qualified” exits zero—green, quiet.
 
 ### Daily audits
 
-**Intent:** separate cadence that **does not** starve the delivery queue. Writes to **audit** tracker projects with evidence rules.
+**Intent:** cadence that **does not** starve the delivery queue. Writes to **audit** projects with evidence rules.
 
-**Invariants**
-
-- Audit jobs do **not** pick from the same Todo column as delivery unless you want stand-up to catch fire.  
-- Tickets created here should cite **artifacts** (report path, job URL, failing test name).
-
----
+**Invariants:** audit jobs do not pick from the same **Todo** column as delivery unless you want stand-up to catch fire; new tickets cite **artifacts**.
 
 ### Self-heal
 
-**Intent:** CI / pipeline diagnostics; optional agent follow-up on a **dedicated** ticket or comment thread.
+**Intent:** CI / pipeline diagnostics; optional agent follow-up on a dedicated ticket or thread.
 
-**Invariants**
-
-- Self-heal is for **platform health**, not “ship features faster.”  
-- It should **not** silently change product code without the same review path as any other PR.
-
----
+**Invariants:** platform health, not “ship features faster”; no silent product edits outside normal review.
 
 ### Autonomous loop (complementary)
 
-**Intent:** extra automation that may run analysis or prep work on another cadence.
+**Intent:** extra automation on another cadence.
 
-**Invariants**
-
-- **Not** a replacement for the delivery grid — otherwise you reintroduce overlapping agents under a prettier name.  
-- Explicit **guards** and **stop** conditions — autonomous should still mean *bounded*.
-
----
+**Invariants:** not a replacement for the delivery grid; explicit **guards** and **stop** conditions.
 
 ### PR preview + checks
 
-**Intent:** human-opened PR path — build previews, smoke tests, policy checks.
+**Intent:** human-opened PR path—previews, smoke tests, policy checks.
 
-**Why it matters in Ship:** humans and bots share one repo. Preview workflows are how you keep **human** lanes fast without borrowing delivery cron.
-
----
+**Why it matters:** humans and bots share one repo; preview workflows keep **human** lanes fast without borrowing delivery cron.
 
 ### Hosted E2E regression
 
-**Intent:** Playwright (or similar) against a **live** dev/stage URL — scheduled or manual.
+**Intent:** Playwright (or similar) against a **live** dev/stage URL.
 
-**Why hosted matters:** catches auth, CDN, third-party sandbox issues that `localhost` will not see. This is the usual companion to **release** discipline, not to “agent wrote code.”
-
----
+**Why hosted matters:** auth, CDN, third-party behaviour—`localhost` will not see them.
 
 ### Release / promote
 
-**Intent:** promote container images or static assets toward production — often **manual** or policy-gated.
+**Intent:** promote images or assets toward production—often **manual** or policy-gated.
 
-**Invariants**
-
-- Promotion decisions stay **human-owned** unless you have explicitly automated them with the same rigour as pick/launch.  
-- Tagging and rollback story must exist before you brag about velocity.
-
----
+**Invariants:** promotion stays human-owned unless automated with the same rigour as pick/launch; rollback story exists before you brag about velocity.
 
 ### Webhooks / integrations
 
-**Intent:** optional glue — review events, notifications, bridging to other systems.
+**Intent:** optional glue—events, notifications, bridging.
 
-**Invariants**
-
-- Webhooks should **not** become a secret second scheduler unless you document them like one.  
-- Idempotency matters — GitHub will retry.
+**Invariants:** webhooks should not become an undocumented second scheduler; idempotency matters.
