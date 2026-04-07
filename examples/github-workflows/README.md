@@ -1,6 +1,6 @@
 # GitHub Actions — migrating from a product monorepo
 
-Many teams first wire Ship **beside application code** (e.g. `website/`) under `.github/workflows/`. **[Examples → Reference org](../../docs/examples/elmundi/index.md)** describes one public layout and filenames; your tree may differ.
+Many teams first wire Ship **beside application code** (e.g. `website/`) under `.github/workflows/`. **[Examples → Reference org](../../documentation/examples/elmundi/index.md)** describes one public layout and filenames; your tree may differ.
 
 | Pattern (typical) | Purpose |
 |-------------------|---------|
@@ -15,7 +15,7 @@ Many teams first wire Ship **beside application code** (e.g. `website/`) under `
 ## What to change when `ship` is the only checkout
 
 1. **Checkout** — use a normal `actions/checkout@v4` of this repo, or sparse-checkout only what you need; remove monorepo-only paths such as `website/` unless your app still lives alongside Ship in the same workspace.
-2. **`working-directory`** — replace every `tools/linear-agent` with **`.`** (repository root of **ship**).
+2. **`working-directory`** — use the **Ship** repository root (`.` when this repo is the checkout). Invoke scripts as **`node runtime/scripts/…`** (or `cd runtime` and `node scripts/…` if your workflow sets cwd to `runtime/`).
 3. **Triggers** — `check-failure-recovery.yml` listens for `workflow_run` on a workflow **name** that must match your repo (e.g. not `"PR Checks + Preview Deploy"` unless you keep that exact title).
 4. **Secrets / vars** — unchanged conceptually (`LINEAR_API_KEY`, `CURSOR_API_KEY`, etc.); scope them to the repo that runs the workflows.
 

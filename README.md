@@ -2,10 +2,21 @@
 
 **Ship** is governed SDLC automation: tracker as system of record, deterministic picks, one delivery role per window, versioned prompts in git, and an audit trail that survives the first incident review.
 
-This repository is the **standalone** framework package: MkDocs manual, Node CLI, `cloud-prompts/`, and `scripts/`. Fork or vendor it into your product repo; configure **Linear project IDs, team keys, domains, and secrets** via `.env` and CI variables — see **`.env.example`** and **[docs/examples/elmundi/](docs/examples/elmundi/index.md)** for one fully wired reference org.
+This repository is the **standalone** framework package. **Adopt into a product repo** using an **agent playbook** (no universal installer): see **[documentation/adoption/](documentation/adoption/index.md)** — `prompts/onboarding/adopt-ship-generic.md`, [agent launch matrix](documentation/adoption/agent-launch-matrix.md), and [ElMundi rollout](documentation/adoption/elmundi.md). Configure **project IDs, team keys, domains, and secrets** via `.env` at the **product repository root** and CI variables — **`.env.example`** and **[documentation/examples/elmundi/](documentation/examples/elmundi/index.md)** for reference wiring.
+
+## Repository layout
+
+| Path | What |
+|------|------|
+| **`documentation/`** | MkDocs manual (`mkdocs.yml` uses `docs_dir: documentation`). |
+| **`prompts/cloud-agent/`** | Role prompts read by `runtime/scripts/cloud-agent-launch.mjs` (`_base.md`, `developer.md`, …). |
+| **`prompts/catalog/`** | Optional A‑series drafts (human reference); not used by CI until promoted into `cloud-agent/`. |
+| **`prompts/onboarding/`** | Markdown playbooks for **coding agents** to submodule/vendor Ship and wire CI (see **Part V — Adoption** in the manual). |
+| **`runtime/`** | Node package **`ship-agent`**: `dist/cli.js`, `src/`, `scripts/`, `config/`. |
+| **`examples/`** | Sample workflow snippets for product repos. |
 
 **Docs (when published):** set `mkdocs.yml` → `site_url` to your deployed origin.  
-**Package / docs version:** `0.6.0` — keep in sync with `mkdocs.yml` → `extra.doc_version` and `docs/stylesheets/extra.css` header chip.
+**Package / docs version:** `0.6.0` — keep in sync with `mkdocs.yml` → `extra.doc_version` and `documentation/stylesheets/extra.css` header chip.
 
 ## Documentation (MkDocs)
 
@@ -19,17 +30,30 @@ mkdocs serve
 ```
 
 - Static build: `mkdocs build` → `site/`. Top nav sections are **one long page** each.
-- **PDF:** browser **Print → Save as PDF** (see `docs/pdf-export.md`).
-- **Diagrams:** `docs/diagrams/*.d2`; SVG regenerates on build if `d2` is on `PATH` (`hooks/d2_prebuild.py`).
+- **PDF:** browser **Print → Save as PDF** (see `documentation/pdf-export.md`).
+- **Diagrams:** `documentation/diagrams/*.d2`; SVG regenerates on build if `d2` is on `PATH` (`documentation/hooks/d2_prebuild.py`).
 
-## Node CLI
+## Node CLI (`runtime/`)
 
 ```bash
-npm install
-npm run build   # when TypeScript under `src/` changes
+npm install    # repository root — npm workspace installs `runtime/` (ship-agent)
 ```
 
-Local secrets: `.env` at this repo root (never commit). Copy from **`.env.example`**.
+Run the CLI from the repo root:
+
+```bash
+node runtime/dist/cli.js --help
+```
+
+Or from the package directory:
+
+```bash
+cd runtime && node dist/cli.js --help
+```
+
+Local secrets: **`.env`** at the **repository root** (never commit). Copy from **`.env.example`**.
+
+Optional: `cd runtime && npm exec ship-agent -- --help` after install.
 
 ## Docs deployment (Docker + Bunny)
 
@@ -43,7 +67,7 @@ docker run --rm -p 8080:8080 ship-docs:local
 # open http://127.0.0.1:8080/  — health: http://127.0.0.1:8080/health
 ```
 
-**CI — production:** [`.github/workflows/docker-publish-bunny.yml`](.github/workflows/docker-publish-bunny.yml) (**Ship — Docker Hub + Bunny deploy**) — on every push to `main`: build, push **`latest`** and **`sha-<short>`** to Docker Hub, read **`docker-content-digest`** from **Docker Hub** for that tag (so it matches what Bunny pulls), then [`scripts/bunny-patch-container.mjs`](scripts/bunny-patch-container.mjs) **`PATCH`**es the template with **tag + digest + `imagePullPolicy: always`** ([patch API](https://docs.bunny.net/api-reference/magic-containers/containers/patch-container-template)), then **`POST /mc/apps/{id}/deploy`**. That avoids the dashboard banner where the **same tag** still shows “new version available” because the **registry digest** moved.
+**CI — production:** [`.github/workflows/docker-publish-bunny.yml`](.github/workflows/docker-publish-bunny.yml) (**Ship — Docker Hub + Bunny deploy**) — on every push to `main`: build, push **`latest`** and **`sha-<short>`** to Docker Hub, read **`docker-content-digest`** from **Docker Hub** for that tag (so it matches what Bunny pulls), then [`runtime/scripts/bunny-patch-container.mjs`](runtime/scripts/bunny-patch-container.mjs) **`PATCH`**es the template with **tag + digest + `imagePullPolicy: always`** ([patch API](https://docs.bunny.net/api-reference/magic-containers/containers/patch-container-template)), then **`POST /mc/apps/{id}/deploy`**. That avoids the dashboard banner where the **same tag** still shows “new version available” because the **registry digest** moved.
 
 **CI — PRs only:** [`.github/workflows/docs.yml`](.github/workflows/docs.yml) (**Ship docs (PR)**) runs `mkdocs build` on pull requests — **no Bunny**, no Docker Hub.
 
@@ -75,10 +99,10 @@ You can attach a GitHub **Environment** (e.g. `ship-docs`) for approval gates; d
 
 ## GitHub Actions (SDLC / Linear)
 
-Workflow YAML in **your** product repository should invoke `scripts/*.mjs` from the **Ship** root (or a vendored path). Use a normal checkout and `working-directory` **`.`** when Ship is this repo; use the nested path when embedded in a monorepo. See **`examples/github-workflows/README.md`**.
+Workflow YAML in **your** product repository should invoke **`runtime/scripts/*.mjs`** from the **Ship** repository root (or a vendored path). Use `working-directory` pointing at Ship when checking out this repo as a subtree or submodule. See **`examples/github-workflows/README.md`**.
 
 ## License
 
-Apache License 2.0 — see [`LICENSE`](LICENSE). Only paths that are part of this **Ship** package are meant to be uniformly permissive; product code around them may use other terms — see `docs/legal-copyright.md`.
+Apache License 2.0 — see [`LICENSE`](LICENSE). Only paths that are part of this **Ship** package are meant to be uniformly permissive; product code around them may use other terms — see `documentation/legal-copyright.md`.
 
 © 2026 Denys Kuzin

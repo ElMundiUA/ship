@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SDLC automation — overview</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;700&family=Source+Sans+3:wght@400;600&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0c0f14;
+      --fg: #e8e4dc;
+      --accent: #c9a227;
+      --muted: #7a8494;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      background-image:
+        radial-gradient(ellipse 120% 80% at 10% 20%, rgba(30, 58, 95, 0.35), transparent 50%),
+        radial-gradient(ellipse 80% 60% at 90% 80%, rgba(201, 162, 39, 0.08), transparent 45%);
+      color: var(--fg);
+      font-family: "Source Sans 3", system-ui, sans-serif;
+    }
+    .deck {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: clamp(1.5rem, 4vw, 2.5rem);
+      padding-bottom: 3rem;
+    }
+    header {
+      margin-bottom: 1.5rem;
+      border-left: 4px solid var(--accent);
+      padding-left: 1rem;
+    }
+    h1 {
+      font-family: "Fraunces", Georgia, serif;
+      font-size: clamp(1.5rem, 3.2vw, 2rem);
+      font-weight: 700;
+      margin: 0 0 0.35rem;
+      letter-spacing: -0.02em;
+    }
+    .subtitle {
+      font-size: 0.95rem;
+      color: var(--muted);
+      font-weight: 400;
+      max-width: 62ch;
+      line-height: 1.45;
+    }
+    section.block {
+      margin-bottom: 2.25rem;
+    }
+    h2 {
+      font-family: "Fraunces", Georgia, serif;
+      font-size: 1.05rem;
+      font-weight: 600;
+      color: #a8b4c4;
+      margin: 0 0 0.75rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      font-size: 0.72rem;
+    }
+    .diagram-wrap {
+      overflow-x: auto;
+      padding: 0.25rem 0;
+    }
+    .mermaid {
+      width: 100%;
+      min-width: 520px;
+    }
+    footer {
+      margin-top: 2rem;
+      font-size: 0.78rem;
+      color: var(--muted);
+      line-height: 1.55;
+      border-top: 1px solid rgba(168, 180, 196, 0.15);
+      padding-top: 1rem;
+    }
+    footer strong { color: #a8b4c4; font-weight: 600; }
+    code { color: var(--accent); font-size: 0.9em; }
+  </style>
+</head>
+<body>
+  <div class="deck">
+    <header>
+      <h1>SDLC automation (current)</h1>
+      <p class="subtitle">
+        Workflow <code>linear-agent-sdlc-scheduled.yml</code> runs on <strong>four separate crons</strong> (even UTC hours).
+        Each scheduled trigger starts <strong>one</strong> workflow run with <strong>one</strong> job (Intake, Clarification, BA, or Developer).
+        The Cursor Cloud Agent step runs only when the pick script returns an issue.
+      </p>
+    </header>
+
+    <section class="block">
+      <h2>Structure — flowchart</h2>
+      <div class="diagram-wrap">
+        <pre class="mermaid">
+flowchart TB
+  S["GitHub: linear-agent-sdlc-scheduled.yml"] --> Q{One cron → one run → one job}
+
+  Q -->|":10 UTC"| J1["Intake"]
+  Q -->|":25 UTC"| J2["Clarification"]
+  Q -->|":40 UTC"| J3["BA / Spec"]
+  Q -->|":55 UTC"| J4["Developer"]
+
+  J1 --> P1["pick-intake-issue.mjs"]
+  J2 --> P2["pick-clarification-issue.mjs"]
+  J3 --> P3["pick-ba-issue.mjs"]
+  J4 --> P4["pick-next-dev-issue.mjs<br/>(Todo + ready:developer)"]
+
+  P4 --> ST["dist/cli.js start → In Progress + stage:developer"]
+  ST --> CA["cloud-agent-launch.mjs → Cursor Cloud Agent"]
+
+  P1 --> CA
+  P2 --> CA
+  P3 --> CA
+
+  CA --> L[("Linear: issues, labels, workflow states")]
+
+  SEC["Repo secrets: LINEAR_API_KEY + CURSOR_API_KEY"] -.-> P1
+  SEC -.-> P2
+  SEC -.-> P3
+  SEC -.-> P4
+  SEC -.-> ST
+  SEC -.-> CA
+
+  WH["Separate: workflow-self-heal.yml — :15 UTC odd hours"]
+        </pre>
+      </div>
+    </section>
+
+    <section class="block">
+      <h2>Developer slot — sequence</h2>
+      <div class="diagram-wrap">
+        <pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant GHA as GitHub Actions
+  participant Pick as pick-next-dev-issue.mjs
+  participant Lin as Linear API
+  participant CLI as dist/cli.js
+  participant Launch as cloud-agent-launch.mjs
+  participant CCA as Cursor Cloud Agent
+
+  GHA->>Pick: node (LINEAR_API_KEY)
+  Pick->>Lin: GraphQL filter Todo + label ready:developer
+  Lin-->>Pick: issue id e.g. ELM-47
+  alt issue found
+    GHA->>CLI: start --issue ELM-47 --role developer
+    CLI->>Lin: issueUpdate In Progress + label stage:developer
+    Lin-->>CLI: ok
+    GHA->>Launch: --role=developer --issue=ELM-47
+    Launch->>CCA: HTTPS API (CURSOR_API_KEY)
+    Note over CCA: clone, implement, lint, open PR
+    CCA->>Lin: comments, state In Review when done
+  else no issue
+    GHA-->>GHA: skip Move + Launch (job succeeds)
+  end
+        </pre>
+      </div>
+    </section>
+
+    <footer>
+      <strong>Intake / clarification / BA:</strong> status <strong>Todo</strong>, delivery project from <code>LINEAR_SDLC_PROJECT_*</code>; intake = no <code>stage:intake</code> / <code>needs:clarification</code> / <code>ready:developer</code>. Backlog is manual-only.
+      <strong>Developer:</strong> <strong>Todo</strong> + <code>ready:developer</code> + same project; otherwise the pick is empty.
+      File: <code>documentation/sdlc-automation-slide.html</code> in the Ship repo
+    </footer>
+  </div>
+  <script type="module">
+    import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";
+    mermaid.initialize({
+      theme: "base",
+      themeVariables: {
+        primaryColor: "#1e3a5f",
+        primaryTextColor: "#f4f1ea",
+        primaryBorderColor: "#c9a227",
+        lineColor: "#8b9dc3",
+        secondaryColor: "#0f172a",
+        tertiaryColor: "#1e293b",
+        fontFamily: '"Source Sans 3", system-ui, sans-serif',
+      },
+      flowchart: { curve: "basis", padding: 10 },
+      sequence: { actorMargin: 38, messageMargin: 28 },
+    });
+    await mermaid.run({ querySelector: ".mermaid" });
+  </script>
+</body>
+</html>

@@ -11,9 +11,9 @@ site_author: Denys Kuzin
 copyright: Copyright &copy; 2026 Denys Kuzin. All rights reserved.
 
 repo_url: https://github.com/ElMundiUA/ship
-edit_uri: edit/main/docs/
+edit_uri: edit/main/documentation/
 
-docs_dir: docs
+docs_dir: documentation
 site_dir: site
 
 exclude_docs: |
@@ -25,7 +25,7 @@ extra:
   generator: false
 
 hooks:
-  - hooks/d2_prebuild.py
+  - documentation/hooks/d2_prebuild.py
 
 theme:
   name: material
@@ -62,6 +62,10 @@ markdown_extensions:
   - pymdownx.tabbed:
       alternate_style: true
   - pymdownx.details
+  - pymdownx.snippets:
+      base_path:
+        - .
+      check_paths: true
   - attr_list
   - md_in_html
   - tables
@@ -81,3 +85,8 @@ nav:
       - Ship Agent & trackers: tools/ship-agent-trackers.md
   - Part IV — Examples:
       - Reference org (example wiring): examples/elmundi/index.md
+  - Part V — Adoption:
+      - Overview: adoption/index.md
+      - Agent playbook: adoption/agent-playbook.md
+      - Agent launch matrix: adoption/agent-launch-matrix.md
+      - ElMundi rollout: adoption/elmundi.md

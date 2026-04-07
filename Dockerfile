@@ -7,8 +7,7 @@ WORKDIR /src
 RUN apk add --no-cache git
 
 COPY requirements-docs.txt mkdocs.yml ./
-COPY docs ./docs
-COPY hooks ./hooks
+COPY documentation ./documentation
 
 RUN pip install --no-cache-dir -r requirements-docs.txt \
     && mkdocs build --clean
