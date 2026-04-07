@@ -8,6 +8,8 @@ RUN apk add --no-cache git
 
 COPY requirements-docs.txt mkdocs.yml ./
 COPY documentation ./documentation
+# Snippets in adoption/*.md include files from prompts/ (base_path . in mkdocs.yml)
+COPY prompts ./prompts
 
 RUN pip install --no-cache-dir -r requirements-docs.txt \
     && mkdocs build --clean

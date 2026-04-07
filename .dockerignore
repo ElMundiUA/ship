@@ -1,11 +1,10 @@
-# Slim context for docs image — Dockerfile needs documentation/, mkdocs.yml, requirements-docs.txt
+# Slim context for docs image — Dockerfile needs documentation/, prompts/ (MkDocs snippets), mkdocs.yml, requirements-docs.txt
 .git
 .github
 .venv-docs
 site
 node_modules
 runtime
-prompts
 examples
 **/__pycache__
 *.pyc
