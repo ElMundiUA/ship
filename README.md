@@ -43,30 +43,28 @@ docker run --rm -p 8080:8080 ship-docs:local
 # open http://127.0.0.1:8080/  — health: http://127.0.0.1:8080/health
 ```
 
-**CI:** [`.github/workflows/docker-publish-bunny.yml`](.github/workflows/docker-publish-bunny.yml) — on every push to `main`: build, push to Docker Hub, then call Bunny’s **container-update-image** action.
+**CI:** [`.github/workflows/docker-publish-bunny.yml`](.github/workflows/docker-publish-bunny.yml) — on every push to `main` (or **Run workflow**): build, push to Docker Hub, **create the Magic Container app if missing** ([`scripts/bunny-ship-docs.mjs`](scripts/bunny-ship-docs.mjs) via `api.bunny.net/mc`), then **BunnyWay/container-update-image** to roll **`latest`**.
 
 **GitHub → repository secrets (Actions):**
 
 | Secret | Purpose |
 |--------|---------|
 | `DOCKER_HUB_TOKEN` | Push image (Docker Hub access token) |
+| `BUNNY_MAIN_API_KEY` | Bunny **account** API key (Magic Containers; same header as `AccessKey` on `api.bunny.net/mc`) |
 
 **Repository variables (optional):**
 
 | Variable | Purpose |
 |----------|---------|
-| `DOCKER_IMAGE_NAME` | Default `dekus/ship-docs` — override if you use another Hub repo |
+| `DOCKER_IMAGE_NAME` | Default `dekus/ship-docs` |
 | `DOCKERHUB_USERNAME` | Default `dekus` |
+| `BUNNY_APP_ID` | After first successful run, you can paste the app id from the job log to skip re-listing (optional optimisation) |
+| `BUNNY_CONTAINER_NAME` | Container template name inside the app — default **`ship`** (must match workflow + script) |
+| `SHIP_MC_APP_NAME` | Magic Container **application** display name — default **`Ship docs`** |
 
-**GitHub Environment `ship-docs`** (recommended — holds Bunny + prod-like vars):
+**DNS for `ship.elmundi.com`:** after a green deploy, open the workflow **summary** on GitHub — it lists the default Bunny host and CNAME steps. In short: in Bunny, add **custom hostname** `ship.elmundi.com` on the app endpoint; at DNS, **`CNAME` `ship` → target Bunny shows** (use their exact value, not guessed).
 
-| Name | Purpose |
-|------|---------|
-| `vars.BUNNY_APP_ID` | Magic Containers **application** ID for Ship (separate app from elmundi frontend) |
-| `vars.BUNNY_CONTAINER_NAME` | Container name inside that app (default in workflow: `ship`) |
-| `secrets.BUNNY_MAIN_API_KEY` | Bunny API key (exchange flow; same family as elmundi — not storage-only keys) |
-
-**Bunny dashboard (new app):** create a **Magic Container** application, add one container named **`ship`** (or match `BUNNY_CONTAINER_NAME`), image `dekus/ship-docs:latest` (or your `DOCKER_IMAGE_NAME`), **container port 8080**, HTTP health path **`/health`**. After the first manual deploy, CI can update the tag on each `main` push.
+You can attach a GitHub **Environment** (e.g. `ship-docs`) for approval gates; if you do, **copy the same secrets** into that environment (repo-level secrets are not inherited).
 
 ## GitHub Actions (SDLC / Linear)
 

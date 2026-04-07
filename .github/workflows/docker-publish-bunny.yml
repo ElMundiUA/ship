@@ -10,7 +10,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Override in repo Variables → DOCKER_IMAGE_NAME (e.g. youruser/ship-docs)
   DOCKER_IMAGE_NAME: dekus/ship-docs
 
 jobs:
@@ -59,16 +58,50 @@ jobs:
           cache-to: type=gha,mode=max
 
   deploy-bunny:
-    name: Update Bunny Magic Container
+    name: Ensure MC app & deploy image
     needs: [build-push]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
-    environment: ship-docs
+    # Optional: attach GitHub Environment "ship-docs" for protection rules — then duplicate secrets there.
     steps:
-      - name: Deploy image to Bunny
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Ensure Magic Container application exists
+        id: mc
+        env:
+          BUNNY_ACCESS_KEY: ${{ secrets.BUNNY_MAIN_API_KEY }}
+          BUNNY_APP_ID: ${{ vars.BUNNY_APP_ID }}
+          SHIP_MC_APP_NAME: ${{ vars.SHIP_MC_APP_NAME || 'Ship docs' }}
+          DOCKER_IMAGE_NAME: ${{ vars.DOCKER_IMAGE_NAME || 'dekus/ship-docs' }}
+          MC_CONTAINER_NAME: ${{ vars.BUNNY_CONTAINER_NAME || 'ship' }}
+          IMAGE_TAG: latest
+        run: node scripts/bunny-ship-docs.mjs ensure
+
+      - name: Point container at new image (Bunny action)
         uses: BunnyWay/actions/container-update-image@main
         with:
-          app_id: ${{ vars.BUNNY_APP_ID }}
+          app_id: ${{ steps.mc.outputs.app_id }}
           api_key: ${{ secrets.BUNNY_MAIN_API_KEY || secrets.BUNNYNET_API_KEY }}
           container: ${{ vars.BUNNY_CONTAINER_NAME || 'ship' }}
           image_tag: latest
+
+      - name: DNS — what to configure for ship.elmundi.com
+        run: |
+          HOST="${{ steps.mc.outputs.bunny_default_host }}"
+          {
+            echo "## Bunny hostname"
+            echo "Default app host: **\`$HOST\`** (HTTPS)."
+            echo ""
+            echo "### Custom domain **ship.elmundi.com**"
+            echo "1. Bunny dashboard → **Magic Containers** → **${{ vars.SHIP_MC_APP_NAME || 'Ship docs' }}** → your **CDN / HTTP endpoint** → **Custom hostnames** → add **ship.elmundi.com**."
+            echo "2. Bunny will show a **DNS target** (often a **CNAME** to a \`*.bunny.net\` / CDN hostname — not always the same string as the default mc host)."
+            echo "3. At your DNS provider for **elmundi.com**, create:"
+            echo "   - **Type:** \`CNAME\`"
+            echo "   - **Name / host:** \`ship\`"
+            echo "   - **Target / value:** exactly what Bunny shows for that custom hostname (copy-paste)."
+            echo "4. Wait for TLS + propagation; MkDocs \`site_url\` is already \`https://ship.elmundi.com/\`."
+          } >> "$GITHUB_STEP_SUMMARY"
