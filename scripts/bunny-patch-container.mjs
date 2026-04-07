@@ -39,8 +39,14 @@ async function main() {
     throw new Error(`No container template named "${containerName}". Known: ${names}`);
   }
 
-  const body = { id: t.id, imageTag };
+  const body = {
+    id: t.id,
+    imageTag,
+    // Ensure MC re-pulls when tag string is unchanged but registry manifest moved
+    imagePullPolicy: "always",
+  };
   if (imageDigest) body.imageDigest = imageDigest;
+  else console.warn("IMAGE_DIGEST empty — PATCH is tag-only; Bunny may show “update available” until digest matches registry.");
 
   const patchRes = await fetch(
     `${BASE}/apps/${encodeURIComponent(appId)}/containers/${encodeURIComponent(t.id)}`,

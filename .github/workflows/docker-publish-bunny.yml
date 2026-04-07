@@ -104,9 +104,31 @@ jobs:
           IMAGE_TAG: ${{ needs.build-push.outputs.deploy_image_tag }}
         run: node scripts/bunny-ship-docs.mjs ensure
 
-      # Bunny's container-update-image action did not await PATCH (fire-and-forget). We PATCH with
-      # tag + digest per https://docs.bunny.net/api-reference/magic-containers/containers/patch-container-template
-      # so rolling updates start reliably (https://docs.bunny.net/magic-containers/rolling-updates).
+      # Digest from the build can differ from what Docker Hub serves (manifest list, timing). Bunny
+      # compares registry digest to the template — same tag + different digest ⇒ orange “Apply update”.
+      - name: Resolve image digest from Docker Hub (source of truth for Bunny)
+        id: hub_digest
+        env:
+          REPO: ${{ needs.build-push.outputs.image }}
+          TAG: ${{ needs.build-push.outputs.deploy_image_tag }}
+        run: |
+          set -euo pipefail
+          TOKEN="$(curl -sS "https://auth.docker.io/token?service=registry.docker.io&scope=repository:${REPO}:pull" | jq -r .token)"
+          [[ -n "$TOKEN" && "$TOKEN" != "null" ]]
+          # Accept OCI index or Docker manifest v2 (multi-arch images)
+          DIG="$(curl -sSI \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -H "Accept: application/vnd.docker.distribution.manifest.list.v2+json" \
+            -H "Accept: application/vnd.oci.image.index.v1+json" \
+            -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+            "https://registry-1.docker.io/v2/${REPO}/manifests/${TAG}" \
+            | grep -i '^docker-content-digest:' | awk '{print $2}' | tr -d '\r')"
+          [[ -n "$DIG" ]]
+          echo "Registry digest for ${REPO}:${TAG} → ${DIG}"
+          echo "digest=${DIG}" >> "$GITHUB_OUTPUT"
+
+      # PATCH tag + digest (+ pull always) per
+      # https://docs.bunny.net/api-reference/magic-containers/containers/patch-container-template
       - name: Patch container image (await Bunny API)
         env:
           BUNNY_ACCESS_KEY: ${{ secrets.BUNNY_MAIN_API_KEY }}
@@ -114,7 +136,7 @@ jobs:
           BUNNY_APP_ID: ${{ steps.mc.outputs.app_id }}
           MC_CONTAINER_NAME: ${{ steps.mc.outputs.mc_container_name }}
           IMAGE_TAG: ${{ needs.build-push.outputs.deploy_image_tag }}
-          IMAGE_DIGEST: ${{ needs.build-push.outputs.image_digest }}
+          IMAGE_DIGEST: ${{ steps.hub_digest.outputs.digest || needs.build-push.outputs.image_digest }}
         run: node scripts/bunny-patch-container.mjs
 
       # Optional second nudge after config is saved (initial deploy / some accounts).
