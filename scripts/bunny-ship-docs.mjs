@@ -78,21 +78,65 @@ function probe(path) {
   };
 }
 
-/** Bunny returns partial stickySessions in suggestions → 500 on create if invalid. */
-function sanitizeEndpoints(endpoints) {
-  for (const ep of endpoints) {
-    const st = ep.cdn?.stickySessions;
-    if (st && (!Array.isArray(st.sessionHeaders) || st.sessionHeaders.length < 1)) {
-      delete ep.cdn.stickySessions;
-    }
+/**
+ * MC OpenAPI uses additionalProperties: false on nested objects. Suggestion payloads
+ * often include extra keys → Bunny may return 500. Rebuild only allowed fields.
+ * @see https://docs.bunny.net/api-reference/magic-containers/applications/add-application.md
+ */
+function pickPortMapping(pm) {
+  const out = { containerPort: 8080 };
+  if (pm?.exposedPort != null && Number.isFinite(Number(pm.exposedPort))) {
+    out.exposedPort = Number(pm.exposedPort);
   }
-  return endpoints;
+  const protocols = Array.isArray(pm?.protocols) ? pm.protocols.filter((p) => p === "tcp" || p === "udp" || p === "sctp") : [];
+  if (protocols.length) out.protocols = protocols;
+  else out.protocols = ["tcp"];
+  return out;
 }
 
-function buildContainerTemplate({ namespace, imageName, tag, containerName, suggestions }) {
-  let endpoints = suggestions?.endpointSuggestions;
-  if (!Array.isArray(endpoints) || endpoints.length === 0) {
-    endpoints = [
+function pickCdn(cdn) {
+  if (!cdn || typeof cdn !== "object") return null;
+  const out = {};
+  if (typeof cdn.isSslEnabled === "boolean") out.isSslEnabled = cdn.isSslEnabled;
+  else out.isSslEnabled = true;
+  if (cdn.pullZoneId != null && Number.isInteger(cdn.pullZoneId)) out.pullZoneId = cdn.pullZoneId;
+  const st = cdn.stickySessions;
+  if (st && Array.isArray(st.sessionHeaders) && st.sessionHeaders.length >= 1 && st.sessionHeaders.length <= 3) {
+    out.stickySessions = {
+      sessionHeaders: st.sessionHeaders.slice(0, 3),
+      ...(typeof st.enabled === "boolean" ? { enabled: st.enabled } : {}),
+      ...(typeof st.cookieName === "string" && st.cookieName ? { cookieName: st.cookieName } : {}),
+    };
+  }
+  const mappings = Array.isArray(cdn.portMappings) ? cdn.portMappings.map(pickPortMapping) : [];
+  out.portMappings = mappings.length ? mappings : [{ containerPort: 8080, protocols: ["tcp"] }];
+  return out;
+}
+
+function pickEndpoint(ep) {
+  const displayName = typeof ep?.displayName === "string" && ep.displayName.trim() ? ep.displayName.trim().slice(0, 50) : "web";
+  const out = { displayName };
+  const cdn = pickCdn(ep?.cdn);
+  if (cdn) out.cdn = cdn;
+  else if (ep?.anycast?.type && Array.isArray(ep.anycast.portMappings) && ep.anycast.portMappings.length) {
+    out.anycast = {
+      type: ep.anycast.type,
+      portMappings: ep.anycast.portMappings.map(pickPortMapping),
+    };
+  }
+  if (!out.cdn && !out.anycast) {
+    out.cdn = {
+      isSslEnabled: true,
+      portMappings: [{ containerPort: 8080, protocols: ["tcp"] }],
+    };
+  }
+  return out;
+}
+
+function buildEndpointsFromSuggestions(suggestions) {
+  const raw = suggestions?.endpointSuggestions;
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return [
       {
         displayName: "web",
         cdn: {
@@ -101,18 +145,12 @@ function buildContainerTemplate({ namespace, imageName, tag, containerName, sugg
         },
       },
     ];
-  } else {
-    endpoints = structuredClone(endpoints);
-    sanitizeEndpoints(endpoints);
-    for (const ep of endpoints) {
-      if (ep.cdn?.portMappings?.length) {
-        ep.cdn.portMappings = ep.cdn.portMappings.map((pm) => ({
-          ...pm,
-          containerPort: 8080,
-        }));
-      }
-    }
   }
+  return raw.map(pickEndpoint);
+}
+
+function buildContainerTemplate({ namespace, imageName, tag, containerName, suggestions }) {
+  const endpoints = buildEndpointsFromSuggestions(suggestions);
 
   return {
     name: containerName,
