@@ -24,6 +24,8 @@ jobs:
       image: ${{ steps.set-image.outputs.image }}
       # Immutable tag for Bunny (matches docker/metadata type=sha prefix=sha- format=short)
       deploy_image_tag: ${{ steps.deploy-tag.outputs.tag }}
+      # Pin manifest so MC pulls the image Bunny just saw pushed (PatchContainerRequest.imageDigest)
+      image_digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
 
@@ -59,6 +61,7 @@ jobs:
           echo "Bunny will deploy **sha-${short}** (same tag pushed to the registry)." >> "$GITHUB_STEP_SUMMARY"
 
       - uses: docker/build-push-action@v5
+        id: build
         with:
           context: .
           file: ./Dockerfile
@@ -101,15 +104,20 @@ jobs:
           IMAGE_TAG: ${{ needs.build-push.outputs.deploy_image_tag }}
         run: node scripts/bunny-ship-docs.mjs ensure
 
-      - name: Point container at new image (Bunny action)
-        uses: BunnyWay/actions/container-update-image@main
-        with:
-          app_id: ${{ steps.mc.outputs.app_id }}
-          api_key: ${{ secrets.BUNNY_MAIN_API_KEY || secrets.BUNNYNET_API_KEY }}
-          container: ${{ steps.mc.outputs.mc_container_name }}
-          image_tag: ${{ needs.build-push.outputs.deploy_image_tag }}
+      # Bunny's container-update-image action did not await PATCH (fire-and-forget). We PATCH with
+      # tag + digest per https://docs.bunny.net/api-reference/magic-containers/containers/patch-container-template
+      # so rolling updates start reliably (https://docs.bunny.net/magic-containers/rolling-updates).
+      - name: Patch container image (await Bunny API)
+        env:
+          BUNNY_ACCESS_KEY: ${{ secrets.BUNNY_MAIN_API_KEY }}
+          BUNNY_ACCESS_KEY_FALLBACK: ${{ secrets.BUNNYNET_API_KEY }}
+          BUNNY_APP_ID: ${{ steps.mc.outputs.app_id }}
+          MC_CONTAINER_NAME: ${{ steps.mc.outputs.mc_container_name }}
+          IMAGE_TAG: ${{ needs.build-push.outputs.deploy_image_tag }}
+          IMAGE_DIGEST: ${{ needs.build-push.outputs.image_digest }}
+        run: node scripts/bunny-patch-container.mjs
 
-      # PATCH image tag alone may not roll pods; explicit deploy triggers rollout.
+      # Optional second nudge after config is saved (initial deploy / some accounts).
       - name: Trigger Magic Container deploy (rollout)
         env:
           APP_ID: ${{ steps.mc.outputs.app_id }}

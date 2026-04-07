@@ -43,7 +43,7 @@ docker run --rm -p 8080:8080 ship-docs:local
 # open http://127.0.0.1:8080/  — health: http://127.0.0.1:8080/health
 ```
 
-**CI — production:** [`.github/workflows/docker-publish-bunny.yml`](.github/workflows/docker-publish-bunny.yml) (**Ship — Docker Hub + Bunny deploy**) — on every push to `main`: build, push **`latest`** and **`sha-<short>`** to Docker Hub, point Magic Containers at the **SHA tag** (not `latest`), then **`POST /mc/apps/{id}/deploy`** so pods roll to that digest.
+**CI — production:** [`.github/workflows/docker-publish-bunny.yml`](.github/workflows/docker-publish-bunny.yml) (**Ship — Docker Hub + Bunny deploy**) — on every push to `main`: build, push **`latest`** and **`sha-<short>`** to Docker Hub, then [`scripts/bunny-patch-container.mjs`](scripts/bunny-patch-container.mjs) **`PATCH`**es the container template with **tag + image digest** (Bunny [rolling updates](https://docs.bunny.net/magic-containers/rolling-updates) / [patch API](https://docs.bunny.net/api-reference/magic-containers/containers/patch-container-template)), then **`POST /mc/apps/{id}/deploy`** as an extra rollout nudge.
 
 **CI — PRs only:** [`.github/workflows/docs.yml`](.github/workflows/docs.yml) (**Ship docs (PR)**) runs `mkdocs build` on pull requests — **no Bunny**, no Docker Hub.
 
