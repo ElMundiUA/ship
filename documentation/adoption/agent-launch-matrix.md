@@ -21,6 +21,8 @@ Reference: [Tools → Cursor Cloud Agent](../tools/index.md#cursor-cloud-agent).
 
 ## Cursor — IDE (Composer / Agent mode)
 
+**Shortcut:** from the product repo, `curl` + `bash` the launcher in [Adoption index](index.md) and choose **Cursor** — it opens the folder (if `cursor` is on `PATH`) and prints `@…` paths.
+
 1. Open the **target product repository** (e.g. ElMundi) in Cursor.  
 2. **@** mention files: `prompts/onboarding/adopt-ship-generic.md`  
    - If you use Ship as submodule: `@tools/ship/prompts/onboarding/adopt-ship-generic.md`  
@@ -49,6 +51,23 @@ If Ship is not yet present, first prompt: *“Add Ship as submodule at tools/shi
 
 ---
 
+## Claude Code (Anthropic terminal agent)
+
+**Interactive launcher** (submodule at `tools/ship` if the playbook is missing, then choose **Cursor** or **Claude Code**):
+
+```bash
+cd /path/to/target-repo
+curl -fsSL https://raw.githubusercontent.com/ElMundiUA/ship/main/adopt-ship.sh | bash
+```
+
+Review [`adopt-ship.sh`](https://github.com/ElMundiUA/ship/blob/main/adopt-ship.sh) before piping to `bash`. For **Claude Code** only, after Ship is on disk:
+
+```bash
+claude "Read tools/ship/prompts/onboarding/adopt-ship-generic.md and execute it against this repo. Create branch chore/ship-adopt. Open a PR when done."
+```
+
+---
+
 ## Claude / other chat with repo upload
 
 Upload `adopt-ship-generic.md` (+ `adopt-ship-elmundi.md` for ElMundi) and a **zip** or file tree of the target repo **or** connect the official “repo” integration if available.
@@ -73,7 +92,9 @@ Pick scripts in `runtime/scripts/pick-*.mjs` remain **Linear-first**; call that 
 
 | Agent surface | What to pass |
 |---------------|----------------|
+| One-command launcher | [Adoption index](index.md) — curl the raw `adopt-ship.sh`, pipe to `bash` |
 | Cursor IDE | `@…/adopt-ship-generic.md` (+ ElMundi addendum) |
+| Claude Code | Launcher above, or `claude "Read …/adopt-ship-generic.md …"` |
 | Copilot chat | Paste playbook markdown |
 | Codex / CLI | Path to playbook file + execute instruction |
 | Humans | [Adoption overview](index.md) + this matrix |

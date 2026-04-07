@@ -2,7 +2,7 @@
 
 **Ship** is governed SDLC automation: tracker as system of record, deterministic picks, one delivery role per window, versioned prompts in git, and an audit trail that survives the first incident review.
 
-This repository is the **standalone** framework package. **Adopt into a product repo** using an **agent playbook** (no universal installer): see **[documentation/adoption/](documentation/adoption/index.md)** — `prompts/onboarding/adopt-ship-generic.md`, [agent launch matrix](documentation/adoption/agent-launch-matrix.md), and [ElMundi rollout](documentation/adoption/elmundi.md). Configure **project IDs, team keys, domains, and secrets** via `.env` at the **product repository root** and CI variables — **`.env.example`** and **[documentation/examples/elmundi/](documentation/examples/elmundi/index.md)** for reference wiring.
+This repository is the **standalone** framework package. **Adopt into a product repo** using an **agent playbook**: see **[documentation/adoption/](documentation/adoption/index.md)** — `prompts/onboarding/adopt-ship-generic.md`, [agent launch matrix](documentation/adoption/agent-launch-matrix.md), and [ElMundi rollout](documentation/adoption/elmundi.md). **One command from your product repo** (adds `tools/ship` submodule if missing, then Cursor or Claude Code): `curl -fsSL https://raw.githubusercontent.com/ElMundiUA/ship/main/adopt-ship.sh | bash` — details in the adoption index. Configure **project IDs, team keys, domains, and secrets** via `.env` at the **product repository root** and CI variables — **`.env.example`** and **[documentation/examples/elmundi/](documentation/examples/elmundi/index.md)** for reference wiring.
 
 ## Repository layout
 

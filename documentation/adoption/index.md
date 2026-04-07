@@ -4,8 +4,11 @@ Ship is designed to be **vendored or submodule’d** into a product repo, then w
 
 Instead, use:
 
-1. **An agent playbook** — a single markdown file the coding agent follows step-by-step.  
-2. **A launch matrix** — how to invoke that playbook from Cursor, Copilot, Codex, etc.
+1. **Optional launcher** — from your **product repo** root, after reviewing the script on GitHub:  
+   `curl -fsSL https://raw.githubusercontent.com/ElMundiUA/ship/main/adopt-ship.sh | bash`  
+   It asks whether you use **Cursor** or **Claude Code**, optionally adds Ship as **`tools/ship`**, then either opens Cursor with `@…` instructions or runs **`claude`** with the playbook path. Environment overrides: see header comments in [`adopt-ship.sh`](https://github.com/ElMundiUA/ship/blob/main/adopt-ship.sh).
+2. **An agent playbook** — a single markdown file the coding agent follows step-by-step.  
+3. **A launch matrix** — how to invoke that playbook from Cursor, Copilot, Codex, etc.
 
 ---
 
@@ -13,6 +16,7 @@ Instead, use:
 
 | Resource | Purpose |
 |----------|---------|
+| **[`adopt-ship.sh` (raw)](https://raw.githubusercontent.com/ElMundiUA/ship/main/adopt-ship.sh)** | One-command launcher: submodule + Cursor vs Claude Code (source: repo root `adopt-ship.sh`). |
 | **[Agent playbook](agent-playbook.md)** | Full instructions (included from `prompts/onboarding/`). |
 | **[Agent launch matrix](agent-launch-matrix.md)** | Cursor / Copilot / Codex / … — how to run the playbook. |
 | **[ElMundi rollout](elmundi.md)** | Concrete path for **ElMundiUA/elmundi** + submodule. |
