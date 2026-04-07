@@ -119,8 +119,10 @@ function buildContainerTemplate({ namespace, imageName, tag, containerName, sugg
 }
 
 async function ensure() {
-  const key = process.env.BUNNY_ACCESS_KEY?.trim();
-  if (!key) throw new Error("Set BUNNY_ACCESS_KEY (Bunny account API key)");
+  const key =
+    process.env.BUNNY_ACCESS_KEY?.trim() ||
+    process.env.BUNNY_ACCESS_KEY_FALLBACK?.trim();
+  if (!key) throw new Error("Set BUNNY_ACCESS_KEY or BUNNY_ACCESS_KEY_FALLBACK (Bunny account API key)");
 
   const appName = (process.env.SHIP_MC_APP_NAME || "Ship docs").trim();
   const imageFull = (process.env.DOCKER_IMAGE_NAME || "dekus/ship-docs").trim();

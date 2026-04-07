@@ -43,7 +43,9 @@ docker run --rm -p 8080:8080 ship-docs:local
 # open http://127.0.0.1:8080/  — health: http://127.0.0.1:8080/health
 ```
 
-**CI:** [`.github/workflows/docker-publish-bunny.yml`](.github/workflows/docker-publish-bunny.yml) — on every push to `main` (or **Run workflow**): build, push to Docker Hub, **create the Magic Container app if missing** ([`scripts/bunny-ship-docs.mjs`](scripts/bunny-ship-docs.mjs) via `api.bunny.net/mc`), then **BunnyWay/container-update-image** to roll **`latest`**.
+**CI — production:** [`.github/workflows/docker-publish-bunny.yml`](.github/workflows/docker-publish-bunny.yml) (**Ship — Docker Hub + Bunny deploy**) — on every push to `main`: build, push to Docker Hub, ensure Magic Container app ([`scripts/bunny-ship-docs.mjs`](scripts/bunny-ship-docs.mjs)), update image tag, then **`POST /mc/apps/{id}/deploy`** so pods actually roll.
+
+**CI — PRs only:** [`.github/workflows/docs.yml`](.github/workflows/docs.yml) (**Ship docs (PR)**) runs `mkdocs build` on pull requests — **no Bunny**, no Docker Hub. If you only see this workflow green on `main`, you are looking at an old run; on `main` you want **Ship — Docker Hub + Bunny deploy**.
 
 **GitHub → repository secrets (Actions):**
 

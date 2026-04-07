@@ -1,4 +1,5 @@
-name: Docker publish & Bunny deploy
+# Full pipeline: Docker image → Docker Hub → Bunny Magic Containers (this is the deploy you want on main).
+name: Ship — Docker Hub + Bunny deploy
 
 on:
   push:
@@ -7,7 +8,8 @@ on:
 
 concurrency:
   group: ship-docker-${{ github.ref }}
-  cancel-in-progress: true
+  # Do not cancel mid-flight: a newer push could skip Bunny if the deploy job never ran.
+  cancel-in-progress: false
 
 env:
   DOCKER_IMAGE_NAME: dekus/ship-docs
@@ -66,6 +68,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Note (read this if you only saw "docs" green before)
+        run: |
+          {
+            echo "### Bunny deploy"
+            echo "Deploy runs **only in this workflow** (Ship — Docker Hub + Bunny deploy), job **Ensure MC app & deploy image**."
+            echo "The separate **Ship docs (PR)** workflow only runs \`mkdocs build\` on pull requests — it never touches Bunny."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -74,6 +84,7 @@ jobs:
         id: mc
         env:
           BUNNY_ACCESS_KEY: ${{ secrets.BUNNY_MAIN_API_KEY }}
+          BUNNY_ACCESS_KEY_FALLBACK: ${{ secrets.BUNNYNET_API_KEY }}
           BUNNY_APP_ID: ${{ vars.BUNNY_APP_ID }}
           SHIP_MC_APP_NAME: ${{ vars.SHIP_MC_APP_NAME || 'Ship docs' }}
           DOCKER_IMAGE_NAME: ${{ vars.DOCKER_IMAGE_NAME || 'dekus/ship-docs' }}
@@ -88,6 +99,29 @@ jobs:
           api_key: ${{ secrets.BUNNY_MAIN_API_KEY || secrets.BUNNYNET_API_KEY }}
           container: ${{ vars.BUNNY_CONTAINER_NAME || 'ship' }}
           image_tag: latest
+
+      # PATCH image tag alone may not roll pods; elmundi also hits deploy in scripts.
+      - name: Trigger Magic Container deploy (rollout)
+        env:
+          APP_ID: ${{ steps.mc.outputs.app_id }}
+        run: |
+          set -euo pipefail
+          KEY='${{ secrets.BUNNY_MAIN_API_KEY }}'
+          if [[ -z "${KEY}" ]]; then KEY='${{ secrets.BUNNYNET_API_KEY }}'; fi
+          if [[ -z "${KEY}" ]]; then
+            echo "::error::Set repository secret BUNNY_MAIN_API_KEY (or BUNNYNET_API_KEY) for Bunny Magic Containers."
+            exit 1
+          fi
+          code="$(curl -sS -o /tmp/deploy.body -w "%{http_code}" \
+            -X POST "https://api.bunny.net/mc/apps/${APP_ID}/deploy" \
+            -H "Accept: application/json" \
+            -H "AccessKey: ${KEY}")"
+          echo "POST /mc/apps/${APP_ID}/deploy → HTTP ${code}"
+          if [[ "${code}" != "200" ]]; then
+            echo "::error::Bunny deploy failed. Body:"; cat /tmp/deploy.body || true
+            exit 1
+          fi
+          echo "Bunny deploy triggered OK." >> "$GITHUB_STEP_SUMMARY"
 
       - name: DNS — what to configure for ship.elmundi.com
         run: |

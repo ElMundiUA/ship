@@ -1,8 +1,7 @@
-name: Docs (MkDocs)
+# MkDocs validation on PRs only. Production deploy lives in docker-publish-bunny.yml (push main).
+name: Ship docs (PR)
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
 
