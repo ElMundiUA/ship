@@ -44,7 +44,7 @@ This site is the **Ship** manual — a governed pattern for SDLC automation — 
 |-----|------------|
 | **Framework** | The **pattern**: quiet-by-design agents, deterministic picks, one delivery role per window, separate audit universe, explicit trust boundaries. **No** requirement to use our vendors. |
 | **Prompts & workflows** | **Discipline**: prompts in git, iterative tightening, catalogs of roles and workflow *patterns*. |
-| **Tools** | **Adapters** we use today (Linear, GitHub Actions, Cursor Cloud Agent, Playwright, Snyk) and what each is responsible for. |
+| **Tools** | **Adapters** we use today (Linear, GitHub Actions, Cursor Cloud Agent, Playwright, Snyk) and what each is responsible for. **[Ship Agent & trackers](tools/ship-agent-trackers.md)** documents the multi-backend CLI (`ship-agent` / `linear-agent` bin). |
 | **Examples** | **Reference wiring** — YAML filenames, Linear projects, cron, domains, secrets for one public org; fork and rename for yours. |
 
 ### Who this is for
@@ -62,6 +62,7 @@ The **Ship** package is this repository at its root: `docs/`, `scripts/`, `cloud
 ### Also on this site
 
 - **[Iterating on prompts](prompts-workflows/index.md#iterating-on-prompts)** — the habit that makes prompts safe (Part II — Prompts & workflows).  
+- **[Ship Agent & tracker adapters](tools/ship-agent-trackers.md)** — `TRACKER_PROVIDER`, env vars, and config for Linear, Jira Cloud, GitHub Issues, Azure DevOps Boards, ClickUp.  
 - **[Examples → Reference org](examples/elmundi/index.md)** — map every abstract noun to a concrete file.
 
 ---

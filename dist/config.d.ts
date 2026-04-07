@@ -1,9 +1,122 @@
 /**
- * Configuration for linear-agent system.
- * Loads .env via dotenv (from CLI entry) for LINEAR_API_KEY.
+ * Configuration for ship-agent (multi-tracker).
  */
 import { z } from "zod";
 declare const ConfigSchema: z.ZodObject<{
+    tracker: z.ZodDefault<z.ZodObject<{
+        provider: z.ZodDefault<z.ZodEnum<["linear", "jira", "github", "azure-devops", "clickup"]>>;
+        jira: z.ZodOptional<z.ZodObject<{
+            hostEnv: z.ZodOptional<z.ZodString>;
+            patEnv: z.ZodOptional<z.ZodString>;
+            emailEnv: z.ZodOptional<z.ZodString>;
+            tokenEnv: z.ZodOptional<z.ZodString>;
+        }, "strip", z.ZodTypeAny, {
+            hostEnv?: string | undefined;
+            patEnv?: string | undefined;
+            emailEnv?: string | undefined;
+            tokenEnv?: string | undefined;
+        }, {
+            hostEnv?: string | undefined;
+            patEnv?: string | undefined;
+            emailEnv?: string | undefined;
+            tokenEnv?: string | undefined;
+        }>>;
+        github: z.ZodOptional<z.ZodObject<{
+            tokenEnv: z.ZodOptional<z.ZodString>;
+            altTokenEnv: z.ZodOptional<z.ZodString>;
+            repoEnv: z.ZodOptional<z.ZodString>;
+            ownerEnv: z.ZodOptional<z.ZodString>;
+            repoNameEnv: z.ZodOptional<z.ZodString>;
+        }, "strip", z.ZodTypeAny, {
+            tokenEnv?: string | undefined;
+            altTokenEnv?: string | undefined;
+            repoEnv?: string | undefined;
+            ownerEnv?: string | undefined;
+            repoNameEnv?: string | undefined;
+        }, {
+            tokenEnv?: string | undefined;
+            altTokenEnv?: string | undefined;
+            repoEnv?: string | undefined;
+            ownerEnv?: string | undefined;
+            repoNameEnv?: string | undefined;
+        }>>;
+        azureDevops: z.ZodOptional<z.ZodObject<{
+            orgEnv: z.ZodOptional<z.ZodString>;
+            projectEnv: z.ZodOptional<z.ZodString>;
+            patEnv: z.ZodOptional<z.ZodString>;
+        }, "strip", z.ZodTypeAny, {
+            orgEnv?: string | undefined;
+            projectEnv?: string | undefined;
+            patEnv?: string | undefined;
+        }, {
+            orgEnv?: string | undefined;
+            projectEnv?: string | undefined;
+            patEnv?: string | undefined;
+        }>>;
+        clickup: z.ZodOptional<z.ZodObject<{
+            tokenEnv: z.ZodOptional<z.ZodString>;
+            listIdEnv: z.ZodOptional<z.ZodString>;
+            teamIdEnv: z.ZodOptional<z.ZodString>;
+        }, "strip", z.ZodTypeAny, {
+            tokenEnv?: string | undefined;
+            listIdEnv?: string | undefined;
+            teamIdEnv?: string | undefined;
+        }, {
+            tokenEnv?: string | undefined;
+            listIdEnv?: string | undefined;
+            teamIdEnv?: string | undefined;
+        }>>;
+    }, "strip", z.ZodTypeAny, {
+        provider: "linear" | "jira" | "github" | "azure-devops" | "clickup";
+        jira?: {
+            hostEnv?: string | undefined;
+            patEnv?: string | undefined;
+            emailEnv?: string | undefined;
+            tokenEnv?: string | undefined;
+        } | undefined;
+        github?: {
+            tokenEnv?: string | undefined;
+            altTokenEnv?: string | undefined;
+            repoEnv?: string | undefined;
+            ownerEnv?: string | undefined;
+            repoNameEnv?: string | undefined;
+        } | undefined;
+        azureDevops?: {
+            orgEnv?: string | undefined;
+            projectEnv?: string | undefined;
+            patEnv?: string | undefined;
+        } | undefined;
+        clickup?: {
+            tokenEnv?: string | undefined;
+            listIdEnv?: string | undefined;
+            teamIdEnv?: string | undefined;
+        } | undefined;
+    }, {
+        provider?: "linear" | "jira" | "github" | "azure-devops" | "clickup" | undefined;
+        jira?: {
+            hostEnv?: string | undefined;
+            patEnv?: string | undefined;
+            emailEnv?: string | undefined;
+            tokenEnv?: string | undefined;
+        } | undefined;
+        github?: {
+            tokenEnv?: string | undefined;
+            altTokenEnv?: string | undefined;
+            repoEnv?: string | undefined;
+            ownerEnv?: string | undefined;
+            repoNameEnv?: string | undefined;
+        } | undefined;
+        azureDevops?: {
+            orgEnv?: string | undefined;
+            projectEnv?: string | undefined;
+            patEnv?: string | undefined;
+        } | undefined;
+        clickup?: {
+            tokenEnv?: string | undefined;
+            listIdEnv?: string | undefined;
+            teamIdEnv?: string | undefined;
+        } | undefined;
+    }>>;
     linear: z.ZodObject<{
         apiKeyEnv: z.ZodDefault<z.ZodString>;
         teamId: z.ZodOptional<z.ZodString>;
@@ -95,6 +208,32 @@ declare const ConfigSchema: z.ZodObject<{
         artifactsDir?: string | undefined;
     }>;
 }, "strip", z.ZodTypeAny, {
+    tracker: {
+        provider: "linear" | "jira" | "github" | "azure-devops" | "clickup";
+        jira?: {
+            hostEnv?: string | undefined;
+            patEnv?: string | undefined;
+            emailEnv?: string | undefined;
+            tokenEnv?: string | undefined;
+        } | undefined;
+        github?: {
+            tokenEnv?: string | undefined;
+            altTokenEnv?: string | undefined;
+            repoEnv?: string | undefined;
+            ownerEnv?: string | undefined;
+            repoNameEnv?: string | undefined;
+        } | undefined;
+        azureDevops?: {
+            orgEnv?: string | undefined;
+            projectEnv?: string | undefined;
+            patEnv?: string | undefined;
+        } | undefined;
+        clickup?: {
+            tokenEnv?: string | undefined;
+            listIdEnv?: string | undefined;
+            teamIdEnv?: string | undefined;
+        } | undefined;
+    };
     linear: {
         apiKeyEnv: string;
         teamId?: string | undefined;
@@ -124,6 +263,32 @@ declare const ConfigSchema: z.ZodObject<{
         artifactsDir: string;
     };
 }, {
+    tracker?: {
+        provider?: "linear" | "jira" | "github" | "azure-devops" | "clickup" | undefined;
+        jira?: {
+            hostEnv?: string | undefined;
+            patEnv?: string | undefined;
+            emailEnv?: string | undefined;
+            tokenEnv?: string | undefined;
+        } | undefined;
+        github?: {
+            tokenEnv?: string | undefined;
+            altTokenEnv?: string | undefined;
+            repoEnv?: string | undefined;
+            ownerEnv?: string | undefined;
+            repoNameEnv?: string | undefined;
+        } | undefined;
+        azureDevops?: {
+            orgEnv?: string | undefined;
+            projectEnv?: string | undefined;
+            patEnv?: string | undefined;
+        } | undefined;
+        clickup?: {
+            tokenEnv?: string | undefined;
+            listIdEnv?: string | undefined;
+            teamIdEnv?: string | undefined;
+        } | undefined;
+    } | undefined;
     linear: {
         apiKeyEnv?: string | undefined;
         teamId?: string | undefined;

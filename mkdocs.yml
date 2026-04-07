@@ -76,6 +76,8 @@ nav:
   - Start here: index.md
   - Part I — Framework: framework/index.md
   - Part II — Prompts & workflows: prompts-workflows/index.md
-  - Part III — Tools: tools/index.md
+  - Part III — Tools:
+      - Overview: tools/index.md
+      - Ship Agent & trackers: tools/ship-agent-trackers.md
   - Part IV — Examples:
       - Reference org (example wiring): examples/elmundi/index.md

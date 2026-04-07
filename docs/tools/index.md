@@ -16,6 +16,8 @@ We need five kinds of capability: **truth on the board**, **something that fires
 
 That list is our **reference deployment**, not a mandate. Swap an adapter, keep the boundaries.
 
+The **Ship Agent CLI** (`dist/cli.js`, npm package **`ship-agent`**) can talk to **Linear, Jira Cloud, GitHub Issues, Azure DevOps Boards, or ClickUp** via `TRACKER_PROVIDER` and env vars — see **[Ship Agent & tracker adapters](ship-agent-trackers.md)** for per-backend configuration. Bin name **`linear-agent`** still works as an alias.
+
 ---
 
 !!! note "Field note — scripts are the spine"
@@ -68,6 +70,8 @@ Framework: [Deterministic pick](../framework/index.md#deterministic-pick).
 ### Swapping Linear for something else
 
 Keep **pick** returning one **issue key string** (or empty). Keep **launch** resolving the same metadata (title, team, branch-safe slug). Coupling surface: [The system](../framework/index.md#the-system). Reference project names: [Examples → SDLC](../examples/elmundi/index.md#sdlc-scheduled).
+
+For the **CLI** specifically, Jira / GitHub Issues / Azure Boards / ClickUp are implemented as adapters with the same commands; configure them on **[Ship Agent & tracker adapters](ship-agent-trackers.md)**. Repository pick scripts and reference workflows may still assume Linear until you adapt them separately.
 
 ---
 

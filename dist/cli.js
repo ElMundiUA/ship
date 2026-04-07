@@ -1,17 +1,24 @@
 #!/usr/bin/env node
 /**
- * linear-agent CLI - multi-role agent orchestration for Linear.
+ * ship-agent CLI — multi-role orchestration with Linear or Jira Cloud.
  */
 import "dotenv/config";
 import { program } from "commander";
 import { loadConfig } from "./config.js";
-import { createLinearClient, getIssueByIdentifier, getNextIssueForRole, listIssues, getIssue, updateIssueState, addLabel, removeLabel, addComment, issueToSummary } from "./linear-client.js";
+import { issueToSummary } from "./linear-client.js";
+import { TrackerFacade } from "./tracker-facade.js";
 import { createPR, getGitRemote, getCurrentBranch, getPRStatus, findPRByHead, findPRByIssueIdentifier, getJobLogs, getFailedJobLogsFromRun, verifyPreviewLive } from "./github-client.js";
 import { computeHandoff, getBlockedHandoff, getEscalatedHandoff } from "./workflow-engine.js";
 import { sendInReviewNotification } from "./sendgrid.js";
 import { formatAgentComment, getNextRole, READY_LABELS, ROLES, STAGE_LABELS } from "./agent-contracts.js";
 const config = loadConfig();
-const apiKey = process.env[config.linear.apiKeyEnv];
+const tracker = new TrackerFacade(config);
+function requireTrackerAuth() {
+    if (!tracker.ensureAuth()) {
+        console.error(tracker.authError);
+        process.exit(1);
+    }
+}
 const jsonOutput = process.argv.includes("--json");
 function out(obj) {
     if (jsonOutput) {
@@ -28,8 +35,8 @@ function out(obj) {
     }
 }
 program
-    .name("linear-agent")
-    .description("CLI for multi-role agent orchestration with Linear")
+    .name("ship-agent")
+    .description("CLI for multi-role orchestration (Linear, Jira, GitHub Issues, Azure Boards, ClickUp)")
     .option("--json", "Output as JSON")
     .option("--dry-run", "Do not persist changes");
 // ─── Get commands ─────────────────────────────────────────────────────────
@@ -39,12 +46,8 @@ program
     .requiredOption("-r, --role <role>", `Role: ${ROLES.join(", ")}`)
     .option("--without-ba", "Include issues that skip BA stage")
     .action(async (opts) => {
-    if (!apiKey) {
-        console.error(`Missing ${config.linear.apiKeyEnv}`);
-        process.exit(1);
-    }
-    const client = createLinearClient(apiKey);
-    const issue = await getNextIssueForRole(client, opts.role, opts.withoutBa);
+    requireTrackerAuth();
+    const issue = await tracker.getNextIssueForRole(opts.role, opts.withoutBa);
     if (!issue) {
         out({ ok: false, message: "No issues available" });
         process.exit(1);
@@ -58,17 +61,13 @@ program
     .option("--without-role <role>", "Filter: without role (e.g. ba for flow:no-ba)")
     .option("-l, --limit <n>", "Max issues", "50")
     .action(async (opts) => {
-    if (!apiKey) {
-        console.error(`Missing ${config.linear.apiKeyEnv}`);
-        process.exit(1);
-    }
-    const client = createLinearClient(apiKey);
+    requireTrackerAuth();
     const filters = {};
     if (opts.role)
         filters.role = opts.role;
     if (opts.withoutRole)
         filters.withoutRole = opts.withoutRole;
-    const issues = await listIssues(client, filters, parseInt(opts.limit, 10));
+    const issues = await tracker.listIssues(filters, parseInt(opts.limit, 10));
     out(issues.map(issueToSummary));
 });
 program
@@ -78,13 +77,9 @@ program
     .option("--no-ba", "Skip BA stage (add flow:no-ba, ready:architect)")
     .option("--bug", "Bug flow: add flow:bug, ready:bug-agent (bug-agent searches root cause, escalates if ambiguous)")
     .action(async (opts) => {
-    if (!apiKey) {
-        console.error(`Missing ${config.linear.apiKeyEnv}`);
-        process.exit(1);
-    }
+    requireTrackerAuth();
     const dryRun = program.opts().dryRun;
-    const client = createLinearClient(apiKey);
-    const issue = await getIssueByIdentifier(client, opts.issue) ?? await getIssue(client, opts.issue);
+    const issue = await tracker.getIssueByIdentifier(opts.issue) ?? await tracker.getIssue(opts.issue);
     if (!issue) {
         console.error("Issue not found");
         process.exit(1);
@@ -99,18 +94,18 @@ program
         return;
     }
     if (opts.bug) {
-        await addLabel(client, issue.id, "flow:bug", config);
-        await addLabel(client, issue.id, "stage:bug-agent", config);
-        await addLabel(client, issue.id, "ready:bug-agent", config);
+        await tracker.addLabel(issue.id, "flow:bug", config);
+        await tracker.addLabel(issue.id, "stage:bug-agent", config);
+        await tracker.addLabel(issue.id, "ready:bug-agent", config);
     }
     else if (opts.noBa) {
-        await addLabel(client, issue.id, "flow:no-ba", config);
-        await addLabel(client, issue.id, "stage:architect", config);
-        await addLabel(client, issue.id, "ready:architect", config);
+        await tracker.addLabel(issue.id, "flow:no-ba", config);
+        await tracker.addLabel(issue.id, "stage:architect", config);
+        await tracker.addLabel(issue.id, "ready:architect", config);
     }
     else {
-        await addLabel(client, issue.id, "stage:ba", config);
-        await addLabel(client, issue.id, "ready:ba", config);
+        await tracker.addLabel(issue.id, "stage:ba", config);
+        await tracker.addLabel(issue.id, "ready:ba", config);
     }
     out({ ok: true, issue: issue.identifier });
 });
@@ -119,19 +114,15 @@ program
     .description("Get issue details by ID or identifier (e.g. ENG-123)")
     .argument("<issue>", "Issue ID or identifier")
     .action(async (issueArg) => {
-    if (!apiKey) {
-        console.error(`Missing ${config.linear.apiKeyEnv}`);
-        process.exit(1);
-    }
-    const client = createLinearClient(apiKey);
+    requireTrackerAuth();
     const issueId = issueArg.match(/^[a-f0-9-]{36}$/i)
         ? issueArg
-        : (await getIssueByIdentifier(client, issueArg))?.id;
+        : (await tracker.getIssueByIdentifier(issueArg))?.id;
     if (!issueId) {
         console.error("Issue not found");
         process.exit(1);
     }
-    const issue = await getIssue(client, issueId);
+    const issue = await tracker.getIssue(issueId);
     if (!issue) {
         console.error("Issue not found");
         process.exit(1);
@@ -145,15 +136,11 @@ program
     .requiredOption("-i, --issue <id>", "Issue ID or identifier")
     .requiredOption("-r, --role <role>", `Role: ${ROLES.join(", ")}`)
     .action(async (opts) => {
-    if (!apiKey) {
-        console.error(`Missing ${config.linear.apiKeyEnv}`);
-        process.exit(1);
-    }
+    requireTrackerAuth();
     const dryRun = program.opts().dryRun;
-    const client = createLinearClient(apiKey);
     const issueId = opts.issue.match(/^[a-f0-9-]{36}$/i)
         ? opts.issue
-        : (await getIssueByIdentifier(client, opts.issue))?.id;
+        : (await tracker.getIssueByIdentifier(opts.issue))?.id;
     if (!issueId) {
         console.error("Issue not found");
         process.exit(1);
@@ -162,12 +149,12 @@ program
         out({ dryRun: true, wouldUpdate: { state: "In Progress", addLabel: STAGE_LABELS[opts.role] } });
         return;
     }
-    const moved = await updateIssueState(client, issueId, "In Progress");
+    const moved = await tracker.updateIssueState(issueId, "In Progress");
     if (!moved) {
         console.error("Failed to move issue to In Progress (check team workflow state names in Linear)");
         process.exit(1);
     }
-    const labeled = await addLabel(client, issueId, STAGE_LABELS[opts.role], config);
+    const labeled = await tracker.addLabel(issueId, STAGE_LABELS[opts.role], config);
     if (!labeled) {
         console.error("Failed to add stage label");
         process.exit(1);
@@ -182,13 +169,9 @@ program
     .option("-s, --summary <text>", "Summary of work done")
     .option("-a, --artifacts <paths>", "Comma-separated artifact paths")
     .action(async (opts) => {
-    if (!apiKey) {
-        console.error(`Missing ${config.linear.apiKeyEnv}`);
-        process.exit(1);
-    }
+    requireTrackerAuth();
     const dryRun = program.opts().dryRun;
-    const client = createLinearClient(apiKey);
-    const issue = await getIssueByIdentifier(client, opts.issue) ?? await getIssue(client, opts.issue);
+    const issue = await tracker.getIssueByIdentifier(opts.issue) ?? await tracker.getIssue(opts.issue);
     if (!issue) {
         console.error("Issue not found");
         process.exit(1);
@@ -201,13 +184,13 @@ program
         return;
     }
     for (const lbl of handoff.labelsToRemove) {
-        await removeLabel(client, issue.id, lbl);
+        await tracker.removeLabel(issue.id, lbl);
     }
     for (const lbl of handoff.labelsToAdd) {
-        await addLabel(client, issue.id, lbl, config);
+        await tracker.addLabel(issue.id, lbl, config);
     }
     if (handoff.newState) {
-        await updateIssueState(client, issue.id, handoff.newState);
+        await tracker.updateIssueState(issue.id, handoff.newState);
     }
     // QA Automation is last: move to In Review + send email
     if (role === "qa-automation" && !nextRole) {
@@ -219,8 +202,8 @@ program
                 const status = await getPRStatus(token, remote.owner, remote.repo, prNumber);
                 const prUrl = `https://github.com/${remote.owner}/${remote.repo}/pull/${status.number}`;
                 const previewUrl = status.previewUrl || prUrl;
-                await updateIssueState(client, issue.id, "In Review");
-                await addComment(client, issue.id, `**Ready for human review**\n\nPR: ${prUrl}\nPreview: ${previewUrl}\n\nMerge remains human-only.`);
+                await tracker.updateIssueState(issue.id, "In Review");
+                await tracker.addComment(issue.id, `**Ready for human review**\n\nPR: ${prUrl}\nPreview: ${previewUrl}\n\nMerge remains human-only.`);
                 const notifyTo = (process.env.IN_REVIEW_NOTIFY_EMAIL || "").trim();
                 if (notifyTo) {
                     await sendInReviewNotification({
@@ -243,7 +226,7 @@ program
         nextRole: handoff.to,
         timestamp: new Date().toISOString(),
     };
-    await addComment(client, issue.id, formatAgentComment(artifact));
+    await tracker.addComment(issue.id, formatAgentComment(artifact));
     out({ ok: true, handoff: handoff.to });
 });
 program
@@ -253,13 +236,9 @@ program
     .requiredOption("--from <role>", `From role: ${ROLES.join(", ")}`)
     .requiredOption("--to <role>", `To role: ${ROLES.join(", ")}`)
     .action(async (opts) => {
-    if (!apiKey) {
-        console.error(`Missing ${config.linear.apiKeyEnv}`);
-        process.exit(1);
-    }
+    requireTrackerAuth();
     const dryRun = program.opts().dryRun;
-    const client = createLinearClient(apiKey);
-    const issue = await getIssueByIdentifier(client, opts.issue) ?? await getIssue(client, opts.issue);
+    const issue = await tracker.getIssueByIdentifier(opts.issue) ?? await tracker.getIssue(opts.issue);
     if (!issue) {
         console.error("Issue not found");
         process.exit(1);
@@ -270,13 +249,13 @@ program
         return;
     }
     for (const lbl of handoff.labelsToRemove) {
-        await removeLabel(client, issue.id, lbl);
+        await tracker.removeLabel(issue.id, lbl);
     }
     for (const lbl of handoff.labelsToAdd) {
-        await addLabel(client, issue.id, lbl, config);
+        await tracker.addLabel(issue.id, lbl, config);
     }
     if (handoff.newState) {
-        await updateIssueState(client, issue.id, handoff.newState);
+        await tracker.updateIssueState(issue.id, handoff.newState);
     }
     out({ ok: true, handoff: handoff.to });
 });
@@ -287,13 +266,9 @@ program
     .requiredOption("-r, --role <role>", `Role: ${ROLES.join(", ")}`)
     .requiredOption("--reason <text>", "Reason for blocking")
     .action(async (opts) => {
-    if (!apiKey) {
-        console.error(`Missing ${config.linear.apiKeyEnv}`);
-        process.exit(1);
-    }
+    requireTrackerAuth();
     const dryRun = program.opts().dryRun;
-    const client = createLinearClient(apiKey);
-    const issue = await getIssueByIdentifier(client, opts.issue) ?? await getIssue(client, opts.issue);
+    const issue = await tracker.getIssueByIdentifier(opts.issue) ?? await tracker.getIssue(opts.issue);
     if (!issue) {
         console.error("Issue not found");
         process.exit(1);
@@ -304,13 +279,13 @@ program
         return;
     }
     for (const lbl of handoff.labelsToRemove) {
-        await removeLabel(client, issue.id, lbl);
+        await tracker.removeLabel(issue.id, lbl);
     }
     for (const lbl of handoff.labelsToAdd) {
-        await addLabel(client, issue.id, lbl, config);
+        await tracker.addLabel(issue.id, lbl, config);
     }
-    await updateIssueState(client, issue.id, "Blocked");
-    await addComment(client, issue.id, `**Blocked** (${opts.role}): ${opts.reason}`);
+    await tracker.updateIssueState(issue.id, "Blocked");
+    await tracker.addComment(issue.id, `**Blocked** (${opts.role}): ${opts.reason}`);
     out({ ok: true });
 });
 program
@@ -320,13 +295,9 @@ program
     .requiredOption("-r, --role <role>", `Role: ${ROLES.join(", ")}`)
     .requiredOption("--reason <text>", "Reason for escalation")
     .action(async (opts) => {
-    if (!apiKey) {
-        console.error(`Missing ${config.linear.apiKeyEnv}`);
-        process.exit(1);
-    }
+    requireTrackerAuth();
     const dryRun = program.opts().dryRun;
-    const client = createLinearClient(apiKey);
-    const issue = await getIssueByIdentifier(client, opts.issue) ?? await getIssue(client, opts.issue);
+    const issue = await tracker.getIssueByIdentifier(opts.issue) ?? await tracker.getIssue(opts.issue);
     if (!issue) {
         console.error("Issue not found");
         process.exit(1);
@@ -337,13 +308,13 @@ program
         return;
     }
     for (const lbl of handoff.labelsToRemove) {
-        await removeLabel(client, issue.id, lbl);
+        await tracker.removeLabel(issue.id, lbl);
     }
     for (const lbl of handoff.labelsToAdd) {
-        await addLabel(client, issue.id, lbl, config);
+        await tracker.addLabel(issue.id, lbl, config);
     }
-    await updateIssueState(client, issue.id, "Blocked");
-    await addComment(client, issue.id, `**Escalated** (${opts.role}): ${opts.reason}`);
+    await tracker.updateIssueState(issue.id, "Blocked");
+    await tracker.addComment(issue.id, `**Escalated** (${opts.role}): ${opts.reason}`);
     out({ ok: true });
 });
 // ─── Label / metadata ──────────────────────────────────────────────────────
@@ -353,13 +324,9 @@ program
     .requiredOption("-i, --issue <id>", "Issue ID or identifier")
     .requiredOption("-l, --label <name>", "Label name")
     .action(async (opts) => {
-    if (!apiKey) {
-        console.error(`Missing ${config.linear.apiKeyEnv}`);
-        process.exit(1);
-    }
+    requireTrackerAuth();
     const dryRun = program.opts().dryRun;
-    const client = createLinearClient(apiKey);
-    const issue = await getIssueByIdentifier(client, opts.issue) ?? await getIssue(client, opts.issue);
+    const issue = await tracker.getIssueByIdentifier(opts.issue) ?? await tracker.getIssue(opts.issue);
     if (!issue) {
         console.error("Issue not found");
         process.exit(1);
@@ -368,7 +335,7 @@ program
         out({ dryRun: true, wouldAdd: opts.label });
         return;
     }
-    await addLabel(client, issue.id, opts.label, config);
+    await tracker.addLabel(issue.id, opts.label, config);
     out({ ok: true });
 });
 program
@@ -377,13 +344,9 @@ program
     .requiredOption("-i, --issue <id>", "Issue ID or identifier")
     .requiredOption("-l, --label <name>", "Label name")
     .action(async (opts) => {
-    if (!apiKey) {
-        console.error(`Missing ${config.linear.apiKeyEnv}`);
-        process.exit(1);
-    }
+    requireTrackerAuth();
     const dryRun = program.opts().dryRun;
-    const client = createLinearClient(apiKey);
-    const issue = await getIssueByIdentifier(client, opts.issue) ?? await getIssue(client, opts.issue);
+    const issue = await tracker.getIssueByIdentifier(opts.issue) ?? await tracker.getIssue(opts.issue);
     if (!issue) {
         console.error("Issue not found");
         process.exit(1);
@@ -392,7 +355,7 @@ program
         out({ dryRun: true, wouldRemove: opts.label });
         return;
     }
-    await removeLabel(client, issue.id, opts.label);
+    await tracker.removeLabel(issue.id, opts.label);
     out({ ok: true });
 });
 program
@@ -401,13 +364,9 @@ program
     .requiredOption("-i, --issue <id>", "Issue ID or identifier")
     .requiredOption("-s, --status <name>", "Status: Backlog, Ready, In Progress, In Review, Blocked, Done, Canceled")
     .action(async (opts) => {
-    if (!apiKey) {
-        console.error(`Missing ${config.linear.apiKeyEnv}`);
-        process.exit(1);
-    }
+    requireTrackerAuth();
     const dryRun = program.opts().dryRun;
-    const client = createLinearClient(apiKey);
-    const issue = await getIssueByIdentifier(client, opts.issue) ?? await getIssue(client, opts.issue);
+    const issue = await tracker.getIssueByIdentifier(opts.issue) ?? await tracker.getIssue(opts.issue);
     if (!issue) {
         console.error("Issue not found");
         process.exit(1);
@@ -416,7 +375,7 @@ program
         out({ dryRun: true, wouldSet: opts.status });
         return;
     }
-    await updateIssueState(client, issue.id, opts.status);
+    await tracker.updateIssueState(issue.id, opts.status);
     out({ ok: true });
 });
 program
@@ -426,13 +385,9 @@ program
     .option("-t, --text <text>", "Comment text")
     .option("-f, --file <path>", "Read comment from file")
     .action(async (opts) => {
-    if (!apiKey) {
-        console.error(`Missing ${config.linear.apiKeyEnv}`);
-        process.exit(1);
-    }
+    requireTrackerAuth();
     const dryRun = program.opts().dryRun;
-    const client = createLinearClient(apiKey);
-    const issue = await getIssueByIdentifier(client, opts.issue) ?? await getIssue(client, opts.issue);
+    const issue = await tracker.getIssueByIdentifier(opts.issue) ?? await tracker.getIssue(opts.issue);
     if (!issue) {
         console.error("Issue not found");
         process.exit(1);
@@ -450,16 +405,16 @@ program
         out({ dryRun: true, wouldComment: body.slice(0, 100) + "..." });
         return;
     }
-    const commentId = await addComment(client, issue.id, body);
+    const commentId = await tracker.addComment(issue.id, body);
     out({ ok: true, commentId });
 });
 program
     .command("pr-create")
-    .description("Create PR from current branch, optionally linked to Linear issue")
-    .requiredOption("-i, --issue <id>", "Linear issue identifier (e.g. ELM-62)")
+    .description("Create PR from current branch, optionally linked to tracker issue")
+    .requiredOption("-i, --issue <id>", "Issue key or id (e.g. ELM-62, PROJ-1)")
     .option("-b, --base <branch>", "Base branch", "main")
     .option("--head <branch>", "Head branch (default: current git branch)")
-    .option("-t, --title <text>", "PR title (default: fix(ISSUE): from Linear)")
+    .option("-t, --title <text>", "PR title (default: fix(ISSUE): from tracker)")
     .action(async (opts) => {
     const token = process.env.GITHUB_TOKEN;
     if (!token) {
@@ -475,9 +430,8 @@ program
     const head = opts.head ?? (await getCurrentBranch());
     let title = opts.title;
     let body = "";
-    if (apiKey) {
-        const client = createLinearClient(apiKey);
-        const issue = await getIssueByIdentifier(client, opts.issue) ?? await getIssue(client, opts.issue);
+    if (tracker.tryAuth()) {
+        const issue = await tracker.getIssueByIdentifier(opts.issue) ?? await tracker.getIssue(opts.issue);
         if (issue) {
             if (!title)
                 title = `fix(${opts.issue}): ${issue.title}`;
@@ -520,14 +474,10 @@ program
     .option("--pr <number>", "PR number (for link in comment)")
     .option("-t, --text <text>", "Additional failure text (prepended to logs)")
     .action(async (opts) => {
-    if (!apiKey) {
-        console.error(`Missing ${config.linear.apiKeyEnv}`);
-        process.exit(1);
-    }
+    requireTrackerAuth();
     const token = process.env.GITHUB_TOKEN;
     const dryRun = program.opts().dryRun;
-    const client = createLinearClient(apiKey);
-    const issue = await getIssueByIdentifier(client, opts.issue) ?? await getIssue(client, opts.issue);
+    const issue = await tracker.getIssueByIdentifier(opts.issue) ?? await tracker.getIssue(opts.issue);
     if (!issue) {
         console.error("Issue not found");
         process.exit(1);
@@ -545,14 +495,14 @@ program
     const header = `**CI failed** (self-heal)\n\n${prUrl ? `PR: ${prUrl}\n\n` : ""}Returning to Developer for fix.`;
     failureText = header + (failureText ? `\n\n${failureText}` : "");
     if (!dryRun) {
-        await addComment(client, issue.id, failureText);
+        await tracker.addComment(issue.id, failureText);
         const handoff = computeHandoff("release-manager", "developer", config);
         for (const lbl of handoff.labelsToRemove)
-            await removeLabel(client, issue.id, lbl);
+            await tracker.removeLabel(issue.id, lbl);
         for (const lbl of handoff.labelsToAdd)
-            await addLabel(client, issue.id, lbl, config);
-        await addLabel(client, issue.id, "result:failed", config);
-        await updateIssueState(client, issue.id, "Ready");
+            await tracker.addLabel(issue.id, lbl, config);
+        await tracker.addLabel(issue.id, "result:failed", config);
+        await tracker.updateIssueState(issue.id, "Ready");
     }
     out({ ok: true, action: "returned_to_developer", reason: "ci_fail" });
 });
@@ -569,10 +519,7 @@ program
         console.error("Missing GITHUB_TOKEN");
         process.exit(1);
     }
-    if (!apiKey) {
-        console.error(`Missing ${config.linear.apiKeyEnv}`);
-        process.exit(1);
-    }
+    requireTrackerAuth();
     const dryRun = program.opts().dryRun;
     const remote = await getGitRemote();
     if (!remote) {
@@ -592,8 +539,7 @@ program
         process.exit(1);
     }
     const status = await getPRStatus(token, remote.owner, remote.repo, prNumber);
-    const client = createLinearClient(apiKey);
-    const issue = await getIssueByIdentifier(client, opts.issue) ?? await getIssue(client, opts.issue);
+    const issue = await tracker.getIssueByIdentifier(opts.issue) ?? await tracker.getIssue(opts.issue);
     if (!issue) {
         console.error("Issue not found");
         process.exit(1);
@@ -617,14 +563,14 @@ program
         }
         failureText += `\n\nReturning to Developer for fix.`;
         if (!dryRun) {
-            await addComment(client, issue.id, failureText);
+            await tracker.addComment(issue.id, failureText);
             const handoff = computeHandoff("release-manager", "developer", config);
             for (const lbl of handoff.labelsToRemove)
-                await removeLabel(client, issue.id, lbl);
+                await tracker.removeLabel(issue.id, lbl);
             for (const lbl of handoff.labelsToAdd)
-                await addLabel(client, issue.id, lbl, config);
-            await addLabel(client, issue.id, "result:failed", config);
-            await updateIssueState(client, issue.id, "Ready");
+                await tracker.addLabel(issue.id, lbl, config);
+            await tracker.addLabel(issue.id, "result:failed", config);
+            await tracker.updateIssueState(issue.id, "Ready");
         }
         out({ ok: false, action: "returned_to_developer", reason: "ci_failed", ...failurePayload });
         process.exit(1);
@@ -632,7 +578,7 @@ program
     if (!status.hasPreviewDeploy && !opts.forceInReview) {
         const msg = `**Waiting for deploy** (Release Manager)\n\nPR: https://github.com/${remote.owner}/${remote.repo}/pull/${status.number}\n\nPreview deploy not ready yet. Not moving to In Review until deploy exists.\nUse \`--force-in-review\` to override.`;
         if (!dryRun)
-            await addComment(client, issue.id, msg);
+            await tracker.addComment(issue.id, msg);
         out({ ok: false, action: "waiting_for_deploy", ...failurePayload });
         process.exit(1);
     }
@@ -641,7 +587,7 @@ program
         if (!verify.ok) {
             const msg = `**Preview not live yet** (Release Manager)\n\nPR: https://github.com/${remote.owner}/${remote.repo}/pull/${status.number}\nPreview: ${status.previewUrl}\n\nReason: ${verify.reason || "unknown"}\n\nBunny may still be deploying. Try again in a few minutes.`;
             if (!dryRun)
-                await addComment(client, issue.id, msg);
+                await tracker.addComment(issue.id, msg);
             out({ ok: false, action: "waiting_for_deploy", previewNotLive: true, reason: verify.reason, ...failurePayload });
             process.exit(1);
         }
@@ -653,14 +599,14 @@ program
         if (!dryRun) {
             for (const r of ["developer", "release-manager"]) {
                 try {
-                    await removeLabel(client, issue.id, READY_LABELS[r]);
+                    await tracker.removeLabel(issue.id, READY_LABELS[r]);
                 }
                 catch {
                     /* label may not exist */
                 }
             }
-            await updateIssueState(client, issue.id, "In Review");
-            await addComment(client, issue.id, `**Ready for human review** (autonomous)\n\nPR: ${prUrl}\nPreview: ${previewUrl}\n\nMerge remains human-only.`);
+            await tracker.updateIssueState(issue.id, "In Review");
+            await tracker.addComment(issue.id, `**Ready for human review** (autonomous)\n\nPR: ${prUrl}\nPreview: ${previewUrl}\n\nMerge remains human-only.`);
             const notifyTo = (process.env.IN_REVIEW_NOTIFY_EMAIL || "").trim();
             if (notifyTo) {
                 await sendInReviewNotification({
@@ -678,15 +624,15 @@ program
         if (!dryRun) {
             for (const r of ["developer", "release-manager"]) {
                 try {
-                    await removeLabel(client, issue.id, READY_LABELS[r]);
+                    await tracker.removeLabel(issue.id, READY_LABELS[r]);
                 }
                 catch {
                     /* label may not exist */
                 }
             }
-            await addLabel(client, issue.id, STAGE_LABELS["qa-automation"], config);
-            await addLabel(client, issue.id, READY_LABELS["qa-automation"], config);
-            await addComment(client, issue.id, `**Deploy ready — QA Automation**\n\nPR: ${prUrl}\nPreview (test here): ${previewUrl}\n\nRun E2E on preview, then \`complete -i ${opts.issue} -r qa-automation\` to move to In Review.`);
+            await tracker.addLabel(issue.id, STAGE_LABELS["qa-automation"], config);
+            await tracker.addLabel(issue.id, READY_LABELS["qa-automation"], config);
+            await tracker.addComment(issue.id, `**Deploy ready — QA Automation**\n\nPR: ${prUrl}\nPreview (test here): ${previewUrl}\n\nRun E2E on preview, then \`complete -i ${opts.issue} -r qa-automation\` to move to In Review.`);
         }
         out({ ok: true, action: "handed_off_to_qa", prNumber: status.number, previewUrl });
     }

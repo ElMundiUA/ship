@@ -1,8 +1,12 @@
 {
-  "name": "linear-agent",
+  "name": "ship-agent",
   "version": "0.6.0",
-  "description": "Linear + GitHub Actions + Cursor Cloud Agent tooling (docs v0.6.0)",
+  "description": "Ship CLI: Linear or Jira Cloud + GitHub Actions + Cursor Cloud Agent (docs v0.6.0)",
   "main": "index.js",
+  "bin": {
+    "ship-agent": "dist/cli.js",
+    "linear-agent": "dist/cli.js"
+  },
   "directories": {
     "doc": "docs"
   },

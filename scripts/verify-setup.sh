@@ -131,14 +131,14 @@ else
   echo "⚠️  Bunny: BUNNYNET_API_KEY not set (PR deploy will fail)"
 fi
 
-# 5) linear-agent CLI
+# 5) ship-agent CLI (dist/cli.js; npm package ship-agent, bin ship-agent / linear-agent)
 echo ""
-echo "--- linear-agent CLI ---"
+echo "--- ship-agent CLI ---"
 if [[ -f "$AGENT_DIR/dist/cli.js" ]]; then
-  echo "✅ linear-agent: dist/cli.js exists"
+  echo "✅ ship-agent: dist/cli.js exists"
   ((PASS++)) || true
 else
-  echo "❌ linear-agent: dist/cli.js missing (run build)"
+  echo "❌ ship-agent: dist/cli.js missing (run build)"
   ((FAIL++)) || true
 fi
 

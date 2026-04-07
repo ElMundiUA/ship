@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * linear-agent CLI - multi-role agent orchestration for Linear.
+ * ship-agent CLI — multi-role orchestration (Linear or Jira Cloud).
  */
 import "dotenv/config";
 //# sourceMappingURL=cli.d.ts.map

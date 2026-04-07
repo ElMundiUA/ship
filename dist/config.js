@@ -1,11 +1,50 @@
 /**
- * Configuration for linear-agent system.
- * Loads .env via dotenv (from CLI entry) for LINEAR_API_KEY.
+ * Configuration for ship-agent (multi-tracker + workflow).
+ * Loads .env via dotenv (from CLI entry). Legacy: LINEAR_AGENT_CONFIG, linear-agent.config.json.
  */
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { z } from "zod";
 const ConfigSchema = z.object({
+    tracker: z
+        .object({
+        provider: z
+            .enum(["linear", "jira", "github", "azure-devops", "clickup"])
+            .default("linear")
+            .describe("Default when TRACKER_PROVIDER is unset"),
+        jira: z
+            .object({
+            hostEnv: z.string().optional(),
+            patEnv: z.string().optional(),
+            emailEnv: z.string().optional(),
+            tokenEnv: z.string().optional(),
+        })
+            .optional(),
+        github: z
+            .object({
+            tokenEnv: z.string().optional(),
+            altTokenEnv: z.string().optional(),
+            repoEnv: z.string().optional(),
+            ownerEnv: z.string().optional(),
+            repoNameEnv: z.string().optional(),
+        })
+            .optional(),
+        azureDevops: z
+            .object({
+            orgEnv: z.string().optional(),
+            projectEnv: z.string().optional(),
+            patEnv: z.string().optional(),
+        })
+            .optional(),
+        clickup: z
+            .object({
+            tokenEnv: z.string().optional(),
+            listIdEnv: z.string().optional(),
+            teamIdEnv: z.string().optional(),
+        })
+            .optional(),
+    })
+        .default({ provider: "linear" }),
     linear: z.object({
         apiKeyEnv: z.string().default("LINEAR_API_KEY"),
         teamId: z.string().optional(),
@@ -46,6 +85,7 @@ const ConfigSchema = z.object({
     }),
 });
 const DEFAULT_CONFIG = {
+    tracker: { provider: "linear" },
     linear: { apiKeyEnv: "LINEAR_API_KEY" },
     workflow: {
         roles: ["ba", "bug-agent", "architect", "qa-architect", "developer", "qa-automation", "release-manager"],
@@ -58,9 +98,14 @@ const DEFAULT_CONFIG = {
 export function loadConfig(configPath) {
     const paths = [
         configPath,
+        process.env.SHIP_AGENT_CONFIG,
         process.env.LINEAR_AGENT_CONFIG,
+        "ship-agent.config.json",
+        ".ship-agent.json",
         "linear-agent.config.json",
         ".linear-agent.json",
+        resolve(process.cwd(), "ship-agent.config.json"),
+        resolve(process.cwd(), ".ship-agent.json"),
         resolve(process.cwd(), "linear-agent.config.json"),
         resolve(process.cwd(), ".linear-agent.json"),
     ].filter(Boolean);
