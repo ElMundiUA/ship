@@ -1,6 +1,6 @@
 # Tools
 
-Ship is **tool-agnostic** in principle. This page is about **where the rubber meets the road**: the adapter layer between “pick → launch → PR → audit trail” and the vendors we actually plug in at ElMundi today. Names change; the **contract** does not. Honesty matters here — some of what follows is **pattern** (replaceable), some is **coupling** we chose on purpose.
+Ship is **tool-agnostic** in principle. This page is about **where the rubber meets the road**: the adapter layer between “pick → launch → PR → audit trail” and the vendors in a **reference deployment**. Names change; the **contract** does not. Honesty matters here — some of what follows is **pattern** (replaceable), some is **coupling** a given org chose on purpose.
 
 ---
 
@@ -26,7 +26,7 @@ That list is our **reference deployment**, not a mandate. Swap an adapter, keep 
 
 ## Example wiring
 
-Filenames, secrets, and cron-shaped truth for ElMundi stay in **[Examples → ElMundi](../examples/elmundi/index.md)** so this page stays about *roles*, not copy-paste tables.
+Filenames, secrets, and cron-shaped truth for the reference org stay in **[Examples → Reference org](../examples/elmundi/index.md)** so this page stays about *roles*, not copy-paste tables.
 
 ---
 
@@ -67,7 +67,7 @@ Framework: [Deterministic pick](../framework/index.md#deterministic-pick).
 
 ### Swapping Linear for something else
 
-Keep **pick** returning one **issue key string** (or empty). Keep **launch** resolving the same metadata (title, team, branch-safe slug). Coupling surface: [The system](../framework/index.md#the-system). Reference project names: [Examples → ElMundi → SDLC](../examples/elmundi/index.md#sdlc-scheduled).
+Keep **pick** returning one **issue key string** (or empty). Keep **launch** resolving the same metadata (title, team, branch-safe slug). Coupling surface: [The system](../framework/index.md#the-system). Reference project names: [Examples → SDLC](../examples/elmundi/index.md#sdlc-scheduled).
 
 ---
 
@@ -94,13 +94,13 @@ Business rules in YAML spaghetti. Pick stays in **scripts**; YAML stays **when**
 
 ### Concurrency and duplicate work
 
-Concurrency groups when push + schedule + manual could fire the same lane — otherwise overlapping agents, the failure mode Ship tries to delete. ElMundi patterns: [Workflows catalog](../examples/elmundi/index.md#workflows-catalog).
+Concurrency groups when push + schedule + manual could fire the same lane — otherwise overlapping agents, the failure mode Ship tries to delete. Reference patterns: [Workflows catalog](../examples/elmundi/index.md#workflows-catalog).
 
 ---
 
 ### Alternatives
 
-GitLab CI, Buildkite, CircleCI — same idea: schedule + checkout + `node scripts/…`. The badge is branding; the pattern is not. Filenames for our repo: [Workflows catalog](../examples/elmundi/index.md#workflows-catalog).
+GitLab CI, Buildkite, CircleCI — same idea: schedule + checkout + `node scripts/…`. The badge is branding; the pattern is not. Filenames for the reference repo: [Workflows catalog](../examples/elmundi/index.md#workflows-catalog).
 
 ---
 
@@ -128,7 +128,7 @@ GitHub passes **`CURSOR_API_KEY`** when launching. For the agent to **update Lin
 
 1. **Cursor Dashboard** → Cloud Agents / Repository / Environment (wording may vary).  
 2. Add **`LINEAR_API_KEY`** (same value as in GitHub). `GITHUB_TOKEN` is usually not required for Linear.  
-3. Optional: **`LINEAR_SDLC_PROJECT_ID`** or **`LINEAR_SDLC_PROJECT_NAME`** — SDLC picks scoped to one project (default in code matches ElMundi pre-release).
+3. Optional: **`LINEAR_SDLC_PROJECT_ID`** or **`LINEAR_SDLC_PROJECT_NAME`** — SDLC picks scoped to one Linear project (set in `.env` / CI; no org-specific default in this package).
 
 Until that key exists in the agent env, prompts may fall back to asking for a manual **`[LINEAR-DRAFT]`** comment — that is **miswired secrets**, not a feature.
 
@@ -190,7 +190,7 @@ Application tests under `website/`; CI sets `PLAYWRIGHT_BASE_URL` to **dev**, **
 
 ### Why skip-by-default is not laziness
 
-Lanes you **promised** should fail closed on missing secrets. Scanners are different: “required on day one” often means noise or blocked PRs while envs still spin up. Skipping with a clear log line is **honest** if you know where skipping is **not** allowed (production-adjacent or scheduled audits). ElMundi schedules: [Daily audits](../examples/elmundi/index.md#daily-audits).
+Lanes you **promised** should fail closed on missing secrets. Scanners are different: “required on day one” often means noise or blocked PRs while envs still spin up. Skipping with a clear log line is **honest** if you know where skipping is **not** allowed (production-adjacent or scheduled audits). Example schedules: [Daily audits](../examples/elmundi/index.md#daily-audits).
 
 ---
 

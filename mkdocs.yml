@@ -1,6 +1,6 @@
 # Ship — MkDocs + Material (English only; *.uk.md excluded)
-# Repo: https://github.com/ElMundiUA/ship — build: pip install -r requirements-docs.txt && mkdocs serve
-# Production: https://ship.elmundi.com
+# Build: pip install -r requirements-docs.txt && mkdocs serve
+# repo_url / site_url: set to your GitHub repo and deployed docs origin (defaults below suit the public Ship package).
 
 site_name: Ship — The Framework That Ships Software
 site_url: https://ship.elmundi.com/
@@ -78,4 +78,4 @@ nav:
   - Part II — Prompts & workflows: prompts-workflows/index.md
   - Part III — Tools: tools/index.md
   - Part IV — Examples:
-      - ElMundi (reference deployment): examples/elmundi/index.md
+      - Reference org (example wiring): examples/elmundi/index.md

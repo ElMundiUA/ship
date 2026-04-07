@@ -2,6 +2,15 @@
  * GitHub API client for PR creation.
  */
 const GITHUB_API = "https://api.github.com";
+function prPreviewMarkers() {
+    const raw = (process.env.GITHUB_PR_PREVIEW_COMMENT_MARKERS ||
+        process.env.GITHUB_PR_PREVIEW_COMMENT_MARKER ||
+        "").trim();
+    if (raw) {
+        return raw.split(",").map((s) => s.trim()).filter(Boolean);
+    }
+    return ["<!-- ship-pr-preview -->"];
+}
 export async function createPR(opts) {
     const res = await fetch(`${GITHUB_API}/repos/${opts.owner}/${opts.repo}/pulls`, {
         method: "POST",
@@ -96,8 +105,8 @@ export async function getPRStatus(token, owner, repo, prNumber) {
     }
     const commentsRes = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/issues/${prNumber}/comments`, { headers });
     const comments = commentsRes.ok ? (await commentsRes.json()) : [];
-    const previewMarker = "<!-- elmundi-preview -->";
-    const previewComment = comments.find((c) => c.body?.includes(previewMarker));
+    const markers = prPreviewMarkers();
+    const previewComment = comments.find((c) => c.body && markers.some((m) => c.body.includes(m)));
     let hasPreviewDeploy = false;
     let previewUrl = "";
     if (previewComment?.body) {

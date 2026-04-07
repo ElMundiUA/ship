@@ -1,6 +1,6 @@
 # Architecture & data flows
 
-Execution is anchored in **GitHub Actions** on the **elmundi** repository. The **Cursor Cloud Agent** runs in Cursor’s cloud against a cloned repo; **Linear** receives updates via API when keys are available.
+Execution is anchored in **GitHub Actions** in **whatever repository runs your workflows** (this Ship package alone, or a product monorepo that vendors it). The **Cursor Cloud Agent** runs in Cursor’s cloud against a cloned repo; **Linear** receives updates via API when keys are available.
 
 !!! note "Diagrams on this page"
     **System context** — components and trust boundaries (`architecture.svg`). **SDLC states** — Backlog vs Todo entry (`sdlc-states.svg`, also used on [Vision & extensibility](enterprise.md)). Sources: `docs/diagrams/*.d2`; SVGs regenerate on `mkdocs build` if `d2` is on `PATH`.
@@ -21,11 +21,13 @@ High-level view of how **Backlog** (human) vs **Todo** (automation entry) differ
 
 ## Linear projects
 
+Typical split (names are **yours** — configure via env; one concrete mapping: [Examples → Reference org](../examples/elmundi/index.md)):
+
 | Project | Role |
 |---------|------|
-| **ElMundi pre-release** | Operational SDLC. Automation **does not** pick from **Backlog**; issues must be in **Todo** with pick filters (project + labels). |
-| **ElMundi tech debt** | Tech architect & QA architect findings (evidence-based). |
-| **ElMundi security** | Dependency/security items from Snyk (deduplicated). |
+| **Delivery / pre-release** | Operational SDLC. Automation **does not** pick from **Backlog**; issues must be in **Todo** with pick filters (project + labels). |
+| **Tech debt** | Tech architect & QA architect findings (evidence-based). |
+| **Security** | Dependency/security items from scanners (deduplicated). |
 
 Create tech/security projects once: `node scripts/ensure-audit-linear-projects.mjs` (see [Daily audits](DAILY-AUDIT-ROLES.md)).
 

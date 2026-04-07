@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Create Linear projects for daily audit roles if missing.
- * Defaults: "ElMundi tech debt", "ElMundi security" on team ELM.
+ * Default project names: "Tech debt", "Security" (override via env — see .env.example).
  *
  * Usage: cd tools/linear-agent && node scripts/ensure-audit-linear-projects.mjs [--dry-run]
  * Requires LINEAR_API_KEY (+ LINEAR_TEAM_KEY) in .env

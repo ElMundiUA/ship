@@ -1,6 +1,6 @@
 # Prompts & workflows
 
-This chapter exists because behaviour and wording drift together. You can wire Linear, GitHub Actions, and a cloud agent correctly and still watch the loop go sideways when the *instructions* live only in someone’s head or in a product UI that forgets to version itself. ElMundi treats prompts the same way it treats workflow YAML: **git is the source of truth**, PRs are the review room, and “we fixed it in chat” is a waypoint — not the finish line.
+This chapter exists because behaviour and wording drift together. You can wire Linear, GitHub Actions, and a cloud agent correctly and still watch the loop go sideways when the *instructions* live only in someone’s head or in a product UI that forgets to version itself. Mature Ship adoptions treat prompts the same way they treat workflow YAML: **git is the source of truth**, PRs are the review room, and “we fixed it in chat” is a waypoint — not the finish line.
 
 **Framework** says what must stay true about automation. **Tools** names the adapters. **Here** we spell out how prompts and workflow *patterns* evolve without turning the repo into a graveyard of one-off hacks: start thin, let a scheduled or manual run prove where the text lied, patch once at human speed, then **promote** the lesson into `cloud-prompts/` so the **next cron tick** inherits it. That is how tonight’s thread becomes tomorrow’s run — with a diff you can blame and roll back.
 
@@ -19,13 +19,13 @@ The habit underneath is almost boring on purpose — **boring survives reality**
 ## Catalogs
 
 - [Prompt catalog](#prompt-catalog) — roles and files in `cloud-prompts/`.  
-- [Workflow patterns](#workflow-patterns) — what each **class** of YAML is for (ElMundi filenames stay under **Examples**).
+- [Workflow patterns](#workflow-patterns) — what each **class** of YAML is for (concrete filenames stay under **Examples**).
 
 ---
 
 ## Where the files actually are
 
-In the ElMundi monorepo: `cloud-prompts/`.  
+In this package: `cloud-prompts/` at the repo root (or the same path inside a vendored copy).  
 Skills embedded by the launch path live under `.cursor/skills/` — keep them **short**; link out to this manual for depth.
 
 ---
@@ -218,7 +218,7 @@ If you cannot answer, you are not adding a prompt — you are adding noise.
 
 YAML files differ by **intent**. This page names the **patterns** — the *why* — so you can design your own filenames without copying ours by accident.
 
-**Concrete ElMundi filenames** live in [Examples → ElMundi → Workflows catalog](../examples/elmundi/index.md#workflows-catalog).
+**Concrete filenames** for the reference org live in [Examples → Workflows catalog](../examples/elmundi/index.md#workflows-catalog).
 
 ---
 

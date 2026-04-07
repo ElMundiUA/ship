@@ -6,7 +6,7 @@ GitHub передає **`CURSOR_API_KEY`** при запуску агента. �
 
 1. **Cursor Dashboard** → Cloud Agents / Repository / Environment (точна назва може відрізнятися).
 2. Додай **`LINEAR_API_KEY`** (те саме значення, що й GitHub `LINEAR_API_KEY`). `GITHUB_TOKEN` для Linear зазвичай не потрібен.
-3. Опційно: **`LINEAR_SDLC_PROJECT_ID`** або **`LINEAR_SDLC_PROJECT_NAME`** — SDLC pick обмежені одним проєктом Linear (дефолт: id ElMundi pre-release у коді).
+3. Для SDLC pick: **`LINEAR_SDLC_PROJECT_ID`** або **`LINEAR_SDLC_PROJECT_NAME`** — без одного з них скрипти не знають, з якого проєкту Linear обирати (див. **`.env.example`**).
 
 Поки ключа немає в env агента, промпти можуть просити ручний коментар **`[LINEAR-DRAFT]`** на тикеті.
 

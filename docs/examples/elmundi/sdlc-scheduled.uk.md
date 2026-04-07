@@ -45,7 +45,7 @@ Linear — **джерело істини** для стану issue.
 
 ## Обсяг: проєкт, Backlog, Todo
 
-Усі pick-скрипти SDLC фільтрують за проєктом **ElMundi pre-release** (перевизначення: **`LINEAR_SDLC_PROJECT_ID`** / **`LINEAR_SDLC_PROJECT_NAME`**).
+Усі pick-скрипти SDLC фільтрують за **налаштованим** проєктом доставки — у цьому референсі **ElMundi pre-release** через **`LINEAR_SDLC_PROJECT_ID`** / **`LINEAR_SDLC_PROJECT_NAME`**.
 
 **Backlog** — лише люди. Щоб запустити ланцюжок, перенеси картку в **Todo**.
 

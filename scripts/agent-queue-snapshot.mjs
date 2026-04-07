@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * Снимок очередей SDLC (те ж фільтри, що pick-* скрипти).
- * Запуск: cd tools/linear-agent && node scripts/agent-queue-snapshot.mjs
+ * SDLC queue snapshot (same filters as pick-* scripts).
+ * Run: node scripts/agent-queue-snapshot.mjs
  * JSON: node scripts/agent-queue-snapshot.mjs --json
  */
 import { readFileSync, existsSync } from "node:fs";
@@ -64,7 +64,9 @@ async function main() {
   const getEnv = (k) => process.env[k] || dot[k];
   const projectId = await resolveSdlcProjectId(apiKey, getEnv);
   if (!projectId) {
-    console.error("Could not resolve SDLC Linear project (set LINEAR_SDLC_PROJECT_ID).");
+    console.error(
+      "Could not resolve SDLC Linear project — set LINEAR_SDLC_PROJECT_ID or LINEAR_SDLC_PROJECT_NAME (see .env.example)."
+    );
     process.exit(1);
   }
 
@@ -183,7 +185,7 @@ async function main() {
       developer: { count: devPool.length, nextPick: devPool[0]?.identifier ?? null, sample: take(devPool) },
     },
     note:
-      "Scheduled workflow бере по 1 задачі на слот (кожні ~2 год на роль). Щоб до вечора пройти більше — workflow_dispatch з issue=ELM-XX.",
+      "Scheduled workflows usually take one ticket per slot per role (~2h). To process more the same day, use workflow_dispatch with issue=TICKET-XX.",
   };
 
   if (jsonOut) {
@@ -193,7 +195,7 @@ async function main() {
 
   const { queues: q } = snapshot;
   console.log(`\n=== SDLC queue snapshot — ${team.key} — ${snapshot.generatedAt} ===\n`);
-  console.log(`Intake (Todo + ElMundi pre-release, без stage/intake/clarification/ready:dev): ${q.intake.count}`);
+  console.log(`Intake (Todo + SDLC project, no stage:intake / needs:clarification / ready:developer): ${q.intake.count}`);
   console.log(`  next pick: ${q.intake.nextPick ?? "—"}`);
   console.log(`  sample: ${q.intake.sample.join(", ") || "—"}\n`);
   console.log(`Clarification: ${q.clarification.countTotal} total, ${q.clarification.countEligibleForPick} eligible (cooldown)`);

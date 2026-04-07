@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Pick one Linear issue: Todo + ready:developer, excluding blocked labels.
- * Prints identifier (e.g. ELM-42) or nothing.
+ * Prints identifier (e.g. ENG-42) or nothing.
  * In GitHub Actions: exit 1 if LINEAR_API_KEY is missing (fail the job loudly).
  */
 import { readFileSync, existsSync } from "node:fs";

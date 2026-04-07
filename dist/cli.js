@@ -221,12 +221,15 @@ program
                 const previewUrl = status.previewUrl || prUrl;
                 await updateIssueState(client, issue.id, "In Review");
                 await addComment(client, issue.id, `**Ready for human review**\n\nPR: ${prUrl}\nPreview: ${previewUrl}\n\nMerge remains human-only.`);
-                await sendInReviewNotification({
-                    to: "support@elmundi.com",
-                    issueId: issue.identifier,
-                    previewUrl,
-                    prUrl,
-                });
+                const notifyTo = (process.env.IN_REVIEW_NOTIFY_EMAIL || "").trim();
+                if (notifyTo) {
+                    await sendInReviewNotification({
+                        to: notifyTo,
+                        issueId: issue.identifier,
+                        previewUrl,
+                        prUrl,
+                    });
+                }
             }
         }
     }
@@ -658,12 +661,15 @@ program
             }
             await updateIssueState(client, issue.id, "In Review");
             await addComment(client, issue.id, `**Ready for human review** (autonomous)\n\nPR: ${prUrl}\nPreview: ${previewUrl}\n\nMerge remains human-only.`);
-            await sendInReviewNotification({
-                to: "support@elmundi.com",
-                issueId: opts.issue,
-                previewUrl,
-                prUrl,
-            });
+            const notifyTo = (process.env.IN_REVIEW_NOTIFY_EMAIL || "").trim();
+            if (notifyTo) {
+                await sendInReviewNotification({
+                    to: notifyTo,
+                    issueId: opts.issue,
+                    previewUrl,
+                    prUrl,
+                });
+            }
         }
         out({ ok: true, action: "moved_to_in_review", autonomous: true, prNumber: status.number, previewUrl });
     }

@@ -88,7 +88,7 @@ jobs:
           BUNNY_APP_ID: ${{ vars.BUNNY_APP_ID }}
           SHIP_MC_APP_NAME: ${{ vars.SHIP_MC_APP_NAME || 'ship-docs' }}
           DOCKER_IMAGE_NAME: ${{ vars.DOCKER_IMAGE_NAME || 'dekus/ship-docs' }}
-          MC_CONTAINER_NAME: ${{ vars.BUNNY_CONTAINER_NAME || 'ship' }}
+          MC_CONTAINER_NAME: ${{ vars.BUNNY_CONTAINER_NAME || 'Container-1' }}
           IMAGE_TAG: latest
         run: node scripts/bunny-ship-docs.mjs ensure
 
@@ -97,10 +97,10 @@ jobs:
         with:
           app_id: ${{ steps.mc.outputs.app_id }}
           api_key: ${{ secrets.BUNNY_MAIN_API_KEY || secrets.BUNNYNET_API_KEY }}
-          container: ${{ vars.BUNNY_CONTAINER_NAME || 'ship' }}
+          container: ${{ steps.mc.outputs.mc_container_name }}
           image_tag: latest
 
-      # PATCH image tag alone may not roll pods; elmundi also hits deploy in scripts.
+      # PATCH image tag alone may not roll pods; explicit deploy triggers rollout.
       - name: Trigger Magic Container deploy (rollout)
         env:
           APP_ID: ${{ steps.mc.outputs.app_id }}
@@ -123,19 +123,28 @@ jobs:
           fi
           echo "Bunny deploy triggered OK." >> "$GITHUB_STEP_SUMMARY"
 
-      - name: DNS — what to configure for ship.elmundi.com
+      - name: DNS — custom hostname (optional)
         run: |
           HOST="${{ steps.mc.outputs.bunny_default_host }}"
+          CUSTOM="${{ vars.SHIP_DOCS_CUSTOM_HOST }}"
+          ZONE="${{ vars.SHIP_DOCS_DNS_ZONE }}"
           {
             echo "## Bunny hostname"
             echo "Default app host: **\`$HOST\`** (HTTPS)."
             echo ""
-            echo "### Custom domain **ship.elmundi.com**"
-            echo "1. Bunny dashboard → **Magic Containers** → **${{ vars.SHIP_MC_APP_NAME || 'ship-docs' }}** → your **CDN / HTTP endpoint** → **Custom hostnames** → add **ship.elmundi.com**."
-            echo "2. Bunny will show a **DNS target** (often a **CNAME** to a \`*.bunny.net\` / CDN hostname — not always the same string as the default mc host)."
-            echo "3. At your DNS provider for **elmundi.com**, create:"
-            echo "   - **Type:** \`CNAME\`"
-            echo "   - **Name / host:** \`ship\`"
-            echo "   - **Target / value:** exactly what Bunny shows for that custom hostname (copy-paste)."
-            echo "4. Wait for TLS + propagation; MkDocs \`site_url\` is already \`https://ship.elmundi.com/\`."
+            if [[ -n "${CUSTOM}" ]]; then
+              echo "### Custom domain **${CUSTOM}**"
+              echo "1. Bunny dashboard → **Magic Containers** → **${{ vars.SHIP_MC_APP_NAME || 'ship-docs' }}** → your **CDN / HTTP endpoint** → **Custom hostnames** → add **${CUSTOM}**."
+              echo "2. Bunny will show a **DNS target** (often a **CNAME** — copy the value they display)."
+              if [[ -n "${ZONE}" ]]; then
+                echo "3. At your DNS provider for **${ZONE}**, create the record Bunny specifies (often a **CNAME** for the hostname prefix of **${CUSTOM}**)."
+              else
+                echo "3. At your DNS provider, create the record Bunny specifies for **${CUSTOM}**."
+              fi
+              echo "4. Wait for TLS + propagation; align \`mkdocs.yml\` → \`site_url\` with **https://${CUSTOM}/** (trailing slash as you prefer)."
+            else
+              echo "### Custom domain"
+              echo "Set GitHub repository variables **SHIP_DOCS_CUSTOM_HOST** (e.g. \`docs.example.com\`) and optionally **SHIP_DOCS_DNS_ZONE** (e.g. \`example.com\`) to print tailored CNAME steps here."
+              echo "Until then, use Bunny’s UI for **Custom hostnames** and match \`site_url\` in \`mkdocs.yml\` to your real docs origin."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"

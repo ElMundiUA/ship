@@ -31,7 +31,7 @@ BRANCH="${BRANCH_PREFIX}/${ISSUE}-auto"
 
 # Repo URL (https for API)
 REMOTE=$(cd "$PROJECT_ROOT" && git remote get-url origin 2>/dev/null | sed 's|git@github.com:|https://github.com/|;s|\.git$||')
-REPO_URL="${REMOTE:-https://github.com/ElMundiUA/elmundi}"
+REPO_URL="${REMOTE:-https://github.com/}"
 
 PROMPT=$(cat <<EOF
 You are the Developer Agent.

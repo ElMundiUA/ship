@@ -1,13 +1,9 @@
 /**
- * SDLC pick scripts: restrict issues to one Linear project (pre-release lane).
- * Override: LINEAR_SDLC_PROJECT_ID, or LINEAR_SDLC_PROJECT_NAME for lookup.
+ * SDLC pick scripts: restrict issues to one Linear project (delivery lane).
+ * Configure with LINEAR_SDLC_PROJECT_ID (preferred) or LINEAR_SDLC_PROJECT_NAME (lookup).
+ * No org-specific defaults — set env or `.env` for your workspace.
  */
 import { linearGraphql } from "./linear-fetch.mjs";
-
-/** Canonical ElMundi pre-release project (see create-prerelease-e2e-bugs.mjs). */
-export const DEFAULT_SDLC_PROJECT_ID = "2eead1a7-8585-4678-96e9-6b3f86b6534c";
-
-const DEFAULT_PROJECT_NAME = "ElMundi pre-release";
 
 /**
  * @param {(k: string) => string | undefined} getEnv - from process.env or loaded .env
@@ -17,7 +13,14 @@ export async function resolveSdlcProjectId(apiKey, getEnv) {
   const id = (getEnv("LINEAR_SDLC_PROJECT_ID") || "").trim();
   if (id) return id;
 
-  const name = (getEnv("LINEAR_SDLC_PROJECT_NAME") || DEFAULT_PROJECT_NAME).trim();
+  const name = (getEnv("LINEAR_SDLC_PROJECT_NAME") || "").trim();
+  if (!name) {
+    console.warn(
+      "resolveSdlcProjectId: set LINEAR_SDLC_PROJECT_ID or LINEAR_SDLC_PROJECT_NAME (see docs Examples → reference org / .env.example)."
+    );
+    return null;
+  }
+
   try {
     const data = await linearGraphql(
       apiKey,
@@ -36,13 +39,13 @@ export async function resolveSdlcProjectId(apiKey, getEnv) {
     }
     if (hit?.id) return hit.id;
   } catch {
-    // fall through to default
+    /* fall through */
   }
 
   console.warn(
-    `resolveSdlcProjectId: no project named "${name}", using DEFAULT_SDLC_PROJECT_ID. Set LINEAR_SDLC_PROJECT_ID to override.`
+    `resolveSdlcProjectId: no Linear project named "${name}". Set LINEAR_SDLC_PROJECT_ID to the project UUID.`
   );
-  return DEFAULT_SDLC_PROJECT_ID;
+  return null;
 }
 
 /** @param {Record<string, unknown>} filter - Linear IssueFilter fragment */

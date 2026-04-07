@@ -1,12 +1,12 @@
 /**
  * Resolve Linear project IDs for daily audit roles (tech debt / security).
- * Env: LINEAR_TECH_DEBT_PROJECT_ID | LINEAR_TECH_DEBT_PROJECT_NAME (default "ElMundi tech debt")
- *      LINEAR_SECURITY_PROJECT_ID | LINEAR_SECURITY_PROJECT_NAME (default "ElMundi security")
+ * Env: LINEAR_TECH_DEBT_PROJECT_ID | LINEAR_TECH_DEBT_PROJECT_NAME (default "Tech debt")
+ *      LINEAR_SECURITY_PROJECT_ID | LINEAR_SECURITY_PROJECT_NAME (default "Security")
  */
 import { linearGraphql } from "./linear-fetch.mjs";
 
-export const DEFAULT_TECH_DEBT_PROJECT_NAME = "ElMundi tech debt";
-export const DEFAULT_SECURITY_PROJECT_NAME = "ElMundi security";
+export const DEFAULT_TECH_DEBT_PROJECT_NAME = "Tech debt";
+export const DEFAULT_SECURITY_PROJECT_NAME = "Security";
 
 /**
  * @param {(k: string) => string | undefined} getEnv

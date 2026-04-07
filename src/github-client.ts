@@ -4,6 +4,19 @@
 
 const GITHUB_API = "https://api.github.com";
 
+/** HTML comment markers in PR bodies that indicate a Magic Container / preview deploy (comma-separated in env). */
+function prPreviewMarkers(): string[] {
+  const raw = (
+    process.env.GITHUB_PR_PREVIEW_COMMENT_MARKERS ||
+    process.env.GITHUB_PR_PREVIEW_COMMENT_MARKER ||
+    ""
+  ).trim();
+  if (raw) {
+    return raw.split(",").map((s) => s.trim()).filter(Boolean);
+  }
+  return ["<!-- ship-pr-preview -->"];
+}
+
 export interface CreatePROptions {
   token: string;
   owner: string;
@@ -143,8 +156,10 @@ export async function getPRStatus(
     { headers }
   );
   const comments = commentsRes.ok ? ((await commentsRes.json()) as { body?: string }[]) : [];
-  const previewMarker = "<!-- elmundi-preview -->";
-  const previewComment = comments.find((c) => c.body?.includes(previewMarker));
+  const markers = prPreviewMarkers();
+  const previewComment = comments.find(
+    (c) => c.body && markers.some((m) => c.body!.includes(m))
+  );
   let hasPreviewDeploy = false;
   let previewUrl = "";
   if (previewComment?.body) {

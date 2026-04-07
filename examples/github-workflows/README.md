@@ -1,9 +1,9 @@
-# GitHub Actions — migrating from the ElMundi monorepo
+# GitHub Actions — migrating from a product monorepo
 
-Ship’s automation was first wired in **[ElMundiUA/elmundi](https://github.com/ElMundiUA/elmundi)** next to `website/`. Workflow files live there under `.github/workflows/`, for example:
+Many teams first wire Ship **beside application code** (e.g. `website/`) under `.github/workflows/`. **[Examples → Reference org](../../docs/examples/elmundi/index.md)** describes one public layout and filenames; your tree may differ.
 
-| Pattern (in elmundi) | Purpose |
-|----------------------|---------|
+| Pattern (typical) | Purpose |
+|-------------------|---------|
 | `linear-agent-sdlc-scheduled.yml` | SDLC grid (intake, clarification, BA, developer) |
 | `linear-agent-daily-audits.yml` | Tech / QA / security audit roles |
 | `linear-agent-autonomous.yml` | Autonomous developer lane |
@@ -19,4 +19,4 @@ Ship’s automation was first wired in **[ElMundiUA/elmundi](https://github.com/
 3. **Triggers** — `check-failure-recovery.yml` listens for `workflow_run` on a workflow **name** that must match your repo (e.g. not `"PR Checks + Preview Deploy"` unless you keep that exact title).
 4. **Secrets / vars** — unchanged conceptually (`LINEAR_API_KEY`, `CURSOR_API_KEY`, etc.); scope them to the repo that runs the workflows.
 
-We do **not** ship blindly copied YAML here: the monorepo versions embed ElMundi-specific names, schedules, and parent-workflow coupling. Copy from **elmundi**, apply the three steps above, then diff.
+We do **not** ship blindly copied YAML here: upstream monorepo workflows often embed **org-specific** names, schedules, and parent-workflow coupling. Start from your existing YAML or the reference example, apply the steps above, then diff.

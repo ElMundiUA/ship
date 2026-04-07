@@ -5,7 +5,7 @@
 **Outcomes:** clear problem/solution boundary, trust model, suggested next step.
 
 !!! note "Reference implementation"
-    This site documents a **reference deployment** in the ElMundi monorepo. For external collateral, replace org-specific names, URLs, and keys with your customer’s equivalents — or export only the pages under **Adoption** + **Vision** + **Architecture**.
+    This site documents **Ship** generically and links to **[Examples → Reference org](../examples/elmundi/index.md)** for one fully wired public layout. For external collateral, replace org-specific names, URLs, and keys — or export only the pages under **Adoption** + **Vision** + **Architecture**.
 
 ## Problem
 

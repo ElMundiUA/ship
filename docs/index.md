@@ -4,7 +4,7 @@
 
 **Ship** is the framework; this site is the manual. It is meant to read like a **short book** — opinionated, mostly **linear**, and **split on purpose** into parts you open from the top tabs.
 
-When hosted, the canonical URL is **https://ship.elmundi.com**. Until then, build locally — see below.
+When hosted, set the canonical URL in **`mkdocs.yml` → `site_url`** to match your deployment. Until then, build locally — see below.
 
 ---
 
@@ -12,11 +12,11 @@ When hosted, the canonical URL is **https://ship.elmundi.com**. Until then, buil
 
 We wrote this because **a working loop beats a loud demo**. You can read it **cover to cover** once and actually finish, or **look things up** when you already know which part you need — both are fine.
 
-**Linear read:** you get the pattern first (quiet-by-design agents, deterministic picks, one delivery role per window, separate audit universe, explicit trust boundaries), then how prompts live **in git**, then which **tools** are adapters, then **ElMundi** as the reference org — the public monorepo wiring with filenames, cron, domains, and secrets spelled out honestly.
+**Linear read:** you get the pattern first (quiet-by-design agents, deterministic picks, one delivery role per window, separate audit universe, explicit trust boundaries), then how prompts live **in git**, then which **tools** are adapters, then **[Examples → Reference org](examples/elmundi/index.md)** — one public wiring with filenames, cron, domains, and secrets spelled out honestly (replace with your org’s values in practice).
 
-**Lookup:** jump straight to **[Examples → ElMundi](examples/elmundi/index.md)** for receipts, or to *When things break* on Framework when something is on fire.
+**Lookup:** jump straight to **Examples** for receipts, or to *When things break* on Framework when something is on fire.
 
-The repo history behind this is not magic — it is **fixes and fences**: idempotent PR creation when Cloud Agent runs got eager, **Todo-only** picks scoped for ElMundi’s pre-release lane, **fail closed** in CI when `LINEAR_API_KEY` is missing, team-scoped workflow states so “start” and queue snapshots match reality. Those commits are the substrate; the Framework tab is the story we tell on top.
+The repo history behind this is not magic — it is **fixes and fences**: idempotent PR creation when Cloud Agent runs got eager, **Todo-only** picks scoped to a **configured** Linear delivery project, **fail closed** in CI when `LINEAR_API_KEY` is missing, team-scoped workflow states so “start” and queue snapshots match reality. Those commits are the substrate; the Framework tab is the story we tell on top.
 
 !!! note "From the ship log"
     **Duplicate PRs** were a real failure mode — we tightened PR creation so the same ticket would not open twins. Idempotency beats another thread in Slack.
@@ -28,7 +28,7 @@ The repo history behind this is not magic — it is **fixes and fences**: idempo
 
 ## Reading the Framework tab {#reading-the-framework-tab}
 
-**Start here** (this page), **Part I — Framework**, **Part II — Prompts & workflows**, **Part III — Tools**, and **Part IV — Examples → ElMundi (reference deployment)** are each **one long page** — keep scrolling; the **left outline** is the section map. Use **top tabs** or the **menu** (☰) to switch.
+**Start here** (this page), **Part I — Framework**, **Part II — Prompts & workflows**, **Part III — Tools**, and **Part IV — Examples → Reference org** are each **one long page** — keep scrolling; the **left outline** is the section map. Use **top tabs** or the **menu** (☰) to switch.
 
 On **[Framework](framework/index.md)** specifically, **jump links** below go straight into that page.
 
@@ -36,7 +36,7 @@ On **[Framework](framework/index.md)** specifically, **jump links** below go str
 
 ---
 
-This site is the **Ship** manual — a governed pattern for SDLC automation — not a dump of repo files. After the framework, read **Prompts & workflows**, **Tools**, and **Examples** (today: **ElMundi** in the public monorepo).
+This site is the **Ship** manual — a governed pattern for SDLC automation — not a dump of repo files. After the framework, read **Prompts & workflows**, **Tools**, and **Examples** (reference org: public monorepo wiring you can copy and retarget).
 
 ### The four tabs (what to expect)
 
@@ -45,7 +45,7 @@ This site is the **Ship** manual — a governed pattern for SDLC automation — 
 | **Framework** | The **pattern**: quiet-by-design agents, deterministic picks, one delivery role per window, separate audit universe, explicit trust boundaries. **No** requirement to use our vendors. |
 | **Prompts & workflows** | **Discipline**: prompts in git, iterative tightening, catalogs of roles and workflow *patterns*. |
 | **Tools** | **Adapters** we use today (Linear, GitHub Actions, Cursor Cloud Agent, Playwright, Snyk) and what each is responsible for. |
-| **Examples** | **Reference wiring** — today **ElMundi** in the public monorepo (YAML filenames, Linear projects, cron, domains, secrets). More example orgs may appear here later. |
+| **Examples** | **Reference wiring** — YAML filenames, Linear projects, cron, domains, secrets for one public org; fork and rename for yours. |
 
 ### Who this is for
 
@@ -55,16 +55,14 @@ This site is the **Ship** manual — a governed pattern for SDLC automation — 
 
 ### How this maps to the repository
 
-The **Ship** package lives in **[ElMundiUA/ship](https://github.com/ElMundiUA/ship)** at repository root: `docs/`, `scripts/`, `cloud-prompts/`, and the Node CLI.
-
-**ElMundi** still wires it inside **[ElMundiUA/elmundi](https://github.com/ElMundiUA/elmundi)** under `tools/linear-agent/` (mirror until we submodule or pin **ship**). **Ship** as a **pattern** does not depend on either path. **Examples → ElMundi** does — it is “how that monorepo runs Ship today.”
+The **Ship** package is this repository at its root: `docs/`, `scripts/`, `cloud-prompts/`, and the Node CLI. You may **vendor** the same tree inside a product monorepo under a path such as `tools/linear-agent/`. **Ship** as a **pattern** does not depend on a particular Git host or folder name. **Examples → Reference org** shows one full layout you can diff against.
 
 **Version** 0.6.0 (header chip) — see [Documentation versioning](#documentation-versioning) on this page.
 
 ### Also on this site
 
 - **[Iterating on prompts](prompts-workflows/index.md#iterating-on-prompts)** — the habit that makes prompts safe (Part II — Prompts & workflows).  
-- **[Examples → ElMundi](examples/elmundi/index.md)** — map every abstract noun to a concrete file.
+- **[Examples → Reference org](examples/elmundi/index.md)** — map every abstract noun to a concrete file.
 
 ---
 
@@ -74,14 +72,14 @@ The **Ship** package lives in **[ElMundiUA/ship](https://github.com/ElMundiUA/sh
 2. Within Framework: [The idea](framework/index.md#the-idea) · [The system](framework/index.md#the-system) · [Running the loop](framework/index.md#running-the-loop) — or just scroll.  
 3. **[Prompts & workflows → Iterating on prompts](prompts-workflows/index.md#iterating-on-prompts)** — the habit that turns bad runs into better prompts **without** losing auditability.
 
-Then open **[Examples → ElMundi](examples/elmundi/index.md)** when you want **filenames, cron minutes, domains, and secrets** — the receipts chapter.
+Then open **[Examples → Reference org](examples/elmundi/index.md)** when you want **filenames, cron minutes, domains, and secrets** — the receipts chapter.
 
 ---
 
 ## Build this site locally
 
 ```bash
-git clone https://github.com/ElMundiUA/ship.git
+git clone https://github.com/<your-org>/ship.git
 cd ship
 python3 -m venv .venv-docs
 source .venv-docs/bin/activate
@@ -148,7 +146,7 @@ Prefer **operational** measures over magic ROI slides:
 
 ### Current version
 
-- **0.6.0** — shown in the site header chip (`docs v0.6.0`), referenced from this page (**Ship**) and [Legal & copyright](legal-copyright.md). Canonical site URL: `mkdocs.yml` → `site_url` (https://ship.elmundi.com/).
+- **0.6.0** — shown in the site header chip (`docs v0.6.0`), referenced from this page (**Ship**) and [Legal & copyright](legal-copyright.md). Canonical site URL: `mkdocs.yml` → `site_url` (set to your deployed origin).
 - Source of truth: `mkdocs.yml` → `extra.doc_version` (keep **in sync** with the chip in `docs/stylesheets/extra.css`).
 
 ### Policy (practical)
@@ -167,9 +165,9 @@ Documentation version is **independent** of application semver unless you explic
 
 ## License {#license}
 
-This repository (**[ElMundiUA/ship](https://github.com/ElMundiUA/ship)**) is the **Ship** framework slice: manual, Node CLI, `cloud-prompts/`, and `scripts/`, offered under the **Apache License, Version 2.0** unless a file says otherwise. Full text: [`LICENSE`](https://github.com/ElMundiUA/ship/blob/main/LICENSE) at this repo’s root.
+This repository is the **Ship** framework slice: manual, Node CLI, `cloud-prompts/`, and `scripts/`, offered under the **Apache License, Version 2.0** unless a file says otherwise. Full text: [`LICENSE`](LICENSE) at this repo’s root.
 
-The **ElMundi** product monorepo (**[ElMundiUA/elmundi](https://github.com/ElMundiUA/elmundi)**) is **mixed**: only the path that tracks this extraction (`tools/linear-agent/`) was ever meant to read as permissively licensed; **website**, media, and product code may stay **proprietary**. Do not assume the monorepo root `LICENSE` covers the whole tree there—see [Legal & copyright](legal-copyright.md).
+A **product monorepo** that embeds Ship may be **mixed**: only the paths that track this package inherit the permissive intent; application, media, and website code may use **other** licenses. Do not assume one root `LICENSE` covers the whole tree—see [Legal & copyright](legal-copyright.md).
 
 ---
 

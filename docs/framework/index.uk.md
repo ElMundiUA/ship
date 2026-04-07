@@ -102,7 +102,7 @@ Ship assumes the opposite: **thin prompts**, **visible queues**, **tight fences*
 
 ### Proof and where to go next
 
-**[Examples → ElMundi](../examples/elmundi/index.md)** is one full wiring — cron minutes, project names, secrets, workflows. The framework chapters describe **that shape** without locking you to our domains or image tags.
+**[Examples → Reference org](../examples/elmundi/index.md)** is one full wiring — cron minutes, project names, secrets, workflows. The framework chapters describe **that shape** without locking you to our domains or image tags.
 
 **Reading order from here**
 
@@ -222,7 +222,7 @@ The **context** diagram above still comes from <code>docs/diagrams/architecture.
 | **Tech debt / findings** | Evidence-based outputs from audit roles — each ticket should point at a log, a report, or a failing check. |
 | **Security / dependencies** | Findings from scanners (e.g. Snyk), deduplicated so the board does not become spam. |
 
-Exact names are **example-specific** — see [ElMundi → SDLC scheduled](../examples/elmundi/sdlc-scheduled.md) for one concrete mapping.
+Exact names are **example-specific** — see [Reference org → SDLC scheduled](../examples/elmundi/sdlc-scheduled.md) for one concrete mapping.
 
 **Why split projects at all?** So you can stand in stand-up and answer: *“What is blocking release?”* without wading through fifty architecture nits that are **true** but **not release-blocking today**.
 
@@ -256,7 +256,7 @@ That contract is how you:
 - grep history by ticket,  
 - teach reviewers what to expect from automation vs humans.
 
-Concrete patterns for our repo: [ElMundi → Pre-release & E2E](../examples/elmundi/pre-release-e2e.md).
+Concrete patterns: [Reference org → Pre-release & E2E](../examples/elmundi/pre-release-e2e.md).
 
 ---
 
@@ -267,7 +267,7 @@ Audit automation answers: *“surface evidence-backed risk.”*
 
 When you mix them on one board without discipline, humans mute notifications and miss real blockers. Separate projects (and often separate schedules) keep both honest.
 
-Example wiring: [ElMundi → Daily audits](../examples/elmundi/daily-audits.md).
+Example wiring: [Reference org → Daily audits](../examples/elmundi/daily-audits.md).
 
 ---
 
@@ -305,7 +305,7 @@ Always-on sounds efficient. In practice it creates **correlated failures**: two 
 - **clear ownership** (“the :40 slot is BA”),  
 - **human-friendly debugging** (“check the 14:40 run”).
 
-**Canonical numbers** (UTC minutes, even hours, which role lands where) are **example-specific** — see [ElMundi → SDLC scheduled](../examples/elmundi/sdlc-scheduled.md).
+**Canonical numbers** (UTC minutes, even hours, which role lands where) are **example-specific** — see [Reference org → SDLC scheduled](../examples/elmundi/sdlc-scheduled.md).
 
 ---
 
@@ -365,7 +365,7 @@ Daily architecture / QA / security passes should **not** consume the delivery qu
 
 Without it, audit bots become **opinion engines** — interesting, not actionable. With evidence, a security ticket can be **reproduced** and **closed** like any other bug.
 
-Example wiring: [ElMundi → Daily audits](../examples/elmundi/daily-audits.md).
+Example wiring: [Reference org → Daily audits](../examples/elmundi/daily-audits.md).
 
 ---
 
@@ -379,7 +379,7 @@ Add **self-heal** or **autonomous** loops only after the main lane is **boring**
 
 Extra schedulers are **additive**. They are not replacements for the delivery grid — otherwise you reintroduce overlapping agents under a new name.
 
-See [Workflow patterns](../prompts-workflows/workflow-patterns.md) for intent; [ElMundi → Workflows catalog](../examples/elmundi/workflows-catalog.md) for filenames.
+See [Workflow patterns](../prompts-workflows/workflow-patterns.md) for intent; [Reference org → Workflows catalog](../examples/elmundi/workflows-catalog.md) for filenames.
 
 ---
 
@@ -410,7 +410,7 @@ If you cannot answer that in one sentence per vendor, you are not ready to wire 
 - **Agent runtime** may need the **same** tracker credential in **two** places (workflow + provider cloud env) — that is a **policy** conversation, not just a checkbox. If GitHub has the key but the agent does not, you get “green CI” and **silent** failure to update tickets.  
 - **Optional scanners** (dependencies, containers) feed JSON into audit roles. Treat those reports as **untrusted input** until validated — same as issue descriptions.
 
-No passwords in this chapter — see [Tools → Cursor Cloud Agent](../tools/cursor-cloud-agent.md) for placement detail and [ElMundi → Operator setup](../examples/elmundi/operator-setup.md) for a full secret map.
+No passwords in this chapter — see [Tools → Cursor Cloud Agent](../tools/cursor-cloud-agent.md) for placement detail and [Reference org → Operator setup](../examples/elmundi/operator-setup.md) for a full secret map.
 
 ---
 
@@ -445,12 +445,12 @@ Issue titles and descriptions are **untrusted**. Prompts must assume an attacker
 **Symptom:** two PRs for the same ticket, or agents overwriting each other.  
 **Fix:** enforce **one** naming contract; close extras without merge; keep **one role per window** on delivery.
 
-Example of duplicate handling: [ElMundi → Pre-release & E2E](../examples/elmundi/pre-release-e2e.md).
+Example of duplicate handling: [Reference org → Pre-release & E2E](../examples/elmundi/pre-release-e2e.md).
 
 #### Audit spam
 
 **Symptom:** dozens of low-value tickets from scanners.  
-**Fix:** dedupe rules, evidence-only creation, separate projects — see [Running the loop](#running-the-loop) and [Examples → Daily audits](../examples/elmundi/daily-audits.md).
+**Fix:** dedupe rules, evidence-only creation, separate projects — see [Running the loop](#running-the-loop) and [Reference org → Daily audits](../examples/elmundi/daily-audits.md).
 
 ---
 
@@ -502,7 +502,7 @@ Big-bang automation fails for the same reason big-bang rewrites fail: **nobody**
 
 **Exit criteria:** two weeks of boring Mondays — same classes of tickets, same guardrails, no emergency retro about automation.
 
-Operator patterns: [ElMundi → Operator setup](../examples/elmundi/operator-setup.md).
+Operator patterns: [Reference org → Operator setup](../examples/elmundi/operator-setup.md).
 
 ---
 
@@ -521,7 +521,7 @@ Operator patterns: [ElMundi → Operator setup](../examples/elmundi/operator-set
 - Audit bot opens vague tickets (“consider improving architecture”).  
 - Delivery throughput collapses because audit and dev fight for the same WIP.
 
-Example wiring: [ElMundi → Daily audits](../examples/elmundi/daily-audits.md).
+Example wiring: [Reference org → Daily audits](../examples/elmundi/daily-audits.md).
 
 ---
 
@@ -551,7 +551,7 @@ Full RACI templates rot in Confluence. **Ship** only requires **named owners** a
 
 ## When things break {#when-things-break}
 
-Symptom → look → fix. **Example-specific** commands, hostnames, and exact env var names sit in [Examples → ElMundi](../examples/elmundi/index.md).
+Symptom → look → fix. **Example-specific** commands, hostnames, and exact env var names sit in [Examples → Reference org](../examples/elmundi/index.md).
 
 Start with the table, then read the **patterns** below — they help when your symptom is “something feels off” rather than a clean error message.
 
@@ -571,7 +571,7 @@ Start with the table, then read the **patterns** below — they help when your s
 | Prompt change “did nothing” | Wrong branch / not deployed / cached image | Confirm merge to default branch; confirm schedule checks out that ref |
 | Rate limits / throttling | Too many concurrent jobs or tight cron | Widen grid; reduce overlap; ask vendor for quotas |
 
-**Deep setup:** [ElMundi → Operator setup](../examples/elmundi/operator-setup.md) · **Terms:** [Vocabulary](#vocabulary).
+**Deep setup:** [Reference org → Operator setup](../examples/elmundi/operator-setup.md) · **Terms:** [Vocabulary](#vocabulary).
 
 ---
 
@@ -696,6 +696,6 @@ Markdown (and optional skills) committed to the repo, reviewed in PRs, executed 
 
 ---
 
-### Where ElMundi names things
+### Where the reference org names things
 
-For **exact** Linear project names, workflow filenames, and cron tables, use **[Examples → ElMundi](../examples/elmundi/index.md)** — not this page.
+For **exact** Linear project names, workflow filenames, and cron tables, use **[Examples → Reference org](../examples/elmundi/index.md)** — not this page.

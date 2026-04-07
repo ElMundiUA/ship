@@ -9,7 +9,7 @@ This repository documentation describes an **internal automation architecture** 
 
 ## Open source vs services
 
-- **Code & config** licensing is **path-specific**: the published **Ship** package is **[ElMundiUA/ship](https://github.com/ElMundiUA/ship)** (Apache 2.0 at root unless a file says otherwise). Inside **ElMundiUA/elmundi**, the parallel path `tools/linear-agent/` is the mirror; the rest of that monorepo is not automatically under the same terms (see [Legal & copyright](../legal-copyright.md)).
+- **Code & config** licensing is **path-specific**: the **Ship** package at this repository root is Apache 2.0 unless a file says otherwise. A **product monorepo** that vendors Ship under a nested path may ship proprietary code beside it — follow notices per path (see [Legal & copyright](../legal-copyright.md) and [Examples → Reference org](../examples/elmundi/index.md)).
 - **Hosted services** (GitHub, Linear, Cursor, optional Snyk/hosting) are **third-party subscriptions** with their own contracts and DPAs.
 
 ## Intellectual property

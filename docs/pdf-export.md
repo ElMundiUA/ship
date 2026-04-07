@@ -1,12 +1,12 @@
 # PDF & offline viewing
 
-Think of this site as **one manual in a single volume**: everything lives under the same build, and the **parts follow the top navigation** in reading order—**Start here**, then **Part I — Framework**, **Part II — Prompts & workflows**, **Part III — Tools**, and **Part IV — Examples → ElMundi (reference deployment)**. Each of those entries is **one long page** in the built site (scroll on screen); there is no separate paginated “book” PDF from MkDocs itself.
+Think of this site as **one manual in a single volume**: everything lives under the same build, and the **parts follow the top navigation** in reading order—**Start here**, then **Part I — Framework**, **Part II — Prompts & workflows**, **Part III — Tools**, and **Part IV — Examples → Reference org**. Each of those entries is **one long page** in the built site (scroll on screen); there is no separate paginated “book” PDF from MkDocs itself.
 
-The site documents **Ship**. When deployed, it is served at **https://ship.elmundi.com**. It is built with [MkDocs](https://www.mkdocs.org) and [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/). The build writes static HTML to `site/`.
+The site documents **Ship**. When deployed, its URL is whatever you set in **`mkdocs.yml` → `site_url`**. It is built with [MkDocs](https://www.mkdocs.org) and [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/). The build writes static HTML to `site/`.
 
 ## Static site (offline)
 
-From the **Ship** repository root (**ElMundiUA/ship**):
+From the **Ship** repository root:
 
 ```bash
 python3 -m venv .venv-docs
@@ -19,7 +19,7 @@ Open `site/index.html`. A local server is optional: `cd site && python -m http.s
 
 ## Printing or saving a readable PDF
 
-After `mkdocs serve` or `mkdocs build`, use the browser’s **Print → Save as PDF** (Chrome, Edge, or Safari). To mirror the **volume order**, export **one PDF per top-level section** in nav sequence (Start here → Part I — Framework → Part II — Prompts & workflows → Part III — Tools → ElMundi), then combine if you want a single file—your OS or PDF tool can merge them.
+After `mkdocs serve` or `mkdocs build`, use the browser’s **Print → Save as PDF** (Chrome, Edge, or Safari). To mirror the **volume order**, export **one PDF per top-level section** in nav sequence (Start here → Part I — Framework → Part II — Prompts & workflows → Part III — Tools → Examples), then combine if you want a single file—your OS or PDF tool can merge them.
 
 ### Readability tips
 

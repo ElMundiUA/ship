@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Todo + stage:intake + ElMundi pre-release, no needs:clarification, no ready:developer.
+ * Todo + stage:intake + SDLC Linear project, no needs:clarification, no ready:developer.
  */
 import { readFileSync, existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";

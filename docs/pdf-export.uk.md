@@ -1,6 +1,6 @@
 # PDF та офлайн
 
-Цей сайт документує **Ship**. У продакшені — **https://ship.elmundi.com**. Збірка: [MkDocs](https://www.mkdocs.org) і [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/). **Англійська** збирається в `site/`; **українська** (`*.uk.md`) — у `site/uk/`.
+Цей сайт документує **Ship**. Канонічний URL публікації — у **`mkdocs.yml` → `site_url`**. Збірка: [MkDocs](https://www.mkdocs.org) і [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/). **Англійська** збирається в `site/`; **українська** (`*.uk.md`) — у `site/uk/`.
 
 ## Статичний сайт (офлайн)
 

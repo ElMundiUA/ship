@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Todo (human moved issue into the lane), project ElMundi pre-release, no stage:intake — oldest first.
+ * Todo (human moved issue into the lane), SDLC Linear project, no stage:intake — oldest first.
  * Backlog is manual-only; automation starts when you move a ticket to Todo.
  */
 import { readFileSync, existsSync } from "node:fs";

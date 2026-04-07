@@ -9,8 +9,8 @@ export async function sendInReviewNotification(params) {
         console.warn("SENDGRID_API_KEY not set, skipping email notification");
         return false;
     }
-    const from = process.env.SENDGRID_FROM_EMAIL ?? "noreply@elmundi.com";
-    const fromName = process.env.SENDGRID_FROM_NAME ?? "ElMundi Release";
+    const from = process.env.SENDGRID_FROM_EMAIL ?? "noreply@example.com";
+    const fromName = process.env.SENDGRID_FROM_NAME ?? "Ship SDLC";
     const subject = `[${params.issueId}] Ready for review`;
     const html = `
     <h2>Ticket ${params.issueId} ready for human review</h2>

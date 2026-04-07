@@ -1,6 +1,6 @@
 # A1 — Intake Agent
 
-**Trigger:** Schedule — issue is in **Todo** (human moved it from Backlog into the SDLC lane; pick = ElMundi pre-release project).
+**Trigger:** Schedule — issue is in **Todo** (human moved it from Backlog into the SDLC lane; pick is scoped to your configured Linear SDLC project).
 
 **Goal:** Structure new issue. Do NOT run again if already processed.
 

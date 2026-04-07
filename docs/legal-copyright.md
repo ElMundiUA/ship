@@ -12,7 +12,7 @@ If you export a **subset** of this site for external stakeholders, use pages und
 
 ## Status
 
-Documentation in `docs/` and the built MkDocs site in this repository are **copyright** Denys Kuzin unless **Apache 2.0** (this repo’s root `LICENSE`) or another explicit file notice applies. For copies still living inside the ElMundi monorepo, the same **Ship** slice rule applies; the monorepo root `LICENSE` does **not** mean “everything there is Apache”—see **Ship vs ElMundi monorepo** below.
+Documentation in `docs/` and the built MkDocs site in this repository are **copyright** Denys Kuzin unless **Apache 2.0** (this repo’s root `LICENSE`) or another explicit file notice applies. If you vendor **Ship** inside a **product monorepo**, only the paths that track this package inherit that permissive intent; the monorepo root `LICENSE` does **not** automatically cover unrelated product or website code—see **Ship vs product monorepo** below.
 
 ## Permitted use
 
@@ -29,9 +29,9 @@ Without **written permission** from the rights holder you may not:
 
 Short quotations in reviews or reports require **attribution** (author + source).
 
-## Ship vs ElMundi monorepo
+## Ship vs product monorepo
 
-**Ship** in **this** repository is the permissively licensed framework package. In **ElMundiUA/elmundi**, the parallel tree was **`tools/linear-agent/`**; product and website code may stay **proprietary** or use **other** licenses. Follow the notice on the **path** you copy, or ask for written permission.
+**Ship** in **this** repository is the permissively licensed framework package (manual, `cloud-prompts/`, `scripts/`, CLI). A **product monorepo** that embeds the same files under a nested path (for example `tools/linear-agent/`) may still ship **proprietary** application or website code beside it. Follow the license **notice on each path** you copy, or ask for written permission. **[Examples → Reference org](examples/elmundi/index.md)** describes one public layout; your tree may differ.
 
 ## Contact
 

@@ -65,6 +65,19 @@ Names like **ElMundi pre-release**, **Bunny**, **dev.elmundi.com** are **this or
 
 We publish the manual at **https://ship.elmundi.com** when the docs site is deployed; until then, build locally — [PDF & offline](../../pdf-export.md).
 
+### Environment identifiers (Linear / GitHub)
+
+The **Ship** package ships **no** org-specific UUIDs in code. For this reference wiring, set values in **`.env`** (see repository root **`.env.example`**):
+
+| Variable | Role |
+|----------|------|
+| `LINEAR_SDLC_PROJECT_ID` or `LINEAR_SDLC_PROJECT_NAME` | Delivery lane — here **ElMundi pre-release** |
+| `LINEAR_TEAM_UUID`, `LINEAR_STATE_BACKLOG_UUID`, `LINEAR_LABEL_BUG_UUID` | `scripts/create-prerelease-e2e-bugs.mjs` |
+| `LINEAR_E2E_ISSUE_SEED_PROJECT_ID` | Optional; else that script uses `LINEAR_SDLC_PROJECT_ID` |
+| `GITHUB_PR_PREVIEW_COMMENT_MARKERS` | PR preview marker(s) in comments — default in tooling is `<!-- ship-pr-preview -->`; legacy workflows may emit a second marker (comma-separate both if you need compatibility) |
+| `E2E_ISSUE_SEED_BASE_URL` | `create-prerelease-e2e-bugs.mjs` — dev URL in issue bodies; else `PLAYWRIGHT_BASE_URL`, else placeholder |
+| `IN_REVIEW_NOTIFY_EMAIL` | Optional SendGrid recipient (no default address in repo) |
+
 ---
 
 ## SDLC — six columns + GitHub schedule {#sdlc-scheduled}
@@ -116,7 +129,7 @@ Without `LINEAR_API_KEY`, the **Pick issue** step fails with `MISSING_LINEAR_API
 
 ### Scope: project, Backlog, Todo
 
-**SDLC lane:** all pick scripts (intake, clarification, BA, developer) filter issues to project **ElMundi pre-release** (default id in repo; override with **`LINEAR_SDLC_PROJECT_ID`** or **`LINEAR_SDLC_PROJECT_NAME`**).
+**SDLC lane:** all pick scripts (intake, clarification, BA, developer) filter issues to the configured delivery project — in this reference deployment **ElMundi pre-release**, via **`LINEAR_SDLC_PROJECT_ID`** or **`LINEAR_SDLC_PROJECT_NAME`**.
 
 **Backlog** is **human-only** — automation does **not** pick from it. To start intake → … → dev, move the card to **Todo** and keep it in the pre-release project.
 

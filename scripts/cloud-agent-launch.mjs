@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Launch Cursor Cloud Agent with role-specific prompt + skills context.
- * Usage: node scripts/cloud-agent-launch.mjs --role=... --issue=ELM-1
+ * Usage: node scripts/cloud-agent-launch.mjs --role=... --issue=TICKET-1
  * Daily audits (no Linear anchor ticket): --role=tech-architect|qa-architect|security-officer --issue=NONE
  * Optional: --report-file=/path/to/self-heal-report.json (appended to prompt; workflow-self-heal)
  *
@@ -81,7 +81,7 @@ function gitRemoteHttps(repoRoot) {
       .replace(/^git@github.com:/, "https://github.com/")
       .replace(/\.git$/, "");
   } catch {
-    return "https://github.com/ElMundiUA/elmundi";
+    return "https://github.com/";
   }
 }
 
@@ -92,7 +92,7 @@ async function main() {
   }
   if (!role || !issue) {
     console.error(
-      "Usage: cloud-agent-launch.mjs --role=intake|clarification|ba|developer|workflow-self-heal|tech-architect|qa-architect|security-officer --issue=ELM-XX|NONE [--report-file=path]"
+      "Usage: cloud-agent-launch.mjs --role=intake|clarification|ba|developer|workflow-self-heal|tech-architect|qa-architect|security-officer --issue=TICKET-XX|NONE [--report-file=path]"
     );
     process.exit(1);
   }
@@ -171,7 +171,7 @@ async function main() {
     .replace(/\{\{TECH_DEBT_PROJECT_NAME\}\}/g, techDebtProjectName)
     .replace(/\{\{SECURITY_PROJECT_ID\}\}/g, securityProjectId)
     .replace(/\{\{SECURITY_PROJECT_NAME\}\}/g, securityProjectName)
-    .replace(/\{\{LINEAR_TEAM_KEY\}\}/g, (process.env.LINEAR_TEAM_KEY || "ELM").trim());
+    .replace(/\{\{LINEAR_TEAM_KEY\}\}/g, (process.env.LINEAR_TEAM_KEY || "YOUR_TEAM").trim());
 
   if (reportFile) {
     const abs = resolve(reportFile);
@@ -187,7 +187,7 @@ async function main() {
 
   const repoUrl = gitRemoteHttps(repoRoot);
   // Developer: keep autoCreatePr false — the prompt tells the agent to open one PR with
-  // Closes ELM-XX; Cursor auto-PR + manual PR caused duplicate PRs for the same issue.
+  // Closes TICKET-XX; Cursor auto-PR + manual PR caused duplicate PRs for the same issue.
   const autoCreatePr = role === "workflow-self-heal";
   const branchName =
     role === "developer"

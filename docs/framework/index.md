@@ -6,7 +6,7 @@ Most “AI in SDLC” demos are **loud**: one button, a magic PR, no story about
 
 **Ship** is **quiet on purpose**. Quiet does not mean slow. It means **predictable**: the same inputs tomorrow should produce the same *class* of outcomes, and when something goes wrong you can **trace** it without heroics.
 
-In the ElMundi monorepo we have lived the unglamorous half of that story—duplicate PRs for one ticket, pick logic that looked “fine” until a label changed, preview deploys that needed several probe iterations before they told us anything useful. None of that was the model being stupid. It was the system being under-specified.
+In one product monorepo we have lived the unglamorous half of that story—duplicate PRs for one ticket, pick logic that looked “fine” until a label changed, preview deploys that needed several probe iterations before they told us anything useful. None of that was the model being stupid. It was the system being under-specified.
 
 ---
 
@@ -53,7 +53,7 @@ Good fences are **boring**:
 
 When fences are explicit, you can **test** them. When they are vibes, you can only **argue** about them in Slack.
 
-We learned that lesson in ElMundi when delivery work had to respect a small **label contract** (for example ELM-scoped guards): if the contract is clear, pick logic stays boring; if it drifts, “green” runs lie and humans stop trusting the board.
+We learned that lesson when delivery work had to respect a small **label contract** (for example ELM-scoped guards): if the contract is clear, pick logic stays boring; if it drifts, “green” runs lie and humans stop trusting the board.
 
 #### 3. Throughput must be bounded
 
@@ -71,7 +71,7 @@ Overlapping agents on the same codebase correlate with:
 **Bounded throughput** is how you keep signal. If the queue grows, that is **data**: you need more humans, narrower scope, or a policy change — not an extra cron job at :02 and :04 and :06.
 
 !!! note "Field note"
-We hit duplicate PRs and branch fights in the ElMundi monorepo when two jobs thought they owned the same ticket or naming drifted. The durable fix is never “smarter model”—it is one delivery role per window plus a branch/title contract everyone actually follows.
+We hit duplicate PRs and branch fights in a large monorepo when two jobs thought they owned the same ticket or naming drifted. The durable fix is never “smarter model”—it is one delivery role per window plus a branch/title contract everyone actually follows.
 !!!
 
 ---
@@ -112,7 +112,7 @@ Ship assumes the opposite: **thin prompts**, **visible queues**, **tight fences*
 
 ### Proof and where to go next
 
-**[Examples → ElMundi](../examples/elmundi/index.md)** is one full wiring — cron minutes, project names, secrets, workflows. The framework chapters describe **that shape** without locking you to our domains or image tags.
+**[Examples → Reference org](../examples/elmundi/index.md)** is one full wiring — cron minutes, project names, secrets, workflows. The framework chapters describe **that shape** without locking you to our domains or image tags.
 
 **Reading order from here**
 
@@ -147,7 +147,7 @@ Imagine a feature ticket that is **real**: scoped, owned, and ready for automati
 
 If you cannot narrate your own process in those six beats, pause tooling and fix the story first.
 
-ElMundi runs this shape with **Todo-only** picks for delivery: Backlog stays human turf, and the scheduler’s job is to say “zero or one” from a column that already means “we agreed this is eligible.”
+A typical deployment runs this shape with **Todo-only** picks for delivery: Backlog stays human turf, and the scheduler’s job is to say “zero or one” from a column that already means “we agreed this is eligible.”
 
 ---
 
@@ -236,7 +236,7 @@ Delivery, findings, and scanner noise want different boards. The table is the mi
 | **Tech debt / findings** | Evidence-based outputs from audit roles — each ticket should point at a log, a report, or a failing check. |
 | **Security / dependencies** | Findings from scanners (e.g. Snyk), deduplicated so the board does not become spam. |
 
-Exact names are **example-specific** — see [ElMundi → SDLC scheduled](../examples/elmundi/index.md#sdlc-scheduled) for one concrete mapping.
+Exact names are **example-specific** — see [Reference org → SDLC scheduled](../examples/elmundi/index.md#sdlc-scheduled) for one concrete mapping.
 
 **Why split projects at all?** So you can stand in stand-up and answer: *“What is blocking release?”* without wading through fifty architecture nits that are **true** but **not release-blocking today**.
 
@@ -258,7 +258,7 @@ Exact names are **example-specific** — see [ElMundi → SDLC scheduled](../exa
 - “Pick the newest.” (Starves old work — sometimes intentional, always a **policy** call.)  
 - Multiple picks per slot. (Breaks the one-role-per-window rule.)
 
-When we tightened **Todo-only** deterministic picks in ElMundi, the win was not cleverness—it was sleep. “Same board, same winner” turns triage from a séance into a diff.
+When we tightened **Todo-only** deterministic picks in that deployment, the win was not cleverness—it was sleep. “Same board, same winner” turns triage from a séance into a diff.
 
 ---
 
@@ -272,7 +272,7 @@ That contract is how you:
 - grep history by ticket,  
 - teach reviewers what to expect from automation vs humans.
 
-Concrete patterns for our repo: [ElMundi → Pre-release & E2E](../examples/elmundi/index.md#pre-release-e2e).
+Concrete patterns: [Reference org → Pre-release & E2E](../examples/elmundi/index.md#pre-release-e2e).
 
 ---
 
@@ -283,9 +283,9 @@ Audit automation answers: *“surface evidence-backed risk.”*
 
 When you mix them on one board without discipline, humans mute notifications and miss real blockers. Separate projects (and often separate schedules) keep both honest.
 
-**Daily audit roles** in ElMundi sit on that second track: same clock discipline, different project, evidence attached—so a security or architecture finding does not masquerade as “the next dev ticket” on the sprint.
+**Daily audit roles** in a split-track setup sit on that second track: same clock discipline, different project, evidence attached—so a security or architecture finding does not masquerade as “the next dev ticket” on the sprint.
 
-Example wiring: [ElMundi → Daily audits](../examples/elmundi/index.md#daily-audits).
+Example wiring: [Reference org → Daily audits](../examples/elmundi/index.md#daily-audits).
 
 ---
 
@@ -323,7 +323,7 @@ Always-on sounds efficient. In practice it creates **correlated failures**: two 
 - **clear ownership** (“the :40 slot is BA”),  
 - **human-friendly debugging** (“check the 14:40 run”).
 
-**Canonical numbers** (UTC minutes, even hours, which role lands where) are **example-specific** — see [ElMundi → SDLC scheduled](../examples/elmundi/index.md#sdlc-scheduled).
+**Canonical numbers** (UTC minutes, even hours, which role lands where) are **example-specific** — see [Reference org → SDLC scheduled](../examples/elmundi/index.md#sdlc-scheduled).
 
 ---
 
@@ -385,7 +385,7 @@ Daily architecture / QA / security passes should **not** consume the delivery qu
 
 Without it, audit bots become **opinion engines** — interesting, not actionable. With evidence, a security ticket can be **reproduced** and **closed** like any other bug.
 
-Example wiring: [ElMundi → Daily audits](../examples/elmundi/index.md#daily-audits).
+Example wiring: [Reference org → Daily audits](../examples/elmundi/index.md#daily-audits).
 
 ---
 
@@ -399,9 +399,9 @@ Add **self-heal** or **autonomous** loops only after the main lane is **boring**
 
 Extra schedulers are **additive**. They are not replacements for the delivery grid — otherwise you reintroduce overlapping agents under a new name.
 
-In ElMundi we leaned on **workflow self-heal** and failed-check recovery when the real problem was not “the agent is dumb” but “required checks flaked or handoff never happened.” That loop is a mop for a messy kitchen—not a substitute for washing dishes after dinner.
+In practice we leaned on **workflow self-heal** and failed-check recovery when the real problem was not “the agent is dumb” but “required checks flaked or handoff never happened.” That loop is a mop for a messy kitchen—not a substitute for washing dishes after dinner.
 
-See [Workflow patterns](../prompts-workflows/index.md#workflow-patterns) for intent; [ElMundi → Workflows catalog](../examples/elmundi/index.md#workflows-catalog) for filenames.
+See [Workflow patterns](../prompts-workflows/index.md#workflow-patterns) for intent; [Reference org → Workflows catalog](../examples/elmundi/index.md#workflows-catalog) for filenames.
 
 !!! note "Field note"
 Self-heal shines when the main grid is already trustworthy. If duplicate PRs or fuzzy picks are still normal, a recovery bot just moves faster around a broken compass.
@@ -436,7 +436,7 @@ If you cannot answer that in one sentence per vendor, you are not ready to wire 
 - **Agent runtime** may need the **same** tracker credential in **two** places (workflow + provider cloud env) — that is a **policy** conversation, not just a checkbox. If GitHub has the key but the agent does not, you get “green CI” and **silent** failure to update tickets.  
 - **Optional scanners** (dependencies, containers) feed JSON into audit roles. Treat those reports as **untrusted input** until validated — same as issue descriptions.
 
-No passwords in this chapter — see [Tools → Cursor Cloud Agent](../tools/index.md#cursor-cloud-agent) for placement detail and [ElMundi → Operator setup](../examples/elmundi/index.md#operator-setup) for a full secret map.
+No passwords in this chapter — see [Tools → Cursor Cloud Agent](../tools/index.md#cursor-cloud-agent) for placement detail and [Reference org → Operator setup](../examples/elmundi/index.md#operator-setup) for a full secret map.
 
 ---
 
@@ -471,7 +471,7 @@ Issue titles and descriptions are **untrusted**. Prompts must assume an attacker
 **Symptom:** two PRs for the same ticket, or agents overwriting each other.  
 **Fix:** enforce **one** naming contract; close extras without merge; keep **one role per window** on delivery.
 
-Example of duplicate handling: [ElMundi → Pre-release & E2E](../examples/elmundi/index.md#pre-release-e2e).
+Example of duplicate handling: [Reference org → Pre-release & E2E](../examples/elmundi/index.md#pre-release-e2e).
 
 #### Audit spam
 
@@ -528,7 +528,7 @@ Big-bang automation fails for the same reason big-bang rewrites fail: **nobody**
 
 **Exit criteria:** two weeks of boring Mondays — same classes of tickets, same guardrails, no emergency retro about automation.
 
-Operator patterns: [ElMundi → Operator setup](../examples/elmundi/index.md#operator-setup).
+Operator patterns: [Reference org → Operator setup](../examples/elmundi/index.md#operator-setup).
 
 ---
 
@@ -547,7 +547,7 @@ Operator patterns: [ElMundi → Operator setup](../examples/elmundi/index.md#ope
 - Audit bot opens vague tickets (“consider improving architecture”).  
 - Delivery throughput collapses because audit and dev fight for the same WIP.
 
-Example wiring: [ElMundi → Daily audits](../examples/elmundi/index.md#daily-audits).
+Example wiring: [Reference org → Daily audits](../examples/elmundi/index.md#daily-audits).
 
 ---
 
@@ -577,7 +577,7 @@ Full RACI templates rot in Confluence. **Ship** only requires **named owners** a
 
 ## When things break {#when-things-break}
 
-Symptom → look → fix. **Example-specific** commands, hostnames, and exact env var names sit in [Examples → ElMundi](../examples/elmundi/index.md).
+Symptom → look → fix. **Example-specific** commands, hostnames, and exact env var names sit in [Examples → Reference org](../examples/elmundi/index.md).
 
 Start with the table, then read the **patterns** below — they help when your symptom is “something feels off” rather than a clean error message.
 
@@ -597,7 +597,7 @@ Start with the table, then read the **patterns** below — they help when your s
 | Prompt change “did nothing” | Wrong branch / not deployed / cached image | Confirm merge to default branch; confirm schedule checks out that ref |
 | Rate limits / throttling | Too many concurrent jobs or tight cron | Widen grid; reduce overlap; ask vendor for quotas |
 
-**Deep setup:** [ElMundi → Operator setup](../examples/elmundi/index.md#operator-setup) · **Terms:** [Vocabulary](#vocabulary).
+**Deep setup:** [Reference org → Operator setup](../examples/elmundi/index.md#operator-setup) · **Terms:** [Vocabulary](#vocabulary).
 
 ---
 
@@ -722,6 +722,6 @@ Markdown (and optional skills) committed to the repo, reviewed in PRs, executed 
 
 ---
 
-### Where ElMundi names things
+### Where the reference org names things
 
-For **exact** Linear project names, workflow filenames, and cron tables, use **[Examples → ElMundi](../examples/elmundi/index.md)** — not this page.
+For **exact** Linear project names, workflow filenames, and cron tables, use **[Examples → Reference org](../examples/elmundi/index.md)** — not this page.

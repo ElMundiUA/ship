@@ -8,7 +8,7 @@
  *   BUNNY_APP_ID (optional) — if set, skip create and use this id
  *   SHIP_MC_APP_NAME (optional) — default "ship-docs"
  *   DOCKER_IMAGE_NAME (optional) — default "dekus/ship-docs" (namespace/name)
- *   MC_CONTAINER_NAME (optional) — default "ship" (must match BunnyWay action `container`)
+ *   MC_CONTAINER_NAME (optional) — default "Container-1" (Bunny UI default); script also resolves real name via GET /apps/{id}
  *   IMAGE_TAG (optional) — default "latest"
  */
 import { appendFileSync } from "fs";
@@ -47,6 +47,27 @@ async function mcFetch(path, { method = "GET", key, body } = {}) {
     /* leave json null */
   }
   return { ok: r.ok, status: r.status, text, json };
+}
+
+/** Resolve template name for BunnyWay/actions/container-update-image (GET app — dashboard apps often use "Container-1"). */
+async function resolveMcContainerName(key, appId, preferred) {
+  const { ok, status, json, text } = await mcFetch(`/apps/${encodeURIComponent(appId)}`, { key });
+  if (!ok) {
+    console.warn(`GET /apps/${appId} failed ${status}: ${text} — using MC_CONTAINER_NAME=${preferred}`);
+    return preferred;
+  }
+  const templates = json?.containerTemplates;
+  if (!Array.isArray(templates) || templates.length === 0) {
+    console.warn("No containerTemplates on app — using MC_CONTAINER_NAME");
+    return preferred;
+  }
+  const exact = templates.find((t) => t?.name === preferred);
+  if (exact) return String(exact.name);
+  if (templates.length === 1) return String(templates[0].name);
+  console.warn(
+    `Multiple container templates (${templates.length}); none named "${preferred}"; using first: ${templates[0].name}`
+  );
+  return String(templates[0].name);
 }
 
 async function listAllApps(key) {
@@ -127,7 +148,7 @@ async function ensure() {
   const appName = (process.env.SHIP_MC_APP_NAME || "ship-docs").trim();
   const imageFull = (process.env.DOCKER_IMAGE_NAME || "dekus/ship-docs").trim();
   const { namespace, name: imageBase } = parseImage(imageFull);
-  const containerName = (process.env.MC_CONTAINER_NAME || "ship").trim();
+  const containerName = (process.env.MC_CONTAINER_NAME || "Container-1").trim();
   const tag = (process.env.IMAGE_TAG || "latest").trim();
 
   let appId = (process.env.BUNNY_APP_ID || "").trim();
@@ -207,6 +228,9 @@ async function ensure() {
   }
 
   out("app_id", appId);
+
+  const resolvedContainer = await resolveMcContainerName(key, appId, containerName);
+  out("mc_container_name", resolvedContainer);
 
   let host = "";
   for (let i = 0; i < 24; i++) {
