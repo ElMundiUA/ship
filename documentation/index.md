@@ -63,6 +63,7 @@ The **Ship** repository is laid out in three layers: **`documentation/`** (MkDoc
 ### Also on this site
 
 - **[Iterating on prompts](prompts-workflows/index.md#iterating-on-prompts)** — the habit that makes prompts safe (Part II — Prompts & workflows).  
+- **[Промпти та воркфлоу (UK)](prompts-workflows/index.uk.md)** — Ukrainian translation of Part II (prompt bodies in `prompts/cloud-agent/` stay English in git).  
 - **[Ship Agent & tracker adapters](tools/ship-agent-trackers.md)** — `TRACKER_PROVIDER`, env vars, and config for Linear, Jira Cloud, GitHub Issues, Azure DevOps Boards, ClickUp.  
 - **[Adoption → Overview](adoption/index.md)** — agent playbooks and launch commands for any project.  
 - **[Examples → Reference org](examples/elmundi/index.md)** — map every abstract noun to a concrete file.

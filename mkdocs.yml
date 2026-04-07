@@ -1,4 +1,4 @@
-# Ship — MkDocs + Material (English only; *.uk.md excluded)
+# Ship — MkDocs + Material (default EN; *.uk.md excluded except prompts-workflows/index.uk.md)
 # Build: pip install -r requirements-docs.txt && mkdocs serve
 # repo_url / site_url: set to your GitHub repo and deployed docs origin (defaults below suit the public Ship package).
 
@@ -19,6 +19,7 @@ site_dir: site
 exclude_docs: |
   archive/**
   **/*.uk.md
+  !prompts-workflows/index.uk.md
 
 extra:
   doc_version: "0.6.0"
@@ -79,7 +80,9 @@ plugins:
 nav:
   - Start here: index.md
   - Part I — Framework: framework/index.md
-  - Part II — Prompts & workflows: prompts-workflows/index.md
+  - Part II — Prompts & workflows:
+      - English: prompts-workflows/index.md
+      - Українська: prompts-workflows/index.uk.md
   - Part III — Tools:
       - Overview: tools/index.md
       - Ship Agent & trackers: tools/ship-agent-trackers.md
