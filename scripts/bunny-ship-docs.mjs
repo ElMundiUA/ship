@@ -6,7 +6,7 @@
  * Env:
  *   BUNNY_ACCESS_KEY (required) — account API key with Magic Containers
  *   BUNNY_APP_ID (optional) — if set, skip create and use this id
- *   SHIP_MC_APP_NAME (optional) — default "Ship docs"
+ *   SHIP_MC_APP_NAME (optional) — default "ship-docs"
  *   DOCKER_IMAGE_NAME (optional) — default "dekus/ship-docs" (namespace/name)
  *   MC_CONTAINER_NAME (optional) — default "ship" (must match BunnyWay action `container`)
  *   IMAGE_TAG (optional) — default "latest"
@@ -78,65 +78,16 @@ function probe(path) {
   };
 }
 
-/**
- * MC OpenAPI uses additionalProperties: false on nested objects. Suggestion payloads
- * often include extra keys → Bunny may return 500. Rebuild only allowed fields.
- * @see https://docs.bunny.net/api-reference/magic-containers/applications/add-application.md
- */
-function pickPortMapping(pm) {
-  const out = { containerPort: 8080 };
-  if (pm?.exposedPort != null && Number.isFinite(Number(pm.exposedPort))) {
-    out.exposedPort = Number(pm.exposedPort);
-  }
-  const protocols = Array.isArray(pm?.protocols) ? pm.protocols.filter((p) => p === "tcp" || p === "udp" || p === "sctp") : [];
-  if (protocols.length) out.protocols = protocols;
-  else out.protocols = ["tcp"];
-  return out;
-}
-
-function pickCdn(cdn) {
-  if (!cdn || typeof cdn !== "object") return null;
-  const out = {};
-  if (typeof cdn.isSslEnabled === "boolean") out.isSslEnabled = cdn.isSslEnabled;
-  else out.isSslEnabled = true;
-  if (cdn.pullZoneId != null && Number.isInteger(cdn.pullZoneId)) out.pullZoneId = cdn.pullZoneId;
-  const st = cdn.stickySessions;
-  if (st && Array.isArray(st.sessionHeaders) && st.sessionHeaders.length >= 1 && st.sessionHeaders.length <= 3) {
-    out.stickySessions = {
-      sessionHeaders: st.sessionHeaders.slice(0, 3),
-      ...(typeof st.enabled === "boolean" ? { enabled: st.enabled } : {}),
-      ...(typeof st.cookieName === "string" && st.cookieName ? { cookieName: st.cookieName } : {}),
-    };
-  }
-  const mappings = Array.isArray(cdn.portMappings) ? cdn.portMappings.map(pickPortMapping) : [];
-  out.portMappings = mappings.length ? mappings : [{ containerPort: 8080, protocols: ["tcp"] }];
-  return out;
-}
-
-function pickEndpoint(ep) {
-  const displayName = typeof ep?.displayName === "string" && ep.displayName.trim() ? ep.displayName.trim().slice(0, 50) : "web";
-  const out = { displayName };
-  const cdn = pickCdn(ep?.cdn);
-  if (cdn) out.cdn = cdn;
-  else if (ep?.anycast?.type && Array.isArray(ep.anycast.portMappings) && ep.anycast.portMappings.length) {
-    out.anycast = {
-      type: ep.anycast.type,
-      portMappings: ep.anycast.portMappings.map(pickPortMapping),
-    };
-  }
-  if (!out.cdn && !out.anycast) {
-    out.cdn = {
-      isSslEnabled: true,
-      portMappings: [{ containerPort: 8080, protocols: ["tcp"] }],
-    };
-  }
-  return out;
-}
-
-function buildEndpointsFromSuggestions(suggestions) {
-  const raw = suggestions?.endpointSuggestions;
-  if (!Array.isArray(raw) || raw.length === 0) {
-    return [
+/** Strict minimal template — no registry config-suggestions (those payloads still 500’d on Bunny). */
+function minimalContainerTemplate({ namespace, imageName, tag, containerName, includeProbes }) {
+  const t = {
+    name: containerName,
+    imageName,
+    imageNamespace: namespace,
+    imageRegistryId: "dockerhub",
+    imageTag: tag,
+    imagePullPolicy: "always",
+    endpoints: [
       {
         displayName: "web",
         cdn: {
@@ -144,28 +95,26 @@ function buildEndpointsFromSuggestions(suggestions) {
           portMappings: [{ containerPort: 8080, protocols: ["tcp"] }],
         },
       },
-    ];
-  }
-  return raw.map(pickEndpoint);
-}
-
-function buildContainerTemplate({ namespace, imageName, tag, containerName, suggestions }) {
-  const endpoints = buildEndpointsFromSuggestions(suggestions);
-
-  return {
-    name: containerName,
-    imageName,
-    imageNamespace: namespace,
-    imageRegistryId: "dockerhub",
-    imageTag: tag,
-    imagePullPolicy: "always",
-    endpoints,
-    probes: {
+    ],
+  };
+  if (includeProbes) {
+    t.probes = {
       startup: { ...probe("/health"), initialDelaySeconds: 3, failureThreshold: 10 },
       readiness: probe("/health"),
       liveness: probe("/health"),
-    },
-  };
+    };
+  }
+  return t;
+}
+
+async function postCreateApp(key, body, withRetries) {
+  let created = await mcFetch("/apps", { method: "POST", key, body });
+  if (!withRetries) return created;
+  for (let attempt = 1; !created.ok && created.status >= 500 && attempt < 4; attempt++) {
+    await new Promise((r) => setTimeout(r, 5000 * attempt));
+    created = await mcFetch("/apps", { method: "POST", key, body });
+  }
+  return created;
 }
 
 async function ensure() {
@@ -188,43 +137,54 @@ async function ensure() {
   if (byName) appId = String(byName.id);
 
   if (!appId) {
-    const sug = await mcFetch("/registries/config-suggestions", {
-      method: "POST",
-      key,
-      body: {
-        registryId: "dockerhub",
-        imageNamespace: namespace,
-        imageName: imageBase,
-        tag,
-      },
-    });
-    if (!sug.ok) throw new Error(`config-suggestions ${sug.status}: ${sug.text}`);
-
     const regions = (process.env.BUNNY_REGION_IDS || "DE,UK,US")
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean);
+    const primary = regions.length ? regions : ["DE", "UK", "US"];
 
-    const body = {
-      name: appName,
-      runtimeType: "shared",
-      autoScaling: { min: 1, max: 1 },
-      regionSettings: { allowedRegionIds: regions },
-      containerTemplates: [
-        buildContainerTemplate({
-          namespace,
-          imageName: imageBase,
-          tag,
-          containerName,
-          suggestions: sug.json,
-        }),
-      ],
+    function buildCreateBody(allowedRegionIds, includeProbes) {
+      return {
+        name: appName,
+        runtimeType: "shared",
+        autoScaling: { min: 1, max: 1 },
+        regionSettings: allowedRegionIds.length ? { allowedRegionIds } : {},
+        containerTemplates: [
+          minimalContainerTemplate({
+            namespace,
+            imageName: imageBase,
+            tag,
+            containerName,
+            includeProbes,
+          }),
+        ],
+      };
+    }
+
+    const variantKeys = [];
+    const variants = [];
+    const add = (allowedRegionIds, includeProbes) => {
+      const k = `${JSON.stringify(allowedRegionIds)}|${includeProbes}`;
+      if (variantKeys.includes(k)) return;
+      variantKeys.push(k);
+      variants.push(buildCreateBody(allowedRegionIds, includeProbes));
     };
 
-    let created = await mcFetch("/apps", { method: "POST", key, body });
-    for (let attempt = 1; !created.ok && created.status >= 500 && attempt < 4; attempt++) {
-      await new Promise((r) => setTimeout(r, 5000 * attempt));
-      created = await mcFetch("/apps", { method: "POST", key, body });
+    add(primary, true);
+    if (JSON.stringify(primary) !== JSON.stringify(["DE"])) add(["DE"], true);
+    add([], true);
+    add(primary, false);
+    if (JSON.stringify(primary) !== JSON.stringify(["DE"])) add(["DE"], false);
+    add([], false);
+
+    let created = { ok: false, status: 0, text: "no attempts" };
+    for (let vi = 0; vi < variants.length; vi++) {
+      const body = variants[vi];
+      created = await postCreateApp(key, body, vi === 0);
+      if (created.ok) break;
+      if (created.status !== 500) {
+        throw new Error(`Create app ${created.status}: ${created.text}`);
+      }
     }
     if (!created.ok) throw new Error(`Create app ${created.status}: ${created.text}`);
     appId = String(created.json?.id || "");
