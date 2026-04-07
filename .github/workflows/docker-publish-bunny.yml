@@ -86,7 +86,7 @@ jobs:
           BUNNY_ACCESS_KEY: ${{ secrets.BUNNY_MAIN_API_KEY }}
           BUNNY_ACCESS_KEY_FALLBACK: ${{ secrets.BUNNYNET_API_KEY }}
           BUNNY_APP_ID: ${{ vars.BUNNY_APP_ID }}
-          SHIP_MC_APP_NAME: ${{ vars.SHIP_MC_APP_NAME || 'Ship docs' }}
+          SHIP_MC_APP_NAME: ${{ vars.SHIP_MC_APP_NAME || 'ship-docs' }}
           DOCKER_IMAGE_NAME: ${{ vars.DOCKER_IMAGE_NAME || 'dekus/ship-docs' }}
           MC_CONTAINER_NAME: ${{ vars.BUNNY_CONTAINER_NAME || 'ship' }}
           IMAGE_TAG: latest
@@ -131,7 +131,7 @@ jobs:
             echo "Default app host: **\`$HOST\`** (HTTPS)."
             echo ""
             echo "### Custom domain **ship.elmundi.com**"
-            echo "1. Bunny dashboard → **Magic Containers** → **${{ vars.SHIP_MC_APP_NAME || 'Ship docs' }}** → your **CDN / HTTP endpoint** → **Custom hostnames** → add **ship.elmundi.com**."
+            echo "1. Bunny dashboard → **Magic Containers** → **${{ vars.SHIP_MC_APP_NAME || 'ship-docs' }}** → your **CDN / HTTP endpoint** → **Custom hostnames** → add **ship.elmundi.com**."
             echo "2. Bunny will show a **DNS target** (often a **CNAME** to a \`*.bunny.net\` / CDN hostname — not always the same string as the default mc host)."
             echo "3. At your DNS provider for **elmundi.com**, create:"
             echo "   - **Type:** \`CNAME\`"

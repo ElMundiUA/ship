@@ -62,7 +62,8 @@ docker run --rm -p 8080:8080 ship-docs:local
 | `DOCKERHUB_USERNAME` | Default `dekus` |
 | `BUNNY_APP_ID` | After first successful run, you can paste the app id from the job log to skip re-listing (optional optimisation) |
 | `BUNNY_CONTAINER_NAME` | Container template name inside the app — default **`ship`** (must match workflow + script) |
-| `SHIP_MC_APP_NAME` | Magic Container **application** display name — default **`Ship docs`** |
+| `SHIP_MC_APP_NAME` | Magic Container app name — default **`ship-docs`** (ASCII, no spaces) |
+| `BUNNY_REGION_IDS` | Optional — comma regions for `allowedRegionIds` (default `DE,UK,US`) |
 
 **DNS for `ship.elmundi.com`:** after a green deploy, open the workflow **summary** on GitHub — it lists the default Bunny host and CNAME steps. In short: in Bunny, add **custom hostname** `ship.elmundi.com` on the app endpoint; at DNS, **`CNAME` `ship` → target Bunny shows** (use their exact value, not guessed).
 

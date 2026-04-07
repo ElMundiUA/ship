@@ -78,6 +78,17 @@ function probe(path) {
   };
 }
 
+/** Bunny returns partial stickySessions in suggestions → 500 on create if invalid. */
+function sanitizeEndpoints(endpoints) {
+  for (const ep of endpoints) {
+    const st = ep.cdn?.stickySessions;
+    if (st && (!Array.isArray(st.sessionHeaders) || st.sessionHeaders.length < 1)) {
+      delete ep.cdn.stickySessions;
+    }
+  }
+  return endpoints;
+}
+
 function buildContainerTemplate({ namespace, imageName, tag, containerName, suggestions }) {
   let endpoints = suggestions?.endpointSuggestions;
   if (!Array.isArray(endpoints) || endpoints.length === 0) {
@@ -92,6 +103,7 @@ function buildContainerTemplate({ namespace, imageName, tag, containerName, sugg
     ];
   } else {
     endpoints = structuredClone(endpoints);
+    sanitizeEndpoints(endpoints);
     for (const ep of endpoints) {
       if (ep.cdn?.portMappings?.length) {
         ep.cdn.portMappings = ep.cdn.portMappings.map((pm) => ({
@@ -124,7 +136,8 @@ async function ensure() {
     process.env.BUNNY_ACCESS_KEY_FALLBACK?.trim();
   if (!key) throw new Error("Set BUNNY_ACCESS_KEY or BUNNY_ACCESS_KEY_FALLBACK (Bunny account API key)");
 
-  const appName = (process.env.SHIP_MC_APP_NAME || "Ship docs").trim();
+  // ASCII name without spaces — Bunny Create app rejected some titles with 500.
+  const appName = (process.env.SHIP_MC_APP_NAME || "ship-docs").trim();
   const imageFull = (process.env.DOCKER_IMAGE_NAME || "dekus/ship-docs").trim();
   const { namespace, name: imageBase } = parseImage(imageFull);
   const containerName = (process.env.MC_CONTAINER_NAME || "ship").trim();
@@ -149,11 +162,16 @@ async function ensure() {
     });
     if (!sug.ok) throw new Error(`config-suggestions ${sug.status}: ${sug.text}`);
 
+    const regions = (process.env.BUNNY_REGION_IDS || "DE,UK,US")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+
     const body = {
       name: appName,
       runtimeType: "shared",
       autoScaling: { min: 1, max: 1 },
-      regionSettings: {},
+      regionSettings: { allowedRegionIds: regions },
       containerTemplates: [
         buildContainerTemplate({
           namespace,
@@ -165,7 +183,11 @@ async function ensure() {
       ],
     };
 
-    const created = await mcFetch("/apps", { method: "POST", key, body });
+    let created = await mcFetch("/apps", { method: "POST", key, body });
+    for (let attempt = 1; !created.ok && created.status >= 500 && attempt < 4; attempt++) {
+      await new Promise((r) => setTimeout(r, 5000 * attempt));
+      created = await mcFetch("/apps", { method: "POST", key, body });
+    }
     if (!created.ok) throw new Error(`Create app ${created.status}: ${created.text}`);
     appId = String(created.json?.id || "");
     if (!appId) throw new Error(`Create app: no id in response: ${created.text}`);
