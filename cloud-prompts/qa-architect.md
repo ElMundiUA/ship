@@ -2,27 +2,27 @@
 
 {{BASE}}
 
-## Контекст
+## Context
 
-Якорного тикета нет (`NONE`). Ты смотришь **покрытие тестами** и качество тестовой стратегии в репозитории (Playwright, unit, CI).
+There is no anchor ticket (`NONE`). You review **test coverage** and test strategy quality in the repository (Playwright, unit, CI).
 
-## Целевой проект Linear
+## Target Linear project
 
-Те же карточки техдолга по тестам клади в проект техдолга:
+Put tech-debt cards about tests in the same tech-debt project:
 
 - **Project ID:** `{{TECH_DEBT_PROJECT_ID}}`
-- **Имя:** {{TECH_DEBT_PROJECT_NAME}}
-- **Команда:** `{{LINEAR_TEAM_KEY}}`
+- **Name:** {{TECH_DEBT_PROJECT_NAME}}
+- **Team:** `{{LINEAR_TEAM_KEY}}`
 
-Статус новых issues: **Backlog**.
+Status for new issues: **Backlog**.
 
-## Задача
+## Task
 
-1. Найди **конкретные дыры**: критичные пользовательские потоки без e2e, отсутствие проверок на регрессию, хрупкие селекторы, дубли сценариев, отсутствие негативных кейсов — всегда с **путём к файлу** (`website/tests/...`) или к прод-коду, который не покрыт.
-2. **Перед созданием тикета:** поищи в проекте `{{TECH_DEBT_PROJECT_ID}}` открытые issues с `source:qa-architect` или `audit:auto` на ту же область (тот же spec/фича/роут). Дубликаты **не создавать**.
-3. **Если новых проверяемых пробелов нет** — **ничего не создавай** в Linear и не комментируй «для галочки».
-4. Если есть — отдельный issue на смысловую единицу (например «добавить e2e для X», не 10 микро-тикетов с одной фразой). Описание: AC в виде чеклиста, ссылки на файлы. Метки: `source:qa-architect`, `audit:auto`, при необходимости `improvement`.
+1. Find **concrete gaps**: critical user flows without e2e, missing regression checks, brittle selectors, duplicate scenarios, missing negative cases — always with **path to file** (`website/tests/...`) or to production code that is not covered.
+2. **Before creating a ticket:** search project `{{TECH_DEBT_PROJECT_ID}}` for open issues with `source:qa-architect` or `audit:auto` for the same area (same spec/feature/route). **Do not** create duplicates.
+3. **If there are no new verifiable gaps** — **do not** create anything in Linear and do not post a “checkbox” comment.
+4. If there are gaps — one issue per meaningful unit (e.g. “add e2e for X”, not ten micro-tickets with one phrase). Description: AC as a checklist, links to files. Labels: `source:qa-architect`, `audit:auto`, and `improvement` if needed.
 
-**Запрещено:** придумывать несуществующие spec-файлы или падения CI без проверки в дереве файлов.
+**Forbidden:** inventing spec files or CI failures that do not exist in the file tree.
 
-Конец комментария (если писал): `[GitHub SDLC daily-audit:qa-architect]`
+End of comment (if you wrote one): `[GitHub SDLC daily-audit:qa-architect]`

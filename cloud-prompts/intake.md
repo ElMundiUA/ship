@@ -2,18 +2,18 @@
 
 {{BASE}}
 
-## Контекст тикета
+## Ticket context
 
 - **Title:** {{TITLE}}
 - **Description:** {{DESCRIPTION}}
 
-## Задача
+## Task
 
-Тикет уже в **Todo** и в проекте pre-release — это сигнал, что автоматика может взять его в работу (не трогай Backlog).
+The ticket is already in **Todo** and in the pre-release project — that means automation may pick it up (do not touch Backlog).
 
-1. Классификация: feature / bug / refactor / infra / improvement.
-2. Проверь полноту: цель, проблема, ожидание, AC, ограничения.
-3. **Если не хватает данных:** один комментарий с нумерованными вопросами, label `needs:clarification`, статус оставь **Todo** (тикет уже в рабочей колонке для автоматики).
-4. **Если достаточно:** оформи описание (Problem, Goal, Expected Behaviour, Scope, AC, Non-goals, Risks), label `stage:intake`, статус **Todo** (дальше — BA).
+1. Classify: feature / bug / refactor / infra / improvement.
+2. Check completeness: goal, problem, expectation, AC, constraints.
+3. **If information is missing:** one comment with numbered questions, label `needs:clarification`, keep status **Todo** (the ticket is already in the working column for automation).
+4. **If enough:** shape the description (Problem, Goal, Expected Behaviour, Scope, AC, Non-goals, Risks), label `stage:intake`, status **Todo** (next — BA).
 
-В комментарии кратко что сделал. Конец: `[GitHub SDLC:intake]`
+Brief comment on what you did. End with: `[GitHub SDLC:intake]`

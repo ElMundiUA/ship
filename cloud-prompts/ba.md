@@ -2,15 +2,15 @@
 
 {{BASE}}
 
-## Контекст
+## Context
 
 - **Title:** {{TITLE}}
 - **Description:** {{DESCRIPTION}}
 
-## Задача
+## Task
 
-1. Добавь спецификацию: Feature Description, User Stories, AC, Edge Cases, Impacted Components, Technical Notes, Test Plan.
-2. Если scope огромный — создай sub-issues и **не** ставь `ready:developer` без ревью.
-3. Иначе: `ready:developer`, статус **Todo**.
+1. Add specification: Feature Description, User Stories, AC, Edge Cases, Impacted Components, Technical Notes, Test Plan.
+2. If scope is huge — create sub-issues and **do not** set `ready:developer` without review.
+3. Otherwise: `ready:developer`, status **Todo**.
 
-Комментарий-краткое резюме. Конец: `[GitHub SDLC:ba]`
+One short summary comment. End with: `[GitHub SDLC:ba]`

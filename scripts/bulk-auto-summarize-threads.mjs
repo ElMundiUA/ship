@@ -3,7 +3,7 @@
  * Scan all Linear team issues; for noisy agent-heavy threads, replace with one auto-generated summary + delete rest.
  *
  * Heuristics (avoid wiping human threads):
- * - Skip: 0–1 comments, or single comment already "## Сводка треда"
+ * - Skip: 0–1 comments, or single comment already "## Thread summary"
  * - Never clean on comment count alone — requires minimum agent/noise ratio.
  * - Clean if n>=4 and >=55% agent-like; or n>=6 and >=40%; or n>=min-comments and >=35%;
  *   or n in 2–3 and >=90% (tiny all-automation threads).
@@ -92,7 +92,7 @@ function agentFraction(comments) {
 function alreadyOnlyOurSummary(comments) {
   if (comments.length !== 1) return false;
   const b = (comments[0].body || "").trim();
-  return /^##\s*Сводка треда/im.test(b);
+  return /^##\s*(Thread summary|Сводка треда)/im.test(b);
 }
 
 function shouldClean(comments) {
@@ -135,12 +135,12 @@ function buildAutoSummary(issue, comments) {
   for (const p of prs) urls.delete(p);
 
   const lines = [
-    "## Сводка треда (авто-архив)",
+    "## Thread summary (auto-archive)",
     "",
-    `**Тикет:** ${issue.identifier} — ${issue.title}`,
-    `**Статус:** ${issue.state.name} (${issue.state.type})`,
+    `**Issue:** ${issue.identifier} — ${issue.title}`,
+    `**Status:** ${issue.state.name} (${issue.state.type})`,
     "",
-    `Исходный тред: **${comments.length}** комментариев, свёрнуто **${today}**. Полная спека и AC — в **описании issue**; здесь только выжимка ссылок/артефактов из удалённого треда.`,
+    `Original thread: **${comments.length}** comments, collapsed **${today}**. Full spec and AC live in the **issue description**; this is only a digest of links/artifacts from the removed thread.`,
     "",
   ];
 
@@ -152,20 +152,20 @@ function buildAutoSummary(issue, comments) {
 
   const shortCommits = [...commits].filter((c) => c.length <= 12).slice(0, 20);
   if (shortCommits.length) {
-    lines.push("**Упоминания коммитов (неполный список):**");
+    lines.push("**Commit references (partial list):**");
     lines.push(shortCommits.sort().join(", "));
     lines.push("");
   }
 
   const restUrls = [...urls].sort().slice(0, 35);
   if (restUrls.length) {
-    lines.push("**Прочие ссылки:**");
+    lines.push("**Other links:**");
     for (const u of restUrls) lines.push(`- ${u}`);
     lines.push("");
   }
 
   if (!prs.size && !restUrls.length && !shortCommits.length) {
-    lines.push("_В треде не найдено распознанных URL/PR/хэшей — ориентируйся на описание issue._");
+    lines.push("_No recognized URLs/PRs/hashes in the thread — use the issue description._");
     lines.push("");
   }
 

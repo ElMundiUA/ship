@@ -2,19 +2,19 @@
 
 {{BASE}}
 
-## Контекст
+## Context
 
 - **Title:** {{TITLE}}
 - **Description:** {{DESCRIPTION}}
 
-## Задача
+## Task
 
-1. Статус в Linear уже должен быть **In Progress** (GitHub выставил). Ветка для этого запуска задана API как **`fix/{{ISSUE}}-auto`** — работай **только** в ней. Не создавай **`feature/{{ISSUE}}-auto`** и не дублируй работу второй веткой: это приводит к двум PR на один тикет и ручному закрытию лишнего.
-2. Реализация по описанию и AC.
-3. **Тесты:** добавь или обнови **unit/integration** под новую логику; если меняется UX или критичный поток — обнови или допиши **e2e** (Playwright). Не ограничивайся только зелёным `test`: новое поведение должно быть покрыто проверками, иначе явно опиши в PR/комментарии Linear, почему нет (редкий случай).
-4. `cd website`: `npm run lint`, `typecheck`, `test`, `build`, `test:e2e:smoke` (chromium-desktop где есть) — все релевантные таргеты должны проходить до PR.
-5. Коммит: `fix({{ISSUE}}): …` или `feat({{ISSUE}}): …`
-6. **Перед открытием PR:** в GitHub проверь, нет ли уже **открытого** PR по этому тикету (тело/заголовок с `Closes {{ISSUE}}`, ветка `fix/{{ISSUE}}-auto` или похожая). Если есть — **не открывай второй**: допушь в существующую ветку или один комментарий в Linear со ссылкой на PR.
-7. Открой **ровно один** PR с `Closes {{ISSUE}}` (если ещё нет открытого). После PR — статус **In Review** в Linear.
+1. Linear status should already be **In Progress** (set by GitHub). The branch for this run is provided by the API as `**fix/{{ISSUE}}-auto**` — work **only** in that branch. Do not create `**feature/{{ISSUE}}-auto**` or duplicate work in a second branch: that leads to two PRs for one ticket and manual cleanup.
+2. Implement per description and AC.
+3. **Tests:** add or update **unit/integration** for new logic; if UX or a critical flow changes — update or add **e2e** (Playwright). Do not stop at a green `test` alone: new behaviour should be covered by checks; if not, explain clearly in the PR/Linear comment why (rare case).
+4. `cd website`: run `npm run lint`, `typecheck`, `test`, `build`, `test:e2e:smoke` (chromium-desktop where applicable) — all relevant targets must pass before opening the PR.
+5. Commit message: `fix({{ISSUE}}): …` or `feat({{ISSUE}}): …`
+6. **Before opening a PR:** in GitHub check there is no **open** PR for this ticket already (body/title with `Closes {{ISSUE}}`, branch `fix/{{ISSUE}}-auto` or similar). If one exists — **do not open a second**: push to the existing branch or one Linear comment with the PR link.
+7. Open **exactly one** PR with `Closes {{ISSUE}}` (if none open yet). After the PR — status **In Review** in Linear.
 
-Комментарий в тикет с ссылкой на PR (один на проход). Конец: `[GitHub SDLC:developer]`
+One ticket comment with the PR link (one per pass). End with: `[GitHub SDLC:developer]`

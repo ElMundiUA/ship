@@ -41,99 +41,99 @@ async function graphql(apiKey, query, variables = {}) {
 
 const ISSUES = [
   {
-    title: "[E2E dev] billing.subscribed: нет кнопки Manage Subscription на /billing",
-    description: `## Контекст
-Регрессия Playwright против **https://dev.elmundi.com** (\`PLAYWRIGHT_BASE_URL\` + \`MAILOSAUR_*\`, \`E2E_SUBSCRIBER_EMAIL\`).
+    title: "[E2E dev] billing.subscribed: Manage Subscription button missing on /billing",
+    description: `## Context
+Playwright regression against **https://dev.elmundi.com** (\`PLAYWRIGHT_BASE_URL\` + \`MAILOSAUR_*\`, \`E2E_SUBSCRIBER_EMAIL\`).
 
-## Файл
+## File
 \`website/tests/e2e/regression/billing.subscribed.functional.spec.ts\`
 
-## Симптом
-После OTP-логина подписчика не находится \`getByRole('button', { name: 'Manage Subscription' })\` — таймаут 30s.
+## Symptom
+After OTP login as subscriber, \`getByRole('button', { name: 'Manage Subscription' })\` is not found — 30s timeout.
 
-## Гипотезы
-- У \`E2E_SUBSCRIBER_EMAIL\` на dev нет активной подписки в Paddle / рассинхрон с API \`/api/users/me/subscription\`.
-- Другой UI для состояния биллинга на dev.
+## Hypotheses
+- \`E2E_SUBSCRIBER_EMAIL\` has no active Paddle subscription on dev / drift vs \`/api/users/me/subscription\`.
+- Different billing UI on dev for this state.
 
 ## AC
-- [ ] Под тестовым подписчиком на dev на \`/billing\` видна активная подписка и CTA «Manage Subscription» (или обновить тест/фикстуру под фактический UI).
+- [ ] On dev, test subscriber sees active subscription and “Manage Subscription” CTA on \`/billing\` (or update test/fixture to match real UI).
 `,
   },
   {
-    title: "[E2E dev] catalog.functional: клавиатура — не уходит на /category/…",
-    description: `## Контекст
-Регрессия против **dev.elmundi.com**.
+    title: "[E2E dev] catalog.functional: keyboard navigation does not reach /category/…",
+    description: `## Context
+Regression against **dev.elmundi.com**.
 
-## Файл
-\`website/tests/e2e/regression/catalog.functional.spec.ts\` — тест **cards are keyboard-activatable**.
+## File
+\`website/tests/e2e/regression/catalog.functional.spec.ts\` — test **cards are keyboard-activatable**.
 
-## Симптом
-После активации с клавиатуры \`toHaveURL(/\\/category\\//)\` падает: остаётся \`https://dev.elmundi.com/\`.
+## Symptom
+After keyboard activation, \`toHaveURL(/\\/category\\//)\` fails: stays on \`https://dev.elmundi.com/\`.
 
-## Гипотезы
-- Фокус / roving tabindex / Enter не совпадают с локальным поведением.
-- Тайминг или отличие сборки на dev.
+## Hypotheses
+- Focus / roving tabindex / Enter differ from local behaviour.
+- Timing or dev build differences.
 
 ## AC
-- [ ] Клавиатурная активация первой карточки каталога ведёт на страницу категории на dev (или скорректировать тест под реальный a11y-поток).
+- [ ] Keyboard activation of the first catalog card navigates to category page on dev (or adjust test to real a11y flow).
 `,
   },
   {
-    title: "[E2E dev] category-tag-filter: после выбора тега URL остаётся на /",
-    description: `## Контекст
-Регрессия против **dev.elmundi.com**.
+    title: "[E2E dev] category-tag-filter: after selecting tag URL stays on /",
+    description: `## Context
+Regression against **dev.elmundi.com**.
 
-## Файл
+## File
 \`website/tests/e2e/regression/category-tag-filter.functional.spec.ts\`
 
-## Симптом
-Ожидался URL категории, фактически остаётся главная (\`/\`).
+## Symptom
+Expected category URL; actually remains home (\`/\`).
 
-## Гипотезы
-- Нет подходящих тегов/данных в каталоге на dev для сценария.
-- Регрессия в навигации при фильтре тегов.
+## Hypotheses
+- No suitable tags/catalog data on dev for the scenario.
+- Navigation regression when filtering by tags.
 
 ## AC
-- [ ] Сценарий «тег → категория с отфильтрованным плейлистом» работает на dev или тест привязан к стабильным фикстурам.
+- [ ] “Tag → category with filtered playlist” works on dev, or test is tied to stable fixtures.
 `,
   },
   {
-    title: "[E2E dev] subscribed-user.audio-access: 403 и модалка перекрывает каталог",
-    description: `## Контекст
-Регрессия против **dev.elmundi.com** (\`E2E_SUBSCRIBER_EMAIL\`).
+    title: "[E2E dev] subscribed-user.audio-access: 403 and modal blocks catalog",
+    description: `## Context
+Regression against **dev.elmundi.com** (\`E2E_SUBSCRIBER_EMAIL\`).
 
-## Файл
+## File
 \`website/tests/e2e/regression/subscribed-user.audio-access.spec.ts\`
 
-## Симптом
-- В консоли: **403** на ресурс (CDN / signed URL).
-- Клик по карточке каталога: \`auth_modal\` перехватывает pointer (\`plan__features\` / подписка), таймаут на \`openFirstCard\`.
+## Symptom
+- Console: **403** on resource (CDN / signed URL).
+- Catalog card click: \`auth_modal\` intercepts pointer (\`plan__features\` / subscription), timeout on \`openFirstCard\`.
 
-## Гипотезы
-- Bunny / entitlement на dev для подписчика.
-- Автооткрытие subscription modal после логина мешает сценарию.
+## Hypotheses
+- Bunny / entitlement on dev for subscriber.
+- Auto-opened subscription modal after login blocks the scenario.
 
 ## AC
-- [ ] Подписчик на dev без paywall на контенте с аудио; signed URL не 403 для entitled эпизода.
-- [ ] E2E стабильно (закрытие модалки / ожидание) или исправлен бэкенд/CDN.
+- [ ] Subscriber on dev has no paywall on audio content; signed URL not 403 for entitled episode.
+- [ ] E2E stable (close modal / wait) or backend/CDN fixed.
 `,
   },
   {
-    title: "[E2E dev] Paddle: после клика Start Free Trial на /pricing не открывается overlay (Playwright)",
-    description: `## Контекст
-После тюнинга paddle-checkout.sandbox.functional.spec.ts (PLAYWRIGHT_BASE_URL, ожидание профиля, расширенный матч URL Paddle, .first() для CTA) прогон против **https://dev.elmundi.com** может падать: нет iframe и нет подходящего network request.
+    title: "[E2E dev] Paddle: Start Free Trial on /pricing does not open overlay (Playwright)",
+    description: `## Context
+After tuning paddle-checkout.sandbox.functional.spec.ts (PLAYWRIGHT_BASE_URL, profile wait, broader Paddle URL match, .first() for CTA), runs against **https://dev.elmundi.com** may fail: no iframe and no matching network request.
 
-## Файл
+## File
 \`website/tests/e2e/regression/paddle-checkout.sandbox.functional.spec.ts\`
 
-## Гипотезы
-- В Paddle Checkout (sandbox) не добавлен origin **https://dev.elmundi.com**
-- Ошибка /api/paddle/token или price IDs на dev
-- Другой host у overlay, чем ловит тест
+## Hypotheses
+- **https://dev.elmundi.com** not added as origin in Paddle Checkout (sandbox)
+- /api/paddle/token or price IDs error on dev
+- Overlay host differs from what the test asserts
 
 ## AC
-- [ ] Sandbox checkout открывается с dev после OTP (Mailosaur) + клик по annual CTA
-- [ ] E2E зелёный с PLAYWRIGHT_BASE_URL=https://dev.elmundi.com или задокументировано исключение
+- [ ] Sandbox checkout opens from dev after OTP (Mailosaur) + annual CTA click
+- [ ] E2E green with PLAYWRIGHT_BASE_URL=https://dev.elmundi.com or documented exception
 `,
   },
 ];

@@ -2,34 +2,34 @@
 
 {{BASE}}
 
-## Контекст тикета Linear (уведомления)
+## Linear ticket context (notifications)
 
-Используй **{{ISSUE}}** только для **одного** короткого статус-коммента в конце успешного прохода (после PR). Не раздувай описание тикета.
+Use **{{ISSUE}}** only for **one** short status comment after a successful pass (after the PR). Do not inflate the ticket description.
 
 - **Title:** {{TITLE}}
-- **Description (фрагмент):** {{DESCRIPTION}}
+- **Description (excerpt):** {{DESCRIPTION}}
 
-## Задача
+## Task
 
-1. Ниже в промпте может быть приложен **JSON-отчёт** `workflow-self-healer` (`issues`, `recommendations`). Опирайся на факты и на skill **workflow-self-healer**.
-2. Если отчёт пустой или проблемы уже устранены в **`main`** — **выйди без изменений, без PR и без комментария в Linear**.
-3. Иначе внеси **минимальные** правки; локально прогони то, что уместно (lint/test/точечный скрипт).
+1. A **JSON report** from `workflow-self-healer` (`issues`, `recommendations`) may be attached below in the prompt. Rely on facts and on the **workflow-self-healer** skill.
+2. If the report is empty or issues are already fixed on `**main**` — **exit with no changes, no PR, and no Linear comment**.
+3. Otherwise apply **minimal** fixes; run locally what makes sense (lint/test/targeted script).
 
-## Анти-дубли (обязательно)
+## Anti-duplication (required)
 
-Перед любыми коммитами/PR:
+Before any commits/PR:
 
-1. **Открытые PR:** проверь в GitHub открытые PR, связанные с тем же симптомом (ветки `cursor/workflow-self-heal-*`, заголовки/changelog про preview/probe/Linear/self-heal). Если уже есть PR с тем же фиксом или с перекрывающимся scope — **не создавай второй**: добавь комментарий в существующий PR или **остановись** с короткой заметкой в Linear (один комментарий), что работа уже ведётся в PR #N.
-2. **Комментарии Linear:** прочитай последние комментарии к **{{ISSUE}}**. Если уже есть комментарий с `[GitHub SDLC:workflow-self-heal]` и ссылкой на открытый PR за последние **72 часа** и тот PR всё ещё открыт — **не пости дубль** и не открывай параллельный PR без новых фактов в отчёте.
-3. **Один результат за проход:** максимум **один** новый PR от этого запуска. Не дроби один фикс на несколько PR.
-4. **Ветка developer/SDLC:** не пересекай чужие активные ветки `fix/ELM-*-auto` и не переименовывай чужие артефакты.
+1. **Open PRs:** check GitHub for open PRs related to the same symptom (branches `cursor/workflow-self-heal-*`, titles/changelog mentioning preview/probe/Linear/self-heal). If a PR already exists with the same fix or overlapping scope — **do not create a second**: comment on the existing PR or **stop** with one short Linear note that work is already in PR #N.
+2. **Linear comments:** read the latest comments on **{{ISSUE}}**. If there is already a comment with `[GitHub SDLC:workflow-self-heal]` linking to an open PR from the last **72 hours** and that PR is still open — **do not** post a duplicate or open a parallel PR without new facts in the report.
+3. **One outcome per pass:** at most **one** new PR from this run. Do not split one fix across multiple PRs.
+4. **Developer/SDLC branches:** do not collide with other active `fix/ELM-*-auto` branches or rename others’ artifacts.
 
-После успешной работы:
+After successful work:
 
-5. Один PR с ясным описанием. В Linear — **максимум один** новый комментарий: ссылка на PR + `[GitHub SDLC:workflow-self-heal]`.
+1. One PR with a clear description. In Linear — **at most one** new comment: PR link + `[GitHub SDLC:workflow-self-heal]`.
 
-## Запреты
+## Do not
 
-- Не трогай секреты / переменные GitHub в коде.
-- Не мерж PR.
-- Не спамь комментариями в Linear (никаких цепочек «ещё одно обновление» без нового PR или новой находки в отчёте).
+- Do not touch GitHub secrets / variables in code.
+- Do not merge PRs.
+- Do not spam Linear (no chains of “another update” without a new PR or new finding in the report).

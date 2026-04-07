@@ -1,16 +1,16 @@
 ## Global rules (Cursor Cloud Agent — GitHub SDLC)
 
-- **Очередь SDLC:** GitHub pick-скрипты берут только тикеты в **Todo** и в проекте **ElMundi pre-release** (или `LINEAR_SDLC_PROJECT_ID`). **Backlog** для ручной сортировки — автоматика его не подхватывает, пока ты не перенесёшь карточку в Todo.
-- **Linear:** Единый канал с людьми — **комментарии к тикету** в Linear. Не спамь: один содержательный комментарий за проход, помечай конец строкой `[GitHub SDLC:{{ROLE}}]`.
-- **IDEMPOTENCY:** Перед изменениями перечитай тикет (и последние комментарии). Если работа для этой роли уже сделана (нужные labels/description/статус), **выйди без изменений и без комментария**.
-- **Расписание GitHub:** Один и тот же тикет может снова попасть в pick через 2h. Если последний комментарий с `[GitHub SDLC:{{ROLE}}]` уже отражает актуальное состояние и новых входных нет — **не дублируй** обновления и комментарии.
-- Не мержить PR. Не переводить в Done без явного апрува человека.
-- **LINEAR_API_KEY:** Должен быть доступен агенту (Cursor Cloud → Secrets / env для репозитория). Обновляй Linear через API или официальный клиент. Если ключа нет — один комментарий `[LINEAR-DRAFT]` с JSON/текстом того, что нужно применить вручную.
-- **Скили:** Ниже контекст из `.cursor/skills` — следуй им для Bunny, деплоя, self-heal и т.д., если задача затрагивает эти области.
-- **Один тикет — один открытый PR от SDLC:** ветка **`fix/ELM-XX-auto`** (см. `cloud-agent-launch.mjs`). Не создавай параллельно **`feature/ELM-XX-auto`** для того же тикета — это дубликаты; если уже есть два PR, не мержи оба: оставь актуальный, второй закрой.
-- **Pre-release / dev→prod:** справочник `tools/linear-agent/docs/PRE-RELEASE-DEPLOY-E2E.md`; ручной смоук `website/docs/manual-smoke-dev-to-prod.md`. Dev-хостинг = **https://dev.elmundi.com** (деплой с `main`), prod = ручной promote (workflows `bunny-promote-prod-*`).
-- **Daily audit roles** (`tech-architect`, `qa-architect`, `security-officer`): не создавай тикеты без проверяемых фактов; дедупликация с открытыми issues в целевых проектах Linear. Маркер комментария: `[GitHub SDLC daily-audit:…]` (см. `docs/DAILY-AUDIT-ROLES.md`).
+- **SDLC queue:** GitHub pick scripts only take tickets in **Todo** and in the **ElMundi pre-release** project (or `LINEAR_SDLC_PROJECT_ID`). **Backlog** is for manual triage — automation does not pick it up until you move the card to Todo.
+- **Linear:** The single channel with humans is **comments on the ticket** in Linear. Do not spam: one substantive comment per pass; end with `[GitHub SDLC:{{ROLE}}]`.
+- **IDEMPOTENCY:** Before making changes, re-read the ticket (and latest comments). If work for this role is already done (required labels/description/status), **exit without changes and without a comment**.
+- **GitHub schedule:** The same ticket can re-enter pick after ~2h. If the latest comment with `[GitHub SDLC:{{ROLE}}]` already reflects the current state and there are no new inputs — **do not duplicate** updates or comments.
+- Do not merge PRs. Do not move to Done without explicit human approval.
+- **LINEAR_API_KEY:** Must be available to the agent (Cursor Cloud → Secrets / env for the repository). Update Linear via API or the official client. If the key is missing — one comment `[LINEAR-DRAFT]` with JSON/text of what to apply manually.
+- **Skills:** Context from `.cursor/skills` appears below — follow it for Bunny, deploy, self-heal, etc., when the task touches those areas.
+- **One ticket — one open PR from SDLC:** branch `**fix/ELM-XX-auto**` (see `cloud-agent-launch.mjs`). Do not create `**feature/ELM-XX-auto**` in parallel for the same ticket — that duplicates work; if two PRs already exist, do not merge both: keep the current one and close the other.
+- **Pre-release / dev→prod:** reference `tools/linear-agent/docs/PRE-RELEASE-DEPLOY-E2E.md`; manual smoke `website/docs/manual-smoke-dev-to-prod.md`. Dev hosting = **[https://dev.elmundi.com](https://dev.elmundi.com)** (deploy from `main`), prod = manual promote (workflows `bunny-promote-prod-`*).
+- **Daily audit roles** (`tech-architect`, `qa-architect`, `security-officer`): do not create tickets without verifiable facts; dedupe against open issues in target Linear projects. Comment marker: `[GitHub SDLC daily-audit:…]` (see `docs/DAILY-AUDIT-ROLES.md`).
 
-## Релевантные skills
+## Relevant skills
 
 {{SKILLS_CONTEXT}}

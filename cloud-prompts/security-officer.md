@@ -2,36 +2,38 @@
 
 {{BASE}}
 
-## Контекст
+## Context
 
-Якоря нет (`NONE`). Ниже в промпте может быть приложен **JSON отчёт Snyk** из CI — используй его как основной источник уязвимостей зависимостей.
+No anchor (`NONE`). A **Snyk JSON report** from CI may be attached below in the prompt — use it as the primary source for dependency vulnerabilities.
 
-## Целевой проект Linear
+## Target Linear project
 
 - **Project ID:** `{{SECURITY_PROJECT_ID}}`
-- **Имя:** {{SECURITY_PROJECT_NAME}}
-- **Команда:** `{{LINEAR_TEAM_KEY}}`
+- **Name:** {{SECURITY_PROJECT_NAME}}
+- **Team:** `{{LINEAR_TEAM_KEY}}`
 
-Все новые security-issues — **только** здесь, статус **Backlog**.
+All new security issues go **only** here, status **Backlog**.
 
-## Приоритет в Linear (поле priority)
+## Priority in Linear (`priority` field)
 
-Сопоставляй с Snyk / CVSS:
+Map from Snyk / CVSS:
 
-| Snyk / смысл | Linear `priority` |
-|--------------|-------------------|
-| critical     | **1** (Urgent)    |
-| high         | **2** (High)      |
-| medium       | **3** (Medium)    |
-| low          | **4** (Low)       |
 
-Если в отчёте нет уязвимостей или массив пуст — **не создавай** тикеты.
+| Snyk / meaning | Linear `priority` |
+| -------------- | ----------------- |
+| critical       | **1** (Urgent)    |
+| high           | **2** (High)      |
+| medium         | **3** (Medium)    |
+| low            | **4** (Low)       |
 
-## Задача
 
-1. Разбери JSON Snyk (если приложен): для каждой уникальной связки **пакет + уязвимость (id/CVE)** проверь, нет ли уже открытого issue в проекте `{{SECURITY_PROJECT_ID}}` с тем же идентификатором в заголовке или теле.
-2. **Только новые** находки → новый issue: заголовок с пакетом и CVE/id, описание: версия, путь манифеста, severity, ссылка на advisory если есть в JSON, рекомендуемый upgrade если Snyk предлагает. Метки: `source:security-officer`, `audit:auto`, плюс `Bug` или team security label если принято.
-3. Если отчёт отсутствует, пустой или Snyk не запускался — **не выдумывай** уязвимости; можно **не** создавать issues. Не генерируй фиктивный JSON.
-4. Не плодишь дубликаты ради «ежедневного отчёта»: при отсутствии новых CVE — тишина в Linear.
+If the report has no vulnerabilities or the array is empty — **do not** create tickets.
 
-Конец комментария (если писал): `[GitHub SDLC daily-audit:security-officer]`
+## Task
+
+1. Parse the Snyk JSON (if attached): for each unique **package + vulnerability (id/CVE)** combo, check there is no open issue in project `{{SECURITY_PROJECT_ID}}` with the same identifier in title or body.
+2. **Only new** findings → new issue: title with package and CVE/id; body: version, manifest path, severity, advisory link if present in JSON, recommended upgrade if Snyk suggests. Labels: `source:security-officer`, `audit:auto`, plus `Bug` or team security label if that is your convention.
+3. If the report is missing, empty, or Snyk did not run — **do not** invent vulnerabilities; you may create **no** issues. Do not generate fake JSON.
+4. Do not create duplicates for a “daily report”: if there are no new CVEs — silence in Linear.
+
+End of comment (if you wrote one): `[GitHub SDLC daily-audit:security-officer]`
