@@ -133,8 +133,11 @@ async function ensure() {
   let appId = (process.env.BUNNY_APP_ID || "").trim();
 
   const apps = await listAllApps(key);
-  const byName = apps.find((a) => a?.name === appName);
-  if (byName) appId = String(byName.id);
+  // Explicit BUNNY_APP_ID (e.g. repo variable) wins — do not overwrite with name match.
+  if (!appId) {
+    const byName = apps.find((a) => a?.name === appName);
+    if (byName) appId = String(byName.id);
+  }
 
   if (!appId) {
     const regions = (process.env.BUNNY_REGION_IDS || "DE,UK,US")

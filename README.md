@@ -60,8 +60,8 @@ docker run --rm -p 8080:8080 ship-docs:local
 |----------|---------|
 | `DOCKER_IMAGE_NAME` | Default `dekus/ship-docs` |
 | `DOCKERHUB_USERNAME` | Default `dekus` |
-| `BUNNY_APP_ID` | Magic Container **application id** (UUID). If `POST …/mc/apps` returns **500** from Bunny’s side, create the app once in **Dashboard → Magic Containers** (name must match `SHIP_MC_APP_NAME`, default `ship-docs`) **or** paste its id here — the script then skips create and only deploys/updates image. |
-| `BUNNY_CONTAINER_NAME` | Container template name inside the app — default **`ship`** (must match workflow + script) |
+| `BUNNY_APP_ID` | Magic Container **application id** from the dashboard. **Set this** so every push to `main` updates that app (skips `POST /apps` create). Example shape: short alphanumeric id from Bunny. |
+| `BUNNY_CONTAINER_NAME` | Container **template name** inside the app (must match **BunnyWay** `container` input). Default **`ship`**; apps created via the Bunny UI often use **`web`** — if the update-image step fails, set this to the name shown under your MC app. |
 | `SHIP_MC_APP_NAME` | Magic Container app name — default **`ship-docs`** (ASCII, no spaces) |
 | `BUNNY_REGION_IDS` | Optional — comma regions for `allowedRegionIds` (default `DE,UK,US`) |
 
