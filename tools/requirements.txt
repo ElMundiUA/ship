@@ -1,0 +1,4 @@
+mcp>=1.22.0
+chromadb>=0.5.0
+uvicorn[standard]>=0.30.0
+python-dotenv>=1.0.0
