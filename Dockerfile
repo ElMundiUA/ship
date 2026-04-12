@@ -6,13 +6,14 @@ WORKDIR /app
 
 RUN apk add --no-cache libc6-compat
 
-ENV NODE_ENV=production
+# Install + build need devDependencies (e.g. TypeScript for next.config.ts); set production after build.
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV REPO_ROOT=/app
 ENV HOSTNAME=0.0.0.0
 
 COPY package.json package-lock.json ./
-COPY landing/package.json landing/package-lock.json ./landing/
+COPY landing/package.json ./landing/
+COPY cli/package.json ./cli/
 
 RUN npm ci
 
@@ -26,6 +27,8 @@ COPY collections ./collections
 COPY backend ./backend
 
 RUN npm run landing:build
+
+ENV NODE_ENV=production
 
 EXPOSE 3000
 
