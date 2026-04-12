@@ -4,7 +4,7 @@
 
 **Year:** 2026  
 
-**Documentation version:** 0.6.0 (see site header chip and `mkdocs.yml` / `extra.doc_version`).
+**Documentation version:** 0.7.0 (see site header chip and `mkdocs.yml` / `extra.doc_version`).
 
 ## Customer-facing packs
 
@@ -31,7 +31,7 @@ Short quotations in reviews or reports require **attribution** (author + source)
 
 ## Ship vs product monorepo
 
-**Ship** in **this** repository is the permissively licensed framework package (`documentation/`, `prompts/cloud-agent/`, `runtime/` with CLI and scripts). A **product monorepo** that embeds the same files under a nested path (for example `tools/ship/`) may still ship **proprietary** application or website code beside it. Follow the license **notice on each path** you copy, or ask for written permission. **[Examples → Reference org](examples/elmundi/index.md)** describes one public layout; your tree may differ.
+**Ship** in **this** repository is the permissively licensed framework package (`documentation/`, `prompts/`, `scripts/`, and reference materials). A **product monorepo** that embeds the same files under a nested path (for example `tools/ship/`) may still ship **proprietary** application or website code beside it. Follow the license **notice on each path** you copy, or ask for written permission. **[Examples → Reference org](examples/elmundi/index.md)** describes one public layout; your tree may differ.
 
 ## Contact
 

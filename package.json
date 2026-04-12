@@ -1,15 +1,17 @@
 {
   "name": "ship",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
-  "description": "Ship framework — documentation, prompts, and ship-agent runtime (npm workspace)",
+  "description": "Ship framework — instruction-first docs, prompts, and reference implementations",
   "workspaces": [
-    "runtime"
+    "landing",
+    "cli"
   ],
   "scripts": {
-    "docs:install": "pip install -r requirements-docs.txt",
-    "docs:serve": "mkdocs serve",
-    "docs:build": "mkdocs build"
+    "landing:dev": "npm run dev --prefix landing",
+    "landing:build": "npm run build --prefix landing",
+    "landing:start": "npm run start --prefix landing",
+    "ship": "node cli/bin/ship.mjs"
   },
   "keywords": [],
   "author": "Denys Kuzin",

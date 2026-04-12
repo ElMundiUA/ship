@@ -1,5 +1,7 @@
 # Prompts
 
-- **`cloud-agent/`** — Markdown read by **`runtime/scripts/cloud-agent-launch.mjs`** for Cursor Cloud Agent (one file per role + `_base.md`).
-- **`catalog/`** — Optional A‑series drafts for humans; **not** loaded by CI until copied or merged into `cloud-agent/`.
-- **`onboarding/`** — Agent playbooks to **adopt Ship** into another repo (`adopt-ship-generic.md`, ElMundi addendum). Published in the manual under **Part V — Adoption**.
+- `onboarding/` — primary adoption playbooks. This is the main delivery vehicle for Ship methodology.
+- `cloud-agent/` — reusable role prompt patterns (adapt per project).
+- `catalog/` — draft prompt ideas and optional patterns.
+
+Ship treats prompts as versioned policy artifacts: reviewable, diffable, and portable across agent vendors.

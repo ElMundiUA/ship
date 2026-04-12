@@ -1,0 +1,10 @@
+{
+  "name": "@ship/cli",
+  "version": "0.7.0",
+  "private": true,
+  "type": "module",
+  "description": "Ship CLI — docs API (search/fetch/feedback), patterns, and agent init",
+  "bin": {
+    "ship": "./bin/ship.mjs"
+  }
+}

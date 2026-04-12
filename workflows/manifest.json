@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "description": "Scheduler intents: how cron, PR gates, hosted E2E, self-heal, and audit lanes compose. Behavioural names — YAML filenames differ per org (see reference org manual).",
+  "workflows": [
+    {
+      "id": "scheduled-sdlc-lane",
+      "title": "Scheduled SDLC lane",
+      "summary": "Cron-driven intake → clarification → BA → developer with queue discipline and evidence.",
+      "path": "documentation/workflows/scheduled-sdlc-lane.md",
+      "tags": ["cron", "linear", "github-actions"],
+      "group": "delivery"
+    },
+    {
+      "id": "pr-and-ci-gate",
+      "title": "PR gate & preview",
+      "summary": "Required checks, optional preview deploy, blocking policy and markers.",
+      "path": "documentation/workflows/pr-and-ci-gate.md",
+      "tags": ["pr", "checks", "preview"],
+      "group": "delivery"
+    },
+    {
+      "id": "hosted-e2e-regression",
+      "title": "Hosted E2E regression",
+      "summary": "Playwright (or similar) against dev/stage on a schedule and on demand.",
+      "path": "documentation/workflows/hosted-e2e-regression.md",
+      "tags": ["e2e", "playwright", "regression"],
+      "group": "quality"
+    },
+    {
+      "id": "pipeline-self-heal",
+      "title": "Pipeline self-heal",
+      "summary": "Diagnostics cadence separate from SDLC picks; report before optional agent repair.",
+      "path": "documentation/workflows/pipeline-self-heal.md",
+      "tags": ["diagnostics", "reliability", "ops"],
+      "group": "operations"
+    },
+    {
+      "id": "parallel-audit-lanes",
+      "title": "Parallel audit lanes",
+      "summary": "Tech, QA, and security audits on separate boards — delivery throughput stays intact.",
+      "path": "documentation/workflows/parallel-audit-lanes.md",
+      "tags": ["audit", "security", "governance"],
+      "group": "governance"
+    }
+  ]
+}

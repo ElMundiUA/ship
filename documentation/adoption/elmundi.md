@@ -18,7 +18,7 @@ Use this page when adopting Ship into **[ElMundiUA/elmundi](https://github.com/E
 - [ ] No remaining references to **`tools/linear-agent`** in active workflows (archived YAML may stay for history if moved).  
 - [ ] GitHub Actions secrets: `LINEAR_API_KEY`, `CURSOR_API_KEY`, `GITHUB_TOKEN` (or fine-scoped PAT) as before.  
 - [ ] Cursor Cloud Agent env for the repo still includes **`LINEAR_API_KEY`**.  
-- [ ] `bash tools/ship/runtime/scripts/verify-setup.sh` (from repo with `.env`) passes or failures are documented.
+- [ ] Agent-produced setup verification steps are documented and pass for your chosen stack (or known blockers are recorded).
 
 ---
 

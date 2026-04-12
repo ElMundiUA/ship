@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "description": "Ready-made bundles: each entry stitches workflow intents, tool surfaces, and org patterns for a concrete product shape.",
+  "collections": [
+    {
+      "id": "web-application",
+      "title": "Web application",
+      "summary": "SDLC grid, PR previews, hosted Playwright, and audit lanes — picked for browser apps.",
+      "path": "documentation/collections/web-application.md",
+      "tags": ["web", "e2e", "spa"],
+      "group": "product"
+    },
+    {
+      "id": "api-backend",
+      "title": "API / backend service",
+      "summary": "SDLC with CI gates and security/architecture audits; lighter on browser E2E, heavier on contracts.",
+      "path": "documentation/collections/api-backend.md",
+      "tags": ["api", "contracts", "services"],
+      "group": "product"
+    },
+    {
+      "id": "adoption-minimum",
+      "title": "Adoption minimum",
+      "summary": "Capability overview, methodology API, and onboarding prompts before a full scheduled grid.",
+      "path": "documentation/collections/adoption-minimum.md",
+      "tags": ["starter", "agents", "api"],
+      "group": "starter"
+    }
+  ]
+}

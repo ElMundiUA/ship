@@ -85,7 +85,7 @@ jobs:
           {
             echo "### Bunny deploy"
             echo "Deploy runs **only in this workflow** (Ship — Docker Hub + Bunny deploy), job **Ensure MC app & deploy image**."
-            echo "The separate **Ship docs (PR)** workflow only runs \`mkdocs build\` on pull requests — it never touches Bunny."
+            echo "Pull requests: run \`npm run landing:build\` locally or in CI if you add a check — Bunny deploy is only this workflow on \`main\`."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/setup-node@v4
@@ -102,7 +102,7 @@ jobs:
           DOCKER_IMAGE_NAME: ${{ vars.DOCKER_IMAGE_NAME || 'dekus/ship-docs' }}
           MC_CONTAINER_NAME: ${{ vars.BUNNY_CONTAINER_NAME || 'Container-1' }}
           IMAGE_TAG: ${{ needs.build-push.outputs.deploy_image_tag }}
-        run: node runtime/scripts/bunny-ship-docs.mjs ensure
+        run: node scripts/bunny-ship-docs.mjs ensure
 
       # Digest from the build can differ from what Docker Hub serves (manifest list, timing). Bunny
       # compares registry digest to the template — same tag + different digest ⇒ orange “Apply update”.
@@ -137,7 +137,7 @@ jobs:
           MC_CONTAINER_NAME: ${{ steps.mc.outputs.mc_container_name }}
           IMAGE_TAG: ${{ needs.build-push.outputs.deploy_image_tag }}
           IMAGE_DIGEST: ${{ steps.hub_digest.outputs.digest || needs.build-push.outputs.image_digest }}
-        run: node runtime/scripts/bunny-patch-container.mjs
+        run: node scripts/bunny-patch-container.mjs
 
       # Optional second nudge after config is saved (initial deploy / some accounts).
       - name: Trigger Magic Container deploy (rollout)
@@ -180,10 +180,10 @@ jobs:
               else
                 echo "3. At your DNS provider, create the record Bunny specifies for **${CUSTOM}**."
               fi
-              echo "4. Wait for TLS + propagation; align \`mkdocs.yml\` → \`site_url\` with **https://${CUSTOM}/** (trailing slash as you prefer)."
+              echo "4. Wait for TLS + propagation; set **NEXT_PUBLIC_SITE_URL** (and public docs URL if split) to **https://${CUSTOM}/** for consistent metadata and links."
             else
               echo "### Custom domain"
               echo "Set GitHub repository variables **SHIP_DOCS_CUSTOM_HOST** (e.g. \`docs.example.com\`) and optionally **SHIP_DOCS_DNS_ZONE** (e.g. \`example.com\`) to print tailored CNAME steps here."
-              echo "Until then, use Bunny’s UI for **Custom hostnames** and match \`site_url\` in \`mkdocs.yml\` to your real docs origin."
+              echo "Until then, use Bunny’s UI for **Custom hostnames** and set the same origin in your deployment env (e.g. **NEXT_PUBLIC_SITE_URL**)."
             fi
           } >> "$GITHUB_STEP_SUMMARY"

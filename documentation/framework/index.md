@@ -1,6 +1,9 @@
-# Framework
+# The book — why Ship
 
-This page is **Ship** in full: a **book-shaped manual** you can read on a long flight or in **forty short sittings**. Each **numbered chapter** is one idea — roughly **three to five minutes** of reading at a normal pace — written as a short essay, not a bullet list disguised as wisdom. Underneath the tone, the rules are the same ones we ship in production.
+!!! tip "Need commands, not chapters?"
+    **Operational checklist** (verify, paths, what to paste into an agent): **[Getting started](../getting-started/index.md)**. This page is the **long narrative** — motivation, trade-offs, and vocabulary — for readers who want the logic before or after wiring.
+
+This page is **Ship** as a **book-shaped essay**: you can read it on a long flight or in **forty short sittings**. Each **numbered chapter** is one idea — roughly **three to five minutes** of reading at a normal pace — written as a short essay, not a bullet list disguised as wisdom. Underneath the tone, the rules are the same ones we ship in production.
 
 **Jump (major parts):** [The idea](#the-idea) · [The system](#the-system) · [Running the loop](#running-the-loop) · [Trust & boundaries](#trust-and-boundaries) · [Rolling it out](#rolling-it-out) · [When things break](#when-things-break) · [Vocabulary](#vocabulary)
 
@@ -671,7 +674,7 @@ Ship is stable only when the **tracker behaves like a contract** — or when you
 
 Drift is embarrassingly human. Someone merges two workflow states because the board felt cluttered. Someone renames a label because the old word embarrassed them in a leadership review. Someone archives a project and creates a new one with a shinier name. Someone deletes “unused” custom fields that were only unused because humans stopped looking at them — the machines were still reading them every hour. None of that is villainy. It is the normal entropy of organisations that forget their tracker is infrastructure, not wallpaper.
 
-The uncomfortable truth is that **automation has no sense of intent**. It does not know you meant well. It matches strings. When the string changes, the contract breaks. From the script’s point of view, that is indistinguishable from a vendor shipping a breaking API with no deprecation notice. Your pick rule asked for `ready:developer`; the board now says `Ready for dev`. To you, it is the same idea. To the machine, it is a 404 dressed as a label.
+The uncomfortable truth is that **automation has no sense of intent**. It does not know you meant well. It matches strings. When the string changes, the contract breaks. From the script’s point of view, that is indistinguishable from a vendor shipping a breaking API with no deprecation notice. Your pick rule asked for `ready:developer`; the workflow state was renamed so it is no longer exactly **Todo**. To you, it is the same idea. To the machine, it is a 404 dressed as a label.
 
 Tokens and scopes drift in the same family. Credentials feel like plumbing until they are not. A rotation policy does its job; a new OAuth screen asks for one fewer checkbox; an admin clicks “principle of least privilege” and trims a scope the automation needed but nobody documented. The failure mode is not always “401 Unauthorized” in giant letters. Sometimes it is partial data, empty search results, or tickets that exist in the UI but not in the query the bot is allowed to see. Again: external drift. Again: suspect it first.
 

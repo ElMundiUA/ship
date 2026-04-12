@@ -1,6 +1,6 @@
 # PDF & offline viewing
 
-Think of this site as **one manual in a single volume**: everything lives under the same build, and the **parts follow the top navigation** in reading order—**Start here**, then **Part I — Framework**, **Part II — Prompts & workflows**, **Part III — Tools**, and **Part IV — Examples → Reference org**. Each of those entries is **one long page** in the built site (scroll on screen); there is no separate paginated “book” PDF from MkDocs itself.
+Think of this site as **one manual in a single volume**: everything lives under the same build, and the **parts follow the top navigation** in reading order—**Start here**, then **Getting started**, **The book**, **Prompts & workflows**, **Tools**, and **Examples → Reference org**. **Getting started** is a short procedural page; **The book** is **one long page** (scroll on screen); other tabs may also be long. There is no separate paginated “book” PDF from MkDocs itself.
 
 The site documents **Ship**. When deployed, its URL is whatever you set in **`mkdocs.yml` → `site_url`**. It is built with [MkDocs](https://www.mkdocs.org) and [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/). The build writes static HTML to `site/`.
 
@@ -19,7 +19,7 @@ Open `site/index.html`. A local server is optional: `cd site && python -m http.s
 
 ## Printing or saving a readable PDF
 
-After `mkdocs serve` or `mkdocs build`, use the browser’s **Print → Save as PDF** (Chrome, Edge, or Safari). To mirror the **volume order**, export **one PDF per top-level section** in nav sequence (Start here → Part I — Framework → Part II — Prompts & workflows → Part III — Tools → Examples), then combine if you want a single file—your OS or PDF tool can merge them.
+After `mkdocs serve` or `mkdocs build`, use the browser’s **Print → Save as PDF** (Chrome, Edge, or Safari). To mirror the **volume order**, export **one PDF per top-level section** in nav sequence (Start here → Getting started → The book → Prompts & workflows → Tools → Examples → Adoption), then combine if you want a single file—your OS or PDF tool can merge them.
 
 ### Readability tips
 

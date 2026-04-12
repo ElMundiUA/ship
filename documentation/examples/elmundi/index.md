@@ -1,8 +1,8 @@
 # ElMundi — reference deployment
 
-This chapter is the **receipts**: not the philosophy of Ship, but the **paper trail** you can audit after the fact. It is the wiring diagram for **ElMundi** — Ship implemented inside a public monorepo (`website/` + `tools/linear-agent/` + `.github/workflows/`) — written the way engineers remember incidents: **preview URLs that had to be probed correctly**, **Playwright suites pinned to hosted dev**, **two PRs for the same ELM ticket and which branch wins**, **morning audit runs that are allowed to say nothing**, **a self-heal job on a different clock than SDLC**, and **an SDLC grid tuned so one cron slot means one role, not a stampede**.
+This chapter is the **receipts**: not the philosophy of Ship, but the **paper trail** you can audit after the fact. It is the wiring diagram for **ElMundi** — a battle-tested reference implementation in a public monorepo (`website/` + `.github/workflows/` + Ship content under `tools/*`).
 
-If you are new here, read **[Framework](../../framework/index.md)** first (one long page — scroll). Come back when you want **filenames**, **cron minutes**, and **domains** instead of narrative.
+If you are new here, use **[Getting started](../../getting-started/index.md)** to wire the repo, then this **Examples** chapter for **filenames**, **cron minutes**, and **domains**. Read **[The book](../../framework/index.md)** when you want the full **why** (one long page — scroll).
 
 !!! tip "Adopt Ship into ElMundi (agent-driven)"
     Use **[Adoption → ElMundi rollout](../../adoption/elmundi.md)** with `prompts/onboarding/adopt-ship-generic.md` + `adopt-ship-elmundi.md` in Cursor (or another agent from the [launch matrix](../../adoption/agent-launch-matrix.md)). Submodule target: `tools/ship` → [ElMundiUA/ship](https://github.com/ElMundiUA/ship).
@@ -18,7 +18,7 @@ If you are new here, read **[Framework](../../framework/index.md)** first (one l
 |--------------------------|----------------------------------------|
 | **Tracker as system of record** | Linear — projects, states, labels; see [SDLC scheduled](#sdlc-scheduled). |
 | **Scheduler / clock** | GitHub Actions — cron + `workflow_dispatch`; full table in [Workflows catalog](#workflows-catalog). |
-| **Deterministic pick** | Node scripts under `runtime/scripts/` (Ship repo root; in **elmundi**: mirror under e.g. `tools/ship/runtime/scripts/`) — invoked from workflows; details in SDLC + operator docs. |
+| **Deterministic pick** | Implemented as project-specific automation scripts/workflows; details in SDLC + operator docs. |
 | **Versioned prompts** | `prompts/cloud-agent/*.md` — one role per file; see [Prompt catalog](../../prompts-workflows/index.md#prompt-catalog). |
 | **Agent launch** | `cloud-agent-launch.mjs` + Cursor Cloud Agent API — secrets in [Operator setup](#operator-setup) and [Tools → Cursor Cloud Agent](../../tools/index.md#cursor-cloud-agent). |
 | **Delivery lane grid** | `linear-agent-sdlc-scheduled.yml` — minutes and roles in [SDLC scheduled](#sdlc-scheduled). |
@@ -58,9 +58,13 @@ If you are new here, read **[Framework](../../framework/index.md)** first (one l
 ### Repository
 
 - **Ship** (this manual, CLI, prompts, scripts): **[ElMundiUA/ship](https://github.com/ElMundiUA/ship)** — canonical open package.  
-- **ElMundi reference wiring** (GitHub Actions next to `website/`, org-specific secrets, cron as deployed today): **[ElMundiUA/elmundi](https://github.com/ElMundiUA/elmundi)** — still contains `tools/linear-agent/` as a **mirror path** until the monorepo switches to a submodule or vendor pin to **ship**.
+- **ElMundi reference wiring** (GitHub Actions next to `website/`, org-specific secrets, cron as deployed today): **[ElMundiUA/elmundi](https://github.com/ElMundiUA/elmundi)**.
 
 ---
+
+### Contribute your own reference
+
+If your team has a production setup worth sharing, follow **[Contribute a reference setup](../contribute-reference-setup.md)**.
 
 ### Honest scope (read before you fork)
 
@@ -568,7 +572,7 @@ This repo deliberately keeps **GitHub Actions + deterministic pick + `cloud-agen
 | Dimension | **This repo (GitHub + pick + Cloud Agent API)** | **Cursor Automations** |
 |-----------|-----------------------------------------------|-------------------------|
 | **When an agent runs** | Agent starts **only if** a pick script returned an issue — scheduled workflow runs are mostly cheap CI minutes; **no agent spend** on empty queues. | Triggers (status change, schedule, webhook) can **invoke an automation run** even when the prompt exits immediately; **provider-side agent usage** can accrue on “no-op” or guard-rail exits unless the product billing model exempts them — **verify in your Cursor plan**. |
-| **Cost predictability** | Bounded by **cron slots × roles** and **~1 issue max per slot**; easy to forecast “at most N agent invocations per day.” | Event-driven triggers multiply with board activity (every Ready transition, every webhook); spikes are harder to cap without extra guards. |
+| **Cost predictability** | Bounded by **cron slots × roles** and **~1 issue max per slot**; easy to forecast “at most N agent invocations per day.” | Event-driven triggers multiply with board activity (every transition into **Todo**, every webhook); spikes are harder to cap without extra guards. |
 | **Bias & output variance** | Same **versioned** prompt bundle from `prompts/cloud-agent/` + `.cursor/skills`; changes go through PR review. | Prompts live in the **Automation UI**; drift across automations, harder to diff/review like code; **LLM bias / anchoring** applies to both stacks, but **governance** (review, tests, PR) is tighter when prompts are in-repo. |
 | **Audit trail for compliance** | Every meaningful step ties to a **GitHub Actions run**, commit context, and Linear ticket — see [Executive brief](../../framework/index.md#the-idea). | Mix of Cursor product logs + GitHub; story is **splintered** if Automations replace the workflow boundary. |
 | **Deterministic gating** | **Labels + project + column** enforced in **Node pick scripts** before any agent call. | Gating often relies on **natural-language rules inside the prompt** (“if no label, exit”) — easier to misconfigure or bypass. |
@@ -585,7 +589,7 @@ This repo deliberately keeps **GitHub Actions + deterministic pick + `cloud-agen
 
 Pricing and included **Cloud Agent** / **Automations** allowances **change often**. Treat the following as **order-of-magnitude planning math**, not invoices.
 
-**Assumptions (example):** SDLC grid = **4 roles × ~12 even hours/day** ⇒ **~48 scheduler ticks/day**. Suppose **only 25%** of ticks actually pick an issue and launch an agent ⇒ **~12 agent runs/day**. If Automations fired on **broader** triggers (e.g. every transition into Ready without a prior pick filter), you could easily reach **tens of extra invocations/day** for the same backlog.
+**Assumptions (example):** SDLC grid = **4 roles × ~12 even hours/day** ⇒ **~48 scheduler ticks/day**. Suppose **only 25%** of ticks actually pick an issue and launch an agent ⇒ **~12 agent runs/day**. If Automations fired on **broader** triggers (e.g. every transition into **Todo** without a prior pick filter), you could easily reach **tens of extra invocations/day** for the same backlog.
 
 | Illustrative line item | GitHub + pick (this design) | Automations-heavy design |
 |------------------------|----------------------------|---------------------------|
@@ -611,10 +615,10 @@ The sections **Option 1–4** below describe **target** architectures. Pick one 
 
 ### Option 1: Linear “Status changed” (common)
 
-When an issue moves to **Ready** with `ready:developer`:
+When an issue moves to **Todo** with `ready:developer`:
 
 1. **cursor.com/automations** → New automation
-2. **Trigger:** Linear → Status changed → New status: Ready
+2. **Trigger:** Linear → Status changed → New status: Todo
 3. **Tools:** Open pull request, Linear (if MCP available)
 4. **Repository:** ElMundiUA/elmundi, base: `main`
 5. **Prompt** (sketch):
@@ -633,7 +637,7 @@ RULES:
 - If blocked: Linear comment "Blocked: <reason>" and exit.
 ```
 
-**Limitation:** “Status changed → Ready” fires for any transition into Ready — guard in the prompt with `ready:developer`.
+**Limitation:** “Status changed → Todo” fires for any transition into Todo — guard in the prompt with `ready:developer`.
 
 ---
 

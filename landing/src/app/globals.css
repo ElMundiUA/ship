@@ -1,0 +1,69 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  @apply bg-ink text-mist antialiased;
+  background-image: radial-gradient(
+      ellipse 120% 80% at 50% -20%,
+      rgba(179, 136, 255, 0.35),
+      transparent 55%
+    ),
+    radial-gradient(ellipse 80% 50% at 100% 0%, rgba(46, 230, 214, 0.2), transparent 45%),
+    radial-gradient(ellipse 60% 40% at 0% 20%, rgba(255, 92, 108, 0.18), transparent 40%);
+}
+
+::selection {
+  background: rgba(46, 230, 214, 0.35);
+  color: #fff;
+}
+
+.glass-panel {
+  @apply rounded-3xl border border-white/10 bg-white/[0.04] backdrop-blur-xl;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.input-ship {
+  @apply w-full rounded-2xl border border-white/15 bg-white/[0.06] px-4 py-3 text-sm text-white outline-none ring-aqua/40 transition placeholder:text-white/35 focus:border-aqua/50 focus:ring-2;
+}
+
+.input-ship.input-ship-wizard {
+  @apply rounded-xl border-white/10 bg-black/45 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)];
+}
+
+.btn-primary {
+  @apply inline-flex items-center justify-center gap-2 rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-8 py-3.5 text-sm font-semibold text-ink shadow-glow transition hover:brightness-110 active:scale-[0.99];
+}
+
+.btn-secondary {
+  @apply inline-flex items-center justify-center gap-2 rounded-full border border-white/20 bg-white/[0.06] px-6 py-3 text-sm font-semibold text-white/90 backdrop-blur transition hover:border-white/35 hover:bg-white/10;
+}
+
+/* The book (/book) */
+.book-shell {
+  @apply mx-auto max-w-4xl px-4 sm:px-6;
+}
+
+.book-prose > p:first-of-type {
+  @apply text-lg font-medium leading-relaxed text-white/85 sm:text-xl;
+}
+
+.book-prose :where(h4, h5, h6) {
+  @apply mt-10 font-display font-bold text-white;
+}
+
+.book-callout-inner blockquote {
+  @apply border-0 bg-transparent p-0 text-inherit;
+}
+
+.book-callout-inner > p:first-of-type {
+  @apply mt-0;
+}

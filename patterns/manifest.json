@@ -1,0 +1,190 @@
+{
+  "version": 1,
+  "description": "Reviewable instruction slices for agents: onboarding, scheduled cloud roles, and lane playbooks aligned to the SDLC grid (file names A1–A12 remain for reference).",
+  "patterns": [
+    {
+      "id": "adopt-ship-generic",
+      "title": "Adopt Ship (baseline)",
+      "summary": "Primary onboarding playbook before any org-specific addendum.",
+      "path": "prompts/onboarding/adopt-ship-generic.md",
+      "tags": ["onboarding", "adoption"],
+      "group": "onboarding"
+    },
+    {
+      "id": "adopt-ship-elmundi",
+      "title": "Adopt Ship (reference org)",
+      "summary": "Queue names, digest/retro, QA-first habits; apply after the baseline playbook.",
+      "path": "prompts/onboarding/adopt-ship-elmundi.md",
+      "tags": ["onboarding", "reference-org"],
+      "group": "onboarding"
+    },
+    {
+      "id": "cloud-base",
+      "title": "Shared base",
+      "summary": "Cross-role guardrails and tone for scheduled cloud agents.",
+      "path": "prompts/cloud-agent/_base.md",
+      "tags": ["guardrails", "tone"],
+      "group": "cloud-agent"
+    },
+    {
+      "id": "cloud-intake",
+      "title": "Intake",
+      "summary": "Role prompt for intake lane on the SDLC grid.",
+      "path": "prompts/cloud-agent/intake.md",
+      "tags": ["intake", "triage"],
+      "group": "cloud-agent"
+    },
+    {
+      "id": "cloud-clarification",
+      "title": "Clarification",
+      "summary": "Structured follow-ups when requirements are incomplete.",
+      "path": "prompts/cloud-agent/clarification.md",
+      "tags": ["clarification", "requirements"],
+      "group": "cloud-agent"
+    },
+    {
+      "id": "cloud-ba",
+      "title": "BA / specification",
+      "summary": "Specification and handoff quality before implementation picks.",
+      "path": "prompts/cloud-agent/ba.md",
+      "tags": ["ba", "spec"],
+      "group": "cloud-agent"
+    },
+    {
+      "id": "cloud-developer",
+      "title": "Developer",
+      "summary": "Implementation role: branch contract, PR shape, evidence.",
+      "path": "prompts/cloud-agent/developer.md",
+      "tags": ["implementation", "pr"],
+      "group": "cloud-agent"
+    },
+    {
+      "id": "cloud-qa-architect",
+      "title": "QA architect",
+      "summary": "Test strategy and automation hooks for delivery quality.",
+      "path": "prompts/cloud-agent/qa-architect.md",
+      "tags": ["test-strategy", "automation"],
+      "group": "cloud-agent"
+    },
+    {
+      "id": "cloud-tech-architect",
+      "title": "Tech architect",
+      "summary": "Architecture audits and tech-debt lane findings.",
+      "path": "prompts/cloud-agent/tech-architect.md",
+      "tags": ["architecture", "tech-debt"],
+      "group": "cloud-agent"
+    },
+    {
+      "id": "cloud-security-officer",
+      "title": "Security officer",
+      "summary": "Security lane: findings routed without stealing delivery throughput.",
+      "path": "prompts/cloud-agent/security-officer.md",
+      "tags": ["security", "findings"],
+      "group": "cloud-agent"
+    },
+    {
+      "id": "cloud-workflow-self-heal",
+      "title": "Workflow self-heal",
+      "summary": "Repair signals from CI and config drift without colliding with intake.",
+      "path": "prompts/cloud-agent/workflow-self-heal.md",
+      "tags": ["ci", "drift"],
+      "group": "cloud-agent"
+    },
+    {
+      "id": "catalog-a1-intake",
+      "title": "Structured intake",
+      "summary": "Idempotent intake: classify, structure, stage labels on Todo.",
+      "path": "prompts/catalog/A1-intake.md",
+      "tags": ["intake", "labels"],
+      "group": "lanes"
+    },
+    {
+      "id": "catalog-a2-clarification",
+      "title": "Requirement clarification",
+      "summary": "Clarification pass when human or upstream left gaps.",
+      "path": "prompts/catalog/A2-clarification.md",
+      "tags": ["clarification", "gaps"],
+      "group": "lanes"
+    },
+    {
+      "id": "catalog-a3-ba-spec",
+      "title": "BA specification",
+      "summary": "BA spec depth, acceptance language, handoff readiness.",
+      "path": "prompts/catalog/A3-ba-spec.md",
+      "tags": ["ba", "acceptance"],
+      "group": "lanes"
+    },
+    {
+      "id": "catalog-a4-developer",
+      "title": "Developer execution",
+      "summary": "Developer execution pattern aligned to pick windows.",
+      "path": "prompts/catalog/A4-developer.md",
+      "tags": ["implementation", "pick-window"],
+      "group": "lanes"
+    },
+    {
+      "id": "catalog-a5-pr-self-review",
+      "title": "PR self-review",
+      "summary": "Self-review checklist before human review load.",
+      "path": "prompts/catalog/A5-pr-self-review.md",
+      "tags": ["pr", "self-review"],
+      "group": "lanes"
+    },
+    {
+      "id": "catalog-a6-check-failure-recovery",
+      "title": "CI failure recovery",
+      "summary": "Recover from red checks without spamming the board.",
+      "path": "prompts/catalog/A6-check-failure-recovery.md",
+      "tags": ["ci", "recovery"],
+      "group": "lanes"
+    },
+    {
+      "id": "catalog-a7-preview-validation",
+      "title": "Preview smoke check",
+      "summary": "Verify preview is live and key flows work after deploy.",
+      "path": "prompts/catalog/A7-preview-validation.md",
+      "tags": ["preview", "smoke"],
+      "group": "lanes"
+    },
+    {
+      "id": "catalog-a8-preview-failure-recovery",
+      "title": "Preview failure triage",
+      "summary": "When preview is flaky or red: narrow signal vs product defect vs infra.",
+      "path": "prompts/catalog/A8-preview-failure-recovery.md",
+      "tags": ["preview", "triage"],
+      "group": "lanes"
+    },
+    {
+      "id": "catalog-a9-qa",
+      "title": "Acceptance verification",
+      "summary": "Verify acceptance criteria on In Review issues after preview passed.",
+      "path": "prompts/catalog/A9-qa.md",
+      "tags": ["acceptance", "in-review"],
+      "group": "lanes"
+    },
+    {
+      "id": "catalog-a10-human-handoff",
+      "title": "Human handoff",
+      "summary": "Clean escalation when automation must stop.",
+      "path": "prompts/catalog/A10-human-handoff.md",
+      "tags": ["escalation", "handoff"],
+      "group": "lanes"
+    },
+    {
+      "id": "catalog-a11-retry-sweep",
+      "title": "Retry sweep",
+      "summary": "Bounded retry logic without hero agents.",
+      "path": "prompts/catalog/A11-retry-sweep.md",
+      "tags": ["retry", "bounded"],
+      "group": "lanes"
+    },
+    {
+      "id": "catalog-a12-learning",
+      "title": "Learning capture",
+      "summary": "Capture what changed in policy or prompts after incidents.",
+      "path": "prompts/catalog/A12-learning.md",
+      "tags": ["retro", "policy"],
+      "group": "lanes"
+    }
+  ]
+}

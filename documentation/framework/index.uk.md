@@ -1,4 +1,7 @@
-# Framework
+# Книга — чому Ship
+
+!!! tip "Потрібні команди, не розділи?"
+    **Готовий чеклист:** **[Getting started](../getting-started/index.md)**. Тут — **довга розповідь** (мотивація, компроміси).
 
 ## The idea {#the-idea}
 

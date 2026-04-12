@@ -1,18 +1,16 @@
-# Slim context for docs image — Dockerfile needs documentation/, prompts/ (MkDocs snippets), mkdocs.yml, requirements-docs.txt
+# Context for Ship Next image — keep repo paths the app reads at runtime.
 .git
 .github
+.venv
 .venv-docs
 site
-node_modules
-runtime
-examples
+**/node_modules
+**/.next
 **/__pycache__
 *.pyc
 .DS_Store
 .env
 .env.*
 artifacts
-package.json
-package-lock.json
-tsconfig.json
-*.ts
+runtime
+examples

@@ -92,11 +92,11 @@ Daily **audit** roles (tech / QA / security) use **separate** Linear projects an
 
 ## Full prompts (`prompts/cloud-agent/`) {#prompt-catalog}
 
-This section is **one page inside one page**: the map below plus the **complete** markdown files as they ship in the repository—no ellipses, no “see repo for the rest.” MkDocs pulls them in with **`--8<--`** so the manual and git cannot silently diverge.
+This section is **one page inside one page**: the map below plus the **complete** markdown files as they ship in the repository—no ellipses, no “see repo for the rest.” The Next.js manual expands the same **`--8<--`** includes at render time so the site and git cannot silently diverge.
 
-Placeholders such as `{{ISSUE}}`, `{{BASE}}`, and `{{SKILLS_CONTEXT}}` are filled by **`runtime/scripts/cloud-agent-launch.mjs`** at run time; treat them as part of the contract, not as typos.
+Placeholders such as `{{ISSUE}}`, `{{BASE}}`, and `{{SKILLS_CONTEXT}}` are filled by your project launcher/runtime at run time; treat them as part of the contract, not as typos.
 
-**How to change them safely:** [Start with a skeleton](#iterating-on-prompts). **Optional A-series drafts** under `prompts/catalog/` are human reference only; **`cloud-agent-launch.mjs` reads `prompts/cloud-agent/`**—promote edits there when the schedule should inherit them.
+**How to change them safely:** [Start with a skeleton](#iterating-on-prompts). **Optional A-series drafts** under `prompts/catalog/` are human reference only; **Your launcher should read `prompts/cloud-agent/`**—promote edits there when scheduled runs should inherit them.
 
 | Bucket | File | Role |
 |--------|------|------|

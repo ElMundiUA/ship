@@ -1,24 +1,32 @@
 # syntax=docker/dockerfile:1
-# Static docs: MkDocs build → nginx (port 8080, /health for probes)
+# Next.js (landing + `/docs` manual). `REPO_ROOT=/app` so server reads `documentation/` beside `landing/`.
 
-FROM python:3.13-alpine AS builder
-WORKDIR /src
+FROM node:20-alpine
+WORKDIR /app
 
-RUN apk add --no-cache git
+RUN apk add --no-cache libc6-compat
 
-COPY requirements-docs.txt mkdocs.yml ./
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV REPO_ROOT=/app
+ENV HOSTNAME=0.0.0.0
+
+COPY package.json package-lock.json ./
+COPY landing/package.json landing/package-lock.json ./landing/
+
+RUN npm ci
+
+COPY landing ./landing
 COPY documentation ./documentation
-# Snippets in adoption/*.md include files from prompts/ (base_path . in mkdocs.yml)
 COPY prompts ./prompts
+COPY patterns ./patterns
+COPY tools ./tools
+COPY workflows ./workflows
+COPY collections ./collections
+COPY backend ./backend
 
-RUN pip install --no-cache-dir -r requirements-docs.txt \
-    && mkdocs build --clean
+RUN npm run landing:build
 
-FROM nginx:1.27-alpine AS runner
+EXPOSE 3000
 
-COPY deploy/nginx-default.conf /etc/nginx/conf.d/default.conf
-COPY --from=builder /src/site /usr/share/nginx/html
-
-EXPOSE 8080
-
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["npm", "run", "landing:start"]

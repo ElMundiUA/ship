@@ -1,0 +1,78 @@
+{
+  "version": 2,
+  "description": "Surfaces agents and humans wire together: tracker, CI scheduler, E2E runner, cloud agent host, local embeddings search, and the methodology HTTP API.",
+  "tools": [
+    {
+      "id": "capabilities-overview",
+      "title": "Five capabilities",
+      "summary": "Neutral map of what a Ship-style setup needs — no vendor lock-in in the names.",
+      "path": "documentation/tools/index.md",
+      "tags": ["map", "architecture"],
+      "group": "platform"
+    },
+    {
+      "id": "linear",
+      "title": "Linear",
+      "summary": "Tracker as system of record — projects, states, labels, evidence for agents.",
+      "path": "documentation/tools/integrations/linear.md",
+      "tags": ["graphql", "projects", "states"],
+      "group": "tracker"
+    },
+    {
+      "id": "tracker-contract",
+      "title": "Tracker contract",
+      "summary": "Vendor-neutral shape: states, labels, evidence — Linear, Jira, GitHub Issues, or spreadsheets.",
+      "path": "documentation/tools/ship-agent-trackers.md",
+      "tags": ["abstraction", "states", "labels"],
+      "group": "tracker"
+    },
+    {
+      "id": "github-actions",
+      "title": "GitHub Actions",
+      "summary": "Cron, concurrency, workflow_dispatch, artifacts as the audit trail.",
+      "path": "documentation/tools/integrations/github-actions.md",
+      "tags": ["yaml", "scheduler", "secrets"],
+      "group": "ci"
+    },
+    {
+      "id": "playwright",
+      "title": "Playwright",
+      "summary": "Hosted regression — pinned URLs, artifacts, flake vs defect triage.",
+      "path": "documentation/tools/integrations/playwright.md",
+      "tags": ["browser", "artifacts", "flake"],
+      "group": "e2e"
+    },
+    {
+      "id": "cursor-cloud-agent",
+      "title": "Cursor Cloud Agent",
+      "summary": "Cloud runtime — PR contract, secrets mirroring, prompts versioned in git.",
+      "path": "documentation/tools/integrations/cursor-cloud-agent.md",
+      "tags": ["branch", "pr", "runtime"],
+      "group": "agents"
+    },
+    {
+      "id": "chroma-local",
+      "title": "Chroma (local)",
+      "summary": "On-disk vector index for POST /search over docs and prompts.",
+      "path": "documentation/tools/integrations/chroma-local.md",
+      "tags": ["embeddings", "local", "index"],
+      "group": "platform"
+    },
+    {
+      "id": "methodology-api",
+      "title": "Methodology API",
+      "summary": "FastAPI for agents; humans use ship docs / ship patterns CLI against the same routes.",
+      "path": "documentation/tools/backend-api.md",
+      "tags": ["http", "fastapi", "agents"],
+      "group": "platform"
+    },
+    {
+      "id": "snyk",
+      "title": "Snyk",
+      "summary": "Dependency and security signal — triage with agents and release gates.",
+      "path": "documentation/tools/integrations/snyk.md",
+      "tags": ["dependencies", "sca"],
+      "group": "platform"
+    }
+  ]
+}
