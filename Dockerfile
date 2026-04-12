@@ -29,7 +29,9 @@ COPY backend ./backend
 RUN npm run landing:build
 
 ENV NODE_ENV=production
+# Bunny MC template maps CDN → container port 8080 (scripts/bunny-ship-docs.mjs).
+ENV PORT=8080
 
-EXPOSE 3000
+EXPOSE 8080
 
 CMD ["npm", "run", "landing:start"]
