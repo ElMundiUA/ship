@@ -1,0 +1,75 @@
+# docs-mcp-server
+
+MCP server with vector search over documents. Everything runs in a single Docker container.
+
+## Features
+
+- **search** — semantic search over documents (top 5 by default)
+- **fetch** — retrieve full document by ID
+
+Documents (MD files) are parsed, chunked, and vectorized at image build time. ChromaDB + sentence-transformers (all-MiniLM-L6-v2) — all local, no external APIs.
+
+## Build and Run
+
+```bash
+# Build (data indexing happens during build)
+docker build -t docs-mcp-server .
+
+# Run (HTTPS by default, self-signed cert)
+docker run -p 8000:8000 docs-mcp-server
+
+# Connect: https://localhost:8000/mcp
+# (ignore certificate warning)
+```
+
+## CLI (Local)
+
+```bash
+python -m src.cli build --data-dir ./data --chroma-path ./chroma_db
+python -m src.cli search "getting started" --top-k 3
+python -m src.cli fetch some_doc_id
+```
+
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest -q
+```
+
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `HOST` | `0.0.0.0` | Host to bind to |
+| `PORT` | `8000` | Port |
+| `ENABLE_AUTH` | `false` | Enable authentication |
+| `API_KEY` | — | API key (when ENABLE_AUTH=true) |
+| `SSL_KEYFILE` | `/app/ssl/key.pem` | Path to SSL key |
+| `SSL_CERTFILE` | `/app/ssl/cert.pem` | Path to SSL certificate |
+| `MISTRAL_BASE_URL` | — | Base URL for Mistral-compatible embeddings API |
+| `MISTRAL_API_KEY` | — | API key for embeddings |
+| `MISTRAL_EMBEDDINGS_PATH` | `/v1/embeddings` | Embeddings path appended to base URL |
+| `MISTRAL_EMBEDDINGS_URL` | — | Full embeddings endpoint (overrides base+path) |
+| `MISTRAL_MODEL` | `mistral-embed` | Embedding model name |
+| `MISTRAL_BATCH_SIZE` | `32` | Batch size for embedding calls |
+| `MISTRAL_TIMEOUT_S` | `60` | HTTP timeout (seconds) |
+| `MISTRAL_SSL_VERIFY` | `true` | Verify SSL certificates |
+| `EMBEDDING_MODEL` | `all-MiniLM-L6-v2` | Local model name when using sentence-transformers |
+
+## Authentication
+
+When `ENABLE_AUTH=true` and `API_KEY` is set:
+
+- Header: `Authorization: Bearer <API_KEY>` or `X-API-Key: <API_KEY>`
+
+```bash
+docker run -p 8000:8000 \
+  -e ENABLE_AUTH=true \
+  -e API_KEY=secret123 \
+  docs-mcp-server
+```
+
+## Adding Documents
+
+Place MD files in `data/` and rebuild the image. Supports up to ~100 files.

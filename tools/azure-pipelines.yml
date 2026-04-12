@@ -1,0 +1,81 @@
+---
+trigger:
+  batch: true
+  branches:
+    include:
+      - development
+      - release
+      - main
+      - feature/*
+  paths:
+    include:
+      - Dockerfile
+      - src/*
+
+pr: none
+
+pool:
+  name: CCoE-SharedAgents-Rhel8
+
+variables:
+  - name: dockerfilePath
+    value: Dockerfile
+  - name: containerRegistry
+    value: bdaaksdevcr
+  - name: imageTagPrefix
+    value: docs-mcp
+
+stages:
+  - stage: Build
+    displayName: Trigger Trivy Build Pipeline
+    jobs:
+      - job: Build
+        displayName: Trigger external pipeline (build + scan + push)
+        steps:
+          - bash: |
+              set -euo pipefail
+
+              az extension add --name azure-devops --only-show-errors
+              az devops configure --defaults \
+                organization="https://dev.azure.com/asml/" \
+                project="Big Data analytics"
+
+              build_id=$(
+                az pipelines run --id 10002 --branch development --parameters \
+                  "repo=$SYSTEM_TEAMPROJECT/$BUILD_REPOSITORY_NAME" \
+                  "branch=$BUILD_SOURCEBRANCH" \
+                  "dockerfilePath=${{ variables.dockerfilePath }}" \
+                  "tag=${{ variables.imageTagPrefix }}:$BUILD_SOURCEVERSION" \
+                  "containerRegistry=${{ variables.containerRegistry }}" \
+                  --query id -o tsv
+              )
+
+              echo "Build details: https://dev.azure.com/asml/Big%20Data%20Analytics/_build/results?buildId=${build_id}&view=results"
+
+              timeout_sec=600
+              start_time=$(date -u +%s)
+              status=""
+              result=""
+
+              while [ "$status" != "completed" ]; do
+                current_time=$(date -u +%s)
+                elapsed_seconds=$((current_time - start_time))
+                if [ $elapsed_seconds -gt $timeout_sec ]; then
+                  echo "ERROR: Timeout of [$timeout_sec] sec with build result [$result]. Check logs for details."
+                  exit 1
+                fi
+
+                status=$(az pipelines build show --id "$build_id" --query status -o tsv)
+                result=$(az pipelines build show --id "$build_id" --query result -o tsv)
+
+                if [ "$result" = "failed" ]; then
+                  echo "Build failed with result: $result"
+                  exit 1
+                fi
+
+                echo "Build status is [$status], elapsed [$elapsed_seconds] sec"
+                sleep 10
+              done
+            displayName: Build and push image (Trivy pipeline)
+            env:
+              AZURE_DEVOPS_EXT_PAT: $(System.AccessToken)
