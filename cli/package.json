@@ -1,5 +1,5 @@
 {
-  "name": "@ship/cli",
+  "name": "@elmundi/ship-cli",
   "version": "0.7.0",
   "type": "module",
   "description": "Ship CLI — docs API (search/fetch/feedback), on-disk patterns & catalogs, and agent init",

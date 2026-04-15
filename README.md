@@ -23,10 +23,10 @@ curl -fsSL https://raw.githubusercontent.com/ElMundiUA/ship/main/adopt-ship.sh |
 
 ### CLI without cloning the full monorepo
 
-1. Install **`@ship/cli`** from npm (or run via **`npx @ship/cli`** once published).
-2. **`npx @ship/cli patterns list`** (and `tools` / `workflows` / `collections`) use the **same deployed methodology API** as search/fetch (`GET /patterns`, `GET /tools`, …). Set **`SHIP_API_BASE`** to that public URL (for local dev it defaults to `http://127.0.0.1:8100`).
+1. Install **`@elmundi/ship-cli`** from npm (or run via **`npx @elmundi/ship-cli`** once published); the binary is **`ship`**.
+2. **`npx @elmundi/ship-cli patterns list`** (and `tools` / `workflows` / `collections`) use the **same deployed methodology API** as search/fetch (`GET /patterns`, `GET /tools`, …). Set **`SHIP_API_BASE`** to that public URL (for local dev it defaults to `http://127.0.0.1:8100`).
 3. Optional: set **`SHIP_REPO`** or run from this clone to read manifests from disk instead of HTTP.
-4. In your product repo, **`npx @ship/cli init`** (use **`--dry-run`** first; **`--yes`** for non-interactive installs — see **`ship init help`**).
+4. In your product repo, **`npx @elmundi/ship-cli init`** (use **`--dry-run`** first; **`--yes`** for non-interactive installs — see **`ship init help`**).
 
 Semantic search / fetch / feedback still need the methodology FastAPI (**`SHIP_API_BASE`**).
 
@@ -96,7 +96,7 @@ npm run ship -- docs search "release gates" --top-k 5
 
 ## Backend API (and CLI)
 
-Humans and scripts typically use **`npm run ship -- …`** from this repo or **`npx @ship/cli`** elsewhere: one **methodology HTTP API** serves **`docs`** (search/fetch/feedback) and **`patterns` / `tools` / `workflows` / `collections`** list/detail, or use disk when cwd / **`SHIP_REPO`** is inside this tree.
+Humans and scripts typically use **`npm run ship -- …`** from this repo or **`npx @elmundi/ship-cli`** elsewhere: one **methodology HTTP API** serves **`docs`** (search/fetch/feedback) and **`patterns` / `tools` / `workflows` / `collections`** list/detail, or use disk when cwd / **`SHIP_REPO`** is inside this tree.
 
 - `GET /patterns` / `GET /patterns/{id}` — **CLI:** `ship patterns list`, `ship patterns show <id>`
 - `GET /tools`, `GET /tools/{id}`, same for **`/workflows`**, **`/collections`**

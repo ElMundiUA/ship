@@ -1,5 +1,5 @@
-# Publish scoped package @ship/cli (cli/ only). Monorepo root stays private.
-name: Publish @ship/cli to npm
+# Publish @elmundi/ship-cli (cli/ workspace). Monorepo root stays private.
+name: Publish @elmundi/ship-cli to npm
 
 on:
   workflow_dispatch:
@@ -20,7 +20,7 @@ jobs:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
 
-      # Needed so `npm publish -w @ship/cli` resolves workspaces from the repo root.
+      # Needed so `npm publish -w @elmundi/ship-cli` resolves workspaces from the repo root.
       - name: npm ci
         run: npm ci
 
@@ -44,4 +44,4 @@ jobs:
             exit 1
           fi
           # `--prefix cli` publishes the root workspace package (`ship`, private). Use `-w` instead.
-          npm publish -w @ship/cli --access public
+          npm publish -w @elmundi/ship-cli --access public
