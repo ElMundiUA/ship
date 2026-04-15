@@ -49,7 +49,7 @@ From a full **Ship** monorepo clone you can still run `npm run ship -- …` from
 
 ## Publishing (maintainers)
 
-Releases are published via GitHub Actions (workflow **Publish @ship/cli to npm**): `npm publish -w @ship/cli` from the monorepo root (not `npm publish --prefix cli`, which would try to publish the private root package). Configure the **`NPM_TOKEN`** repository secret (automation access token). Trigger a publish from the Actions tab, or push a git tag `cli-v*` whose remainder matches `version` in `cli/package.json` (example: tag `cli-v0.7.0` for `"version": "0.7.0"`).
+Releases are published via GitHub Actions (workflow **Publish @ship/cli to npm**): `npm publish -w @ship/cli` from the monorepo root (not `npm publish --prefix cli`, which would try to publish the private root package). Configure the **`NPM_TOKEN`** repository secret. On npmjs.com use either a **Granular Access Token** with **Publish** on `@ship/cli` (or the org) and **“Bypass two-factor authentication”** enabled for automation, or a classic **Automation** token — classic **Publish** tokens often cannot publish from CI when 2FA is on (`E403` *Two-factor authentication or granular access token with bypass 2fa…*).
 
 The root monorepo `package.json` stays **`private`: true**; only **`@ship/cli`** is intended for the public registry.
 
