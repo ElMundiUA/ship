@@ -1,9 +1,35 @@
 {
   "name": "@ship/cli",
   "version": "0.7.0",
-  "private": true,
   "type": "module",
-  "description": "Ship CLI — docs API (search/fetch/feedback), patterns, and agent init",
+  "description": "Ship CLI — docs API (search/fetch/feedback), on-disk patterns & catalogs, and agent init",
+  "license": "Apache-2.0",
+  "author": "Denys Kuzin",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ElMundiUA/ship.git",
+    "directory": "cli"
+  },
+  "bugs": {
+    "url": "https://github.com/ElMundiUA/ship/issues"
+  },
+  "homepage": "https://github.com/ElMundiUA/ship/tree/main/cli#readme",
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "ship",
+    "cli",
+    "agents",
+    "methodology"
+  ],
+  "files": [
+    "bin",
+    "lib"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "bin": {
     "ship": "./bin/ship.mjs"
   }

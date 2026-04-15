@@ -20,7 +20,7 @@ Base URL (override with \`SHIP_API_BASE\` for agents, or \`--base-url\` for CLI)
 1. **Discover** — \`POST /search\` with a natural-language query over Ship docs + prompts.
 2. **Read** — \`POST /fetch\` with a repo-relative \`path\` from search hits (markdown/text only).
 3. **Retro** — \`POST /feedback\` to open a sanitized GitHub issue (needs \`GITHUB_TOKEN\` on the server).
-4. **Patterns** — from the Ship repo run \`npm run ship -- patterns list\` and \`npm run ship -- patterns show <id>\` (same as \`GET /patterns\`, \`GET /patterns/{id}\`).
+4. **Patterns** — run \`ship patterns list\` / \`ship patterns show <id>\` (\`GET /patterns\` on the same base URL as search; or disk when cwd/\`SHIP_REPO\` is the Ship tree).
 
 ## Examples (CLI from Ship repo)
 
@@ -65,7 +65,7 @@ Base URL: \`${baseUrl}\` (env \`SHIP_API_BASE\`).
 - **Search** \`POST /search\` JSON \`{ "query": string, "top_k"?: number }\`
 - **Fetch** \`POST /fetch\` JSON \`{ "path": "documentation/...md" }\`
 - **Feedback** \`POST /feedback\` JSON \`{ "title", "summary", "recommendations"?: string[], "source_context"?: string }\`
-- **Patterns** — \`npm run ship -- patterns list\` / \`npm run ship -- patterns show <id>\` from the Ship repo (HTTP: \`GET /patterns\`, \`GET /patterns/{id}\`)
+- **Patterns** — \`ship patterns list\` / \`ship patterns show <id>\` (same \`SHIP_API_BASE\` as search, or local tree): \`GET /patterns\`, \`GET /patterns/{id}\`
 
 Use search first, then fetch the best path. Keep tokens out of feedback bodies.
 `;
@@ -90,8 +90,8 @@ See the Ship repo \`documentation/tools/backend-api.md\` for full contract.
 | POST | /search | \`{ "query": "...", "top_k": 8 }\` |
 | POST | /fetch | \`{ "path": "documentation/foo.md" }\` |
 | POST | /feedback | \`{ "title", "summary", "recommendations": [], "source_context" }\` |
-| GET | /patterns | list manifest — **CLI:** \`npm run ship -- patterns list\` (from Ship repo) |
-| GET | /patterns/{id} | metadata + markdown \`content\` — **CLI:** \`npm run ship -- patterns show <id>\` |
+| GET | /patterns | list manifest — **CLI:** \`ship patterns list\` (HTTP or disk in clone) |
+| GET | /patterns/{id} | metadata + markdown \`content\` — **CLI:** \`ship patterns show <id>\` |
 
 ## CLI (from Ship monorepo)
 

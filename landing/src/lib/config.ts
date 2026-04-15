@@ -12,5 +12,5 @@ export const docsUrl = envOr("NEXT_PUBLIC_DOCS_URL", siteUrl);
 
 export const repoUrl = envOr("NEXT_PUBLIC_REPO_URL", "https://github.com/ElMundiUA/ship");
 
-/** Methodology API (FastAPI) — patterns list/detail, search, fetch, feedback. */
+/** Methodology API (FastAPI) — search, fetch, feedback, GET /patterns, /tools, /workflows, /collections. */
 export const shipApiBase = envOr("NEXT_PUBLIC_SHIP_API_BASE", "http://127.0.0.1:8100");

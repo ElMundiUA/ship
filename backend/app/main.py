@@ -19,6 +19,9 @@ MANIFEST_PATH = CHROMA_DIR / "manifest.json"
 COLLECTION_NAME = "ship_methodology"
 DEFAULT_PATHS = ("documentation", "prompts", "README.md")
 PATTERNS_MANIFEST_PATH = APP_ROOT / "patterns" / "manifest.json"
+TOOLS_MANIFEST_PATH = APP_ROOT / "tools" / "manifest.json"
+WORKFLOWS_MANIFEST_PATH = APP_ROOT / "workflows" / "manifest.json"
+COLLECTIONS_MANIFEST_PATH = APP_ROOT / "collections" / "manifest.json"
 
 
 class SearchRequest(BaseModel):
@@ -195,6 +198,9 @@ index_store = IndexStore()
 app = FastAPI(title="Ship Methodology API", version="0.1.0")
 
 _patterns_cache: dict[str, Any] | None = None
+_tools_cache: dict[str, Any] | None = None
+_workflows_cache: dict[str, Any] | None = None
+_collections_cache: dict[str, Any] | None = None
 
 
 def load_patterns_manifest() -> dict[str, Any]:
@@ -222,16 +228,17 @@ def pattern_by_id(pattern_id: str) -> dict[str, Any] | None:
     return None
 
 
-def read_pattern_markdown(rel_path: str) -> str:
+def read_repo_markdown(rel_path: str) -> str:
+    """Read a single markdown/text file under APP_ROOT (manifest `path` targets)."""
     candidate = (APP_ROOT / rel_path).resolve()
     try:
         candidate.relative_to(APP_ROOT.resolve())
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Path escapes repository root.") from exc
     if not candidate.is_file():
-        raise HTTPException(status_code=404, detail="Pattern file not found.")
+        raise HTTPException(status_code=404, detail="File not found.")
     if candidate.suffix.lower() not in {".md", ".txt"}:
-        raise HTTPException(status_code=400, detail="Only markdown or text patterns are allowed.")
+        raise HTTPException(status_code=400, detail="Only markdown or text files are allowed.")
     return candidate.read_text(encoding="utf-8", errors="ignore")
 
 
@@ -274,7 +281,7 @@ def get_pattern(pattern_id: str) -> dict[str, Any]:
     rel = meta.get("path")
     if not isinstance(rel, str) or not rel.strip():
         raise HTTPException(status_code=500, detail="Pattern entry has no path.")
-    content = read_pattern_markdown(rel)
+    content = read_repo_markdown(rel)
     return {
         "id": meta.get("id"),
         "title": meta.get("title"),
@@ -284,6 +291,123 @@ def get_pattern(pattern_id: str) -> dict[str, Any]:
         "group": meta.get("group"),
         "content": content,
     }
+
+
+def load_tools_manifest() -> dict[str, Any]:
+    global _tools_cache
+    if _tools_cache is not None:
+        return _tools_cache
+    if not TOOLS_MANIFEST_PATH.is_file():
+        _tools_cache = {"version": 0, "tools": [], "description": ""}
+        return _tools_cache
+    try:
+        data = json.loads(TOOLS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=500, detail="tools/manifest.json is invalid JSON.") from exc
+    if not isinstance(data.get("tools"), list):
+        raise HTTPException(status_code=500, detail="tools manifest must contain a tools array.")
+    _tools_cache = data
+    return _tools_cache
+
+
+def load_workflows_manifest() -> dict[str, Any]:
+    global _workflows_cache
+    if _workflows_cache is not None:
+        return _workflows_cache
+    if not WORKFLOWS_MANIFEST_PATH.is_file():
+        _workflows_cache = {"version": 0, "workflows": [], "description": ""}
+        return _workflows_cache
+    try:
+        data = json.loads(WORKFLOWS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=500, detail="workflows/manifest.json is invalid JSON.") from exc
+    if not isinstance(data.get("workflows"), list):
+        raise HTTPException(status_code=500, detail="workflows manifest must contain a workflows array.")
+    _workflows_cache = data
+    return _workflows_cache
+
+
+def load_collections_manifest() -> dict[str, Any]:
+    global _collections_cache
+    if _collections_cache is not None:
+        return _collections_cache
+    if not COLLECTIONS_MANIFEST_PATH.is_file():
+        _collections_cache = {"version": 0, "collections": [], "description": ""}
+        return _collections_cache
+    try:
+        data = json.loads(COLLECTIONS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=500, detail="collections/manifest.json is invalid JSON.") from exc
+    if not isinstance(data.get("collections"), list):
+        raise HTTPException(status_code=500, detail="collections manifest must contain a collections array.")
+    _collections_cache = data
+    return _collections_cache
+
+
+def _catalog_item_by_id(items: Any, item_id: str) -> dict[str, Any] | None:
+    if not isinstance(items, list):
+        return None
+    for p in items:
+        if isinstance(p, dict) and p.get("id") == item_id:
+            return p
+    return None
+
+
+@app.get("/tools")
+def list_tools() -> dict[str, Any]:
+    """Full `tools/manifest.json` (CLI `ship tools list --json`)."""
+    return load_tools_manifest()
+
+
+@app.get("/tools/{item_id}")
+def get_tool(item_id: str) -> dict[str, Any]:
+    data = load_tools_manifest()
+    meta = _catalog_item_by_id(data.get("tools"), item_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail="Unknown tool id.")
+    rel = meta.get("path")
+    if not isinstance(rel, str) or not rel.strip():
+        raise HTTPException(status_code=500, detail="Tool entry has no path.")
+    content = read_repo_markdown(rel)
+    return {**meta, "content": content}
+
+
+@app.get("/workflows")
+def list_workflows() -> dict[str, Any]:
+    """Full `workflows/manifest.json`."""
+    return load_workflows_manifest()
+
+
+@app.get("/workflows/{item_id}")
+def get_workflow(item_id: str) -> dict[str, Any]:
+    data = load_workflows_manifest()
+    meta = _catalog_item_by_id(data.get("workflows"), item_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail="Unknown workflow id.")
+    rel = meta.get("path")
+    if not isinstance(rel, str) or not rel.strip():
+        raise HTTPException(status_code=500, detail="Workflow entry has no path.")
+    content = read_repo_markdown(rel)
+    return {**meta, "content": content}
+
+
+@app.get("/collections")
+def list_collections() -> dict[str, Any]:
+    """Full `collections/manifest.json`."""
+    return load_collections_manifest()
+
+
+@app.get("/collections/{item_id}")
+def get_collection(item_id: str) -> dict[str, Any]:
+    data = load_collections_manifest()
+    meta = _catalog_item_by_id(data.get("collections"), item_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail="Unknown collection id.")
+    rel = meta.get("path")
+    if not isinstance(rel, str) or not rel.strip():
+        raise HTTPException(status_code=500, detail="Collection entry has no path.")
+    content = read_repo_markdown(rel)
+    return {**meta, "content": content}
 
 
 @app.post("/search")

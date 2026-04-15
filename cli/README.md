@@ -1,0 +1,58 @@
+# @ship/cli
+
+Command-line entry to the Ship methodology: **one HTTP API** (FastAPI) for **search, fetch, feedback, patterns, tools, workflows, collections** — or read catalogs from disk inside a Ship clone / `SHIP_REPO` — plus **`ship init`** to inject API usage into agent configs.
+
+## Requirements
+
+- **Node.js 20+** (matches Ship CI and typical adopters).
+
+## Install
+
+After the package is [published to npm](https://www.npmjs.com/package/@ship/cli):
+
+```bash
+npm install -g @ship/cli
+# or, without a global install:
+npx @ship/cli help
+```
+
+From a full **Ship** monorepo clone you can still run `npm run ship -- …` from the repo root (workspace).
+
+## Adopt without cloning the whole monorepo
+
+1. Install the CLI (`npm i -g @ship/cli` or use `npx @ship/cli`).
+2. From **any** directory, point **`SHIP_API_BASE`** at the **deployed methodology API** and list patterns or catalogs (same server as search):
+
+   ```bash
+   SHIP_API_BASE=https://your-ship-api.example.com npx @ship/cli patterns list
+   SHIP_API_BASE=https://your-ship-api.example.com npx @ship/cli tools list
+   ```
+
+3. Optional: work from a **local** Ship checkout (or **`SHIP_REPO`**) to read manifests from disk without calling the API.
+
+4. In your **product** repository, wire agents to the methodology API:
+
+   ```bash
+   cd /path/to/your-product
+   npx @ship/cli init --yes
+   ```
+
+   Use **`--dry-run`** first to preview; **`--yes`** skips prompts and writes files — see `ship init help`.
+
+## Which commands need what
+
+| Command | Needs |
+|--------|--------|
+| `ship patterns …`, `ship tools …`, `ship workflows …`, `ship collections …` | Same **`SHIP_API_BASE`** as docs when not on disk. **Local:** cwd inside Ship or **`SHIP_REPO`**. |
+| `ship docs search|fetch|feedback` | **`SHIP_API_BASE`** (default `http://127.0.0.1:8100`) or `--base-url`. |
+| `ship init` | Target repo cwd; **`SHIP_API_BASE` / `--base-url`** is the API URL written into snippets. |
+
+## Publishing (maintainers)
+
+Releases are published from this directory via GitHub Actions (workflow **Publish @ship/cli to npm**). Configure the **`NPM_TOKEN`** repository secret (automation access token). Trigger a publish from the Actions tab, or push a git tag `cli-v*` whose remainder matches `version` in `cli/package.json` (example: tag `cli-v0.7.0` for `"version": "0.7.0"`).
+
+The root monorepo `package.json` stays **`private`: true**; only **`@ship/cli`** is intended for the public registry.
+
+## Semver
+
+Package version lives in **`cli/package.json`**. Bump it for each npm release following [semver](https://semver.org/).

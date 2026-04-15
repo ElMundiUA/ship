@@ -21,6 +21,15 @@ Optional helper launcher (from a product repo root):
 curl -fsSL https://raw.githubusercontent.com/ElMundiUA/ship/main/adopt-ship.sh | bash
 ```
 
+### CLI without cloning the full monorepo
+
+1. Install **`@ship/cli`** from npm (or run via **`npx @ship/cli`** once published).
+2. **`npx @ship/cli patterns list`** (and `tools` / `workflows` / `collections`) use the **same deployed methodology API** as search/fetch (`GET /patterns`, `GET /tools`, …). Set **`SHIP_API_BASE`** to that public URL (for local dev it defaults to `http://127.0.0.1:8100`).
+3. Optional: set **`SHIP_REPO`** or run from this clone to read manifests from disk instead of HTTP.
+4. In your product repo, **`npx @ship/cli init`** (use **`--dry-run`** first; **`--yes`** for non-interactive installs — see **`ship init help`**).
+
+Semantic search / fetch / feedback still need the methodology FastAPI (**`SHIP_API_BASE`**).
+
 ## Repository structure
 
 | Path | Purpose |
@@ -32,7 +41,7 @@ curl -fsSL https://raw.githubusercontent.com/ElMundiUA/ship/main/adopt-ship.sh |
 | `workflows/` | **Workflow intents** manifest (`/workflows` — SDLC lane, PR gates, E2E, self-heal, audits). |
 | `collections/` | **Curated bundles** manifest (`/collections` — web app, API service, adoption minimum). |
 | `backend/` | Agent-facing API (`/search`, `/fetch`, `/feedback`, `/patterns`, …). |
-| `cli/` | **`ship` CLI** — HTTP client for that API + `init` to inject agent instructions. |
+| `cli/` | **`ship` CLI** — one FastAPI client (search, fetch, feedback, catalogs) + optional disk + `init`. |
 | `landing/` | Next.js app: marketing UI, **The book** (`/book`), **Patterns** (`/patterns`), **Manual** (`/docs/**`). |
 | `scripts/` | Repo maintenance/deployment helper scripts. |
 | `examples/` | Reference implementation materials and contribution scaffolds. |
@@ -82,14 +91,15 @@ npm run ship -- collections list
 npm run ship -- docs search "release gates" --top-k 5
 ```
 
-`tools`, `workflows`, and `collections` read manifests from disk (no API). With the API on another host: `SHIP_API_BASE=https://example.com npm run ship -- patterns list`  
-(or pass `--base-url` on any subcommand). `ship init` detects Cursor / `AGENTS.md` / `CLAUDE.md` / `.codex` / Copilot instructions and, after confirmation, writes or appends API usage notes for agents.
+`patterns`, `tools`, `workflows`, and `collections` use the **same FastAPI** as **`ship docs`** when you are not inside a Ship checkout (`SHIP_API_BASE` / `--base-url`). From this repo (or **`SHIP_REPO`**), the same commands read manifests from disk.  
+`ship init` detects Cursor / `AGENTS.md` / `CLAUDE.md` / `.codex` / Copilot instructions and, after confirmation, writes or appends API usage notes for agents.
 
 ## Backend API (and CLI)
 
-Humans and scripts typically use **`npm run ship -- …`** from this repo: **`patterns`**, **`docs`** (search/fetch/feedback) call the HTTP API; **`tools`**, **`workflows`**, **`collections`** read repo manifests directly.
+Humans and scripts typically use **`npm run ship -- …`** from this repo or **`npx @ship/cli`** elsewhere: one **methodology HTTP API** serves **`docs`** (search/fetch/feedback) and **`patterns` / `tools` / `workflows` / `collections`** list/detail, or use disk when cwd / **`SHIP_REPO`** is inside this tree.
 
-- `GET /patterns` / `GET /patterns/{id}` — curated org patterns (manifest + body); **CLI:** `ship patterns list`, `ship patterns show <id>`
+- `GET /patterns` / `GET /patterns/{id}` — **CLI:** `ship patterns list`, `ship patterns show <id>`
+- `GET /tools`, `GET /tools/{id}`, same for **`/workflows`**, **`/collections`**
 - `POST /search` — vector search over Ship methodology content (local Chroma + OpenAI embeddings); **CLI:** `ship docs search "<query>"`
 - `POST /fetch` — full page/file fetch after snippet search; **CLI:** `ship docs fetch <path>`
 - `POST /feedback` — create GitHub issue with automatic sensitive-data sanitization; **CLI:** `ship docs feedback …`

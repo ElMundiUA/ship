@@ -12,6 +12,26 @@ const END_MARKER = "<!-- ship-cli:end methodology-api -->";
  * @param {string[]} args
  */
 export async function initCommand(ctx, args) {
+  if (!args.length || args[0] === "help" || args[0] === "-h" || args[0] === "--help") {
+    console.log(`Usage:
+  ship init [--yes] [--force] [--dry-run] [--only <id>] [--cwd <dir>]
+
+Writes Cursor rules and/or markdown sections that point agents at the Ship methodology API
+(base URL from SHIP_API_BASE or --base-url, default http://127.0.0.1:8100).
+
+Flags:
+  --dry-run   Show the plan only (recommended before first use).
+  --yes       Non-interactive: apply immediately. In CI or scripts there is no prompt;
+              combine with --dry-run first if you are unsure. --force replaces existing
+              ship-cli blocks; without --force, existing injections are skipped.
+  --force     Replace existing injected blocks.
+  --only      cursor | agents-md | claude-md | codex | copilot
+  --cwd       Target repository root (default: current directory).
+
+If stdin is not a TTY and you omit --yes, init exits with an error unless you use --dry-run.`);
+    return;
+  }
+
   let cwd = process.cwd();
   /** @type {string[]} */
   let only = [];

@@ -1,5 +1,5 @@
 export function printHelp() {
-  console.log(`Ship CLI — methodology API (docs, patterns) + manifest catalogs (tools, workflows, collections).
+  console.log(`Ship CLI — Ship methodology HTTP API (search, fetch, feedback, patterns, tools, workflows, collections) + init.
 
 USAGE
   ship help
@@ -14,15 +14,15 @@ USAGE
   ship init [--yes] [--force] [--dry-run] [--only <id>] [--cwd <dir>]
 
 GLOBAL FLAGS
-  --base-url URL   API root (default: SHIP_API_BASE or http://127.0.0.1:8100)
+  --base-url URL   API root for ALL HTTP commands (default: SHIP_API_BASE or http://127.0.0.1:8100)
   --json           Machine-readable JSON to stdout
 
-MANIFEST COMMANDS (tools / workflows / collections)
-  Read tools/manifest.json, workflows/manifest.json, collections/manifest.json from disk.
-  Run inside the Ship clone or set SHIP_REPO to the repo root. No API server required.
+CATALOG COMMANDS (patterns, tools, workflows, collections)
+  If cwd or SHIP_REPO points at a Ship clone: read manifests from disk.
+  Otherwise: same base URL as docs — GET /patterns, /tools, /workflows, /collections (and /{id} for show).
 
 INIT FLAGS
-  --yes            Skip confirmation prompts (non-interactive)
+  --yes            Skip confirmation prompts (non-interactive; writes files — review plan with --dry-run first)
   --force          Overwrite / replace existing ship-cli blocks
   --dry-run        Print actions only
   --only <id>      Limit to one target: cursor | agents-md | claude-md | codex | copilot
@@ -42,14 +42,14 @@ Embedding in an agent (Cursor, Codex, Claude Code, etc.)
 2. Teach the agent this loop (or mirror it with curl):
    - POST /search with the user question → pick 1–3 paths from results (CLI: ship docs search)
    - POST /fetch for each chosen path → ground answers in those files (CLI: ship docs fetch)
-   - Optionally list/show patterns for curated instruction slices (CLI: ship patterns list | ship patterns show <id> — same as GET /patterns)
+   - Optionally list/show patterns (CLI: ship patterns list | ship patterns show <id> — GET /patterns on the same API, or disk in a Ship clone / SHIP_REPO)
    - POST /feedback only for retro-style notes (no secrets in free text) (CLI: ship docs feedback)
 
 3. Run  ship init  in the TARGET repository (your product repo, not necessarily Ship).
    It detects .cursor/, AGENTS.md, CLAUDE.md, .codex/, or Copilot instructions and, after
    your confirmation, drops a focused rule or appends a markdown section the agent can read.
 
-4. List tools/workflows/collections from manifests without the API:  ship tools list ,  ship workflows list ,  ship collections list  (and  show <id> ).
+4. List patterns/tools/workflows/collections via the same API (or from disk in a clone / SHIP_REPO):  ship patterns list ,  ship tools list ,  etc.
 
 5. From CI or headless agents, call the same HTTP API with curl or fetch; use  ship … --json
    for stable parsing.

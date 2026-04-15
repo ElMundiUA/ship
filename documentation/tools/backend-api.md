@@ -1,31 +1,33 @@
 # Backend API
 
-Ship now includes a lightweight backend for agent workflows: semantic search, file fetch, retro feedback, and **pattern metadata** from the root manifest.
+Ship now includes a lightweight backend for agent workflows: semantic search, file fetch, retro feedback, and **catalog HTTP** (patterns, tools, workflows, collections).
 
 ## Purpose
 
-- Give humans and agents semantic access to framework knowledge (`/search` + `/fetch`) and a stable pattern index.
+- Give humans and agents semantic access to framework knowledge (`/search` + `/fetch`), stable **catalog list/detail** (`GET /patterns`, `GET /tools`, …), and full bodies for any repo-relative markdown path.
 - Collect operational retro feedback into Ship backlog safely (`/feedback`).
 - Stay local-first: no external vector database.
 
-## CLI (patterns and docs)
+## CLI (all HTTP via one base URL)
 
-From the **Ship** repository root, the **`ship`** CLI wraps the same HTTP API (defaults to `http://127.0.0.1:8100`; override with `--base-url` or `SHIP_API_BASE`):
+The **`ship`** CLI uses the **same** FastAPI root for **`docs`**, **`patterns`**, **`tools`**, **`workflows`**, and **`collections`** when you are not inside a local Ship tree (defaults to `http://127.0.0.1:8100`; override with `--base-url` or `SHIP_API_BASE`). Deploy this API publicly (or behind your reverse proxy) and point adopters at that single URL.
 
 ```bash
-npm run ship -- patterns list
-npm run ship -- patterns show catalog-a1-intake
 npm run ship -- docs search "intake idempotency" --top-k 6
-npm run ship -- patterns list --json
+npm run ship -- docs fetch documentation/adoption/delivery-quality-and-release-process.md
+npm run ship -- docs search "release gates" --json
 ```
 
 Run `npm run ship -- help` for all subcommands. Use `--json` in scripts for stable parsing.
 
-## CLI (tools, workflows, collections)
+## CLI (patterns, tools, workflows, collections)
 
-These read **`tools/manifest.json`**, **`workflows/manifest.json`**, and **`collections/manifest.json`** from disk — **no HTTP server**. Run inside the Ship clone, or set **`SHIP_REPO`** to the monorepo root.
+- **Remote:** `GET /patterns`, `GET /tools`, … on the same **`SHIP_API_BASE`** as `POST /search`.
+- **Local tree:** run inside the Ship clone or set **`SHIP_REPO`** to read manifests from disk (no server).
 
 ```bash
+npm run ship -- patterns list
+npm run ship -- patterns show adopt-ship-generic
 npm run ship -- tools list
 npm run ship -- tools show playwright
 npm run ship -- workflows list
@@ -34,7 +36,7 @@ npm run ship -- collections list
 npm run ship -- collections show web-application
 ```
 
-## Endpoints (HTTP)
+## Endpoints (FastAPI)
 
 Agents, CI, and other runtimes may call these directly; humans usually use the CLI above.
 
@@ -70,6 +72,22 @@ Example (same as `npm run ship -- patterns show catalog-a1-intake --json` withou
 ```bash
 curl -sS "http://127.0.0.1:8100/patterns/catalog-a1-intake"
 ```
+
+### `GET /tools`
+
+Returns full **`tools/manifest.json`** (same as CLI `ship tools list --json`).
+
+### `GET /tools/{id}`
+
+Returns one catalog entry plus markdown `content` for the manifest `path`.
+
+### `GET /workflows` / `GET /workflows/{id}`
+
+Same as tools for **`workflows/manifest.json`**.
+
+### `GET /collections` / `GET /collections/{id}`
+
+Same for **`collections/manifest.json`**.
 
 ### `POST /search`
 
