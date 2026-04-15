@@ -20,6 +20,10 @@ jobs:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
 
+      # Needed so `npm publish -w @ship/cli` resolves workspaces from the repo root.
+      - name: npm ci
+        run: npm ci
+
       - name: Verify tag matches cli/package.json version (tag builds only)
         if: startsWith(github.ref, 'refs/tags/')
         run: |
@@ -39,4 +43,5 @@ jobs:
             echo "NPM_TOKEN secret is not set; cannot publish."
             exit 1
           fi
-          npm publish --prefix cli --access public
+          # `--prefix cli` publishes the root workspace package (`ship`, private). Use `-w` instead.
+          npm publish -w @ship/cli --access public

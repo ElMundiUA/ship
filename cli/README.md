@@ -49,7 +49,7 @@ From a full **Ship** monorepo clone you can still run `npm run ship -- …` from
 
 ## Publishing (maintainers)
 
-Releases are published from this directory via GitHub Actions (workflow **Publish @ship/cli to npm**). Configure the **`NPM_TOKEN`** repository secret (automation access token). Trigger a publish from the Actions tab, or push a git tag `cli-v*` whose remainder matches `version` in `cli/package.json` (example: tag `cli-v0.7.0` for `"version": "0.7.0"`).
+Releases are published via GitHub Actions (workflow **Publish @ship/cli to npm**): `npm publish -w @ship/cli` from the monorepo root (not `npm publish --prefix cli`, which would try to publish the private root package). Configure the **`NPM_TOKEN`** repository secret (automation access token). Trigger a publish from the Actions tab, or push a git tag `cli-v*` whose remainder matches `version` in `cli/package.json` (example: tag `cli-v0.7.0` for `"version": "0.7.0"`).
 
 The root monorepo `package.json` stays **`private`: true**; only **`@ship/cli`** is intended for the public registry.
 
