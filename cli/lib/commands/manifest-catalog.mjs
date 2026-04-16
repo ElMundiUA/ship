@@ -1,62 +1,80 @@
 import fs from "node:fs";
 import path from "node:path";
-import { apiGet } from "../http.mjs";
+import { apiGet, apiPost } from "../http.mjs";
 import { resolveShipRepoRootForCatalog } from "../find-ship-root.mjs";
+import { searchCommand } from "./search.mjs";
 
-/** @type {Record<string, { manifestRel: string; arrayKey: string; name: string }>} */
-const CATALOGS = {
-  tools: { manifestRel: "tools/manifest.json", arrayKey: "tools", name: "Tools" },
-  workflows: {
+/** @type {Record<string, { manifestRel: string; arrayKey: string; name: string; apiPath: string; fetchKind: string }>} */
+const RESOURCES = {
+  tool: {
+    manifestRel: "tools/manifest.json",
+    arrayKey: "tools",
+    name: "Tools",
+    apiPath: "tools",
+    fetchKind: "tool",
+  },
+  workflow: {
     manifestRel: "workflows/manifest.json",
     arrayKey: "workflows",
     name: "Workflows",
+    apiPath: "workflows",
+    fetchKind: "workflow",
   },
-  collections: {
+  collection: {
     manifestRel: "collections/manifest.json",
     arrayKey: "collections",
     name: "Collections",
+    apiPath: "collections",
+    fetchKind: "collection",
   },
 };
 
 /**
- * @param {"tools"|"workflows"|"collections"} kind
+ * @param {"tool"|"workflow"|"collection"} resource
  * @param {{ baseUrl: string; json: boolean }} ctx
- * @param {string[]} args subcommand tail (e.g. `list` or `show`, `linear`)
+ * @param {string[]} args
  */
-export async function manifestCatalogCommand(kind, ctx, args) {
-  const spec = CATALOGS[kind];
-  if (!spec) throw new Error(`Unknown catalog kind: ${kind}`);
+export async function resourceManifestCommand(resource, ctx, args) {
+  const spec = RESOURCES[resource];
+  if (!spec) throw new Error(`Unknown resource: ${resource}`);
 
   const [sub, ...rest] = args;
   if (!sub || sub === "help") {
     console.log(`Usage:
-  ship ${kind} list
-  ship ${kind} show <id>
+  ship ${resource} list
+  ship ${resource} show <id>
+  ship ${resource} fetch <id>
+  ship ${resource} search <query> [--top-k N]
 
 With a local Ship tree (cwd or SHIP_REPO): reads ${spec.manifestRel} on disk.
-Otherwise: methodology HTTP API — GET /${kind} and GET /${kind}/<id> (SHIP_API_BASE / --base-url).
+Otherwise: methodology API (GET /${spec.apiPath}, POST /fetch for fetch, POST /search for search).
+
+Plural alias: ship ${spec.apiPath} …
 
 Global flags: --base-url URL  --json`);
     return;
   }
 
+  if (sub === "search") {
+    await searchCommand(ctx, rest);
+    return;
+  }
+
   const root = resolveShipRepoRootForCatalog();
   if (root) {
-    await manifestFromDisk(kind, root, spec, ctx, sub, rest);
+    await manifestFromDisk(resource, root, spec, ctx, sub, rest);
   } else {
-    await manifestFromHosted(kind, spec, ctx, sub, rest);
+    await manifestFromHosted(resource, spec, ctx, sub, rest);
   }
 }
 
 /**
- * @param {"tools"|"workflows"|"collections"} kind
- * @param {typeof CATALOGS["tools"]} spec
- * @param {{ baseUrl: string; json: boolean }} ctx
+ * @param {"tool"|"workflow"|"collection"} resource
  */
-async function manifestFromHosted(kind, spec, ctx, sub, rest) {
+async function manifestFromHosted(resource, spec, ctx, sub, rest) {
   const base = ctx.baseUrl;
   if (sub === "list") {
-    const data = await apiGet(base, `/${kind}`);
+    const data = await apiGet(base, `/${spec.apiPath}`);
     if (ctx.json) {
       console.log(JSON.stringify(data, null, 2));
     } else {
@@ -78,7 +96,7 @@ async function manifestFromHosted(kind, spec, ctx, sub, rest) {
       console.error("show: id required.");
       process.exit(1);
     }
-    const data = await apiGet(base, `/${kind}/${encodeURIComponent(id)}`);
+    const data = await apiGet(base, `/${spec.apiPath}/${encodeURIComponent(id)}`);
     if (ctx.json) {
       console.log(JSON.stringify(data, null, 2));
     } else {
@@ -87,17 +105,29 @@ async function manifestFromHosted(kind, spec, ctx, sub, rest) {
     }
     return;
   }
-  console.error(`Unknown ${kind} subcommand: ${sub}`);
+  if (sub === "fetch") {
+    const id = rest[0];
+    if (!id) {
+      console.error("fetch: id required.");
+      process.exit(1);
+    }
+    const data = await apiPost(base, "/fetch", { kind: spec.fetchKind, id });
+    if (ctx.json) {
+      console.log(JSON.stringify(data, null, 2));
+    } else {
+      console.log(`# ${data.title} (${data.id})\n`);
+      console.log(data.content);
+    }
+    return;
+  }
+  console.error(`Unknown ${resource} subcommand: ${sub}`);
   process.exit(1);
 }
 
 /**
- * @param {"tools"|"workflows"|"collections"} kind
- * @param {string} root
- * @param {typeof CATALOGS["tools"]} spec
- * @param {{ json: boolean }} ctx
+ * @param {"tool"|"workflow"|"collection"} resource
  */
-async function manifestFromDisk(kind, root, spec, ctx, sub, rest) {
+async function manifestFromDisk(resource, root, spec, ctx, sub, rest) {
   const manifestPath = path.join(root, spec.manifestRel);
   const raw = fs.readFileSync(manifestPath, "utf8");
   /** @type {Record<string, unknown>} */
@@ -120,10 +150,10 @@ async function manifestFromDisk(kind, root, spec, ctx, sub, rest) {
     return;
   }
 
-  if (sub === "show") {
+  if (sub === "show" || sub === "fetch") {
     const id = rest[0];
     if (!id) {
-      console.error("show: id required.");
+      console.error(`${sub}: id required.`);
       process.exit(1);
     }
     const entry = entries.find((e) => e.id === id);
@@ -152,6 +182,6 @@ async function manifestFromDisk(kind, root, spec, ctx, sub, rest) {
     return;
   }
 
-  console.error(`Unknown ${kind} subcommand: ${sub}`);
+  console.error(`Unknown ${resource} subcommand: ${sub}`);
   process.exit(1);
 }

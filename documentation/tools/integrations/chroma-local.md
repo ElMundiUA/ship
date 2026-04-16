@@ -10,4 +10,4 @@
 ## Read next
 
 - [Backend API](/docs/tools/backend-api) — `/search`, `/fetch`, `/feedback`, `/patterns` (from the Ship repo use `npm run ship -- docs …` and `npm run ship -- patterns …`).
-- Ship CLI: `ship docs search …` from the repo root (see root `package.json` script `ship`).
+- Ship CLI: `ship search …` from the repo root (see root `package.json` script `ship`).

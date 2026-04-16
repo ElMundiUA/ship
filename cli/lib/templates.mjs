@@ -20,14 +20,14 @@ Base URL (override with \`SHIP_API_BASE\` for agents, or \`--base-url\` for CLI)
 1. **Discover** — \`POST /search\` with a natural-language query over Ship docs + prompts.
 2. **Read** — \`POST /fetch\` with a repo-relative \`path\` from search hits (markdown/text only).
 3. **Retro** — \`POST /feedback\` to open a sanitized GitHub issue (needs \`GITHUB_TOKEN\` on the server).
-4. **Patterns** — run \`ship patterns list\` / \`ship patterns show <id>\` (\`GET /patterns\` on the same base URL as search; or disk when cwd/\`SHIP_REPO\` is the Ship tree).
+4. **Catalog** — \`ship pattern|tool|workflow|collection list\` / \`show <id>\` / \`fetch <id>\` (\`GET /…\` on the same base URL as search, or \`POST /fetch\` with \`{ kind, id }\` when hosted; or disk when cwd/\`SHIP_REPO\` is the Ship tree).
 
 ## Examples (CLI from Ship repo)
 
 \`\`\`bash
-npm run ship -- docs search "release gates and qa split" --top-k 8
+npm run ship -- search "release gates and qa split" --top-k 8
 npm run ship -- docs fetch documentation/adoption/delivery-quality-and-release-process.md
-npm run ship -- patterns list
+npm run ship -- pattern list
 \`\`\`
 
 Equivalent curl (when not using the CLI):
@@ -65,7 +65,7 @@ Base URL: \`${baseUrl}\` (env \`SHIP_API_BASE\`).
 - **Search** \`POST /search\` JSON \`{ "query": string, "top_k"?: number }\`
 - **Fetch** \`POST /fetch\` JSON \`{ "path": "documentation/...md" }\`
 - **Feedback** \`POST /feedback\` JSON \`{ "title", "summary", "recommendations"?: string[], "source_context"?: string }\`
-- **Patterns** — \`ship patterns list\` / \`ship patterns show <id>\` (same \`SHIP_API_BASE\` as search, or local tree): \`GET /patterns\`, \`GET /patterns/{id}\`
+- **Catalog** — \`ship pattern|tool|workflow|collection list\` / \`show <id>\` / \`fetch <id>\` (same \`SHIP_API_BASE\` as search, or local tree): \`GET /patterns\`, \`GET /patterns/{id}\`, or \`POST /fetch\` with \`{ "kind": "pattern", "id": "…" }\`
 
 Use search first, then fetch the best path. Keep tokens out of feedback bodies.
 `;
@@ -90,15 +90,16 @@ See the Ship repo \`documentation/tools/backend-api.md\` for full contract.
 | POST | /search | \`{ "query": "...", "top_k": 8 }\` |
 | POST | /fetch | \`{ "path": "documentation/foo.md" }\` |
 | POST | /feedback | \`{ "title", "summary", "recommendations": [], "source_context" }\` |
-| GET | /patterns | list manifest — **CLI:** \`ship patterns list\` (HTTP or disk in clone) |
-| GET | /patterns/{id} | metadata + markdown \`content\` — **CLI:** \`ship patterns show <id>\` |
+| GET | /patterns | list manifest — **CLI:** \`ship pattern list\` (HTTP or disk in clone) |
+| GET | /patterns/{id} | metadata + markdown \`content\` — **CLI:** \`ship pattern show <id>\` |
+| POST | /fetch | catalog body — **CLI:** \`ship pattern fetch <id>\` with \`{ "kind": "pattern", "id" }\` |
 
 ## CLI (from Ship monorepo)
 
 \`\`\`bash
-npm run ship -- patterns list
-npm run ship -- patterns show catalog-a1-intake
-npm run ship -- docs search "intake labels" --top-k 5
+npm run ship -- pattern list
+npm run ship -- pattern show catalog-a1-intake
+npm run ship -- search "intake labels" --top-k 5
 \`\`\`
 
 ## curl (direct HTTP)

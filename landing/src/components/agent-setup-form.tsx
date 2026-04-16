@@ -77,15 +77,15 @@ Integrate Ship's **operating model** into **this** repository: discovery, mappin
    cd vendor/ship
    npm install
    npm run ship -- help
-   npm run ship -- patterns list
+   npm run ship -- pattern list
    \`\`\`
    Set **SHIP_ROOT** to the absolute path of \`vendor/ship\` (or the directory you chose).
 
 3. **Sanity check** from SHIP_ROOT — all must succeed without network beyond npm/git:
-   - \`npm run ship -- patterns list\` (reads \`patterns/manifest.json\`)
-   - \`npm run ship -- tools list\`
-   - \`npm run ship -- workflows list\`
-   - \`npm run ship -- collections list\`
+   - \`npm run ship -- pattern list\` (reads \`patterns/manifest.json\`)
+   - \`npm run ship -- tool list\`
+   - \`npm run ship -- workflow list\`
+   - \`npm run ship -- collection list\`
 
 ---
 

@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { extractGlobalArgv } from "../lib/config.mjs";
 import { docsCommand } from "../lib/commands/docs.mjs";
-import { patternsCommand } from "../lib/commands/patterns.mjs";
-import { manifestCatalogCommand } from "../lib/commands/manifest-catalog.mjs";
+import { searchCommand } from "../lib/commands/search.mjs";
+import { patternCommand } from "../lib/commands/patterns.mjs";
+import { resourceManifestCommand } from "../lib/commands/manifest-catalog.mjs";
 import { printHelp } from "../lib/commands/help.mjs";
 import { initCommand } from "../lib/commands/init.mjs";
 
@@ -24,28 +25,33 @@ try {
     process.exit(0);
   }
 
+  if (cmd === "search") {
+    await searchCommand(ctx, rest);
+    process.exit(0);
+  }
+
   if (cmd === "docs") {
     await docsCommand(ctx, rest);
     process.exit(0);
   }
 
-  if (cmd === "patterns") {
-    await patternsCommand(ctx, rest);
+  if (cmd === "pattern" || cmd === "patterns") {
+    await patternCommand(ctx, rest);
     process.exit(0);
   }
 
-  if (cmd === "tools") {
-    await manifestCatalogCommand("tools", ctx, rest);
+  if (cmd === "tool" || cmd === "tools") {
+    await resourceManifestCommand("tool", ctx, rest);
     process.exit(0);
   }
 
-  if (cmd === "workflows") {
-    await manifestCatalogCommand("workflows", ctx, rest);
+  if (cmd === "workflow" || cmd === "workflows") {
+    await resourceManifestCommand("workflow", ctx, rest);
     process.exit(0);
   }
 
-  if (cmd === "collections") {
-    await manifestCatalogCommand("collections", ctx, rest);
+  if (cmd === "collection" || cmd === "collections") {
+    await resourceManifestCommand("collection", ctx, rest);
     process.exit(0);
   }
 

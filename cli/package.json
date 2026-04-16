@@ -1,8 +1,8 @@
 {
   "name": "@elmundi/ship-cli",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "type": "module",
-  "description": "Ship CLI — docs API (search/fetch/feedback), on-disk patterns & catalogs, and agent init",
+  "description": "Ship CLI — methodology search, docs fetch/feedback, catalog commands (pattern/tool/workflow/collection), and agent init",
   "license": "Apache-2.0",
   "author": "Denys Kuzin",
   "repository": {

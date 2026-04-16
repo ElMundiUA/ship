@@ -4,11 +4,11 @@ Instruction-first companion API for agents.
 
 ## Endpoints
 
-From any machine, `npm run ship -- patterns list` uses **`SHIP_API_BASE`** (`GET /patterns`, …), or reads from disk inside the monorepo (or with `SHIP_REPO`).
+From any machine, `npm run ship -- pattern list` uses **`SHIP_API_BASE`** (`GET /patterns`, …), or reads from disk inside the monorepo (or with `SHIP_REPO`).
 
 - `GET /patterns` — list curated org patterns from `patterns/manifest.json` (metadata only).
 - `GET /patterns/{id}` — one pattern plus full markdown body.
-- `GET /tools`, `GET /tools/{id}` — tools manifest + body (same as CLI `ship tools …`).
+- `GET /tools`, `GET /tools/{id}` — tools manifest + body (same as CLI `ship tool …`).
 - `GET /workflows`, `GET /workflows/{id}` — workflows manifest + body.
 - `GET /collections`, `GET /collections/{id}` — collections manifest + body.
 - `POST /search` — vector search over methodology files (`documentation/`, `prompts/`, `README.md`) using local Chroma + OpenAI embeddings.

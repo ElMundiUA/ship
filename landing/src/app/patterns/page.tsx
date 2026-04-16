@@ -9,7 +9,7 @@ import { loadPatternsManifest } from "@/lib/patterns";
 export const metadata: Metadata = {
   title: "Org patterns — Ship",
   description:
-    "Reviewable markdown prompts for agents: onboarding, scheduled cloud roles, and lane playbooks — discover bodies with the Ship CLI (patterns list/show).",
+    "Reviewable markdown prompts for agents: onboarding, scheduled cloud roles, and lane playbooks — discover bodies with the Ship CLI (pattern list/show/fetch).",
 };
 
 export default function PatternsPage() {
@@ -69,7 +69,7 @@ export default function PatternsPage() {
                 <p className="text-xs font-bold uppercase tracking-widest text-lilac">Discovery</p>
                 <h2 className="font-display mt-2 text-xl font-bold text-white">List + body API</h2>
                 <p className="mt-3 text-sm leading-relaxed text-white/65">
-                  Pair <code className="text-aqua/90">ship patterns list</code> with <code className="text-aqua/90">ship docs search</code> when you need fuzzy match; use <code className="text-aqua/90">ship patterns show &lt;id&gt;</code> when you already know the id.
+                  Pair <code className="text-aqua/90">ship pattern list</code> with <code className="text-aqua/90">ship search</code> when you need fuzzy match; use <code className="text-aqua/90">ship pattern show &lt;id&gt;</code> or <code className="text-aqua/90">ship pattern fetch &lt;id&gt;</code> when you already know the id.
                 </p>
               </div>
             </div>
@@ -154,19 +154,19 @@ export default function PatternsPage() {
             <div className="mt-8 space-y-6 rounded-2xl border border-white/10 bg-black/40 p-5 font-mono text-xs text-white/80 sm:text-sm">
               <div>
                 <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-white/40">List pattern ids</p>
-                <pre className="overflow-x-auto whitespace-pre-wrap break-all">npm run ship -- patterns list</pre>
+                <pre className="overflow-x-auto whitespace-pre-wrap break-all">npm run ship -- pattern list</pre>
               </div>
               <div>
                 <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-white/40">Print one pattern (markdown body)</p>
-                <pre className="overflow-x-auto whitespace-pre-wrap break-all">npm run ship -- patterns show catalog-a1-intake</pre>
+                <pre className="overflow-x-auto whitespace-pre-wrap break-all">npm run ship -- pattern show catalog-a1-intake</pre>
               </div>
               <div>
                 <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-white/40">Semantic search (optional)</p>
-                <pre className="overflow-x-auto whitespace-pre-wrap break-all">npm run ship -- docs search &quot;intake idempotency Todo&quot; --top-k 6</pre>
+                <pre className="overflow-x-auto whitespace-pre-wrap break-all">npm run ship -- search &quot;intake idempotency Todo&quot; --top-k 6</pre>
               </div>
               <div>
                 <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-white/40">Machine-readable JSON</p>
-                <pre className="overflow-x-auto whitespace-pre-wrap break-all">npm run ship -- patterns list --json</pre>
+                <pre className="overflow-x-auto whitespace-pre-wrap break-all">npm run ship -- pattern list --json</pre>
               </div>
             </div>
             <p className="mt-8 text-center text-sm text-white/50">

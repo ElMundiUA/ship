@@ -169,15 +169,15 @@ export default function ToolsPage() {
             <div className="mt-8 space-y-6 rounded-2xl border border-white/10 bg-black/40 p-5 font-mono text-xs text-white/80 sm:text-sm">
               <div>
                 <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-white/40">List tool ids</p>
-                <pre className="overflow-x-auto whitespace-pre-wrap break-all">npm run ship -- tools list</pre>
+                <pre className="overflow-x-auto whitespace-pre-wrap break-all">npm run ship -- tool list</pre>
               </div>
               <div>
                 <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-white/40">Print one tool doc (markdown)</p>
-                <pre className="overflow-x-auto whitespace-pre-wrap break-all">npm run ship -- tools show playwright</pre>
+                <pre className="overflow-x-auto whitespace-pre-wrap break-all">npm run ship -- tool show playwright</pre>
               </div>
               <div>
                 <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-white/40">Semantic search (needs API)</p>
-                <pre className="overflow-x-auto whitespace-pre-wrap break-all">npm run ship -- docs search &quot;Playwright hosted regression&quot; --top-k 6</pre>
+                <pre className="overflow-x-auto whitespace-pre-wrap break-all">npm run ship -- search &quot;Playwright hosted regression&quot; --top-k 6</pre>
               </div>
               <div>
                 <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-white/40">Fetch arbitrary path (needs API)</p>

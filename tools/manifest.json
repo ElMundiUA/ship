@@ -61,7 +61,7 @@
     {
       "id": "methodology-api",
       "title": "Methodology API",
-      "summary": "FastAPI for agents; humans use ship docs / ship patterns CLI against the same routes.",
+      "summary": "FastAPI for agents; humans use ship search, ship docs, and ship pattern|tool|… CLI against the same routes.",
       "path": "documentation/tools/backend-api.md",
       "tags": ["http", "fastapi", "agents"],
       "group": "platform"

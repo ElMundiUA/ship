@@ -26,8 +26,8 @@ From a full **Ship** monorepo clone you can still run `npm run ship -- …` from
 2. From **any** directory, point **`SHIP_API_BASE`** at the **deployed methodology API** and list patterns or catalogs (same server as search):
 
    ```bash
-   SHIP_API_BASE=https://your-ship-api.example.com npx @elmundi/ship-cli patterns list
-   SHIP_API_BASE=https://your-ship-api.example.com npx @elmundi/ship-cli tools list
+   SHIP_API_BASE=https://your-ship-api.example.com npx @elmundi/ship-cli pattern list
+   SHIP_API_BASE=https://your-ship-api.example.com npx @elmundi/ship-cli tool list
    ```
 
 3. Optional: work from a **local** Ship checkout (or **`SHIP_REPO`**) to read manifests from disk without calling the API.
@@ -45,8 +45,8 @@ From a full **Ship** monorepo clone you can still run `npm run ship -- …` from
 
 | Command | Needs |
 |--------|--------|
-| `ship patterns …`, `ship tools …`, `ship workflows …`, `ship collections …` | Same **`SHIP_API_BASE`** as docs when not on disk. **Local:** cwd inside Ship or **`SHIP_REPO`**. |
-| `ship docs search|fetch|feedback` | **`SHIP_API_BASE`** (default `http://127.0.0.1:8100`) or `--base-url`. |
+| `ship pattern|tool|workflow|collection …` (plural aliases) | Same **`SHIP_API_BASE`** as search/docs when not on disk. **Local:** cwd inside Ship or **`SHIP_REPO`**. |
+| `ship search`, `ship docs fetch|feedback` | **`SHIP_API_BASE`** (default public methodology URL; override locally) or `--base-url`. |
 | `ship init` | Target repo cwd; **`SHIP_API_BASE` / `--base-url`** is the API URL written into snippets. |
 
 ## Publishing (maintainers)

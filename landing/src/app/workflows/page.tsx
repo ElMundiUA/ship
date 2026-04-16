@@ -89,21 +89,21 @@ export default function WorkflowsPage() {
             <h2 className="font-display mt-2 text-3xl font-bold text-white">Workflows commands</h2>
             <p className="mt-4 text-sm leading-relaxed text-white/65">
               Reads <code className="text-aqua/90">workflows/manifest.json</code> from disk — no API. From the Ship repo root (or{" "}
-              <code className="text-aqua/90">SHIP_REPO</code>). Explore intent text with <code className="text-aqua/90">ship docs search</code> when the API is up (
+              <code className="text-aqua/90">SHIP_REPO</code>). Explore intent text with <code className="text-aqua/90">ship search</code> when the API is up (
               <code className="text-white/80">{shipApiBase}</code>).
             </p>
             <div className="mt-8 space-y-6 rounded-2xl border border-white/10 bg-black/40 p-5 font-mono text-xs text-white/80 sm:text-sm">
               <div>
                 <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-white/40">List workflow ids</p>
-                <pre className="overflow-x-auto whitespace-pre-wrap break-all">npm run ship -- workflows list</pre>
+                <pre className="overflow-x-auto whitespace-pre-wrap break-all">npm run ship -- workflow list</pre>
               </div>
               <div>
                 <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-white/40">Print one intent (markdown)</p>
-                <pre className="overflow-x-auto whitespace-pre-wrap break-all">npm run ship -- workflows show pr-and-ci-gate</pre>
+                <pre className="overflow-x-auto whitespace-pre-wrap break-all">npm run ship -- workflow show pr-and-ci-gate</pre>
               </div>
               <div>
                 <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-white/40">Semantic search (needs API)</p>
-                <pre className="overflow-x-auto whitespace-pre-wrap break-all">npm run ship -- docs search &quot;PR gate preview&quot; --top-k 6</pre>
+                <pre className="overflow-x-auto whitespace-pre-wrap break-all">npm run ship -- search &quot;PR gate preview&quot; --top-k 6</pre>
               </div>
             </div>
             <p className="mt-8 text-center text-sm text-white/50">

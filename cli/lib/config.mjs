@@ -5,7 +5,9 @@
 export function extractGlobalArgv(argv) {
   const out = {
     _: /** @type {string[]} */ ([]),
-    baseUrl: (process.env.SHIP_API_BASE || "http://127.0.0.1:8100").replace(/\/$/, ""),
+    baseUrl: (
+      process.env.SHIP_API_BASE || "https://ship.elmundi.com/api/methodology"
+    ).replace(/\/$/, ""),
     json: false,
     yes: false,
     force: false,

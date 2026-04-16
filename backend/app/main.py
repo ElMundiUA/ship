@@ -10,7 +10,7 @@ from typing import Any
 import chromadb
 import httpx
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 APP_ROOT = Path(__file__).resolve().parents[2]
@@ -30,7 +30,12 @@ class SearchRequest(BaseModel):
 
 
 class FetchRequest(BaseModel):
-    path: str
+    """Either a repo file (`path`) or a catalog entry (`kind` + `id` / `resource_id`)."""
+
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    path: str | None = None
+    kind: str | None = None
+    resource_id: str | None = Field(default=None, alias="id")
 
 
 class FeedbackRequest(BaseModel):
@@ -355,7 +360,7 @@ def _catalog_item_by_id(items: Any, item_id: str) -> dict[str, Any] | None:
 
 @app.get("/tools")
 def list_tools() -> dict[str, Any]:
-    """Full `tools/manifest.json` (CLI `ship tools list --json`)."""
+    """Full `tools/manifest.json` (CLI `ship tool list --json`)."""
     return load_tools_manifest()
 
 
@@ -419,17 +424,50 @@ def search(req: SearchRequest) -> dict[str, Any]:
 
 @app.post("/fetch")
 def fetch(req: FetchRequest) -> dict[str, Any]:
-    candidate = (APP_ROOT / req.path).resolve()
-    if not candidate.exists() or not candidate.is_file():
-        raise HTTPException(status_code=404, detail="File not found.")
-    try:
-        candidate.relative_to(APP_ROOT)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="Path is outside repository.") from exc
-    if candidate.suffix.lower() not in {".md", ".txt"}:
-        raise HTTPException(status_code=400, detail="Only markdown/text files are fetchable.")
-    content = candidate.read_text(encoding="utf-8", errors="ignore")
-    return {"path": str(candidate.relative_to(APP_ROOT)), "content": content}
+    """Full text: repo-relative markdown (`path`) or one catalog body (`kind` + `id`)."""
+    path = (req.path or "").strip()
+    rid = (req.resource_id or "").strip()
+    kind = (req.kind or "").strip().lower() if req.kind else ""
+
+    if kind and rid:
+        allowed = {"pattern", "tool", "workflow", "collection"}
+        if kind not in allowed:
+            raise HTTPException(
+                status_code=400,
+                detail=f"kind must be one of: {', '.join(sorted(allowed))}",
+            )
+        if kind == "pattern":
+            out = dict(get_pattern(rid))
+        elif kind == "tool":
+            out = dict(get_tool(rid))
+        elif kind == "workflow":
+            out = dict(get_workflow(rid))
+        else:
+            out = dict(get_collection(rid))
+        out["kind"] = kind
+        return out
+
+    if path:
+        candidate = (APP_ROOT / path).resolve()
+        if not candidate.exists() or not candidate.is_file():
+            raise HTTPException(status_code=404, detail="File not found.")
+        try:
+            candidate.relative_to(APP_ROOT)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Path is outside repository.") from exc
+        if candidate.suffix.lower() not in {".md", ".txt"}:
+            raise HTTPException(status_code=400, detail="Only markdown/text files are fetchable.")
+        content = candidate.read_text(encoding="utf-8", errors="ignore")
+        return {
+            "kind": "file",
+            "path": str(candidate.relative_to(APP_ROOT)),
+            "content": content,
+        }
+
+    raise HTTPException(
+        status_code=400,
+        detail='Provide "path" (repo-relative .md/.txt) or "kind" + "id" (catalog: pattern, tool, workflow, collection).',
+    )
 
 
 @app.post("/feedback")

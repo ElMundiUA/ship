@@ -1,6 +1,7 @@
 import { apiPost } from "../http.mjs";
 
 /**
+ * Documentation files only: fetch markdown by repo path, retro feedback.
  * @param {{ baseUrl: string; json: boolean }} ctx
  * @param {string[]} args
  */
@@ -8,52 +9,27 @@ export async function docsCommand(ctx, args) {
   const [sub, ...rest] = args;
   if (!sub || sub === "help") {
     console.log(`Usage:
-  ship docs search <query> [--top-k 8]
   ship docs fetch <repo-relative-path>
   ship docs feedback --title "..." --summary "..." [--recommendation "line"]... [--source-context "..."]
 
-Global flags: --base-url URL  --json`);
-    return;
-  }
+Vector search:  ship search <query>
+Catalog bodies:  ship pattern|tool|workflow|collection fetch <id>
 
-  if (sub === "search") {
-    const qParts = [];
-    let topK = 8;
-    for (let i = 0; i < rest.length; i++) {
-      const a = rest[i];
-      if (a === "--top-k" && rest[i + 1]) {
-        topK = Number(rest[++i]);
-        continue;
-      }
-      qParts.push(a);
-    }
-    const query = qParts.join(" ").trim();
-    if (query.length < 3) {
-      console.error("search: query must be at least 3 characters.");
-      process.exit(1);
-    }
-    const data = await apiPost(ctx.baseUrl, "/search", { query, top_k: topK });
-    if (ctx.json) console.log(JSON.stringify(data, null, 2));
-    else {
-      console.log(`Query: ${data.query}\n`);
-      for (const r of data.results || []) {
-        console.log(`- ${r.path}  (chunk ${r.chunk_index}, distance ${r.distance ?? "n/a"})`);
-        console.log(`  ${r.snippet}\n`);
-      }
-    }
+Global flags: --base-url URL  --json`);
     return;
   }
 
   if (sub === "fetch") {
     const p = rest.join(" ").trim();
     if (!p) {
-      console.error("fetch: path required.");
+      console.error("fetch: repo-relative path required (markdown/text under the Ship tree).");
       process.exit(1);
     }
     const data = await apiPost(ctx.baseUrl, "/fetch", { path: p });
     if (ctx.json) console.log(JSON.stringify(data, null, 2));
     else {
-      console.log(`# ${data.path}\n`);
+      const title = data.path ?? data.id ?? "document";
+      console.log(`# ${title}\n`);
       console.log(data.content);
     }
     return;

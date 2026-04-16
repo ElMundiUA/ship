@@ -24,11 +24,11 @@ curl -fsSL https://raw.githubusercontent.com/ElMundiUA/ship/main/adopt-ship.sh |
 ### CLI without cloning the full monorepo
 
 1. Install **`@elmundi/ship-cli`** from npm (or run via **`npx @elmundi/ship-cli`** once published); the binary is **`ship`**.
-2. **`npx @elmundi/ship-cli patterns list`** (and `tools` / `workflows` / `collections`) use the **same deployed methodology API** as search/fetch (`GET /patterns`, `GET /tools`, …). Set **`SHIP_API_BASE`** to that public URL (for local dev it defaults to `http://127.0.0.1:8100`).
+2. **`npx @elmundi/ship-cli pattern list`** (and `tool` / `workflow` / `collection`; plural aliases work) use the **same deployed methodology API** as **`ship search`** and **`ship docs`** (`GET /patterns`, `GET /tools`, …). Set **`SHIP_API_BASE`** to that public URL (defaults to the public methodology host unless overridden).
 3. Optional: set **`SHIP_REPO`** or run from this clone to read manifests from disk instead of HTTP.
 4. In your product repo, **`npx @elmundi/ship-cli init`** (use **`--dry-run`** first; **`--yes`** for non-interactive installs — see **`ship init help`**).
 
-Semantic search / fetch / feedback still need the methodology FastAPI (**`SHIP_API_BASE`**).
+**`ship search`**, **`ship docs`**, and catalog commands still use the methodology FastAPI (**`SHIP_API_BASE`**).
 
 ## Repository structure
 
@@ -84,24 +84,24 @@ From the repository root (after `npm install`):
 
 ```bash
 npm run ship -- help
-npm run ship -- patterns list
-npm run ship -- tools list
-npm run ship -- workflows list
-npm run ship -- collections list
-npm run ship -- docs search "release gates" --top-k 5
+npm run ship -- pattern list
+npm run ship -- tool list
+npm run ship -- workflow list
+npm run ship -- collection list
+npm run ship -- search "release gates" --top-k 5
 ```
 
-`patterns`, `tools`, `workflows`, and `collections` use the **same FastAPI** as **`ship docs`** when you are not inside a Ship checkout (`SHIP_API_BASE` / `--base-url`). From this repo (or **`SHIP_REPO`**), the same commands read manifests from disk.  
+`pattern`, `tool`, `workflow`, and `collection` (plural aliases `patterns`, `tools`, …) use the **same FastAPI** as **`ship docs`** when you are not inside a Ship checkout (`SHIP_API_BASE` / `--base-url`). From this repo (or **`SHIP_REPO`**), the same commands read manifests from disk.  
 `ship init` detects Cursor / `AGENTS.md` / `CLAUDE.md` / `.codex` / Copilot instructions and, after confirmation, writes or appends API usage notes for agents.
 
 ## Backend API (and CLI)
 
-Humans and scripts typically use **`npm run ship -- …`** from this repo or **`npx @elmundi/ship-cli`** elsewhere: one **methodology HTTP API** serves **`docs`** (search/fetch/feedback) and **`patterns` / `tools` / `workflows` / `collections`** list/detail, or use disk when cwd / **`SHIP_REPO`** is inside this tree.
+Humans and scripts typically use **`npm run ship -- …`** from this repo or **`npx @elmundi/ship-cli`** elsewhere: one **methodology HTTP API** serves **`ship search`**, **`ship docs`** (fetch markdown by path + feedback), and **`pattern` / `tool` / `workflow` / `collection`** list/show/fetch, or use disk when cwd / **`SHIP_REPO`** is inside this tree.
 
-- `GET /patterns` / `GET /patterns/{id}` — **CLI:** `ship patterns list`, `ship patterns show <id>`
-- `GET /tools`, `GET /tools/{id}`, same for **`/workflows`**, **`/collections`**
-- `POST /search` — vector search over Ship methodology content (local Chroma + OpenAI embeddings); **CLI:** `ship docs search "<query>"`
-- `POST /fetch` — full page/file fetch after snippet search; **CLI:** `ship docs fetch <path>`
+- `GET /patterns` / `GET /patterns/{id}` — **CLI:** `ship pattern list`, `ship pattern show <id>`; full body via **`ship pattern fetch <id>`** → `POST /fetch` with `{ "kind": "pattern", "id" }`
+- `GET /tools`, `GET /tools/{id}`, same for **`/workflows`**, **`/collections`** — **CLI:** `ship tool|workflow|collection list|show|fetch <id>`
+- `POST /search` — vector search over Ship methodology content (local Chroma + OpenAI embeddings); **CLI:** `ship search "<query>"`
+- `POST /fetch` — repo file by path **`{ "path": "…" }`** (**CLI:** `ship docs fetch <path>`) or catalog entry **`{ "kind": "pattern"|…, "id" }`** (**CLI:** `ship pattern|tool|… fetch <id>`)
 - `POST /feedback` — create GitHub issue with automatic sensitive-data sanitization; **CLI:** `ship docs feedback …`
 
 ## Production container
