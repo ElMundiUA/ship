@@ -17,7 +17,7 @@ export async function initCommand(ctx, args) {
   ship init [--yes] [--force] [--dry-run] [--only <id>] [--cwd <dir>]
 
 Writes Cursor rules and/or markdown sections that point agents at the Ship methodology API
-(base URL from SHIP_API_BASE or --base-url, default http://127.0.0.1:8100).
+(base URL from SHIP_API_BASE or --base-url; same default as other commands, e.g. ship.elmundi.com).
 
 Flags:
   --dry-run   Show the plan only (recommended before first use).
