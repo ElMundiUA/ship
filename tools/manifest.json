@@ -7,72 +7,178 @@
       "title": "Five capabilities",
       "summary": "Neutral map of what a Ship-style setup needs — no vendor lock-in in the names.",
       "path": "documentation/tools/index.md",
-      "tags": ["map", "architecture"],
-      "group": "platform"
+      "tags": [
+        "map",
+        "architecture"
+      ],
+      "group": "platform",
+      "version": "1.0.0",
+      "content_sha256": "7d4418767984ea82b819081801b8023773ffe3572e4ab5fd98ca32d468e9af44",
+      "updated_at": "2026-04-12T04:11:35+03:00",
+      "channel": "stable",
+      "min_shipctl": "0.3.0",
+      "deprecated": false,
+      "replaced_by": null,
+      "yanked": false
     },
     {
       "id": "linear",
       "title": "Linear",
       "summary": "Tracker as system of record — projects, states, labels, evidence for agents.",
       "path": "documentation/tools/integrations/linear.md",
-      "tags": ["graphql", "projects", "states"],
-      "group": "tracker"
+      "tags": [
+        "graphql",
+        "projects",
+        "states"
+      ],
+      "group": "tracker",
+      "version": "1.0.0",
+      "content_sha256": "7d4ed7772da69241cf4d281a38dc982aa972b6c4723dcbbca6c619b0ebf096e4",
+      "updated_at": "2026-04-12T04:11:35+03:00",
+      "channel": "stable",
+      "min_shipctl": "0.3.0",
+      "deprecated": false,
+      "replaced_by": null,
+      "yanked": false
     },
     {
       "id": "tracker-contract",
       "title": "Tracker contract",
       "summary": "Vendor-neutral shape: states, labels, evidence — Linear, Jira, GitHub Issues, or spreadsheets.",
       "path": "documentation/tools/ship-agent-trackers.md",
-      "tags": ["abstraction", "states", "labels"],
-      "group": "tracker"
+      "tags": [
+        "abstraction",
+        "states",
+        "labels"
+      ],
+      "group": "tracker",
+      "version": "1.1.0",
+      "content_sha256": "144e43747039b7cb1038d0b31649d5c9762fd1ce4e07a60feb2c98fd7650f11a",
+      "updated_at": "2026-04-12T04:11:35+03:00",
+      "channel": "stable",
+      "min_shipctl": "0.3.0",
+      "deprecated": false,
+      "replaced_by": null,
+      "yanked": false
     },
     {
       "id": "github-actions",
       "title": "GitHub Actions",
       "summary": "Cron, concurrency, workflow_dispatch, artifacts as the audit trail.",
       "path": "documentation/tools/integrations/github-actions.md",
-      "tags": ["yaml", "scheduler", "secrets"],
-      "group": "ci"
+      "tags": [
+        "yaml",
+        "scheduler",
+        "secrets"
+      ],
+      "group": "ci",
+      "version": "1.0.0",
+      "content_sha256": "a23d1546e987e2f62b1c0ba50e81c8dbd25c6f5d08cb4a03f471d180ee368938",
+      "updated_at": "2026-04-12T04:11:35+03:00",
+      "channel": "stable",
+      "min_shipctl": "0.3.0",
+      "deprecated": false,
+      "replaced_by": null,
+      "yanked": false
     },
     {
       "id": "playwright",
       "title": "Playwright",
       "summary": "Hosted regression — pinned URLs, artifacts, flake vs defect triage.",
       "path": "documentation/tools/integrations/playwright.md",
-      "tags": ["browser", "artifacts", "flake"],
-      "group": "e2e"
+      "tags": [
+        "browser",
+        "artifacts",
+        "flake"
+      ],
+      "group": "e2e",
+      "version": "1.0.0",
+      "content_sha256": "f8b15934b9216708fec12733a2d561ecd27bb020f53bf80496f75d2377ea91c0",
+      "updated_at": "2026-04-12T04:11:35+03:00",
+      "channel": "stable",
+      "min_shipctl": "0.3.0",
+      "deprecated": false,
+      "replaced_by": null,
+      "yanked": false
     },
     {
       "id": "cursor-cloud-agent",
       "title": "Cursor Cloud Agent",
       "summary": "Cloud runtime — PR contract, secrets mirroring, prompts versioned in git.",
       "path": "documentation/tools/integrations/cursor-cloud-agent.md",
-      "tags": ["branch", "pr", "runtime"],
-      "group": "agents"
+      "tags": [
+        "branch",
+        "pr",
+        "runtime"
+      ],
+      "group": "agents",
+      "version": "1.0.0",
+      "content_sha256": "09a13439cb617bcbb15c894ee7faed5b20683c81f2859f471cb3a92bb4f893cf",
+      "updated_at": "2026-04-12T04:11:35+03:00",
+      "channel": "stable",
+      "min_shipctl": "0.3.0",
+      "deprecated": false,
+      "replaced_by": null,
+      "yanked": false
     },
     {
       "id": "chroma-local",
       "title": "Chroma (local)",
       "summary": "On-disk vector index for POST /search over docs and prompts.",
       "path": "documentation/tools/integrations/chroma-local.md",
-      "tags": ["embeddings", "local", "index"],
-      "group": "platform"
+      "tags": [
+        "embeddings",
+        "local",
+        "index"
+      ],
+      "group": "platform",
+      "version": "1.0.0",
+      "content_sha256": "5fcb6fe6c7bfe96eed2eeb07905279ff1421f6b8d846d8be78e79383b7e0fc77",
+      "updated_at": "2026-04-16T09:17:12+03:00",
+      "channel": "stable",
+      "min_shipctl": "0.3.0",
+      "deprecated": false,
+      "replaced_by": null,
+      "yanked": false
     },
     {
       "id": "methodology-api",
       "title": "Methodology API",
       "summary": "FastAPI for agents; humans use ship search, ship docs, and ship pattern|tool|… CLI against the same routes.",
       "path": "documentation/tools/backend-api.md",
-      "tags": ["http", "fastapi", "agents"],
-      "group": "platform"
+      "tags": [
+        "http",
+        "fastapi",
+        "agents"
+      ],
+      "group": "platform",
+      "version": "1.0.0",
+      "content_sha256": "03b8d562e5fedfa64b1753bdc989695c642c4524cc2ad4763857676117987dab",
+      "updated_at": "2026-04-16T09:17:12+03:00",
+      "channel": "stable",
+      "min_shipctl": "0.3.0",
+      "deprecated": false,
+      "replaced_by": null,
+      "yanked": false
     },
     {
       "id": "snyk",
       "title": "Snyk",
       "summary": "Dependency and security signal — triage with agents and release gates.",
       "path": "documentation/tools/integrations/snyk.md",
-      "tags": ["dependencies", "sca"],
-      "group": "platform"
+      "tags": [
+        "dependencies",
+        "sca"
+      ],
+      "group": "platform",
+      "version": "1.0.0",
+      "content_sha256": "c221542a0040522c5ac536e5e4adb28a7889775993aa9447a8463fbfdccf1612",
+      "updated_at": "2026-04-12T04:11:35+03:00",
+      "channel": "stable",
+      "min_shipctl": "0.3.0",
+      "deprecated": false,
+      "replaced_by": null,
+      "yanked": false
     }
   ]
 }

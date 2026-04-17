@@ -4,24 +4,65 @@ import hashlib
 import json
 import os
 import re
+import time
+import uuid
+from collections import defaultdict, deque
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import chromadb
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 
 APP_ROOT = Path(__file__).resolve().parents[2]
 CHROMA_DIR = APP_ROOT / "backend" / ".chroma"
-MANIFEST_PATH = CHROMA_DIR / "manifest.json"
+CHROMA_MANIFEST_PATH = CHROMA_DIR / "manifest.json"
 COLLECTION_NAME = "ship_methodology"
 DEFAULT_PATHS = ("documentation", "prompts", "README.md")
 PATTERNS_MANIFEST_PATH = APP_ROOT / "patterns" / "manifest.json"
 TOOLS_MANIFEST_PATH = APP_ROOT / "tools" / "manifest.json"
 WORKFLOWS_MANIFEST_PATH = APP_ROOT / "workflows" / "manifest.json"
 COLLECTIONS_MANIFEST_PATH = APP_ROOT / "collections" / "manifest.json"
+TELEMETRY_DIR = APP_ROOT / "backend" / "telemetry"
+TELEMETRY_FILE = TELEMETRY_DIR / "events.jsonl"
+
+REQUIRED_ENTRY_FIELDS = (
+    "version",
+    "content_sha256",
+    "updated_at",
+    "channel",
+    "min_shipctl",
+    "deprecated",
+    "replaced_by",
+    "yanked",
+)
+
+ARTIFACT_KINDS = {
+    "pattern": ("patterns", "patterns"),
+    "tool": ("tools", "tools"),
+    "workflow": ("workflows", "workflows"),
+    "collection": ("collections", "collections"),
+}
+
+ALLOWED_TELEMETRY_TYPES = {
+    "artifact.fetch",
+    "artifact.use",
+    "artifact.sync",
+    "feedback.submit",
+    "doctor.result",
+}
+
+TELEMETRY_PAYLOAD_DENYLIST = {"path", "code", "diff", "branch", "remote", "email"}
+
+UUID4_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+
+SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+(?:[.+-][0-9A-Za-z.+-]+)?$")
 
 
 class SearchRequest(BaseModel):
@@ -36,6 +77,13 @@ class FetchRequest(BaseModel):
     path: str | None = None
     kind: str | None = None
     resource_id: str | None = Field(default=None, alias="id")
+    version: str | None = None
+
+
+class FeedbackArtifactRef(BaseModel):
+    kind: str = Field(min_length=1)
+    id: str = Field(min_length=1)
+    version: str | None = None
 
 
 class FeedbackRequest(BaseModel):
@@ -43,6 +91,19 @@ class FeedbackRequest(BaseModel):
     summary: str = Field(min_length=10)
     recommendations: list[str] = Field(default_factory=list)
     source_context: str | None = None
+    artifact: FeedbackArtifactRef | None = None
+
+
+class TelemetryEvent(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    type: str
+    anonymous_id: str
+    timestamp: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class TelemetryBatch(BaseModel):
+    events: list[TelemetryEvent] = Field(default_factory=list)
 
 
 class IndexStore:
@@ -93,17 +154,17 @@ class IndexStore:
     def _needs_reindex(self, new_manifest: dict[str, str]) -> bool:
         if os.getenv("FORCE_REINDEX", "").lower() in {"1", "true", "yes"}:
             return True
-        if not MANIFEST_PATH.exists():
+        if not CHROMA_MANIFEST_PATH.exists():
             return True
         try:
-            old_manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+            old_manifest = json.loads(CHROMA_MANIFEST_PATH.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             return True
         return old_manifest != new_manifest
 
     def _write_manifest(self, manifest: dict[str, str]) -> None:
         CHROMA_DIR.mkdir(parents=True, exist_ok=True)
-        MANIFEST_PATH.write_text(json.dumps(manifest, ensure_ascii=True, indent=2), encoding="utf-8")
+        CHROMA_MANIFEST_PATH.write_text(json.dumps(manifest, ensure_ascii=True, indent=2), encoding="utf-8")
 
     def ensure_ready(self) -> None:
         CHROMA_DIR.mkdir(parents=True, exist_ok=True)
@@ -200,37 +261,121 @@ def safe_repo() -> tuple[str, str]:
 
 
 index_store = IndexStore()
-app = FastAPI(title="Ship Methodology API", version="0.1.0")
+app = FastAPI(title="Ship Methodology API", version="0.3.0")
 
-_patterns_cache: dict[str, Any] | None = None
-_tools_cache: dict[str, Any] | None = None
-_workflows_cache: dict[str, Any] | None = None
-_collections_cache: dict[str, Any] | None = None
+
+_manifest_cache: dict[str, dict[str, Any]] = {}
+
+
+def _clear_manifest_cache() -> None:
+    """Test helper: drop cached manifests so filesystem changes take effect."""
+    _manifest_cache.clear()
+
+
+def _load_manifest(
+    manifest_path: Path,
+    array_key: str,
+    cache_key: str,
+    kind_label: str,
+) -> dict[str, Any]:
+    cached = _manifest_cache.get(cache_key)
+    if cached is not None:
+        return cached
+    if not manifest_path.is_file():
+        data = {"version": 0, array_key: [], "description": ""}
+        _manifest_cache[cache_key] = data
+        return data
+    try:
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=500, detail=f"{manifest_path.name} is invalid JSON."
+        ) from exc
+    if not isinstance(data.get(array_key), list):
+        raise HTTPException(
+            status_code=500,
+            detail=f"{manifest_path.name} must contain a `{array_key}` array.",
+        )
+    for idx, entry in enumerate(data[array_key]):
+        if not isinstance(entry, dict):
+            raise HTTPException(
+                status_code=500,
+                detail=f"{manifest_path.name} entry {idx} is not an object.",
+            )
+        missing = [f for f in REQUIRED_ENTRY_FIELDS if f not in entry]
+        if missing:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"{manifest_path.name} entry `{entry.get('id', idx)}` is missing "
+                    f"required {kind_label} fields: {', '.join(missing)}. "
+                    "Run scripts/stamp_artifact_versions.py."
+                ),
+            )
+    _manifest_cache[cache_key] = data
+    return data
 
 
 def load_patterns_manifest() -> dict[str, Any]:
-    global _patterns_cache
-    if _patterns_cache is not None:
-        return _patterns_cache
-    if not PATTERNS_MANIFEST_PATH.is_file():
-        _patterns_cache = {"version": 0, "patterns": [], "description": ""}
-        return _patterns_cache
-    try:
-        data = json.loads(PATTERNS_MANIFEST_PATH.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=500, detail="patterns/manifest.json is invalid JSON.") from exc
-    if not isinstance(data.get("patterns"), list):
-        raise HTTPException(status_code=500, detail="patterns manifest must contain a patterns array.")
-    _patterns_cache = data
-    return _patterns_cache
+    return _load_manifest(PATTERNS_MANIFEST_PATH, "patterns", "patterns", "pattern")
 
 
-def pattern_by_id(pattern_id: str) -> dict[str, Any] | None:
-    data = load_patterns_manifest()
-    for p in data["patterns"]:
-        if isinstance(p, dict) and p.get("id") == pattern_id:
-            return p
+def load_tools_manifest() -> dict[str, Any]:
+    return _load_manifest(TOOLS_MANIFEST_PATH, "tools", "tools", "tool")
+
+
+def load_workflows_manifest() -> dict[str, Any]:
+    return _load_manifest(WORKFLOWS_MANIFEST_PATH, "workflows", "workflows", "workflow")
+
+
+def load_collections_manifest() -> dict[str, Any]:
+    return _load_manifest(
+        COLLECTIONS_MANIFEST_PATH, "collections", "collections", "collection"
+    )
+
+
+MANIFEST_LOADERS = {
+    "pattern": load_patterns_manifest,
+    "tool": load_tools_manifest,
+    "workflow": load_workflows_manifest,
+    "collection": load_collections_manifest,
+}
+
+
+def _catalog_item_by_id(items: Any, item_id: str) -> dict[str, Any] | None:
+    if not isinstance(items, list):
+        return None
+    for entry in items:
+        if isinstance(entry, dict) and entry.get("id") == item_id:
+            return entry
     return None
+
+
+def _filter_entries_by_channel(entries: list[dict[str, Any]], channel: str) -> list[dict[str, Any]]:
+    channel = (channel or "stable").lower()
+    if channel == "edge":
+        return list(entries)
+    return [e for e in entries if (e.get("channel") or "stable").lower() == "stable"]
+
+
+def _entry_summary(entry: dict[str, Any], kind: str) -> dict[str, Any]:
+    return {
+        "kind": kind,
+        "id": entry.get("id"),
+        "title": entry.get("title"),
+        "summary": entry.get("summary"),
+        "path": entry.get("path"),
+        "tags": entry.get("tags") or [],
+        "group": entry.get("group"),
+        "version": entry.get("version"),
+        "content_sha256": entry.get("content_sha256"),
+        "updated_at": entry.get("updated_at"),
+        "channel": entry.get("channel"),
+        "min_shipctl": entry.get("min_shipctl"),
+        "deprecated": bool(entry.get("deprecated", False)),
+        "replaced_by": entry.get("replaced_by"),
+        "yanked": bool(entry.get("yanked", False)),
+    }
 
 
 def read_repo_markdown(rel_path: str) -> str:
@@ -247,6 +392,47 @@ def read_repo_markdown(rel_path: str) -> str:
     return candidate.read_text(encoding="utf-8", errors="ignore")
 
 
+def _resolve_entry_with_version(
+    kind: str,
+    item_id: str,
+    version: str | None,
+) -> dict[str, Any]:
+    loader = MANIFEST_LOADERS.get(kind)
+    if loader is None:
+        raise HTTPException(status_code=400, detail=f"Unknown kind: {kind}")
+    _, array_key = ARTIFACT_KINDS[kind]
+    data = loader()
+    entry = _catalog_item_by_id(data.get(array_key), item_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"Unknown {kind} id.")
+    current_version = entry.get("version")
+    if version and version != current_version:
+        raise HTTPException(
+            status_code=404,
+            detail=f"unknown version; current is {current_version}",
+        )
+    if entry.get("yanked"):
+        replaced = entry.get("replaced_by")
+        detail = f"replaced_by={replaced}" if replaced else "artifact yanked"
+        raise HTTPException(status_code=410, detail=detail)
+    return entry
+
+
+def _full_entry_response(entry: dict[str, Any], kind: str) -> dict[str, Any]:
+    rel = entry.get("path")
+    if not isinstance(rel, str) or not rel.strip():
+        raise HTTPException(status_code=500, detail=f"{kind} entry has no path.")
+    content = read_repo_markdown(rel)
+    out = _entry_summary(entry, kind)
+    out["content"] = content
+    if entry.get("deprecated"):
+        replaced = entry.get("replaced_by")
+        out["deprecation_notice"] = (
+            f"replaced_by={replaced}" if replaced else "deprecated"
+        )
+    return out
+
+
 @app.on_event("startup")
 def startup() -> None:
     # Allow API boot without OPENAI_API_KEY; /search will fail with explicit error until configured.
@@ -257,162 +443,189 @@ def startup() -> None:
 
 
 @app.get("/patterns")
-def list_patterns() -> dict[str, Any]:
-    """Curated org patterns (manifest entries without full file bodies)."""
+def list_patterns(channel: str = Query(default="stable")) -> dict[str, Any]:
     data = load_patterns_manifest()
-    slim = []
-    for p in data.get("patterns", []):
-        if not isinstance(p, dict):
-            continue
-        slim.append(
-            {
-                "id": p.get("id"),
-                "title": p.get("title"),
-                "summary": p.get("summary"),
-                "path": p.get("path"),
-                "tags": p.get("tags") or [],
-                "group": p.get("group"),
-            }
-        )
-    return {"version": data.get("version", 1), "description": data.get("description", ""), "patterns": slim}
-
-
-@app.get("/patterns/{pattern_id}")
-def get_pattern(pattern_id: str) -> dict[str, Any]:
-    """Single pattern metadata plus full markdown body."""
-    meta = pattern_by_id(pattern_id)
-    if not meta:
-        raise HTTPException(status_code=404, detail="Unknown pattern id.")
-    rel = meta.get("path")
-    if not isinstance(rel, str) or not rel.strip():
-        raise HTTPException(status_code=500, detail="Pattern entry has no path.")
-    content = read_repo_markdown(rel)
+    entries = [e for e in data.get("patterns", []) if isinstance(e, dict)]
+    filtered = _filter_entries_by_channel(entries, channel)
     return {
-        "id": meta.get("id"),
-        "title": meta.get("title"),
-        "summary": meta.get("summary"),
-        "path": rel,
-        "tags": meta.get("tags") or [],
-        "group": meta.get("group"),
-        "content": content,
+        "version": data.get("version", 1),
+        "description": data.get("description", ""),
+        "patterns": [_entry_summary(e, "pattern") for e in filtered],
     }
 
 
-def load_tools_manifest() -> dict[str, Any]:
-    global _tools_cache
-    if _tools_cache is not None:
-        return _tools_cache
-    if not TOOLS_MANIFEST_PATH.is_file():
-        _tools_cache = {"version": 0, "tools": [], "description": ""}
-        return _tools_cache
-    try:
-        data = json.loads(TOOLS_MANIFEST_PATH.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=500, detail="tools/manifest.json is invalid JSON.") from exc
-    if not isinstance(data.get("tools"), list):
-        raise HTTPException(status_code=500, detail="tools manifest must contain a tools array.")
-    _tools_cache = data
-    return _tools_cache
+@app.get("/patterns/{item_id}")
+def get_pattern(item_id: str, version: str | None = Query(default=None)) -> dict[str, Any]:
+    entry = _resolve_entry_with_version("pattern", item_id, version)
+    return _full_entry_response(entry, "pattern")
 
 
-def load_workflows_manifest() -> dict[str, Any]:
-    global _workflows_cache
-    if _workflows_cache is not None:
-        return _workflows_cache
-    if not WORKFLOWS_MANIFEST_PATH.is_file():
-        _workflows_cache = {"version": 0, "workflows": [], "description": ""}
-        return _workflows_cache
-    try:
-        data = json.loads(WORKFLOWS_MANIFEST_PATH.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=500, detail="workflows/manifest.json is invalid JSON.") from exc
-    if not isinstance(data.get("workflows"), list):
-        raise HTTPException(status_code=500, detail="workflows manifest must contain a workflows array.")
-    _workflows_cache = data
-    return _workflows_cache
-
-
-def load_collections_manifest() -> dict[str, Any]:
-    global _collections_cache
-    if _collections_cache is not None:
-        return _collections_cache
-    if not COLLECTIONS_MANIFEST_PATH.is_file():
-        _collections_cache = {"version": 0, "collections": [], "description": ""}
-        return _collections_cache
-    try:
-        data = json.loads(COLLECTIONS_MANIFEST_PATH.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=500, detail="collections/manifest.json is invalid JSON.") from exc
-    if not isinstance(data.get("collections"), list):
-        raise HTTPException(status_code=500, detail="collections manifest must contain a collections array.")
-    _collections_cache = data
-    return _collections_cache
-
-
-def _catalog_item_by_id(items: Any, item_id: str) -> dict[str, Any] | None:
-    if not isinstance(items, list):
-        return None
-    for p in items:
-        if isinstance(p, dict) and p.get("id") == item_id:
-            return p
-    return None
+@app.get("/patterns/{item_id}/versions")
+def list_pattern_versions(item_id: str) -> dict[str, Any]:
+    return _versions_for_kind("pattern", item_id)
 
 
 @app.get("/tools")
-def list_tools() -> dict[str, Any]:
-    """Full `tools/manifest.json` (CLI `ship tool list --json`)."""
-    return load_tools_manifest()
+def list_tools(channel: str = Query(default="stable")) -> dict[str, Any]:
+    data = load_tools_manifest()
+    entries = [e for e in data.get("tools", []) if isinstance(e, dict)]
+    filtered = _filter_entries_by_channel(entries, channel)
+    return {
+        "version": data.get("version", 1),
+        "description": data.get("description", ""),
+        "tools": [_entry_summary(e, "tool") for e in filtered],
+    }
 
 
 @app.get("/tools/{item_id}")
-def get_tool(item_id: str) -> dict[str, Any]:
-    data = load_tools_manifest()
-    meta = _catalog_item_by_id(data.get("tools"), item_id)
-    if not meta:
-        raise HTTPException(status_code=404, detail="Unknown tool id.")
-    rel = meta.get("path")
-    if not isinstance(rel, str) or not rel.strip():
-        raise HTTPException(status_code=500, detail="Tool entry has no path.")
-    content = read_repo_markdown(rel)
-    return {**meta, "content": content}
+def get_tool(item_id: str, version: str | None = Query(default=None)) -> dict[str, Any]:
+    entry = _resolve_entry_with_version("tool", item_id, version)
+    return _full_entry_response(entry, "tool")
+
+
+@app.get("/tools/{item_id}/versions")
+def list_tool_versions(item_id: str) -> dict[str, Any]:
+    return _versions_for_kind("tool", item_id)
 
 
 @app.get("/workflows")
-def list_workflows() -> dict[str, Any]:
-    """Full `workflows/manifest.json`."""
-    return load_workflows_manifest()
+def list_workflows(channel: str = Query(default="stable")) -> dict[str, Any]:
+    data = load_workflows_manifest()
+    entries = [e for e in data.get("workflows", []) if isinstance(e, dict)]
+    filtered = _filter_entries_by_channel(entries, channel)
+    return {
+        "version": data.get("version", 1),
+        "description": data.get("description", ""),
+        "workflows": [_entry_summary(e, "workflow") for e in filtered],
+    }
 
 
 @app.get("/workflows/{item_id}")
-def get_workflow(item_id: str) -> dict[str, Any]:
-    data = load_workflows_manifest()
-    meta = _catalog_item_by_id(data.get("workflows"), item_id)
-    if not meta:
-        raise HTTPException(status_code=404, detail="Unknown workflow id.")
-    rel = meta.get("path")
-    if not isinstance(rel, str) or not rel.strip():
-        raise HTTPException(status_code=500, detail="Workflow entry has no path.")
-    content = read_repo_markdown(rel)
-    return {**meta, "content": content}
+def get_workflow(item_id: str, version: str | None = Query(default=None)) -> dict[str, Any]:
+    entry = _resolve_entry_with_version("workflow", item_id, version)
+    return _full_entry_response(entry, "workflow")
+
+
+@app.get("/workflows/{item_id}/versions")
+def list_workflow_versions(item_id: str) -> dict[str, Any]:
+    return _versions_for_kind("workflow", item_id)
 
 
 @app.get("/collections")
-def list_collections() -> dict[str, Any]:
-    """Full `collections/manifest.json`."""
-    return load_collections_manifest()
+def list_collections(channel: str = Query(default="stable")) -> dict[str, Any]:
+    data = load_collections_manifest()
+    entries = [e for e in data.get("collections", []) if isinstance(e, dict)]
+    filtered = _filter_entries_by_channel(entries, channel)
+    return {
+        "version": data.get("version", 1),
+        "description": data.get("description", ""),
+        "collections": [_entry_summary(e, "collection") for e in filtered],
+    }
 
 
 @app.get("/collections/{item_id}")
-def get_collection(item_id: str) -> dict[str, Any]:
-    data = load_collections_manifest()
-    meta = _catalog_item_by_id(data.get("collections"), item_id)
-    if not meta:
-        raise HTTPException(status_code=404, detail="Unknown collection id.")
-    rel = meta.get("path")
-    if not isinstance(rel, str) or not rel.strip():
-        raise HTTPException(status_code=500, detail="Collection entry has no path.")
-    content = read_repo_markdown(rel)
-    return {**meta, "content": content}
+def get_collection(item_id: str, version: str | None = Query(default=None)) -> dict[str, Any]:
+    entry = _resolve_entry_with_version("collection", item_id, version)
+    return _full_entry_response(entry, "collection")
+
+
+@app.get("/collections/{item_id}/versions")
+def list_collection_versions(item_id: str) -> dict[str, Any]:
+    return _versions_for_kind("collection", item_id)
+
+
+def _versions_for_kind(kind: str, item_id: str) -> dict[str, Any]:
+    loader = MANIFEST_LOADERS[kind]
+    _, array_key = ARTIFACT_KINDS[kind]
+    data = loader()
+    entry = _catalog_item_by_id(data.get(array_key), item_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"Unknown {kind} id.")
+    return {
+        "id": entry.get("id"),
+        "versions": [
+            {
+                "version": entry.get("version"),
+                "updated_at": entry.get("updated_at"),
+                "channel": entry.get("channel"),
+                "deprecated": bool(entry.get("deprecated", False)),
+                "yanked": bool(entry.get("yanked", False)),
+            }
+        ],
+    }
+
+
+def _discover_doc_entries() -> list[dict[str, Any]]:
+    """Auto-discover `doc` kind artifacts under documentation/ and prompts/, plus README.md."""
+    doc_paths: list[Path] = []
+    for root in ("documentation", "prompts"):
+        base = APP_ROOT / root
+        if base.is_dir():
+            for suffix in (".md", ".txt"):
+                doc_paths.extend(sorted(base.rglob(f"*{suffix}")))
+    readme = APP_ROOT / "README.md"
+    if readme.is_file():
+        doc_paths.append(readme)
+
+    seen: set[Path] = set()
+    entries: list[dict[str, Any]] = []
+    for path in doc_paths:
+        if path in seen or not path.is_file():
+            continue
+        seen.add(path)
+        rel = str(path.relative_to(APP_ROOT))
+        sha = hashlib.sha256(path.read_bytes()).hexdigest()
+        updated_at = datetime.fromtimestamp(
+            path.stat().st_mtime, tz=timezone.utc
+        ).isoformat()
+        entries.append(
+            {
+                "kind": "doc",
+                "id": rel,
+                "version": "1.0.0",
+                "content_sha256": sha,
+                "updated_at": updated_at,
+                "channel": "stable",
+                "deprecated": False,
+                "yanked": False,
+                "path": rel,
+            }
+        )
+    return entries
+
+
+@app.get("/manifest")
+def get_manifest(channel: str = Query(default="edge")) -> dict[str, Any]:
+    """Flat aggregate manifest across all kinds plus auto-discovered docs."""
+    entries: list[dict[str, Any]] = []
+
+    for kind, (_manifest_name, array_key) in ARTIFACT_KINDS.items():
+        loader = MANIFEST_LOADERS[kind]
+        data = loader()
+        items = [e for e in data.get(array_key, []) if isinstance(e, dict)]
+        filtered = _filter_entries_by_channel(items, channel)
+        for entry in filtered:
+            entries.append(
+                {
+                    "kind": kind,
+                    "id": entry.get("id"),
+                    "version": entry.get("version"),
+                    "content_sha256": entry.get("content_sha256"),
+                    "updated_at": entry.get("updated_at"),
+                    "channel": entry.get("channel"),
+                    "deprecated": bool(entry.get("deprecated", False)),
+                    "yanked": bool(entry.get("yanked", False)),
+                    "path": entry.get("path"),
+                }
+            )
+
+    entries.extend(_discover_doc_entries())
+
+    return {
+        "version": 1,
+        "generated_at": datetime.now(tz=timezone.utc).isoformat(),
+        "entries": entries,
+    }
 
 
 @app.post("/search")
@@ -428,33 +641,25 @@ def fetch(req: FetchRequest) -> dict[str, Any]:
     path = (req.path or "").strip()
     rid = (req.resource_id or "").strip()
     kind = (req.kind or "").strip().lower() if req.kind else ""
+    version = (req.version or "").strip() or None
 
     if kind and rid:
-        allowed = {"pattern", "tool", "workflow", "collection"}
-        if kind not in allowed:
+        if kind not in ARTIFACT_KINDS:
             raise HTTPException(
                 status_code=400,
-                detail=f"kind must be one of: {', '.join(sorted(allowed))}",
+                detail=f"kind must be one of: {', '.join(sorted(ARTIFACT_KINDS))}",
             )
-        if kind == "pattern":
-            out = dict(get_pattern(rid))
-        elif kind == "tool":
-            out = dict(get_tool(rid))
-        elif kind == "workflow":
-            out = dict(get_workflow(rid))
-        else:
-            out = dict(get_collection(rid))
-        out["kind"] = kind
-        return out
+        entry = _resolve_entry_with_version(kind, rid, version)
+        return _full_entry_response(entry, kind)
 
     if path:
         candidate = (APP_ROOT / path).resolve()
-        if not candidate.exists() or not candidate.is_file():
-            raise HTTPException(status_code=404, detail="File not found.")
         try:
-            candidate.relative_to(APP_ROOT)
+            candidate.relative_to(APP_ROOT.resolve())
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="Path is outside repository.") from exc
+        if not candidate.exists() or not candidate.is_file():
+            raise HTTPException(status_code=404, detail="File not found.")
         if candidate.suffix.lower() not in {".md", ".txt"}:
             raise HTTPException(status_code=400, detail="Only markdown/text files are fetchable.")
         content = candidate.read_text(encoding="utf-8", errors="ignore")
@@ -470,6 +675,28 @@ def fetch(req: FetchRequest) -> dict[str, Any]:
     )
 
 
+# --- Feedback --------------------------------------------------------------
+
+# Injected by tests / configurable at runtime; falls back to a real AsyncClient.
+_FEEDBACK_HTTP_CLIENT_FACTORY: Any = None
+
+
+def _feedback_http_client() -> httpx.AsyncClient:
+    if _FEEDBACK_HTTP_CLIENT_FACTORY is not None:
+        return _FEEDBACK_HTTP_CLIENT_FACTORY()
+    return httpx.AsyncClient(timeout=20.0)
+
+
+def _github_labels_for_artifact(artifact: FeedbackArtifactRef | None) -> list[str]:
+    labels = ["feedback", "retro"]
+    if artifact is None:
+        return labels
+    labels.append(f"artifact:{artifact.kind}:{artifact.id}")
+    if artifact.version:
+        labels.append(f"version:{artifact.version}")
+    return labels
+
+
 @app.post("/feedback")
 async def feedback(req: FeedbackRequest) -> dict[str, Any]:
     github_token = os.getenv("GITHUB_TOKEN", "").strip()
@@ -479,8 +706,32 @@ async def feedback(req: FeedbackRequest) -> dict[str, Any]:
     owner, repo = safe_repo()
 
     rec_block = "\n".join([f"- {item}" for item in req.recommendations]) or "- No recommendations provided."
+    artifact_block = ""
+    meta_footer = ""
+    labels = _github_labels_for_artifact(req.artifact)
+    if req.artifact:
+        artifact_block = (
+            "### Artifact\n"
+            f"{req.artifact.kind}:{req.artifact.id}"
+            + (f"@{req.artifact.version}" if req.artifact.version else "")
+            + "\n\n"
+        )
+        meta_footer = (
+            "\n\n---\n<!-- ship-feedback-meta: "
+            + json.dumps(
+                {
+                    "kind": req.artifact.kind,
+                    "id": req.artifact.id,
+                    "version": req.artifact.version,
+                },
+                ensure_ascii=False,
+            )
+            + " -->\n"
+        )
+
     raw_body = (
         "## Retro feedback from Ship backend\n\n"
+        f"{artifact_block}"
         f"### Summary\n{req.summary}\n\n"
         f"### Recommendations\n{rec_block}\n\n"
         f"### Source context\n{req.source_context or 'N/A'}\n"
@@ -494,22 +745,237 @@ async def feedback(req: FeedbackRequest) -> dict[str, Any]:
             "_Sensitive fragments were detected and generalized before issue creation._\n\n"
             + safe_body
         )
+    safe_body = safe_body + meta_footer
 
-    url = f"https://api.github.com/repos/{owner}/{repo}/issues"
     headers = {
         "Authorization": f"Bearer {github_token}",
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    payload = {"title": safe_title, "body": safe_body, "labels": ["feedback", "retro"]}
 
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        resp = await client.post(url, headers=headers, json=payload)
-    if resp.status_code >= 300:
-        raise HTTPException(status_code=502, detail=f"GitHub issue creation failed: {resp.text}")
-    data = resp.json()
+    async with _feedback_http_client() as client:
+        # Dedup: look for an existing open issue carrying the artifact+version labels.
+        dedup_labels = [lab for lab in labels if lab.startswith("artifact:") or lab.startswith("version:")]
+        deduplicated = False
+        existing_issue: dict[str, Any] | None = None
+        if req.artifact and dedup_labels:
+            list_url = f"https://api.github.com/repos/{owner}/{repo}/issues"
+            resp = await client.get(
+                list_url,
+                headers=headers,
+                params={"labels": ",".join(dedup_labels), "state": "open"},
+            )
+            if resp.status_code < 300:
+                try:
+                    items = resp.json()
+                except ValueError:
+                    items = []
+                if isinstance(items, list) and items:
+                    existing_issue = items[0]
+
+        if existing_issue is not None:
+            issue_number = existing_issue.get("number")
+            comment_url = (
+                f"https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}/comments"
+            )
+            resp = await client.post(
+                comment_url,
+                headers=headers,
+                json={"body": safe_body},
+            )
+            if resp.status_code >= 300:
+                raise HTTPException(status_code=502, detail=f"GitHub comment failed: {resp.text}")
+            deduplicated = True
+            return {
+                "issue_url": existing_issue.get("html_url"),
+                "issue_number": issue_number,
+                "labels": existing_issue.get("labels") or labels,
+                "redactions_applied": redactions,
+                "deduplicated": True,
+            }
+
+        create_url = f"https://api.github.com/repos/{owner}/{repo}/issues"
+        payload = {"title": safe_title, "body": safe_body, "labels": labels}
+        resp = await client.post(create_url, headers=headers, json=payload)
+        if resp.status_code >= 300:
+            raise HTTPException(status_code=502, detail=f"GitHub issue creation failed: {resp.text}")
+        data = resp.json()
+
     return {
         "issue_url": data.get("html_url"),
         "issue_number": data.get("number"),
+        "labels": labels,
         "redactions_applied": redactions,
+        "deduplicated": deduplicated,
     }
+
+
+# --- Telemetry -------------------------------------------------------------
+
+_TELEMETRY_BUCKETS: dict[str, deque[float]] = defaultdict(deque)
+_TELEMETRY_RATE_WINDOW_SEC = 60.0
+_TELEMETRY_RATE_LIMIT = 60
+_TELEMETRY_MAX_BATCH = 100
+
+
+def _rate_limit_check(anon_id: str) -> bool:
+    now = time.monotonic()
+    bucket = _TELEMETRY_BUCKETS[anon_id]
+    while bucket and (now - bucket[0]) > _TELEMETRY_RATE_WINDOW_SEC:
+        bucket.popleft()
+    if len(bucket) >= _TELEMETRY_RATE_LIMIT:
+        return False
+    bucket.append(now)
+    return True
+
+
+def _reset_rate_limits() -> None:
+    """Test helper."""
+    _TELEMETRY_BUCKETS.clear()
+
+
+def _find_denied_keys(obj: Any) -> list[str]:
+    found: list[str] = []
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if isinstance(key, str) and key.lower() in TELEMETRY_PAYLOAD_DENYLIST:
+                    found.append(key)
+                walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(obj)
+    return found
+
+
+def _telemetry_file_path() -> Path:
+    override = os.getenv("SHIP_TELEMETRY_DIR", "").strip()
+    if override:
+        base = Path(override)
+        if not base.is_absolute():
+            base = APP_ROOT / base
+        base.mkdir(parents=True, exist_ok=True)
+        return base / "events.jsonl"
+    TELEMETRY_DIR.mkdir(parents=True, exist_ok=True)
+    return TELEMETRY_FILE
+
+
+@app.post("/telemetry")
+def telemetry(batch: TelemetryBatch, response: Response) -> dict[str, Any]:
+    if len(batch.events) == 0:
+        return {"accepted": 0, "rejected": 0, "reasons": []}
+    if len(batch.events) > _TELEMETRY_MAX_BATCH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"max {_TELEMETRY_MAX_BATCH} events per request",
+        )
+
+    # Validate anonymous_id + rate limit on the first anon id in the batch.
+    # All events are expected to share the same anonymous_id; enforce it.
+    anon_ids = {ev.anonymous_id for ev in batch.events}
+    if len(anon_ids) != 1:
+        raise HTTPException(status_code=400, detail="all events must share one anonymous_id")
+    anon_id = next(iter(anon_ids))
+    if not UUID4_RE.match(anon_id or ""):
+        raise HTTPException(status_code=400, detail="anonymous_id must be a UUIDv4")
+
+    if not _rate_limit_check(anon_id):
+        raise HTTPException(status_code=429, detail="rate limit exceeded")
+
+    accepted = 0
+    rejected = 0
+    reasons: list[str] = []
+    to_write: list[dict[str, Any]] = []
+    received_at = datetime.now(tz=timezone.utc).isoformat()
+
+    for event in batch.events:
+        if event.type not in ALLOWED_TELEMETRY_TYPES:
+            rejected += 1
+            reasons.append(f"type:{event.type}:unknown")
+            continue
+        denied = _find_denied_keys(event.payload)
+        if denied:
+            raise HTTPException(
+                status_code=400,
+                detail=f"payload contains denied keys: {', '.join(sorted(set(denied)))}",
+            )
+        record = {
+            "type": event.type,
+            "anonymous_id": event.anonymous_id,
+            "timestamp": event.timestamp,
+            "payload": event.payload,
+            "received_at": received_at,
+        }
+        to_write.append(record)
+        accepted += 1
+
+    if to_write:
+        path = _telemetry_file_path()
+        with path.open("a", encoding="utf-8") as fh:
+            for record in to_write:
+                fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    response.status_code = 202
+    return {"accepted": accepted, "rejected": rejected, "reasons": reasons}
+
+
+@app.delete("/telemetry/{anonymous_id}")
+def telemetry_delete(
+    anonymous_id: str,
+    x_ship_confirm: str | None = Header(default=None, alias="X-Ship-Confirm"),
+) -> dict[str, Any]:
+    if not UUID4_RE.match(anonymous_id or ""):
+        raise HTTPException(status_code=400, detail="anonymous_id must be a UUIDv4")
+    if (x_ship_confirm or "").lower() != "yes":
+        raise HTTPException(status_code=400, detail="X-Ship-Confirm: yes header required")
+
+    path = _telemetry_file_path()
+    if not path.is_file():
+        return {"deleted": 0}
+
+    kept: list[str] = []
+    deleted = 0
+    with path.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.rstrip("\n")
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                kept.append(line)
+                continue
+            if record.get("anonymous_id") == anonymous_id:
+                deleted += 1
+            else:
+                kept.append(line)
+
+    with path.open("w", encoding="utf-8") as fh:
+        for line in kept:
+            fh.write(line + "\n")
+    return {"deleted": deleted}
+
+
+@app.get("/telemetry/{anonymous_id}/export")
+def telemetry_export(anonymous_id: str) -> dict[str, Any]:
+    if not UUID4_RE.match(anonymous_id or ""):
+        raise HTTPException(status_code=400, detail="anonymous_id must be a UUIDv4")
+    path = _telemetry_file_path()
+    if not path.is_file():
+        return {"events": []}
+    events: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if record.get("anonymous_id") == anonymous_id:
+                events.append(record)
+    return {"events": events}

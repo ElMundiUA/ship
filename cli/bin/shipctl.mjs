@@ -6,6 +6,7 @@ import { patternCommand } from "../lib/commands/patterns.mjs";
 import { resourceManifestCommand } from "../lib/commands/manifest-catalog.mjs";
 import { printHelp } from "../lib/commands/help.mjs";
 import { initCommand } from "../lib/commands/init.mjs";
+import { doctorCommand } from "../lib/commands/doctor.mjs";
 
 const raw = process.argv.slice(2);
 const { _, ...g } = extractGlobalArgv(raw);
@@ -60,7 +61,60 @@ try {
     process.exit(0);
   }
 
-  console.error(`Unknown command: ${cmd}\nRun: ship help`);
+  if (cmd === "doctor") {
+    await doctorCommand(ctx, rest);
+    process.exit(0);
+  }
+
+  if (cmd === "config") {
+    const { configCommand } = await import("../lib/commands/config.mjs");
+    await configCommand(ctx, rest);
+    process.exit(0);
+  }
+
+  if (cmd === "sync") {
+    const { syncCommand } = await import("../lib/commands/sync.mjs");
+    await syncCommand(ctx, rest);
+    process.exit(0);
+  }
+
+  if (cmd === "doctor") {
+    const { doctorCommand } = await import("../lib/commands/doctor.mjs");
+    await doctorCommand(ctx, rest);
+    process.exit(0);
+  }
+
+  if (cmd === "verify") {
+    const { verifyCommand } = await import("../lib/commands/verify.mjs");
+    await verifyCommand(ctx, rest);
+    process.exit(0);
+  }
+
+  if (cmd === "telemetry") {
+    const { telemetryCommand } = await import("../lib/commands/telemetry.mjs");
+    await telemetryCommand(ctx, rest);
+    process.exit(0);
+  }
+
+  if (cmd === "feedback") {
+    const { feedbackCommand } = await import("../lib/commands/feedback.mjs");
+    await feedbackCommand(ctx, rest);
+    process.exit(0);
+  }
+
+  if (cmd === "new") {
+    const { newCommand } = await import("../lib/commands/new.mjs");
+    await newCommand(ctx, rest);
+    process.exit(0);
+  }
+
+  if (cmd === "bootstrap") {
+    const { bootstrapCommand } = await import("../lib/commands/bootstrap.mjs");
+    await bootstrapCommand(ctx, rest);
+    process.exit(0);
+  }
+
+  console.error(`Unknown command: ${cmd}\nRun: shipctl help`);
   process.exit(1);
 } catch (err) {
   console.error(err instanceof Error ? err.message : err);

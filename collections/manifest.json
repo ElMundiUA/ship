@@ -7,24 +7,461 @@
       "title": "Web application",
       "summary": "SDLC grid, PR previews, hosted Playwright, and audit lanes — picked for browser apps.",
       "path": "documentation/collections/web-application.md",
-      "tags": ["web", "e2e", "spa"],
-      "group": "product"
+      "tags": [
+        "web",
+        "e2e",
+        "spa"
+      ],
+      "group": "product",
+      "version": "1.0.0",
+      "content_sha256": "b3e64ca81a8e2327936bd043702095ed31c5989194f7557c461f41a377dd36fe",
+      "updated_at": "2026-04-12T04:11:35+03:00",
+      "channel": "stable",
+      "min_shipctl": "0.3.0",
+      "deprecated": false,
+      "replaced_by": null,
+      "yanked": false
     },
     {
       "id": "api-backend",
       "title": "API / backend service",
       "summary": "SDLC with CI gates and security/architecture audits; lighter on browser E2E, heavier on contracts.",
       "path": "documentation/collections/api-backend.md",
-      "tags": ["api", "contracts", "services"],
-      "group": "product"
+      "tags": [
+        "api",
+        "contracts",
+        "services"
+      ],
+      "group": "product",
+      "version": "1.0.0",
+      "content_sha256": "6846dfbd55314a1ae0858483bb12afddcc17d1659c8c853b79948f2aeec4409c",
+      "updated_at": "2026-04-12T04:11:35+03:00",
+      "channel": "stable",
+      "min_shipctl": "0.3.0",
+      "deprecated": false,
+      "replaced_by": null,
+      "yanked": false
     },
     {
       "id": "adoption-minimum",
       "title": "Adoption minimum",
       "summary": "Capability overview, methodology API, and onboarding prompts before a full scheduled grid.",
       "path": "documentation/collections/adoption-minimum.md",
-      "tags": ["starter", "agents", "api"],
-      "group": "starter"
+      "tags": [
+        "starter",
+        "agents",
+        "api"
+      ],
+      "group": "starter",
+      "version": "1.0.0",
+      "content_sha256": "3407870c3a057f5fd6922e85fc51c11a115ea40d85a46d0e302af91a01167078",
+      "updated_at": "2026-04-12T04:11:35+03:00",
+      "channel": "stable",
+      "min_shipctl": "0.3.0",
+      "deprecated": false,
+      "replaced_by": null,
+      "yanked": false
+    },
+    {
+      "id": "agent-rules-cursor",
+      "title": "Agent rules — Cursor",
+      "summary": "Install the Ship artifacts protocol as a Cursor MDC rule.",
+      "path": "documentation/collections/agent-rules-cursor.md",
+      "tags": [
+        "agent-rules",
+        "cursor"
+      ],
+      "group": "agent-rules",
+      "version": "1.0.0",
+      "content_sha256": "8709ab4826579eed38c7ffad7f9ce456281d8c8bc13664f4e96ceddcb7e308ee",
+      "updated_at": "2026-04-17T21:15:32.595569+00:00",
+      "channel": "stable",
+      "min_shipctl": "0.3.0",
+      "deprecated": false,
+      "replaced_by": null,
+      "yanked": false
+    },
+    {
+      "id": "agent-rules-codex",
+      "title": "Agent rules — Codex (AGENTS.md)",
+      "summary": "Append the Ship artifacts protocol to AGENTS.md for Codex-family agents.",
+      "path": "documentation/collections/agent-rules-codex.md",
+      "tags": [
+        "agent-rules",
+        "codex"
+      ],
+      "group": "agent-rules",
+      "version": "1.0.0",
+      "content_sha256": "85b9274c25b7e99fb9f86963bfc94f12b9c5311a26b5878aad32ba1677707eaa",
+      "updated_at": "2026-04-17T21:15:32.595670+00:00",
+      "channel": "stable",
+      "min_shipctl": "0.3.0",
+      "deprecated": false,
+      "replaced_by": null,
+      "yanked": false
+    },
+    {
+      "id": "agent-rules-claude",
+      "title": "Agent rules — Claude Code (CLAUDE.md)",
+      "summary": "Append the Ship artifacts protocol to CLAUDE.md for Claude Code.",
+      "path": "documentation/collections/agent-rules-claude.md",
+      "tags": [
+        "agent-rules",
+        "claude"
+      ],
+      "group": "agent-rules",
+      "version": "1.0.0",
+      "content_sha256": "06cf7b7a2c6bea930616d8c0de711e24bdcae217455c9203ebee29704060c0ad",
+      "updated_at": "2026-04-17T21:15:32.595749+00:00",
+      "channel": "stable",
+      "min_shipctl": "0.3.0",
+      "deprecated": false,
+      "replaced_by": null,
+      "yanked": false
+    },
+    {
+      "id": "agent-rules-aider",
+      "title": "Agent rules — Aider",
+      "summary": "Append the Ship artifacts protocol to AIDER.md for Aider pair sessions.",
+      "path": "documentation/collections/agent-rules-aider.md",
+      "tags": [
+        "agent-rules",
+        "aider"
+      ],
+      "group": "agent-rules",
+      "version": "1.0.0",
+      "content_sha256": "4edb15a7f066f2a7e82bc4edbc4d58d65a7b84514706f5a3920d99f97af87756",
+      "updated_at": "2026-04-17T21:15:32.595819+00:00",
+      "channel": "stable",
+      "min_shipctl": "0.3.0",
+      "deprecated": false,
+      "replaced_by": null,
+      "yanked": false
+    },
+    {
+      "id": "agent-rules-cline",
+      "title": "Agent rules — Cline",
+      "summary": "Install the Ship artifacts protocol as a Cline system-prompt rule.",
+      "path": "documentation/collections/agent-rules-cline.md",
+      "tags": [
+        "agent-rules",
+        "cline"
+      ],
+      "group": "agent-rules",
+      "version": "1.0.0",
+      "content_sha256": "1642b70d036ec0a0d6a17cce9011a7fe8f4b5b0189ec2d00ecfa7a95bdc2e520",
+      "updated_at": "2026-04-17T21:15:32.595897+00:00",
+      "channel": "stable",
+      "min_shipctl": "0.3.0",
+      "deprecated": false,
+      "replaced_by": null,
+      "yanked": false
+    },
+    {
+      "id": "agent-rules-continue",
+      "title": "Agent rules — Continue",
+      "summary": "Install the Ship artifacts protocol as a Continue reference rule.",
+      "path": "documentation/collections/agent-rules-continue.md",
+      "tags": [
+        "agent-rules",
+        "continue"
+      ],
+      "group": "agent-rules",
+      "version": "1.0.0",
+      "content_sha256": "855b5bb019a5255ad6feb4203f0baaf5512b96349ffabe724fd9e9efd5f1e055",
+      "updated_at": "2026-04-17T21:15:32.595983+00:00",
+      "channel": "stable",
+      "min_shipctl": "0.3.0",
+      "deprecated": false,
+      "replaced_by": null,
+      "yanked": false
+    },
+    {
+      "id": "agent-rules-windsurf",
+      "title": "Agent rules — Windsurf",
+      "summary": "Install the Ship artifacts protocol as a Windsurf rules file.",
+      "path": "documentation/collections/agent-rules-windsurf.md",
+      "tags": [
+        "agent-rules",
+        "windsurf"
+      ],
+      "group": "agent-rules",
+      "version": "1.0.0",
+      "content_sha256": "66ec7eacda0f41e75b06b909c9a78addaae9747863d4b10bab7b9dc92ec6ef22",
+      "updated_at": "2026-04-17T21:15:32.596048+00:00",
+      "channel": "stable",
+      "min_shipctl": "0.3.0",
+      "deprecated": false,
+      "replaced_by": null,
+      "yanked": false
+    },
+    {
+      "id": "agent-rules-zed",
+      "title": "Agent rules — Zed",
+      "summary": "Install the Ship artifacts protocol as a Zed assistant custom-agent rule.",
+      "path": "documentation/collections/agent-rules-zed.md",
+      "tags": [
+        "agent-rules",
+        "zed"
+      ],
+      "group": "agent-rules",
+      "version": "1.0.0",
+      "content_sha256": "5eee50b02cb51c8db38c29ab2eaee3347027c9be0247a4bec0ce04f6784e294c",
+      "updated_at": "2026-04-17T21:15:32.596117+00:00",
+      "channel": "stable",
+      "min_shipctl": "0.3.0",
+      "deprecated": false,
+      "replaced_by": null,
+      "yanked": false
+    },
+    {
+      "id": "agent-rules-gemini",
+      "title": "Agent rules — Gemini Code Assist (GEMINI.md)",
+      "summary": "Append the Ship artifacts protocol to GEMINI.md for Gemini Code Assist.",
+      "path": "documentation/collections/agent-rules-gemini.md",
+      "tags": [
+        "agent-rules",
+        "gemini"
+      ],
+      "group": "agent-rules",
+      "version": "1.0.0",
+      "content_sha256": "4f640b164dc0fd92553086fcb165da1f09012b145a7c28a84d9ffa9ef8d2c69f",
+      "updated_at": "2026-04-17T21:15:32.596174+00:00",
+      "channel": "stable",
+      "min_shipctl": "0.3.0",
+      "deprecated": false,
+      "replaced_by": null,
+      "yanked": false
+    },
+    {
+      "id": "agent-rules-opencode",
+      "title": "Agent rules — OpenCode",
+      "summary": "Install the Ship artifacts protocol as an OpenCode rule file.",
+      "path": "documentation/collections/agent-rules-opencode.md",
+      "tags": [
+        "agent-rules",
+        "opencode"
+      ],
+      "group": "agent-rules",
+      "version": "1.0.0",
+      "content_sha256": "fbb63a63104a37d3ae09cd40e632ab7da0ebb2445d1046d7e30ceb834d8bcfec",
+      "updated_at": "2026-04-17T21:15:32.596231+00:00",
+      "channel": "stable",
+      "min_shipctl": "0.3.0",
+      "deprecated": false,
+      "replaced_by": null,
+      "yanked": false
+    },
+    {
+      "id": "agent-rules-copilot",
+      "title": "Agent rules — GitHub Copilot",
+      "summary": "Append the Ship artifacts protocol to GitHub Copilot custom instructions.",
+      "path": "documentation/collections/agent-rules-copilot.md",
+      "tags": [
+        "agent-rules",
+        "copilot"
+      ],
+      "group": "agent-rules",
+      "version": "1.0.0",
+      "content_sha256": "c1fa504c0963aa3f5240de141a0deda51dc8ef4b42006c6c4e786a447c947074",
+      "updated_at": "2026-04-17T21:15:32.596303+00:00",
+      "channel": "stable",
+      "min_shipctl": "0.3.0",
+      "deprecated": false,
+      "replaced_by": null,
+      "yanked": false
+    },
+    {
+      "id": "agent-rules-cursor-cloud",
+      "title": "Agent rules — Cursor Cloud Agent",
+      "summary": "Register a Cursor Cloud environment that loads the Ship artifacts protocol.",
+      "path": "documentation/collections/agent-rules-cursor-cloud.md",
+      "tags": [
+        "agent-rules",
+        "cursor-cloud"
+      ],
+      "group": "agent-rules",
+      "version": "1.0.0",
+      "content_sha256": "4001871b8e65cc80c9c70d9506588fd10b96caf45fd5166d04fdc23f0100c2cf",
+      "updated_at": "2026-04-17T21:15:32.596390+00:00",
+      "channel": "stable",
+      "min_shipctl": "0.3.0",
+      "deprecated": false,
+      "replaced_by": null,
+      "yanked": false
+    },
+    {
+      "id": "agent-rules-agents-md",
+      "title": "Agent rules — Generic AGENTS.md",
+      "summary": "Generic AGENTS.md treatment of the Ship artifacts protocol for any agent that reads it.",
+      "path": "documentation/collections/agent-rules-agents-md.md",
+      "tags": [
+        "agent-rules",
+        "agents-md"
+      ],
+      "group": "agent-rules",
+      "version": "1.0.0",
+      "content_sha256": "747835cca260d6444aa7c63dacd8aa6c1f4084a3acdcf56850eb544096ec29b0",
+      "updated_at": "2026-04-17T21:15:32.596460+00:00",
+      "channel": "stable",
+      "min_shipctl": "0.3.0",
+      "deprecated": false,
+      "replaced_by": null,
+      "yanked": false
+    },
+    {
+      "id": "agent-rules-claude-md",
+      "title": "Agent rules — Generic CLAUDE.md",
+      "summary": "Generic CLAUDE.md treatment of the Ship artifacts protocol for Claude-family agents.",
+      "path": "documentation/collections/agent-rules-claude-md.md",
+      "tags": [
+        "agent-rules",
+        "claude-md"
+      ],
+      "group": "agent-rules",
+      "version": "1.0.0",
+      "content_sha256": "f6e33d9b0d9de1d48bd32d9d01377b191d254352304fccbcf7d364af8b02595f",
+      "updated_at": "2026-04-17T21:15:32.596519+00:00",
+      "channel": "stable",
+      "min_shipctl": "0.3.0",
+      "deprecated": false,
+      "replaced_by": null,
+      "yanked": false
+    },
+    {
+      "id": "preset-web-app",
+      "title": "Preset — Web application",
+      "summary": "Preset for browser-first products (SPA/SSR) with preview URLs and hosted E2E.",
+      "path": "documentation/collections/preset-web-app.md",
+      "tags": [
+        "preset",
+        "web-app"
+      ],
+      "group": "preset",
+      "version": "1.0.0",
+      "content_sha256": "1e8a277cf352344c87c31b071f61db55d896917581ac22cc9f72cbb9504d5bbb",
+      "updated_at": "2026-04-17T21:15:32.596580+00:00",
+      "channel": "stable",
+      "min_shipctl": "0.3.0",
+      "deprecated": false,
+      "replaced_by": null,
+      "yanked": false
+    },
+    {
+      "id": "preset-api-backend",
+      "title": "Preset — API / backend service",
+      "summary": "Preset for stateless HTTP/gRPC services with contract tests and migration discipline.",
+      "path": "documentation/collections/preset-api-backend.md",
+      "tags": [
+        "preset",
+        "api-backend"
+      ],
+      "group": "preset",
+      "version": "1.0.0",
+      "content_sha256": "df73bb34f2b30c62cc32e62daecadd08dbb745205f9e729ed396d1876b489524",
+      "updated_at": "2026-04-17T21:15:32.596636+00:00",
+      "channel": "stable",
+      "min_shipctl": "0.3.0",
+      "deprecated": false,
+      "replaced_by": null,
+      "yanked": false
+    },
+    {
+      "id": "preset-mobile-app",
+      "title": "Preset — Mobile application",
+      "summary": "Preset for iOS/Android apps with store-review cadence, OTA updates, and device-farm testing.",
+      "path": "documentation/collections/preset-mobile-app.md",
+      "tags": [
+        "preset",
+        "mobile-app"
+      ],
+      "group": "preset",
+      "version": "1.0.0",
+      "content_sha256": "1012e0d69511176901efce517c5c52b789f611c06b012b972dbbbc9b04216659",
+      "updated_at": "2026-04-17T21:15:32.596709+00:00",
+      "channel": "stable",
+      "min_shipctl": "0.3.0",
+      "deprecated": false,
+      "replaced_by": null,
+      "yanked": false
+    },
+    {
+      "id": "preset-cli",
+      "title": "Preset — Developer CLI / SDK",
+      "summary": "Preset for CLI binaries and SDK packages with release pipelines and multi-target builds.",
+      "path": "documentation/collections/preset-cli.md",
+      "tags": [
+        "preset",
+        "cli"
+      ],
+      "group": "preset",
+      "version": "1.0.0",
+      "content_sha256": "896a617c3a097104ac8d0f8e2844008ff14c2785bd1c23abf66532d63bd102cd",
+      "updated_at": "2026-04-17T21:15:32.596775+00:00",
+      "channel": "stable",
+      "min_shipctl": "0.3.0",
+      "deprecated": false,
+      "replaced_by": null,
+      "yanked": false
+    },
+    {
+      "id": "preset-monorepo",
+      "title": "Preset — Monorepo",
+      "summary": "Preset for multi-package repos with workspace tools, per-package release, and CODEOWNERS.",
+      "path": "documentation/collections/preset-monorepo.md",
+      "tags": [
+        "preset",
+        "monorepo"
+      ],
+      "group": "preset",
+      "version": "1.0.0",
+      "content_sha256": "467254a5185f3aff604e125ecf366ee075c0d4fe6d9ba14e2613512fe54b6e5b",
+      "updated_at": "2026-04-17T21:15:32.596833+00:00",
+      "channel": "stable",
+      "min_shipctl": "0.3.0",
+      "deprecated": false,
+      "replaced_by": null,
+      "yanked": false
+    },
+    {
+      "id": "preset-adoption-minimum",
+      "title": "Preset — Adoption minimum",
+      "summary": "Smallest viable adoption: queue lanes and agent rules before any CI or product-specific gates.",
+      "path": "documentation/collections/preset-adoption-minimum.md",
+      "tags": [
+        "preset",
+        "adoption-minimum"
+      ],
+      "group": "preset",
+      "version": "1.0.0",
+      "content_sha256": "a5cdbc8142f4e5b56ecd2e9a62a2fbf98cf8e90a5a17d315753937039ded3e39",
+      "updated_at": "2026-04-17T21:15:32.596888+00:00",
+      "channel": "stable",
+      "min_shipctl": "0.3.0",
+      "deprecated": false,
+      "replaced_by": null,
+      "yanked": false
+    },
+    {
+      "id": "addendum-pharma",
+      "title": "Addendum — Pharma / Health",
+      "summary": "Regulated-vertical overlay (HIPAA, GDPR, 21 CFR Part 11).",
+      "path": "documentation/collections/addendum-pharma.md",
+      "tags": [
+        "addendum",
+        "pharma",
+        "hipaa",
+        "gdpr"
+      ],
+      "group": "addendum",
+      "version": "1.0.0",
+      "content_sha256": "e51923549b8ecad232933030878c38556e4448bad9b5eae9863b2d0befd4c5e8",
+      "updated_at": "2026-04-17T21:15:32.596953+00:00",
+      "channel": "stable",
+      "min_shipctl": "0.3.0",
+      "deprecated": false,
+      "replaced_by": null,
+      "yanked": false
     }
   ]
 }

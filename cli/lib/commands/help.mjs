@@ -1,23 +1,51 @@
 export function printHelp() {
-  console.log(`Ship CLI — methodology on ship.elmundi.com (or SHIP_API_BASE) + init.
+  console.log(`Ship CLI — artifacts protocol on ship.elmundi.com (or SHIP_API_BASE) + init.
 
-ONE FLOW
-  1) ship search <query>     — vector search (POST /search) over docs + prompts + README
-  2) ship docs fetch <path>  — full markdown file by repo-relative path (POST /fetch { path })
-     ship pattern|tool|workflow|collection fetch <id> — catalog entry body (POST /fetch { kind, id })
-  3) ship docs feedback …   — improvement / retro note (POST /feedback)
+ARTIFACTS PROTOCOL (RFC-0001)
+  1) shipctl search <query>          — vector search (POST /search) over docs + prompts
+  2) shipctl docs fetch <path>       — full markdown body by repo-relative path
+     shipctl pattern|tool|workflow|collection show|fetch <id>
+                                     — versioned artifact body (POST /fetch { kind, id, version? })
+  3) shipctl docs feedback …         — improvement / retro note (POST /feedback)
+
+Every consumed artifact should be recorded in the PR as \`<kind>:<id>@<version>\`.
 
 COMMANDS
-  ship help
-  ship search <query> [--top-k N]
+  shipctl help
+  shipctl search <query> [--top-k N]
 
-  ship docs fetch <repo-relative-path>
-  ship docs feedback --title "..." --summary "..." [--recommendation "…"]... [--source-context "…"]
+  shipctl docs fetch <repo-relative-path>
+  shipctl docs feedback --title "..." --summary "..." [--recommendation "…"]... [--source-context "…"]
 
-  ship pattern list | ship pattern show <id> | ship pattern fetch <id> | ship pattern search <query> [--top-k N]
-  ship tool … | ship workflow … | ship collection …   (same subcommands; plural aliases: patterns, tools, …)
+  shipctl pattern list | shipctl pattern show <id> | shipctl pattern fetch <id> | shipctl pattern search <query> [--top-k N]
+  shipctl tool … | shipctl workflow … | shipctl collection …   (same subcommands; plural aliases: patterns, tools, …)
 
-  ship init [--yes] [--force] [--dry-run] [--only <id>] [--cwd <dir>]
+  shipctl init [--yes] [--force] [--dry-run] [--json] [--cwd <dir>]
+               [--agents <csv>] [--only <id>]
+               [--tracker <name>] [--ci <name>] [--preset <name>]
+               [--language <name>] [--channel stable|edge]
+               [--copy-rules] [--copy-playbook] [--bootstrap]
+               [--telemetry on|off|ask]
+
+  shipctl doctor [--json] [--cwd <dir>] [--write-inventory] [--no-network]
+                                     — inspect the repo, propose a stack, optionally write
+                                       .ship/inventory.json for 'shipctl init --bootstrap'.
+
+  shipctl config init|get|set|validate|show|path     — .ship/config.yml management
+  shipctl sync [--check-only] [--only <kind:id>...] [--channel <c>] [--force-unpin] [--dry-run]
+
+  shipctl new <name> [--preset ...] [--tracker ...] [--ci ...] [--agents ...] [--here] [--yes]
+                                     — bootstrap a fresh repo: git init + README + .ship/config.yml
+  shipctl verify [--no-network] [--check <id,...>] [--severity warn|error|info] [--json]
+                                     — post-adoption liveness checks (local + config + network)
+  shipctl telemetry status|on|off|show-id|reset-id|flush|export|delete-my-data|buffer
+                                     — opt-in anonymous usage (RFC-0003); default OFF.
+                                       '--scope artifact_usage,improvement_drafts,errors' on 'on'
+                                       '--dry-run' on 'flush'; '--out <file>' on 'export'
+  shipctl feedback draft|list|show|edit|submit|remove
+                                     — local markdown drafts; submit creates a GitHub issue
+                                       via POST /feedback and moves the draft to sent/.
+  shipctl bootstrap   (stub)
 
 GLOBAL FLAGS
   --base-url URL   Methodology API (default: SHIP_API_BASE or https://ship.elmundi.com/api/methodology)
@@ -28,12 +56,29 @@ LOCAL TREE
   is inside the Ship monorepo (search always uses HTTP).
 
 INIT FLAGS
-  --yes       Non-interactive apply (use --dry-run first)
-  --force     Replace existing injected blocks
-  --dry-run   Preview only
-  --only      cursor | agents-md | claude-md | codex | copilot
-  --cwd       Target repo root
+  --yes              Non-interactive apply (use --dry-run first)
+  --force            Replace existing rule blocks and overwrite generated files
+  --dry-run          Preview only
+  --json             Emit a JSON summary suitable for CI
+  --agents <csv>     Comma-separated agent ids (overrides --only). See list below.
+  --only             Single agent id (kept for back-compat).
+  --tracker <name>   Stack tracker: linear|jira|github-issues|azure-boards|clickup|spreadsheet|none
+  --ci <name>        Stack CI: gh-actions|gitlab-ci|buildkite|circleci|azure-pipelines|jenkins|manual
+  --preset <name>    Stack preset: web-app|api-backend|mobile-app|cli|monorepo|adoption-minimum
+  --language <name>  Stack language: ts|js|py|go|rust|java|kotlin|swift|dart|multi
+  --channel <name>   Override api.channel: stable|edge
+  --copy-rules       Install collection/agent-rules-<agent> files at their install_target
+  --copy-playbook    Fetch collection/adoption-playbook into .ship/cache/ (skipped on 404)
+  --bootstrap        Render CI/tracker scaffolding (mobile-app+gh-actions+linear skeletons today;
+                     other combos emit SHIP_BOOTSTRAP_PLAN.md)
+  --telemetry        on|off|ask — override the interactive telemetry prompt
+  --cwd              Target repo root
+
+SUPPORTED AGENTS
+  cursor, codex, claude, aider, cline, continue, windsurf, zed,
+  gemini, opencode, copilot, cursor-cloud, agents-md, claude-md
 
 For HTTP schemas see documentation/tools/backend-api.md in the Ship repo.
+Package: @elmundi/ship-cli (the binary name is shipctl; legacy 'ship' still works with a deprecation warning).
 `);
 }

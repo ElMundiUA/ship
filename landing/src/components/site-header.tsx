@@ -7,12 +7,13 @@ import { repoUrl } from "@/lib/config";
  */
 const NAV: { href: string; label: string; className: string }[] = [
   { href: "/docs/getting-started", label: "Getting started", className: "" },
-  { href: "/use-cases", label: "Use cases", className: "" },
-  { href: "/patterns", label: "Patterns", className: "hidden sm:inline" },
-  { href: "/workflows", label: "Workflows", className: "hidden md:inline" },
-  { href: "/collections", label: "Collections", className: "hidden md:inline" },
-  { href: "/tools", label: "Tools", className: "hidden lg:inline" },
-  { href: "/docs", label: "Manual", className: "hidden sm:inline" },
+  { href: "/docs/shipctl", label: "CLI", className: "" },
+  { href: "/docs", label: "Docs", className: "" },
+  { href: "/use-cases", label: "Use cases", className: "hidden sm:inline" },
+  { href: "/patterns", label: "Patterns", className: "hidden md:inline" },
+  { href: "/workflows", label: "Workflows", className: "hidden lg:inline" },
+  { href: "/collections", label: "Collections", className: "hidden lg:inline" },
+  { href: "/tools", label: "Tools", className: "hidden xl:inline" },
 ];
 
 export function SiteHeader() {

@@ -66,6 +66,9 @@ export function SiteFooter() {
                 <Link className="text-white/70 transition hover:text-aqua" href="/docs">
                   Manual
                 </Link>
+                <Link className="text-white/70 transition hover:text-aqua" href="/docs/shipctl">
+                  shipctl CLI
+                </Link>
                 <Link className="text-white/70 transition hover:text-aqua" href="/book">
                   The book
                 </Link>
@@ -86,10 +89,20 @@ export function SiteFooter() {
         </div>
 
         <div className="mt-16 border-t border-white/10 pt-10 sm:mt-20 sm:pt-12">
-          <p className="text-center text-sm text-white/50 sm:text-left">
-            © {YEAR} <span className="text-white/80">Denys Kuzin</span>. Documentation and site content are part of the Ship
-            open-source project (Apache-2.0).
-          </p>
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <p className="text-sm text-white/50">
+              © {YEAR} <span className="text-white/80">Denys Kuzin</span>. Documentation and site content are part of the Ship
+              open-source project (Apache-2.0).
+            </p>
+            <Link
+              href="/docs/rfc"
+              className="inline-flex items-center gap-2 rounded-full border border-aqua/30 bg-aqua/[0.08] px-3 py-1 text-xs font-bold uppercase tracking-[0.16em] text-aqua transition hover:border-aqua/60 hover:bg-aqua/[0.14]"
+              aria-label="Protocol v1 — read the RFC index"
+            >
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-aqua" aria-hidden />
+              Protocol v1
+            </Link>
+          </div>
         </div>
       </div>
     </footer>

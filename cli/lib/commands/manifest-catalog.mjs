@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { apiGet, apiPost } from "../http.mjs";
+import { apiGet, apiPost, fetchArtifact } from "../http.mjs";
 import { resolveShipRepoRootForCatalog } from "../find-ship-root.mjs";
+import { findShipRoot } from "../config/io.mjs";
+import { writeCached, cachePath } from "../cache/store.mjs";
 import { searchCommand } from "./search.mjs";
 
 /** @type {Record<string, { manifestRel: string; arrayKey: string; name: string; apiPath: string; fetchKind: string }>} */
@@ -43,11 +45,15 @@ export async function resourceManifestCommand(resource, ctx, args) {
     console.log(`Usage:
   ship ${resource} list
   ship ${resource} show <id>
-  ship ${resource} fetch <id>
+  ship ${resource} fetch <id> [--version V] [--print]
   ship ${resource} search <query> [--top-k N]
 
 With a local Ship tree (cwd or SHIP_REPO): reads ${spec.manifestRel} on disk.
 Otherwise: methodology API (GET /${spec.apiPath}, POST /fetch for fetch, POST /search for search).
+
+In a Ship workspace (.ship/config.yml), 'fetch' writes the artifact to
+.ship/cache/<kind>/<id>@<version>.md and prints a 'cached:' line. Pass
+--print to also echo the body on stdout.
 
 Plural alias: ship ${spec.apiPath} …
 
@@ -66,6 +72,28 @@ Global flags: --base-url URL  --json`);
   } else {
     await manifestFromHosted(resource, spec, ctx, sub, rest);
   }
+}
+
+/**
+ * Parse `fetch`-specific flags so the hosted catalog path can honour
+ * `--print`, `--version` and `--cwd` without polluting the global flag
+ * extractor. Unknown flags are silently preserved as positionals (no error),
+ * matching the rest of the manifest-catalog command.
+ * @param {string[]} rest
+ */
+function parseFetchFlags(rest) {
+  const out = { positional: /** @type {string[]} */ ([]), print: false, version: null, cwd: null };
+  const copy = [...rest];
+  while (copy.length) {
+    const a = copy.shift();
+    if (a === "--print") { out.print = true; continue; }
+    if (a === "--version" && copy.length) { out.version = copy.shift(); continue; }
+    if (a && a.startsWith("--version=")) { out.version = a.slice("--version=".length); continue; }
+    if (a === "--cwd" && copy.length) { out.cwd = copy.shift(); continue; }
+    if (a && a.startsWith("--cwd=")) { out.cwd = a.slice("--cwd=".length); continue; }
+    out.positional.push(a);
+  }
+  return out;
 }
 
 /**
@@ -106,16 +134,72 @@ async function manifestFromHosted(resource, spec, ctx, sub, rest) {
     return;
   }
   if (sub === "fetch") {
-    const id = rest[0];
+    const flags = parseFetchFlags(rest);
+    const id = flags.positional[0];
     if (!id) {
       console.error("fetch: id required.");
       process.exit(1);
     }
-    const data = await apiPost(base, "/fetch", { kind: spec.fetchKind, id });
+
+    const shipRoot = findShipRoot(flags.cwd || process.cwd());
+    const wantCache = !!shipRoot;
+    const wantStdoutBody = flags.print || !wantCache || ctx.json;
+
+    // JSON output is a machine-readable mode; keep the legacy body-dump shape
+    // but still persist to cache when the caller is in a Ship workspace so
+    // downstream `verify` / `sync` operations see the artifact on disk.
+    if (wantCache) {
+      const { content, meta } = await fetchArtifact(
+        base,
+        spec.fetchKind,
+        id,
+        flags.version || undefined,
+      );
+      const version = meta.version || flags.version || "0.0.0";
+      const writeRes = writeCached(shipRoot, spec.fetchKind, id, version, content, {
+        content_sha256: meta.content_sha256,
+        updated_at: meta.updated_at,
+        channel: meta.channel,
+        version,
+        source_url: meta.source_url,
+      });
+      const rel = path.relative(shipRoot, writeRes.bodyPath) || cachePath(shipRoot, spec.fetchKind, id, version);
+      const relDisplay = path.isAbsolute(rel) ? writeRes.bodyPath : rel;
+      if (ctx.json) {
+        console.log(
+          JSON.stringify(
+            {
+              kind: spec.fetchKind,
+              id,
+              version,
+              content_sha256: meta.content_sha256,
+              cached_path: relDisplay,
+              content: wantStdoutBody ? content : undefined,
+            },
+            null,
+            2,
+          ),
+        );
+      } else {
+        console.log(`cached: ${spec.fetchKind}/${id}@${version} \u2192 ${relDisplay}`);
+        if (wantStdoutBody) {
+          console.log(`# ${id}@${version}\n`);
+          console.log(content);
+        }
+      }
+      return;
+    }
+
+    // Outside a Ship workspace: keep the legacy print-only behaviour and
+    // nudge the user toward `shipctl config init`.
+    const data = await apiPost(base, "/fetch", { kind: spec.fetchKind, id, ...(flags.version ? { version: flags.version } : {}) });
     if (ctx.json) {
       console.log(JSON.stringify(data, null, 2));
     } else {
-      console.log(`# ${data.title} (${data.id})\n`);
+      console.error(
+        `note: not in a Ship workspace (no .ship/config.yml found); printing body only. Run 'shipctl config init' to enable caching.`,
+      );
+      console.log(`# ${data.title || data.id} (${data.id})\n`);
       console.log(data.content);
     }
     return;

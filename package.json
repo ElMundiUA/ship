@@ -11,7 +11,8 @@
     "landing:dev": "npm run dev --prefix landing",
     "landing:build": "npm run build --prefix landing",
     "landing:start": "npm run start --prefix landing",
-    "ship": "node cli/bin/ship.mjs"
+    "shipctl": "node cli/bin/shipctl.mjs",
+    "ship": "node cli/bin/ship-deprecated.mjs"
   },
   "keywords": [],
   "author": "Denys Kuzin",

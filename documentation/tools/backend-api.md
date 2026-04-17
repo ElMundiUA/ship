@@ -164,4 +164,182 @@ Optional:
 - `SHIP_FEEDBACK_REPO` (default: `ElMundiUA/ship`)
 - `OPENAI_EMBED_MODEL` (default: `text-embedding-3-small`)
 - `FORCE_REINDEX=true` (force rebuild of vector index)
+- `SHIP_TELEMETRY_DIR` (default: `backend/telemetry`) — directory for the `events.jsonl` append-log
+
+## v0.3 additions
+
+The v0.3 surface implements RFC-0001 (artifacts protocol) and RFC-0003
+(telemetry and feedback). All existing endpoints remain backward-compatible;
+list endpoints simply gain new fields on each entry.
+
+### Per-entry version fields
+
+Every entry in `GET /patterns`, `GET /tools`, `GET /workflows`, and
+`GET /collections` now carries:
+
+- `version` — semver `MAJOR.MINOR.PATCH`
+- `content_sha256` — hex SHA-256 of the referenced markdown body
+- `updated_at` — ISO-8601 UTC timestamp of the last publish
+- `channel` — `stable` or `edge`
+- `min_shipctl` — minimum `shipctl` semver required
+- `deprecated` — boolean
+- `replaced_by` — id of the replacement artifact or `null`
+- `yanked` — boolean
+
+Fields are stamped by `scripts/stamp_artifact_versions.py` and verified in CI by
+`scripts/ship_artifact_check.py`.
+
+### `?channel=` filter
+
+`GET /patterns`, `/tools`, `/workflows`, `/collections`, and `/manifest` accept
+`?channel=stable|edge`. Default is `stable`, which filters entries whose
+`channel` is `stable`. `edge` returns every entry regardless of channel.
+
+### `?version=` on detail endpoints and `/fetch`
+
+- `GET /patterns/{id}?version=X.Y.Z` and the same shape for tools, workflows,
+  collections.
+- `POST /fetch` with `{"kind": "...", "id": "...", "version": "X.Y.Z"}`.
+
+If the requested version matches the current manifest version the response is
+returned verbatim. Any other version responds with HTTP `404` and the detail
+`"unknown version; current is <v>"`. v1 of the server does not walk git
+history for older bodies.
+
+When the entry is `deprecated=true`, the response still returns `200` but adds
+`"deprecation_notice": "replaced_by=<id>"`. When `yanked=true`, the endpoint
+responds with `410 Gone` carrying the same notice.
+
+### `GET /manifest`
+
+Single flat inventory across all five kinds (`pattern`, `tool`, `workflow`,
+`collection`, `doc`). Designed for cheap freshness checks.
+
+```json
+{
+  "version": 1,
+  "generated_at": "2026-04-17T10:00:00+00:00",
+  "entries": [
+    {
+      "kind": "pattern",
+      "id": "cloud-developer",
+      "version": "1.0.0",
+      "content_sha256": "...",
+      "updated_at": "2026-04-12T04:11:35+03:00",
+      "channel": "stable",
+      "deprecated": false,
+      "yanked": false,
+      "path": "prompts/cloud-agent/developer.md"
+    }
+  ]
+}
+```
+
+The `doc` kind is auto-discovered: every `.md` and `.txt` under
+`documentation/` and `prompts/`, plus `README.md`. The `id` of a `doc` entry is
+its repo-relative path.
+
+### `GET /<kind>s/{id}/versions`
+
+Returns the version index for a single artifact. v1 always returns exactly one
+entry (the current manifest version):
+
+```json
+{
+  "id": "cloud-developer",
+  "versions": [
+    {
+      "version": "1.0.0",
+      "updated_at": "2026-04-12T04:11:35+03:00",
+      "channel": "stable",
+      "deprecated": false,
+      "yanked": false
+    }
+  ]
+}
+```
+
+### `POST /feedback` (extended)
+
+Request now accepts an optional `artifact` object:
+
+```json
+{
+  "title": "Developer checklist missing mobile preview",
+  "summary": "…",
+  "recommendations": ["add mobile preview bullet"],
+  "artifact": {
+    "kind": "pattern",
+    "id": "cloud-developer",
+    "version": "1.0.0"
+  }
+}
+```
+
+When `artifact` is present the server:
+
+1. Applies labels `feedback`, `retro`, `artifact:<kind>:<id>`,
+   `version:<version>` to the resulting issue.
+2. Embeds a machine-readable footer in the issue body:
+   `<!-- ship-feedback-meta: {"kind":"pattern","id":"cloud-developer","version":"1.0.0"} -->`.
+3. **Dedupes**: before creating a new issue the server queries open issues
+   with the same `artifact:*` and `version:*` labels. If an open issue
+   exists, the submission becomes a new comment on that issue and the
+   response carries `"deduplicated": true` with the same `issue_url`.
+
+Response:
+
+```json
+{
+  "issue_url": "https://github.com/…/issues/42",
+  "issue_number": 42,
+  "labels": ["feedback", "retro", "artifact:pattern:cloud-developer", "version:1.0.0"],
+  "redactions_applied": 0,
+  "deduplicated": false
+}
+```
+
+### `POST /telemetry`
+
+Accepts a batch of events and appends them to `backend/telemetry/events.jsonl`
+(configurable via `SHIP_TELEMETRY_DIR`). Each line is a self-contained JSON
+event augmented with `received_at`.
+
+```json
+{
+  "events": [
+    {
+      "type": "artifact.fetch",
+      "anonymous_id": "11111111-2222-4333-8444-555555555555",
+      "timestamp": "2026-04-17T10:05:13+00:00",
+      "payload": {"kind": "pattern", "id": "cloud-developer", "version": "1.0.0"}
+    }
+  ]
+}
+```
+
+Rules:
+
+- `anonymous_id` must match the UUIDv4 pattern.
+- `type` must be one of `artifact.fetch`, `artifact.use`, `artifact.sync`,
+  `feedback.submit`, `doctor.result`.
+- Up to **100 events per request**; larger batches respond with `400`.
+- `payload` must not contain any key named `path`, `code`, `diff`, `branch`,
+  `remote`, or `email` (recursive denylist). Any match responds with `400`.
+- Rate limit: **60 requests / minute per `anonymous_id`**. Excess requests
+  respond with `429`.
+- Success responds with `202 Accepted` and
+  `{"accepted": <n>, "rejected": <n>, "reasons": [...]}`. Events with an
+  unknown `type` are counted as rejected (never written).
+
+### `DELETE /telemetry/{anonymous_id}`
+
+Removes every event in the JSONL log matching the supplied id. Requires the
+header `X-Ship-Confirm: yes` as a safety acknowledgement; without it the
+server responds `400`. Returns `{"deleted": <n>}`.
+
+### `GET /telemetry/{anonymous_id}/export`
+
+Returns `{"events": [...]}` — all events for the supplied id. Allows adopters
+to export their telemetry contribution for review or before deletion.
 

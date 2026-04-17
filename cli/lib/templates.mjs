@@ -1,50 +1,71 @@
-const MARKER = "<!-- ship-cli: methodology-api -->";
+const MARKER = "<!-- ship-cli: artifacts-protocol v1 -->";
+const END_MARKER = "<!-- ship-cli:end artifacts-protocol -->";
+
+/**
+ * Short "Artifacts protocol" stub shared by every rendered template.
+ * Keep it tight; the authoritative contract lives in RFC-0001.
+ *
+ * @param {string} baseUrl
+ */
+function protocolBody(baseUrl) {
+  return `Base URL (env \`SHIP_API_BASE\`, flag \`--base-url\`): \`${baseUrl}\`
+
+## Artifacts protocol (RFC-0001)
+
+Every Ship artifact is versioned (semver + \`content_sha256\`). Clients never
+vendor artifact bodies — they call \`shipctl\` (which hits \`POST /fetch\` and
+writes a local \`.ship/cache/\` entry keyed by \`<kind>/<id>@<version>\`).
+
+Agent protocol (must follow before applying an artifact):
+
+1. **Resolve before use.** Run \`shipctl <kind> show <id>\` (or \`fetch\`) so the
+   body you act on is the current pinned version. Pins live in
+   \`.ship/config.yml\` (\`artifacts.pins\`).
+2. **Record the exact version.** Put \`<kind>:<id>@<version>\` in the PR
+   description for every artifact you consumed (one per line).
+3. **Do not copy bodies into the repo.** Reference the artifact id + version.
+4. **Feedback is opt-in.** Use \`shipctl feedback draft\`; never auto-submit.
+
+## CLI
+
+\`\`\`bash
+shipctl pattern list
+shipctl pattern show cloud-developer              # resolves latest or pin
+shipctl pattern fetch cloud-developer --version 1.4.2
+shipctl search "release gates and qa split" --top-k 8
+shipctl docs fetch documentation/adoption/delivery-quality-and-release-process.md
+shipctl sync                                       # reconcile .ship/cache/
+\`\`\`
+
+## HTTP (curl, no CLI)
+
+\`\`\`bash
+curl -sS -X POST "${baseUrl}/fetch" -H "Content-Type: application/json" \\
+  -d '{"kind":"pattern","id":"cloud-developer"}'
+curl -sS "${baseUrl}/manifest"
+\`\`\`
+
+See \`documentation/rfc/rfc-0001-artifacts-protocol.md\` in the Ship repo for the
+full HTTP surface, pin rules, and cache layout. \`.ship/config.yml\` schema is
+RFC-0002.`;
+}
 
 /**
  * @param {string} baseUrl
  */
 export function cursorRuleMdc(baseUrl) {
   return `---
-name: ship-methodology-api
-description: Call the Ship methodology HTTP API (semantic search, fetch full docs, retro feedback, pattern index) from the agent.
+name: ship-artifacts-protocol
+description: Resolve, use, and record Ship artifacts (patterns/tools/workflows/collections) via shipctl.
 ---
 
 ${MARKER}
 
-# Ship methodology API (local)
+# Ship artifacts protocol (Cursor rule)
 
-Base URL (override with \`SHIP_API_BASE\` for agents, or \`--base-url\` for CLI): \`${baseUrl}\`
+${protocolBody(baseUrl)}
 
-## When to use
-
-1. **Discover** — \`POST /search\` with a natural-language query over Ship docs + prompts.
-2. **Read** — \`POST /fetch\` with a repo-relative \`path\` from search hits (markdown/text only).
-3. **Retro** — \`POST /feedback\` to open a sanitized GitHub issue (needs \`GITHUB_TOKEN\` on the server).
-4. **Catalog** — \`ship pattern|tool|workflow|collection list\` / \`show <id>\` / \`fetch <id>\` (\`GET /…\` on the same base URL as search, or \`POST /fetch\` with \`{ kind, id }\` when hosted; or disk when cwd/\`SHIP_REPO\` is the Ship tree).
-
-## Examples (CLI from Ship repo)
-
-\`\`\`bash
-npm run ship -- search "release gates and qa split" --top-k 8
-npm run ship -- docs fetch documentation/adoption/delivery-quality-and-release-process.md
-npm run ship -- pattern list
-\`\`\`
-
-Equivalent curl (when not using the CLI):
-
-\`\`\`bash
-curl -sS -X POST "${baseUrl}/search" -H "Content-Type: application/json" \\
-  -d '{"query":"release gates and qa split","top_k":8}'
-curl -sS -X POST "${baseUrl}/fetch" -H "Content-Type: application/json" \\
-  -d '{"path":"documentation/adoption/delivery-quality-and-release-process.md"}'
-curl -sS "${baseUrl}/patterns"
-\`\`\`
-
-## Agent workflow
-
-Prefer **search → fetch one path → quote** in your reply. Never paste secrets into \`/feedback\`; the server redacts common token shapes.
-
-Run the API locally: \`uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8100\` (see \`documentation/tools/backend-api.md\` in the Ship repo).
+${END_MARKER}
 `;
 }
 
@@ -58,16 +79,9 @@ export function markdownSection(baseUrl) {
 
 ${MARKER}
 
-## Ship methodology API
+## Ship artifacts protocol
 
-Base URL: \`${baseUrl}\` (env \`SHIP_API_BASE\`).
-
-- **Search** \`POST /search\` JSON \`{ "query": string, "top_k"?: number }\`
-- **Fetch** \`POST /fetch\` JSON \`{ "path": "documentation/...md" }\`
-- **Feedback** \`POST /feedback\` JSON \`{ "title", "summary", "recommendations"?: string[], "source_context"?: string }\`
-- **Catalog** — \`ship pattern|tool|workflow|collection list\` / \`show <id>\` / \`fetch <id>\` (same \`SHIP_API_BASE\` as search, or local tree): \`GET /patterns\`, \`GET /patterns/{id}\`, or \`POST /fetch\` with \`{ "kind": "pattern", "id": "…" }\`
-
-Use search first, then fetch the best path. Keep tokens out of feedback bodies.
+${protocolBody(baseUrl)}
 `;
 }
 
@@ -75,40 +89,14 @@ Use search first, then fetch the best path. Keep tokens out of feedback bodies.
  * @param {string} baseUrl
  */
 export function standaloneDoc(baseUrl) {
-  return `# Ship methodology API — agent reference
+  return `# Ship artifacts protocol — agent reference
 
 ${MARKER}
 
-Generated by \`ship init\`. Base URL: \`${baseUrl}\`
+Generated by \`shipctl init\`.
 
-See the Ship repo \`documentation/tools/backend-api.md\` for full contract.
-
-## Endpoints
-
-| Method | Path | Body / notes |
-|--------|------|----------------|
-| POST | /search | \`{ "query": "...", "top_k": 8 }\` |
-| POST | /fetch | \`{ "path": "documentation/foo.md" }\` |
-| POST | /feedback | \`{ "title", "summary", "recommendations": [], "source_context" }\` |
-| GET | /patterns | list manifest — **CLI:** \`ship pattern list\` (HTTP or disk in clone) |
-| GET | /patterns/{id} | metadata + markdown \`content\` — **CLI:** \`ship pattern show <id>\` |
-| POST | /fetch | catalog body — **CLI:** \`ship pattern fetch <id>\` with \`{ "kind": "pattern", "id" }\` |
-
-## CLI (from Ship monorepo)
-
-\`\`\`bash
-npm run ship -- pattern list
-npm run ship -- pattern show catalog-a1-intake
-npm run ship -- search "intake labels" --top-k 5
-\`\`\`
-
-## curl (direct HTTP)
-
-\`\`\`bash
-export SHIP=${baseUrl}
-curl -sS -X POST "$SHIP/search" -H "Content-Type: application/json" -d '{"query":"intake labels","top_k":5}'
-\`\`\`
+${protocolBody(baseUrl)}
 `;
 }
 
-export { MARKER };
+export { MARKER, END_MARKER };
