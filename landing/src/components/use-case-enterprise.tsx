@@ -31,6 +31,102 @@ export function UseCaseHero({
   );
 }
 
+export type UseCaseSnapshotItem = { label: string; value: string };
+
+/** "At a glance" row — sector / stack / size / status — designed to live directly under the hero. */
+export function UseCaseSnapshot({ items }: { items: UseCaseSnapshotItem[] }) {
+  if (!items.length) return null;
+  return (
+    <section className="border-b border-white/10 bg-black/20 py-10">
+      <div className="mx-auto grid max-w-5xl grid-cols-2 gap-y-6 px-4 text-left sm:grid-cols-4 sm:px-6">
+        {items.map((it) => (
+          <div key={it.label}>
+            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/40">{it.label}</p>
+            <p className="mt-2 text-sm font-semibold text-white sm:text-base">{it.value}</p>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+export type UseCaseResult = {
+  /** Big number / phrase (e.g. "5x", "Days, not weeks", "100%"). */
+  headline: string;
+  /** One-line label under the headline. */
+  label: string;
+  /** Optional supporting sentence. */
+  detail?: string;
+};
+
+/** Three-up "results" / quantified outcomes panel. Place after the implementation section. */
+export function UseCaseResults({
+  kicker = "Results",
+  title,
+  caveat,
+  results,
+}: {
+  kicker?: string;
+  title: string;
+  /** Print-friendly note about how the numbers were measured (keeps the section honest). */
+  caveat?: string;
+  results: UseCaseResult[];
+}) {
+  if (!results.length) return null;
+  return (
+    <section id="results" className="scroll-mt-24 border-b border-white/10 bg-gradient-to-b from-black/20 to-transparent py-14 sm:py-20">
+      <div className="mx-auto max-w-5xl px-4 sm:px-6">
+        <p className="text-xs font-bold uppercase tracking-widest text-aqua/90">{kicker}</p>
+        <h2 className="font-display mt-2 text-2xl font-bold text-white sm:text-3xl">{title}</h2>
+        <div className="mt-10 grid gap-6 md:grid-cols-3">
+          {results.map((r) => (
+            <div key={r.label} className="glass-panel p-6">
+              <p className="font-display text-3xl font-bold text-aqua sm:text-4xl">{r.headline}</p>
+              <p className="mt-3 text-sm font-semibold text-white">{r.label}</p>
+              {r.detail ? <p className="mt-2 text-sm leading-relaxed text-white/65">{r.detail}</p> : null}
+            </div>
+          ))}
+        </div>
+        {caveat ? (
+          <p className="mt-6 text-xs leading-relaxed text-white/45">{caveat}</p>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+export type UseCaseStakeholder = {
+  role: string;
+  perspective: string;
+};
+
+/** "What different stakeholders see" — Engineering, Security, Procurement, Leadership. */
+export function UseCaseStakeholders({
+  title = "What different stakeholders see",
+  items,
+}: {
+  title?: string;
+  items: UseCaseStakeholder[];
+}) {
+  if (!items.length) return null;
+  return (
+    <section className="border-b border-white/10 py-14 sm:py-16">
+      <div className="mx-auto max-w-4xl px-4 sm:px-6">
+        <p className="text-xs font-bold uppercase tracking-widest text-white/45">Stakeholder view</p>
+        <h2 className="font-display mt-2 text-2xl font-bold text-white sm:text-3xl">{title}</h2>
+        <div className="mt-8 grid gap-4 sm:grid-cols-2">
+          {items.map((s) => (
+            <div key={s.role} className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+              <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-aqua/85">{s.role}</p>
+              <p className="mt-3 text-sm leading-relaxed text-white/80">{s.perspective}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export function UseCaseSection({
   id,
   kicker,

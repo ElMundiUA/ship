@@ -9,6 +9,14 @@ const nextConfig: NextConfig = {
     return [
       { source: "/docs/framework", destination: "/book", permanent: false },
       { source: "/docs/framework/", destination: "/book", permanent: false },
+      /* Convenience aliases — people type /cli and /getting-started in the bar. */
+      { source: "/cli", destination: "/docs/shipctl", permanent: false },
+      { source: "/cli/:path*", destination: "/docs/shipctl", permanent: false },
+      { source: "/getting-started", destination: "/docs/getting-started", permanent: false },
+      /* Old MkDocs paths a few external docs link to. */
+      { source: "/docs/tools/shipctl-cli", destination: "/docs/shipctl", permanent: false },
+      { source: "/docs/tools/ship-agent-trackers", destination: "/tools", permanent: false },
+      { source: "/docs/tools/ship-agent-ci", destination: "/tools", permanent: false },
     ];
   },
   images: {
