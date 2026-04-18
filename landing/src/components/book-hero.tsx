@@ -1,7 +1,23 @@
+import fs from "node:fs";
+import path from "node:path";
 import Image from "next/image";
 import Link from "next/link";
 
+function getBookPdfMeta(): { sizeKb: number; mtime: string } | null {
+  try {
+    const pdfPath = path.join(process.cwd(), "public", "book.pdf");
+    const stat = fs.statSync(pdfPath);
+    return {
+      sizeKb: Math.round(stat.size / 1024),
+      mtime: stat.mtime.toISOString().slice(0, 10),
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function BookHero() {
+  const pdfMeta = getBookPdfMeta();
   return (
     <section className="relative overflow-hidden border-b border-white/10 pb-14 pt-24 sm:pb-16 sm:pt-28">
       <div
@@ -43,13 +59,41 @@ export function BookHero() {
               Chapters, diagrams, and callouts — laid out like the landing: glass, gradients, and neon discipline. Links to
               Getting started and examples still hop out to the docs site when you need filenames and cron tables.
             </p>
-            <div className="mt-8 flex flex-wrap gap-3">
+            <div className="mt-8 flex flex-wrap items-center gap-3">
               <Link href="/" className="btn-secondary">
                 ← Landing
               </Link>
               <a className="btn-primary" href="#the-idea">
                 Start at “The idea”
               </a>
+              {pdfMeta ? (
+                <a
+                  className="inline-flex items-center gap-2 rounded-full border border-aqua/40 bg-aqua/10 px-5 py-2.5 text-sm font-semibold text-aqua transition hover:bg-aqua/20 hover:text-white"
+                  href="/book.pdf"
+                  download="ship-why-book.pdf"
+                >
+                  <svg
+                    aria-hidden
+                    viewBox="0 0 16 16"
+                    width="14"
+                    height="14"
+                    className="opacity-90"
+                  >
+                    <path
+                      d="M8 2v8m0 0l3-3m-3 3L5 7M3 13h10"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.6"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                  Download PDF
+                  <span className="text-[11px] font-normal text-white/55">
+                    {`${(pdfMeta.sizeKb / 1024).toFixed(1)} MB · ${pdfMeta.mtime}`}
+                  </span>
+                </a>
+              ) : null}
             </div>
           </div>
         </div>
