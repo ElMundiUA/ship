@@ -12,7 +12,9 @@ landing/content/book.md
 !.env.example
 
 .DS_Store
-artifacts/
+# stray agent run logs (legacy location was repo-root artifacts/)
+agent-run-*.log
+.ship/agent-runs/
 hooks/__pycache__/
 **/__pycache__/
 backend/.chroma/

@@ -1,0 +1,147 @@
+Work on Linear issue ELM-103:
+
+<issue identifier="ELM-103">
+<title>Registration. Error when selecting a plan</title>
+<description>
+## Problem
+
+* On the **Unlock ElMundi** / registration flow, entering an **email that already belongs to a user** still triggers the OTP flow.
+* After email verification, on the **plan selection** screen, **Start free trial** fails with: **"Failed to open checkout. Please try again."**
+* The **Login** action is not prominent enough, so existing users may accidentally follow the registration path.
+
+## Objectives
+
+* Reduce failed checkouts and confusion for existing users by **surfacing login** and **detecting existing accounts by email** before or during sign-up, with clear messaging.
+* Restore a coherent path from plan selection to checkout (trial) for users who are allowed to proceed.
+
+## Expected behaviour
+
+1. **Login visibility:** The **Login** entry point on the Unlock / registration flow is **visually more prominent** than today (per product/design direction).
+2. **Existing email:** When the user attempts to register with an email **already tied to an account**, the product shows a **clear, user-facing message** (e.g. prompt to log in or use password recovery) instead of silently continuing into a broken flow.
+3. **Checkout:** **Start free trial** opens the checkout flow successfully for users who are permitted to start a trial, or the user sees a **specific, actionable** message if checkout cannot open (e.g. already subscribed, wrong session)—not only a generic failure.
+
+## Scope
+
+* **Frontend:** Unlock / registration UI, plan selection / trial CTA, **Login** prominence.
+* **Backend / auth:** Ability to **detect existing user by email** at the right step (registration or pre-OTP) without breaking security/privacy expectations.
+* **Payments / checkout:** Investigate why checkout fails (session, Stripe, eligibility) for the scenario above and align behaviour with product rules.
+
+## Non-goals
+
+* Redesigning the entire pricing or subscription model outside this flow.
+* Merging without explicit approval; **do not** move this issue to **Done** without human sign-off.
+
+## Risks
+
+* **Email enumeration:** Checking whether an email exists can be **abused** to infer account existence. Mitigation must align with **security** and product policy (e.g. rate limiting, same messaging patterns as login).
+* **Payment / Stripe:** Root cause of checkout failure may be **backend or config**; fix may span multiple services.
+
+## Classification
+
+* **Primary:** **Bug** (checkout failure after registration path for existing-account email).
+* **Secondary:** **Improvement** (login visibility, duplicate-email messaging).
+
+---
+
+## Feature description
+
+Fix the **Unlock / registration** journey so that **existing-account emails** are handled explicitly (login or recovery path) instead of progressing into OTP and a **broken trial/checkout** step. Increase **Login** visibility on the same flow. Ensure **Start free trial** either opens checkout for eligible users or surfaces **specific, actionable** errors (not a single generic message).
+
+---
+
+## User stories
+
+1. **As a** returning user who mistook Unlock for sign-up, **I want** Login to be easy to find on the Unlock screen, **so that** I sign in instead of starting registration.
+2. **As a** user who enters an email that already has an account, **I want** a clear message before or early in sign-up (not only after OTP on pricing), **so that** I can log in or reset password without wasting steps.
+3. **As a** new user eligible for a trial, **I want** **Start free trial** to open checkout reliably after verification, **so that** I can subscribe without opaque failures.
+4. **As a** user who cannot start a trial (e.g. already subscribed or ineligible), **I want** a specific reason and next step, **so that** I know what to do instead of seeing a generic checkout error.
+
+---
+
+## Acceptance criteria (BA)
+
+1. **Login prominence:** On the relevant Unlock / registration screen(s), **Login** is **more visually prominent** than in the current production behaviour, per agreed design (placement, weight, or hierarchy).
+2. **Duplicate email:** If the user submits an email that **already belongs to an existing account** on the registration path, the product shows an **explicit, user-facing message** and a path to **log in** and/or **password recovery** (per product/security policy). The user **must not** be left with the only outcome being **failed trial after OTP** with no earlier explanation.
+3. **Checkout / trial:** For users **allowed** to start a trial, **Start free trial** successfully initiates/opens the checkout flow (or equivalent) after plan selection. If checkout cannot open, the user sees a **specific** message (e.g. session, eligibility, already subscribed, configuration) and a **clear next step**, not only **"Failed to open checkout. Please try again."**
+4. **Regression:** New registration and trial for a **genuinely new** email still completes end-to-end.
+5. **Privacy / abuse:** Any server-side check that reveals whether an email is registered is implemented with mitigations agreed with **security** (rate limiting, consistent messaging, logging/monitoring as needed).
+
+---
+
+## Edge cases
+
+* **Email enumeration:** Rapid or automated probing of "does this email exist?" — throttle, CAPTCHA or equivalent if required by policy, uniform response times where applicable.
+* **Same email, different auth methods:** e.g. password vs OAuth — messaging should guide to **login** without exposing unnecessary account internals.
+* **Session mismatch:** User verified OTP in one tab or stale session — checkout should fail gracefully with **session refresh** or **re-login** guidance where applicable.
+* **Already subscribed / active trial:** User reaches plan screen but is not eligible — **specific** copy and CTA (e.g. go to account, manage subscription), not generic checkout failure.
+* **Stripe or config errors:** Distinguish **user-actionable** (e.g. "try again", contact support) from **internal** errors (log/monitor; user sees safe generic fallback only if necessary).
+
+---
+
+## Impacted components (initial)
+
+* **Frontend:** Unlock / registration screens, OTP step, plan selection / **Start free trial** CTA, error/toast copy, Login entry styling and placement.
+* **Backend / auth:** Registration and/or OTP initiation endpoints; optional **email lookup** or equivalent flow with security review; session/cookie handling for post-login checkout.
+* **Payments:** Stripe (or current provider) checkout/session creation for trial; eligibility rules and error mapping to user-visible reasons.
+* **Analytics (if applicable):** Funnel events for duplicate-email branch and checkout failures (for validation, not scope expansion).
+
+---
+
+## Technical notes
+
+* **Root cause split:** (A) UX/auth — duplicate email allowed through to pricing; (B) checkout — failure may be **eligibility**, **Stripe**, or **session**. Implementation may require **frontend + API + payments** alignment; confirm actual stack in repo.
+* **Enumeration:** Prefer patterns aligned with existing **login** and **password reset** (same ambiguity vs explicit "email found" per product decision). Coordinate with **security** on copy and rate limits.
+* **Errors:** Map backend/Stripe codes to **stable user-facing reasons**; avoid leaking internal IDs in production UI.
+
+---
+
+## Test plan
+
+**Manual (priority)**
+
+1. **New email:** Full Unlock → OTP → plan → **Start free trial** → checkout opens (or expected redirect); complete or cancel safely.
+2. **Existing email (core bug):** Use a known registered email on Unlock registration → expect **early** explicit handling (no silent OTP-only dead end); **no** generic checkout failure as the first explanation of "already registered".
+3. **Login path:** From Unlock screen, **Login** is noticeable; user can reach login without hunting.
+4. **Ineligible trial:** Account already subscribed (or policy-defined ineligible) → **Start free trial** shows **specific** message, not only generic failure.
+5. **Regression:** Password recovery link still works from messaging if offered.
+
+**Automated (if present in repo)**
+
+* E2E or integration for registration + checkout happy path; add cases for duplicate-email branch once API behaviour is fixed.
+
+---
+
+**Original report (screenshot):** [image](https://uploads.linear.app/e615cc75-cc52-48a7-8912-47bc4f61fd71/62316d2f-ce5e-490c-a048-3a2385b9e30e/0a5b9776-c325-4db8-9a72-14b0cbe61506?signature=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJwYXRoIjoiL2U2MTVjYzc1LWNjNTItNDhhNy04OTEyLTQ3YmM0ZjYxZmQ3MS82MjMxNmQyZi1jZTVlLTQ5MGMtYTA0OC0zYTIzODViOWUzMGUvMGE1Yjk3NzYtYzMyNS00ZGI4LTlhNzItMTRiMGNiZTYxNTA2IiwiaWF0IjoxNzc2MzE2NDQ4LCJleHAiOjE3NzYzMTY3NDh9.vY4OBvBJuyaqU96_yKtx_hUQsZhYdt02DoeEysi9R9w)
+
+</description>
+<team name="Elmundi"/>
+<label>Bug</label>
+<label>ready:developer</label>
+<label>stage:developer</label>
+<label>Improvement</label>
+<project name="ElMundi pre-release"/>
+</issue>
+
+<comment-thread comment-id="1af62190-24e6-44c8-92fd-5d1d6176b46f">
+<comment author="Denys Kuzin" created-at="2026-04-16T05:14:55.730Z">
+**Intake (SDLC)**
+
+* **Класифікація:** основний трек — **bug** (checkout не відкривається після сценарію з уже наявною поштою); додатково — **improvement** (виділення Login, явне повідомлення при дубльованому email).
+* **Повнота:** вхідних даних достатньо для BA/розробки; ризик **email enumeration** і потреба уточнити **конкретні тексти/політику** на етапі BA/дизайну закладені в описі (Risks / AC).
+* **Зроблено:** структурований опис (Problem, Objectives, Expected behaviour, Scope, AC, Non-goals, Risks, Classification), мітки **Bug**, **Improvement**, **stage:intake**; статус **Todo** без змін.
+
+[GitHub SDLC:intake]
+</comment>
+</comment-thread>
+
+<comment-thread comment-id="7c6e300d-7897-4dc2-8023-b92345daf2a0">
+<comment author="Denys Kuzin" created-at="2026-04-16T08:50:39.168Z">
+**BA spec (SDLC)**
+
+* Додано секції: **Feature description**, **User stories**, **Acceptance criteria (BA)**, **Edge cases**, **Impacted components**, **Technical notes**, **Test plan**; вихідні Problem / Objectives / Scope / Risks збережено.
+* **Sub-issues не створювались:** обсяг вкладається в один тікет (frontend + auth + payments — одна наскрізна історія).
+* Мітки: `ready:developer`, `stage:developer` (замість `stage:intake`); `Bug`, `Improvement` без змін. Статус **Todo**.
+
+[GitHub SDLC:ba]
+</comment>
+</comment-thread>

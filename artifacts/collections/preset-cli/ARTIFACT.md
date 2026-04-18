@@ -1,0 +1,115 @@
+---
+artifact_kind: collection
+id: preset-cli
+name: Preset — Developer CLI / SDK
+version: 1.0.0
+channel: stable
+min_shipctl: 0.3.0
+updated_at: "2026-04-17T21:15:32.596775+00:00"
+content_sha256: bde23bc24c092370b976bb9cb49f8c91c5526b711204a73a68521924ff4b1ab7
+deprecated: false
+replaced_by: null
+yanked: false
+group: preset
+tags: [preset, cli]
+authors: [@elmundi/ship-core]
+license: Apache-2.0
+description: >-
+  Preset for CLI binaries and SDK packages with release pipelines and multi-target builds. Use when bootstrapping a Ship project that matches this preset shape, when picking a starter set with `shipctl init`, or when the addendums or presets it composes need updating.
+spec:
+  subkind: preset
+  compatible_trackers: [linear, jira, github-issues]
+  compatible_ci: [gh-actions, gitlab-ci, circleci, azure-pipelines, manual]
+  compatible_agents: [cursor, codex, claude, aider, copilot]
+  required_tools: [tool/tracker/<current>, tool/ci/<current>, collection/agent-rules-<agent>]
+  optional_tools: [tool/release/goreleaser, tool/release/changesets, tool/release/semantic-release]
+  addendums: "[]   # preset itself declares no addendum; user opts in separately"
+  preset_id: cli
+  install_target: documentation/collections/preset-cli.md
+---
+
+# Preset — Developer CLI / SDK
+
+## Product shape
+
+Developer CLI or SDK — Node / Go / Rust / Python package
+consumed by other developers via a registry (npm, PyPI,
+crates.io, Go proxy) or as a raw binary. Bounded context is
+**"the install + invocation"**: a user runs `foo --bar` and
+expects the exit code, stdout, and stderr to be contract.
+
+## SDLC columns the preset expects
+
+- `Backlog → Todo → In Progress → In Review → Done`
+- `Blocked` as a parallel state.
+- Optional `Release Candidate` column between `Done` and a
+  final `Released` marker: a change sits in `Release
+  Candidate` while a prerelease (npm `next`, PyPI
+  `rc`-suffixed, Go pre-release tag) bakes.
+
+## Label contract (preset-specific)
+
+- `cli:breaking` — flag, subcommand, or exit-code change
+  that requires a MAJOR bump.
+- `cli:additive` — new subcommand or optional flag.
+- `platform:linux` / `platform:darwin` / `platform:windows` —
+  when a change is platform-specific.
+- `release:rc` — change needs prerelease verification before
+  stable publish.
+- Plus the base Ship labels.
+
+## CI stages (pseudocode)
+
+```
+on: pull_request
+jobs:
+  install:
+  lint-typecheck:
+  unit:
+  cross-build:     # matrix across linux/darwin/windows targets
+  golden-tests:    # frozen stdout/stderr/exit-code fixtures
+  fuzz:            # short fuzz run (optional but encouraged)
+  doctor:
+on: push tags
+jobs:
+  release:         # semantic-release / goreleaser / changesets
+  publish:         # npm publish / pypi upload / crates publish
+  smoke:            # pull from registry and run --version
+```
+
+## Evidence types
+
+- Cross-build matrix result (all target OS/arch pairs green).
+- Golden-test diff (byte-exact stdout/stderr for happy-path
+  fixtures).
+- Release notes + changelog entry.
+- Registry smoke verification (post-publish install + invoke).
+
+## Promote gates
+
+`cross-build green → golden-tests green → RC publish →
+real-user install smoke → stable publish → release note`.
+
+Any `cli:breaking` label forces a MAJOR bump and a
+documented deprecation notice in the release notes.
+
+## Required secrets (generic names)
+
+- Tracker API key.
+- CI token for the bot user.
+- Registry publish token (npm automation token / PyPI API
+  token / crates.io token / Go module proxy, if private).
+- Code-signing certificates for signed binaries (Apple
+  Developer ID, Windows Authenticode), if distributed as
+  binaries.
+- GPG key for tag signing (recommended).
+
+## Recommended addendums
+
+- `addendum-pharma` — rarely applicable to a CLI, but if the
+  CLI operates on PHI inputs (e.g. ETL for health data),
+  apply it.
+- `addendum-fin` — if the CLI handles payment data or
+  regulated artifacts.
+
+Most CLIs ship without any addendum.
