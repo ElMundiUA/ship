@@ -12,8 +12,7 @@
     "landing:build": "npm run build --prefix landing",
     "landing:start": "npm run start --prefix landing",
     "book:pdf": "npm run book:pdf --prefix landing",
-    "shipctl": "node cli/bin/shipctl.mjs",
-    "ship": "node cli/bin/ship-deprecated.mjs"
+    "shipctl": "node cli/bin/shipctl.mjs"
   },
   "keywords": [],
   "author": "Denys Kuzin",

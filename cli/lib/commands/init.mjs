@@ -287,7 +287,6 @@ function parseInitArgs(args, ctx) {
   };
 
   const agentsCsv = [];
-  let onlyAgent = null;
 
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -320,10 +319,6 @@ function parseInitArgs(args, ctx) {
         const id = s.trim();
         if (id) agentsCsv.push(id);
       }
-      continue;
-    }
-    if (a === "--only" && args[i + 1]) {
-      onlyAgent = String(args[++i]).trim();
       continue;
     }
     if (a === "--tracker" && args[i + 1]) {
@@ -369,7 +364,7 @@ function parseInitArgs(args, ctx) {
     }
   }
 
-  opts.agents = agentsCsv.length ? agentsCsv : onlyAgent ? [onlyAgent] : [];
+  opts.agents = agentsCsv;
   return opts;
 }
 
@@ -853,7 +848,7 @@ function printInitHelp() {
 
 USAGE
   shipctl init [--yes] [--force] [--dry-run] [--cwd DIR] [--json]
-               [--agents cursor,codex,claude-md] [--only <id>]
+               [--agents cursor,codex,claude-md]
                [--tracker <name>] [--ci <name>] [--preset <name>]
                [--language <id>] [--channel stable|edge]
                [--copy-rules] [--copy-playbook] [--bootstrap]
@@ -865,8 +860,7 @@ FLAGS
   --dry-run          Preview only; no files written, no network writes.
   --json             Emit the final summary as a JSON object (stdout).
   --cwd DIR          Operate against DIR instead of the current working dir.
-  --agents <csv>     Comma-separated agent ids (overrides --only). Example: cursor,codex,claude-md.
-  --only <id>        Single agent id (back-compat with older init).
+  --agents <csv>     Comma-separated agent ids. Example: cursor,codex,claude-md.
   --tracker <name>   Stack tracker: ${TRACKERS.join("|")}
   --ci <name>        Stack CI: ${CIS.join("|")}
   --preset <name>    Stack preset: ${PRESETS.join("|")}

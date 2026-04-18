@@ -32,8 +32,7 @@
     "access": "public"
   },
   "bin": {
-    "shipctl": "./bin/shipctl.mjs",
-    "ship": "./bin/ship-deprecated.mjs"
+    "shipctl": "./bin/shipctl.mjs"
   },
   "scripts": {
     "test": "node --test tests/*.test.mjs"

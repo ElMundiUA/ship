@@ -302,7 +302,7 @@ def _clear_manifest_cache() -> None:
 
 
 # YAML reserved indicators that PyYAML's scanner rejects as the start of a
-# plain scalar. The migration script writes things like `authors: [@scope/x]`,
+# plain scalar. Authors frequently write things like `authors: [@scope/x]`,
 # which is not strictly valid YAML, so we quote those tokens before parsing.
 _YAML_RESERVED_PREFIXES = ("@", "`", "%")
 

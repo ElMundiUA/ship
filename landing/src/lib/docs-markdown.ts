@@ -6,7 +6,8 @@ import { rewriteDocLinks, rewriteImages, transformAdmonitions, transformHeadingI
 const SNIPPET = /^--8<--\s+"([^"]+)"\s*$/gm;
 
 /**
- * Inline legacy MkDocs Material `--8<-- "path"` snippets (paths relative to repo root).
+ * Inline MkDocs Material-style `--8<-- "path"` snippets (paths relative to repo root)
+ * used by some documentation sources to compose long pages from shared fragments.
  */
 export function expandSnippetIncludes(source: string): string {
   const root = repoRoot();

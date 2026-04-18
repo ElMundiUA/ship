@@ -163,7 +163,7 @@ export function detectAgentTargets(cwd) {
 
 /**
  * Fixed catalog of agent ids + default paths used when the user forces
- * an agent via `--agents` or `--only` and the marker is missing.
+ * an agent via `--agents` and the marker is missing.
  * Keeping this in sync with detectAgentTargets() is intentional: the
  * "target file if missing" column in RFC-0004 maps here.
  */

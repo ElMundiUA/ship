@@ -6,7 +6,6 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const bin = path.resolve(__dirname, "..", "bin", "shipctl.mjs");
-const deprecatedBin = path.resolve(__dirname, "..", "bin", "ship-deprecated.mjs");
 
 function run(script, args) {
   return spawnSync(process.execPath, [script, ...args], { encoding: "utf8" });
@@ -31,10 +30,3 @@ test("shipctl init help mentions new flags", () => {
   assert.match(r.stdout, /shipctl init/);
 });
 
-test("ship-deprecated.mjs prints deprecation warning then forwards", () => {
-  const r = run(deprecatedBin, ["help"]);
-  assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stderr, /deprecated/i);
-  assert.match(r.stderr, /shipctl/);
-  assert.match(r.stdout, /shipctl/);
-});

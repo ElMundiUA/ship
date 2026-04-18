@@ -77,7 +77,6 @@ npx @elmundi/ship-cli verify --no-network
 | [CI adapters](../tools/ship-agent-ci.md) | Per-CI contracts (`gh-actions`, `gitlab-ci`, `buildkite`, `circleci`, `azure-pipelines`, `jenkins`, `manual`). |
 | [ElMundi rollout](elmundi.md) | Reference-org specific delta. |
 | [The book](../framework/index.md) | Long-form rationale and trade-offs. |
-| [Migration guide (v0.6)](migration-instruction-first-v0.6.md) | Breaking-change summary and staged transition checklist. |
 
 ## Authoritative protocol
 

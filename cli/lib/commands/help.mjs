@@ -21,7 +21,7 @@ COMMANDS
   shipctl tool … | shipctl workflow … | shipctl collection …   (same subcommands; plural aliases: patterns, tools, …)
 
   shipctl init [--yes] [--force] [--dry-run] [--json] [--cwd <dir>]
-               [--agents <csv>] [--only <id>]
+               [--agents <csv>]
                [--tracker <name>] [--ci <name>] [--preset <name>]
                [--language <name>] [--channel stable|edge]
                [--copy-rules] [--copy-playbook] [--bootstrap]
@@ -61,8 +61,7 @@ INIT FLAGS
   --force            Replace existing rule blocks and overwrite generated files
   --dry-run          Preview only
   --json             Emit a JSON summary suitable for CI
-  --agents <csv>     Comma-separated agent ids (overrides --only). See list below.
-  --only             Single agent id (kept for back-compat).
+  --agents <csv>     Comma-separated agent ids. See list below.
   --tracker <name>   Stack tracker: linear|jira|github-issues|azure-boards|clickup|spreadsheet|none
   --ci <name>        Stack CI: gh-actions|gitlab-ci|buildkite|circleci|azure-pipelines|jenkins|manual
   --preset <name>    Stack preset: web-app|api-backend|mobile-app|cli|monorepo|adoption-minimum
@@ -80,6 +79,6 @@ SUPPORTED AGENTS
   gemini, opencode, copilot, cursor-cloud, agents-md, claude-md
 
 For HTTP schemas see artifacts/tools/methodology-api/ARTIFACT.md in the Ship repo.
-Package: @elmundi/ship-cli (the binary name is shipctl; legacy 'ship' still works with a deprecation warning).
+Package: @elmundi/ship-cli (binary: shipctl).
 `);
 }

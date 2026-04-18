@@ -22,7 +22,7 @@
   </a>
   <a class="ship-card" href="adoption/">
     <h3>Adoption playbooks</h3>
-    <p>Interactive setup contract, launch matrix, migration notes, and practical rollout artifacts.</p>
+    <p>Interactive setup contract, launch matrix, and practical rollout artifacts.</p>
   </a>
   <a class="ship-card" href="tools/">
     <h3>Interfaces & API</h3>

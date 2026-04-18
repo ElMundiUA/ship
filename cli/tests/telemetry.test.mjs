@@ -265,19 +265,22 @@ test("telemetry flush: disabled → nothing to send, exits 0", () => {
   assert.match(r.stdout, /telemetry disabled/);
 });
 
-test("outbox: old-shape ({event,ts}) events are upgraded on read", () => {
+test("outbox: tolerates {event,ts} alias keys on read", () => {
+  // Some local writers (and human pokes via `jq`) historically used `event`/
+  // `ts` instead of `type`/`timestamp`. Reads normalize both shapes so we
+  // never silently drop telemetry the user already produced.
   const dir = mktmp();
   initRepo(dir, { share: true });
   const file = outboxPath(dir);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const legacy = {
+  const aliased = {
     event: "artifact.sync",
     ts: "2026-04-17T10:00:00Z",
     anonymous_id: readConfig(dir).config.telemetry.anonymous_id,
     shipctl_version: "0.9.0",
     payload: { categories: ["pattern"], updates_count: 1, failures_count: 0 },
   };
-  fs.writeFileSync(file, JSON.stringify(legacy) + "\n", "utf8");
+  fs.writeFileSync(file, JSON.stringify(aliased) + "\n", "utf8");
 
   const [ev] = listEvents(dir);
   assert.equal(ev.type, "artifact.sync");

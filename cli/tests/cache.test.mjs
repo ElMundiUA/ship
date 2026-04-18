@@ -18,7 +18,6 @@ import {
   cachePath,
   cacheFolder,
   metaPath,
-  migrateLegacyCache,
 } from "../lib/cache/store.mjs";
 
 const SHIPCTL_BIN = path.resolve(
@@ -253,66 +252,6 @@ test("readCachedArtifact surfaces v2 spec.install_target", () => {
   assert.equal(art.fm.spec && art.fm.spec.install_target, "AGENTS.md");
   assert.deepEqual(art.fm.tags, ["agent", "codex"]);
   assert.match(art.body, /# Codex rules body/);
-});
-
-test("migrateLegacyCache moves <id>@<v>.md + .meta.json into the new folder layout", () => {
-  const root = mktmp();
-  const kind = "collection";
-  const id = "agent-rules-cursor";
-  const version = "1.0.0";
-  const dir = path.join(root, ".ship", "cache", kind);
-  fs.mkdirSync(dir, { recursive: true });
-  const legacyBody = path.join(dir, `${id}@${version}.md`);
-  const legacyMeta = path.join(dir, `${id}@${version}.meta.json`);
-  const md = "---\ninstall_target: \".cursor/rules/ship.mdc\"\n---\n\nbody\n";
-  fs.writeFileSync(legacyBody, md, "utf8");
-  fs.writeFileSync(
-    legacyMeta,
-    JSON.stringify({ kind, id, version, content_sha256: sha256Hex(md) }),
-    "utf8",
-  );
-
-  migrateLegacyCache(root);
-
-  assert.equal(fs.existsSync(legacyBody), false);
-  assert.equal(fs.existsSync(legacyMeta), false);
-  const newBody = path.join(cacheFolder(root, kind, id, version), "ARTIFACT.md");
-  const newMeta = metaPath(root, kind, id, version);
-  assert.ok(fs.existsSync(newBody));
-  assert.ok(fs.existsSync(newMeta));
-
-  const cached = readCached(root, kind, id, version);
-  assert.equal(cached.content, md);
-  assert.equal(cached.meta.id, id);
-
-  // Migration is implicitly invoked by readCached/listCached, so calling it
-  // again should be a no-op (idempotent).
-  migrateLegacyCache(root);
-  assert.ok(fs.existsSync(newBody));
-});
-
-test("readCached lazily migrates a legacy single-file entry", () => {
-  const root = mktmp();
-  const kind = "pattern";
-  const id = "cloud-developer";
-  const version = "1.4.2";
-  const dir = path.join(root, ".ship", "cache", kind);
-  fs.mkdirSync(dir, { recursive: true });
-  const body = "# legacy body\n";
-  const meta = { kind, id, version, content_sha256: sha256Hex(body) };
-  fs.writeFileSync(path.join(dir, `${id}@${version}.md`), body, "utf8");
-  fs.writeFileSync(
-    path.join(dir, `${id}@${version}.meta.json`),
-    JSON.stringify(meta),
-    "utf8",
-  );
-
-  const got = readCached(root, kind, id, version);
-  assert.ok(got);
-  assert.equal(got.content, body);
-  // After read, the legacy single-file path should no longer exist.
-  assert.equal(fs.existsSync(path.join(dir, `${id}@${version}.md`)), false);
-  assert.ok(fs.existsSync(path.join(cacheFolder(root, kind, id, version), "ARTIFACT.md")));
 });
 
 test("shipctl collection fetch <id> writes to .ship/cache when in a workspace (Bug C)", async () => {

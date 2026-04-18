@@ -13,7 +13,6 @@ landing/tsconfig.tsbuildinfo
 !.env.example
 
 .DS_Store
-# stray agent run logs (legacy location was repo-root artifacts/)
 agent-run-*.log
 .ship/agent-runs/
 hooks/__pycache__/

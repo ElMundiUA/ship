@@ -305,17 +305,3 @@ export function validateConfig(obj) {
   if (errors.length) return { ok: false, errors, warnings };
   return { ok: true, config: obj, warnings };
 }
-
-/**
- * Identity migration for now. Future bumps will add real steps.
- * @param {object} obj
- * @param {number} from
- * @param {number} to
- */
-export function migrateConfig(obj, from, to) {
-  if (from === to) return obj;
-  if (from === 1 && to === 1) return obj;
-  throw new Error(
-    `shipctl config migrate: unsupported migration ${from} → ${to} (only 1 → 1 is defined today)`,
-  );
-}

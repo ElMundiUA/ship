@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-12T04:11:35+03:00"
-content_sha256: 61c16822962d232afad44ee3d34cd0000fed05c199ed116afead043db7294282
+content_sha256: 8b134358ac215a111fa431d05c8cd95a5ab86e56364708e3e65b4f6bf221c49e
 deprecated: false
 replaced_by: null
 yanked: false
@@ -63,7 +63,3 @@ If uncertain, present 1-2 options and request a decision before implementation.
 - `.env.example` entries for chosen stack
 - one workflow/runbook proving first green path
 - concise rollback notes for automation changes
-
-## If project uses legacy Ship runtime integration
-
-Treat it as optional legacy. Migrate toward instruction-first docs and stack-native adapters unless user asks to keep runtime behavior.

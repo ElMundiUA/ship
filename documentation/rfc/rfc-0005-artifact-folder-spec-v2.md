@@ -184,21 +184,15 @@ Deprecated and removed in v0.x:
 
 - `GET /manifest` — was a fan-out across kinds; recreate client-side as `Promise.all([list(patterns), list(workflows), …])` or as a release bundle.
 
-## Migration plan
+## Status (as-built)
 
-The plan is folded into the larger Wave 0–6 sequence already on the table; this RFC is the artifact for Wave 0.
+There are no v1 deployments to migrate from: the framework had no external adopters when this RFC landed, so v2 is the **only** layout. All artifacts in this repo were authored or rewritten directly under `artifacts/<kind>/<id>/ARTIFACT.md`.
 
-| Wave | Days | Output                                                                                      |
-|------|------|---------------------------------------------------------------------------------------------|
-| 0    | 1–2  | This RFC + `documentation/rfc/rfc-0005-artifact-folder-spec-v2/inventory.csv` (60-row map). |
-| 1    | 3–4  | `scripts/migrate_artifacts_v1_to_v2.py` populates `artifacts/<kind>/<id>/ARTIFACT.md` from old bodies and old manifest entries. Old manifests deleted. Old body locations replaced with stub redirect comments for one minor (or symlinked, if the OS allows). |
-| 2    | 2–3  | Backend in-memory index, new routes, FS watch in dev. CLI: `shipctl fetch` mirrors a folder, `shipctl new <kind> <id>` scaffolds from `templates/<kind>/`, `shipctl verify` checks folder sha. Old `GET /manifest` removed. |
-| 3    | 1–2  | `ship_artifact_check.py` v2: required frontmatter, description quality, sha drift, install_target reachable, id uniqueness across `artifacts/<kind>/`. CI workflow blocks PRs on drift. |
-| 4    | 1–2  | Landing/Next reads from new layout; `/<kind>/<id>` shows examples, reference, tests, scripts as tabs. Authoring guide: `documentation/getting-started/authoring-artifacts.md`. |
-| 5    | 1    | Telemetry events carry `kind/id/version/sha`; feedback drafts saved as `.ship/feedback/<kind>/<id>/draft.md`. RFC-0003 fixup. |
-| 6    | 1    | Cleanup: archive old body locations, remove migration shims, declare v0.4.0. |
+Followups still on the roadmap (no migration involved):
 
-Total: ~8–10 working days for one engineer, or 4–6 with two parallel tracks (backend+lint vs CLI+landing).
+- `shipctl new <kind> <id>` scaffolding from `templates/<kind>/`.
+- `GET /api/<kind>/<id>/files/<rel>` and `/tree` routes for sibling files.
+- Authoring guide at `documentation/getting-started/authoring-artifacts.md`.
 
 ## Interaction with prior RFCs
 
@@ -221,4 +215,4 @@ Total: ~8–10 working days for one engineer, or 4–6 with two parallel tracks 
 
 ## Acceptance
 
-This RFC is `Proposed` until Wave 1's migration script lands and the first ten artifacts (the `cloud-agent/*` patterns plus the five workflows) round-trip through the new API end-to-end. At that point the RFC moves to `Accepted` and the remaining artifacts migrate without further discussion.
+`Accepted`. All 61 artifacts in this repo round-trip through the new API end-to-end; backend, CLI, landing, and the artifact-sha lint all read from the v2 layout.

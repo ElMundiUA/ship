@@ -4,16 +4,6 @@
 
 Published as **`@elmundi/ship-cli`** under the [elmundi](https://www.npmjs.com/org/elmundi) org; the binary name is **`shipctl`**.
 
-## Deprecated alias
-
-The previous binary name `ship` still resolves after installation but prints a one-line stderr deprecation warning and forwards every argument to `shipctl`. It will be removed in `@elmundi/ship-cli@0.5` (tracking via RFC-0001 cleanup). Migrate scripts and docs to `shipctl` when convenient.
-
-```bash
-# Equivalent; the first form prints a deprecation warning.
-ship init --dry-run
-shipctl init --dry-run
-```
-
 ## Requirements
 
 - **Node.js 20+**
@@ -65,7 +55,7 @@ npx @elmundi/ship-cli init --dry-run
 
 If **none** of the above exist, init offers a **standalone** **`SHIP_AGENT_API.md`** in the repo root so humans can copy the contract into whatever system you use later.
 
-Use **`--agents <csv>`** (preferred) or **`--only <id>`** to limit targets; **`--cwd <dir>`** to point at another root. Example:
+Use **`--agents <csv>`** to limit targets and **`--cwd <dir>`** to point at another root. Example:
 
 ```bash
 npx @elmundi/ship-cli init --agents cursor,codex,claude --dry-run
@@ -119,7 +109,6 @@ npx @elmundi/ship-cli init --yes
 shipctl init
   [--yes] [--force] [--dry-run] [--cwd DIR] [--json]
   [--agents cursor,codex,claude-md]    # comma-separated ids
-  [--only <id>]                         # back-compat single agent
   [--tracker linear]                    # RFC-0002 enum
   [--ci gh-actions]                     # RFC-0002 enum
   [--preset mobile-app]                 # RFC-0002 enum
@@ -247,7 +236,6 @@ shipctl init --bootstrap --yes \
 shipctl init
   [--yes] [--force] [--dry-run] [--cwd DIR] [--json]
   [--agents cursor,codex,claude-md]  # preferred, csv
-  [--only <id>]                       # back-compat single agent
   [--tracker linear]                  # linear|jira|github-issues|…|none
   [--ci gh-actions]                   # gh-actions|gitlab-ci|…|manual
   [--preset mobile-app]               # web-app|api-backend|mobile-app|…

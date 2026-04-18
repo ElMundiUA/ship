@@ -55,9 +55,6 @@ export function sha256Hex(buf) {
  * of hashing a file whose own hash lives inside it. Both the server-side
  * stamp and any client-side verification must apply the same normalization.
  *
- * For artifacts that pre-date v2 (no frontmatter, single body file) this
- * is a no-op, so legacy cached entries keep verifying as before.
- *
  * @param {string} content
  * @returns {string}
  */
@@ -70,8 +67,6 @@ export function normalizeForArtifactSha(content) {
 
 /**
  * Hash an artifact body the way the server does — with the sha line cleared.
- * Falls back to a raw hash for legacy single-file artifacts that have no
- * frontmatter at all (the regex misses, so normalization is a no-op).
  *
  * @param {string|Buffer} content
  * @returns {string}
@@ -81,79 +76,10 @@ export function artifactSha256(content) {
   return sha256Hex(Buffer.from(normalizeForArtifactSha(text), "utf8"));
 }
 
-// ── Legacy → folder migrator ───────────────────────────────────────────────
-
-function legacyBodyPath(shipRoot, kind, id, version) {
-  return path.join(kindDir(shipRoot, kind), `${sanitize(id)}@${version}.md`);
-}
-
-function legacyMetaPath(shipRoot, kind, id, version) {
-  return path.join(kindDir(shipRoot, kind), `${sanitize(id)}@${version}.meta.json`);
-}
-
-function migrateOne(shipRoot, kind, id, version) {
-  const oldBody = legacyBodyPath(shipRoot, kind, id, version);
-  const oldMeta = legacyMetaPath(shipRoot, kind, id, version);
-  const folder = cacheFolder(shipRoot, kind, id, version);
-  if (!fs.existsSync(oldBody) && !fs.existsSync(oldMeta)) return false;
-  // Already migrated — both folder + new file present; nothing to do.
-  const newBody = path.join(folder, "ARTIFACT.md");
-  const newMeta = path.join(folder, ".meta.json");
-  fs.mkdirSync(folder, { recursive: true });
-  if (fs.existsSync(oldBody) && !fs.existsSync(newBody)) {
-    fs.renameSync(oldBody, newBody);
-  } else if (fs.existsSync(oldBody)) {
-    fs.rmSync(oldBody);
-  }
-  if (fs.existsSync(oldMeta) && !fs.existsSync(newMeta)) {
-    fs.renameSync(oldMeta, newMeta);
-  } else if (fs.existsSync(oldMeta)) {
-    fs.rmSync(oldMeta);
-  }
-  return true;
-}
-
-/**
- * Walk every kind dir and migrate any legacy single-file entries to the
- * new folder layout. Idempotent and silent. Safe to call from any cache
- * helper (we throttle by checking for any `*.meta.json` files at the kind
- * dir level, which only legacy entries have).
- *
- * @param {string} shipRoot
- */
-export function migrateLegacyCache(shipRoot) {
-  for (const kind of KIND_ROOTS) {
-    const dir = kindDir(shipRoot, kind);
-    if (!fs.existsSync(dir)) continue;
-    let entries;
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const e of entries) {
-      if (!e.isFile()) continue;
-      const m = /^(.+)@([^@]+)\.meta\.json$/.exec(e.name);
-      if (!m) continue;
-      const sanitizedId = m[1];
-      const version = m[2];
-      // sanitize() only ever maps "/" → "__", so we can reverse it safely.
-      const id = sanitizedId.replace(/__/g, "/");
-      try {
-        migrateOne(shipRoot, kind, id, version);
-      } catch {
-        // Best-effort migration; swallow errors to avoid breaking unrelated
-        // cache reads.
-      }
-    }
-  }
-}
-
 /**
  * @returns {{content:string, meta:object}|null}
  */
 export function readCached(shipRoot, kind, id, version) {
-  migrateOne(shipRoot, kind, id, version);
   const body = cachePath(shipRoot, kind, id, version);
   const meta = metaPath(shipRoot, kind, id, version);
   if (!fs.existsSync(body) || !fs.existsSync(meta)) return null;
@@ -175,7 +101,6 @@ export function readCached(shipRoot, kind, id, version) {
  * @param {object} [meta]
  */
 export function writeCached(shipRoot, kind, id, version, content, meta = {}) {
-  migrateOne(shipRoot, kind, id, version);
   const folder = cacheFolder(shipRoot, kind, id, version);
   const body = cachePath(shipRoot, kind, id, version);
   const metaFile = metaPath(shipRoot, kind, id, version);
@@ -205,7 +130,6 @@ export function writeCached(shipRoot, kind, id, version, content, meta = {}) {
  * @returns {Array<{kind:string,id:string,version:string,sha256:string,fetched_at:string|null,source_url:string|null}>}
  */
 export function listCached(shipRoot) {
-  migrateLegacyCache(shipRoot);
   const out = [];
   for (const kind of KIND_ROOTS) {
     const dir = kindDir(shipRoot, kind);
@@ -240,7 +164,6 @@ export function listCached(shipRoot) {
 }
 
 export function removeCached(shipRoot, kind, id, version) {
-  migrateOne(shipRoot, kind, id, version);
   const folder = cacheFolder(shipRoot, kind, id, version);
   if (!fs.existsSync(folder)) return 0;
   // Count what we are about to remove so callers (and tests) can assert how
@@ -258,7 +181,6 @@ export function removeCached(shipRoot, kind, id, version) {
  * @returns {{ok:boolean, expected:string|null, actual:string|null, reason?:string}}
  */
 export function verifyCached(shipRoot, kind, id, version) {
-  migrateOne(shipRoot, kind, id, version);
   const body = cachePath(shipRoot, kind, id, version);
   const meta = metaPath(shipRoot, kind, id, version);
   if (!fs.existsSync(body) || !fs.existsSync(meta)) {
@@ -288,7 +210,6 @@ export function verifyCached(shipRoot, kind, id, version) {
  * @returns {{ok:boolean, reason?:string, expected_sha?:string|null, actual_sha?:string|null}}
  */
 export function verifyCachedOnDisk(shipRoot, kind, id, version) {
-  migrateOne(shipRoot, kind, id, version);
   const body = cachePath(shipRoot, kind, id, version);
   const meta = metaPath(shipRoot, kind, id, version);
   if (!fs.existsSync(meta)) {

@@ -294,8 +294,8 @@ function recommendations(inferred, existing) {
  * Load .ship/config.yml starting from `cwd` (walking upward). Returns the
  * declared stack subtree (tracker/ci/language/preset/agents plus
  * api.channel) or null if no config is present. Parse errors are swallowed
- * into `null` so doctor never crashes on malformed YAML — the legacy
- * disk-only recommendation path still runs.
+ * into `null` so doctor never crashes on malformed YAML — the disk-only
+ * recommendation path still runs.
  *
  * @param {string} cwd
  * @returns {{filePath:string|null, stack: null | {tracker:string|null, ci:string|null, language:string|null, preset:string|null, agents:string[], channel:string|null}}}

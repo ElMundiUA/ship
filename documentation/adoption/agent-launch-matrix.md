@@ -6,7 +6,7 @@ Reference table for wiring any supported agent to the Ship **artifacts protocol*
 npx @elmundi/ship-cli init --agents <csv>
 ```
 
-`shipctl init` detects marker files/dirs and only injects into what is already in the tree; use `--agents` (or legacy `--only`) to force-include. With `--copy-rules`, the cached `collection/agent-rules-<agent>` artifact is installed at the `install_target` declared in its front-matter.
+`shipctl init` detects marker files/dirs and only injects into what is already in the tree; use `--agents` to force-include. With `--copy-rules`, the cached `collection/agent-rules-<agent>` artifact is installed at the `install_target` declared in its front-matter.
 
 ## Canonical artifact + prompt files
 

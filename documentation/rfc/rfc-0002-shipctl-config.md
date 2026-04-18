@@ -122,8 +122,6 @@ Fully specified in RFC-0003. The config-side surface is:
 | `shipctl config unset <key>`                    | Removes the key; reverts to schema default on next read.                           |
 | `shipctl config validate`                       | Parses the file, enforces enums and required fields, exits non-zero on failure.    |
 | `shipctl config show [--effective]`             | Prints the config (`--effective` resolves env + CLI overrides).                    |
-| `shipctl migrate`                               | Runs schema migrations; prompts interactively by default.                          |
-| `shipctl migrate --from 1 --to 2`               | Runs a specific migration path, prints the diff, asks for confirmation.            |
 
 Example usage:
 
@@ -180,17 +178,9 @@ Unknown `SHIP_*` variables are ignored; they do not cause failures.
 
 `shipctl init` runs `validate` before exit. `shipctl doctor` runs it on every invocation.
 
-## Migration policy
+## Schema versioning
 
-Schema bumps (`version: 1 → 2`) are not silent.
-
-1. The new `shipctl` detects `version: 1` in a file it would like to treat as `version: 2`.
-2. It refuses to mutate the file under the new rules.
-3. It instructs the user to run `shipctl migrate --from 1 --to 2`.
-4. `shipctl migrate` computes the target YAML, prints a unified diff, and waits for confirmation (`--yes` skips the prompt for CI).
-5. On confirm, the file is rewritten with `version: 2` and comments are preserved where possible.
-
-Each migration step is reversible via `shipctl migrate --from 2 --to 1` until a subsequent migration adds a non-reversible change, at which point the tool documents the loss.
+`version: 1` is the only schema today. There are no upgrade migrations to define yet — once schema-breaking field renames or moves arrive in a future RFC, this section spells out the upgrade flow (interactive diff, opt-in confirm, comments preserved). Until then, validation simply rejects unknown `version:` values.
 
 ## Gitignore defaults
 
@@ -356,7 +346,7 @@ Exit is `0` on pass, non-zero when any check fails. A `warn` does not flip exit 
 | Scenario                                                | `shipctl` behavior                                                     |
 |---------------------------------------------------------|------------------------------------------------------------------------|
 | Missing `.ship/config.yml`                              | `shipctl init` prompts to create; all other commands exit `10`.        |
-| `version:` missing or not `1`                           | Exit `10`. Hint: run `shipctl migrate`.                                |
+| `version:` missing or not `1`                           | Exit `10`. Hint: bump the file or downgrade `shipctl`.                 |
 | `shipctl_min` higher than installed version             | Exit `15`. Hint: upgrade the CLI.                                      |
 | YAML parse error                                        | Exit `10` with line/column and excerpt.                                |
 | Unknown enum value                                      | Exit `10` listing valid values.                                        |

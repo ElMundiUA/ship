@@ -5,7 +5,7 @@ Ship is an instruction-first framework for SDLC automation.
 Instead of shipping one hardcoded runtime, Ship ships:
 - a portable operating model,
 - versioned artifacts (patterns, tools, workflows, collections) for coding agents,
-- reference implementations and migration patterns.
+- reference implementations and adoption playbooks.
 
 Your agent adapts Ship to your real stack (Linear/Jira/GitHub Issues/spreadsheets, any CI, any agent runtime).
 
@@ -108,7 +108,6 @@ The root `Dockerfile` builds the Next app from the monorepo (so `/docs` can read
 
 - Ship is **knowledge + methodology** plus a small **HTTP API** and a **local CLI** (\`npm run ship\`) that wraps it — not a hosted proprietary control plane.
 - Secrets are never committed; agents should only reference secret names in outputs.
-- Breaking migration notes: [documentation/adoption/migration-instruction-first-v0.6.md](documentation/adoption/migration-instruction-first-v0.6.md)
 
 ## License
 

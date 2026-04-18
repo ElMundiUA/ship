@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-12T04:11:35+03:00"
-content_sha256: 9ef30393eba4809bbe324b8e9a1d99c5043836b6b201dae77150ce44972e48be
+content_sha256: dc3412459176fd3ec8788f7154308d57c8d0e347073cd0c9b0c61395982ebfc0
 deprecated: false
 replaced_by: null
 yanked: false
@@ -33,7 +33,7 @@ Target context: ElMundi-style monorepo (`website/`, `.github/workflows/`, delive
 - QA verifies behavior first; QA automation encodes it into reusable tests.
 - Daily digest and daily retro emails are required (DL recommended).
 
-## Migration guidance
+## Naming conventions
 
 - Historical names like `linear-agent-*.yml` may remain in repo history; normalize to neutral naming where feasible.
 - Preserve one canonical branch naming rule per ticket to avoid duplicate PRs.
