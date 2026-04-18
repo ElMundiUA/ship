@@ -14,7 +14,7 @@ function protocolBody(baseUrl) {
 
 Every Ship artifact is versioned (semver + \`content_sha256\`). Clients never
 vendor artifact bodies — they call \`shipctl\` (which hits \`POST /fetch\` and
-writes a local \`.ship/cache/\` entry keyed by \`<kind>/<id>@<version>\`).
+writes a local \`.ship/cache/<kind>/<id>@<version>/ARTIFACT.md\` entry).
 
 Agent protocol (must follow before applying an artifact):
 
@@ -42,7 +42,7 @@ shipctl sync                                       # reconcile .ship/cache/
 \`\`\`bash
 curl -sS -X POST "${baseUrl}/fetch" -H "Content-Type: application/json" \\
   -d '{"kind":"pattern","id":"cloud-developer"}'
-curl -sS "${baseUrl}/manifest"
+curl -sS "${baseUrl}/patterns"
 \`\`\`
 
 See \`documentation/rfc/rfc-0001-artifacts-protocol.md\` in the Ship repo for the

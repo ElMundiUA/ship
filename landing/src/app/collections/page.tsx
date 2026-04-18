@@ -52,11 +52,11 @@ export default function CollectionsPage() {
         <section className="py-12 sm:py-16">
           <div className="mx-auto max-w-3xl px-4 text-center text-sm text-white/55 sm:px-6">
             <p>
-              Add or edit bundles in markdown under <code className="text-aqua/90">documentation/collections/</code> and{" "}
-              <a className="font-semibold text-lilac underline-offset-2 hover:underline" href={`${repoUrl}/tree/main/collections`}>
-                collections/manifest.json
-              </a>
-              .
+              Add or edit bundles in{" "}
+              <a className="font-semibold text-lilac underline-offset-2 hover:underline" href={`${repoUrl}/tree/main/artifacts/collections`}>
+                artifacts/collections/&lt;id&gt;/ARTIFACT.md
+              </a>{" "}
+              — YAML frontmatter plus body in one file, reviewed in normal PRs.
             </p>
           </div>
         </section>
@@ -79,7 +79,7 @@ export default function CollectionsPage() {
             <p className="text-sm font-bold uppercase tracking-widest text-lilac">Ship CLI</p>
             <h2 className="font-display mt-2 text-3xl font-bold text-white">Collections commands</h2>
             <p className="mt-4 text-sm leading-relaxed text-white/65">
-              Reads <code className="text-aqua/90">collections/manifest.json</code> from disk — no API. From the Ship repo root (or{" "}
+              Scans <code className="text-aqua/90">artifacts/collections/&lt;id&gt;/ARTIFACT.md</code> on disk — no API. From the Ship repo root (or{" "}
               <code className="text-aqua/90">SHIP_REPO</code>). Cross-link discovery: <code className="text-aqua/90">ship search</code> when the API is running (
               <code className="text-white/80">{shipApiBase}</code>).
             </p>

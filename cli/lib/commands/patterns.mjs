@@ -1,25 +1,7 @@
-import fs from "node:fs";
-import path from "node:path";
 import { apiGet, apiPost } from "../http.mjs";
 import { resolveShipRepoRootForCatalog } from "../find-ship-root.mjs";
 import { searchCommand } from "./search.mjs";
-
-const MANIFEST_REL = "patterns/manifest.json";
-
-/**
- * @param {Record<string, unknown>} data
- */
-function parseManifest(data) {
-  const patterns = /** @type {unknown} */ (data.patterns);
-  if (!Array.isArray(patterns)) {
-    throw new Error(`${MANIFEST_REL} must contain a "patterns" array.`);
-  }
-  return {
-    version: data.version ?? 1,
-    description: typeof data.description === "string" ? data.description : "",
-    patterns: /** @type {Array<Record<string, unknown>>} */ (patterns),
-  };
-}
+import { scanArtifacts, readArtifactFile } from "../artifacts/fs-index.mjs";
 
 /**
  * @param {Record<string, unknown>} p
@@ -42,19 +24,14 @@ function slimEntry(p) {
  * @param {string[]} rest
  */
 async function patternsFromDisk(root, ctx, sub, rest) {
-  const manifestPath = path.join(root, MANIFEST_REL);
-  const raw = fs.readFileSync(manifestPath, "utf8");
-  /** @type {Record<string, unknown>} */
-  const manifest = JSON.parse(raw);
-  const { version, description, patterns } = parseManifest(manifest);
-  const entries = patterns.filter((p) => p && typeof p === "object" && typeof p.id === "string");
+  const entries = scanArtifacts(root, "pattern");
 
   if (sub === "list") {
     const slim = entries.map((p) => slimEntry(p));
-    const out = { version, description, patterns: slim };
+    const out = { version: 1, description: "Patterns", patterns: slim };
     if (ctx.json) console.log(JSON.stringify(out, null, 2));
     else {
-      console.log(`${description || "Patterns"}\n`);
+      console.log(`Patterns\n`);
       for (const p of slim) {
         console.log(`- ${p.id}`);
         console.log(`  ${p.title}`);
@@ -76,23 +53,12 @@ async function patternsFromDisk(root, ctx, sub, rest) {
       console.error(`Unknown id: ${id}`);
       process.exit(1);
     }
-    const rel = entry.path;
-    if (typeof rel !== "string" || !rel.trim()) {
-      console.error("Pattern entry has no path.");
+    const file = readArtifactFile(root, "pattern", id);
+    if (!file) {
+      console.error(`Missing file: ${entry.path}`);
       process.exit(1);
     }
-    const abs = path.resolve(root, rel);
-    const rootNorm = root.endsWith(path.sep) ? root.slice(0, -1) : root;
-    const absNorm = abs.endsWith(path.sep) ? abs.slice(0, -1) : abs;
-    if (absNorm !== rootNorm && !abs.startsWith(root + path.sep)) {
-      console.error("Manifest path escapes repository root.");
-      process.exit(1);
-    }
-    if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
-      console.error(`Missing file: ${rel}`);
-      process.exit(1);
-    }
-    const content = fs.readFileSync(abs, "utf8");
+    const content = file.content;
     const full = { ...slimEntry(entry), content };
     if (ctx.json) console.log(JSON.stringify(full, null, 2));
     else {
@@ -171,7 +137,7 @@ export async function patternCommand(ctx, args) {
   ship pattern fetch <id>
   ship pattern search <query> [--top-k N]
 
-With a local Ship tree (cwd or SHIP_REPO): list/show/fetch read patterns/manifest.json on disk.
+With a local Ship tree (cwd or SHIP_REPO): list/show/fetch scan artifacts/patterns/<id>/ARTIFACT.md on disk.
 Otherwise: methodology API (GET /patterns, POST /fetch for fetch, POST /search for search).
 
 Plural alias: ship patterns …

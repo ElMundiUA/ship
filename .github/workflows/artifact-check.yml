@@ -3,12 +3,7 @@ name: artifact-check
 on:
   pull_request:
     paths:
-      - "patterns/manifest.json"
-      - "tools/manifest.json"
-      - "workflows/manifest.json"
-      - "collections/manifest.json"
-      - "prompts/**"
-      - "documentation/**"
+      - "artifacts/**"
       - "scripts/ship_artifact_check.py"
       - ".github/workflows/artifact-check.yml"
 

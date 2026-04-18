@@ -22,6 +22,13 @@ function sha256Hex(s) {
   return crypto.createHash("sha256").update(s).digest("hex");
 }
 
+const PLURAL_BY_SINGULAR = {
+  pattern: "patterns",
+  workflow: "workflows",
+  tool: "tools",
+  collection: "collections",
+};
+
 function startServer({ body, version = "1.0.0", kind = "pattern", id = "cloud-developer" } = {}) {
   const shaExpected = sha256Hex(body);
   const entry = {
@@ -29,7 +36,7 @@ function startServer({ body, version = "1.0.0", kind = "pattern", id = "cloud-de
     id,
     title: "Developer",
     summary: "test",
-    path: `prompts/${id}.md`,
+    path: `artifacts/${PLURAL_BY_SINGULAR[kind]}/${id}/ARTIFACT.md`,
     tags: [],
     group: "test",
     version,
@@ -45,9 +52,13 @@ function startServer({ body, version = "1.0.0", kind = "pattern", id = "cloud-de
     req.on("data", (c) => chunks.push(c));
     req.on("end", () => {
       const url = new URL(req.url, "http://localhost");
-      if (req.method === "GET" && url.pathname === "/manifest") {
+      const perKindMatch = url.pathname.match(/^\/(patterns|workflows|tools|collections)$/);
+      if (req.method === "GET" && perKindMatch) {
+        const plural = perKindMatch[1];
+        const expectedPlural = PLURAL_BY_SINGULAR[entry.kind];
+        const arr = plural === expectedPlural ? [entry] : [];
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify([entry]));
+        res.end(JSON.stringify({ description: "", version: 2, [plural]: arr }));
         return;
       }
       if (req.method === "POST" && url.pathname === "/fetch") {
@@ -138,7 +149,8 @@ test("sync --check-only reports updated:1; second sync reports up_to_date:1", as
       ".ship",
       "cache",
       "pattern",
-      "cloud-developer@1.0.0.md",
+      "cloud-developer@1.0.0",
+      "ARTIFACT.md",
     );
     assert.ok(fs.existsSync(bodyPath), `expected cache at ${bodyPath}`);
     assert.equal(fs.readFileSync(bodyPath, "utf8"), body);
@@ -184,7 +196,8 @@ test("sync re-fetches when the cached .md body drifted from its meta sha (Bug F)
       ".ship",
       "cache",
       "pattern",
-      "cloud-developer@1.0.0.md",
+      "cloud-developer@1.0.0",
+      "ARTIFACT.md",
     );
     // Corrupt the on-disk body without updating the sidecar meta.
     fs.appendFileSync(bodyPath, "\nEXTRA\n");
@@ -233,14 +246,16 @@ test("sync re-fetches when the cached .md body was deleted while meta remains (B
       ".ship",
       "cache",
       "pattern",
-      "cloud-developer@1.0.0.md",
+      "cloud-developer@1.0.0",
+      "ARTIFACT.md",
     );
     const metaPath = path.join(
       dir,
       ".ship",
       "cache",
       "pattern",
-      "cloud-developer@1.0.0.meta.json",
+      "cloud-developer@1.0.0",
+      ".meta.json",
     );
     fs.rmSync(bodyPath);
     assert.ok(fs.existsSync(metaPath), "meta sidecar should remain");
@@ -281,7 +296,7 @@ test("sync --dry-run prints planned HTTP calls without writing cache", async () 
       dir,
     ]);
     assert.equal(dry.status, 0, dry.stderr);
-    assert.match(dry.stdout, /plan: GET .*\/manifest/);
+    assert.match(dry.stdout, /plan: GET .*\/\{patterns,workflows,tools,collections\}/);
     assert.match(dry.stdout, /plan: POST .*\/fetch/);
 
     const bodyPath = path.join(
@@ -289,7 +304,8 @@ test("sync --dry-run prints planned HTTP calls without writing cache", async () 
       ".ship",
       "cache",
       "pattern",
-      "cloud-developer@1.0.0.md",
+      "cloud-developer@1.0.0",
+      "ARTIFACT.md",
     );
     assert.equal(fs.existsSync(bodyPath), false);
   } finally {

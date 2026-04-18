@@ -60,9 +60,9 @@ export default function WorkflowsPage() {
               <Link href="/docs/examples/elmundi" className="font-semibold text-coral underline-offset-2 hover:underline">
                 Manual → ElMundi
               </Link>
-              . Manifest source:{" "}
-              <a className="font-semibold text-coral underline-offset-2 hover:underline" href={`${repoUrl}/tree/main/workflows`}>
-                workflows/manifest.json
+              . Source:{" "}
+              <a className="font-semibold text-coral underline-offset-2 hover:underline" href={`${repoUrl}/tree/main/artifacts/workflows`}>
+                artifacts/workflows/
               </a>
               .
             </p>
@@ -88,7 +88,7 @@ export default function WorkflowsPage() {
             <p className="text-sm font-bold uppercase tracking-widest text-coral">Ship CLI</p>
             <h2 className="font-display mt-2 text-3xl font-bold text-white">Workflows commands</h2>
             <p className="mt-4 text-sm leading-relaxed text-white/65">
-              Reads <code className="text-aqua/90">workflows/manifest.json</code> from disk — no API. From the Ship repo root (or{" "}
+              Scans <code className="text-aqua/90">artifacts/workflows/&lt;id&gt;/ARTIFACT.md</code> on disk — no API. From the Ship repo root (or{" "}
               <code className="text-aqua/90">SHIP_REPO</code>). Explore intent text with <code className="text-aqua/90">ship search</code> when the API is up (
               <code className="text-white/80">{shipApiBase}</code>).
             </p>

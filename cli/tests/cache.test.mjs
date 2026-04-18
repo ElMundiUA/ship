@@ -14,7 +14,11 @@ import {
   verifyCached,
   verifyCachedOnDisk,
   readCachedFrontMatter,
+  readCachedArtifact,
   cachePath,
+  cacheFolder,
+  metaPath,
+  migrateLegacyCache,
 } from "../lib/cache/store.mjs";
 
 const SHIPCTL_BIN = path.resolve(
@@ -46,14 +50,24 @@ function startFetchServer({ kind, id, version, body }) {
     deprecated: false,
     replaced_by: null,
   };
+  const PLURAL_BY_SINGULAR = {
+    pattern: "patterns",
+    workflow: "workflows",
+    tool: "tools",
+    collection: "collections",
+  };
   const server = http.createServer((req, res) => {
     let chunks = [];
     req.on("data", (c) => chunks.push(c));
     req.on("end", () => {
       const url = new URL(req.url, "http://localhost");
-      if (req.method === "GET" && url.pathname === "/manifest") {
+      const perKindMatch = url.pathname.match(/^\/(patterns|workflows|tools|collections)$/);
+      if (req.method === "GET" && perKindMatch) {
+        const plural = perKindMatch[1];
+        const expectedPlural = PLURAL_BY_SINGULAR[entry.kind];
+        const arr = plural === expectedPlural ? [entry] : [];
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify([entry]));
+        res.end(JSON.stringify({ description: "", version: 2, [plural]: arr }));
         return;
       }
       if (req.method === "POST" && url.pathname === "/fetch") {
@@ -106,10 +120,13 @@ test("writeCached -> readCached round-trips", () => {
   assert.equal(got.meta.content_sha256, meta.content_sha256);
 });
 
-test("sanitize replaces slashes in id for filenames", () => {
+test("sanitize replaces slashes in id for cache folder name", () => {
   const root = mktmp();
   const p = cachePath(root, "collection", "agent-rules/cursor", "1.0.0");
-  assert.ok(p.endsWith("agent-rules__cursor@1.0.0.md"));
+  assert.ok(
+    p.endsWith(path.join("agent-rules__cursor@1.0.0", "ARTIFACT.md")),
+    `unexpected cache path: ${p}`,
+  );
   writeCached(root, "collection", "agent-rules/cursor", "1.0.0", "body", {});
   const back = readCached(root, "collection", "agent-rules/cursor", "1.0.0");
   assert.equal(back.content, "body");
@@ -137,11 +154,14 @@ test("verifyCached detects tampering", () => {
   assert.notEqual(bad.expected, bad.actual);
 });
 
-test("removeCached removes both body and meta", () => {
+test("removeCached removes the artifact folder (body + meta)", () => {
   const root = mktmp();
   writeCached(root, "pattern", "x", "1.0.0", "x", {});
+  const folder = cacheFolder(root, "pattern", "x", "1.0.0");
+  assert.ok(fs.existsSync(folder));
   const n = removeCached(root, "pattern", "x", "1.0.0");
   assert.equal(n, 2);
+  assert.equal(fs.existsSync(folder), false);
   assert.equal(readCached(root, "pattern", "x", "1.0.0"), null);
 });
 
@@ -209,6 +229,92 @@ test("readCachedFrontMatter returns null when nothing is cached", () => {
   assert.equal(readCachedFrontMatter(root, "collection", "agent-rules-missing"), null);
 });
 
+test("readCachedArtifact surfaces v2 spec.install_target", () => {
+  const root = mktmp();
+  const md = [
+    "---",
+    "artifact_kind: collection",
+    "id: agent-rules-codex",
+    "name: Codex agent rules",
+    "version: 1.2.3",
+    "tags: [agent, codex]",
+    "spec:",
+    "  install_target: AGENTS.md",
+    "  marker: \"<!-- ship-cli: artifacts-protocol v1 -->\"",
+    "---",
+    "",
+    "# Codex rules body",
+    "",
+  ].join("\n");
+  writeCached(root, "collection", "agent-rules-codex", "1.2.3", md, {});
+  const art = readCachedArtifact(root, "collection", "agent-rules-codex", "1.2.3");
+  assert.ok(art);
+  assert.equal(art.spec.install_target, "AGENTS.md");
+  assert.equal(art.fm.spec && art.fm.spec.install_target, "AGENTS.md");
+  assert.deepEqual(art.fm.tags, ["agent", "codex"]);
+  assert.match(art.body, /# Codex rules body/);
+});
+
+test("migrateLegacyCache moves <id>@<v>.md + .meta.json into the new folder layout", () => {
+  const root = mktmp();
+  const kind = "collection";
+  const id = "agent-rules-cursor";
+  const version = "1.0.0";
+  const dir = path.join(root, ".ship", "cache", kind);
+  fs.mkdirSync(dir, { recursive: true });
+  const legacyBody = path.join(dir, `${id}@${version}.md`);
+  const legacyMeta = path.join(dir, `${id}@${version}.meta.json`);
+  const md = "---\ninstall_target: \".cursor/rules/ship.mdc\"\n---\n\nbody\n";
+  fs.writeFileSync(legacyBody, md, "utf8");
+  fs.writeFileSync(
+    legacyMeta,
+    JSON.stringify({ kind, id, version, content_sha256: sha256Hex(md) }),
+    "utf8",
+  );
+
+  migrateLegacyCache(root);
+
+  assert.equal(fs.existsSync(legacyBody), false);
+  assert.equal(fs.existsSync(legacyMeta), false);
+  const newBody = path.join(cacheFolder(root, kind, id, version), "ARTIFACT.md");
+  const newMeta = metaPath(root, kind, id, version);
+  assert.ok(fs.existsSync(newBody));
+  assert.ok(fs.existsSync(newMeta));
+
+  const cached = readCached(root, kind, id, version);
+  assert.equal(cached.content, md);
+  assert.equal(cached.meta.id, id);
+
+  // Migration is implicitly invoked by readCached/listCached, so calling it
+  // again should be a no-op (idempotent).
+  migrateLegacyCache(root);
+  assert.ok(fs.existsSync(newBody));
+});
+
+test("readCached lazily migrates a legacy single-file entry", () => {
+  const root = mktmp();
+  const kind = "pattern";
+  const id = "cloud-developer";
+  const version = "1.4.2";
+  const dir = path.join(root, ".ship", "cache", kind);
+  fs.mkdirSync(dir, { recursive: true });
+  const body = "# legacy body\n";
+  const meta = { kind, id, version, content_sha256: sha256Hex(body) };
+  fs.writeFileSync(path.join(dir, `${id}@${version}.md`), body, "utf8");
+  fs.writeFileSync(
+    path.join(dir, `${id}@${version}.meta.json`),
+    JSON.stringify(meta),
+    "utf8",
+  );
+
+  const got = readCached(root, kind, id, version);
+  assert.ok(got);
+  assert.equal(got.content, body);
+  // After read, the legacy single-file path should no longer exist.
+  assert.equal(fs.existsSync(path.join(dir, `${id}@${version}.md`)), false);
+  assert.ok(fs.existsSync(path.join(cacheFolder(root, kind, id, version), "ARTIFACT.md")));
+});
+
 test("shipctl collection fetch <id> writes to .ship/cache when in a workspace (Bug C)", async () => {
   const body = "---\nartifact_kind: collection\n---\n\n# Pharma addendum\nhello\n";
   const kind = "collection";
@@ -234,12 +340,12 @@ test("shipctl collection fetch <id> writes to .ship/cache when in a workspace (B
     // By default the body should NOT be dumped to stdout (opt-in via --print).
     assert.doesNotMatch(res.stdout, /# Pharma addendum/);
 
-    const bodyPath = path.join(dir, ".ship", "cache", kind, `${id}@${version}.md`);
+    const bodyPath = path.join(dir, ".ship", "cache", kind, `${id}@${version}`, "ARTIFACT.md");
     assert.ok(fs.existsSync(bodyPath), `expected cache body at ${bodyPath}`);
     assert.equal(fs.readFileSync(bodyPath, "utf8"), body);
 
-    const metaPath = path.join(dir, ".ship", "cache", kind, `${id}@${version}.meta.json`);
-    const meta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+    const metaJsonPath = path.join(dir, ".ship", "cache", kind, `${id}@${version}`, ".meta.json");
+    const meta = JSON.parse(fs.readFileSync(metaJsonPath, "utf8"));
     assert.equal(meta.content_sha256, sha256Hex(body));
     assert.equal(meta.kind, kind);
     assert.equal(meta.id, id);

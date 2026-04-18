@@ -253,7 +253,9 @@ export async function syncArtifacts(options = {}) {
     typeof config.api?.ttl_hours === "number" ? config.api.ttl_hours : 24;
 
   if (dryRun && verbose) {
-    console.log(`plan: GET ${baseUrl}/manifest?channel=${channel}`);
+    console.log(
+      `plan: GET ${baseUrl}/{patterns,workflows,tools,collections} (channel=${channel})`,
+    );
   }
 
   let manifestEntries;

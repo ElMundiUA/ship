@@ -87,8 +87,9 @@ export default function PatternsPage() {
                 <div>
                   <p className="font-display font-semibold text-white">Pin the repo (or subtree)</p>
                   <p className="mt-1 text-sm leading-relaxed">
-                    Treat <code className="text-aqua/90">patterns/manifest.json</code> as the manifest index. Your fork owns
-                    the manifest; upstream Ship can be merged like any other dependency.
+                    Each pattern lives at <code className="text-aqua/90">artifacts/patterns/&lt;id&gt;/ARTIFACT.md</code> with
+                    YAML frontmatter as the single source of truth. Your fork owns the folder; upstream Ship can be merged
+                    like any other dependency.
                   </p>
                 </div>
               </li>
@@ -191,7 +192,7 @@ export default function PatternsPage() {
                 Manual → Backend API
               </Link>{" "}
               (
-              <a className="text-aqua/80 underline-offset-2 hover:underline" href={`${repoUrl}/blob/main/documentation/tools/backend-api.md`}>
+              <a className="text-aqua/80 underline-offset-2 hover:underline" href={`${repoUrl}/blob/main/artifacts/tools/methodology-api/ARTIFACT.md`}>
                 source on GitHub
               </a>
               ).

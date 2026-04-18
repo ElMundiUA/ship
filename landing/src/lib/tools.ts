@@ -1,15 +1,8 @@
-import fs from "node:fs";
-import path from "node:path";
-import { repoRoot } from "@/lib/repo-path";
+import { loadArtifactCatalog, loadArtifactBody, type ArtifactEntry } from "@/lib/artifacts-fs";
 
 export type ToolGroup = "platform" | "tracker" | "ci" | "e2e" | "agents";
 
-export interface ToolEntry {
-  id: string;
-  title: string;
-  summary: string;
-  path: string;
-  tags: string[];
+export interface ToolEntry extends ArtifactEntry {
   group: ToolGroup | string;
 }
 
@@ -19,28 +12,17 @@ export interface ToolsManifest {
   tools: ToolEntry[];
 }
 
-/** Manifest at repo root `tools/manifest.json`. */
-export function toolsManifestPath(): string {
-  const p = path.join(repoRoot(), "tools", "manifest.json");
-  if (!fs.existsSync(p)) throw new Error("tools/manifest.json not found.");
-  return p;
-}
-
 export function loadToolsManifest(): ToolsManifest {
-  const raw = fs.readFileSync(toolsManifestPath(), "utf8");
-  return JSON.parse(raw) as ToolsManifest;
+  const cat = loadArtifactCatalog("tools");
+  return {
+    version: cat.version,
+    description: cat.description,
+    tools: cat.entries as ToolEntry[],
+  };
 }
 
 export function loadToolMarkdown(relPath: string): string {
-  const root = repoRoot();
-  const candidate = path.resolve(root, relPath);
-  if (!candidate.startsWith(root + path.sep) && candidate !== root) {
-    throw new Error("Tool path escapes repository root.");
-  }
-  if (!fs.existsSync(candidate) || !fs.statSync(candidate).isFile()) {
-    throw new Error(`Tool file missing: ${relPath}`);
-  }
-  return fs.readFileSync(candidate, "utf8");
+  return loadArtifactBody(relPath);
 }
 
 export function getToolById(id: string): ToolEntry | undefined {

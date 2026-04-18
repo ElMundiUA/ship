@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Lint script: verify manifest `content_sha256` matches the referenced file.
+"""Lint script: verify every artifact's recorded `content_sha256` is canonical.
 
-Walks every entry in patterns/tools/workflows/collections manifests and
-compares the recorded `content_sha256` to a freshly computed SHA-256 of the
-referenced file. If any entry has drifted, prints red `FAIL:` lines and exits
-non-zero so CI can block the PR.
+Walks `artifacts/<kind>/<id>/ARTIFACT.md` and compares the recorded
+`content_sha256` (from the YAML frontmatter) to a freshly computed SHA-256
+using the RFC-0005 normalization rule:
+
+    sha256( file_bytes_with_sha_line_value_cleared )
+
+If any artifact has drifted, prints red `FAIL:` lines and exits non-zero so
+CI can block the PR.
 
 Usage:
     python3 scripts/ship_artifact_check.py
@@ -13,81 +17,62 @@ Usage:
 from __future__ import annotations
 
 import hashlib
-import json
+import re
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-
-MANIFESTS = (
-    ("pattern", REPO_ROOT / "patterns" / "manifest.json", "patterns"),
-    ("tool", REPO_ROOT / "tools" / "manifest.json", "tools"),
-    ("workflow", REPO_ROOT / "workflows" / "manifest.json", "workflows"),
-    ("collection", REPO_ROOT / "collections" / "manifest.json", "collections"),
-)
+ARTIFACTS_ROOT = REPO_ROOT / "artifacts"
 
 RED = "\033[31m"
 GREEN = "\033[32m"
 RESET = "\033[0m"
 
-
-def sha256_of(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(65536), b""):
-            h.update(chunk)
-    return h.hexdigest()
+SHA_LINE_RE = re.compile(
+    r"^(content_sha256:\s*)([0-9a-fA-F]+)\s*$",
+    re.MULTILINE,
+)
 
 
-def check_manifest(kind: str, manifest_path: Path, array_key: str) -> tuple[int, list[str]]:
-    if not manifest_path.is_file():
-        return 0, []
-    data = json.loads(manifest_path.read_text(encoding="utf-8"))
-    entries = data.get(array_key) or []
-    failures: list[str] = []
-    checked = 0
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        rel = entry.get("path")
-        if not isinstance(rel, str):
-            continue
-        target = (REPO_ROOT / rel).resolve()
-        try:
-            target.relative_to(REPO_ROOT.resolve())
-        except ValueError:
-            continue
-        if not target.is_file() or target.suffix.lower() not in {".md", ".txt"}:
-            continue
-        stored = entry.get("content_sha256")
-        actual = sha256_of(target)
-        version = entry.get("version", "?.?.?")
-        ident = entry.get("id", "?")
-        checked += 1
-        if stored != actual:
-            failures.append(
-                f"{RED}FAIL:{RESET} {kind}:{ident} content changed but manifest "
-                f"version still {version} (expected bump). "
-                f"stored_sha={stored}, actual_sha={actual}"
-            )
-    return checked, failures
+def canonical_sha(text: str) -> str:
+    cleared = SHA_LINE_RE.sub(r"\1", text, count=1)
+    return hashlib.sha256(cleared.encode("utf-8")).hexdigest()
 
 
 def main() -> int:
-    total_checked = 0
-    all_failures: list[str] = []
-    for kind, path, array_key in MANIFESTS:
-        count, failures = check_manifest(kind, path, array_key)
-        total_checked += count
-        all_failures.extend(failures)
-
-    if all_failures:
-        for line in all_failures:
-            print(line)
-        print(f"{RED}{len(all_failures)} drift(s) detected across {total_checked} checked entries.{RESET}")
+    if not ARTIFACTS_ROOT.is_dir():
+        print(f"{RED}FAIL{RESET} artifacts/ directory not found at {ARTIFACTS_ROOT}")
         return 1
 
-    print(f"{GREEN}OK:{RESET} {total_checked} manifest entries checked")
+    failures: list[str] = []
+    checked = 0
+    for md in sorted(ARTIFACTS_ROOT.rglob("ARTIFACT.md")):
+        rel = md.relative_to(REPO_ROOT)
+        text = md.read_text(encoding="utf-8")
+        match = SHA_LINE_RE.search(text)
+        if match is None:
+            failures.append(f"{rel}: missing content_sha256 frontmatter line")
+            continue
+        recorded = match.group(2).lower()
+        actual = canonical_sha(text)
+        if actual != recorded:
+            id_match = re.search(r"^id:\s*(\S+)", text, re.MULTILINE)
+            artifact_id = id_match.group(1) if id_match else rel.parts[-2]
+            failures.append(
+                f"{rel} (id={artifact_id}): expected {recorded[:12]}…, computed {actual[:12]}…"
+            )
+        checked += 1
+
+    if failures:
+        for line in failures:
+            print(f"{RED}FAIL:{RESET} {line}")
+        print(
+            f"\n{RED}{len(failures)} of {checked} artifacts have drifted{RESET}. "
+            "Run `python scripts/restamp_artifact_shas.py` to fix.",
+        )
+        return 1
+
+    print(f"{GREEN}OK:{RESET} {checked} artifacts canonical (content_sha256 matches).")
     return 0
 
 

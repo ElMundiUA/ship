@@ -1,19 +1,26 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const MARKERS = [
-  "workflows/manifest.json",
-  "tools/manifest.json",
-  "collections/manifest.json",
-  "patterns/manifest.json",
+const MARKER_DIRS = [
+  "artifacts/patterns",
+  "artifacts/tools",
+  "artifacts/workflows",
+  "artifacts/collections",
 ];
 
 function markersOk(dir) {
-  return MARKERS.every((m) => fs.existsSync(path.join(dir, m)));
+  return MARKER_DIRS.every((rel) => {
+    const abs = path.join(dir, rel);
+    try {
+      return fs.statSync(abs).isDirectory();
+    } catch {
+      return false;
+    }
+  });
 }
 
 /**
- * Walk parents from cwd for a directory containing all Ship manifest markers.
+ * Walk parents from cwd for a directory containing the v2 artifacts/ tree.
  * @returns {string | null}
  */
 export function tryFindShipRepoRootFromWalk() {
@@ -28,7 +35,7 @@ export function tryFindShipRepoRootFromWalk() {
 }
 
 /**
- * Root of the Ship monorepo (manifests at repo root).
+ * Root of the Ship monorepo (artifacts/<plural>/<id>/ARTIFACT.md present).
  * Set `SHIP_REPO` to an absolute path when not running from inside the tree.
  */
 export function findShipRepoRoot() {
@@ -37,7 +44,7 @@ export function findShipRepoRoot() {
     const r = path.resolve(env);
     if (!markersOk(r)) {
       throw new Error(
-        `SHIP_REPO=${r} is not the Ship monorepo (expected tools/, workflows/, collections/, patterns/ manifests at repo root).`,
+        `SHIP_REPO=${r} is not the Ship monorepo (expected artifacts/{patterns,tools,workflows,collections}/ at repo root).`,
       );
     }
     return r;
@@ -60,7 +67,7 @@ export function resolveShipRepoRootForCatalog() {
     const r = path.resolve(env);
     if (!markersOk(r)) {
       throw new Error(
-        `SHIP_REPO=${r} is not the Ship monorepo (expected tools/, workflows/, collections/, patterns/ manifests at repo root).`,
+        `SHIP_REPO=${r} is not the Ship monorepo (expected artifacts/{patterns,tools,workflows,collections}/ at repo root).`,
       );
     }
     return r;

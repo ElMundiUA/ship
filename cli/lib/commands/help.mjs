@@ -52,8 +52,9 @@ GLOBAL FLAGS
   --json           Machine-readable JSON
 
 LOCAL TREE
-  pattern / tool / workflow / collection list|show|fetch read manifests from disk when cwd or SHIP_REPO
-  is inside the Ship monorepo (search always uses HTTP).
+  pattern / tool / workflow / collection list|show|fetch scan
+  artifacts/<plural>/<id>/ARTIFACT.md on disk when cwd or SHIP_REPO is inside
+  the Ship monorepo (search always uses HTTP).
 
 INIT FLAGS
   --yes              Non-interactive apply (use --dry-run first)
@@ -78,7 +79,7 @@ SUPPORTED AGENTS
   cursor, codex, claude, aider, cline, continue, windsurf, zed,
   gemini, opencode, copilot, cursor-cloud, agents-md, claude-md
 
-For HTTP schemas see documentation/tools/backend-api.md in the Ship repo.
+For HTTP schemas see artifacts/tools/methodology-api/ARTIFACT.md in the Ship repo.
 Package: @elmundi/ship-cli (the binary name is shipctl; legacy 'ship' still works with a deprecation warning).
 `);
 }

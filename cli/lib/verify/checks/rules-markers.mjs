@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { KNOWN_AGENTS } from "../../detect.mjs";
-import { listCached, readCachedFrontMatter } from "../../cache/store.mjs";
+import { listCached, readCachedArtifact } from "../../cache/store.mjs";
 
 export const id = "rules-markers";
 export const category = "local";
@@ -49,7 +49,7 @@ export async function run(ctx) {
     let rel = null;
     let cachedFm = null;
     try {
-      cachedFm = readCachedFrontMatter(ctx.cwd, "collection", `agent-rules-${agent}`);
+      cachedFm = readCachedArtifact(ctx.cwd, "collection", `agent-rules-${agent}`);
     } catch {
       cachedFm = null;
     }
@@ -62,9 +62,15 @@ export async function run(ctx) {
       hasWarn = true;
       continue;
     }
-    const installTarget = cachedFm.fm && typeof cachedFm.fm.install_target === "string"
+    // v1 single-file artifacts kept install_target at the top level; v2
+    // moved it under `spec:`. Honour both.
+    const topLevel = cachedFm.fm && typeof cachedFm.fm.install_target === "string"
       ? cachedFm.fm.install_target.trim()
       : "";
+    const nested = cachedFm.spec && typeof cachedFm.spec.install_target === "string"
+      ? cachedFm.spec.install_target.trim()
+      : "";
+    const installTarget = topLevel || nested;
     if (installTarget) {
       rel = installTarget;
     } else if (spec) {

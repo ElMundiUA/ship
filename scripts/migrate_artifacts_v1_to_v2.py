@@ -283,10 +283,18 @@ def build_frontmatter(
 
 
 def render_artifact_md(fm: dict, body: str) -> str:
-    desc = fm.pop("description")
-    spec = fm.pop("spec", None)
+    """Pure renderer: never mutates `fm`. Description and spec always go
+    last (in that order) so two consecutive renders of the same fm produce
+    byte-identical output — required for the content_sha256 stamp to be
+    self-consistent.
+    """
+
+    desc = fm.get("description", "")
+    spec = fm.get("spec")
     fm_lines: list[str] = ["---"]
     for k, v in fm.items():
+        if k in ("description", "spec"):
+            continue
         fm_lines.append(f"{k}: {scalar_yaml(v)}")
     fm_lines.append("description: >-")
     for line in desc.split("\n"):
@@ -295,9 +303,6 @@ def render_artifact_md(fm: dict, body: str) -> str:
         fm_lines.append("spec:")
         fm_lines.append(emit_yaml_block(spec, indent=1))
     fm_lines.append("---")
-    fm.setdefault("description", desc)
-    if spec is not None:
-        fm["spec"] = spec
     body = body.lstrip("\n")
     return "\n".join(fm_lines) + "\n\n" + body
 
@@ -352,13 +357,16 @@ def migrate() -> int:
             target_dir.mkdir(parents=True, exist_ok=True)
             target_md = target_dir / "ARTIFACT.md"
 
-            placeholder_sha = "0" * 64
-            fm = build_frontmatter(entry, kind_plural, existing_fm, body, placeholder_sha)
-            preliminary = render_artifact_md(fm, body)
-            preliminary_no_sha = preliminary.replace(placeholder_sha, "")
-            real_sha = sha256_bytes(preliminary_no_sha.encode("utf-8"))
-            fm["content_sha256"] = real_sha
-            final = render_artifact_md(fm, body)
+            # RFC-0005 hashing: render once with content_sha256 value cleared,
+            # hash that, then substitute the real sha back into the same
+            # rendered bytes (so the on-disk file's bytes-with-sha-cleared
+            # always reproduce the recorded sha).
+            fm = build_frontmatter(entry, kind_plural, existing_fm, body, "")
+            blank = render_artifact_md(fm, body)
+            real_sha = sha256_bytes(blank.encode("utf-8"))
+            final = blank.replace(
+                "content_sha256: \n", f"content_sha256: {real_sha}\n", 1
+            )
 
             target_md.write_text(final, encoding="utf-8")
 

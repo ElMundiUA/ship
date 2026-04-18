@@ -6,12 +6,12 @@ Instruction-first companion API for agents.
 
 From any machine, `npm run ship -- pattern list` uses **`SHIP_API_BASE`** (`GET /patterns`, …), or reads from disk inside the monorepo (or with `SHIP_REPO`).
 
-- `GET /patterns` — list curated org patterns from `patterns/manifest.json` (metadata only).
-- `GET /patterns/{id}` — one pattern plus full markdown body.
-- `GET /tools`, `GET /tools/{id}` — tools manifest + body (same as CLI `ship tool …`).
-- `GET /workflows`, `GET /workflows/{id}` — workflows manifest + body.
-- `GET /collections`, `GET /collections/{id}` — collections manifest + body.
-- `POST /search` — vector search over methodology files (`documentation/`, `prompts/`, `README.md`) using local Chroma + OpenAI embeddings.
+- `GET /patterns` — list curated org patterns scanned from `artifacts/patterns/<id>/ARTIFACT.md` (frontmatter only).
+- `GET /patterns/{id}` — one pattern plus full `ARTIFACT.md` (frontmatter + body).
+- `GET /tools`, `GET /tools/{id}` — tools index + body (same as CLI `ship tool …`).
+- `GET /workflows`, `GET /workflows/{id}` — workflows index + body (`artifacts/workflows/<id>/ARTIFACT.md`).
+- `GET /collections`, `GET /collections/{id}` — collections index + body (`artifacts/collections/<id>/ARTIFACT.md`).
+- `POST /search` — vector search over methodology files (`documentation/`, `artifacts/**/ARTIFACT.md`, `README.md`) using local Chroma + OpenAI embeddings.
 - `POST /fetch` — fetch full content for a selected markdown/text file.
 - `POST /feedback` — create GitHub issues in Ship repo after sanitizing sensitive fragments.
 

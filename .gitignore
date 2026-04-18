@@ -7,6 +7,7 @@ node_modules/
 landing/.next/
 landing/.playwright-cli/
 landing/content/book.md
+landing/tsconfig.tsbuildinfo
 .env
 .env.*
 !.env.example

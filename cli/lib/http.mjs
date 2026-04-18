@@ -68,19 +68,44 @@ export async function apiGet(baseUrl, path) {
 }
 
 /**
- * GET /manifest?channel=…
+ * Aggregated catalog. RFC-0005 removed the legacy `/manifest` endpoint;
+ * the catalog is now exposed as four per-kind routes (`/patterns`,
+ * `/workflows`, `/tools`, `/collections`). This helper fans them out in
+ * parallel and stamps a `kind` field on each entry so callers (sync,
+ * verify) keep their existing single-list shape. `channel` is applied
+ * client-side because the per-kind endpoints don't filter today.
+ *
  * @param {string} baseUrl
  * @param {{channel?:string}} [opts]
  * @returns {Promise<Array<object>>}
  */
 export async function fetchManifest(baseUrl, { channel } = {}) {
-  const qs = channel ? `?channel=${encodeURIComponent(channel)}` : "";
-  const data = await apiGet(baseUrl, `/manifest${qs}`);
-  if (Array.isArray(data)) return data;
-  if (data && Array.isArray(data.entries)) return data.entries;
-  throw new Error(
-    `GET /manifest: expected array or {entries:[]}; got ${typeof data}`,
+  const KINDS = [
+    { plural: "patterns", singular: "pattern" },
+    { plural: "workflows", singular: "workflow" },
+    { plural: "tools", singular: "tool" },
+    { plural: "collections", singular: "collection" },
+  ];
+  const responses = await Promise.all(
+    KINDS.map((k) => apiGet(baseUrl, `/${k.plural}`)),
   );
+  /** @type {Array<object>} */
+  const entries = [];
+  for (let i = 0; i < KINDS.length; i += 1) {
+    const { plural, singular } = KINDS[i];
+    const data = responses[i];
+    const arr = data && Array.isArray(data[plural]) ? data[plural] : [];
+    for (const e of arr) {
+      entries.push({ ...e, kind: e.kind || singular });
+    }
+  }
+  const wantChannel = (channel || "").toLowerCase();
+  if (wantChannel && wantChannel !== "edge") {
+    return entries.filter(
+      (e) => (e.channel || "stable").toLowerCase() === wantChannel,
+    );
+  }
+  return entries;
 }
 
 function sha256Hex(buf) {

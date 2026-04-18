@@ -81,14 +81,23 @@ function startServer(manifest) {
       yanked: false,
     };
   });
+  const PLURAL_BY_SINGULAR = {
+    pattern: "patterns",
+    workflow: "workflows",
+    tool: "tools",
+    collection: "collections",
+  };
   const server = http.createServer((req, res) => {
     const chunks = [];
     req.on("data", (c) => chunks.push(c));
     req.on("end", () => {
       const url = new URL(req.url, "http://localhost");
-      if (req.method === "GET" && url.pathname === "/manifest") {
+      const perKindMatch = url.pathname.match(/^\/(patterns|workflows|tools|collections)$/);
+      if (req.method === "GET" && perKindMatch) {
+        const plural = perKindMatch[1];
+        const arr = entries.filter((e) => PLURAL_BY_SINGULAR[e.kind] === plural);
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(entries));
+        res.end(JSON.stringify({ description: "", version: 2, [plural]: arr }));
         return;
       }
       if (req.method === "POST" && url.pathname === "/fetch") {

@@ -76,8 +76,8 @@ const PHARMA_PILOT: PharmaPreset = {
 };
 
 const BRANCH = "main";
-const PHARMA_PRESET_URL = `${repoUrl}/blob/${BRANCH}/documentation/collections/preset-mobile-app.md`;
-const PHARMA_ADDENDUM_URL = `${repoUrl}/blob/${BRANCH}/documentation/collections/addendum-pharma.md`;
+const PHARMA_PRESET_URL = `${repoUrl}/blob/${BRANCH}/artifacts/collections/preset-mobile-app/ARTIFACT.md`;
+const PHARMA_ADDENDUM_URL = `${repoUrl}/blob/${BRANCH}/artifacts/collections/addendum-pharma/ARTIFACT.md`;
 
 function buildCommand(s: {
   mode: Mode;

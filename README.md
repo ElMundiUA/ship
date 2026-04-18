@@ -4,7 +4,7 @@ Ship is an instruction-first framework for SDLC automation.
 
 Instead of shipping one hardcoded runtime, Ship ships:
 - a portable operating model,
-- prompts/playbooks for coding agents,
+- versioned artifacts (patterns, tools, workflows, collections) for coding agents,
 - reference implementations and migration patterns.
 
 Your agent adapts Ship to your real stack (Linear/Jira/GitHub Issues/spreadsheets, any CI, any agent runtime).
@@ -34,12 +34,8 @@ curl -fsSL https://raw.githubusercontent.com/ElMundiUA/ship/main/adopt-ship.sh |
 
 | Path | Purpose |
 |------|---------|
-| `documentation/` | Source markdown for the **manual** (served under `/docs` on the Next.js site). |
-| `prompts/` | Reusable prompts and onboarding playbooks. |
-| `patterns/` | Org patterns manifest + catalog metadata. |
-| `tools/` | **Tools catalog** manifest (`/tools` — integrations: Linear, Actions, Playwright, Cursor Cloud, Chroma, API, …). |
-| `workflows/` | **Workflow intents** manifest (`/workflows` — SDLC lane, PR gates, E2E, self-heal, audits). |
-| `collections/` | **Curated bundles** manifest (`/collections` — web app, API service, adoption minimum). |
+| `documentation/` | Source markdown for the **manual** and **The book** (served under `/docs` and `/book` on the Next.js site). |
+| `artifacts/` | All Ship artifacts in folder-per-artifact layout (`artifacts/<kind>/<id>/ARTIFACT.md` with YAML frontmatter — see [RFC-0005](documentation/rfc/rfc-0005-artifact-folder-spec-v2.md)). Subfolders: `patterns/`, `tools/`, `workflows/`, `collections/`. |
 | `backend/` | Agent-facing API (`/search`, `/fetch`, `/feedback`, `/patterns`, …). |
 | `cli/` | **`ship` CLI** — one FastAPI client (search, fetch, feedback, catalogs) + optional disk + `init`. |
 | `landing/` | Next.js app: marketing UI, **The book** (`/book`), **Patterns** (`/patterns`), **Manual** (`/docs/**`). |

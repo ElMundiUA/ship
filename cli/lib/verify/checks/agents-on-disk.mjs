@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { detectAgentTargets } from "../../detect.mjs";
-import { readCachedFrontMatter } from "../../cache/store.mjs";
+import { readCachedArtifact } from "../../cache/store.mjs";
 
 export const id = "agents-on-disk";
 export const category = "config";
@@ -26,13 +26,17 @@ export async function run(ctx) {
     // doesn't recognise. Treat a present install_target file as "signal".
     let fm = null;
     try {
-      fm = readCachedFrontMatter(ctx.cwd, "collection", `agent-rules-${agent}`);
+      fm = readCachedArtifact(ctx.cwd, "collection", `agent-rules-${agent}`);
     } catch {
       fm = null;
     }
-    const target = fm && fm.fm && typeof fm.fm.install_target === "string"
+    const topLevel = fm && fm.fm && typeof fm.fm.install_target === "string"
       ? fm.fm.install_target.trim()
       : "";
+    const nested = fm && fm.spec && typeof fm.spec.install_target === "string"
+      ? fm.spec.install_target.trim()
+      : "";
+    const target = topLevel || nested;
     if (target && fs.existsSync(path.join(ctx.cwd, target))) {
       detected.add(agent);
       continue;

@@ -63,10 +63,11 @@ export default function ToolsPage() {
               </div>
               <div className="glass-panel p-6 sm:p-8">
                 <p className="text-xs font-bold uppercase tracking-widest text-sun">Git-first</p>
-                <h2 className="font-display mt-2 text-xl font-bold text-white">Manifest + markdown</h2>
+                <h2 className="font-display mt-2 text-xl font-bold text-white">Folder per tool</h2>
                 <p className="mt-3 text-sm leading-relaxed text-white/65">
-                  <code className="text-aqua/90">tools/manifest.json</code> indexes files under{" "}
-                  <code className="text-aqua/90">documentation/tools/</code>. Improve the text with normal PRs — the site is a
+                  Each tool lives at{" "}
+                  <code className="text-aqua/90">artifacts/tools/&lt;id&gt;/ARTIFACT.md</code> — YAML frontmatter
+                  (id, version, channel, owner) plus the body in one file. Improve the text with normal PRs; the site is a
                   reader.
                 </p>
               </div>
@@ -134,9 +135,9 @@ export default function ToolsPage() {
               · on GitHub:{" "}
               <a
                 className="font-semibold text-aqua underline-offset-2 hover:underline"
-                href={`${repoUrl}/tree/main/tools`}
+                href={`${repoUrl}/tree/main/artifacts/tools`}
               >
-                tools/manifest.json
+                artifacts/tools/
               </a>
               .
             </p>
@@ -161,7 +162,7 @@ export default function ToolsPage() {
             <p className="text-sm font-bold uppercase tracking-widest text-aqua">Ship CLI</p>
             <h2 className="font-display mt-2 text-3xl font-bold text-white">Tools commands</h2>
             <p className="mt-4 text-sm leading-relaxed text-white/65">
-              <strong className="text-white/90">List and show</strong> read <code className="text-aqua/90">tools/manifest.json</code> from disk —{" "}
+              <strong className="text-white/90">List and show</strong> scan <code className="text-aqua/90">artifacts/tools/</code> on disk —{" "}
               <strong className="text-white/90">no API server</strong>. Run from the Ship repo root (or set <code className="text-aqua/90">SHIP_REPO</code>
               ). Semantic search still uses the methodology API — start <code className="text-aqua/90">uvicorn</code> first; base URL defaults to{" "}
               <code className="text-white/80">{shipApiBase}</code> (<code className="text-aqua/90">--base-url</code> / <code className="text-aqua/90">SHIP_API_BASE</code>).
@@ -181,7 +182,7 @@ export default function ToolsPage() {
               </div>
               <div>
                 <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-white/40">Fetch arbitrary path (needs API)</p>
-                <pre className="overflow-x-auto whitespace-pre-wrap break-all">npm run ship -- docs fetch documentation/tools/integrations/playwright.md</pre>
+                <pre className="overflow-x-auto whitespace-pre-wrap break-all">npm run ship -- tool fetch playwright</pre>
               </div>
             </div>
             <p className="mt-8 text-center text-sm text-white/50">

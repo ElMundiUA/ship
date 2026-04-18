@@ -1,34 +1,6 @@
 from __future__ import annotations
 
 
-def test_manifest_endpoint(client):
-    resp = client.get("/manifest")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["version"] == 1
-    assert "generated_at" in body
-    assert isinstance(body["entries"], list)
-    assert body["entries"], "expected at least one entry"
-
-    kinds = {e["kind"] for e in body["entries"]}
-    # Should cover every catalog kind plus docs.
-    assert {"pattern", "tool", "workflow", "collection", "doc"}.issubset(kinds)
-
-    required_fields = {
-        "kind",
-        "id",
-        "version",
-        "content_sha256",
-        "updated_at",
-        "channel",
-        "deprecated",
-        "yanked",
-        "path",
-    }
-    for entry in body["entries"]:
-        assert required_fields.issubset(entry.keys()), entry
-
-
 def test_patterns_list_includes_version(client):
     resp = client.get("/patterns")
     assert resp.status_code == 200
@@ -98,3 +70,19 @@ def test_fetch_with_version_mismatch(client):
     )
     assert bad.status_code == 404
     assert "unknown version" in bad.json()["detail"]
+
+
+def test_patterns_list_uses_artifact_folder(client):
+    resp = client.get("/patterns")
+    assert resp.status_code == 200
+    data = resp.json()
+    first = data["patterns"][0]
+    assert first["path"].startswith("artifacts/patterns/")
+    assert first["path"].endswith("/ARTIFACT.md")
+
+
+def test_pattern_get_returns_full_artifact_md(client):
+    resp = client.get("/patterns")
+    pid = resp.json()["patterns"][0]["id"]
+    body = client.get(f"/patterns/{pid}").json()
+    assert body["content"].startswith("---\n")

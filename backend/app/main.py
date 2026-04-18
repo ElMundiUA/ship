@@ -13,6 +13,7 @@ from typing import Any
 
 import chromadb
 import httpx
+import yaml
 from fastapi import FastAPI, Header, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -21,11 +22,8 @@ APP_ROOT = Path(__file__).resolve().parents[2]
 CHROMA_DIR = APP_ROOT / "backend" / ".chroma"
 CHROMA_MANIFEST_PATH = CHROMA_DIR / "manifest.json"
 COLLECTION_NAME = "ship_methodology"
-DEFAULT_PATHS = ("documentation", "prompts", "README.md")
-PATTERNS_MANIFEST_PATH = APP_ROOT / "patterns" / "manifest.json"
-TOOLS_MANIFEST_PATH = APP_ROOT / "tools" / "manifest.json"
-WORKFLOWS_MANIFEST_PATH = APP_ROOT / "workflows" / "manifest.json"
-COLLECTIONS_MANIFEST_PATH = APP_ROOT / "collections" / "manifest.json"
+DEFAULT_PATHS = ("documentation", "README.md")
+ARTIFACTS_ROOT = APP_ROOT / "artifacts"
 TELEMETRY_DIR = APP_ROOT / "backend" / "telemetry"
 TELEMETRY_FILE = TELEMETRY_DIR / "events.jsonl"
 
@@ -128,7 +126,29 @@ class IndexStore:
                 files.append(candidate)
             elif candidate.is_dir():
                 files.extend(sorted(candidate.rglob("*.md")))
+        if ARTIFACTS_ROOT.is_dir():
+            files.extend(sorted(ARTIFACTS_ROOT.rglob("ARTIFACT.md")))
         return [p for p in files if p.is_file()]
+
+    def _index_path_for(self, path: Path) -> str:
+        """Return the path that clients should use to fetch this content again.
+
+        For ARTIFACT.md files inside `artifacts/<plural>/<id>/`, return the
+        artifact folder path so clients can fetch the whole artifact bundle.
+        Other files use their plain repo-relative path.
+        """
+        rel = path.relative_to(APP_ROOT)
+        if path.name == "ARTIFACT.md" and len(rel.parts) >= 3 and rel.parts[0] == "artifacts":
+            return str(rel.parent)
+        return str(rel)
+
+    def _index_text_for(self, path: Path) -> str:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        if path.name == "ARTIFACT.md" and text.startswith("---\n"):
+            end = text.find("\n---\n", 4)
+            if end != -1:
+                return text[end + len("\n---\n"):]
+        return text
 
     def _fingerprint(self, path: Path) -> str:
         data = path.read_bytes()
@@ -188,11 +208,12 @@ class IndexStore:
             metas: list[dict[str, Any]] = []
             for file_path in files:
                 rel = str(file_path.relative_to(APP_ROOT))
-                text = file_path.read_text(encoding="utf-8", errors="ignore")
+                indexed_path = self._index_path_for(file_path)
+                text = self._index_text_for(file_path)
                 for idx, chunk in enumerate(self._chunk_text(text)):
                     ids.append(f"{rel}::chunk-{idx}")
                     docs.append(chunk)
-                    metas.append({"path": rel, "chunk_index": idx})
+                    metas.append({"path": indexed_path, "chunk_index": idx})
             if docs:
                 self.collection.add(ids=ids, documents=docs, metadatas=metas)
             self._write_manifest(manifest)
@@ -264,74 +285,204 @@ index_store = IndexStore()
 app = FastAPI(title="Ship Methodology API", version="0.3.0")
 
 
-_manifest_cache: dict[str, dict[str, Any]] = {}
+_KIND_DESCRIPTIONS = {
+    "pattern": "Catalog of Ship patterns sourced from artifacts/patterns/<id>/ARTIFACT.md.",
+    "tool": "Catalog of Ship tools sourced from artifacts/tools/<id>/ARTIFACT.md.",
+    "workflow": "Catalog of Ship workflows sourced from artifacts/workflows/<id>/ARTIFACT.md.",
+    "collection": "Catalog of Ship collections sourced from artifacts/collections/<id>/ARTIFACT.md.",
+}
+
+
+_kind_cache: dict[str, tuple[tuple[str, float, int], dict[str, Any]]] = {}
 
 
 def _clear_manifest_cache() -> None:
-    """Test helper: drop cached manifests so filesystem changes take effect."""
-    _manifest_cache.clear()
+    """Test helper: drop cached kind data so filesystem changes take effect."""
+    _kind_cache.clear()
 
 
-def _load_manifest(
-    manifest_path: Path,
-    array_key: str,
-    cache_key: str,
-    kind_label: str,
-) -> dict[str, Any]:
-    cached = _manifest_cache.get(cache_key)
-    if cached is not None:
-        return cached
-    if not manifest_path.is_file():
-        data = {"version": 0, array_key: [], "description": ""}
-        _manifest_cache[cache_key] = data
-        return data
-    try:
-        data = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise HTTPException(
-            status_code=500, detail=f"{manifest_path.name} is invalid JSON."
-        ) from exc
-    if not isinstance(data.get(array_key), list):
+# YAML reserved indicators that PyYAML's scanner rejects as the start of a
+# plain scalar. The migration script writes things like `authors: [@scope/x]`,
+# which is not strictly valid YAML, so we quote those tokens before parsing.
+_YAML_RESERVED_PREFIXES = ("@", "`", "%")
+
+
+def _normalize_inline_lists(raw: str) -> str:
+    """Quote unquoted tokens inside flow lists that begin with reserved chars.
+
+    Only touches values of the form `key: [a, @b, "c"]` (inline). Block-style
+    sequences and nested mappings are left untouched.
+    """
+
+    def repl(match: re.Match[str]) -> str:
+        head = match.group(1)
+        body = match.group(2)
+        items = []
+        for raw_item in body.split(","):
+            item = raw_item.strip()
+            if not item:
+                items.append("")
+                continue
+            if item[0] in {'"', "'"}:
+                items.append(item)
+                continue
+            if item[0] in _YAML_RESERVED_PREFIXES:
+                items.append('"' + item.replace('"', '\\"') + '"')
+                continue
+            items.append(item)
+        return f"{head}[{', '.join(items)}]"
+
+    return re.sub(r"^(\s*[\w.-]+\s*:\s*)\[([^\[\]\n]*)\]\s*$", repl, raw, flags=re.MULTILINE)
+
+
+def _split_frontmatter(text: str, artifact_path: Path) -> tuple[dict[str, Any], str]:
+    if not text.startswith("---\n"):
         raise HTTPException(
             status_code=500,
-            detail=f"{manifest_path.name} must contain a `{array_key}` array.",
+            detail=f"{artifact_path.relative_to(APP_ROOT)} is missing YAML frontmatter.",
         )
-    for idx, entry in enumerate(data[array_key]):
-        if not isinstance(entry, dict):
-            raise HTTPException(
-                status_code=500,
-                detail=f"{manifest_path.name} entry {idx} is not an object.",
-            )
-        missing = [f for f in REQUIRED_ENTRY_FIELDS if f not in entry]
-        if missing:
-            raise HTTPException(
-                status_code=500,
-                detail=(
-                    f"{manifest_path.name} entry `{entry.get('id', idx)}` is missing "
-                    f"required {kind_label} fields: {', '.join(missing)}. "
-                    "Run scripts/stamp_artifact_versions.py."
-                ),
-            )
-    _manifest_cache[cache_key] = data
+    end = text.find("\n---\n", 4)
+    if end == -1:
+        raise HTTPException(
+            status_code=500,
+            detail=f"{artifact_path.relative_to(APP_ROOT)} has unterminated frontmatter.",
+        )
+    raw = text[4:end]
+    body = text[end + len("\n---\n"):]
+    try:
+        meta = yaml.safe_load(_normalize_inline_lists(raw)) or {}
+    except yaml.YAMLError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"{artifact_path.relative_to(APP_ROOT)} has invalid YAML frontmatter: {exc}",
+        ) from exc
+    if not isinstance(meta, dict):
+        raise HTTPException(
+            status_code=500,
+            detail=f"{artifact_path.relative_to(APP_ROOT)} frontmatter must be a mapping.",
+        )
+    return meta, body
+
+
+def _summary_from_description(description: str) -> str:
+    text = (description or "").strip()
+    if not text:
+        return ""
+    sentinel = ". "
+    idx = text.find(sentinel)
+    if idx == -1:
+        return text
+    return text[:idx].rstrip()
+
+
+def _build_entry(meta: dict[str, Any], body: str, full: str, plural: str, artifact_path: Path) -> dict[str, Any]:
+    artifact_id = meta.get("id")
+    missing = [f for f in REQUIRED_ENTRY_FIELDS if f not in meta]
+    if missing:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"artifacts/{plural}/{artifact_id}/ARTIFACT.md is missing "
+                f"required fields: {', '.join(missing)}. "
+                "Run scripts/stamp_artifact_versions.py."
+            ),
+        )
+    description = meta.get("description") or ""
+    if not isinstance(description, str):
+        description = str(description)
+    rel_path = f"artifacts/{plural}/{artifact_id}/ARTIFACT.md"
+    spec = meta.get("spec") if isinstance(meta.get("spec"), dict) else {}
+    return {
+        "id": artifact_id,
+        "title": meta.get("name"),
+        "summary": _summary_from_description(description),
+        "description": description,
+        "path": rel_path,
+        "tags": list(meta.get("tags") or []),
+        "group": meta.get("group"),
+        "version": meta.get("version"),
+        "content_sha256": meta.get("content_sha256"),
+        "updated_at": meta.get("updated_at"),
+        "channel": meta.get("channel"),
+        "min_shipctl": meta.get("min_shipctl"),
+        "deprecated": bool(meta.get("deprecated", False)),
+        "replaced_by": meta.get("replaced_by"),
+        "yanked": bool(meta.get("yanked", False)),
+        "spec": spec,
+        "_body": body,
+        "_full": full,
+    }
+
+
+def _kind_dir_signature(plural: str) -> tuple[str, float, int]:
+    base = APP_ROOT / "artifacts" / plural
+    if not base.is_dir():
+        return (plural, 0.0, 0)
+    try:
+        listing = sorted(p.name for p in base.iterdir() if p.is_dir())
+    except OSError:
+        return (plural, 0.0, 0)
+    mtime = base.stat().st_mtime
+    for name in listing:
+        artifact = base / name / "ARTIFACT.md"
+        if artifact.is_file():
+            mtime = max(mtime, artifact.stat().st_mtime)
+    return (plural, mtime, len(listing))
+
+
+def _load_kind(kind: str) -> dict[str, Any]:
+    if kind not in ARTIFACT_KINDS:
+        raise HTTPException(status_code=400, detail=f"Unknown kind: {kind}")
+    plural = ARTIFACT_KINDS[kind][1]
+    signature = _kind_dir_signature(plural)
+    cached = _kind_cache.get(kind)
+    if cached is not None and cached[0] == signature:
+        return cached[1]
+
+    base = APP_ROOT / "artifacts" / plural
+    entries: list[dict[str, Any]] = []
+    if base.is_dir():
+        for child in sorted(base.iterdir(), key=lambda p: p.name):
+            if not child.is_dir():
+                continue
+            artifact_path = child / "ARTIFACT.md"
+            if not artifact_path.is_file():
+                continue
+            full = artifact_path.read_text(encoding="utf-8")
+            meta, body = _split_frontmatter(full, artifact_path)
+            if meta.get("id") != child.name:
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        f"artifacts/{plural}/{child.name}/ARTIFACT.md frontmatter id "
+                        f"`{meta.get('id')}` does not match folder name."
+                    ),
+                )
+            entries.append(_build_entry(meta, body, full, plural, artifact_path))
+
+    data = {
+        "version": 2,
+        "description": _KIND_DESCRIPTIONS.get(kind, ""),
+        plural: entries,
+    }
+    _kind_cache[kind] = (signature, data)
     return data
 
 
 def load_patterns_manifest() -> dict[str, Any]:
-    return _load_manifest(PATTERNS_MANIFEST_PATH, "patterns", "patterns", "pattern")
+    return _load_kind("pattern")
 
 
 def load_tools_manifest() -> dict[str, Any]:
-    return _load_manifest(TOOLS_MANIFEST_PATH, "tools", "tools", "tool")
+    return _load_kind("tool")
 
 
 def load_workflows_manifest() -> dict[str, Any]:
-    return _load_manifest(WORKFLOWS_MANIFEST_PATH, "workflows", "workflows", "workflow")
+    return _load_kind("workflow")
 
 
 def load_collections_manifest() -> dict[str, Any]:
-    return _load_manifest(
-        COLLECTIONS_MANIFEST_PATH, "collections", "collections", "collection"
-    )
+    return _load_kind("collection")
 
 
 MANIFEST_LOADERS = {
@@ -419,12 +570,11 @@ def _resolve_entry_with_version(
 
 
 def _full_entry_response(entry: dict[str, Any], kind: str) -> dict[str, Any]:
-    rel = entry.get("path")
-    if not isinstance(rel, str) or not rel.strip():
-        raise HTTPException(status_code=500, detail=f"{kind} entry has no path.")
-    content = read_repo_markdown(rel)
+    full = entry.get("_full")
+    if not isinstance(full, str) or not full:
+        raise HTTPException(status_code=500, detail=f"{kind} entry has no body.")
     out = _entry_summary(entry, kind)
-    out["content"] = content
+    out["content"] = full
     if entry.get("deprecated"):
         replaced = entry.get("replaced_by")
         out["deprecation_notice"] = (
@@ -552,79 +702,6 @@ def _versions_for_kind(kind: str, item_id: str) -> dict[str, Any]:
                 "yanked": bool(entry.get("yanked", False)),
             }
         ],
-    }
-
-
-def _discover_doc_entries() -> list[dict[str, Any]]:
-    """Auto-discover `doc` kind artifacts under documentation/ and prompts/, plus README.md."""
-    doc_paths: list[Path] = []
-    for root in ("documentation", "prompts"):
-        base = APP_ROOT / root
-        if base.is_dir():
-            for suffix in (".md", ".txt"):
-                doc_paths.extend(sorted(base.rglob(f"*{suffix}")))
-    readme = APP_ROOT / "README.md"
-    if readme.is_file():
-        doc_paths.append(readme)
-
-    seen: set[Path] = set()
-    entries: list[dict[str, Any]] = []
-    for path in doc_paths:
-        if path in seen or not path.is_file():
-            continue
-        seen.add(path)
-        rel = str(path.relative_to(APP_ROOT))
-        sha = hashlib.sha256(path.read_bytes()).hexdigest()
-        updated_at = datetime.fromtimestamp(
-            path.stat().st_mtime, tz=timezone.utc
-        ).isoformat()
-        entries.append(
-            {
-                "kind": "doc",
-                "id": rel,
-                "version": "1.0.0",
-                "content_sha256": sha,
-                "updated_at": updated_at,
-                "channel": "stable",
-                "deprecated": False,
-                "yanked": False,
-                "path": rel,
-            }
-        )
-    return entries
-
-
-@app.get("/manifest")
-def get_manifest(channel: str = Query(default="edge")) -> dict[str, Any]:
-    """Flat aggregate manifest across all kinds plus auto-discovered docs."""
-    entries: list[dict[str, Any]] = []
-
-    for kind, (_manifest_name, array_key) in ARTIFACT_KINDS.items():
-        loader = MANIFEST_LOADERS[kind]
-        data = loader()
-        items = [e for e in data.get(array_key, []) if isinstance(e, dict)]
-        filtered = _filter_entries_by_channel(items, channel)
-        for entry in filtered:
-            entries.append(
-                {
-                    "kind": kind,
-                    "id": entry.get("id"),
-                    "version": entry.get("version"),
-                    "content_sha256": entry.get("content_sha256"),
-                    "updated_at": entry.get("updated_at"),
-                    "channel": entry.get("channel"),
-                    "deprecated": bool(entry.get("deprecated", False)),
-                    "yanked": bool(entry.get("yanked", False)),
-                    "path": entry.get("path"),
-                }
-            )
-
-    entries.extend(_discover_doc_entries())
-
-    return {
-        "version": 1,
-        "generated_at": datetime.now(tz=timezone.utc).isoformat(),
-        "entries": entries,
     }
 
 

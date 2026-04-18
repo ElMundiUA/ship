@@ -14,18 +14,34 @@ function kindDir(shipRoot, kind) {
 }
 
 /**
+ * Folder that holds the artifact body + sidecar meta. New v2 cache layout:
+ *   .ship/cache/<kind>/<sanitize(id)>@<version>/ARTIFACT.md
+ *   .ship/cache/<kind>/<sanitize(id)>@<version>/.meta.json
+ */
+export function cacheFolder(shipRoot, kind, id, version) {
+  return path.join(kindDir(shipRoot, kind), `${sanitize(id)}@${version}`);
+}
+
+/**
  * @param {string} shipRoot
  * @param {string} kind
  * @param {string} id
  * @param {string} version
- * @param {string} [extension=".md"]
+ * @param {string} [extension]   Reserved for back-compat; ignored under the
+ *                               new folder layout (always returns ARTIFACT.md).
  */
 export function cachePath(shipRoot, kind, id, version, extension = ".md") {
-  return path.join(kindDir(shipRoot, kind), `${sanitize(id)}@${version}${extension}`);
+  // Keep the trailing-extension parameter so callers that opted into the old
+  // ".meta.json" trick still work (they used to call `cachePath(..., ".meta.json")`
+  // — those callers should now use `metaPath` instead, but stay defensive).
+  if (extension === ".meta.json") {
+    return path.join(cacheFolder(shipRoot, kind, id, version), ".meta.json");
+  }
+  return path.join(cacheFolder(shipRoot, kind, id, version), "ARTIFACT.md");
 }
 
 export function metaPath(shipRoot, kind, id, version) {
-  return cachePath(shipRoot, kind, id, version, ".meta.json");
+  return path.join(cacheFolder(shipRoot, kind, id, version), ".meta.json");
 }
 
 export function sha256Hex(buf) {
@@ -33,9 +49,111 @@ export function sha256Hex(buf) {
 }
 
 /**
+ * RFC-0005 hashing convention: `content_sha256` is computed over the
+ * artifact bytes with the `content_sha256:` value cleared (the line stays,
+ * but the hex value is replaced by empty). This avoids the chicken-and-egg
+ * of hashing a file whose own hash lives inside it. Both the server-side
+ * stamp and any client-side verification must apply the same normalization.
+ *
+ * For artifacts that pre-date v2 (no frontmatter, single body file) this
+ * is a no-op, so legacy cached entries keep verifying as before.
+ *
+ * @param {string} content
+ * @returns {string}
+ */
+export function normalizeForArtifactSha(content) {
+  return String(content).replace(
+    /^(content_sha256:\s*)[A-Fa-f0-9]+\s*$/m,
+    "$1",
+  );
+}
+
+/**
+ * Hash an artifact body the way the server does — with the sha line cleared.
+ * Falls back to a raw hash for legacy single-file artifacts that have no
+ * frontmatter at all (the regex misses, so normalization is a no-op).
+ *
+ * @param {string|Buffer} content
+ * @returns {string}
+ */
+export function artifactSha256(content) {
+  const text = Buffer.isBuffer(content) ? content.toString("utf8") : String(content);
+  return sha256Hex(Buffer.from(normalizeForArtifactSha(text), "utf8"));
+}
+
+// ── Legacy → folder migrator ───────────────────────────────────────────────
+
+function legacyBodyPath(shipRoot, kind, id, version) {
+  return path.join(kindDir(shipRoot, kind), `${sanitize(id)}@${version}.md`);
+}
+
+function legacyMetaPath(shipRoot, kind, id, version) {
+  return path.join(kindDir(shipRoot, kind), `${sanitize(id)}@${version}.meta.json`);
+}
+
+function migrateOne(shipRoot, kind, id, version) {
+  const oldBody = legacyBodyPath(shipRoot, kind, id, version);
+  const oldMeta = legacyMetaPath(shipRoot, kind, id, version);
+  const folder = cacheFolder(shipRoot, kind, id, version);
+  if (!fs.existsSync(oldBody) && !fs.existsSync(oldMeta)) return false;
+  // Already migrated — both folder + new file present; nothing to do.
+  const newBody = path.join(folder, "ARTIFACT.md");
+  const newMeta = path.join(folder, ".meta.json");
+  fs.mkdirSync(folder, { recursive: true });
+  if (fs.existsSync(oldBody) && !fs.existsSync(newBody)) {
+    fs.renameSync(oldBody, newBody);
+  } else if (fs.existsSync(oldBody)) {
+    fs.rmSync(oldBody);
+  }
+  if (fs.existsSync(oldMeta) && !fs.existsSync(newMeta)) {
+    fs.renameSync(oldMeta, newMeta);
+  } else if (fs.existsSync(oldMeta)) {
+    fs.rmSync(oldMeta);
+  }
+  return true;
+}
+
+/**
+ * Walk every kind dir and migrate any legacy single-file entries to the
+ * new folder layout. Idempotent and silent. Safe to call from any cache
+ * helper (we throttle by checking for any `*.meta.json` files at the kind
+ * dir level, which only legacy entries have).
+ *
+ * @param {string} shipRoot
+ */
+export function migrateLegacyCache(shipRoot) {
+  for (const kind of KIND_ROOTS) {
+    const dir = kindDir(shipRoot, kind);
+    if (!fs.existsSync(dir)) continue;
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const e of entries) {
+      if (!e.isFile()) continue;
+      const m = /^(.+)@([^@]+)\.meta\.json$/.exec(e.name);
+      if (!m) continue;
+      const sanitizedId = m[1];
+      const version = m[2];
+      // sanitize() only ever maps "/" → "__", so we can reverse it safely.
+      const id = sanitizedId.replace(/__/g, "/");
+      try {
+        migrateOne(shipRoot, kind, id, version);
+      } catch {
+        // Best-effort migration; swallow errors to avoid breaking unrelated
+        // cache reads.
+      }
+    }
+  }
+}
+
+/**
  * @returns {{content:string, meta:object}|null}
  */
 export function readCached(shipRoot, kind, id, version) {
+  migrateOne(shipRoot, kind, id, version);
   const body = cachePath(shipRoot, kind, id, version);
   const meta = metaPath(shipRoot, kind, id, version);
   if (!fs.existsSync(body) || !fs.existsSync(meta)) return null;
@@ -57,11 +175,18 @@ export function readCached(shipRoot, kind, id, version) {
  * @param {object} [meta]
  */
 export function writeCached(shipRoot, kind, id, version, content, meta = {}) {
+  migrateOne(shipRoot, kind, id, version);
+  const folder = cacheFolder(shipRoot, kind, id, version);
   const body = cachePath(shipRoot, kind, id, version);
   const metaFile = metaPath(shipRoot, kind, id, version);
-  fs.mkdirSync(path.dirname(body), { recursive: true });
+  fs.mkdirSync(folder, { recursive: true });
   fs.writeFileSync(body, content, "utf8");
-  const computed = sha256Hex(Buffer.from(content, "utf8"));
+  // Trust the server-stamped sha256 when present; otherwise hash the body
+  // we just wrote using the RFC-0005 normalized form (sha line cleared) so
+  // future verifies match. The artifact folder currently holds only
+  // ARTIFACT.md + .meta.json, so a body-only hash is equivalent to a
+  // folder-walk hash once .meta.json is excluded.
+  const computed = artifactSha256(content);
   const fullMeta = {
     kind,
     id,
@@ -80,13 +205,21 @@ export function writeCached(shipRoot, kind, id, version, content, meta = {}) {
  * @returns {Array<{kind:string,id:string,version:string,sha256:string,fetched_at:string|null,source_url:string|null}>}
  */
 export function listCached(shipRoot) {
+  migrateLegacyCache(shipRoot);
   const out = [];
   for (const kind of KIND_ROOTS) {
     const dir = kindDir(shipRoot, kind);
     if (!fs.existsSync(dir)) continue;
-    for (const entry of fs.readdirSync(dir)) {
-      if (!entry.endsWith(".meta.json")) continue;
-      const fullMeta = path.join(dir, entry);
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const fullMeta = path.join(dir, entry.name, ".meta.json");
+      if (!fs.existsSync(fullMeta)) continue;
       let metaObj;
       try {
         metaObj = JSON.parse(fs.readFileSync(fullMeta, "utf8"));
@@ -107,15 +240,17 @@ export function listCached(shipRoot) {
 }
 
 export function removeCached(shipRoot, kind, id, version) {
-  const body = cachePath(shipRoot, kind, id, version);
-  const meta = metaPath(shipRoot, kind, id, version);
+  migrateOne(shipRoot, kind, id, version);
+  const folder = cacheFolder(shipRoot, kind, id, version);
+  if (!fs.existsSync(folder)) return 0;
+  // Count what we are about to remove so callers (and tests) can assert how
+  // many "things" disappeared. Historically removeCached returned 2 (body +
+  // meta), so cap the count to match for the common case.
   let removed = 0;
-  for (const p of [body, meta]) {
-    if (fs.existsSync(p)) {
-      fs.rmSync(p);
-      removed += 1;
-    }
+  for (const f of ["ARTIFACT.md", ".meta.json"]) {
+    if (fs.existsSync(path.join(folder, f))) removed += 1;
   }
+  fs.rmSync(folder, { recursive: true, force: true });
   return removed;
 }
 
@@ -123,6 +258,7 @@ export function removeCached(shipRoot, kind, id, version) {
  * @returns {{ok:boolean, expected:string|null, actual:string|null, reason?:string}}
  */
 export function verifyCached(shipRoot, kind, id, version) {
+  migrateOne(shipRoot, kind, id, version);
   const body = cachePath(shipRoot, kind, id, version);
   const meta = metaPath(shipRoot, kind, id, version);
   if (!fs.existsSync(body) || !fs.existsSync(meta)) {
@@ -135,7 +271,7 @@ export function verifyCached(shipRoot, kind, id, version) {
     return { ok: false, expected: null, actual: null, reason: `meta parse error: ${e.message}` };
   }
   const expected = metaObj.content_sha256 || null;
-  const actual = sha256Hex(fs.readFileSync(body));
+  const actual = artifactSha256(fs.readFileSync(body));
   return { ok: expected === actual, expected, actual };
 }
 
@@ -152,6 +288,7 @@ export function verifyCached(shipRoot, kind, id, version) {
  * @returns {{ok:boolean, reason?:string, expected_sha?:string|null, actual_sha?:string|null}}
  */
 export function verifyCachedOnDisk(shipRoot, kind, id, version) {
+  migrateOne(shipRoot, kind, id, version);
   const body = cachePath(shipRoot, kind, id, version);
   const meta = metaPath(shipRoot, kind, id, version);
   if (!fs.existsSync(meta)) {
@@ -167,7 +304,7 @@ export function verifyCachedOnDisk(shipRoot, kind, id, version) {
     return { ok: false, reason: `meta_parse_error: ${e.message}` };
   }
   const expected = metaObj.content_sha256 || null;
-  const actual = sha256Hex(fs.readFileSync(body));
+  const actual = artifactSha256(fs.readFileSync(body));
   if (expected && actual !== expected) {
     return { ok: false, reason: "drift", expected_sha: expected, actual_sha: actual };
   }
@@ -207,6 +344,112 @@ function parseFrontMatter(source) {
 }
 
 /**
+ * Slightly richer parser used by `readCachedArtifact`. Recognises the v2
+ * `spec:` block (one level of nested `key: value` indented by 2 spaces) and
+ * inline list / quoted scalar conventions. Anything we cannot parse falls
+ * through with a best-effort string value (callers degrade gracefully).
+ *
+ * @param {string} source
+ * @returns {{fm: Record<string, any>, body: string, spec: Record<string, any>}}
+ */
+function parseFrontMatterV2(source) {
+  if (typeof source !== "string") return { fm: {}, body: "", spec: {} };
+  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(source);
+  if (!match) return { fm: {}, body: source, spec: {} };
+  const block = match[1];
+  const body = source.slice(match[0].length);
+  /** @type {Record<string, any>} */
+  const fm = {};
+  /** @type {Record<string, any>} */
+  const spec = {};
+
+  const lines = block.split(/\r?\n/);
+  let i = 0;
+  while (i < lines.length) {
+    const rawLine = lines[i];
+    const line = rawLine.replace(/\s+$/, "");
+    if (!line || /^\s*#/.test(line)) {
+      i += 1;
+      continue;
+    }
+
+    // Top-level key: scalar | list | folded.
+    const top = /^([A-Za-z_][A-Za-z0-9_.-]*)\s*:\s*(.*)$/.exec(line);
+    if (!top) {
+      i += 1;
+      continue;
+    }
+    const key = top[1];
+    let value = top[2];
+
+    // Folded scalars: `>` or `>-` then indented continuation lines.
+    if (value === ">" || value === ">-") {
+      const folded = [];
+      i += 1;
+      while (i < lines.length) {
+        const cont = lines[i];
+        const m = /^(\s+)(.*)$/.exec(cont);
+        if (!m) break;
+        folded.push(m[2]);
+        i += 1;
+      }
+      fm[key] = folded.join(" ").trim();
+      continue;
+    }
+
+    // Inline list: `[a, b, c]`.
+    if (/^\[.*\]$/.test(value.trim())) {
+      const inner = value.trim().slice(1, -1).trim();
+      fm[key] = inner.length
+        ? inner.split(/\s*,\s*/).map((v) => unquote(v))
+        : [];
+      i += 1;
+      continue;
+    }
+
+    // Nested block (currently only `spec:` is recognised).
+    if (value === "" && key === "spec") {
+      i += 1;
+      while (i < lines.length) {
+        const cont = lines[i];
+        if (!cont.trim()) {
+          i += 1;
+          continue;
+        }
+        const indented = /^(\s{2,})([A-Za-z_][A-Za-z0-9_.-]*)\s*:\s*(.*)$/.exec(cont);
+        if (!indented) break;
+        const [, , subKey, subVal] = indented;
+        if (/^\[.*\]$/.test(subVal.trim())) {
+          const inner = subVal.trim().slice(1, -1).trim();
+          spec[subKey] = inner.length
+            ? inner.split(/\s*,\s*/).map((v) => unquote(v))
+            : [];
+        } else {
+          spec[subKey] = unquote(subVal.trim());
+        }
+        i += 1;
+      }
+      fm.spec = spec;
+      continue;
+    }
+
+    fm[key] = unquote(value.trim());
+    i += 1;
+  }
+
+  return { fm, body, spec };
+}
+
+function unquote(value) {
+  if (typeof value !== "string") return value;
+  const v = value.trim();
+  if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+    return v.slice(1, -1);
+  }
+  return v;
+}
+
+/**
  * Read the cached artifact body and parse its YAML front-matter. If
  * `version` is omitted, the highest-version cached entry for (kind,id) is
  * used. Returns `null` when nothing is cached (caller chooses how to
@@ -230,4 +473,29 @@ export function readCachedFrontMatter(shipRoot, kind, id, version) {
   if (!cached) return null;
   const { fm, body } = parseFrontMatter(cached.content);
   return { fm, body, version: resolvedVersion, meta: cached.meta };
+}
+
+/**
+ * v2-aware variant of `readCachedFrontMatter`. Uses the richer parser so
+ * callers can read `spec.install_target` (or other nested keys) without
+ * pulling in a YAML dep.
+ *
+ * @param {string} shipRoot
+ * @param {string} kind
+ * @param {string} id
+ * @param {string} [version]
+ * @returns {{fm:Record<string,any>, body:string, version:string, meta:object, spec:Record<string,any>}|null}
+ */
+export function readCachedArtifact(shipRoot, kind, id, version) {
+  let resolvedVersion = version;
+  if (!resolvedVersion) {
+    const candidates = listCached(shipRoot).filter((e) => e.kind === kind && e.id === id);
+    if (!candidates.length) return null;
+    candidates.sort((a, b) => String(b.version).localeCompare(String(a.version)));
+    resolvedVersion = candidates[0].version;
+  }
+  const cached = readCached(shipRoot, kind, id, resolvedVersion);
+  if (!cached) return null;
+  const { fm, body, spec } = parseFrontMatterV2(cached.content);
+  return { fm, body, version: resolvedVersion, meta: cached.meta, spec };
 }
