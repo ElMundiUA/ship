@@ -85,9 +85,12 @@ def get_engine() -> AsyncEngine:
     global _engine, _sessionmaker
     if _engine is None:
         settings = get_settings()
-        _engine = create_async_engine(
-            settings.database_url, **_engine_kwargs(settings.database_url)
-        )
+        # ``async_database_url`` rewrites the operator-pasted DSN to the
+        # ``postgresql+asyncpg://`` driver and strips libpq-only query
+        # params (sslmode, channel_binding) that asyncpg can't parse —
+        # see backend.app.core.config._normalise_to_asyncpg.
+        url = settings.async_database_url
+        _engine = create_async_engine(url, **_engine_kwargs(url))
         _sessionmaker = async_sessionmaker(
             _engine, expire_on_commit=False, class_=AsyncSession
         )

@@ -10,12 +10,65 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _swap_driver(url: str, target_prefix: str) -> str:
+    """Rewrite the URL scheme to ``target_prefix`` regardless of which Postgres
+    spelling the operator pasted. Returns the URL unchanged if it doesn't look
+    like a Postgres DSN at all (e.g. SQLite in tests)."""
+    prefixes = (
+        "postgresql+asyncpg://",
+        "postgresql+psycopg2://",
+        "postgresql+psycopg://",
+        "postgresql://",
+        "postgres://",
+    )
+    for prefix in prefixes:
+        if url.startswith(prefix):
+            return target_prefix + url[len(prefix) :]
+    return url
+
+
+def _strip_libpq_only_params(url: str, *, for_asyncpg: bool) -> str:
+    """Translate libpq-only query params into a form the target driver accepts.
+
+    Cloud Postgres providers (Neon, Supabase, …) hand operators DSNs that look
+    like ``postgresql://...?sslmode=require&channel_binding=require``. Those
+    are libpq parameters; psycopg understands them, but asyncpg parses the
+    raw URL itself and 500s with ``invalid DSN: invalid GUC parameter`` if
+    it sees them. This shim:
+
+    - For asyncpg: collapses ``sslmode`` to a boolean ``ssl=true|false`` that
+      the asyncpg dialect forwards correctly, and drops ``channel_binding``
+      (asyncpg negotiates SCRAM channel binding automatically when TLS is on
+      — there is no opt-in knob to forward).
+    - For psycopg: passes through unchanged (psycopg/libpq handle both).
+    """
+    parts = urlsplit(url)
+    if not parts.query:
+        return url
+    kept: list[tuple[str, str]] = []
+    for key, value in parse_qsl(parts.query, keep_blank_values=True):
+        lkey = key.lower()
+        if for_asyncpg and lkey == "sslmode":
+            normalised = value.strip().lower()
+            kept.append(("ssl", "false" if normalised in ("disable", "allow") else "true"))
+        elif for_asyncpg and lkey == "channel_binding":
+            # asyncpg has no equivalent; SCRAM-SHA-256-PLUS still happens
+            # transparently when the server requests it over TLS.
+            continue
+        else:
+            kept.append((key, value))
+    return urlunsplit(
+        (parts.scheme, parts.netloc, parts.path, urlencode(kept), parts.fragment)
+    )
 
 
 def _normalise_to_psycopg(url: str) -> str:
@@ -27,16 +80,25 @@ def _normalise_to_psycopg(url: str) -> str:
     cloud-provided ``postgresql://...`` DSN crashes the boot with
     ``ModuleNotFoundError: No module named 'psycopg2'``.
     """
-    prefixes_to_psycopg = (
-        "postgresql+asyncpg://",
-        "postgresql+psycopg2://",
-        "postgresql://",
-        "postgres://",
-    )
-    for prefix in prefixes_to_psycopg:
-        if url.startswith(prefix):
-            return "postgresql+psycopg://" + url[len(prefix) :]
-    return url
+    swapped = _swap_driver(url, "postgresql+psycopg://")
+    return _strip_libpq_only_params(swapped, for_asyncpg=False)
+
+
+def _normalise_to_asyncpg(url: str) -> str:
+    """Force any Postgres URL to use the asyncpg async driver.
+
+    The runtime app uses asyncpg (the async dialect SQLAlchemy ships with),
+    but operators paste DSNs in whatever spelling their cloud provider gave
+    them (``postgresql://``, ``postgres://``, occasionally
+    ``postgresql+psycopg2://``). Without the explicit ``+asyncpg`` hint
+    SQLAlchemy tries to import psycopg2 and the request fans out into 500s.
+
+    We also strip libpq-only query params (``sslmode``, ``channel_binding``)
+    because asyncpg parses the raw URL itself and rejects them — see
+    :func:`_strip_libpq_only_params`.
+    """
+    swapped = _swap_driver(url, "postgresql+asyncpg://")
+    return _strip_libpq_only_params(swapped, for_asyncpg=True)
 
 
 class Settings(BaseSettings):
@@ -214,6 +276,14 @@ class Settings(BaseSettings):
         """
         raw = (self.alembic_database_url or self.database_url).strip()
         return _normalise_to_psycopg(raw)
+
+    @property
+    def async_database_url(self) -> str:
+        """Return an async-driver URL suitable for the runtime SQLAlchemy
+        engine. See :func:`_normalise_to_asyncpg` — the same forgiving
+        rewrite story as ``sync_database_url`` but targeting asyncpg.
+        """
+        return _normalise_to_asyncpg(self.database_url.strip())
 
 
 @lru_cache(maxsize=1)
