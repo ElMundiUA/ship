@@ -266,7 +266,7 @@ A work board is not a filing cabinet. It is a narrative: ideas arrive, get shape
 
 **Done** is the honest closing line—merged, accepted, or explicitly closed with a reason. Done is how you measure throughput and tell stakeholders what changed in the world.
 
-The SVG is built from `documentation/diagrams/architecture.d2` during `mkdocs build` when `d2` is on your `PATH`. Aligning columns with that diagram keeps the story on the page from drifting from the story in production.
+The SVG is built from `documentation/diagrams/architecture.d2` (run `d2 documentation/diagrams/architecture.d2 documentation/diagrams/architecture.svg` after edits when `d2` is on your `PATH`). Aligning columns with that diagram keeps the story on the page from drifting from the story in production.
 
 ### Chapter 13 — Four players, four kinds of discipline
 

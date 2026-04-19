@@ -1,69 +1,64 @@
 # Ship
 
-Ship is an instruction-first framework for SDLC automation.
+Ship is an **instruction-first** framework for SDLC automation: a portable operating model plus versioned artifacts (patterns, tools, workflows, collections) that any coding agent — Cursor, Claude, Codex, Copilot, Aider, and friends — can consume to drive real work in a real repo.
 
 Instead of shipping one hardcoded runtime, Ship ships:
-- a portable operating model,
-- versioned artifacts (patterns, tools, workflows, collections) for coding agents,
-- reference implementations and adoption playbooks.
+- a **methodology** (see *The book* under [`/book`](https://ship.elmundi.com.ua/book) on the live site, source in [`documentation/framework/`](documentation/framework/))
+- **versioned artifacts** under [`artifacts/`](artifacts/) following [RFC-0005](documentation/rfc/rfc-0005-artifact-folder-spec-v2.md) (single `ARTIFACT.md` per item, YAML frontmatter as the source of truth)
+- a **CLI** ([`@elmundi/ship-cli`](cli/), binary `shipctl`) that talks to a thin **methodology HTTP API** ([`backend/`](backend/))
+- a **Next.js site** ([`landing/`](landing/)) that serves the manual, *The book*, the artifact catalogs, the use-case pages, and the marketing surface
 
-Your agent adapts Ship to your real stack (Linear/Jira/GitHub Issues/spreadsheets, any CI, any agent runtime).
+Your agent adapts Ship to your real stack — Linear / Jira / GitHub Issues / spreadsheets, any CI, any agent runtime.
 
-## Quick start
+## Try it in 60 seconds
 
-1. Open the manual: after `npm run landing:dev`, visit [http://127.0.0.1:3000/docs/getting-started](http://127.0.0.1:3000/docs/getting-started)  
-2. Use the built-in prompt builder and hand the generated prompt to your agent  
-3. Follow with: [http://127.0.0.1:3000/docs/adoption](http://127.0.0.1:3000/docs/adoption)
-
-Optional helper launcher (from a product repo root):
+In any product repo:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ElMundiUA/ship/main/adopt-ship.sh | bash
+npx @elmundi/ship-cli init --dry-run
 ```
 
-### CLI without cloning the full monorepo
+`shipctl init` detects what you already have (`.cursor/`, `AGENTS.md`, `CLAUDE.md`, `.codex/`, Copilot instructions, Aider, Cline, Continue, Windsurf, Zed, Gemini, Opencode) and **plans only the injections that fit your tree**. Re-run without `--dry-run` (or with `--yes` for non-interactive) to apply.
 
-1. Install **`@elmundi/ship-cli`** from npm (or run via **`npx @elmundi/ship-cli`** once published); the binary is **`ship`**.
-2. **`npx @elmundi/ship-cli pattern list`** (and `tool` / `workflow` / `collection`; plural aliases work) use the **same deployed methodology API** as **`ship search`** and **`ship docs`** (`GET /patterns`, `GET /tools`, …). Set **`SHIP_API_BASE`** to that public URL (defaults to the public methodology host unless overridden).
-3. Optional: set **`SHIP_REPO`** or run from this clone to read manifests from disk instead of HTTP.
-4. In your product repo, **`npx @elmundi/ship-cli init`** (use **`--dry-run`** first; **`--yes`** for non-interactive installs — see **`ship init help`**).
-
-**`ship search`**, **`ship docs`**, and catalog commands still use the methodology FastAPI (**`SHIP_API_BASE`**).
+Full walkthrough on the site: <https://ship.elmundi.com.ua/docs/getting-started>.
 
 ## Repository structure
 
 | Path | Purpose |
 |------|---------|
-| `documentation/` | Source markdown for the **manual** and **The book** (served under `/docs` and `/book` on the Next.js site). |
-| `artifacts/` | All Ship artifacts in folder-per-artifact layout (`artifacts/<kind>/<id>/ARTIFACT.md` with YAML frontmatter — see [RFC-0005](documentation/rfc/rfc-0005-artifact-folder-spec-v2.md)). Subfolders: `patterns/`, `tools/`, `workflows/`, `collections/`. |
-| `backend/` | Agent-facing API (`/search`, `/fetch`, `/feedback`, `/patterns`, …). |
-| `cli/` | **`ship` CLI** — one FastAPI client (search, fetch, feedback, catalogs) + optional disk + `init`. |
-| `landing/` | Next.js app: marketing UI, **The book** (`/book`), **Patterns** (`/patterns`), **Manual** (`/docs/**`). |
-| `scripts/` | Repo maintenance/deployment helper scripts. |
-| `examples/` | Reference implementation materials and contribution scaffolds. |
+| [`documentation/`](documentation/) | Source markdown for the **manual** (`/docs/**`), **The book** (`/book`), and the [RFC index](documentation/rfc/). |
+| [`artifacts/`](artifacts/) | Every Ship artifact in folder-per-artifact layout (`artifacts/<kind>/<id>/ARTIFACT.md` + YAML frontmatter — see [RFC-0005](documentation/rfc/rfc-0005-artifact-folder-spec-v2.md)). Subfolders: `patterns/`, `tools/`, `workflows/`, `collections/`. |
+| [`backend/`](backend/) | Methodology FastAPI: `/search`, `/fetch`, `/feedback`, `/patterns`, `/tools`, `/workflows`, `/collections`, `/telemetry`. |
+| [`cli/`](cli/) | `@elmundi/ship-cli` (binary `shipctl`) — search, fetch, feedback, catalogs, `init`, `sync`, `verify`, `doctor`, `telemetry`, `feedback`, `new`, `bootstrap`. |
+| [`landing/`](landing/) | Next.js app: marketing, **manual** (`/docs/**`), **The book** (`/book`), **Patterns** (`/patterns`), **Use cases** (`/use-cases`), generated PDF (`/book.pdf`). |
+| [`scripts/`](scripts/) | Repo maintenance (`version.mjs`, `restamp_artifact_shas.py`, `ship_artifact_check.py`, Bunny / Docker helpers). |
+| [`deploy/`](deploy/) | Edge nginx config for the production image. |
+| [`VERSION`](VERSION) | Single-line semver — the canonical Ship release version. See [Versioning](#versioning--releases). |
 
 ## Local development
 
-### Web (Next.js — marketing + manual + book)
-
-From the **repository root** (where this `README.md` lives):
+This is a small monorepo. From the **repo root**:
 
 ```bash
 npm install
-cp landing/.env.example landing/.env.local
-# optional: TOGETHER_API_KEY for on-page image generation (Together / FLUX)
+```
+
+### Web (Next.js — marketing + manual + book)
+
+```bash
+cp landing/.env.example landing/.env.local        # optional: TOGETHER_API_KEY for image gen
 npm run landing:dev
 ```
 
-Then open [http://127.0.0.1:3000](http://127.0.0.1:3000) — **Manual** lives at [/docs](http://127.0.0.1:3000/docs), **The book** at [/book](http://127.0.0.1:3000/book), **Patterns** at [/patterns](http://127.0.0.1:3000/patterns).
+Then open <http://127.0.0.1:3000>: **manual** at [/docs](http://127.0.0.1:3000/docs), **book** at [/book](http://127.0.0.1:3000/book), **patterns** at [/patterns](http://127.0.0.1:3000/patterns), **use cases** at [/use-cases](http://127.0.0.1:3000/use-cases).
 
-Equivalent (runs with `landing/` as cwd):
+> Do **not** run `npx next dev` from the repo root — there is no `next.config` there. Always go through `npm run landing:dev` (or `cd landing && npm run dev`).
+
+Build the downloadable PDF of *The book* (output: `landing/public/book.pdf`):
 
 ```bash
-cd landing && npm install && npm run dev
+npm run book:pdf
 ```
-
-Do **not** run `npx next dev` from the repo root: there is no `next.config` there, and you will get confusing errors.
 
 ### Backend API
 
@@ -74,40 +69,83 @@ pip install -r requirements-backend.txt
 uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8100
 ```
 
-### Ship CLI
-
-From the repository root (after `npm install`):
+Tests:
 
 ```bash
-npm run ship -- help
-npm run ship -- pattern list
-npm run ship -- tool list
-npm run ship -- workflow list
-npm run ship -- collection list
-npm run ship -- search "release gates" --top-k 5
+pytest backend/tests -q
 ```
 
-`pattern`, `tool`, `workflow`, and `collection` (plural aliases `patterns`, `tools`, …) use the **same FastAPI** as **`ship docs`** when you are not inside a Ship checkout (`SHIP_API_BASE` / `--base-url`). From this repo (or **`SHIP_REPO`**), the same commands read manifests from disk.  
-`ship init` detects Cursor / `AGENTS.md` / `CLAUDE.md` / `.codex` / Copilot instructions and, after confirmation, writes or appends API usage notes for agents.
+### CLI (`shipctl`)
 
-## Backend API (and CLI)
+From the repo root:
 
-Humans and scripts typically use **`npm run ship -- …`** from this repo or **`npx @elmundi/ship-cli`** elsewhere: one **methodology HTTP API** serves **`ship search`**, **`ship docs`** (fetch markdown by path + feedback), and **`pattern` / `tool` / `workflow` / `collection`** list/show/fetch, or use disk when cwd / **`SHIP_REPO`** is inside this tree.
+```bash
+npm run shipctl -- help                 # full usage
+npm run shipctl -- pattern list         # plural alias `patterns` also works
+npm run shipctl -- tool list
+npm run shipctl -- workflow list
+npm run shipctl -- collection list
+npm run shipctl -- search "release gates" --top-k 5
+npm run shipctl -- --version
+```
 
-- `GET /patterns` / `GET /patterns/{id}` — **CLI:** `ship pattern list`, `ship pattern show <id>`; full body via **`ship pattern fetch <id>`** → `POST /fetch` with `{ "kind": "pattern", "id" }`
-- `GET /tools`, `GET /tools/{id}`, same for **`/workflows`**, **`/collections`** — **CLI:** `ship tool|workflow|collection list|show|fetch <id>`
-- `POST /search` — vector search over Ship methodology content (local Chroma + OpenAI embeddings); **CLI:** `ship search "<query>"`
-- `POST /fetch` — repo file by path **`{ "path": "…" }`** (**CLI:** `ship docs fetch <path>`) or catalog entry **`{ "kind": "pattern"|…, "id" }`** (**CLI:** `ship pattern|tool|… fetch <id>`)
-- `POST /feedback` — create GitHub issue with automatic sensitive-data sanitization; **CLI:** `ship docs feedback …`
+In this repo (or with `SHIP_REPO=/path/to/ship`), the catalog commands read `artifacts/**/ARTIFACT.md` directly off disk. Outside it, they hit the methodology API at `SHIP_API_BASE` (defaults to the public host). `shipctl search` and `shipctl docs` always go through HTTP.
+
+CLI tests:
+
+```bash
+npm test --prefix cli
+```
+
+## Backend API ↔ CLI quick reference
+
+One HTTP API serves both humans (via the live site) and agents (via the CLI). All catalog and doc bodies are returned as full `ARTIFACT.md` files (frontmatter + content).
+
+| HTTP | `shipctl` |
+|---|---|
+| `GET /patterns`, `GET /patterns/{id}` | `shipctl pattern list`, `shipctl pattern show <id>` |
+| `GET /tools` / `/workflows` / `/collections` (+ `/{id}`) | `shipctl tool\|workflow\|collection list\|show <id>` |
+| `POST /fetch` `{kind,id[,version]}` | `shipctl pattern\|tool\|workflow\|collection fetch <id>` |
+| `POST /fetch` `{path}` | `shipctl docs fetch <path>` |
+| `POST /search` | `shipctl search "<query>"` |
+| `POST /feedback` | `shipctl docs feedback …` / `shipctl feedback submit …` |
+| `POST /telemetry` | `shipctl telemetry flush` (opt-in, see RFC-0003) |
+
+## Versioning & releases
+
+There is exactly one version, in [`VERSION`](VERSION) at the repo root. Every component (`package.json`, `landing/package.json`, `cli/package.json`, `backend/app/main.py`’s `FastAPI(version=…)`) is kept in lockstep with it by [`scripts/version.mjs`](scripts/version.mjs).
+
+```bash
+npm run version:show       # print the canonical version
+npm run version:check      # CI guard — fails if any target drifted
+npm run version:sync       # rewrite every target back to VERSION
+npm run version:bump -- patch   # 0.10.0 → 0.10.1, syncs everything
+npm run version:bump -- minor   # 0.10.0 → 0.11.0
+npm run version:bump -- 1.0.0   # explicit value
+```
+
+The `.github/workflows/version-check.yml` workflow runs `version:check` on every PR that touches a version-bearing file, so drift cannot be merged.
+
+### Release recipe
+
+```bash
+npm run version:bump -- minor                   # prints the new version (e.g. 0.11.0)
+git commit -am "release v$(cat VERSION)"
+git tag "v$(cat VERSION)"
+git push --follow-tags
+```
+
+The `v<x.y.z>` tag triggers `.github/workflows/npm-publish-cli.yml`, which re-checks version alignment and publishes `@elmundi/ship-cli` to npm. The legacy `cli-v<x.y.z>` tag is still accepted for emergency CLI-only patches.
 
 ## Production container
 
-The root `Dockerfile` builds the Next app from the monorepo (so `/docs` can read `documentation/`). Deploy with the same image you already publish (e.g. Docker Hub + Bunny); set `REPO_ROOT=/app` is the default in the image.
+The root [`Dockerfile`](Dockerfile) builds the Next app with `REPO_ROOT=/app`, so `/docs` and `/book` can read `documentation/` and `artifacts/` straight from the image. Deploy with the same image you already publish to Docker Hub + Bunny.
 
 ## Important notes
 
-- Ship is **knowledge + methodology** plus a small **HTTP API** and a **local CLI** (\`npm run ship\`) that wraps it — not a hosted proprietary control plane.
-- Secrets are never committed; agents should only reference secret names in outputs.
+- Ship is **knowledge + methodology** plus a small **HTTP API** and a **local CLI** — not a hosted proprietary control plane.
+- Secrets are never committed; agents only reference secret *names* in outputs.
+- Telemetry is **opt-in** and OFF by default — see [RFC-0003](documentation/rfc/rfc-0003-telemetry-and-feedback.md).
 
 ## License
 

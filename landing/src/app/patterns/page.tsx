@@ -146,28 +146,27 @@ export default function PatternsPage() {
             <p className="text-sm font-bold uppercase tracking-widest text-aqua">Ship CLI</p>
             <h2 className="font-display mt-2 text-3xl font-bold text-white">Patterns commands</h2>
             <p className="mt-4 text-sm leading-relaxed text-white/65">
-              Run these from the <strong className="text-white/90">Ship repository root</strong> (where <code className="text-aqua/90">package.json</code> defines{" "}
-              <code className="text-aqua/90">npm run ship</code>). The CLI talks to the same methodology API as agents — start{" "}
-              <code className="text-aqua/90">uvicorn</code> first (see manual). API base defaults to{" "}
+              Install <code className="text-aqua/90">@elmundi/ship-cli</code> (binary <code className="text-aqua/90">shipctl</code>) or run from a Ship clone with{" "}
+              <code className="text-aqua/90">npm run shipctl -- &lt;cmd&gt;</code>. The CLI talks to the same methodology API as agents — API base defaults to{" "}
               <code className="text-white/80">{shipApiBase}</code>; override with <code className="text-aqua/90">--base-url</code> or{" "}
               <code className="text-aqua/90">SHIP_API_BASE</code>.
             </p>
             <div className="mt-8 space-y-6 rounded-2xl border border-white/10 bg-black/40 p-5 font-mono text-xs text-white/80 sm:text-sm">
               <div>
                 <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-white/40">List pattern ids</p>
-                <pre className="overflow-x-auto whitespace-pre-wrap break-all">npm run ship -- pattern list</pre>
+                <pre className="overflow-x-auto whitespace-pre-wrap break-all">shipctl pattern list</pre>
               </div>
               <div>
                 <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-white/40">Print one pattern (markdown body)</p>
-                <pre className="overflow-x-auto whitespace-pre-wrap break-all">npm run ship -- pattern show catalog-a1-intake</pre>
+                <pre className="overflow-x-auto whitespace-pre-wrap break-all">shipctl pattern show adopt-ship-generic</pre>
               </div>
               <div>
                 <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-white/40">Semantic search (optional)</p>
-                <pre className="overflow-x-auto whitespace-pre-wrap break-all">npm run ship -- search &quot;intake idempotency Todo&quot; --top-k 6</pre>
+                <pre className="overflow-x-auto whitespace-pre-wrap break-all">shipctl search &quot;intake idempotency Todo&quot; --top-k 6</pre>
               </div>
               <div>
                 <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-white/40">Machine-readable JSON</p>
-                <pre className="overflow-x-auto whitespace-pre-wrap break-all">npm run ship -- pattern list --json</pre>
+                <pre className="overflow-x-auto whitespace-pre-wrap break-all">shipctl pattern list --json</pre>
               </div>
             </div>
             <p className="mt-8 text-center text-sm text-white/50">

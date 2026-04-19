@@ -2,11 +2,11 @@
 artifact_kind: tool
 id: methodology-api
 name: Methodology API
-version: 1.0.0
+version: 1.1.0
 channel: stable
-min_shipctl: 0.3.0
-updated_at: "2026-04-16T09:17:12+03:00"
-content_sha256: d7dbffeeeaccfa915c986710bf3602c67cd1275440e12c16b7ddb150fd371ae7
+min_shipctl: 0.10.0
+updated_at: "2026-04-19T03:00:00+03:00"
+content_sha256: 2a26fd8e1c55b5e542b2f4d8c0e47682df934196a1187e8465c112aac4ae7d70
 deprecated: false
 replaced_by: null
 yanked: false
@@ -15,7 +15,7 @@ tags: [http, fastapi, agents]
 authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
-  FastAPI for agents; humans use ship search, ship docs, and ship pattern|tool|… CLI against the same routes. Use when integrating this surface into a Ship setup, when evaluating vendor neutrality for a procurement, or when an adapter under platform needs to call into it.
+  FastAPI for agents; humans use shipctl search, shipctl docs, and shipctl pattern|tool|… CLI against the same routes. Use when integrating this surface into a Ship setup, when evaluating vendor neutrality for a procurement, or when an adapter under platform needs to call into it.
 spec:
   capability: platform
   install_target: documentation/tools/backend-api.md
@@ -33,31 +33,31 @@ Ship now includes a lightweight backend for agent workflows: semantic search, fi
 
 ## CLI (all HTTP via one base URL)
 
-The `**ship`** CLI uses the **same** FastAPI root for **`ship search`**, **`ship docs`** (documentation paths + feedback), and **`ship pattern` / `tool` / `workflow` / `collection`** when you are not inside a local Ship tree (default **`SHIP_API_BASE`**: deployed methodology URL, e.g. `https://ship.elmundi.com/api/methodology`; override with `--base-url`). Deploy this API publicly (or behind your reverse proxy) and point adopters at that single URL.
+The **`shipctl`** CLI uses the **same** FastAPI root for **`shipctl search`**, **`shipctl docs`** (documentation paths + feedback), and **`shipctl pattern` / `tool` / `workflow` / `collection`** when you are not inside a local Ship tree (default **`SHIP_API_BASE`**: deployed methodology URL, e.g. `https://ship.elmundi.com.ua/api/methodology`; override with `--base-url`). Deploy this API publicly (or behind your reverse proxy) and point adopters at that single URL.
 
 ```bash
-npm run ship -- search "intake idempotency" --top-k 6
-npm run ship -- docs fetch documentation/adoption/delivery-quality-and-release-process.md
-npm run ship -- search "release gates" --json
+shipctl search "intake idempotency" --top-k 6
+shipctl docs fetch documentation/adoption/delivery-quality-and-release-process.md
+shipctl search "release gates" --json
 ```
 
-Run `npm run ship -- help` for all subcommands. Use `--json` in scripts for stable parsing.
+Run `shipctl help` for all subcommands (or `npm run shipctl -- help` from a clone of this repo). Use `--json` in scripts for stable parsing.
 
 ## CLI (pattern, tool, workflow, collection)
 
-- **Remote:** `GET /patterns`, `GET /tools`, … on the same `**SHIP_API_BASE`** as `POST /search`; catalog bodies can use **`POST /fetch`** with `{ "kind", "id" }` (**`ship pattern|tool|… fetch <id>`**).
-- **Local tree:** run inside the Ship clone or set `**SHIP_REPO`** to read manifests from disk (no server).
+- **Remote:** `GET /patterns`, `GET /tools`, … on the same **`SHIP_API_BASE`** as `POST /search`; catalog bodies use **`POST /fetch`** with `{ "kind", "id" }` (**`shipctl pattern|tool|… fetch <id>`**).
+- **Local tree:** run inside the Ship clone or set **`SHIP_REPO`** to scan `artifacts/<kind>/<id>/ARTIFACT.md` files directly off disk (no server, per RFC-0005).
 
 ```bash
-npm run ship -- pattern list
-npm run ship -- pattern show adopt-ship-generic
-npm run ship -- pattern fetch adopt-ship-generic
-npm run ship -- tool list
-npm run ship -- tool show playwright
-npm run ship -- workflow list
-npm run ship -- workflow show pr-and-ci-gate
-npm run ship -- collection list
-npm run ship -- collection show web-application
+shipctl pattern list
+shipctl pattern show adopt-ship-generic
+shipctl pattern fetch adopt-ship-generic
+shipctl tool list
+shipctl tool show playwright
+shipctl workflow list
+shipctl workflow show pr-and-ci-gate
+shipctl collection list
+shipctl collection show web-application
 ```
 
 ## Endpoints (FastAPI)
@@ -66,7 +66,7 @@ Agents, CI, and other runtimes may call these directly; humans usually use the C
 
 ### `GET /patterns`
 
-Returns metadata for every entry in `patterns/manifest.json` at the repository root (no file bodies).
+Returns metadata for every artifact found by scanning `artifacts/patterns/<id>/ARTIFACT.md` (frontmatter only, no body).
 
 Response shape:
 
@@ -76,12 +76,14 @@ Response shape:
   "description": "...",
   "patterns": [
     {
-      "id": "catalog-a1-intake",
-      "title": "Structured intake",
+      "id": "adopt-ship-generic",
+      "title": "Adopt Ship (generic)",
       "summary": "...",
-      "path": "prompts/catalog/A1-intake.md",
-      "tags": ["intake", "labels"],
-      "group": "lanes"
+      "path": "artifacts/patterns/adopt-ship-generic/ARTIFACT.md",
+      "version": "1.0.0",
+      "channel": "stable",
+      "tags": ["adoption"],
+      "group": "adoption"
     }
   ]
 }
@@ -89,36 +91,36 @@ Response shape:
 
 ### `GET /patterns/{pattern_id}`
 
-Returns the same fields as one list item, plus a `content` string with the full markdown file (path must match the manifest and stay inside the repo).
+Returns the same fields as one list item, plus a `content` string with the full `ARTIFACT.md` (frontmatter + body) so agents can re-validate the version/sha they cached locally.
 
-Example (same as `npm run ship -- pattern show catalog-a1-intake --json` without `--json`):
+Example (same as `shipctl pattern show adopt-ship-generic --json` without `--json`):
 
 ```bash
-curl -sS "http://127.0.0.1:8100/patterns/catalog-a1-intake"
+curl -sS "http://127.0.0.1:8100/patterns/adopt-ship-generic"
 ```
 
 ### `GET /tools`
 
-Returns full `**tools/manifest.json**` (same as CLI `ship tool list --json`).
+Same shape as `/patterns`, scanning `artifacts/tools/<id>/ARTIFACT.md` (matches CLI `shipctl tool list --json`).
 
 ### `GET /tools/{id}`
 
-Returns one catalog entry plus markdown `content` for the manifest `path`.
+Returns one catalog entry plus the full `ARTIFACT.md` content.
 
 ### `GET /workflows` / `GET /workflows/{id}`
 
-Same as tools for `**workflows/manifest.json**`.
+Same as tools, against `artifacts/workflows/<id>/ARTIFACT.md`.
 
 ### `GET /collections` / `GET /collections/{id}`
 
-Same for `**collections/manifest.json**`.
+Same for `artifacts/collections/<id>/ARTIFACT.md`.
 
 ### `POST /search`
 
 Vector search over:
 
 - `documentation/**/*.md`
-- `prompts/**/*.md`
+- `artifacts/**/ARTIFACT.md`
 - `README.md`
 
 Uses local Chroma persistence (`backend/.chroma/`) and OpenAI embeddings.
@@ -155,7 +157,7 @@ Returns full markdown/text content.
 }
 ```
 
-`kind` is one of `pattern`, `tool`, `workflow`, `collection`. **CLI:** `ship docs fetch <path>` vs `ship pattern|tool|workflow|collection fetch <id>`.
+`kind` is one of `pattern`, `tool`, `workflow`, `collection`. **CLI:** `shipctl docs fetch <path>` vs `shipctl pattern|tool|workflow|collection fetch <id>`.
 
 ### `POST /feedback`
 
@@ -189,19 +191,22 @@ Optional:
 - `FORCE_REINDEX=true` (force rebuild of vector index)
 - `SHIP_TELEMETRY_DIR` (default: `backend/telemetry`) — directory for the `events.jsonl` append-log
 
-## v0.3 additions
+## Artifacts protocol surface
 
-The v0.3 surface implements RFC-0001 (artifacts protocol) and RFC-0003
-(telemetry and feedback). All existing endpoints remain backward-compatible;
-list endpoints simply gain new fields on each entry.
+The catalog endpoints implement RFC-0001 (artifacts protocol) on top of the
+RFC-0005 folder layout (`artifacts/<kind>/<id>/ARTIFACT.md`). Every artifact's
+metadata lives in YAML frontmatter inside that single file — the server is a
+thin filesystem scanner with no separate `manifest.json` to keep in sync.
 
 ### Per-entry version fields
 
 Every entry in `GET /patterns`, `GET /tools`, `GET /workflows`, and
-`GET /collections` now carries:
+`GET /collections` carries:
 
 - `version` — semver `MAJOR.MINOR.PATCH`
-- `content_sha256` — hex SHA-256 of the referenced markdown body
+- `content_sha256` — hex SHA-256 of the artifact body, computed with the
+  `content_sha256:` line value cleared (see `scripts/restamp_artifact_shas.py`
+  for the canonical hashing rule).
 - `updated_at` — ISO-8601 UTC timestamp of the last publish
 - `channel` — `stable` or `edge`
 - `min_shipctl` — minimum `shipctl` semver required
@@ -209,12 +214,13 @@ Every entry in `GET /patterns`, `GET /tools`, `GET /workflows`, and
 - `replaced_by` — id of the replacement artifact or `null`
 - `yanked` — boolean
 
-Fields are stamped by `scripts/stamp_artifact_versions.py` and verified in CI by
-`scripts/ship_artifact_check.py`.
+Fields are authored in frontmatter, verified in CI by
+`scripts/ship_artifact_check.py`, and re-stamped (when content changes) by
+`scripts/restamp_artifact_shas.py`.
 
 ### `?channel=` filter
 
-`GET /patterns`, `/tools`, `/workflows`, `/collections`, and `/manifest` accept
+`GET /patterns`, `/tools`, `/workflows`, `/collections` accept
 `?channel=stable|edge`. Default is `stable`, which filters entries whose
 `channel` is `stable`. `edge` returns every entry regardless of channel.
 
@@ -233,34 +239,21 @@ When the entry is `deprecated=true`, the response still returns `200` but adds
 `"deprecation_notice": "replaced_by=<id>"`. When `yanked=true`, the endpoint
 responds with `410 Gone` carrying the same notice.
 
-### `GET /manifest`
+### Aggregated catalog
 
-Single flat inventory across all five kinds (`pattern`, `tool`, `workflow`,
-`collection`, `doc`). Designed for cheap freshness checks.
+The legacy `GET /manifest` endpoint was retired in v0.10 (RFC-0005). Clients
+should fan out the four per-kind list endpoints in parallel and concatenate
+the results — the CLI already does this in `cli/lib/http.mjs::fetchManifest`.
 
-```json
-{
-  "version": 1,
-  "generated_at": "2026-04-17T10:00:00+00:00",
-  "entries": [
-    {
-      "kind": "pattern",
-      "id": "cloud-developer",
-      "version": "1.0.0",
-      "content_sha256": "...",
-      "updated_at": "2026-04-12T04:11:35+03:00",
-      "channel": "stable",
-      "deprecated": false,
-      "yanked": false,
-      "path": "prompts/cloud-agent/developer.md"
-    }
-  ]
-}
+```text
+GET /patterns
+GET /tools
+GET /workflows
+GET /collections
 ```
 
-The `doc` kind is auto-discovered: every `.md` and `.txt` under
-`documentation/` and `prompts/`, plus `README.md`. The `id` of a `doc` entry is
-its repo-relative path.
+Each entry has the same per-entry shape documented above; clients add a
+`kind` field client-side.
 
 ### `GET /<kind>s/{id}/versions`
 

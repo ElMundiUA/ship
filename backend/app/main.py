@@ -282,7 +282,7 @@ def safe_repo() -> tuple[str, str]:
 
 
 index_store = IndexStore()
-app = FastAPI(title="Ship Methodology API", version="0.3.0")
+app = FastAPI(title="Ship Methodology API", version="0.10.0")
 
 
 _KIND_DESCRIPTIONS = {

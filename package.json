@@ -1,6 +1,6 @@
 {
   "name": "ship",
-  "version": "0.7.0",
+  "version": "0.10.0",
   "private": true,
   "description": "Ship framework — instruction-first docs, prompts, and reference implementations",
   "workspaces": [
@@ -12,7 +12,11 @@
     "landing:build": "npm run build --prefix landing",
     "landing:start": "npm run start --prefix landing",
     "book:pdf": "npm run book:pdf --prefix landing",
-    "shipctl": "node cli/bin/shipctl.mjs"
+    "shipctl": "node cli/bin/shipctl.mjs",
+    "version:show": "node scripts/version.mjs show",
+    "version:check": "node scripts/version.mjs check",
+    "version:sync": "node scripts/version.mjs sync",
+    "version:bump": "node scripts/version.mjs bump"
   },
   "keywords": [],
   "author": "Denys Kuzin",

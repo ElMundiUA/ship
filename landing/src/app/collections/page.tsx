@@ -79,22 +79,22 @@ export default function CollectionsPage() {
             <p className="text-sm font-bold uppercase tracking-widest text-lilac">Ship CLI</p>
             <h2 className="font-display mt-2 text-3xl font-bold text-white">Collections commands</h2>
             <p className="mt-4 text-sm leading-relaxed text-white/65">
-              Scans <code className="text-aqua/90">artifacts/collections/&lt;id&gt;/ARTIFACT.md</code> on disk — no API. From the Ship repo root (or{" "}
-              <code className="text-aqua/90">SHIP_REPO</code>). Cross-link discovery: <code className="text-aqua/90">ship search</code> when the API is running (
+              Scans <code className="text-aqua/90">artifacts/collections/&lt;id&gt;/ARTIFACT.md</code> on disk — no API. From the Ship repo root (or with{" "}
+              <code className="text-aqua/90">SHIP_REPO</code> set). Cross-link discovery: <code className="text-aqua/90">shipctl search</code> when the API is running (
               <code className="text-white/80">{shipApiBase}</code>).
             </p>
             <div className="mt-8 space-y-6 rounded-2xl border border-white/10 bg-black/40 p-5 font-mono text-xs text-white/80 sm:text-sm">
               <div>
                 <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-white/40">List bundle ids</p>
-                <pre className="overflow-x-auto whitespace-pre-wrap break-all">npm run ship -- collection list</pre>
+                <pre className="overflow-x-auto whitespace-pre-wrap break-all">shipctl collection list</pre>
               </div>
               <div>
                 <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-white/40">Print one bundle (markdown)</p>
-                <pre className="overflow-x-auto whitespace-pre-wrap break-all">npm run ship -- collection show web-application</pre>
+                <pre className="overflow-x-auto whitespace-pre-wrap break-all">shipctl collection show web-application</pre>
               </div>
               <div>
                 <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-white/40">Semantic search (needs API)</p>
-                <pre className="overflow-x-auto whitespace-pre-wrap break-all">npm run ship -- search &quot;collections bundle web app&quot; --top-k 6</pre>
+                <pre className="overflow-x-auto whitespace-pre-wrap break-all">shipctl search &quot;collections bundle web app&quot; --top-k 6</pre>
               </div>
             </div>
             <p className="mt-8 text-center text-sm text-white/50">

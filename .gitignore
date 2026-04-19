@@ -18,6 +18,10 @@ output/playwright/
 .DS_Store
 agent-run-*.log
 .ship/agent-runs/
-hooks/__pycache__/
 **/__pycache__/
 backend/.chroma/
+
+# Local-only working trees: presentation decks, scratch outputs.
+# Commit deliberately if you want any of these published.
+presentations/
+output/

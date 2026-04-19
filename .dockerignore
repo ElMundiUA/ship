@@ -1,4 +1,5 @@
-# Context for Ship Next image — keep repo paths the app reads at runtime.
+# Context for the Ship Next image. Keep this list narrow and aligned with
+# what the running container actually needs — see Dockerfile for what we COPY.
 .git
 .github
 .venv
@@ -11,6 +12,8 @@ site
 .DS_Store
 .env
 .env.*
-artifacts
-runtime
-examples
+
+# Local-only working trees that are never part of a release image.
+presentations
+output
+.ship

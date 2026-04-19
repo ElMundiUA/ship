@@ -7,9 +7,6 @@ If you are new here, use **[Getting started](../../getting-started/index.md)** t
 !!! tip "Adopt Ship into ElMundi (agent-driven)"
     Use **[Adoption → ElMundi rollout](../../adoption/elmundi.md)** with `prompts/onboarding/adopt-ship-generic.md` + `adopt-ship-elmundi.md` in Cursor (or another agent from the [launch matrix](../../adoption/agent-launch-matrix.md)). Submodule target: `tools/ship` → [ElMundiUA/ship](https://github.com/ElMundiUA/ship).
 
-!!! note "Ship log"
-    Ukrainian runbooks for this chapter live beside the English source as `index.uk.md` and siblings under `documentation/examples/elmundi/` (see `mkdocs.yml` `exclude_docs` if your local build hides them). They are the human translation layer; the tables below stay canonical for automation.
-
 ---
 
 ### How Ship maps to ElMundi (one table)
@@ -70,7 +67,7 @@ If your team has a production setup worth sharing, follow **[Contribute a refere
 
 Names like **ElMundi pre-release**, **Bunny**, **dev.elmundi.com** are **this org’s** choices. Your fork should rename projects, URLs, and secrets — **Ship** (the **Framework** tab) stays valid.
 
-We publish the manual at **https://ship.elmundi.com** when the docs site is deployed; until then, build locally — [PDF & offline](../../pdf-export.md).
+We publish the manual at **https://ship.elmundi.com.ua** — the same Next.js site that serves this page also exposes a downloadable PDF of *The book* at [/book.pdf](/book.pdf).
 
 ### Environment identifiers (Linear / GitHub)
 
@@ -104,7 +101,7 @@ Stages **intake → dev** run from **`.github/workflows/linear-agent-sdlc-schedu
 **Self-heal:** **`workflow-self-heal.yml`** runs on a separate cadence (CLI analysis first, optional Cloud Agent). It is **not** the same job as SDLC intake/BA/developer.
 
 !!! tip "Ship documentation site"
-    **Production:** [ship.elmundi.com](https://ship.elmundi.com/). **Local:** from **ElMundiUA/ship** repo root, `pip install -r requirements-docs.txt` → `mkdocs serve` — navigation, search; **PDF** via browser print (see [PDF & offline](../../pdf-export.md)). Start at [Start here](../../index.md).
+    **Production:** [ship.elmundi.com.ua](https://ship.elmundi.com.ua/). **Local:** from the **ElMundiUA/ship** repo root, `npm install` → `npm run landing:dev` and open <http://127.0.0.1:3000/docs>. The same site exposes a downloadable PDF of *The book* at [/book.pdf](/book.pdf). Start at [Start here](../../index.md).
 
 ### Schedule (canonical)
 

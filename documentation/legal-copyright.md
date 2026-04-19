@@ -4,7 +4,7 @@
 
 **Year:** 2026  
 
-**Documentation version:** 0.7.0 (see site header chip and `mkdocs.yml` / `extra.doc_version`).
+**Documentation version:** matches the canonical Ship release in [`/VERSION`](https://github.com/ElMundiUA/ship/blob/main/VERSION) (see also `scripts/version.mjs` and the site footer).
 
 ## Customer-facing packs
 

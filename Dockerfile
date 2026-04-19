@@ -1,5 +1,8 @@
 # syntax=docker/dockerfile:1
-# Next.js (landing + `/docs` manual). `REPO_ROOT=/app` so server reads `documentation/` beside `landing/`.
+# Next.js (landing + `/docs` manual + `/book`). The Next app reads
+# `documentation/`, `artifacts/` and `VERSION` straight off disk via
+# `REPO_ROOT=/app`, so we copy the whole working tree (minus what
+# `.dockerignore` excludes) rather than enumerating moving subfolders.
 
 FROM node:20-alpine
 WORKDIR /app
@@ -11,7 +14,7 @@ ENV NEXT_TELEMETRY_DISABLED=1
 ENV REPO_ROOT=/app
 ENV HOSTNAME=0.0.0.0
 
-COPY package.json package-lock.json ./
+COPY package.json package-lock.json VERSION ./
 COPY landing/package.json ./landing/
 COPY cli/package.json ./cli/
 
@@ -19,12 +22,9 @@ RUN npm ci
 
 COPY landing ./landing
 COPY documentation ./documentation
-COPY prompts ./prompts
-COPY patterns ./patterns
-COPY tools ./tools
-COPY workflows ./workflows
-COPY collections ./collections
+COPY artifacts ./artifacts
 COPY backend ./backend
+COPY scripts ./scripts
 
 RUN npm run landing:build
 

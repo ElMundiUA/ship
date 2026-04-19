@@ -92,86 +92,6 @@ npx @elmundi/ship-cli init --yes
 
 ## Init flow
 
-`shipctl init` is now the primary adoption entry point. A single invocation can:
-
-1. Create `.ship/config.yml` + `.ship/state.json` + `.ship/cache/` (with `.gitignore`).
-2. Fetch the collections relevant to the chosen stack (`collection/agent-rules-<agent>@<v>`,
-   `collection/preset-<preset>@<v>`, optionally `collection/adoption-playbook`) into the cache.
-3. With `--copy-rules`, install each cached `agent-rules-*` artifact at the `install_target`
-   declared in its front-matter — respecting existing markers and previous version footers.
-4. With `--bootstrap`, render CI/tracker scaffolding. The `mobile-app + gh-actions + linear`
-   triple gets full skeletons (`.github/workflows/ship-pilot.yml`, `.ship/labels.yml`,
-   appended `.env.example` block); other combos emit a plan-only `SHIP_BOOTSTRAP_PLAN.md`.
-
-### Flag surface
-
-```text
-shipctl init
-  [--yes] [--force] [--dry-run] [--cwd DIR] [--json]
-  [--agents cursor,codex,claude-md]    # comma-separated ids
-  [--tracker linear]                    # RFC-0002 enum
-  [--ci gh-actions]                     # RFC-0002 enum
-  [--preset mobile-app]                 # RFC-0002 enum
-  [--language ts]                       # optional; doctor can infer
-  [--channel stable|edge]               # override api.channel
-  [--copy-rules]                        # install cached agent-rules files
-  [--copy-playbook]                     # copy cached playbook into .ship/playbooks/
-  [--bootstrap]                         # render CI/tracker scaffolding
-  [--telemetry on|off|ask]              # override the telemetry prompt
-```
-
-### Three primary invocations
-
-**MVP (adopt in an empty repo, no bootstrap):**
-
-```bash
-shipctl init --yes --agents cursor --copy-rules --telemetry off
-```
-
-**Pilot (team-wide agent rules, infer tracker/CI from the repo):**
-
-```bash
-shipctl init --yes \
-  --agents cursor,claude-md --copy-rules --telemetry ask
-```
-
-**Full bootstrap (mobile-app on GitHub Actions + Linear):**
-
-```bash
-shipctl init --bootstrap \
-  --agents cursor,claude-md,codex \
-  --tracker linear --ci gh-actions --preset mobile-app \
-  --telemetry off --yes
-```
-
-`--dry-run` prints the plan (planned files, rules, bootstrap outputs) without writing
-anything — no config, no cache mutations, no rule files. `--json` prints the same
-summary as a single JSON object suitable for CI pipelines.
-
-### Rule file upsert semantics
-
-Agent rules ship as `collection/agent-rules-<id>` artifacts. Each artifact declares
-its install path and marker via front-matter:
-
-```yaml
----
-install_target: ".cursor/rules/ship-artifacts-protocol.mdc"
-marker: "<!-- ship-cli: artifacts-protocol v1 -->"
----
-```
-
-When `--copy-rules` is set, `init` writes the marker-delimited body to the install
-target and appends a footer `<!-- ship-cli: installed-from collection/<id>@<v> -->`.
-Re-runs are idempotent:
-
-- Existing marker/end-marker blocks are replaced in place.
-- Unmarked files receive the block appended with a blank-line separator.
-- The footer is rewritten to match the newly installed version.
-- If the footer shows a different version and `--force` is not set, the file is
-  skipped with a warning (bump manually with `--force`).
-
-## Init flow
-
 `shipctl init` is the primary adoption entrypoint. It composes four steps in one
 command:
 
@@ -347,11 +267,12 @@ repo git history — `shipctl sync` caches them in `.ship/cache/`, which is
 ├── config.yml                 # RFC-0002 schema; committed
 ├── state.json                 # last_sync_at, last_manifest_hash; gitignored
 ├── cache/                     # per-repo artifact cache (gitignored)
-│   ├── pattern/<id>@<v>.md
-│   ├── pattern/<id>@<v>.meta.json
-│   ├── tool/…
-│   ├── workflow/…
-│   ├── collection/…
+│   ├── pattern/<id>@<v>/
+│   │   ├── ARTIFACT.md        # full body (frontmatter + content), per RFC-0005
+│   │   └── .meta.json         # source, sha256, fetched_at, etc.
+│   ├── tool/<id>@<v>/…
+│   ├── workflow/<id>@<v>/…
+│   ├── collection/<id>@<v>/…
 │   └── doc/…
 ├── telemetry-outbox.jsonl     # buffered telemetry events (gitignored)
 └── feedback-drafts/           # feedback draft markdowns (gitignored)
@@ -514,9 +435,10 @@ Post-adoption liveness check. A collection of independent checks under
   `ship-managed` markers.
 - **config** — `stack.*` enum re-validation, declared agents have
   on-disk signals.
-- **network** (skip with `--no-network`) — `/health` or `/manifest`
-  reachable, local cache matches channel manifest, Linear labels exist
-  (needs `LINEAR_API_KEY`), every `${{ secrets.X }}` reference in
+- **network** (skip with `--no-network`) — `/health` (or `/patterns` as a
+  fallback) reachable, local cache matches the channel catalog aggregated
+  across `/patterns`, `/tools`, `/workflows`, `/collections`, Linear labels
+  exist (needs `LINEAR_API_KEY`), every `${{ secrets.X }}` reference in
   gh-actions workflows is declared in `.env.example`.
 
 Exit `0` when no check returned `fail`; warnings do not fail.
@@ -531,8 +453,32 @@ shipctl verify --json                # { checks:[…], summary:{…}, exit_code 
 
 ## Versioning
 
-`0.9.0` renames the binary from `ship` → `shipctl` and aligns with the artifacts protocol (RFC-0001) + `.ship/config.yml` schema (RFC-0002). The deprecated `ship` alias will be removed in `0.5` (after the next CLI major). Minor/major bumps resume once things are stable.
+`shipctl --version` (or `shipctl version`) prints the running release. The
+version is part of every outbound `User-Agent` header so the methodology API
+can correlate adoption metrics with the client release.
+
+This package follows the **monorepo-wide** Ship version: a single `VERSION`
+file at the repo root drives `cli/package.json`, `landing/package.json`,
+`backend/app/main.py`, and the root `package.json` in lockstep via
+`scripts/version.mjs` (`npm run version:bump -- patch|minor|major|x.y.z`).
+See the root [`README.md`](../README.md#versioning--releases) for the full
+release recipe.
 
 ## Publishing (maintainers)
 
-GitHub Action **Publish @elmundi/ship-cli to npm** (tag **`cli-v<version>`** must match **`cli/package.json`**, or use **workflow_dispatch**). Repository secret **`NPM_TOKEN`** required. Publish from monorepo root: **`npm publish -w @elmundi/ship-cli`**, not `npm publish --prefix cli` (root package is private).
+The GitHub Action **Publish @elmundi/ship-cli to npm** is triggered by either
+the unified `v<x.y.z>` tag (preferred — bumps every component in lockstep) or
+the legacy `cli-v<x.y.z>` tag (escape hatch for CLI-only patches). It runs
+`scripts/version.mjs check` before publishing so an out-of-sync tree never
+ships to npm.
+
+```bash
+npm run version:bump -- minor          # 0.10.0 → 0.11.0, syncs everything
+git commit -am "release v$(cat VERSION)"
+git tag "v$(cat VERSION)"
+git push --follow-tags                 # publish workflow picks up v0.11.0
+```
+
+Repository secret **`NPM_TOKEN`** is required. Publish from the monorepo
+root: **`npm publish -w @elmundi/ship-cli`** — not `npm publish --prefix cli`
+(the root package is private).

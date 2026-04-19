@@ -7,8 +7,20 @@ import { resourceManifestCommand } from "../lib/commands/manifest-catalog.mjs";
 import { printHelp } from "../lib/commands/help.mjs";
 import { initCommand } from "../lib/commands/init.mjs";
 import { doctorCommand } from "../lib/commands/doctor.mjs";
+import { getCliVersion } from "../lib/version.mjs";
 
 const raw = process.argv.slice(2);
+
+/* `--version` / `-v` / `version` short-circuit before normal arg parsing —
+ * any tool worth its salt prints its version without the rest of the parser
+ * having to work. We only fire when the version flag is the *first* token,
+ * so that subcommand args like `feedback draft --version 1.0.0` are not
+ * mistaken for a request to print our own version. */
+if (raw[0] === "--version" || raw[0] === "-v" || raw[0] === "version") {
+  console.log(getCliVersion());
+  process.exit(0);
+}
+
 const { _, ...g } = extractGlobalArgv(raw);
 const ctx = {
   baseUrl: g.baseUrl,

@@ -170,19 +170,19 @@ export default function ToolsPage() {
             <div className="mt-8 space-y-6 rounded-2xl border border-white/10 bg-black/40 p-5 font-mono text-xs text-white/80 sm:text-sm">
               <div>
                 <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-white/40">List tool ids</p>
-                <pre className="overflow-x-auto whitespace-pre-wrap break-all">npm run ship -- tool list</pre>
+                <pre className="overflow-x-auto whitespace-pre-wrap break-all">shipctl tool list</pre>
               </div>
               <div>
                 <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-white/40">Print one tool doc (markdown)</p>
-                <pre className="overflow-x-auto whitespace-pre-wrap break-all">npm run ship -- tool show playwright</pre>
+                <pre className="overflow-x-auto whitespace-pre-wrap break-all">shipctl tool show playwright</pre>
               </div>
               <div>
                 <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-white/40">Semantic search (needs API)</p>
-                <pre className="overflow-x-auto whitespace-pre-wrap break-all">npm run ship -- search &quot;Playwright hosted regression&quot; --top-k 6</pre>
+                <pre className="overflow-x-auto whitespace-pre-wrap break-all">shipctl search &quot;Playwright hosted regression&quot; --top-k 6</pre>
               </div>
               <div>
-                <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-white/40">Fetch arbitrary path (needs API)</p>
-                <pre className="overflow-x-auto whitespace-pre-wrap break-all">npm run ship -- tool fetch playwright</pre>
+                <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-white/40">Fetch full ARTIFACT.md (needs API)</p>
+                <pre className="overflow-x-auto whitespace-pre-wrap break-all">shipctl tool fetch playwright</pre>
               </div>
             </div>
             <p className="mt-8 text-center text-sm text-white/50">

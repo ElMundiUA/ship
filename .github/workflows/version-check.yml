@@ -1,0 +1,29 @@
+name: version-check
+
+on:
+  pull_request:
+    paths:
+      - "VERSION"
+      - "package.json"
+      - "landing/package.json"
+      - "cli/package.json"
+      - "backend/app/main.py"
+      - "scripts/version.mjs"
+      - ".github/workflows/version-check.yml"
+  push:
+    branches:
+      - main
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Verify all package versions match VERSION
+        run: |
+          node scripts/version.mjs check
+          echo
+          echo "Tip: if this failed, run \`npm run version:sync\` (or \`npm run version:bump <kind>\`)."

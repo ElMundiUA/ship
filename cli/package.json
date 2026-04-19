@@ -1,6 +1,6 @@
 {
   "name": "@elmundi/ship-cli",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "type": "module",
   "description": "Ship CLI — artifacts protocol (patterns/tools/workflows/collections), docs search/fetch/feedback, and agent init",
   "license": "Apache-2.0",

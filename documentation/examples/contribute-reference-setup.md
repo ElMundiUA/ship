@@ -46,4 +46,4 @@ Add under `documentation/examples/<your-reference>/`:
 
 ## Where to link it
 
-Update examples navigation in `mkdocs.yml` and add a short entry in `documentation/examples/elmundi/index.md` (or the parent examples page when introduced).
+Add a short entry in `documentation/examples/elmundi/index.md` (or the parent examples page when introduced) and link the new chapter from the docs index — the Next.js docs router under `landing/src/app/docs/[...slug]/page.tsx` picks it up automatically.

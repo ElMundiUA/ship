@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { getUserAgent } from "./version.mjs";
 
 function joinUrl(baseUrl, path) {
   return `${baseUrl.replace(/\/$/, "")}${path.startsWith("/") ? path : `/${path}`}`;
@@ -7,6 +8,16 @@ function joinUrl(baseUrl, path) {
 function authHeaders() {
   const token = process.env.SHIP_API_TOKEN;
   return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+/* Stamp a real User-Agent on every outbound call so the methodology API can
+ * correlate adoption metrics with the CLI release. The version string lives
+ * in cli/package.json (kept in sync with the root VERSION file). */
+function commonHeaders() {
+  return {
+    "User-Agent": getUserAgent(),
+    ...authHeaders(),
+  };
 }
 
 export class HttpError extends Error {
@@ -32,7 +43,7 @@ export async function apiPost(baseUrl, path, body) {
     headers: {
       "Content-Type": "application/json",
       Accept: "application/json",
-      ...authHeaders(),
+      ...commonHeaders(),
     },
     body: JSON.stringify(body),
   });
@@ -54,7 +65,7 @@ export async function apiPost(baseUrl, path, body) {
 export async function apiGet(baseUrl, path) {
   const url = joinUrl(baseUrl, path);
   const res = await fetch(url, {
-    headers: { Accept: "application/json", ...authHeaders() },
+    headers: { Accept: "application/json", ...commonHeaders() },
   });
   const text = await res.text();
   let data;
@@ -235,7 +246,7 @@ export async function deleteTelemetry(baseUrl, anonymousId) {
     headers: {
       Accept: "application/json",
       "X-Ship-Confirm": "yes",
-      ...authHeaders(),
+      ...commonHeaders(),
     },
   });
   const text = await res.text();

@@ -88,22 +88,22 @@ export default function WorkflowsPage() {
             <p className="text-sm font-bold uppercase tracking-widest text-coral">Ship CLI</p>
             <h2 className="font-display mt-2 text-3xl font-bold text-white">Workflows commands</h2>
             <p className="mt-4 text-sm leading-relaxed text-white/65">
-              Scans <code className="text-aqua/90">artifacts/workflows/&lt;id&gt;/ARTIFACT.md</code> on disk — no API. From the Ship repo root (or{" "}
-              <code className="text-aqua/90">SHIP_REPO</code>). Explore intent text with <code className="text-aqua/90">ship search</code> when the API is up (
+              Scans <code className="text-aqua/90">artifacts/workflows/&lt;id&gt;/ARTIFACT.md</code> on disk — no API. From the Ship repo root (or with{" "}
+              <code className="text-aqua/90">SHIP_REPO</code> set). Explore intent text with <code className="text-aqua/90">shipctl search</code> when the API is up (
               <code className="text-white/80">{shipApiBase}</code>).
             </p>
             <div className="mt-8 space-y-6 rounded-2xl border border-white/10 bg-black/40 p-5 font-mono text-xs text-white/80 sm:text-sm">
               <div>
                 <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-white/40">List workflow ids</p>
-                <pre className="overflow-x-auto whitespace-pre-wrap break-all">npm run ship -- workflow list</pre>
+                <pre className="overflow-x-auto whitespace-pre-wrap break-all">shipctl workflow list</pre>
               </div>
               <div>
                 <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-white/40">Print one intent (markdown)</p>
-                <pre className="overflow-x-auto whitespace-pre-wrap break-all">npm run ship -- workflow show pr-and-ci-gate</pre>
+                <pre className="overflow-x-auto whitespace-pre-wrap break-all">shipctl workflow show pr-and-ci-gate</pre>
               </div>
               <div>
                 <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-white/40">Semantic search (needs API)</p>
-                <pre className="overflow-x-auto whitespace-pre-wrap break-all">npm run ship -- search &quot;PR gate preview&quot; --top-k 6</pre>
+                <pre className="overflow-x-auto whitespace-pre-wrap break-all">shipctl search &quot;PR gate preview&quot; --top-k 6</pre>
               </div>
             </div>
             <p className="mt-8 text-center text-sm text-white/50">
