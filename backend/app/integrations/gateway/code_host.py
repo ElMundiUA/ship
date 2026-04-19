@@ -38,6 +38,26 @@ class PullRequestRef:
     number: int
 
 
+@dataclass(frozen=True, slots=True)
+class RepoSummary:
+    """Rich snapshot of a repository for UI listings (picker, dashboard).
+
+    ``RepoRef`` stays minimal because it's a cross-host *identifier*; this
+    is the *resource* shape we return when the user actually needs to
+    eyeball the list. ``external_id`` is the vendor's numeric id (opaque
+    to us), persisted alongside the install so we can de-dupe selections
+    even if the user renames the repo on the vendor side.
+    """
+
+    ref: RepoRef
+    external_id: int
+    full_name: str
+    default_branch: str
+    private: bool
+    html_url: str
+    description: str | None
+
+
 @runtime_checkable
 class CodeHostGateway(Protocol):
     """Operations a code host must support to back our default pipelines.
@@ -50,6 +70,11 @@ class CodeHostGateway(Protocol):
 
     async def list_repos(self) -> list[RepoRef]:
         """Repos visible to the calling identity (App installation, PAT…)."""
+        ...
+
+    async def list_repo_summaries(self) -> list[RepoSummary]:
+        """Same set as ``list_repos`` but with the metadata the picker UI
+        needs (default branch, visibility, html_url, vendor id)."""
         ...
 
     async def get_pull_request(self, ref: PullRequestRef) -> dict[str, Any]:

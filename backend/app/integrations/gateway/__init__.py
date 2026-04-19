@@ -17,6 +17,7 @@ from backend.app.integrations.gateway.code_host import (
     CodeHostGateway,
     PullRequestRef,
     RepoRef,
+    RepoSummary,
 )
 from backend.app.integrations.gateway.tracker import TicketRef, TrackerGateway
 
@@ -26,6 +27,7 @@ __all__ = [
     "CodeHostGateway",
     "PullRequestRef",
     "RepoRef",
+    "RepoSummary",
     "TicketRef",
     "TrackerGateway",
 ]

@@ -304,6 +304,72 @@ export function startGitHubAppInstall(
   return apiFetch<ApiGitHubInstallStart>(path, { method: "POST", token });
 }
 
+// --- Workspace repos (Day-2 picker) ----------------------------------------
+
+/**
+ * One row of the picker UI. Mirrors the backend `AvailableRepoOut`
+ * shape. ``activated`` reflects our DB state for the workspace; the rest
+ * is whatever the GitHub installation API returned at request time.
+ */
+export interface ApiAvailableRepo {
+  external_id: number;
+  full_name: string;
+  owner: string;
+  name: string;
+  default_branch: string;
+  private: boolean;
+  html_url: string;
+  description: string | null;
+  activated: boolean;
+}
+
+export interface ApiActivatedRepo {
+  id: string;
+  external_id: number;
+  full_name: string;
+  default_branch: string;
+  private: boolean;
+  html_url: string;
+  description: string | null;
+  activated_at: string | null;
+  provider: string;
+}
+
+export function listAvailableRepos(
+  workspaceId: string,
+  token?: string,
+): Promise<ApiAvailableRepo[]> {
+  return apiFetch<ApiAvailableRepo[]>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/available`,
+    { token },
+  );
+}
+
+export function listActivatedRepos(
+  workspaceId: string,
+  token?: string,
+): Promise<ApiActivatedRepo[]> {
+  return apiFetch<ApiActivatedRepo[]>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos`,
+    { token },
+  );
+}
+
+export function activateRepos(
+  workspaceId: string,
+  externalIds: number[],
+  token?: string,
+): Promise<ApiActivatedRepo[]> {
+  return apiFetch<ApiActivatedRepo[]>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/activate`,
+    {
+      method: "POST",
+      body: { external_ids: externalIds },
+      token,
+    },
+  );
+}
+
 // --- Artifact repos --------------------------------------------------------
 
 export function listArtifactRepos(

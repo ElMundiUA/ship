@@ -19,11 +19,17 @@ from backend.app.integrations.gateway.code_host import (
     CodeHostGateway,
     PullRequestRef,
     RepoRef,
+    RepoSummary,
 )
 from backend.app.integrations.github.app_auth import (
     GITHUB_API_BASE,
     fetch_installation_token,
 )
+
+# Hard cap on how many repos we'll return to the picker. GitHub orgs can
+# legitimately have more, but past ~500 the checkbox UI is hostile and
+# we'd rather force a search box than ship a 5MB JSON to the browser.
+_MAX_INSTALL_REPOS = 500
 
 
 class GitHubCodeHost(CodeHostGateway):
@@ -70,18 +76,44 @@ class GitHubCodeHost(CodeHostGateway):
         # ``/installation/repositories`` returns the repos the App has
         # access to under the *current* installation token — this is the
         # canonical "what can we see" call.
-        response = await self._request(
-            "GET", "/installation/repositories", params={"per_page": 100}
-        )
-        payload = response.json()
-        return [
-            RepoRef(
-                kind="github",
-                owner=item["owner"]["login"],
-                repo=item["name"],
+        return [s.ref for s in await self.list_repo_summaries()]
+
+    async def list_repo_summaries(self) -> list[RepoSummary]:
+        # Same call as ``list_repos`` but we keep the rich metadata so the
+        # picker UI can show repo descriptions / visibility badges. We
+        # paginate up to ``_MAX_INSTALL_REPOS`` to keep the response
+        # bounded — installations bigger than that should fall back to a
+        # search box on the picker (Day 3 polish).
+        out: list[RepoSummary] = []
+        page = 1
+        while True:
+            response = await self._request(
+                "GET",
+                "/installation/repositories",
+                params={"per_page": 100, "page": page},
             )
-            for item in payload.get("repositories", [])
-        ]
+            payload = response.json()
+            items = payload.get("repositories", []) or []
+            for item in items:
+                out.append(
+                    RepoSummary(
+                        ref=RepoRef(
+                            kind="github",
+                            owner=item["owner"]["login"],
+                            repo=item["name"],
+                        ),
+                        external_id=int(item["id"]),
+                        full_name=item["full_name"],
+                        default_branch=item.get("default_branch") or "main",
+                        private=bool(item.get("private", False)),
+                        html_url=item.get("html_url") or "",
+                        description=item.get("description"),
+                    )
+                )
+            if len(items) < 100 or len(out) >= _MAX_INSTALL_REPOS:
+                break
+            page += 1
+        return out[:_MAX_INSTALL_REPOS]
 
     async def get_pull_request(self, ref: PullRequestRef) -> dict[str, Any]:
         response = await self._request(

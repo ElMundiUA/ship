@@ -22,6 +22,8 @@ import Link from "next/link";
 import {
   inspectRepo,
   isApiConfigured,
+  listAvailableRepos,
+  type ApiAvailableRepo,
   type ApiRepoProfile,
 } from "@/lib/api/client";
 import { getSessionToken } from "@/lib/api/session";
@@ -34,6 +36,7 @@ type StepId =
   | "repo"
   | "workspace"
   | "github"
+  | "repos"
   | "workflows"
   | "tracker"
   | "knowledge"
@@ -44,6 +47,7 @@ const STEPS: { id: StepId; label: string }[] = [
   { id: "repo", label: "Repo" },
   { id: "workspace", label: "Workspace" },
   { id: "github", label: "GitHub" },
+  { id: "repos", label: "Pick repos" },
   { id: "workflows", label: "Workflows" },
   { id: "tracker", label: "Tracker" },
   { id: "knowledge", label: "Knowledge" },
@@ -86,6 +90,17 @@ const GITHUB_ERRORS: Record<string, string> = {
   bad_state:
     "Install link expired or was tampered with. Start the install again from this step.",
   unknown: "Couldn't start the install flow. Try again or skip for now.",
+};
+
+const REPOS_ERRORS: Record<string, string> = {
+  api_unavailable: "Backend not reachable.",
+  forbidden: "You need admin role on this workspace to activate repos.",
+  no_install:
+    "GitHub App isn't installed on this workspace yet. Step back to GitHub.",
+  bad_token:
+    "GitHub rejected our installation token. Reinstall the Ship app and try again.",
+  empty: "Pick at least one repo, or use Skip to come back later.",
+  unknown: "Couldn't save the repo selection. Try again.",
 };
 
 const TRACKER_ERRORS: Record<string, string> = {
@@ -205,6 +220,7 @@ function pickStep(raw: string | string[] | undefined): StepId {
   if (
     v === "workspace" ||
     v === "github" ||
+    v === "repos" ||
     v === "workflows" ||
     v === "tracker" ||
     v === "knowledge" ||
@@ -245,8 +261,29 @@ export default async function OnboardingPage({
     try {
       profile = await inspectRepo(repo);
     } catch {
-      // Surface as a soft warning rather than blocking the page.
       profile = null;
+    }
+  }
+
+  // Repo picker step: pull the live installation set once, server-side.
+  // We render the result as a server component (faster first paint than
+  // a client useEffect, and matches the pattern of the workflows step).
+  // ``reposLoadError`` carries a short error code so the UI can show a
+  // helpful banner without leaking backend internals.
+  let availableRepos: ApiAvailableRepo[] | null = null;
+  let reposLoadError: string | null = null;
+  if (step === "repos" && wsId && apiConfigured && hasSession) {
+    try {
+      availableRepos = await listAvailableRepos(wsId);
+    } catch (err) {
+      const status =
+        err && typeof err === "object" && "status" in err
+          ? (err as { status: number }).status
+          : 0;
+      if (status === 409) reposLoadError = "no_install";
+      else if (status === 502) reposLoadError = "bad_token";
+      else if (status === 401) reposLoadError = "api_unavailable";
+      else reposLoadError = "unknown";
     }
   }
 
@@ -313,6 +350,15 @@ export default async function OnboardingPage({
           />
         )}
         {step === "github" && !wsId && <MissingWorkspaceNotice />}
+        {step === "repos" && wsId && (
+          <ReposStep
+            wsId={wsId}
+            repo={repo ?? ""}
+            error={error ?? reposLoadError ?? undefined}
+            available={availableRepos}
+          />
+        )}
+        {step === "repos" && !wsId && <MissingWorkspaceNotice />}
         {step === "workflows" && wsId && (
           <WorkflowsStep
             wsId={wsId}
@@ -716,8 +762,18 @@ function GitHubStep({
       {success && (
         <div className="mt-5 rounded-xl border border-aqua/30 bg-aqua/[0.06] px-4 py-3 text-xs text-white/85">
           <strong className="text-aqua">GitHub App installed.</strong> Webhooks
-          armed and per-installation tokens are minted on demand. You can pick
-          and toggle repos any time from the GitHub install page.
+          armed and per-installation tokens are minted on demand. Now pick which
+          repos Ship should wire up.
+          <div className="mt-3">
+            <Link
+              href={`/onboarding?step=repos&ws=${encodeURIComponent(wsId)}${
+                repo ? `&repo=${encodeURIComponent(repo)}` : ""
+              }`}
+              className="inline-flex rounded-full bg-aqua/20 px-3 py-1.5 text-[11px] font-bold text-aqua hover:bg-aqua/30"
+            >
+              Pick repos to wire →
+            </Link>
+          </div>
         </div>
       )}
 
@@ -750,7 +806,7 @@ function GitHubStep({
           {success ? "Reinstall / pick more repos →" : "Install Ship on GitHub →"}
         </button>
         <Link
-          href={`/onboarding?step=workflows&ws=${encodeURIComponent(wsId)}${
+          href={`/onboarding?step=repos&ws=${encodeURIComponent(wsId)}${
             repo ? `&repo=${encodeURIComponent(repo)}` : ""
           }`}
           className="text-xs text-white/55 hover:text-white"
@@ -789,6 +845,154 @@ function GitHubStep({
 
 // ---------------------------------------------------------------------------
 // Step 4 — Workflows
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Step 4 — Pick repos (Day-2 picker, fed by /v1/.../repos/available)
+// ---------------------------------------------------------------------------
+
+function ReposStep({
+  wsId,
+  repo,
+  error,
+  available,
+}: {
+  wsId: string;
+  repo: string;
+  error?: string;
+  available: ApiAvailableRepo[] | null;
+}) {
+  const message = error ? REPOS_ERRORS[error] ?? error : null;
+  const skipHref = `/onboarding?step=workflows&ws=${encodeURIComponent(wsId)}${
+    repo ? `&repo=${encodeURIComponent(repo)}` : ""
+  }`;
+  const reinstallHref = `/onboarding?step=github&ws=${encodeURIComponent(wsId)}${
+    repo ? `&repo=${encodeURIComponent(repo)}` : ""
+  }`;
+  // ``available`` is null when the page bailed early (no install, API
+  // down). The error code already explains *why*, so we just don't
+  // render the list — show the banner + a link back to the github step.
+  const repos = available ?? [];
+  // Default-tick anything already activated; the user can untick to
+  // detach. We also default-tick the first repo when nothing is
+  // activated yet — saves a click on the most common single-repo case.
+  const hasActivation = repos.some((r) => r.activated);
+  return (
+    <section>
+      <p className="font-mono text-[11px] uppercase tracking-[0.3em] text-aqua/85">
+        Step 4 of 8 · Pick repos
+      </p>
+      <h1 className="mt-2 font-display text-4xl font-bold leading-tight">
+        Which repos should Ship wire up?
+      </h1>
+      <p className="mt-3 max-w-2xl text-sm leading-relaxed text-white/70">
+        We pulled this list straight from your GitHub App installation. Tick
+        the ones we should attach default pipelines to. You can change this
+        later from the dashboard.
+      </p>
+
+      {message && (
+        <div className="mt-5 rounded-lg border border-coral/40 bg-coral/10 px-3 py-2 text-xs text-coral">
+          {message}
+          {(error === "no_install" || error === "bad_token") && (
+            <>
+              {" "}
+              <Link href={reinstallHref} className="underline hover:text-white">
+                Reinstall the app →
+              </Link>
+            </>
+          )}
+        </div>
+      )}
+
+      {available !== null && repos.length === 0 && (
+        <div className="mt-5 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-xs text-white/70">
+          The Ship app is installed but it can&apos;t see any repos yet. Open
+          the install page on GitHub and grant access to at least one
+          repository, then refresh.
+        </div>
+      )}
+
+      {repos.length > 0 && (
+        <form
+          action="/api/onboard/repos-activate"
+          method="POST"
+          className="mt-7 space-y-4"
+          suppressHydrationWarning
+        >
+          <input type="hidden" name="ws" value={wsId} suppressHydrationWarning />
+          {repo && (
+            <input type="hidden" name="repo" value={repo} suppressHydrationWarning />
+          )}
+
+          <fieldset className="space-y-2 rounded-2xl border border-white/10 bg-white/[0.025] p-3 max-h-[420px] overflow-y-auto">
+            <legend className="px-2 text-[11px] font-bold uppercase tracking-widest text-white/55">
+              {repos.length} visible repo{repos.length === 1 ? "" : "s"}
+            </legend>
+            {repos.map((r, i) => (
+              <label
+                key={r.external_id}
+                className="flex cursor-pointer items-start gap-3 rounded-xl border border-white/5 bg-white/[0.02] p-3 has-[:checked]:border-aqua/50 has-[:checked]:bg-aqua/[0.06]"
+              >
+                <input
+                  type="checkbox"
+                  name="repo_id"
+                  value={String(r.external_id)}
+                  defaultChecked={r.activated || (!hasActivation && i === 0)}
+                  className="mt-1"
+                  suppressHydrationWarning
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-semibold text-white">
+                      {r.full_name}
+                    </span>
+                    {r.private && (
+                      <span className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-white/65">
+                        private
+                      </span>
+                    )}
+                    {r.activated && (
+                      <span className="rounded bg-aqua/15 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-aqua">
+                        activated
+                      </span>
+                    )}
+                    <span className="rounded bg-white/5 px-1.5 py-0.5 font-mono text-[10px] tracking-wide text-white/45">
+                      {r.default_branch}
+                    </span>
+                  </div>
+                  {r.description && (
+                    <div className="mt-1 line-clamp-2 text-[11px] text-white/55">
+                      {r.description}
+                    </div>
+                  )}
+                  <div className="mt-1 font-mono text-[10px] text-white/35">
+                    {r.html_url}
+                  </div>
+                </div>
+              </label>
+            ))}
+          </fieldset>
+
+          <div className="flex items-center justify-between gap-3 pt-2">
+            <Link href={skipHref} className="text-xs text-white/55 hover:text-white">
+              Skip for now →
+            </Link>
+            <button
+              type="submit"
+              className="rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-4 py-2.5 text-sm font-bold text-ink shadow-glow transition hover:brightness-110"
+            >
+              Wire selected repos →
+            </button>
+          </div>
+        </form>
+      )}
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Step 5 — Workflows
 // ---------------------------------------------------------------------------
 
 function WorkflowsStep({
