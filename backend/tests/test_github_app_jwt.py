@@ -7,6 +7,7 @@ with httpx mocked.
 
 from __future__ import annotations
 
+import base64
 import time
 
 import pytest
@@ -74,6 +75,40 @@ def test_mint_app_jwt_includes_required_claims(
     assert claims["iat"] == int(now) - 60
     # Expiry within the documented 10-minute ceiling.
     assert claims["exp"] - claims["iat"] <= 10 * 60
+
+
+def test_private_key_accepts_escaped_newlines(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Single-line env stores (Bunny et al.) deliver PEM with literal ``\\n``."""
+    pem = _generate_pem()
+    one_line = pem.replace("\n", "\\n")
+    settings = _settings_with_env(
+        monkeypatch,
+        GITHUB_APP_ID="12345",
+        GITHUB_APP_PRIVATE_KEY=one_line,
+    )
+    # mint_app_jwt would raise on a malformed PEM, so a clean call here
+    # is itself the assertion that normalization restored the newlines.
+    token = mint_app_jwt(settings, now=1_700_000_000.0)
+    claims = jwt.get_unverified_claims(token)
+    assert claims["iss"] == "12345"
+
+
+def test_private_key_accepts_base64_blob(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Operators can paste base64(PEM) when the env field rejects newlines."""
+    pem = _generate_pem()
+    blob = base64.b64encode(pem.encode("utf-8")).decode("ascii")
+    settings = _settings_with_env(
+        monkeypatch,
+        GITHUB_APP_ID="12345",
+        GITHUB_APP_PRIVATE_KEY=blob,
+    )
+    token = mint_app_jwt(settings, now=1_700_000_000.0)
+    claims = jwt.get_unverified_claims(token)
+    assert claims["iss"] == "12345"
 
 
 def test_mint_app_jwt_raises_when_private_key_missing(
