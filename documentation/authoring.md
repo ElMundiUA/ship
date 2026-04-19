@@ -9,6 +9,13 @@ front-matter, hashing) and [RFC-0004](/docs/protocol/rfc-0004-adapters)
 (adapter sections); read them before changing schema. Vocabulary like *kind*,
 *pattern*, *preset*, and *channel* is defined in [Concepts](/docs/concepts).
 
+> **Before you draft a new pattern**, read
+> [Pattern vs knowledge](/docs/authoring/pattern-vs-knowledge) — the editorial
+> rubric that decides whether what you have in mind is a `pattern` or
+> belongs in a `knowledge` bucket (the kind being added in a follow-up
+> RFC). The single biggest cause of pattern bloat is reference material
+> filed as method.
+
 ## Folder layout
 
 Every artifact is a folder under the `artifacts/` root, one per kind:

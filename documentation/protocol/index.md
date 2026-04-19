@@ -26,3 +26,4 @@ When an RFC is superseded, its status moves to `Superseded` and the replacement 
 | [0003](rfc-0003-telemetry-and-feedback.md) | Telemetry and feedback | Accepted | Opt-in anonymous telemetry about artifact usage; client-drafted feedback becomes GitHub issues. |
 | [0004](rfc-0004-adapters.md) | Adapters | Accepted | CI / tracker / agent / rules adapters as versioned artifacts, not bundled into `shipctl`. |
 | [0005](rfc-0005-artifact-folder-spec-v2.md) | Artifact folder spec v2 | Proposed | Each artifact is a folder with `ARTIFACT.md` (frontmatter as single source of truth); catalog manifests removed from git; backend serves a live FS-derived index. |
+| [0006](rfc-0006-cloud-platform-foundations.md) | Cloud platform foundations | Proposed | Multi-tenant `Org → Workspace → Project` model; git-as-source-of-truth for human-authored content; Postgres + pgvector everywhere (Neon for SaaS); `/v1` API alongside backwards-compatible methodology routes. |

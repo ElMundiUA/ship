@@ -1,0 +1,89 @@
+"""Runtime configuration for the Ship backend (RFC-0006).
+
+A single :class:`Settings` object is read from environment variables (and an
+optional ``.env`` file at the repo root). The same shape is used in three
+deployments — local docker-compose, self-hosted Helm, and our SaaS on Neon —
+so the application code never branches on environment.
+"""
+
+from __future__ import annotations
+
+from functools import lru_cache
+from pathlib import Path
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+class Settings(BaseSettings):
+    """All runtime knobs for ``ship-server`` and ``ship-worker``."""
+
+    model_config = SettingsConfigDict(
+        env_file=str(REPO_ROOT / ".env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
+        case_sensitive=False,
+    )
+
+    # --- Identity ---
+    public_url: str = Field(default="http://localhost:8100", alias="SHIP_PUBLIC_URL")
+    auth_mode: str = Field(default="local", alias="SHIP_AUTH_MODE")  # local | github | oidc
+
+    # --- Database (Postgres + pgvector everywhere; RFC-0006) ---
+    database_url: str = Field(
+        default="postgresql+asyncpg://ship:ship@localhost:5433/ship",
+        alias="DATABASE_URL",
+    )
+    # Alembic uses a sync driver; set explicitly so the same DATABASE_URL works
+    # for the async app without forcing operators to maintain two URLs.
+    alembic_database_url: str | None = Field(default=None, alias="ALEMBIC_DATABASE_URL")
+
+    # --- Cache / broker / pubsub ---
+    redis_url: str = Field(default="redis://localhost:6380/0", alias="REDIS_URL")
+
+    # --- Object storage (documents bucket source files) ---
+    s3_endpoint_url: str | None = Field(default=None, alias="S3_ENDPOINT_URL")
+    s3_bucket: str = Field(default="ship-documents", alias="S3_BUCKET")
+    s3_access_key: str | None = Field(default=None, alias="S3_ACCESS_KEY")
+    s3_secret_key: str | None = Field(default=None, alias="S3_SECRET_KEY")
+    s3_region: str = Field(default="us-east-1", alias="S3_REGION")
+
+    # --- Auth / secrets ---
+    jwt_secret: str = Field(default="dev-only-not-for-prod-change-me", alias="JWT_SECRET")
+    jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
+    jwt_ttl_seconds: int = Field(default=60 * 60 * 12, alias="JWT_TTL_SECONDS")
+    encryption_key: str | None = Field(default=None, alias="ENCRYPTION_KEY")
+
+    # --- Existing methodology API knobs (kept for backwards compatibility) ---
+    openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
+    openai_embed_model: str = Field(
+        default="text-embedding-3-small", alias="OPENAI_EMBED_MODEL"
+    )
+    github_token: str | None = Field(default=None, alias="GITHUB_TOKEN")
+    feedback_repo: str = Field(default="ElMundiUA/ship", alias="SHIP_FEEDBACK_REPO")
+
+    @property
+    def sync_database_url(self) -> str:
+        """Return a sync-driver URL suitable for Alembic.
+
+        Operators can override with ``ALEMBIC_DATABASE_URL``; otherwise we map
+        ``postgresql+asyncpg://`` → ``postgresql+psycopg://`` so a single
+        ``DATABASE_URL`` works for both runtime and migrations.
+        """
+        if self.alembic_database_url:
+            return self.alembic_database_url
+        url = self.database_url
+        if url.startswith("postgresql+asyncpg://"):
+            return "postgresql+psycopg://" + url[len("postgresql+asyncpg://") :]
+        if url.startswith("postgres://"):
+            return "postgresql+psycopg://" + url[len("postgres://") :]
+        return url
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    """Cached accessor; tests reset it via ``get_settings.cache_clear()``."""
+    return Settings()

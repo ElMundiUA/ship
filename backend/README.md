@@ -1,38 +1,136 @@
 # Ship backend API
 
-Instruction-first companion API for agents.
+Instruction-first companion API for agents — and the foundation of the Ship cloud platform (RFC-0006).
 
 ## Endpoints
 
-From any machine, `npx @elmundi/ship-cli pattern list` (or `npm run shipctl -- pattern list` from this repo) uses **`SHIP_API_BASE`** (`GET /patterns`, …), or reads from disk inside the monorepo (or with `SHIP_REPO`).
+### Methodology API (unauthenticated, kept stable for the released CLI)
+
+`npx @elmundi/ship-cli pattern list` (or `npm run shipctl -- pattern list` from this repo) uses **`SHIP_API_BASE`** to call:
 
 - `GET /patterns` — list curated org patterns scanned from `artifacts/patterns/<id>/ARTIFACT.md` (frontmatter only).
 - `GET /patterns/{id}` — one pattern plus full `ARTIFACT.md` (frontmatter + body).
-- `GET /tools`, `GET /tools/{id}` — tools index + body (same as CLI `shipctl tool …`).
-- `GET /workflows`, `GET /workflows/{id}` — workflows index + body (`artifacts/workflows/<id>/ARTIFACT.md`).
-- `GET /collections`, `GET /collections/{id}` — collections index + body (`artifacts/collections/<id>/ARTIFACT.md`).
-- `POST /search` — vector search over methodology files (`documentation/`, `artifacts/**/ARTIFACT.md`, `README.md`) using local Chroma + OpenAI embeddings.
-- `POST /fetch` — fetch full content for a selected markdown/text file or a catalog entry by `{kind, id, version?}`.
-- `POST /feedback` — create GitHub issues in Ship repo after sanitizing sensitive fragments.
-- `POST /telemetry` — opt-in adoption events (RFC-0003); buffered client-side until `shipctl telemetry flush`.
+- `GET /tools`, `GET /tools/{id}` — tools index + body.
+- `GET /workflows`, `GET /workflows/{id}` — workflows index + body.
+- `GET /collections`, `GET /collections/{id}` — collections index + body.
+- `POST /search` — vector search over methodology files (`documentation/`, `artifacts/**/ARTIFACT.md`, `README.md`).
+- `POST /fetch` — fetch full content for a selected file or catalog entry.
+- `POST /feedback` — create GitHub issues in the Ship repo after sanitizing sensitive fragments.
+- `POST /telemetry` — opt-in adoption events (RFC-0003).
+
+### Cloud platform v1 (multi-tenant, authenticated; RFC-0006)
+
+- `GET /v1/health` — liveness + Postgres round-trip.
+- `GET /v1/workspaces` — workspaces the caller belongs to.
+- `POST /v1/workspaces` — create a workspace under the caller's org.
+- `GET /v1/workspaces/{id}` — fetch a single workspace (404 unless the caller is a member).
+- `POST /v1/onboarding/inspect` — run `RepoInspector` against a local path
+  or remote git URL, return a `RepoProfile` (language, frameworks, CI,
+  tests, README excerpt, suggested workspace identity, recommended
+  workflows). Clones remote URLs shallowly under `/tmp/ship-repos/`.
+- `POST /v1/onboarding/scaffold-demo-repo` — materialize a tiny
+  Next.js + FastAPI fixture under `/tmp/ship-repos/demo-*` so the wizard
+  has something concrete to inspect on a fresh laptop.
+- `POST /v1/onboarding/install-workflows` — `WorkflowInstaller` writes the
+  approved workflows into the target repo (one `.github/workflows/{id}.yml`
+  + the artifact contract under `.ship/workflows/{id}.md`), refreshes
+  `.ship/lock.yaml`, and commits everything as
+  `ship: install N workflow(s)`. Memberships with role `admin`/`owner`
+  required.
+- `POST /v1/onboarding/seed-knowledge` — `KnowledgeSeeder` generates
+  `brandbook.md`, `code-style.md` and `testing.md` under
+  `.ship/knowledge/`, distilled from the inspected repo, and commits them
+  as `ship: seed knowledge buckets`.
+
+Auth: `Authorization: Bearer <token>` where `<token>` is either a session JWT or a personal access token prefixed `ship_pat_`.
 
 The API version is reported by `GET /openapi.json` and matches the canonical Ship release in [`/VERSION`](../VERSION) (kept in sync by `scripts/version.mjs`).
 
-## Run locally
+## Run the cloud platform locally (one command)
+
+The full backend stack (Postgres+pgvector, Redis, MinIO, API server, worker) lives behind a single `docker-compose.yml` at the repo root.
+
+```bash
+cp .env.example .env       # defaults are fine for local
+docker compose up --build
+```
+
+When everything is healthy:
+
+- API: <http://localhost:8100/v1/health>
+- MinIO console: <http://localhost:9001> (creds from `.env`)
+- Postgres: `localhost:5433` (user/pass `ship`/`ship`)
+
+The first boot runs Alembic migrations against the empty database; subsequent boots are no-ops.
+
+## Run the API directly (no Docker)
 
 ```bash
 . .venv/bin/activate
 pip install -r requirements-backend.txt
+
+# Migrations (Postgres must already be reachable at DATABASE_URL)
+alembic -c backend/alembic.ini upgrade head
+
+# API
 uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8100
+
+# Worker (separate shell)
+arq backend.app.workers.main.WorkerSettings
 ```
 
 ## Required env
 
+Methodology API:
+
 - `OPENAI_API_KEY` — embeddings for `/search`
 - `GITHUB_TOKEN` — issue creation for `/feedback`
+
+Cloud platform (RFC-0006) — see `.env.example` for the full list:
+
+- `DATABASE_URL` — `postgresql+asyncpg://...` (Neon-pooled URL in SaaS)
+- `REDIS_URL` — used by the worker and by API rate limits
+- `S3_*` — object storage for document blobs
+- `JWT_SECRET` — sign session tokens; must be a long random string in production
+- `ENCRYPTION_KEY` — 32-byte urlsafe base64; required to store integration secrets
 
 Optional:
 
 - `OPENAI_EMBED_MODEL` (default `text-embedding-3-small`)
 - `SHIP_FEEDBACK_REPO` (default `ElMundiUA/ship`)
-- `FORCE_REINDEX=true` to rebuild vector index on startup
+- `FORCE_REINDEX=true` to rebuild the legacy Chroma vector index on startup
+- `ALEMBIC_DATABASE_URL` to override the sync URL Alembic uses
+
+## Operator notes — repo-driven onboarding
+
+The `/v1/onboarding/*` endpoints shell out to `git` to clone, stage, and
+commit changes inside the user's repository, so the API process needs:
+
+- **`git` on PATH** — already present in the official `python:3.13-slim`
+  base image we ship and in the `ship-server` Docker image.
+- **Filesystem access to the target repo** — for local paths the API
+  container must be able to `read/write` the directory; for remote URLs the
+  inspector clones into `/tmp/ship-repos/`, so make sure that directory is
+  writable (the container runs as root by default and the path is on the
+  ephemeral container fs).
+- **Outbound network** — only when a wizard run targets a remote URL
+  (HTTPS clone). For air-gapped environments, point the wizard at a local
+  path that's already on disk.
+
+Commits are authored as `Ship Onboarding <ship@onboarding.local>` when the
+target repo has no local `user.email`/`user.name` configured; otherwise the
+existing identity is preserved. Every wizard mutation is recorded in
+`audit_log` with `actor_user_id`, the workspace ID, and a small JSON
+payload describing what was installed.
+
+## Tests
+
+```bash
+pytest backend/tests
+```
+
+Tests that depend on Postgres (the new `/v1/*` suite) automatically **skip** when no database is reachable. To run them, point `TEST_DATABASE_URL` at the local stack:
+
+```bash
+TEST_DATABASE_URL=postgresql+asyncpg://ship:ship@localhost:5433/ship pytest backend/tests
+```

@@ -50,3 +50,17 @@ def github_env(monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "ghs_test_token_for_testing_only_123456")
     monkeypatch.setenv("SHIP_FEEDBACK_REPO", "ElMundiUA/ship")
     yield
+
+
+# Postgres-backed fixtures for the v1 API tests (RFC-0006). Imported here so
+# the fixtures are discoverable from any test in this directory; tests that
+# don't touch them are unaffected.
+from backend.tests.db_conftest import (  # noqa: E402, F401  (re-export as fixtures)
+    _engine,
+    _migrated,
+    db_session,
+    seed_user,
+    seed_user_with_token,
+    seed_workspace,
+    v1_client,
+)

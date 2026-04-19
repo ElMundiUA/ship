@@ -1,0 +1,168 @@
+# Ship cloud platform — local stack (RFC-0006).
+#
+# One command brings up the full backend on a developer laptop:
+#
+#   cp .env.example .env
+#   docker compose up
+#
+# Same image set is what runs in self-hosted Helm and (without Postgres/Redis/MinIO
+# containers) in our SaaS on Neon + managed Redis + S3.
+
+name: ship
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ship}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ship}
+      POSTGRES_DB: ${POSTGRES_DB:-ship}
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./deploy/postgres/init.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ship} -d ${POSTGRES_DB:-ship}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6380}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-shipminio}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-shipminio}
+    ports:
+      - "${S3_PORT:-9000}:9000"
+      - "${S3_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      sh -c "
+      mc alias set local http://minio:9000 ${S3_ACCESS_KEY:-shipminio} ${S3_SECRET_KEY:-shipminio} &&
+      mc mb -p local/${S3_BUCKET:-ship-documents} &&
+      mc anonymous set download local/${S3_BUCKET:-ship-documents} || true
+      "
+    restart: "no"
+
+  ship-server:
+    build:
+      context: .
+      dockerfile: deploy/backend/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-ship}:${POSTGRES_PASSWORD:-ship}@postgres:5432/${POSTGRES_DB:-ship}
+      ALEMBIC_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ship}:${POSTGRES_PASSWORD:-ship}@postgres:5432/${POSTGRES_DB:-ship}
+      REDIS_URL: redis://redis:6379/0
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_BUCKET: ${S3_BUCKET:-ship-documents}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-shipminio}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-shipminio}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      JWT_SECRET: ${JWT_SECRET:-dev-only-not-for-prod-change-me}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_EMBED_MODEL: ${OPENAI_EMBED_MODEL:-text-embedding-3-small}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      SHIP_FEEDBACK_REPO: ${SHIP_FEEDBACK_REPO:-ElMundiUA/ship}
+      SHIP_AUTH_MODE: ${SHIP_AUTH_MODE:-local}
+      SHIP_PUBLIC_URL: ${SHIP_PUBLIC_URL:-http://localhost:8100}
+    ports:
+      - "${SHIP_API_PORT:-8100}:8100"
+    volumes:
+      - ./artifacts:/app/artifacts:ro
+      - ./documentation:/app/documentation:ro
+      - ./README.md:/app/README.md:ro
+      - ./VERSION:/app/VERSION:ro
+
+  console:
+    # Operator console (Next.js). The marketing landing is intentionally NOT
+    # in compose — it stays on the public web and reads like any other site.
+    # This service ships only the in-app operator UI.
+    build:
+      context: .
+      dockerfile: deploy/console/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      ship-server:
+        condition: service_started
+    environment:
+      # Console talks to ship-server over the internal compose network.
+      # next.config.ts proxies /api/* -> ${SHIP_API_URL}/v1/* when set.
+      SHIP_API_URL: http://ship-server:8100
+      PORT: "3001"
+    ports:
+      - "${SHIP_CONSOLE_PORT:-3001}:3001"
+
+  ship-worker:
+    build:
+      context: .
+      dockerfile: deploy/backend/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      ship-server:
+        condition: service_started
+    command: ["arq", "backend.app.workers.main.WorkerSettings"]
+    environment:
+      # Server runs migrations; worker should not race on them.
+      SHIP_SKIP_MIGRATIONS: "1"
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-ship}:${POSTGRES_PASSWORD:-ship}@postgres:5432/${POSTGRES_DB:-ship}
+      REDIS_URL: redis://redis:6379/0
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_BUCKET: ${S3_BUCKET:-ship-documents}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-shipminio}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-shipminio}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      JWT_SECRET: ${JWT_SECRET:-dev-only-not-for-prod-change-me}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_EMBED_MODEL: ${OPENAI_EMBED_MODEL:-text-embedding-3-small}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+    volumes:
+      - ./artifacts:/app/artifacts:ro
+      - ./documentation:/app/documentation:ro
+      - ./README.md:/app/README.md:ro
+      - ./VERSION:/app/VERSION:ro
+
+volumes:
+  postgres_data:
+  minio_data:

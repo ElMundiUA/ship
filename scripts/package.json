@@ -1,0 +1,9 @@
+{
+  "name": "ship-scripts",
+  "private": true,
+  "type": "module",
+  "description": "Local helper scripts (Playwright tour, etc.) — not part of any deployable.",
+  "dependencies": {
+    "playwright": "^1.49.0"
+  }
+}

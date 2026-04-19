@@ -1,8 +1,44 @@
+# Ship backend — runtime + test dependencies.
+# One stack across laptop / self-hosted / SaaS (RFC-0006).
+
+# --- Web framework ---
 fastapi>=0.115,<1
-uvicorn>=0.30,<1
-chromadb>=0.5,<1
-openai>=1.50,<2
+uvicorn[standard]>=0.30,<1
+pydantic[email]>=2.7,<3
+pydantic-settings>=2.4,<3
+
+# --- HTTP client (used by /search, /feedback, integrations) ---
 httpx>=0.27,<1
+
+# --- LLM / embeddings ---
+openai>=1.50,<2
+
+# --- Persistence (Postgres + pgvector everywhere; RFC-0006) ---
+SQLAlchemy[asyncio]>=2.0.30,<3
+alembic>=1.13,<2
+asyncpg>=0.29,<1
+pgvector>=0.3,<1
+
+# --- Background jobs / cache / pubsub ---
+redis>=5.0,<6
+arq>=0.26,<1
+
+# --- Object storage (documents bucket source files) ---
+aioboto3>=13.1,<14
+
+# --- Auth / secrets ---
+python-jose[cryptography]>=3.3,<4
+passlib[bcrypt]>=1.7,<2
+cryptography>=43,<44
+
+# --- YAML for artifact frontmatter ---
 pyyaml>=6.0
+
+# --- Tests ---
 pytest>=8.0,<9
 pytest-asyncio>=0.24,<1
+pytest-postgresql>=6.1,<7
+psycopg[binary]>=3.2,<4   # used by pytest-postgresql
+
+# --- Vector search legacy (kept until migration to pgvector is complete) ---
+chromadb>=0.5,<1

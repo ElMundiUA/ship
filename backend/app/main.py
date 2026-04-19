@@ -7,6 +7,7 @@ import re
 import time
 import uuid
 from collections import defaultdict, deque
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,9 @@ import httpx
 import yaml
 from fastapi import FastAPI, Header, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict, Field
+
+from backend.app.api.v1 import api_router as v1_api_router
+from backend.app.db.session import dispose_engine, get_engine
 
 
 APP_ROOT = Path(__file__).resolve().parents[2]
@@ -282,7 +286,33 @@ def safe_repo() -> tuple[str, str]:
 
 
 index_store = IndexStore()
-app = FastAPI(title="Ship Methodology API", version="0.10.0")
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Open the async database engine eagerly so the first request doesn't
+    pay for connection setup, and dispose it cleanly on shutdown.
+
+    The methodology API endpoints (``/patterns``, ``/search``, …) do not need
+    Postgres and continue to work even if the database is unreachable; only
+    the new ``/v1`` routes will fail in that case. We therefore log and
+    swallow startup errors instead of preventing the process from booting.
+    """
+    try:
+        get_engine()
+    except Exception:  # pragma: no cover — best-effort startup
+        pass
+    try:
+        yield
+    finally:
+        try:
+            await dispose_engine()
+        except Exception:  # pragma: no cover
+            pass
+
+
+app = FastAPI(title="Ship Methodology API", version="0.10.0", lifespan=lifespan)
+app.include_router(v1_api_router)
 
 
 _KIND_DESCRIPTIONS = {

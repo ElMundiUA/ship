@@ -10,6 +10,9 @@ landing/content/book.md
 landing/public/.book.tmp.html
 landing/public/.book.tmp.html.md
 landing/tsconfig.tsbuildinfo
+console/.next/
+console/tsconfig.tsbuildinfo
+console/.dockerignore.bak
 output/playwright/
 .env
 .env.*

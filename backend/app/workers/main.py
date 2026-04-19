@@ -1,0 +1,54 @@
+"""Background worker entry point (arq).
+
+Run as: ``arq backend.app.workers.main.WorkerSettings``.
+
+The worker shares the same image, the same Settings, and the same database
+as ``ship-server``. Concrete jobs (artifact repo sync, document parsing,
+embedding refresh, daily/retro generation, OTLP export) land in dedicated
+modules under :mod:`backend.app.workers` and are imported here so arq picks
+them up at startup.
+"""
+
+from __future__ import annotations
+
+import logging
+
+from arq import cron
+from arq.connections import RedisSettings
+
+from backend.app.core.config import get_settings
+from backend.app.workers.secret_probe import cron_probe_pending_secrets
+
+
+log = logging.getLogger("ship.worker")
+
+
+async def heartbeat(ctx: dict) -> None:
+    """Trivial heartbeat job used as a smoke-test until real jobs land.
+
+    Runs every minute; emits a single info line so operators can see the
+    worker is alive in container logs without standing up extra observability.
+    """
+    log.info("ship-worker heartbeat tick=%s", ctx.get("job_try"))
+
+
+def _redis_settings() -> RedisSettings:
+    settings = get_settings()
+    return RedisSettings.from_dsn(settings.redis_url)
+
+
+class WorkerSettings:
+    """arq's discovery point for queue config + scheduled jobs."""
+
+    redis_settings = _redis_settings()
+    functions: list = []
+    cron_jobs = [
+        cron(heartbeat, minute=set(range(0, 60))),
+        # Probe newly-saved or stale integration secrets on the half-minute so
+        # `pending` rows turn green within ~30s of the user clicking "Save
+        # secret". The job itself is bounded (32 rows, 6s/probe) so it can't
+        # starve the heartbeat tick.
+        cron(cron_probe_pending_secrets, minute=set(range(0, 60)), second={0, 30}),
+    ]
+    keep_result = 60
+    job_timeout = 300
