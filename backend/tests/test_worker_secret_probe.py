@@ -26,25 +26,44 @@ async def test_worker_picks_pending_row_and_writes_verdict(
     user, raw, workspace = seed_workspace
     headers = {"Authorization": f"Bearer {raw}"}
 
-    # Provision via the API so we exercise the same encrypt path the
-    # workspace owner sees.
-    response = await v1_client.put(
-        f"/v1/workspaces/{workspace.id}/integrations/linear",
-        headers=headers,
-        json={"kind": "linear", "config": {"team_id": "ENG"}, "secret": "lin_api_x"},
-    )
-    assert response.status_code == 200
-    assert response.json()["status"] == "pending"
-
-    # Stub probe_one so this test is hermetic — exercise the plumbing only.
+    # The PUT route now probes inline; stub it across both the API path and
+    # the worker import so this test stays hermetic and offline.
     calls: list[tuple[str, str]] = []
 
     async def _stub_probe(kind: str, secret: str, _config):
         calls.append((kind, secret))
         return "ok", None
 
+    from backend.app.api.v1.routes import integrations as routes
+
+    monkeypatch.setattr(routes, "probe_one", _stub_probe)
     monkeypatch.setattr(worker, "probe_one", _stub_probe)
     monkeypatch.setattr(worker, "get_sessionmaker", lambda: _MakerWrapper(db_session))
+
+    # Provision via the API so we exercise the same encrypt path the
+    # workspace owner sees. After the inline probe the row is already 'ok';
+    # the worker should still re-pick stale rows on its cadence.
+    response = await v1_client.put(
+        f"/v1/workspaces/{workspace.id}/integrations/linear",
+        headers=headers,
+        json={"kind": "linear", "config": {"team_id": "ENG"}, "secret": "lin_api_x"},
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+
+    # Force the row back to 'pending' so the worker selection picks it up
+    # again — the original cron path still has a job to do for rotated rows
+    # in self-hosted topologies that opt into the worker.
+    from backend.app.db.models.tenancy import Integration as IntegrationModel
+
+    row = (
+        await db_session.execute(
+            select(IntegrationModel).where(IntegrationModel.workspace_id == workspace.id)
+        )
+    ).scalar_one()
+    row.status = "pending"
+    row.last_health_at = None
+    await db_session.flush()
 
     summary = await worker.probe_pending_secrets()
     # The shared test database may contain leftover integrations from prior
@@ -139,6 +158,13 @@ async def test_probe_endpoint_runs_inline_and_persists(
 
     user, raw, workspace = seed_workspace
     headers = {"Authorization": f"Bearer {raw}"}
+
+    # Stub before the PUT so the inline probe doesn't hit the network.
+    async def _ok(_kind, _secret, _config):
+        return "ok", None
+
+    monkeypatch.setattr(routes, "probe_one", _ok)
+
     await v1_client.put(
         f"/v1/workspaces/{workspace.id}/integrations/linear",
         headers=headers,

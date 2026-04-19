@@ -98,6 +98,11 @@ async def upsert_integration(
     composite key (one Slack, one Linear, etc. per workspace), and clients
     don't need to know the row's UUID to edit or replace it. Send
     ``secret = null`` to keep the existing ciphertext while editing config.
+
+    When a non-empty secret is provided the response carries the synchronous
+    probe verdict (``status`` is ``ok`` or ``error``, ``last_health_at`` is
+    populated). The legacy "wait for the worker to flip pending to ok" loop
+    is gone — there is no worker in the cloud SaaS topology.
     """
     if payload.kind != kind:
         raise HTTPException(
@@ -120,14 +125,26 @@ async def upsert_integration(
     else:
         row.config = payload.config or {}
 
+    probed_status: str | None = None
+    probed_message: str | None = None
     if payload.secret is not None:
         # Empty string means "clear the secret" — useful when the operator
         # wants to disable an integration without losing its config.
         row.secret_ciphertext = encrypt(payload.secret) if payload.secret else None
-        # Re-arm health probe; the next worker pass will set this to ok/error.
-        row.status = "pending"
-        row.last_health_at = None
-        row.last_health_error = None
+        if payload.secret:
+            # Cloud SaaS has no background worker, so we probe inline and
+            # return the verdict in the same response — the operator sees
+            # ok/error instantly instead of waiting for the next cron tick.
+            probed_status, probed_message = await probe_one(
+                kind, payload.secret, payload.config or {}
+            )
+            row.status = probed_status
+            row.last_health_at = datetime.now(timezone.utc)
+            row.last_health_error = probed_message
+        else:
+            row.status = "pending"
+            row.last_health_at = None
+            row.last_health_error = None
     elif is_new:
         row.status = "pending"
 
@@ -157,6 +174,10 @@ async def upsert_integration(
                 "config_keys": sorted((payload.config or {}).keys()),
                 "secret_rotated": payload.secret is not None,
                 "secret_cleared": payload.secret == "",
+                # Record the probe verdict in the audit trail so operators can
+                # later prove "save was confirmed ok at T" without joining
+                # against the integration row.
+                "probe_status": probed_status,
             },
         )
     )
