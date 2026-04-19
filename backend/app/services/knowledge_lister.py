@@ -31,7 +31,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.db.models.tenancy import ArtifactRepo, Workspace
-from backend.app.services.git_sync import is_remote_url, repo_cache_path
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,16 +55,13 @@ _MAX_BODY_BYTES = 256 * 1024  # don't slurp pathological 100MB markdown
 def _resolve_repo_root(repo: ArtifactRepo) -> Path | None:
     """Mirror :func:`backend.app.services.artifact_resolver._resolve_repo_root`.
 
-    ``file://`` paths are read inline; remote URLs come from the git-sync
-    cache populated by :mod:`backend.app.services.git_sync`.
+    Only ``file://`` paths are dereferenced; remote URLs await the GitHub
+    App integration that will replace the legacy git-sync cache.
     """
     parsed = urlparse(repo.url)
     if parsed.scheme in ("", "file"):
         path = Path(parsed.path or repo.url).expanduser()
         return path if path.is_dir() else None
-    if is_remote_url(repo.url):
-        cache = repo_cache_path(repo)
-        return cache if cache.is_dir() else None
     return None
 
 

@@ -1,16 +1,16 @@
 """Artifact source repos for a workspace (RFC-0006).
 
 A workspace can register one or more :class:`ArtifactRepo` rows. Each entry
-points at a place artifacts live — either a local filesystem path
-(``file:///…``, read inline by the resolver) or a git URL that the sync
-worker (:mod:`backend.app.workers.git_sync`) clones into a local cache.
-The ``POST /sync`` endpoint forces an immediate sync for a single repo so
-the operator gets feedback right after registering one.
+points at a place artifacts live — currently a local filesystem path
+(``file:///…``, read inline by the resolver). The legacy git-sync worker
+that cloned remote URLs is gone; remote URLs are accepted on the schema
+level (so existing rows don't break) but are invisible to the resolver
+until the upcoming GitHub App integration replaces them with installation
+IDs and Trees-API reads.
 """
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 from urllib.parse import urlparse
 
@@ -27,11 +27,6 @@ from backend.app.api.v1.routes.workspaces import (
 )
 from backend.app.db.models.tenancy import ArtifactRepo, AuditLog
 from backend.app.db.session import get_session
-from backend.app.services.git_sync import (
-    apply_outcome,
-    is_remote_url,
-    sync_repo,
-)
 
 
 router = APIRouter(
@@ -90,11 +85,6 @@ async def create_artifact_repo(
         url=payload.url,
         default_branch=payload.default_branch,
     )
-    if is_remote_url(payload.url):
-        # Mark as not-yet-synced so the UI can show "Pending sync" while the
-        # cron worker (or a manual /sync POST) catches up. The worker will
-        # overwrite ``last_sync_at`` on the next tick.
-        repo.last_sync_error = "pending first sync"
     session.add(repo)
     await session.flush()
 
@@ -110,54 +100,6 @@ async def create_artifact_repo(
         )
     )
     await session.flush()
-    return ArtifactRepoOut.model_validate(repo)
-
-
-@router.post("/{repo_id}/sync", response_model=ArtifactRepoOut)
-async def sync_artifact_repo(
-    workspace_id: uuid.UUID,
-    repo_id: uuid.UUID,
-    auth: AuthContext = Depends(get_current_auth),
-    session: AsyncSession = Depends(get_session),
-) -> ArtifactRepoOut:
-    """Sync this repo right now and return the updated row.
-
-    Convenience wrapper around the cron worker so an operator who just
-    registered a repo doesn't have to wait for the next tick. ``file://``
-    repos respond immediately with no-op since they're read inline.
-
-    Permission: same as the rest of artifact-repo writes (admin+).
-    """
-    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
-    repo = await session.get(ArtifactRepo, repo_id)
-    if repo is None or repo.workspace_id != workspace_id:
-        raise HTTPException(status_code=404, detail="artifact repo not found")
-
-    # ``sync_repo`` is a blocking subprocess (git clone/fetch); offload so we
-    # don't pin the event loop for ~seconds at a time.
-    outcome = await asyncio.to_thread(sync_repo, repo)
-    apply_outcome(repo, outcome)
-    session.add(
-        AuditLog(
-            workspace_id=workspace_id,
-            actor_user_id=auth.user.id,
-            actor_token_id=auth.token.id if auth.token else None,
-            action="artifact_repo.sync",
-            target_kind="artifact_repo",
-            target_id=str(repo_id),
-            payload={
-                "ok": outcome.error is None,
-                "head_sha": outcome.head_sha,
-                "error": outcome.error,
-            },
-        )
-    )
-    await session.flush()
-    if outcome.error and not outcome.head_sha:
-        # Surface failure with a 502: the row is still updated (so the
-        # operator can see the error in the UI) but the call clearly didn't
-        # bring a working clone online.
-        raise HTTPException(status_code=502, detail=outcome.error)
     return ArtifactRepoOut.model_validate(repo)
 
 

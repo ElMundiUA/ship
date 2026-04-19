@@ -14,8 +14,10 @@ and its ``effective_source`` is recorded so the UI / CLI can show provenance
 ("inherited from global", "overridden in workspace", …).
 
 This v1 implementation reads from local filesystem paths only. Git remotes
-are stored in ``ArtifactRepo.url``; a follow-up worker will clone them into
-a local cache directory and feed that path into the resolver.
+stored in ``ArtifactRepo.url`` are no longer cloned by Ship — the upcoming
+GitHub App flow will register repos via API installation IDs and the
+resolver will read them through the GitHub Trees API instead of an on-disk
+cache. Until that lands, remote URLs simply don't contribute layers.
 """
 
 from __future__ import annotations
@@ -29,10 +31,8 @@ from urllib.parse import urlparse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.app.core.config import get_settings
 from backend.app.db.models.tenancy import ArtifactRepo, Workspace
 from backend.app.services.artifact_loader import KIND_PLURALS, load_kind_from_root
-from backend.app.services.git_sync import is_remote_url, repo_cache_path
 
 
 # Source label literal: lower precedence first.
@@ -61,18 +61,15 @@ def _global_root() -> Path:
 def _resolve_repo_root(repo: ArtifactRepo) -> Path | None:
     """Map an :class:`ArtifactRepo` to a local directory if possible.
 
-    * ``file://`` URLs are dereferenced inline.
-    * Anything else (https/ssh/git) is read from the git-sync cache populated
-      by :mod:`backend.app.services.git_sync`. Repos that have never synced
-      successfully simply don't show up in the resolver until they do.
+    Only ``file://`` URLs are dereferenced inline. Remote URLs (https/ssh/
+    git) used to be cloned by the legacy git-sync worker; that worker is
+    gone. Remote-URL repos are intentionally invisible to the resolver
+    until the GitHub App integration replaces them.
     """
     parsed = urlparse(repo.url)
     if parsed.scheme in ("", "file"):
         path = Path(parsed.path or repo.url).expanduser()
         return path if path.is_dir() else None
-    if is_remote_url(repo.url):
-        cache = repo_cache_path(repo)
-        return cache if cache.is_dir() else None
     return None
 
 

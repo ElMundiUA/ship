@@ -69,17 +69,6 @@ class Settings(BaseSettings):
     jwt_ttl_seconds: int = Field(default=60 * 60 * 12, alias="JWT_TTL_SECONDS")
     encryption_key: str | None = Field(default=None, alias="ENCRYPTION_KEY")
 
-    # --- Git sync worker (RFC-0006) ---
-    # On-disk root for cloned artifact repos. The worker materialises every
-    # non-``file://`` ``ArtifactRepo`` under ``<root>/<workspace_id>/<repo_id>``
-    # so the resolver can read it like a local layer.
-    repo_cache_root: str = Field(
-        default="/var/lib/ship/repo-cache", alias="REPO_CACHE_ROOT"
-    )
-    repo_sync_interval_minutes: int = Field(
-        default=10, alias="REPO_SYNC_INTERVAL_MINUTES"
-    )
-
     # --- Observability (Sentry, RFC-0006 phase 2) ---
     # When ``sentry_dsn`` is empty we skip ``sentry_sdk.init`` entirely, so a
     # missing key is the documented "Sentry off" mode for laptop dev. The

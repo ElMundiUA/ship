@@ -315,17 +315,6 @@ export function deleteArtifactRepo(
   );
 }
 
-export function syncArtifactRepo(
-  workspaceId: string,
-  repoId: string,
-  token?: string,
-): Promise<ApiArtifactRepo> {
-  return apiFetch<ApiArtifactRepo>(
-    `/v1/workspaces/${workspaceId}/artifact-repos/${repoId}/sync`,
-    { method: "POST", token },
-  );
-}
-
 // --- Onboarding -----------------------------------------------------------
 
 export type ApiRepoProfile = {
