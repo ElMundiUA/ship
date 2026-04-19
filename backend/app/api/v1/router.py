@@ -15,6 +15,7 @@ from backend.app.api.v1.routes import (
     auth,
     health,
     integrations,
+    knowledge,
     onboarding,
     workspace_artifacts,
     workspaces,
@@ -27,5 +28,6 @@ api_router.include_router(auth.router)
 api_router.include_router(workspaces.router)
 api_router.include_router(artifact_repos.router)
 api_router.include_router(integrations.router)
+api_router.include_router(knowledge.router)
 api_router.include_router(onboarding.router)
 api_router.include_router(workspace_artifacts.router)

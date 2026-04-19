@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.core.config import get_settings
 from backend.app.db.models.tenancy import ArtifactRepo, Workspace
 from backend.app.services.artifact_loader import KIND_PLURALS, load_kind_from_root
+from backend.app.services.git_sync import is_remote_url, repo_cache_path
 
 
 # Source label literal: lower precedence first.
@@ -60,14 +61,18 @@ def _global_root() -> Path:
 def _resolve_repo_root(repo: ArtifactRepo) -> Path | None:
     """Map an :class:`ArtifactRepo` to a local directory if possible.
 
-    Currently only ``file://`` URLs are dereferenced inline. Git URLs are
-    accepted on register but require the (forthcoming) sync worker to
-    materialise them under a known local cache path before they can be read.
+    * ``file://`` URLs are dereferenced inline.
+    * Anything else (https/ssh/git) is read from the git-sync cache populated
+      by :mod:`backend.app.services.git_sync`. Repos that have never synced
+      successfully simply don't show up in the resolver until they do.
     """
     parsed = urlparse(repo.url)
     if parsed.scheme in ("", "file"):
         path = Path(parsed.path or repo.url).expanduser()
         return path if path.is_dir() else None
+    if is_remote_url(repo.url):
+        cache = repo_cache_path(repo)
+        return cache if cache.is_dir() else None
     return None
 
 
@@ -155,3 +160,35 @@ async def get_one(
                 winner = _annotate(entry, layer)
                 break  # within a single layer, ids are unique
     return winner
+
+
+async def get_with_layers(
+    session: AsyncSession,
+    workspace: Workspace,
+    kind: str,
+    artifact_id: str,
+) -> dict[str, Any] | None:
+    """Return ``{winner, layers}`` for the catalog detail page.
+
+    ``layers`` carries every source that has this id, ordered highest-priority
+    first (the winner is always ``layers[0]``). Each entry is the same dict
+    shape as :func:`get_one` returns, so the UI can show "effective: project
+    overrides workspace" without a second round-trip.
+    """
+    if kind not in KIND_PLURALS:
+        raise ValueError(f"unknown artifact kind: {kind}")
+
+    layers = await _layers_for_workspace(session, workspace)
+    matches: list[dict[str, Any]] = []
+    for layer in layers:
+        for entry in load_kind_from_root(layer.root, kind):
+            if entry["id"] == artifact_id:
+                matches.append(_annotate(entry, layer))
+                break
+
+    if not matches:
+        return None
+
+    rank = {name: idx for idx, name in enumerate(SOURCE_PRIORITY)}
+    matches.sort(key=lambda e: rank.get(e["effective_source"], -1), reverse=True)
+    return {"winner": matches[0], "layers": matches}

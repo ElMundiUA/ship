@@ -104,6 +104,8 @@ services:
       AUTH0_AUDIENCE: ${AUTH0_AUDIENCE:-}
       AUTH0_ISSUER: ${AUTH0_ISSUER:-}
       AUTH0_JWKS_URL: ${AUTH0_JWKS_URL:-}
+      REPO_CACHE_ROOT: /var/lib/ship/repo-cache
+      REPO_SYNC_INTERVAL_MINUTES: ${REPO_SYNC_INTERVAL_MINUTES:-10}
     ports:
       - "${SHIP_API_PORT:-8100}:8100"
     volumes:
@@ -111,6 +113,9 @@ services:
       - ./documentation:/app/documentation:ro
       - ./README.md:/app/README.md:ro
       - ./VERSION:/app/VERSION:ro
+      # Shared with ship-worker so a "Sync now" click on the API path and a
+      # cron tick on the worker path write to the same on-disk cache.
+      - repo_cache:/var/lib/ship/repo-cache
     healthcheck:
       # Readiness: v1/health round-trips Postgres so this only goes green
       # *after* alembic upgrade has completed and the DB is reachable.
@@ -205,12 +210,16 @@ services:
       AUTH0_AUDIENCE: ${AUTH0_AUDIENCE:-}
       AUTH0_ISSUER: ${AUTH0_ISSUER:-}
       AUTH0_JWKS_URL: ${AUTH0_JWKS_URL:-}
+      REPO_CACHE_ROOT: /var/lib/ship/repo-cache
+      REPO_SYNC_INTERVAL_MINUTES: ${REPO_SYNC_INTERVAL_MINUTES:-10}
     volumes:
       - ./artifacts:/app/artifacts:ro
       - ./documentation:/app/documentation:ro
       - ./README.md:/app/README.md:ro
       - ./VERSION:/app/VERSION:ro
+      - repo_cache:/var/lib/ship/repo-cache
 
 volumes:
   postgres_data:
   minio_data:
+  repo_cache:

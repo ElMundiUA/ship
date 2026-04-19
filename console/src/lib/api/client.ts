@@ -11,10 +11,12 @@ import "server-only";
 
 import type {
   ApiArtifact,
+  ApiArtifactDetail,
   ApiArtifactKind,
   ApiArtifactRepo,
   ApiIntegration,
   ApiIntegrationKind,
+  ApiKnowledgeBucket,
   ApiSession,
   ApiTokenMint,
   ApiUser,
@@ -202,6 +204,25 @@ export async function listAllArtifacts(workspaceId: string): Promise<ApiArtifact
   return results.flat() as ApiArtifact[];
 }
 
+/** Look up the detail for a given artifact id, probing every kind in order. */
+export async function getArtifactById(
+  workspaceId: string,
+  artifactId: string,
+): Promise<ApiArtifactDetail | null> {
+  const kinds: ApiArtifactKind[] = ["workflow", "tool", "pattern", "collection"];
+  for (const kind of kinds) {
+    try {
+      return await apiFetch<ApiArtifactDetail>(
+        `/v1/workspaces/${workspaceId}/artifacts/${kind}/${encodeURIComponent(artifactId)}`,
+      );
+    } catch (err) {
+      if (err instanceof ApiHttpError && err.status === 404) continue;
+      throw err;
+    }
+  }
+  return null;
+}
+
 // --- Integrations ----------------------------------------------------------
 
 export function listIntegrations(
@@ -287,6 +308,17 @@ export function deleteArtifactRepo(
   return apiFetch<void>(
     `/v1/workspaces/${workspaceId}/artifact-repos/${repoId}`,
     { method: "DELETE", token },
+  );
+}
+
+export function syncArtifactRepo(
+  workspaceId: string,
+  repoId: string,
+  token?: string,
+): Promise<ApiArtifactRepo> {
+  return apiFetch<ApiArtifactRepo>(
+    `/v1/workspaces/${workspaceId}/artifact-repos/${repoId}/sync`,
+    { method: "POST", token },
   );
 }
 
@@ -391,6 +423,30 @@ export function seedKnowledge(
     body: input,
     token,
   });
+}
+
+// --- Knowledge -------------------------------------------------------------
+
+export async function listKnowledgeBuckets(
+  workspaceId: string,
+  token?: string,
+): Promise<ApiKnowledgeBucket[]> {
+  const payload = await apiFetch<{ buckets: ApiKnowledgeBucket[] }>(
+    `/v1/workspaces/${workspaceId}/knowledge`,
+    { token },
+  );
+  return Array.isArray(payload.buckets) ? payload.buckets : [];
+}
+
+export function getKnowledgeBucket(
+  workspaceId: string,
+  slug: string,
+  token?: string,
+): Promise<ApiKnowledgeBucket> {
+  return apiFetch<ApiKnowledgeBucket>(
+    `/v1/workspaces/${workspaceId}/knowledge/${encodeURIComponent(slug)}`,
+    { token },
+  );
 }
 
 // --- API tokens ------------------------------------------------------------

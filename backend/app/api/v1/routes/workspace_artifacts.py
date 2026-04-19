@@ -22,7 +22,7 @@ from backend.app.api.v1.routes.workspaces import (
 from backend.app.db.models.tenancy import Workspace
 from backend.app.db.session import get_session
 from backend.app.services.artifact_loader import KIND_PLURALS
-from backend.app.services.artifact_resolver import get_one, list_kind
+from backend.app.services.artifact_resolver import get_with_layers, list_kind
 
 
 router = APIRouter(
@@ -71,8 +71,16 @@ async def list_workspace_artifacts(
         "kind": canonical,
         "workspace_id": str(workspace.id),
         "catalog_sources": workspace.catalog_sources,
-        plural: entries,
+        plural: [_public(e) for e in entries],
     }
+
+
+_INTERNAL_FIELDS = ("_body", "_full")
+
+
+def _public(entry: dict[str, Any]) -> dict[str, Any]:
+    """Strip resolver-internal keys before serialising to the wire."""
+    return {k: v for k, v in entry.items() if k not in _INTERNAL_FIELDS}
 
 
 @router.get("/{kind}/{artifact_id}")
@@ -85,10 +93,18 @@ async def get_workspace_artifact(
 ) -> dict[str, Any]:
     workspace = await _load_workspace(session, workspace_id, auth.user.id)
     canonical = _kind_or_400(kind)
-    entry = await get_one(session, workspace, canonical, artifact_id)
-    if entry is None:
+    bundle = await get_with_layers(session, workspace, canonical, artifact_id)
+    if bundle is None:
         raise HTTPException(
             status_code=404,
             detail=f"{canonical} '{artifact_id}' not found in any enabled catalog source",
         )
-    return entry
+    winner = bundle["winner"]
+    layers = bundle["layers"]
+    return {
+        **_public(winner),
+        # README rendered straight from artifacts/<plural>/<id>/ARTIFACT.md so
+        # the UI doesn't need a second round-trip to the source repo.
+        "readme": winner.get("_body") or "",
+        "layers": [_public(layer) for layer in layers],
+    }

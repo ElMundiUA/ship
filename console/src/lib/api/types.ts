@@ -55,6 +55,13 @@ export type ApiArtifactList = {
   [plural: string]: unknown;
 };
 
+/** GET /v1/workspaces/{id}/artifacts/{kind}/{artifact_id} response. */
+export type ApiArtifactDetail = ApiArtifact & {
+  readme: string;
+  layers: ApiArtifact[];
+  spec?: Record<string, unknown> | null;
+};
+
 export type ApiError = {
   detail: string | { msg: string }[];
 };
@@ -103,4 +110,18 @@ export type ApiTokenMint = {
   expires_at: string | null;
   secret: string;
   created_at: string;
+};
+
+export type ApiKnowledgeBucket = {
+  slug: string;
+  title: string;
+  visibility: "project" | "workspace";
+  repo_id: string;
+  repo_url: string;
+  path: string;
+  size: number;
+  updated_at: string;
+  excerpt: string;
+  /** Only present on the detail endpoint. */
+  body?: string;
 };

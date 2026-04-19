@@ -147,6 +147,47 @@ async def test_project_repo_overrides_workspace(
     assert resp.json()["effective_source"] == "project"
 
 
+async def test_detail_returns_readme_and_layer_history(
+    v1_client, seed_workspace, db_session, tmp_path
+):
+    """Detail endpoint should expose README body and every overriding layer."""
+    _, raw, ws = seed_workspace
+    headers = {"Authorization": f"Bearer {raw}"}
+
+    artifact_id = "ship-cloud-detail-fixture"
+    ws_root = tmp_path / "ws"
+    proj_root = tmp_path / "proj"
+    _write_pattern(ws_root, artifact_id, summary="from workspace")
+    _write_pattern(proj_root, artifact_id, summary="from project")
+
+    db_session.add(
+        ArtifactRepo(workspace_id=ws.id, kind="workspace", url=f"file://{ws_root}")
+    )
+    db_session.add(
+        ArtifactRepo(workspace_id=ws.id, kind="project", url=f"file://{proj_root}")
+    )
+    await db_session.flush()
+
+    resp = await v1_client.get(
+        f"/v1/workspaces/{ws.id}/artifacts/patterns/{artifact_id}",
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    # winner is the highest-priority layer (project)
+    assert body["effective_source"] == "project"
+    # README body comes from ARTIFACT.md (everything below the closing `---`)
+    assert artifact_id in body["readme"]
+    # both layers are reported, project first then workspace
+    assert [layer["effective_source"] for layer in body["layers"]] == [
+        "project",
+        "workspace",
+    ]
+    # internal resolver bookkeeping is stripped from the wire shape
+    assert "_body" not in body
+    assert "_full" not in body
+
+
 async def test_artifact_repo_register_and_list(
     v1_client, seed_workspace, tmp_path
 ):
