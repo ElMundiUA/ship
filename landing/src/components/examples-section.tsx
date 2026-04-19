@@ -97,7 +97,7 @@ export function ExamplesSection() {
             <Link href="/use-cases/elmundi" className="btn-secondary inline-flex text-center">
               ElMundi reference
             </Link>
-            <Link href="/docs/examples/elmundi" className="btn-secondary inline-flex text-center">
+            <Link href="/use-cases/elmundi" className="btn-secondary inline-flex text-center">
               Deep-dive manual
             </Link>
           </div>

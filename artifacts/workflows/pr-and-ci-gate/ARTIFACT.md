@@ -41,4 +41,4 @@ spec:
 
 - [Playwright](/tools/playwright) — hosted regression runner role.
 - [Preview smoke check](/patterns/catalog-a7-preview-validation) — lane prompt intent.
-- [Delivery, quality & release](/docs/adoption/delivery-quality-and-release-process) — gate language.
+- [Delivery, quality & release](/docs/operating) — gate language.

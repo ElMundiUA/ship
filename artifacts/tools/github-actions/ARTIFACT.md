@@ -39,5 +39,5 @@ spec:
 ## Read next
 
 - [Tools — capability map](/docs/tools) — why scheduler is one of five capabilities.
-- [Delivery, quality & release](/docs/adoption/delivery-quality-and-release-process) — release policy vs schedule.
-- [Examples → ElMundi](/docs/examples/elmundi) — sample workflow filenames and minutes (reference only).
+- [Delivery, quality & release](/docs/operating) — release policy vs schedule.
+- [Examples → ElMundi](/use-cases/elmundi) — sample workflow filenames and minutes (reference only).

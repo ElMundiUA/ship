@@ -41,5 +41,5 @@ spec:
 
 - [GitHub Actions](/tools/github-actions) — scheduler role.
 - [Linear](/tools/linear) — tracker role.
-- [Prompts & workflows — SDLC story](/docs/prompts-workflows#elmundi-sdlc-flow) — narrative + diagram.
-- [Examples → ElMundi](/docs/examples/elmundi) — reference YAML names and minutes.
+- [Prompts & workflows — SDLC story](/patterns) — narrative + diagram.
+- [Examples → ElMundi](/use-cases/elmundi) — reference YAML names and minutes.

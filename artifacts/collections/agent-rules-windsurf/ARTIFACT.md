@@ -42,7 +42,7 @@ Every Ship artifact (pattern / tool / workflow / collection / doc) is
 versioned (semver + `content_sha256`). Clients **never** vendor artifact
 bodies — they call `shipctl`, which hits `POST /fetch` and writes a local
 `.ship/cache/` entry keyed by `<kind>/<id>@<version>`. The authoritative
-contract is `documentation/rfc/rfc-0001-artifacts-protocol.md`.
+contract is `documentation/protocol/rfc-0001-artifacts-protocol.md`.
 
 ## Agent protocol (follow before applying an artifact)
 
@@ -96,7 +96,7 @@ curl -sS "https://ship.elmundi.com/api/methodology/manifest"
 - Never commit `.ship/cache/` or any rendered artifact body to the repo —
   the cache is a local read-through of the server, not a source of truth.
 
-See `documentation/rfc/rfc-0001-artifacts-protocol.md` for the full HTTP
+See `documentation/protocol/rfc-0001-artifacts-protocol.md` for the full HTTP
 surface, pin rules, and cache layout. `.ship/config.yml` schema is
 RFC-0002.
 

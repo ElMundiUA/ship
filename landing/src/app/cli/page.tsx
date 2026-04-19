@@ -187,7 +187,7 @@ export default function CliPage() {
                 </p>
               </Link>
               <Link
-                href="/docs/adoption"
+                href="/docs"
                 className="group flex flex-col gap-2 rounded-2xl border border-white/10 bg-gradient-to-br from-white/[0.04] to-transparent p-5 text-left transition hover:border-aqua/40 hover:bg-white/[0.06]"
               >
                 <span className="font-display text-base font-bold text-white group-hover:text-aqua">Adoption hub</span>
@@ -196,7 +196,7 @@ export default function CliPage() {
                 </p>
               </Link>
               <Link
-                href="/docs/rfc"
+                href="/docs/protocol"
                 className="group flex flex-col gap-2 rounded-2xl border border-white/10 bg-gradient-to-br from-white/[0.04] to-transparent p-5 text-left transition hover:border-aqua/40 hover:bg-white/[0.06]"
               >
                 <span className="font-display text-base font-bold text-white group-hover:text-aqua">Protocol RFCs</span>

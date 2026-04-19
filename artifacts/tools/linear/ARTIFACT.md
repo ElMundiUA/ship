@@ -39,7 +39,7 @@ spec:
 ## Read next
 
 - [Tracker adaptation contract](/docs/tools/ship-agent-trackers) — vendor-neutral interface your tracker must satisfy.
-- [Delivery, quality & release](/docs/adoption/delivery-quality-and-release-process) — gates and evidence habits.
-- [Agent launch matrix](/docs/adoption/agent-launch-matrix) — where Linear fits in runtime choices.
+- [Delivery, quality & release](/docs/operating) — gates and evidence habits.
+- [Agent launch matrix](/docs/agent-matrix) — where Linear fits in runtime choices.
 
-For a **reference** cron grid and YAML names (ElMundi-style), see [Examples → ElMundi](/docs/examples/elmundi) — treat names and URLs as templates, not requirements.
+For a **reference** cron grid and YAML names (ElMundi-style), see [Examples → ElMundi](/use-cases/elmundi) — treat names and URLs as templates, not requirements.

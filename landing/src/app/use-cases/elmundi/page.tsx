@@ -34,7 +34,7 @@ const EVIDENCE = [
     src: "/use-cases/elmundi-manual-chapter.png",
     alt: "Ship manual chapter for ElMundi reference wiring",
     caption:
-      "Operator depth — the same story written in the manual (/docs/examples/elmundi) for engineers, security, and onboarding. One source, two audiences.",
+      "Operator depth — the same story written in the manual (/use-cases/elmundi) for engineers, security, and onboarding. One source, two audiences.",
   },
 ];
 
@@ -124,7 +124,7 @@ export default function ElmundiUseCasePage() {
             </li>
             <li>
               <strong>The manual</strong> became the contract. Every workflow file, label, and state has a chapter under{" "}
-              <code className="text-aqua">/docs/examples/elmundi</code>; the page anyone reads ships the same words the
+              <code className="text-aqua">/use-cases/elmundi</code>; the page anyone reads ships the same words the
               automation enforces.
             </li>
           </ul>
@@ -204,7 +204,7 @@ export default function ElmundiUseCasePage() {
         <UseCaseCtaRow
           links={[
             { href: "/docs/getting-started", label: "Adopt the same loop", variant: "primary" },
-            { href: "/docs/examples/elmundi", label: "Read the engineering chapter", variant: "secondary" },
+            { href: "/use-cases/elmundi", label: "Read the engineering chapter", variant: "secondary" },
             { href: "/use-cases/ship", label: "Story 2 — Ship as a product", variant: "secondary" },
             { href: "/use-cases", label: "All customer stories", variant: "secondary" },
           ]}

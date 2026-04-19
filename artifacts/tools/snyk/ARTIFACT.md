@@ -32,5 +32,5 @@ spec:
 
 ## Read next
 
-- [Delivery, quality & release](/docs/adoption/delivery-quality-and-release-process) — where security evidence meets release gates.
+- [Delivery, quality & release](/docs/operating) — where security evidence meets release gates.
 - [Tools — capability map](/docs/tools) — “security/dependency signal” row.

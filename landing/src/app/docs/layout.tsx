@@ -3,23 +3,21 @@ import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 
 /**
- * The Manual sub-nav lists ONLY pages that live inside `/docs`.
- *
- * Everything that has a top-level route — `/cli`, `/use-cases`, `/patterns`,
- * `/workflows`, `/collections`, `/tools`, `/book` — is already in the global
- * site header. Mirroring those links here turned the page into two parallel
- * menus that pointed at the same routes (the v0.10 sub-nav even shipped a
- * dead `/docs/tools` link). Order: start → onboarding → operating model →
- * protocol → real-world deployment → legal.
+ * Manual sub-nav. Order: orientation → reference → guides → specs → legal.
+ * Everything with a top-level route lives in the global site header.
  */
 const NAV = [
-  { href: "/docs", label: "Start here" },
-  { href: "/docs/getting-started", label: "Getting started" },
-  { href: "/docs/adoption", label: "Adoption" },
-  { href: "/docs/prompts-workflows", label: "Prompts & workflows" },
-  { href: "/docs/rfc", label: "RFCs" },
-  { href: "/docs/examples/elmundi", label: "Reference org" },
-  { href: "/docs/legal-copyright", label: "Legal" },
+  { href: "/docs", label: "Manual" },
+  { href: "/docs/getting-started", label: "Get started" },
+  { href: "/docs/concepts", label: "Concepts" },
+  { href: "/docs/configuration", label: "Configuration" },
+  { href: "/docs/operating", label: "Operating" },
+  { href: "/docs/troubleshooting", label: "Troubleshooting" },
+  { href: "/docs/authoring", label: "Authoring" },
+  { href: "/docs/discovery", label: "Discovery" },
+  { href: "/docs/agent-matrix", label: "Agent matrix" },
+  { href: "/docs/protocol", label: "Protocol" },
+  { href: "/docs/legal", label: "Legal" },
 ];
 
 export default function DocsLayout({ children }: { children: React.ReactNode }) {

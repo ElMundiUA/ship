@@ -40,4 +40,4 @@ spec:
 
 - [GitHub Actions](/tools/github-actions).
 - [Cloud agent — workflow self-heal](/patterns/cloud-workflow-self-heal) — prompt body.
-- [Examples → ElMundi](/docs/examples/elmundi) — `workflow-self-heal` reference naming.
+- [Examples → ElMundi](/use-cases/elmundi) — `workflow-self-heal` reference naming.

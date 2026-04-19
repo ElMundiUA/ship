@@ -60,5 +60,5 @@ A **ready bundle** for teams shipping a **browser app** (SPA/SSR) with hosted pr
 ## Manual chapters
 
 - [Getting started](/docs/getting-started) — agent prompt builder.
-- [Prompts & workflows](/docs/prompts-workflows) — how prompt text evolves.
-- [Examples → ElMundi](/docs/examples/elmundi) — YAML filenames, cron, secrets (reference org).
+- [Prompts & workflows](/patterns) — how prompt text evolves.
+- [Examples → ElMundi](/use-cases/elmundi) — YAML filenames, cron, secrets (reference org).

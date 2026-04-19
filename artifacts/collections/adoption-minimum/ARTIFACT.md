@@ -53,4 +53,4 @@ Use a **manual** or lightly scheduled process until the board is boring—then p
 ## Manual
 
 - [Getting started](/docs/getting-started)
-- [Adoption](/docs/adoption)
+- [Adoption](/docs)

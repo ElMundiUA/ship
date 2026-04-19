@@ -40,4 +40,4 @@ spec:
 
 - [Linear](/tools/linear) — multi-project hygiene.
 - [Cloud agent — QA architect](/patterns/cloud-qa-architect) · [Security officer](/patterns/cloud-security-officer).
-- [Examples → ElMundi](/docs/examples/elmundi) — daily audits chapter.
+- [Examples → ElMundi](/use-cases/elmundi) — daily audits chapter.

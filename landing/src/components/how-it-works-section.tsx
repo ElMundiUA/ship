@@ -64,19 +64,19 @@ export function HowItWorksSection() {
         <div className="mt-10 flex flex-wrap items-center gap-3 text-sm">
           <Link
             className="inline-flex items-center rounded-full border border-aqua/30 bg-aqua/[0.08] px-4 py-1.5 font-semibold text-aqua hover:border-aqua/60"
-            href="/docs/rfc/rfc-0001-artifacts-protocol"
+            href="/docs/protocol/rfc-0001-artifacts-protocol"
           >
             Read RFC-0001 (artifacts protocol)
           </Link>
           <Link
             className="inline-flex items-center rounded-full border border-white/15 bg-white/[0.04] px-4 py-1.5 font-semibold text-white/80 hover:border-white/30"
-            href="/docs/rfc/rfc-0002-shipctl-config"
+            href="/docs/protocol/rfc-0002-shipctl-config"
           >
             RFC-0002 (shipctl config)
           </Link>
           <Link
             className="inline-flex items-center rounded-full border border-white/15 bg-white/[0.04] px-4 py-1.5 font-semibold text-white/80 hover:border-white/30"
-            href="/docs/rfc/rfc-0003-telemetry-and-feedback"
+            href="/docs/protocol/rfc-0003-telemetry-and-feedback"
           >
             RFC-0003 (telemetry opt-in)
           </Link>

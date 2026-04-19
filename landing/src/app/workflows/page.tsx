@@ -39,7 +39,7 @@ export default function WorkflowsPage() {
               <a href="#cli" className="btn-secondary inline-flex">
                 CLI
               </a>
-              <Link href="/docs/prompts-workflows" className="btn-secondary inline-flex">
+              <Link href="/patterns" className="btn-secondary inline-flex">
                 Prompts &amp; workflows (manual)
               </Link>
               <Link href="/use-cases/elmundi" className="btn-secondary inline-flex">
@@ -57,7 +57,7 @@ export default function WorkflowsPage() {
                 Use case → ElMundi
               </Link>
               . Filenames and cron tables:{" "}
-              <Link href="/docs/examples/elmundi" className="font-semibold text-coral underline-offset-2 hover:underline">
+              <Link href="/use-cases/elmundi" className="font-semibold text-coral underline-offset-2 hover:underline">
                 Manual → ElMundi
               </Link>
               . Source:{" "}

@@ -35,14 +35,9 @@ export function relPathToSlug(rel: string): string[] {
 
 function shouldSkip(relPath: string): boolean {
   const n = relPath.replace(/\\/g, "/");
-  if (n.startsWith("framework/")) return true; /* long-form book lives at /book */
-  /* getting-started has its own static React route with the AgentSetupForm wizard; the
-   * legacy MkDocs HTML form in documentation/getting-started/index.md does not work
-   * outside MkDocs Material and must not be rendered through the catch-all. */
-  if (n === "getting-started/index.md") return true;
-  /* Ukrainian translations were retired in v0.10 — keep the skip as a guard so
-   * an accidentally re-introduced .uk.md file is silently ignored rather than
-   * rendered as a duplicate sibling of the English page. */
+  /* getting-started has its own static React route with the AgentSetupForm wizard. */
+  if (n.startsWith("getting-started/")) return true;
+  /* Ukrainian translations were retired in v0.10. */
   if (n.endsWith(".uk.md")) return true;
   return false;
 }

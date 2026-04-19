@@ -40,4 +40,4 @@ spec:
 
 - [Playwright](/tools/playwright).
 - [Acceptance verification](/patterns/catalog-a9-qa).
-- [Examples → ElMundi](/docs/examples/elmundi) — reference wiring for E2E jobs.
+- [Examples → ElMundi](/use-cases/elmundi) — reference wiring for E2E jobs.

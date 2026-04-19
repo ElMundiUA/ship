@@ -38,6 +38,6 @@ spec:
 
 ## Read next
 
-- [Delivery, quality & release](/docs/adoption/delivery-quality-and-release-process) — where automated regression evidence sits in the gate story.
-- [Prompts & workflows — catalog](/docs/prompts-workflows) — search for preview/E2E intent sections.
-- [Examples → ElMundi](/docs/examples/elmundi) — reference wiring for scheduled regression vs PR preview (workflow names differ per org).
+- [Delivery, quality & release](/docs/operating) — where automated regression evidence sits in the gate story.
+- [Prompts & workflows — catalog](/patterns) — search for preview/E2E intent sections.
+- [Examples → ElMundi](/use-cases/elmundi) — reference wiring for scheduled regression vs PR preview (workflow names differ per org).

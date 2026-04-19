@@ -157,7 +157,7 @@ Unknown `spec` fields are ignored by today's CLI but not stripped by the server,
 
 The hash is a deterministic merkle over every file in the folder **except** `CHANGELOG.md` and the frontmatter `content_sha256` field itself (it is rewritten by the lint). Adding `examples/foo.md` changes the hash → telemetry sees a real change → the version field must be bumped on the same PR. The lint enforces "sha changed without version bump" as a hard error.
 
-The exact algorithm, sorted file list, and canonical byte representation are normative and live in `documentation/rfc/rfc-0005-artifact-folder-spec-v2/sha-algorithm.md` (added in Wave 1).
+The exact algorithm, sorted file list, and canonical byte representation are normative and live in `documentation/protocol/rfc-0005-artifact-folder-spec-v2/sha-algorithm.md` (added in Wave 1).
 
 ## Catalog manifests — removed from git
 

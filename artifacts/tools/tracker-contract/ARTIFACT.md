@@ -23,7 +23,7 @@ spec:
 
 # Tracker adapters
 
-For the RFC-level protocol, see [`documentation/rfc/rfc-0004-adapters.md`](../rfc/rfc-0004-adapters.md).
+For the RFC-level protocol, see [`documentation/protocol/rfc-0004-adapters.md`](../../../documentation/protocol/rfc-0004-adapters.md).
 This page is the operational quick-reference per supported tracker; the
 **adaptation contract** in the second half is unchanged and remains the
 human-facing contract that an agent must satisfy when introducing Ship to a

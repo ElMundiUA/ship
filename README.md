@@ -4,7 +4,7 @@ Ship is an **instruction-first** framework for SDLC automation: a portable opera
 
 Instead of shipping one hardcoded runtime, Ship ships:
 - a **methodology** (see *The book* under [`/book`](https://ship.elmundi.com.ua/book) on the live site, source in [`documentation/framework/`](documentation/framework/))
-- **versioned artifacts** under [`artifacts/`](artifacts/) following [RFC-0005](documentation/rfc/rfc-0005-artifact-folder-spec-v2.md) (single `ARTIFACT.md` per item, YAML frontmatter as the source of truth)
+- **versioned artifacts** under [`artifacts/`](artifacts/) following [RFC-0005](documentation/protocol/rfc-0005-artifact-folder-spec-v2.md) (single `ARTIFACT.md` per item, YAML frontmatter as the source of truth)
 - a **CLI** ([`@elmundi/ship-cli`](cli/), binary `shipctl`) that talks to a thin **methodology HTTP API** ([`backend/`](backend/))
 - a **Next.js site** ([`landing/`](landing/)) that serves the manual, *The book*, the artifact catalogs, the use-case pages, and the marketing surface
 
@@ -24,7 +24,7 @@ Full walkthrough on the site: <https://ship.elmundi.com.ua/docs/getting-started>
 
 ## Stack coverage matrix
 
-Every Ship deployment is the same loop with three swappable roles ([RFC-0004](documentation/rfc/rfc-0004-adapters.md)):
+Every Ship deployment is the same loop with three swappable roles ([RFC-0004](documentation/protocol/rfc-0004-adapters.md)):
 
 - **Tracker** (a.k.a. *orchestrator* / system of record) — Linear, Jira, GitHub Issues, Notion, …
 - **Scheduler** (cron + runner that wakes the loop) — GitHub Actions, GitLab CI, CircleCI, Jenkins, self-hosted cron, …
@@ -117,8 +117,8 @@ The full Cartesian product is ~14 × 7 × 7 ≈ **686 combos**. Realistically we
 
 | Path | Purpose |
 |------|---------|
-| [`documentation/`](documentation/) | Source markdown for the **manual** (`/docs/**`), **The book** (`/book`), and the [RFC index](documentation/rfc/). |
-| [`artifacts/`](artifacts/) | Every Ship artifact in folder-per-artifact layout (`artifacts/<kind>/<id>/ARTIFACT.md` + YAML frontmatter — see [RFC-0005](documentation/rfc/rfc-0005-artifact-folder-spec-v2.md)). Subfolders: `patterns/`, `tools/`, `workflows/`, `collections/`. |
+| [`documentation/`](documentation/) | Source markdown for the **manual** (`/docs/**`), **The book** (`/book`), and the [RFC index](documentation/protocol/). |
+| [`artifacts/`](artifacts/) | Every Ship artifact in folder-per-artifact layout (`artifacts/<kind>/<id>/ARTIFACT.md` + YAML frontmatter — see [RFC-0005](documentation/protocol/rfc-0005-artifact-folder-spec-v2.md)). Subfolders: `patterns/`, `tools/`, `workflows/`, `collections/`. |
 | [`backend/`](backend/) | Methodology FastAPI: `/search`, `/fetch`, `/feedback`, `/patterns`, `/tools`, `/workflows`, `/collections`, `/telemetry`. |
 | [`cli/`](cli/) | `@elmundi/ship-cli` (binary `shipctl`) — search, fetch, feedback, catalogs, `init`, `sync`, `verify`, `doctor`, `telemetry`, `feedback`, `new`, `bootstrap`. |
 | [`landing/`](landing/) | Next.js app: marketing, **manual** (`/docs/**`), **The book** (`/book`), **Patterns** (`/patterns`), **Use cases** (`/use-cases`), generated PDF (`/book.pdf`). |
@@ -236,7 +236,7 @@ The root [`Dockerfile`](Dockerfile) builds the Next app with `REPO_ROOT=/app`, s
 
 - Ship is **knowledge + methodology** plus a small **HTTP API** and a **local CLI** — not a hosted proprietary control plane.
 - Secrets are never committed; agents only reference secret *names* in outputs.
-- Telemetry is **opt-in** and OFF by default — see [RFC-0003](documentation/rfc/rfc-0003-telemetry-and-feedback.md).
+- Telemetry is **opt-in** and OFF by default — see [RFC-0003](documentation/protocol/rfc-0003-telemetry-and-feedback.md).
 
 ## License
 

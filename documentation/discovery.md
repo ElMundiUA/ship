@@ -1,9 +1,13 @@
-# Agent setup contract (interactive)
+# Discovery contract
 
-Use this contract when an agent adapts Ship to a real project. The shape of
-the discovery interview is unchanged — it is the human-facing contract — but
-the agent now begins with a **machine-readable preamble** so that downstream
-`shipctl init --bootstrap` has everything it needs.
+Normative spec for how an agent picks up a repo and brings it to a working
+Ship installation. The contract has five phases (Phase 0 → Phase 4); the
+agent moves to the next phase only when the previous one's deliverables
+exist. Skipping a phase is a contract violation.
+
+Audience: anyone integrating an agent (or a human) with Ship for the first
+time on a given repo. Operators rerunning `shipctl` on a configured repo
+do not need this page — see [Operating](/docs/operating).
 
 ## Phase 0 — machine-readable preamble (required)
 

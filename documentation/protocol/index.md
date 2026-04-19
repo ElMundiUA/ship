@@ -1,8 +1,10 @@
-# RFCs
+# Protocol
 
-Request-for-Comments documents describe Ship's protocols, configuration surfaces, and extension points. Each RFC is self-contained and dated. Accepted RFCs describe the intended design; they do not automatically reflect the state of the reference implementation, but the reference implementation should converge on them.
+Normative specifications for Ship. Each RFC describes one surface — the artifacts protocol, the config schema, telemetry, adapters, the on-disk folder layout. Accepted RFCs describe the intended design; the reference implementation in this repo converges on them but may lag any single RFC by one minor release.
 
-RFCs live under `documentation/rfc/` and follow a fixed front-matter:
+Read this section when you need the contract, not the how-to. For "how do I…" recipes, see [Operating](/docs/operating); for vocabulary, [Concepts](/docs/concepts); for command syntax, [/cli](/cli).
+
+RFCs live under `documentation/protocol/` and follow a fixed front-matter:
 
 ```
 ---

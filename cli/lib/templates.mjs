@@ -45,7 +45,7 @@ curl -sS -X POST "${baseUrl}/fetch" -H "Content-Type: application/json" \\
 curl -sS "${baseUrl}/patterns"
 \`\`\`
 
-See \`documentation/rfc/rfc-0001-artifacts-protocol.md\` in the Ship repo for the
+See \`documentation/protocol/rfc-0001-artifacts-protocol.md\` in the Ship repo for the
 full HTTP surface, pin rules, and cache layout. \`.ship/config.yml\` schema is
 RFC-0002.`;
 }

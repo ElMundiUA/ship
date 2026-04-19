@@ -53,24 +53,34 @@ const DAY_TWO: { cmd: string; body: string }[] = [
 
 const NEXT_LINKS: { href: string; title: string; body: string }[] = [
   {
-    href: "/docs/shipctl",
+    href: "/cli",
     title: "shipctl CLI reference",
     body: "Every command, every flag, every check the CLI runs.",
   },
   {
-    href: "/docs/adoption",
-    title: "Adoption hub",
-    body: "How a real team picks a path, sequences PRs, and lands the first agent.",
+    href: "/docs/concepts",
+    title: "Concepts",
+    body: "Vocabulary: artifact, kind, channel, pin, install_target, adapter, preset, marker.",
   },
   {
-    href: "/docs/adoption/agent-setup-contract",
-    title: "Agent setup contract",
-    body: "The interview a human runs with an agent before the first PR.",
+    href: "/docs/configuration",
+    title: "Configuration",
+    body: "Every field of .ship/config.yml plus the on-disk layout.",
   },
   {
-    href: "/docs/adoption/delivery-quality-and-release-process",
-    title: "Delivery, quality & release process",
-    body: "The process policy Ship enforces — gates, evidence, promotion.",
+    href: "/docs/operating",
+    title: "Operating",
+    body: "Day-2 recipes: pin a version, switch channels, read verify, debug sync.",
+  },
+  {
+    href: "/docs/discovery",
+    title: "Discovery contract",
+    body: "The Phase 0–4 interview an agent runs before its first PR.",
+  },
+  {
+    href: "/docs/troubleshooting",
+    title: "Troubleshooting",
+    body: "Failure-first lookup: symptom → likely cause → fix.",
   },
   {
     href: "/tools",
@@ -78,19 +88,9 @@ const NEXT_LINKS: { href: string; title: string; body: string }[] = [
     body: "Tracker adapters, CI adapters, secret backends, and the rest of the catalog.",
   },
   {
-    href: "/docs/rfc",
-    title: "Protocol RFCs",
-    body: "RFC-0001 (artifacts), RFC-0002 (config), RFC-0003 (telemetry), RFC-0004 (adapters), RFC-0005 (folder spec).",
-  },
-  {
     href: "/book",
     title: "The book — long rationale",
     body: "Why the loop looks the way it does. Read in order if you have an evening.",
-  },
-  {
-    href: "/docs/examples/elmundi",
-    title: "ElMundi reference deployment",
-    body: "How the methodology is wired in a real monorepo: Linear, Actions, Cursor Cloud, Playwright.",
   },
 ];
 

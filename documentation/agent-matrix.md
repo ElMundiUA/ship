@@ -1,22 +1,18 @@
-# Agent launch matrix — one protocol, many agent surfaces
+# Agent matrix
 
-Reference table for wiring any supported agent to the Ship **artifacts protocol** (RFC-0001). The canonical entry point is:
+Reference table for the 13 agent runtimes Ship supports out of the box. For each: the on-disk marker `shipctl doctor` looks for, the install target the rule body lands at, and the adapter artifact that owns the contract.
 
-```bash
-npx @elmundi/ship-cli init --agents <csv>
-```
+For *how* installation works (commands, flags, ordering), see [/cli](/cli). For *why* this contract looks the way it does, see [Discovery](/docs/discovery) (the agent-side interview) and [Protocol → RFC-0001](/docs/protocol/rfc-0001-artifacts-protocol).
 
-`shipctl init` detects marker files/dirs and only injects into what is already in the tree; use `--agents` to force-include. With `--copy-rules`, the cached `collection/agent-rules-<agent>` artifact is installed at the `install_target` declared in its front-matter.
-
-## Canonical artifact + prompt files
+## Canonical sources
 
 | Source | Purpose |
 |--------|---------|
-| `collection/agent-rules-<agent>` | Per-agent rule artifact (RFC-0004); `shipctl --copy-rules` installs it. |
+| `collection/agent-rules-<agent>` | Per-agent rule artifact (RFC-0004); `shipctl init --copy-rules` installs it. |
 | `collection/preset-<preset>` | Per-preset bootstrap content (CI workflow, labels, secrets). |
-| [`pattern/adopt-ship-generic`](/patterns/adopt-ship-generic) | Universal adoption prompt (included in the [Agent playbook](agent-playbook.md); resolved by `--copy-playbook`). |
+| [`pattern/adopt-ship-generic`](/patterns/adopt-ship-generic) | Universal adoption prompt for the discovery interview. |
 | [`pattern/adopt-ship-elmundi`](/patterns/adopt-ship-elmundi) | ElMundi-specific adoption delta. |
-| `documentation/adoption/agent-setup-contract.md` | Interactive discovery contract (Phase 0 preamble + interview). |
+| [Discovery contract](/docs/discovery) | Interactive Phase 0–4 contract the agent runs before its first PR. |
 
 ## Detection + injection matrix
 

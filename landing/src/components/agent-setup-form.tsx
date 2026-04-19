@@ -149,8 +149,8 @@ Steps:
 1. Run the shipctl command the user copied. Confirm \`.ship/config.yml\` and the
    seeded \`.ship/cache/\` match the preset.
 2. Read the protocol you must obey:
-   - documentation/rfc/rfc-0001-artifacts-protocol.md
-   - documentation/rfc/rfc-0002-shipctl-config.md
+   - documentation/protocol/rfc-0001-artifacts-protocol.md
+   - documentation/protocol/rfc-0002-shipctl-config.md
    - documentation/adoption/agent-setup-contract.md
 3. Run a discovery interview: tracker fields, CI stages, release policy,
    evidence trail, secret *names* (never values). Persist answers in the PR.

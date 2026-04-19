@@ -33,6 +33,6 @@ spec:
 
 ## Read next
 
-- [Agent launch matrix](/docs/adoption/agent-launch-matrix) — compare runtimes and launch paths.
+- [Agent launch matrix](/docs/agent-matrix) — compare runtimes and launch paths.
 - Org patterns under **Cloud agent** on [/patterns](/patterns) — role prompts (`prompts/cloud-agent/*.md`).
 - Ukrainian deep-dive (same repo): [Cursor Cloud Agent secrets (UA) on GitHub](https://github.com/ElMundiUA/ship/blob/main/documentation/tools/cursor-cloud-agent.uk.md) — env mirroring details until an English split is published.

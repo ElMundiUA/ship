@@ -129,7 +129,7 @@ export default function ToolsPage() {
                 Use case → ElMundi
               </Link>
               . YAML names and minutes:{" "}
-              <Link className="font-semibold text-aqua underline-offset-2 hover:underline" href="/docs/examples/elmundi">
+              <Link className="font-semibold text-aqua underline-offset-2 hover:underline" href="/use-cases/elmundi">
                 Manual → ElMundi
               </Link>{" "}
               · on GitHub:{" "}

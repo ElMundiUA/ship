@@ -94,16 +94,24 @@ export function rewriteDocLinks(source) {
 
     const map = {
       "getting-started/index.md": "/docs/getting-started",
-      "examples/elmundi/index.md": "/docs/examples/elmundi",
-      "prompts-workflows/index.md": "/docs/prompts-workflows",
-      /* `documentation/tools/` no longer exists — the catalog moved to the
-       * top-level `/tools` route. Pre-v0.10 markdown still references it
-       * via `../tools/index.md`, so map it to the live route instead of
-       * letting it fall through to a 404 on `/docs/tools`. */
+      /* Pre-v0.11 catalog paths that lived under documentation/ moved
+       * to top-level routes. */
       "tools/index.md": "/tools",
       "collections/index.md": "/collections",
       "patterns/index.md": "/patterns",
       "workflows/index.md": "/workflows",
+      /* Manual pages that were renamed/relocated in v0.11. */
+      "adoption/index.md": "/docs",
+      "adoption/agent-playbook.md": "/docs/operating",
+      "adoption/elmundi.md": "/use-cases",
+      "adoption/delivery-quality-and-release-process.md": "/docs/operating",
+      "adoption/agent-setup-contract.md": "/docs/discovery",
+      "adoption/agent-launch-matrix.md": "/docs/agent-matrix",
+      "prompts-workflows/index.md": "/patterns",
+      "examples/elmundi/index.md": "/use-cases/elmundi",
+      "framework/index.md": "/book",
+      "rfc/index.md": "/docs/protocol",
+      "legal-copyright.md": "/docs/legal",
       "index.md": "/docs",
     };
 
@@ -114,7 +122,9 @@ export function rewriteDocLinks(source) {
 
     const withoutMd = normalized.replace(/\.md$/, "");
     const slug = withoutMd.endsWith("/index") ? withoutMd.slice(0, -"/index".length) : withoutMd;
-    const urlPath = slug === "" ? "/docs" : `/docs/${slug}`;
+    /* `documentation/rfc/` was renamed to `documentation/protocol/` in v0.11. */
+    const renamedSlug = slug.startsWith("rfc/") ? `protocol/${slug.slice("rfc/".length)}` : slug;
+    const urlPath = renamedSlug === "" ? "/docs" : `/docs/${renamedSlug}`;
     return `](${urlPath}${hash})`;
   });
 }

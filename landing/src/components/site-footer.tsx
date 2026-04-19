@@ -36,7 +36,7 @@ export function SiteFooter() {
                 <Link className="text-white/70 transition hover:text-aqua" href="/use-cases">
                   Use cases
                 </Link>
-                <Link className="text-white/70 transition hover:text-aqua" href="/docs/adoption">
+                <Link className="text-white/70 transition hover:text-aqua" href="/docs">
                   Adoption
                 </Link>
               </nav>
@@ -66,7 +66,7 @@ export function SiteFooter() {
                 <Link className="text-white/70 transition hover:text-aqua" href="/docs">
                   Manual
                 </Link>
-                <Link className="text-white/70 transition hover:text-aqua" href="/docs/shipctl">
+                <Link className="text-white/70 transition hover:text-aqua" href="/cli">
                   shipctl CLI
                 </Link>
                 <Link className="text-white/70 transition hover:text-aqua" href="/book">
@@ -95,7 +95,7 @@ export function SiteFooter() {
               open-source project (Apache-2.0).
             </p>
             <Link
-              href="/docs/rfc"
+              href="/docs/protocol"
               className="inline-flex items-center gap-2 rounded-full border border-aqua/30 bg-aqua/[0.08] px-3 py-1 text-xs font-bold uppercase tracking-[0.16em] text-aqua transition hover:border-aqua/60 hover:bg-aqua/[0.14]"
               aria-label="Protocol v1 — read the RFC index"
             >
