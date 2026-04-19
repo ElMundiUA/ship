@@ -93,6 +93,11 @@ async function findTemplate(app, containerName) {
 async function patchTemplate({ key, appId, containerName, imageTag, imageDigest }) {
   const { json: app } = await api(`/apps/${encodeURIComponent(appId)}`, { key });
   const template = await findTemplate(app, containerName);
+  // Bunny's /apps/{id} PATCH expects every required template field in
+  // containerTemplates[] (name + imageName + imageNamespace + imageRegistryId
+  // + …) and 400s otherwise. The per-container endpoint accepts a delta:
+  //   PATCH /apps/{id}/containers/{containerId}
+  // (https://docs.bunny.net/api-reference/magic-containers/containers/patch-container-template)
   const body = {
     id: template.id,
     imageTag,
@@ -101,15 +106,14 @@ async function patchTemplate({ key, appId, containerName, imageTag, imageDigest 
   if (imageDigest) body.imageDigest = imageDigest;
   if (process.env.DRY_RUN === "1") {
     console.log(
-      `[dry-run] PATCH /apps/${appId} template=${containerName} -> tag=${imageTag} digest=${imageDigest || "(unset)"}`,
+      `[dry-run] PATCH /apps/${appId}/containers/${template.id} template=${containerName} -> tag=${imageTag} digest=${imageDigest || "(unset)"}`,
     );
     return { app, template };
   }
-  await api(`/apps/${encodeURIComponent(appId)}`, {
-    method: "PATCH",
-    key,
-    body: { containerTemplates: [body] },
-  });
+  await api(
+    `/apps/${encodeURIComponent(appId)}/containers/${encodeURIComponent(template.id)}`,
+    { method: "PATCH", key, body },
+  );
   console.log(`PATCH ok app=${app.name} template=${containerName} tag=${imageTag}`);
   return { app, template };
 }
@@ -147,8 +151,21 @@ async function waitForRollout({ key, appId, containerName, imageTag, maxWaitS })
   );
 }
 
+async function nudgeDeploy({ key, appId }) {
+  if (process.env.DRY_RUN === "1") {
+    console.log(`[dry-run] POST /apps/${appId}/deploy`);
+    return;
+  }
+  // Some Bunny accounts only roll out after an explicit /deploy POST even
+  // when the per-container PATCH succeeded — same defensive pattern as the
+  // docs deploy workflow. 200 == accepted; non-200 throws via api().
+  await api(`/apps/${encodeURIComponent(appId)}/deploy`, { method: "POST", key });
+  console.log(`[bunny] deploy nudge sent app=${appId}`);
+}
+
 async function deployComponent({ key, appId, containerName, imageTag, imageDigest, maxWaitS }) {
   await patchTemplate({ key, appId, containerName, imageTag, imageDigest });
+  await nudgeDeploy({ key, appId });
   await waitForRollout({ key, appId, containerName, imageTag, maxWaitS });
 }
 
