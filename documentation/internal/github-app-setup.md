@@ -57,18 +57,23 @@ User permissions: none.
 
 ### Subscribe to events
 
-Tick:
-- `installation`
-- `installation_repositories`
+> **Heads-up:** `installation` and `installation_repositories` are **not**
+> in the "Subscribe to events" checklist — GitHub delivers them
+> automatically to every App that has a Webhook URL + secret configured.
+> Don't go looking for them. (`Installation target` in the list is a
+> different event about App ownership transfer; leave it unticked.)
+
+Tick the optional events we actually consume:
 - `pull_request`
 - `pull_request_review`
 - `workflow_run`
 - `check_run`
 - `issues` (only if GH Issues tracker is in scope)
 
-The Day-1 backend only handles `installation` / `installation_repositories`
-end-to-end; the rest are received and signature-verified but treated as
-no-ops until Day 3 lands the PR / CI handlers. Subscribing now saves a
+Day 3 wires `pull_request` and `workflow_run` end-to-end (they populate
+the dashboard's Recent PRs / Workflow runs blocks). The rest are
+received and signature-verified but treated as no-ops until later
+packages land the review / CI handlers. Subscribing now saves a
 re-deploy of the App later.
 
 ### Where can this GitHub App be installed?
