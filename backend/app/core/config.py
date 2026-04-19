@@ -229,10 +229,12 @@ class Settings(BaseSettings):
         default=None, alias="GITHUB_APP_WEBHOOK_SECRET"
     )
     # The exact slug GitHub uses in the install URL
-    # (``https://github.com/apps/<slug>/installations/new``). Defaults to
-    # ``ship`` because that's the published name; override per-environment if
-    # you register a staging App.
-    github_app_slug: str = Field(default="ship", alias="GITHUB_APP_SLUG")
+    # (``https://github.com/apps/<slug>/installations/new``). Optional —
+    # when unset (the default) the backend looks the slug up live from
+    # ``GET https://api.github.com/app`` using the App's own JWT and
+    # caches it for an hour. Set this only when you want to pin the slug
+    # explicitly (staging Apps, integration tests, etc.).
+    github_app_slug: str | None = Field(default=None, alias="GITHUB_APP_SLUG")
 
     # --- Linear OAuth (pilot Day 2 — tracker WOW flow) ---
     # Public OAuth Application credentials registered at

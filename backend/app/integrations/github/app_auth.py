@@ -141,6 +141,73 @@ async def fetch_installation_token(
     return token
 
 
+@dataclass(slots=True)
+class _CachedAppMetadata:
+    slug: str
+    fetched_at: float
+
+
+_app_metadata_cache: _CachedAppMetadata | None = None
+_APP_METADATA_TTL_SECONDS: Final[int] = 60 * 60  # 1h is plenty — slug never moves.
+
+
+async def fetch_app_slug(
+    *,
+    settings: Settings,
+    client: httpx.AsyncClient | None = None,
+) -> str:
+    """Return the App's URL slug (e.g. ``ship-elmundi``).
+
+    GitHub assigns the slug from the App display name when it's first
+    created and never changes it, so this is the canonical source for the
+    install-URL host segment. Caching for an hour keeps onboarding hot —
+    a single network call per pod per hour.
+
+    Raises :class:`GitHubAppMisconfigured` when the App credentials are
+    missing; surfaces transport errors via :class:`httpx.HTTPStatusError`.
+    """
+    global _app_metadata_cache
+
+    cached = _app_metadata_cache
+    if cached and (time.time() - cached.fetched_at) < _APP_METADATA_TTL_SECONDS:
+        return cached.slug
+
+    app_jwt = mint_app_jwt(settings)
+    headers = {
+        "Authorization": f"Bearer {app_jwt}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    owns_client = client is None
+    http = client or httpx.AsyncClient(timeout=httpx.Timeout(10.0))
+    try:
+        response = await http.get(f"{GITHUB_API_BASE}/app", headers=headers)
+    finally:
+        if owns_client:
+            await http.aclose()
+    if response.status_code >= 400:
+        raise httpx.HTTPStatusError(
+            f"GitHub /app metadata fetch failed: {response.status_code}",
+            request=response.request,
+            response=response,
+        )
+    payload = response.json()
+    slug = str(payload.get("slug") or "").strip()
+    if not slug:
+        raise GitHubAppMisconfigured(
+            "GitHub /app response did not contain a slug. The App likely "
+            "needs to be reinstalled or the credentials rotated."
+        )
+    _app_metadata_cache = _CachedAppMetadata(slug=slug, fetched_at=time.time())
+    return slug
+
+
+def invalidate_app_metadata_cache() -> None:
+    """Test helper / ops escape hatch — drop the cached App slug."""
+    global _app_metadata_cache
+    _app_metadata_cache = None
+
+
 def invalidate_installation_token_cache(installation_id: int | None = None) -> None:
     """Drop the cached installation token(s).
 
@@ -157,7 +224,9 @@ def invalidate_installation_token_cache(installation_id: int | None = None) -> N
 __all__ = [
     "GITHUB_API_BASE",
     "GitHubAppMisconfigured",
+    "fetch_app_slug",
     "fetch_installation_token",
+    "invalidate_app_metadata_cache",
     "invalidate_installation_token_cache",
     "mint_app_jwt",
 ]

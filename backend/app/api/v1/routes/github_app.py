@@ -40,6 +40,7 @@ from backend.app.db.models.pipelines import PullRequest, WorkflowRun
 from backend.app.db.models.tenancy import AuditLog
 from backend.app.db.session import get_session
 from backend.app.integrations.github.app_auth import (
+    GitHubAppMisconfigured,
     invalidate_installation_token_cache,
 )
 from backend.app.integrations.github.oauth import (
@@ -107,16 +108,21 @@ async def install_start(
     Admin-only because attaching an App installation is a workspace-wide
     credential.
     """
-    if not settings.github_app_slug:
-        # Misconfiguration → 503 (operator action needed) rather than 500.
-        raise HTTPException(
-            status_code=503,
-            detail="GitHub App is not configured on this deployment",
-        )
     await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
     state = build_install_state(workspace_id, settings=settings)
+    try:
+        install_url = await build_install_url(state, settings=settings)
+    except GitHubAppMisconfigured as exc:
+        # Operator hasn't filled in GITHUB_APP_ID + GITHUB_APP_PRIVATE_KEY,
+        # so we can neither read the slug from GitHub nor mint installation
+        # tokens later. 503 with a clear message → console surfaces the
+        # ``app_not_configured`` banner next to the install button.
+        raise HTTPException(
+            status_code=503,
+            detail=str(exc),
+        ) from exc
     return InstallStartResponse(
-        install_url=build_install_url(state, settings=settings),
+        install_url=install_url,
         state=state,
     )
 
