@@ -1,7 +1,7 @@
 # Ship pilot plan — WOW onboarding (Cloud SaaS, Model A)
 
-> **Status:** planning, not implemented yet. Compiled from session 2026-04-19.
-> **Source chats:** [Pilot scope discussion](442f31fa-34f0-47da-888b-a2d10a773f8e)
+> **Status:** **Day 1 shipped (2026-04-19).** Day 2-3 still planning.
+> **Source chats:** [Pilot scope discussion](442f31fa-34f0-47da-888b-a2d10a773f8e), [Day 1 build](48ef7ed3-881c-42e6-a823-1f670f4907ac)
 > **Owner:** Denys / Ship core
 > **Target:** 3-day pilot demo with WOW onboarding (sign-in → working dashboard in < 5 min)
 
@@ -21,6 +21,106 @@ toward **Model A: Cloud SaaS + GitHub App + OAuth**.
 - **On-prem / self-hosted / broker mode:** **postponed** — that is the future
   *enterprise tier* with paywall (Snyk Broker / Sourcegraph Cloud Connect model).
   No pilot work on it.
+
+---
+
+## Where we are now (handoff for the next session)
+
+> **Read this first if you're picking the work up cold.** It's the only
+> source of truth that's kept up to date as the build progresses; the
+> per-day sections below describe the *plan* (with status badges), this
+> section describes the *state of the repo right now*.
+
+**Last updated:** 2026-04-19, end of Day 1.
+
+### Day 1 — ✅ shipped
+
+Foundations are merged on `main`. Everything below works end-to-end with
+the live test suite (162 passing). What landed:
+
+- **Gateway interfaces** (`backend/app/integrations/gateway/`):
+  `CodeHostGateway`, `TrackerGateway`, `CIGateway`, `ChatGateway` —
+  typed protocols every vendor adapter implements. `RepoRef`,
+  `PullRequestRef`, `TicketRef` are the shared discriminated types.
+- **GitHub App backend** (`backend/app/integrations/github/`):
+  - `app_auth.py` — RS256 JWT minting + per-installation token cache
+    (~1h TTL, invalidated on reinstall)
+  - `oauth.py` — signed `state` token (HS256 over workspace_id + nonce
+    + exp) and install URL builder
+  - `webhook.py` — HMAC-SHA256 `X-Hub-Signature-256` verification
+  - `code_host_adapter.py` — first cut of `CodeHostGateway` over the
+    GitHub REST API using installation tokens
+- **Routes** (`backend/app/api/v1/routes/github_app.py`):
+  - `POST /v1/integrations/github/install/start` (admin-only, returns
+    `install_url` + `state`)
+  - `GET /v1/integrations/github/install/callback` (no auth, validates
+    `state`, persists `GitHubInstallation`, audit-logs, redirects to
+    `<console>/onboarding?step=github&github=installed`; on tampered
+    state redirects with `?error=bad_state`)
+  - `POST /v1/webhooks/github` (signature-verified;
+    `installation` / `installation_repositories` handled, others ack'd
+    for Day 3)
+- **DB** (`backend/migrations/versions/0003_github_installations.py`):
+  new `github_installations` table — `(workspace_id, installation_id*,
+  account_id, account_login, account_type, repository_selection,
+  settings JSONB, installed_at, suspended_at)`. Unique on
+  `installation_id`, indexed on `workspace_id`.
+- **Settings** (`backend/app/core/config.py`): `GITHUB_APP_ID`,
+  `GITHUB_APP_PRIVATE_KEY`, `GITHUB_APP_CLIENT_ID`,
+  `GITHUB_APP_CLIENT_SECRET`, `GITHUB_APP_WEBHOOK_SECRET`,
+  `GITHUB_APP_SLUG` (default `ship`), plus `SHIP_CONSOLE_URL`
+  (browser-facing console origin, used for callback redirects).
+- **Console wizard** (`console/src/app/onboarding/page.tsx` +
+  `console/src/app/api/onboard/github-install/route.ts`):
+  new `step=github` between `workspace` and `workflows`. Renders the
+  install CTA, handles `?github=installed` (success banner),
+  `?github=request` (awaiting org-admin), and `?error=<code>` (mapped
+  via `GITHUB_ERRORS`). Workspace step now redirects to `step=github`
+  instead of jumping straight to `workflows`.
+- **Migration env fix** (`backend/migrations/env.py`): honours an
+  `sqlalchemy.url` already injected by the Alembic `Config` (the
+  pytest fixture sets it to a local DB) before falling back to
+  `Settings`. Prevents accidental migration against the production
+  Neon DSN baked into `.env` while running local tests.
+- **Tests**: `test_github_app_jwt.py`, `test_github_app_oauth.py`,
+  `test_github_app_webhook.py`, `test_v1_github_app.py` cover unit
+  + integration paths (state minting/verification, signature
+  verification, install start/callback redirects, webhook persistence
+  of `installation` events). Suite-wide: 162 passing.
+- **Operator docs** (`documentation/internal/github-app-setup.md`):
+  full one-time GitHub-side checklist (App registration, permissions,
+  events, secrets, env, smoke test, local dev via cloudflared, key
+  rotation). Linked from the Day 1 section below.
+
+### Open items / known gaps before Day 2
+
+1. **Auth0 GitHub-social-login** is *not* wired yet — the install flow
+   above works under `SHIP_AUTH_MODE=local`. Production cutover needs
+   the Auth0 dashboard click documented in [auth0-setup.md](../auth0-setup.md)
+   plus a smoke run in `auth0` mode.
+2. **`code_host_adapter.py`** is intentionally minimal (enough to cover
+   the wizard's needs). Day 2's "list available repos" endpoint will
+   be the next consumer that exercises it for real.
+3. **Webhook handlers for `pull_request` / `workflow_run` / `check_run`
+   / `pull_request_review`** verify signatures and ack 200, but don't
+   touch DB yet. Day 3 lands the actual handlers.
+4. **PAT-input integration UI** still exists in the console as a
+   secondary flow for non-GitHub trackers; we'll leave it alone until
+   Day 2 introduces tracker OAuth.
+5. **No rate-limiting on `/v1/webhooks/github`** beyond the global
+   limiter — fine for pilot, revisit before opening to public installs
+   at scale.
+
+### Day 2 — pending (next up)
+
+Repo picker UI + tracker OAuth (Linear, Notion) + Code Map MVP. See
+[Day 2](#day-2--repo-picker--tracker-oauth--code-map-mvp) below; nothing
+started yet.
+
+### Day 3 — pending
+
+Default pipelines + dashboard + polish. See
+[Day 3](#day-3--default-pipelines--dashboard--polish) below.
 
 ---
 
@@ -215,27 +315,44 @@ init --copy-rules` flow is already implemented and works.
 
 ### Day 1 — Foundations: Auth0 + GitHub App + Gateway interface
 
+> **Status: ✅ shipped 2026-04-19.**
+> Operator wiring lives in [github-app-setup.md](./github-app-setup.md);
+> Auth0 wiring in [../auth0-setup.md](../auth0-setup.md). All items below
+> are merged with tests (162 passing as of d1 close).
+
 1. **Auth0 config:** enable GitHub social connection in our Auth0 EU tenant
    (5-min dashboard click). Update Universal Login screen.
+   *Manual ops step — see [auth0-setup.md](../auth0-setup.md).*
 2. **Console:** landing page with single "Continue with GitHub" button →
    Auth0 → callback → JIT workspace creation if first time.
 3. **Register GitHub App "Ship"** in our org `ship-platform` (or wherever).
    Permissions: PRs read+write, contents read, metadata read, issues
    read+write, workflow_run read, checks read, webhooks. Public listing,
    multi-tenant install.
+   *Manual ops step — see [github-app-setup.md](./github-app-setup.md).*
 4. **Backend:** `backend/app/integrations/gateway/{code_host,tracker,ci,chat}.py`
    — abstract interfaces.
 5. **Backend:** `backend/app/integrations/github/`:
-   - `oauth.py` — install start/callback endpoints
-   - `code_host_adapter.py` — implements `CodeHostGateway` via PyGithub +
-     httpx + JWT App auth
-   - webhook receiver `/v1/webhooks/github`
+   - `app_auth.py` — App JWT minting + per-installation token cache
+   - `oauth.py` — signed `state` token + install URL builder
+   - `webhook.py` — HMAC-SHA256 signature verification
+   - `code_host_adapter.py` — implements `CodeHostGateway` via App tokens
+   - routes: `POST /v1/integrations/github/install/start`,
+     `GET /v1/integrations/github/install/callback`,
+     `POST /v1/webhooks/github`
 6. **DB migration:** new table `github_installations` (workspace_id,
-   installation_id, account_login, account_id, installed_at).
+   installation_id, account_login, account_id, account_type,
+   repository_selection, installed_at, suspended_at).
+   See `backend/migrations/versions/0003_github_installations.py`.
 7. **Console:** onboarding step "Connect your GitHub" → button kicks
-   `/v1/integrations/github/install/start`.
+   `/api/onboard/github-install` → backend returns `install_url` →
+   redirect to `github.com/apps/<slug>/installations/new`. Success
+   bounces back to `?step=github&github=installed` so the user sees the
+   "GitHub App installed" banner before moving on to workflows.
 
 ### Day 2 — Repo picker + tracker OAuth + Code Map MVP
+
+> **Status: ⏳ pending.** Not started. Day 1 unblocks all of these.
 
 1. **Backend:** `GET /v1/repos/available` (live from installation API)
    + `POST /v1/repos/activate` (saves selection + creates default pipelines).
@@ -255,6 +372,9 @@ init --copy-rules` flow is already implemented and works.
    trims to 5k files preview for big repos.
 
 ### Day 3 — Default pipelines + dashboard + polish
+
+> **Status: ⏳ pending.** Day 2 must land first (default pipelines key
+> off the activated repo set).
 
 1. **Backend:** auto-create 5 default pipelines on first `repos/activate`.
 2. **Backend:** `POST /v1/pipelines/{id}/run` (sync via BackgroundTasks),
