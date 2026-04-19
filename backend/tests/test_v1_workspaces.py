@@ -27,6 +27,31 @@ async def test_workspaces_require_auth(v1_client) -> None:
 
 
 @pytest.mark.asyncio
+async def test_list_workspaces_jit_creates_personal_for_fresh_user(
+    v1_client, seed_user_with_token
+) -> None:
+    """Brand-new sign-ins have zero memberships; ``GET /v1/workspaces``
+    must materialise a personal workspace so the WOW-onboarding wizard
+    can land somewhere instead of staring at an empty list."""
+    _, raw_token = seed_user_with_token
+    headers = {"Authorization": f"Bearer {raw_token}"}
+
+    listed = await v1_client.get("/v1/workspaces", headers=headers)
+    assert listed.status_code == 200
+    rows = listed.json()
+    assert len(rows) == 1
+    assert rows[0]["name"]
+    assert rows[0]["slug"]
+
+    # Idempotent — calling again returns the same workspace, not a fresh one.
+    listed_again = await v1_client.get("/v1/workspaces", headers=headers)
+    assert listed_again.status_code == 200
+    again = listed_again.json()
+    assert len(again) == 1
+    assert again[0]["id"] == rows[0]["id"]
+
+
+@pytest.mark.asyncio
 async def test_user_can_create_and_list_workspace(
     v1_client, seed_user_with_token
 ) -> None:

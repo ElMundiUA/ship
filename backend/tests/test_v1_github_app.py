@@ -111,10 +111,11 @@ async def test_install_callback_persists_row(
     # Callback issues a redirect into the console onboarding wizard.
     assert response.status_code in (302, 307)
     location = response.headers["location"]
-    # The callback intentionally lands back on the github step so the
-    # success banner inside ``GitHubStep`` is the first thing the user
-    # sees; the in-banner CTA is what walks them to workflows.
-    assert location.startswith("https://ship.test/onboarding?step=github")
+    # The callback jumps the user straight to the repo picker — the
+    # "GitHub App installed" success banner renders above the picker so
+    # they know it worked, but they don't need an extra "Pick repos →"
+    # click before they can do anything.
+    assert location.startswith("https://ship.test/onboarding?step=repos")
     assert "github=installed" in location
 
     row = (

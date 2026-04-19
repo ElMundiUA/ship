@@ -22,7 +22,6 @@ from backend.app.api.v1.routes import (
     linear_oauth,
     members,
     notion_oauth,
-    onboarding,
     pipelines,
     repos,
     workspace_artifacts,
@@ -39,7 +38,6 @@ api_router.include_router(audit.router)
 api_router.include_router(integrations.router)
 api_router.include_router(knowledge.router)
 api_router.include_router(members.router)
-api_router.include_router(onboarding.router)
 api_router.include_router(workspace_artifacts.router)
 # Workspace repo activations (pilot Day 2 — picker UI + Code Map MVP).
 # Lives next to artifact_repos but is keyed off GitHub App installations

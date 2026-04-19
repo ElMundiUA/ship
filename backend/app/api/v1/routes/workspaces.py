@@ -93,8 +93,95 @@ async def list_workspaces(
         .where(WorkspaceMember.user_id == auth.user.id)
         .order_by(Workspace.created_at.desc())
     )
-    rows = (await session.execute(stmt)).scalars().all()
-    return [WorkspaceOut.model_validate(row) for row in rows]
+    rows = list((await session.execute(stmt)).scalars().all())
+    if rows:
+        return [WorkspaceOut.model_validate(row) for row in rows]
+    # JIT: fresh user (e.g. just finished Auth0 sign-in). The WOW
+    # onboarding flow assumes a workspace already exists so the wizard can
+    # jump straight into the GitHub App install. We give them a personal
+    # workspace under their personal org with a stable, derived slug. Real
+    # team workspaces remain create-on-demand via POST /v1/workspaces.
+    workspace = await _ensure_personal_workspace(session, auth)
+    return [WorkspaceOut.model_validate(workspace)]
+
+
+def _personal_slug_for(auth: AuthContext) -> str:
+    """Slug for the user's auto-provisioned personal workspace.
+
+    Stable per user id so re-runs of the JIT path are idempotent and so two
+    different users with the same email local-part never collide.
+    """
+    suffix = str(auth.user.id).replace("-", "")[:8]
+    base = (auth.user.email or "user").split("@", 1)[0].lower()
+    base = "".join(c if c.isalnum() else "-" for c in base).strip("-") or "user"
+    return f"{base[:40]}-{suffix}"
+
+
+async def _ensure_personal_workspace(
+    session: AsyncSession, auth: AuthContext
+) -> Workspace:
+    """Create-or-return the user's auto-provisioned personal workspace.
+
+    Idempotent: if a workspace with the derived slug already exists in the
+    user's personal org we return it (which can happen if a previous JIT
+    call landed but the membership lookup raced a transaction boundary).
+    """
+    org = await _ensure_personal_org(session, auth)
+    slug = _personal_slug_for(auth)
+    stmt = (
+        select(Workspace)
+        .where(Workspace.org_id == org.id)
+        .where(Workspace.slug == slug)
+    )
+    existing = (await session.execute(stmt)).scalar_one_or_none()
+    if existing is not None:
+        # Belt-and-braces: ensure the membership row exists. Without this a
+        # half-failed earlier provisioning would leave the user staring at a
+        # workspace they cannot read.
+        member_stmt = select(WorkspaceMember).where(
+            WorkspaceMember.workspace_id == existing.id,
+            WorkspaceMember.user_id == auth.user.id,
+        )
+        if (await session.execute(member_stmt)).scalar_one_or_none() is None:
+            session.add(
+                WorkspaceMember(
+                    workspace_id=existing.id, user_id=auth.user.id, role="owner"
+                )
+            )
+            await session.flush()
+        return existing
+
+    display = (auth.user.display_name or auth.user.email or "Personal").split("@", 1)[0]
+    workspace = Workspace(
+        org_id=org.id,
+        slug=slug,
+        name=f"{display.title()}'s workspace",
+    )
+    session.add(workspace)
+    try:
+        await session.flush()
+    except IntegrityError:
+        # Lost a race with a concurrent JIT call; re-fetch.
+        await session.rollback()
+        return (await session.execute(stmt)).scalar_one()
+    session.add(
+        WorkspaceMember(
+            workspace_id=workspace.id, user_id=auth.user.id, role="owner"
+        )
+    )
+    session.add(
+        AuditLog(
+            workspace_id=workspace.id,
+            actor_user_id=auth.user.id,
+            actor_token_id=auth.token.id if auth.token else None,
+            action="workspace.create",
+            target_kind="workspace",
+            target_id=str(workspace.id),
+            payload={"slug": workspace.slug, "name": workspace.name, "jit": True},
+        )
+    )
+    await session.flush()
+    return workspace
 
 
 @router.post("", response_model=WorkspaceOut, status_code=status.HTTP_201_CREATED)

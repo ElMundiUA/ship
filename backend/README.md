@@ -24,23 +24,12 @@ Instruction-first companion API for agents — and the foundation of the Ship cl
 - `GET /v1/workspaces` — workspaces the caller belongs to.
 - `POST /v1/workspaces` — create a workspace under the caller's org.
 - `GET /v1/workspaces/{id}` — fetch a single workspace (404 unless the caller is a member).
-- `POST /v1/onboarding/inspect` — run `RepoInspector` against a local path
-  or remote git URL, return a `RepoProfile` (language, frameworks, CI,
-  tests, README excerpt, suggested workspace identity, recommended
-  workflows). Clones remote URLs shallowly under `/tmp/ship-repos/`.
-- `POST /v1/onboarding/scaffold-demo-repo` — materialize a tiny
-  Next.js + FastAPI fixture under `/tmp/ship-repos/demo-*` so the wizard
-  has something concrete to inspect on a fresh laptop.
-- `POST /v1/onboarding/install-workflows` — `WorkflowInstaller` writes the
-  approved workflows into the target repo (one `.github/workflows/{id}.yml`
-  + the artifact contract under `.ship/workflows/{id}.md`), refreshes
-  `.ship/lock.yaml`, and commits everything as
-  `ship: install N workflow(s)`. Memberships with role `admin`/`owner`
-  required.
-- `POST /v1/onboarding/seed-knowledge` — `KnowledgeSeeder` generates
-  `brandbook.md`, `code-style.md` and `testing.md` under
-  `.ship/knowledge/`, distilled from the inspected repo, and commits them
-  as `ship: seed knowledge buckets`.
+- `POST /v1/integrations/github/install/start` + callback — kick off the
+  GitHub App install flow that backs the WOW onboarding (no repo clones).
+- `GET /v1/workspaces/{id}/repos/available` /
+  `POST /v1/workspaces/{id}/repos/activate` — list and pick repos visible
+  to the GitHub App installation; activation auto-seeds the five default
+  pipelines via `seed_default_pipelines`.
 
 Auth: `Authorization: Bearer <token>` where `<token>` is either a session JWT or a personal access token prefixed `ship_pat_`.
 

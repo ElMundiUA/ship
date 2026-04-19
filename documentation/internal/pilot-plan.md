@@ -1,7 +1,8 @@
 # Ship pilot plan — WOW onboarding (Cloud SaaS, Model A)
 
-> **Status:** **Day 1 + Day 2 + Day 3 shipped (2026-04-19).** Pilot scope
-> complete; smoke test pending.
+> **Status:** **Day 1 + Day 2 + Day 3 shipped (2026-04-19); WOW wizard
+> tightened to the planned 3-step shape (2026-04-20).** Pilot scope
+> complete; live smoke test pending.
 > **Source chats:** [Pilot scope discussion](442f31fa-34f0-47da-888b-a2d10a773f8e), [Day 1+2+3 build](48ef7ed3-881c-42e6-a823-1f670f4907ac)
 > **Owner:** Denys / Ship core
 > **Target:** 3-day pilot demo with WOW onboarding (sign-in → working dashboard in < 5 min)
@@ -32,7 +33,43 @@ No pilot work on it.
 > per-day sections below describe the *plan* (with status badges), this
 > section describes the *state of the repo right now*.
 
-**Last updated:** 2026-04-19, end of Day 3.
+**Last updated:** 2026-04-20, after the WOW-wizard re-cut (see "Wizard
+re-cut" section below).
+
+### Wizard re-cut — ✅ shipped (2026-04-20)
+
+After Day-3 we noticed the wizard had grown back into the pre-pivot
+8-step shape (paste a URL → name a workspace → install GitHub → pick
+repos → install workflows into the repo → tracker → seed knowledge into
+the repo → mint CLI token → done). That violated the TL;DR ("we never
+clone customer repos") and the WOW UX target. The cleanup:
+
+- **Backend purge.** Deleted `backend/app/api/v1/routes/onboarding.py`,
+  `backend/app/services/{repo_inspector,workflow_installer,knowledge_seeder}.py`,
+  and `backend/tests/test_v1_onboarding.py`. The cloud backend has no
+  code that can clone or commit into a customer repo any more.
+- **JIT personal workspace.** `GET /v1/workspaces` now materialises a
+  personal workspace on first hit (slug derived from the user id) so
+  the wizard can land somewhere immediately after Auth0. New regression
+  in `backend/tests/test_v1_workspaces.py`.
+- **3-step wizard.** `console/src/app/onboarding/page.tsx` rewritten to
+  render exactly three steps: `github` → `repos` → `tracker`. The page
+  redirects unauthenticated visitors to `/login?next=/onboarding` and
+  pulls the workspace id off the JIT call when `?ws=` is missing.
+- **Console route purge.** Deleted `/api/onboard/{inspect,workspace,
+  workflows,knowledge,mint-token,integration}` and the now-unused
+  `inspectRepo / scaffoldDemoRepo / installWorkflows / seedKnowledge`
+  exports from `console/src/lib/api/client.ts`.
+- **Post-install short-circuit.** GitHub callback now redirects to
+  `?step=repos&github=installed` (was `?step=github&...`) so the user
+  doesn't have to hit one extra "Pick repos →" link before they can do
+  anything. Tests updated.
+- **Post-login routing.** `console/src/app/page.tsx` redirects to
+  `/onboarding?step=github&ws=…` when the dashboard reports
+  `active_repos === 0`. The mint-token UI moved off the wizard onto a
+  permanent "Wire up your CLI" card under the dashboard plus a "CLI
+  tokens" link in the header (both point at `/settings`, which already
+  has a TokensPanel).
 
 ### Day 1 — ✅ shipped
 

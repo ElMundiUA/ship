@@ -31,7 +31,6 @@ export async function POST(request: Request) {
   const origin = resolveOrigin(request);
   const form = await request.formData();
   const wsId = (form.get("ws") ?? "").toString();
-  const repo = (form.get("repo") ?? "").toString();
 
   if (!wsId) {
     // No workspace context → kick the user back to the wizard's first
@@ -40,7 +39,7 @@ export async function POST(request: Request) {
   }
 
   if (!isApiConfigured()) {
-    return wizardError(origin, wsId, repo, "api_unavailable");
+    return wizardError(origin, wsId, "api_unavailable");
   }
 
   try {
@@ -48,7 +47,7 @@ export async function POST(request: Request) {
     return NextResponse.redirect(start.install_url, 303);
   } catch (err) {
     if (err instanceof ApiUnavailableError)
-      return wizardError(origin, wsId, repo, "api_unavailable");
+      return wizardError(origin, wsId, "api_unavailable");
     if (err instanceof ApiHttpError) {
       if (err.status === 401)
         return NextResponse.redirect(
@@ -56,25 +55,24 @@ export async function POST(request: Request) {
           303,
         );
       if (err.status === 403)
-        return wizardError(origin, wsId, repo, "forbidden");
+        return wizardError(origin, wsId, "forbidden");
       // 503 = backend says the App is not configured (missing
       // GITHUB_APP_* env vars); surface a dedicated error so ops sees it.
       if (err.status === 503)
-        return wizardError(origin, wsId, repo, "app_not_configured");
-      return wizardError(origin, wsId, repo, `http_${err.status}`);
+        return wizardError(origin, wsId, "app_not_configured");
+      return wizardError(origin, wsId, `http_${err.status}`);
     }
-    return wizardError(origin, wsId, repo, "unknown");
+    return wizardError(origin, wsId, "unknown");
   }
 }
 
-function wizardError(origin: string, wsId: string, repo: string, code: string) {
+function wizardError(origin: string, wsId: string, code: string) {
   // Stay on the github step so the error banner sits next to the same
   // "Install on GitHub" button the user just clicked — much less
   // confusing than punting them to a different step.
   const url = new URL("/onboarding", origin);
   url.searchParams.set("step", "github");
   url.searchParams.set("ws", wsId);
-  if (repo) url.searchParams.set("repo", repo);
   url.searchParams.set("error", code);
   return NextResponse.redirect(url, 303);
 }
