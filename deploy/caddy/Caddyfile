@@ -1,0 +1,107 @@
+# Caddy front-door for the Ship cloud platform on a single VPS.
+#
+# Used by `docker-compose.prod.yml`. The same image is what Bunny Magic
+# Containers fronts with its own TLS terminator in our SaaS deploy — that
+# path skips Caddy entirely (see `scripts/bunny-deploy-platform.mjs`).
+#
+# Two virtual hosts:
+#
+#   {$SHIP_DOMAIN}              -> Next.js operator console (port 3001)
+#   api.{$SHIP_DOMAIN}          -> FastAPI ship-server (port 8100)
+#
+# Caddy provisions Let's Encrypt certificates automatically on first hit.
+# Set SHIP_TLS_EMAIL so Let's Encrypt has a contact for renewal failures.
+#
+# Required env in the host shell (or `.env.prod` consumed by compose):
+#
+#   SHIP_DOMAIN=ship.example.com
+#   SHIP_TLS_EMAIL=ops@example.com
+#
+# Optional knobs:
+#   SHIP_CADDY_LOG_LEVEL=INFO     # DEBUG for verbose proxy traces
+
+{
+	email {$SHIP_TLS_EMAIL}
+	# Caddy's default ACME endpoint is production Let's Encrypt; override
+	# to staging by setting `acme_ca https://acme-staging-v02.api.letsencrypt.org/directory`
+	# in CADDY_GLOBAL_OPTIONS while debugging cert issuance.
+	{$CADDY_GLOBAL_OPTIONS}
+}
+
+# --- Operator console ------------------------------------------------------
+{$SHIP_DOMAIN} {
+	encode zstd gzip
+
+	# Strict transport security — Caddy already serves HTTPS by default; the
+	# header makes browsers refuse plaintext for one year after first hit.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		# Console is a private operator surface; keep it out of search engines
+		# and embedding contexts even if the marketing landing accidentally
+		# links to it.
+		X-Robots-Tag "noindex, nofollow"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# Removed by request handlers; we set the umbrella default here so
+		# misconfigured upstreams never accidentally weaken it.
+		-Server
+	}
+
+	# Health endpoint is exposed without buffering so probes stay snappy.
+	handle /healthz {
+		reverse_proxy console:3001
+	}
+
+	handle {
+		reverse_proxy console:3001 {
+			# Pass the original host so Next.js URL helpers stay correct.
+			header_up Host {http.request.host}
+			header_up X-Real-IP {http.request.remote.host}
+			header_up X-Forwarded-Proto {http.request.scheme}
+		}
+	}
+
+	log {
+		output stdout
+		format console
+		level {$SHIP_CADDY_LOG_LEVEL:INFO}
+	}
+}
+
+# --- API (ship-server) -----------------------------------------------------
+api.{$SHIP_DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	# Cheap liveness — bypasses DB so probe-storms don't pile up Postgres
+	# connections.
+	handle /healthz {
+		reverse_proxy ship-server:8100
+	}
+
+	handle {
+		reverse_proxy ship-server:8100 {
+			header_up Host {http.request.host}
+			header_up X-Real-IP {http.request.remote.host}
+			header_up X-Forwarded-Proto {http.request.scheme}
+			# The CLI uploads can be large (artifact sync, knowledge seed);
+			# match the in-process FastAPI body limits.
+			transport http {
+				read_timeout 120s
+				write_timeout 120s
+			}
+		}
+	}
+
+	log {
+		output stdout
+		format console
+		level {$SHIP_CADDY_LOG_LEVEL:INFO}
+	}
+}

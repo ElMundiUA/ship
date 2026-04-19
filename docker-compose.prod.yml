@@ -1,0 +1,83 @@
+# Production overlay for the single-VPS Ship deploy.
+#
+# Usage:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# What it adds on top of the base compose:
+#
+# - A `caddy` reverse proxy that terminates TLS on :443 (auto-cert via
+#   Let's Encrypt) and routes `{$SHIP_DOMAIN}` to the console and
+#   `api.{$SHIP_DOMAIN}` to ship-server. Caddy uses the host's own
+#   network for ports 80/443 only — internal traffic stays on the
+#   compose `default` network.
+# - Removes the host port bindings on ship-server / console (only Caddy
+#   should be reachable from the public internet).
+# - Bumps Postgres + ship-server to `restart: always` so the box recovers
+#   on reboot.
+#
+# What it does NOT do:
+# - It does not configure off-host backups (see `scripts/backup-postgres.sh`).
+# - It does not handle log shipping; pair with vector / Promtail if needed.
+# - It does not route IPv6 — Caddy listens on the host's default
+#   interfaces; constrain via `bind` if your VPS exposes more than one.
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: always
+    depends_on:
+      ship-server:
+        condition: service_healthy
+      console:
+        condition: service_healthy
+    environment:
+      SHIP_DOMAIN: ${SHIP_DOMAIN:?set SHIP_DOMAIN in .env.prod (e.g. ship.example.com)}
+      SHIP_TLS_EMAIL: ${SHIP_TLS_EMAIL:?set SHIP_TLS_EMAIL for Let's Encrypt notifications}
+      SHIP_CADDY_LOG_LEVEL: ${SHIP_CADDY_LOG_LEVEL:-INFO}
+      CADDY_GLOBAL_OPTIONS: ${CADDY_GLOBAL_OPTIONS:-}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"  # HTTP/3
+    volumes:
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:2019/config/", "--header=Accept: application/json"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  ship-server:
+    restart: always
+    # Drop the public port binding from the base file. Caddy reaches the
+    # service over the compose-default network on `ship-server:8100`.
+    ports: !reset []
+
+  console:
+    restart: always
+    ports: !reset []
+
+  ship-worker:
+    restart: always
+
+  postgres:
+    restart: always
+    # Keep Postgres off the public network in prod — only ship-server +
+    # ship-worker need it. The host port binding from the base file is
+    # convenient for `psql` from a developer laptop, not for prod.
+    ports: !reset []
+
+  redis:
+    restart: always
+    ports: !reset []
+
+  minio:
+    restart: always
+    ports: !reset []
+
+volumes:
+  caddy_data:
+  caddy_config:

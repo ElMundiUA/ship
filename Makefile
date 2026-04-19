@@ -22,7 +22,8 @@ SMOKE_API ?= http://localhost:8100
 
 .PHONY: help bootstrap up down restart rebuild logs logs-server logs-worker \
         logs-console health smoke psql redis-cli migrate revision shell \
-        test test-backend test-fast clean nuke status backup ps env-check
+        test test-backend test-fast clean nuke status backup backup-prune ps env-check \
+        prod-up prod-down prod-logs bunny-deploy bunny-deploy-dry
 
 help: ## Show this help.
 	@awk 'BEGIN {FS = ":.*##"; printf "Targets:\n"} \
@@ -101,12 +102,28 @@ test-backend: test ## Alias for test.
 test-fast: ## Run only fast unit tests (-m "not slow").
 	$(COMPOSE) exec -T $(BACKEND_SVC) pytest backend/tests -x -m "not slow"
 
-backup: ## Snapshot Postgres into ./backups/ship-YYYYMMDD-HHMMSS.sql.gz.
-	@mkdir -p backups
-	@stamp=$$(date +%Y%m%d-%H%M%S); \
-	  out="backups/ship-$$stamp.sql.gz"; \
-	  $(COMPOSE) exec -T $(DB_SVC) pg_dump -U $${POSTGRES_USER:-ship} $${POSTGRES_DB:-ship} | gzip > $$out; \
-	  echo "wrote $$out ($$(du -h $$out | cut -f1))"
+backup: ## Snapshot Postgres into ./backups/ (rotates per BACKUP_KEEP, default 14).
+	@./scripts/backup-postgres.sh
+
+backup-prune: ## Drop old snapshots older than BACKUP_KEEP, no new dump.
+	@BACKUP_PRUNE_ONLY=1 ./scripts/backup-postgres.sh
+
+prod-up: env-check ## Bring the stack up with the Caddy/HTTPS overlay (single-VPS prod).
+	$(COMPOSE) -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+
+prod-down: ## Tear down the prod-overlay stack (keeps volumes).
+	$(COMPOSE) -f docker-compose.yml -f docker-compose.prod.yml down
+
+prod-logs: ## Tail logs for all prod-overlay services (Caddy + app).
+	$(COMPOSE) -f docker-compose.yml -f docker-compose.prod.yml logs -f --tail=200
+
+bunny-deploy: ## Roll backend + console images to Bunny Magic Containers (uses scripts/bunny-deploy-platform.mjs).
+	@test -n "$(IMAGE_TAG)" || { echo "Usage: make bunny-deploy IMAGE_TAG=main-abc1234"; exit 2; }
+	IMAGE_TAG=$(IMAGE_TAG) node scripts/bunny-deploy-platform.mjs
+
+bunny-deploy-dry: ## Same as bunny-deploy but no API writes (DRY_RUN=1).
+	@test -n "$(IMAGE_TAG)" || { echo "Usage: make bunny-deploy-dry IMAGE_TAG=main-abc1234"; exit 2; }
+	DRY_RUN=1 IMAGE_TAG=$(IMAGE_TAG) node scripts/bunny-deploy-platform.mjs
 
 clean: ## Stop the stack and drop the docker network. Keeps volumes (DB safe).
 	$(COMPOSE) down --remove-orphans
