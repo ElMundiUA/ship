@@ -36,39 +36,60 @@ def _swap_driver(url: str, target_prefix: str) -> str:
     return url
 
 
+_LIBPQ_ONLY_KEYS = frozenset({"sslmode", "channel_binding", "sslrootcert", "sslcert", "sslkey"})
+
+
 def _strip_libpq_only_params(url: str, *, for_asyncpg: bool) -> str:
-    """Translate libpq-only query params into a form the target driver accepts.
+    """Drop libpq-only query params from the URL when targeting asyncpg.
 
     Cloud Postgres providers (Neon, Supabase, …) hand operators DSNs that look
     like ``postgresql://...?sslmode=require&channel_binding=require``. Those
     are libpq parameters; psycopg understands them, but asyncpg parses the
-    raw URL itself and 500s with ``invalid DSN: invalid GUC parameter`` if
-    it sees them. This shim:
-
-    - For asyncpg: collapses ``sslmode`` to a boolean ``ssl=true|false`` that
-      the asyncpg dialect forwards correctly, and drops ``channel_binding``
-      (asyncpg negotiates SCRAM channel binding automatically when TLS is on
-      — there is no opt-in knob to forward).
-    - For psycopg: passes through unchanged (psycopg/libpq handle both).
+    raw URL itself and rejects them at DSN-parse time. We strip them entirely
+    on the asyncpg side and rely on
+    :func:`asyncpg_connect_args` to push the TLS intent into ``connect_args``
+    instead — that path uses asyncpg's native ``ssl=`` argument, which avoids
+    the SQLAlchemy URL-coercion ambiguity around ``?ssl=true|require|...``.
     """
+    if not for_asyncpg:
+        return url
     parts = urlsplit(url)
     if not parts.query:
         return url
-    kept: list[tuple[str, str]] = []
-    for key, value in parse_qsl(parts.query, keep_blank_values=True):
-        lkey = key.lower()
-        if for_asyncpg and lkey == "sslmode":
-            normalised = value.strip().lower()
-            kept.append(("ssl", "false" if normalised in ("disable", "allow") else "true"))
-        elif for_asyncpg and lkey == "channel_binding":
-            # asyncpg has no equivalent; SCRAM-SHA-256-PLUS still happens
-            # transparently when the server requests it over TLS.
-            continue
-        else:
-            kept.append((key, value))
+    kept = [
+        (key, value)
+        for key, value in parse_qsl(parts.query, keep_blank_values=True)
+        if key.lower() not in _LIBPQ_ONLY_KEYS
+    ]
     return urlunsplit(
         (parts.scheme, parts.netloc, parts.path, urlencode(kept), parts.fragment)
     )
+
+
+def asyncpg_ssl_arg(original_database_url: str) -> str | bool | None:
+    """Map the operator's ``DATABASE_URL`` to asyncpg's ``ssl=`` value.
+
+    Returns:
+        ``"require"`` when the DSN explicitly requested TLS via ``sslmode``,
+        ``False`` when it explicitly disabled it, ``True`` for any non-loopback
+        host (cloud Postgres always needs TLS, and assuming TLS by default
+        keeps prod-safe behaviour for operators who forgot the parameter), and
+        ``None`` for plain localhost dev DSNs (let asyncpg decide).
+    """
+    parts = urlsplit(original_database_url)
+    sslmode: str | None = None
+    for key, value in parse_qsl(parts.query, keep_blank_values=True):
+        if key.lower() == "sslmode":
+            sslmode = value.strip().lower()
+            break
+    if sslmode in ("disable",):
+        return False
+    if sslmode in ("allow", "prefer", "require", "verify-ca", "verify-full"):
+        return sslmode
+    host = (parts.hostname or "").lower()
+    if host in ("", "localhost", "127.0.0.1", "::1"):
+        return None
+    return True
 
 
 def _normalise_to_psycopg(url: str) -> str:
