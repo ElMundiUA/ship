@@ -35,7 +35,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.api.v1.deps import AuthContext, get_current_auth
 from backend.app.api.v1.routes.workspaces import ROLES_ADMIN, _require_membership
 from backend.app.core.config import Settings, get_settings
-from backend.app.db.models.integrations import GitHubInstallation
+from backend.app.db.models.integrations import GitHubInstallation, WorkspaceRepo
+from backend.app.db.models.pipelines import PullRequest, WorkflowRun
 from backend.app.db.models.tenancy import AuditLog
 from backend.app.db.session import get_session
 from backend.app.integrations.github.app_auth import (
@@ -255,6 +256,18 @@ async def github_webhook(
         installation_id = payload.get("installation", {}).get("id")
         if installation_id:
             invalidate_installation_token_cache(int(installation_id))
+    elif event == "pull_request":
+        # Day-3: write-through cache so the dashboard "Recent PRs" panel
+        # has live data without per-render API hops. Drop silently if the
+        # PR's repo isn't activated for any workspace — we don't want to
+        # cache PRs nobody asked us to track.
+        await _apply_pull_request_event(session, payload, action)
+        await session.flush()
+    elif event == "workflow_run":
+        # Same idea for GitHub Actions runs. Useful for self-heal pipeline
+        # in Day-4 when we start reacting to ``conclusion=failure``.
+        await _apply_workflow_run_event(session, payload, action)
+        await session.flush()
     else:
         # Day-1: silently 200 every other event. We log at debug to keep
         # signal high and avoid filling Sentry breadcrumbs with noise.
@@ -330,6 +343,217 @@ async def _apply_installation_event(
             invalidate_installation_token_cache(int(installation_id))
     else:
         logger.debug("installation event with unhandled action=%s", action)
+
+
+async def _resolve_workspace_repo(
+    session: AsyncSession,
+    installation_id: int | None,
+    repo_external_id: int | None,
+) -> WorkspaceRepo | None:
+    """Look up the activated repo row for an incoming webhook event.
+
+    Webhooks carry GitHub's numeric ``installation.id`` and
+    ``repository.id``. We map ``installation.id`` → our internal
+    :class:`GitHubInstallation` row, then join to :class:`WorkspaceRepo`
+    on the (UUID install id + numeric repo id). Returns ``None`` if
+    either lookup misses — in which case the webhook is dropped
+    silently (the user activated repo X but not repo Y, which is fine).
+    """
+    if not installation_id or not repo_external_id:
+        return None
+    install = (
+        await session.execute(
+            select(GitHubInstallation).where(
+                GitHubInstallation.installation_id == int(installation_id)
+            )
+        )
+    ).scalar_one_or_none()
+    if install is None:
+        return None
+    stmt = select(WorkspaceRepo).where(
+        WorkspaceRepo.installation_id == install.id,
+        WorkspaceRepo.external_id == int(repo_external_id),
+    )
+    return (await session.execute(stmt)).scalars().first()
+
+
+def _parse_iso(value: Any) -> datetime | None:
+    """Tolerant ISO-8601 parser for webhook timestamps.
+
+    GitHub serialises with trailing ``Z`` which Python's stdlib only
+    learned to parse in 3.11; we normalise to ``+00:00`` for safety.
+    Returns ``None`` if the value is missing or malformed — webhooks
+    must never crash us over a date field.
+    """
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+async def _apply_pull_request_event(
+    session: AsyncSession, payload: dict[str, Any], action: str | None
+) -> None:
+    pr = payload.get("pull_request") or {}
+    repo = payload.get("repository") or {}
+    install = payload.get("installation") or {}
+    external_id = pr.get("id")
+    if not external_id:
+        logger.warning("pull_request event missing pull_request.id, skipping")
+        return
+
+    repo_row = await _resolve_workspace_repo(
+        session, install.get("id"), repo.get("id")
+    )
+    if repo_row is None:
+        # PR for a repo the user hasn't activated. Drop silently —
+        # the wider GitHub App may receive deliveries for the whole
+        # account selection.
+        logger.debug(
+            "pull_request event for inactive repo external_id=%s",
+            repo.get("id"),
+        )
+        return
+
+    state = pr.get("state") or "open"
+    merged = bool(pr.get("merged"))
+    # Closed + merged is GitHub's idiom for "merged"; surface it as a
+    # synthetic state so the dashboard can colour-code without a join.
+    if merged and state == "closed":
+        state = "merged"
+
+    user = pr.get("user") or {}
+    title = pr.get("title") or "(untitled)"
+    html_url = pr.get("html_url") or ""
+
+    existing = (
+        await session.execute(
+            select(PullRequest).where(
+                PullRequest.workspace_id == repo_row.workspace_id,
+                PullRequest.external_id == int(external_id),
+            )
+        )
+    ).scalars().first()
+
+    if existing is None:
+        session.add(
+            PullRequest(
+                workspace_id=repo_row.workspace_id,
+                repo_id=repo_row.id,
+                external_id=int(external_id),
+                number=int(pr.get("number") or 0),
+                repo_full_name=repo_row.full_name,
+                title=title[:1024],
+                state=state,
+                merged=merged,
+                draft=bool(pr.get("draft")),
+                author=(user.get("login") or None),
+                html_url=html_url[:1024],
+                opened_at=_parse_iso(pr.get("created_at")),
+                updated_at_external=_parse_iso(pr.get("updated_at")),
+                closed_at=_parse_iso(pr.get("closed_at")),
+                merged_at=_parse_iso(pr.get("merged_at")),
+            )
+        )
+    else:
+        existing.repo_id = repo_row.id
+        existing.title = title[:1024]
+        existing.state = state
+        existing.merged = merged
+        existing.draft = bool(pr.get("draft"))
+        existing.author = user.get("login") or existing.author
+        existing.html_url = html_url[:1024] or existing.html_url
+        existing.opened_at = _parse_iso(pr.get("created_at")) or existing.opened_at
+        existing.updated_at_external = (
+            _parse_iso(pr.get("updated_at")) or existing.updated_at_external
+        )
+        existing.closed_at = _parse_iso(pr.get("closed_at")) or existing.closed_at
+        existing.merged_at = _parse_iso(pr.get("merged_at")) or existing.merged_at
+
+    logger.debug("pull_request cached action=%s pr_id=%s", action, external_id)
+
+
+async def _apply_workflow_run_event(
+    session: AsyncSession, payload: dict[str, Any], action: str | None
+) -> None:
+    run = payload.get("workflow_run") or {}
+    repo = payload.get("repository") or {}
+    install = payload.get("installation") or {}
+    external_id = run.get("id")
+    if not external_id:
+        logger.warning("workflow_run event missing workflow_run.id, skipping")
+        return
+
+    repo_row = await _resolve_workspace_repo(
+        session, install.get("id"), repo.get("id")
+    )
+    if repo_row is None:
+        logger.debug(
+            "workflow_run event for inactive repo external_id=%s",
+            repo.get("id"),
+        )
+        return
+
+    actor = run.get("actor") or run.get("triggering_actor") or {}
+
+    existing = (
+        await session.execute(
+            select(WorkflowRun).where(
+                WorkflowRun.workspace_id == repo_row.workspace_id,
+                WorkflowRun.external_id == int(external_id),
+            )
+        )
+    ).scalars().first()
+
+    name = (run.get("name") or run.get("display_title") or "Workflow")[:255]
+    html_url = run.get("html_url") or ""
+
+    if existing is None:
+        session.add(
+            WorkflowRun(
+                workspace_id=repo_row.workspace_id,
+                repo_id=repo_row.id,
+                external_id=int(external_id),
+                repo_full_name=repo_row.full_name,
+                name=name,
+                event=run.get("event"),
+                status=run.get("status") or "unknown",
+                conclusion=run.get("conclusion"),
+                head_branch=run.get("head_branch"),
+                head_sha=run.get("head_sha"),
+                actor=actor.get("login") if isinstance(actor, dict) else None,
+                html_url=html_url[:1024] or None,
+                started_at=_parse_iso(run.get("run_started_at"))
+                or _parse_iso(run.get("created_at")),
+                finished_at=_parse_iso(run.get("updated_at"))
+                if run.get("status") == "completed"
+                else None,
+            )
+        )
+    else:
+        existing.repo_id = repo_row.id
+        existing.name = name
+        existing.event = run.get("event") or existing.event
+        existing.status = run.get("status") or existing.status
+        existing.conclusion = run.get("conclusion") or existing.conclusion
+        existing.head_branch = run.get("head_branch") or existing.head_branch
+        existing.head_sha = run.get("head_sha") or existing.head_sha
+        if isinstance(actor, dict) and actor.get("login"):
+            existing.actor = actor.get("login")
+        existing.html_url = (html_url[:1024] or existing.html_url)
+        existing.started_at = (
+            _parse_iso(run.get("run_started_at"))
+            or _parse_iso(run.get("created_at"))
+            or existing.started_at
+        )
+        if run.get("status") == "completed":
+            existing.finished_at = (
+                _parse_iso(run.get("updated_at")) or existing.finished_at
+            )
+
+    logger.debug("workflow_run cached action=%s run_id=%s", action, external_id)
 
 
 __all__ = ["router", "InstallStartResponse", "InstallationOut"]

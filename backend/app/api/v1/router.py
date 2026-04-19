@@ -14,6 +14,7 @@ from backend.app.api.v1.routes import (
     artifact_repos,
     audit,
     auth,
+    dashboard,
     github_app,
     health,
     integrations,
@@ -22,6 +23,7 @@ from backend.app.api.v1.routes import (
     members,
     notion_oauth,
     onboarding,
+    pipelines,
     repos,
     workspace_artifacts,
     workspaces,
@@ -51,3 +53,6 @@ api_router.include_router(github_app.router)
 api_router.include_router(linear_oauth.router)
 # Notion OAuth (pilot Day 2 — tracker WOW flow). Same shape as Linear.
 api_router.include_router(notion_oauth.router)
+# Pipelines API + dashboard summary (pilot Day 3 — main app surface).
+api_router.include_router(pipelines.router)
+api_router.include_router(dashboard.router)
