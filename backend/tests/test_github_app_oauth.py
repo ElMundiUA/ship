@@ -81,17 +81,50 @@ def test_install_state_rejects_expired(settings: Settings) -> None:
         verify_install_state(expired, settings=settings)
 
 
-def test_install_url_uses_configured_slug(
+@pytest.mark.asyncio
+async def test_install_url_uses_configured_slug(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Pinned slug short-circuits the live GitHub /app lookup."""
     monkeypatch.setenv("GITHUB_APP_SLUG", "ship-staging")
     from backend.app.core.config import get_settings
 
     get_settings.cache_clear()
     settings = Settings()
     state = build_install_state(uuid.uuid4(), settings=settings)
-    url = build_install_url(state, settings=settings)
+    url = await build_install_url(state, settings=settings)
     assert url.startswith(
         "https://github.com/apps/ship-staging/installations/new?"
     )
     assert f"state={state}" in url
+
+
+@pytest.mark.asyncio
+async def test_install_url_falls_back_to_live_slug_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When GITHUB_APP_SLUG is unset we discover the slug via /app and cache.
+
+    Operators only have to provide GITHUB_APP_ID + GITHUB_APP_PRIVATE_KEY
+    for the WOW onboarding to work — the slug is read from GitHub itself.
+    """
+    monkeypatch.delenv("GITHUB_APP_SLUG", raising=False)
+    from backend.app.core.config import get_settings
+    from backend.app.integrations.github import app_auth
+
+    get_settings.cache_clear()
+    settings = Settings()
+    app_auth.invalidate_app_metadata_cache()
+
+    async def fake_fetch_app_slug(*, settings, client=None):  # noqa: ARG001
+        return "ship-elmundi"
+
+    monkeypatch.setattr(
+        "backend.app.integrations.github.oauth.fetch_app_slug",
+        fake_fetch_app_slug,
+    )
+    state = build_install_state(uuid.uuid4(), settings=settings)
+    url = await build_install_url(state, settings=settings)
+    assert url.startswith(
+        "https://github.com/apps/ship-elmundi/installations/new?"
+    )

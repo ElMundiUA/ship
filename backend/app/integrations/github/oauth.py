@@ -26,6 +26,10 @@ from urllib.parse import urlencode
 from jose import JWTError, jwt
 
 from backend.app.core.config import Settings
+from backend.app.integrations.github.app_auth import (
+    GitHubAppMisconfigured,
+    fetch_app_slug,
+)
 
 
 # State tokens are short-lived (the user has to be redirected back within
@@ -93,12 +97,27 @@ def verify_install_state(state: str, *, settings: Settings) -> InstallState:
     return InstallState(workspace_id=workspace_id, nonce=str(raw_nonce))
 
 
-def build_install_url(state: str, *, settings: Settings) -> str:
-    """Return the GitHub URL that opens the App install picker."""
-    # ``/apps/<slug>/installations/new`` is the *public* install URL —
-    # works for first-time installs and reinstalls. We pass ``state`` so
-    # GitHub round-trips it back to our callback unchanged.
-    base = f"https://github.com/apps/{settings.github_app_slug}/installations/new"
+async def build_install_url(state: str, *, settings: Settings) -> str:
+    """Return the GitHub URL that opens the App install picker.
+
+    The slug is discovered live from GitHub's ``GET /app`` (cached for an
+    hour) so operators only need ``GITHUB_APP_ID`` + ``GITHUB_APP_PRIVATE_KEY``
+    to wire up the WOW onboarding — ``GITHUB_APP_SLUG`` becomes an optional
+    override for unusual setups (e.g. a reverse proxy in front of github.com,
+    or a one-off integration test where the App credentials are absent).
+    """
+    slug = (settings.github_app_slug or "").strip()
+    if not slug:
+        try:
+            slug = await fetch_app_slug(settings=settings)
+        except GitHubAppMisconfigured:
+            # Operator hasn't even set the App credentials. We still need
+            # to return *something* — the calling endpoint will surface a
+            # 503 once it sees we have no slug + no creds. Falling back to
+            # the literal "" yields an obviously-broken URL we'd rather
+            # not emit, so we raise instead.
+            raise
+    base = f"https://github.com/apps/{slug}/installations/new"
     return f"{base}?{urlencode({'state': state})}"
 
 
