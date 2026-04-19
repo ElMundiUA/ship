@@ -94,7 +94,7 @@ export function DashboardLive({
         </h3>
         <p className="mb-4 text-xs text-white/55">
           Five baked-in lanes auto-created when you activated repos. Toggle
-          off to mute, "Run now" to fire a manual execution.
+          off to mute, &ldquo;Run now&rdquo; to fire a manual execution.
         </p>
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
           {data.pipelines.length === 0 && <EmptyPipelines />}
