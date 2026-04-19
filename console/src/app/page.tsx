@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { AppShell } from "@/components/app-shell";
+import { DashboardLive } from "@/components/dashboard-live";
 import {
   Badge,
   ButtonGhost,
@@ -12,11 +13,14 @@ import {
   StatTile,
 } from "@/components/ui";
 import {
+  type ApiDashboard,
   ApiHttpError,
   ApiUnavailableError,
+  getDashboard,
   isApiConfigured,
   listWorkspaces,
 } from "@/lib/api/client";
+import type { ApiWorkspace } from "@/lib/api/types";
 import { getSessionToken } from "@/lib/api/session";
 import {
   actionItems,
@@ -31,29 +35,56 @@ const ws = workspaces[0];
 
 export const dynamic = "force-dynamic";
 
-export default async function CloudHomePage() {
-  // If the user is authed against a real backend but has zero workspaces,
-  // bounce them into the onboarding wizard so the dashboard isn't a confusing
-  // wall of mock data on first run.
+type SearchParams = { [key: string]: string | string[] | undefined };
+
+export default async function CloudHomePage({
+  searchParams,
+}: {
+  searchParams?: Promise<SearchParams>;
+}) {
+  const params = (await searchParams) ?? {};
+
+  // If the user is authed against a real backend, the dashboard becomes
+  // the live one (Day 3). The mock dashboard sticks around for the
+  // marketing-style preview deployment where SHIP_API_URL isn't set.
   if (isApiConfigured()) {
     const token = await getSessionToken();
     if (token) {
-      const result = await loadWorkspaces(token);
-      if (result === "empty") redirect("/onboarding?step=repo");
+      const result = await loadLiveContext(token);
       if (result === "unauthorized") redirect("/login");
-      // "ok" or "down" → fall through to the dashboard (mock for now).
+      if (result === "empty") redirect("/onboarding?step=repo");
+      if (result === "down") {
+        return renderDownState();
+      }
+      return renderLiveDashboard(result, params);
     }
   }
 
-  return renderDashboard();
+  return renderMockDashboard();
 }
 
-async function loadWorkspaces(
+type LiveContext = {
+  workspace: ApiWorkspace;
+  data: ApiDashboard;
+};
+
+async function loadLiveContext(
   token: string,
-): Promise<"ok" | "empty" | "unauthorized" | "down"> {
+): Promise<LiveContext | "empty" | "unauthorized" | "down"> {
+  let list: ApiWorkspace[];
   try {
-    const list = await listWorkspaces(token);
-    return list.length === 0 ? "empty" : "ok";
+    list = await listWorkspaces(token);
+  } catch (err) {
+    if (err instanceof ApiHttpError && err.status === 401) return "unauthorized";
+    if (err instanceof ApiUnavailableError) return "down";
+    return "down";
+  }
+  if (list.length === 0) return "empty";
+
+  const workspace = list[0];
+  try {
+    const data = await getDashboard(workspace.id, token);
+    return { workspace, data };
   } catch (err) {
     if (err instanceof ApiHttpError && err.status === 401) return "unauthorized";
     if (err instanceof ApiUnavailableError) return "down";
@@ -61,7 +92,70 @@ async function loadWorkspaces(
   }
 }
 
-function renderDashboard() {
+function renderLiveDashboard(ctx: LiveContext, params: SearchParams) {
+  const { workspace, data } = ctx;
+  const banner = pickBanner(params);
+  return (
+    <AppShell
+      kicker={workspace.slug}
+      title="Operating dashboard"
+      actions={
+        <>
+          <Link
+            href="/integrations"
+            className="text-xs font-semibold text-white/65 hover:text-white"
+          >
+            Integrations
+          </Link>
+          <ButtonPrimary>
+            <Link href="/onboarding?step=repos">Pick more repos →</Link>
+          </ButtonPrimary>
+        </>
+      }
+    >
+      <DashboardLive
+        workspaceId={workspace.id}
+        workspaceName={workspace.name}
+        workspaceSlug={workspace.slug}
+        data={data}
+        banner={banner}
+      />
+    </AppShell>
+  );
+}
+
+function pickBanner(
+  params: SearchParams,
+): { kind: string; reason: string } | undefined {
+  // Either ?ran=<id>&reason=<code> or ?toggled=<id>&reason=<code> (set
+  // by the dashboard form handlers). We don't bother validating the
+  // pipeline id — the banner copy doesn't depend on it.
+  const reasonRaw = params.reason;
+  if (!reasonRaw) return undefined;
+  const reason = Array.isArray(reasonRaw) ? reasonRaw[0] : reasonRaw;
+  if (params.ran) return { kind: "Run", reason };
+  if (params.toggled) return { kind: "Toggle", reason };
+  return undefined;
+}
+
+function renderDownState() {
+  return (
+    <AppShell title="Operating dashboard">
+      <Card>
+        <CardHeader
+          title="Backend unreachable"
+          subtitle="The dashboard couldn't load live data."
+        />
+        <p className="text-sm text-white/70">
+          Try again in a few seconds. If this keeps happening, check the
+          backend service in your hosting console.
+        </p>
+      </Card>
+    </AppShell>
+  );
+}
+
+function renderMockDashboard() {
   const proposed = actionItems.filter((a) => a.status === "proposed");
   const approved = actionItems.filter((a) => a.status === "approved");
 

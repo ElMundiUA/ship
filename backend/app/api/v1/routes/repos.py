@@ -38,10 +38,12 @@ from backend.app.api.v1.routes.workspaces import (
 )
 from backend.app.core.config import Settings, get_settings
 from backend.app.db.models.integrations import GitHubInstallation, WorkspaceRepo
+from backend.app.db.models.pipelines import Pipeline
 from backend.app.db.models.tenancy import AuditLog
 from backend.app.db.session import get_session
 from backend.app.integrations.gateway.code_host import RepoRef, RepoSummary
 from backend.app.integrations.github.code_host_adapter import GitHubCodeHost
+from backend.app.services.default_pipelines import seed_default_pipelines
 
 
 router = APIRouter(
@@ -334,6 +336,17 @@ async def activate_repos(
         await session.delete(row)
         removed.append(ext_id)
 
+    # Seed the default pipeline set if this is the workspace's first
+    # activation (idempotent; subsequent activations are no-ops). We
+    # do this before the audit log so the audit row can record how
+    # many pipelines we materialised in the same transaction.
+    pipeline_count_before = (
+        await session.execute(
+            select(Pipeline.id).where(Pipeline.workspace_id == workspace_id)
+        )
+    ).scalars().all()
+    seeded_pipelines = await seed_default_pipelines(session, workspace_id)
+
     session.add(
         AuditLog(
             workspace_id=workspace_id,
@@ -347,6 +360,11 @@ async def activate_repos(
                 "updated": sorted(updated),
                 "removed": sorted(removed),
                 "installation_id": install.installation_id,
+                # Tells the audit consumer how many default pipelines
+                # already existed and how many are alive after seed
+                # (delta = newly created in this call).
+                "pipelines_existing": len(pipeline_count_before),
+                "pipelines_total": len(seeded_pipelines),
             },
         )
     )

@@ -370,6 +370,142 @@ export function activateRepos(
   );
 }
 
+// --- Pipelines + dashboard (Day-3 main app surface) -----------------------
+
+/**
+ * One row of the dashboard's pipeline strip. Mirrors the backend
+ * ``PipelineOut``. ``last_run_at`` / ``last_run_status`` are denormalised
+ * onto the pipeline so the card can render "last run · ok · 4m ago" with
+ * a single SELECT.
+ */
+export interface ApiPipeline {
+  id: string;
+  kind: string;
+  name: string;
+  workflow_id: string;
+  enabled: boolean;
+  config: Record<string, unknown>;
+  last_run_at: string | null;
+  last_run_status: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ApiPipelineRun {
+  id: string;
+  pipeline_id: string;
+  trigger: string;
+  status: string;
+  started_at: string | null;
+  finished_at: string | null;
+  summary: string | null;
+  payload: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface ApiDashboardPullRequest {
+  id: string;
+  repo_full_name: string;
+  number: number;
+  title: string;
+  state: string;
+  merged: boolean;
+  draft: boolean;
+  author: string | null;
+  html_url: string;
+  opened_at: string | null;
+  updated_at_external: string | null;
+  closed_at: string | null;
+  merged_at: string | null;
+}
+
+export interface ApiDashboardWorkflowRun {
+  id: string;
+  repo_full_name: string;
+  name: string;
+  event: string | null;
+  status: string;
+  conclusion: string | null;
+  head_branch: string | null;
+  head_sha: string | null;
+  actor: string | null;
+  html_url: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface ApiDashboardCounts {
+  active_repos: number;
+  enabled_pipelines: number;
+  open_pull_requests: number;
+  runs_last_24h: number;
+}
+
+export interface ApiDashboard {
+  counts: ApiDashboardCounts;
+  pipelines: ApiPipeline[];
+  pull_requests: ApiDashboardPullRequest[];
+  workflow_runs: ApiDashboardWorkflowRun[];
+  pipeline_runs: ApiPipelineRun[];
+}
+
+export function listPipelines(
+  workspaceId: string,
+  token?: string,
+): Promise<ApiPipeline[]> {
+  return apiFetch<ApiPipeline[]>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/pipelines`,
+    { token },
+  );
+}
+
+export function togglePipeline(
+  workspaceId: string,
+  pipelineId: string,
+  enabled: boolean,
+  token?: string,
+): Promise<ApiPipeline> {
+  return apiFetch<ApiPipeline>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/pipelines/${encodeURIComponent(pipelineId)}`,
+    { method: "PATCH", body: { enabled }, token },
+  );
+}
+
+export function runPipeline(
+  workspaceId: string,
+  pipelineId: string,
+  note?: string,
+  token?: string,
+): Promise<ApiPipelineRun> {
+  return apiFetch<ApiPipelineRun>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/pipelines/${encodeURIComponent(pipelineId)}/runs`,
+    { method: "POST", body: { note: note ?? null }, token },
+  );
+}
+
+export function listPipelineRuns(
+  workspaceId: string,
+  pipelineId: string,
+  limit?: number,
+  token?: string,
+): Promise<ApiPipelineRun[]> {
+  const qs = limit !== undefined ? `?limit=${limit}` : "";
+  return apiFetch<ApiPipelineRun[]>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/pipelines/${encodeURIComponent(pipelineId)}/runs${qs}`,
+    { token },
+  );
+}
+
+export function getDashboard(
+  workspaceId: string,
+  token?: string,
+): Promise<ApiDashboard> {
+  return apiFetch<ApiDashboard>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/dashboard`,
+    { token },
+  );
+}
+
 // --- Tracker OAuth (Linear / Notion, Day-2 wow flow) ----------------------
 
 /**
