@@ -44,20 +44,19 @@ export default async function CloudHomePage({
 }) {
   const params = (await searchParams) ?? {};
 
-  // If the user is authed against a real backend, the dashboard becomes
-  // the live one (Day 3). The mock dashboard sticks around for the
-  // marketing-style preview deployment where SHIP_API_URL isn't set.
+  // Real cloud deployment: SHIP_API_URL is set, so the root must always
+  // resolve to either the live dashboard or the auth flow — never the
+  // mock fixtures. The mock dashboard is kept ONLY for marketing-preview
+  // deployments where the operator deliberately leaves SHIP_API_URL unset
+  // (so /, /login, /onboarding render with shipped copy + no backend).
   if (isApiConfigured()) {
     const token = await getSessionToken();
-    if (token) {
-      const result = await loadLiveContext(token);
-      if (result === "unauthorized") redirect("/login");
-      if (result === "empty") redirect("/onboarding?step=repo");
-      if (result === "down") {
-        return renderDownState();
-      }
-      return renderLiveDashboard(result, params);
-    }
+    if (!token) redirect("/login?next=%2F");
+    const result = await loadLiveContext(token);
+    if (result === "unauthorized") redirect("/login?next=%2F");
+    if (result === "empty") redirect("/onboarding?step=repo");
+    if (result === "down") return renderDownState();
+    return renderLiveDashboard(result, params);
   }
 
   return renderMockDashboard();
