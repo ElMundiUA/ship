@@ -160,6 +160,14 @@ const INTEGRATION_PRESETS: {
     ],
   },
   {
+    id: "notion",
+    name: "Notion",
+    blurb: "Pages-as-tickets: queue lives in a Notion database, agents pick from it.",
+    configFields: [
+      { name: "database_id", label: "Database ID", placeholder: "32-char hex" },
+    ],
+  },
+  {
     id: "github",
     name: "GitHub",
     blurb: "Issues + PR review handles for catalog merges.",

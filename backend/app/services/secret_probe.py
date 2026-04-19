@@ -212,6 +212,37 @@ async def _probe_jira(secret: str, config: Mapping[str, Any]) -> ProbeResult:
     return "ok", None
 
 
+async def _probe_notion(secret: str, _config: Mapping[str, Any]) -> ProbeResult:
+    """Notion integration token (`secret_xxx` or `ntn_xxx`).
+
+    `/v1/users/me` is the cheapest auth probe — returns 401 on bad token,
+    200 with the bot user otherwise. Notion mandates an API version header.
+    """
+    if not secret:
+        return "error", "secret is empty"
+    headers = {
+        "Authorization": f"Bearer {secret}",
+        "Notion-Version": "2022-06-28",
+        "User-Agent": USER_AGENT,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=PROBE_TIMEOUT_SECONDS) as client:
+            res = await client.get("https://api.notion.com/v1/users/me", headers=headers)
+    except httpx.HTTPError as exc:
+        return "error", _short(f"network: {exc!s}")
+    if res.status_code in (401, 403):
+        return "error", f"notion rejected the token (HTTP {res.status_code})"
+    if res.status_code >= 400:
+        return "error", f"notion HTTP {res.status_code}"
+    try:
+        body = res.json()
+    except ValueError:
+        return "error", "notion returned a non-JSON response"
+    if not isinstance(body, dict) or body.get("object") != "user":
+        return "error", "notion users.me did not return a user object"
+    return "ok", None
+
+
 async def _probe_webhook(secret: str, config: Mapping[str, Any]) -> ProbeResult:
     """Generic webhook: format-check the secret + sanity-check the URL."""
     url = str(config.get("url") or "").strip()
@@ -250,6 +281,7 @@ PROBERS: dict[str, ProbeFn] = {
     "gitlab": _probe_gitlab,
     "slack": _probe_slack,
     "jira": _probe_jira,
+    "notion": _probe_notion,
     "teams": _probe_teams,
     "otel": _probe_otel,
     "webhook": _probe_webhook,

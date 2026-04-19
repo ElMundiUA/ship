@@ -63,6 +63,16 @@ const CATALOG: {
     secretLabel: "API token",
   },
   {
+    id: "notion",
+    name: "Notion",
+    group: "Tracker",
+    body: "Pages-as-tickets. Mirrors approved retro/daily action items into a database.",
+    fields: [
+      { name: "database_id", label: "Database ID", placeholder: "32-char hex" },
+    ],
+    secretLabel: "Internal integration token (secret_… or ntn_…)",
+  },
+  {
     id: "github",
     name: "GitHub",
     group: "Source",

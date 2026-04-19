@@ -170,6 +170,36 @@ async def test_jira_uses_basic_auth_when_config_present(
 
 
 @pytest.mark.asyncio
+async def test_notion_ok(monkeypatch: pytest.MonkeyPatch) -> None:
+    stub = _patch_client(
+        monkeypatch,
+        _StubResponse(json_body={"object": "user", "id": "bot1", "type": "bot"}),
+    )
+    status, _ = await secret_probe.probe_one("notion", "secret_xyz", {})
+    assert status == "ok"
+    method, url, kwargs = stub.calls[0]
+    assert (method, url) == ("GET", "https://api.notion.com/v1/users/me")
+    assert kwargs["headers"]["Authorization"] == "Bearer secret_xyz"
+    assert kwargs["headers"]["Notion-Version"] == "2022-06-28"
+
+
+@pytest.mark.asyncio
+async def test_notion_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_client(monkeypatch, _StubResponse(status_code=401, json_body={}))
+    status, message = await secret_probe.probe_one("notion", "bad", {})
+    assert status == "error"
+    assert message is not None and "401" in message
+
+
+@pytest.mark.asyncio
+async def test_notion_unexpected_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_client(monkeypatch, _StubResponse(json_body={"object": "page"}))
+    status, message = await secret_probe.probe_one("notion", "x", {})
+    assert status == "error"
+    assert message is not None and "users.me" in message
+
+
+@pytest.mark.asyncio
 async def test_webhook_requires_url_and_min_secret_len() -> None:
     s, _ = await secret_probe.probe_one("webhook", "short", {"url": "https://x.com/h"})
     assert s == "error"
