@@ -154,7 +154,38 @@ export function DashboardLive({
           )}
         </Card>
       </section>
+
+      <CliCard />
     </>
+  );
+}
+
+function CliCard() {
+  return (
+    <section className="mt-8">
+      <Card>
+        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+          <div className="min-w-0">
+            <CardHeader
+              title="Wire up your CLI"
+              subtitle="Mint a Personal Access Token to call the API from shipctl, Cursor, Codex, or Claude Code."
+            />
+            <pre className="mt-2 overflow-x-auto rounded-lg border border-white/10 bg-black/40 px-3 py-2 font-mono text-[11px] text-white/85">
+              <code>
+                {"export SHIP_API_TOKEN=ship_pat_…\n"}
+                {"npx @elmundi/ship-cli init --copy-rules"}
+              </code>
+            </pre>
+          </div>
+          <Link
+            href="/settings"
+            className="self-start rounded-full border border-aqua/40 bg-aqua/[0.08] px-4 py-2 text-xs font-bold text-aqua hover:bg-aqua/[0.16]"
+          >
+            Mint a token →
+          </Link>
+        </div>
+      </Card>
+    </section>
   );
 }
 

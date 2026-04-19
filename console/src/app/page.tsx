@@ -54,8 +54,17 @@ export default async function CloudHomePage({
     if (!token) redirect("/login?next=%2F");
     const result = await loadLiveContext(token);
     if (result === "unauthorized") redirect("/login?next=%2F");
-    if (result === "empty") redirect("/onboarding?step=repo");
+    if (result === "empty") redirect("/onboarding?step=github");
     if (result === "down") return renderDownState();
+    // No repos activated yet → user needs to finish the WOW wizard. We
+    // jump them straight back into ?step=github (the App-install screen
+    // is the only thing they have to do; once the App is on, the picker
+    // and tracker steps are one click each).
+    if (result.data.counts.active_repos === 0) {
+      redirect(
+        `/onboarding?step=github&ws=${encodeURIComponent(result.workspace.id)}`,
+      );
+    }
     return renderLiveDashboard(result, params);
   }
 
@@ -101,13 +110,23 @@ function renderLiveDashboard(ctx: LiveContext, params: SearchParams) {
       actions={
         <>
           <Link
+            href="/settings"
+            className="text-xs font-semibold text-white/65 hover:text-white"
+          >
+            CLI tokens
+          </Link>
+          <Link
             href="/integrations"
             className="text-xs font-semibold text-white/65 hover:text-white"
           >
             Integrations
           </Link>
           <ButtonPrimary>
-            <Link href="/onboarding?step=repos">Pick more repos →</Link>
+            <Link
+              href={`/onboarding?step=repos&ws=${encodeURIComponent(workspace.id)}`}
+            >
+              Pick more repos →
+            </Link>
           </ButtonPrimary>
         </>
       }

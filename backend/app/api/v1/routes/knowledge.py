@@ -2,8 +2,9 @@
 
 Reads from :mod:`backend.app.services.knowledge_lister` which scans every
 registered :class:`backend.app.db.models.tenancy.ArtifactRepo` for
-``.ship/knowledge/*.md`` files. Today these are the documents emitted by
-:mod:`backend.app.services.knowledge_seeder` during onboarding.
+``.ship/knowledge/*.md`` files. Tenants commit those markdown files
+themselves (typically through their own CI/agent workflow); the cloud
+backend never writes to a customer repo.
 
 The endpoint shape is intentionally close to ``workspace_artifacts``:
 ``GET /v1/workspaces/{ws_id}/knowledge`` returns ``{buckets: [...]}`` and

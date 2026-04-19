@@ -204,13 +204,12 @@ async def install_callback(
     # Drop any stale cached token in case we updated the same install row.
     invalidate_installation_token_cache(installation_id)
 
-    # Stay on the github step after a successful install so the user
-    # sees the "GitHub App installed" confirmation banner — the success
-    # message is part of ``GitHubStep`` and would never render if we
-    # immediately punted them to the next step. The wizard CTA inside
-    # the success banner advances them to ``workflows`` from here.
+    # Jump straight to the repo picker — that's the next thing the user
+    # has to do, and the picker page renders a "GitHub App installed"
+    # success banner above the list. Staying on the github step would
+    # require an extra "Pick repos →" click for no payoff.
     return RedirectResponse(
-        url=_console_onboarding_url(settings, step="github", reason="installed")
+        url=_console_onboarding_url(settings, step="repos", reason="installed")
     )
 
 

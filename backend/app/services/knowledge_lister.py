@@ -11,8 +11,8 @@ entry, summarising:
 - ``excerpt``  — first ~280 chars after the H1, for the index card
 
 This is the v1 cut: one markdown file per bucket, no embeddings yet. The
-seeder (:mod:`backend.app.services.knowledge_seeder`) writes exactly this
-shape, so anything onboarding produces is immediately readable here.
+tenant repos commit `.ship/knowledge/<slug>.md` files themselves
+(through their own agent / CI lane); this lister surfaces them read-only.
 
 When the embedding indexer lands (RFC-0006 follow-up) we'll keep the same
 "bucket = file in .ship/knowledge/" mapping and add ``chunks``/``embeddings``
