@@ -52,6 +52,7 @@ export function DashboardLive({
   banner?: { kind: string; reason: string };
 }) {
   const bannerInfo = banner ? RUN_REASONS[banner.reason] ?? null : null;
+  const setupComplete = data.counts.active_repos > 0;
 
   return (
     <>
@@ -64,6 +65,8 @@ export function DashboardLive({
           <span className="text-white/80">{bannerInfo.label}</span>
         </div>
       )}
+
+      {!setupComplete && <FinishSetupCallout workspaceId={workspaceId} />}
 
       <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatTile
@@ -157,6 +160,38 @@ export function DashboardLive({
 
       <CliCard />
     </>
+  );
+}
+
+function FinishSetupCallout({ workspaceId }: { workspaceId: string }) {
+  const wizardHref = `/onboarding?step=github&ws=${encodeURIComponent(workspaceId)}`;
+  return (
+    <Card className="mb-6 border-aqua/30 bg-aqua/[0.06]">
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <Badge tone="info">Setup</Badge>
+            <span className="text-xs font-semibold uppercase tracking-wider text-aqua/80">
+              3 quick steps · ~2 min
+            </span>
+          </div>
+          <h3 className="mt-2 font-display text-base font-bold text-white">
+            Finish wiring Ship into your repos.
+          </h3>
+          <p className="mt-1 text-xs text-white/65">
+            Install the GitHub App, pick the repos Ship can see, and connect a
+            tracker. Until then this dashboard stays empty &mdash; there&apos;s
+            nothing to stream yet.
+          </p>
+        </div>
+        <Link
+          href={wizardHref}
+          className="self-start rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-4 py-2 text-xs font-bold text-ink shadow-glow hover:brightness-110"
+        >
+          Resume setup →
+        </Link>
+      </div>
+    </Card>
   );
 }
 
