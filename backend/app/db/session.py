@@ -84,13 +84,18 @@ def _engine_kwargs(database_url: str, original_url: str) -> dict[str, Any]:
         # connections that PgBouncer assumes are short-lived transactions
         # and the pool quickly fills up with idle backends.
         kwargs["poolclass"] = NullPool
-        # The asyncpg dialect forwards this to ``asyncpg.connect`` as
-        # ``statement_cache_size=0``, which disables prepared statements.
-        # PgBouncer transaction mode cannot route a re-used prepared
-        # statement back to its origin backend, so the cache is a recipe
-        # for "prepared statement does not exist" 26000 / 42P05 errors at
-        # p99 once traffic crosses ~1 backend per request.
-        kwargs["prepared_statement_cache_size"] = 0
+        # asyncpg's connect kwarg ``statement_cache_size=0`` disables
+        # prepared statements. PgBouncer transaction mode cannot route a
+        # re-used prepared statement back to its origin backend, so the
+        # cache is a recipe for "prepared statement does not exist"
+        # 26000 / 42P05 errors at p99 once traffic crosses ~1 backend
+        # per request. SQLAlchemy *also* exposes this as the dialect
+        # option ``prepared_statement_cache_size``, but pinning it via
+        # ``connect_args`` (which goes to ``asyncpg.connect``) avoids the
+        # ``TypeError: Invalid argument(s) 'prepared_statement_cache_size'
+        # sent to create_engine()`` that SQLAlchemy 2.0 raises when the
+        # option is passed as a top-level engine kwarg with NullPool.
+        connect_args["statement_cache_size"] = 0
     if connect_args:
         kwargs["connect_args"] = connect_args
     return kwargs
