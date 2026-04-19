@@ -315,6 +315,18 @@ app = FastAPI(title="Ship Methodology API", version="0.10.0", lifespan=lifespan)
 app.include_router(v1_api_router)
 
 
+@app.get("/healthz", tags=["meta"], include_in_schema=False)
+async def healthz() -> dict[str, str]:
+    """Cheap, dependency-free liveness probe.
+
+    Used by Caddy / k8s / docker-compose to decide "is this process up at
+    all?". Distinct from ``/v1/health`` which round-trips Postgres and is
+    therefore a *readiness* probe — useful for gating dependent services
+    but too expensive to run every second.
+    """
+    return {"status": "ok"}
+
+
 _KIND_DESCRIPTIONS = {
     "pattern": "Catalog of Ship patterns sourced from artifacts/patterns/<id>/ARTIFACT.md.",
     "tool": "Catalog of Ship tools sourced from artifacts/tools/<id>/ARTIFACT.md.",

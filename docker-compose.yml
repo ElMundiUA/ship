@@ -100,6 +100,10 @@ services:
       SHIP_FEEDBACK_REPO: ${SHIP_FEEDBACK_REPO:-ElMundiUA/ship}
       SHIP_AUTH_MODE: ${SHIP_AUTH_MODE:-local}
       SHIP_PUBLIC_URL: ${SHIP_PUBLIC_URL:-http://localhost:8100}
+      AUTH0_DOMAIN: ${AUTH0_DOMAIN:-}
+      AUTH0_AUDIENCE: ${AUTH0_AUDIENCE:-}
+      AUTH0_ISSUER: ${AUTH0_ISSUER:-}
+      AUTH0_JWKS_URL: ${AUTH0_JWKS_URL:-}
     ports:
       - "${SHIP_API_PORT:-8100}:8100"
     volumes:
@@ -107,6 +111,15 @@ services:
       - ./documentation:/app/documentation:ro
       - ./README.md:/app/README.md:ro
       - ./VERSION:/app/VERSION:ro
+    healthcheck:
+      # Readiness: v1/health round-trips Postgres so this only goes green
+      # *after* alembic upgrade has completed and the DB is reachable.
+      # `start_period` gives migrations time to run on cold boot.
+      test: ["CMD", "curl", "-fsS", "http://localhost:8100/v1/health"]
+      interval: 10s
+      timeout: 4s
+      retries: 6
+      start_period: 30s
 
   console:
     # Operator console (Next.js). The marketing landing is intentionally NOT
@@ -118,14 +131,41 @@ services:
     restart: unless-stopped
     depends_on:
       ship-server:
-        condition: service_started
+        # Wait for migrations + DB before serving — otherwise the first SSR
+        # request lands on a half-booted backend and the page falls back to
+        # the mock banner for no good reason.
+        condition: service_healthy
     environment:
       # Console talks to ship-server over the internal compose network.
       # next.config.ts proxies /api/* -> ${SHIP_API_URL}/v1/* when set.
       SHIP_API_URL: http://ship-server:8100
       PORT: "3001"
+      SHIP_AUTH_MODE: ${SHIP_AUTH_MODE:-local}
+      # Auth0 (used when SHIP_AUTH_MODE=auth0). The SDK reads these from
+      # the standard env names; APP_BASE_URL is the public URL the user
+      # hits in their browser.
+      AUTH0_DOMAIN: ${AUTH0_DOMAIN:-}
+      AUTH0_CLIENT_ID: ${AUTH0_CLIENT_ID:-}
+      AUTH0_CLIENT_SECRET: ${AUTH0_CLIENT_SECRET:-}
+      AUTH0_AUDIENCE: ${AUTH0_AUDIENCE:-}
+      AUTH0_SESSION_SECRET: ${AUTH0_SESSION_SECRET:-}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3001}
     ports:
       - "${SHIP_CONSOLE_PORT:-3001}:3001"
+    healthcheck:
+      # node:alpine doesn't ship curl/wget — use node itself so we don't
+      # have to bloat the runner image. /login is a server component that
+      # renders without DB hits, so it's a good liveness target.
+      test:
+        - CMD-SHELL
+        - >
+          node -e "require('http').get('http://localhost:3001/login',
+          r => process.exit(r.statusCode < 500 ? 0 : 1))
+          .on('error', () => process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   ship-worker:
     build:
@@ -140,7 +180,10 @@ services:
       minio:
         condition: service_healthy
       ship-server:
-        condition: service_started
+        # Worker uses the same schema; let the server run alembic first so
+        # we don't race on DDL. SHIP_SKIP_MIGRATIONS=1 below keeps the
+        # worker out of alembic permanently.
+        condition: service_healthy
     command: ["arq", "backend.app.workers.main.WorkerSettings"]
     environment:
       # Server runs migrations; worker should not race on them.
@@ -157,6 +200,11 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_EMBED_MODEL: ${OPENAI_EMBED_MODEL:-text-embedding-3-small}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      SHIP_AUTH_MODE: ${SHIP_AUTH_MODE:-local}
+      AUTH0_DOMAIN: ${AUTH0_DOMAIN:-}
+      AUTH0_AUDIENCE: ${AUTH0_AUDIENCE:-}
+      AUTH0_ISSUER: ${AUTH0_ISSUER:-}
+      AUTH0_JWKS_URL: ${AUTH0_JWKS_URL:-}
     volumes:
       - ./artifacts:/app/artifacts:ro
       - ./documentation:/app/documentation:ro
