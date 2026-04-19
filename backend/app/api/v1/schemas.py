@@ -115,6 +115,63 @@ class WorkspaceUpdate(BaseModel):
     catalog_sources: dict[str, bool] | None = None
 
 
+# --- Members ---
+
+
+# Workspace-tier roles. Keep in sync with the backend resolver tuples in
+# ``backend.app.api.v1.routes.workspaces`` (ROLES_ADMIN/MAINTAIN/READ).
+WORKSPACE_ROLES: tuple[str, ...] = ("owner", "admin", "maintainer", "member", "viewer")
+
+
+class MemberOut(BaseModel):
+    """One row in ``GET /v1/workspaces/{id}/members``.
+
+    The ``user_id`` is the same UUID that surfaces in audit log and
+    ``WorkspaceMember`` rows. ``pending`` tells the UI whether the row was
+    pre-invited (no Auth0 ``external_subject`` yet) so it can render a
+    "waiting for first sign-in" badge instead of a fake last-active timestamp.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID  # WorkspaceMember row id; stable for PATCH/DELETE
+    user_id: uuid.UUID
+    email: EmailStr
+    display_name: str | None
+    role: str
+    pending: bool
+    created_at: datetime
+
+
+class MemberInviteRequest(BaseModel):
+    """Pre-provision a workspace member by email.
+
+    Auth0 sends the actual invite email out of band (operator copies the
+    Auth0 invitation link from the dashboard, or a Management-API integration
+    fires the email later). We just create the local rows so that when the
+    invitee logs in via Auth0 with the same email, the JIT mapper finds the
+    existing row and inherits the chosen workspace role.
+    """
+
+    email: EmailStr
+    role: str = Field(default="member", pattern=r"^(owner|admin|maintainer|member|viewer)$")
+    display_name: str | None = Field(default=None, max_length=200)
+
+
+class MemberRoleUpdate(BaseModel):
+    role: str = Field(pattern=r"^(owner|admin|maintainer|member|viewer)$")
+
+
+class WorkspaceDeleteRequest(BaseModel):
+    """Confirmation payload for the destructive workspace delete.
+
+    The console asks the operator to retype the slug; we then verify it
+    server-side so a stale tab or a misclick can't nuke the wrong workspace.
+    """
+
+    slug_confirmation: str = Field(min_length=1, max_length=64)
+
+
 # --- Artifact repos ---
 
 

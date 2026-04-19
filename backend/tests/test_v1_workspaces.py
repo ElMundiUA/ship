@@ -85,3 +85,43 @@ async def test_get_workspace_returns_404_for_strangers(
         f"/v1/workspaces/{uuid.uuid4()}", headers=headers
     )
     assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_workspace_requires_slug_confirmation(
+    v1_client, seed_workspace
+) -> None:
+    _, raw, ws = seed_workspace
+    headers = {"Authorization": f"Bearer {raw}"}
+
+    bad = await v1_client.request(
+        "DELETE",
+        f"/v1/workspaces/{ws.id}",
+        headers=headers,
+        json={"slug_confirmation": "not-the-slug"},
+    )
+    assert bad.status_code == 409
+    # Workspace must still be visible after the failed delete.
+    still = await v1_client.get(f"/v1/workspaces/{ws.id}", headers=headers)
+    assert still.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_delete_workspace_owner_succeeds(
+    v1_client, seed_workspace
+) -> None:
+    _, raw, ws = seed_workspace
+    headers = {"Authorization": f"Bearer {raw}"}
+
+    res = await v1_client.request(
+        "DELETE",
+        f"/v1/workspaces/{ws.id}",
+        headers=headers,
+        json={"slug_confirmation": ws.slug},
+    )
+    assert res.status_code == 204, res.text
+
+    after = await v1_client.get(f"/v1/workspaces/{ws.id}", headers=headers)
+    # 404 because membership row was cascaded — same hide-from-strangers rule
+    # as the get endpoint applies.
+    assert after.status_code == 404

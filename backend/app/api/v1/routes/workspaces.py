@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.api.v1.deps import AuthContext, get_current_auth
 from backend.app.api.v1.schemas import (
     WorkspaceCreate,
+    WorkspaceDeleteRequest,
     WorkspaceOut,
     WorkspaceUpdate,
 )
@@ -200,3 +201,56 @@ async def update_workspace(
         )
     await session.flush()
     return WorkspaceOut.model_validate(workspace)
+
+
+@router.delete(
+    "/{workspace_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_workspace(
+    workspace_id: uuid.UUID,
+    payload: WorkspaceDeleteRequest,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    """Permanently delete a workspace.
+
+    Owners only. Cascades drop members, integrations, artifact-repo rows,
+    and audit-log entries via ``ON DELETE CASCADE`` / ``SET NULL`` on the
+    foreign keys (see :mod:`backend.app.db.models.tenancy`). The remote
+    Git repos and any cloned cache directories are **not** touched here —
+    operator can rerun the git-sync worker garbage collector after the row
+    is gone, or just nuke the cache volume.
+
+    The caller must echo the workspace slug back in
+    ``slug_confirmation`` — a deliberate "are you sure?" gate that protects
+    against accidental DELETE calls from misconfigured CI scripts.
+    """
+    await _require_membership(session, workspace_id, auth.user.id, ("owner",))
+    workspace = await session.get(Workspace, workspace_id)
+    if workspace is None:
+        raise HTTPException(status_code=404, detail="workspace not found")
+    if payload.slug_confirmation != workspace.slug:
+        raise HTTPException(
+            status_code=409,
+            detail="slug_confirmation does not match workspace slug",
+        )
+
+    # Audit-log first so the row survives the cascade ON DELETE SET NULL
+    # path below — once the workspace is gone, ``workspace_id`` becomes
+    # NULL on the audit row but the action + target_id keep the trail.
+    session.add(
+        AuditLog(
+            workspace_id=workspace.id,
+            actor_user_id=auth.user.id,
+            actor_token_id=auth.token.id if auth.token else None,
+            action="workspace.delete",
+            target_kind="workspace",
+            target_id=str(workspace.id),
+            payload={"slug": workspace.slug, "name": workspace.name},
+        )
+    )
+    await session.flush()
+    await session.delete(workspace)
+    await session.flush()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

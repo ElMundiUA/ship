@@ -16,9 +16,10 @@ are configured.
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -223,3 +224,39 @@ async def list_tokens(
     )
     rows = (await session.execute(stmt)).scalars().all()
     return [TokenInfoOut.model_validate(row) for row in rows]
+
+
+@router.delete("/tokens/{token_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_token(
+    token_id: uuid.UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    """Revoke a PAT owned by the current user.
+
+    Soft-delete: we set ``revoked_at`` instead of dropping the row so the
+    audit log keeps a record of the token having existed (and so the
+    PAT-resolution path returns a clean "invalid or revoked token" 401 even
+    if the operator still has the secret cached locally).
+    """
+    stmt = select(ApiToken).where(
+        ApiToken.id == token_id, ApiToken.user_id == auth.user.id
+    )
+    token = (await session.execute(stmt)).scalar_one_or_none()
+    if token is None:
+        raise HTTPException(status_code=404, detail="token not found")
+    if token.revoked_at is None:
+        token.revoked_at = datetime.now(timezone.utc)
+        session.add(
+            AuditLog(
+                workspace_id=token.workspace_id,
+                actor_user_id=auth.user.id,
+                actor_token_id=auth.token.id if auth.token else None,
+                action="auth.token.revoke",
+                target_kind="api_token",
+                target_id=str(token.id),
+                payload={"name": token.name},
+            )
+        )
+        await session.flush()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

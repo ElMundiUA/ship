@@ -101,3 +101,70 @@ async def test_mint_pat_via_session_jwt(v1_client) -> None:
     assert len(rows) == 1
     assert "secret" not in rows[0]
     assert rows[0]["name"] == "ci-token"
+
+
+async def test_revoke_token_invalidates_secret(v1_client) -> None:
+    signup = await v1_client.post(
+        "/v1/auth/local/signup",
+        json={"email": "eve@example.com", "password": "password-3333"},
+    )
+    jwt_token = signup.json()["access_token"]
+
+    minted = await v1_client.post(
+        "/v1/auth/tokens",
+        headers={"Authorization": f"Bearer {jwt_token}"},
+        json={"name": "throwaway"},
+    )
+    secret = minted.json()["secret"]
+    token_id = minted.json()["id"]
+
+    # Sanity: the secret works.
+    ok = await v1_client.get(
+        "/v1/auth/me", headers={"Authorization": f"Bearer {secret}"}
+    )
+    assert ok.status_code == 200
+
+    revoked = await v1_client.delete(
+        f"/v1/auth/tokens/{token_id}",
+        headers={"Authorization": f"Bearer {jwt_token}"},
+    )
+    assert revoked.status_code == 204, revoked.text
+
+    # Same secret now bounces with a 401.
+    after = await v1_client.get(
+        "/v1/auth/me", headers={"Authorization": f"Bearer {secret}"}
+    )
+    assert after.status_code == 401
+
+    # And the list view hides revoked rows.
+    listed = await v1_client.get(
+        "/v1/auth/tokens", headers={"Authorization": f"Bearer {jwt_token}"}
+    )
+    assert listed.json() == []
+
+
+async def test_revoke_token_404_for_other_user(v1_client) -> None:
+    """Trying to revoke a sibling's token must 404, not 204."""
+    a = await v1_client.post(
+        "/v1/auth/local/signup",
+        json={"email": "owner-a@example.com", "password": "password-aaaa"},
+    )
+    b = await v1_client.post(
+        "/v1/auth/local/signup",
+        json={"email": "owner-b@example.com", "password": "password-bbbb"},
+    )
+    jwt_a = a.json()["access_token"]
+    jwt_b = b.json()["access_token"]
+
+    minted = await v1_client.post(
+        "/v1/auth/tokens",
+        headers={"Authorization": f"Bearer {jwt_a}"},
+        json={"name": "owned-by-a"},
+    )
+    token_id = minted.json()["id"]
+
+    res = await v1_client.delete(
+        f"/v1/auth/tokens/{token_id}",
+        headers={"Authorization": f"Bearer {jwt_b}"},
+    )
+    assert res.status_code == 404

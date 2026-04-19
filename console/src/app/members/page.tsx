@@ -1,54 +1,169 @@
+/**
+ * Members page — workspace roster (live).
+ *
+ * Reads `/v1/workspaces/{id}/members` for the operator's current workspace
+ * (first one returned by `/v1/workspaces`, matching the rest of the console),
+ * and renders an invite form + role select + remove button. All mutations
+ * go through tiny <form action="/api/members/..."> POSTs so the page stays
+ * a Server Component and degrades gracefully when JS is off.
+ *
+ * When the API isn't configured or the operator isn't signed in, we fall
+ * back to a static MockView so the marketing-style preview still has
+ * something to render.
+ */
+
 import { AppShell } from "@/components/app-shell";
 import {
   Badge,
   ButtonGhost,
-  ButtonPrimary,
   Card,
   CardHeader,
+  LiveBanner,
   MockBanner,
 } from "@/components/ui";
-import { workspaces } from "@/lib/mock/cloud";
+import {
+  ApiHttpError,
+  ApiUnavailableError,
+  isApiConfigured,
+  listMembers,
+  listWorkspaces,
+} from "@/lib/api/client";
+import type {
+  ApiMember,
+  ApiMemberRole,
+  ApiWorkspace,
+} from "@/lib/api/types";
+import { getSessionToken } from "@/lib/api/session";
+import { workspaces as mockWorkspaces } from "@/lib/mock/cloud";
 
-const ws = workspaces[0];
+export const dynamic = "force-dynamic";
 
-type MemberRow = {
-  initials: string;
-  name: string;
-  email: string;
-  role: "owner" | "admin" | "maintainer" | "member" | "viewer";
-  active: string;
-  source: "github" | "local" | "oidc";
-};
-
-const members: MemberRow[] = [
-  { initials: "DK", name: "Denis K.",     email: "denis@helio.dev",  role: "owner",      active: "now",         source: "github" },
-  { initials: "MT", name: "Mira Tan",     email: "mira@helio.dev",   role: "admin",      active: "12m ago",     source: "github" },
-  { initials: "JL", name: "Jordan Lee",   email: "jordan@helio.dev", role: "maintainer", active: "1h ago",      source: "github" },
-  { initials: "SC", name: "Sam Chen",     email: "sam@helio.dev",    role: "maintainer", active: "3h ago",      source: "github" },
-  { initials: "RP", name: "Riley Park",   email: "riley@helio.dev",  role: "member",     active: "yesterday",   source: "github" },
-  { initials: "AV", name: "Asha Verma",   email: "asha@helio.dev",   role: "member",     active: "2d ago",      source: "oidc"   },
-  { initials: "EB", name: "Eli Becker",   email: "eli@helio.dev",    role: "viewer",     active: "1w ago",      source: "oidc"   },
+const ROLES: readonly ApiMemberRole[] = [
+  "owner",
+  "admin",
+  "maintainer",
+  "member",
+  "viewer",
 ];
 
-export default function MembersPage() {
+type Mode =
+  | { source: "live"; workspace: ApiWorkspace; members: ApiMember[] }
+  | { source: "mock"; reason: string };
+
+function errorMessage(code: string): string {
+  switch (code) {
+    case "bad_input":
+      return "Missing required fields. Email and role are both required.";
+    case "invalid_email":
+      return "That email looks malformed. Use a valid mailbox like name@company.com.";
+    case "duplicate":
+      return "This person already has that role on the workspace.";
+    case "forbidden":
+      return "You need admin or owner role to manage members.";
+    case "not_found":
+      return "That member is gone — they may have been removed in another tab.";
+    case "last_owner":
+      return "This is the last workspace owner. Promote another member to owner first.";
+    case "api_unavailable":
+      return "Backend is unreachable. Try again in a moment.";
+    default:
+      return `Couldn't apply the change (${code}). Try again or refresh.`;
+  }
+}
+
+async function load(): Promise<Mode> {
+  if (!isApiConfigured()) return { source: "mock", reason: "SHIP_API_URL not set" };
+  const token = await getSessionToken();
+  if (!token) return { source: "mock", reason: "Sign in to manage real members" };
+  try {
+    const ws = await listWorkspaces(token);
+    if (ws.length === 0)
+      return {
+        source: "mock",
+        reason: "Create a workspace first to manage members",
+      };
+    const target = ws[0];
+    const members = await listMembers(target.id, token);
+    return { source: "live", workspace: target, members };
+  } catch (err) {
+    if (err instanceof ApiHttpError && err.status === 401)
+      return { source: "mock", reason: "Session expired — sign in again" };
+    if (err instanceof ApiUnavailableError)
+      return { source: "mock", reason: "Backend unreachable" };
+    return { source: "mock", reason: "Backend returned an error" };
+  }
+}
+
+function initialsFor(member: ApiMember): string {
+  const source = member.display_name?.trim() || member.email;
+  const parts = source.split(/[\s@.]+/).filter(Boolean);
+  if (parts.length >= 2) {
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+  return (parts[0]?.slice(0, 2) ?? "??").toUpperCase();
+}
+
+export default async function MembersPage({
+  searchParams,
+}: {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const data = await load();
+  const params = ((await (searchParams ?? Promise.resolve({}))) ?? {}) as Record<
+    string,
+    string | string[] | undefined
+  >;
+  const errorCode = typeof params.error === "string" ? params.error : null;
+
+  if (data.source === "mock") {
+    return <MockView reason={data.reason} errorCode={errorCode} />;
+  }
+
+  const { workspace, members } = data;
+  const owners = members.filter((m) => m.role === "owner");
+  const admins = members.filter((m) => m.role === "admin");
+  const pending = members.filter((m) => m.pending);
+
   return (
     <AppShell
-      kicker={`${ws.name} · access`}
+      kicker={`${workspace.name} · access`}
       title="Members"
       actions={
         <>
           <ButtonGhost>Open invite link</ButtonGhost>
-          <ButtonPrimary>+ Invite</ButtonPrimary>
+          <a
+            href="#invite"
+            className="rounded-full bg-aqua/80 px-3 py-1.5 text-xs font-bold text-ink transition hover:bg-aqua"
+          >
+            + Invite
+          </a>
         </>
       }
     >
-      <MockBanner />
+      <LiveBanner workspace={workspace.slug} />
+      {errorCode && (
+        <div className="mb-5 rounded-xl border border-coral/30 bg-coral/[0.06] px-3 py-2 text-xs text-coral/95">
+          {errorMessage(errorCode)}
+        </div>
+      )}
 
       <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat label="Total" value={members.length.toString()} />
-        <Stat label="Owners + admins" value={members.filter((m) => m.role === "owner" || m.role === "admin").length.toString()} />
-        <Stat label="Active this week" value="6" />
-        <Stat label="Pending invites" value="2" />
+        <Stat
+          label="Owners + admins"
+          value={(owners.length + admins.length).toString()}
+        />
+        <Stat label="Pending invites" value={pending.length.toString()} />
+        <Stat
+          label="Owners"
+          value={owners.length.toString()}
+          tone={owners.length === 1 ? "warn" : "ok"}
+          hint={
+            owners.length === 1
+              ? "Only one owner — promote a backup before going on holiday"
+              : "Healthy: more than one owner"
+          }
+        />
       </div>
 
       <Card padded={false} className="overflow-hidden">
@@ -62,14 +177,266 @@ export default function MembersPage() {
             <tr>
               <th className="px-4 py-2 text-left font-semibold">Member</th>
               <th className="px-4 py-2 text-left font-semibold">Role</th>
-              <th className="px-4 py-2 text-left font-semibold">Identity</th>
-              <th className="px-4 py-2 text-left font-semibold">Last active</th>
+              <th className="px-4 py-2 text-left font-semibold">Status</th>
+              <th className="px-4 py-2 text-left font-semibold">Added</th>
               <th className="px-4 py-2 text-right font-semibold"></th>
             </tr>
           </thead>
           <tbody>
             {members.map((m) => (
-              <tr key={m.email} className="border-t border-white/5 hover:bg-white/[0.02]">
+              <MemberRow key={m.id} member={m} workspaceId={workspace.id} />
+            ))}
+          </tbody>
+        </table>
+      </Card>
+
+      <Card className="mt-6" id="invite">
+        <CardHeader
+          title="Invite teammate"
+          subtitle="The user is created in pending state; first Auth0 sign-in with this email binds it."
+        />
+        <form
+          action="/api/members/invite"
+          method="POST"
+          className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_10rem_auto]"
+        >
+          <input
+            type="hidden"
+            name="ws"
+            value={workspace.id}
+            suppressHydrationWarning
+          />
+          <label className="block">
+            <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/55">
+              Email
+            </span>
+            <input
+              name="email"
+              type="email"
+              required
+              placeholder="teammate@company.com"
+              suppressHydrationWarning
+              className="w-full rounded border border-white/10 bg-white/[0.04] px-2 py-1.5 text-sm text-white outline-none focus:border-aqua/40"
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/55">
+              Role
+            </span>
+            <select
+              name="role"
+              defaultValue="member"
+              suppressHydrationWarning
+              className="w-full rounded border border-white/10 bg-white/[0.04] px-2 py-1.5 text-sm text-white outline-none focus:border-aqua/40"
+            >
+              {ROLES.filter((r) => r !== "owner").map((r) => (
+                <option key={r} value={r}>
+                  {r}
+                </option>
+              ))}
+              <option value="owner">owner</option>
+            </select>
+          </label>
+          <div className="flex items-end">
+            <button
+              type="submit"
+              className="w-full rounded-full bg-aqua/80 px-4 py-1.5 text-sm font-bold text-ink transition hover:bg-aqua md:w-auto"
+            >
+              Invite
+            </button>
+          </div>
+        </form>
+        <p className="mt-3 text-[11px] text-white/55">
+          Send the invitee a sign-in link out-of-band (Auth0 dashboard → Users
+          → ‘Invite’). When they sign in with this email, Ship binds their
+          IdP subject to the row above and the “pending” badge flips off.
+        </p>
+      </Card>
+    </AppShell>
+  );
+}
+
+function MemberRow({
+  member,
+  workspaceId,
+}: {
+  member: ApiMember;
+  workspaceId: string;
+}) {
+  return (
+    <tr className="border-t border-white/5 hover:bg-white/[0.02]">
+      <td className="px-4 py-3 align-top">
+        <div className="flex items-center gap-3">
+          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-gradient-to-br from-aqua via-lilac to-coral text-[11px] font-bold text-ink">
+            {initialsFor(member)}
+          </span>
+          <div className="min-w-0">
+            <div className="font-semibold text-white">
+              {member.display_name || member.email}
+            </div>
+            <div className="text-[11px] text-white/50">{member.email}</div>
+          </div>
+        </div>
+      </td>
+      <td className="px-4 py-3 align-top">
+        <form
+          action="/api/members/role"
+          method="POST"
+          className="inline-flex items-center"
+        >
+          <input
+            type="hidden"
+            name="ws"
+            value={workspaceId}
+            suppressHydrationWarning
+          />
+          <input
+            type="hidden"
+            name="member"
+            value={member.id}
+            suppressHydrationWarning
+          />
+          <select
+            name="role"
+            defaultValue={member.role}
+            suppressHydrationWarning
+            className="rounded-full border border-white/15 bg-white/[0.05] px-3 py-1 text-xs font-semibold text-white/85 outline-none focus:border-aqua/40"
+          >
+            {ROLES.map((role) => (
+              <option key={role} value={role}>
+                {role}
+              </option>
+            ))}
+          </select>
+          {/*
+            Auto-submit on change keeps the row read-only while still being
+            client-JS-free: the <select> name "role" + the <button> below
+            both post to the same handler.
+          */}
+          <button
+            type="submit"
+            className="ml-2 rounded-full border border-aqua/30 bg-aqua/10 px-2 py-1 text-[10px] font-bold uppercase tracking-widest text-aqua/85 transition hover:bg-aqua/20"
+          >
+            save
+          </button>
+        </form>
+      </td>
+      <td className="px-4 py-3 align-top">
+        {member.pending ? (
+          <Badge tone="warn" dot>
+            pending
+          </Badge>
+        ) : (
+          <Badge tone="ok" dot>
+            active
+          </Badge>
+        )}
+      </td>
+      <td className="px-4 py-3 align-top text-xs text-white/55">
+        {new Date(member.created_at).toUTCString()}
+      </td>
+      <td className="px-4 py-3 text-right align-top">
+        <form action="/api/members/remove" method="POST" className="inline-block">
+          <input
+            type="hidden"
+            name="ws"
+            value={workspaceId}
+            suppressHydrationWarning
+          />
+          <input
+            type="hidden"
+            name="member"
+            value={member.id}
+            suppressHydrationWarning
+          />
+          <button
+            type="submit"
+            className="text-[11px] font-semibold text-coral/80 hover:text-coral"
+          >
+            Remove
+          </button>
+        </form>
+      </td>
+    </tr>
+  );
+}
+
+function Stat({
+  label,
+  value,
+  tone,
+  hint,
+}: {
+  label: string;
+  value: string;
+  tone?: "ok" | "warn";
+  hint?: string;
+}) {
+  return (
+    <Card>
+      <div className="text-[10px] font-bold uppercase tracking-widest text-white/45">
+        {label}
+      </div>
+      <div className="mt-1 flex items-baseline gap-2">
+        <div className="font-display text-2xl font-bold text-white">{value}</div>
+        {tone && (
+          <span
+            className={
+              "text-[10px] font-semibold " +
+              (tone === "warn" ? "text-coral/80" : "text-aqua/80")
+            }
+          >
+            {tone === "warn" ? "fragile" : "ok"}
+          </span>
+        )}
+      </div>
+      {hint && <div className="mt-1 text-[10px] text-white/45">{hint}</div>}
+    </Card>
+  );
+}
+
+function MockView({
+  reason,
+  errorCode,
+}: {
+  reason: string;
+  errorCode: string | null;
+}) {
+  const ws = mockWorkspaces[0];
+  const sample: { initials: string; name: string; email: string; role: ApiMemberRole; status: "active" | "pending" }[] = [
+    { initials: "DK", name: "Denis K.", email: "denis@helio.dev", role: "owner", status: "active" },
+    { initials: "MT", name: "Mira Tan", email: "mira@helio.dev", role: "admin", status: "active" },
+    { initials: "JL", name: "Jordan Lee", email: "jordan@helio.dev", role: "maintainer", status: "active" },
+    { initials: "AV", name: "Asha Verma", email: "asha@helio.dev", role: "member", status: "pending" },
+  ];
+  return (
+    <AppShell
+      kicker={`${ws.name} · access`}
+      title="Members"
+    >
+      <MockBanner reason={reason} />
+      {errorCode && (
+        <div className="mb-5 rounded-xl border border-coral/30 bg-coral/[0.06] px-3 py-2 text-xs text-coral/95">
+          {errorMessage(errorCode)}
+        </div>
+      )}
+      <Card padded={false} className="overflow-hidden">
+        <CardHeader
+          className="px-5 pt-5"
+          title="Workspace members (sample)"
+          subtitle="Sign in to manage the real roster."
+        />
+        <table className="min-w-full text-sm">
+          <thead className="bg-white/[0.04] text-[10px] uppercase tracking-widest text-white/45">
+            <tr>
+              <th className="px-4 py-2 text-left font-semibold">Member</th>
+              <th className="px-4 py-2 text-left font-semibold">Role</th>
+              <th className="px-4 py-2 text-left font-semibold">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sample.map((m) => (
+              <tr key={m.email} className="border-t border-white/5">
                 <td className="px-4 py-3 align-top">
                   <div className="flex items-center gap-3">
                     <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-gradient-to-br from-aqua via-lilac to-coral text-[11px] font-bold text-ink">
@@ -81,28 +448,11 @@ export default function MembersPage() {
                     </div>
                   </div>
                 </td>
+                <td className="px-4 py-3 align-top text-xs text-white/65">{m.role}</td>
                 <td className="px-4 py-3 align-top">
-                  <select
-                    defaultValue={m.role}
-                    className="rounded-full border border-white/15 bg-white/[0.05] px-3 py-1 text-xs font-semibold text-white/85 outline-none focus:border-aqua/40"
-                  >
-                    <option value="owner">owner</option>
-                    <option value="admin">admin</option>
-                    <option value="maintainer">maintainer</option>
-                    <option value="member">member</option>
-                    <option value="viewer">viewer</option>
-                  </select>
-                </td>
-                <td className="px-4 py-3 align-top">
-                  <Badge tone={m.source === "github" ? "info" : m.source === "oidc" ? "workspace" : "neutral"}>
-                    {m.source}
+                  <Badge tone={m.status === "active" ? "ok" : "warn"} dot>
+                    {m.status}
                   </Badge>
-                </td>
-                <td className="px-4 py-3 align-top text-xs text-white/55">{m.active}</td>
-                <td className="px-4 py-3 text-right align-top">
-                  <button className="text-[11px] font-semibold text-coral/80 hover:text-coral">
-                    Remove
-                  </button>
                 </td>
               </tr>
             ))}
@@ -110,14 +460,5 @@ export default function MembersPage() {
         </table>
       </Card>
     </AppShell>
-  );
-}
-
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <Card>
-      <div className="text-[10px] font-bold uppercase tracking-widest text-white/45">{label}</div>
-      <div className="mt-1 font-display text-2xl font-bold text-white">{value}</div>
-    </Card>
   );
 }

@@ -17,7 +17,10 @@ import type {
   ApiIntegration,
   ApiIntegrationKind,
   ApiKnowledgeBucket,
+  ApiMember,
+  ApiMemberRole,
   ApiSession,
+  ApiTokenInfo,
   ApiTokenMint,
   ApiUser,
   ApiWorkspace,
@@ -463,6 +466,77 @@ export function mintToken(
   return apiFetch<ApiTokenMint>(`/v1/auth/tokens`, {
     method: "POST",
     body: input,
+    token,
+  });
+}
+
+export function listTokens(token?: string): Promise<ApiTokenInfo[]> {
+  return apiFetch<ApiTokenInfo[]>(`/v1/auth/tokens`, { token });
+}
+
+export function revokeToken(tokenId: string, token?: string): Promise<void> {
+  return apiFetch<void>(`/v1/auth/tokens/${encodeURIComponent(tokenId)}`, {
+    method: "DELETE",
+    token,
+  });
+}
+
+// --- Members ---------------------------------------------------------------
+
+export function listMembers(
+  workspaceId: string,
+  token?: string,
+): Promise<ApiMember[]> {
+  return apiFetch<ApiMember[]>(`/v1/workspaces/${workspaceId}/members`, {
+    token,
+  });
+}
+
+export function inviteMember(
+  workspaceId: string,
+  input: { email: string; role: ApiMemberRole; display_name?: string | null },
+  token?: string,
+): Promise<ApiMember> {
+  return apiFetch<ApiMember>(`/v1/workspaces/${workspaceId}/members`, {
+    method: "POST",
+    body: input,
+    token,
+  });
+}
+
+export function updateMemberRole(
+  workspaceId: string,
+  memberId: string,
+  role: ApiMemberRole,
+  token?: string,
+): Promise<ApiMember> {
+  return apiFetch<ApiMember>(
+    `/v1/workspaces/${workspaceId}/members/${encodeURIComponent(memberId)}`,
+    { method: "PATCH", body: { role }, token },
+  );
+}
+
+export function removeMember(
+  workspaceId: string,
+  memberId: string,
+  token?: string,
+): Promise<void> {
+  return apiFetch<void>(
+    `/v1/workspaces/${workspaceId}/members/${encodeURIComponent(memberId)}`,
+    { method: "DELETE", token },
+  );
+}
+
+// --- Workspace lifecycle ---------------------------------------------------
+
+export function deleteWorkspace(
+  workspaceId: string,
+  slugConfirmation: string,
+  token?: string,
+): Promise<void> {
+  return apiFetch<void>(`/v1/workspaces/${workspaceId}`, {
+    method: "DELETE",
+    body: { slug_confirmation: slugConfirmation },
     token,
   });
 }

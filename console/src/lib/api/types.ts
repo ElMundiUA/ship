@@ -112,6 +112,34 @@ export type ApiTokenMint = {
   created_at: string;
 };
 
+export type ApiMemberRole =
+  | "owner"
+  | "admin"
+  | "maintainer"
+  | "member"
+  | "viewer";
+
+export type ApiMember = {
+  id: string;
+  user_id: string;
+  email: string;
+  display_name: string | null;
+  role: ApiMemberRole;
+  pending: boolean;
+  created_at: string;
+};
+
+export type ApiTokenInfo = {
+  id: string;
+  name: string;
+  workspace_id: string | null;
+  prefix: string | null;
+  scopes: string[];
+  expires_at: string | null;
+  last_used_at: string | null;
+  created_at: string;
+};
+
 export type ApiKnowledgeBucket = {
   slug: string;
   title: string;

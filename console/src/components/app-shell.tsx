@@ -26,28 +26,35 @@ type NavItem = {
   badge?: string;
 };
 
-const NAV: { section: string; items: NavItem[] }[] = [
+// Pages that aren't backed by real `/v1` endpoints yet — kept around as
+// rendered routes for design reference but hidden from the operator nav so
+// the pilot tenant doesn't bump into "coming soon" walls. Toggle with
+// NEXT_PUBLIC_SHIP_SHOW_STUBS=1 to surface them again during console
+// development.
+const SHOW_STUBS = process.env.NEXT_PUBLIC_SHIP_SHOW_STUBS === "1";
+
+const ALL_NAV: { section: string; items: (NavItem & { stub?: boolean })[] }[] = [
   {
     section: "Operate",
     items: [
       { href: "/", label: "Dashboard", icon: <DotIcon /> },
-      { href: "/daily", label: "Daily & retro", icon: <DotIcon />, badge: "3" },
-      { href: "/workflows", label: "Workflow runs", icon: <DotIcon /> },
+      { href: "/daily", label: "Daily & retro", icon: <DotIcon />, badge: "3", stub: true },
+      { href: "/workflows", label: "Workflow runs", icon: <DotIcon />, stub: true },
     ],
   },
   {
     section: "Knowledge",
     items: [
       { href: "/catalog", label: "Catalog", icon: <DotIcon /> },
-      { href: "/catalog/pull-requests", label: "Pull requests", icon: <DotIcon />, badge: "4" },
+      { href: "/catalog/pull-requests", label: "Pull requests", icon: <DotIcon />, badge: "4", stub: true },
       { href: "/knowledge", label: "Buckets", icon: <DotIcon /> },
     ],
   },
   {
     section: "Observe",
     items: [
-      { href: "/effectiveness", label: "Effectiveness", icon: <DotIcon /> },
-      { href: "/telemetry", label: "Telemetry", icon: <DotIcon /> },
+      { href: "/effectiveness", label: "Effectiveness", icon: <DotIcon />, stub: true },
+      { href: "/telemetry", label: "Telemetry", icon: <DotIcon />, stub: true },
     ],
   },
   {
@@ -59,6 +66,15 @@ const NAV: { section: string; items: NavItem[] }[] = [
     ],
   },
 ];
+
+const NAV: { section: string; items: NavItem[] }[] = ALL_NAV
+  .map((section) => ({
+    section: section.section,
+    items: SHOW_STUBS
+      ? section.items
+      : section.items.filter((item) => !item.stub),
+  }))
+  .filter((section) => section.items.length > 0);
 
 function DotIcon() {
   return (
