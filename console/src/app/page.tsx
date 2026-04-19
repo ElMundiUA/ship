@@ -56,15 +56,11 @@ export default async function CloudHomePage({
     if (result === "unauthorized") redirect("/login?next=%2F");
     if (result === "empty") redirect("/onboarding?step=github");
     if (result === "down") return renderDownState();
-    // No repos activated yet → user needs to finish the WOW wizard. We
-    // jump them straight back into ?step=github (the App-install screen
-    // is the only thing they have to do; once the App is on, the picker
-    // and tracker steps are one click each).
-    if (result.data.counts.active_repos === 0) {
-      redirect(
-        `/onboarding?step=github&ws=${encodeURIComponent(result.workspace.id)}`,
-      );
-    }
+    // We deliberately do NOT bounce users with active_repos === 0 back
+    // into the wizard. They might have skipped setup on purpose, or come
+    // back after revoking the App, or just want to read the docs. The
+    // dashboard surfaces a "finish setup" callout for that case
+    // (see DashboardLive), but the page itself stays accessible.
     return renderLiveDashboard(result, params);
   }
 
