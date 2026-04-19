@@ -30,6 +30,11 @@ class Settings(BaseSettings):
 
     # --- Identity ---
     public_url: str = Field(default="http://localhost:8100", alias="SHIP_PUBLIC_URL")
+    # Browser-facing console origin. Used for OAuth-style callback redirects
+    # that need to land back in the user's browser tab on the *console*
+    # rather than the API. Defaults to the local Next.js dev server so the
+    # docker-compose stack works out of the box.
+    console_url: str = Field(default="http://localhost:3001", alias="SHIP_CONSOLE_URL")
     auth_mode: str = Field(default="local", alias="SHIP_AUTH_MODE")  # local | auth0
 
     # --- Auth0 (used when auth_mode == "auth0") ---
@@ -95,6 +100,35 @@ class Settings(BaseSettings):
     )
     github_token: str | None = Field(default=None, alias="GITHUB_TOKEN")
     feedback_repo: str = Field(default="ElMundiUA/ship", alias="SHIP_FEEDBACK_REPO")
+
+    # --- GitHub App "Ship" (pilot WOW-onboarding flow, RFC pilot-plan) ---
+    # Numeric App ID shown on the "About" page of the App settings.
+    github_app_id: str | None = Field(default=None, alias="GITHUB_APP_ID")
+    # PEM-encoded private key (the whole ``-----BEGIN RSA PRIVATE KEY-----``
+    # block). Required to mint the App-level JWT used to exchange for
+    # short-lived per-installation tokens.
+    github_app_private_key: str | None = Field(
+        default=None, alias="GITHUB_APP_PRIVATE_KEY"
+    )
+    # OAuth client_id / client_secret of the **App** (separate from the
+    # Auth0-side GitHub social-login OAuth app — see pilot-plan.md). Used to
+    # identify the installing user during the install callback.
+    github_app_client_id: str | None = Field(
+        default=None, alias="GITHUB_APP_CLIENT_ID"
+    )
+    github_app_client_secret: str | None = Field(
+        default=None, alias="GITHUB_APP_CLIENT_SECRET"
+    )
+    # HMAC-SHA256 secret configured on the App's webhook page; we reject any
+    # delivery whose ``X-Hub-Signature-256`` does not verify under this key.
+    github_app_webhook_secret: str | None = Field(
+        default=None, alias="GITHUB_APP_WEBHOOK_SECRET"
+    )
+    # The exact slug GitHub uses in the install URL
+    # (``https://github.com/apps/<slug>/installations/new``). Defaults to
+    # ``ship`` because that's the published name; override per-environment if
+    # you register a staging App.
+    github_app_slug: str = Field(default="ship", alias="GITHUB_APP_SLUG")
 
     @property
     def resolved_auth0_issuer(self) -> str | None:

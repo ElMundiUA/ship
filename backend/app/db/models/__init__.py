@@ -2,6 +2,7 @@
 so Alembic ``--autogenerate`` and `Base.metadata.create_all` see them all.
 """
 
+from backend.app.db.models.integrations import GitHubInstallation
 from backend.app.db.models.tenancy import (
     ApiToken,
     ArtifactRepo,
@@ -19,6 +20,7 @@ __all__ = [
     "ApiToken",
     "ArtifactRepo",
     "AuditLog",
+    "GitHubInstallation",
     "Integration",
     "Org",
     "OrgMember",

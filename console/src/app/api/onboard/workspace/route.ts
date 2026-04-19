@@ -38,9 +38,12 @@ export async function POST(request: Request) {
   try {
     const ws = await createWorkspace({ name, slug });
     const next = new URL("/onboarding", origin);
-    // After workspace creation, jump to the workflows step (or the
-    // first-secret step if the user opted out of giving us a repo).
-    next.searchParams.set("step", repo ? "workflows" : "tracker");
+    // After workspace creation, push the user into the GitHub App install
+    // (the WOW-onboarding hero step). They can still skip to workflows or
+    // tracker from there. Operators with no repo paste survived this far
+    // by clicking "Use a demo repo" and we treat them the same — the
+    // GitHub install is independent of the inspected repo.
+    next.searchParams.set("step", "github");
     next.searchParams.set("ws", ws.id);
     if (repo) next.searchParams.set("repo", repo);
     return NextResponse.redirect(next, 303);

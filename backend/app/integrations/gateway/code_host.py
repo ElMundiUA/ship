@@ -1,0 +1,70 @@
+"""Code-host gateway interface — repos, pull requests, contents.
+
+Concrete implementations live under sibling vendor packages
+(``backend.app.integrations.github.code_host_adapter`` is the pilot
+implementation). Pipelines and resolvers depend on this protocol, not on
+the GitHub SDK directly, so adding GitLab or Azure DevOps later is a pure
+adapter add.
+
+The reference dataclasses use *discriminated kinds* so a future
+``RepoRef(kind="ado", org=..., project=..., repo=...)`` slots in without
+breaking ``RepoRef(kind="github", owner=..., repo=...)`` consumers.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Literal, Protocol, runtime_checkable
+
+
+@dataclass(frozen=True, slots=True)
+class RepoRef:
+    """Vendor-discriminated identifier for a single repository."""
+
+    kind: Literal["github"]  # broaden once more code hosts arrive
+    owner: str
+    repo: str
+
+    @property
+    def full_name(self) -> str:
+        return f"{self.owner}/{self.repo}"
+
+
+@dataclass(frozen=True, slots=True)
+class PullRequestRef:
+    """Identifier for a single pull/merge request on a code host."""
+
+    repo: RepoRef
+    number: int
+
+
+@runtime_checkable
+class CodeHostGateway(Protocol):
+    """Operations a code host must support to back our default pipelines.
+
+    Methods are intentionally minimal: each one is a verb the pipelines
+    actually use today (`list_repos`, `get_pull_request`, `list_files`).
+    Resist the urge to mirror the full vendor SDK here — every method we
+    add is a method every future adapter must implement.
+    """
+
+    async def list_repos(self) -> list[RepoRef]:
+        """Repos visible to the calling identity (App installation, PAT…)."""
+        ...
+
+    async def get_pull_request(self, ref: PullRequestRef) -> dict[str, Any]:
+        """Return a normalised PR snapshot for the review pipeline.
+
+        We deliberately keep the shape as ``dict[str, Any]`` for the pilot
+        — committing to a strict schema before we have two adapters would
+        be premature lock-in. Day-3 typing pass tightens this up.
+        """
+        ...
+
+    async def list_files(self, ref: RepoRef, *, ref_sha: str | None = None) -> list[str]:
+        """Flat list of repo paths at ``ref_sha`` (HEAD if omitted).
+
+        Used by the code-map pipeline; truncated upstream to 5k entries on
+        very large repos.
+        """
+        ...
