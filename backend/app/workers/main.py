@@ -2,11 +2,13 @@
 
 Run as: ``arq backend.app.workers.main.WorkerSettings``.
 
+The worker is opt-in (``docker compose --profile worker up``) and ships the
+secret-probe cron for self-hosted operators who don't want the inline-on-save
+behaviour the API also performs. Cloud SaaS deploys no worker container;
+the API path covers everything.
+
 The worker shares the same image, the same Settings, and the same database
-as ``ship-server``. Concrete jobs (artifact repo sync, document parsing,
-embedding refresh, daily/retro generation, OTLP export) land in dedicated
-modules under :mod:`backend.app.workers` and are imported here so arq picks
-them up at startup.
+as ``ship-server``.
 """
 
 from __future__ import annotations
@@ -18,10 +20,6 @@ from arq.connections import RedisSettings
 
 from backend.app.core.config import get_settings
 from backend.app.core.sentry import init_sentry
-from backend.app.workers.git_sync import (
-    cron_sync_pending_repos,
-    settings_interval_minutes,
-)
 from backend.app.workers.secret_probe import cron_probe_pending_secrets
 
 
@@ -30,12 +28,6 @@ log = logging.getLogger("ship.worker")
 # Worker boots with a different service tag so Sentry can split error rates
 # between the API and background jobs without operators digging through tags.
 init_sentry(service_name="ship-worker")
-
-
-def _every_n_minutes(n: int) -> set[int]:
-    """Return the minute-of-hour set arq's cron expects for "every N minutes"."""
-    n = max(1, min(60, n))
-    return set(range(0, 60, n))
 
 
 async def heartbeat(ctx: dict) -> None:
@@ -69,18 +61,11 @@ class WorkerSettings:
     functions: list = []
     cron_jobs = [
         cron(heartbeat, minute=set(range(0, 60))),
-        # Probe newly-saved or stale integration secrets on the half-minute so
-        # `pending` rows turn green within ~30s of the user clicking "Save
-        # secret". The job itself is bounded (32 rows, 6s/probe) so it can't
-        # starve the heartbeat tick.
+        # Re-probe stale integration rows on the half-minute. The API path
+        # already probes inline on save, so this is purely a guard for
+        # rotated upstream tokens that operators left untouched. Bounded
+        # (32 rows, 6s/probe) so it never starves the heartbeat tick.
         cron(cron_probe_pending_secrets, minute=set(range(0, 60)), second={0, 30}),
-        # Clone/fetch every registered remote artifact repo. Spacing is
-        # operator-tunable via REPO_SYNC_INTERVAL_MINUTES (default 10) so a
-        # large self-hosted install can throttle git traffic without forking.
-        cron(
-            cron_sync_pending_repos,
-            minute=_every_n_minutes(settings_interval_minutes()),
-        ),
     ]
     keep_result = 60
     job_timeout = 300

@@ -232,38 +232,32 @@ async def test_install_workflows_registers_project_artifact_repo(
 
 
 @pytest.mark.asyncio
-async def test_install_workflows_flags_remote_repo_as_pending_sync(
+async def test_install_workflows_accepts_remote_repo_without_sync_marker(
     v1_client, seed_workspace, tmp_path
 ) -> None:
-    """Non-file:// URLs are accepted but flagged with a sync-worker hint so
-    the settings page can warn the user that the project layer won't show
-    real artifacts until the worker lands."""
+    """Non-file:// URLs are accepted by the schema but are no longer flagged
+    with a sync-worker placeholder; the legacy git-sync worker is gone and
+    the upcoming GitHub App integration will populate these rows via
+    installation IDs instead. The row stays clean (last_sync_error is None)
+    so the settings page can decide whether to show "not yet wired" copy."""
     repo = _make_repo(tmp_path)
     _, raw, workspace = seed_workspace
     headers = {"Authorization": f"Bearer {raw}"}
-    # We still resolve against the local repo so the install can run; only
-    # the recorded `repo_source` is the remote URL.
     remote = "https://github.com/example/aurora"
 
-    # Pre-cache the remote URL by hand so resolve_source returns this repo.
-    # Easiest path: monkeypatch resolve_source via a dependency override is
-    # overkill — instead, register the remote URL through the existing
-    # artifact-repos endpoint and assert no second row is created.
     seed = await v1_client.post(
         f"/v1/workspaces/{workspace.id}/artifact-repos",
         headers=headers,
         json={"kind": "project", "url": remote, "default_branch": "main"},
     )
     assert seed.status_code == 201
-    # Sanity: the manual create path also flags non-file URLs with the same
-    # sync-worker placeholder so the UI behaviour is consistent across both
-    # entry points.
     listing = await v1_client.get(
         f"/v1/workspaces/{workspace.id}/artifact-repos", headers=headers
     )
-    assert any(
-        r["url"] == remote and r["last_sync_error"] for r in listing.json()
-    )
+    rows = [r for r in listing.json() if r["url"] == remote]
+    assert len(rows) == 1
+    assert rows[0]["last_sync_error"] is None
+    assert rows[0]["last_sync_at"] is None
     _ = repo  # silence unused — repo only seeded for fixture parity.
 
 

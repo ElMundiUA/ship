@@ -355,13 +355,6 @@ async def install_workflows_route(
             url=payload.repo_source,
             default_branch=result.branch or "main",
         )
-        # file:// repos are read inline; remote URLs need the (still-pending)
-        # sync worker. Surface that here so the settings page can flag it.
-        if not payload.repo_source.startswith("file://"):
-            repo_row.last_sync_error = (
-                "git sync worker not yet implemented; project artifacts "
-                "will appear once the worker lands"
-            )
         session.add(repo_row)
         repo_registered = True
 

@@ -662,38 +662,20 @@ function RepoRow({
         </Badge>
       </td>
       <td className="px-3 py-2.5 align-top text-right">
-        <div className="inline-flex items-center gap-1.5">
-          {!repo.url.startsWith("file://") && (
-            <form
-              action="/api/settings/artifact-repos/sync"
-              method="POST"
-              className="inline-block"
-            >
-              <input type="hidden" name="ws" value={workspaceId} suppressHydrationWarning />
-              <input type="hidden" name="repo" value={repo.id} suppressHydrationWarning />
-              <button
-                type="submit"
-                className="rounded-full border border-aqua/30 bg-aqua/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest text-aqua/85 transition hover:bg-aqua/20"
-              >
-                Sync now
-              </button>
-            </form>
-          )}
-          <form
-            action="/api/settings/artifact-repos/delete"
-            method="POST"
-            className="inline-block"
+        <form
+          action="/api/settings/artifact-repos/delete"
+          method="POST"
+          className="inline-block"
+        >
+          <input type="hidden" name="ws" value={workspaceId} suppressHydrationWarning />
+          <input type="hidden" name="repo" value={repo.id} suppressHydrationWarning />
+          <button
+            type="submit"
+            className="rounded-full border border-coral/30 bg-coral/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest text-coral/85 transition hover:bg-coral/20"
           >
-            <input type="hidden" name="ws" value={workspaceId} suppressHydrationWarning />
-            <input type="hidden" name="repo" value={repo.id} suppressHydrationWarning />
-            <button
-              type="submit"
-              className="rounded-full border border-coral/30 bg-coral/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest text-coral/85 transition hover:bg-coral/20"
-            >
-              Remove
-            </button>
-          </form>
-        </div>
+            Remove
+          </button>
+        </form>
       </td>
     </tr>
   );
@@ -768,10 +750,9 @@ function AddRepoForm({ workspaceId }: { workspaceId: string }) {
       </form>
       <p className="mt-2 text-[11px] text-white/55">
         <code className="font-mono">file://</code> paths are read inline. Git
-        URLs (https/ssh) are cloned by the background sync worker into{" "}
-        <code className="font-mono">REPO_CACHE_ROOT</code> and refreshed on a
-        cron tick — use <span className="font-bold text-aqua/85">Sync now</span>{" "}
-        on a row to materialise it immediately.
+        URLs (https/ssh) are accepted but won&rsquo;t contribute artifacts
+        until the upcoming GitHub App integration replaces the legacy
+        sync-worker flow.
       </p>
     </details>
   );
