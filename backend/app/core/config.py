@@ -18,6 +18,27 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
+def _normalise_to_psycopg(url: str) -> str:
+    """Force any Postgres URL to use the psycopg v3 sync driver.
+
+    Alembic + SQLAlchemy 2.x default to ``psycopg2`` whenever the URL has no
+    explicit driver hint, but the runtime image only installs psycopg v3
+    (``psycopg[binary]``). Without this rewrite, an operator pasting their
+    cloud-provided ``postgresql://...`` DSN crashes the boot with
+    ``ModuleNotFoundError: No module named 'psycopg2'``.
+    """
+    prefixes_to_psycopg = (
+        "postgresql+asyncpg://",
+        "postgresql+psycopg2://",
+        "postgresql://",
+        "postgres://",
+    )
+    for prefix in prefixes_to_psycopg:
+        if url.startswith(prefix):
+            return "postgresql+psycopg://" + url[len(prefix) :]
+    return url
+
+
 class Settings(BaseSettings):
     """All runtime knobs for ``ship-server`` and ``ship-worker``."""
 
@@ -183,18 +204,16 @@ class Settings(BaseSettings):
     def sync_database_url(self) -> str:
         """Return a sync-driver URL suitable for Alembic.
 
-        Operators can override with ``ALEMBIC_DATABASE_URL``; otherwise we map
-        ``postgresql+asyncpg://`` → ``postgresql+psycopg://`` so a single
-        ``DATABASE_URL`` works for both runtime and migrations.
+        Always normalises to ``postgresql+psycopg://`` (psycopg v3) — that's
+        the only sync DBAPI we ship in ``requirements-backend.txt``. We accept
+        ``DATABASE_URL`` or ``ALEMBIC_DATABASE_URL`` in any of the common
+        Postgres URL spellings (``postgres://``, ``postgresql://`` with no
+        explicit driver, ``postgresql+asyncpg://``, ``postgresql+psycopg2://``)
+        so operators can paste the connection string their cloud provider
+        hands out without remembering which driver hint we expect.
         """
-        if self.alembic_database_url:
-            return self.alembic_database_url
-        url = self.database_url
-        if url.startswith("postgresql+asyncpg://"):
-            return "postgresql+psycopg://" + url[len("postgresql+asyncpg://") :]
-        if url.startswith("postgres://"):
-            return "postgresql+psycopg://" + url[len("postgres://") :]
-        return url
+        raw = (self.alembic_database_url or self.database_url).strip()
+        return _normalise_to_psycopg(raw)
 
 
 @lru_cache(maxsize=1)
