@@ -239,7 +239,12 @@ jobs:
           BUNNY_BACKEND_DIGEST: ${{ steps.digests.outputs.backend }}
           BUNNY_CONSOLE_DIGEST: ${{ steps.digests.outputs.console }}
           IMAGE_TAG: ${{ steps.vars.outputs.tag }}
-          MAX_WAIT_S: "900"
+          # Best-effort observability only — bunny-deploy-platform's
+          # waitForRollout no longer fails on this budget; it just stops
+          # streaming progress and trusts the PATCH + deploy nudge. 90 s
+          # is enough to catch a fast rollout in the log without burning
+          # CI minutes.
+          MAX_WAIT_S: "90"
         run: |
           set -euo pipefail
           if [[ -z "${BUNNY_BACKEND_APP_ID:-}" || -z "${BUNNY_CONSOLE_APP_ID:-}" ]]; then

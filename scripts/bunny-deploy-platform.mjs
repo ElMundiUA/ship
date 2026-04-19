@@ -123,12 +123,31 @@ async function waitForRollout({ key, appId, containerName, imageTag, maxWaitS })
     console.log(`[dry-run] skip rollout wait app=${appId} template=${containerName}`);
     return;
   }
+  // Best-effort observability: poll /apps/{id} for up to maxWaitS, but
+  // never fail the deploy on it. Bunny's GET /apps/{id} response shape for
+  // per-container live state isn't part of the documented API surface and
+  // can return an empty `containers` array even after a successful rolling
+  // update — relying on it blocks the pipeline (and prevents subsequent
+  // sequential PATCHes for other containers in the same workflow run).
+  // The PATCH + /deploy POST already returned 2xx upstream, so the
+  // rollout is in flight; this loop just streams progress to the log if
+  // Bunny happens to expose it.
   const deadline = Date.now() + maxWaitS * 1000;
   let lastSummary = "";
   while (Date.now() < deadline) {
-    const { json: app } = await api(`/apps/${encodeURIComponent(appId)}`, { key });
+    let app;
+    try {
+      ({ json: app } = await api(`/apps/${encodeURIComponent(appId)}`, { key }));
+    } catch (err) {
+      console.warn(`[wait] ${containerName} GET failed (${err.message}); continuing`);
+      await new Promise((r) => setTimeout(r, 5000));
+      continue;
+    }
     const template = (app.containerTemplates || []).find((t) => t.name === containerName);
-    if (!template) throw new Error(`template ${containerName} disappeared mid-rollout`);
+    if (!template) {
+      console.warn(`[wait] template ${containerName} not found in /apps response; trusting PATCH`);
+      return;
+    }
     const containers = template.containers || [];
     const total = containers.length;
     const onTag = containers.filter((c) => (c.imageTag || "") === imageTag).length;
@@ -146,8 +165,8 @@ async function waitForRollout({ key, appId, containerName, imageTag, maxWaitS })
     }
     await new Promise((r) => setTimeout(r, 5000));
   }
-  throw new Error(
-    `rollout timed out for ${containerName} after ${maxWaitS}s (last: ${lastSummary})`,
+  console.warn(
+    `[wait] ${containerName} no observed convergence after ${maxWaitS}s (last: ${lastSummary || "no progress reported"}); trusting PATCH + deploy nudge`,
   );
 }
 
