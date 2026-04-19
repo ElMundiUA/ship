@@ -23,6 +23,12 @@
 #   interfaces; constrain via `bind` if your VPS exposes more than one.
 
 services:
+  # Production overlay deliberately omits ship-worker and redis. Cloud
+  # topology probes secrets inline on save (no worker), and self-hosted
+  # operators who want background jobs opt in with
+  # `docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+  #   --profile worker up`.
+
   caddy:
     image: caddy:2-alpine
     restart: always
@@ -60,18 +66,12 @@ services:
     restart: always
     ports: !reset []
 
-  ship-worker:
-    restart: always
-
   postgres:
     restart: always
-    # Keep Postgres off the public network in prod — only ship-server +
-    # ship-worker need it. The host port binding from the base file is
-    # convenient for `psql` from a developer laptop, not for prod.
-    ports: !reset []
-
-  redis:
-    restart: always
+    # Keep Postgres off the public network in prod — only ship-server (and
+    # the optional worker, when enabled via --profile worker) need it. The
+    # host port binding from the base file is convenient for `psql` from a
+    # developer laptop, not for prod.
     ports: !reset []
 
   minio:

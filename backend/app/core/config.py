@@ -51,7 +51,10 @@ class Settings(BaseSettings):
     alembic_database_url: str | None = Field(default=None, alias="ALEMBIC_DATABASE_URL")
 
     # --- Cache / broker / pubsub ---
-    redis_url: str = Field(default="redis://localhost:6380/0", alias="REDIS_URL")
+    # Optional. Only the ARQ worker reads it; cloud SaaS topology has no worker
+    # container so REDIS_URL stays unset there. The in-memory rate limiter on
+    # the API side has no Redis dependency.
+    redis_url: str | None = Field(default=None, alias="REDIS_URL")
 
     # --- Object storage (documents bucket source files) ---
     s3_endpoint_url: str | None = Field(default=None, alias="S3_ENDPOINT_URL")

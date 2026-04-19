@@ -1,12 +1,18 @@
 # Ship cloud platform — local stack (RFC-0006).
 #
-# One command brings up the full backend on a developer laptop:
+# One command brings up the lean backend on a developer laptop (matches the
+# cloud SaaS topology: Postgres + MinIO + API + console — no worker, no Redis):
 #
 #   cp .env.example .env
 #   docker compose up
 #
-# Same image set is what runs in self-hosted Helm and (without Postgres/Redis/MinIO
-# containers) in our SaaS on Neon + managed Redis + S3.
+# Opt into the legacy ARQ worker + Redis with the `worker` profile when you
+# need background jobs locally:
+#
+#   docker compose --profile worker up
+#
+# Same image set is what runs in self-hosted Helm and (against Neon + S3 in
+# our SaaS) on Bunny Magic Containers.
 
 name: ship
 
@@ -30,8 +36,12 @@ services:
       retries: 20
 
   redis:
+    # Worker-only dependency. Cloud SaaS doesn't ship a worker container, so
+    # redis stays behind the `worker` profile and only spins up when an
+    # operator opts in with `docker compose --profile worker up`.
     image: redis:7-alpine
     restart: unless-stopped
+    profiles: ["worker"]
     ports:
       - "${REDIS_PORT:-6380}:6379"
     healthcheck:
@@ -79,14 +89,11 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
       minio:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-ship}:${POSTGRES_PASSWORD:-ship}@postgres:5432/${POSTGRES_DB:-ship}
       ALEMBIC_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ship}:${POSTGRES_PASSWORD:-ship}@postgres:5432/${POSTGRES_DB:-ship}
-      REDIS_URL: redis://redis:6379/0
       S3_ENDPOINT_URL: http://minio:9000
       S3_BUCKET: ${S3_BUCKET:-ship-documents}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY:-shipminio}
@@ -187,10 +194,16 @@ services:
       start_period: 20s
 
   ship-worker:
+    # The worker is opt-in via `docker compose --profile worker up`. Cloud
+    # SaaS topology has no worker container after the pilot pivot — secret
+    # probes run inline on save and the legacy git-sync cron is gone. We keep
+    # the service definition for self-hosted operators who still want the
+    # full local stack.
     build:
       context: .
       dockerfile: deploy/backend/Dockerfile
     restart: unless-stopped
+    profiles: ["worker"]
     depends_on:
       postgres:
         condition: service_healthy

@@ -49,6 +49,16 @@ async def heartbeat(ctx: dict) -> None:
 
 def _redis_settings() -> RedisSettings:
     settings = get_settings()
+    if not settings.redis_url:
+        # Cloud SaaS topology no longer ships a worker container; arq invoked
+        # against this entry point should exit cleanly so the orchestrator does
+        # not flap. Local dev opts in via `docker compose --profile worker up`,
+        # which sets REDIS_URL alongside the redis service.
+        log.info(
+            "REDIS_URL not configured; ship-worker is a no-op in this "
+            "deployment, exiting 0"
+        )
+        raise SystemExit(0)
     return RedisSettings.from_dsn(settings.redis_url)
 
 

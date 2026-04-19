@@ -48,11 +48,17 @@ The API version is reported by `GET /openapi.json` and matches the canonical Shi
 
 ## Run the cloud platform locally (one command)
 
-The full backend stack (Postgres+pgvector, Redis, MinIO, API server, worker) lives behind a single `docker-compose.yml` at the repo root.
+The lean backend stack (Postgres+pgvector, MinIO, API server, console) lives behind a single `docker-compose.yml` at the repo root.
 
 ```bash
 cp .env.example .env       # defaults are fine for local
 docker compose up --build
+```
+
+The ARQ worker + Redis are behind a `worker` profile so the default `up` matches the cloud SaaS topology (no worker, no Redis). Spin them up locally only when you need background jobs:
+
+```bash
+docker compose --profile worker up --build
 ```
 
 When everything is healthy:
@@ -89,7 +95,7 @@ Methodology API:
 Cloud platform (RFC-0006) — see `.env.example` for the full list:
 
 - `DATABASE_URL` — `postgresql+asyncpg://...` (Neon-pooled URL in SaaS)
-- `REDIS_URL` — used by the worker and by API rate limits
+- `REDIS_URL` — only required when running the optional `--profile worker` stack; cloud SaaS leaves it unset
 - `S3_*` — object storage for document blobs
 - `JWT_SECRET` — sign session tokens; must be a long random string in production
 - `ENCRYPTION_KEY` — 32-byte urlsafe base64; required to store integration secrets

@@ -59,8 +59,8 @@ logs: ## Tail logs for all services.
 logs-server: ## Tail backend (ship-server) logs.
 	$(COMPOSE) logs -f --tail=200 $(BACKEND_SVC)
 
-logs-worker: ## Tail worker (arq) logs.
-	$(COMPOSE) logs -f --tail=200 $(WORKER_SVC)
+logs-worker: ## Tail worker (arq) logs (requires `--profile worker`).
+	$(COMPOSE) --profile worker logs -f --tail=200 $(WORKER_SVC)
 
 logs-console: ## Tail console (Next.js) logs.
 	$(COMPOSE) logs -f --tail=200 $(CONSOLE_SVC)
@@ -88,8 +88,8 @@ revision: env-check ## Generate a new alembic revision. Use: make revision M="ad
 psql: ## Open a psql shell on the running Postgres.
 	$(COMPOSE) exec $(DB_SVC) psql -U $${POSTGRES_USER:-ship} -d $${POSTGRES_DB:-ship}
 
-redis-cli: ## Open redis-cli on the running Redis.
-	$(COMPOSE) exec redis redis-cli
+redis-cli: ## Open redis-cli on the running Redis (requires `--profile worker`).
+	$(COMPOSE) --profile worker exec redis redis-cli
 
 shell: ## Drop into a bash shell on the backend container.
 	$(COMPOSE) exec $(BACKEND_SVC) bash

@@ -18,7 +18,10 @@
  * Components managed:
  *
  *   ship-server   — FastAPI (image: ${BUNNY_BACKEND_IMAGE})
- *   ship-worker   — arq worker, same image, different command via Bunny "args"
+ *   ship-worker   — arq worker, same image, different command. Skipped by
+ *                   default — cloud SaaS topology has no worker container.
+ *                   Opt-in by setting BUNNY_WORKER_CONTAINER to the template
+ *                   name of an existing worker template.
  *   ship-console  — Next.js operator console (image: ${BUNNY_CONSOLE_IMAGE})
  *
  * Env contract (set as GitHub Actions secrets or pass inline):
@@ -33,7 +36,7 @@
  *   BUNNY_WORKER_DIGEST           optional sha256:... for ship-worker template
  *   BUNNY_CONSOLE_DIGEST          optional sha256:... for console template
  *   BUNNY_BACKEND_CONTAINER       template name for ship-server  (default: ship-server)
- *   BUNNY_WORKER_CONTAINER        template name for ship-worker  (default: ship-worker)
+ *   BUNNY_WORKER_CONTAINER        template name for ship-worker  (default: empty -> skip)
  *   BUNNY_CONSOLE_CONTAINER       template name for console      (default: console)
  *   MAX_WAIT_S                    rolling-update poll budget     (default: 600)
  *   DRY_RUN                       set to "1" to print actions only
@@ -156,14 +159,15 @@ async function main() {
   const imageTag = opt("IMAGE_TAG", "latest");
   const maxWaitS = Number(opt("MAX_WAIT_S", "600")) || 600;
   const backendContainer = opt("BUNNY_BACKEND_CONTAINER", "ship-server");
-  const workerContainer = opt("BUNNY_WORKER_CONTAINER", "ship-worker");
+  const workerContainer = opt("BUNNY_WORKER_CONTAINER", "");
   const consoleContainer = opt("BUNNY_CONSOLE_CONTAINER", "console");
 
   console.log(`[bunny] deploying tag=${imageTag} (max-wait=${maxWaitS}s)`);
 
-  // Backend app holds two templates (server + worker) sharing one image; we
-  // PATCH them sequentially so a failed worker rollout doesn't take the
-  // server with it. Bunny does the actual rolling update per template.
+  // Cloud SaaS topology only ships ship-server + ship-console. The worker is
+  // opt-in: set BUNNY_WORKER_CONTAINER to the existing template name to roll
+  // it out alongside the API. Sequential PATCHes so a failed worker rollout
+  // doesn't take the server with it.
   await deployComponent({
     key,
     appId: backendAppId,
@@ -172,14 +176,18 @@ async function main() {
     imageDigest: opt("BUNNY_BACKEND_DIGEST"),
     maxWaitS,
   });
-  await deployComponent({
-    key,
-    appId: backendAppId,
-    containerName: workerContainer,
-    imageTag,
-    imageDigest: opt("BUNNY_WORKER_DIGEST"),
-    maxWaitS,
-  });
+  if (workerContainer) {
+    await deployComponent({
+      key,
+      appId: backendAppId,
+      containerName: workerContainer,
+      imageTag,
+      imageDigest: opt("BUNNY_WORKER_DIGEST"),
+      maxWaitS,
+    });
+  } else {
+    console.log("[bunny] skipping ship-worker rollout (BUNNY_WORKER_CONTAINER unset)");
+  }
   await deployComponent({
     key,
     appId: consoleAppId,
