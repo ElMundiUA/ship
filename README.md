@@ -22,6 +22,97 @@ npx @elmundi/ship-cli init --dry-run
 
 Full walkthrough on the site: <https://ship.elmundi.com.ua/docs/getting-started>.
 
+## Stack coverage matrix
+
+Every Ship deployment is the same loop with three swappable roles ([RFC-0004](documentation/rfc/rfc-0004-adapters.md)):
+
+- **Tracker** (a.k.a. *orchestrator* / system of record) — Linear, Jira, GitHub Issues, Notion, …
+- **Scheduler** (cron + runner that wakes the loop) — GitHub Actions, GitLab CI, CircleCI, Jenkins, self-hosted cron, …
+- **Agent** (the coding agent that produces the diff) — Cursor, Cursor Cloud, Claude Code, Codex CLI, GitHub Copilot, Aider, Cline, Continue, Windsurf, Zed, Gemini, Opencode, …
+
+The matrix below is the **smoke-test surface** we want green for every release. Status legend:
+
+- **validated** — wired by an artifact under [`artifacts/`](artifacts/) **and** exercised by an end-to-end smoke run (real ticket → real PR).
+- **partial** — adapter / agent-rules artifact exists but no automated smoke run yet.
+- **planned** — on the roadmap, no artifact yet (community PRs welcome).
+- **n/a** — combination intentionally unsupported (e.g. agent has no CI-friendly runner).
+
+### Per-role support
+
+| Tracker (orchestrator) | Adapter artifact | Status |
+|---|---|---|
+| Linear | [`tools/linear`](artifacts/tools/linear/) | validated |
+| GitHub Issues | [`tools/tracker-contract`](artifacts/tools/tracker-contract/) | partial |
+| Jira | [`tools/tracker-contract`](artifacts/tools/tracker-contract/) | partial |
+| Notion | — | planned |
+| Asana / ClickUp / Monday | — | planned |
+| Spreadsheet (Sheets / CSV) | [`tools/tracker-contract`](artifacts/tools/tracker-contract/) | partial |
+
+| Scheduler | Adapter artifact | Status |
+|---|---|---|
+| GitHub Actions | [`tools/github-actions`](artifacts/tools/github-actions/) | validated |
+| GitLab CI | — | planned |
+| CircleCI | — | planned |
+| Jenkins | — | planned |
+| Buildkite | — | planned |
+| Self-hosted cron / systemd timer | — | partial |
+| Temporal / Airflow | — | planned |
+
+| Agent | Rules collection | Status |
+|---|---|---|
+| Cursor (desktop) | [`collections/agent-rules-cursor`](artifacts/collections/agent-rules-cursor/) | validated |
+| Cursor Cloud | [`collections/agent-rules-cursor-cloud`](artifacts/collections/agent-rules-cursor-cloud/) + [`tools/cursor-cloud-agent`](artifacts/tools/cursor-cloud-agent/) | validated |
+| Claude Code | [`collections/agent-rules-claude`](artifacts/collections/agent-rules-claude/) / [`agent-rules-claude-md`](artifacts/collections/agent-rules-claude-md/) | partial |
+| Codex CLI | [`collections/agent-rules-codex`](artifacts/collections/agent-rules-codex/) | partial |
+| GitHub Copilot (workspace / coding agent) | [`collections/agent-rules-copilot`](artifacts/collections/agent-rules-copilot/) | partial |
+| Aider | [`collections/agent-rules-aider`](artifacts/collections/agent-rules-aider/) | partial |
+| Cline | [`collections/agent-rules-cline`](artifacts/collections/agent-rules-cline/) | partial |
+| Continue | [`collections/agent-rules-continue`](artifacts/collections/agent-rules-continue/) | partial |
+| Windsurf | [`collections/agent-rules-windsurf`](artifacts/collections/agent-rules-windsurf/) | partial |
+| Zed | [`collections/agent-rules-zed`](artifacts/collections/agent-rules-zed/) | partial |
+| Gemini CLI | [`collections/agent-rules-gemini`](artifacts/collections/agent-rules-gemini/) | partial |
+| Opencode | [`collections/agent-rules-opencode`](artifacts/collections/agent-rules-opencode/) | partial |
+| Generic `AGENTS.md` | [`collections/agent-rules-agents-md`](artifacts/collections/agent-rules-agents-md/) | partial |
+
+### End-to-end combinations (Tracker × Agent × Scheduler)
+
+The full Cartesian product is ~14 × 7 × 7 ≈ **686 combos**. Realistically we test the tier-1 grid below (~30) and let the rest fall back to per-role coverage.
+
+| # | Tracker | Agent | Scheduler | Status | Reference |
+|---|---------|-------|-----------|--------|-----------|
+| 1  | Linear         | Cursor             | GitHub Actions   | validated | [`workflows/scheduled-sdlc-lane`](artifacts/workflows/scheduled-sdlc-lane/) |
+| 2  | Linear         | Cursor Cloud       | GitHub Actions   | validated | [`tools/cursor-cloud-agent`](artifacts/tools/cursor-cloud-agent/) |
+| 3  | Linear         | Claude Code        | GitHub Actions   | partial   | [`collections/agent-rules-claude`](artifacts/collections/agent-rules-claude/) |
+| 4  | Linear         | Codex CLI          | GitHub Actions   | partial   | [`collections/agent-rules-codex`](artifacts/collections/agent-rules-codex/) |
+| 5  | Linear         | GitHub Copilot     | GitHub Actions   | partial   | [`collections/agent-rules-copilot`](artifacts/collections/agent-rules-copilot/) |
+| 6  | Linear         | Aider              | GitHub Actions   | partial   | [`collections/agent-rules-aider`](artifacts/collections/agent-rules-aider/) |
+| 7  | Linear         | Gemini CLI         | GitHub Actions   | partial   | [`collections/agent-rules-gemini`](artifacts/collections/agent-rules-gemini/) |
+| 8  | Linear         | Cursor             | GitLab CI        | planned   | scheduler adapter pending |
+| 9  | Linear         | Cursor             | CircleCI         | planned   | scheduler adapter pending |
+| 10 | Linear         | Cursor             | Jenkins          | planned   | scheduler adapter pending |
+| 11 | Linear         | Cursor             | Self-hosted cron | partial   | shape-only via `shipctl` |
+| 12 | GitHub Issues  | Cursor             | GitHub Actions   | partial   | tracker adapter pending |
+| 13 | GitHub Issues  | Cursor Cloud       | GitHub Actions   | partial   | tracker adapter pending |
+| 14 | GitHub Issues  | Claude Code        | GitHub Actions   | partial   | tracker + agent partial |
+| 15 | GitHub Issues  | GitHub Copilot     | GitHub Actions   | partial   | tracker + agent partial |
+| 16 | GitHub Issues  | Codex CLI          | GitHub Actions   | partial   | tracker + agent partial |
+| 17 | Jira           | Cursor             | GitHub Actions   | partial   | tracker adapter pending |
+| 18 | Jira           | Cursor Cloud       | GitHub Actions   | partial   | tracker adapter pending |
+| 19 | Jira           | Claude Code        | GitHub Actions   | partial   | tracker adapter pending |
+| 20 | Jira           | Codex CLI          | Jenkins          | planned   | both adapters pending |
+| 21 | Jira           | Aider              | GitLab CI        | planned   | both adapters pending |
+| 22 | Notion         | Cursor             | GitHub Actions   | planned   | tracker adapter not started |
+| 23 | Notion         | Claude Code        | GitHub Actions   | planned   | tracker adapter not started |
+| 24 | Notion         | Cursor Cloud       | GitHub Actions   | planned   | tracker adapter not started |
+| 25 | Notion         | Codex CLI          | GitHub Actions   | planned   | tracker adapter not started |
+| 26 | Asana          | Cursor             | GitHub Actions   | planned   | tracker adapter not started |
+| 27 | ClickUp        | Cursor             | GitHub Actions   | planned   | tracker adapter not started |
+| 28 | Spreadsheet    | Cursor             | GitHub Actions   | partial   | tracker-contract shape only |
+| 29 | Spreadsheet    | Aider              | Self-hosted cron | partial   | tracker-contract + cron shape |
+| 30 | Linear         | Windsurf / Cline / Continue / Zed / Opencode | GitHub Actions | partial | per-agent rules only |
+
+> A row marked **partial** means the artifacts exist and the loop *should* work, but no smoke run has gone green for that exact combination this release. Treat **partial** rows as the queue for the next coverage push — see the automation plan on the PR that introduced this matrix.
+
 ## Repository structure
 
 | Path | Purpose |
