@@ -105,9 +105,15 @@ const REPOS_ERRORS: Record<string, string> = {
 
 const TRACKER_ERRORS: Record<string, string> = {
   api_unavailable: "Backend not reachable.",
-  missing_secret: "Paste the API key/token before saving.",
-  bad_kind: "Pick one of the supported integrations.",
+  bad_kind: "Pick one of the supported trackers.",
   forbidden: "You need admin role on this workspace to add an integration.",
+  not_configured:
+    "OAuth credentials for that tracker aren't configured on this deployment. Ask ops to wire {LINEAR,NOTION}_CLIENT_ID/SECRET.",
+  bad_state:
+    "OAuth handshake failed (state expired or tampered). Start the flow again.",
+  exchange_failed:
+    "Tracker rejected the OAuth code. Try again, or check the application is approved by your workspace admin.",
+  denied: "You declined the connection. Hit a tile to try again or skip.",
   unknown: "Something went sideways. Please retry.",
 };
 
@@ -162,49 +168,6 @@ const KNOWLEDGE_BUCKETS: { id: string; name: string; blurb: string }[] = [
     id: "testing",
     name: "Testing approach",
     blurb: "Test pyramid + sample command — distilled from the test files.",
-  },
-];
-
-const INTEGRATION_PRESETS: {
-  id: string;
-  name: string;
-  blurb: string;
-  configFields?: { name: string; label: string; placeholder?: string }[];
-}[] = [
-  {
-    id: "linear",
-    name: "Linear",
-    blurb: "Mirror approved retro action items as Linear issues.",
-    configFields: [{ name: "team_id", label: "Team ID", placeholder: "ENG" }],
-  },
-  {
-    id: "jira",
-    name: "Jira",
-    blurb: "Two-way sync of agent-authored tickets with Jira.",
-    configFields: [
-      { name: "site", label: "Site", placeholder: "acme.atlassian.net" },
-      { name: "project_key", label: "Project key", placeholder: "ENG" },
-    ],
-  },
-  {
-    id: "notion",
-    name: "Notion",
-    blurb: "Pages-as-tickets: queue lives in a Notion database, agents pick from it.",
-    configFields: [
-      { name: "database_id", label: "Database ID", placeholder: "32-char hex" },
-    ],
-  },
-  {
-    id: "github",
-    name: "GitHub",
-    blurb: "Issues + PR review handles for catalog merges.",
-    configFields: [{ name: "org", label: "Org", placeholder: "your-org" }],
-  },
-  {
-    id: "slack",
-    name: "Slack",
-    blurb: "Post the daily digest into a channel.",
-    configFields: [{ name: "channel", label: "Channel", placeholder: "#ship-daily" }],
   },
 ];
 
@@ -373,8 +336,8 @@ export default async function OnboardingPage({
             wsId={wsId}
             repo={repo ?? ""}
             error={error}
-            installed={pick(params.installed)}
-            commit={pick(params.commit)}
+            linearStatus={pick(params.linear)}
+            notionStatus={pick(params.notion)}
           />
         )}
         {step === "tracker" && !wsId && <MissingWorkspaceNotice />}
@@ -1119,44 +1082,69 @@ function TrackerStep({
   wsId,
   repo,
   error,
-  installed,
-  commit,
+  linearStatus,
+  notionStatus,
 }: {
   wsId: string;
   repo: string;
   error?: string;
-  installed?: string;
-  commit?: string;
+  linearStatus?: string;
+  notionStatus?: string;
 }) {
   const message = error ? TRACKER_ERRORS[error] ?? error : null;
+  const tiles: { id: "linear" | "notion" | "github"; name: string; blurb: string; tag: string }[] = [
+    {
+      id: "linear",
+      name: "Linear",
+      blurb:
+        "OAuth into your Linear workspace. We can list issues, transition states, and comment on tickets.",
+      tag: "OAuth · 1 click",
+    },
+    {
+      id: "notion",
+      name: "Notion",
+      blurb:
+        "OAuth into Notion. Share at least one ticket-shaped database with the integration after approval.",
+      tag: "OAuth · 1 click",
+    },
+    {
+      id: "github",
+      name: "GitHub Issues",
+      blurb:
+        "Reuses the GitHub App you installed earlier — no extra OAuth, no extra secret.",
+      tag: "Already connected",
+    },
+  ];
   return (
     <section>
       <p className="font-mono text-[11px] uppercase tracking-[0.3em] text-aqua/85">
-        Step 4 of 6 · Optional
+        Step 5 of 8 · Optional
       </p>
       <h1 className="mt-2 font-display text-4xl font-bold leading-tight">
-        Wire up your tracker.
+        Pick a tracker.
       </h1>
       <p className="mt-3 max-w-2xl text-sm leading-relaxed text-white/70">
-        Pick where the daily lane should mirror tickets. Plaintext is encrypted with the
-        workspace key and never leaves Postgres — the API only reports{" "}
+        The daily lane mirrors approved actions as tickets here. OAuth flows
+        encrypt the access token with the workspace key — the API only reports{" "}
         <code className="rounded bg-white/5 px-1 py-[1px] text-aqua">has_secret: true</code>{" "}
-        from here on. You can skip and configure later from{" "}
+        from here on. You can skip and wire one up later from{" "}
         <Link href="/integrations" className="text-aqua underline">
           Integrations
         </Link>
         .
       </p>
 
-      {installed && Number(installed) > 0 && (
+      {linearStatus === "connected" && (
         <div className="mt-5 rounded-xl border border-aqua/30 bg-aqua/[0.06] px-4 py-3 text-xs text-white/85">
-          <strong className="text-aqua">Installed {installed} workflow(s).</strong>{" "}
-          {commit && (
-            <>
-              Commit{" "}
-              <code className="font-mono text-aqua">{commit}</code> recorded in your repo.
-            </>
-          )}
+          <strong className="text-aqua">Linear connected.</strong> Token saved
+          and ready. Pick another tracker or hit Continue below.
+        </div>
+      )}
+      {notionStatus === "connected" && (
+        <div className="mt-5 rounded-xl border border-aqua/30 bg-aqua/[0.06] px-4 py-3 text-xs text-white/85">
+          <strong className="text-aqua">Notion connected.</strong> Remember to
+          share a database with the &quot;Ship&quot; integration so we can read
+          your queue.
         </div>
       )}
 
@@ -1166,81 +1154,69 @@ function TrackerStep({
         </div>
       )}
 
+      <div className="mt-7 grid grid-cols-1 gap-4 md:grid-cols-3">
+        {tiles.map((tile) => (
+          <form
+            key={tile.id}
+            action="/api/onboard/tracker-install"
+            method="POST"
+            className="flex h-full flex-col rounded-2xl border border-white/10 bg-white/[0.03] p-4 backdrop-blur-xl shadow-card transition hover:border-aqua/40"
+            suppressHydrationWarning
+          >
+            <input type="hidden" name="ws" value={wsId} suppressHydrationWarning />
+            {repo && (
+              <input
+                type="hidden"
+                name="repo"
+                value={repo}
+                suppressHydrationWarning
+              />
+            )}
+            <input type="hidden" name="kind" value={tile.id} suppressHydrationWarning />
+            <div className="flex items-center justify-between">
+              <h3 className="font-display text-lg font-bold text-white">
+                {tile.name}
+              </h3>
+              <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] uppercase tracking-widest text-white/55">
+                {tile.tag}
+              </span>
+            </div>
+            <p className="mt-2 flex-1 text-[12px] leading-relaxed text-white/65">
+              {tile.blurb}
+            </p>
+            <button
+              type="submit"
+              className="mt-4 rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-4 py-2 text-xs font-bold text-ink shadow-glow transition hover:brightness-110"
+            >
+              {tile.id === "github" ? "Use GitHub Issues →" : `Connect ${tile.name} →`}
+            </button>
+          </form>
+        ))}
+      </div>
+
       <form
-        action="/api/onboard/integration"
+        action="/api/onboard/tracker-install"
         method="POST"
-        className="mt-7 space-y-5"
+        className="mt-7 flex items-center justify-between gap-3 border-t border-white/10 pt-5"
         suppressHydrationWarning
       >
         <input type="hidden" name="ws" value={wsId} suppressHydrationWarning />
-        {repo && <input type="hidden" name="repo" value={repo} suppressHydrationWarning />}
-
-        <fieldset className="grid grid-cols-1 gap-3 md:grid-cols-2">
-          <legend className="mb-1.5 text-[11px] font-bold uppercase tracking-widest text-white/55">
-            Pick a kind
-          </legend>
-          {INTEGRATION_PRESETS.map((p, i) => (
-            <label
-              key={p.id}
-              className="flex cursor-pointer items-start gap-3 rounded-xl border border-white/10 bg-white/[0.025] p-3 has-[:checked]:border-aqua/50 has-[:checked]:bg-aqua/[0.06]"
-            >
-              <input
-                type="radio"
-                name="kind"
-                value={p.id}
-                defaultChecked={i === 0}
-                className="mt-1"
-                suppressHydrationWarning
-              />
-              <div className="min-w-0">
-                <div className="font-semibold text-white">{p.name}</div>
-                <div className="text-[11px] text-white/55">{p.blurb}</div>
-              </div>
-            </label>
-          ))}
-        </fieldset>
-
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-          {INTEGRATION_PRESETS[0].configFields?.map((f) => (
-            <label key={f.name} className="block">
-              <span className="mb-1.5 block text-[11px] font-bold uppercase tracking-widest text-white/55">
-                {f.label} <span className="font-normal text-white/35">(optional)</span>
-              </span>
-              <input
-                name={`config_${f.name}`}
-                type="text"
-                placeholder={f.placeholder}
-                className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3.5 py-2.5 text-sm text-white outline-none focus:border-aqua/40"
-                suppressHydrationWarning
-              />
-            </label>
-          ))}
-        </div>
-
-        <label className="block">
-          <span className="mb-1.5 block text-[11px] font-bold uppercase tracking-widest text-white/55">
-            Secret
-          </span>
+        {repo && (
           <input
-            name="secret"
-            type="password"
-            autoComplete="off"
-            placeholder="lin_api_…   /   xoxb-…   /   ghp_…"
-            className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3.5 py-2.5 font-mono text-xs text-white outline-none focus:border-aqua/40"
+            type="hidden"
+            name="repo"
+            value={repo}
             suppressHydrationWarning
           />
-          <span className="mt-1 block text-[10px] text-white/45">
-            Encrypted at rest with{" "}
-            <code className="text-aqua">ENCRYPTION_KEY</code> (Fernet). Audit log records who
-            saved it and when, never the value itself.
-          </span>
-        </label>
-
-        <div className="flex items-center justify-between gap-3 pt-2">
+        )}
+        <input type="hidden" name="kind" value="skip" suppressHydrationWarning />
+        <span className="text-[11px] text-white/45">
+          Already connected one? Just hit Continue — the wizard remembers across
+          refreshes.
+        </span>
+        <div className="flex items-center gap-3">
           <button
             type="submit"
-            name="intent"
-            value="skip"
             className="text-xs text-white/55 hover:text-white"
             formNoValidate
           >
@@ -1248,11 +1224,9 @@ function TrackerStep({
           </button>
           <button
             type="submit"
-            name="intent"
-            value="save"
-            className="rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-4 py-2.5 text-sm font-bold text-ink shadow-glow transition hover:brightness-110"
+            className="rounded-full border border-aqua/40 bg-aqua/[0.08] px-4 py-2 text-xs font-bold text-aqua hover:bg-aqua/[0.16]"
           >
-            Save &amp; continue →
+            Continue →
           </button>
         </div>
       </form>
