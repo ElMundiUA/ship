@@ -89,7 +89,7 @@ async def _resolve_auth0_jwt(
 ) -> AuthContext:
     """Verify an Auth0 access token and JIT-resolve the User row."""
     claims = auth0_validator.validate_access_token(raw, settings)
-    user = await auth0_validator.user_from_claims(claims, session)
+    user = await auth0_validator.user_from_claims(claims, session, raw_token=raw)
     if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="user disabled"

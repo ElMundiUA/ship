@@ -313,6 +313,42 @@ async def test_jit_requires_email_for_new_user(db_session) -> None:
     assert "email" in exc.value.detail.lower()
 
 
+@pytest.mark.asyncio
+async def test_jit_fetches_email_from_userinfo_when_claim_missing(
+    db_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Auth0 access tokens for a custom API audience drop the ``email`` /
+    ``name`` claims by default — those live on the ID token. The WOW
+    onboarding has to work without forcing operators to wire a custom
+    Action, so the JIT path falls back to the OIDC ``/userinfo`` endpoint
+    when the access-token claims don't include an email.
+    """
+    from backend.app.db.models.tenancy import User
+
+    captured: dict[str, str] = {}
+
+    def fake_fetch(issuer: str, raw_token: str) -> dict[str, str]:
+        captured["issuer"] = issuer
+        captured["token"] = raw_token
+        return {"email": "Latecomer@Example.COM", "name": "Late Comer"}
+
+    monkeypatch.setattr(auth0, "_fetch_userinfo", fake_fetch)
+
+    user = await auth0.user_from_claims(
+        {"sub": "auth0|late", "iss": "https://tenant.example.auth0.com/"},
+        db_session,
+        raw_token="fake-token",
+    )
+
+    assert user.email == "latecomer@example.com"
+    assert user.external_subject == "auth0|late"
+    assert user.display_name == "Late Comer"
+    assert captured == {
+        "issuer": "https://tenant.example.auth0.com/",
+        "token": "fake-token",
+    }
+
+
 def test_rejects_when_settings_incomplete(monkeypatch: pytest.MonkeyPatch) -> None:
     # Settings normally reads .env; for this test we want a guaranteed-empty
     # snapshot so we exercise the "operator forgot to set AUTH0_*" branch.
