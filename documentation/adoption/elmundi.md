@@ -4,10 +4,15 @@ Use this page when adopting Ship into **[ElMundiUA/elmundi](https://github.com/E
 
 ## Agent instruction (copy-paste order)
 
-1. Run everything in **`prompts/onboarding/adopt-ship-generic.md`** (see [Agent playbook](agent-playbook.md)).  
-2. Then apply **`prompts/onboarding/adopt-ship-elmundi.md`** (delta below).
+The onboarding prompts are now versioned artifacts. Point your agent at:
 
---8<-- "prompts/onboarding/adopt-ship-elmundi.md"
+1. [`pattern/adopt-ship-generic`](/patterns/adopt-ship-generic) — the universal adoption prompt (see also [Agent playbook](agent-playbook.md)).
+2. [`pattern/adopt-ship-elmundi`](/patterns/adopt-ship-elmundi) — the ElMundi delta with submodule wiring, secrets, and the cron grid this fork expects.
+
+`shipctl init --copy-playbook` resolves the generic body into the repo on
+demand; the ElMundi-specific delta is applied by hand because it depends on
+the existing `tools/`, `website/`, and `.github/workflows/` layout in the
+fork.
 
 ---
 

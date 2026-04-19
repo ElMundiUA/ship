@@ -96,7 +96,14 @@ export function rewriteDocLinks(source) {
       "getting-started/index.md": "/docs/getting-started",
       "examples/elmundi/index.md": "/docs/examples/elmundi",
       "prompts-workflows/index.md": "/docs/prompts-workflows",
-      "tools/index.md": "/docs/tools",
+      /* `documentation/tools/` no longer exists — the catalog moved to the
+       * top-level `/tools` route. Pre-v0.10 markdown still references it
+       * via `../tools/index.md`, so map it to the live route instead of
+       * letting it fall through to a 404 on `/docs/tools`. */
+      "tools/index.md": "/tools",
+      "collections/index.md": "/collections",
+      "patterns/index.md": "/patterns",
+      "workflows/index.md": "/workflows",
       "index.md": "/docs",
     };
 
@@ -118,6 +125,117 @@ export function rewriteImages(source) {
   });
 }
 
+/**
+ * Where the ECharts SVG infographics belong in the book.
+ *
+ * Each entry says: when this exact h3 line appears, insert the
+ * companion figure *immediately after the chapter's prose* (we anchor
+ * by the next chapter heading or a top-level horizontal rule, which
+ * is the simplest stable seam in this book).
+ *
+ * Charts live in `landing/public/diagrams/charts/` and are produced
+ * by `landing/scripts/build-book-charts.mjs`. They use the book's
+ * cream/ink palette directly so:
+ *   - the print pipeline opts out of SVG colour inversion (see
+ *     `figure.book-chart` in build-book-pdf.mjs), and
+ *   - the web `/book` page renders them on a paper-toned card so the
+ *     warm palette reads correctly against the dark theme (see the
+ *     `BookImg` chart branch + `.book-chart` CSS in book.css).
+ *
+ * The figure is emitted as raw HTML with a markdown image inside so
+ * both renderers see the same DOM shape:
+ *
+ *   <figure class="book-chart">
+ *     ![alt](src)
+ *     <figcaption>...</figcaption>
+ *   </figure>
+ */
+export const bookChartInsertions = [
+  {
+    afterHeading: "### Chapter 20.A — What to measure in the morning",
+    image: "/diagrams/charts/book-morning-metrics.svg",
+    alt: "Five morning-shape signals over a week",
+    caption:
+      "Fig. 20.A — The five \u201Cshape\u201D signals worth a wall-mounted panel. The shaded band on pick rate marks the healthy quarter; everything outside it is a question, not an alarm.",
+  },
+  {
+    afterHeading: "### Chapter 5 — Throughput must be bounded",
+    image: "/diagrams/charts/book-bounded-throughput.svg",
+    alt: "Merged outcomes flatten while rework accelerates as WIP grows",
+    caption:
+      "Fig. 5 — Merged outcomes plateau quickly; rework and duplicate PRs do not. The bounded zone is the part of the curve a tired team can still defend at midnight.",
+  },
+  {
+    afterHeading: "### Chapter 19 — Why \u201Calways on\u201D is a trap",
+    image: "/diagrams/charts/book-role-grid.svg",
+    alt: "Role grid: at most one delivery role per UTC slot",
+    caption:
+      "Fig. 19 — One role per slot, by construction. The grid is the calendar a firehose pretends does not exist.",
+  },
+  {
+    afterHeading: "### Chapter 25.A — Where a fix becomes feedback",
+    image: "/diagrams/charts/book-elm64-compound.svg",
+    alt: "Fifteen identical patches in one calendar day",
+    caption:
+      "Fig. 25.A — Compound interest, drawn from a real commit log. By patch \u00233 the right move was to escalate the artifact, not to ship patch \u00234.",
+  },
+  {
+    afterHeading: "### Chapter 31.A — The price of a bounded loop",
+    image: "/diagrams/charts/book-cost-envelope.svg",
+    alt: "Daily agent runs against a bounded envelope",
+    caption:
+      "Fig. 31.A — The envelope is the contract; spend is the receipt. A day above the line is not a billing event yet \u2014 it is a design conversation.",
+  },
+];
+
+export function injectBookCharts(source) {
+  const lines = source.split("\n");
+  const out = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    out.push(lines[i]);
+    const hit = bookChartInsertions.find((c) => lines[i].trim() === c.afterHeading.trim());
+    if (!hit) continue;
+    /* Walk forward until the *end* of this chapter's prose — the next
+     * h3, h2, top-level horizontal rule, OR the raw-HTML form of the
+     * same headings (transformHeadingIds emits `<h3 id="..." …>` for
+     * headings that carried a `{#anchor}` suffix). */
+    let j = i + 1;
+    while (j < lines.length) {
+      const L = lines[j];
+      if (
+        /^###\s+/.test(L) ||
+        /^##\s+/.test(L) ||
+        /^<h[23]\b/.test(L) ||
+        L.trim() === "---"
+      ) {
+        break;
+      }
+      j += 1;
+    }
+    /* Emit raw HTML for the entire figure (incl. the <img>) — putting
+     * the markdown image syntax inside a block-level <figure> would
+     * make both `marked` (PDF) and `react-markdown` (web) treat the
+     * image as text, which is why earlier passes printed a stranded
+     * `!Caption text` line where the chart should be. The
+     * `not-prose` class opts the card out of @tailwindcss/typography
+     * spacing on the web; the print pipeline ignores the class. */
+    const altAttr = escapeHtml(hit.alt);
+    const captionHtml = escapeHtml(hit.caption);
+    const figureLines = [
+      "",
+      `<figure class="book-chart not-prose">`,
+      `<img src="${hit.image}" alt="${altAttr}" />`,
+      `<figcaption>${captionHtml}</figcaption>`,
+      `</figure>`,
+      "",
+    ];
+    for (let k = i + 1; k < j; k += 1) out.push(lines[k]);
+    out.push(...figureLines);
+    i = j - 1;
+  }
+  return out.join("\n");
+}
+
 export function preprocessBookMarkdown(source) {
   let md = source.replace(/^#\s+The book[^\n]*\n+/, "");
   md = transformAdmonitions(md);
@@ -128,5 +246,9 @@ export function preprocessBookMarkdown(source) {
     /(!\[System context]\(\/diagrams\/architecture\.svg\)\s*\n+)/,
     "$1\n![SDLC states — lane language for tickets](/diagrams/sdlc-linear-states.svg)\n\n",
   );
+  /* Chart injection runs *after* heading-id rewriting so we can match
+   * both markdown (`### Chapter …`) and HTML (`<h3 id="…">`) headings
+   * as boundaries. Both web (`/book`) and PDF pipelines call this. */
+  md = injectBookCharts(md);
   return md.trimStart();
 }

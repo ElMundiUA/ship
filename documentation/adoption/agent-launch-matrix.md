@@ -14,8 +14,8 @@ npx @elmundi/ship-cli init --agents <csv>
 |--------|---------|
 | `collection/agent-rules-<agent>` | Per-agent rule artifact (RFC-0004); `shipctl --copy-rules` installs it. |
 | `collection/preset-<preset>` | Per-preset bootstrap content (CI workflow, labels, secrets). |
-| `prompts/onboarding/adopt-ship-generic.md` | Universal adoption prompt (included in the [Agent playbook](agent-playbook.md)). |
-| `prompts/onboarding/adopt-ship-elmundi.md` | ElMundi-specific delta. |
+| [`pattern/adopt-ship-generic`](/patterns/adopt-ship-generic) | Universal adoption prompt (included in the [Agent playbook](agent-playbook.md); resolved by `--copy-playbook`). |
+| [`pattern/adopt-ship-elmundi`](/patterns/adopt-ship-elmundi) | ElMundi-specific adoption delta. |
 | `documentation/adoption/agent-setup-contract.md` | Interactive discovery contract (Phase 0 preamble + interview). |
 
 ## Detection + injection matrix

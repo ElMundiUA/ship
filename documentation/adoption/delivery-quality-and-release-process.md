@@ -2,7 +2,7 @@
 
 This document describes a **complete, project-agnostic** operating model for teams using **Ship**: tracker states, human vs automation boundaries, **QA** vs **QA automation**, regression as a **promote gate**, optional **scheduled production release**, and **mandatory daily rhythm** (morning digest + end-of-day retro email). Use it when adopting Ship into **any** repository—not only a specific product or hosting stack.
 
-**Companion docs:** [Getting started](../getting-started/index.md) (commands and agent bundle), [Agent playbook](agent-playbook.md) (wiring Ship into the tree), [Ship Agent & trackers](../tools/ship-agent-trackers.md), [The book](../framework/index.md) (philosophy and long narrative).
+**Companion docs:** [Getting started](../getting-started/index.md) (commands and agent bundle), [Agent playbook](agent-playbook.md) (wiring Ship into the tree), [Tools catalog](/tools) (tracker / CI / agent / secret adapters), [The book](../framework/index.md) (philosophy and long narrative).
 
 ---
 

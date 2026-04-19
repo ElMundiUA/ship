@@ -9,12 +9,15 @@ const nextConfig: NextConfig = {
     return [
       { source: "/docs/framework", destination: "/book", permanent: false },
       { source: "/docs/framework/", destination: "/book", permanent: false },
-      /* Convenience aliases — people type /cli and /getting-started in the bar. */
-      { source: "/cli", destination: "/docs/shipctl", permanent: false },
-      { source: "/cli/:path*", destination: "/docs/shipctl", permanent: false },
+      /* Convenience alias — people type /getting-started in the bar. */
       { source: "/getting-started", destination: "/docs/getting-started", permanent: false },
+      /* CLI moved to top-level `/cli` in v0.10. The `/cli/:path*` rule keeps
+       * the door open for future sub-routes (e.g. /cli/reference) without
+       * shadowing the real `/cli` page. */
+      { source: "/docs/shipctl", destination: "/cli", permanent: false },
+      { source: "/docs/shipctl/:path*", destination: "/cli", permanent: false },
       /* Old MkDocs paths a few external docs link to. */
-      { source: "/docs/tools/shipctl-cli", destination: "/docs/shipctl", permanent: false },
+      { source: "/docs/tools/shipctl-cli", destination: "/cli", permanent: false },
       { source: "/docs/tools/ship-agent-trackers", destination: "/tools", permanent: false },
       { source: "/docs/tools/ship-agent-ci", destination: "/tools", permanent: false },
     ];

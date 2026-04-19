@@ -7,7 +7,7 @@ import { repoUrl } from "@/lib/config";
  */
 const NAV: { href: string; label: string; className: string }[] = [
   { href: "/docs/getting-started", label: "Getting started", className: "" },
-  { href: "/docs/shipctl", label: "CLI", className: "" },
+  { href: "/cli", label: "CLI", className: "" },
   { href: "/docs", label: "Docs", className: "" },
   { href: "/use-cases", label: "Use cases", className: "hidden sm:inline" },
   { href: "/patterns", label: "Patterns", className: "hidden md:inline" },

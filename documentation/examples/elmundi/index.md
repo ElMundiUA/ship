@@ -16,8 +16,8 @@ If you are new here, use **[Getting started](../../getting-started/index.md)** t
 | **Tracker as system of record** | Linear — projects, states, labels; see [SDLC scheduled](#sdlc-scheduled). |
 | **Scheduler / clock** | GitHub Actions — cron + `workflow_dispatch`; full table in [Workflows catalog](#workflows-catalog). |
 | **Deterministic pick** | Implemented as project-specific automation scripts/workflows; details in SDLC + operator docs. |
-| **Versioned prompts** | `prompts/cloud-agent/*.md` — one role per file; see [Prompt catalog](../../prompts-workflows/index.md#prompt-catalog). |
-| **Agent launch** | `cloud-agent-launch.mjs` + Cursor Cloud Agent API — secrets in [Operator setup](#operator-setup) and [Tools → Cursor Cloud Agent](../../tools/index.md#cursor-cloud-agent). |
+| **Versioned prompts** | `pattern/cloud-*` artifacts — one role per pattern; see [Prompt catalog](../../prompts-workflows/index.md#prompt-catalog). |
+| **Agent launch** | `cloud-agent-launch.mjs` + Cursor Cloud Agent API — secrets in [Operator setup](#operator-setup) and [`tool/cursor-cloud-agent`](/tools/cursor-cloud-agent). |
 | **Delivery lane grid** | `linear-agent-sdlc-scheduled.yml` — minutes and roles in [SDLC scheduled](#sdlc-scheduled). |
 | **Audit loop (separate board)** | `linear-agent-daily-audits.yml` — tech / QA / security roles; [Daily audits](#daily-audits). |
 | **Self-heal (diagnostics)** | `workflow-self-heal.yml` — **not** the same as SDLC intake; see workflows catalog. |
@@ -163,7 +163,7 @@ Without `LINEAR_API_KEY`, the **Pick issue** step fails with `MISSING_LINEAR_API
 
 **Skills:** checkout includes `.cursor/skills`; each `SKILL.md` (truncated) is embedded by `scripts/cloud-agent-launch.mjs`.
 
-**Linear from the agent:** provide **LINEAR_API_KEY** to Cloud Agent env (see [Cursor Cloud secrets](../../tools/index.md#cursor-cloud-agent)).
+**Linear from the agent:** provide **LINEAR_API_KEY** to Cloud Agent env (see [`tool/cursor-cloud-agent`](/tools/cursor-cloud-agent)).
 
 ### Manual run
 
@@ -403,7 +403,7 @@ GitHub **Settings → Secrets → Actions**:
 | `LINEAR_SECURITY_PROJECT_ID` | Optional; Snyk ticket target |
 | `LINEAR_SDLC_PROJECT_ID` | Optional; SDLC pick project override |
 
-**Agent + Linear env:** [Cursor Cloud secrets](../../tools/index.md#cursor-cloud-agent).
+**Agent + Linear env:** [`tool/cursor-cloud-agent`](/tools/cursor-cloud-agent).
 
 ### Quick debug checklist
 

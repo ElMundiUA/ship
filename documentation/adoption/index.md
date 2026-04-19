@@ -68,13 +68,15 @@ npx @elmundi/ship-cli verify --no-network
 | Resource | Purpose |
 |----------|---------|
 | [Getting started](../getting-started/index.md) | Form-driven entry point that builds your `shipctl init` command + agent prompt. |
-| [shipctl CLI reference](../tools/shipctl-cli.md) | Authoritative quick reference for every `shipctl` command. |
+| [shipctl CLI reference](/cli) | Authoritative quick reference for every `shipctl` command. |
 | [Agent setup contract](agent-setup-contract.md) | Mandatory interactive discovery behavior for agents (now with the machine-readable preamble). |
 | [Agent playbook](agent-playbook.md) | Canonical generic onboarding playbook. |
 | [Delivery, quality & release](delivery-quality-and-release-process.md) | End-to-end operating model, QA split, release gates, daily digest/retro. |
 | [Agent launch matrix](agent-launch-matrix.md) | One protocol, 13 agent surfaces — id ↔ install target ↔ adapter artifact. |
-| [Tracker adapters](../tools/ship-agent-trackers.md) | Per-tracker contracts (`linear`, `jira`, `github-issues`, `azure-boards`, `clickup`, `spreadsheet`, `none`). |
-| [CI adapters](../tools/ship-agent-ci.md) | Per-CI contracts (`gh-actions`, `gitlab-ci`, `buildkite`, `circleci`, `azure-pipelines`, `jenkins`, `manual`). |
+| [Tools catalog](/tools) | Tracker, CI, secret-store, agent-runtime adapters with cards and detail pages. |
+| [Org patterns](/patterns) | The catalog of role / lane / cadence patterns that compose into a delivery loop. |
+| [Workflows](/workflows) | Pipeline-shaped patterns: scheduled SDLC lane, hosted E2E, parallel audits, pipeline self-heal. |
+| [Collections](/collections) | Bundles `shipctl init` resolves: presets, agent-rules-* per agent, vertical addendums. |
 | [ElMundi rollout](elmundi.md) | Reference-org specific delta. |
 | [The book](../framework/index.md) | Long-form rationale and trade-offs. |
 
@@ -95,8 +97,8 @@ Browse the full [RFC index](../rfc/index.md) for status and changelogs.
 ## Source of truth for content
 
 The actual rule bodies, presets, and addendums live as artifacts under
-[`documentation/collections/`](../collections/). They are fetched by
-`shipctl` — never copied into client repos:
+[`artifacts/collections/`](/collections). They are fetched by `shipctl` —
+never copied into client repos:
 
 - `collection/agent-rules-<agent>` — one per supported agent (13 today).
 - `collection/preset-<preset>` — `web-app`, `api-backend`, `mobile-app`, `cli`,

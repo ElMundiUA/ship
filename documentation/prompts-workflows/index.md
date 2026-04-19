@@ -90,69 +90,31 @@ Daily **audit** roles (tech / QA / security) use **separate** Linear projects an
 
 ---
 
-## Full prompts (`prompts/cloud-agent/`) {#prompt-catalog}
+## Cloud-agent prompt catalog {#prompt-catalog}
 
-This section is **one page inside one page**: the map below plus the **complete** markdown files as they ship in the repository—no ellipses, no “see repo for the rest.” The Next.js manual expands the same **`--8<--`** includes at render time so the site and git cannot silently diverge.
+The bodies that used to live under `prompts/cloud-agent/*.md` are now first-class **artifacts** in this repository — every cloud-agent role is a versioned `pattern/cloud-*` body resolved by `shipctl pattern fetch` and pinned in `.ship/config.yml`. The catalog below is the canonical map; click the link to read the full body, the routing block (which Linear project, which schedule), and the front-matter (`install_target`, `marker`, `version`).
 
 Placeholders such as `{{ISSUE}}`, `{{BASE}}`, and `{{SKILLS_CONTEXT}}` are filled by your project launcher/runtime at run time; treat them as part of the contract, not as typos.
 
-**How to change them safely:** [Start with a skeleton](#iterating-on-prompts). **Optional A-series drafts** under `prompts/catalog/` are human reference only; **Your launcher should read `prompts/cloud-agent/`**—promote edits there when scheduled runs should inherit them.
+**How to change them safely:** [Start with a skeleton](#iterating-on-prompts), then open a PR against the relevant `artifacts/patterns/cloud-*/ARTIFACT.md` file. Cron schedules pick up the new body on the next sync; no vendor UI involved.
 
-| Bucket | File | Role |
-|--------|------|------|
-| Shared | `_base.md` | Global rules for all Cloud Agent runs |
-| Delivery | `intake.md` | First pass on **Todo** work — triage, questions, **stop** when hollow |
-| Delivery | `clarification.md` | Follow-up when humans answer (or nudge if still stuck) |
-| Delivery | `ba.md` | Spec shape, AC, `ready:developer` when appropriate |
-| Delivery | `developer.md` | Implement, test, **one** PR, **In Review** |
-| Platform | `workflow-self-heal.md` | Minimal pipeline fixes; narrow scope |
-| Audit | `tech-architect.md` | Architecture / tech-debt findings with paths |
-| Audit | `qa-architect.md` | Test-strategy gaps with file paths |
-| Audit | `security-officer.md` | Snyk-grounded issues only |
+| Bucket | Pattern | Role |
+|--------|---------|------|
+| Shared | [`pattern/cloud-base`](/patterns/cloud-base) | Cross-cutting rules for every headless role: queue boundaries, Linear as the human channel, idempotency, branch contract, audit markers. |
+| Delivery | [`pattern/cloud-intake`](/patterns/cloud-intake) | First pass on **Todo** work — triage, questions, **stop** when hollow. |
+| Delivery | [`pattern/cloud-clarification`](/patterns/cloud-clarification) | Follow-up when humans answer (or nudge if still stuck). |
+| Delivery | [`pattern/cloud-ba`](/patterns/cloud-ba) | Spec shape, AC, set `ready:developer` when appropriate. |
+| Delivery | [`pattern/cloud-developer`](/patterns/cloud-developer) | Implement, test, **one** PR, move card to **In Review**. |
+| Platform | [`pattern/cloud-workflow-self-heal`](/patterns/cloud-workflow-self-heal) | Minimal pipeline fixes; narrow scope. |
+| Audit | [`pattern/cloud-tech-architect`](/patterns/cloud-tech-architect) | Architecture / tech-debt findings with paths. |
+| Audit | [`pattern/cloud-qa-architect`](/patterns/cloud-qa-architect) | Test-strategy gaps with file paths. |
+| Audit | [`pattern/cloud-security-officer`](/patterns/cloud-security-officer) | Snyk-grounded issues only. |
 
-**Adding a new role:** decide **which project** receives output, **which schedule** fires it, **what guards** stop the run, and **what artefact** proves success. If you cannot answer, you are adding noise—not a prompt.
+The full A-series catalog (`catalog-a1-intake` through `catalog-a13-daily-retro`) describes the **idealised** SDLC roles independent of runtime. The `cloud-*` family above is the cloud-agent **implementation** of that catalog. Use the catalog as the contract, the cloud bodies as the wiring.
 
-**Skills** under `.cursor/skills/` are embedded by the launch path—keep them **short**; link out to this manual for depth. **Onboarding** playbooks live in **`prompts/onboarding/`** — see **[Adoption → Overview](../adoption/index.md)**.
+**Adding a new role:** decide **which project** receives output, **which schedule** fires it, **what guards** stop the run, and **what artefact** proves success. If you cannot answer, you are adding noise — not a prompt. Then add an `artifacts/patterns/<id>/ARTIFACT.md` file with the front-matter spec (`kind: pattern`, `id`, `version`, optional `install_target`/`marker`).
 
-### Full file contents {#elmundi-prompt-samples}
-
-### Shared base — `_base.md`
-
-Cross-cutting rules for every headless role (queue boundaries, Linear as the human channel, idempotency, branch contract, audit markers).
-
---8<-- "prompts/cloud-agent/_base.md"
-
-### Delivery lane — `intake.md`
-
---8<-- "prompts/cloud-agent/intake.md"
-
-### Delivery lane — `clarification.md`
-
---8<-- "prompts/cloud-agent/clarification.md"
-
-### Delivery lane — `ba.md`
-
---8<-- "prompts/cloud-agent/ba.md"
-
-### Delivery lane — `developer.md`
-
---8<-- "prompts/cloud-agent/developer.md"
-
-### Platform — `workflow-self-heal.md`
-
---8<-- "prompts/cloud-agent/workflow-self-heal.md"
-
-### Daily audit — `tech-architect.md`
-
---8<-- "prompts/cloud-agent/tech-architect.md"
-
-### Daily audit — `qa-architect.md`
-
---8<-- "prompts/cloud-agent/qa-architect.md"
-
-### Daily audit — `security-officer.md`
-
---8<-- "prompts/cloud-agent/security-officer.md"
+**Skills** under `.cursor/skills/` are embedded by the launch path — keep them **short**; link out to this manual for depth. **Onboarding** playbooks live as `pattern/adopt-ship-*` (see [Adoption → Overview](../adoption/index.md)).
 
 ---
 

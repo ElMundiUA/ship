@@ -2,19 +2,24 @@ import Link from "next/link";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 
-/** Same funnel as the landing header: evaluate → product → manual depth. */
+/**
+ * The Manual sub-nav lists ONLY pages that live inside `/docs`.
+ *
+ * Everything that has a top-level route — `/cli`, `/use-cases`, `/patterns`,
+ * `/workflows`, `/collections`, `/tools`, `/book` — is already in the global
+ * site header. Mirroring those links here turned the page into two parallel
+ * menus that pointed at the same routes (the v0.10 sub-nav even shipped a
+ * dead `/docs/tools` link). Order: start → onboarding → operating model →
+ * protocol → real-world deployment → legal.
+ */
 const NAV = [
-  { href: "/docs/getting-started", label: "Getting started" },
-  { href: "/use-cases", label: "Use cases" },
-  { href: "/patterns", label: "Org patterns" },
-  { href: "/workflows", label: "Workflows" },
-  { href: "/collections", label: "Collections" },
-  { href: "/tools", label: "Tools" },
   { href: "/docs", label: "Start here" },
-  { href: "/docs/prompts-workflows", label: "Prompts & workflows" },
-  { href: "/docs/tools", label: "Manual · Tools" },
-  { href: "/book", label: "The book" },
+  { href: "/docs/getting-started", label: "Getting started" },
   { href: "/docs/adoption", label: "Adoption" },
+  { href: "/docs/prompts-workflows", label: "Prompts & workflows" },
+  { href: "/docs/rfc", label: "RFCs" },
+  { href: "/docs/examples/elmundi", label: "Reference org" },
+  { href: "/docs/legal-copyright", label: "Legal" },
 ];
 
 export default function DocsLayout({ children }: { children: React.ReactNode }) {
