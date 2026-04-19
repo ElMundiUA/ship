@@ -174,6 +174,8 @@ YAML files differ by **intent**. This section names the **patterns**—the *why*
 
 **Invariants:** audit jobs do not pick from the same **Todo** column as delivery unless you want stand-up to catch fire; new tickets cite **artifacts**.
 
+**Canonical role for cross-system retro:** [`catalog-a13-daily-retro`](/patterns/catalog-a13-daily-retro) — once-a-day pass that reads the **tracker delta** and the last 24 h of run journals to surface dead loops (`tracker_delta == 0`), regression drift against the 7-day baseline, vendor outages clustered into one finding, and replay/coverage gaps. Pairs with [`catalog-a12-learning`](/patterns/catalog-a12-learning) (per-issue lessons) and [`catalog-a11-retry-sweep`](/patterns/catalog-a11-retry-sweep) (every-6-hours stuck-issue sweep) to cover three cadences without overlap.
+
 ### Self-heal
 
 **Intent:** CI / pipeline diagnostics; optional agent follow-up on a dedicated ticket or thread.
