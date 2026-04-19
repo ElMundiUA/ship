@@ -29,21 +29,38 @@ def test_pgbouncer_pooled_detection(url: str, expected: bool) -> None:
 
 
 def test_engine_kwargs_for_direct_dsn_keeps_default_pool() -> None:
-    kwargs = db_session._engine_kwargs(
-        "postgresql+asyncpg://ship:ship@localhost:5433/ship"
-    )
+    local = "postgresql+asyncpg://ship:ship@localhost:5433/ship"
+    kwargs = db_session._engine_kwargs(local, local)
     assert kwargs["pool_pre_ping"] is True
     assert kwargs["future"] is True
     # Direct DSNs run with SQLAlchemy's default QueuePool — no override.
     assert "poolclass" not in kwargs
     assert "prepared_statement_cache_size" not in kwargs
+    # No TLS for plain localhost dev — let asyncpg decide.
+    assert "connect_args" not in kwargs
 
 
 def test_engine_kwargs_for_pooled_dsn_disables_prepared_statements() -> None:
-    kwargs = db_session._engine_kwargs(
-        "postgresql+asyncpg://ship:ship@ep-foo-pooler.eu-central-1.aws.neon.tech/ship"
-    )
+    pooled = "postgresql+asyncpg://ship:ship@ep-foo-pooler.eu-central-1.aws.neon.tech/ship"
+    kwargs = db_session._engine_kwargs(pooled, pooled)
     assert kwargs["pool_pre_ping"] is True
     assert kwargs["poolclass"] is NullPool
     # SQLAlchemy forwards this to asyncpg as ``statement_cache_size=0``.
     assert kwargs["prepared_statement_cache_size"] == 0
+    # Cloud (non-loopback) host -> default ssl=True even without sslmode in
+    # the operator-pasted DSN; asyncpg negotiates TLS.
+    assert kwargs["connect_args"]["ssl"] is True
+
+
+def test_engine_kwargs_translates_neon_sslmode_to_asyncpg_ssl_arg() -> None:
+    original = (
+        "postgresql://u:p@ep-foo-pooler.eu-central-1.aws.neon.tech/db"
+        "?sslmode=require&channel_binding=require"
+    )
+    # ``async_database_url`` would normalise this to the +asyncpg URL with
+    # the libpq query params stripped; mimic that here so the test is
+    # self-contained.
+    normalised = "postgresql+asyncpg://u:p@ep-foo-pooler.eu-central-1.aws.neon.tech/db"
+    kwargs = db_session._engine_kwargs(normalised, original)
+    assert kwargs["connect_args"]["ssl"] == "require"
+    assert kwargs["poolclass"] is NullPool

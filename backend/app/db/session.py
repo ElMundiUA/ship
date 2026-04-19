@@ -35,7 +35,7 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import NullPool
 
-from backend.app.core.config import get_settings
+from backend.app.core.config import asyncpg_ssl_arg, get_settings
 
 
 _engine: AsyncEngine | None = None
@@ -56,8 +56,13 @@ def _is_pgbouncer_pooled(url: str) -> bool:
     return "-pooler" in host
 
 
-def _engine_kwargs(database_url: str) -> dict[str, Any]:
-    """Pick SQLAlchemy/asyncpg arguments based on the DSN flavor."""
+def _engine_kwargs(database_url: str, original_url: str) -> dict[str, Any]:
+    """Pick SQLAlchemy/asyncpg arguments based on the DSN flavor.
+
+    ``database_url`` is the post-normalisation URL (libpq-only query params
+    stripped). ``original_url`` is the operator-pasted DSN we use to decide
+    whether TLS is required — see :func:`asyncpg_ssl_arg`.
+    """
     kwargs: dict[str, Any] = {
         # ``pool_pre_ping`` is critical for any pool fronted by PgBouncer —
         # it transparently re-opens connections the pooler closed during a
@@ -65,6 +70,14 @@ def _engine_kwargs(database_url: str) -> dict[str, Any]:
         "pool_pre_ping": True,
         "future": True,
     }
+    connect_args: dict[str, Any] = {}
+    ssl_arg = asyncpg_ssl_arg(original_url)
+    if ssl_arg is not None:
+        # asyncpg's native ssl= argument: bool or one of the libpq strings
+        # (require, prefer, verify-ca, …). Pushing this through connect_args
+        # avoids the SQLAlchemy-vs-asyncpg coercion ambiguity that bites
+        # operators who paste ``?sslmode=require`` into DATABASE_URL.
+        connect_args["ssl"] = ssl_arg
     if _is_pgbouncer_pooled(database_url):
         # NullPool delegates pooling to PgBouncer (the Neon pooler is the
         # pool of record). Without this, SQLAlchemy holds long-lived
@@ -78,6 +91,8 @@ def _engine_kwargs(database_url: str) -> dict[str, Any]:
         # for "prepared statement does not exist" 26000 / 42P05 errors at
         # p99 once traffic crosses ~1 backend per request.
         kwargs["prepared_statement_cache_size"] = 0
+    if connect_args:
+        kwargs["connect_args"] = connect_args
     return kwargs
 
 
@@ -88,9 +103,12 @@ def get_engine() -> AsyncEngine:
         # ``async_database_url`` rewrites the operator-pasted DSN to the
         # ``postgresql+asyncpg://`` driver and strips libpq-only query
         # params (sslmode, channel_binding) that asyncpg can't parse —
-        # see backend.app.core.config._normalise_to_asyncpg.
+        # see backend.app.core.config._normalise_to_asyncpg. The TLS
+        # intent encoded in those stripped params is reconstituted by
+        # _engine_kwargs into asyncpg's native ``ssl=`` connect arg.
         url = settings.async_database_url
-        _engine = create_async_engine(url, **_engine_kwargs(url))
+        original = settings.database_url.strip()
+        _engine = create_async_engine(url, **_engine_kwargs(url, original))
         _sessionmaker = async_sessionmaker(
             _engine, expire_on_commit=False, class_=AsyncSession
         )
