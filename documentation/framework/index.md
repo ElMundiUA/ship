@@ -151,12 +151,14 @@ Finally, consider time horizons. The first month is seductive because novelty co
 
 In that light, “what you are actually buying” is not a single miracle component. It is a composition of roles that stay stable even as tools churn. The following table names those roles plainly—so you can test any pitch against them, not against the font choice in the PDF.
 
-| Piece | Job |
-| ----- | --- |
-| **Tracker** | System of record for **state** and **guards** — what is allowed to move, and where work sits today. |
-| **Scheduler** | Wakes on a clock, runs **cheap** selection logic first, stops early when nothing qualifies. |
-| **Agent** | Executes a **versioned** prompt against a branch under a **contract**: branch name, PR title and body, ticket comments, allowed tools. |
-| **Audit** | Every automated touch ties to a **ticket**, a **CI run**, and a **traceable comment** so "what happened?" has an answer without Slack archaeology. |
+
+| Piece         | Job                                                                                                                                                |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Tracker**   | System of record for **state** and **guards** — what is allowed to move, and where work sits today.                                                |
+| **Scheduler** | Wakes on a clock, runs **cheap** selection logic first, stops early when nothing qualifies.                                                        |
+| **Agent**     | Executes a **versioned** prompt against a branch under a **contract**: branch name, PR title and body, ticket comments, allowed tools.             |
+| **Audit**     | Every automated touch ties to a **ticket**, a **CI run**, and a **traceable comment** so "what happened?" has an answer without Slack archaeology. |
+
 
 **Whiteboard test, not logos.** If you can redraw those four boxes from memory, explain the arrows between them, and point to where your organization’s non-negotiables live inside that diagram, you are evaluating a real system. If you need the vendor’s slide to remember what you bought, you probably bought branding. The purchase that ages well is the one that still makes sense when the room is empty except for a marker, a board, and a teammate who was not in the demo.
 
@@ -200,8 +202,8 @@ Treat Examples as a **receipt**, not a mandate. Receipts are what you show when 
 
 The sections that follow on this same page lift the altitude from temperament to **architecture** and **operations**—still adapter-shaped, still polite about vendor logos—because serious work needs both the whiteboard sentence and the labeled doors. Read in this order when you are implementing or reviewing end to end:
 
-1. **[The system](#the-system)** — boxes, arrows, and where business rules live: tracker as system of record, scheduler as cheap gatekeeper, agent under a versioned prompt, pull request as evidence, audits in parallel lanes that do not steal the delivery story.  
-2. **[Running the loop](#running-the-loop)** — cadence, queues, branch races, what “green” is allowed to mean, why boredom is load-bearing, and how self-heal relates to intake without collapsing the two loops into one noisy stampede.  
+1. **[The system](#the-system)** — boxes, arrows, and where business rules live: tracker as system of record, scheduler as cheap gatekeeper, agent under a versioned prompt, pull request as evidence, audits in parallel lanes that do not steal the delivery story.
+2. **[Running the loop](#running-the-loop)** — cadence, queues, branch races, what “green” is allowed to mean, why boredom is load-bearing, and how self-heal relates to intake without collapsing the two loops into one noisy stampede.
 3. **[Trust & boundaries](#trust-and-boundaries)** — where bits flow, which subprocessors show up when you actually run this, threats in plain language, and the boring questions risk reviews should ask before you widen access.
 
 If your job is to **procure** or **govern** rather than wire cron yourself, you still need the same spine—only the emphasis shifts. Read *The system* and *Trust & boundaries*, then step to **[Start here → Buying & procurement](../index.md#buying-and-procurement)** for stakeholder-facing framing: what is being bought, what stays human, how exit and portability read when orchestration is “just CI plus scripts.” The purchase that ages well is the one you can redraw from memory after the vendor PDF is closed.
@@ -294,11 +296,13 @@ Security and dependency boards hold scanner output, with **deduplication** as a 
 
 None of this forbids a unified **view** for leadership. What you avoid is a unified **queue** where incompatible work types compete in the same instant-priority arena.
 
-| Project type | Role |
-| ------------ | ---- |
-| **Delivery / pre-release** | Operational SDLC. Automation does **not** pick from Backlog; **Todo** plus labels plus project membership gate every pick. |
-| **Tech debt / findings** | Evidence-based outputs from audit roles — each ticket should point at a log, a report, or a failing check. |
-| **Security / dependencies** | Scanner output (for example Snyk), deduplicated so the board does not become spam. |
+
+| Project type                | Role                                                                                                                       |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| **Delivery / pre-release**  | Operational SDLC. Automation does **not** pick from Backlog; **Todo** plus labels plus project membership gate every pick. |
+| **Tech debt / findings**    | Evidence-based outputs from audit roles — each ticket should point at a log, a report, or a failing check.                 |
+| **Security / dependencies** | Scanner output (for example Snyk), deduplicated so the board does not become spam.                                         |
+
 
 ### Chapter 15 — Why boring is load-bearing {#deterministic-pick}
 
@@ -808,17 +812,19 @@ Nobody opens the manual at chapter thirty-six because the morning felt orderly. 
 
 Symptom-first triage is not pessimism; it is respect for how humans remember incidents. Months later nobody quotes the inner name of a workflow step; they quote the user-visible hurt—“the agent never picked up my ticket,” “CI is green but Linear disagrees.” A good triage map meets people at that sentence and only then names the subsystem. That is also why this page refuses to be a runbook: runbooks age per repo, per tracker, per cloud account. A framework manual that pretends otherwise becomes fiction the week after the first fork. So read what follows as a compass, not a checklist. When a row points at “see example SDLC doc” or “see Cursor doc,” that is intentional deferral—the examples carry the verbs; this chapter carries the *why*.
 
-| Symptom | Where to look | Typical fix |
-| ------- | ------------- | ----------- |
-| Pick fails: missing API key | CI secrets for tracker | Add token; rerun workflow; confirm secret available to the *job* that runs pick |
-| Agent never starts | Agent provider dashboard + CI secret | Allow repo/org linkage; verify API key secret name matches workflow |
-| Ticket stuck after "green" run | Wrong workflow state / team mapping / guards | Compare ticket fields to pick rules; run local `cli start` for that issue (see example SDLC doc) |
-| Duplicate PRs for one ticket | Branch naming contract drift | Keep `fix/TICKET-auto` (or your scheme); close extras; find who diverged |
-| Agent updates ticket in CI but not "in the cloud" | Keys only in GitHub, not agent env | Mirror tracker key to agent provider env (see Cursor doc) |
-| Scanner job skipped | Missing scanner token | Expected in dev; add token for full signal; document "skip is OK here" |
-| Queues unclear | Board vs snapshot script | Run snapshot utility from example repo; fix labels |
-| Prompt change "did nothing" | Wrong branch / not deployed / cached image | Confirm merge to default branch; confirm schedule checks out that ref |
-| Rate limits / throttling | Too many concurrent jobs or tight cron | Widen grid; reduce overlap; ask vendor for quotas |
+
+| Symptom                                           | Where to look                                | Typical fix                                                                                      |
+| ------------------------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Pick fails: missing API key                       | CI secrets for tracker                       | Add token; rerun workflow; confirm secret available to the *job* that runs pick                  |
+| Agent never starts                                | Agent provider dashboard + CI secret         | Allow repo/org linkage; verify API key secret name matches workflow                              |
+| Ticket stuck after "green" run                    | Wrong workflow state / team mapping / guards | Compare ticket fields to pick rules; run local `cli start` for that issue (see example SDLC doc) |
+| Duplicate PRs for one ticket                      | Branch naming contract drift                 | Keep `fix/TICKET-auto` (or your scheme); close extras; find who diverged                         |
+| Agent updates ticket in CI but not "in the cloud" | Keys only in GitHub, not agent env           | Mirror tracker key to agent provider env (see Cursor doc)                                        |
+| Scanner job skipped                               | Missing scanner token                        | Expected in dev; add token for full signal; document "skip is OK here"                           |
+| Queues unclear                                    | Board vs snapshot script                     | Run snapshot utility from example repo; fix labels                                               |
+| Prompt change "did nothing"                       | Wrong branch / not deployed / cached image   | Confirm merge to default branch; confirm schedule checks out that ref                            |
+| Rate limits / throttling                          | Too many concurrent jobs or tight cron       | Widen grid; reduce overlap; ask vendor for quotas                                                |
+
 
 **Deep setup:** **[Reference org → Operator setup](../examples/elmundi/index.md#operator-setup)** · **Terms:** **[Vocabulary](#vocabulary)**.
 

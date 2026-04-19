@@ -67,3 +67,32 @@ body {
 .book-callout-inner > p:first-of-type {
   @apply mt-0;
 }
+
+/* Print-palette ECharts SVGs (book-morning-metrics.svg, …) — drop them
+ * on a paper-toned card so the warm cream/ink colours read correctly
+ * against the dark theme. The bordered card doubles as the "this is a
+ * data figure, not just an inline image" affordance. The `not-prose`
+ * class on the wrapper opts out of Tailwind typography spacing. */
+.book-prose figure.book-chart {
+  @apply my-14 mx-auto rounded-2xl border border-white/10 bg-[#fbf8f1] p-4 shadow-card sm:p-6;
+  max-width: 56rem;
+}
+
+.book-prose figure.book-chart > p {
+  margin: 0;
+}
+
+.book-prose figure.book-chart img {
+  @apply mx-auto block h-auto w-full;
+}
+
+.book-prose figure.book-chart figcaption {
+  @apply mt-3 border-t border-[#d9d2c3] pt-3 text-center text-[0.92rem] leading-snug text-[#4d525c];
+  font-family: "Iowan Old Style", "Charter", "Source Serif Pro", Georgia, "Times New Roman", serif;
+  font-style: italic;
+}
+
+.book-prose figure.book-chart figcaption::first-letter {
+  @apply font-bold text-[#a4451b];
+  font-style: normal;
+}

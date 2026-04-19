@@ -8,5 +8,7 @@ export {
   transformHeadingIds,
   rewriteDocLinks,
   rewriteImages,
+  injectBookCharts,
+  bookChartInsertions,
   preprocessBookMarkdown,
 } from "./book-markdown.mjs";

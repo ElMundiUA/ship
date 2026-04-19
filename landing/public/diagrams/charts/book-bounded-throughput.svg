@@ -1,0 +1,90 @@
+<svg preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1" baseProfile="full" viewBox="0 0 760 340">
+<rect width="760" height="340" x="0" y="0" fill="none"></rect>
+<path d="M70.7 284.5L736 284.5" fill="none" pointer-events="visible" stroke="#d9d2c3" stroke-dasharray="4,2" class="zr2-cls-15"></path>
+<path d="M70.7 222.5L736 222.5" fill="none" pointer-events="visible" stroke="#d9d2c3" stroke-dasharray="4,2" class="zr2-cls-15"></path>
+<path d="M70.7 161.5L736 161.5" fill="none" pointer-events="visible" stroke="#d9d2c3" stroke-dasharray="4,2" class="zr2-cls-15"></path>
+<path d="M70.7 99.5L736 99.5" fill="none" pointer-events="visible" stroke="#d9d2c3" stroke-dasharray="4,2" class="zr2-cls-15"></path>
+<path d="M70.7 38.5L736 38.5" fill="none" pointer-events="visible" stroke="#d9d2c3" stroke-dasharray="4,2" class="zr2-cls-15"></path>
+<text dominant-baseline="central" text-anchor="middle" style="font-size:11px;font-family:Inter, Helvetica Neue, Arial, sans-serif;" xml:space="preserve" y="5.5" transform="translate(403.36 312)" fill="#7b818d">concurrent items in flight</text>
+<path d="M70.7 284.5L736 284.5" fill="none" pointer-events="visible" stroke="#d9d2c3" stroke-linecap="round" class="zr2-cls-15"></path>
+<text dominant-baseline="central" text-anchor="end" style="font-size:12px;font-family:Inter, Helvetica Neue, Arial, sans-serif;" transform="translate(62.72 284)" fill="#7b818d">0</text>
+<text dominant-baseline="central" text-anchor="end" style="font-size:12px;font-family:Inter, Helvetica Neue, Arial, sans-serif;" transform="translate(62.72 222.5)" fill="#7b818d">2</text>
+<text dominant-baseline="central" text-anchor="end" style="font-size:12px;font-family:Inter, Helvetica Neue, Arial, sans-serif;" transform="translate(62.72 161)" fill="#7b818d">4</text>
+<text dominant-baseline="central" text-anchor="end" style="font-size:12px;font-family:Inter, Helvetica Neue, Arial, sans-serif;" transform="translate(62.72 99.5)" fill="#7b818d">6</text>
+<text dominant-baseline="central" text-anchor="end" style="font-size:12px;font-family:Inter, Helvetica Neue, Arial, sans-serif;" transform="translate(62.72 38)" fill="#7b818d">8</text>
+<text dominant-baseline="central" text-anchor="middle" style="font-size:12px;font-family:Inter, Helvetica Neue, Arial, sans-serif;" y="6" transform="translate(100.96 292)" fill="#4d525c">0</text>
+<text dominant-baseline="central" text-anchor="middle" style="font-size:12px;font-family:Inter, Helvetica Neue, Arial, sans-serif;" y="6" transform="translate(161.44 292)" fill="#4d525c">1</text>
+<text dominant-baseline="central" text-anchor="middle" style="font-size:12px;font-family:Inter, Helvetica Neue, Arial, sans-serif;" y="6" transform="translate(221.92 292)" fill="#4d525c">2</text>
+<text dominant-baseline="central" text-anchor="middle" style="font-size:12px;font-family:Inter, Helvetica Neue, Arial, sans-serif;" y="6" transform="translate(282.4 292)" fill="#4d525c">3</text>
+<text dominant-baseline="central" text-anchor="middle" style="font-size:12px;font-family:Inter, Helvetica Neue, Arial, sans-serif;" y="6" transform="translate(342.88 292)" fill="#4d525c">4</text>
+<text dominant-baseline="central" text-anchor="middle" style="font-size:12px;font-family:Inter, Helvetica Neue, Arial, sans-serif;" y="6" transform="translate(403.36 292)" fill="#4d525c">5</text>
+<text dominant-baseline="central" text-anchor="middle" style="font-size:12px;font-family:Inter, Helvetica Neue, Arial, sans-serif;" y="6" transform="translate(463.84 292)" fill="#4d525c">6</text>
+<text dominant-baseline="central" text-anchor="middle" style="font-size:12px;font-family:Inter, Helvetica Neue, Arial, sans-serif;" y="6" transform="translate(524.32 292)" fill="#4d525c">7</text>
+<text dominant-baseline="central" text-anchor="middle" style="font-size:12px;font-family:Inter, Helvetica Neue, Arial, sans-serif;" y="6" transform="translate(584.8 292)" fill="#4d525c">8</text>
+<text dominant-baseline="central" text-anchor="middle" style="font-size:12px;font-family:Inter, Helvetica Neue, Arial, sans-serif;" y="6" transform="translate(645.28 292)" fill="#4d525c">9</text>
+<text dominant-baseline="central" text-anchor="middle" style="font-size:12px;font-family:Inter, Helvetica Neue, Arial, sans-serif;" y="6" transform="translate(705.76 292)" fill="#4d525c">10</text>
+<polygon points="101 284 403.4 284 403.4 38 101 38" fill="#f4efe1" fill-opacity="0.6" stroke="#c98a4f" stroke-width="0" stroke-opacity="0.6" ecmeta_series_index="1" ecmeta_data_index="0" ecmeta_ssr_type="chart" ecmeta_silent="true" class="zr2-cls-15"></polygon>
+<text dominant-baseline="central" text-anchor="middle" style="font-size:11px;font-family:Inter, Helvetica Neue, Arial, sans-serif;font-weight:600;" xml:space="preserve" y="5.5" transform="translate(252.16 43)" fill="#4d525c">bounded zone — what we ship</text>
+<g clip-path="url(#zr2-c0)">
+<path d="M101 284C101 284 130.5 258.4 161.4 234.8C190.9 212.3 191.7 213.3 221.9 191.8C252.2 170.2 251.5 169.2 282.4 148.7C311.9 129.2 312.6 130.3 342.9 111.8C373.1 93.4 372.5 92.2 403.4 74.9C432.9 58.4 431.9 51 463.8 44.2C492.4 38 494 38 524.3 38C554.5 38 554.6 38 584.8 38C615 38 615 38 645.3 38C675.5 38 705.8 38 705.8 38L705.8 284L645.3 284L584.8 284L524.3 284L463.8 284L403.4 284L342.9 284L282.4 284L221.9 284L161.4 284L101 284Z" fill="#74a087" fill-opacity="0.35" class="zr2-cls-17"></path>
+</g>
+<g clip-path="url(#zr2-c1)">
+<path d="M101 284C101 284 131.2 282.5 161.4 280.9C191.7 279.4 191.8 280.9 221.9 277.9C252.3 274.8 252.5 274.7 282.4 268.6C312.9 262.4 312.6 260.9 342.9 253.3C373.1 245.6 373.5 247 403.4 237.9C434 228.5 433.6 227.1 463.8 216.4C494.1 205.6 494.6 206.9 524.3 194.8C555.1 182.3 555.2 182.2 584.8 167.1C615.7 151.5 615 150.2 645.3 133.3C675.5 116.4 705.8 99.5 705.8 99.5L705.8 284L645.3 284L584.8 284L524.3 284L463.8 284L403.4 284L342.9 284L282.4 284L221.9 284L161.4 284L101 284Z" fill="#e8c9a8" fill-opacity="0.5" class="zr2-cls-18"></path>
+</g>
+<g clip-path="url(#zr2-c0)">
+<path d="M101 284C101 284 130.5 258.4 161.4 234.8C190.9 212.3 191.7 213.3 221.9 191.8C252.2 170.2 251.5 169.2 282.4 148.7C311.9 129.2 312.6 130.3 342.9 111.8C373.1 93.4 372.5 92.2 403.4 74.9C432.9 58.4 431.9 51 463.8 44.2C492.4 38 494 38 524.3 38C554.5 38 554.6 38 584.8 38C615 38 615 38 645.3 38C675.5 38 705.8 38 705.8 38" fill="none" pointer-events="visible" stroke="#3d6b4f" stroke-width="2.2" stroke-linejoin="bevel" class="zr2-cls-19"></path>
+</g>
+<g clip-path="url(#zr2-c1)">
+<path d="M101 284C101 284 131.2 282.5 161.4 280.9C191.7 279.4 191.8 280.9 221.9 277.9C252.3 274.8 252.5 274.7 282.4 268.6C312.9 262.4 312.6 260.9 342.9 253.3C373.1 245.6 373.5 247 403.4 237.9C434 228.5 433.6 227.1 463.8 216.4C494.1 205.6 494.6 206.9 524.3 194.8C555.1 182.3 555.2 182.2 584.8 167.1C615.7 151.5 615 150.2 645.3 133.3C675.5 116.4 705.8 99.5 705.8 99.5" fill="none" pointer-events="visible" stroke="#a4451b" stroke-width="2.2" stroke-linejoin="bevel" class="zr2-cls-19"></path>
+</g>
+<path d="M-5 -5l321.4 0l0 21l-321.4 0Z" transform="translate(5 5)" fill="rgb(0,0,0)" fill-opacity="0" stroke="#b7b9be" stroke-width="0" class="zr2-cls-15"></path>
+<path d="M0 4L14 4" transform="translate(6 6.5)" fill="#000" stroke="#3d6b4f" stroke-width="2" stroke-linecap="butt" stroke-miterlimit="10" class="zr2-cls-15"></path>
+<path d="M10.2 4A3.2 3.2 0 1 1 10.2 3.7A3.2 3.2 0 0 1 10.2 4" transform="translate(6 6.5)" fill="#3d6b4f" class="zr2-cls-15"></path>
+<text dominant-baseline="central" text-anchor="start" style="font-size:11px;font-family:Inter, Helvetica Neue, Arial, sans-serif;" xml:space="preserve" x="19" y="4" transform="translate(6 6.5)" fill="#4d525c">Merged outcomes (per day)</text>
+<path d="M-1 -1.5l155.5 0l0 11l-155.5 0Z" transform="translate(6 6.5)" fill="none" pointer-events="visible" ecmeta_series_index="0" ecmeta_data_index="0" ecmeta_ssr_type="legend" class="zr2-cls-20"></path>
+<path d="M0 4L14 4" transform="translate(179.52 6.5)" fill="#000" stroke="#a4451b" stroke-width="2" stroke-linecap="butt" stroke-miterlimit="10" class="zr2-cls-15"></path>
+<path d="M10.2 4A3.2 3.2 0 1 1 10.2 3.7A3.2 3.2 0 0 1 10.2 4" transform="translate(179.52 6.5)" fill="#a4451b" class="zr2-cls-15"></path>
+<text dominant-baseline="central" text-anchor="start" style="font-size:11px;font-family:Inter, Helvetica Neue, Arial, sans-serif;" xml:space="preserve" x="19" y="4" transform="translate(179.52 6.5)" fill="#4d525c">Rework + duplicate PRs</text>
+<path d="M-1 -1.5l137.9 0l0 11l-137.9 0Z" transform="translate(179.52 6.5)" fill="none" pointer-events="visible" ecmeta_series_index="1" ecmeta_data_index="1" ecmeta_ssr_type="legend" class="zr2-cls-20"></path>
+<path d="M403.5 284L403.5 38" fill="none" pointer-events="visible" stroke="#c98a4f" stroke-width="1.4" stroke-dasharray="5.6,2.8" ecmeta_series_index="1" ecmeta_data_index="0" ecmeta_ssr_type="chart" class="zr2-cls-21"></path>
+<text dominant-baseline="central" text-anchor="middle" style="font-size:11px;font-family:Inter, Helvetica Neue, Arial, sans-serif;font-weight:600;" xml:space="preserve" y="-5.5" transform="translate(403.36 33)" fill="#a4451b">throughput knee</text>
+<defs >
+<clipPath id="zr2-c0">
+<path d="M69 36.9l669 0l0 248.2l-669 0Z" fill="#000" class="zr2-cls-16"></path>
+</clipPath>
+<clipPath id="zr2-c1">
+<path d="M69 36.9l669 0l0 248.2l-669 0Z" fill="#000" class="zr2-cls-16"></path>
+</clipPath>
+</defs>
+<style ><![CDATA[
+.zr2-cls-15:hover {
+pointer-events:none;
+}
+.zr2-cls-16:hover {
+cursor:pointer;
+fill:rgba(0,0,0,1);
+}
+.zr2-cls-17:hover {
+cursor:pointer;
+fill:rgba(127,176,148,1);
+}
+.zr2-cls-18:hover {
+cursor:pointer;
+fill:rgba(255,221,184,1);
+}
+.zr2-cls-19:hover {
+cursor:pointer;
+}
+.zr2-cls-20:hover {
+cursor:pointer;
+fill:rgba(0,0,0,0);
+}
+.zr2-cls-21:hover {
+cursor:pointer;
+stroke-width:3;
+}
+
+]]>
+
+</style>
+</svg>

@@ -7,7 +7,7 @@ matches the repo you are sitting in, copy the command, and you are done.
 
 > The interactive wizard that builds the exact command and a starter agent
 > prompt for you lives on the **site**, not in this markdown file:
-> [`/docs/getting-started`](https://elmundi.ua/ship/docs/getting-started).
+> [`/docs/getting-started`](https://ship.elmundi.com/docs/getting-started).
 > It is a real React component (`landing/src/components/agent-setup-form.tsx`)
 > and does not work when this file is rendered standalone (e.g. on GitHub).
 

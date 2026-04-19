@@ -90,6 +90,25 @@ function BookImg(props: React.ImgHTMLAttributes<HTMLImageElement> & RemarkNodePr
     return <SdlcLaneDiagram caption={dom.alt ?? undefined} />;
   }
 
+  /* ECharts infographics (book-morning-metrics.svg, book-cost-envelope.svg, …)
+   * ship with the print palette baked in (cream paper, ink lines). On the
+   * dark `/book` page we drop them on a paper-toned card so the warm palette
+   * reads correctly — the parent `<figure class="book-chart">` (emitted by
+   * injectBookCharts) provides the layout slot, this branch supplies the
+   * styled <img>. We deliberately bypass the "ship / diagram" titlebar
+   * wrapper because charts already carry their own legend + figcaption. */
+  if (src.includes("/diagrams/charts/")) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element -- baked SVG asset in /public
+      <img
+        {...dom}
+        alt={dom.alt ?? ""}
+        className="mx-auto block h-auto w-full max-w-full"
+        loading="lazy"
+      />
+    );
+  }
+
   return (
     <figure className="not-prose my-14">
       <div className="relative overflow-hidden rounded-2xl border border-white/12 bg-black/40 shadow-card">

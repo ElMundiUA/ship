@@ -10,7 +10,8 @@
     "build": "next build",
     "start": "next start -H 0.0.0.0 -p ${PORT:-3000}",
     "lint": "next lint",
-    "book:pdf": "node scripts/sync-book.mjs && node scripts/build-book-pdf.mjs"
+    "book:charts": "node scripts/build-book-charts.mjs",
+    "book:pdf": "node scripts/sync-book.mjs && node scripts/build-book-charts.mjs && node scripts/build-book-pdf.mjs"
   },
   "dependencies": {
     "next": "^15.2.4",
@@ -27,8 +28,10 @@
     "@types/react": "^19.0.12",
     "@types/react-dom": "^19.0.4",
     "autoprefixer": "^10.4.21",
+    "echarts": "^6.0.0",
     "eslint": "^9.23.0",
     "eslint-config-next": "^15.2.4",
+    "jsdom": "^29.0.2",
     "md-to-pdf": "^5.2.5",
     "postcss": "^8.5.3",
     "tailwindcss": "^3.4.17",
