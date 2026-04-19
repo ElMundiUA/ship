@@ -277,6 +277,33 @@ export function probeIntegration(
   );
 }
 
+// --- GitHub App install (Day 1 WOW-onboarding flow) -----------------------
+
+/**
+ * Response from `POST /v1/integrations/github/install/start`.
+ *
+ * The console redirects the browser to `install_url`; GitHub bounces back
+ * to the backend's `/install/callback` once the user picks repos, and the
+ * backend then 302s the browser back into `/onboarding?step=tracker` on
+ * the configured console origin.
+ */
+export interface ApiGitHubInstallStart {
+  install_url: string;
+  state: string;
+}
+
+export function startGitHubAppInstall(
+  workspaceId: string,
+  token?: string,
+): Promise<ApiGitHubInstallStart> {
+  // Workspace id travels as a query param so the backend can scope auth +
+  // membership without us having to choose between path-style ("nice URL")
+  // and body-style ("survives form-redirects"). Query is the natural fit
+  // for an idempotent admin-only initiator.
+  const path = `/v1/integrations/github/install/start?workspace_id=${encodeURIComponent(workspaceId)}`;
+  return apiFetch<ApiGitHubInstallStart>(path, { method: "POST", token });
+}
+
 // --- Artifact repos --------------------------------------------------------
 
 export function listArtifactRepos(

@@ -24,14 +24,21 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 settings = get_settings()
-config.set_main_option("sqlalchemy.url", settings.sync_database_url)
+# Honour an URL the caller already injected via ``cfg.set_main_option`` (the
+# pytest fixture sets it to a local-DB URL); only fall back to Settings when
+# the caller didn't override. This avoids the surprise of running migrations
+# against the production Neon DSN baked into ``.env`` while a developer is
+# trying to migrate localhost:5433.
+_caller_url = config.get_main_option("sqlalchemy.url")
+_resolved_url = _caller_url or settings.sync_database_url
+config.set_main_option("sqlalchemy.url", _resolved_url)
 
 target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
     context.configure(
-        url=settings.sync_database_url,
+        url=_resolved_url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},

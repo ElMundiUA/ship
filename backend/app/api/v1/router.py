@@ -14,6 +14,7 @@ from backend.app.api.v1.routes import (
     artifact_repos,
     audit,
     auth,
+    github_app,
     health,
     integrations,
     knowledge,
@@ -35,3 +36,6 @@ api_router.include_router(knowledge.router)
 api_router.include_router(members.router)
 api_router.include_router(onboarding.router)
 api_router.include_router(workspace_artifacts.router)
+# GitHub App OAuth + webhooks (pilot WOW-onboarding flow). Webhook route
+# is public; install start/callback do their own auth.
+api_router.include_router(github_app.router)

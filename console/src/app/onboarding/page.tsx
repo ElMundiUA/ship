@@ -33,6 +33,7 @@ export const dynamic = "force-dynamic";
 type StepId =
   | "repo"
   | "workspace"
+  | "github"
   | "workflows"
   | "tracker"
   | "knowledge"
@@ -42,6 +43,7 @@ type StepId =
 const STEPS: { id: StepId; label: string }[] = [
   { id: "repo", label: "Repo" },
   { id: "workspace", label: "Workspace" },
+  { id: "github", label: "GitHub" },
   { id: "workflows", label: "Workflows" },
   { id: "tracker", label: "Tracker" },
   { id: "knowledge", label: "Knowledge" },
@@ -74,6 +76,16 @@ const WORKFLOWS_ERRORS: Record<string, string> = {
   bad_path: "We lost track of the repo path. Restart from step 1.",
   not_found: "The repo path is no longer reachable. Re-inspect it.",
   unknown: "Something went sideways. Please retry.",
+};
+
+const GITHUB_ERRORS: Record<string, string> = {
+  api_unavailable: "Backend not reachable.",
+  forbidden: "You need admin role on this workspace to install the GitHub App.",
+  app_not_configured:
+    "GitHub App env vars are missing on the backend (GITHUB_APP_ID / GITHUB_APP_PRIVATE_KEY / GITHUB_APP_WEBHOOK_SECRET). Ask ops to wire them up and try again.",
+  bad_state:
+    "Install link expired or was tampered with. Start the install again from this step.",
+  unknown: "Couldn't start the install flow. Try again or skip for now.",
 };
 
 const TRACKER_ERRORS: Record<string, string> = {
@@ -192,6 +204,7 @@ function pickStep(raw: string | string[] | undefined): StepId {
   const v = Array.isArray(raw) ? raw[0] : raw;
   if (
     v === "workspace" ||
+    v === "github" ||
     v === "workflows" ||
     v === "tracker" ||
     v === "knowledge" ||
@@ -291,6 +304,15 @@ export default async function OnboardingPage({
             initialSlug={pick(params.slug) ?? profile?.suggested_slug ?? ""}
           />
         )}
+        {step === "github" && wsId && (
+          <GitHubStep
+            wsId={wsId}
+            repo={repo ?? ""}
+            error={error}
+            githubReason={pick(params.github)}
+          />
+        )}
+        {step === "github" && !wsId && <MissingWorkspaceNotice />}
         {step === "workflows" && wsId && (
           <WorkflowsStep
             wsId={wsId}
@@ -657,7 +679,116 @@ function SummaryRow({
 }
 
 // ---------------------------------------------------------------------------
-// Step 3 — Workflows
+// Step 3 — GitHub App install (WOW-onboarding flow)
+// ---------------------------------------------------------------------------
+
+function GitHubStep({
+  wsId,
+  repo,
+  error,
+  githubReason,
+}: {
+  wsId: string;
+  repo: string;
+  error?: string;
+  githubReason?: string;
+}) {
+  const message = error ? GITHUB_ERRORS[error] ?? error : null;
+  // ``githubReason`` lands here when the backend redirects us back from
+  // the GitHub callback. ``installed`` = success, ``request`` = the user
+  // hit org-admin approval and we should tell them to wait.
+  const success = githubReason === "installed";
+  const requested = githubReason === "request";
+  return (
+    <section>
+      <p className="font-mono text-[11px] uppercase tracking-[0.3em] text-aqua/85">
+        Step 3 of 7 · Connect your code
+      </p>
+      <h1 className="mt-2 font-display text-4xl font-bold leading-tight">
+        Install Ship on GitHub.
+      </h1>
+      <p className="mt-3 max-w-2xl text-sm leading-relaxed text-white/70">
+        We use a GitHub App (not a PAT) so the token is scoped to the repos you
+        pick, rotates automatically, and stays revocable from your org settings.
+        After install you&apos;ll bounce straight back here.
+      </p>
+
+      {success && (
+        <div className="mt-5 rounded-xl border border-aqua/30 bg-aqua/[0.06] px-4 py-3 text-xs text-white/85">
+          <strong className="text-aqua">GitHub App installed.</strong> Webhooks
+          armed and per-installation tokens are minted on demand. You can pick
+          and toggle repos any time from the GitHub install page.
+        </div>
+      )}
+
+      {requested && (
+        <div className="mt-5 rounded-xl border border-coral/40 bg-coral/10 px-4 py-3 text-xs text-white/85">
+          <strong className="text-coral">Awaiting org-admin approval.</strong>{" "}
+          Your install request was forwarded. Re-run this step once the admin
+          accepts; nothing else here needs to change.
+        </div>
+      )}
+
+      {message && (
+        <div className="mt-5 rounded-lg border border-coral/40 bg-coral/10 px-3 py-2 text-xs text-coral">
+          {message}
+        </div>
+      )}
+
+      <form
+        action="/api/onboard/github-install"
+        method="POST"
+        className="mt-7 flex flex-wrap items-center gap-3"
+        suppressHydrationWarning
+      >
+        <input type="hidden" name="ws" value={wsId} suppressHydrationWarning />
+        {repo && <input type="hidden" name="repo" value={repo} suppressHydrationWarning />}
+        <button
+          type="submit"
+          className="rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-5 py-2.5 text-sm font-bold text-ink shadow-glow transition hover:brightness-110"
+        >
+          {success ? "Reinstall / pick more repos →" : "Install Ship on GitHub →"}
+        </button>
+        <Link
+          href={`/onboarding?step=workflows&ws=${encodeURIComponent(wsId)}${
+            repo ? `&repo=${encodeURIComponent(repo)}` : ""
+          }`}
+          className="text-xs text-white/55 hover:text-white"
+        >
+          Skip for now →
+        </Link>
+      </form>
+
+      <ul className="mt-7 grid grid-cols-1 gap-3 text-xs text-white/65 md:grid-cols-3">
+        {[
+          [
+            "Scoped install",
+            "Pick exactly the repos Ship can see. Default is selected, never all-repos.",
+          ],
+          [
+            "Per-install tokens",
+            "We mint a fresh installation token per request and cache it for ~1h.",
+          ],
+          [
+            "Webhook-armed",
+            "PR / workflow_run / installation events stream to /v1/webhooks/github.",
+          ],
+        ].map(([t, b]) => (
+          <li
+            key={t}
+            className="rounded-xl border border-white/10 bg-white/[0.03] p-3"
+          >
+            <div className="font-semibold text-white">{t}</div>
+            <div className="mt-1 text-[11px] text-white/55">{b}</div>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Step 4 — Workflows
 // ---------------------------------------------------------------------------
 
 function WorkflowsStep({
