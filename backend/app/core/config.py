@@ -12,8 +12,46 @@ from functools import lru_cache
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from pydantic import Field
+import base64
+import binascii
+
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _normalize_pem(value: str | None) -> str | None:
+    """Coerce a PEM-encoded secret into the multi-line form ``cryptography`` expects.
+
+    Single-line env stores (Bunny Magic Containers, Fly.io secrets, k8s
+    Secrets pasted via web UI) routinely strip newlines or refuse them
+    altogether. We accept three on-the-wire shapes so operators never
+    have to fight the input field:
+
+    1. **Already a PEM** — left untouched.
+    2. **Literal ``\\n`` escapes** — converted to real newlines (the same
+       trick the GitHub Actions / Vercel docs recommend).
+    3. **Base64 of the entire PEM block** — decoded. We probe by trying
+       ``base64.b64decode(..., validate=True)`` and only accepting the
+       result when it itself looks like a PEM, so a real one-liner PEM
+       (which is technically also valid base64-ish input) is not
+       mis-decoded.
+    """
+    if value is None:
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+    if "-----BEGIN" in raw and "\n" in raw:
+        return raw
+    if "-----BEGIN" in raw and "\\n" in raw:
+        return raw.replace("\\r\\n", "\n").replace("\\n", "\n")
+    try:
+        decoded = base64.b64decode(raw, validate=True).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError, ValueError):
+        return raw
+    if "-----BEGIN" in decoded:
+        return decoded.strip()
+    return raw
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -211,9 +249,21 @@ class Settings(BaseSettings):
     # PEM-encoded private key (the whole ``-----BEGIN RSA PRIVATE KEY-----``
     # block). Required to mint the App-level JWT used to exchange for
     # short-lived per-installation tokens.
+    #
+    # Single-line env stores (Bunny Magic Containers, Fly.io secrets,
+    # k8s Secret YAML pasted via web UI) reject the raw multi-line PEM,
+    # so we also accept ``\n``-escaped strings and base64 of the whole
+    # block. See ``_normalize_pem`` for the decode logic.
     github_app_private_key: str | None = Field(
         default=None, alias="GITHUB_APP_PRIVATE_KEY"
     )
+
+    @field_validator("github_app_private_key", mode="before")
+    @classmethod
+    def _decode_github_app_private_key(cls, value: object) -> object:
+        if value is None or isinstance(value, str):
+            return _normalize_pem(value)
+        return value
     # OAuth client_id / client_secret of the **App** (separate from the
     # Auth0-side GitHub social-login OAuth app — see pilot-plan.md). Used to
     # identify the installing user during the install callback.
