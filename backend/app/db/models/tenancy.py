@@ -66,6 +66,13 @@ class User(Base):
     avatar_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     # Local-mode password hash; null for users who only authenticate via OAuth.
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # OIDC subject (e.g. Auth0 `sub`: "auth0|abc123", "google-oauth2|xyz").
+    # Populated lazily on first JIT login when SHIP_AUTH_MODE=auth0; lets us
+    # reattach an existing email-based row to a new IdP identity without
+    # resetting workspace memberships.
+    external_subject: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, unique=True, index=True
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
 
     created_at: Mapped[datetime] = _ts_created()

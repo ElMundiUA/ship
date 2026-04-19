@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { isApiConfigured } from "@/lib/api/client";
+import { isAuth0Mode } from "@/lib/auth0";
 
 import { LoginForm } from "./login-form";
 
@@ -86,12 +87,16 @@ export default async function LoginPage({
         </section>
 
         <section className="rounded-2xl border border-white/10 bg-white/[0.04] p-7 backdrop-blur-xl shadow-card">
-          <LoginForm
-            apiConfigured={apiConfigured}
-            initialError={error}
-            initialEmail={email}
-            initialMode={mode}
-          />
+          {isAuth0Mode ? (
+            <Auth0SignInPanel next={typeof params.next === "string" ? params.next : "/"} />
+          ) : (
+            <LoginForm
+              apiConfigured={apiConfigured}
+              initialError={error}
+              initialEmail={email}
+              initialMode={mode}
+            />
+          )}
 
           <p className="mt-6 text-[11px] leading-snug text-white/45">
             By signing in you accept the Ship{" "}
@@ -106,6 +111,34 @@ export default async function LoginPage({
           </p>
         </section>
       </main>
+    </div>
+  );
+}
+
+function Auth0SignInPanel({ next }: { next: string }) {
+  const loginHref = `/auth/login?returnTo=${encodeURIComponent(next || "/")}`;
+  return (
+    <div>
+      <div className="mb-5 flex items-center justify-between">
+        <h2 className="font-display text-2xl font-bold">Sign in</h2>
+        <span className="rounded-full bg-aqua/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest text-aqua">
+          auth0
+        </span>
+      </div>
+      <p className="text-sm text-white/70">
+        This deployment authenticates via Auth0. You&apos;ll be sent to your
+        organization&apos;s identity provider, then bounced back here.
+      </p>
+      <a
+        href={loginHref}
+        className="mt-5 block w-full rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-4 py-2.5 text-center text-sm font-bold text-ink shadow-glow transition hover:brightness-110"
+      >
+        Continue with Auth0 →
+      </a>
+      <p className="mt-3 text-center text-[11px] text-white/45">
+        First time here? The platform will create your account on the
+        first successful login.
+      </p>
     </div>
   );
 }

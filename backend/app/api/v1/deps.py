@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.core.config import Settings, get_settings
 from backend.app.db.models.tenancy import ApiToken, User, WorkspaceMember
 from backend.app.db.session import get_session
+from backend.app.security import auth0 as auth0_validator
 from backend.app.security.tokens import PAT_PREFIX, hash_pat
 
 
@@ -60,9 +61,10 @@ async def _resolve_pat(session: AsyncSession, raw: str) -> AuthContext:
     return AuthContext(user=user, token=token, scopes=frozenset(token.scopes or []))
 
 
-async def _resolve_jwt(
+async def _resolve_local_jwt(
     session: AsyncSession, raw: str, settings: Settings
 ) -> AuthContext:
+    """Decode a session JWT minted by ``backend.app.security.tokens``."""
     try:
         claims = jwt.decode(raw, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
     except JWTError as exc:
@@ -80,6 +82,38 @@ async def _resolve_jwt(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="user disabled"
         )
     return AuthContext(user=user, token=None, scopes=frozenset(claims.get("scopes", [])))
+
+
+async def _resolve_auth0_jwt(
+    session: AsyncSession, raw: str, settings: Settings
+) -> AuthContext:
+    """Verify an Auth0 access token and JIT-resolve the User row."""
+    claims = auth0_validator.validate_access_token(raw, settings)
+    user = await auth0_validator.user_from_claims(claims, session)
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="user disabled"
+        )
+    # Auth0 access tokens carry granted scopes as a single space-delimited
+    # string per RFC 8693; normalise to a frozenset so downstream code is
+    # mode-agnostic.
+    raw_scopes = claims.get("scope") or claims.get("scp") or ""
+    if isinstance(raw_scopes, str):
+        scopes = frozenset(s for s in raw_scopes.split() if s)
+    elif isinstance(raw_scopes, list):
+        scopes = frozenset(str(s) for s in raw_scopes if s)
+    else:
+        scopes = frozenset()
+    return AuthContext(user=user, token=None, scopes=scopes)
+
+
+async def _resolve_jwt(
+    session: AsyncSession, raw: str, settings: Settings
+) -> AuthContext:
+    """Pick the JWT verification path based on ``SHIP_AUTH_MODE``."""
+    if settings.auth_mode == "auth0":
+        return await _resolve_auth0_jwt(session, raw, settings)
+    return await _resolve_local_jwt(session, raw, settings)
 
 
 async def get_current_auth(

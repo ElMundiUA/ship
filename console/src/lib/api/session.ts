@@ -1,18 +1,39 @@
 /**
  * Session cookie helpers.
  *
- * The console stores the bearer token from `/v1/auth/local/login` in an
- * httpOnly cookie named `ship_session`. Browser code never sees it; every
- * server component / server action reads it via these helpers.
+ * Two modes coexist:
+ *
+ * - **Local** (SHIP_AUTH_MODE=local) — bearer token from
+ *   `/v1/auth/local/login` is stored in an httpOnly cookie named
+ *   `ship_session`. Browser code never sees it; server components read it
+ *   via these helpers.
+ *
+ * - **Auth0** (SHIP_AUTH_MODE=auth0) — the SDK manages the session cookie
+ *   for us; `getSessionToken()` calls into the SDK to extract the
+ *   access_token that the backend will validate against the Auth0 JWKS.
  */
 
 import "server-only";
 
 import { cookies } from "next/headers";
 
+import { auth0, isAuth0Mode } from "@/lib/auth0";
+
 const COOKIE_NAME = "ship_session";
 
 export async function getSessionToken(): Promise<string | null> {
+  if (isAuth0Mode && auth0) {
+    try {
+      const session = await auth0.getSession();
+      if (!session) return null;
+      const { token } = await auth0.getAccessToken();
+      return token ?? null;
+    } catch {
+      // No session, expired, or refresh failed. Treat as logged out — the
+      // calling code falls back to mock data or redirects to /login.
+      return null;
+    }
+  }
   const jar = await cookies();
   const c = jar.get(COOKIE_NAME);
   return c?.value ?? null;

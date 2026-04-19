@@ -9,10 +9,17 @@
 
 import { NextResponse } from "next/server";
 
+import { isAuth0Mode } from "@/lib/auth0";
 import { clearSessionCookie } from "@/lib/api/session";
 import { resolveOrigin } from "@/lib/api/origin";
 
 export async function POST(request: Request) {
+  if (isAuth0Mode) {
+    // Hand off to the SDK-mounted route — it clears the encrypted session
+    // cookie *and* redirects through Auth0's RP-initiated logout endpoint
+    // so the IdP-side session goes away too.
+    return NextResponse.redirect(new URL("/auth/logout", resolveOrigin(request)), 303);
+  }
   await clearSessionCookie();
   return NextResponse.redirect(new URL("/login", resolveOrigin(request)), 303);
 }

@@ -30,7 +30,16 @@ class Settings(BaseSettings):
 
     # --- Identity ---
     public_url: str = Field(default="http://localhost:8100", alias="SHIP_PUBLIC_URL")
-    auth_mode: str = Field(default="local", alias="SHIP_AUTH_MODE")  # local | github | oidc
+    auth_mode: str = Field(default="local", alias="SHIP_AUTH_MODE")  # local | auth0
+
+    # --- Auth0 (used when auth_mode == "auth0") ---
+    auth0_domain: str | None = Field(default=None, alias="AUTH0_DOMAIN")
+    auth0_audience: str | None = Field(default=None, alias="AUTH0_AUDIENCE")
+    # Issuer is normally `https://{domain}/` but tenants on a custom domain
+    # may emit a different `iss`; allow override.
+    auth0_issuer: str | None = Field(default=None, alias="AUTH0_ISSUER")
+    # JWKS URL override for tests (point at a local stub).
+    auth0_jwks_url: str | None = Field(default=None, alias="AUTH0_JWKS_URL")
 
     # --- Database (Postgres + pgvector everywhere; RFC-0006) ---
     database_url: str = Field(
@@ -64,6 +73,23 @@ class Settings(BaseSettings):
     )
     github_token: str | None = Field(default=None, alias="GITHUB_TOKEN")
     feedback_repo: str = Field(default="ElMundiUA/ship", alias="SHIP_FEEDBACK_REPO")
+
+    @property
+    def resolved_auth0_issuer(self) -> str | None:
+        """Default issuer to ``https://{domain}/`` when not overridden."""
+        if self.auth0_issuer:
+            return self.auth0_issuer
+        if self.auth0_domain:
+            return f"https://{self.auth0_domain}/"
+        return None
+
+    @property
+    def resolved_auth0_jwks_url(self) -> str | None:
+        if self.auth0_jwks_url:
+            return self.auth0_jwks_url
+        if self.auth0_domain:
+            return f"https://{self.auth0_domain}/.well-known/jwks.json"
+        return None
 
     @property
     def sync_database_url(self) -> str:
