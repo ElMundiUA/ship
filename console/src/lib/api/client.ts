@@ -14,6 +14,7 @@ import type {
   ApiArtifactDetail,
   ApiArtifactKind,
   ApiArtifactRepo,
+  ApiAuditPage,
   ApiIntegration,
   ApiIntegrationKind,
   ApiKnowledgeBucket,
@@ -524,6 +525,25 @@ export function removeMember(
   return apiFetch<void>(
     `/v1/workspaces/${workspaceId}/members/${encodeURIComponent(memberId)}`,
     { method: "DELETE", token },
+  );
+}
+
+// --- Audit log -------------------------------------------------------------
+
+export function listAuditLog(
+  workspaceId: string,
+  opts: { limit?: number; before?: number | null; action?: string | null } = {},
+  token?: string,
+): Promise<ApiAuditPage> {
+  const params = new URLSearchParams();
+  if (opts.limit !== undefined) params.set("limit", String(opts.limit));
+  if (opts.before !== undefined && opts.before !== null)
+    params.set("before", String(opts.before));
+  if (opts.action) params.set("action", opts.action);
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return apiFetch<ApiAuditPage>(
+    `/v1/workspaces/${workspaceId}/audit-log${suffix}`,
+    { token },
   );
 }
 

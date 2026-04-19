@@ -12,6 +12,7 @@ from fastapi import APIRouter
 
 from backend.app.api.v1.routes import (
     artifact_repos,
+    audit,
     auth,
     health,
     integrations,
@@ -28,6 +29,7 @@ api_router.include_router(health.router)
 api_router.include_router(auth.router)
 api_router.include_router(workspaces.router)
 api_router.include_router(artifact_repos.router)
+api_router.include_router(audit.router)
 api_router.include_router(integrations.router)
 api_router.include_router(knowledge.router)
 api_router.include_router(members.router)

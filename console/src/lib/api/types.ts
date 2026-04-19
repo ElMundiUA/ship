@@ -140,6 +140,28 @@ export type ApiTokenInfo = {
   created_at: string;
 };
 
+export type ApiAuditActor = {
+  user_id: string | null;
+  user_email: string | null;
+  token_id: string | null;
+  token_name: string | null;
+};
+
+export type ApiAuditEntry = {
+  id: number;
+  action: string;
+  target_kind: string | null;
+  target_id: string | null;
+  payload: Record<string, unknown>;
+  created_at: string;
+  actor: ApiAuditActor;
+};
+
+export type ApiAuditPage = {
+  items: ApiAuditEntry[];
+  next_cursor: number | null;
+};
+
 export type ApiKnowledgeBucket = {
   slug: string;
   title: string;

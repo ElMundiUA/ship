@@ -43,6 +43,12 @@ from backend.app.db.models.tenancy import (
 )
 from backend.app.db.session import get_session
 from backend.app.security.passwords import hash_password, verify_password
+from backend.app.security.rate_limit import (
+    LOGIN_LIMITER,
+    SIGNUP_LIMITER,
+    TOKEN_MINT_LIMITER,
+    rate_limit,
+)
 from backend.app.security.tokens import (
     PAT_PREFIX,
     generate_pat,
@@ -80,6 +86,7 @@ def _session_response(user: User, settings: Settings) -> SessionTokenOut:
     "/local/signup",
     response_model=SessionTokenOut,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(rate_limit(SIGNUP_LIMITER, "auth.signup"))],
 )
 async def local_signup(
     payload: LocalSignupRequest,
@@ -111,7 +118,11 @@ async def local_signup(
     return _session_response(user, settings)
 
 
-@router.post("/local/login", response_model=SessionTokenOut)
+@router.post(
+    "/local/login",
+    response_model=SessionTokenOut,
+    dependencies=[Depends(rate_limit(LOGIN_LIMITER, "auth.login"))],
+)
 async def local_login(
     payload: LocalLoginRequest,
     settings: Settings = Depends(get_settings),
@@ -143,6 +154,7 @@ async def get_me(auth: AuthContext = Depends(get_current_auth)) -> UserOut:
     "/tokens",
     response_model=TokenMintOut,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(rate_limit(TOKEN_MINT_LIMITER, "auth.token.mint"))],
 )
 async def mint_token(
     payload: TokenMintRequest,

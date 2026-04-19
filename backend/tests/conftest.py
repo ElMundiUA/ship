@@ -16,14 +16,17 @@ if str(REPO_ROOT) not in sys.path:
 def _telemetry_sandbox(tmp_path, monkeypatch):
     """Isolate every test from the shared on-disk telemetry jsonl + rate limits."""
     from backend.app import main as backend_main
+    from backend.app.security import rate_limit as auth_rate_limit
 
     events_file = tmp_path / "telemetry" / "events.jsonl"
     events_file.parent.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(backend_main, "TELEMETRY_DIR", events_file.parent)
     monkeypatch.setattr(backend_main, "TELEMETRY_FILE", events_file)
     backend_main._reset_rate_limits()
+    auth_rate_limit._reset_all_for_tests()
     yield
     backend_main._reset_rate_limits()
+    auth_rate_limit._reset_all_for_tests()
 
 
 @pytest.fixture(autouse=True)

@@ -172,6 +172,57 @@ class WorkspaceDeleteRequest(BaseModel):
     slug_confirmation: str = Field(min_length=1, max_length=64)
 
 
+# --- Audit log ---
+
+
+class AuditLogActorOut(BaseModel):
+    """Slim user/token reference attached to each audit row.
+
+    Both fields are optional: a system-driven mutation (e.g. cron) records
+    no actor, and a token can be deleted (set-null) while the row stays.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    user_id: uuid.UUID | None = None
+    user_email: EmailStr | None = None
+    token_id: uuid.UUID | None = None
+    token_name: str | None = None
+
+
+class AuditLogEntryOut(BaseModel):
+    """One row in ``GET /v1/workspaces/{id}/audit-log``.
+
+    ``payload`` is the same ``JSONB`` blob the writer recorded. We never
+    redact it here — every action that records a value (PAT name, slug,
+    email) intentionally chose that shape, and operators rely on it for
+    incident review. PAT *secrets* are never written to ``payload`` in the
+    first place.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    action: str
+    target_kind: str | None = None
+    target_id: str | None = None
+    payload: dict
+    created_at: datetime
+    actor: AuditLogActorOut
+
+
+class AuditLogPage(BaseModel):
+    """Paginated audit-log envelope.
+
+    ``next_cursor`` is the ``id`` to pass back as ``before`` to fetch the
+    next (older) page. ``None`` means the caller has reached the bottom of
+    the workspace's history.
+    """
+
+    items: list[AuditLogEntryOut]
+    next_cursor: int | None = None
+
+
 # --- Artifact repos ---
 
 

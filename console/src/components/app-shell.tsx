@@ -63,6 +63,7 @@ const ALL_NAV: { section: string; items: (NavItem & { stub?: boolean })[] }[] = 
       { href: "/settings", label: "Workspace settings", icon: <DotIcon /> },
       { href: "/members", label: "Members", icon: <DotIcon /> },
       { href: "/integrations", label: "Integrations", icon: <DotIcon /> },
+      { href: "/audit", label: "Audit log", icon: <DotIcon /> },
     ],
   },
 ];
