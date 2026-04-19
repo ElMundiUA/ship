@@ -93,14 +93,14 @@ export function rewriteDocLinks(source) {
     }
 
     const map = {
-      "getting-started/index.md": "/docs/getting-started",
+      "getting-started/index.md": "/getting-started",
       /* Pre-v0.11 catalog paths that lived under documentation/ moved
        * to top-level routes. */
       "tools/index.md": "/tools",
       "collections/index.md": "/collections",
       "patterns/index.md": "/patterns",
       "workflows/index.md": "/workflows",
-      /* Manual pages that were renamed/relocated in v0.11. */
+      /* Docs pages that were renamed/relocated in v0.11. */
       "adoption/index.md": "/docs",
       "adoption/agent-playbook.md": "/docs/operating",
       "adoption/elmundi.md": "/use-cases",

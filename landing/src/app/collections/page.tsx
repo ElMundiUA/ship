@@ -30,7 +30,7 @@ export default function CollectionsPage() {
               A <strong className="text-white">collection</strong> is a curated bundle for a product shape—tables of links into{" "}
               <Link href="/workflows" className="font-semibold text-lilac underline-offset-2 hover:underline">workflows</Link>,{" "}
               <Link href="/tools" className="font-semibold text-lilac underline-offset-2 hover:underline">tools</Link>, and{" "}
-              <Link href="/patterns" className="font-semibold text-lilac underline-offset-2 hover:underline">patterns</Link>, plus manual chapters when you need prose.
+              <Link href="/patterns" className="font-semibold text-lilac underline-offset-2 hover:underline">patterns</Link>, plus docs pages when you need prose.
             </p>
             <div className="mt-10 flex flex-wrap justify-center gap-3">
               <a href="#catalog" className="btn-primary inline-flex">
@@ -42,7 +42,7 @@ export default function CollectionsPage() {
               <Link href="/workflows" className="btn-secondary inline-flex">
                 Workflows
               </Link>
-              <Link href="/docs/getting-started" className="btn-secondary inline-flex">
+              <Link href="/getting-started" className="btn-secondary inline-flex">
                 Getting started
               </Link>
             </div>

@@ -77,7 +77,7 @@ export default function CliPage() {
               artifacts on demand, and tells your agent what is true today — without locking you to a vendor.
             </p>
             <div className="mt-10 flex flex-wrap justify-center gap-3">
-              <Link href="/docs/getting-started" className="btn-primary inline-flex">
+              <Link href="/getting-started" className="btn-primary inline-flex">
                 Build your init command
               </Link>
               <a href="#install" className="btn-secondary inline-flex">
@@ -177,7 +177,7 @@ export default function CliPage() {
             <h2 className="font-display text-2xl font-bold text-white sm:text-3xl">Where to go next</h2>
             <div className="mt-8 grid gap-4 sm:grid-cols-3">
               <Link
-                href="/docs/getting-started"
+                href="/getting-started"
                 className="group flex flex-col gap-2 rounded-2xl border border-white/10 bg-gradient-to-br from-white/[0.04] to-transparent p-5 text-left transition hover:border-aqua/40 hover:bg-white/[0.06]"
               >
                 <span className="font-display text-base font-bold text-white group-hover:text-aqua">Getting started</span>

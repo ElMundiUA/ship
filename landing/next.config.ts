@@ -10,8 +10,9 @@ const nextConfig: NextConfig = {
       { source: "/docs/framework", destination: "/book", permanent: false },
       { source: "/docs/framework/", destination: "/book", permanent: false },
       { source: "/docs/framework/:path*", destination: "/book", permanent: false },
-      /* Convenience alias — people type /getting-started in the bar. */
-      { source: "/getting-started", destination: "/docs/getting-started", permanent: false },
+      /* /getting-started moved out of /docs in v0.12 — it is a setup wizard,
+       * not reference material, so it sits at the top level next to /cli. */
+      { source: "/docs/getting-started", destination: "/getting-started", permanent: false },
       /* CLI moved to top-level `/cli` in v0.10. */
       { source: "/docs/shipctl", destination: "/cli", permanent: false },
       { source: "/docs/shipctl/:path*", destination: "/cli", permanent: false },
@@ -19,7 +20,7 @@ const nextConfig: NextConfig = {
       { source: "/docs/tools/shipctl-cli", destination: "/cli", permanent: false },
       { source: "/docs/tools/ship-agent-trackers", destination: "/tools", permanent: false },
       { source: "/docs/tools/ship-agent-ci", destination: "/tools", permanent: false },
-      /* Manual reorganisation — v0.11. */
+      /* Docs reorganisation — v0.11. */
       { source: "/docs/adoption", destination: "/docs", permanent: false },
       { source: "/docs/adoption/agent-playbook", destination: "/docs/operating", permanent: false },
       { source: "/docs/adoption/elmundi", destination: "/use-cases", permanent: false },

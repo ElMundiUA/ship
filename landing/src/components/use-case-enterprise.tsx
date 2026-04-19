@@ -167,7 +167,7 @@ export function UseCaseEvidenceGrid({
         <h2 className="font-display mt-2 text-center text-2xl font-bold text-white sm:text-3xl">Screens from the live site</h2>
         <p className="mx-auto mt-3 max-w-2xl text-center text-sm text-white/55">
           {evidenceIntro ??
-            "Captured from the same Next.js surface readers use — marketing, catalog, and manual routes."}
+            "Captured from the same Next.js surface readers use — marketing, catalog, and docs routes."}
         </p>
         <div className="mt-12 grid gap-8 md:grid-cols-2">
           {items.map((ev) => (

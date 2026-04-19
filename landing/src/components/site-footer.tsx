@@ -30,23 +30,26 @@ export function SiteFooter() {
             <div className="space-y-4">
               <p className="text-xs font-bold uppercase tracking-[0.18em] text-white/40">Evaluate</p>
               <nav className="flex flex-col gap-3 text-base">
-                <Link className="text-white/70 transition hover:text-aqua" href="/docs/getting-started">
-                  Getting started
-                </Link>
                 <Link className="text-white/70 transition hover:text-aqua" href="/use-cases">
                   Use cases
                 </Link>
                 <Link className="text-white/70 transition hover:text-aqua" href="/docs">
-                  Adoption
+                  Get started
+                </Link>
+                <Link className="text-white/70 transition hover:text-aqua" href="/getting-started">
+                  Setup wizard
                 </Link>
               </nav>
             </div>
 
             <div className="space-y-4">
-              <p className="text-xs font-bold uppercase tracking-[0.18em] text-white/40">Product</p>
+              <p className="text-xs font-bold uppercase tracking-[0.18em] text-white/40">Kit</p>
               <nav className="flex flex-col gap-3 text-base">
+                <Link className="text-white/70 transition hover:text-aqua" href="/kit">
+                  All four kinds
+                </Link>
                 <Link className="text-white/70 transition hover:text-aqua" href="/patterns">
-                  Org patterns
+                  Patterns
                 </Link>
                 <Link className="text-white/70 transition hover:text-aqua" href="/workflows">
                   Workflows
@@ -63,9 +66,6 @@ export function SiteFooter() {
             <div className="space-y-4 sm:col-span-2 lg:col-span-1">
               <p className="text-xs font-bold uppercase tracking-[0.18em] text-white/40">Reference</p>
               <nav className="flex flex-col gap-3 text-base">
-                <Link className="text-white/70 transition hover:text-aqua" href="/docs">
-                  Manual
-                </Link>
                 <Link className="text-white/70 transition hover:text-aqua" href="/cli">
                   shipctl CLI
                 </Link>

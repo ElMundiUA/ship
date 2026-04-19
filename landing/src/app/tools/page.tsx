@@ -105,7 +105,7 @@ export default function ToolsPage() {
                 <div>
                   <p className="font-display font-semibold text-white">Fork and rename for your org</p>
                   <p className="mt-1 text-sm leading-relaxed">
-                    ElMundi names in the manual are <strong className="text-white/90">reference only</strong>; your URLs, projects,
+                    ElMundi names in the docs are <strong className="text-white/90">reference only</strong>; your URLs, projects,
                     and secrets differ. The contracts here stay portable.
                   </p>
                 </div>
@@ -128,11 +128,7 @@ export default function ToolsPage() {
               <Link className="font-semibold text-aqua underline-offset-2 hover:underline" href="/use-cases/elmundi">
                 Use case → ElMundi
               </Link>
-              . YAML names and minutes:{" "}
-              <Link className="font-semibold text-aqua underline-offset-2 hover:underline" href="/use-cases/elmundi">
-                Manual → ElMundi
-              </Link>{" "}
-              · on GitHub:{" "}
+              {" · "} on GitHub:{" "}
               <a
                 className="font-semibold text-aqua underline-offset-2 hover:underline"
                 href={`${repoUrl}/tree/main/artifacts/tools`}
@@ -188,7 +184,7 @@ export default function ToolsPage() {
             <p className="mt-8 text-center text-sm text-white/50">
               Raw HTTP:{" "}
               <Link href="/docs/tools/backend-api" className="font-semibold text-aqua underline-offset-2 hover:underline">
-                Manual → Backend API
+                Docs → Backend API
               </Link>
               {" · "}
               <Link href="/patterns#cli" className="font-semibold text-aqua underline-offset-2 hover:underline">

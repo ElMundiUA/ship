@@ -32,9 +32,9 @@ const EVIDENCE = [
   },
   {
     src: "/use-cases/elmundi-manual-chapter.png",
-    alt: "Ship manual chapter for ElMundi reference wiring",
+    alt: "Ship docs chapter for ElMundi reference wiring",
     caption:
-      "Operator depth — the same story written in the manual (/use-cases/elmundi) for engineers, security, and onboarding. One source, two audiences.",
+      "Operator depth — the same story written in the docs (/use-cases/elmundi) for engineers, security, and onboarding. One source, two audiences.",
   },
 ];
 
@@ -123,7 +123,7 @@ export default function ElmundiUseCasePage() {
               directly to the ticket narrative.
             </li>
             <li>
-              <strong>The manual</strong> became the contract. Every workflow file, label, and state has a chapter under{" "}
+              <strong>The docs</strong> became the contract. Every workflow file, label, and state has a page under{" "}
               <code className="text-aqua">/use-cases/elmundi</code>; the page anyone reads ships the same words the
               automation enforces.
             </li>
@@ -148,7 +148,7 @@ export default function ElmundiUseCasePage() {
 
         <UseCaseResults
           title="What changed once the loop was running"
-          caveat="Results are directional indicators reported by the ElMundi team operating the public reference deployment. The loop, the workflows, and the manual chapter cited here are open source — adopters can reproduce the wiring and measure the same intervals in their own org."
+          caveat="Results are directional indicators reported by the ElMundi team operating the public reference deployment. The loop, the workflows, and the docs cited here are open source — adopters can reproduce the wiring and measure the same intervals in their own org."
           results={[
             {
               headline: "Hours, not days",
@@ -158,9 +158,9 @@ export default function ElmundiUseCasePage() {
             },
             {
               headline: "Single source",
-              label: "Manual = automation = sales deck",
+              label: "Docs = automation = sales deck",
               detail:
-                "The same words describe the loop to engineers (manual), to procurement (this page), and to the runtime (workflow files). Drift between &quot;how we say we work&quot; and &quot;how we actually work&quot; is structurally impossible.",
+                "The same words describe the loop to engineers (docs), to procurement (this page), and to the runtime (workflow files). Drift between &quot;how we say we work&quot; and &quot;how we actually work&quot; is structurally impossible.",
             },
             {
               headline: "Zero",
@@ -181,7 +181,7 @@ export default function ElmundiUseCasePage() {
             {
               role: "Founder / GM",
               perspective:
-                "I can show a buyer the production site and the manual chapter that explains how it got built. There is no demo gap — the deck and the repository tell the same story.",
+                "I can show a buyer the production site and the docs page that explains how it got built. There is no demo gap — the deck and the repository tell the same story.",
             },
             {
               role: "Security / compliance",
@@ -191,19 +191,19 @@ export default function ElmundiUseCasePage() {
             {
               role: "New contributor",
               perspective:
-                "I read one chapter and one config file and I know what to do on a Monday morning. The names in the docs match the names in the workflow files match the names in Linear.",
+                "I read one docs page and one config file and I know what to do on a Monday morning. The names in the docs match the names in the workflow files match the names in Linear.",
             },
           ]}
         />
 
         <UseCaseEvidenceGrid
           items={EVIDENCE}
-          evidenceIntro="Evidence comes from two places: the live consumer site (dev.elmundi.com) and the operator manual chapter. Both render from the same monorepo the team ships into."
+          evidenceIntro="Evidence comes from two places: the live consumer site (dev.elmundi.com) and the operator docs. Both render from the same monorepo the team ships into."
         />
 
         <UseCaseCtaRow
           links={[
-            { href: "/docs/getting-started", label: "Adopt the same loop", variant: "primary" },
+            { href: "/getting-started", label: "Adopt the same loop", variant: "primary" },
             { href: "/use-cases/elmundi", label: "Read the engineering chapter", variant: "secondary" },
             { href: "/use-cases/ship", label: "Story 2 — Ship as a product", variant: "secondary" },
             { href: "/use-cases", label: "All customer stories", variant: "secondary" },

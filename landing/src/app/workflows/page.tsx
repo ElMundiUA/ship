@@ -40,7 +40,7 @@ export default function WorkflowsPage() {
                 CLI
               </a>
               <Link href="/patterns" className="btn-secondary inline-flex">
-                Prompts &amp; workflows (manual)
+                Patterns catalog
               </Link>
               <Link href="/use-cases/elmundi" className="btn-secondary inline-flex">
                 Reference org use case
@@ -55,10 +55,6 @@ export default function WorkflowsPage() {
               Narrative and screenshots:{" "}
               <Link href="/use-cases/elmundi" className="font-semibold text-coral underline-offset-2 hover:underline">
                 Use case → ElMundi
-              </Link>
-              . Filenames and cron tables:{" "}
-              <Link href="/use-cases/elmundi" className="font-semibold text-coral underline-offset-2 hover:underline">
-                Manual → ElMundi
               </Link>
               . Source:{" "}
               <a className="font-semibold text-coral underline-offset-2 hover:underline" href={`${repoUrl}/tree/main/artifacts/workflows`}>

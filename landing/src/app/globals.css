@@ -96,3 +96,238 @@ body {
   @apply font-bold text-[#a4451b];
   font-style: normal;
 }
+
+/* ============================================================ *
+ * Docs ( /docs )                                                *
+ * Shared layout primitives + markdown prose styling. The book   *
+ * uses the heavy bordered-card heading look; the docs are a     *
+ * reference, so the same shape would turn it into a wiki dump.  *
+ * Crisp typographic headings + a thin accent rail instead.      *
+ * ============================================================ */
+
+.docs-shell {
+  @apply mx-auto grid w-full max-w-[88rem] gap-10 px-4 py-10 sm:px-6 sm:py-12 lg:grid-cols-[15rem_minmax(0,1fr)] lg:gap-12 lg:py-16;
+}
+
+/* Per-page inner grid: content + optional sticky right-rail TOC.
+ * Only applied when the page actually has H2s worth indexing. */
+.docs-page {
+  @apply min-w-0;
+}
+
+.docs-page-with-toc {
+  @apply min-w-0 grid grid-cols-1 gap-12 xl:grid-cols-[minmax(0,1fr)_14rem];
+}
+
+.docs-sidebar {
+  @apply min-w-0;
+}
+
+.docs-sidebar-sticky {
+  @apply lg:sticky lg:top-24 lg:max-h-[calc(100vh-7rem)] lg:overflow-y-auto lg:pr-2;
+}
+
+.docs-sidebar-group-label {
+  @apply mb-2 px-3 text-[10px] font-bold uppercase tracking-[0.2em] text-white/40;
+}
+
+.docs-sidebar-link {
+  @apply relative block rounded-md px-3 py-1.5 text-sm leading-snug text-white/55 transition hover:text-white;
+}
+
+/* Active state: keep it quiet — just bump the text to white and add a thin
+ * aqua rail flush against the left edge. No fill, no gradient, no glow. */
+.docs-sidebar-link[aria-current="page"] {
+  @apply font-medium text-white shadow-[inset_2px_0_0_theme(colors.aqua)];
+}
+
+.docs-toc-rail {
+  @apply hidden xl:block;
+}
+
+.docs-toc-sticky {
+  @apply sticky top-24 max-h-[calc(100vh-7rem)] overflow-y-auto pr-2;
+}
+
+.docs-toc-label {
+  @apply mb-3 text-[10px] font-bold uppercase tracking-[0.2em] text-white/45;
+}
+
+.docs-toc-link {
+  @apply block border-l border-white/10 py-1 pl-3 text-sm leading-snug text-white/55 transition hover:border-aqua/60 hover:text-white;
+}
+
+.docs-content {
+  @apply min-w-0;
+}
+
+.docs-hero {
+  @apply mb-10 border-b border-white/10 pb-10;
+}
+
+.docs-hero-kicker {
+  @apply text-[11px] font-bold uppercase tracking-[0.2em] text-aqua;
+}
+
+.docs-hero-title {
+  @apply font-display mt-3 text-4xl font-bold leading-[1.05] tracking-tight text-white sm:text-5xl;
+}
+
+.docs-hero-lede {
+  @apply mt-5 max-w-3xl text-lg leading-relaxed text-white/70;
+}
+
+/* The actual rendered prose */
+.docs-prose {
+  @apply text-base leading-relaxed text-white/80;
+}
+
+.docs-prose > * + * {
+  @apply mt-5;
+}
+
+.docs-prose strong {
+  @apply font-semibold text-white;
+}
+
+.docs-prose em {
+  @apply italic text-white/90;
+}
+
+.docs-prose a {
+  @apply font-semibold text-aqua underline-offset-[3px] decoration-aqua/40 hover:underline hover:decoration-aqua;
+}
+
+.docs-prose :is(ul, ol) {
+  @apply my-5 space-y-2 pl-6;
+}
+
+.docs-prose ul {
+  @apply list-disc marker:text-aqua/55;
+}
+
+.docs-prose ol {
+  @apply list-decimal marker:text-aqua/70 marker:font-semibold;
+}
+
+.docs-prose li > p {
+  @apply my-1;
+}
+
+.docs-prose code:not(pre code) {
+  @apply rounded-md border border-white/10 bg-white/[0.06] px-1.5 py-0.5 font-mono text-[0.86em] text-aqua/95;
+}
+
+.docs-prose hr {
+  @apply my-12 border-t border-white/10;
+}
+
+.docs-prose blockquote {
+  @apply my-6 rounded-r-xl border-l-4 border-aqua/55 bg-white/[0.03] px-5 py-3 text-white/75 [&>p:first-child]:mt-0 [&>p:last-child]:mb-0;
+}
+
+/* H2: typographic, with thin coloured rail on the left and an anchor pilcrow on hover.
+ * Styling lives here (not inline) so we can scope reliably under .docs-prose. */
+.docs-prose h2 {
+  @apply font-display mt-16 mb-4 scroll-mt-28 border-l-[3px] border-aqua/70 pl-4 text-2xl font-bold leading-tight tracking-tight text-white sm:text-[1.6rem];
+}
+
+.docs-prose h3 {
+  @apply font-display mt-12 mb-3 scroll-mt-28 text-lg font-bold leading-tight text-white sm:text-xl;
+}
+
+.docs-prose h4 {
+  @apply font-display mt-10 mb-2 scroll-mt-28 text-base font-bold uppercase tracking-wide text-white/85;
+}
+
+.docs-prose .docs-anchor {
+  @apply ml-2 align-middle text-sm font-normal text-white/0 transition group-hover:text-aqua/60 hover:!text-aqua;
+}
+
+/* Code block — terminal chrome */
+.docs-prose .docs-code {
+  @apply my-7 overflow-hidden rounded-2xl border border-white/[0.12] bg-black/55 shadow-card;
+}
+
+.docs-prose .docs-code-bar {
+  @apply flex items-center gap-2 border-b border-white/10 bg-white/[0.04] px-3.5 py-2;
+}
+
+.docs-prose .docs-code-dots {
+  @apply inline-flex gap-1.5;
+}
+
+.docs-prose .docs-code-dots > span {
+  @apply h-2.5 w-2.5 rounded-full;
+}
+
+.docs-prose .docs-code-lang {
+  @apply ml-2 font-mono text-[10px] uppercase tracking-widest text-white/40;
+}
+
+.docs-prose .docs-code pre {
+  @apply m-0 max-h-[28rem] overflow-x-auto px-4 py-3.5 font-mono text-[0.82rem] leading-relaxed text-white/90;
+}
+
+.docs-prose .docs-code pre code {
+  @apply border-0 bg-transparent p-0 text-inherit;
+}
+
+/* Tables — same dark-card style the book uses, scoped here to avoid the book heading wrapper */
+.docs-prose .docs-table-wrap {
+  @apply my-8 overflow-x-auto rounded-2xl border border-white/[0.12] bg-black/30 shadow-inner;
+}
+
+.docs-prose .docs-table-wrap table {
+  @apply min-w-full border-collapse text-left text-sm text-white/85;
+}
+
+.docs-prose .docs-table-wrap thead {
+  @apply bg-white/[0.05] text-[11px] uppercase tracking-wider text-aqua/85;
+}
+
+.docs-prose .docs-table-wrap th {
+  @apply border-b border-white/15 px-4 py-3 font-semibold;
+}
+
+.docs-prose .docs-table-wrap td {
+  @apply border-b border-white/[0.07] px-4 py-3 align-top text-white/75;
+}
+
+.docs-prose .docs-table-wrap tbody tr:nth-child(odd) {
+  @apply bg-white/[0.02];
+}
+
+.docs-prose .docs-table-wrap tbody tr:last-child td {
+  @apply border-b-0;
+}
+
+/* Breadcrumb */
+.docs-crumbs {
+  @apply mb-6 flex flex-wrap items-center gap-1.5 text-xs text-white/45;
+}
+
+.docs-crumbs a {
+  @apply rounded-md px-1.5 py-0.5 text-white/55 transition hover:bg-white/5 hover:text-white;
+}
+
+.docs-crumbs span.sep {
+  @apply text-white/25;
+}
+
+/* Mobile: horizontal scrollable section pills (replaces the desktop sidebar) */
+.docs-mobile-nav {
+  @apply -mx-4 mb-6 flex gap-1 overflow-x-auto px-4 lg:hidden;
+}
+
+.docs-mobile-nav::-webkit-scrollbar {
+  display: none;
+}
+
+.docs-mobile-nav-link {
+  @apply shrink-0 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-medium text-white/70 transition hover:border-aqua/40 hover:text-white;
+}
+
+.docs-mobile-nav-link[aria-current="page"] {
+  @apply border-white/30 bg-white/[0.08] font-semibold text-white;
+}

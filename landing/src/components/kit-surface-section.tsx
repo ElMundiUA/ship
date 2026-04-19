@@ -32,7 +32,7 @@ export function KitSurfaceSection() {
     <section id="kit" className="border-y border-white/10 bg-black/30 py-20 sm:py-24">
       <div className="mx-auto max-w-6xl px-4 sm:px-6">
         <p className="text-sm font-bold uppercase tracking-widest text-aqua/90">What you get in the box</p>
-        <h2 className="font-display mt-2 text-3xl font-bold text-white sm:text-4xl">Manual, book, and catalogs — one experience</h2>
+        <h2 className="font-display mt-2 text-3xl font-bold text-white sm:text-4xl">Docs, book, and catalogs — one experience</h2>
         <p className="mt-4 max-w-3xl text-lg text-white/65">
           Buyers read the narrative; operators browse tools and workflows; engineers deep-link into chapters. Everything
           ships from the same repository so the story and the wiring cannot silently diverge.

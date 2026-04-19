@@ -188,7 +188,7 @@ export default function PatternsPage() {
               </Link>
               {" · "}
               <Link className="font-semibold text-aqua underline-offset-2 hover:underline" href="/docs/tools/backend-api">
-                Manual → Backend API
+                Docs → Backend API
               </Link>{" "}
               (
               <a className="text-aqua/80 underline-offset-2 hover:underline" href={`${repoUrl}/blob/main/artifacts/tools/methodology-api/ARTIFACT.md`}>

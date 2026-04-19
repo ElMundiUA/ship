@@ -30,7 +30,7 @@ const STORIES: Story[] = [
     bullets: [
       "Operators launch the day with one workflow, not six tabs",
       "Every agent action is reviewable in GitHub Actions and Linear history",
-      "Onboarding a new contributor is a single chapter of the manual, not a tribal call",
+      "Onboarding a new contributor is a single page of the docs, not a tribal call",
     ],
     stack: ["Linear", "GitHub Actions", "Cursor Cloud Agent", "Playwright", "Sentry"],
   },
@@ -43,7 +43,7 @@ const STORIES: Story[] = [
       "Packaged forty chapters of operating doctrine, a versioned artifact catalog (patterns / tools / workflows / collections), a CLI, and a small agent API behind one Apache-2.0 surface — so security review is a license check, not a vendor questionnaire.",
     bullets: [
       "Apache-2.0 + public repo removes the legal-review gate before a pilot can start",
-      "Manual, catalog, and CLI all read the same source of truth — no drift between sales deck and runbook",
+      "Docs, catalog, and CLI all read the same source of truth — no drift between sales deck and runbook",
       "Adopters compose what they need: take a single pattern, or wire the full reference stack",
     ],
     stack: ["Next.js", "FastAPI", "shipctl", "MDX", "Apache-2.0"],
@@ -68,7 +68,7 @@ export default function UseCasesIndexPage() {
               into their SDLC — and what that bought them.
             </p>
             <div className="mt-10 flex flex-wrap justify-center gap-3">
-              <Link href="/docs/getting-started" className="btn-primary inline-flex">
+              <Link href="/getting-started" className="btn-primary inline-flex">
                 Start a 30-day pilot
               </Link>
               <Link href="#stories" className="btn-secondary inline-flex">
@@ -106,7 +106,7 @@ export default function UseCasesIndexPage() {
               Each case follows the buyer arc: <strong className="text-white">situation</strong>,{" "}
               <strong className="text-white">complication</strong>, <strong className="text-white">resolution</strong>,{" "}
               <strong className="text-white">measured outcome</strong>, <strong className="text-white">evidence</strong>.
-              Engineering depth lives in the manual; this page is for buying committees.
+              Engineering depth lives in the docs; this page is for buying committees.
             </p>
 
             <div className="mt-10 flex flex-col gap-8">
@@ -159,10 +159,10 @@ export default function UseCasesIndexPage() {
             <p className="mt-4 text-base leading-relaxed text-white/70">
               The kit is open source. Most teams stand up a working delivery loop in under an hour using{" "}
               <code className="rounded bg-white/10 px-1.5 py-0.5 text-aqua/90">shipctl init</code>. The deck-friendly story
-              is on this page; the rest is a manual and a CLI you can read end-to-end on the plane home.
+              is on this page; the rest is the docs and a CLI you can read end-to-end on the plane home.
             </p>
             <div className="mt-8 flex flex-wrap justify-center gap-3">
-              <Link href="/docs/getting-started" className="btn-primary inline-flex">
+              <Link href="/getting-started" className="btn-primary inline-flex">
                 Get started
               </Link>
               <Link href="/book" className="btn-secondary inline-flex">

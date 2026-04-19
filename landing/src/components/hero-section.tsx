@@ -58,7 +58,7 @@ export function HeroSection() {
           <Link className="btn-primary text-center sm:text-left" href="#command-builder">
             Open the command builder
           </Link>
-          <Link className="btn-secondary text-center" href="/docs/getting-started">
+          <Link className="btn-secondary text-center" href="/getting-started">
             Three adoption paths
           </Link>
           <AdoptionWizardButton className="btn-secondary text-center">

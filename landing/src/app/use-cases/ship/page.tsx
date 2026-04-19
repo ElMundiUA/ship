@@ -54,7 +54,7 @@ export default function ShipUseCasePage() {
           items={[
             { label: "Category", value: "SDLC methodology · open source" },
             { label: "License", value: "Apache-2.0" },
-            { label: "Surface", value: "Manual · catalog · CLI · agent API" },
+            { label: "Surface", value: "Docs · catalog · CLI · agent API" },
             { label: "Footprint", value: "Markdown + Next.js + FastAPI" },
           ]}
         />
@@ -157,7 +157,7 @@ export default function ShipUseCasePage() {
             },
             {
               headline: "1 source",
-              label: "Manual, catalog, CLI all read the same files",
+              label: "Docs, catalog, CLI all read the same files",
               detail:
                 "There is no separate &quot;sales-truth&quot; and &quot;engineering-truth&quot;. A buyer reading /docs and an agent loading a pattern over the API are reading the same paragraph.",
             },
@@ -199,7 +199,7 @@ export default function ShipUseCasePage() {
 
         <UseCaseCtaRow
           links={[
-            { href: "/docs/getting-started", label: "Run a pilot in your repo", variant: "primary" },
+            { href: "/getting-started", label: "Run a pilot in your repo", variant: "primary" },
             { href: "/book", label: "Read the book", variant: "secondary" },
             { href: "/use-cases/elmundi", label: "Story 1 — ElMundi reference", variant: "secondary" },
             { href: "/use-cases", label: "All customer stories", variant: "secondary" },

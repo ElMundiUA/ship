@@ -87,7 +87,7 @@ export function ExamplesSection() {
             <h2 className="font-display mt-2 text-3xl font-bold text-white sm:text-4xl">See the framework in real pages</h2>
             <p className="mt-3 max-w-2xl text-white/65">
               Stories match how enterprise teams evaluate vendors — challenge, solution, outcomes, evidence. Previews use
-              this site&apos;s UI plus the ElMundi consumer experience on staging (not the Ship manual reader).
+              this site&apos;s UI plus the ElMundi consumer experience on staging (not the Ship docs reader).
             </p>
           </div>
           <div className="flex shrink-0 flex-col gap-2 sm:flex-row sm:items-center">
@@ -96,9 +96,6 @@ export function ExamplesSection() {
             </Link>
             <Link href="/use-cases/elmundi" className="btn-secondary inline-flex text-center">
               ElMundi reference
-            </Link>
-            <Link href="/use-cases/elmundi" className="btn-secondary inline-flex text-center">
-              Deep-dive manual
             </Link>
           </div>
         </div>
