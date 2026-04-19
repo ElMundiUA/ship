@@ -77,6 +77,25 @@ class Settings(BaseSettings):
         default=10, alias="REPO_SYNC_INTERVAL_MINUTES"
     )
 
+    # --- Observability (Sentry, RFC-0006 phase 2) ---
+    # When ``sentry_dsn`` is empty we skip ``sentry_sdk.init`` entirely, so a
+    # missing key is the documented "Sentry off" mode for laptop dev. The
+    # release / environment values are read by Sentry to group events.
+    sentry_dsn: str | None = Field(default=None, alias="SENTRY_DSN")
+    sentry_environment: str = Field(
+        default="local", alias="SENTRY_ENVIRONMENT"
+    )
+    # Performance sampling. We default to 0.1 in prod and 0.0 in local so a
+    # mistakenly-set DSN on a developer laptop does not flood the project.
+    sentry_traces_sample_rate: float = Field(
+        default=0.0, alias="SENTRY_TRACES_SAMPLE_RATE", ge=0.0, le=1.0
+    )
+    # Logical service name attached as a tag; lets one Sentry project hold
+    # both ``ship-server`` and ``ship-worker`` events without confusion.
+    sentry_service_name: str = Field(
+        default="ship-server", alias="SENTRY_SERVICE_NAME"
+    )
+
     # --- Existing methodology API knobs (kept for backwards compatibility) ---
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
     openai_embed_model: str = Field(

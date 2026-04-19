@@ -17,6 +17,7 @@ from arq import cron
 from arq.connections import RedisSettings
 
 from backend.app.core.config import get_settings
+from backend.app.core.sentry import init_sentry
 from backend.app.workers.git_sync import (
     cron_sync_pending_repos,
     settings_interval_minutes,
@@ -25,6 +26,10 @@ from backend.app.workers.secret_probe import cron_probe_pending_secrets
 
 
 log = logging.getLogger("ship.worker")
+
+# Worker boots with a different service tag so Sentry can split error rates
+# between the API and background jobs without operators digging through tags.
+init_sentry(service_name="ship-worker")
 
 
 def _every_n_minutes(n: int) -> set[int]:

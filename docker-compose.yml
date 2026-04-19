@@ -106,6 +106,11 @@ services:
       AUTH0_JWKS_URL: ${AUTH0_JWKS_URL:-}
       REPO_CACHE_ROOT: /var/lib/ship/repo-cache
       REPO_SYNC_INTERVAL_MINUTES: ${REPO_SYNC_INTERVAL_MINUTES:-10}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-local}
+      SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.0}
+      SENTRY_SERVICE_NAME: ship-server
+      SHIP_VERSION: ${SHIP_VERSION:-}
     ports:
       - "${SHIP_API_PORT:-8100}:8100"
     volumes:
@@ -155,6 +160,15 @@ services:
       AUTH0_AUDIENCE: ${AUTH0_AUDIENCE:-}
       AUTH0_SESSION_SECRET: ${AUTH0_SESSION_SECRET:-}
       APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3001}
+      # Sentry — empty DSN means "off". The console reads NEXT_PUBLIC_*
+      # variants in the browser bundle and the unprefixed ones server-side.
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-local}
+      SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.0}
+      NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN:-${SENTRY_DSN:-}}
+      NEXT_PUBLIC_SENTRY_ENVIRONMENT: ${NEXT_PUBLIC_SENTRY_ENVIRONMENT:-${SENTRY_ENVIRONMENT:-local}}
+      NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE: ${NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE:-${SENTRY_TRACES_SAMPLE_RATE:-0.0}}
+      SHIP_VERSION: ${SHIP_VERSION:-}
     ports:
       - "${SHIP_CONSOLE_PORT:-3001}:3001"
     healthcheck:
@@ -212,6 +226,11 @@ services:
       AUTH0_JWKS_URL: ${AUTH0_JWKS_URL:-}
       REPO_CACHE_ROOT: /var/lib/ship/repo-cache
       REPO_SYNC_INTERVAL_MINUTES: ${REPO_SYNC_INTERVAL_MINUTES:-10}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-local}
+      SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.0}
+      SENTRY_SERVICE_NAME: ship-worker
+      SHIP_VERSION: ${SHIP_VERSION:-}
     volumes:
       - ./artifacts:/app/artifacts:ro
       - ./documentation:/app/documentation:ro

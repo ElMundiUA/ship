@@ -34,6 +34,11 @@ cryptography>=43,<44
 # --- YAML for artifact frontmatter ---
 pyyaml>=6.0
 
+# --- Observability (RFC-0006 / phase 2) ---
+# `fastapi` extra wires the Sentry FastAPI middleware (request spans + error
+# capture); `arq` keeps the background-worker integration on the same SDK.
+sentry-sdk[fastapi,arq]>=2.18,<3
+
 # --- Tests ---
 pytest>=8.0,<9
 pytest-asyncio>=0.24,<1

@@ -19,7 +19,14 @@ from fastapi import FastAPI, Header, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.api.v1 import api_router as v1_api_router
+from backend.app.core.sentry import init_sentry
 from backend.app.db.session import dispose_engine, get_engine
+
+
+# Sentry must be wired up *before* FastAPI is constructed so the
+# StarletteIntegration can monkey-patch the routing layer when the app
+# instance is built. Empty SENTRY_DSN turns this into a no-op.
+init_sentry(service_name="ship-server")
 
 
 APP_ROOT = Path(__file__).resolve().parents[2]
