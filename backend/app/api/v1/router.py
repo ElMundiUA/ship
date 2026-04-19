@@ -18,7 +18,9 @@ from backend.app.api.v1.routes import (
     health,
     integrations,
     knowledge,
+    linear_oauth,
     members,
+    notion_oauth,
     onboarding,
     repos,
     workspace_artifacts,
@@ -44,3 +46,8 @@ api_router.include_router(repos.router)
 # GitHub App OAuth + webhooks (pilot WOW-onboarding flow). Webhook route
 # is public; install start/callback do their own auth.
 api_router.include_router(github_app.router)
+# Linear OAuth (pilot Day 2 — tracker WOW flow). Callback is public so
+# the browser redirect from Linear can hit it without a session.
+api_router.include_router(linear_oauth.router)
+# Notion OAuth (pilot Day 2 — tracker WOW flow). Same shape as Linear.
+api_router.include_router(notion_oauth.router)

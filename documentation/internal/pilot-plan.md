@@ -1,7 +1,7 @@
 # Ship pilot plan — WOW onboarding (Cloud SaaS, Model A)
 
-> **Status:** **Day 1 shipped (2026-04-19).** Day 2-3 still planning.
-> **Source chats:** [Pilot scope discussion](442f31fa-34f0-47da-888b-a2d10a773f8e), [Day 1 build](48ef7ed3-881c-42e6-a823-1f670f4907ac)
+> **Status:** **Day 1 + Day 2 shipped (2026-04-19).** Day 3 still planning.
+> **Source chats:** [Pilot scope discussion](442f31fa-34f0-47da-888b-a2d10a773f8e), [Day 1+2 build](48ef7ed3-881c-42e6-a823-1f670f4907ac)
 > **Owner:** Denys / Ship core
 > **Target:** 3-day pilot demo with WOW onboarding (sign-in → working dashboard in < 5 min)
 
@@ -31,7 +31,7 @@ toward **Model A: Cloud SaaS + GitHub App + OAuth**.
 > per-day sections below describe the *plan* (with status badges), this
 > section describes the *state of the repo right now*.
 
-**Last updated:** 2026-04-19, end of Day 1.
+**Last updated:** 2026-04-19, end of Day 2.
 
 ### Day 1 — ✅ shipped
 
@@ -111,11 +111,92 @@ the live test suite (162 passing). What landed:
    limiter — fine for pilot, revisit before opening to public installs
    at scale.
 
-### Day 2 — pending (next up)
+### Day 2 — ✅ shipped
 
-Repo picker UI + tracker OAuth (Linear, Notion) + Code Map MVP. See
-[Day 2](#day-2--repo-picker--tracker-oauth--code-map-mvp) below; nothing
-started yet.
+Repo picker, Linear + Notion OAuth, Code Map MVP all on `main`. Suite
+green at 180 passing. What landed:
+
+- **`RepoSummary`** added to `CodeHostGateway`; the GitHub adapter
+  paginates `/installation/repositories` (max 500) and surfaces
+  default branch, visibility, and `external_id` for the picker UI.
+- **`workspace_repos` table** (migration `0004_workspace_repos.py`) with
+  `(workspace_id, provider, external_id)` unique key + FK to
+  `github_installations`. Stores the activated set so default
+  pipelines on Day 3 can iterate it without re-hitting GitHub.
+- **Repo picker API** (`backend/app/api/v1/routes/repos.py`):
+  - `GET /v1/workspaces/{ws}/repos/available` — live App-installation
+    list with an `activated` flag per row.
+  - `GET /v1/workspaces/{ws}/repos` — currently activated set (DB).
+  - `POST /v1/workspaces/{ws}/repos/activate` — replaces the set,
+    audit-logs the diff, rejects external_ids the App can't see (422).
+  - `GET /v1/workspaces/{ws}/repos/{id}/code-map` — MVP truncated file
+    list via the GitHub Trees API (cap 5,000).
+- **Linear OAuth** (`backend/app/integrations/linear/`):
+  - `oauth.py` — signed state JWT (HS256 over `JWT_SECRET`), authorize
+    URL builder (`response_type=code`, `actor=user`, `prompt=consent`),
+    `exchange_code_for_token` against `https://api.linear.app/oauth/token`.
+  - `tracker_adapter.py` — GraphQL implementation of
+    `TrackerGateway`: `list_tickets`, `transition`, `comment`.
+  - `routes/linear_oauth.py`:
+    `POST /v1/integrations/linear/install/start` (admin-only, 503 if
+    creds missing) +
+    `GET /v1/integrations/linear/install/callback` (public, validates
+    state, exchanges code, persists `Integration{kind="linear"}` with
+    encrypted token, audit-logs, redirects back to
+    `<console>/onboarding?step=tracker&linear=connected`).
+- **Notion OAuth** (`backend/app/integrations/notion/`):
+  - Same shape as Linear, with the Notion-specific bits: HTTP Basic
+    auth on the token endpoint, `Notion-Version: 2025-09-03` header,
+    workspace metadata stored in the integration `config` so the
+    console can show "connected to Acme" without re-asking.
+  - `tracker_adapter.py` — REST adapter; uses `/search` for ticket
+    listing because Notion has no first-class issue type, and patches
+    `properties.Status` on `transition`.
+  - `routes/notion_oauth.py`: same start + callback contract as Linear.
+- **Settings** (`backend/app/core/config.py`): `LINEAR_CLIENT_ID`,
+  `LINEAR_CLIENT_SECRET`, `LINEAR_OAUTH_SCOPES` (default
+  `read,write,issues:create,comments:create`), `NOTION_CLIENT_ID`,
+  `NOTION_CLIENT_SECRET`. Both pairs hard-503 on the start endpoint
+  when missing so ops sees a clean "wire env vars" error instead of a
+  generic 500.
+- **Console wizard**:
+  - New `step=repos` between `github` and `workflows`. Server-renders
+    the available list, ticks already-activated rows; submit posts to
+    `/api/onboard/repos-activate` which delegates to the backend and
+    bounces forward to `workflows`.
+  - `step=tracker` rewritten: 3 OAuth/skip tiles (Linear, Notion,
+    GitHub Issues "already connected"). Submitting a vendor tile
+    posts to `/api/onboard/tracker-install` which calls the matching
+    backend `install/start` and 303-redirects the browser to the
+    vendor's authorize URL. The vendor callback bounces back into
+    `?step=tracker&{linear,notion}=connected`. PAT-input form is
+    retired; `INTEGRATION_PRESETS` removed from the wizard.
+- **Tests**: `test_v1_repos.py` (picker + activate + code-map),
+  `test_v1_linear_oauth.py` (start + callback round-trip with
+  `exchange_code_for_token` monkey-patched), `test_v1_notion_oauth.py`
+  (mirror). 180 passing across the whole backend.
+- **Docker**: rebuilt `ship-server` after image refresh exposed missing
+  `integrations/` package; `alembic.ini` had `sqlalchemy.url` cleared
+  so `ALEMBIC_DATABASE_URL` from compose is no longer overridden, and
+  `migrations/env.py` now strips whitespace before deciding whether to
+  fall back to `Settings.sync_database_url`.
+
+### Day 2 — open items / known gaps before Day 3
+
+1. **Default pipelines** still aren't auto-created on first
+   `repos/activate` — that's the Day 3 task that consumes
+   `workspace_repos`.
+2. **Notion database picker** — after OAuth we don't yet show the user
+   *which* shared databases we'll target. Day 3 surfaces them in the
+   dashboard once the daily-standup pipeline lands.
+3. **Linear webhook subscription** — we only do REST/GraphQL polling
+   today. Day 3 adds the GraphQL subscription registration so ticket
+   updates land in real time.
+4. **Code-map persistence** — the MVP returns the file list inline.
+   Day 3 caches it in S3 + indexes the JSON with a refresh cron.
+5. **Linear/Notion operator docs** — there are no
+   `documentation/internal/{linear,notion}-oauth-setup.md` files yet.
+   Add when we wire the production tenants in the Day 3 smoke test.
 
 ### Day 3 — pending
 
@@ -352,10 +433,13 @@ init --copy-rules` flow is already implemented and works.
 
 ### Day 2 — Repo picker + tracker OAuth + Code Map MVP
 
-> **Status: ⏳ pending.** Not started. Day 1 unblocks all of these.
+> **Status: ✅ shipped (2026-04-19).** All bullets below landed; see the
+> "Day 2 — ✅ shipped" handoff section above for the file-by-file
+> rundown and the open items deferred to Day 3.
 
 1. **Backend:** `GET /v1/repos/available` (live from installation API)
-   + `POST /v1/repos/activate` (saves selection + creates default pipelines).
+   + `POST /v1/repos/activate` (saves selection; default-pipelines
+   auto-create deferred to Day 3).
 2. **Console:** onboarding step "Pick repos" — checkbox list from live data.
 3. **Linear OAuth:**
    - Register Ship OAuth Application at linear.app/settings → API

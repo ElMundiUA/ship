@@ -370,6 +370,40 @@ export function activateRepos(
   );
 }
 
+// --- Tracker OAuth (Linear / Notion, Day-2 wow flow) ----------------------
+
+/**
+ * Response from `POST /v1/integrations/{linear,notion}/install/start`.
+ *
+ * The console redirects the browser to `install_url`; the vendor bounces
+ * back to the backend's `/install/callback`, which 303s back into the
+ * onboarding wizard's `tracker` step on the configured console origin.
+ */
+export interface ApiTrackerInstallStart {
+  install_url: string;
+  state: string;
+}
+
+export function startLinearInstall(
+  workspaceId: string,
+  token?: string,
+): Promise<ApiTrackerInstallStart> {
+  return apiFetch<ApiTrackerInstallStart>(
+    `/v1/integrations/linear/install/start?workspace_id=${encodeURIComponent(workspaceId)}`,
+    { method: "POST", token },
+  );
+}
+
+export function startNotionInstall(
+  workspaceId: string,
+  token?: string,
+): Promise<ApiTrackerInstallStart> {
+  return apiFetch<ApiTrackerInstallStart>(
+    `/v1/integrations/notion/install/start?workspace_id=${encodeURIComponent(workspaceId)}`,
+    { method: "POST", token },
+  );
+}
+
 // --- Artifact repos --------------------------------------------------------
 
 export function listArtifactRepos(

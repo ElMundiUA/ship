@@ -130,6 +130,38 @@ class Settings(BaseSettings):
     # you register a staging App.
     github_app_slug: str = Field(default="ship", alias="GITHUB_APP_SLUG")
 
+    # --- Linear OAuth (pilot Day 2 — tracker WOW flow) ---
+    # Public OAuth Application credentials registered at
+    # https://linear.app/<workspace>/settings/api/applications. Required
+    # for the install/start + install/callback endpoints; without them
+    # the routes 503 so ops sees a clean misconfiguration error.
+    linear_client_id: str | None = Field(default=None, alias="LINEAR_CLIENT_ID")
+    linear_client_secret: str | None = Field(
+        default=None, alias="LINEAR_CLIENT_SECRET"
+    )
+    # Comma-separated OAuth scopes. ``read,write`` is the minimum the
+    # pilot adapter needs (list issues + post comments). Leave the
+    # defaults unless a tenant explicitly objects.
+    linear_oauth_scopes: str = Field(
+        default="read,write,issues:create,comments:create",
+        alias="LINEAR_OAUTH_SCOPES",
+    )
+
+    # --- Notion OAuth (pilot Day 2 — tracker WOW flow) ---
+    # Public Notion integration credentials from
+    # https://www.notion.so/profile/integrations . Notion calls these
+    # ``OAuth Client ID`` / ``OAuth Client Secret`` in the UI; same
+    # shape as Linear. The user still has to share at least one database
+    # with the integration after the OAuth dance — Notion's API does not
+    # let us list every database the user can see, only ones explicitly
+    # granted to the integration. The console explains this in copy.
+    notion_client_id: str | None = Field(
+        default=None, alias="NOTION_CLIENT_ID"
+    )
+    notion_client_secret: str | None = Field(
+        default=None, alias="NOTION_CLIENT_SECRET"
+    )
+
     @property
     def resolved_auth0_issuer(self) -> str | None:
         """Default issuer to ``https://{domain}/`` when not overridden."""
