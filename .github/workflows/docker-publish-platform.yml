@@ -1,0 +1,155 @@
+# Build & push the Ship cloud platform Docker images (RFC-0006).
+#
+# Two images live in this repo:
+#
+#   dekus/ship-backend  — FastAPI (`ship-server`) + arq worker (`ship-worker`)
+#                         share one image; the runtime command differs.
+#                         Dockerfile: deploy/backend/Dockerfile
+#   dekus/ship-console  — Next.js operator UI (standalone build).
+#                         Dockerfile: deploy/console/Dockerfile
+#
+# The marketing landing image (`dekus/ship-docs`) is built by the sibling
+# workflow `docker-publish-bunny.yml`. Keep these two pipelines independent
+# so a slow console build never blocks a docs hotfix.
+#
+# Tagging:
+#   - `latest`              — only on `main` pushes
+#   - `sha-<7-char-sha>`    — every build (pinnable for Bunny Magic Containers)
+#   - `pr-<number>`         — on pull_request, push=false (smoke build only)
+#
+# Bunny rollout is **not** wired here yet; once the two MC apps are
+# provisioned (BUNNY_BACKEND_APP_ID + BUNNY_CONSOLE_APP_ID), add a deploy
+# job that calls `node scripts/bunny-deploy-platform.mjs` against
+# `IMAGE_TAG=sha-<short>`.
+
+name: Ship — platform images (backend + console)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - "console/**"
+      - "deploy/backend/**"
+      - "deploy/console/**"
+      - "requirements-backend.txt"
+      - "VERSION"
+      - ".github/workflows/docker-publish-platform.yml"
+  pull_request:
+    paths:
+      - "backend/**"
+      - "console/**"
+      - "deploy/backend/**"
+      - "deploy/console/**"
+      - "requirements-backend.txt"
+      - ".github/workflows/docker-publish-platform.yml"
+  workflow_dispatch:
+
+concurrency:
+  # PRs cancel mid-flight; main pushes never do (we want every commit to
+  # produce a registry tag for bisecting).
+  group: ship-platform-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      # Don't fail the whole pipeline if one image breaks — we want to know
+      # which one is broken without re-running.
+      fail-fast: false
+      matrix:
+        include:
+          - name: backend
+            image_default: dekus/ship-backend
+            image_var: DOCKER_IMAGE_NAME_BACKEND
+            dockerfile: ./deploy/backend/Dockerfile
+            context: .
+          - name: console
+            image_default: dekus/ship-console
+            image_var: DOCKER_IMAGE_NAME_CONSOLE
+            dockerfile: ./deploy/console/Dockerfile
+            context: .
+    outputs:
+      backend_tag: ${{ steps.deploy-tag.outputs.tag }}
+      console_tag: ${{ steps.deploy-tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve image name
+        id: set-image
+        env:
+          OVERRIDE: ${{ vars[matrix.image_var] }}
+          FALLBACK: ${{ matrix.image_default }}
+        run: |
+          IMG="${OVERRIDE:-$FALLBACK}"
+          echo "image=${IMG}" >> "$GITHUB_OUTPUT"
+          echo "Using image: ${IMG}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Resolve deploy tag (sha-<short>)
+        id: deploy-tag
+        run: |
+          short="${GITHUB_SHA:0:7}"
+          echo "tag=sha-${short}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Login is skipped on PRs — we only build to verify the Dockerfile,
+      # never push from forks (would need write access to the registry).
+      - name: Log in to Docker Hub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME || 'dekus' }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.set-image.outputs.image }}
+          # `latest` only on main; `sha-<short>` always; `pr-<n>` for PR previews.
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=sha,prefix=sha-,format=short
+            type=ref,event=pr,prefix=pr-
+
+      - name: Build (and push on main / dispatch)
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          # PR builds verify the Dockerfile but never push.
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Per-image cache scope so backend and console don't trash each other.
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+          # Single arch on purpose — Bunny Magic Containers run linux/amd64.
+          # Add arm64 here if/when we host on Graviton / Apple-silicon CI.
+          platforms: linux/amd64
+
+      - name: Summary
+        if: always()
+        env:
+          IMG: ${{ steps.set-image.outputs.image }}
+          TAG: ${{ steps.deploy-tag.outputs.tag }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          {
+            echo "### ${{ matrix.name }}"
+            echo "- Image: \`${IMG}\`"
+            echo "- Deploy tag: \`${TAG}\`"
+            if [[ -n "${DIGEST}" ]]; then echo "- Digest: \`${DIGEST}\`"; fi
+            if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+              echo "- Pushed: **no** (PR build verifies Dockerfile only)"
+            else
+              echo "- Pushed: **yes** (\`latest\` + \`${TAG}\`)"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
