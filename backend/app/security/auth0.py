@@ -42,6 +42,37 @@ log = logging.getLogger(__name__)
 _JWKS_TTL_SECONDS = 60 * 60  # 1h — Auth0 docs recommend ≥ 10m, we go bigger.
 _JWKS_FETCH_TIMEOUT = 4.0
 _JWT_LEEWAY_SECONDS = 60
+_USERINFO_FETCH_TIMEOUT = 4.0
+
+
+def _fetch_userinfo(issuer: str, raw_token: str) -> dict[str, Any] | None:
+    """Call the Auth0 ``/userinfo`` endpoint to recover OIDC profile claims.
+
+    Auth0 access tokens that target a custom API audience do **not** carry
+    the ``email`` / ``name`` claims by default — those live on the ID token
+    instead. Tenants can wire an Action to inject them, but the cloud SaaS
+    onboarding has to work without operator-side Auth0 surgery, so we fall
+    back to fetching ``/userinfo`` (which the OIDC spec mandates accept the
+    same access token, provided the ``openid`` scope was granted).
+
+    Returns ``None`` on any HTTP / parse error so the caller can decide
+    whether to escalate to a 401.
+    """
+    base = issuer.rstrip("/")
+    try:
+        resp = httpx.get(
+            f"{base}/userinfo",
+            headers={"Authorization": f"Bearer {raw_token}"},
+            timeout=_USERINFO_FETCH_TIMEOUT,
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        log.warning("auth0 /userinfo fetch failed: %s", exc)
+        return None
+    if not isinstance(payload, Mapping):
+        return None
+    return dict(payload)
 
 
 class _JwksCache:
@@ -176,7 +207,10 @@ def validate_access_token(token: str, settings: Settings) -> dict[str, Any]:
 
 
 async def user_from_claims(
-    claims: Mapping[str, Any], session: AsyncSession
+    claims: Mapping[str, Any],
+    session: AsyncSession,
+    *,
+    raw_token: str | None = None,
 ) -> User:
     """Resolve (or create) a :class:`User` for a verified Auth0 access token.
 
@@ -190,8 +224,12 @@ async def user_from_claims(
        hit the index path.
     3. Insert a fresh row.
 
-    Email is mandatory; Auth0 rules can be configured to require it (the
-    "Force Users to Verify Email" flag in the Dashboard).
+    Email is mandatory; if the access token doesn't carry an ``email``
+    claim (the default Auth0 behaviour for tokens targeting a custom API
+    audience) and ``raw_token`` is provided, we fall back to the OIDC
+    ``/userinfo`` endpoint to recover it. This means the WOW onboarding
+    flow works out-of-the-box without forcing operators to wire a custom
+    Auth0 Action.
     """
     sub = str(claims["sub"]).strip()
     email_raw = claims.get("email") or claims.get("https://ship.local/email")
@@ -201,6 +239,17 @@ async def user_from_claims(
         or claims.get("nickname")
         or claims.get("https://ship.local/name")
     )
+
+    if not email and raw_token:
+        issuer = str(claims.get("iss") or "")
+        if issuer:
+            userinfo = _fetch_userinfo(issuer, raw_token)
+            if userinfo:
+                ui_email = userinfo.get("email")
+                if ui_email:
+                    email = str(ui_email).strip().lower()
+                if not name:
+                    name = userinfo.get("name") or userinfo.get("nickname")
 
     user = (
         await session.execute(select(User).where(User.external_subject == sub))
@@ -218,8 +267,9 @@ async def user_from_claims(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=(
-                "access token has no email claim — enable the 'email' scope "
-                "on the Auth0 application or add a custom rule that injects "
+                "access token has no email claim and /userinfo lookup did "
+                "not return one. Either enable the 'email' scope on the "
+                "Auth0 application or add a custom rule that injects "
                 "the user's email address."
             ),
         )
