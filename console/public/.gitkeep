@@ -1,0 +1,5 @@
+# Keeps `console/public/` tracked even when no static assets are checked in.
+# Next.js's standalone build expects this directory to exist (the Dockerfile
+# COPYs `--from=builder /app/public ./public`), and an empty directory does
+# not survive a fresh Git checkout. Drop this file the moment a real asset
+# (favicon, og-image, etc.) lands here.
