@@ -20,6 +20,7 @@ from backend.app.api.v1.routes import (
     knowledge,
     members,
     onboarding,
+    repos,
     workspace_artifacts,
     workspaces,
 )
@@ -36,6 +37,10 @@ api_router.include_router(knowledge.router)
 api_router.include_router(members.router)
 api_router.include_router(onboarding.router)
 api_router.include_router(workspace_artifacts.router)
+# Workspace repo activations (pilot Day 2 — picker UI + Code Map MVP).
+# Lives next to artifact_repos but is keyed off GitHub App installations
+# instead of paste-URL clones.
+api_router.include_router(repos.router)
 # GitHub App OAuth + webhooks (pilot WOW-onboarding flow). Webhook route
 # is public; install start/callback do their own auth.
 api_router.include_router(github_app.router)

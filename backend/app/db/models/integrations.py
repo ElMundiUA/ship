@@ -24,6 +24,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     DateTime,
     ForeignKey,
     Index,
@@ -113,4 +114,75 @@ class GitHubInstallation(Base):
     workspace: Mapped[Workspace] = relationship()
 
 
-__all__ = ["GitHubInstallation"]
+class WorkspaceRepo(Base):
+    """A repository the workspace has *activated* for Ship pipelines.
+
+    Day-2 of the pilot adds this table so the wizard can persist the
+    user's repo picks across sessions and so default-pipeline creation
+    (Day 3) has something concrete to key off.
+
+    The row is intentionally a *snapshot*: ``full_name`` /
+    ``default_branch`` / ``private`` are mirrored from the vendor at
+    activate time and refreshed on subsequent picker visits. The vendor
+    is always the source of truth — we never resolve permissions or
+    visibility off this row alone. ``external_id`` (the vendor's numeric
+    id) is what we de-dupe on, so a rename on the vendor side won't
+    accidentally create a duplicate activation.
+
+    The ``installation_id`` FK points at our internal
+    :class:`GitHubInstallation` row (UUID), not at GitHub's numeric
+    installation_id, so cascading deletes work the moment the user
+    uninstalls the App.
+    """
+
+    __tablename__ = "workspace_repos"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id",
+            "provider",
+            "external_id",
+            name="uq_workspace_repos_external",
+        ),
+        Index("ix_workspace_repos_workspace_id", "workspace_id"),
+        Index("ix_workspace_repos_installation_id", "installation_id"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # Nullable to leave room for non-GitHub providers (paste-URL, GitLab
+    # via PAT in the legacy flow) — but for the pilot every WorkspaceRepo
+    # currently has an installation backing it.
+    installation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("github_installations.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+
+    # ``github`` for the pilot. Future: ``gitlab``, ``ado``.
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    # Vendor's numeric repo id. Opaque to us; canonical de-dupe key.
+    external_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    full_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    default_branch: Mapped[str] = mapped_column(
+        String(255), nullable=False, server_default=text("'main'")
+    )
+    private: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    html_url: Mapped[str] = mapped_column(String(1024), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+
+    activated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = _ts_created()
+    updated_at: Mapped[datetime] = _ts_updated()
+
+    workspace: Mapped[Workspace] = relationship()
+
+
+__all__ = ["GitHubInstallation", "WorkspaceRepo"]

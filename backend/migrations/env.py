@@ -24,12 +24,15 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 settings = get_settings()
-# Honour an URL the caller already injected via ``cfg.set_main_option`` (the
-# pytest fixture sets it to a local-DB URL); only fall back to Settings when
-# the caller didn't override. This avoids the surprise of running migrations
-# against the production Neon DSN baked into ``.env`` while a developer is
-# trying to migrate localhost:5433.
-_caller_url = config.get_main_option("sqlalchemy.url")
+# Honour an URL the caller already injected via ``cfg.set_main_option``
+# (the pytest fixture in ``backend/tests/db_conftest.py`` sets it to a
+# local-DB URL so the suite migrates the throwaway test DB instead of the
+# production Neon DSN baked into ``.env``). When the caller didn't
+# override (the production / docker-compose path), fall back to Settings,
+# which respects ``DATABASE_URL`` / ``ALEMBIC_DATABASE_URL`` env vars.
+# ``alembic.ini`` ships an empty ``sqlalchemy.url`` so an empty string
+# here means "not overridden", *not* "use empty URL".
+_caller_url = (config.get_main_option("sqlalchemy.url") or "").strip()
 _resolved_url = _caller_url or settings.sync_database_url
 config.set_main_option("sqlalchemy.url", _resolved_url)
 
