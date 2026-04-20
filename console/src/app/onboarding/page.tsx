@@ -27,6 +27,7 @@ import {
   ApiHttpError,
   ApiUnavailableError,
   isApiConfigured,
+  listActivatedRepos,
   listAvailableRepos,
   listWorkspaces,
   type ApiAvailableRepo,
@@ -146,10 +147,61 @@ function pick(raw: string | string[] | undefined): string | undefined {
   return v ?? undefined;
 }
 
+/** True iff the user explicitly pinned a step in the URL.
+ *
+ * We honour explicit pins (``?step=repos``) even when the auto-resume
+ * logic would jump further ahead — that way users can click the step
+ * labels in ``<Stepper/>`` to go backwards, e.g. to change their
+ * preset choice without having to re-activate repos.
+ */
+function hasExplicitStep(raw: string | string[] | undefined): boolean {
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  return v === "github" || v === "repos" || v === "tracker" || v === "done";
+}
+
 function pickStep(raw: string | string[] | undefined): StepId {
   const v = Array.isArray(raw) ? raw[0] : raw;
   if (v === "repos" || v === "tracker" || v === "done") return v;
   return "github";
+}
+
+/**
+ * Derive the step the operator should land on when no ``?step=`` pin is
+ * present in the URL — the B8 resume pointer.
+ *
+ * We read state from two tiny backend calls (``/repos`` for activated
+ * rows, ``/repos/available`` to detect the App install) and pick the
+ * furthest step the user could meaningfully act on:
+ *
+ * - activated repos > 0          → ``tracker`` (they'd just re-confirm
+ *                                   the repo list otherwise; the tracker
+ *                                   step is the only remaining thing to
+ *                                   do or skip)
+ * - GitHub App installed         → ``repos``   (install is done, pick)
+ * - nothing yet                  → ``github``  (fresh account)
+ *
+ * Any API hiccup falls back to ``github`` — the first step never errors
+ * out because it doesn't hit the backend for anything except the
+ * install-start handler (triggered by the user's click).
+ */
+async function resumeStep(
+  wsId: string,
+  token: string | undefined,
+): Promise<StepId> {
+  try {
+    const activated = await listActivatedRepos(wsId, token);
+    if (activated.length > 0) return "tracker";
+  } catch {
+    /* fall through — treat as unknown */
+  }
+  try {
+    await listAvailableRepos(wsId, token);
+    // Install exists (otherwise this 409s) but nothing activated yet.
+    return "repos";
+  } catch (err) {
+    if (err instanceof ApiHttpError && err.status === 409) return "github";
+    return "github";
+  }
 }
 
 export default async function OnboardingPage({
@@ -194,7 +246,15 @@ export default async function OnboardingPage({
     }
   }
 
-  const step = requestedStep;
+  // B8 — auto-resume. If the URL didn't pin a step, peek at the
+  // backend to land the user on the furthest step they can make
+  // progress on. This prevents the classic "closed the tab after
+  // installing the App, came back, stared at the GitHub step that
+  // already said 'connected'" dead-end.
+  let step: StepId = requestedStep;
+  if (!hasExplicitStep(params.step) && wsId && apiConfigured) {
+    step = await resumeStep(wsId, sessionToken ?? undefined);
+  }
   const error = pick(params.error);
 
   // Repo picker step: pull the live installation set once, server-side.

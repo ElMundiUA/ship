@@ -28,6 +28,19 @@ import type {
  * the httpOnly cookie and the page works without JS.
  */
 
+// Must stay in lockstep with ``backend.app.services.default_pipelines.KNOWN_PRESETS``.
+// The dashboard picker is intentionally terser than the onboarding wizard's
+// — this is a "I know what I'm doing" admin affordance, not the first-time
+// decision surface.
+const PRESET_CHOICES: { id: string; label: string }[] = [
+  { id: "web-app", label: "Web app" },
+  { id: "api-backend", label: "API backend" },
+  { id: "mobile-app", label: "Mobile app" },
+  { id: "cli", label: "CLI / tool" },
+  { id: "monorepo", label: "Monorepo" },
+  { id: "adoption-minimum", label: "Adoption-minimum" },
+];
+
 const RUN_REASONS: Record<string, { tone: BadgeTone; label: string }> = {
   ran: { tone: "ok", label: "Pipeline run finished." },
   dispatched: { tone: "info", label: "Dispatch sent — watch the run land in seconds." },
@@ -89,6 +102,31 @@ const RUN_REASONS: Record<string, { tone: BadgeTone; label: string }> = {
     tone: "ok",
     label:
       "Welcome back! If you merged the install PR, refresh in ~30s — the dashboard probes GitHub on a 60s TTL.",
+  },
+  disconnected: {
+    tone: "ok",
+    label:
+      "Repo disconnected. Lanes + runs wiped; remove the Ship App on GitHub to drop the webhook too.",
+  },
+  disconnect_confirm_missing: {
+    tone: "warn",
+    label: "Type \"disconnect\" to confirm — keeps accidental clicks safe.",
+  },
+  disconnect_missing: {
+    tone: "warn",
+    label: "Repo already gone — nothing to disconnect.",
+  },
+  preset_updated: {
+    tone: "ok",
+    label: "Preset updated. New lanes (if any) are seeded; run them when you're ready.",
+  },
+  preset_invalid: {
+    tone: "warn",
+    label: "That preset is not recognised — pick from the dropdown.",
+  },
+  preset_missing_repo: {
+    tone: "warn",
+    label: "Repo gone — refresh the dashboard and try again.",
   },
   install_kind_not_supported_yet: {
     tone: "neutral",
@@ -496,6 +534,91 @@ function RepoStatusStrip({
                   {repo.activated_at ? relativeTime(repo.activated_at) : "?"}
                 </span>
               </div>
+
+              <details className="group rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2 text-[11px] leading-snug">
+                <summary className="cursor-pointer list-none text-white/55 hover:text-white">
+                  Change preset →
+                </summary>
+                <form
+                  action="/api/dashboard/update-preset"
+                  method="POST"
+                  className="mt-2 space-y-2"
+                >
+                  <input type="hidden" name="ws" value={workspaceId} />
+                  <input type="hidden" name="repo_id" value={repo.id} />
+                  <label className="block">
+                    <span className="sr-only">Preset</span>
+                    <select
+                      name="preset"
+                      defaultValue={repo.preset ?? ""}
+                      className="w-full rounded-md border border-white/15 bg-black/30 px-2 py-1 text-[11px] text-white focus:border-aqua/60 focus:outline-none"
+                    >
+                      <option value="">(default shape)</option>
+                      {PRESET_CHOICES.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="flex items-center gap-2 text-white/60">
+                    <input
+                      type="checkbox"
+                      name="reshape"
+                      className="h-3 w-3 accent-aqua"
+                    />
+                    Re-apply enabled/disabled to match preset (otherwise
+                    additive — new lanes seed, existing stay as-is)
+                  </label>
+                  <button
+                    type="submit"
+                    className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-white/5 px-3 py-1 text-[11px] font-semibold text-white/90 transition hover:border-aqua/60 hover:bg-aqua/10"
+                  >
+                    Save preset
+                  </button>
+                </form>
+              </details>
+
+              <details className="group rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2 text-[11px] leading-snug">
+                <summary className="cursor-pointer list-none text-white/55 hover:text-coral">
+                  Danger zone →
+                </summary>
+                <div className="mt-2 space-y-2">
+                  <p className="text-white/60">
+                    Deletes Ship's state for <strong>{repo.full_name}</strong>:
+                    every lane bound to this repo plus their run history.
+                    Doesn't touch github.com — unlink the App there
+                    separately.
+                  </p>
+                  <form
+                    action="/api/dashboard/disconnect-repo"
+                    method="POST"
+                    className="flex flex-wrap items-center gap-2"
+                  >
+                    <input type="hidden" name="ws" value={workspaceId} />
+                    <input type="hidden" name="repo_id" value={repo.id} />
+                    <label className="flex-1 min-w-[140px]">
+                      <span className="sr-only">
+                        Type disconnect to confirm
+                      </span>
+                      <input
+                        type="text"
+                        name="confirm"
+                        placeholder={"type: disconnect"}
+                        required
+                        pattern="disconnect"
+                        className="w-full rounded-md border border-white/15 bg-black/30 px-2 py-1 font-mono text-[11px] text-white placeholder:text-white/35 focus:border-coral/60 focus:outline-none"
+                      />
+                    </label>
+                    <button
+                      type="submit"
+                      className="inline-flex items-center gap-1.5 rounded-full border border-coral/40 bg-coral/10 px-3 py-1 text-[11px] font-semibold text-coral transition hover:border-coral/70 hover:bg-coral/20"
+                    >
+                      Disconnect
+                    </button>
+                  </form>
+                </div>
+              </details>
             </Card>
           );
         })}

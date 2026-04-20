@@ -19,6 +19,7 @@ from backend.app.db.models.tenancy import (
     Project,
     User,
     Workspace,
+    WorkspaceInvite,
     WorkspaceMember,
 )
 
@@ -36,6 +37,7 @@ __all__ = [
     "PullRequest",
     "User",
     "Workspace",
+    "WorkspaceInvite",
     "WorkspaceMember",
     "WorkspaceRepo",
     "WorkflowRun",

@@ -386,3 +386,73 @@ class AuditLog(Base):
     )
 
     created_at: Mapped[datetime] = _ts_created()
+
+
+# ---------------------------------------------------------------------------
+# Team invites (B7)
+# ---------------------------------------------------------------------------
+
+
+class WorkspaceInvite(Base):
+    """Pending (or accepted / revoked) invitation into a workspace.
+
+    The WOW onboarding promise is "invite the whole team with one
+    bulk submit" — in practice that's one admin pasting a list of
+    emails and forwarding the resulting accept-URLs out-of-band
+    (email, Slack, etc.). We don't ship an email sender in the
+    pilot; the UI surfaces the accept-URL exactly once so the
+    admin can copy it.
+
+    Lifecycle:
+
+    - ``created_at`` → ``revoked_at`` — admin clicked revoke.
+    - ``created_at`` → ``accepted_at`` — invitee logged in and
+      POSTed ``/v1/invites/{token}/accept``. A
+      :class:`WorkspaceMember` row is created in the same
+      transaction.
+    - ``expires_at`` is a hard wall — past it, the accept endpoint
+      returns 410 Gone.
+
+    Tokens are persisted as a **SHA-256 hash** only; the plaintext
+    value is returned exactly once to the caller that created the
+    invite. Matches the :class:`AccessToken` pattern so a DB leak
+    doesn't turn into an "anyone can join any workspace" incident.
+    """
+
+    __tablename__ = "workspace_invites"
+    __table_args__ = (
+        Index("ix_workspace_invites_workspace_id", "workspace_id"),
+        Index("ix_workspace_invites_email", "email"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    email: Mapped[str] = mapped_column(String(320), nullable=False)
+    role: Mapped[str] = mapped_column(String(32), nullable=False)
+    token_hash: Mapped[bytes] = mapped_column(
+        LargeBinary, nullable=False, unique=True
+    )
+    invited_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    accepted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    accepted_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = _ts_created()

@@ -175,6 +175,8 @@ function pickBanner(
   if (params.ran) return { kind: "Run", reason, detail };
   if (params.toggled) return { kind: "Toggle", reason, detail };
   if (params.installed) return { kind: "Install", reason, detail };
+  if (params.disconnected) return { kind: "Disconnect", reason, detail };
+  if (params.preset) return { kind: "Preset", reason, detail };
   return undefined;
 }
 

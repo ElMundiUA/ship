@@ -739,3 +739,253 @@ async def install_bundle(
         files=[p for p, _ in files],
         presets=cleaned,
     )
+
+
+# ---------------------------------------------------------------------------
+# Per-repo preset picker (B9)
+# ---------------------------------------------------------------------------
+
+
+class RepoPresetPatchIn(BaseModel):
+    """Payload for ``PATCH /v1/workspaces/{ws}/repos/{id}``.
+
+    Only the ``preset`` field is mutable today; future fields (e.g.
+    ``default_branch`` or per-repo config) can land here without a new
+    endpoint. ``reshape`` controls whether we also rewrite the
+    ``enabled`` flag on lanes bound to this repo so they match the
+    new preset's default shape. It defaults to ``False`` because the
+    seed path is "additive only" (we never silently disable a lane
+    the operator turned on) — flipping this flag is an explicit
+    operator choice surfaced in the UI copy.
+    """
+
+    preset: str | None = None
+    reshape: bool = False
+
+
+@router.patch("/{repo_id}", response_model=ActivatedRepoOut)
+async def update_repo(
+    workspace_id: uuid.UUID,
+    repo_id: uuid.UUID,
+    payload: RepoPresetPatchIn,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> ActivatedRepoOut:
+    """Mutate the preset bound to ``repo`` (and optionally reshape lanes).
+
+    Admin-only. The ``preset`` must be one of ``KNOWN_PRESETS`` (or
+    ``None`` to clear the binding and fall back to the Day-3 default
+    shape on future seeds).
+
+    Behavioural notes:
+
+    - If ``reshape`` is true the new preset's
+      ``PRESET_ENABLED_KINDS`` is applied to every ``Pipeline`` in
+      the workspace whose ``repo_id`` matches this row. Workspace-
+      level (unbound) lanes are untouched — they keep their hand-
+      toggled state because they're shared across repos.
+    - The seed helper is invoked afterwards so a tenant that picked
+      e.g. ``monorepo`` later gets the ``self_heal`` lane created if
+      it didn't exist yet.
+    - Every call records an ``AuditLog`` entry with the old / new
+      preset + counts so we can trace "why did my code_map lane
+      flip on overnight" later.
+    """
+    from backend.app.db.models.pipelines import Pipeline
+    from backend.app.services.default_pipelines import (
+        PRESET_ENABLED_KINDS,
+        resolve_enabled_kinds,
+        seed_default_pipelines,
+    )
+
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+
+    repo_row = (
+        await session.execute(
+            select(WorkspaceRepo).where(
+                WorkspaceRepo.id == repo_id,
+                WorkspaceRepo.workspace_id == workspace_id,
+            )
+        )
+    ).scalars().first()
+    if repo_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Repo not found in this workspace.",
+        )
+
+    new_preset = payload.preset
+    if new_preset is not None and new_preset not in KNOWN_PRESETS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Unknown preset '{new_preset}'. Expected one of:"
+                f" {', '.join(KNOWN_PRESETS)}."
+            ),
+        )
+
+    old_preset = repo_row.preset
+    repo_row.preset = new_preset
+
+    reshape_applied = 0
+    if payload.reshape and new_preset is not None:
+        # Limit reshape to lanes actually bound to this repo; shared
+        # workspace-level lanes stay untouched (they may be driving
+        # other repos in the same workspace).
+        enabled_kinds = PRESET_ENABLED_KINDS.get(
+            new_preset, resolve_enabled_kinds(new_preset)
+        )
+        bound_lanes = (
+            await session.execute(
+                select(Pipeline).where(Pipeline.repo_id == repo_row.id)
+            )
+        ).scalars().all()
+        for lane in bound_lanes:
+            desired = lane.kind in enabled_kinds
+            if lane.enabled != desired:
+                lane.enabled = desired
+                reshape_applied += 1
+
+    # Additive seed — creates lanes that the new preset implies but
+    # that weren't part of the old one (e.g. ``self_heal`` on
+    # ``monorepo``). Never disables anything.
+    await seed_default_pipelines(
+        session,
+        workspace_id,
+        default_repo_id=repo_row.id,
+        preset=new_preset,
+    )
+
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=auth.user.id,
+            actor_token_id=auth.token.id if auth.token else None,
+            action="repo.preset.update",
+            target_kind="workspace_repo",
+            target_id=str(repo_id),
+            payload={
+                "full_name": repo_row.full_name,
+                "old_preset": old_preset,
+                "new_preset": new_preset,
+                "reshape": bool(payload.reshape),
+                "reshape_applied": reshape_applied,
+            },
+        )
+    )
+    await session.flush()
+    return _row_to_out(repo_row)
+
+
+# ---------------------------------------------------------------------------
+# Disconnect (B6)
+# ---------------------------------------------------------------------------
+
+
+class DisconnectRepoOut(BaseModel):
+    """Summary of what the disconnect call wiped, for the UI toast."""
+
+    repo_id: uuid.UUID
+    full_name: str
+    deleted_pipelines: int
+    deleted_runs: int
+
+
+@router.delete("/{repo_id}", response_model=DisconnectRepoOut)
+async def disconnect_repo(
+    workspace_id: uuid.UUID,
+    repo_id: uuid.UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> DisconnectRepoOut:
+    """Unwire Ship from ``repo`` — deletes the row and every lane bound to it.
+
+    Admin-only. The deletion order matters because ``Pipeline.repo_id``
+    is declared ``ondelete=SET NULL`` (so we can keep workspace-level
+    lanes alive when a *different* repo in the same workspace gets
+    disconnected). When the operator explicitly disconnects a repo
+    they want the Ship state gone, not nulled out — so we:
+
+    1. Collect every ``Pipeline`` with ``repo_id == repo_id``.
+    2. Delete those pipelines (cascades to ``PipelineRun``).
+    3. Delete the ``WorkspaceRepo`` row itself.
+    4. Record an :class:`AuditLog` entry with the tallies.
+
+    We deliberately do **not** touch github.com:
+
+    - Removing the repo from the App's ``selected_repositories`` list
+      requires a user-initiated flow in GitHub's UI.
+    - The workflow YAMLs our install PR added live under version
+      control in the customer repo — the customer owns them now.
+
+    The UI makes both caveats obvious in the confirmation modal.
+    """
+    from backend.app.db.models.pipelines import Pipeline, PipelineRun
+
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+
+    repo_row = (
+        await session.execute(
+            select(WorkspaceRepo).where(
+                WorkspaceRepo.id == repo_id,
+                WorkspaceRepo.workspace_id == workspace_id,
+            )
+        )
+    ).scalars().first()
+    if repo_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Repo not found in this workspace.",
+        )
+
+    full_name = repo_row.full_name
+    pipeline_ids = (
+        await session.execute(
+            select(Pipeline.id).where(Pipeline.repo_id == repo_row.id)
+        )
+    ).scalars().all()
+
+    run_count = 0
+    if pipeline_ids:
+        run_count = (
+            await session.execute(
+                select(PipelineRun).where(PipelineRun.pipeline_id.in_(pipeline_ids))
+            )
+        ).scalars().all()
+        run_count = len(run_count)
+
+        # SQLAlchemy's async session doesn't play well with DELETE …
+        # RETURNING under some drivers; do it with the ORM so cascades
+        # still fire for dependent ``PipelineRun`` rows.
+        pipelines_to_delete = (
+            await session.execute(
+                select(Pipeline).where(Pipeline.id.in_(pipeline_ids))
+            )
+        ).scalars().all()
+        for p in pipelines_to_delete:
+            await session.delete(p)
+
+    await session.delete(repo_row)
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=auth.user.id,
+            actor_token_id=auth.token.id if auth.token else None,
+            action="repo.disconnect",
+            target_kind="workspace_repo",
+            target_id=str(repo_id),
+            payload={
+                "full_name": full_name,
+                "deleted_pipelines": len(pipeline_ids),
+                "deleted_runs": run_count,
+            },
+        )
+    )
+    await session.flush()
+
+    return DisconnectRepoOut(
+        repo_id=repo_id,
+        full_name=full_name,
+        deleted_pipelines=len(pipeline_ids),
+        deleted_runs=run_count,
+    )
