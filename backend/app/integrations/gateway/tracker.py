@@ -7,6 +7,7 @@ Linear (Day 2), Notion (Day 2). Future: Jira, Asana, ClickUp, Azure Boards.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Literal, Protocol, runtime_checkable
 
 
@@ -22,6 +23,46 @@ class TicketRef:
     kind: Literal["github_issues", "linear", "notion"]
     workspace_hint: str | None  # org/team/database id, vendor-specific
     id: str
+
+
+@dataclass(frozen=True, slots=True)
+class ListedIssue:
+    """One labelled ticket as returned by the projection-facing listing.
+
+    ``ref`` is what the adapter hands back for subsequent calls
+    (``list_comments``, ``remove_label``, ``comment``) — the vendor's
+    stable identifier. ``display_id`` is the human-readable form Ship
+    stores on :class:`Clarification.tracker_issue_key` (``ENG-42``,
+    ``owner/repo#123``, Notion page slug); the two diverge on Linear
+    where ``ref.id`` is a UUID but humans think in ``ENG-42``.
+    ``url`` is the deep-link for the UI.
+    """
+
+    ref: TicketRef
+    display_id: str
+    url: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CommentRef:
+    """One comment on a tracker ticket — the shape the clarifications
+    projection needs.
+
+    We carry the vendor's raw comment identifier (``id``) because Ship
+    uses ``(provider, issue, comment)`` as the dedup key when ingesting
+    clarifications — re-running the projection must be idempotent even
+    if the ticket gains new comments between polls. ``body`` is the
+    markdown the agent wrote (Ship scans it for the ``@ship`` markers);
+    ``author`` is best-effort (GitHub gives us logins, Linear gives
+    display names, Notion gives user ids) and is used only for audit
+    metadata.
+    """
+
+    id: str
+    body: str
+    author: str | None
+    created_at: datetime
+    url: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,3 +132,62 @@ class TrackerGateway(Protocol):
         the reason up to the user rather than a generic 500.
         """
         ...
+
+    # -----------------------------------------------------------------
+    # Clarifications projection (D13)
+    #
+    # Optional surface — only trackers that participate in the
+    # clarifications read-model need to implement these. Adapters that
+    # don't (Notion in the pilot, any tracker where labels aren't
+    # first-class) raise :class:`NotImplementedError`; the sync service
+    # catches that and skips the tracker cleanly. We did not make these
+    # top-level abstract methods because they'd force churn on every
+    # adapter Ship grows before we know that tracker fits the model.
+    # -----------------------------------------------------------------
+
+    async def list_issues_with_label(
+        self, label: str, *, limit: int = 100
+    ) -> list[ListedIssue]:
+        """All open issues carrying ``label`` on the connected workspace.
+
+        Used by the clarifications projection — the agent marks a
+        ticket with ``ship:needs-clarification`` and Ship polls this
+        call to pick it up. Adapters filter to whatever the vendor
+        considers "still needs attention" (open on GitHub, non-done
+        states on Linear). ``limit`` caps the per-poll batch; the
+        projection iterates.
+
+        Returns :class:`ListedIssue` — a ``TicketRef`` for subsequent
+        API calls plus the human-readable ``display_id`` and ``url``
+        Ship projects into the row.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not participate in the "
+            "clarifications projection"
+        )
+
+    async def list_comments(self, ticket: TicketRef) -> list[CommentRef]:
+        """All comments on ``ticket``, oldest first.
+
+        Scanned for ``@ship clarification:`` / ``@ship answer:``
+        markers by the projection. Adapters must return them in
+        chronological order so the "most recent clarification" +
+        "answer that came after it" pairing works without extra
+        sorting in the service layer.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not list comments"
+        )
+
+    async def remove_label(self, ticket: TicketRef, label: str) -> None:
+        """Remove ``label`` from ``ticket``; no-op if the label isn't set.
+
+        Used when a human answers a clarification from the Ship
+        console (we write the answer back as a comment, then strip
+        ``ship:needs-clarification`` so the agent / projection moves
+        on). Adapters treat "label isn't attached" as success — the
+        caller shouldn't need to check first.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} cannot remove labels"
+        )

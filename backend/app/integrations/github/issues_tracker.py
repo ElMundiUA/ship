@@ -20,12 +20,18 @@ re-resolve it per request.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 import httpx
 
 from backend.app.core.config import Settings
-from backend.app.integrations.gateway.tracker import CreatedTicket, TicketRef
+from backend.app.integrations.gateway.tracker import (
+    CommentRef,
+    CreatedTicket,
+    ListedIssue,
+    TicketRef,
+)
 from backend.app.integrations.github.app_auth import (
     GITHUB_API_BASE,
     fetch_installation_token,
@@ -195,6 +201,129 @@ class GitHubIssuesTracker:
             url=str(payload.get("html_url") or ""),
             display_id=display_id,
         )
+
+
+    # -----------------------------------------------------------------
+    # Clarifications projection surface (D13)
+    # -----------------------------------------------------------------
+
+    async def list_issues_with_label(
+        self, label: str, *, limit: int = 100
+    ) -> list[ListedIssue]:
+        """Open issues in the wired repo that carry ``label``.
+
+        GitHub's ``GET /issues?labels=X`` returns both issues and
+        PRs (PRs are issues with a ``pull_request`` key); we filter
+        PRs out so a clarification label accidentally landing on a
+        PR doesn't spam the projection.
+        """
+        response = await self._request(
+            "GET",
+            f"/repos/{self._owner}/{self._repo}/issues",
+            params={
+                "state": "open",
+                "labels": label,
+                "per_page": max(1, min(limit, 100)),
+            },
+        )
+        payload = response.json() or []
+        out: list[ListedIssue] = []
+        for item in payload:
+            if item.get("pull_request") is not None:
+                continue
+            number = item.get("number")
+            if not isinstance(number, int):
+                continue
+            display_id = f"{self._owner}/{self._repo}#{number}"
+            out.append(
+                ListedIssue(
+                    ref=TicketRef(
+                        kind="github_issues",
+                        workspace_hint=f"{self._owner}/{self._repo}",
+                        id=str(number),
+                    ),
+                    display_id=display_id,
+                    url=item.get("html_url"),
+                )
+            )
+        return out
+
+    async def list_comments(self, ticket: TicketRef) -> list[CommentRef]:
+        """All comments on the issue, oldest first.
+
+        GitHub defaults to ascending order (``sort=created,
+        direction=asc``) — we set it explicitly because the
+        projection depends on chronological order for the
+        "answer that came after a clarification" pairing.
+        """
+        if ticket.kind != "github_issues":
+            raise ValueError(
+                f"GitHubIssuesTracker can't list_comments for kind={ticket.kind}"
+            )
+        number = _issue_number_from_ref(ticket)
+        response = await self._request(
+            "GET",
+            f"/repos/{self._owner}/{self._repo}/issues/{number}/comments",
+            params={
+                "sort": "created",
+                "direction": "asc",
+                "per_page": 100,
+            },
+        )
+        payload = response.json() or []
+        out: list[CommentRef] = []
+        for item in payload:
+            created_raw = item.get("created_at")
+            try:
+                created_at = _parse_iso8601(created_raw) if created_raw else datetime.min
+            except ValueError:
+                created_at = datetime.min
+            user = item.get("user") or {}
+            out.append(
+                CommentRef(
+                    id=str(item.get("id") or ""),
+                    body=str(item.get("body") or ""),
+                    author=user.get("login"),
+                    created_at=created_at,
+                    url=item.get("html_url"),
+                )
+            )
+        return out
+
+    async def remove_label(self, ticket: TicketRef, label: str) -> None:
+        """Strip ``label`` from the issue.
+
+        GitHub's ``DELETE /issues/{n}/labels/{name}`` returns 404
+        when the label isn't attached; we swallow that so the
+        caller can treat the call as idempotent.
+        """
+        if ticket.kind != "github_issues":
+            raise ValueError(
+                f"GitHubIssuesTracker can't remove_label for kind={ticket.kind}"
+            )
+        number = _issue_number_from_ref(ticket)
+        headers = await self._headers()
+        owns_client = self._client is None
+        http = self._client or httpx.AsyncClient(timeout=httpx.Timeout(10.0))
+        try:
+            response = await http.request(
+                "DELETE",
+                f"{GITHUB_API_BASE}/repos/{self._owner}/{self._repo}/issues/"
+                f"{number}/labels/{label}",
+                headers=headers,
+            )
+        finally:
+            if owns_client:
+                await http.aclose()
+        if response.status_code == 404:
+            return  # Label wasn't attached; idempotent no-op.
+        response.raise_for_status()
+
+
+def _parse_iso8601(raw: str) -> datetime:
+    """GitHub ships ``created_at`` as ``2026-01-02T03:04:05Z`` — normalise."""
+    cleaned = raw.replace("Z", "+00:00") if raw.endswith("Z") else raw
+    return datetime.fromisoformat(cleaned)
 
 
 def _issue_number_from_ref(ticket: TicketRef) -> int:
