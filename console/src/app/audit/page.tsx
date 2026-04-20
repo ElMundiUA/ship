@@ -1,15 +1,27 @@
 /**
- * Audit log page (RFC-0006 phase 2.5).
+ * Audit log page (RFC-0006 phase 2.5 + D12 filter depth).
  *
  * Reads `/v1/workspaces/{id}/audit-log` for the operator's current
  * workspace and renders the cursor-paginated history of every
  * privileged mutation. Owner / admin only — the backend returns 403 to
  * everyone else, and we surface that gracefully via the mock fallback.
  *
- * Filters are stateless: change the `?action=` query string to narrow
- * the view, and `?before=<id>` to walk older pages. Both round-trips go
- * through the standard Next.js search-params plumbing so the page stays
- * a Server Component.
+ * **D12 extensions (2026-04-20).** The filter form now covers the full
+ * compliance surface the plan promised:
+ *
+ * - Action (category chips — existing)
+ * - Actor (substring on user email OR token name — new)
+ * - Target kind (exact match — new)
+ * - Since / Until (ISO dates — new)
+ *
+ * Filters are submitted via a plain HTML `<form method="GET">` so the
+ * page stays a Server Component — no `useState`, no `useRouter`, just
+ * the browser's native "submit → new URL → server rerender" loop. The
+ * only client bit is the payload expander row (tiny; lives in
+ * `audit-payload-cell.tsx`).
+ *
+ * Pagination preserves every active filter — we push them into the
+ * `Older →` link so cursor-walking doesn't silently widen the view.
  */
 
 import Link from "next/link";
@@ -33,8 +45,20 @@ import type { ApiAuditEntry, ApiAuditPage, ApiWorkspace } from "@/lib/api/types"
 import { getSessionToken } from "@/lib/api/session";
 import { workspaces as mockWorkspaces } from "@/lib/mock/cloud";
 
+import { AuditPayloadCell } from "./audit-payload-cell";
+
 export const dynamic = "force-dynamic";
 
+/**
+ * Action filter chips. `id` is what the backend expects; `""` is the
+ * "no filter" sentinel (we strip it from the URL on submit).
+ *
+ * Keep this in lock-step with `_ALLOWED_ACTION_PREFIXES` in
+ * `backend/app/api/v1/routes/audit.py` — the backend 422s on anything
+ * that isn't a known prefix or fully-qualified value, so adding a chip
+ * here without extending the backend list would give us an empty page
+ * with a silent 422.
+ */
 const ACTION_FILTERS = [
   { id: "", label: "All" },
   { id: "workspace", label: "Workspace" },
@@ -42,49 +66,126 @@ const ACTION_FILTERS = [
   { id: "auth", label: "Auth & tokens" },
   { id: "integration", label: "Integrations" },
   { id: "artifact_repo", label: "Artifact repos" },
+  { id: "pipeline", label: "Pipelines" },
+  { id: "repo", label: "Repos" },
+  { id: "improvement", label: "Improvements" },
+  { id: "clarification", label: "Clarifications" },
+  { id: "invite", label: "Invites" },
+  { id: "agent", label: "Agent" },
+] as const;
+
+/**
+ * Target-kind options for the `<select>` filter. Mirrors the
+ * `_ALLOWED_TARGET_KINDS` frozenset on the backend — again, anything
+ * not on this list 422s server-side, so keep them in sync.
+ */
+const TARGET_KINDS = [
+  { id: "", label: "Any" },
+  { id: "workspace", label: "Workspace" },
+  { id: "user", label: "User" },
+  { id: "api_token", label: "API token" },
+  { id: "integration", label: "Integration" },
+  { id: "artifact_repo", label: "Artifact repo" },
+  { id: "pipeline", label: "Pipeline" },
+  { id: "pipeline_run", label: "Pipeline run" },
+  { id: "workspace_repo", label: "Workspace repo" },
+  { id: "workspace_repos", label: "Workspace repos (bulk)" },
+  { id: "workspace_invite", label: "Invite" },
+  { id: "github_installation", label: "GitHub install" },
+  { id: "improvement", label: "Improvement" },
+  { id: "clarification", label: "Clarification" },
 ] as const;
 
 const PAGE_SIZE = 50;
+
+interface AuditFilters {
+  action: string;
+  actor: string;
+  targetKind: string;
+  since: string;
+  until: string;
+  before: number | null;
+}
 
 type Mode =
   | {
       source: "live";
       workspace: ApiWorkspace;
       page: ApiAuditPage;
-      action: string;
-      before: number | null;
+      filters: AuditFilters;
     }
-  | { source: "mock"; reason: string };
+  | { source: "mock"; reason: string; filters: AuditFilters };
 
-async function load(action: string, before: number | null): Promise<Mode> {
-  if (!isApiConfigured()) return { source: "mock", reason: "SHIP_API_URL not set" };
+function readParam(
+  params: Record<string, string | string[] | undefined>,
+  name: string,
+): string {
+  const v = params[name];
+  return typeof v === "string" ? v : "";
+}
+
+function parseFilters(
+  params: Record<string, string | string[] | undefined>,
+): AuditFilters {
+  const beforeRaw = readParam(params, "before");
+  const before = beforeRaw && /^\d+$/.test(beforeRaw) ? Number(beforeRaw) : null;
+  return {
+    action: readParam(params, "action").trim(),
+    actor: readParam(params, "actor").trim(),
+    targetKind: readParam(params, "target_kind").trim(),
+    since: readParam(params, "since").trim(),
+    until: readParam(params, "until").trim(),
+    before,
+  };
+}
+
+async function load(filters: AuditFilters): Promise<Mode> {
+  if (!isApiConfigured())
+    return { source: "mock", reason: "SHIP_API_URL not set", filters };
   const token = await getSessionToken();
-  if (!token) return { source: "mock", reason: "Sign in to view audit history" };
+  if (!token)
+    return { source: "mock", reason: "Sign in to view audit history", filters };
   try {
     const ws = await listWorkspaces(token);
     if (ws.length === 0)
       return {
         source: "mock",
         reason: "Create a workspace first to see audit history",
+        filters,
       };
     const target = ws[0];
     const page = await listAuditLog(
       target.id,
-      { limit: PAGE_SIZE, before, action: action || null },
+      {
+        limit: PAGE_SIZE,
+        before: filters.before,
+        action: filters.action || null,
+        actor: filters.actor || null,
+        target_kind: filters.targetKind || null,
+        since: filters.since || null,
+        until: filters.until || null,
+      },
       token,
     );
-    return { source: "live", workspace: target, page, action, before };
+    return { source: "live", workspace: target, page, filters };
   } catch (err) {
     if (err instanceof ApiHttpError && err.status === 401)
-      return { source: "mock", reason: "Session expired — sign in again" };
+      return { source: "mock", reason: "Session expired — sign in again", filters };
     if (err instanceof ApiHttpError && err.status === 403)
       return {
         source: "mock",
         reason: "Audit log is owner / admin only — ask your workspace admin",
+        filters,
+      };
+    if (err instanceof ApiHttpError && err.status === 422)
+      return {
+        source: "mock",
+        reason: `Backend rejected a filter value (${err.message}). Check date shape + categories.`,
+        filters,
       };
     if (err instanceof ApiUnavailableError)
-      return { source: "mock", reason: "Backend unreachable" };
-    return { source: "mock", reason: "Backend returned an error" };
+      return { source: "mock", reason: "Backend unreachable", filters };
+    return { source: "mock", reason: "Backend returned an error", filters };
   }
 }
 
@@ -103,29 +204,22 @@ function actorLabel(entry: ApiAuditEntry): string {
   return "system";
 }
 
-function previewPayload(payload: Record<string, unknown>): string {
-  const keys = Object.keys(payload);
-  if (keys.length === 0) return "—";
-  const slice = keys.slice(0, 4).map((k) => {
-    const v = payload[k];
-    const s =
-      typeof v === "string"
-        ? v.length > 32
-          ? `${v.slice(0, 32)}…`
-          : v
-        : JSON.stringify(v);
-    return `${k}=${s}`;
-  });
-  const more = keys.length > 4 ? ` +${keys.length - 4}` : "";
-  return slice.join(" · ") + more;
-}
-
-function buildPagerUrl(action: string, cursor: number | null): string {
+function buildPagerUrl(filters: AuditFilters, cursor: number | null): string {
+  // Always preserve the current filter set when paging; `before` is the
+  // only param that flips (cursor walk).
   const params = new URLSearchParams();
-  if (action) params.set("action", action);
+  if (filters.action) params.set("action", filters.action);
+  if (filters.actor) params.set("actor", filters.actor);
+  if (filters.targetKind) params.set("target_kind", filters.targetKind);
+  if (filters.since) params.set("since", filters.since);
+  if (filters.until) params.set("until", filters.until);
   if (cursor !== null) params.set("before", String(cursor));
   const q = params.toString();
   return q ? `/audit?${q}` : "/audit";
+}
+
+function hasFilters(f: AuditFilters): boolean {
+  return !!(f.action || f.actor || f.targetKind || f.since || f.until);
 }
 
 export default async function AuditPage({
@@ -137,23 +231,17 @@ export default async function AuditPage({
     string,
     string | string[] | undefined
   >;
-  const action =
-    typeof params.action === "string" && params.action.length > 0
-      ? params.action
-      : "";
-  const beforeRaw = typeof params.before === "string" ? params.before : null;
-  const before = beforeRaw && /^\d+$/.test(beforeRaw) ? Number(beforeRaw) : null;
-
-  const data = await load(action, before);
+  const filters = parseFilters(params);
+  const data = await load(filters);
 
   if (data.source === "mock") {
-    return <MockView reason={data.reason} />;
+    return <MockView reason={data.reason} filters={filters} />;
   }
 
   const { workspace, page } = data;
   const items = page.items;
   const nextHref =
-    page.next_cursor !== null ? buildPagerUrl(action, page.next_cursor) : null;
+    page.next_cursor !== null ? buildPagerUrl(filters, page.next_cursor) : null;
 
   return (
     <AppShell
@@ -161,7 +249,7 @@ export default async function AuditPage({
       title="Audit log"
       actions={
         <Link
-          href={buildPagerUrl(action, null)}
+          href="/audit"
           className="rounded-full border border-white/15 bg-white/[0.04] px-3 py-1.5 text-xs font-bold text-white/85 transition hover:bg-white/[0.08]"
         >
           Reset
@@ -170,37 +258,17 @@ export default async function AuditPage({
     >
       <LiveBanner workspace={workspace.slug} />
 
-      <Card className="mb-5">
-        <CardHeader
-          title="Filter"
-          subtitle="Narrow by action category. Cursor pagination preserves the chosen filter."
-        />
-        <div className="flex flex-wrap gap-2">
-          {ACTION_FILTERS.map((opt) => {
-            const active = (opt.id || "") === action;
-            return (
-              <Link
-                key={opt.id || "all"}
-                href={buildPagerUrl(opt.id, null)}
-                className={
-                  "rounded-full border px-3 py-1 text-xs font-semibold transition " +
-                  (active
-                    ? "border-aqua/50 bg-aqua/15 text-aqua"
-                    : "border-white/15 bg-white/[0.04] text-white/75 hover:bg-white/[0.08]")
-                }
-              >
-                {opt.label}
-              </Link>
-            );
-          })}
-        </div>
-      </Card>
+      <FilterCard filters={filters} />
 
       <Card padded={false} className="overflow-hidden">
         <CardHeader
           className="px-5 pt-5"
           title={`History · ${items.length} row${items.length === 1 ? "" : "s"}`}
-          subtitle="Newest first. Each row is one privileged mutation; the JSON payload is recorded verbatim."
+          subtitle={
+            hasFilters(filters)
+              ? "Filtered view — reset to see the full workspace history."
+              : "Newest first. Each row is one privileged mutation; the JSON payload is recorded verbatim."
+          }
         />
         {items.length === 0 ? (
           <div className="px-5 py-10 text-center text-sm text-white/60">
@@ -220,10 +288,10 @@ export default async function AuditPage({
             <tbody>
               {items.map((entry) => (
                 <tr key={entry.id} className="border-t border-white/5 align-top">
-                  <td className="px-4 py-3 text-xs text-white/65">
+                  <td className="px-4 py-3 text-xs text-white/65 whitespace-nowrap">
                     {new Date(entry.created_at).toUTCString()}
                   </td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-3 whitespace-nowrap">
                     <Badge tone={actionTone(entry.action)} dot>
                       {entry.action}
                     </Badge>
@@ -231,7 +299,7 @@ export default async function AuditPage({
                   <td className="px-4 py-3 text-xs text-white/85">
                     {actorLabel(entry)}
                   </td>
-                  <td className="px-4 py-3 text-xs text-white/65">
+                  <td className="px-4 py-3 text-xs text-white/65 whitespace-nowrap">
                     {entry.target_kind ? (
                       <>
                         <span className="text-white/85">{entry.target_kind}</span>
@@ -250,9 +318,7 @@ export default async function AuditPage({
                     )}
                   </td>
                   <td className="px-4 py-3">
-                    <code className="block max-w-[40ch] truncate font-mono text-[11px] text-white/55">
-                      {previewPayload(entry.payload)}
-                    </code>
+                    <AuditPayloadCell payload={entry.payload} />
                   </td>
                 </tr>
               ))}
@@ -281,7 +347,126 @@ export default async function AuditPage({
   );
 }
 
-function MockView({ reason }: { reason: string }) {
+function FilterCard({ filters }: { filters: AuditFilters }) {
+  return (
+    <Card className="mb-5">
+      <CardHeader
+        title="Filter"
+        subtitle="Combine any filters below. Submit to apply — empty fields are ignored. Pagination keeps the filter set."
+      />
+      <form
+        method="GET"
+        action="/audit"
+        className="flex flex-col gap-4"
+      >
+        <div className="flex flex-wrap gap-2">
+          {ACTION_FILTERS.map((opt) => {
+            const active = (opt.id || "") === filters.action;
+            return (
+              <label
+                key={opt.id || "all"}
+                className={
+                  "cursor-pointer rounded-full border px-3 py-1 text-xs font-semibold transition " +
+                  (active
+                    ? "border-aqua/50 bg-aqua/15 text-aqua"
+                    : "border-white/15 bg-white/[0.04] text-white/75 hover:bg-white/[0.08]")
+                }
+              >
+                <input
+                  type="radio"
+                  name="action"
+                  value={opt.id}
+                  defaultChecked={active}
+                  className="sr-only"
+                />
+                {opt.label}
+              </label>
+            );
+          })}
+        </div>
+        <div className="grid gap-3 md:grid-cols-4">
+          <label className="flex flex-col gap-1 text-[11px] font-semibold uppercase tracking-widest text-white/55">
+            Actor
+            <input
+              type="text"
+              name="actor"
+              defaultValue={filters.actor}
+              placeholder="email or token name"
+              className="rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1.5 text-sm font-normal normal-case tracking-normal text-white/90 focus:border-aqua/50 focus:outline-none"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-[11px] font-semibold uppercase tracking-widest text-white/55">
+            Target kind
+            <select
+              name="target_kind"
+              defaultValue={filters.targetKind}
+              className="rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1.5 text-sm font-normal normal-case tracking-normal text-white/90 focus:border-aqua/50 focus:outline-none"
+            >
+              {TARGET_KINDS.map((t) => (
+                <option key={t.id || "any"} value={t.id} className="bg-ink">
+                  {t.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-[11px] font-semibold uppercase tracking-widest text-white/55">
+            Since (UTC)
+            <input
+              type="date"
+              name="since"
+              defaultValue={filters.since}
+              className="rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1.5 text-sm font-normal normal-case tracking-normal text-white/90 focus:border-aqua/50 focus:outline-none"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-[11px] font-semibold uppercase tracking-widest text-white/55">
+            Until (UTC)
+            <input
+              type="date"
+              name="until"
+              defaultValue={filters.until}
+              className="rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1.5 text-sm font-normal normal-case tracking-normal text-white/90 focus:border-aqua/50 focus:outline-none"
+            />
+          </label>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="submit"
+            className="rounded-full bg-aqua/80 px-4 py-1.5 text-xs font-bold text-ink transition hover:bg-aqua"
+          >
+            Apply filters
+          </button>
+          <Link
+            href="/audit"
+            className="rounded-full border border-white/15 bg-white/[0.04] px-3 py-1.5 text-xs font-bold text-white/85 transition hover:bg-white/[0.08]"
+          >
+            Clear
+          </Link>
+          {hasFilters(filters) ? (
+            <span className="text-[11px] text-white/45">
+              Active: {[
+                filters.action && `action=${filters.action}`,
+                filters.actor && `actor=${filters.actor}`,
+                filters.targetKind && `target=${filters.targetKind}`,
+                filters.since && `since=${filters.since}`,
+                filters.until && `until=${filters.until}`,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+            </span>
+          ) : null}
+        </div>
+      </form>
+    </Card>
+  );
+}
+
+function MockView({
+  reason,
+  filters,
+}: {
+  reason: string;
+  filters: AuditFilters;
+}) {
   const ws = mockWorkspaces[0];
   const sample: ApiAuditEntry[] = [
     {
@@ -331,6 +516,7 @@ function MockView({ reason }: { reason: string }) {
   return (
     <AppShell kicker={`${ws.name} · history`} title="Audit log">
       <MockBanner reason={reason} />
+      <FilterCard filters={filters} />
       <Card padded={false} className="overflow-hidden">
         <CardHeader
           className="px-5 pt-5"
@@ -361,9 +547,7 @@ function MockView({ reason }: { reason: string }) {
                   {actorLabel(entry)}
                 </td>
                 <td className="px-4 py-3">
-                  <code className="block max-w-[40ch] truncate font-mono text-[11px] text-white/55">
-                    {previewPayload(entry.payload)}
-                  </code>
+                  <AuditPayloadCell payload={entry.payload} />
                 </td>
               </tr>
             ))}
