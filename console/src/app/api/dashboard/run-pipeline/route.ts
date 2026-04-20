@@ -26,6 +26,10 @@ export async function POST(request: Request) {
   const wsId = (form.get("ws") ?? "").toString();
   const pipelineId = (form.get("pipeline") ?? "").toString();
   const note = (form.get("note") ?? "").toString().trim() || undefined;
+  // Card posts the repo it lives under so the backend targets that
+  // exact repo and rebinds the pipeline if it was bound elsewhere.
+  const repoIdRaw = (form.get("repo_id") ?? "").toString().trim();
+  const repoId = repoIdRaw || null;
 
   if (!wsId || !pipelineId) {
     return NextResponse.redirect(new URL("/", origin), 303);
@@ -35,7 +39,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    await runPipeline(wsId, pipelineId, note);
+    await runPipeline(wsId, pipelineId, note, { repoId });
   } catch (err) {
     if (err instanceof ApiUnavailableError)
       return back(origin, wsId, pipelineId, "api_unavailable");

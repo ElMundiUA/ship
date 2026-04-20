@@ -274,6 +274,34 @@ class PipelineRunIn(BaseModel):
         max_length=500,
         description="Optional human note shown in the run history.",
     )
+    repo_id: uuid.UUID | None = Field(
+        default=None,
+        description=(
+            "Workspace repo to dispatch against. When set, the pipeline is "
+            "rebound to this repo before dispatch (``Pipeline.repo_id`` "
+            "mutates) so subsequent Run-now calls from other surfaces stay "
+            "consistent. When omitted, the existing binding is used (or "
+            "the sole-repo auto-bind heuristic kicks in)."
+        ),
+    )
+
+
+class PipelineInstallIn(BaseModel):
+    """Optional payload for install-workflow requests.
+
+    Same ``repo_id`` semantics as :class:`PipelineRunIn` — if the user
+    fires Install from a specific repo's swimlane card, we rebind
+    before opening the PR so both the Install and the follow-up Run
+    target the same repo.
+    """
+
+    repo_id: uuid.UUID | None = Field(
+        default=None,
+        description=(
+            "Workspace repo to open the install PR against. Rebinds the "
+            "pipeline when different from the current binding."
+        ),
+    )
 
 
 class PipelineInstallOut(BaseModel):
@@ -401,7 +429,10 @@ async def _auto_bind_pipeline_to_repo(
 
 
 async def _load_repo_and_install(
-    session: AsyncSession, pipeline: Pipeline
+    session: AsyncSession,
+    pipeline: Pipeline,
+    *,
+    explicit_repo_id: uuid.UUID | None = None,
 ) -> tuple[WorkspaceRepo, GitHubInstallation]:
     """Resolve the repo + install backing a pipeline or raise 412.
 
@@ -410,14 +441,52 @@ async def _load_repo_and_install(
     console can switch on to decide which CTA to show (re-bind, install
     workflow, reinstall the App).
 
-    If the pipeline row carries no ``repo_id`` yet (legacy seed, or
-    first run before the Day-4 backfill caught up) we try to
-    auto-bind to the workspace's sole activated repo. Most pilot
-    tenants have exactly one repo, and the "obvious" binding there is
-    the friction we want to avoid. Only when auto-bind can't decide
-    (zero or multiple repos) do we return ``pipeline_not_bound``.
+    Repo selection follows three tiers in order of preference:
+
+    1. **Explicit override** (``explicit_repo_id``) — the UI posted
+       the card from a specific repo's swimlane, so that repo wins
+       even if the pipeline was previously bound elsewhere. Rebinds
+       the pipeline in-place so subsequent surfaces stay consistent.
+    2. **Existing binding** (``pipeline.repo_id``) — use whatever
+       ``/repos/activate`` or a prior override set.
+    3. **Sole-repo auto-bind** — if the workspace has exactly one
+       activated repo, bind to it. Convenience for legacy seeds that
+       predate the FK.
+
+    Returns 412 ``pipeline_not_bound`` only when no tier resolves to
+    a concrete repo (0 or multiple repos, nothing explicit, nothing
+    stored).
     """
-    if pipeline.repo_id is None:
+    if explicit_repo_id is not None:
+        target = await session.get(WorkspaceRepo, explicit_repo_id)
+        if target is None or target.workspace_id != pipeline.workspace_id:
+            # Cross-workspace or gone — refuse rather than silently
+            # falling back to a different repo the user didn't pick.
+            raise HTTPException(
+                status_code=status.HTTP_412_PRECONDITION_FAILED,
+                detail={
+                    "code": "pipeline_not_bound",
+                    "message": (
+                        "Requested repo isn't activated in this workspace. "
+                        "Pick a repo from the swimlane the card lives in."
+                    ),
+                },
+            )
+        if pipeline.repo_id != target.id:
+            pipeline.repo_id = target.id
+            # Keep ``updated_at`` in sync client-side so the onupdate
+            # default doesn't expire the attribute mid-request.
+            pipeline.updated_at = datetime.now(timezone.utc)
+            await session.flush()
+            logger.info(
+                "rebound pipeline pipeline_id=%s workspace_id=%s repo_id=%s (%s)",
+                pipeline.id,
+                pipeline.workspace_id,
+                target.id,
+                target.full_name,
+            )
+        repo: WorkspaceRepo | None = target
+    elif pipeline.repo_id is None:
         repo = await _auto_bind_pipeline_to_repo(session, pipeline)
         if repo is None:
             raise HTTPException(
@@ -431,33 +500,8 @@ async def _load_repo_and_install(
                     ),
                 },
             )
-        # Auto-bound path — fall through using the freshly-resolved repo
-        # instead of doing a redundant session.get.
-        if repo.installation_id is None:
-            raise HTTPException(
-                status_code=status.HTTP_412_PRECONDITION_FAILED,
-                detail={
-                    "code": "github_app_missing",
-                    "message": (
-                        "Repo isn't backed by a GitHub App installation. "
-                        "Reinstall the Ship App."
-                    ),
-                },
-            )
-        install = await session.get(GitHubInstallation, repo.installation_id)
-        if install is None or install.suspended_at is not None:
-            raise HTTPException(
-                status_code=status.HTTP_412_PRECONDITION_FAILED,
-                detail={
-                    "code": "github_app_missing",
-                    "message": (
-                        "GitHub App installation is suspended or gone. "
-                        "Reinstall the Ship App."
-                    ),
-                },
-            )
-        return repo, install
-    repo = await session.get(WorkspaceRepo, pipeline.repo_id)
+    else:
+        repo = await session.get(WorkspaceRepo, pipeline.repo_id)
     if repo is None:
         raise HTTPException(
             status_code=status.HTTP_412_PRECONDITION_FAILED,
@@ -716,7 +760,10 @@ async def run_pipeline(
             },
         )
 
-    repo, install = await _load_repo_and_install(session, pipeline)
+    explicit_repo_id = payload.repo_id if payload else None
+    repo, install = await _load_repo_and_install(
+        session, pipeline, explicit_repo_id=explicit_repo_id
+    )
 
     files = await list_repo_workflows(repo, install, settings=settings)
     if workflow_file not in files:
@@ -826,6 +873,7 @@ async def run_pipeline(
 async def install_pipeline_workflow(
     workspace_id: uuid.UUID,
     pipeline_id: uuid.UUID,
+    payload: PipelineInstallIn | None = None,
     auth: AuthContext = Depends(get_current_auth),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
@@ -854,7 +902,10 @@ async def install_pipeline_workflow(
                 ),
             },
         )
-    repo, install = await _load_repo_and_install(session, pipeline)
+    explicit_repo_id = payload.repo_id if payload else None
+    repo, install = await _load_repo_and_install(
+        session, pipeline, explicit_repo_id=explicit_repo_id
+    )
     content = _read_starter_yaml(pipeline.kind)
     try:
         result: StarterWorkflowPR = await commit_starter_workflow(

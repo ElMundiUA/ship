@@ -121,6 +121,7 @@ export default async function PipelinesPage() {
               key={lane.key}
               title={lane.title}
               subtitle={lane.subtitle}
+              repoId={lane.repoId}
               pipelines={lane.pipelines}
               workspaceId={workspace.id}
             />
@@ -135,6 +136,13 @@ type Lane = {
   key: string;
   title: string;
   subtitle: string;
+  /**
+   * The repo this swimlane targets, when there is one. Cards in a
+   * bound lane post this on Install / Run so the backend fires
+   * against the repo the user visually pulled the card from — even
+   * if the pipeline's stored binding had drifted elsewhere.
+   */
+  repoId: string | null;
   pipelines: ApiPipeline[];
 };
 
@@ -149,6 +157,7 @@ function groupByRepo(pipelines: ApiPipeline[]): Lane[] {
         subtitle: p.repo_full_name
           ? `${pluralize(0, "lane", "lanes")} firing against ${p.repo_full_name}`
           : "Bind these to a repo so manual runs have somewhere to dispatch.",
+        repoId: p.repo_id,
         pipelines: [],
       });
     }
@@ -178,11 +187,13 @@ function pluralize(n: number, one: string, many: string): string {
 function Swimlane({
   title,
   subtitle,
+  repoId,
   pipelines,
   workspaceId,
 }: {
   title: string;
   subtitle: string;
+  repoId: string | null;
   pipelines: ApiPipeline[];
   workspaceId: string;
 }) {
@@ -198,7 +209,18 @@ function Swimlane({
       </div>
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
         {pipelines.map((p) => (
-          <PipelineLaneCard key={p.id} pipeline={p} workspaceId={workspaceId} />
+          <PipelineLaneCard
+            key={p.id}
+            pipeline={p}
+            // Swimlane repo wins over the pipeline's stored binding: if
+            // the user grabs a card from this repo's lane the backend
+            // rebinds + dispatches against this repo. ``null`` keeps
+            // the "no context" shape for the default-lanes lane so we
+            // still fall back to the auto-bind heuristic for legacy
+            // seeds.
+            repoId={repoId ?? p.repo_id}
+            workspaceId={workspaceId}
+          />
         ))}
       </div>
     </section>
@@ -207,9 +229,11 @@ function Swimlane({
 
 function PipelineLaneCard({
   pipeline,
+  repoId,
   workspaceId,
 }: {
   pipeline: ApiPipeline;
+  repoId: string | null;
   workspaceId: string;
 }) {
   const state = pipelineState(pipeline);
@@ -275,6 +299,9 @@ function PipelineLaneCard({
           >
             <input type="hidden" name="ws" value={workspaceId} />
             <input type="hidden" name="pipeline" value={pipeline.id} />
+            {repoId && (
+              <input type="hidden" name="repo_id" value={repoId} />
+            )}
             <button
               type="submit"
               disabled={!pipeline.enabled}
@@ -297,6 +324,9 @@ function PipelineLaneCard({
           >
             <input type="hidden" name="ws" value={workspaceId} />
             <input type="hidden" name="pipeline" value={pipeline.id} />
+            {repoId && (
+              <input type="hidden" name="repo_id" value={repoId} />
+            )}
             <button
               type="submit"
               className="inline-flex items-center gap-1.5 rounded-full border border-aqua/40 bg-aqua/[0.08] px-3.5 py-1.5 text-xs font-bold text-aqua hover:bg-aqua/[0.16]"
