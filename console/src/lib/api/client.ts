@@ -1330,9 +1330,19 @@ export function removeMember(
 
 // --- Audit log -------------------------------------------------------------
 
+export interface AuditLogFilters {
+  limit?: number;
+  before?: number | null;
+  action?: string | null;
+  actor?: string | null;
+  target_kind?: string | null;
+  since?: string | null;
+  until?: string | null;
+}
+
 export function listAuditLog(
   workspaceId: string,
-  opts: { limit?: number; before?: number | null; action?: string | null } = {},
+  opts: AuditLogFilters = {},
   token?: string,
 ): Promise<ApiAuditPage> {
   const params = new URLSearchParams();
@@ -1340,6 +1350,10 @@ export function listAuditLog(
   if (opts.before !== undefined && opts.before !== null)
     params.set("before", String(opts.before));
   if (opts.action) params.set("action", opts.action);
+  if (opts.actor) params.set("actor", opts.actor);
+  if (opts.target_kind) params.set("target_kind", opts.target_kind);
+  if (opts.since) params.set("since", opts.since);
+  if (opts.until) params.set("until", opts.until);
   const suffix = params.toString() ? `?${params.toString()}` : "";
   return apiFetch<ApiAuditPage>(
     `/v1/workspaces/${workspaceId}/audit-log${suffix}`,
