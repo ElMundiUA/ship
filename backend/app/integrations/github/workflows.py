@@ -380,9 +380,167 @@ async def commit_starter_workflow(
     )
 
 
+async def commit_bundle_pr(
+    repo: WorkspaceRepo,
+    install: GitHubInstallation,
+    *,
+    files: list[tuple[str, str]],
+    title: str,
+    branch_label: str,
+    pr_body_header: str,
+    settings: Settings,
+    client: httpx.AsyncClient | None = None,
+    return_url: str | None = None,
+) -> StarterWorkflowPR:
+    """Open a single PR that commits ``files`` (path, content) to a fresh branch.
+
+    Used for the multi-preset "Install everything" flow — instead of
+    four separate ``commit_starter_workflow`` PRs (four review
+    contexts, four merges, four chances to forget one), we create one
+    commit via the Git Data API's tree endpoint that carries every
+    workflow YAML + ``.ship/`` bootstrap in one shot.
+
+    Sequence:
+
+    1. Read the default-branch HEAD SHA and tree SHA.
+    2. Upload each file as a blob.
+    3. Build a new tree that adds every blob at its target path.
+    4. Create a commit on that tree pointing at HEAD as the parent.
+    5. Create ``ship/bundle-<label>-<unix>`` ref on that commit.
+    6. Open the PR.
+
+    Idempotency is the same as the single-file flow: the timestamped
+    branch suffix keeps retries from colliding on a stale branch.
+    """
+    if not files:
+        raise ValueError("commit_bundle_pr requires at least one file")
+
+    token = await fetch_installation_token(
+        install.installation_id, settings=settings, client=client
+    )
+    owner, name = _split_full_name(repo.full_name)
+    base_ref = repo.default_branch or "main"
+
+    head_resp = await _request(
+        "GET",
+        f"/repos/{owner}/{name}/git/ref/heads/{base_ref}",
+        token=token,
+        client=client,
+    )
+    _raise_for(head_resp)
+    base_sha = head_resp.json()["object"]["sha"]
+
+    base_commit = await _request(
+        "GET",
+        f"/repos/{owner}/{name}/git/commits/{base_sha}",
+        token=token,
+        client=client,
+    )
+    _raise_for(base_commit)
+    base_tree_sha = base_commit.json()["tree"]["sha"]
+
+    # Create a blob per file and collect the tree entries. Not parallelised
+    # intentionally — preset bundles top out around 5-6 files, and
+    # sequential requests keep rate-limit pressure tame.
+    tree_entries: list[dict[str, Any]] = []
+    for path, content in files:
+        blob_resp = await _request(
+            "POST",
+            f"/repos/{owner}/{name}/git/blobs",
+            token=token,
+            client=client,
+            json={"content": content, "encoding": "utf-8"},
+        )
+        _raise_for(blob_resp)
+        tree_entries.append(
+            {
+                "path": path,
+                "mode": "100644",
+                "type": "blob",
+                "sha": blob_resp.json()["sha"],
+            }
+        )
+
+    tree_resp = await _request(
+        "POST",
+        f"/repos/{owner}/{name}/git/trees",
+        token=token,
+        client=client,
+        json={"base_tree": base_tree_sha, "tree": tree_entries},
+    )
+    _raise_for(tree_resp)
+    new_tree_sha = tree_resp.json()["sha"]
+
+    commit_resp = await _request(
+        "POST",
+        f"/repos/{owner}/{name}/git/commits",
+        token=token,
+        client=client,
+        json={
+            "message": f"ship: install {branch_label} bundle",
+            "tree": new_tree_sha,
+            "parents": [base_sha],
+        },
+    )
+    _raise_for(commit_resp)
+    new_commit_sha = commit_resp.json()["sha"]
+
+    branch = f"ship/bundle-{branch_label}-{int(time.time())}"
+    ref_resp = await _request(
+        "POST",
+        f"/repos/{owner}/{name}/git/refs",
+        token=token,
+        client=client,
+        json={"ref": f"refs/heads/{branch}", "sha": new_commit_sha},
+    )
+    if ref_resp.status_code not in (200, 201):
+        _raise_for(ref_resp)
+
+    file_list = "\n".join(f"- `{path}`" for path, _ in files)
+    return_fragment = (
+        f"\n\n---\n\n### ← Back to Ship\n\n"
+        f"After merging this PR, jump back to the Ship dashboard to "
+        f"watch the knowledge-gathering lanes auto-dispatch:\n\n"
+        f"[**Open Ship dashboard →**]({return_url})\n"
+        if return_url
+        else ""
+    )
+    pr_resp = await _request(
+        "POST",
+        f"/repos/{owner}/{name}/pulls",
+        token=token,
+        client=client,
+        json={
+            "title": title,
+            "head": branch,
+            "base": base_ref,
+            "body": (
+                f"{pr_body_header}\n\n"
+                "### Files added\n\n"
+                f"{file_list}\n\n"
+                "Once merged, Ship will auto-dispatch the knowledge-gathering "
+                "lanes (tech-debt, code map) so your dashboard lands with data "
+                "instead of empty cards. The manual lanes (PR review, daily "
+                "standup) remain opt-in via **Run now**.\n\n"
+                "Generated automatically by the Ship App. Safe to merge as-is."
+                f"{return_fragment}"
+            ),
+            "maintainer_can_modify": True,
+        },
+    )
+    _raise_for(pr_resp)
+    payload = pr_resp.json()
+    return StarterWorkflowPR(
+        pr_url=str(payload.get("html_url") or ""),
+        pr_number=int(payload.get("number") or 0),
+        branch=branch,
+    )
+
+
 __all__ = [
     "StarterWorkflowPR",
     "WorkflowDispatchError",
+    "commit_bundle_pr",
     "commit_starter_workflow",
     "dispatch_workflow",
     "invalidate_workflow_list_cache",
