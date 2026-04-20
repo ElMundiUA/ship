@@ -130,9 +130,16 @@ async def test_install_callback_persists_row(
 
 
 @pytest.mark.asyncio
-async def test_install_callback_rejects_bad_state(
+async def test_install_callback_tolerates_bad_state_for_unknown_install(
     v1_client, github_app_env
 ) -> None:
+    """Forged/expired ``state`` + unknown installation → wizard banner.
+
+    We can't trust the bad state, and we have no install row to fall
+    back on, so the only safe move is to ask the user to start over
+    through the wizard (which mints a fresh state token tied to a real
+    workspace).
+    """
     response = await v1_client.get(
         "/v1/integrations/github/install/callback",
         params={
@@ -142,15 +149,83 @@ async def test_install_callback_rejects_bad_state(
         },
         follow_redirects=False,
     )
-    # We bounce back into the wizard with a friendly error code rather
-    # than 400-ing the browser tab — much better UX. The redirect points
-    # at the github step so the user can re-trigger the install from the
-    # same screen they already understand.
     assert response.status_code in (302, 303, 307)
     location = response.headers["location"]
     assert "/onboarding" in location
     assert "step=github" in location
-    assert "error=bad_state" in location
+    assert "error=missing_state" in location
+
+
+@pytest.mark.asyncio
+async def test_install_callback_without_state_redirects_to_wizard(
+    v1_client, github_app_env
+) -> None:
+    """No state + unknown installation → wizard banner (not 422).
+
+    GitHub omits ``state`` whenever the user enters the install picker
+    outside of our wizard (e.g. clicking "Configure" on the App page).
+    The callback used to 422 on the missing query param; we now degrade
+    gracefully into the same "start over" prompt as the bad-state case.
+    """
+    response = await v1_client.get(
+        "/v1/integrations/github/install/callback",
+        params={
+            "installation_id": "424242",
+            "setup_action": "update",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code in (302, 303, 307)
+    location = response.headers["location"]
+    assert "step=github" in location
+    assert "error=missing_state" in location
+
+
+@pytest.mark.asyncio
+async def test_install_callback_without_state_refreshes_known_install(
+    v1_client, db_session, seed_workspace, github_app_env
+) -> None:
+    """No state + known installation → idempotent refresh, no workspace move.
+
+    Re-confirming repo selection from the GitHub UI shouldn't re-bind
+    the install to a different workspace (we have no signal to tell us
+    which one) — we just touch ``updated_at`` and bounce the user into
+    the picker so they can carry on.
+    """
+    from datetime import datetime, timezone
+
+    from backend.app.db.models.integrations import GitHubInstallation
+
+    _, _, workspace = seed_workspace
+    db_session.add(
+        GitHubInstallation(
+            workspace_id=workspace.id,
+            installation_id=555111,
+            installed_at=datetime.now(timezone.utc),
+        )
+    )
+    await db_session.flush()
+
+    response = await v1_client.get(
+        "/v1/integrations/github/install/callback",
+        params={"installation_id": "555111", "setup_action": "update"},
+        follow_redirects=False,
+    )
+    assert response.status_code in (302, 303, 307)
+    location = response.headers["location"]
+    assert "step=repos" in location
+    assert "github=installed" in location
+
+    row = (
+        await db_session.execute(
+            select(GitHubInstallation).where(
+                GitHubInstallation.installation_id == 555111
+            )
+        )
+    ).scalar_one()
+    # Workspace binding stays put — the GitHub redirect carries no
+    # signal that would justify re-binding.
+    assert row.workspace_id == workspace.id
 
 
 @pytest.mark.asyncio

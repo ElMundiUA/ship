@@ -129,8 +129,8 @@ async def install_start(
 
 @router.get("/integrations/github/install/callback")
 async def install_callback(
-    state: str,
     installation_id: int,
+    state: str | None = None,
     setup_action: str | None = None,
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
@@ -142,27 +142,39 @@ async def install_callback(
     off by an admin who legitimately started the install. After
     persistence we bounce the browser back to
     ``/onboarding?step=tracker`` (the next step in the wizard).
+
+    ``state`` is **optional** because GitHub omits it whenever the user
+    enters the install picker outside of our wizard — clicking
+    "Configure" on the App page, hitting the App's public install URL
+    directly, or following the "Redirect on update" path when GitHub
+    didn't have a state to forward (e.g. repo-selection tweak from the
+    org settings UI). Three cases:
+
+    1. **state present + valid** → trust the workspace_id from the JWT.
+       This is the WOW-onboarding happy path.
+    2. **state missing + installation_id already known** → idempotent
+       refresh; we already have a workspace binding so we just touch
+       ``updated_at`` and let the user back into the dashboard.
+    3. **state missing + brand new installation_id** → we genuinely
+       don't know which workspace this should attach to. Send the user
+       back to the wizard with a banner so they re-enter through the
+       "Install" button (which mints a state token tied to their
+       workspace).
     """
-    try:
-        decoded = verify_install_state(state, settings=settings)
-    except InvalidInstallState:
-        # Tampered / expired ``state`` token. Don't 500, and don't dump
-        # the raw exception — bounce the user back into the wizard with
-        # a friendly error code so the onboarding UI can render a
-        # human-readable banner. ``ws=`` is unknown here (the state was
-        # the only carrier), so fall back to the install entry point
-        # which re-asks the user to start over.
-        return RedirectResponse(
-            url=(
-                f"{settings.console_url.rstrip('/')}/onboarding"
-                "?step=github&error=bad_state"
-            )
-        )
+    decoded_workspace_id: uuid.UUID | None = None
+    if state is not None:
+        try:
+            decoded = verify_install_state(state, settings=settings)
+            decoded_workspace_id = decoded.workspace_id
+        except InvalidInstallState:
+            # Tampered / expired ``state`` token. Treat as missing —
+            # falling through to the lookup path is safer than 401-ing
+            # the operator out of their own callback URL.
+            decoded_workspace_id = None
 
     # ``setup_action`` is "install" on first install, "update" on
     # repo-selection edit, "request" when the user lacks org permission
-    # and submitted an admin-approval request. We treat install/update
-    # identically; "request" means there's nothing to persist yet.
+    # and submitted an admin-approval request.
     if setup_action == "request":
         # Bounce back; the console UI will surface "awaiting org admin".
         return RedirectResponse(
@@ -173,18 +185,40 @@ async def install_callback(
         GitHubInstallation.installation_id == installation_id
     )
     row = (await session.execute(stmt)).scalar_one_or_none()
+
+    if row is None and decoded_workspace_id is None:
+        # Brand new install but the redirect didn't come through our
+        # wizard, so we can't pick a workspace deterministically. Don't
+        # silently attach to the user's first workspace — instead nudge
+        # them back through the wizard where the "Install" button mints
+        # a state token bound to a specific workspace.
+        return RedirectResponse(
+            url=(
+                f"{settings.console_url.rstrip('/')}/onboarding"
+                "?step=github&error=missing_state"
+            )
+        )
+
     if row is None:
+        # decoded_workspace_id is non-None here (guarded by the branch
+        # above); narrow the type for the persistence path.
+        assert decoded_workspace_id is not None
+        target_workspace_id = decoded_workspace_id
         row = GitHubInstallation(
-            workspace_id=decoded.workspace_id,
+            workspace_id=target_workspace_id,
             installation_id=installation_id,
             installed_at=datetime.now(timezone.utc),
         )
         session.add(row)
         action_kind = "github.install.create"
     else:
-        # Re-install (e.g. into a different workspace) — overwrite the
-        # workspace binding because the unique key is installation_id.
-        row.workspace_id = decoded.workspace_id
+        # Existing install. If the wizard handed us a state token,
+        # re-bind to the (possibly new) workspace; otherwise leave the
+        # existing binding alone — the user is just re-confirming repo
+        # selection from the GitHub UI.
+        if decoded_workspace_id is not None:
+            row.workspace_id = decoded_workspace_id
+        target_workspace_id = row.workspace_id
         row.installed_at = datetime.now(timezone.utc)
         row.suspended_at = None
         action_kind = "github.install.update"
@@ -193,7 +227,7 @@ async def install_callback(
 
     session.add(
         AuditLog(
-            workspace_id=decoded.workspace_id,
+            workspace_id=target_workspace_id,
             actor_user_id=None,  # callback has no session; authoritative
             actor_token_id=None,  # link is on installation_id below.
             action=action_kind,
@@ -202,6 +236,7 @@ async def install_callback(
             payload={
                 "installation_id": installation_id,
                 "setup_action": setup_action,
+                "had_state": state is not None,
             },
         )
     )
