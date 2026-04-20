@@ -1191,6 +1191,89 @@ export function dismissAllNotifications(
   );
 }
 
+// --- Per-repo Ship-managed secrets (B10) ----------------------------------
+
+/**
+ * Plaintext-free projection of a Ship-managed repo secret. The
+ * backend never returns the original value once written; the UI
+ * relies on {@link ApiRepoSecret.masked_hint} (last 4 plaintext
+ * characters, pre-computed at write time) for the familiar
+ * "•••••••abcd" display so operators can eyeball whether a key was
+ * actually rotated.
+ */
+export interface ApiRepoSecret {
+  id: string;
+  name: string;
+  masked_hint: string | null;
+  description: string | null;
+  sync_status: "pending" | "synced" | "stale" | "error" | string;
+  sync_error: string | null;
+  last_synced_at: string | null;
+  github_key_id: string | null;
+  created_by_user_id: string | null;
+  updated_by_user_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * One row of the "required secrets" matrix — the dashboard renders
+ * these as warnings when ``stored=false`` so operators can add a
+ * missing key before the next cron fires.
+ */
+export interface ApiRequiredSecret {
+  name: string;
+  required_by: string[];
+  stored: boolean;
+  sync_status: string | null;
+}
+
+export function listRepoSecrets(
+  workspaceId: string,
+  repoId: string,
+  token?: string,
+): Promise<{ items: ApiRepoSecret[] }> {
+  return apiFetch<{ items: ApiRepoSecret[] }>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/secrets`,
+    { token },
+  );
+}
+
+export function listRequiredSecrets(
+  workspaceId: string,
+  repoId: string,
+  token?: string,
+): Promise<{ items: ApiRequiredSecret[] }> {
+  return apiFetch<{ items: ApiRequiredSecret[] }>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/secrets/required`,
+    { token },
+  );
+}
+
+export function upsertRepoSecret(
+  workspaceId: string,
+  repoId: string,
+  payload: { name: string; value: string; description?: string | null },
+  token?: string,
+): Promise<ApiRepoSecret> {
+  return apiFetch<ApiRepoSecret>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/secrets`,
+    { method: "POST", body: payload, token },
+  );
+}
+
+export function deleteRepoSecret(
+  workspaceId: string,
+  repoId: string,
+  secretId: string,
+  token?: string,
+): Promise<void> {
+  return apiFetch<void>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/secrets/${encodeURIComponent(secretId)}`,
+    { method: "DELETE", token },
+  );
+}
+
 // --- Tracker OAuth (Linear / Notion, Day-2 wow flow) ----------------------
 
 /**

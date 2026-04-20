@@ -30,6 +30,7 @@ from backend.app.api.v1.routes import (
     notifications,
     notion_oauth,
     pipelines,
+    repo_secrets,
     repos,
     workspace_artifacts,
     workspaces,
@@ -97,3 +98,8 @@ api_router.include_router(metrics.router)
 # A5 "self-heal auto-triggered"). Reader + dismiss surface; writes
 # happen from the webhook handlers via `services.notifications`.
 api_router.include_router(notifications.router)
+# Per-repo Ship-managed Actions secrets (B10). Admin-only CRUD at
+# /workspaces/{ws}/repos/{repo}/secrets. Plaintext on POST only; the
+# service layer syncs to GitHub so cron/push/dispatch workflows all
+# see the values as ``${{ secrets.X }}``.
+api_router.include_router(repo_secrets.router)

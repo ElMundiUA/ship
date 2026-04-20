@@ -531,13 +531,21 @@ function RepoStatusStrip({
                 </form>
               )}
 
-              <div className="mt-auto flex items-center justify-between text-[11px] font-semibold text-white/55">
-                <Link
-                  href={`/pipelines?repo=${encodeURIComponent(repo.full_name)}`}
-                  className="hover:text-aqua"
-                >
-                  Open lanes →
-                </Link>
+              <div className="mt-auto flex flex-wrap items-center justify-between gap-2 text-[11px] font-semibold text-white/55">
+                <div className="flex flex-wrap items-center gap-3">
+                  <Link
+                    href={`/pipelines?repo=${encodeURIComponent(repo.full_name)}`}
+                    className="hover:text-aqua"
+                  >
+                    Open lanes →
+                  </Link>
+                  <Link
+                    href={`/repos/${encodeURIComponent(repo.id)}/secrets`}
+                    className="hover:text-aqua"
+                  >
+                    Manage secrets →
+                  </Link>
+                </div>
                 <span>
                   activated{" "}
                   {repo.activated_at ? relativeTime(repo.activated_at) : "?"}

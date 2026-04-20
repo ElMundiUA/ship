@@ -35,6 +35,11 @@ aioboto3>=13.1,<14
 python-jose[cryptography]>=3.3,<4
 passlib[bcrypt]>=1.7,<2
 cryptography>=43,<44
+# libsodium bindings. Used by B10 (per-repo secrets) to sealed-box
+# encrypt plaintext against a repo's Actions public key before the
+# `PUT /repos/.../actions/secrets/{name}` upload. GitHub's secret
+# API accepts no other encryption format.
+PyNaCl>=1.5,<2
 
 # --- YAML for artifact frontmatter ---
 pyyaml>=6.0

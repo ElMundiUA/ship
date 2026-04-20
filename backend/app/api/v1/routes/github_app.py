@@ -972,6 +972,134 @@ async def _maybe_trigger_self_heal(
         )
 
 
+def _run_path_basename(run: dict[str, Any]) -> str | None:
+    """Return the workflow filename from a ``workflow_run`` event.
+
+    GitHub ships the full path (``.github/workflows/foo.yml``) on
+    ``workflow_run.path`` for every delivery; we reduce to just the
+    basename because our catalog keys by filename and so do the
+    starter YAMLs we install. Returns ``None`` if the path field is
+    missing or malformed — most callers treat "can't figure out the
+    lane" as "skip this event".
+    """
+    path = run.get("path")
+    if not isinstance(path, str) or not path:
+        return None
+    return path.rsplit("/", 1)[-1] or None
+
+
+async def _lazy_create_pipeline_run_from_webhook(
+    session: AsyncSession,
+    repo_row: WorkspaceRepo,
+    run: dict[str, Any],
+) -> PipelineRun | None:
+    """Create a :class:`PipelineRun` row for a cron / push / schedule run.
+
+    Called from :func:`_reconcile_pipeline_run_from_webhook` when we
+    can't find a matching row by either ``gh_workflow_run_id`` or
+    "most recent in-flight". That's the signature of a non-dispatch
+    trigger (``schedule:``, ``push:``, ``pull_request:``) where the
+    workflow started without our dispatcher ever creating the row.
+
+    We only do this for *Ship-owned* workflows (name matches the
+    catalog's ``install_target`` for one of the workspace's
+    pipelines bound to this repo). Third-party cron workflows stay
+    in the ``WorkflowRun`` cache and never enter ``PipelineRun`` —
+    they're not ours to reason about.
+
+    Returns ``None`` if we couldn't match the run to a pipeline;
+    the caller treats that as "skip enrichment" and moves on.
+    """
+    # Late import to keep catalog IO out of webhook startup; the
+    # catalog already caches parsed artifacts internally so repeat
+    # calls are fine.
+    from backend.app.services.catalog import workflow_install_filename
+
+    filename = _run_path_basename(run)
+    if filename is None:
+        return None
+
+    pipelines = (
+        await session.execute(
+            select(Pipeline).where(
+                Pipeline.workspace_id == repo_row.workspace_id,
+                Pipeline.repo_id == repo_row.id,
+            )
+        )
+    ).scalars().all()
+    matched: Pipeline | None = None
+    for candidate in pipelines:
+        target_filename = workflow_install_filename(candidate.workflow_id)
+        if target_filename and target_filename == filename:
+            matched = candidate
+            break
+    if matched is None:
+        return None
+
+    event = (run.get("event") or "webhook")[:32]
+    # Pilot's :class:`PipelineRun.trigger` vocabulary is
+    # ``manual`` / ``webhook`` / ``cron`` / ``onboarding``. Collapse
+    # GitHub's event names so downstream filters stay meaningful.
+    trigger = "cron" if event == "schedule" else "webhook"
+
+    gh_run_id_raw = run.get("id")
+    try:
+        gh_run_id = (
+            int(gh_run_id_raw) if gh_run_id_raw is not None else None
+        )
+    except (TypeError, ValueError):
+        gh_run_id = None
+
+    status_map = {
+        "queued": "queued",
+        "pending": "queued",
+        "requested": "queued",
+        "waiting": "queued",
+        "in_progress": "running",
+    }
+    gh_status = run.get("status") or "unknown"
+    mapped_status = status_map.get(gh_status, "running")
+
+    started_at = (
+        _parse_iso(run.get("run_started_at"))
+        or _parse_iso(run.get("created_at"))
+        or datetime.now(timezone.utc)
+    )
+
+    payload: dict[str, Any] = {
+        "source": "webhook_lazy_register",
+        "gh_event": event,
+    }
+    if gh_run_id is not None:
+        payload["metrics"] = {"gh_workflow_run_id": gh_run_id}
+    html_url = run.get("html_url") or ""
+    if html_url:
+        payload.setdefault("metrics", {})["gh_html_url"] = html_url[:1024]
+
+    pipeline_run = PipelineRun(
+        pipeline_id=matched.id,
+        workspace_id=repo_row.workspace_id,
+        trigger=trigger,
+        status=mapped_status,
+        started_at=started_at,
+        summary=(
+            f"Auto-registered from {event} workflow_run "
+            f"for {repo_row.full_name}"
+        )[:1024],
+        payload=payload,
+    )
+    session.add(pipeline_run)
+    await session.flush()
+    logger.info(
+        "lazy-registered pipeline_run id=%s pipeline=%s event=%s repo=%s",
+        pipeline_run.id,
+        matched.id,
+        event,
+        repo_row.full_name,
+    )
+    return pipeline_run
+
+
 async def _reconcile_pipeline_run_from_webhook(
     session: AsyncSession,
     repo_row: WorkspaceRepo,
@@ -1038,6 +1166,20 @@ async def _reconcile_pipeline_run_from_webhook(
         pipeline_run = (
             await session.execute(in_flight_stmt)
         ).scalars().first()
+
+    if pipeline_run is None:
+        # B10 addition: the run might have been triggered by the
+        # workflow's own ``schedule:`` / ``push:`` / ``pull_request:``
+        # block, which means *no* one ever called our dispatch
+        # endpoint to pre-seed a :class:`PipelineRun`. Match the
+        # workflow file path on the run back to one of our installed
+        # pipelines; if it's a Ship-owned lane, lazily create the
+        # run row here so the dashboard's "last activity" panel
+        # surfaces the cron execution the same way it shows manual
+        # ones.
+        pipeline_run = await _lazy_create_pipeline_run_from_webhook(
+            session, repo_row, run
+        )
 
     if pipeline_run is None:
         # Nothing to enrich. The user might have triggered the
