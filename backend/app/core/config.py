@@ -243,6 +243,27 @@ class Settings(BaseSettings):
     github_token: str | None = Field(default=None, alias="GITHUB_TOKEN")
     feedback_repo: str = Field(default="ElMundiUA/ship", alias="SHIP_FEEDBACK_REPO")
 
+    # --- Agent (C12) ----------------------------------------------------------
+    # Pilot ships OpenAI as the default backend because ``OPENAI_API_KEY`` is
+    # already wired for embeddings; Anthropic is plugged in behind the same
+    # :class:`AgentClient` abstraction and only activates when
+    # ``ANTHROPIC_API_KEY`` is present. Switching vendor is one env flip —
+    # ``AGENT_VENDOR=anthropic`` — so B10 (BYO per-tenant keys) can layer on
+    # top later without reshuffling call sites.
+    anthropic_api_key: str | None = Field(default=None, alias="ANTHROPIC_API_KEY")
+    agent_vendor: str = Field(default="openai", alias="AGENT_VENDOR")
+    # Primary model drives the user-facing conversation; ``fast`` drives
+    # cheap one-shot chores (topic-shift classifier, summarisers) where we
+    # do not want to burn frontier-tier tokens.
+    agent_model_main: str = Field(default="gpt-4o", alias="AGENT_MODEL_MAIN")
+    agent_model_fast: str = Field(default="gpt-4o-mini", alias="AGENT_MODEL_FAST")
+    # Hard cap on tokens we let the agent spend per turn (prompt + completion
+    # combined). Triggers a 429 from the SSE route when exceeded so a runaway
+    # tool-loop doesn't silently nuke a tenant's monthly budget.
+    agent_max_tokens_per_turn: int = Field(
+        default=200_000, alias="AGENT_MAX_TOKENS_PER_TURN"
+    )
+
     # --- GitHub App "Ship" (pilot WOW-onboarding flow, RFC pilot-plan) ---
     # Numeric App ID shown on the "About" page of the App settings.
     github_app_id: str | None = Field(default=None, alias="GITHUB_APP_ID")

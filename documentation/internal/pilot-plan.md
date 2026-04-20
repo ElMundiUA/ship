@@ -9,8 +9,8 @@
 >
 > **Post-pilot work in flight (2026-04-20):** A/B/C/D post-pilot
 > backlog — see "[Post-pilot feature backlog](#post-pilot-feature-backlog-abcd-phases)"
-> below. Currently: **A1–A3, B5–B9, C8–C10, D11 shipped**;
-> A4/A5, B10/B11, C11/C12, D12/D13 pending.
+> below. Currently: **A1–A3, B5–B9, C8–C10, C12, D11 shipped**;
+> A4/A5, B10/B11, C11, D12/D13 pending.
 >
 > **Source chats:** [Pilot scope discussion](442f31fa-34f0-47da-888b-a2d10a773f8e), [Day 1+2+3 build](48ef7ed3-881c-42e6-a823-1f670f4907ac), [Post-pilot A/B/C sprint](48ef7ed3-881c-42e6-a823-1f670f4907ac)
 > **Owner:** Denys / Ship core
@@ -982,7 +982,7 @@ SENTRY_SERVICE_NAME=ship-console
 | C9  | Clarifications inbox (agent Q&A in one place) | ✅ | Same commit. Run-token ingress from dispatched workflows. |
 | C10 | Chat window for task creation with agent (stub `_agent_reply`) | ✅ | Same commit. Resolve → optional `Improvement` spawn. |
 | C11 | **Pipeline preset editor** — mutate preset composition (which kinds are enabled by default) without editing `default_pipelines.py`. Admin-only UI under workspace settings | ⏳ | Needed once we have >2 preset variants customers ask for. |
-| C12 | **Real agent** — replace `_agent_reply` stub (and the knowledge-gathering pipelines' body) with Claude/GPT via a thin `AgentClient` abstraction. Reads `B10` secrets | ⏳ | Biggest single ROI, depends on B10. |
+| C12 | **Real agent** — single-window SSE chat with OpenAI/Anthropic via a vendor-agnostic `AgentClient`. Named knowledge buckets for memory, `.ship/knowledge/**/*.md` RAG over pgvector, tools for `create_ticket` / `get_repo_file` / `create_artifact_feedback`, topic-shift detection | ✅ | See `documentation/internal/agent-setup.md`. Migration `0010_agent_v2`, routes `/chat/active*`, `/chat/stream`, `/buckets`, `/artifact-feedback`. Console surfaces: `/chat` (single-window), `/artifact-feedback`. |
 
 ### D — Observability / real executor
 

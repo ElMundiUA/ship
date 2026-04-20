@@ -1,0 +1,383 @@
+"""KB indexer: ingest ``.ship/knowledge/**/*.md`` into ``kb_chunks``.
+
+The agent's ``search_repo_kb`` tool is a vector search over the
+``kb_chunks`` table; this module is what *populates* it. One activated
+:class:`~backend.app.db.models.integrations.WorkspaceRepo` at a time.
+
+Design notes
+------------
+
+- **Scope** is narrow by design: only files under ``.ship/knowledge/``
+  ending in ``.md`` get ingested. That's the knob operators use to
+  curate what the agent sees. We deliberately do *not* index the whole
+  repo in the first cut — full-repo indexing costs money (embeddings +
+  storage) and encourages the agent to quote random code back at the
+  user. Operators who want broader grounding use the ``get_repo_file``
+  tool or add files to ``.ship/knowledge/`` explicitly.
+
+- **Chunking** is paragraph-oriented with a hard char cap so a single
+  blob can't blow up embed costs. We split on blank lines, then
+  re-bin to target ~800 chars / chunk. Headings attach to the chunk
+  that immediately follows them so retrieval carries the section
+  context.
+
+- **Diffing** is path+sha based. If the Git blob SHA for a KB doc
+  hasn't moved since the last successful index, we skip the
+  re-embedding entirely. Re-runs on an unchanged repo are therefore
+  cheap; this is what makes wiring the indexer to push webhooks
+  (Day-3 polish) safe.
+
+- **Idempotency** is per-repo: we load the current set of
+  ``kb_chunks`` for the repo, diff against the incoming set, and
+  ``DELETE``-then-``INSERT`` the delta. This lets a knowledge doc
+  being renamed / deleted actually disappear from search — the
+  alternative (insert-only) would leave ghosts behind.
+
+- **Concurrency**: one indexer run per repo at a time. Callers
+  (webhook handler + manual reindex endpoint) serialize through a
+  per-repo advisory lock. Within a run, embeddings are sent to
+  OpenAI in batches of 64 (the SDK default limit is much higher, but
+  64 keeps a single slow batch from blocking the whole run for
+  minutes).
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+from dataclasses import dataclass
+from typing import Final
+
+import httpx
+from sqlalchemy import delete, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from backend.app.core.config import Settings, get_settings
+from backend.app.db.models.agent_memory import KbChunk
+from backend.app.db.models.integrations import GitHubInstallation, WorkspaceRepo
+from backend.app.integrations.gateway.code_host import (
+    BlobContent,
+    CodeHostGateway,
+    RepoRef,
+)
+from backend.app.integrations.github.code_host_adapter import GitHubCodeHost
+from backend.app.services.agent.embedding import EMBED_DIM, embed_texts
+
+logger = logging.getLogger(__name__)
+
+
+# Only files under this path get ingested. The string lives in one
+# place so operators can grep for it in the docs and the code agrees.
+KB_ROOT: Final[str] = ".ship/knowledge"
+
+# Target chunk size. Picked so that ~10 chunks fit in a typical
+# retrieval window without blowing up the prompt. Strictly a soft
+# target — we never split mid-paragraph to hit it exactly.
+_CHUNK_TARGET_CHARS: Final[int] = 800
+# Hard cap — paragraphs larger than this get split on sentence
+# boundaries. Beyond this, embeddings stop being semantically useful
+# because too many concepts share one vector.
+_CHUNK_HARD_CAP_CHARS: Final[int] = 1600
+# How many texts we embed per OpenAI call. 64 is a compromise: big
+# enough to amortise network latency, small enough that one slow
+# batch doesn't stall the whole indexing run.
+_EMBED_BATCH: Final[int] = 64
+
+# Defensive caps so a misconfigured repo can't wedge a run:
+#   * cap total files so a runaway ``.ship/knowledge/`` (someone
+#     dumping 10k auto-generated markdown files) doesn't blow our
+#     budget on one tenant,
+#   * cap per-file size so a committed SQL dump doesn't either.
+_MAX_FILES: Final[int] = 500
+_MAX_FILE_BYTES: Final[int] = 256 * 1024
+
+
+@dataclass(slots=True)
+class IndexReport:
+    """Per-run summary so callers can surface progress in the UI.
+
+    The numbers are intentionally concrete: "processed 12 files,
+    skipped 4 unchanged, wrote 83 chunks" is the shape the manual
+    reindex endpoint streams back so the operator sees the indexer
+    actually doing work.
+    """
+
+    repo_id: str
+    files_discovered: int = 0
+    files_indexed: int = 0
+    files_skipped_unchanged: int = 0
+    files_skipped_too_big: int = 0
+    files_skipped_binary: int = 0
+    chunks_deleted: int = 0
+    chunks_written: int = 0
+
+
+async def reindex_repo_kb(
+    session: AsyncSession,
+    repo: WorkspaceRepo,
+    install: GitHubInstallation,
+    *,
+    settings: Settings | None = None,
+    gateway: CodeHostGateway | None = None,
+    http_client: httpx.AsyncClient | None = None,
+) -> IndexReport:
+    """Rebuild ``kb_chunks`` for one activated repo.
+
+    Drops chunks for files that no longer exist, updates chunks whose
+    source SHA changed, and skips files whose SHA matches what's
+    already in the DB. Returns an :class:`IndexReport` so the caller
+    can render per-file counts.
+    """
+    s = settings or get_settings()
+    gw = gateway or GitHubCodeHost(
+        install.installation_id, settings=s, client=http_client
+    )
+    owner, name = _owner_repo(repo)
+    ref = RepoRef(kind="github", owner=owner, repo=name)
+
+    report = IndexReport(repo_id=str(repo.id))
+
+    # Step 1 — list every path under ``.ship/knowledge/``. We rely on
+    # ``list_files`` returning the whole tree; the gateway already
+    # truncates at 5k paths, which is two orders of magnitude above
+    # the KB files we realistically expect.
+    all_paths = await gw.list_files(ref, ref_sha=repo.default_branch or None)
+    kb_paths = [
+        p for p in all_paths
+        if p.startswith(KB_ROOT + "/") and p.lower().endswith(".md")
+    ]
+    report.files_discovered = len(kb_paths)
+    if len(kb_paths) > _MAX_FILES:
+        logger.warning(
+            "repo %s has %d KB files, truncating to %d",
+            repo.full_name, len(kb_paths), _MAX_FILES,
+        )
+        kb_paths = kb_paths[:_MAX_FILES]
+
+    # Step 2 — fetch existing chunks once so the diff is in-memory.
+    existing_rows = (
+        await session.execute(
+            select(KbChunk).where(KbChunk.repo_id == repo.id)
+        )
+    ).scalars().all()
+    existing_by_path: dict[str, list[KbChunk]] = {}
+    for row in existing_rows:
+        existing_by_path.setdefault(row.source_path, []).append(row)
+
+    seen_paths: set[str] = set()
+    blobs_to_embed: list[tuple[str, BlobContent, list[str]]] = []
+
+    # Step 3 — fetch blobs and diff on SHA. Sequential: the upstream
+    # rate limit is the bottleneck, not us, and concurrent fetches
+    # against the contents API earn us 403s fast.
+    for path in kb_paths:
+        try:
+            blob = await gw.get_blob(ref, path=path, ref_sha=repo.default_branch or None)
+        except FileNotFoundError:
+            # Between listing and fetching, someone deleted the file.
+            # Skip; the cleanup loop below will drop any orphaned
+            # chunks.
+            continue
+        seen_paths.add(path)
+        if blob.encoding != "utf-8":
+            report.files_skipped_binary += 1
+            continue
+        if blob.size > _MAX_FILE_BYTES:
+            report.files_skipped_too_big += 1
+            continue
+
+        current_chunks = existing_by_path.get(path, [])
+        if current_chunks and all(c.content_sha == blob.sha for c in current_chunks):
+            # Unchanged — the entire file was last indexed at this
+            # exact SHA, so every chunk is still valid.
+            report.files_skipped_unchanged += 1
+            continue
+
+        chunks = _chunk_markdown(blob.content)
+        if not chunks:
+            # File is empty or pure whitespace — delete any stale
+            # chunks and move on.
+            if current_chunks:
+                await _delete_chunks_for_path(session, repo.id, path)
+                report.chunks_deleted += len(current_chunks)
+            continue
+        blobs_to_embed.append((path, blob, chunks))
+
+    # Step 4 — embed in batches. We flatten first so one OpenAI call
+    # covers chunks from multiple files; the (path, index) tuple
+    # tells us where to write the vector back.
+    flat_texts: list[str] = []
+    flat_origins: list[tuple[str, BlobContent, int]] = []
+    for path, blob, chunks in blobs_to_embed:
+        for idx, chunk_text in enumerate(chunks):
+            flat_texts.append(chunk_text)
+            flat_origins.append((path, blob, idx))
+
+    vectors: list[list[float]] = []
+    for start in range(0, len(flat_texts), _EMBED_BATCH):
+        batch = flat_texts[start:start + _EMBED_BATCH]
+        vectors.extend(await embed_texts(batch, settings=s))
+
+    # Sanity: the embeddings service promises one vector per input.
+    # Fail loud if that ever drifts — a silent misalignment would
+    # teach the agent to cite the wrong file forever.
+    if len(vectors) != len(flat_texts):
+        raise RuntimeError(
+            f"embed_texts returned {len(vectors)} vectors for "
+            f"{len(flat_texts)} inputs (repo={repo.full_name})"
+        )
+    for v in vectors:
+        if len(v) != EMBED_DIM:
+            raise RuntimeError(
+                f"embed_texts returned {len(v)}-d vector, expected {EMBED_DIM}"
+            )
+
+    # Step 5 — replace chunks for the paths we re-embedded. We do a
+    # path-scoped delete first so a file whose chunk count shrank
+    # doesn't leave stragglers behind.
+    rewritten_paths = {path for path, _, _ in blobs_to_embed}
+    for path in rewritten_paths:
+        dropped = await _delete_chunks_for_path(session, repo.id, path)
+        report.chunks_deleted += dropped
+
+    rows_to_add: list[KbChunk] = []
+    for (path, blob, idx), vector, chunk_text in zip(
+        flat_origins, vectors, flat_texts
+    ):
+        rows_to_add.append(
+            KbChunk(
+                workspace_id=repo.workspace_id,
+                repo_id=repo.id,
+                source_path=path,
+                chunk_index=idx,
+                content=chunk_text,
+                content_sha=blob.sha,
+                embedding=vector,
+            )
+        )
+    session.add_all(rows_to_add)
+    report.chunks_written = len(rows_to_add)
+    report.files_indexed = len(rewritten_paths)
+
+    # Step 6 — garbage-collect chunks for files that disappeared
+    # since the last run.
+    orphan_paths = set(existing_by_path) - seen_paths
+    for path in orphan_paths:
+        dropped = await _delete_chunks_for_path(session, repo.id, path)
+        report.chunks_deleted += dropped
+
+    await session.flush()
+    return report
+
+
+async def _delete_chunks_for_path(
+    session: AsyncSession, repo_id, path: str
+) -> int:
+    """Delete every :class:`KbChunk` for ``(repo_id, path)``; return count."""
+    result = await session.execute(
+        delete(KbChunk).where(
+            KbChunk.repo_id == repo_id, KbChunk.source_path == path
+        )
+    )
+    return int(result.rowcount or 0)
+
+
+def _owner_repo(repo: WorkspaceRepo) -> tuple[str, str]:
+    owner, _, name = (repo.full_name or "").partition("/")
+    if not owner or not name:
+        raise ValueError(
+            f"WorkspaceRepo.full_name {repo.full_name!r} is not owner/repo."
+        )
+    return owner, name
+
+
+_PARA_SPLIT_RE = re.compile(r"\n\s*\n")
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+_HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+")
+
+
+def _chunk_markdown(text: str) -> list[str]:
+    """Paragraph-based chunker with sentence fallback.
+
+    The goals, in priority order:
+
+    1. Never split mid-sentence.
+    2. Attach a heading to the chunk it introduces.
+    3. Target ~``_CHUNK_TARGET_CHARS``, cap at
+       ``_CHUNK_HARD_CAP_CHARS``.
+
+    Returns an empty list if ``text`` is empty or whitespace-only so
+    the caller can drop the file cleanly.
+    """
+    if not text or not text.strip():
+        return []
+    paragraphs = [p.strip() for p in _PARA_SPLIT_RE.split(text) if p.strip()]
+    if not paragraphs:
+        return []
+
+    # First pass: fold headings forward so they don't become
+    # standalone chunks.
+    folded: list[str] = []
+    pending_heading: str | None = None
+    for para in paragraphs:
+        first_line = para.splitlines()[0] if para else ""
+        if _HEADING_RE.match(first_line) and len(para.splitlines()) == 1:
+            pending_heading = para
+            continue
+        combined = f"{pending_heading}\n\n{para}" if pending_heading else para
+        folded.append(combined)
+        pending_heading = None
+    # Trailing heading with no body — keep it so we don't lose the
+    # section title entirely.
+    if pending_heading is not None:
+        folded.append(pending_heading)
+
+    # Second pass: bin paragraphs into target-sized chunks.
+    chunks: list[str] = []
+    buf: list[str] = []
+    buf_len = 0
+    for para in folded:
+        if len(para) > _CHUNK_HARD_CAP_CHARS:
+            # Flush the current buffer before we split the big para —
+            # otherwise the split fragments end up mixed with
+            # unrelated content.
+            if buf:
+                chunks.append("\n\n".join(buf))
+                buf = []
+                buf_len = 0
+            chunks.extend(_split_long_paragraph(para))
+            continue
+        if buf and buf_len + len(para) + 2 > _CHUNK_TARGET_CHARS:
+            chunks.append("\n\n".join(buf))
+            buf = [para]
+            buf_len = len(para)
+        else:
+            buf.append(para)
+            buf_len += len(para) + (2 if buf else 0)
+    if buf:
+        chunks.append("\n\n".join(buf))
+    return chunks
+
+
+def _split_long_paragraph(paragraph: str) -> list[str]:
+    """Split a paragraph that overflows the hard cap on sentence boundaries."""
+    sentences = [s.strip() for s in _SENTENCE_SPLIT_RE.split(paragraph) if s.strip()]
+    if not sentences:
+        return [paragraph[:_CHUNK_HARD_CAP_CHARS]]
+    out: list[str] = []
+    buf: list[str] = []
+    buf_len = 0
+    for sentence in sentences:
+        if buf and buf_len + len(sentence) + 1 > _CHUNK_TARGET_CHARS:
+            out.append(" ".join(buf))
+            buf = [sentence]
+            buf_len = len(sentence)
+        else:
+            buf.append(sentence)
+            buf_len += len(sentence) + (1 if buf else 0)
+    if buf:
+        out.append(" ".join(buf))
+    return out
+
+
+__all__ = ["IndexReport", "KB_ROOT", "reindex_repo_kb"]

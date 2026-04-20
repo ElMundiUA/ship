@@ -12,6 +12,11 @@ httpx>=0.27,<1
 
 # --- LLM / embeddings ---
 openai>=1.50,<2
+# Optional Anthropic client (C12 real agent). Activated at runtime only when
+# ``ANTHROPIC_API_KEY`` is set + ``AGENT_VENDOR=anthropic``; otherwise it sits
+# idle. Kept in the base requirement set so the same image can serve both
+# vendors without a rebuild.
+anthropic>=0.40,<1
 
 # --- Persistence (Postgres + pgvector everywhere; RFC-0006) ---
 SQLAlchemy[asyncio]>=2.0.30,<3

@@ -18,7 +18,7 @@ from typing import Any
 
 import httpx
 
-from backend.app.integrations.gateway.tracker import TicketRef
+from backend.app.integrations.gateway.tracker import CreatedTicket, TicketRef
 
 
 NOTION_API_ROOT = "https://api.notion.com/v1"
@@ -139,6 +139,101 @@ class NotionTracker:
                 "parent": {"page_id": ticket.id},
                 "rich_text": [{"type": "text", "text": {"content": body}}],
             },
+        )
+
+    async def create_ticket(
+        self,
+        *,
+        title: str,
+        body: str,
+        labels: list[str] | None = None,
+        project_hint: str | None = None,
+    ) -> CreatedTicket:
+        """Create a page under a Notion database.
+
+        ``project_hint`` is the target database id. When omitted we
+        do a search for the first database the integration can see
+        and use that; if there's more than one we bail out so the
+        caller surfaces "pick a database" rather than dropping the
+        ticket somewhere random.
+
+        ``labels`` are ignored in the first cut — Notion's
+        multi-select label columns differ per database and we
+        don't want to guess a column name. The body is rendered
+        as a single paragraph block because Notion doesn't accept
+        markdown directly; a fuller markdown → Notion blocks
+        translation is a Phase-3 polish item.
+        """
+        database_id = await self._resolve_database_id(project_hint)
+        title_prop_name = await self._resolve_title_property(database_id)
+
+        create_payload: dict[str, Any] = {
+            "parent": {"database_id": database_id},
+            "properties": {
+                title_prop_name: {
+                    "title": [{"type": "text", "text": {"content": title}}],
+                }
+            },
+            # Body as a single paragraph block; good enough for
+            # LLM-generated tickets where the body is a short spec.
+            "children": [
+                {
+                    "object": "block",
+                    "type": "paragraph",
+                    "paragraph": {
+                        "rich_text": [
+                            {"type": "text", "text": {"content": body[:2000]}}
+                        ]
+                    },
+                }
+            ],
+        }
+        created = await self._request("POST", "/pages", json=create_payload)
+        page_id = str(created.get("id") or "")
+        if not page_id:
+            raise ValueError("Notion refused page creation (no id returned).")
+        return CreatedTicket(
+            ref=TicketRef(kind="notion", workspace_hint=database_id, id=page_id),
+            url=str(created.get("url") or ""),
+            display_id=page_id,
+        )
+
+    async def _resolve_database_id(self, hint: str | None) -> str:
+        if hint:
+            return hint
+        # Search for visible databases; the user shares specific
+        # databases with the integration at install time.
+        body = await self._request(
+            "POST",
+            "/search",
+            json={
+                "filter": {"property": "object", "value": "database"},
+                "page_size": 2,
+            },
+        )
+        results = body.get("results", []) or []
+        if not results:
+            raise ValueError(
+                "No Notion databases are shared with the Ship integration. "
+                "Share a database under the tracker connection first."
+            )
+        if len(results) > 1:
+            raise ValueError(
+                "Multiple Notion databases are visible; pass "
+                "project_hint=<database-id> to pick one."
+            )
+        return str(results[0]["id"])
+
+    async def _resolve_title_property(self, database_id: str) -> str:
+        """Notion databases always have exactly one ``title`` property."""
+        db = await self._request("GET", f"/databases/{database_id}")
+        props = db.get("properties") or {}
+        for name, prop in props.items():
+            if prop.get("type") == "title":
+                return str(name)
+        # Should never happen for a well-formed database.
+        raise ValueError(
+            f"Notion database {database_id} has no title property."
         )
 
 
