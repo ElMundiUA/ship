@@ -282,6 +282,48 @@ async def test_run_pipeline_412_when_not_bound(
 
 
 @pytest.mark.asyncio
+async def test_run_pipeline_auto_binds_when_single_repo(
+    monkeypatch, v1_client, db_session, seed_repo_and_install
+) -> None:
+    """Phase-3 convenience: legacy pipelines with ``repo_id=None``
+    auto-bind to the workspace's sole activated repo instead of
+    surfacing the cryptic ``pipeline_not_bound`` error. The dispatcher
+    then proceeds as if the pipeline had been bound from day one."""
+    from backend.app.api.v1.routes import pipelines as pipelines_route
+    from backend.app.integrations.github import workflows as workflows_mod
+    from backend.app.services.default_pipelines import seed_default_pipelines
+
+    raw, workspace, _install, repo = seed_repo_and_install
+    # Seed without ``default_repo_id`` so rows come out unbound — this
+    # is the exact shape legacy pilots observed on Day 3.
+    pipelines = await seed_default_pipelines(db_session, workspace.id)
+    await db_session.flush()
+    target = next(p for p in pipelines if p.kind == "pr_review")
+    assert target.repo_id is None
+
+    async def _probe(*args, **kwargs):
+        return frozenset({"pr-and-ci-gate.yml"})
+
+    async def _dispatch(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(pipelines_route, "list_repo_workflows", _probe)
+    monkeypatch.setattr(pipelines_route, "dispatch_workflow", _dispatch)
+    monkeypatch.setattr(workflows_mod, "list_repo_workflows", _probe)
+    monkeypatch.setattr(workflows_mod, "dispatch_workflow", _dispatch)
+
+    response = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/pipelines/{target.id}/runs",
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert response.status_code == 202, response.text
+    # DB row now carries the binding — repeat runs don't need the
+    # auto-bind heuristic anymore.
+    await db_session.refresh(target)
+    assert target.repo_id == repo.id
+
+
+@pytest.mark.asyncio
 async def test_run_pipeline_412_when_kind_not_supported(
     v1_client, db_session, seed_repo_and_install
 ) -> None:
