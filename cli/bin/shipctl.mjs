@@ -126,6 +126,12 @@ try {
     process.exit(0);
   }
 
+  if (cmd === "callback") {
+    const { callbackCommand } = await import("../lib/commands/callback.mjs");
+    await callbackCommand(ctx, rest);
+    process.exit(0);
+  }
+
   console.error(`Unknown command: ${cmd}\nRun: shipctl help`);
   process.exit(1);
 } catch (err) {
