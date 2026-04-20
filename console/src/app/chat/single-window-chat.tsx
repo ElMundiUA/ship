@@ -10,11 +10,20 @@
  * thread replaces it in-place. Packed threads show up in the
  * sidebar as buckets — see ``buckets-sidebar.tsx``.
  *
- * This file owns the SSE plumbing. The event protocol matches the
- * backend exactly (``thread`` / ``user_message`` / ``topic_shift``
- * / ``delta`` / ``tool_call`` / ``tool_result`` / ``assistant_message``
- * / ``end`` / ``error``); each type has a dedicated reducer that
- * mutates the local transcript state.
+ * The surface is deliberately flat: no message bubbles, no boxed
+ * scroll panel, no tool-call "strip". Messages read top-to-bottom
+ * like a transcript, with a thin role label above each turn. The
+ * assistant's reply animates one character at a time via a
+ * typewriter layer — the incoming SSE ``delta`` events accumulate
+ * into the target string, and a local interval advances the
+ * rendered length toward that target so the text feels *typed*
+ * rather than dumped in bursts.
+ *
+ * The event protocol matches the backend exactly (``thread`` /
+ * ``user_message`` / ``topic_shift`` / ``delta`` / ``tool_call`` /
+ * ``tool_result`` / ``assistant_message`` / ``end`` / ``error``);
+ * each type has a dedicated reducer that mutates the local
+ * transcript state.
  */
 
 import {
@@ -85,7 +94,6 @@ type InitialState = {
   thread: Thread & { messages: Message[] };
 };
 
-/** ``text-embedding`` etc. Produce one id per render burst. */
 function clientId(): string {
   return "c_" + Math.random().toString(36).slice(2, 10);
 }
@@ -99,18 +107,24 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
   const [draft, setDraft] = useState("");
   const [errorText, setErrorText] = useState<string | null>(null);
 
+  // Typewriter cursor: how many characters of the *last* assistant
+  // message are currently rendered. Bumped on a timer (see effect
+  // below); reset to 0 whenever a fresh assistant turn starts.
+  const [typedLen, setTypedLen] = useState(0);
+  const currentAssistantIdRef = useRef<string | null>(null);
+
   const abortRef = useRef<AbortController | null>(null);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
 
-  // Autoscroll to the newest message on every update. ``behavior:
-  // "instant"`` because the stream lands in tight bursts and smooth
-  // scroll animations end up chasing their own tail.
+  // Autoscroll to the newest content on every update. ``instant``
+  // because the stream lands in tight bursts and smooth scroll
+  // animations end up chasing their own tail.
   useEffect(() => {
     const el = scrollerRef.current;
     if (el) {
       el.scrollTop = el.scrollHeight;
     }
-  }, [messages, tools, streaming]);
+  }, [messages, tools, streaming, typedLen]);
 
   useEffect(() => {
     // Always clean up the fetch abort controller if the component
@@ -120,6 +134,23 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
       abortRef.current?.abort();
     };
   }, []);
+
+  // Typewriter tick. Speed is adaptive: when we're far behind the
+  // target (big buffer of unreceived chars) we accelerate so the
+  // cursor doesn't crawl for 10 seconds after the model already
+  // finished. Near the tail we slow down for a natural "typing" feel.
+  useEffect(() => {
+    const last = messages[messages.length - 1];
+    if (!last || last.role !== "assistant") return;
+    if (typedLen >= last.body.length) return;
+    const remaining = last.body.length - typedLen;
+    const step = remaining > 400 ? 6 : remaining > 120 ? 3 : remaining > 40 ? 2 : 1;
+    const delay = remaining > 120 ? 10 : remaining > 40 ? 18 : 28;
+    const h = window.setTimeout(() => {
+      setTypedLen((n) => Math.min(last.body.length, n + step));
+    }, delay);
+    return () => window.clearTimeout(h);
+  }, [messages, typedLen]);
 
   const handleEvent = useCallback(
     (evt: StreamEvent) => {
@@ -137,6 +168,10 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
             );
             return [...trimmed, evt.message];
           });
+          // A new user turn means the next assistant reply starts
+          // fresh — reset the typewriter cursor so it begins at 0.
+          currentAssistantIdRef.current = null;
+          setTypedLen(0);
           return;
         }
         case "topic_shift": {
@@ -153,15 +188,14 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
               next.push({ ...last, body: last.body + evt.text });
               return next;
             }
-            return [
-              ...prev,
-              {
-                id: clientId(),
-                role: "assistant",
-                body: evt.text,
-                streaming: true,
-              },
-            ];
+            const fresh: Message = {
+              id: clientId(),
+              role: "assistant",
+              body: evt.text,
+              streaming: true,
+            };
+            currentAssistantIdRef.current = fresh.id;
+            return [...prev, fresh];
           });
           return;
         }
@@ -186,11 +220,31 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
           return;
         }
         case "assistant_message": {
-          // Replace the streaming placeholder with the canonical
-          // message so the ids stay stable across refreshes.
+          // Merge the canonical body into the existing streaming
+          // placeholder instead of replacing it with a brand-new
+          // message. This keeps the client id stable, so the
+          // typewriter's progress counter stays meaningful across
+          // the finalization boundary. We *don't* flip streaming
+          // off here — the cursor disappears on its own once the
+          // typewriter catches up to body.length.
           setMessages((prev) => {
-            const trimmed = prev.filter((m) => !m.streaming);
-            return [...trimmed, evt.message];
+            const idx = findLastIndex(
+              prev,
+              (m) => m.role === "assistant" && !!m.streaming,
+            );
+            if (idx < 0) {
+              return [
+                ...prev,
+                { ...evt.message, streaming: true },
+              ];
+            }
+            const next = prev.slice();
+            next[idx] = {
+              ...next[idx],
+              body: evt.message.body,
+              meta: evt.message.meta ?? next[idx].meta,
+            };
+            return next;
           });
           return;
         }
@@ -224,6 +278,8 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
       };
       setMessages((prev) => [...prev, optimistic]);
       setDraft("");
+      currentAssistantIdRef.current = null;
+      setTypedLen(0);
 
       const ac = new AbortController();
       abortRef.current = ac;
@@ -300,6 +356,8 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
       setMessages(fresh.messages ?? []);
       setTools([]);
       setShift(null);
+      currentAssistantIdRef.current = null;
+      setTypedLen(0);
     },
     [streaming, workspaceId],
   );
@@ -308,95 +366,108 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
     () => messages.filter((m) => m.role !== "system"),
     [messages],
   );
+  const lastAssistantIndex = useMemo(() => {
+    for (let i = visibleMessages.length - 1; i >= 0; i--) {
+      if (visibleMessages[i].role === "assistant") return i;
+    }
+    return -1;
+  }, [visibleMessages]);
 
   return (
-    <div className="flex h-[calc(100vh-16rem)] min-h-[32rem] flex-col">
-      <div className="flex items-center gap-3 border-b border-white/10 pb-3">
-        <h2 className="font-semibold text-white">{current.title}</h2>
-        <span className="text-[11px] text-white/45">
+    <div className="flex h-[calc(100vh-14rem)] min-h-[32rem] flex-col">
+      <div className="flex items-center gap-3 pb-2">
+        <h2 className="text-sm font-semibold text-white/90">{current.title}</h2>
+        <span className="text-[11px] text-white/35">
           {current.status === "active" ? "live" : "archived"} ·{" "}
           {visibleMessages.length} msg
         </span>
         <button
           type="button"
           onClick={() => resetConversation({})}
-          className="ml-auto rounded-md border border-white/15 bg-white/5 px-2 py-1 text-[11px] text-white/75 hover:border-white/30 hover:text-white"
+          className="ml-auto text-[11px] text-white/50 transition hover:text-white/90"
           disabled={streaming}
         >
-          New conversation
+          new conversation ↻
         </button>
       </div>
 
       {shift ? (
-        <div className="mt-3 flex items-start gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[12px] text-amber-100">
+        <div className="flex items-start gap-3 py-2 text-[12px] text-amber-200/90">
+          <span className="mt-0.5 h-1 w-1 shrink-0 rounded-full bg-amber-300" />
           <div className="flex-1">
-            <strong className="font-semibold">Topic shift detected.</strong>{" "}
-            {shift.reason ?? "Looks like you moved on."} Pack the current
-            thread into{" "}
-            <code className="rounded bg-black/30 px-1 py-0.5">
+            <strong className="font-semibold">Topic shift.</strong>{" "}
+            {shift.reason ?? "Looks like you moved on."} Pack this thread
+            into{" "}
+            <code className="text-amber-100">
               {shift.suggested_bucket_name ?? "a new bucket"}
-            </code>{" "}
-            and start fresh?
+            </code>
+            ?
+            <button
+              type="button"
+              onClick={() =>
+                resetConversation({
+                  bucketName: shift.suggested_bucket_name ?? undefined,
+                })
+              }
+              className="ml-2 font-semibold text-amber-100 underline-offset-2 hover:underline"
+            >
+              pack & start fresh
+            </button>
+            <button
+              type="button"
+              onClick={() => setShift(null)}
+              className="ml-2 text-white/40 hover:text-white/80"
+            >
+              dismiss
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={() =>
-              resetConversation({
-                bucketName: shift.suggested_bucket_name ?? undefined,
-              })
-            }
-            className="rounded-md border border-amber-400/60 bg-amber-400/10 px-2 py-1 text-[11px] font-semibold text-amber-100 hover:bg-amber-400/20"
-          >
-            Pack & start fresh
-          </button>
-          <button
-            type="button"
-            onClick={() => setShift(null)}
-            className="rounded-md border border-white/10 px-2 py-1 text-[11px] text-white/60 hover:text-white"
-          >
-            Dismiss
-          </button>
         </div>
       ) : null}
 
       <div
         ref={scrollerRef}
-        className="mt-3 flex-1 overflow-y-auto rounded-xl border border-white/10 bg-black/30 p-4"
+        className="flex-1 overflow-y-auto py-4"
       >
         {visibleMessages.length === 0 ? (
           <EmptyHint />
         ) : (
-          <ul className="space-y-4">
-            {visibleMessages.map((m) => (
-              <MessageBubble key={m.id} message={m} />
+          <div className="space-y-6">
+            {visibleMessages.map((m, i) => (
+              <MessageRow
+                key={m.id}
+                message={m}
+                animate={i === lastAssistantIndex}
+                typedLen={typedLen}
+              />
             ))}
-            {tools.length > 0 ? <ToolCallStrip rows={tools} /> : null}
-          </ul>
+            {tools.length > 0 ? <ToolCallTrail rows={tools} /> : null}
+          </div>
         )}
       </div>
 
       {errorText ? (
-        <div className="mt-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-[12px] text-rose-200">
-          {errorText}
-        </div>
+        <div className="py-2 text-[12px] text-rose-300">{errorText}</div>
       ) : null}
 
-      <form onSubmit={onSubmit} className="mt-3 flex items-end gap-2">
+      <form
+        onSubmit={onSubmit}
+        className="flex items-end gap-2 border-t border-white/5 pt-3"
+      >
         <textarea
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={onKeyDown}
           placeholder="Ask the agent. Enter to send, Shift-Enter for newline."
-          rows={3}
+          rows={2}
           disabled={streaming}
-          className="min-h-[64px] flex-1 resize-y rounded-md border border-white/10 bg-black/40 px-3 py-2 text-sm text-white placeholder-white/30 focus:border-aqua focus:outline-none disabled:opacity-50"
+          className="min-h-[48px] flex-1 resize-none bg-transparent px-1 py-2 text-sm text-white placeholder-white/25 focus:outline-none disabled:opacity-50"
         />
         <button
           type="submit"
           disabled={streaming || draft.trim().length === 0}
-          className="rounded-md bg-aqua px-4 py-2 text-sm font-semibold text-black hover:bg-aqua/90 disabled:cursor-not-allowed disabled:bg-aqua/40"
+          className="text-sm font-semibold text-aqua transition hover:text-aqua/80 disabled:cursor-not-allowed disabled:text-white/25"
         >
-          {streaming ? "…" : "Send"}
+          {streaming ? "…" : "send ↵"}
         </button>
       </form>
     </div>
@@ -405,10 +476,10 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
 
 function EmptyHint() {
   return (
-    <div className="flex h-full items-center justify-center text-center text-[12px] text-white/45">
+    <div className="flex h-full items-center justify-center text-center text-[12px] text-white/35">
       <div>
-        <p className="font-semibold text-white/70">Single window, one chat.</p>
-        <p className="mt-1">
+        <p className="font-semibold text-white/60">Single window, one chat.</p>
+        <p className="mt-1 max-w-sm">
           Ask the agent anything about this workspace. It can search the
           repo knowledge base, read files, create tickets, and file
           feedback against artifacts.
@@ -418,57 +489,70 @@ function EmptyHint() {
   );
 }
 
-function MessageBubble({ message }: { message: Message }) {
+function MessageRow({
+  message,
+  animate,
+  typedLen,
+}: {
+  message: Message;
+  animate: boolean;
+  typedLen: number;
+}) {
   const isUser = message.role === "user";
-  const align = isUser ? "justify-end" : "justify-start";
-  const bubble = isUser
-    ? "bg-aqua/15 border-aqua/30 text-white"
-    : "bg-white/[0.04] border-white/10 text-white/90";
+  const label = isUser ? "You" : message.role === "assistant" ? "Ship" : message.role;
+  const labelTint = isUser ? "text-aqua/80" : "text-lilac/80";
+
+  // For the last assistant message we render a prefix of the body
+  // based on the typewriter cursor. Everything else renders fully.
+  const display =
+    animate && message.role === "assistant"
+      ? message.body.slice(0, Math.max(0, Math.min(typedLen, message.body.length)))
+      : message.body;
+  const showCursor =
+    animate && message.role === "assistant" && typedLen < message.body.length;
+
   return (
-    <li className={`flex ${align}`}>
+    <div className="text-[14px] leading-relaxed">
       <div
-        className={`max-w-[85%] whitespace-pre-wrap rounded-xl border px-3 py-2 text-sm ${bubble}`}
+        className={`mb-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${labelTint}`}
       >
-        {message.body}
-        {message.streaming ? (
-          <span className="ml-1 inline-block h-3 w-2 animate-pulse rounded-sm bg-white/50 align-middle" />
+        {label}
+      </div>
+      <div className="whitespace-pre-wrap text-white/90">
+        {display}
+        {showCursor ? (
+          <span className="ml-0.5 inline-block h-[0.9em] w-[2px] animate-pulse bg-white/60 align-[-0.1em]" />
         ) : null}
       </div>
-    </li>
+    </div>
   );
 }
 
-function ToolCallStrip({ rows }: { rows: ToolCallRow[] }) {
+function ToolCallTrail({ rows }: { rows: ToolCallRow[] }) {
   return (
-    <li className="rounded-lg border border-white/5 bg-white/[0.02] p-2 text-[11px] text-white/60">
-      <div className="mb-1 font-semibold uppercase tracking-wider text-white/40">
-        Agent tools
-      </div>
-      <ul className="space-y-1">
-        {rows.map((t) => (
-          <li key={t.id} className="flex items-start gap-2">
-            <span
-              className={`mt-0.5 inline-block h-2 w-2 rounded-full ${
-                t.result
-                  ? t.result.ok
-                    ? "bg-emerald-400"
-                    : "bg-rose-400"
-                  : "animate-pulse bg-aqua"
-              }`}
-            />
-            <code className="flex-1 break-all text-white/80">
-              {t.name}({shortJson(t.args)})
-              {t.result && !t.result.ok ? (
-                <span className="ml-1 text-rose-300">
-                  {" "}
-                  → {t.result.error ?? "failed"}
-                </span>
-              ) : null}
-            </code>
-          </li>
-        ))}
-      </ul>
-    </li>
+    <div className="space-y-0.5 text-[11px] text-white/40">
+      {rows.map((t) => (
+        <div key={t.id} className="flex items-start gap-2">
+          <span
+            className={`mt-[7px] inline-block h-1 w-1 shrink-0 rounded-full ${
+              t.result
+                ? t.result.ok
+                  ? "bg-emerald-400/80"
+                  : "bg-rose-400/80"
+                : "animate-pulse bg-aqua/80"
+            }`}
+          />
+          <code className="flex-1 break-all font-mono">
+            {t.name}({shortJson(t.args)})
+            {t.result && !t.result.ok ? (
+              <span className="ml-1 text-rose-300/80">
+                → {t.result.error ?? "failed"}
+              </span>
+            ) : null}
+          </code>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -479,6 +563,13 @@ function shortJson(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function findLastIndex<T>(arr: T[], pred: (t: T) => boolean): number {
+  for (let i = arr.length - 1; i >= 0; i--) {
+    if (pred(arr[i])) return i;
+  }
+  return -1;
 }
 
 // ---------------------------------------------------------------------------
