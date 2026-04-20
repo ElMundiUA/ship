@@ -35,19 +35,28 @@ export async function POST(req: Request): Promise<Response> {
 
   let body: {
     workspace_id?: string;
+    /** Composer text — forwarded as backend ``ChatStreamIn.body``. */
     message?: string;
-    force_new_thread?: boolean;
+    /** Alias for ``message`` (matches ``ChatStreamIn`` field name). */
+    body?: string;
+    classify_shift?: boolean;
   } = {};
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "bad_json" }, { status: 400 });
   }
-  const { workspace_id, message, force_new_thread } = body;
+  const { workspace_id, message, body: bodyField, classify_shift } = body;
   if (!workspace_id || typeof workspace_id !== "string") {
     return NextResponse.json({ error: "workspace_id_required" }, { status: 400 });
   }
-  if (!message || typeof message !== "string" || message.trim().length === 0) {
+  const text =
+    typeof message === "string" && message.trim().length > 0
+      ? message.trim()
+      : typeof bodyField === "string" && bodyField.trim().length > 0
+        ? bodyField.trim()
+        : "";
+  if (!text) {
     return NextResponse.json({ error: "message_required" }, { status: 400 });
   }
 
@@ -60,7 +69,10 @@ export async function POST(req: Request): Promise<Response> {
         accept: "text/event-stream",
         authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({ message, force_new_thread: !!force_new_thread }),
+      body: JSON.stringify({
+        body: text,
+        ...(typeof classify_shift === "boolean" ? { classify_shift } : {}),
+      }),
       // Disable any fetch cache — this is a live stream.
       cache: "no-store",
     },
