@@ -198,7 +198,3 @@ function renderUnavailable(err: unknown) {
     </AppShell>
   );
 }
-
-// Re-exported for the client row component.
-export type { ApiArtifactFeedback };
-export { Badge };
