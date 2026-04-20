@@ -36,6 +36,8 @@ import {
   type KeyboardEvent,
 } from "react";
 
+import { ChatMarkdown } from "./chat-markdown";
+
 type Role = "user" | "assistant" | "system" | "tool";
 
 type Message = {
@@ -77,11 +79,21 @@ type StreamEvent =
   | { type: "user_message"; message: Message }
   | { type: "topic_shift"; shift: TopicShift }
   | { type: "delta"; text: string }
-  | { type: "tool_call"; id: string; name: string; args: Record<string, unknown> }
+  | {
+      type: "tool_call";
+      id: string;
+      name: string;
+      /** Backend SSE field — same as ``args``. */
+      args?: Record<string, unknown>;
+      arguments?: Record<string, unknown>;
+    }
   | {
       type: "tool_result";
       id: string;
-      ok: boolean;
+      name?: string;
+      /** Raw JSON string from the toolbox (success payload or ``{"error":...}``). */
+      output?: string;
+      ok?: boolean;
       result?: unknown;
       error?: string;
     }
@@ -200,19 +212,24 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
           return;
         }
         case "tool_call": {
+          const args =
+            evt.args ??
+            evt.arguments ??
+            ({} as Record<string, unknown>);
           setTools((prev) => [
             ...prev,
-            { id: evt.id, name: evt.name, args: evt.args },
+            { id: evt.id, name: evt.name, args },
           ]);
           return;
         }
         case "tool_result": {
+          const normalized = normalizeToolResult(evt);
           setTools((prev) =>
             prev.map((t) =>
               t.id === evt.id
                 ? {
                     ...t,
-                    result: { ok: evt.ok, result: evt.result, error: evt.error },
+                    result: normalized,
                   }
                 : t,
             ),
@@ -250,11 +267,13 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
         }
         case "end": {
           setStreaming(false);
+          setTools([]);
           return;
         }
         case "error": {
           setErrorText(evt.detail ?? evt.error ?? "Agent error");
           setStreaming(false);
+          setTools([]);
           return;
         }
       }
@@ -268,6 +287,7 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
       if (!trimmed || streaming) return;
       setErrorText(null);
       setStreaming(true);
+      setTools([]);
 
       // Optimistic user message so the textarea feels responsive.
       const optimistic: Message = {
@@ -510,6 +530,8 @@ function MessageRow({
       : message.body;
   const showCursor =
     animate && message.role === "assistant" && typedLen < message.body.length;
+  const useMarkdown =
+    !showCursor && (message.role === "assistant" || message.role === "user");
 
   return (
     <div className="text-[14px] leading-relaxed">
@@ -518,12 +540,16 @@ function MessageRow({
       >
         {label}
       </div>
-      <div className="whitespace-pre-wrap text-white/90">
-        {display}
-        {showCursor ? (
-          <span className="ml-0.5 inline-block h-[0.9em] w-[2px] animate-pulse bg-white/60 align-[-0.1em]" />
-        ) : null}
-      </div>
+      {useMarkdown ? (
+        <ChatMarkdown text={display} />
+      ) : (
+        <div className="whitespace-pre-wrap text-white/90">
+          {display}
+          {showCursor ? (
+            <span className="ml-0.5 inline-block h-[0.9em] w-[2px] animate-pulse bg-white/60 align-[-0.1em]" />
+          ) : null}
+        </div>
+      )}
     </div>
   );
 }
@@ -544,10 +570,14 @@ function ToolCallTrail({ rows }: { rows: ToolCallRow[] }) {
           />
           <code className="flex-1 break-all font-mono">
             {t.name}({shortJson(t.args)})
-            {t.result && !t.result.ok ? (
-              <span className="ml-1 text-rose-300/80">
-                → {t.result.error ?? "failed"}
-              </span>
+            {t.result ? (
+              t.result.ok ? (
+                <span className="ml-1 text-emerald-400/70">→ ok</span>
+              ) : (
+                <span className="ml-1 text-rose-300/80">
+                  → {t.result.error ?? "failed"}
+                </span>
+              )
             ) : null}
           </code>
         </div>
@@ -562,6 +592,38 @@ function shortJson(value: unknown): string {
     return s.length > 120 ? s.slice(0, 117) + "…" : s;
   } catch {
     return String(value);
+  }
+}
+
+function normalizeToolResult(evt: {
+  ok?: boolean;
+  result?: unknown;
+  error?: string;
+  output?: string;
+}): { ok: boolean; result?: unknown; error?: string } {
+  if (typeof evt.ok === "boolean" && (evt.error !== undefined || evt.result !== undefined)) {
+    return { ok: evt.ok, result: evt.result, error: evt.error };
+  }
+  const raw = evt.output;
+  if (typeof raw !== "string") {
+    return { ok: true, result: raw };
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      !Array.isArray(parsed) &&
+      "error" in parsed
+    ) {
+      return {
+        ok: false,
+        error: String((parsed as { error?: unknown }).error ?? "failed"),
+      };
+    }
+    return { ok: true, result: parsed };
+  } catch {
+    return { ok: true, result: raw };
   }
 }
 
