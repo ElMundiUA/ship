@@ -57,6 +57,7 @@ const ALL_NAV: { section: string; items: (NavItem & { stub?: boolean })[] }[] = 
   {
     section: "Observe",
     items: [
+      { href: "/metrics", label: "Metrics", icon: <DotIcon /> },
       { href: "/effectiveness", label: "Effectiveness", icon: <DotIcon />, stub: true },
       { href: "/telemetry", label: "Telemetry", icon: <DotIcon />, stub: true },
     ],
