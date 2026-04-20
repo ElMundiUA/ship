@@ -517,3 +517,225 @@ async def get_code_map(
         files=files[:_CODE_MAP_FILE_CAP],
         truncated=truncated,
     )
+
+
+# ---------------------------------------------------------------------------
+# Multi-preset bundle install
+# ---------------------------------------------------------------------------
+
+
+class BundleInstallIn(BaseModel):
+    """Body for ``POST /workspaces/{ws}/repos/{repo_id}/install_bundle``."""
+
+    # Comma/array of preset ids to bundle together. ``None`` means
+    # "use the repo's persisted preset"; at least one valid preset
+    # must resolve after expansion or the request fails 422.
+    presets: list[str] | None = Field(
+        default=None,
+        description=(
+            "Preset ids to bundle (e.g. ['web-app']). Defaults to the "
+            "repo's persisted preset; pass multiple to combine."
+        ),
+    )
+
+
+class BundleInstallOut(BaseModel):
+    pr_url: str
+    pr_number: int
+    branch: str
+    files: list[str]
+    presets: list[str]
+
+
+@router.post("/{repo_id}/install_bundle", response_model=BundleInstallOut)
+async def install_bundle(
+    workspace_id: uuid.UUID,
+    repo_id: uuid.UUID,
+    payload: BundleInstallIn | None = None,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> BundleInstallOut:
+    """Open a single PR carrying every workflow + ``.ship/`` file a preset needs.
+
+    Admin-only. Combines one or more presets into a single
+    ``ship/bundle-<label>-<unix>`` PR so the operator reviews + merges
+    *once* instead of per-lane. On merge, the knowledge-gathering
+    webhook takes over and auto-dispatches ``tech_debt`` / ``code_map``
+    (see ``auto_dispatch_knowledge_pipelines``).
+
+    Returns ``412`` with a structured code when the repo has no
+    resolvable preset or the bundle comes out empty (preset maps only
+    to YAML-less lanes — currently ``code_map`` alone).
+    """
+    # Local imports keep the catalog + github-workflows modules out of
+    # the hot path for the code-map / availability endpoints that
+    # don't need them.
+    from backend.app.db.models.integrations import GitHubInstallation
+    from backend.app.integrations.github.workflows import (
+        WorkflowDispatchError,
+        commit_bundle_pr,
+    )
+    from backend.app.services import catalog as catalog_service
+
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+
+    repo_row = (
+        await session.execute(
+            select(WorkspaceRepo).where(
+                WorkspaceRepo.id == repo_id,
+                WorkspaceRepo.workspace_id == workspace_id,
+            )
+        )
+    ).scalars().first()
+    if repo_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Repo not found in this workspace.",
+        )
+
+    install_row = (
+        await session.execute(
+            select(GitHubInstallation).where(
+                GitHubInstallation.id == repo_row.installation_id
+            )
+        )
+    ).scalars().first()
+    if install_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_412_PRECONDITION_FAILED,
+            detail={
+                "code": "github_app_missing",
+                "message": (
+                    "Ship's GitHub App isn't installed for the workspace. "
+                    "Reconnect it before opening a bundle PR."
+                ),
+            },
+        )
+
+    # Resolve the effective preset list. Prefer the caller's explicit
+    # list, else fall back to the repo's persisted preset. Validate
+    # every id against ``KNOWN_PRESETS`` so a stale UI can't sneak
+    # unknown values into the YAML resolver.
+    requested = payload.presets if payload and payload.presets else None
+    if requested is None:
+        requested = [repo_row.preset] if repo_row.preset else []
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for pid in requested:
+        pid = pid.strip()
+        if not pid or pid in seen:
+            continue
+        if pid not in KNOWN_PRESETS:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Unknown preset {pid!r}. Expected one of: "
+                    f"{sorted(KNOWN_PRESETS)}"
+                ),
+            )
+        cleaned.append(pid)
+        seen.add(pid)
+    if not cleaned:
+        raise HTTPException(
+            status_code=status.HTTP_412_PRECONDITION_FAILED,
+            detail={
+                "code": "preset_required",
+                "message": (
+                    "Pass at least one preset or set it on the repo before "
+                    "opening a bundle PR."
+                ),
+            },
+        )
+
+    # Collect the per-preset bundles, de-duplicating on path — two
+    # presets can legitimately share a workflow (e.g. web-app +
+    # api-backend both ship pr-and-ci-gate) and the second copy
+    # would break the tree create.
+    seen_paths: set[str] = set()
+    files: list[tuple[str, str]] = []
+    for pid in cleaned:
+        for path, content in catalog_service.preset_bundle_files(
+            pid, repo_full_name=repo_row.full_name
+        ):
+            # ``.ship/config.yml`` gets rebuilt per preset but the
+            # bundle needs exactly one — last preset wins, which is
+            # fine since config.yml just records the label.
+            if path == ".ship/config.yml":
+                files = [
+                    (p, c) for (p, c) in files if p != ".ship/config.yml"
+                ]
+                seen_paths.discard(path)
+            if path in seen_paths:
+                continue
+            files.append((path, content))
+            seen_paths.add(path)
+
+    if not files:
+        raise HTTPException(
+            status_code=status.HTTP_412_PRECONDITION_FAILED,
+            detail={
+                "code": "empty_bundle",
+                "message": (
+                    f"Preset(s) {cleaned!r} resolved to zero installable files. "
+                    "Likely the preset only declares YAML-less lanes today."
+                ),
+            },
+        )
+
+    return_url = (
+        f"{settings.console_url.rstrip('/')}/?ws={workspace_id}"
+        f"&installed=bundle&reason=back_from_pr"
+    )
+    branch_label = "-".join(cleaned)
+    try:
+        result = await commit_bundle_pr(
+            repo_row,
+            install_row,
+            files=files,
+            title=f"Ship: install {', '.join(cleaned)} preset bundle",
+            branch_label=branch_label,
+            pr_body_header=(
+                f"This PR wires Ship into this repo by installing every "
+                f"workflow the selected preset(s) need in **one merge**:\n\n"
+                f"**Presets**: {', '.join('`' + p + '`' for p in cleaned)}"
+            ),
+            settings=settings,
+            return_url=return_url,
+        )
+    except WorkflowDispatchError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "code": "install_bundle_failed",
+                "upstream_status": exc.status_code,
+                "message": exc.message[:512],
+            },
+        ) from exc
+
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=auth.user.id,
+            actor_token_id=auth.token.id if auth.token else None,
+            action="repo.install_bundle",
+            target_kind="workspace_repo",
+            target_id=str(repo_row.id),
+            payload={
+                "presets": cleaned,
+                "files": [p for p, _ in files],
+                "pr_number": result.pr_number,
+                "pr_url": result.pr_url,
+                "branch": result.branch,
+            },
+        )
+    )
+    await session.flush()
+
+    return BundleInstallOut(
+        pr_url=result.pr_url,
+        pr_number=result.pr_number,
+        branch=result.branch,
+        files=[p for p, _ in files],
+        presets=cleaned,
+    )

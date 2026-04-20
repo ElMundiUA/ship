@@ -62,6 +62,29 @@ const RUN_REASONS: Record<string, { tone: BadgeTone; label: string }> = {
   },
   dispatch_failed: { tone: "err", label: "GitHub rejected the dispatch — see audit log." },
   installed: { tone: "ok", label: "Install PR opened — merge it to unlock Run now." },
+  bundle_installed: {
+    tone: "ok",
+    label:
+      "Bundle PR opened — merging it wires every preset lane in one go, then knowledge pipelines auto-fire.",
+  },
+  bundle_preset_required: {
+    tone: "warn",
+    label:
+      "Pick a preset on the repo first (or add one via the onboarding wizard) so we know which workflows to install.",
+  },
+  bundle_empty_bundle: {
+    tone: "warn",
+    label:
+      "Selected preset has no installable workflows yet — they're still catalog-only. Fall back to per-lane Install for now.",
+  },
+  bundle_invalid_preset: {
+    tone: "err",
+    label: "Unknown preset id. The picker only accepts presets in the catalog.",
+  },
+  bundle_upstream: {
+    tone: "err",
+    label: "GitHub refused the bundle PR — check the App permissions.",
+  },
   back_from_pr: {
     tone: "ok",
     label:
@@ -172,7 +195,11 @@ export function DashboardLive({
         />
       </section>
 
-      <RepoStatusStrip repos={repos} pipelines={data.pipelines} />
+      <RepoStatusStrip
+        repos={repos}
+        pipelines={data.pipelines}
+        workspaceId={workspaceId}
+      />
 
       <RecommendedActions
         pipelines={data.pipelines}
@@ -323,9 +350,11 @@ function pipelineById(rows: ApiPipeline[]): Record<string, ApiPipeline> {
 function RepoStatusStrip({
   repos,
   pipelines,
+  workspaceId,
 }: {
   repos: ApiActivatedRepo[];
   pipelines: ApiPipeline[];
+  workspaceId: string;
 }) {
   if (repos.length === 0) return null;
   const byRepo = new Map<string, ApiPipeline[]>();
@@ -433,6 +462,27 @@ function RepoStatusStrip({
                   </dd>
                 </div>
               </dl>
+
+              {!setupComplete && (
+                <form
+                  action="/api/dashboard/install-bundle"
+                  method="POST"
+                  className="flex items-center justify-between gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2"
+                >
+                  <input type="hidden" name="ws" value={workspaceId} />
+                  <input type="hidden" name="repo_id" value={repo.id} />
+                  <div className="min-w-0 text-[11px] leading-snug text-white/65">
+                    One PR adds every workflow + <code>.ship/</code> so lanes
+                    come live at once.
+                  </div>
+                  <button
+                    type="submit"
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-3 py-1 text-[11px] font-bold text-ink shadow-glow transition hover:brightness-110"
+                  >
+                    Install everything →
+                  </button>
+                </form>
+              )}
 
               <div className="mt-auto flex items-center justify-between text-[11px] font-semibold text-white/55">
                 <Link

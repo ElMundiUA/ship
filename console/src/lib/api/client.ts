@@ -379,6 +379,42 @@ export function activateRepos(
   );
 }
 
+/** Response from ``POST /workspaces/{ws}/repos/{id}/install_bundle``. */
+export interface ApiInstallBundle {
+  pr_url: string;
+  pr_number: number;
+  branch: string;
+  files: string[];
+  presets: string[];
+}
+
+/**
+ * Opens one PR that carries every workflow YAML + ``.ship/config.yml``
+ * the selected preset(s) need. Replaces 3-4 sequential single-lane
+ * ``installPipelineWorkflow`` calls with a single "Install everything"
+ * click. Pass ``presets`` to override the repo's persisted preset.
+ */
+export function installBundle(
+  workspaceId: string,
+  repoId: string,
+  options: { presets?: string[]; token?: string } = {},
+): Promise<ApiInstallBundle> {
+  const body: Record<string, unknown> = {};
+  if (options.presets && options.presets.length > 0) {
+    body.presets = options.presets;
+  }
+  return apiFetch<ApiInstallBundle>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(
+      repoId,
+    )}/install_bundle`,
+    {
+      method: "POST",
+      body: Object.keys(body).length === 0 ? undefined : body,
+      token: options.token,
+    },
+  );
+}
+
 // --- Pipelines + dashboard (Day-3 main app surface) -----------------------
 
 /**
