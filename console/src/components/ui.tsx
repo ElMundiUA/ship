@@ -178,6 +178,49 @@ export function ButtonDanger({
   );
 }
 
+/**
+ * iOS-style toggle switch used for enable/disable on pipelines.
+ *
+ * The outer element must be a ``<form method="POST">``: the button
+ * itself is the single form submit so we keep the "works without JS"
+ * property (the dashboard is deliberately form-driven). The visual
+ * piece is just CSS against ``data-on`` — no JavaScript needed.
+ */
+export function ToggleSwitch({
+  checked,
+  label,
+  disabled,
+}: {
+  checked: boolean;
+  label: string;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="submit"
+      disabled={disabled}
+      data-on={checked ? "true" : "false"}
+      aria-pressed={checked}
+      aria-label={label}
+      title={label}
+      className={cn(
+        "group relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border transition-colors",
+        checked
+          ? "border-aqua/50 bg-aqua/30"
+          : "border-white/15 bg-white/[0.06] hover:bg-white/[0.09]",
+        disabled && "cursor-not-allowed opacity-40",
+      )}
+    >
+      <span
+        className={cn(
+          "inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform",
+          checked ? "translate-x-6" : "translate-x-1",
+        )}
+      />
+    </button>
+  );
+}
+
 export function StatTile({
   label,
   value,

@@ -151,6 +151,7 @@ function renderLiveDashboard(ctx: LiveContext, params: SearchParams) {
         workspaceName={workspace.name}
         workspaceSlug={workspace.slug}
         data={data}
+        repos={repos}
         banner={banner}
       />
     </AppShell>

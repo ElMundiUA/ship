@@ -2,13 +2,14 @@ import Link from "next/link";
 
 import {
   Badge,
-  ButtonGhost,
   Card,
   CardHeader,
   StatTile,
+  ToggleSwitch,
   type BadgeTone,
 } from "@/components/ui";
 import type {
+  ApiActivatedRepo,
   ApiDashboard,
   ApiDashboardPullRequest,
   ApiDashboardWorkflowRun,
@@ -114,12 +115,14 @@ export function DashboardLive({
   workspaceName,
   workspaceSlug,
   data,
+  repos,
   banner,
 }: {
   workspaceId: string;
   workspaceName: string;
   workspaceSlug: string;
   data: ApiDashboard;
+  repos: ApiActivatedRepo[];
   banner?: { kind: string; reason: string; detail?: string };
 }) {
   const bannerInfo = banner ? RUN_REASONS[banner.reason] ?? null : null;
@@ -168,6 +171,8 @@ export function DashboardLive({
           hint="Manual + webhook triggers"
         />
       </section>
+
+      <RepoStatusStrip repos={repos} pipelines={data.pipelines} />
 
       <RecommendedActions
         pipelines={data.pipelines}
@@ -306,6 +311,149 @@ function pipelineById(rows: ApiPipeline[]): Record<string, ApiPipeline> {
  * needs an Install-PR or is a Phase-2 preset is a navigation away,
  * not in the operator's face.
  */
+/**
+ * Per-repo "Ship status" strip. For each activated repo we roll up:
+ *
+ *   preset · pipelines enabled/total · workflows installed · last run.
+ *
+ * This answers the operator's first question on the dashboard —
+ * "is Ship actually live on my repo?" — without making them scan the
+ * whole Recommended-actions grid or jump to ``/pipelines``.
+ */
+function RepoStatusStrip({
+  repos,
+  pipelines,
+}: {
+  repos: ApiActivatedRepo[];
+  pipelines: ApiPipeline[];
+}) {
+  if (repos.length === 0) return null;
+  const byRepo = new Map<string, ApiPipeline[]>();
+  for (const p of pipelines) {
+    if (!p.repo_id) continue;
+    const bucket = byRepo.get(p.repo_id) ?? [];
+    bucket.push(p);
+    byRepo.set(p.repo_id, bucket);
+  }
+  return (
+    <section className="mt-8">
+      <div className="mb-3 flex items-end justify-between gap-3">
+        <div>
+          <h3 className="font-display text-base font-bold text-white">
+            Ship status per repo
+          </h3>
+          <p className="mt-1 text-xs text-white/55">
+            Roll-up of presets, installed workflows, and the most recent run
+            for every activated repository.
+          </p>
+        </div>
+      </div>
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {repos.map((repo) => {
+          const laneRows = byRepo.get(repo.id) ?? [];
+          const totalLanes = laneRows.length;
+          const enabledLanes = laneRows.filter((p) => p.enabled).length;
+          const installedLanes = laneRows.filter(
+            (p) => p.workflow_installed === true,
+          ).length;
+          const needsInstallLanes = laneRows.filter(
+            (p) => pipelineCardState(p) === "needs-install",
+          ).length;
+          const lastRunTs = laneRows.reduce<string | null>((acc, p) => {
+            if (!p.last_run_at) return acc;
+            if (!acc) return p.last_run_at;
+            return p.last_run_at > acc ? p.last_run_at : acc;
+          }, null);
+          const lastStatus = (() => {
+            if (!lastRunTs) return null;
+            const hit = laneRows.find((p) => p.last_run_at === lastRunTs);
+            return hit?.last_run_status ?? null;
+          })();
+
+          const setupComplete =
+            totalLanes > 0 && installedLanes === totalLanes;
+          const tone: BadgeTone = setupComplete
+            ? "ok"
+            : needsInstallLanes > 0
+              ? "warn"
+              : "err";
+          const toneLabel = setupComplete
+            ? "setup complete"
+            : needsInstallLanes > 0
+              ? `${needsInstallLanes} install pending`
+              : "no lanes yet";
+
+          return (
+            <Card key={repo.id} className="flex flex-col gap-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="truncate font-mono text-sm font-semibold text-white">
+                    {repo.full_name}
+                  </p>
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                    <Badge tone="neutral">
+                      {repo.preset ?? "adoption-minimum"}
+                    </Badge>
+                    <Badge tone={tone}>{toneLabel}</Badge>
+                    {repo.private && <Badge tone="neutral">private</Badge>}
+                  </div>
+                </div>
+                <a
+                  href={repo.html_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="shrink-0 text-[11px] font-semibold text-white/55 hover:text-aqua"
+                >
+                  github →
+                </a>
+              </div>
+
+              <dl className="grid grid-cols-3 gap-2 text-[11px] uppercase tracking-wide text-white/45">
+                <div>
+                  <dt>Lanes</dt>
+                  <dd className="mt-0.5 text-sm font-semibold text-white/85">
+                    {enabledLanes}/{totalLanes}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Workflows</dt>
+                  <dd className="mt-0.5 text-sm font-semibold text-white/85">
+                    {installedLanes}/{totalLanes}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Last run</dt>
+                  <dd className="mt-0.5 text-sm font-semibold text-white/85">
+                    {lastRunTs ? relativeTime(lastRunTs) : "—"}
+                    {lastStatus && (
+                      <span className="ml-1 text-[10px] font-semibold text-white/55">
+                        · {lastStatus}
+                      </span>
+                    )}
+                  </dd>
+                </div>
+              </dl>
+
+              <div className="mt-auto flex items-center justify-between text-[11px] font-semibold text-white/55">
+                <Link
+                  href={`/pipelines?repo=${encodeURIComponent(repo.full_name)}`}
+                  className="hover:text-aqua"
+                >
+                  Open lanes →
+                </Link>
+                <span>
+                  activated{" "}
+                  {repo.activated_at ? relativeTime(repo.activated_at) : "?"}
+                </span>
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function RecommendedActions({
   pipelines,
   workspaceId,
@@ -480,9 +628,13 @@ function PipelineCard({
             name="enabled"
             value={pipeline.enabled ? "off" : "on"}
           />
-          <ButtonGhost type="submit">
-            {pipeline.enabled ? "Disable" : "Enable"}
-          </ButtonGhost>
+          <ToggleSwitch
+            checked={pipeline.enabled}
+            label={pipeline.enabled ? "Disable pipeline" : "Enable pipeline"}
+          />
+          <span className="text-[11px] font-semibold text-white/55">
+            {pipeline.enabled ? "enabled" : "disabled"}
+          </span>
         </form>
 
         <PipelineActionButton
