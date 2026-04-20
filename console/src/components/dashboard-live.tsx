@@ -44,7 +44,8 @@ const RUN_REASONS: Record<string, { tone: BadgeTone; label: string }> = {
   },
   precondition_pipeline_not_bound: {
     tone: "warn",
-    label: "Pipeline isn't tied to a repo — re-activate one in the Repos tab.",
+    label:
+      "No activated repo to attach this pipeline to. Open the wizard and activate at least one repo, then try again.",
   },
   precondition_kind_not_supported_yet: {
     tone: "neutral",
@@ -66,7 +67,8 @@ const RUN_REASONS: Record<string, { tone: BadgeTone; label: string }> = {
   },
   install_pipeline_not_bound: {
     tone: "warn",
-    label: "Bind the pipeline to a repo first.",
+    label:
+      "No activated repo yet — finish the onboarding wizard (or activate a repo in the Repos tab), then hit Install again.",
   },
   install_github_app_missing: {
     tone: "err",

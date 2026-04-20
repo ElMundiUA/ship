@@ -52,6 +52,7 @@ from backend.app.db.models.integrations import GitHubInstallation, WorkspaceRepo
 from backend.app.db.models.pipelines import Pipeline, PipelineRun
 from backend.app.db.models.tenancy import AuditLog
 from backend.app.db.session import get_session
+from backend.app.integrations.github.app_auth import GitHubAppMisconfigured
 from backend.app.integrations.github.workflows import (
     StarterWorkflowPR,
     WorkflowDispatchError,
@@ -355,6 +356,50 @@ async def _load_pipeline(
     return row
 
 
+async def _auto_bind_pipeline_to_repo(
+    session: AsyncSession, pipeline: Pipeline
+) -> WorkspaceRepo | None:
+    """If the workspace has exactly one GH-backed repo, bind and return it.
+
+    Phase-3 convenience: legacy pipelines (seeded before Day-4 added
+    the binding FK) or pipelines created under edge-cases can have
+    ``repo_id=None``. In the common case — a single activated repo —
+    the "right" binding is obvious and asking the user "pick a repo"
+    is just friction on a pilot with one-repo tenants. We bind
+    in-place and let the caller re-check. For workspaces with multiple
+    activated repos the answer isn't obvious so we return ``None`` and
+    the 412 picker flow kicks in.
+
+    Idempotent (caller already knows ``pipeline.repo_id`` is ``None``).
+    The mutation is flushed so subsequent ``session.get`` by callers
+    in the same request see the new binding.
+    """
+    stmt = (
+        select(WorkspaceRepo)
+        .where(WorkspaceRepo.workspace_id == pipeline.workspace_id)
+        .where(WorkspaceRepo.installation_id.is_not(None))
+        .order_by(WorkspaceRepo.full_name)
+    )
+    rows = (await session.execute(stmt)).scalars().all()
+    if len(rows) != 1:
+        return None
+    repo = rows[0]
+    pipeline.repo_id = repo.id
+    # Pin ``updated_at`` client-side — same rationale as
+    # :func:`enrich_pipelines` (avoid the ORM expiring the attribute
+    # after the onupdate server-default fires).
+    pipeline.updated_at = datetime.now(timezone.utc)
+    await session.flush()
+    logger.info(
+        "auto-bound pipeline pipeline_id=%s workspace_id=%s repo_id=%s (%s)",
+        pipeline.id,
+        pipeline.workspace_id,
+        repo.id,
+        repo.full_name,
+    )
+    return repo
+
+
 async def _load_repo_and_install(
     session: AsyncSession, pipeline: Pipeline
 ) -> tuple[WorkspaceRepo, GitHubInstallation]:
@@ -364,25 +409,64 @@ async def _load_repo_and_install(
     same precondition story. The 412s carry a ``code`` field the
     console can switch on to decide which CTA to show (re-bind, install
     workflow, reinstall the App).
+
+    If the pipeline row carries no ``repo_id`` yet (legacy seed, or
+    first run before the Day-4 backfill caught up) we try to
+    auto-bind to the workspace's sole activated repo. Most pilot
+    tenants have exactly one repo, and the "obvious" binding there is
+    the friction we want to avoid. Only when auto-bind can't decide
+    (zero or multiple repos) do we return ``pipeline_not_bound``.
     """
     if pipeline.repo_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_412_PRECONDITION_FAILED,
-            detail={
-                "code": "pipeline_not_bound",
-                "message": (
-                    "Pipeline isn't bound to a repo yet. Re-activate a repo "
-                    "in the Repos tab to bind it."
-                ),
-            },
-        )
+        repo = await _auto_bind_pipeline_to_repo(session, pipeline)
+        if repo is None:
+            raise HTTPException(
+                status_code=status.HTTP_412_PRECONDITION_FAILED,
+                detail={
+                    "code": "pipeline_not_bound",
+                    "message": (
+                        "No activated repo to bind this pipeline to. "
+                        "Open the onboarding wizard and activate a repo, "
+                        "or pick one from the Repos tab."
+                    ),
+                },
+            )
+        # Auto-bound path — fall through using the freshly-resolved repo
+        # instead of doing a redundant session.get.
+        if repo.installation_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_412_PRECONDITION_FAILED,
+                detail={
+                    "code": "github_app_missing",
+                    "message": (
+                        "Repo isn't backed by a GitHub App installation. "
+                        "Reinstall the Ship App."
+                    ),
+                },
+            )
+        install = await session.get(GitHubInstallation, repo.installation_id)
+        if install is None or install.suspended_at is not None:
+            raise HTTPException(
+                status_code=status.HTTP_412_PRECONDITION_FAILED,
+                detail={
+                    "code": "github_app_missing",
+                    "message": (
+                        "GitHub App installation is suspended or gone. "
+                        "Reinstall the Ship App."
+                    ),
+                },
+            )
+        return repo, install
     repo = await session.get(WorkspaceRepo, pipeline.repo_id)
     if repo is None:
         raise HTTPException(
             status_code=status.HTTP_412_PRECONDITION_FAILED,
             detail={
                 "code": "pipeline_not_bound",
-                "message": "Bound repo no longer exists. Re-activate a repo.",
+                "message": (
+                    "Bound repo no longer exists. Re-activate a repo "
+                    "from the wizard."
+                ),
             },
         )
     if repo.installation_id is None:
@@ -437,6 +521,43 @@ async def enrich_pipelines(
     swallowed per (install, repo) pair so one bad GitHub call doesn't
     blank an unrelated card.
     """
+    # Phase-3 convenience: before the probe, opportunistically bind any
+    # still-unbound pipelines to the workspace's sole activated repo.
+    # This is the same rule the dispatcher applies on Run-now/Install,
+    # but doing it at dashboard-load time means the UI renders
+    # "Install workflow PR" instead of a confusing "Coming with presets"
+    # badge on refresh. Only touches pipelines that share the same
+    # workspace_id (the caller already filtered by workspace).
+    unbound = [p for p in pipelines if p.repo_id is None]
+    if unbound:
+        now_utc = datetime.now(timezone.utc)
+        workspace_ids = {p.workspace_id for p in unbound}
+        mutated = False
+        for workspace_id in workspace_ids:
+            repo_candidates = (
+                await session.execute(
+                    select(WorkspaceRepo)
+                    .where(WorkspaceRepo.workspace_id == workspace_id)
+                    .where(WorkspaceRepo.installation_id.is_not(None))
+                    .order_by(WorkspaceRepo.full_name)
+                )
+            ).scalars().all()
+            if len(repo_candidates) != 1:
+                continue
+            default_repo = repo_candidates[0]
+            for pipeline in unbound:
+                if pipeline.workspace_id == workspace_id:
+                    pipeline.repo_id = default_repo.id
+                    # Set ``updated_at`` client-side so the server-side
+                    # ``onupdate=now()`` doesn't expire the attribute on
+                    # the ORM row — otherwise the sync ``_row_to_out``
+                    # below tries to lazy-reload it and explodes in the
+                    # async context.
+                    pipeline.updated_at = now_utc
+                    mutated = True
+        if mutated:
+            await session.flush()
+
     repo_ids = {r.repo_id for r in pipelines if r.repo_id is not None}
     repos: dict[uuid.UUID, WorkspaceRepo] = {}
     if repo_ids:
@@ -477,7 +598,13 @@ async def enrich_pipelines(
                 workflow_sets[cache_key] = await list_repo_workflows(
                     repo, install, settings=settings
                 )
-            except (WorkflowDispatchError, httpx.HTTPError) as exc:
+            except (
+                WorkflowDispatchError,
+                httpx.HTTPError,
+                GitHubAppMisconfigured,
+            ) as exc:
+                # Probe is best-effort — dashboard should still render if
+                # GitHub is unreachable or the App creds went missing.
                 logger.warning(
                     "workflow probe failed repo=%s err=%s", repo.full_name, exc
                 )
