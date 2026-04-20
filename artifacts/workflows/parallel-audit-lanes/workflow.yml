@@ -1,12 +1,6 @@
 name: Ship · Parallel audit lanes
 # Day-4 Phase-2 starter workflow for the `tech_debt` pipeline kind.
-# Runs weekly (Monday 06:00 UTC) and via dashboard "Run now". Emits a
-# tech-debt report artefact + a Ship callback so the dashboard knows
-# whether the last audit pass went green. Replace the individual
-# audit steps with real lane bodies (SBOM, dep scan, dead-code, test
-# coverage, etc.). Keep the fan-out pattern: each lane exports its own
-# `lane.<name>.status` output so the aggregator summarises which lanes
-# failed, not just a boolean.
+# Runs weekly (Monday 06:00 UTC) and via dashboard "Run now".
 
 on:
   workflow_dispatch:
@@ -34,13 +28,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install shipctl
+        run: npm install -g @elmundi/ship-cli@0.11.1
+
       - name: Run audit lanes
         id: audit
-        # Placeholder: succeed with a note. Replace with parallel calls
-        # to `shipctl audit run --lane <name>` or bespoke scripts that
-        # aggregate each lane's outcome into a single `status`.
         run: |
           set -euo pipefail
+          shipctl kickoff --pattern kickoff > /tmp/ship-kickoff.md || true
           echo "status=succeeded" >> "$GITHUB_OUTPUT"
           echo "summary=Parallel audit lanes completed (starter stub — no lanes wired)" >> "$GITHUB_OUTPUT"
 
@@ -56,17 +56,9 @@ jobs:
           GH_RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
-          curl --fail-with-body --show-error --silent \
-            -X POST "$SHIP_CALLBACK_URL" \
-            -H "Authorization: Bearer $SHIP_RUN_TOKEN" \
-            -H "Content-Type: application/json" \
-            --data @- <<JSON
-          {
-            "status": "$GATE_STATUS",
-            "summary": "$GATE_SUMMARY",
-            "metrics": {
-              "gh_workflow_run_id": $GH_RUN_ID,
-              "gh_html_url": "$GH_RUN_URL"
-            }
-          }
-          JSON
+          CB=failed
+          if [ "$GATE_STATUS" = "succeeded" ]; then CB=ok; fi
+          shipctl callback --status "$CB" \
+            --summary "$GATE_SUMMARY" \
+            --metric "gh_workflow_run_id=$GH_RUN_ID" \
+            --metric "gh_html_url=$GH_RUN_URL"

@@ -132,6 +132,12 @@ try {
     process.exit(0);
   }
 
+  if (cmd === "kickoff") {
+    const { kickoffCommand } = await import("../lib/commands/kickoff.mjs");
+    await kickoffCommand(ctx, rest);
+    process.exit(0);
+  }
+
   console.error(`Unknown command: ${cmd}\nRun: shipctl help`);
   process.exit(1);
 } catch (err) {
