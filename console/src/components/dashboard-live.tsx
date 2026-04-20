@@ -585,9 +585,9 @@ function RepoStatusStrip({
                 </summary>
                 <div className="mt-2 space-y-2">
                   <p className="text-white/60">
-                    Deletes Ship's state for <strong>{repo.full_name}</strong>:
+                    Deletes Ship&rsquo;s state for <strong>{repo.full_name}</strong>:
                     every lane bound to this repo plus their run history.
-                    Doesn't touch github.com — unlink the App there
+                    Doesn&rsquo;t touch github.com — unlink the App there
                     separately.
                   </p>
                   <form

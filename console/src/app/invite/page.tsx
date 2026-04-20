@@ -84,7 +84,7 @@ export default async function InvitePage({
   return (
     <Frame>
       <h1 className="font-display text-2xl font-bold text-white">
-        You're invited to Ship
+        You&rsquo;re invited to Ship
       </h1>
       {peek ? (
         <>

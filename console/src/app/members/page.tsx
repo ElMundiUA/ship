@@ -528,7 +528,7 @@ function TeamInvitesSection({
       )}
       {wasRevoked && (
         <div className="mb-4 rounded-xl border border-white/20 bg-white/[0.04] px-3 py-2 text-xs text-white/75">
-          Invite revoked. Issue a fresh one whenever they're ready.
+          Invite revoked. Issue a fresh one whenever they&rsquo;re ready.
         </div>
       )}
       {inviteErrorCode && (

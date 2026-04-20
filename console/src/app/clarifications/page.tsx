@@ -164,7 +164,7 @@ export default async function ClarificationsPage({
       <p className="mb-4 max-w-2xl text-xs text-white/55">
         Everything the agent is waiting on a human for — usually the
         missing context that lets a ticket get auto-resolved. Answer
-        inline or mark as "not relevant" to clear the queue.
+        inline or mark as &ldquo;not relevant&rdquo; to clear the queue.
       </p>
 
       {banner ? (

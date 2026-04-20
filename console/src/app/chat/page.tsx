@@ -2,7 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { AppShell } from "@/components/app-shell";
-import { Badge, Card, CardHeader } from "@/components/ui";
+import { Card, CardHeader } from "@/components/ui";
 import {
   ApiHttpError,
   ApiUnavailableError,
