@@ -123,6 +123,145 @@ class GitHubCodeHost(CodeHostGateway):
         )
         return response.json()
 
+    async def list_pull_request_files(
+        self, ref: PullRequestRef, *, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        """Return files changed in ``ref``, with additions/deletions/patch.
+
+        Paginated at the GitHub default of 30/page via ``per_page=100``
+        and capped at ``limit`` so a monorepo rename doesn't hand the
+        LLM a 3k-file document. Each entry mirrors GitHub's
+        ``/pulls/{num}/files`` shape trimmed to the fields the agent
+        actually reasons over.
+        """
+        out: list[dict[str, Any]] = []
+        page = 1
+        while len(out) < limit:
+            response = await self._request(
+                "GET",
+                f"/repos/{ref.repo.owner}/{ref.repo.repo}/pulls/{ref.number}/files",
+                params={"per_page": 100, "page": page},
+            )
+            batch = response.json() or []
+            if not isinstance(batch, list) or not batch:
+                break
+            for item in batch:
+                out.append(
+                    {
+                        "filename": item.get("filename"),
+                        "status": item.get("status"),
+                        "additions": item.get("additions"),
+                        "deletions": item.get("deletions"),
+                        "changes": item.get("changes"),
+                        "patch": item.get("patch"),
+                        "previous_filename": item.get("previous_filename"),
+                    }
+                )
+                if len(out) >= limit:
+                    break
+            if len(batch) < 100:
+                break
+            page += 1
+        return out
+
+    async def list_pull_request_reviews(
+        self, ref: PullRequestRef, *, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        """Return submitted PR reviews (APPROVED / COMMENTED / CHANGES_REQUESTED)."""
+        response = await self._request(
+            "GET",
+            f"/repos/{ref.repo.owner}/{ref.repo.repo}/pulls/{ref.number}/reviews",
+            params={"per_page": min(limit, 100)},
+        )
+        items = response.json() or []
+        out: list[dict[str, Any]] = []
+        for item in items[:limit]:
+            if not isinstance(item, dict):
+                continue
+            user = item.get("user") or {}
+            out.append(
+                {
+                    "id": item.get("id"),
+                    "user": user.get("login") if isinstance(user, dict) else None,
+                    "state": item.get("state"),
+                    "body": item.get("body"),
+                    "submitted_at": item.get("submitted_at"),
+                    "commit_id": item.get("commit_id"),
+                }
+            )
+        return out
+
+    async def list_pull_request_commits(
+        self, ref: PullRequestRef, *, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        """Return commits attached to the PR (sha, author, message)."""
+        out: list[dict[str, Any]] = []
+        page = 1
+        while len(out) < limit:
+            response = await self._request(
+                "GET",
+                f"/repos/{ref.repo.owner}/{ref.repo.repo}/pulls/{ref.number}/commits",
+                params={"per_page": 100, "page": page},
+            )
+            batch = response.json() or []
+            if not isinstance(batch, list) or not batch:
+                break
+            for item in batch:
+                commit = item.get("commit") or {}
+                author = commit.get("author") or {}
+                out.append(
+                    {
+                        "sha": item.get("sha"),
+                        "message": commit.get("message"),
+                        "author_name": author.get("name") if isinstance(author, dict) else None,
+                        "author_email": author.get("email") if isinstance(author, dict) else None,
+                        "authored_at": author.get("date") if isinstance(author, dict) else None,
+                    }
+                )
+                if len(out) >= limit:
+                    break
+            if len(batch) < 100:
+                break
+            page += 1
+        return out
+
+    async def list_pull_request_issue_comments(
+        self, ref: PullRequestRef, *, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        """Return conversation-tab comments (not inline review comments).
+
+        GitHub exposes these under the ``issues`` namespace because a PR
+        is an issue under the hood.
+        """
+        out: list[dict[str, Any]] = []
+        page = 1
+        while len(out) < limit:
+            response = await self._request(
+                "GET",
+                f"/repos/{ref.repo.owner}/{ref.repo.repo}/issues/{ref.number}/comments",
+                params={"per_page": 100, "page": page},
+            )
+            batch = response.json() or []
+            if not isinstance(batch, list) or not batch:
+                break
+            for item in batch:
+                user = item.get("user") or {}
+                out.append(
+                    {
+                        "id": item.get("id"),
+                        "user": user.get("login") if isinstance(user, dict) else None,
+                        "body": item.get("body"),
+                        "created_at": item.get("created_at"),
+                        "updated_at": item.get("updated_at"),
+                    }
+                )
+                if len(out) >= limit:
+                    break
+            if len(batch) < 100:
+                break
+            page += 1
+        return out
+
     async def list_files(
         self, ref: RepoRef, *, ref_sha: str | None = None
     ) -> list[str]:
