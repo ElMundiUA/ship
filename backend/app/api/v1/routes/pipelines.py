@@ -32,7 +32,6 @@ import secrets
 import time
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path as FsPath
 from typing import Final
 
 import httpx
@@ -61,42 +60,49 @@ from backend.app.integrations.github.workflows import (
     invalidate_workflow_list_cache,
     list_repo_workflows,
 )
+from backend.app.services import catalog as catalog_service
+from backend.app.services.default_pipelines import DEFAULT_PIPELINES
 
 
 logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Pipeline kind ↔ workflow file mapping
+# Pipeline kind ↔ catalog workflow mapping
 # ---------------------------------------------------------------------------
 
-# Phase 1 only ships the ``pr_review`` lane end-to-end. Other kinds
-# stay in the table so the dashboard can render the cards but the
-# dispatcher refuses with ``kind_not_supported_yet``. Phase 2 (presets)
-# fills in the rest.
-_WORKFLOW_FILE_BY_KIND: Final[dict[str, str]] = {
-    "pr_review": "ship-pr-gate.yml",
-}
-
-# Path of the starter workflow YAML inside the artifacts/ tree that
-# the install endpoint commits into the customer repo. ``artifacts/``
-# is *not* a Python package (the slugs contain hyphens), so we resolve
-# via the repository filesystem starting from this module's location
-# and walking up to the project root.
-_STARTER_YAML_REL: Final[dict[str, tuple[str, str]]] = {
-    "pr_review": ("pr-and-ci-gate", "workflow.yml"),
+# ``DEFAULT_PIPELINES`` is the authoritative kind → workflow_id map
+# (``pr_review`` → ``pr-and-ci-gate``, ``self_heal`` → ``pipeline-self-heal``,
+# …). Everything filename-related comes from the workflow's catalog entry
+# so adding a new lane = dropping a new ARTIFACT.md + workflow.yml pair
+# and extending ``DEFAULT_PIPELINES`` — no code churn in this module.
+_KIND_TO_WORKFLOW_ID: Final[dict[str, str]] = {
+    spec.kind: spec.workflow_id for spec in DEFAULT_PIPELINES
 }
 
 
-def _project_root() -> FsPath:
-    """Walk parents of this file until we find ``artifacts/``."""
-    here = FsPath(__file__).resolve()
-    for parent in here.parents:
-        if (parent / "artifacts").is_dir():
-            return parent
-    raise FileNotFoundError(
-        "could not locate ``artifacts/`` relative to backend package"
-    )
+def _workflow_file_for_kind(kind: str) -> str | None:
+    """Basename the customer repo will contain, via catalog ``install_target``.
+
+    Returns ``None`` when the kind has no catalog-backed workflow (e.g.
+    ``code_map`` — resolver-only) so callers know to fall back to the
+    "Coming with presets" state instead of 412-ing the user.
+    """
+    workflow_id = _KIND_TO_WORKFLOW_ID.get(kind)
+    if workflow_id is None:
+        return None
+    return catalog_service.workflow_install_filename(workflow_id)
+
+
+def _supports_run(kind: str) -> bool:
+    """True iff we can both dispatch and (re)install the workflow for ``kind``."""
+    workflow_id = _KIND_TO_WORKFLOW_ID.get(kind)
+    if workflow_id is None:
+        return False
+    entry = catalog_service.get_workflow(workflow_id)
+    if entry is None or entry.install_filename is None:
+        return False
+    return catalog_service.read_starter_yaml(workflow_id) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -162,27 +168,39 @@ def _hash_run_token(token: str) -> str:
 
 
 def _read_starter_yaml(kind: str) -> str:
-    spec = _STARTER_YAML_REL.get(kind)
-    if spec is None:
+    """Return the YAML body for the kind's starter workflow or 412/500.
+
+    ``kind_not_supported_yet`` when we have no catalog mapping for the
+    pipeline kind (e.g. ``code_map`` — resolver-only, no workflow
+    artefact today). ``500`` only when the mapping exists but the YAML
+    file on disk is missing — a release-packaging bug the operator
+    needs to see, not a tenant-actionable condition.
+    """
+    workflow_id = _KIND_TO_WORKFLOW_ID.get(kind)
+    if workflow_id is None:
         raise HTTPException(
             status_code=status.HTTP_412_PRECONDITION_FAILED,
             detail={
                 "code": "kind_not_supported_yet",
                 "message": (
-                    f"Pipeline kind {kind!r} doesn't have a starter workflow "
-                    "in this release. Coming with Phase 2 presets."
+                    f"Pipeline kind {kind!r} has no catalog workflow. "
+                    "Coming with Phase 3 presets."
                 ),
             },
         )
-    slug, filename = spec
-    try:
-        path = _project_root() / "artifacts" / "workflows" / slug / filename
-        return path.read_text(encoding="utf-8")
-    except (FileNotFoundError, OSError) as exc:
+    content = catalog_service.read_starter_yaml(workflow_id)
+    if content is None:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"starter workflow YAML not found for kind={kind}",
-        ) from exc
+            status_code=status.HTTP_412_PRECONDITION_FAILED,
+            detail={
+                "code": "kind_not_supported_yet",
+                "message": (
+                    f"Workflow {workflow_id!r} for kind {kind!r} has no "
+                    "installable YAML yet. Coming with presets."
+                ),
+            },
+        )
+    return content
 
 
 # ---------------------------------------------------------------------------
@@ -291,7 +309,7 @@ def _row_to_out(
     repo: WorkspaceRepo | None = None,
     workflow_installed: bool | None = None,
 ) -> PipelineOut:
-    workflow_file = _WORKFLOW_FILE_BY_KIND.get(row.kind)
+    workflow_file = _workflow_file_for_kind(row.kind)
     return PipelineOut(
         id=row.id,
         kind=row.kind,
@@ -307,7 +325,7 @@ def _row_to_out(
         repo_full_name=repo.full_name if repo else None,
         workflow_installed=workflow_installed,
         workflow_file=workflow_file,
-        supports_run=row.kind in _WORKFLOW_FILE_BY_KIND,
+        supports_run=_supports_run(row.kind),
     )
 
 
@@ -445,7 +463,8 @@ async def enrich_pipelines(
     out: list[PipelineOut] = []
     for row in pipelines:
         repo = repos.get(row.repo_id) if row.repo_id else None
-        if repo is None or row.kind not in _WORKFLOW_FILE_BY_KIND:
+        workflow_file = _workflow_file_for_kind(row.kind)
+        if repo is None or workflow_file is None or not _supports_run(row.kind):
             out.append(_row_to_out(row, repo=repo, workflow_installed=None))
             continue
         install = installs.get(repo.installation_id) if repo.installation_id else None
@@ -464,7 +483,7 @@ async def enrich_pipelines(
                 )
                 workflow_sets[cache_key] = frozenset()
         files = workflow_sets[cache_key]
-        installed = _WORKFLOW_FILE_BY_KIND[row.kind] in files
+        installed = workflow_file in files
         out.append(_row_to_out(row, repo=repo, workflow_installed=installed))
 
     return out
@@ -557,15 +576,15 @@ async def run_pipeline(
             status_code=status.HTTP_409_CONFLICT,
             detail="Pipeline is disabled. Enable it before running.",
         )
-    workflow_file = _WORKFLOW_FILE_BY_KIND.get(pipeline.kind)
-    if workflow_file is None:
+    workflow_file = _workflow_file_for_kind(pipeline.kind)
+    if workflow_file is None or not _supports_run(pipeline.kind):
         raise HTTPException(
             status_code=status.HTTP_412_PRECONDITION_FAILED,
             detail={
                 "code": "kind_not_supported_yet",
                 "message": (
                     f"Pipeline kind {pipeline.kind!r} doesn't ship with a "
-                    "real executor yet. Coming with Phase 2 presets."
+                    "catalog workflow yet. Coming with presets."
                 ),
             },
         )
@@ -696,15 +715,15 @@ async def install_pipeline_workflow(
     """
     await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
     pipeline = await _load_pipeline(session, workspace_id, pipeline_id)
-    workflow_file = _WORKFLOW_FILE_BY_KIND.get(pipeline.kind)
-    if workflow_file is None:
+    workflow_file = _workflow_file_for_kind(pipeline.kind)
+    if workflow_file is None or not _supports_run(pipeline.kind):
         raise HTTPException(
             status_code=status.HTTP_412_PRECONDITION_FAILED,
             detail={
                 "code": "kind_not_supported_yet",
                 "message": (
                     f"Pipeline kind {pipeline.kind!r} doesn't ship with a "
-                    "starter workflow yet. Coming with Phase 2 presets."
+                    "starter workflow yet. Coming with presets."
                 ),
             },
         )

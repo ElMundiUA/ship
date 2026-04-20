@@ -1,0 +1,72 @@
+name: Ship · Scheduled SDLC lane
+# Day-4 Phase-2 starter workflow for the `daily_standup` pipeline kind.
+# Runs on a cron (default 09:00 UTC) and via dashboard "Run now"
+# (workflow_dispatch). The body is a thin stub — replace the `lane`
+# step with a real intake → clarification → BA → developer pick once
+# your tracker is wired up. The reporting contract matches
+# pr-and-ci-gate so Ship can reconcile the run via both the callback
+# and the `workflow_run` webhook.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ship_run_id:
+        description: "Ship pipeline_run id we should report against"
+        required: true
+      ship_callback_url:
+        description: "URL Ship is listening on for the result callback"
+        required: true
+      ship_run_token:
+        description: "Short-lived bearer token Ship issued for this run"
+        required: true
+  schedule:
+    - cron: "0 9 * * 1-5"
+
+permissions:
+  contents: read
+
+jobs:
+  sdlc_lane:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run SDLC lane pick
+        id: lane
+        # Placeholder: produce an empty pick so the run stays green
+        # until the tenant wires their tracker. Replace with a call to
+        # `shipctl sdlc pick` or a GraphQL query against Linear / GitHub
+        # Projects that yields a single ticket id.
+        run: |
+          set -euo pipefail
+          echo "status=succeeded" >> "$GITHUB_OUTPUT"
+          echo "summary=Scheduled SDLC lane completed (starter stub — no pick queued)" >> "$GITHUB_OUTPUT"
+
+      - name: Report back to Ship
+        if: always() && inputs.ship_callback_url != ''
+        env:
+          SHIP_RUN_ID: ${{ inputs.ship_run_id }}
+          SHIP_CALLBACK_URL: ${{ inputs.ship_callback_url }}
+          SHIP_RUN_TOKEN: ${{ inputs.ship_run_token }}
+          GATE_STATUS: ${{ steps.lane.outputs.status || 'failed' }}
+          GATE_SUMMARY: ${{ steps.lane.outputs.summary || 'Scheduled SDLC lane failed before reporting' }}
+          GH_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          GH_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --show-error --silent \
+            -X POST "$SHIP_CALLBACK_URL" \
+            -H "Authorization: Bearer $SHIP_RUN_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data @- <<JSON
+          {
+            "status": "$GATE_STATUS",
+            "summary": "$GATE_SUMMARY",
+            "metrics": {
+              "gh_workflow_run_id": $GH_RUN_ID,
+              "gh_html_url": "$GH_RUN_URL"
+            }
+          }
+          JSON

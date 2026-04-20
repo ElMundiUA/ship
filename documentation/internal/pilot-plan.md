@@ -351,6 +351,76 @@ What landed:
   webhook upsert and the inactive-repo drop-path. Total backend suite
   now 193 passing.
 
+### Day 4 — ✅ shipped
+
+Phase 1 (honest executor) + Phase 2 (catalog integration) landed in two
+back-to-back deploys. 219 backend tests passing.
+
+**Phase 1 — honest executor (pr_review end-to-end):**
+
+- `Pipeline.repo_id` + `PipelineRun.run_token_hash` columns (migration
+  `0006_pipeline_repo_binding`). Default pipelines now bind to a repo on
+  activation so the dispatcher doesn't guess.
+- `backend/app/integrations/github/workflows.py` — list / dispatch /
+  commit-starter primitives with a 60 s probe cache.
+- `POST /v1/workspaces/{ws}/pipelines/{id}/runs` replaced its Day-3 stub
+  with real `workflow_dispatch`. Returns 412 with a structured `code`
+  (`pipeline_not_bound` / `kind_not_supported_yet` /
+  `workflow_not_installed` / `github_app_missing`) instead of faking
+  success.
+- `POST /v1/workspaces/{ws}/pipelines/{id}/install` opens a PR in the
+  customer repo via the Git Data API with the starter workflow YAML
+  and a kind-specific branch name.
+- `POST /v1/pipelines/runs/{run_id}/result` — dispatched workflow's
+  bearer-token callback (JWT signed with the shared secret, hash
+  stored on the run row for defence in depth, 30-minute TTL,
+  idempotent for terminal statuses).
+- `_apply_workflow_run_event` in the webhook handler reconciles
+  `workflow_run` events as a fallback when the runner callback
+  can't reach us.
+
+**Phase 2 — catalog integration:**
+
+- `backend/app/services/catalog.py` — file-system-backed loader walking
+  `artifacts/{patterns,tools,workflows,collections}/<id>/ARTIFACT.md`.
+  Caches parsed frontmatter keyed on mtime signature; exposes
+  `list_presets()`, `list_workflows()`, `workflow_install_target()`,
+  `read_starter_yaml()`.
+- `/v1/catalog/{presets,workflows,workflows/{id},collections}` — thin
+  authenticated read-only surface the console will consume for the
+  preset picker and "available workflows" dashboard.
+- Pipelines module dropped its hardcoded kind→filename table. The
+  dispatcher now resolves `install_filename` from the catalog entry,
+  so adding a lane = drop an ARTIFACT.md + workflow.yml and extend
+  `DEFAULT_PIPELINES`.
+- Phase-2 starter YAMLs shipped for `scheduled-sdlc-lane`,
+  `parallel-audit-lanes`, `pipeline-self-heal`, `hosted-e2e-regression`
+  — each follows the same Ship callback contract as `pr-and-ci-gate`.
+  Four of five default pipelines are now runnable/installable end-to-end
+  (`code_map` remains resolver-only until its workflow lands).
+- Tests: `backend/tests/test_catalog_service.py` +
+  `backend/tests/test_v1_catalog.py` + expanded
+  `backend/tests/test_v1_pipelines.py` now cover Phase-2 installs
+  (e.g. `daily_standup` opens a `scheduled-sdlc-lane.yml` PR).
+
+### Day 4 — open items
+
+1. **Preset-driven seeding** — add `workspace_repos.preset` +
+   teach `seed_default_pipelines` to materialise only the lanes the
+   chosen preset demands (`preset-web-app` → PR gate + hosted E2E,
+   `preset-api-backend` → PR gate + audit lanes, etc.). Wizard
+   gets a preset picker step backed by `/v1/catalog/presets`.
+2. **Auto-seed knowledge pipelines** — dispatch `code_map` +
+   `tech_debt` straight after `POST /v1/workspaces/{ws}/repos/activate`
+   so the dashboard lands with data instead of empty cards (waits on
+   `code_map` getting a catalog workflow).
+3. **Scaffold `.ship/`** — reuse `commit_starter_workflow` to open a
+   PR with `agent-rules-*` and `.ship/config.yml` picked from the
+   chosen preset's `required_tools` list.
+4. **Dashboard live polling** — after a "Run now", auto-refresh the
+   card status (status: queued → running → succeeded/failed) without
+   a full reload.
+
 ### Day 3 — open items / smoke-test work
 
 1. **End-to-end smoke test** — wire the GitHub App against a real

@@ -14,6 +14,7 @@ from backend.app.api.v1.routes import (
     artifact_repos,
     audit,
     auth,
+    catalog,
     dashboard,
     github_app,
     health,
@@ -59,3 +60,7 @@ api_router.include_router(notion_oauth.router)
 api_router.include_router(pipelines.router)
 api_router.include_router(pipelines.public_router)
 api_router.include_router(dashboard.router)
+# Catalog read-only surface (presets / workflows / collections) backed
+# by ``artifacts/**/ARTIFACT.md``. Powers the wizard preset picker and
+# the dashboard's workflow install buttons.
+api_router.include_router(catalog.router)

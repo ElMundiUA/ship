@@ -94,7 +94,7 @@ async def test_list_pipelines_returns_seeded_defaults(
     await _seed_bound_pipelines(db_session, workspace.id, repo.id)
 
     async def _stub_list_workflows(repo, install, *, settings, **_):
-        return frozenset({"ship-pr-gate.yml"})
+        return frozenset({"pr-and-ci-gate.yml"})
 
     monkeypatch.setattr(
         pipelines_route, "list_repo_workflows", _stub_list_workflows
@@ -109,14 +109,24 @@ async def test_list_pipelines_returns_seeded_defaults(
     assert {p["kind"] for p in body} == {p.kind for p in DEFAULT_PIPELINES}
     assert [p["kind"] for p in body] == [p.kind for p in DEFAULT_PIPELINES]
     by_kind = {p["kind"]: p for p in body}
-    # PR review is the one Phase-1 lane; the probe says it's installed.
+    # PR review is installed (probe stub says so).
     assert by_kind["pr_review"]["workflow_installed"] is True
     assert by_kind["pr_review"]["supports_run"] is True
     assert by_kind["pr_review"]["repo_full_name"] == repo.full_name
-    # Self-heal still ships off, no executor yet → not_supported branch.
+    # Phase-2 added catalog starters for daily-standup / tech-debt /
+    # self-heal — they now advertise ``supports_run`` but the probe
+    # only reported ``pr-and-ci-gate.yml``, so their ``workflow_installed``
+    # flag is False (dashboard renders Install-workflow CTA).
     assert by_kind["self_heal"]["enabled"] is False
-    assert by_kind["self_heal"]["supports_run"] is False
-    assert by_kind["self_heal"]["workflow_installed"] is None
+    assert by_kind["self_heal"]["supports_run"] is True
+    assert by_kind["self_heal"]["workflow_installed"] is False
+    assert by_kind["daily_standup"]["supports_run"] is True
+    assert by_kind["daily_standup"]["workflow_installed"] is False
+    assert by_kind["tech_debt"]["supports_run"] is True
+    assert by_kind["tech_debt"]["workflow_installed"] is False
+    # ``code_map`` is still resolver-only (no catalog workflow.yml).
+    assert by_kind["code_map"]["supports_run"] is False
+    assert by_kind["code_map"]["workflow_installed"] is None
 
 
 @pytest.mark.asyncio
@@ -180,7 +190,7 @@ async def test_run_pipeline_dispatches_when_workflow_installed(
     captured: dict[str, object] = {}
 
     async def _probe(repo, install, *, settings, **_):
-        return frozenset({"ship-pr-gate.yml"})
+        return frozenset({"pr-and-ci-gate.yml"})
 
     async def _dispatch(repo, install, workflow_file, *, inputs, settings, **_):
         captured["workflow_file"] = workflow_file
@@ -199,7 +209,7 @@ async def test_run_pipeline_dispatches_when_workflow_installed(
     assert body["status"] == "running"
     assert body["trigger"] == "manual"
 
-    assert captured["workflow_file"] == "ship-pr-gate.yml"
+    assert captured["workflow_file"] == "pr-and-ci-gate.yml"
     inputs = captured["inputs"]
     assert isinstance(inputs, dict)
     assert inputs["ship_run_id"] == body["id"]
@@ -247,7 +257,7 @@ async def test_run_pipeline_412_when_workflow_not_installed(
     assert response.status_code == 412, response.text
     detail = response.json()["detail"]
     assert detail["code"] == "workflow_not_installed"
-    assert detail["workflow_file"] == "ship-pr-gate.yml"
+    assert detail["workflow_file"] == "pr-and-ci-gate.yml"
     assert detail["repo_full_name"] == "acme/widgets"
     assert detail["install_endpoint"].endswith("/install")
 
@@ -277,7 +287,10 @@ async def test_run_pipeline_412_when_kind_not_supported(
 ) -> None:
     raw, workspace, _install, repo = seed_repo_and_install
     pipelines = await _seed_bound_pipelines(db_session, workspace.id, repo.id)
-    target = pipelines["tech_debt"]
+    # ``code_map`` has no catalog workflow (resolver-only), so dispatch
+    # still 412s with ``kind_not_supported_yet`` — the rest of the
+    # DEFAULT_PIPELINES are catalog-backed as of Phase 2.
+    target = pipelines["code_map"]
 
     response = await v1_client.post(
         f"/v1/workspaces/{workspace.id}/pipelines/{target.id}/runs",
@@ -302,7 +315,7 @@ async def test_run_pipeline_502_when_dispatch_fails(
     target = pipelines["pr_review"]
 
     async def _probe(repo, install, *, settings, **_):
-        return frozenset({"ship-pr-gate.yml"})
+        return frozenset({"pr-and-ci-gate.yml"})
 
     async def _dispatch(*_args, **_kwargs):
         raise WorkflowDispatchError(503, "GitHub had a bad day")
@@ -365,7 +378,7 @@ async def test_callback_updates_run_with_valid_token(
     captured_inputs: dict[str, str] = {}
 
     async def _probe(repo, install, *, settings, **_):
-        return frozenset({"ship-pr-gate.yml"})
+        return frozenset({"pr-and-ci-gate.yml"})
 
     async def _dispatch(repo, install, workflow_file, *, inputs, settings, **_):
         captured_inputs.update(inputs)
@@ -433,7 +446,7 @@ async def test_callback_rejects_wrong_token(
     captured: dict[str, str] = {}
 
     async def _probe(repo, install, *, settings, **_):
-        return frozenset({"ship-pr-gate.yml"})
+        return frozenset({"pr-and-ci-gate.yml"})
 
     async def _dispatch(repo, install, workflow_file, *, inputs, settings, **_):
         captured.update(inputs)
@@ -475,7 +488,7 @@ async def test_callback_idempotent_for_terminal_runs(
     captured: dict[str, str] = {}
 
     async def _probe(repo, install, *, settings, **_):
-        return frozenset({"ship-pr-gate.yml"})
+        return frozenset({"pr-and-ci-gate.yml"})
 
     async def _dispatch(repo, install, workflow_file, *, inputs, settings, **_):
         captured.update(inputs)
@@ -550,7 +563,7 @@ async def test_install_pipeline_workflow_opens_pr(
     body = response.json()
     assert body["pr_number"] == 42
     assert body["pr_url"].endswith("/42")
-    assert seen["workflow_file"] == "ship-pr-gate.yml"
+    assert seen["workflow_file"] == "pr-and-ci-gate.yml"
     assert seen["pipeline_kind"] == "pr_review"
     assert seen["content_loaded"] is True
 
@@ -572,7 +585,8 @@ async def test_install_412_when_kind_not_supported(
 ) -> None:
     raw, workspace, _install, repo = seed_repo_and_install
     pipelines = await _seed_bound_pipelines(db_session, workspace.id, repo.id)
-    target = pipelines["tech_debt"]
+    # ``code_map`` has no catalog workflow → install 412s.
+    target = pipelines["code_map"]
 
     response = await v1_client.post(
         f"/v1/workspaces/{workspace.id}/pipelines/{target.id}/install",
@@ -580,6 +594,42 @@ async def test_install_412_when_kind_not_supported(
     )
     assert response.status_code == 412
     assert response.json()["detail"]["code"] == "kind_not_supported_yet"
+
+
+@pytest.mark.asyncio
+async def test_install_pipeline_workflow_daily_standup(
+    monkeypatch, v1_client, db_session, seed_repo_and_install
+) -> None:
+    """Phase-2 lanes (daily_standup, tech_debt, self_heal) install too."""
+    from backend.app.api.v1.routes import pipelines as pipelines_route
+    from backend.app.integrations.github.workflows import StarterWorkflowPR
+
+    raw, workspace, _install, repo = seed_repo_and_install
+    pipelines = await _seed_bound_pipelines(db_session, workspace.id, repo.id)
+    target = pipelines["daily_standup"]
+
+    seen: dict[str, object] = {}
+
+    async def _commit(repo, install, *, workflow_file, content, pipeline_kind, settings, **_):
+        seen["workflow_file"] = workflow_file
+        seen["pipeline_kind"] = pipeline_kind
+        seen["has_callback"] = "ship_callback_url" in content
+        return StarterWorkflowPR(
+            pr_url="https://github.com/acme/widgets/pull/43",
+            pr_number=43,
+            branch="ship/install-daily_standup-1",
+        )
+
+    monkeypatch.setattr(pipelines_route, "commit_starter_workflow", _commit)
+
+    response = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/pipelines/{target.id}/install",
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert response.status_code == 201, response.text
+    assert seen["workflow_file"] == "scheduled-sdlc-lane.yml"
+    assert seen["pipeline_kind"] == "daily_standup"
+    assert seen["has_callback"] is True
 
 
 # ---------------------------------------------------------------------------
