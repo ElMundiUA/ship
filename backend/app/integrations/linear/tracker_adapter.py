@@ -72,23 +72,86 @@ class LinearTracker:
             )
         return body.get("data") or {}
 
-    async def list_tickets(self, *, limit: int = 10) -> list[dict[str, Any]]:
+    async def list_tickets(
+        self,
+        *,
+        limit: int = 10,
+        state: str | None = None,
+        assignee_me: bool = False,
+        query: str | None = None,
+        assignee: str | None = None,
+    ) -> list[dict[str, Any]]:
         """Most-recently-updated issues for the authorised workspace."""
-        query = """
-        query ShipListIssues($first: Int!) {
-          issues(first: $first, orderBy: updatedAt) {
-            nodes {
-              id
-              identifier
-              title
-              url
-              state { name type }
-              updatedAt
+        del assignee  # Linear assignee-by-login not supported in pilot
+        first = max(1, min(limit, 50))
+        issue_filter: dict[str, Any] | None = None
+        parts: list[dict[str, Any]] = []
+
+        raw_state = (state or "all").lower()
+        if raw_state == "open":
+            parts.append(
+                {"state": {"type": {"nin": ["completed", "canceled"]}}}
+            )
+        elif raw_state in {"closed", "done", "completed"}:
+            parts.append(
+                {"state": {"type": {"in": ["completed", "canceled"]}}}
+            )
+
+        if query and query.strip():
+            parts.append(
+                {"title": {"containsIgnoreCase": query.strip()}}
+            )
+
+        if assignee_me:
+            vdata = await self._gql("query { viewer { id } }", {})
+            vid = (vdata.get("viewer") or {}).get("id")
+            if vid:
+                parts.append({"assignee": {"id": {"eq": vid}}})
+
+        if len(parts) == 1:
+            issue_filter = parts[0]
+        elif len(parts) > 1:
+            issue_filter = {"and": parts}
+        else:
+            issue_filter = None
+
+        nodes: list[dict[str, Any]]
+        if issue_filter is None:
+            gql = """
+            query ShipListIssues($first: Int!) {
+              issues(first: $first, orderBy: updatedAt) {
+                nodes {
+                  id
+                  identifier
+                  title
+                  url
+                  state { name type }
+                  updatedAt
+                }
+              }
             }
-          }
-        }
-        """
-        data = await self._gql(query, {"first": max(1, min(limit, 50))})
+            """
+            data = await self._gql(gql, {"first": first})
+            nodes = (data.get("issues") or {}).get("nodes") or []
+        else:
+            gql = """
+            query ShipListIssues($first: Int!, $filter: IssueFilter) {
+              issues(first: $first, orderBy: updatedAt, filter: $filter) {
+                nodes {
+                  id
+                  identifier
+                  title
+                  url
+                  state { name type }
+                  updatedAt
+                }
+              }
+            }
+            """
+            data = await self._gql(
+                gql, {"first": first, "filter": issue_filter}
+            )
+            nodes = (data.get("issues") or {}).get("nodes") or []
         nodes = (data.get("issues") or {}).get("nodes") or []
         out: list[dict[str, Any]] = []
         for n in nodes:

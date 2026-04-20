@@ -61,6 +61,17 @@ Tool inventory (C12 Phase 2.2):
   and their pending/accepted/declined decisions).
 - :meth:`get_metrics_overview` — dashboard aggregates (pipelines,
   runs, clarifications, improvements, chat, DORA) for a window.
+- :meth:`search_code` — GitHub code search scoped to one activated
+  repo (symbol / string search; complements embedding-only KB search).
+- :meth:`list_audit_events` — workspace audit log (admin-only).
+- :meth:`list_workspace_members` — roster with roles.
+- :meth:`list_workspace_invites` — invite history (admin-only).
+- :meth:`get_workspace_settings` — name, slug, catalog_sources.
+- :meth:`list_workspace_artifact_repos` — custom catalog source URLs.
+- :meth:`get_knowledge_bucket` — one bucket by slug + optional
+  summaries list.
+- :meth:`list_artifact_feedback` — catalog feedback rows filed from
+  the console.
 
 The JSON schemas live next to each method (single source of truth,
 no drift). Vendors that can't consume a method share the same
@@ -74,8 +85,10 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
-from sqlalchemy import desc, select
+from fastapi import HTTPException
+from sqlalchemy import desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from backend.app.core.config import Settings
 from backend.app.db.models.agent_memory import (
@@ -98,7 +111,16 @@ from backend.app.db.models.pipelines import (
     PullRequest,
     WorkflowRun,
 )
-from backend.app.db.models.tenancy import Integration
+from backend.app.db.models.tenancy import (
+    ApiToken,
+    ArtifactRepo,
+    AuditLog,
+    Integration,
+    User as TenancyUser,
+    Workspace,
+    WorkspaceInvite,
+    WorkspaceMember,
+)
 from backend.app.integrations.gateway.code_host import PullRequestRef, RepoRef
 from backend.app.integrations.gateway.tracker import (
     CreatedTicket,
@@ -144,6 +166,12 @@ _MAX_IMPROVEMENTS = 50
 _MAX_INTEGRATIONS = 30
 _MAX_PRS_LISTED = 50
 _MAX_ARTIFACT_BODY_CHARS = 32 * 1024
+_MAX_KB_FULL_CHUNK = 12_000
+_MAX_CODE_SEARCH = 20
+_MAX_AUDIT_EVENTS = 50
+_MAX_ARTIFACT_FEEDBACK_LIST = 50
+_MAX_BUCKET_SUMMARIES = 40
+_KB_GLOB_PREFETCH_CAP = 80
 
 
 @dataclass(slots=True)
@@ -196,7 +224,10 @@ class ToolBox:
                     "Semantic search over `.ship/knowledge/**/*.md` for the "
                     "workspace's activated repos. Use for grounded answers "
                     "about the repo's docs, decisions, runbooks. Returns "
-                    "the top-N matching chunks with path + snippet."
+                    "the top-N matching chunks with path + snippet. "
+                    "Optional ``path_prefix`` / ``path_glob`` narrow results; "
+                    "``include_full_content`` returns a longer ``content`` "
+                    "field (still capped) for runbook-sized chunks."
                 ),
                 parameters={
                     "type": "object",
@@ -210,6 +241,28 @@ class ToolBox:
                             "description": (
                                 "Optional UUID of a specific activated repo; "
                                 "omit to search across all activated repos."
+                            ),
+                        },
+                        "path_prefix": {
+                            "type": "string",
+                            "description": (
+                                "Only chunks whose ``source_path`` is under "
+                                "this prefix (e.g. ``runbooks/``)."
+                            ),
+                        },
+                        "path_glob": {
+                            "type": "string",
+                            "description": (
+                                "fnmatch pattern applied after the vector "
+                                "search (e.g. ``**/*.md``)."
+                            ),
+                        },
+                        "include_full_content": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": (
+                                "Include ``content`` with a larger cap than "
+                                "the default snippet."
                             ),
                         },
                         "limit": {
@@ -473,10 +526,11 @@ class ToolBox:
                 description=(
                     "List the repositories the workspace has activated for "
                     "Ship, including each repo's UUID (``id``), "
-                    "``full_name`` and ``default_branch``. Call this before "
-                    "asking the user for a repo id — the other repo-scoped "
-                    "tools (``get_repo_file``, ``list_code_map``, "
-                    "``get_pull_request``) all require the UUID."
+                    "``full_name`` and ``default_branch``, plus "
+                    "``kb_chunk_count`` / ``kb_last_indexed_at`` so you can "
+                    "tell whether `.ship/knowledge` is indexed. Call this "
+                    "before asking the user for a repo id — the other "
+                    "repo-scoped tools require the UUID."
                 ),
                 parameters={
                     "type": "object",
@@ -491,7 +545,10 @@ class ToolBox:
                     "workspace's connected tracker (Linear / Notion / "
                     "GitHub Issues). Use to answer 'what's on my plate?' "
                     "or 'does a ticket already exist for X?' before "
-                    "considering ``create_ticket``."
+                    "considering ``create_ticket``. Supports coarse "
+                    "``state`` filters, optional title ``query``, "
+                    "``assignee_me`` (Linear: current user), and "
+                    "``assignee`` (GitHub login)."
                 ),
                 parameters={
                     "type": "object",
@@ -510,6 +567,37 @@ class ToolBox:
                                 "Forwarded to the tracker for GitHub "
                                 "Issues (``owner/repo``); usually "
                                 "unnecessary for Linear/Notion."
+                            ),
+                        },
+                        "state": {
+                            "type": "string",
+                            "enum": ["open", "closed", "all"],
+                            "description": (
+                                "Ticket lifecycle filter (vendor-specific "
+                                "semantics; GitHub maps to open/closed/all)."
+                            ),
+                        },
+                        "query": {
+                            "type": "string",
+                            "description": (
+                                "Substring / search string for titles "
+                                "(Linear native; GitHub uses search API; "
+                                "Notion client-side)."
+                            ),
+                        },
+                        "assignee_me": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": (
+                                "Only issues assigned to the tracker "
+                                "user (Linear only in the pilot)."
+                            ),
+                        },
+                        "assignee": {
+                            "type": "string",
+                            "description": (
+                                "GitHub login for assignee filter "
+                                "(GitHub Issues only)."
                             ),
                         },
                         "limit": {
@@ -924,6 +1012,209 @@ class ToolBox:
                     "additionalProperties": False,
                 },
             ),
+            ToolSpec(
+                name="search_code",
+                description=(
+                    "Search source code in one activated GitHub repo via "
+                    "GitHub's code search API. Use for 'where is X defined?' "
+                    "when pgvector KB search is not enough. One call per "
+                    "turn — subject to GitHub rate limits."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "repo_id": {
+                            "type": "string",
+                            "description": "UUID of the activated repo.",
+                        },
+                        "query": {
+                            "type": "string",
+                            "description": (
+                                "Search terms (GitHub code search syntax), "
+                                "e.g. ``symbol:MyClass`` or a function name."
+                            ),
+                        },
+                        "language": {
+                            "type": "string",
+                            "description": (
+                                "Optional language filter (``Python``, "
+                                "``TypeScript``, …)."
+                            ),
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": _MAX_CODE_SEARCH,
+                            "default": 15,
+                        },
+                    },
+                    "required": ["repo_id", "query"],
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="list_audit_events",
+                description=(
+                    "Read workspace audit log entries (who changed what). "
+                    "Requires admin or owner role. Supports the same filters "
+                    "as the console audit page."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "description": (
+                                "Prefix or full action key, e.g. ``member`` "
+                                "or ``pipeline.run``."
+                            ),
+                        },
+                        "actor": {
+                            "type": "string",
+                            "description": (
+                                "Case-insensitive substring on actor email "
+                                "or API token name."
+                            ),
+                        },
+                        "target_kind": {
+                            "type": "string",
+                            "description": (
+                                "Exact ``target_kind`` e.g. ``user``, "
+                                "``pipeline``."
+                            ),
+                        },
+                        "since": {
+                            "type": "string",
+                            "description": "ISO-8601 inclusive lower bound.",
+                        },
+                        "until": {
+                            "type": "string",
+                            "description": "ISO-8601 exclusive upper bound.",
+                        },
+                        "before_id": {
+                            "type": "integer",
+                            "description": (
+                                "Pagination cursor: return rows with id < "
+                                "this value."
+                            ),
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": _MAX_AUDIT_EVENTS,
+                            "default": 30,
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="list_workspace_members",
+                description=(
+                    "List workspace members with roles and emails (same as "
+                    "the team page). Any member can call."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="list_workspace_invites",
+                description=(
+                    "List workspace invites (pending and historical). "
+                    "Admin or owner only."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="get_workspace_settings",
+                description=(
+                    "Return workspace metadata: slug, name, org id, "
+                    "catalog_sources map. Read-only."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="list_workspace_artifact_repos",
+                description=(
+                    "Custom artifact source repos registered for this "
+                    "workspace (catalog mirrors)."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="get_knowledge_bucket",
+                description=(
+                    "Fetch one knowledge bucket by slug with optional "
+                    "packed summaries. Complements ``list_buckets`` / "
+                    "``search_buckets`` when the user names a bucket."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "slug": {
+                            "type": "string",
+                            "description": "Bucket slug (stable handle).",
+                        },
+                        "include_summaries": {
+                            "type": "boolean",
+                            "default": True,
+                        },
+                        "summary_limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": _MAX_BUCKET_SUMMARIES,
+                            "default": 20,
+                        },
+                    },
+                    "required": ["slug"],
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="list_artifact_feedback",
+                description=(
+                    "List catalog artifact feedback filed from the console. "
+                    "Use before creating duplicate feedback on the same "
+                    "pattern/workflow."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "status": {
+                            "type": "string",
+                            "enum": ["open", "triaged", "merged", "closed"],
+                        },
+                        "artifact_id": {
+                            "type": "string",
+                            "description": (
+                                "Optional filter on ``pattern/foo`` id."
+                            ),
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": _MAX_ARTIFACT_FEEDBACK_LIST,
+                            "default": 25,
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+            ),
         ]
 
     # ------------------------------------------------------------------
@@ -975,6 +1266,14 @@ class ToolBox:
             "list_clarifications": self._tool_list_clarifications,
             "list_improvements": self._tool_list_improvements,
             "get_metrics_overview": self._tool_get_metrics_overview,
+            "search_code": self._tool_search_code,
+            "list_audit_events": self._tool_list_audit_events,
+            "list_workspace_members": self._tool_list_workspace_members,
+            "list_workspace_invites": self._tool_list_workspace_invites,
+            "get_workspace_settings": self._tool_get_workspace_settings,
+            "list_workspace_artifact_repos": self._tool_list_workspace_artifact_repos,
+            "get_knowledge_bucket": self._tool_get_knowledge_bucket,
+            "list_artifact_feedback": self._tool_list_artifact_feedback,
         }
 
     # ------------------------------------------------------------------
@@ -982,8 +1281,13 @@ class ToolBox:
     # ------------------------------------------------------------------
 
     async def _tool_search_repo_kb(self, args: dict[str, Any]) -> str:
+        import fnmatch
+
         query = _require_str(args, "query")
         limit = _clamp_int(args.get("limit"), default=5, low=1, high=_MAX_KB_RESULTS)
+        include_full = bool(args.get("include_full_content", False))
+        path_prefix = args.get("path_prefix")
+        path_glob = args.get("path_glob")
         repo_id_raw = args.get("repo_id")
         repo_id: uuid.UUID | None = None
         if repo_id_raw:
@@ -992,32 +1296,54 @@ class ToolBox:
             except ValueError as exc:
                 raise ToolInvocationError(f"invalid repo_id: {repo_id_raw!r}") from exc
 
+        fetch_cap = limit
+        if isinstance(path_glob, str) and path_glob.strip():
+            fetch_cap = min(_KB_GLOB_PREFETCH_CAP, max(limit * 8, limit))
+
         qvec = await embed_text(query, settings=self._settings)
         stmt = (
             select(KbChunk, KbChunk.embedding.cosine_distance(qvec).label("dist"))
             .where(KbChunk.workspace_id == self._workspace_id)
             .order_by("dist")
-            .limit(limit)
+            .limit(fetch_cap)
         )
         if repo_id is not None:
             stmt = stmt.where(KbChunk.repo_id == repo_id)
+        if isinstance(path_prefix, str) and path_prefix.strip():
+            pref = path_prefix.strip().rstrip("/")
+            stmt = stmt.where(
+                or_(
+                    KbChunk.source_path == pref,
+                    KbChunk.source_path.like(pref + "/%"),
+                )
+            )
 
         rows = (await self._session.execute(stmt)).all()
+        if isinstance(path_glob, str) and path_glob.strip():
+            pat = path_glob.strip()
+            rows = [
+                pair
+                for pair in rows
+                if fnmatch.fnmatch(pair[0].source_path, pat)
+            ]
+        rows = rows[:limit]
         if not rows:
             return _json_result({"results": [], "note": "no knowledge indexed"})
 
+        snippet_cap = _MAX_KB_FULL_CHUNK if include_full else 800
         results = []
         for chunk, dist in rows:
-            results.append(
-                {
-                    "repo_id": str(chunk.repo_id),
-                    "path": chunk.source_path,
-                    "chunk_index": chunk.chunk_index,
-                    "content_sha": chunk.content_sha,
-                    "snippet": _truncate(chunk.content, 800),
-                    "similarity": round(1.0 - float(dist), 4),
-                }
-            )
+            entry: dict[str, Any] = {
+                "repo_id": str(chunk.repo_id),
+                "path": chunk.source_path,
+                "chunk_index": chunk.chunk_index,
+                "content_sha": chunk.content_sha,
+                "snippet": _truncate(chunk.content, snippet_cap),
+                "similarity": round(1.0 - float(dist), 4),
+            }
+            if include_full:
+                entry["content"] = _truncate(chunk.content, _MAX_KB_FULL_CHUNK)
+            results.append(entry)
         return _json_result({"results": results})
 
     async def _tool_get_repo_file(self, args: dict[str, Any]) -> str:
@@ -1316,19 +1642,42 @@ class ToolBox:
                 .limit(_MAX_REPOS_LISTED)
             )
         ).scalars().all()
-        items = [
-            {
-                "id": str(r.id),
-                "full_name": r.full_name,
-                "default_branch": r.default_branch,
-                "private": bool(r.private),
-                "html_url": r.html_url,
-                "preset": r.preset,
-                "provider": r.provider,
-                "has_github_app": r.installation_id is not None,
-            }
-            for r in rows
-        ]
+        stats_rows = (
+            await self._session.execute(
+                select(
+                    KbChunk.repo_id,
+                    func.count(KbChunk.id).label("kb_chunk_count"),
+                    func.max(KbChunk.indexed_at).label("kb_last_indexed_at"),
+                ).where(KbChunk.workspace_id == self._workspace_id)
+                .group_by(KbChunk.repo_id)
+            )
+        ).all()
+        stats_map = {
+            str(r.repo_id): (
+                int(r.kb_chunk_count),
+                r.kb_last_indexed_at.isoformat()
+                if r.kb_last_indexed_at
+                else None,
+            )
+            for r in stats_rows
+        }
+        items = []
+        for r in rows:
+            cnt, last_ix = stats_map.get(str(r.id), (0, None))
+            items.append(
+                {
+                    "id": str(r.id),
+                    "full_name": r.full_name,
+                    "default_branch": r.default_branch,
+                    "private": bool(r.private),
+                    "html_url": r.html_url,
+                    "preset": r.preset,
+                    "provider": r.provider,
+                    "has_github_app": r.installation_id is not None,
+                    "kb_chunk_count": cnt,
+                    "kb_last_indexed_at": last_ix,
+                }
+            )
         return _json_result({"repos": items, "count": len(items)})
 
     async def _tool_list_tickets(self, args: dict[str, Any]) -> str:
@@ -1337,9 +1686,27 @@ class ToolBox:
         )
         tracker_kind = args.get("tracker")
         project_hint = args.get("project_hint")
+        state = args.get("state")
+        title_query = args.get("query")
+        assignee_me = bool(args.get("assignee_me", False))
+        assignee = args.get("assignee")
+        assignee_s = str(assignee).strip() if isinstance(assignee, str) else None
+        state_s = state.lower().strip() if isinstance(state, str) and state else None
+        if state_s and state_s not in {"open", "closed", "all"}:
+            raise ToolInvocationError(
+                "state must be one of open, closed, all when provided"
+            )
         tracker = await self._resolve_tracker(tracker_kind, project_hint)
         try:
-            tickets = await tracker.list_tickets(limit=limit)
+            tickets = await tracker.list_tickets(
+                limit=limit,
+                state=state_s,
+                assignee_me=assignee_me,
+                query=str(title_query).strip()
+                if isinstance(title_query, str)
+                else None,
+                assignee=assignee_s,
+            )
         except Exception as exc:  # noqa: BLE001 — tracker-specific errors
             raise ToolInvocationError(f"tracker list_tickets failed: {exc}") from exc
         # Best-effort label on which backend answered so the model can
@@ -1995,6 +2362,330 @@ class ToolBox:
             }
         )
 
+    async def _tool_search_code(self, args: dict[str, Any]) -> str:
+        repo_id = _parse_uuid(args, "repo_id")
+        q = _require_str(args, "query")
+        language = args.get("language")
+        limit = _clamp_int(
+            args.get("limit"), default=15, low=1, high=_MAX_CODE_SEARCH
+        )
+        repo, install = await self._resolve_repo_with_install(repo_id)
+        gateway = GitHubCodeHost(install.installation_id, settings=self._settings)
+        owner, _, name = repo.full_name.partition("/")
+        ref = RepoRef(kind="github", owner=owner, repo=name)
+        lang = str(language).strip() if isinstance(language, str) else None
+        try:
+            hits = await gateway.search_code(
+                ref,
+                q,
+                language=lang or None,
+                limit=limit,
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise ToolInvocationError(
+                f"code search failed (GitHub rate limit or query error): {exc}"
+            ) from exc
+        return _json_result(
+            {
+                "repo": repo.full_name,
+                "query": q,
+                "language": lang,
+                "hits": hits,
+                "count": len(hits),
+            }
+        )
+
+    async def _tool_list_audit_events(self, args: dict[str, Any]) -> str:
+        from backend.app.api.v1.routes import audit as audit_routes
+        from backend.app.api.v1.routes.workspaces import ROLES_ADMIN
+
+        await self._require_workspace_role(ROLES_ADMIN)
+        limit = _clamp_int(
+            args.get("limit"), default=30, low=1, high=_MAX_AUDIT_EVENTS
+        )
+        before_raw = args.get("before_id")
+        before: int | None = None
+        if before_raw is not None:
+            try:
+                before = int(before_raw)
+            except (TypeError, ValueError) as exc:
+                raise ToolInvocationError("before_id must be an integer") from exc
+            if before < 1:
+                raise ToolInvocationError("before_id must be >= 1")
+
+        def _audit_call(fn: Any, *fn_args: Any) -> Any:
+            try:
+                return fn(*fn_args)
+            except HTTPException as exc:
+                detail = exc.detail
+                msg = detail if isinstance(detail, str) else str(detail)
+                raise ToolInvocationError(msg) from exc
+
+        action_f = _audit_call(
+            audit_routes._validate_action_filter, args.get("action")
+        )
+        target_f = _audit_call(
+            audit_routes._validate_target_kind, args.get("target_kind")
+        )
+        actor_f = audit_routes._coerce_actor_filter(args.get("actor"))
+        since_dt = _audit_call(
+            audit_routes._coerce_datetime, args.get("since"), "since"
+        )
+        until_dt = _audit_call(
+            audit_routes._coerce_datetime, args.get("until"), "until"
+        )
+        if since_dt is not None and until_dt is not None and since_dt > until_dt:
+            raise ToolInvocationError("since must be <= until")
+
+        actor_user = aliased(TenancyUser)
+        actor_token = aliased(ApiToken)
+        stmt = (
+            select(AuditLog, actor_user, actor_token)
+            .outerjoin(actor_user, actor_user.id == AuditLog.actor_user_id)
+            .outerjoin(actor_token, actor_token.id == AuditLog.actor_token_id)
+            .where(AuditLog.workspace_id == self._workspace_id)
+            .order_by(AuditLog.id.desc())
+            .limit(limit + 1)
+        )
+        if before is not None:
+            stmt = stmt.where(AuditLog.id < before)
+        if action_f is not None:
+            stmt = stmt.where(
+                (AuditLog.action == action_f)
+                | AuditLog.action.like(f"{action_f}.%")
+                | AuditLog.action.like(f"{action_f}%")
+            )
+        if target_f is not None:
+            stmt = stmt.where(AuditLog.target_kind == target_f)
+        if actor_f is not None:
+            needle = f"%{actor_f}%"
+            stmt = stmt.where(
+                func.lower(actor_user.email).like(needle)
+                | func.lower(actor_token.name).like(needle)
+            )
+        if since_dt is not None:
+            stmt = stmt.where(AuditLog.created_at >= since_dt)
+        if until_dt is not None:
+            stmt = stmt.where(AuditLog.created_at < until_dt)
+
+        rows = (await self._session.execute(stmt)).all()
+        has_more = len(rows) > limit
+        visible = rows[:limit]
+        items = []
+        for entry, user, token in visible:
+            items.append(
+                {
+                    "id": entry.id,
+                    "action": entry.action,
+                    "target_kind": entry.target_kind,
+                    "target_id": entry.target_id,
+                    "payload": entry.payload or {},
+                    "created_at": entry.created_at.isoformat()
+                    if entry.created_at
+                    else None,
+                    "actor": {
+                        "user_id": str(user.id) if user is not None else None,
+                        "user_email": user.email if user is not None else None,
+                        "token_id": str(token.id) if token is not None else None,
+                        "token_name": token.name if token is not None else None,
+                    },
+                }
+            )
+        next_cursor = items[-1]["id"] if has_more and items else None
+        return _json_result(
+            {"events": items, "count": len(items), "next_before_id": next_cursor}
+        )
+
+    async def _tool_list_workspace_members(self, args: dict[str, Any]) -> str:
+        from backend.app.api.v1.routes.workspaces import ROLES_READ
+
+        del args
+        await self._require_workspace_role(ROLES_READ)
+        stmt = (
+            select(WorkspaceMember, TenancyUser)
+            .join(TenancyUser, TenancyUser.id == WorkspaceMember.user_id)
+            .where(WorkspaceMember.workspace_id == self._workspace_id)
+            .order_by(WorkspaceMember.created_at.asc())
+        )
+        rows = (await self._session.execute(stmt)).all()
+        items = [
+            {
+                "member_id": str(m.id),
+                "user_id": str(u.id),
+                "email": u.email,
+                "display_name": u.display_name,
+                "role": m.role,
+                "pending": u.external_subject is None and u.password_hash is None,
+                "created_at": m.created_at.isoformat() if m.created_at else None,
+            }
+            for m, u in rows
+        ]
+        return _json_result({"members": items, "count": len(items)})
+
+    async def _tool_list_workspace_invites(self, args: dict[str, Any]) -> str:
+        from backend.app.api.v1.routes.workspaces import ROLES_ADMIN
+
+        del args
+        await self._require_workspace_role(ROLES_ADMIN)
+        rows = (
+            await self._session.execute(
+                select(WorkspaceInvite)
+                .where(WorkspaceInvite.workspace_id == self._workspace_id)
+                .order_by(WorkspaceInvite.created_at.desc())
+            )
+        ).scalars().all()
+        inviter_ids = [r.invited_by_user_id for r in rows if r.invited_by_user_id]
+        inviter_map: dict[uuid.UUID, str] = {}
+        if inviter_ids:
+            urows = (
+                await self._session.execute(
+                    select(TenancyUser).where(
+                        TenancyUser.id.in_({*inviter_ids})
+                    )
+                )
+            ).scalars().all()
+            inviter_map = {u.id: u.email for u in urows}
+        items = [
+            {
+                "id": str(r.id),
+                "email": r.email,
+                "role": r.role,
+                "invited_by_email": inviter_map.get(r.invited_by_user_id)
+                if r.invited_by_user_id
+                else None,
+                "expires_at": r.expires_at.isoformat() if r.expires_at else None,
+                "accepted_at": r.accepted_at.isoformat() if r.accepted_at else None,
+                "revoked_at": r.revoked_at.isoformat() if r.revoked_at else None,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in rows
+        ]
+        return _json_result({"invites": items, "count": len(items)})
+
+    async def _tool_get_workspace_settings(self, args: dict[str, Any]) -> str:
+        from backend.app.api.v1.routes.workspaces import ROLES_READ
+
+        del args
+        await self._require_workspace_role(ROLES_READ)
+        ws = await self._session.get(Workspace, self._workspace_id)
+        if ws is None:
+            raise ToolInvocationError("workspace not found")
+        return _json_result(
+            {
+                "id": str(ws.id),
+                "org_id": str(ws.org_id),
+                "slug": ws.slug,
+                "name": ws.name,
+                "catalog_sources": dict(ws.catalog_sources or {}),
+                "created_at": ws.created_at.isoformat() if ws.created_at else None,
+            }
+        )
+
+    async def _tool_list_workspace_artifact_repos(self, args: dict[str, Any]) -> str:
+        from backend.app.api.v1.routes.workspaces import ROLES_READ
+
+        del args
+        await self._require_workspace_role(ROLES_READ)
+        rows = (
+            await self._session.execute(
+                select(ArtifactRepo)
+                .where(ArtifactRepo.workspace_id == self._workspace_id)
+                .order_by(ArtifactRepo.created_at.asc())
+            )
+        ).scalars().all()
+        items = [
+            {
+                "id": str(r.id),
+                "kind": r.kind,
+                "url": r.url,
+                "default_branch": r.default_branch,
+                "last_sync_at": r.last_sync_at.isoformat()
+                if r.last_sync_at
+                else None,
+                "last_sync_sha": r.last_sync_sha,
+                "last_sync_error": r.last_sync_error,
+            }
+            for r in rows
+        ]
+        return _json_result({"artifact_repos": items, "count": len(items)})
+
+    async def _tool_get_knowledge_bucket(self, args: dict[str, Any]) -> str:
+        slug = _require_str(args, "slug")
+        include_summaries = bool(args.get("include_summaries", True))
+        summary_limit = _clamp_int(
+            args.get("summary_limit"),
+            default=20,
+            low=1,
+            high=_MAX_BUCKET_SUMMARIES,
+        )
+        row = (
+            await self._session.execute(
+                select(KnowledgeBucket).where(
+                    KnowledgeBucket.workspace_id == self._workspace_id,
+                    KnowledgeBucket.slug == slug.strip(),
+                )
+            )
+        ).scalars().first()
+        if row is None:
+            raise ToolInvocationError(f"bucket {slug!r} not found")
+        out: dict[str, Any] = {
+            "slug": row.slug,
+            "name": row.name,
+            "description": row.description,
+            "archived": row.archived_at is not None,
+            "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+            "summaries": [],
+        }
+        if include_summaries:
+            sums = (
+                await self._session.execute(
+                    select(BucketSummary)
+                    .where(BucketSummary.bucket_id == row.id)
+                    .order_by(desc(BucketSummary.created_at))
+                    .limit(summary_limit)
+                )
+            ).scalars().all()
+            out["summaries"] = [
+                {
+                    "id": str(s.id),
+                    "title": s.title,
+                    "summary": _truncate(s.summary, 2000),
+                    "created_at": s.created_at.isoformat() if s.created_at else None,
+                }
+                for s in sums
+            ]
+        return _json_result(out)
+
+    async def _tool_list_artifact_feedback(self, args: dict[str, Any]) -> str:
+        limit = _clamp_int(
+            args.get("limit"), default=25, low=1, high=_MAX_ARTIFACT_FEEDBACK_LIST
+        )
+        status_filter = args.get("status")
+        artifact_id = args.get("artifact_id")
+        stmt = (
+            select(ArtifactFeedback)
+            .where(ArtifactFeedback.workspace_id == self._workspace_id)
+            .order_by(desc(ArtifactFeedback.created_at))
+            .limit(limit)
+        )
+        if isinstance(status_filter, str) and status_filter:
+            stmt = stmt.where(ArtifactFeedback.status == status_filter)
+        if isinstance(artifact_id, str) and artifact_id.strip():
+            stmt = stmt.where(ArtifactFeedback.artifact_id == artifact_id.strip())
+        rows = (await self._session.execute(stmt)).scalars().all()
+        items = [
+            {
+                "id": str(r.id),
+                "artifact_id": r.artifact_id,
+                "status": r.status,
+                "body": _truncate(r.body, 600),
+                "linked_pr_url": r.linked_pr_url,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in rows
+        ]
+        return _json_result({"feedback": items, "count": len(items)})
+
     async def _tool_search_buckets(self, args: dict[str, Any]) -> str:
         query = _require_str(args, "query")
         limit = _clamp_int(
@@ -2035,6 +2726,26 @@ class ToolBox:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    async def _require_workspace_role(
+        self, accept: tuple[str, ...]
+    ) -> WorkspaceMember:
+        row = (
+            await self._session.execute(
+                select(WorkspaceMember).where(
+                    WorkspaceMember.workspace_id == self._workspace_id,
+                    WorkspaceMember.user_id == self._user_id,
+                )
+            )
+        ).scalars().first()
+        if row is None:
+            raise ToolInvocationError("workspace membership not found")
+        if row.role not in accept:
+            raise ToolInvocationError(
+                f"insufficient role for this tool (need one of {accept}; "
+                f"you are {row.role!r})"
+            )
+        return row
 
     async def _resolve_repo_with_install(
         self, repo_id: uuid.UUID

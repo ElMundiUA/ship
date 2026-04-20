@@ -98,28 +98,77 @@ class GitHubIssuesTracker:
         response.raise_for_status()
         return response
 
-    async def list_tickets(self, *, limit: int = 10) -> list[dict[str, Any]]:
-        """Open issues in ``owner/repo`` ordered by most-recently-updated."""
-        response = await self._request(
-            "GET",
-            f"/repos/{self._owner}/{self._repo}/issues",
-            params={
-                "state": "open",
+    async def list_tickets(
+        self,
+        *,
+        limit: int = 10,
+        state: str | None = None,
+        assignee_me: bool = False,
+        query: str | None = None,
+        assignee: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Issues in ``owner/repo`` ordered by most-recently-updated.
+
+        Uses the REST list endpoint when only state/assignee filters are
+        needed; falls back to ``/search/issues`` when ``query`` is set
+        (full-text in GitHub's search syntax).
+        """
+        del assignee_me  # installation tokens have no human "me"
+        raw_state = (state or "open").lower()
+        if raw_state == "all":
+            gh_state = "all"
+        elif raw_state in {"closed", "done", "completed"}:
+            gh_state = "closed"
+        else:
+            gh_state = "open"
+
+        per_page = max(1, min(limit, 50))
+        payload: list[Any]
+
+        if query and query.strip():
+            q_parts = [
+                f"repo:{self._owner}/{self._repo}",
+                "is:issue",
+            ]
+            if gh_state == "open":
+                q_parts.append("is:open")
+            elif gh_state == "closed":
+                q_parts.append("is:closed")
+            if assignee:
+                q_parts.append(f"assignee:{assignee}")
+            q_parts.append(query.strip())
+            q_str = " ".join(q_parts)
+            response = await self._request(
+                "GET",
+                "/search/issues",
+                params={"q": q_str, "per_page": min(per_page, 100)},
+            )
+            body = response.json() or {}
+            payload = body.get("items") or []
+        else:
+            params: dict[str, Any] = {
+                "state": gh_state,
                 "sort": "updated",
                 "direction": "desc",
-                "per_page": max(1, min(limit, 50)),
-            },
-        )
-        payload = response.json() or []
+                "per_page": per_page,
+            }
+            if assignee:
+                params["assignee"] = assignee
+            response = await self._request(
+                "GET",
+                f"/repos/{self._owner}/{self._repo}/issues",
+                params=params,
+            )
+            payload = response.json() or []
+
         out: list[dict[str, Any]] = []
         for item in payload:
-            # ``/issues`` also returns PRs; filter them out. The
-            # ``pull_request`` key is only present for PR rows.
             if item.get("pull_request") is not None:
                 continue
+            num = item.get("number")
             out.append(
                 {
-                    "id": f"{self._owner}/{self._repo}#{item.get('number')}",
+                    "id": f"{self._owner}/{self._repo}#{num}",
                     "title": item.get("title"),
                     "url": item.get("html_url"),
                     "status": item.get("state"),
