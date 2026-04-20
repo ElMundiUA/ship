@@ -1,0 +1,220 @@
+"""GitHub Issues implementation of :class:`TrackerGateway`.
+
+Backed by a :class:`GitHubInstallation` token, not by a user-supplied
+PAT, so the agent never needs an extra OAuth dance — if the Ship App
+is installed against the repo it can already open issues.
+
+Scope is deliberately narrow for C12: ``create_ticket`` is the only
+verb the real-agent toolbox needs out of the box. ``list_tickets`` /
+``transition`` / ``comment`` exist as stubs raising
+:class:`NotImplementedError` so any code that tries to use this as a
+full tracker fails loudly instead of silently doing nothing — we'll
+flesh those out when the daily-standup pipeline gets a
+GitHub-Issues-native surface (Day-5+).
+
+Unlike the Linear/Notion adapters, this one needs the *repo* to post
+against (Linear / Notion connect at the workspace / database level).
+That's wired in at construction time so the call sites don't have to
+re-resolve it per request.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import httpx
+
+from backend.app.core.config import Settings
+from backend.app.integrations.gateway.tracker import CreatedTicket, TicketRef
+from backend.app.integrations.github.app_auth import (
+    GITHUB_API_BASE,
+    fetch_installation_token,
+)
+
+
+class GitHubIssuesTracker:
+    """Per-(installation, repo) adapter implementing :class:`TrackerGateway`.
+
+    Construct one per repo. ``owner`` + ``repo`` are the natural
+    GitHub identifiers; ``installation_id`` points at the Ship App's
+    numeric install id (GitHub's side, not our UUID).
+    """
+
+    def __init__(
+        self,
+        *,
+        installation_id: int,
+        owner: str,
+        repo: str,
+        settings: Settings,
+        client: httpx.AsyncClient | None = None,
+    ) -> None:
+        self._installation_id = installation_id
+        self._owner = owner
+        self._repo = repo
+        self._settings = settings
+        self._client = client
+
+    async def _headers(self) -> dict[str, str]:
+        token = await fetch_installation_token(
+            self._installation_id,
+            settings=self._settings,
+            client=self._client,
+        )
+        return {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        json: Any | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> httpx.Response:
+        headers = await self._headers()
+        owns_client = self._client is None
+        http = self._client or httpx.AsyncClient(timeout=httpx.Timeout(10.0))
+        try:
+            response = await http.request(
+                method,
+                f"{GITHUB_API_BASE}{path}",
+                headers=headers,
+                json=json,
+                params=params,
+            )
+        finally:
+            if owns_client:
+                await http.aclose()
+        response.raise_for_status()
+        return response
+
+    async def list_tickets(self, *, limit: int = 10) -> list[dict[str, Any]]:
+        """Open issues in ``owner/repo`` ordered by most-recently-updated."""
+        response = await self._request(
+            "GET",
+            f"/repos/{self._owner}/{self._repo}/issues",
+            params={
+                "state": "open",
+                "sort": "updated",
+                "direction": "desc",
+                "per_page": max(1, min(limit, 50)),
+            },
+        )
+        payload = response.json() or []
+        out: list[dict[str, Any]] = []
+        for item in payload:
+            # ``/issues`` also returns PRs; filter them out. The
+            # ``pull_request`` key is only present for PR rows.
+            if item.get("pull_request") is not None:
+                continue
+            out.append(
+                {
+                    "id": f"{self._owner}/{self._repo}#{item.get('number')}",
+                    "title": item.get("title"),
+                    "url": item.get("html_url"),
+                    "status": item.get("state"),
+                    "updated_at": item.get("updated_at"),
+                }
+            )
+        return out
+
+    async def transition(self, ticket: TicketRef, *, to_state: str) -> None:
+        """Open / close a GitHub Issue.
+
+        GitHub's state machine is binary (open / closed); any
+        ``to_state`` other than those two raises :class:`ValueError`
+        so the agent sees a clear error instead of silently nothing.
+        """
+        if ticket.kind != "github_issues":
+            raise ValueError(
+                f"GitHubIssuesTracker can't transition kind={ticket.kind}"
+            )
+        normalized = to_state.lower()
+        if normalized not in {"open", "closed"}:
+            raise ValueError(
+                f"GitHub issues support only open/closed, got {to_state!r}"
+            )
+        number = _issue_number_from_ref(ticket)
+        await self._request(
+            "PATCH",
+            f"/repos/{self._owner}/{self._repo}/issues/{number}",
+            json={"state": normalized},
+        )
+
+    async def comment(self, ticket: TicketRef, *, body: str) -> None:
+        if ticket.kind != "github_issues":
+            raise ValueError(
+                f"GitHubIssuesTracker can't comment kind={ticket.kind}"
+            )
+        number = _issue_number_from_ref(ticket)
+        await self._request(
+            "POST",
+            f"/repos/{self._owner}/{self._repo}/issues/{number}/comments",
+            json={"body": body},
+        )
+
+    async def create_ticket(
+        self,
+        *,
+        title: str,
+        body: str,
+        labels: list[str] | None = None,
+        project_hint: str | None = None,
+    ) -> CreatedTicket:
+        """Open an issue in ``owner/repo``.
+
+        ``project_hint`` is ignored — the repo is decided at
+        construction time. ``labels`` are passed straight through;
+        GitHub silently ignores labels that don't exist on the
+        repo, which is the opposite of Linear's strictness and is
+        fine here because GitHub treats labels as free-form.
+        """
+        body_payload: dict[str, Any] = {"title": title, "body": body}
+        if labels:
+            body_payload["labels"] = labels
+        response = await self._request(
+            "POST",
+            f"/repos/{self._owner}/{self._repo}/issues",
+            json=body_payload,
+        )
+        payload = response.json() or {}
+        number = int(payload.get("number") or 0)
+        if number == 0:
+            raise ValueError("GitHub refused issue creation (no number).")
+        display_id = f"{self._owner}/{self._repo}#{number}"
+        return CreatedTicket(
+            ref=TicketRef(
+                kind="github_issues",
+                workspace_hint=f"{self._owner}/{self._repo}",
+                id=str(number),
+            ),
+            url=str(payload.get("html_url") or ""),
+            display_id=display_id,
+        )
+
+
+def _issue_number_from_ref(ticket: TicketRef) -> int:
+    """Extract the issue number from a ``github_issues`` :class:`TicketRef`.
+
+    ``TicketRef.id`` carries the bare number as a string (that's what
+    we stamp in :meth:`create_ticket`). If a caller somehow hands us
+    the ``owner/repo#N`` shape we still cope — but we refuse silently
+    bad inputs like floats or empty strings so the caller sees a
+    clean error.
+    """
+    raw = (ticket.id or "").strip()
+    if "#" in raw:
+        raw = raw.rsplit("#", 1)[-1]
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise ValueError(
+            f"TicketRef.id {ticket.id!r} is not a GitHub issue number"
+        ) from exc
+
+
+__all__ = ["GitHubIssuesTracker"]

@@ -225,6 +225,12 @@ class ChatThread(Base):
     __table_args__ = (
         Index("ix_chat_threads_workspace_id", "workspace_id"),
         Index("ix_chat_threads_repo_id", "repo_id"),
+        Index(
+            "ix_chat_threads_last_user_activity",
+            "workspace_id",
+            "created_by_user_id",
+            "last_user_activity_at",
+        ),
     )
 
     id: Mapped[uuid.UUID] = _pk()
@@ -251,6 +257,21 @@ class ChatThread(Base):
         String(16), nullable=False, server_default=text("'active'")
     )
     resolved_ticket_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # --- C12 single-window UX ---
+    # Natural-language recap rendered as a sentinel "Packed → bucket X"
+    # message in the chat UI when the thread is packed into a bucket.
+    topic_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    packed_into_bucket_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("knowledge_buckets.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    # Bumped on every user message; the "active thread" resolver picks
+    # the thread with the freshest value per (workspace, user) tuple.
+    last_user_activity_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     created_at: Mapped[datetime] = _ts_created()
     updated_at: Mapped[datetime] = _ts_updated()

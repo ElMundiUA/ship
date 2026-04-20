@@ -308,6 +308,16 @@ async def github_webhook(
         # in Day-4 when we start reacting to ``conclusion=failure``.
         await _apply_workflow_run_event(session, payload, action)
         await session.flush()
+    elif event == "push":
+        # C12: a push to the repo's default branch that touches
+        # ``.ship/knowledge/`` invalidates the agent's KB corpus. We
+        # run the reindexer inline because corpora are small (dozens
+        # of docs). If that becomes a hot spot we'll move it to a
+        # background task; for now keeping it in-request gives us a
+        # crisp 502 when embeddings are misconfigured instead of a
+        # silent delivery-succeeded / indexer-failed split.
+        await _apply_push_event_for_kb(session, payload, settings=settings)
+        await session.flush()
     else:
         # Day-1: silently 200 every other event. We log at debug to keep
         # signal high and avoid filling Sentry breadcrumbs with noise.
@@ -671,6 +681,83 @@ async def _apply_workflow_run_event(
         )
 
     logger.debug("workflow_run cached action=%s run_id=%s", action, external_id)
+
+
+async def _apply_push_event_for_kb(
+    session: AsyncSession,
+    payload: dict[str, Any],
+    *,
+    settings: Settings,
+) -> None:
+    """Re-embed the KB when a push touches ``.ship/knowledge/``.
+
+    We only care about pushes to the repo's default branch — pushes
+    to feature branches would force us to keep per-branch indexes,
+    which the agent isn't meant to reason about. The default branch
+    is also the only ref ``search_repo_kb`` ever resolves against.
+
+    The heuristic for "touches KB" is deliberately loose: we inspect
+    the ``commits[].added/modified/removed`` arrays GitHub sends in
+    the push payload. Missing those (huge pushes get truncated by
+    GitHub) falls back to "run the indexer unconditionally" — the
+    indexer itself is SHA-diffed so the worst case is a cheap no-op
+    pass.
+    """
+    from backend.app.services.agent.kb_indexer import KB_ROOT, reindex_repo_kb
+
+    install_id = (payload.get("installation") or {}).get("id")
+    repo_ext_id = (payload.get("repository") or {}).get("id")
+    repo_row = await _resolve_workspace_repo(session, install_id, repo_ext_id)
+    if repo_row is None:
+        return
+
+    # Pushes come as ``refs/heads/<branch>``. Skip anything that
+    # isn't the default branch.
+    ref_name = str(payload.get("ref") or "")
+    default_branch = repo_row.default_branch or "main"
+    if ref_name != f"refs/heads/{default_branch}":
+        return
+
+    # Fast-path: if commits payload is present, only reindex when a
+    # KB path is in the diff. Keeps noisy monorepo pushes cheap.
+    commits = payload.get("commits") or []
+    if commits:
+        touched_kb = False
+        for commit in commits:
+            for key in ("added", "modified", "removed"):
+                for path in commit.get(key) or []:
+                    if isinstance(path, str) and path.startswith(KB_ROOT + "/"):
+                        touched_kb = True
+                        break
+                if touched_kb:
+                    break
+            if touched_kb:
+                break
+        if not touched_kb:
+            return
+
+    install = await session.get(GitHubInstallation, repo_row.installation_id)
+    if install is None or install.suspended_at is not None:
+        return
+
+    try:
+        report = await reindex_repo_kb(session, repo_row, install, settings=settings)
+    except RuntimeError as exc:
+        # Missing OPENAI_API_KEY, almost certainly. Don't fail the
+        # webhook — GitHub would just retry and we'd keep failing.
+        # Operator sees this in logs + the next manual reindex will
+        # surface the same error as a 412.
+        logger.warning(
+            "push → KB reindex skipped for %s: %s", repo_row.full_name, exc
+        )
+        return
+
+    logger.info(
+        "push → KB reindex for %s: files_indexed=%d chunks_written=%d",
+        repo_row.full_name,
+        report.files_indexed,
+        report.chunks_written,
+    )
 
 
 # Map GitHub ``workflow_run.conclusion`` values onto our

@@ -43,6 +43,7 @@ from backend.app.db.models.tenancy import AuditLog
 from backend.app.db.session import get_session
 from backend.app.integrations.gateway.code_host import RepoRef, RepoSummary
 from backend.app.integrations.github.code_host_adapter import GitHubCodeHost
+from backend.app.services.agent.kb_indexer import reindex_repo_kb
 from backend.app.services.default_pipelines import (
     KNOWN_PRESETS,
     seed_default_pipelines,
@@ -516,6 +517,124 @@ async def get_code_map(
         ref_sha=row.default_branch,
         files=files[:_CODE_MAP_FILE_CAP],
         truncated=truncated,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Agent KB reindex (C12 Phase 1.3)
+# ---------------------------------------------------------------------------
+
+
+class KbReindexOut(BaseModel):
+    """Result of a manual ``POST /{repo_id}/kb/reindex`` call.
+
+    Mirrors :class:`~backend.app.services.agent.kb_indexer.IndexReport`
+    but typed with pydantic so the console can render the numbers
+    inline after the button click.
+    """
+
+    repo_id: uuid.UUID
+    files_discovered: int
+    files_indexed: int
+    files_skipped_unchanged: int
+    files_skipped_too_big: int
+    files_skipped_binary: int
+    chunks_deleted: int
+    chunks_written: int
+
+
+@router.post("/{repo_id}/kb/reindex", response_model=KbReindexOut)
+async def reindex_repo_kb_route(
+    workspace_id: uuid.UUID,
+    repo_id: uuid.UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> KbReindexOut:
+    """Re-embed ``.ship/knowledge/**/*.md`` for one repo on demand.
+
+    Synchronous by design: KB corpora are small (dozens of docs, not
+    thousands) so the whole pass finishes inside a request window.
+    When that stops being true we'll queue a job and stream the
+    report over SSE; for now keep it simple.
+
+    Admin-only. The push webhook (Day-3 polish) calls
+    :func:`reindex_repo_kb` directly, without going through this
+    route, so pushing code doesn't require an API token.
+    """
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+
+    row = (await session.execute(
+        select(WorkspaceRepo).where(
+            WorkspaceRepo.workspace_id == workspace_id,
+            WorkspaceRepo.id == repo_id,
+        )
+    )).scalars().first()
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    if row.installation_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Repo is not backed by a GitHub App installation.",
+        )
+    install = await session.get(GitHubInstallation, row.installation_id)
+    if install is None or install.suspended_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "GitHub App installation for this repo is missing or "
+                "suspended. Reinstall the Ship app."
+            ),
+        )
+
+    try:
+        report = await reindex_repo_kb(
+            session, row, install, settings=settings
+        )
+    except RuntimeError as exc:
+        # ``embed_texts`` raises RuntimeError when OPENAI_API_KEY is
+        # missing; surface that as a 412 (precondition) so the operator
+        # sees a clear "configure this first" message.
+        raise HTTPException(
+            status_code=status.HTTP_412_PRECONDITION_FAILED,
+            detail=str(exc),
+        ) from exc
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=(
+                "GitHub API rejected a KB indexer request "
+                f"(HTTP {exc.response.status_code})."
+            ),
+        ) from exc
+
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=auth.user.id,
+            actor_token_id=None,
+            action="agent.kb.reindex",
+            target_kind="workspace_repo",
+            target_id=str(repo_id),
+            payload={
+                "files_discovered": report.files_discovered,
+                "files_indexed": report.files_indexed,
+                "chunks_written": report.chunks_written,
+                "chunks_deleted": report.chunks_deleted,
+            },
+        )
+    )
+    await session.flush()
+
+    return KbReindexOut(
+        repo_id=repo_id,
+        files_discovered=report.files_discovered,
+        files_indexed=report.files_indexed,
+        files_skipped_unchanged=report.files_skipped_unchanged,
+        files_skipped_too_big=report.files_skipped_too_big,
+        files_skipped_binary=report.files_skipped_binary,
+        chunks_deleted=report.chunks_deleted,
+        chunks_written=report.chunks_written,
     )
 
 

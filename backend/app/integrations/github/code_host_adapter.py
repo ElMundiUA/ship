@@ -16,6 +16,7 @@ import httpx
 
 from backend.app.core.config import Settings
 from backend.app.integrations.gateway.code_host import (
+    BlobContent,
     CodeHostGateway,
     PullRequestRef,
     RepoRef,
@@ -140,6 +141,79 @@ class GitHubCodeHost(CodeHostGateway):
         )
         tree = response.json().get("tree", [])
         return [entry["path"] for entry in tree if entry.get("type") == "blob"]
+
+    async def get_blob(
+        self,
+        ref: RepoRef,
+        *,
+        path: str,
+        ref_sha: str | None = None,
+    ) -> BlobContent:
+        # ``/repos/{owner}/{repo}/contents/{path}`` returns a ``content``
+        # field (base64) for files < 1 MB; for anything bigger we fall
+        # back to the Blob API via the ``sha`` reported by the contents
+        # call, which streams up to 100 MB. Agent KB docs and source
+        # files comfortably fit under 1 MB, so the fallback is rare.
+        params: dict[str, str] = {}
+        if ref_sha is not None:
+            params["ref"] = ref_sha
+        try:
+            response = await self._request(
+                "GET",
+                f"/repos/{ref.owner}/{ref.repo}/contents/{path}",
+                params=params,
+            )
+        except httpx.HTTPStatusError as exc:  # pragma: no cover — translated
+            if exc.response.status_code == 404:
+                raise FileNotFoundError(
+                    f"{ref.owner}/{ref.repo}:{path}@{ref_sha or 'HEAD'}"
+                ) from exc
+            raise
+        payload = response.json()
+        if isinstance(payload, list):
+            # Directory, not a file — callers must walk themselves.
+            raise IsADirectoryError(f"{ref.owner}/{ref.repo}:{path}")
+
+        encoding = str(payload.get("encoding") or "base64")
+        size = int(payload.get("size") or 0)
+        sha = str(payload.get("sha") or "")
+        raw_content = str(payload.get("content") or "")
+        effective_ref = ref_sha or payload.get("ref") or "HEAD"
+
+        if encoding == "base64":
+            import base64
+
+            try:
+                decoded_bytes = base64.b64decode(raw_content.replace("\n", ""))
+                decoded = decoded_bytes.decode("utf-8")
+                return BlobContent(
+                    path=path,
+                    ref=str(effective_ref),
+                    sha=sha,
+                    size=size,
+                    encoding="utf-8",
+                    content=decoded,
+                )
+            except UnicodeDecodeError:
+                # Binary — hand back the base64 so the caller (KB
+                # indexer, get_repo_file) can refuse it without us
+                # re-downloading.
+                return BlobContent(
+                    path=path,
+                    ref=str(effective_ref),
+                    sha=sha,
+                    size=size,
+                    encoding="base64",
+                    content=raw_content,
+                )
+        return BlobContent(
+            path=path,
+            ref=str(effective_ref),
+            sha=sha,
+            size=size,
+            encoding=encoding,
+            content=raw_content,
+        )
 
 
 __all__ = ["GitHubCodeHost"]

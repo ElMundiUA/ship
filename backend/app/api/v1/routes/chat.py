@@ -1,36 +1,56 @@
-"""Chat window (C10) — scope tickets with the Ship agent.
+"""Chat surface for the C12 single-window agent.
 
-Shape:
+This module owns three distinct surfaces, co-located because they're
+the public face of the same conceptual object (the chat window):
 
-- ``POST /workspaces/{ws}/chat/threads`` — open a thread with a seed
-  prompt (becomes the first user message) and optional repo /
-  workflow binding. Returns the thread + initial messages.
-- ``GET  /workspaces/{ws}/chat/threads`` — list threads (paginated
-  in the future; pilot returns everything).
-- ``GET  /workspaces/{ws}/chat/threads/{id}`` — thread + ordered
-  messages.
-- ``POST /workspaces/{ws}/chat/threads/{id}/messages`` — append a
-  user message; server inserts a stub assistant reply. The reply is
-  an echo-ish heuristic until we wire a real model.
-- ``POST /workspaces/{ws}/chat/threads/{id}/resolve`` — mark the
-  thread as resolved with a ticket ref; optionally materialise an
-  :class:`Improvement` row from the last assistant message so the
-  decision loop picks it up.
+1. **Live conversation** —
+   ``GET  /workspaces/{ws}/chat/active``
+       Return the user's current active thread (the freshest one by
+       ``last_user_activity_at``), or create an empty one on the fly.
+   ``POST /workspaces/{ws}/chat/active/new``
+       Explicitly start a fresh thread. Optional ``pack_into_bucket``
+       argument packs the outgoing thread into a bucket first.
+   ``POST /workspaces/{ws}/chat/stream``
+       SSE endpoint. The request body carries the user's next
+       message; the response streams :class:`AgentEvent`-shaped JSON
+       chunks until the model stops. Runs the tool-use loop
+       server-side so the client only ever sees deltas + tool
+       results, never vendor-specific shapes.
+   ``POST /workspaces/{ws}/chat/threads/{id}/pack``
+       Pack a thread into a bucket (explicit user action or
+       accepted topic-shift banner).
 
-We keep the agent "stub" very simple on purpose — the whole point
-of this surface is to get the UX right first and swap the model
-behind :func:`_agent_reply` when we wire Claude/GPT in Phase-2.
+2. **Knowledge buckets** —
+   CRUD + listing under ``/workspaces/{ws}/buckets``. Buckets
+   live in :class:`KnowledgeBucket`; their summaries live in
+   :class:`BucketSummary`. The "continue from bucket" affordance
+   is a client-side operation — it just calls ``/active/new``
+   with the bucket's summaries pre-injected into the running
+   summary.
+
+3. **Artifact feedback** —
+   ``/workspaces/{ws}/artifact-feedback`` list + create, plus the
+   :meth:`create_artifact_feedback` tool feeds into the same
+   table. Separate from chat threads because feedback lives past
+   any individual conversation.
+
+We deliberately do not keep the old C10 "scope a ticket" surface
+around — the single-window model replaces it. Migrations keep
+older ``ChatThread`` rows around for audit.
 """
 
 from __future__ import annotations
 
+import json
+import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Any, AsyncIterator, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.api.v1.deps import AuthContext, get_current_auth
@@ -39,21 +59,40 @@ from backend.app.api.v1.routes.workspaces import (
     ROLES_READ,
     _require_membership,
 )
+from backend.app.core.config import Settings, get_settings
+from backend.app.db.models.agent_memory import (
+    ArtifactFeedback,
+    BucketSummary,
+    KnowledgeBucket,
+)
 from backend.app.db.models.agent_surface import (
-    ChatMessage,
+    ChatMessage as ChatMessageRow,
     ChatThread,
-    Improvement,
 )
 from backend.app.db.session import get_session
+from backend.app.services.agent.client import (
+    AgentClient,
+    ChatMessage,
+    End,
+    TextDelta,
+    ToolCall,
+    ToolResult,
+    pick_default_client,
+)
+from backend.app.services.agent.tools import ToolBox, ToolInvocationError
+from backend.app.services.agent.topic import TopicService
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter(
-    prefix="/workspaces/{workspace_id}/chat", tags=["chat"]
+    prefix="/workspaces/{workspace_id}",
+    tags=["chat-v2"],
 )
 
 
 # ---------------------------------------------------------------------------
-# Response types
+# Schemas
 # ---------------------------------------------------------------------------
 
 
@@ -68,78 +107,89 @@ class ChatMessageOut(BaseModel):
 
 class ChatThreadOut(BaseModel):
     id: uuid.UUID
-    workspace_id: uuid.UUID
-    repo_id: uuid.UUID | None
-    workflow_id: str | None
     title: str
     status: str
-    resolved_ticket_ref: str | None
+    topic_summary: str | None
+    packed_into_bucket_id: uuid.UUID | None
+    last_user_activity_at: datetime | None
     created_at: datetime
     updated_at: datetime
     message_count: int
-
-
-class ChatThreadDetailOut(ChatThreadOut):
     messages: list[ChatMessageOut]
 
 
-# ---------------------------------------------------------------------------
-# Agent stub
-# ---------------------------------------------------------------------------
+class ChatActiveNewIn(BaseModel):
+    title: str | None = Field(default=None, max_length=512)
+    pack_into_bucket_slug: str | None = Field(default=None, max_length=120)
+    pack_into_bucket_name: str | None = Field(default=None, max_length=255)
 
 
-def _agent_reply(user_message: str, thread: ChatThread) -> str:
-    """Produce a placeholder assistant response.
-
-    The stub is intentionally boring so nobody confuses it for a
-    real model while the product work finishes. It echoes the user's
-    prompt, restates the thread's binding (repo / workflow) so we
-    can verify that wiring end-to-end, and suggests a next-step
-    affordance. When we swap in a real model, this function becomes
-    the only touchpoint that changes.
-    """
-    lines = [
-        "Thanks — logging that.",
-    ]
-    if thread.repo_id:
-        lines.append(
-            f"I'll scope this against the repo bound to this thread "
-            f"({thread.repo_id})."
-        )
-    if thread.workflow_id:
-        lines.append(
-            f"Lane context: {thread.workflow_id}."
-        )
-    lines.append(
-        "Reply *resolve: TICKET-REF* when you want me to materialise a "
-        "ticket, or *cancel* to archive this thread."
-    )
-    summary = user_message.strip().splitlines()[0][:200]
-    if summary:
-        lines.append(f"You said: “{summary}”")
-    return "\n".join(lines)
-
-
-# ---------------------------------------------------------------------------
-# Input models
-# ---------------------------------------------------------------------------
-
-
-class ChatThreadCreateIn(BaseModel):
-    title: str = Field(min_length=1, max_length=512)
-    initial_message: str = Field(min_length=1, max_length=20_000)
-    repo_id: uuid.UUID | None = None
-    workflow_id: str | None = Field(default=None, max_length=120)
-
-
-class ChatMessageAppendIn(BaseModel):
+class ChatStreamIn(BaseModel):
     body: str = Field(min_length=1, max_length=20_000)
+    # Classifier is optional — the client can disable it when the
+    # user toggled "always continue" in the header affordance.
+    classify_shift: bool = True
 
 
-class ChatResolveIn(BaseModel):
-    ticket_ref: str = Field(min_length=1, max_length=255)
-    create_improvement: bool = False
-    action: Literal["resolved", "archived"] = "resolved"
+class PackThreadIn(BaseModel):
+    bucket_slug: str | None = Field(default=None, max_length=120)
+    bucket_id: uuid.UUID | None = None
+    bucket_name: str | None = Field(default=None, max_length=255)
+
+
+class BucketOut(BaseModel):
+    id: uuid.UUID
+    slug: str
+    name: str
+    description: str | None
+    archived_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+    summary_count: int
+
+
+class BucketSummaryOut(BaseModel):
+    id: uuid.UUID
+    bucket_id: uuid.UUID
+    thread_id: uuid.UUID | None
+    title: str
+    summary: str
+    created_at: datetime
+
+
+class BucketCreateIn(BaseModel):
+    slug: str | None = Field(default=None, max_length=120)
+    name: str = Field(min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=2000)
+
+
+class BucketUpdateIn(BaseModel):
+    name: str | None = Field(default=None, max_length=255)
+    description: str | None = Field(default=None, max_length=2000)
+    archived: bool | None = None
+
+
+class ArtifactFeedbackIn(BaseModel):
+    artifact_id: str = Field(min_length=1, max_length=255)
+    body: str = Field(min_length=1, max_length=20_000)
+    context: dict = Field(default_factory=dict)
+
+
+class ArtifactFeedbackUpdateIn(BaseModel):
+    status: Literal["open", "triaged", "merged", "closed"] | None = None
+    linked_pr_url: str | None = Field(default=None, max_length=1024)
+
+
+class ArtifactFeedbackOut(BaseModel):
+    id: uuid.UUID
+    artifact_id: str
+    body: str
+    status: str
+    linked_pr_url: str | None
+    context: dict
+    created_by_user_id: uuid.UUID | None
+    created_at: datetime
+    updated_at: datetime
 
 
 # ---------------------------------------------------------------------------
@@ -147,38 +197,603 @@ class ChatResolveIn(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _msg_to_out(row: ChatMessage) -> ChatMessageOut:
+def _msg_to_out(row: ChatMessageRow) -> ChatMessageOut:
     return ChatMessageOut(
         id=row.id,
         thread_id=row.thread_id,
         role=row.role,
         body=row.body,
-        meta=row.meta,
+        meta=row.meta or {},
         created_at=row.created_at,
     )
+
+
+async def _thread_messages(
+    session: AsyncSession, thread_id: uuid.UUID
+) -> list[ChatMessageRow]:
+    rows = (
+        await session.execute(
+            select(ChatMessageRow)
+            .where(ChatMessageRow.thread_id == thread_id)
+            .order_by(ChatMessageRow.created_at.asc())
+        )
+    ).scalars().all()
+    return list(rows)
 
 
 def _thread_to_out(
-    row: ChatThread, message_count: int
+    thread: ChatThread, messages: list[ChatMessageRow]
 ) -> ChatThreadOut:
     return ChatThreadOut(
-        id=row.id,
-        workspace_id=row.workspace_id,
-        repo_id=row.repo_id,
-        workflow_id=row.workflow_id,
-        title=row.title,
-        status=row.status,
-        resolved_ticket_ref=row.resolved_ticket_ref,
-        created_at=row.created_at,
-        updated_at=row.updated_at,
-        message_count=message_count,
+        id=thread.id,
+        title=thread.title,
+        status=thread.status,
+        topic_summary=thread.topic_summary,
+        packed_into_bucket_id=thread.packed_into_bucket_id,
+        last_user_activity_at=thread.last_user_activity_at,
+        created_at=thread.created_at,
+        updated_at=thread.updated_at,
+        message_count=len(messages),
+        messages=[_msg_to_out(m) for m in messages],
     )
 
 
-async def _load_thread(
-    session: AsyncSession, workspace_id: uuid.UUID, thread_id: uuid.UUID
+async def _find_or_create_active_thread(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    user_id: uuid.UUID,
+    title: str | None = None,
 ) -> ChatThread:
+    """Resolve the user's single active thread (create if none).
+
+    "Active" = status==active AND not yet packed into a bucket,
+    ordered by ``last_user_activity_at`` DESC. We pick the freshest
+    one so a user with several legacy threads lands on the most
+    recent activity.
+    """
     row = (
+        await session.execute(
+            select(ChatThread)
+            .where(
+                ChatThread.workspace_id == workspace_id,
+                ChatThread.created_by_user_id == user_id,
+                ChatThread.status == "active",
+                ChatThread.packed_into_bucket_id.is_(None),
+            )
+            .order_by(desc(ChatThread.last_user_activity_at))
+            .limit(1)
+        )
+    ).scalars().first()
+    if row is not None:
+        return row
+    row = ChatThread(
+        workspace_id=workspace_id,
+        created_by_user_id=user_id,
+        title=title or "New conversation",
+        status="active",
+        last_user_activity_at=datetime.now(timezone.utc),
+    )
+    session.add(row)
+    await session.flush()
+    # Pull server-generated timestamps into the instance so callers
+    # can serialise them without triggering lazy IO.
+    await session.refresh(row)
+    return row
+
+
+def _get_agent_client(settings: Settings) -> AgentClient:
+    """Factory with a crisp 412 when no LLM key is configured."""
+    try:
+        return pick_default_client(settings)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_412_PRECONDITION_FAILED,
+            detail=str(exc),
+        ) from exc
+
+
+# ---------------------------------------------------------------------------
+# Active thread — GET / new
+# ---------------------------------------------------------------------------
+
+
+@router.get("/chat/active", response_model=ChatThreadOut)
+async def get_active_thread(
+    workspace_id: uuid.UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> ChatThreadOut:
+    """Return (or create) the caller's single active chat thread.
+
+    The single-window UX never shows a thread list — the user always
+    sees exactly one conversation. This endpoint is how the UI
+    bootstraps on page load.
+    """
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
+    thread = await _find_or_create_active_thread(
+        session, workspace_id=workspace_id, user_id=auth.user.id
+    )
+    messages = await _thread_messages(session, thread.id)
+    return _thread_to_out(thread, messages)
+
+
+@router.post("/chat/active/new", response_model=ChatThreadOut)
+async def new_active_thread(
+    workspace_id: uuid.UUID,
+    payload: ChatActiveNewIn | None = None,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> ChatThreadOut:
+    """Archive the current active thread and open a fresh one.
+
+    Optional ``pack_into_bucket_slug`` / ``_name`` packs the
+    outgoing thread into a bucket as part of the same request —
+    this is what the topic-shift banner calls when the user
+    accepts the suggestion.
+    """
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+    current = await _find_or_create_active_thread(
+        session, workspace_id=workspace_id, user_id=auth.user.id
+    )
+    payload = payload or ChatActiveNewIn()
+
+    # Pack the outgoing thread if the caller asked. We only pack
+    # if it has real messages — an empty bootstrapped thread is
+    # not worth a bucket summary.
+    messages = await _thread_messages(session, current.id)
+    if (
+        (payload.pack_into_bucket_slug or payload.pack_into_bucket_name)
+        and messages
+    ):
+        agent = _get_agent_client(settings)
+        topic = TopicService(
+            session,
+            settings=settings,
+            client=agent,
+            workspace_id=workspace_id,
+            user_id=auth.user.id,
+        )
+        await topic.pack_topic(
+            current,
+            bucket_slug=payload.pack_into_bucket_slug,
+            bucket_name=payload.pack_into_bucket_name,
+        )
+
+    current.status = "archived"
+    await session.flush()
+
+    fresh = ChatThread(
+        workspace_id=workspace_id,
+        created_by_user_id=auth.user.id,
+        title=payload.title or "New conversation",
+        status="active",
+        last_user_activity_at=datetime.now(timezone.utc),
+    )
+    session.add(fresh)
+    await session.flush()
+    await session.refresh(fresh)
+    return _thread_to_out(fresh, [])
+
+
+# ---------------------------------------------------------------------------
+# Streaming chat
+# ---------------------------------------------------------------------------
+
+
+@router.post("/chat/stream")
+async def chat_stream(
+    workspace_id: uuid.UUID,
+    payload: ChatStreamIn,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> StreamingResponse:
+    """Stream the agent's next turn as Server-Sent Events.
+
+    Event types emitted on the wire (``data: <json>\\n\\n``):
+
+    - ``{"type": "thread", "thread": ...}`` — sent once up-front so
+      the client can render the thread id / updated title before
+      any model output.
+    - ``{"type": "user_message", "message": ...}`` — the persisted
+      user message row.
+    - ``{"type": "topic_shift", "decision": {...}}`` — optional;
+      only when the classifier suggests a shift. The UI renders
+      a banner the user can accept / dismiss.
+    - ``{"type": "delta", "text": "..."}`` — one chunk of the
+      assistant's streaming text.
+    - ``{"type": "tool_call", "id": "...", "name": "...",
+      "arguments": {...}}`` — the model requested a tool.
+    - ``{"type": "tool_result", "id": "...", "output": "..."}`` —
+      the tool's response we fed back to the model.
+    - ``{"type": "assistant_message", "message": ...}`` — the
+      persisted assistant message at the end of the turn.
+    - ``{"type": "end", "finish_reason": "...", "usage": {...}}`` —
+      terminal marker; UI unlocks the composer.
+    - ``{"type": "error", "error": "..."}`` — fatal error during
+      the turn; UI surfaces it and unlocks the composer.
+    """
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+    thread = await _find_or_create_active_thread(
+        session, workspace_id=workspace_id, user_id=auth.user.id
+    )
+    if thread.status != "active":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"thread is {thread.status}; open a new one first",
+        )
+
+    agent = _get_agent_client(settings)
+
+    # Persist the user message before streaming so a client that
+    # drops the connection mid-stream still has its message
+    # recorded (and the classifier / assembler see it too).
+    user_msg = ChatMessageRow(
+        thread_id=thread.id,
+        role="user",
+        author_user_id=auth.user.id,
+        body=payload.body,
+    )
+    session.add(user_msg)
+    thread.last_user_activity_at = datetime.now(timezone.utc)
+    await session.flush()
+
+    classify_shift = payload.classify_shift
+
+    async def event_stream() -> AsyncIterator[bytes]:
+        async for chunk in _run_agent_turn(
+            session=session,
+            settings=settings,
+            agent=agent,
+            workspace_id=workspace_id,
+            user_id=auth.user.id,
+            thread=thread,
+            user_msg=user_msg,
+            classify_shift=classify_shift,
+        ):
+            yield chunk
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _sse(payload: dict[str, Any]) -> bytes:
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8")
+
+
+class _NullSpan:
+    """No-op span used when Sentry is not installed / not initialised.
+
+    Matches the tiny subset of the ``sentry_sdk.Span`` surface we
+    actually call (``set_data``) so the tracing code path can be
+    branchless at the use site.
+    """
+
+    def set_data(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+
+class _NullSpanCM:
+    def __enter__(self) -> _NullSpan:
+        return _NullSpan()
+
+    def __exit__(self, *_exc: Any) -> None:
+        return None
+
+
+def _null_span() -> _NullSpanCM:
+    return _NullSpanCM()
+
+
+async def _run_agent_turn(
+    *,
+    session: AsyncSession,
+    settings: Settings,
+    agent: AgentClient,
+    workspace_id: uuid.UUID,
+    user_id: uuid.UUID,
+    thread: ChatThread,
+    user_msg: ChatMessageRow,
+    classify_shift: bool,
+) -> AsyncIterator[bytes]:
+    """Run one user→assistant turn end to end, emitting SSE frames.
+
+    Flow:
+
+    1. Emit the ``thread`` + ``user_message`` frames so the UI
+       renders the user's message immediately.
+    2. (Optional) run the topic-shift classifier — if it fires,
+       emit ``topic_shift`` so the UI can render the banner while
+       the model is still thinking.
+    3. Assemble the LLM prompt via :class:`TopicService`.
+    4. Drive the tool-use loop (``astream`` → tool calls → tool
+       results → ``astream`` again) until the model stops.
+    5. Persist the assistant message + emit ``end``.
+
+    Cost guard: per-turn token budget tracked via ``End.usage`` on
+    each round-trip; once exceeded we break the loop with an
+    ``error`` frame.
+    """
+    topic_service = TopicService(
+        session,
+        settings=settings,
+        client=agent,
+        workspace_id=workspace_id,
+        user_id=user_id,
+    )
+    toolbox = ToolBox(
+        session,
+        settings=settings,
+        workspace_id=workspace_id,
+        user_id=user_id,
+    )
+
+    messages = await _thread_messages(session, thread.id)
+    # The live row for user_msg is already in messages (we flushed
+    # it above). Everything before it is history.
+    prior_messages = [m for m in messages if m.id != user_msg.id]
+    await session.refresh(thread)
+
+    yield _sse({"type": "thread", "thread": _thread_to_out(thread, messages).model_dump(mode="json")})
+    yield _sse({"type": "user_message", "message": _msg_to_out(user_msg).model_dump(mode="json")})
+
+    # Topic-shift classifier (best-effort, non-blocking errors).
+    if classify_shift:
+        try:
+            decision = await topic_service.classify_shift(
+                running_summary=thread.topic_summary,
+                recent_messages=prior_messages,
+                new_user_message=user_msg.body,
+            )
+            if decision.shifted:
+                yield _sse(
+                    {
+                        "type": "topic_shift",
+                        "decision": {
+                            "shifted": True,
+                            "reason": decision.reason,
+                            "new_title": decision.new_title,
+                        },
+                    }
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("topic classifier errored: %s", exc)
+
+    # Retrieve supporting context. Both are best-effort — a KB miss
+    # or a bucket-retrieval error shouldn't kill the turn.
+    retrieved_buckets = []
+    try:
+        retrieved_buckets = await topic_service.retrieve_buckets(
+            query=user_msg.body, limit=3
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("bucket retrieval failed: %s", exc)
+
+    assembled = await topic_service.assemble_messages(
+        thread=thread,
+        recent_messages=prior_messages,
+        new_user_message=user_msg.body,
+        retrieved_buckets=retrieved_buckets,
+    )
+
+    cost_budget = settings.agent_max_tokens_per_turn
+    cost_spent = 0
+    assistant_text_parts: list[str] = []
+    tool_invocations: list[dict[str, Any]] = []
+    tool_spec_list = toolbox.specs()
+    finish_reason = "stop"
+
+    # Tool-use loop. One iteration = one ``astream`` round-trip.
+    # Break when the model answers without calling tools, or when
+    # we hit the hard cap on iterations (defensive, otherwise a
+    # bug in a tool could loop forever).
+    _MAX_TOOL_LOOPS = 8
+    # Sentry tracing is optional — only wrap when the SDK is
+    # present, otherwise the chat turn runs exactly as before.
+    try:
+        import sentry_sdk  # type: ignore[import-not-found]
+    except Exception:  # pragma: no cover — sentry is an extra
+        sentry_sdk = None  # type: ignore[assignment]
+
+    for _loop in range(_MAX_TOOL_LOOPS):
+        span_cm = (
+            sentry_sdk.start_span(op="ai.chat", description="agent.astream")
+            if sentry_sdk is not None
+            else _null_span()
+        )
+        with span_cm as span:
+            if span is not None:
+                span.set_data("loop_index", _loop)
+                span.set_data("vendor", settings.agent_vendor)
+                span.set_data(
+                    "model", settings.agent_model_main or "(default)"
+                )
+                span.set_data("tool_count", len(tool_spec_list))
+                span.set_data("message_count", len(assembled))
+            try:
+                stream = await agent.astream(
+                    assembled,
+                    tools=tool_spec_list,
+                    max_tokens=None,
+                    temperature=0.2,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("astream failed")
+                yield _sse(
+                    {"type": "error", "error": f"agent stream failed: {exc}"}
+                )
+                return
+
+            turn_text_parts: list[str] = []
+            turn_tool_calls: list[ToolCall] = []
+
+            try:
+                async for event in stream:
+                    if isinstance(event, TextDelta):
+                        turn_text_parts.append(event.text)
+                        yield _sse({"type": "delta", "text": event.text})
+                    elif isinstance(event, ToolCall):
+                        turn_tool_calls.append(event)
+                    elif isinstance(event, ToolResult):
+                        pass
+                    elif isinstance(event, End):
+                        finish_reason = event.finish_reason
+                        cost_spent += int(event.usage.get("total_tokens", 0))
+                        if span is not None:
+                            for key, value in event.usage.items():
+                                span.set_data(f"tokens.{key}", int(value))
+                            span.set_data("finish_reason", event.finish_reason)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("agent stream errored")
+                yield _sse(
+                    {"type": "error", "error": f"agent stream errored: {exc}"}
+                )
+                return
+
+        # Record the assistant's partial text on this iteration.
+        if turn_text_parts:
+            assistant_text_parts.extend(turn_text_parts)
+
+        # Cost guard — stop before we burn more than the budget.
+        if cost_spent > cost_budget:
+            yield _sse(
+                {
+                    "type": "error",
+                    "error": (
+                        f"agent exceeded token budget ({cost_spent} > "
+                        f"{cost_budget}); ending turn"
+                    ),
+                }
+            )
+            finish_reason = "length"
+            break
+
+        if not turn_tool_calls:
+            break
+
+        # Run each requested tool and append the results back to
+        # the message stack for the next astream round-trip.
+        openai_style_tool_calls = [
+            {
+                "id": tc.id,
+                "type": "function",
+                "function": {
+                    "name": tc.name,
+                    "arguments": json.dumps(tc.arguments, ensure_ascii=False),
+                },
+            }
+            for tc in turn_tool_calls
+        ]
+        assembled.append(
+            ChatMessage(
+                role="assistant",
+                content="".join(turn_text_parts),
+                tool_calls=openai_style_tool_calls,
+            )
+        )
+        for tc in turn_tool_calls:
+            yield _sse(
+                {
+                    "type": "tool_call",
+                    "id": tc.id,
+                    "name": tc.name,
+                    "arguments": tc.arguments,
+                }
+            )
+            try:
+                output = await toolbox.invoke(tc.name, tc.arguments)
+            except ToolInvocationError as exc:
+                output = json.dumps({"error": str(exc)}, ensure_ascii=False)
+            tool_invocations.append(
+                {"id": tc.id, "name": tc.name, "arguments": tc.arguments, "output": output}
+            )
+            assembled.append(
+                ChatMessage(
+                    role="tool",
+                    name=tc.name,
+                    tool_call_id=tc.id,
+                    content=output,
+                )
+            )
+            yield _sse(
+                {
+                    "type": "tool_result",
+                    "id": tc.id,
+                    "name": tc.name,
+                    "output": output,
+                }
+            )
+    else:
+        # Exhausted the tool-loop cap — end with a best-effort
+        # finish_reason so the UI surfaces the truncation.
+        finish_reason = "tool_loop_exceeded"
+
+    assistant_body = "".join(assistant_text_parts).strip() or (
+        "(no response)"
+    )
+    meta = {
+        "tool_invocations": tool_invocations,
+        "tokens": cost_spent,
+        "vendor": agent.vendor,
+    }
+    assistant_row = ChatMessageRow(
+        thread_id=thread.id,
+        role="assistant",
+        body=assistant_body,
+        meta=meta,
+    )
+    session.add(assistant_row)
+    thread.updated_at = datetime.now(timezone.utc)
+    await session.flush()
+
+    yield _sse(
+        {
+            "type": "assistant_message",
+            "message": _msg_to_out(assistant_row).model_dump(mode="json"),
+        }
+    )
+    yield _sse(
+        {
+            "type": "end",
+            "finish_reason": finish_reason,
+            "usage": {"total_tokens": cost_spent},
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
+# Pack thread → bucket
+# ---------------------------------------------------------------------------
+
+
+@router.post("/chat/threads/{thread_id}/pack", response_model=BucketSummaryOut)
+async def pack_thread(
+    workspace_id: uuid.UUID,
+    thread_id: uuid.UUID,
+    payload: PackThreadIn,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> BucketSummaryOut:
+    """Pack a thread into a bucket and archive it.
+
+    ``bucket_id`` / ``bucket_slug`` pick an existing bucket; if
+    only ``bucket_name`` is provided we auto-create one (the UI
+    uses this for "pack into new bucket"). The thread moves to
+    ``archived`` status once packed so the caller has to open a
+    fresh thread to continue.
+    """
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+
+    thread = (
         await session.execute(
             select(ChatThread).where(
                 ChatThread.id == thread_id,
@@ -186,236 +801,345 @@ async def _load_thread(
             )
         )
     ).scalars().first()
-    if row is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Chat thread not found.",
-        )
-    return row
+    if thread is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
-
-async def _thread_messages(
-    session: AsyncSession, thread_id: uuid.UUID
-) -> list[ChatMessage]:
-    rows = (
-        await session.execute(
-            select(ChatMessage)
-            .where(ChatMessage.thread_id == thread_id)
-            .order_by(ChatMessage.created_at.asc())
-        )
-    ).scalars().all()
-    return list(rows)
-
-
-# ---------------------------------------------------------------------------
-# Routes
-# ---------------------------------------------------------------------------
-
-
-@router.post(
-    "/threads",
-    response_model=ChatThreadDetailOut,
-    status_code=status.HTTP_201_CREATED,
-)
-async def create_thread(
-    workspace_id: uuid.UUID,
-    payload: ChatThreadCreateIn,
-    auth: AuthContext = Depends(get_current_auth),
-    session: AsyncSession = Depends(get_session),
-) -> ChatThreadDetailOut:
-    """Open a new thread with a seed user message and a stub reply."""
-    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
-    thread = ChatThread(
+    agent = _get_agent_client(settings)
+    topic_service = TopicService(
+        session,
+        settings=settings,
+        client=agent,
         workspace_id=workspace_id,
-        repo_id=payload.repo_id,
-        created_by_user_id=auth.user.id,
-        title=payload.title,
-        workflow_id=payload.workflow_id,
+        user_id=auth.user.id,
     )
-    session.add(thread)
+    try:
+        summary = await topic_service.pack_topic(
+            thread,
+            bucket_id=payload.bucket_id,
+            bucket_slug=payload.bucket_slug,
+            bucket_name=payload.bucket_name,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+    thread.status = "archived"
     await session.flush()
-    await session.refresh(thread)
 
-    user_msg = ChatMessage(
-        thread_id=thread.id,
-        role="user",
-        author_user_id=auth.user.id,
-        body=payload.initial_message,
+    return BucketSummaryOut(
+        id=summary.id,
+        bucket_id=summary.bucket_id,
+        thread_id=summary.thread_id,
+        title=summary.title,
+        summary=summary.summary,
+        created_at=summary.created_at,
     )
-    assistant_msg = ChatMessage(
-        thread_id=thread.id,
-        role="assistant",
-        body=_agent_reply(payload.initial_message, thread),
-        meta={"stub": True},
-    )
-    session.add_all([user_msg, assistant_msg])
-    await session.flush()
-    messages = await _thread_messages(session, thread.id)
-
-    await session.refresh(thread)
-    out = ChatThreadDetailOut(
-        **_thread_to_out(thread, len(messages)).model_dump(),
-        messages=[_msg_to_out(m) for m in messages],
-    )
-    return out
 
 
-@router.get("/threads", response_model=list[ChatThreadOut])
-async def list_threads(
+# ---------------------------------------------------------------------------
+# Buckets CRUD
+# ---------------------------------------------------------------------------
+
+
+@router.get("/buckets", response_model=list[BucketOut])
+async def list_buckets(
     workspace_id: uuid.UUID,
+    include_archived: bool = False,
     auth: AuthContext = Depends(get_current_auth),
     session: AsyncSession = Depends(get_session),
-) -> list[ChatThreadOut]:
+) -> list[BucketOut]:
     await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
-    rows = (
+    stmt = (
+        select(KnowledgeBucket)
+        .where(KnowledgeBucket.workspace_id == workspace_id)
+        .order_by(KnowledgeBucket.name)
+    )
+    if not include_archived:
+        stmt = stmt.where(KnowledgeBucket.archived_at.is_(None))
+    buckets = (await session.execute(stmt)).scalars().all()
+
+    out: list[BucketOut] = []
+    for b in buckets:
+        count = (
+            await session.execute(
+                select(BucketSummary.id).where(BucketSummary.bucket_id == b.id)
+            )
+        ).scalars().all()
+        out.append(
+            BucketOut(
+                id=b.id,
+                slug=b.slug,
+                name=b.name,
+                description=b.description,
+                archived_at=b.archived_at,
+                created_at=b.created_at,
+                updated_at=b.updated_at,
+                summary_count=len(count),
+            )
+        )
+    return out
+
+
+@router.post("/buckets", response_model=BucketOut, status_code=status.HTTP_201_CREATED)
+async def create_bucket(
+    workspace_id: uuid.UUID,
+    payload: BucketCreateIn,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> BucketOut:
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+    slug = (payload.slug or _slugify(payload.name)).strip()
+    if not slug:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="slug is empty"
+        )
+    existing = (
         await session.execute(
-            select(ChatThread)
-            .where(ChatThread.workspace_id == workspace_id)
-            .order_by(ChatThread.updated_at.desc())
+            select(KnowledgeBucket).where(
+                KnowledgeBucket.workspace_id == workspace_id,
+                KnowledgeBucket.slug == slug,
+            )
+        )
+    ).scalars().first()
+    if existing is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"bucket {slug!r} already exists",
+        )
+    row = KnowledgeBucket(
+        workspace_id=workspace_id,
+        slug=slug,
+        name=payload.name,
+        description=payload.description,
+    )
+    session.add(row)
+    await session.flush()
+    # ``updated_at`` has ``onupdate=now()`` applied server-side, which
+    # expires the attribute post-flush; an explicit refresh pulls the
+    # freshly generated value without tripping the sync-IO guard.
+    await session.refresh(row)
+    return BucketOut(
+        id=row.id,
+        slug=row.slug,
+        name=row.name,
+        description=row.description,
+        archived_at=row.archived_at,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+        summary_count=0,
+    )
+
+
+@router.get("/buckets/{slug}", response_model=BucketOut)
+async def get_bucket(
+    workspace_id: uuid.UUID,
+    slug: str,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> BucketOut:
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
+    row = await _load_bucket(session, workspace_id, slug)
+    count = (
+        await session.execute(
+            select(BucketSummary.id).where(BucketSummary.bucket_id == row.id)
         )
     ).scalars().all()
-    # One SELECT count per thread is fine in pilot volumes; if this
-    # becomes hot we flip to a materialised view.
-    out: list[ChatThreadOut] = []
-    for row in rows:
-        count = len(await _thread_messages(session, row.id))
-        out.append(_thread_to_out(row, count))
-    return out
+    return BucketOut(
+        id=row.id,
+        slug=row.slug,
+        name=row.name,
+        description=row.description,
+        archived_at=row.archived_at,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+        summary_count=len(count),
+    )
+
+
+@router.patch("/buckets/{slug}", response_model=BucketOut)
+async def update_bucket(
+    workspace_id: uuid.UUID,
+    slug: str,
+    payload: BucketUpdateIn,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> BucketOut:
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+    row = await _load_bucket(session, workspace_id, slug)
+    if payload.name is not None:
+        row.name = payload.name
+    if payload.description is not None:
+        row.description = payload.description
+    if payload.archived is not None:
+        row.archived_at = datetime.now(timezone.utc) if payload.archived else None
+    await session.flush()
+    await session.refresh(row)
+    count = (
+        await session.execute(
+            select(BucketSummary.id).where(BucketSummary.bucket_id == row.id)
+        )
+    ).scalars().all()
+    return BucketOut(
+        id=row.id,
+        slug=row.slug,
+        name=row.name,
+        description=row.description,
+        archived_at=row.archived_at,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+        summary_count=len(count),
+    )
 
 
 @router.get(
-    "/threads/{thread_id}", response_model=ChatThreadDetailOut
+    "/buckets/{slug}/summaries", response_model=list[BucketSummaryOut]
 )
-async def get_thread(
+async def list_bucket_summaries(
     workspace_id: uuid.UUID,
-    thread_id: uuid.UUID,
+    slug: str,
     auth: AuthContext = Depends(get_current_auth),
     session: AsyncSession = Depends(get_session),
-) -> ChatThreadDetailOut:
+) -> list[BucketSummaryOut]:
     await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
-    thread = await _load_thread(session, workspace_id, thread_id)
-    messages = await _thread_messages(session, thread.id)
-    return ChatThreadDetailOut(
-        **_thread_to_out(thread, len(messages)).model_dump(),
-        messages=[_msg_to_out(m) for m in messages],
+    bucket = await _load_bucket(session, workspace_id, slug)
+    rows = (
+        await session.execute(
+            select(BucketSummary)
+            .where(BucketSummary.bucket_id == bucket.id)
+            .order_by(desc(BucketSummary.created_at))
+        )
+    ).scalars().all()
+    return [
+        BucketSummaryOut(
+            id=r.id,
+            bucket_id=r.bucket_id,
+            thread_id=r.thread_id,
+            title=r.title,
+            summary=r.summary,
+            created_at=r.created_at,
+        )
+        for r in rows
+    ]
+
+
+async def _load_bucket(
+    session: AsyncSession, workspace_id: uuid.UUID, slug: str
+) -> KnowledgeBucket:
+    row = (
+        await session.execute(
+            select(KnowledgeBucket).where(
+                KnowledgeBucket.workspace_id == workspace_id,
+                KnowledgeBucket.slug == slug,
+            )
+        )
+    ).scalars().first()
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    return row
+
+
+def _slugify(value: str) -> str:
+    out: list[str] = []
+    for ch in value.lower().strip():
+        if ch.isalnum():
+            out.append(ch)
+        elif ch in {" ", "-", "_"}:
+            out.append("-")
+    slug = "".join(out).strip("-")
+    return slug[:120]
+
+
+# ---------------------------------------------------------------------------
+# Artifact feedback
+# ---------------------------------------------------------------------------
+
+
+@router.get("/artifact-feedback", response_model=list[ArtifactFeedbackOut])
+async def list_artifact_feedback(
+    workspace_id: uuid.UUID,
+    status_filter: Literal["open", "triaged", "merged", "closed"] | None = None,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> list[ArtifactFeedbackOut]:
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
+    stmt = (
+        select(ArtifactFeedback)
+        .where(ArtifactFeedback.workspace_id == workspace_id)
+        .order_by(desc(ArtifactFeedback.created_at))
     )
+    if status_filter is not None:
+        stmt = stmt.where(ArtifactFeedback.status == status_filter)
+    rows = (await session.execute(stmt)).scalars().all()
+    return [_feedback_to_out(r) for r in rows]
 
 
 @router.post(
-    "/threads/{thread_id}/messages",
-    response_model=ChatThreadDetailOut,
+    "/artifact-feedback",
+    response_model=ArtifactFeedbackOut,
     status_code=status.HTTP_201_CREATED,
 )
-async def append_message(
+async def create_artifact_feedback_route(
     workspace_id: uuid.UUID,
-    thread_id: uuid.UUID,
-    payload: ChatMessageAppendIn,
+    payload: ArtifactFeedbackIn,
     auth: AuthContext = Depends(get_current_auth),
     session: AsyncSession = Depends(get_session),
-) -> ChatThreadDetailOut:
-    """Append a user message and the stub assistant reply.
-
-    Behaviour matters for the UX contract:
-
-    - Refuses to append to ``resolved`` / ``archived`` threads (422);
-      the UI should have hidden the composer in those cases. We
-      still check because API clients can't be trusted.
-    - Bumps ``updated_at`` so the thread list sorts recent ones up.
-    - Keeps the stub reply inline so the round-trip is single-shot;
-      when we add the real model we keep the contract (client sends
-      one message, gets the updated thread back).
-    """
+) -> ArtifactFeedbackOut:
     await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
-    thread = await _load_thread(session, workspace_id, thread_id)
-    if thread.status != "active":
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Thread is {thread.status}; can't append.",
-        )
-
-    user_msg = ChatMessage(
-        thread_id=thread.id,
-        role="user",
-        author_user_id=auth.user.id,
+    row = ArtifactFeedback(
+        workspace_id=workspace_id,
+        artifact_id=payload.artifact_id,
+        created_by_user_id=auth.user.id,
         body=payload.body,
+        status="open",
+        context=payload.context,
     )
-    assistant_msg = ChatMessage(
-        thread_id=thread.id,
-        role="assistant",
-        body=_agent_reply(payload.body, thread),
-        meta={"stub": True},
-    )
-    session.add_all([user_msg, assistant_msg])
-    thread.updated_at = datetime.now(timezone.utc)
+    session.add(row)
     await session.flush()
-    messages = await _thread_messages(session, thread.id)
-    await session.refresh(thread)
-    return ChatThreadDetailOut(
-        **_thread_to_out(thread, len(messages)).model_dump(),
-        messages=[_msg_to_out(m) for m in messages],
-    )
+    await session.refresh(row)
+    return _feedback_to_out(row)
 
 
-@router.post(
-    "/threads/{thread_id}/resolve", response_model=ChatThreadDetailOut
+@router.patch(
+    "/artifact-feedback/{feedback_id}", response_model=ArtifactFeedbackOut
 )
-async def resolve_thread(
+async def update_artifact_feedback(
     workspace_id: uuid.UUID,
-    thread_id: uuid.UUID,
-    payload: ChatResolveIn,
+    feedback_id: uuid.UUID,
+    payload: ArtifactFeedbackUpdateIn,
     auth: AuthContext = Depends(get_current_auth),
     session: AsyncSession = Depends(get_session),
-) -> ChatThreadDetailOut:
-    """Mark the thread terminal and optionally spawn an Improvement.
-
-    The typical flow: user chats, converges on a proposal, clicks
-    "create ticket" → we stamp ``resolved_ticket_ref`` (the caller
-    passes the tracker ref) and, when ``create_improvement=True``,
-    materialise an :class:`Improvement` row so the C8 page shows
-    the accept / decline buttons on it.
-
-    ``action="archived"`` is the "close without a ticket" path —
-    the thread ends but no Improvement is created.
-    """
+) -> ArtifactFeedbackOut:
     await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
-    thread = await _load_thread(session, workspace_id, thread_id)
-    if thread.status != "active":
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Thread is already {thread.status}.",
+    row = (
+        await session.execute(
+            select(ArtifactFeedback).where(
+                ArtifactFeedback.workspace_id == workspace_id,
+                ArtifactFeedback.id == feedback_id,
+            )
         )
-    thread.status = payload.action
-    thread.resolved_ticket_ref = payload.ticket_ref if payload.action == "resolved" else None
-
-    if payload.action == "resolved" and payload.create_improvement:
-        # Grab the latest assistant message body as the improvement
-        # body — in practice this is the agent's summary of the
-        # proposed change. If there isn't one (stub disabled?) we
-        # fall back to the thread title.
-        messages = await _thread_messages(session, thread.id)
-        assistant_tail = next(
-            (m.body for m in reversed(messages) if m.role == "assistant"),
-            None,
-        )
-        improvement = Improvement(
-            workspace_id=workspace_id,
-            repo_id=thread.repo_id,
-            kind="chat",
-            title=thread.title[:512],
-            body=assistant_tail or thread.title,
-            context={
-                "thread_id": str(thread.id),
-                "ticket_ref": payload.ticket_ref,
-            },
-        )
-        session.add(improvement)
-
+    ).scalars().first()
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    if payload.status is not None:
+        row.status = payload.status
+    if payload.linked_pr_url is not None:
+        row.linked_pr_url = payload.linked_pr_url
     await session.flush()
-    await session.refresh(thread)
-    messages = await _thread_messages(session, thread.id)
-    return ChatThreadDetailOut(
-        **_thread_to_out(thread, len(messages)).model_dump(),
-        messages=[_msg_to_out(m) for m in messages],
+    await session.refresh(row)
+    return _feedback_to_out(row)
+
+
+def _feedback_to_out(row: ArtifactFeedback) -> ArtifactFeedbackOut:
+    return ArtifactFeedbackOut(
+        id=row.id,
+        artifact_id=row.artifact_id,
+        body=row.body,
+        status=row.status,
+        linked_pr_url=row.linked_pr_url,
+        context=row.context or {},
+        created_by_user_id=row.created_by_user_id,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
     )
 
 

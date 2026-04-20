@@ -19,7 +19,7 @@ from typing import Any
 
 import httpx
 
-from backend.app.integrations.gateway.tracker import TicketRef
+from backend.app.integrations.gateway.tracker import CreatedTicket, TicketRef
 
 
 LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql"
@@ -141,6 +141,112 @@ class LinearTracker:
         }
         """
         await self._gql(mutation, {"id": ticket.id, "body": body})
+
+    async def create_ticket(
+        self,
+        *,
+        title: str,
+        body: str,
+        labels: list[str] | None = None,
+        project_hint: str | None = None,
+    ) -> CreatedTicket:
+        """Create a Linear issue under the requested team.
+
+        ``project_hint`` accepts either a team UUID or a team key
+        (``ENG``) — we resolve to UUID up front because the
+        ``issueCreate`` mutation requires a UUID. When the user
+        omits a hint and the workspace has exactly one team, we
+        pick it; otherwise we raise so the caller surfaces a
+        "which team?" prompt rather than silently landing the
+        ticket in the wrong inbox.
+
+        ``labels`` are resolved by name within the team's label
+        set. Unknown labels are dropped (not auto-created) — we
+        don't want the agent polluting a customer's Linear with
+        freshly-invented tag names.
+        """
+        team_id = await self._resolve_team_id(project_hint)
+        label_ids = (
+            await self._resolve_label_ids(team_id, labels) if labels else []
+        )
+
+        mutation = """
+        mutation ShipCreateIssue($input: IssueCreateInput!) {
+          issueCreate(input: $input) {
+            success
+            issue { id identifier url }
+          }
+        }
+        """
+        input_payload: dict[str, Any] = {
+            "teamId": team_id,
+            "title": title,
+            "description": body,
+        }
+        if label_ids:
+            input_payload["labelIds"] = label_ids
+
+        data = await self._gql(mutation, {"input": input_payload})
+        issue = ((data.get("issueCreate") or {}).get("issue")) or {}
+        if not (data.get("issueCreate") or {}).get("success") or not issue:
+            raise ValueError("Linear refused issueCreate (no issue returned).")
+
+        return CreatedTicket(
+            ref=TicketRef(
+                kind="linear",
+                workspace_hint=team_id,
+                id=str(issue["id"]),
+            ),
+            url=str(issue.get("url") or ""),
+            display_id=str(issue.get("identifier") or issue["id"]),
+        )
+
+    async def _resolve_team_id(self, hint: str | None) -> str:
+        """Accept ``None`` / UUID / team key, return a team UUID."""
+        if hint:
+            # If it already looks like a UUID, trust it; Linear IDs
+            # are 36-char UUIDs, team keys are uppercase short codes.
+            if len(hint) >= 32 and "-" in hint:
+                return hint
+            lookup = """
+            query ShipResolveTeam($key: String!) {
+              teams(filter: {key: {eq: $key}}) { nodes { id } }
+            }
+            """
+            data = await self._gql(lookup, {"key": hint})
+            nodes = (data.get("teams") or {}).get("nodes") or []
+            if not nodes:
+                raise ValueError(f"Linear team {hint!r} not found.")
+            return str(nodes[0]["id"])
+        # No hint — fall back to "exactly one team" auto-pick.
+        first = """
+        query ShipFirstTeam { teams(first: 2) { nodes { id key } } }
+        """
+        data = await self._gql(first)
+        nodes = (data.get("teams") or {}).get("nodes") or []
+        if len(nodes) != 1:
+            raise ValueError(
+                "Linear workspace has multiple teams; pass project_hint="
+                "<team-key or id>."
+            )
+        return str(nodes[0]["id"])
+
+    async def _resolve_label_ids(
+        self, team_id: str, labels: list[str]
+    ) -> list[str]:
+        if not labels:
+            return []
+        query = """
+        query ShipLabels($teamId: String!) {
+          team(id: $teamId) { labels { nodes { id name } } }
+        }
+        """
+        data = await self._gql(query, {"teamId": team_id})
+        nodes = (
+            ((data.get("team") or {}).get("labels") or {}).get("nodes") or []
+        )
+        want = {lbl.lower() for lbl in labels}
+        return [str(n["id"]) for n in nodes if str(n.get("name", "")).lower() in want]
 
 
 __all__ = ["LinearTracker", "LINEAR_GRAPHQL_URL"]

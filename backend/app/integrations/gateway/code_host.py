@@ -39,6 +39,24 @@ class PullRequestRef:
 
 
 @dataclass(frozen=True, slots=True)
+class BlobContent:
+    """One file's contents at a given ref.
+
+    ``encoding`` is ``"utf-8"`` for text blobs and ``"base64"`` for
+    binary; the caller decides how to decode. ``sha`` is the vendor's
+    blob SHA so indexing pipelines can diff against the last known
+    version without re-downloading.
+    """
+
+    path: str
+    ref: str
+    sha: str
+    size: int
+    encoding: str
+    content: str
+
+
+@dataclass(frozen=True, slots=True)
 class RepoSummary:
     """Rich snapshot of a repository for UI listings (picker, dashboard).
 
@@ -91,5 +109,25 @@ class CodeHostGateway(Protocol):
 
         Used by the code-map pipeline; truncated upstream to 5k entries on
         very large repos.
+        """
+        ...
+
+    async def get_blob(
+        self,
+        ref: RepoRef,
+        *,
+        path: str,
+        ref_sha: str | None = None,
+    ) -> BlobContent:
+        """Fetch the contents of ``path`` at ``ref_sha`` (HEAD if omitted).
+
+        Used by the agent KB indexer (``.ship/knowledge/**/*.md``) and the
+        agent's ``get_repo_file`` tool. Binary files come back with
+        ``encoding="base64"`` so callers can refuse to feed binaries to
+        the model; text files are already decoded into ``content``.
+
+        Raises :class:`FileNotFoundError` when the path does not exist at
+        the requested ref so callers can distinguish "GitHub said no"
+        from "GitHub is down".
         """
         ...

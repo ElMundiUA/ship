@@ -588,12 +588,21 @@ export function updateImprovement(
   );
 }
 
-// --- Chat threads (C10) ----------------------------------------------------
+// --- Chat threads + agent memory (C12) -------------------------------------
+//
+// The C12 surface collapses the "list of chats" UX into a single
+// window: there's one active thread per user per workspace, and
+// topic shifts are handled by packing the current thread into a
+// named knowledge bucket. The API here is minimal on purpose —
+// the streaming turn is routed through ``/api/chat/stream`` (see
+// ``console/src/app/api/chat/stream/route.ts``) because Next.js
+// server components can't directly expose an SSE socket to the
+// browser.
 
 export interface ApiChatMessage {
   id: string;
   thread_id: string;
-  role: "user" | "assistant" | "system";
+  role: "user" | "assistant" | "system" | "tool";
   body: string;
   meta: Record<string, unknown>;
   created_at: string;
@@ -601,83 +610,196 @@ export interface ApiChatMessage {
 
 export interface ApiChatThread {
   id: string;
-  workspace_id: string;
-  repo_id: string | null;
-  workflow_id: string | null;
   title: string;
-  status: "active" | "resolved" | "archived";
-  resolved_ticket_ref: string | null;
+  status: "active" | "archived";
+  topic_summary: string | null;
+  packed_into_bucket_id: string | null;
+  last_user_activity_at: string | null;
   created_at: string;
   updated_at: string;
   message_count: number;
-}
-
-export interface ApiChatThreadDetail extends ApiChatThread {
   messages: ApiChatMessage[];
 }
 
-export function listChatThreads(
+export function getActiveChatThread(
   workspaceId: string,
   token?: string,
-): Promise<ApiChatThread[]> {
-  return apiFetch<ApiChatThread[]>(
-    `/v1/workspaces/${encodeURIComponent(workspaceId)}/chat/threads`,
+): Promise<ApiChatThread> {
+  return apiFetch<ApiChatThread>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/chat/active`,
     { token },
   );
 }
 
-export function getChatThread(
+export function newActiveChatThread(
+  workspaceId: string,
+  payload: {
+    title?: string | null;
+    pack_into_bucket_slug?: string | null;
+    pack_into_bucket_name?: string | null;
+  } = {},
+  options: { token?: string } = {},
+): Promise<ApiChatThread> {
+  return apiFetch<ApiChatThread>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/chat/active/new`,
+    { method: "POST", body: payload, token: options.token },
+  );
+}
+
+export function packChatThread(
   workspaceId: string,
   threadId: string,
+  payload: { bucket_slug?: string | null; bucket_name?: string | null } = {},
+  options: { token?: string } = {},
+): Promise<{ bucket_id: string; bucket_slug: string; summary_id: string }> {
+  return apiFetch(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/chat/threads/${encodeURIComponent(threadId)}/pack`,
+    { method: "POST", body: payload, token: options.token },
+  );
+}
+
+// --- Knowledge buckets ------------------------------------------------------
+
+export interface ApiBucket {
+  id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  archived_at: string | null;
+  created_at: string;
+  updated_at: string;
+  summary_count: number;
+}
+
+export interface ApiBucketSummary {
+  id: string;
+  bucket_id: string;
+  thread_id: string | null;
+  title: string;
+  summary: string;
+  created_at: string;
+}
+
+export function listBuckets(
+  workspaceId: string,
+  opts: { includeArchived?: boolean; token?: string } = {},
+): Promise<ApiBucket[]> {
+  const qs = opts.includeArchived ? "?include_archived=true" : "";
+  return apiFetch<ApiBucket[]>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/buckets${qs}`,
+    { token: opts.token },
+  );
+}
+
+export function getBucket(
+  workspaceId: string,
+  slug: string,
   token?: string,
-): Promise<ApiChatThreadDetail> {
-  return apiFetch<ApiChatThreadDetail>(
-    `/v1/workspaces/${encodeURIComponent(workspaceId)}/chat/threads/${encodeURIComponent(threadId)}`,
+): Promise<ApiBucket> {
+  return apiFetch<ApiBucket>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/buckets/${encodeURIComponent(slug)}`,
     { token },
   );
 }
 
-export function createChatThread(
+export function createBucket(
   workspaceId: string,
-  payload: {
-    title: string;
-    initial_message: string;
-    repo_id?: string | null;
-    workflow_id?: string | null;
-  },
+  payload: { slug?: string | null; name: string; description?: string | null },
   options: { token?: string } = {},
-): Promise<ApiChatThreadDetail> {
-  return apiFetch<ApiChatThreadDetail>(
-    `/v1/workspaces/${encodeURIComponent(workspaceId)}/chat/threads`,
+): Promise<ApiBucket> {
+  return apiFetch<ApiBucket>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/buckets`,
     { method: "POST", body: payload, token: options.token },
   );
 }
 
-export function appendChatMessage(
+export function updateBucket(
   workspaceId: string,
-  threadId: string,
-  body: string,
+  slug: string,
+  patch: {
+    name?: string | null;
+    description?: string | null;
+    archived?: boolean | null;
+  },
   options: { token?: string } = {},
-): Promise<ApiChatThreadDetail> {
-  return apiFetch<ApiChatThreadDetail>(
-    `/v1/workspaces/${encodeURIComponent(workspaceId)}/chat/threads/${encodeURIComponent(threadId)}/messages`,
-    { method: "POST", body: { body }, token: options.token },
+): Promise<ApiBucket> {
+  return apiFetch<ApiBucket>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/buckets/${encodeURIComponent(slug)}`,
+    { method: "PATCH", body: patch, token: options.token },
   );
 }
 
-export function resolveChatThread(
+export function listBucketSummaries(
   workspaceId: string,
-  threadId: string,
+  slug: string,
+  token?: string,
+): Promise<ApiBucketSummary[]> {
+  return apiFetch<ApiBucketSummary[]>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/buckets/${encodeURIComponent(slug)}/summaries`,
+    { token },
+  );
+}
+
+// --- Artifact feedback ------------------------------------------------------
+
+export type ApiArtifactFeedbackStatus =
+  | "open"
+  | "triaged"
+  | "merged"
+  | "closed";
+
+export interface ApiArtifactFeedback {
+  id: string;
+  artifact_id: string;
+  body: string;
+  status: ApiArtifactFeedbackStatus;
+  linked_pr_url: string | null;
+  context: Record<string, unknown>;
+  created_by_user_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export function listArtifactFeedback(
+  workspaceId: string,
+  opts: { status?: ApiArtifactFeedbackStatus; token?: string } = {},
+): Promise<ApiArtifactFeedback[]> {
+  const qs = opts.status
+    ? `?status_filter=${encodeURIComponent(opts.status)}`
+    : "";
+  return apiFetch<ApiArtifactFeedback[]>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/artifact-feedback${qs}`,
+    { token: opts.token },
+  );
+}
+
+export function createArtifactFeedback(
+  workspaceId: string,
   payload: {
-    ticket_ref: string;
-    create_improvement?: boolean;
-    action?: "resolved" | "archived";
+    artifact_id: string;
+    body: string;
+    context?: Record<string, unknown>;
   },
   options: { token?: string } = {},
-): Promise<ApiChatThreadDetail> {
-  return apiFetch<ApiChatThreadDetail>(
-    `/v1/workspaces/${encodeURIComponent(workspaceId)}/chat/threads/${encodeURIComponent(threadId)}/resolve`,
+): Promise<ApiArtifactFeedback> {
+  return apiFetch<ApiArtifactFeedback>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/artifact-feedback`,
     { method: "POST", body: payload, token: options.token },
+  );
+}
+
+export function updateArtifactFeedback(
+  workspaceId: string,
+  feedbackId: string,
+  patch: {
+    status?: ApiArtifactFeedbackStatus | null;
+    linked_pr_url?: string | null;
+  },
+  options: { token?: string } = {},
+): Promise<ApiArtifactFeedback> {
+  return apiFetch<ApiArtifactFeedback>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/artifact-feedback/${encodeURIComponent(feedbackId)}`,
+    { method: "PATCH", body: patch, token: options.token },
   );
 }
 

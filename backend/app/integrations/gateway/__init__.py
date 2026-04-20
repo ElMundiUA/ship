@@ -14,17 +14,24 @@ vendor through the lowest common denominator.
 from backend.app.integrations.gateway.chat import ChatGateway
 from backend.app.integrations.gateway.ci import CIGateway
 from backend.app.integrations.gateway.code_host import (
+    BlobContent,
     CodeHostGateway,
     PullRequestRef,
     RepoRef,
     RepoSummary,
 )
-from backend.app.integrations.gateway.tracker import TicketRef, TrackerGateway
+from backend.app.integrations.gateway.tracker import (
+    CreatedTicket,
+    TicketRef,
+    TrackerGateway,
+)
 
 __all__ = [
+    "BlobContent",
     "ChatGateway",
     "CIGateway",
     "CodeHostGateway",
+    "CreatedTicket",
     "PullRequestRef",
     "RepoRef",
     "RepoSummary",
