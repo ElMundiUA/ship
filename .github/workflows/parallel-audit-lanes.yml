@@ -1,0 +1,72 @@
+name: Ship · Parallel audit lanes
+# Day-4 Phase-2 starter workflow for the `tech_debt` pipeline kind.
+# Runs weekly (Monday 06:00 UTC) and via dashboard "Run now". Emits a
+# tech-debt report artefact + a Ship callback so the dashboard knows
+# whether the last audit pass went green. Replace the individual
+# audit steps with real lane bodies (SBOM, dep scan, dead-code, test
+# coverage, etc.). Keep the fan-out pattern: each lane exports its own
+# `lane.<name>.status` output so the aggregator summarises which lanes
+# failed, not just a boolean.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ship_run_id:
+        description: "Ship pipeline_run id we should report against"
+        required: true
+      ship_callback_url:
+        description: "URL Ship is listening on for the result callback"
+        required: true
+      ship_run_token:
+        description: "Short-lived bearer token Ship issued for this run"
+        required: true
+  schedule:
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run audit lanes
+        id: audit
+        # Placeholder: succeed with a note. Replace with parallel calls
+        # to `shipctl audit run --lane <name>` or bespoke scripts that
+        # aggregate each lane's outcome into a single `status`.
+        run: |
+          set -euo pipefail
+          echo "status=succeeded" >> "$GITHUB_OUTPUT"
+          echo "summary=Parallel audit lanes completed (starter stub — no lanes wired)" >> "$GITHUB_OUTPUT"
+
+      - name: Report back to Ship
+        if: always() && inputs.ship_callback_url != ''
+        env:
+          SHIP_RUN_ID: ${{ inputs.ship_run_id }}
+          SHIP_CALLBACK_URL: ${{ inputs.ship_callback_url }}
+          SHIP_RUN_TOKEN: ${{ inputs.ship_run_token }}
+          GATE_STATUS: ${{ steps.audit.outputs.status || 'failed' }}
+          GATE_SUMMARY: ${{ steps.audit.outputs.summary || 'Audit lanes failed before reporting' }}
+          GH_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          GH_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --show-error --silent \
+            -X POST "$SHIP_CALLBACK_URL" \
+            -H "Authorization: Bearer $SHIP_RUN_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data @- <<JSON
+          {
+            "status": "$GATE_STATUS",
+            "summary": "$GATE_SUMMARY",
+            "metrics": {
+              "gh_workflow_run_id": $GH_RUN_ID,
+              "gh_html_url": "$GH_RUN_URL"
+            }
+          }
+          JSON
