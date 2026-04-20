@@ -64,7 +64,7 @@ const SEMVER_OR_RANGE_REGEX =
 export function DEFAULT_CONFIG() {
   return {
     version: CONFIG_SCHEMA_VERSION,
-    shipctl_min: "0.11.1",
+    shipctl_min: "0.11.2",
     api: {
       base_url: "https://ship.elmundi.com",
       channel: "stable",

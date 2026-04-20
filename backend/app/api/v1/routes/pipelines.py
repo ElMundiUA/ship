@@ -1077,6 +1077,35 @@ async def list_pipeline_runs(
     return [_run_to_out(r) for r in rows]
 
 
+@router.get(
+    "/{pipeline_id}/runs/{run_id}",
+    response_model=PipelineRunOut,
+)
+async def get_pipeline_run(
+    workspace_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    run_id: uuid.UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> PipelineRunOut:
+    """Fetch a single run row (for the console detail page).
+
+    Members can read. The run must belong to ``pipeline_id`` and the
+    workspace — otherwise ``404`` so UUID enumeration across tenants
+    doesn't leak existence.
+    """
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
+    await _load_pipeline(session, workspace_id, pipeline_id)
+    run = await session.get(PipelineRun, run_id)
+    if (
+        run is None
+        or run.pipeline_id != pipeline_id
+        or run.workspace_id != workspace_id
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    return _run_to_out(run)
+
+
 # ---------------------------------------------------------------------------
 # Routes — global (callback only, bearer-token auth)
 # ---------------------------------------------------------------------------
