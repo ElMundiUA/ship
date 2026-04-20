@@ -43,13 +43,21 @@ Repository permissions:
 
 | Permission | Access | Why |
 |---|---|---|
-| Pull requests | Read & write | Comment, label, request reviews |
-| Contents | Read-only | List files, fetch raw blobs for AI context |
+| Pull requests | Read & write | Comment, label, request reviews, open the install-workflow PR from the dashboard |
+| Contents | **Read & write** | Read blobs for AI context **and** create the branch + file for the install-workflow PR (Day-4 Phase-1) |
 | Metadata | Read-only | Mandatory; granted automatically |
 | Issues | Read & write | Tracker integration when GH Issues is the chosen backend |
-| Workflows | Read-only | Inspect `.github/workflows/` for the wizard's "Approve workflows" step |
+| Workflows | **Read & write** | Required by the GitHub Contents API whenever the committed file lives under `.github/workflows/**` (install PR ships the starter YAML there) |
 | Checks | Read-only | Show CI status next to PRs |
-| Actions | Read-only | Read `workflow_run` history |
+| Actions | **Read & write** | Probe workflows via `/actions/workflows` (Read) **and** dispatch them via `workflow_dispatch` (Write) on Run-now |
+
+> **Heads-up for upgrades:** bumping Contents / Workflows / Actions from
+> Read to Read-write flips the App into "permissions update pending"
+> for every existing installation. Customers must click "Review and
+> accept" on the App page before the dashboard's Install / Run-now
+> actions start succeeding. Until they do, the console surfaces
+> `install_upstream_workflows_scope` (or similar) banners so it's
+> obvious what's blocking.
 
 Organization permissions: none required for the pilot.
 

@@ -80,7 +80,27 @@ const RUN_REASONS: Record<string, { tone: BadgeTone; label: string }> = {
   },
   install_upstream: {
     tone: "err",
-    label: "GitHub refused the install PR — try again or check perms.",
+    label: "GitHub refused the install PR — see details below and re-check App perms.",
+  },
+  install_upstream_workflows_scope: {
+    tone: "err",
+    label:
+      'GitHub App is missing the "Workflows" permission (Read & Write). Open the App settings → Permissions → Workflows, accept the update, then retry Install.',
+  },
+  install_upstream_contents_scope: {
+    tone: "err",
+    label:
+      'GitHub App is missing "Contents" (Read & Write). Grant it in the App settings, accept the permissions update, then retry.',
+  },
+  install_upstream_pulls_scope: {
+    tone: "err",
+    label:
+      'GitHub App is missing "Pull requests" (Read & Write). Grant it in the App settings, accept the permissions update, then retry.',
+  },
+  install_upstream_repo_not_selected: {
+    tone: "warn",
+    label:
+      "The App isn't granted access to this repo. Open the App installation in GitHub, add the repo to the selected list, then retry.",
   },
 };
 
@@ -95,7 +115,7 @@ export function DashboardLive({
   workspaceName: string;
   workspaceSlug: string;
   data: ApiDashboard;
-  banner?: { kind: string; reason: string };
+  banner?: { kind: string; reason: string; detail?: string };
 }) {
   const bannerInfo = banner ? RUN_REASONS[banner.reason] ?? null : null;
   const setupComplete = data.counts.active_repos > 0;
@@ -104,11 +124,18 @@ export function DashboardLive({
     <>
       {bannerInfo && (
         <div
-          className="mb-4 flex items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm"
+          className="mb-4 flex flex-col gap-1 rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm"
           role="status"
         >
-          <Badge tone={bannerInfo.tone}>{banner!.kind}</Badge>
-          <span className="text-white/80">{bannerInfo.label}</span>
+          <div className="flex items-start gap-2">
+            <Badge tone={bannerInfo.tone}>{banner!.kind}</Badge>
+            <span className="text-white/80">{bannerInfo.label}</span>
+          </div>
+          {banner?.detail && (
+            <p className="ml-[52px] break-words font-mono text-[11px] leading-snug text-white/55">
+              {banner.detail}
+            </p>
+          )}
         </div>
       )}
 

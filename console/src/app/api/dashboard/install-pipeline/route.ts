@@ -69,18 +69,72 @@ export async function POST(request: Request) {
             : "precondition";
         return back(origin, wsId, pipelineId, `install_${code}`);
       }
-      if (err.status === 502)
-        return back(origin, wsId, pipelineId, "install_upstream");
+      if (err.status === 502) {
+        const { reason, detail } = classifyUpstream(err.detail);
+        return back(origin, wsId, pipelineId, reason, detail);
+      }
       return back(origin, wsId, pipelineId, `http_${err.status}`);
     }
     return back(origin, wsId, pipelineId, "unknown");
   }
 }
 
-function back(origin: string, wsId: string, pipelineId: string, reason: string) {
+/**
+ * Map the backend's 502 ``{code, upstream_status, message}`` detail to
+ * a concrete banner reason. Specifically flags the three most common
+ * root causes so the user doesn't have to read a raw GitHub API body
+ * to figure out what to fix:
+ *
+ * - Missing GitHub App ``workflows`` permission (403 + "Resource not
+ *   accessible by integration" + the committed path starts with
+ *   ``.github/workflows/``). By far the #1 cause on pilot tenants.
+ * - Missing ``contents`` or ``pull_requests`` scope (same 403 body,
+ *   different API surface).
+ * - Repo not in the App's "selected repositories" list (404 on the
+ *   git/ref call).
+ *
+ * Anything else falls through to ``install_upstream`` with the
+ * upstream status + message snippet as ``detail`` so we at least
+ * surface something actionable in the banner.
+ */
+function classifyUpstream(
+  detail: unknown,
+): { reason: string; detail?: string } {
+  if (!detail || typeof detail !== "object") return { reason: "install_upstream" };
+  const d = detail as {
+    upstream_status?: unknown;
+    message?: unknown;
+  };
+  const status = typeof d.upstream_status === "number" ? d.upstream_status : 0;
+  const message = typeof d.message === "string" ? d.message : "";
+  const lower = message.toLowerCase();
+  const snippet = message
+    ? `GitHub ${status || "?"}: ${message.slice(0, 240)}`
+    : undefined;
+
+  if (status === 403 && lower.includes("resource not accessible by integration")) {
+    // Body excerpt doesn't tell us *which* scope is missing — the
+    // caller always hits Contents (PUT workflows file) first, so the
+    // workflows-permission case dominates in practice.
+    return { reason: "install_upstream_workflows_scope", detail: snippet };
+  }
+  if (status === 404) {
+    return { reason: "install_upstream_repo_not_selected", detail: snippet };
+  }
+  return { reason: "install_upstream", detail: snippet };
+}
+
+function back(
+  origin: string,
+  wsId: string,
+  pipelineId: string,
+  reason: string,
+  detail?: string,
+) {
   const url = new URL("/", origin);
   url.searchParams.set("ws", wsId);
   url.searchParams.set("installed", pipelineId);
   url.searchParams.set("reason", reason);
+  if (detail) url.searchParams.set("detail", detail);
   return NextResponse.redirect(url, 303);
 }

@@ -159,16 +159,21 @@ function renderLiveDashboard(ctx: LiveContext, params: SearchParams) {
 
 function pickBanner(
   params: SearchParams,
-): { kind: string; reason: string } | undefined {
+): { kind: string; reason: string; detail?: string } | undefined {
   // Either ?ran=<id>&reason=<code> or ?toggled=<id>&reason=<code> (set
   // by the dashboard form handlers). We don't bother validating the
-  // pipeline id — the banner copy doesn't depend on it.
+  // pipeline id — the banner copy doesn't depend on it. Upstream
+  // errors (GitHub said no) carry a truncated ``detail`` so the
+  // operator sees the actual HTTP status + message body excerpt
+  // instead of a generic "check perms" copy.
   const reasonRaw = params.reason;
   if (!reasonRaw) return undefined;
   const reason = Array.isArray(reasonRaw) ? reasonRaw[0] : reasonRaw;
-  if (params.ran) return { kind: "Run", reason };
-  if (params.toggled) return { kind: "Toggle", reason };
-  if (params.installed) return { kind: "Install", reason };
+  const detailRaw = params.detail;
+  const detail = Array.isArray(detailRaw) ? detailRaw[0] : detailRaw;
+  if (params.ran) return { kind: "Run", reason, detail };
+  if (params.toggled) return { kind: "Toggle", reason, detail };
+  if (params.installed) return { kind: "Install", reason, detail };
   return undefined;
 }
 
