@@ -10,7 +10,7 @@
 > **Post-pilot work in flight (2026-04-20):** A/B/C/D post-pilot
 > backlog — see "[Post-pilot feature backlog](#post-pilot-feature-backlog-abcd-phases)"
 > below. Currently: **A1–A5, B5–B9, C8–C10, C12, D11–D12 shipped**;
-> B10/B11, C11, D13 pending.
+> B11, C11, D13 pending (B10 shipped).
 >
 > **Source chats:** [Pilot scope discussion](442f31fa-34f0-47da-888b-a2d10a773f8e), [Day 1+2+3 build](48ef7ed3-881c-42e6-a823-1f670f4907ac), [Post-pilot A/B/C sprint](48ef7ed3-881c-42e6-a823-1f670f4907ac)
 > **Owner:** Denys / Ship core
@@ -971,7 +971,7 @@ SENTRY_SERVICE_NAME=ship-console
 | B7  | Team management / invites / seats | ✅ | Bulk invites + one-shot cookie for accept URLs. |
 | B8  | Onboarding resume pointer (skip completed steps) | ✅ | `resumeStep()` in `/onboarding`. |
 | B9  | Per-repo preset picker (change preset on activated repo) | ✅ | `PATCH /repos/{id}` with `reshape` flag. |
-| B10 | **Secrets per-repo UI** — DB model `RepoSecret` (AES-GCM + KMS stub → SOPS/age later), CRUD UI under repo settings, inject into `workflow_dispatch` inputs when the lane requires it | ⏳ | Blocks real agent (C12) because we can't supply `LINEAR_API_KEY` / `ANTHROPIC_API_KEY` otherwise. |
+| B10 | **Secrets per-repo UI** — DB model `RepoSecret` (Fernet-at-rest via `ENCRYPTION_KEY`, KMS-stub hook), CRUD UI under repo settings, mirrored into GitHub Actions Secrets via libsodium sealed-box so cron/push workflows see them too | ✅ | Admin-only `/v1/workspaces/{ws}/repos/{repo}/secrets` + `/required`. Lazy `PipelineRun` registration on `workflow_run` events whose `path` matches a Ship-owned catalog artifact so `schedule` / `push` / `pull_request`-triggered runs still show up on the dashboard. `CatalogArtifact.required_secrets` surfaces the matrix ("stored / required-by / sync_status") so operators can spot missing creds before the workflow runs. Console page at `/repos/[id]/secrets`. 10 new tests in `test_b10_repo_secrets.py` (encrypt roundtrip, GitHub sync create/update/delete, admin-only gate, cron lazy-register). |
 | B11 | **Team seats + usage limits** — pricing-tier gate on invites + API calls. Per-workspace `plan` column + simple counter middleware | ⏳ | Extension of B7. Only matters when we start charging. |
 
 ### C — Agent surface UX

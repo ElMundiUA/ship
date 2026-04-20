@@ -22,6 +22,7 @@ from backend.app.db.models.pipelines import (
     PullRequest,
     WorkflowRun,
 )
+from backend.app.db.models.repo_secrets import RepoSecret
 from backend.app.db.models.tenancy import (
     ApiToken,
     ArtifactRepo,
@@ -56,6 +57,7 @@ __all__ = [
     "PipelineRun",
     "Project",
     "PullRequest",
+    "RepoSecret",
     "User",
     "Workspace",
     "WorkspaceInvite",

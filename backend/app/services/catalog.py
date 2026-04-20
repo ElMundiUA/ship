@@ -263,6 +263,29 @@ class CatalogArtifact:
         preset = self.spec.get("preset_id")
         return preset if isinstance(preset, str) and preset else None
 
+    @property
+    def required_secrets(self) -> list[str]:
+        """GitHub Actions secret names this workflow needs at runtime.
+
+        Declared in ``spec.required_secrets`` as a list of uppercase
+        names (``[ANTHROPIC_API_KEY, LINEAR_API_KEY]``). The dashboard
+        cross-checks against the workspace's :class:`RepoSecret`
+        inventory to warn before a lane is dispatched with missing
+        credentials. Deduplicated + upper-cased here so downstream
+        consumers don't have to normalise on every read.
+        """
+        raw = self.spec.get("required_secrets")
+        if not isinstance(raw, (list, tuple)):
+            return []
+        seen: list[str] = []
+        for item in raw:
+            if not isinstance(item, str):
+                continue
+            candidate = item.strip().upper()
+            if candidate and candidate not in seen:
+                seen.append(candidate)
+        return seen
+
     def to_summary(self) -> dict[str, Any]:
         """Serialisation shape mirrored at ``/v1/catalog/*`` endpoints."""
         return {
@@ -282,6 +305,7 @@ class CatalogArtifact:
             "spec": dict(self.spec),
             "install_target": self.install_target,
             "preset_id": self.preset_id,
+            "required_secrets": self.required_secrets,
         }
 
 
