@@ -69,7 +69,15 @@ class NotionTracker:
         response.raise_for_status()
         return response.json()
 
-    async def list_tickets(self, *, limit: int = 10) -> list[dict[str, Any]]:
+    async def list_tickets(
+        self,
+        *,
+        limit: int = 10,
+        state: str | None = None,
+        assignee_me: bool = False,
+        query: str | None = None,
+        assignee: str | None = None,
+    ) -> list[dict[str, Any]]:
         """Recent pages from any database the integration can see.
 
         Notion forces the user to share specific databases with the
@@ -77,7 +85,13 @@ class NotionTracker:
         returns rows the user has implicitly granted. We do a global
         search filtered to ``object=page`` sorted by ``last_edited_time``
         which is the closest analogue to "recently updated tickets".
+
+        ``state`` / ``query`` / ``assignee_me`` are applied as a
+        best-effort client-side filter on the fetched page (Notion's
+        search API is too coarse for server-side ticket semantics).
         """
+        del assignee  # not available without richer Notion metadata
+        fetch_n = max(1, min(max(limit * 3, limit), 50))
         body = await self._request(
             "POST",
             "/search",
@@ -87,7 +101,7 @@ class NotionTracker:
                     "direction": "descending",
                     "timestamp": "last_edited_time",
                 },
-                "page_size": max(1, min(limit, 50)),
+                "page_size": fetch_n,
             },
         )
         out: list[dict[str, Any]] = []
@@ -101,7 +115,32 @@ class NotionTracker:
                     "updated_at": page.get("last_edited_time"),
                 }
             )
-        return out
+
+        qlow = (query or "").strip().lower()
+        if qlow:
+            out = [
+                row
+                for row in out
+                if qlow in (row.get("title") or "").lower()
+            ]
+
+        st = (state or "all").lower()
+        done_like = {"done", "closed", "complete", "completed"}
+
+        def _status_bucket(s: str | None) -> str:
+            if not s:
+                return "open"
+            return "closed" if s.lower() in done_like else "open"
+
+        if st == "open":
+            out = [row for row in out if _status_bucket(row.get("status")) == "open"]
+        elif st in {"closed", "done", "completed"}:
+            out = [row for row in out if _status_bucket(row.get("status")) == "closed"]
+
+        if assignee_me:
+            out = []
+
+        return out[:limit]
 
     async def transition(self, ticket: TicketRef, *, to_state: str) -> None:
         """Update the ``Status`` property of a Notion page.

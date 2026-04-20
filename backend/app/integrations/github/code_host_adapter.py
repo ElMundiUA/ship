@@ -262,6 +262,45 @@ class GitHubCodeHost(CodeHostGateway):
             page += 1
         return out
 
+    async def search_code(
+        self,
+        ref: RepoRef,
+        query: str,
+        *,
+        language: str | None = None,
+        limit: int = 15,
+    ) -> list[dict[str, Any]]:
+        """Search code in ``ref`` via GitHub ``/search/code``.
+
+        Subject to GitHub Search API rate limits (~10 req/min for
+        unauthenticated; higher with the App token). ``query`` is
+        appended after an implicit ``repo:owner/name`` scope.
+        """
+        q = f"repo:{ref.owner}/{ref.repo} {query.strip()}"
+        if language:
+            q += f" language:{language.strip()}"
+        cap = max(1, min(limit, 20))
+        response = await self._request(
+            "GET",
+            "/search/code",
+            params={"q": q, "per_page": cap},
+        )
+        body = response.json() or {}
+        items = body.get("items") or []
+        out: list[dict[str, Any]] = []
+        for item in items[:cap]:
+            if not isinstance(item, dict):
+                continue
+            out.append(
+                {
+                    "name": item.get("name"),
+                    "path": item.get("path"),
+                    "sha": item.get("sha"),
+                    "url": item.get("html_url"),
+                }
+            )
+        return out
+
     async def list_files(
         self, ref: RepoRef, *, ref_sha: str | None = None
     ) -> list[str]:

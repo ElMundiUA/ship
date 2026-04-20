@@ -86,12 +86,26 @@ class CreatedTicket:
 class TrackerGateway(Protocol):
     """The pipeline-side surface for any ticket tracker."""
 
-    async def list_tickets(self, *, limit: int = 10) -> list[dict[str, Any]]:
+    async def list_tickets(
+        self,
+        *,
+        limit: int = 10,
+        state: str | None = None,
+        assignee_me: bool = False,
+        query: str | None = None,
+        assignee: str | None = None,
+    ) -> list[dict[str, Any]]:
         """Most recently updated tickets for the connected workspace.
 
         Used by the dashboard and the daily-standup pipeline. Vendor
         adapters normalise to ``{"id", "title", "url", "status",
         "updated_at"}`` at minimum.
+
+        ``state`` is a coarse hint: ``open`` / ``closed`` / ``all``
+        (interpretation is vendor-specific). ``assignee_me`` limits to
+        the authenticated tracker user where the vendor supports it
+        (Linear). ``assignee`` is a GitHub login for GitHub Issues.
+        ``query`` filters by title / free-text where supported.
         """
         ...
 
