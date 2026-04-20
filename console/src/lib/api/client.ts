@@ -333,6 +333,13 @@ export interface ApiActivatedRepo {
   description: string | null;
   activated_at: string | null;
   provider: string;
+  /**
+   * Catalog preset id (``web-app`` / ``api-backend`` / …) attached to
+   * this repo during activation. ``null`` for legacy rows activated
+   * before Phase 2 — the backend treats ``null`` as
+   * ``adoption-minimum``-shaped defaults.
+   */
+  preset: string | null;
 }
 
 export function listAvailableRepos(
@@ -358,14 +365,16 @@ export function listActivatedRepos(
 export function activateRepos(
   workspaceId: string,
   externalIds: number[],
-  token?: string,
+  options: { preset?: string | null; token?: string } = {},
 ): Promise<ApiActivatedRepo[]> {
+  const body: Record<string, unknown> = { external_ids: externalIds };
+  if (options.preset) body.preset = options.preset;
   return apiFetch<ApiActivatedRepo[]>(
     `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/activate`,
     {
       method: "POST",
-      body: { external_ids: externalIds },
-      token,
+      body,
+      token: options.token,
     },
   );
 }

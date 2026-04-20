@@ -43,7 +43,10 @@ from backend.app.db.models.tenancy import AuditLog
 from backend.app.db.session import get_session
 from backend.app.integrations.gateway.code_host import RepoRef, RepoSummary
 from backend.app.integrations.github.code_host_adapter import GitHubCodeHost
-from backend.app.services.default_pipelines import seed_default_pipelines
+from backend.app.services.default_pipelines import (
+    KNOWN_PRESETS,
+    seed_default_pipelines,
+)
 
 
 router = APIRouter(
@@ -88,6 +91,7 @@ class ActivatedRepoOut(BaseModel):
     description: str | None
     activated_at: datetime | None
     provider: str
+    preset: str | None
 
 
 class RepoActivateIn(BaseModel):
@@ -99,6 +103,18 @@ class RepoActivateIn(BaseModel):
             "Vendor numeric repository ids to keep activated. The set is "
             "**replacing**: anything previously activated and *not* in this "
             "list is removed."
+        ),
+    )
+    preset: str | None = Field(
+        default=None,
+        description=(
+            "Catalog preset id to attach to the activated repo(s). One of "
+            "``web-app`` / ``api-backend`` / ``mobile-app`` / ``cli`` / "
+            "``monorepo`` / ``adoption-minimum``. ``None`` keeps any "
+            "existing preset and falls back to ``adoption-minimum``-shaped "
+            "defaults for new rows. Setting a preset on a subsequent "
+            "activation call updates the stored value but never re-seeds "
+            "lanes a tenant already customised."
         ),
     )
 
@@ -173,6 +189,7 @@ def _row_to_out(row: WorkspaceRepo) -> ActivatedRepoOut:
         description=row.description,
         activated_at=row.activated_at,
         provider=row.provider,
+        preset=row.preset,
     )
 
 
@@ -259,6 +276,16 @@ async def activate_repos(
 
     desired_ids: set[int] = {int(x) for x in payload.external_ids}
 
+    preset = payload.preset
+    if preset is not None and preset not in KNOWN_PRESETS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Unknown preset {preset!r}. Expected one of: "
+                f"{sorted(KNOWN_PRESETS)}"
+            ),
+        )
+
     # Fetch the live picker view once so we can validate ids and grab
     # the metadata we'll persist. We *trust* the GitHub installation
     # API: if a repo is missing from the live list, the App can't see
@@ -315,6 +342,7 @@ async def activate_repos(
                 html_url=summary.html_url,
                 description=summary.description,
                 activated_at=now,
+                preset=preset,
             )
             session.add(row)
             added.append(ext_id)
@@ -328,6 +356,12 @@ async def activate_repos(
             row.html_url = summary.html_url
             row.description = summary.description
             row.updated_at = now
+            if preset is not None:
+                # Caller explicitly chose a preset on this call — adopt
+                # it. ``None`` means "don't touch"; this preserves the
+                # preset from the original activation even if a later
+                # repo-picker reconfiguration forgets to re-send it.
+                row.preset = preset
             updated.append(ext_id)
 
     for ext_id, row in existing_by_ext.items():
@@ -363,8 +397,21 @@ async def activate_repos(
         if default_row is not None:
             default_repo_id = default_row.id
 
+    # Prefer the preset requested on this call; otherwise adopt the
+    # preset stored on the "default" repo the pipelines will bind to
+    # so a reseed call without an explicit preset still respects the
+    # original pick.
+    seed_preset = preset
+    if seed_preset is None and default_repo_id is not None:
+        default_row = await session.get(WorkspaceRepo, default_repo_id)
+        if default_row is not None:
+            seed_preset = default_row.preset
+
     seeded_pipelines = await seed_default_pipelines(
-        session, workspace_id, default_repo_id=default_repo_id
+        session,
+        workspace_id,
+        default_repo_id=default_repo_id,
+        preset=seed_preset,
     )
 
     session.add(
@@ -385,6 +432,7 @@ async def activate_repos(
                 # (delta = newly created in this call).
                 "pipelines_existing": len(pipeline_count_before),
                 "pipelines_total": len(seeded_pipelines),
+                "preset": seed_preset,
             },
         )
     )
