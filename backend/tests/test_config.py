@@ -60,3 +60,38 @@ def test_cloud_mode_accepts_real_hostnames() -> None:
     )
     assert settings.public_url.startswith("https://")
     assert settings.console_url.startswith("https://")
+
+
+def test_anthropic_vendor_swaps_default_openai_model_ids() -> None:
+    """Anthropic + key + default ``gpt-*`` env → Claude ids (avoids 404 model)."""
+    settings = Settings(
+        SHIP_AUTH_MODE="local",
+        AGENT_VENDOR="anthropic",
+        ANTHROPIC_API_KEY="sk-ant-api03-test",
+    )
+    assert settings.agent_model_main.startswith("claude-")
+    assert settings.agent_model_fast.startswith("claude-")
+
+
+def test_anthropic_vendor_respects_explicit_claude_ids() -> None:
+    settings = Settings(
+        SHIP_AUTH_MODE="local",
+        AGENT_VENDOR="anthropic",
+        ANTHROPIC_API_KEY="sk-ant-api03-test",
+        AGENT_MODEL_MAIN="claude-3-5-haiku-20241022",
+        AGENT_MODEL_FAST="claude-3-5-haiku-20241022",
+    )
+    assert settings.agent_model_main == "claude-3-5-haiku-20241022"
+    assert settings.agent_model_fast == "claude-3-5-haiku-20241022"
+
+
+def test_anthropic_vendor_without_key_keeps_openai_default_models() -> None:
+    """OpenAI fallback path still sees ``gpt-*`` defaults."""
+    settings = Settings(
+        SHIP_AUTH_MODE="local",
+        AGENT_VENDOR="anthropic",
+        ANTHROPIC_API_KEY="",
+        OPENAI_API_KEY="sk-test",
+    )
+    assert settings.agent_model_main == "gpt-4o"
+    assert settings.agent_model_fast == "gpt-4o-mini"
