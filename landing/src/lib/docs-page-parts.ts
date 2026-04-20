@@ -90,7 +90,7 @@ export function parseDocsPage(source: string): DocsPageParts {
     out.push(lines[i]);
   }
   /* Trim leading blank lines. */
-  let body = out.join("\n").replace(/^\s+/, "");
+  const body = out.join("\n").replace(/^\s+/, "");
 
   /* TOC: every H2 in the surviving body, ignoring blocks inside fenced code. */
   const toc: { id: string; text: string }[] = [];
