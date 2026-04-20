@@ -43,6 +43,67 @@ const STEPS: { id: StepId; label: string }[] = [
   { id: "tracker", label: "Connect tracker" },
 ];
 
+// Must stay in lockstep with ``backend.app.services.default_pipelines.KNOWN_PRESETS``
+// (the route handler also whitelists them before forwarding). Order
+// here drives the picker order; ``adoption-minimum`` sits last because
+// it's the "I'll wire the rest later" option.
+const PRESETS: {
+  id:
+    | "web-app"
+    | "api-backend"
+    | "mobile-app"
+    | "cli"
+    | "monorepo"
+    | "adoption-minimum";
+  name: string;
+  blurb: string;
+  // Short list of pipelines that ship *enabled* for this preset — cosmetic.
+  lanes: string;
+}[] = [
+  {
+    id: "web-app",
+    name: "Web app",
+    blurb:
+      "Next.js / Remix / SPA — PR review gate, daily standup, tech-debt scan, code map.",
+    lanes: "PR gate · Standup · Tech-debt · Code map",
+  },
+  {
+    id: "api-backend",
+    name: "API backend",
+    blurb:
+      "FastAPI / Go / Rails service — identical operational baseline as web-app, tailored for server repos.",
+    lanes: "PR gate · Standup · Tech-debt · Code map",
+  },
+  {
+    id: "mobile-app",
+    name: "Mobile app",
+    blurb:
+      "iOS / Android / RN — same four lanes; hosted E2E ships once a device-lab preset lands.",
+    lanes: "PR gate · Standup · Tech-debt · Code map",
+  },
+  {
+    id: "cli",
+    name: "CLI / library",
+    blurb:
+      "CLI tools or libraries — quieter cadence: PR gate + tech-debt + code map only.",
+    lanes: "PR gate · Tech-debt · Code map",
+  },
+  {
+    id: "monorepo",
+    name: "Monorepo",
+    blurb:
+      "Large multi-package repo — opts into pipeline self-heal on top of the baseline.",
+    lanes: "PR gate · Standup · Tech-debt · Self-heal · Code map",
+  },
+  {
+    id: "adoption-minimum",
+    name: "Minimum",
+    blurb:
+      "Just the PR review gate + code map. Flip extra lanes on later from the Pipelines page.",
+    lanes: "PR gate · Code map",
+  },
+];
+
 const GITHUB_ERRORS: Record<string, string> = {
   api_unavailable: "Backend not reachable.",
   forbidden: "You need admin role on this workspace to install the GitHub App.",
@@ -436,6 +497,49 @@ function ReposStep({
         >
           <input type="hidden" name="ws" value={wsId} suppressHydrationWarning />
 
+          <fieldset className="rounded-2xl border border-white/10 bg-white/[0.025] p-3">
+            <legend className="px-2 text-[11px] font-bold uppercase tracking-widest text-white/55">
+              Preset — shapes the default lanes
+            </legend>
+            <div className="grid grid-cols-1 gap-2 p-1 md:grid-cols-2">
+              {PRESETS.map((p, i) => (
+                <label
+                  key={p.id}
+                  className="flex cursor-pointer items-start gap-3 rounded-xl border border-white/5 bg-white/[0.02] p-3 has-[:checked]:border-aqua/50 has-[:checked]:bg-aqua/[0.06]"
+                >
+                  <input
+                    type="radio"
+                    name="preset"
+                    value={p.id}
+                    defaultChecked={i === 0}
+                    className="mt-1"
+                    suppressHydrationWarning
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-semibold text-white">
+                        {p.name}
+                      </span>
+                      <span className="rounded bg-white/5 px-1.5 py-0.5 font-mono text-[10px] tracking-wide text-white/45">
+                        {p.id}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-[11px] leading-snug text-white/60">
+                      {p.blurb}
+                    </div>
+                    <div className="mt-1 font-mono text-[10px] text-aqua/70">
+                      {p.lanes}
+                    </div>
+                  </div>
+                </label>
+              ))}
+            </div>
+            <p className="mt-2 px-2 text-[11px] leading-snug text-white/45">
+              Preset only picks which lanes arrive <em>enabled</em>. Every lane
+              is still seeded — flip extras on later from the Pipelines page.
+            </p>
+          </fieldset>
+
           <fieldset className="space-y-2 rounded-2xl border border-white/10 bg-white/[0.025] p-3 max-h-[420px] overflow-y-auto">
             <legend className="px-2 text-[11px] font-bold uppercase tracking-widest text-white/55">
               {repos.length} visible repo{repos.length === 1 ? "" : "s"}
@@ -575,9 +679,9 @@ function TrackerStep({
       {reposJustWired && (
         <div className="mt-5 rounded-xl border border-aqua/30 bg-aqua/[0.06] px-4 py-3 text-xs text-white/85">
           <strong className="text-aqua">Repos wired.</strong> Default pipelines
-          (PR review, daily standup, code map, tech-debt scan, pipeline
-          self-heal) are queued — they&apos;ll show up on the dashboard the
-          moment we move past this step.
+          were seeded for the chosen preset — they&apos;ll show up on the
+          dashboard as Recommended actions the moment we move past this
+          step. Flip the rest on any time from the Pipelines page.
         </div>
       )}
       {linearStatus === "connected" && (

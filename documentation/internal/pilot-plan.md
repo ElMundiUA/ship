@@ -403,13 +403,42 @@ back-to-back deploys. 219 backend tests passing.
   `backend/tests/test_v1_pipelines.py` now cover Phase-2 installs
   (e.g. `daily_standup` opens a `scheduled-sdlc-lane.yml` PR).
 
+**Phase 3 — preset-driven seeding + wizard picker:**
+
+- `workspace_repos.preset` (nullable `String(64)`, migration
+  `0007_workspace_repo_preset`). Every activated repo remembers its
+  catalog preset id — one of `web-app` / `api-backend` / `mobile-app`
+  / `cli` / `monorepo` / `adoption-minimum`.
+- `seed_default_pipelines(..., preset=...)` now shapes which of the
+  five default lanes ship *enabled* vs. *disabled* on first seeding.
+  The mapping lives next to the spec
+  (`PRESET_ENABLED_KINDS` in `default_pipelines.py`):
+  `monorepo` opts into `self_heal`; `cli` trims daily standup;
+  `adoption-minimum` enables only PR review + code map; the rest share
+  the "operational baseline" (PR gate + standup + audit + code map).
+  Seeding stays **additive-only** — a re-activation with a broader
+  preset never re-enables a lane a tenant previously turned off.
+- `POST /v1/workspaces/{ws}/repos/activate` accepts an optional
+  `preset` field, persists it on each activated row, and echoes it
+  back on `GET /v1/workspaces/{ws}/repos`. `ActivatedRepoOut` gained
+  a `preset: str | null` field so the dashboard + wizard can render
+  badges without a second round-trip.
+- Wizard Step 2 got a radio-button preset picker above the repo
+  checkbox list. Defaults to `web-app` (the most common shape) and is
+  whitelisted client- + server-side so an unknown preset never
+  reaches the backend.
+- Tests: `backend/tests/test_default_pipelines_presets.py`
+  (pins the preset → enabled-kinds contract + "additive-only"
+  invariant) and two new HTTP tests in `test_v1_repos.py`
+  (`test_activate_with_preset_persists_and_shapes_default_pipelines`
+  + `test_activate_rejects_unknown_preset`). Total suite now 229 passing.
+
 ### Day 4 — open items
 
-1. **Preset-driven seeding** — add `workspace_repos.preset` +
-   teach `seed_default_pipelines` to materialise only the lanes the
-   chosen preset demands (`preset-web-app` → PR gate + hosted E2E,
-   `preset-api-backend` → PR gate + audit lanes, etc.). Wizard
-   gets a preset picker step backed by `/v1/catalog/presets`.
+1. **Dashboard preset awareness** — show the preset chip on each
+   `PipelineCard` + add "Install this workflow" buttons for every
+   catalog workflow (not just default pipelines) on the Pipelines
+   page, gated by the repo's preset.
 2. **Auto-seed knowledge pipelines** — dispatch `code_map` +
    `tech_debt` straight after `POST /v1/workspaces/{ws}/repos/activate`
    so the dashboard lands with data instead of empty cards (waits on

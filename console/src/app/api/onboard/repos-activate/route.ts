@@ -50,8 +50,23 @@ export async function POST(request: Request) {
     return wizardError(origin, wsId, "empty");
   }
 
+  // Preset is optional — if the user skipped the picker we fall back to
+  // the backend's ``adoption-minimum`` default. Whitelist here so a
+  // hand-crafted POST can't smuggle an unknown string through (the
+  // backend re-validates too; this just gives a cleaner wizard error).
+  const rawPreset = (form.get("preset") ?? "").toString().trim();
+  const knownPresets = new Set([
+    "web-app",
+    "api-backend",
+    "mobile-app",
+    "cli",
+    "monorepo",
+    "adoption-minimum",
+  ]);
+  const preset = knownPresets.has(rawPreset) ? rawPreset : null;
+
   try {
-    await activateRepos(wsId, externalIds);
+    await activateRepos(wsId, externalIds, { preset });
   } catch (err) {
     if (err instanceof ApiUnavailableError)
       return wizardError(origin, wsId, "api_unavailable");

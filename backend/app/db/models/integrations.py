@@ -176,6 +176,15 @@ class WorkspaceRepo(Base):
     html_url: Mapped[str] = mapped_column(String(1024), nullable=False)
     description: Mapped[str | None] = mapped_column(String(1024), nullable=True)
 
+    # Phase-2 catalog integration: ties this repo to one of the
+    # collections in ``artifacts/collections/preset-*`` (``web-app``,
+    # ``api-backend``, ``mobile-app``, ``cli``, ``monorepo``,
+    # ``adoption-minimum``). The wizard collects it once, default
+    # pipelines use it to decide which lanes ship enabled vs. disabled.
+    # Nullable because legacy rows predate the column — treat ``NULL``
+    # the same as ``adoption-minimum`` (minimum surface area).
+    preset: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
     activated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

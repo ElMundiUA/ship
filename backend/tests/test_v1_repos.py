@@ -221,6 +221,107 @@ async def test_activate_replaces_set_and_audit_logs(
     payload = audits[0].payload
     assert sorted(payload["added"]) == [1001, 1002]
     assert payload["removed"] == [999]
+    # No preset was sent on the request → audit log records it as null
+    # and the preset column on each row stays null (legacy-shaped).
+    assert payload["preset"] is None
+    assert all(r.preset is None for r in rows)
+
+
+@pytest.mark.asyncio
+async def test_activate_with_preset_persists_and_shapes_default_pipelines(
+    v1_client,
+    db_session,
+    seed_workspace,
+    github_app_env,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Phase-2 preset flows end-to-end: persisted on the repo row,
+    recorded on the audit log, and only the preset's lanes arrive
+    enabled on the default pipeline set."""
+    from backend.app.api.v1.routes import repos as repos_module
+    from backend.app.db.models.integrations import WorkspaceRepo
+    from backend.app.db.models.pipelines import Pipeline
+    from backend.app.db.models.tenancy import AuditLog
+
+    _, raw, workspace = seed_workspace
+    await _seed_installation(db_session, workspace.id)
+
+    canned = [_summary(external_id=1001, repo="alpha")]
+
+    async def _stub(self) -> list:
+        return canned
+
+    monkeypatch.setattr(
+        repos_module.GitHubCodeHost, "list_repo_summaries", _stub
+    )
+
+    workspace_id = workspace.id
+    response = await v1_client.post(
+        f"/v1/workspaces/{workspace_id}/repos/activate",
+        headers={"Authorization": f"Bearer {raw}"},
+        json={"external_ids": [1001], "preset": "monorepo"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()[0]["preset"] == "monorepo"
+
+    rows = (
+        await db_session.execute(
+            select(WorkspaceRepo).where(WorkspaceRepo.workspace_id == workspace_id)
+        )
+    ).scalars().all()
+    assert rows[0].preset == "monorepo"
+
+    pipelines = (
+        await db_session.execute(
+            select(Pipeline).where(Pipeline.workspace_id == workspace_id)
+        )
+    ).scalars().all()
+    by_kind = {p.kind: p for p in pipelines}
+    # ``monorepo`` is the only preset that opts into self_heal by default.
+    assert by_kind["self_heal"].enabled is True
+    assert by_kind["pr_review"].enabled is True
+    assert by_kind["daily_standup"].enabled is True
+
+    audits = (
+        await db_session.execute(
+            select(AuditLog).where(
+                AuditLog.workspace_id == workspace_id,
+                AuditLog.action == "repos.activate",
+            )
+        )
+    ).scalars().all()
+    assert audits[0].payload["preset"] == "monorepo"
+
+
+@pytest.mark.asyncio
+async def test_activate_rejects_unknown_preset(
+    v1_client,
+    db_session,
+    seed_workspace,
+    github_app_env,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.app.api.v1.routes import repos as repos_module
+
+    _, raw, workspace = seed_workspace
+    await _seed_installation(db_session, workspace.id)
+
+    canned = [_summary(external_id=1001, repo="alpha")]
+
+    async def _stub(self) -> list:
+        return canned
+
+    monkeypatch.setattr(
+        repos_module.GitHubCodeHost, "list_repo_summaries", _stub
+    )
+
+    response = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/repos/activate",
+        headers={"Authorization": f"Bearer {raw}"},
+        json={"external_ids": [1001], "preset": "not-a-real-preset"},
+    )
+    assert response.status_code == 422, response.text
+    assert "not-a-real-preset" in response.json()["detail"]
 
 
 @pytest.mark.asyncio
