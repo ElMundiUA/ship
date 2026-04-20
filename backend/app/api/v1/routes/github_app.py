@@ -537,6 +537,46 @@ async def _apply_pull_request_event(
                 head_ref,
             )
 
+        # Kick off the knowledge-gathering lanes (tech_debt / code_map)
+        # so the operator's first post-merge dashboard load lands on
+        # actual data instead of empty cards. Best-effort: a flaky
+        # dispatch shouldn't fail the webhook ack.
+        try:
+            install_row = None
+            if isinstance(install_id, int):
+                install_row = (
+                    await session.execute(
+                        select(GitHubInstallation).where(
+                            GitHubInstallation.installation_id == install_id
+                        )
+                    )
+                ).scalars().first()
+            if install_row is not None:
+                from backend.app.api.v1.routes.pipelines import (
+                    auto_dispatch_knowledge_pipelines,
+                )
+                from backend.app.core.config import get_settings
+
+                created = await auto_dispatch_knowledge_pipelines(
+                    session,
+                    repo_row,
+                    install_row,
+                    settings=get_settings(),
+                )
+                if created:
+                    logger.info(
+                        "auto-dispatched %d knowledge run(s) after install PR merge "
+                        "repo=%s",
+                        len(created),
+                        repo_row.full_name,
+                    )
+        except Exception as exc:  # pragma: no cover - log & move on
+            logger.warning(
+                "auto-dispatch after install PR merge failed repo=%s: %s",
+                repo_row.full_name,
+                exc,
+            )
+
 
 async def _apply_workflow_run_event(
     session: AsyncSession, payload: dict[str, Any], action: str | None

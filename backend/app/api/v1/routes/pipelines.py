@@ -1109,4 +1109,163 @@ async def report_run_result(
     return _run_to_out(run)
 
 
-__all__ = ["router", "public_router"]
+# ---------------------------------------------------------------------------
+# Auto-dispatch (knowledge-gathering pipelines)
+# ---------------------------------------------------------------------------
+
+# Pipelines that are safe to fire automatically after the install PR
+# merges. The premise: these read-only scans feed the dashboard's
+# "initial knowledge" buckets (code map + tech-debt inventory) so the
+# operator's first visit after merging isn't a bunch of empty cards.
+# Write-heavy or noisy lanes (pr_review, daily_standup) stay manual.
+KNOWLEDGE_PIPELINE_KINDS: Final[frozenset[str]] = frozenset(
+    {"tech_debt", "code_map"}
+)
+
+
+async def auto_dispatch_knowledge_pipelines(
+    session: AsyncSession,
+    repo: WorkspaceRepo,
+    install: GitHubInstallation,
+    *,
+    settings: Settings,
+    trigger: str = "auto_post_install",
+) -> list[uuid.UUID]:
+    """Fire ``workflow_dispatch`` for every knowledge lane on ``repo``.
+
+    Called from the ``pull_request`` webhook when a
+    ``ship/install-*`` branch merges — by then the workflow YAMLs
+    the install PR added are live on the default branch, so
+    dispatching them succeeds. Each failure is logged but swallowed:
+    one missing preset shouldn't block the others, and the operator
+    can always hit ``Run now`` manually.
+
+    Returns the list of ``PipelineRun.id`` it created (useful for
+    tests and future telemetry).
+    """
+    candidates = (
+        await session.execute(
+            select(Pipeline).where(
+                Pipeline.workspace_id == repo.workspace_id,
+                Pipeline.repo_id == repo.id,
+                Pipeline.enabled.is_(True),
+                Pipeline.kind.in_(KNOWLEDGE_PIPELINE_KINDS),
+            )
+        )
+    ).scalars().all()
+    if not candidates:
+        return []
+
+    created: list[uuid.UUID] = []
+    files = None  # lazy — only probe if we have something runnable
+    for pipeline in candidates:
+        if not _supports_run(pipeline.kind):
+            continue
+        workflow_file = _workflow_file_for_kind(pipeline.kind)
+        if workflow_file is None:
+            continue
+        if files is None:
+            try:
+                files = await list_repo_workflows(
+                    repo, install, settings=settings
+                )
+            except Exception as exc:  # pragma: no cover - upstream flake
+                logger.warning(
+                    "auto-dispatch skipped (workflow probe failed): %s", exc
+                )
+                return created
+        if workflow_file not in files:
+            logger.info(
+                "auto-dispatch skipped kind=%s repo=%s: %s not in repo yet",
+                pipeline.kind,
+                repo.full_name,
+                workflow_file,
+            )
+            continue
+        now = datetime.now(timezone.utc)
+        run = PipelineRun(
+            pipeline_id=pipeline.id,
+            workspace_id=pipeline.workspace_id,
+            trigger=trigger,
+            status="queued",
+            started_at=now,
+            summary=(
+                f"Auto-dispatched {pipeline.name} after install PR merge "
+                f"({repo.full_name})"
+            ),
+            payload={"auto_trigger": trigger},
+        )
+        session.add(run)
+        await session.flush()
+        token = _mint_run_token(run.id, settings)
+        run.run_token_hash = _hash_run_token(token)
+        inputs = {
+            "ship_run_id": str(run.id),
+            "ship_callback_url": _callback_url(settings, run.id),
+            "ship_run_token": token,
+        }
+        try:
+            await dispatch_workflow(
+                repo,
+                install,
+                workflow_file,
+                inputs=inputs,
+                settings=settings,
+            )
+        except WorkflowDispatchError as exc:
+            logger.warning(
+                "auto-dispatch failed kind=%s repo=%s status=%s: %s",
+                pipeline.kind,
+                repo.full_name,
+                exc.status_code,
+                exc.message[:200],
+            )
+            run.status = "failed"
+            run.finished_at = datetime.now(timezone.utc)
+            run.summary = (
+                f"Auto-dispatch failed (HTTP {exc.status_code}): "
+                f"{exc.message[:200]}"
+            )
+            pipeline.last_run_status = "failed"
+            pipeline.last_run_at = run.finished_at
+            pipeline.updated_at = run.finished_at
+            await session.flush()
+            continue
+        run.status = "running"
+        pipeline.last_run_at = now
+        pipeline.last_run_status = "running"
+        pipeline.updated_at = now
+        session.add(
+            AuditLog(
+                workspace_id=pipeline.workspace_id,
+                actor_user_id=None,
+                actor_token_id=None,
+                action="pipeline.run",
+                target_kind="pipeline",
+                target_id=str(pipeline.id),
+                payload={
+                    "kind": pipeline.kind,
+                    "trigger": trigger,
+                    "run_id": str(run.id),
+                    "repo_full_name": repo.full_name,
+                    "workflow_file": workflow_file,
+                },
+            )
+        )
+        await session.flush()
+        created.append(run.id)
+        logger.info(
+            "auto-dispatched knowledge lane kind=%s repo=%s run=%s",
+            pipeline.kind,
+            repo.full_name,
+            run.id,
+        )
+    return created
+
+
+__all__ = [
+    "router",
+    "public_router",
+    "auto_dispatch_knowledge_pipelines",
+    "KNOWLEDGE_PIPELINE_KINDS",
+]
