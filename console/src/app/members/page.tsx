@@ -25,9 +25,12 @@ import {
   ApiHttpError,
   ApiUnavailableError,
   isApiConfigured,
+  listInvites,
   listMembers,
   listWorkspaces,
+  type ApiInvite,
 } from "@/lib/api/client";
+import { consumeInviteTokens } from "@/lib/api/invite-stash";
 import type {
   ApiMember,
   ApiMemberRole,
@@ -47,7 +50,12 @@ const ROLES: readonly ApiMemberRole[] = [
 ];
 
 type Mode =
-  | { source: "live"; workspace: ApiWorkspace; members: ApiMember[] }
+  | {
+      source: "live";
+      workspace: ApiWorkspace;
+      members: ApiMember[];
+      invites: ApiInvite[];
+    }
   | { source: "mock"; reason: string };
 
 function errorMessage(code: string): string {
@@ -83,8 +91,11 @@ async function load(): Promise<Mode> {
         reason: "Create a workspace first to manage members",
       };
     const target = ws[0];
-    const members = await listMembers(target.id, token);
-    return { source: "live", workspace: target, members };
+    const [members, invites] = await Promise.all([
+      listMembers(target.id, token),
+      listInvites(target.id, token).catch(() => [] as ApiInvite[]),
+    ]);
+    return { source: "live", workspace: target, members, invites };
   } catch (err) {
     if (err instanceof ApiHttpError && err.status === 401)
       return { source: "mock", reason: "Session expired — sign in again" };
@@ -119,7 +130,16 @@ export default async function MembersPage({
     return <MockView reason={data.reason} errorCode={errorCode} />;
   }
 
-  const { workspace, members } = data;
+  const { workspace, members, invites } = data;
+  const freshTokens = await consumeInviteTokens();
+  const invitedCount = (() => {
+    const raw = params.invited;
+    const v = typeof raw === "string" ? raw : Array.isArray(raw) ? raw[0] : undefined;
+    const n = v ? Number.parseInt(v, 10) : NaN;
+    return Number.isFinite(n) ? n : null;
+  })();
+  const inviteErrorCode = typeof params.invite_error === "string" ? params.invite_error : null;
+  const wasRevoked = params.revoked === "1";
   const owners = members.filter((m) => m.role === "owner");
   const admins = members.filter((m) => m.role === "admin");
   const pending = members.filter((m) => m.pending);
@@ -190,10 +210,19 @@ export default async function MembersPage({
         </table>
       </Card>
 
+      <TeamInvitesSection
+        workspaceId={workspace.id}
+        invites={invites}
+        freshTokens={freshTokens}
+        invitedCount={invitedCount}
+        inviteErrorCode={inviteErrorCode}
+        wasRevoked={wasRevoked}
+      />
+
       <Card className="mt-6" id="invite">
         <CardHeader
-          title="Invite teammate"
-          subtitle="The user is created in pending state; first Auth0 sign-in with this email binds it."
+          title="Invite teammate (legacy / single)"
+          subtitle="Immediate Auth0-backed pending user — prefer the bulk team invite block above."
         />
         <form
           action="/api/members/invite"
@@ -461,4 +490,225 @@ function MockView({
       </Card>
     </AppShell>
   );
+}
+
+function TeamInvitesSection({
+  workspaceId,
+  invites,
+  freshTokens,
+  invitedCount,
+  inviteErrorCode,
+  wasRevoked,
+}: {
+  workspaceId: string;
+  invites: ApiInvite[];
+  freshTokens: Record<string, string>;
+  invitedCount: number | null;
+  inviteErrorCode: string | null;
+  wasRevoked: boolean;
+}) {
+  const pending = invites.filter((i) => !i.accepted_at && !i.revoked_at);
+  const history = invites
+    .filter((i) => i.accepted_at || i.revoked_at)
+    .slice(0, 5);
+  const freshIds = new Set(Object.keys(freshTokens));
+  return (
+    <Card className="mt-6" id="team-invites">
+      <CardHeader
+        title="Team invites"
+        subtitle="Bulk-paste emails, mint one shareable accept URL per invitee. We don't send the email — forward the URL via Slack/email/etc."
+      />
+
+      {invitedCount !== null && (
+        <div className="mb-4 rounded-xl border border-aqua/30 bg-aqua/10 px-3 py-2 text-xs text-white/85">
+          {invitedCount === 1
+            ? "Invite minted. Copy the accept URL below and send it."
+            : `${invitedCount} invites minted. Copy the accept URLs below and send them.`}
+        </div>
+      )}
+      {wasRevoked && (
+        <div className="mb-4 rounded-xl border border-white/20 bg-white/[0.04] px-3 py-2 text-xs text-white/75">
+          Invite revoked. Issue a fresh one whenever they're ready.
+        </div>
+      )}
+      {inviteErrorCode && (
+        <div className="mb-4 rounded-xl border border-coral/40 bg-coral/10 px-3 py-2 text-xs text-white/85">
+          {inviteErrorLabel(inviteErrorCode)}
+        </div>
+      )}
+
+      <form
+        action="/api/team/create-invites"
+        method="POST"
+        className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_10rem_6rem_auto]"
+      >
+        <input type="hidden" name="ws" value={workspaceId} />
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/55">
+            Emails (comma, space or newline separated)
+          </span>
+          <textarea
+            name="emails"
+            rows={3}
+            required
+            placeholder={"alice@acme.dev\nbob@acme.dev\ncharlie@acme.dev"}
+            className="w-full rounded border border-white/10 bg-white/[0.04] px-2 py-1.5 font-mono text-xs text-white outline-none focus:border-aqua/40"
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/55">
+            Role
+          </span>
+          <select
+            name="role"
+            defaultValue="member"
+            className="w-full rounded border border-white/10 bg-white/[0.04] px-2 py-1.5 text-sm text-white outline-none focus:border-aqua/40"
+          >
+            <option value="admin">admin</option>
+            <option value="maintainer">maintainer</option>
+            <option value="member">member</option>
+            <option value="viewer">viewer</option>
+          </select>
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/55">
+            TTL days
+          </span>
+          <input
+            type="number"
+            name="ttl_days"
+            min={1}
+            max={60}
+            defaultValue={7}
+            className="w-full rounded border border-white/10 bg-white/[0.04] px-2 py-1.5 text-sm text-white outline-none focus:border-aqua/40"
+          />
+        </label>
+        <div className="flex items-end">
+          <button
+            type="submit"
+            className="w-full rounded-full bg-aqua/80 px-4 py-1.5 text-sm font-bold text-ink transition hover:bg-aqua md:w-auto"
+          >
+            Send invites
+          </button>
+        </div>
+      </form>
+
+      {pending.length > 0 && (
+        <div className="mt-5 overflow-x-auto">
+          <div className="mb-2 text-[10px] font-bold uppercase tracking-widest text-white/45">
+            Pending ({pending.length})
+          </div>
+          <table className="min-w-full text-xs">
+            <thead className="bg-white/[0.04] text-[10px] uppercase tracking-widest text-white/45">
+              <tr>
+                <th className="px-3 py-2 text-left font-semibold">Email</th>
+                <th className="px-3 py-2 text-left font-semibold">Role</th>
+                <th className="px-3 py-2 text-left font-semibold">Expires</th>
+                <th className="px-3 py-2 text-left font-semibold">
+                  Accept URL
+                </th>
+                <th className="px-3 py-2 text-right font-semibold"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {pending.map((invite) => {
+                const acceptUrl = freshTokens[invite.id];
+                return (
+                  <tr
+                    key={invite.id}
+                    className="border-t border-white/5 hover:bg-white/[0.02]"
+                  >
+                    <td className="px-3 py-2 text-white">{invite.email}</td>
+                    <td className="px-3 py-2 text-white/75">{invite.role}</td>
+                    <td className="px-3 py-2 text-white/55">
+                      {new Date(invite.expires_at).toLocaleDateString()}
+                    </td>
+                    <td className="px-3 py-2">
+                      {acceptUrl ? (
+                        <code className="break-all rounded bg-white/[0.07] px-2 py-1 text-[11px] text-aqua">
+                          {acceptUrl}
+                        </code>
+                      ) : freshIds.has(invite.id) ? (
+                        <span className="text-[11px] text-white/50">
+                          (session expired — reissue)
+                        </span>
+                      ) : (
+                        <span className="text-[11px] text-white/50">
+                          —{" "}
+                          <span className="italic">
+                            (shown only once when minted)
+                          </span>
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      <form
+                        action="/api/team/revoke-invite"
+                        method="POST"
+                        className="inline-block"
+                      >
+                        <input
+                          type="hidden"
+                          name="ws"
+                          value={workspaceId}
+                        />
+                        <input
+                          type="hidden"
+                          name="invite_id"
+                          value={invite.id}
+                        />
+                        <button
+                          type="submit"
+                          className="text-[11px] font-semibold text-coral/80 hover:text-coral"
+                        >
+                          Revoke
+                        </button>
+                      </form>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {history.length > 0 && (
+        <div className="mt-5 text-[11px] text-white/55">
+          <div className="mb-1 font-semibold uppercase tracking-widest text-white/45">
+            Recent
+          </div>
+          <ul className="space-y-1">
+            {history.map((invite) => (
+              <li key={invite.id}>
+                {invite.email} ·{" "}
+                {invite.accepted_at
+                  ? `accepted ${new Date(invite.accepted_at).toLocaleDateString()}`
+                  : `revoked ${new Date(invite.revoked_at as string).toLocaleDateString()}`}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function inviteErrorLabel(code: string): string {
+  switch (code) {
+    case "forbidden":
+      return "You need admin to create or revoke invites.";
+    case "bad_input":
+      return "Paste at least one email and pick a role.";
+    case "empty":
+      return "Email list is empty — paste one or more emails.";
+    case "not_found":
+      return "Invite already gone — refresh the page.";
+    case "already_accepted":
+      return "That invite was already accepted — remove the member instead.";
+    case "api_unavailable":
+      return "Backend is unreachable. Try again.";
+    default:
+      return `Couldn't apply the change (${code}). Try again or refresh.`;
+  }
 }

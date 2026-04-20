@@ -19,6 +19,7 @@ from backend.app.api.v1.routes import (
     github_app,
     health,
     integrations,
+    invites,
     knowledge,
     linear_oauth,
     members,
@@ -64,3 +65,8 @@ api_router.include_router(dashboard.router)
 # by ``artifacts/**/ARTIFACT.md``. Powers the wizard preset picker and
 # the dashboard's workflow install buttons.
 api_router.include_router(catalog.router)
+# Team invites (B7 — WOW onboarding team install). Admin-scoped list/
+# create/revoke under ``/workspaces/{ws}/invites``; public peek +
+# authenticated accept at ``/invites/{token}``.
+api_router.include_router(invites.workspace_router)
+api_router.include_router(invites.invite_router)

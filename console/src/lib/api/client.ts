@@ -379,6 +379,139 @@ export function activateRepos(
   );
 }
 
+// --- Team invites (B7) ------------------------------------------------------
+
+export interface ApiInvite {
+  id: string;
+  email: string;
+  role: string;
+  invited_by_email: string | null;
+  expires_at: string;
+  accepted_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
+  /** Only populated on the ``POST`` create response, exactly once. */
+  token: string | null;
+  /** Convenience accept URL for the admin to copy/forward. */
+  accept_url: string | null;
+}
+
+export interface ApiInvitePeek {
+  email: string;
+  role: string;
+  workspace_id: string;
+  workspace_name: string;
+  invited_by_email: string | null;
+  expires_at: string;
+}
+
+export interface ApiInviteAccept {
+  workspace_id: string;
+  role: string;
+}
+
+export function listInvites(
+  workspaceId: string,
+  token?: string,
+): Promise<ApiInvite[]> {
+  return apiFetch<ApiInvite[]>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/invites`,
+    { token },
+  );
+}
+
+export function createInvites(
+  workspaceId: string,
+  payload: {
+    emails?: string;
+    invites?: { email: string; role: string }[];
+    default_role?: string;
+    ttl_days?: number;
+  },
+  options: { token?: string } = {},
+): Promise<ApiInvite[]> {
+  return apiFetch<ApiInvite[]>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/invites`,
+    { method: "POST", body: payload, token: options.token },
+  );
+}
+
+export function revokeInvite(
+  workspaceId: string,
+  inviteId: string,
+  options: { token?: string } = {},
+): Promise<void> {
+  return apiFetch<void>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/invites/${encodeURIComponent(inviteId)}`,
+    { method: "DELETE", token: options.token },
+  );
+}
+
+/** Unauthenticated peek — the invite token itself is the capability. */
+export function peekInvite(inviteToken: string): Promise<ApiInvitePeek> {
+  return apiFetch<ApiInvitePeek>(
+    `/v1/invites/${encodeURIComponent(inviteToken)}`,
+    { token: null },
+  );
+}
+
+export function acceptInvite(
+  inviteToken: string,
+  options: { token?: string } = {},
+): Promise<ApiInviteAccept> {
+  return apiFetch<ApiInviteAccept>(
+    `/v1/invites/${encodeURIComponent(inviteToken)}/accept`,
+    { method: "POST", token: options.token },
+  );
+}
+
+/**
+ * Patch a single activated repo. Today the only mutable field is
+ * ``preset``; ``reshape`` tells the backend to re-apply the preset's
+ * default enabled-kinds shape to lanes bound to this repo (otherwise
+ * we stay additive-only).
+ */
+export function updateRepo(
+  workspaceId: string,
+  repoId: string,
+  patch: { preset?: string | null; reshape?: boolean },
+  options: { token?: string } = {},
+): Promise<ApiActivatedRepo> {
+  return apiFetch<ApiActivatedRepo>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(
+      repoId,
+    )}`,
+    { method: "PATCH", body: patch, token: options.token },
+  );
+}
+
+export interface ApiDisconnectRepo {
+  repo_id: string;
+  full_name: string;
+  deleted_pipelines: number;
+  deleted_runs: number;
+}
+
+/**
+ * Delete ``repo_id`` from the workspace. Cascades to pipelines bound
+ * to the repo + their runs. Doesn't touch github.com (the App config
+ * and any already-committed workflow YAMLs are the operator's to
+ * clean up). Idempotent-ish: 404 on a stale id is surfaced as
+ * :class:`ApiHttpError` so the UI can auto-refresh and move on.
+ */
+export function disconnectRepo(
+  workspaceId: string,
+  repoId: string,
+  options: { token?: string } = {},
+): Promise<ApiDisconnectRepo> {
+  return apiFetch<ApiDisconnectRepo>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(
+      repoId,
+    )}`,
+    { method: "DELETE", token: options.token },
+  );
+}
+
 /** Response from ``POST /workspaces/{ws}/repos/{id}/install_bundle``. */
 export interface ApiInstallBundle {
   pr_url: string;
