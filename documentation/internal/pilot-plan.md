@@ -10,9 +10,9 @@
 > **Post-pilot work in flight (2026-04-20):** A/B/C/D post-pilot
 > backlog — see "[Post-pilot feature backlog](#post-pilot-feature-backlog-abcd-phases)"
 > below. Currently: **A1–A5, B5–B10, C8–C10, C12, D11–D12 shipped**;
-> **D13** — `shipctl callback`, `shipctl kickoff`, tracker-backed clarifications
-> projection, and starter GitHub Actions bodies using `shipctl` are in;
-> console run-detail polish + optional `PipelineRun` column enrichments remain.
+> **D13** — shipped: `shipctl callback` / `shipctl kickoff`, `kickoff` pattern,
+> tracker-backed clarifications, starter workflows, **console pipeline run
+> detail** (`/pipelines/{pipelineId}/runs/{runId}`) with metrics + GitHub link.
 > **B11**, **C11** still pending.
 >
 > **Source chats:** [Pilot scope discussion](442f31fa-34f0-47da-888b-a2d10a773f8e), [Day 1+2+3 build](48ef7ed3-881c-42e6-a823-1f670f4907ac), [Post-pilot A/B/C sprint](48ef7ed3-881c-42e6-a823-1f670f4907ac)
@@ -993,7 +993,7 @@ SENTRY_SERVICE_NAME=ship-console
 | --- | ---- | ------ | ----- |
 | D11 | **SHIP-book metrics dashboard** — DORA-ish panel (deploy freq, lead time, CFR, MTTR) + Ship-native (pipeline success %, clarifications resolved, improvements accepted %, chat→ticket rate). Aggregated endpoint `GET /metrics/overview?window=7d\|30d\|90d`. Simple stat cards + breakdown tables; no charting lib in MVP | ✅ | Endpoint `backend/app/api/v1/routes/metrics.py`; page `console/src/app/metrics/page.tsx`; 5 new tests (`test_v1_metrics.py`). MTTR returned as `null` with "coming soon" label until we wire failure→recovery linking (D13 territory). |
 | D12 | Audit log surface — proper `/audit` page with actor/action/target/date filters | ✅ | Backend `GET /v1/workspaces/{ws}/audit-log` now takes `?actor=`, `?target_kind=`, `?since=`, `?until=` on top of the pre-existing `?action=` / cursor pagination. Console `/audit` got a real filter form (action chips + actor substring + target-kind select + date range) and expandable JSON payload cells via `<details>`. 3 new tests in `test_v1_audit.py`; suite 286 passing. After A4+A5 ship the full suite is 299 passing (13 new cases covering both sides of the webhook→notification wire). |
-| D13 | **Customer CI executor** — Ship dispatches GitHub Actions; the **customer's agent** (their LLM keys) runs in the runner using `shipctl` to fetch versioned patterns (`kickoff` + workload) and `shipctl callback` to report `PipelineRun` status. Tracker is SoT for clarifications (`ship:needs-clarification` + `@ship clarification:`); Ship projects into the inbox. Starter workflows no longer hand-roll JSON `curl`. | 🟨 | **Shipped in repo:** `shipctl callback` / `shipctl kickoff`, pattern `artifacts/patterns/kickoff`, `.ship/config.yml` `stack.agent.provider`, five catalog `workflow.yml` bodies, backend clarifications sync + write-back (Linear + GitHub Issues). **Remaining:** run-detail UI niceties, any extra `PipelineRun` metadata columns if not satisfied by `payload.metrics`. |
+| D13 | **Customer CI executor** — Ship dispatches GitHub Actions; the **customer's agent** runs in the runner using `shipctl` for patterns and `shipctl callback` for observability. Tracker is SoT for clarifications. | ✅ | **Shipped:** CLI commands, `kickoff` artifact, config `stack.agent.provider`, starter workflows, clarifications projection + write-back, `GET .../pipelines/{id}/runs/{run_id}`, console run detail page + dashboard **Details** links. Callback metrics (e.g. `gh_html_url`) surface in the UI. |
 
 ### Scratch / not-yet-numbered ideas
 

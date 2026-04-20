@@ -41,7 +41,7 @@ jobs:
           node-version: "20"
 
       - name: Install shipctl
-        run: npm install -g @elmundi/ship-cli@0.11.1
+        run: npm install -g @elmundi/ship-cli@0.11.2
 
       - name: Run PR gate
         id: gate

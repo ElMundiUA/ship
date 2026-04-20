@@ -1160,6 +1160,19 @@ export function listPipelineRuns(
   );
 }
 
+/** GET `/v1/workspaces/{ws}/pipelines/{id}/runs/{runId}` — single run for the detail page. */
+export function getPipelineRun(
+  workspaceId: string,
+  pipelineId: string,
+  runId: string,
+  token?: string,
+): Promise<ApiPipelineRun> {
+  return apiFetch<ApiPipelineRun>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/pipelines/${encodeURIComponent(pipelineId)}/runs/${encodeURIComponent(runId)}`,
+    { token },
+  );
+}
+
 export function getDashboard(
   workspaceId: string,
   token?: string,

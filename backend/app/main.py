@@ -318,7 +318,7 @@ async def lifespan(_app: FastAPI):
             pass
 
 
-app = FastAPI(title="Ship Methodology API", version="0.11.1", lifespan=lifespan)
+app = FastAPI(title="Ship Methodology API", version="0.11.2", lifespan=lifespan)
 app.include_router(v1_api_router)
 
 

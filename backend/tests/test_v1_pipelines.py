@@ -236,6 +236,51 @@ async def test_run_pipeline_dispatches_when_workflow_installed(
 
 
 @pytest.mark.asyncio
+async def test_get_pipeline_run(
+    monkeypatch, v1_client, db_session, seed_repo_and_install
+) -> None:
+    """GET …/pipelines/{id}/runs/{run_id} returns the row for the console."""
+    from backend.app.api.v1.routes import pipelines as pipelines_route
+
+    raw, workspace, _install, repo = seed_repo_and_install
+    pipelines = await _seed_bound_pipelines(db_session, workspace.id, repo.id)
+    target = pipelines["pr_review"]
+
+    async def _probe(repo, install, *, settings, **_):
+        return frozenset({"pr-and-ci-gate.yml"})
+
+    async def _dispatch(repo, install, workflow_file, *, inputs, settings, **_):
+        pass
+
+    monkeypatch.setattr(pipelines_route, "list_repo_workflows", _probe)
+    monkeypatch.setattr(pipelines_route, "dispatch_workflow", _dispatch)
+
+    post = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/pipelines/{target.id}/runs",
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert post.status_code == 202, post.text
+    run_id = post.json()["id"]
+
+    ok = await v1_client.get(
+        f"/v1/workspaces/{workspace.id}/pipelines/{target.id}/runs/{run_id}",
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert ok.status_code == 200, ok.text
+    body = ok.json()
+    assert body["id"] == run_id
+    assert body["pipeline_id"] == str(target.id)
+    assert body["status"] == "running"
+    assert "created_at" in body
+
+    missing = await v1_client.get(
+        f"/v1/workspaces/{workspace.id}/pipelines/{target.id}/runs/{uuid.uuid4()}",
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert missing.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_run_pipeline_412_when_workflow_not_installed(
     monkeypatch, v1_client, db_session, seed_repo_and_install
 ) -> None:

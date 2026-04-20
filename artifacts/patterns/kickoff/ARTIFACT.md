@@ -4,9 +4,9 @@ id: kickoff
 name: CI kickoff preamble
 version: 1.0.0
 channel: stable
-min_shipctl: 0.11.1
+min_shipctl: 0.11.2
 updated_at: "2026-04-20T12:00:00+00:00"
-content_sha256:43c509100cccce5c06aab8867dad21c0f2c9244c44596f3fafdf268d6e605add
+content_sha256:57912dc49ea1a23fb3d5a0b000aaaff8b13085242a74d32b4053ae326564b40c
 deprecated: false
 replaced_by: null
 yanked: false

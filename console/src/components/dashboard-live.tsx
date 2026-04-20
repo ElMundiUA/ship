@@ -297,6 +297,7 @@ export function DashboardLive({
             <EmptyState text='Press "Run now" on any pipeline to see history land here.' />
           ) : (
             <PipelineRunsList
+              workspaceId={workspaceId}
               rows={data.pipeline_runs}
               pipelinesById={pipelineById(data.pipelines)}
             />
@@ -1027,9 +1028,11 @@ function runTone(r: ApiDashboardWorkflowRun): BadgeTone {
 }
 
 function PipelineRunsList({
+  workspaceId,
   rows,
   pipelinesById,
 }: {
+  workspaceId: string;
   rows: ApiPipelineRun[];
   pipelinesById: Record<string, ApiPipeline>;
 }) {
@@ -1043,11 +1046,13 @@ function PipelineRunsList({
             <th className="px-3 py-2 text-left font-semibold">Status</th>
             <th className="px-3 py-2 text-left font-semibold">When</th>
             <th className="px-3 py-2 text-left font-semibold">Note</th>
+            <th className="px-3 py-2 text-right font-semibold"> </th>
           </tr>
         </thead>
         <tbody>
           {rows.map((run) => {
             const pipeline = pipelinesById[run.pipeline_id];
+            const detailHref = `/pipelines/${encodeURIComponent(run.pipeline_id)}/runs/${encodeURIComponent(run.id)}?ws=${encodeURIComponent(workspaceId)}`;
             return (
               <tr
                 key={run.id}
@@ -1076,6 +1081,14 @@ function PipelineRunsList({
                 </td>
                 <td className="px-3 py-2.5 align-top text-xs text-white/65">
                   {run.summary ?? "—"}
+                </td>
+                <td className="px-3 py-2.5 align-top text-right text-xs">
+                  <Link
+                    href={detailHref}
+                    className="font-semibold text-aqua hover:underline"
+                  >
+                    Details
+                  </Link>
                 </td>
               </tr>
             );

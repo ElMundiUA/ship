@@ -16,7 +16,7 @@ const BIN = path.resolve(
 test("validateConfig accepts stack.agent.provider", () => {
   const cfg = {
     version: 1,
-    shipctl_min: "0.11.1",
+    shipctl_min: "0.11.2",
     api: { base_url: "https://ship.example.com", channel: "stable", ttl_hours: 24, offline_ok: true },
     stack: {
       tracker: "none",
