@@ -39,6 +39,9 @@ const ALL_NAV: { section: string; items: (NavItem & { stub?: boolean })[] }[] = 
     items: [
       { href: "/", label: "Dashboard", icon: <DotIcon /> },
       { href: "/pipelines", label: "Pipelines", icon: <DotIcon /> },
+      { href: "/clarifications", label: "Clarifications", icon: <DotIcon /> },
+      { href: "/improvements", label: "Improvements", icon: <DotIcon /> },
+      { href: "/chat", label: "Chat", icon: <DotIcon /> },
       { href: "/daily", label: "Daily & retro", icon: <DotIcon />, badge: "3", stub: true },
       { href: "/workflows", label: "Workflow runs", icon: <DotIcon />, stub: true },
     ],

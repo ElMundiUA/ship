@@ -465,6 +465,222 @@ export function acceptInvite(
   );
 }
 
+// --- Clarifications inbox (C9) ---------------------------------------------
+
+export type ApiClarificationStatus =
+  | "open"
+  | "answered"
+  | "skipped"
+  | "stale";
+
+export interface ApiClarification {
+  id: string;
+  workspace_id: string;
+  repo_id: string | null;
+  pipeline_run_id: string | null;
+  ticket_ref: string | null;
+  question: string;
+  answer: string | null;
+  status: ApiClarificationStatus;
+  context: Record<string, unknown>;
+  answered_by_email: string | null;
+  answered_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export function listClarifications(
+  workspaceId: string,
+  opts: { status?: ApiClarificationStatus; token?: string } = {},
+): Promise<ApiClarification[]> {
+  const qs = opts.status ? `?status=${encodeURIComponent(opts.status)}` : "";
+  return apiFetch<ApiClarification[]>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/clarifications${qs}`,
+    { token: opts.token },
+  );
+}
+
+export function createClarification(
+  workspaceId: string,
+  payload: {
+    question: string;
+    ticket_ref?: string | null;
+    repo_id?: string | null;
+    context?: Record<string, unknown>;
+  },
+  options: { token?: string } = {},
+): Promise<ApiClarification> {
+  return apiFetch<ApiClarification>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/clarifications`,
+    { method: "POST", body: payload, token: options.token },
+  );
+}
+
+export function updateClarification(
+  workspaceId: string,
+  clarificationId: string,
+  patch: {
+    answer?: string | null;
+    status?: "open" | "answered" | "skipped";
+  },
+  options: { token?: string } = {},
+): Promise<ApiClarification> {
+  return apiFetch<ApiClarification>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/clarifications/${encodeURIComponent(clarificationId)}`,
+    { method: "PATCH", body: patch, token: options.token },
+  );
+}
+
+// --- Improvements (C8) -----------------------------------------------------
+
+export type ApiImprovementDecision =
+  | "pending"
+  | "accepted"
+  | "declined"
+  | "deferred";
+
+export interface ApiImprovement {
+  id: string;
+  workspace_id: string;
+  repo_id: string | null;
+  pipeline_run_id: string | null;
+  kind: string;
+  title: string;
+  body: string;
+  impact: string | null;
+  effort: string | null;
+  context: Record<string, unknown>;
+  decision: ApiImprovementDecision;
+  decision_reason: string | null;
+  decided_by_email: string | null;
+  decided_at: string | null;
+  next_action_url: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export function listImprovements(
+  workspaceId: string,
+  opts: { decision?: ApiImprovementDecision; token?: string } = {},
+): Promise<ApiImprovement[]> {
+  const qs = opts.decision
+    ? `?decision=${encodeURIComponent(opts.decision)}`
+    : "";
+  return apiFetch<ApiImprovement[]>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/improvements${qs}`,
+    { token: opts.token },
+  );
+}
+
+export function updateImprovement(
+  workspaceId: string,
+  improvementId: string,
+  patch: {
+    decision?: ApiImprovementDecision;
+    decision_reason?: string | null;
+    next_action_url?: string | null;
+  },
+  options: { token?: string } = {},
+): Promise<ApiImprovement> {
+  return apiFetch<ApiImprovement>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/improvements/${encodeURIComponent(improvementId)}`,
+    { method: "PATCH", body: patch, token: options.token },
+  );
+}
+
+// --- Chat threads (C10) ----------------------------------------------------
+
+export interface ApiChatMessage {
+  id: string;
+  thread_id: string;
+  role: "user" | "assistant" | "system";
+  body: string;
+  meta: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface ApiChatThread {
+  id: string;
+  workspace_id: string;
+  repo_id: string | null;
+  workflow_id: string | null;
+  title: string;
+  status: "active" | "resolved" | "archived";
+  resolved_ticket_ref: string | null;
+  created_at: string;
+  updated_at: string;
+  message_count: number;
+}
+
+export interface ApiChatThreadDetail extends ApiChatThread {
+  messages: ApiChatMessage[];
+}
+
+export function listChatThreads(
+  workspaceId: string,
+  token?: string,
+): Promise<ApiChatThread[]> {
+  return apiFetch<ApiChatThread[]>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/chat/threads`,
+    { token },
+  );
+}
+
+export function getChatThread(
+  workspaceId: string,
+  threadId: string,
+  token?: string,
+): Promise<ApiChatThreadDetail> {
+  return apiFetch<ApiChatThreadDetail>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/chat/threads/${encodeURIComponent(threadId)}`,
+    { token },
+  );
+}
+
+export function createChatThread(
+  workspaceId: string,
+  payload: {
+    title: string;
+    initial_message: string;
+    repo_id?: string | null;
+    workflow_id?: string | null;
+  },
+  options: { token?: string } = {},
+): Promise<ApiChatThreadDetail> {
+  return apiFetch<ApiChatThreadDetail>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/chat/threads`,
+    { method: "POST", body: payload, token: options.token },
+  );
+}
+
+export function appendChatMessage(
+  workspaceId: string,
+  threadId: string,
+  body: string,
+  options: { token?: string } = {},
+): Promise<ApiChatThreadDetail> {
+  return apiFetch<ApiChatThreadDetail>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/chat/threads/${encodeURIComponent(threadId)}/messages`,
+    { method: "POST", body: { body }, token: options.token },
+  );
+}
+
+export function resolveChatThread(
+  workspaceId: string,
+  threadId: string,
+  payload: {
+    ticket_ref: string;
+    create_improvement?: boolean;
+    action?: "resolved" | "archived";
+  },
+  options: { token?: string } = {},
+): Promise<ApiChatThreadDetail> {
+  return apiFetch<ApiChatThreadDetail>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/chat/threads/${encodeURIComponent(threadId)}/resolve`,
+    { method: "POST", body: payload, token: options.token },
+  );
+}
+
 /**
  * Patch a single activated repo. Today the only mutable field is
  * ``preset``; ``reshape`` tells the backend to re-apply the preset's

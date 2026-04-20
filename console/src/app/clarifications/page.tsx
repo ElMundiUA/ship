@@ -1,0 +1,396 @@
+import Link from "next/link";
+import { redirect } from "next/navigation";
+
+import { AppShell } from "@/components/app-shell";
+import { Badge, Card, CardHeader } from "@/components/ui";
+import {
+  type ApiClarification,
+  type ApiClarificationStatus,
+  ApiHttpError,
+  ApiUnavailableError,
+  isApiConfigured,
+  listActivatedRepos,
+  listClarifications,
+  listWorkspaces,
+} from "@/lib/api/client";
+import { getSessionToken } from "@/lib/api/session";
+
+/**
+ * Clarifications inbox (C9).
+ *
+ * One page per workspace where every agent-raised question about a
+ * ticket / repo / PR lives until a human answers or marks it
+ * "skipped". Populated either by a pipeline run's callback (the
+ * happy path) or by an admin manually via the API. Answers flow
+ * back to the originating pipeline's audit log for the retro.
+ *
+ * Tabs: ``open`` / ``answered`` / ``skipped`` — default is ``open``
+ * because that's where the work is. Counts live in the tab labels
+ * so we can see the backlog without loading each bucket.
+ */
+
+export const dynamic = "force-dynamic";
+
+const VALID_STATUSES: readonly ApiClarificationStatus[] = [
+  "open",
+  "answered",
+  "skipped",
+];
+
+type BannerKind = { tone: "ok" | "warn" | "err"; text: string };
+
+function pickBanner(param: string | undefined): BannerKind | null {
+  switch (param) {
+    case "answered":
+      return { tone: "ok", text: "Answer recorded." };
+    case "skipped":
+      return { tone: "ok", text: "Marked as not relevant." };
+    case "reopened":
+      return { tone: "ok", text: "Clarification reopened." };
+    case "empty_answer":
+      return { tone: "warn", text: "Answer body can't be empty." };
+    case "not_found":
+      return { tone: "warn", text: "Clarification no longer exists." };
+    case "bad_input":
+      return { tone: "warn", text: "Invalid input." };
+    case "api_unavailable":
+      return {
+        tone: "err",
+        text: "Backend unreachable — try again in a moment.",
+      };
+    case undefined:
+      return null;
+    default:
+      if (param?.startsWith("http_")) {
+        return { tone: "err", text: `Backend returned ${param.slice(5)}.` };
+      }
+      return { tone: "err", text: "Something went sideways." };
+  }
+}
+
+export default async function ClarificationsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{
+    status?: string;
+    banner?: string;
+    focus?: string;
+  }>;
+}) {
+  const params = await searchParams;
+  if (!isApiConfigured()) {
+    return (
+      <AppShell title="Clarifications">
+        <Card>
+          <CardHeader
+            title="Backend not configured"
+            subtitle="Set SHIP_API_URL to load the clarifications inbox."
+          />
+        </Card>
+      </AppShell>
+    );
+  }
+
+  const token = await getSessionToken();
+  if (!token) redirect("/login?next=%2Fclarifications");
+
+  let workspaces: Awaited<ReturnType<typeof listWorkspaces>>;
+  try {
+    workspaces = await listWorkspaces(token);
+  } catch (err) {
+    if (err instanceof ApiHttpError && err.status === 401) {
+      redirect("/login?next=%2Fclarifications");
+    }
+    return renderUnavailable(err);
+  }
+  if (workspaces.length === 0) redirect("/onboarding?step=github");
+
+  const workspace = workspaces[0];
+
+  const statusFilter: ApiClarificationStatus =
+    VALID_STATUSES.includes(params.status as ApiClarificationStatus)
+      ? (params.status as ApiClarificationStatus)
+      : "open";
+
+  // Load every status at once so we can render tab counts. Cheap —
+  // one SELECT per tab, all filtered on the same index.
+  let allRows: ApiClarification[] = [];
+  let repos: Awaited<ReturnType<typeof listActivatedRepos>> = [];
+  try {
+    [allRows, repos] = await Promise.all([
+      listClarifications(workspace.id, { token }),
+      listActivatedRepos(workspace.id, token).catch(() => []),
+    ]);
+  } catch (err) {
+    if (err instanceof ApiHttpError && err.status === 401)
+      redirect("/login?next=%2Fclarifications");
+    return renderUnavailable(err);
+  }
+
+  const counts = {
+    open: 0,
+    answered: 0,
+    skipped: 0,
+    stale: 0,
+    total: allRows.length,
+  } as Record<string, number>;
+  for (const r of allRows) counts[r.status] = (counts[r.status] ?? 0) + 1;
+
+  const rows = allRows.filter((r) => r.status === statusFilter);
+  rows.sort(
+    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+  );
+
+  const reposById = new Map(repos.map((r) => [r.id, r]));
+  const banner = pickBanner(params.banner);
+
+  return (
+    <AppShell
+      title="Clarifications"
+      workspace={{ id: workspace.id, name: workspace.name, slug: workspace.slug }}
+      scope={{
+        repos: repos.map((r) => ({ id: r.id, full_name: r.full_name })),
+        selectedRepoId: repos[0]?.id ?? null,
+      }}
+      actions={
+        <Link
+          href="/"
+          className="text-xs font-semibold text-white/65 hover:text-white"
+        >
+          ← Dashboard
+        </Link>
+      }
+    >
+      <p className="mb-4 max-w-2xl text-xs text-white/55">
+        Everything the agent is waiting on a human for — usually the
+        missing context that lets a ticket get auto-resolved. Answer
+        inline or mark as "not relevant" to clear the queue.
+      </p>
+
+      {banner ? (
+        <div
+          className={`mb-4 rounded-lg border px-3 py-2 text-[12px] ${
+            banner.tone === "ok"
+              ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
+              : banner.tone === "warn"
+                ? "border-amber-500/30 bg-amber-500/10 text-amber-200"
+                : "border-rose-500/30 bg-rose-500/10 text-rose-200"
+          }`}
+        >
+          {banner.text}
+        </div>
+      ) : null}
+
+      <div className="mb-5 flex flex-wrap gap-2 border-b border-white/10 pb-2">
+        {([
+          { key: "open", label: "Open" },
+          { key: "answered", label: "Answered" },
+          { key: "skipped", label: "Skipped" },
+        ] as const).map((tab) => (
+          <Link
+            key={tab.key}
+            href={tab.key === "open" ? "/clarifications" : `/clarifications?status=${tab.key}`}
+            className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+              statusFilter === tab.key
+                ? "bg-white/10 text-white"
+                : "text-white/55 hover:text-white"
+            }`}
+          >
+            {tab.label}
+            <span className="ml-2 text-white/40">{counts[tab.key] ?? 0}</span>
+          </Link>
+        ))}
+        <span className="ml-auto text-[11px] text-white/40">
+          {counts.total} total across the workspace
+        </span>
+      </div>
+
+      {rows.length === 0 ? (
+        <EmptyState statusFilter={statusFilter} />
+      ) : (
+        <ul className="space-y-3">
+          {rows.map((row) => (
+            <ClarificationRow
+              key={row.id}
+              row={row}
+              workspaceId={workspace.id}
+              repoName={row.repo_id ? reposById.get(row.repo_id)?.full_name ?? null : null}
+              statusFilter={statusFilter}
+              focused={params.focus === row.id}
+            />
+          ))}
+        </ul>
+      )}
+    </AppShell>
+  );
+}
+
+function EmptyState({ statusFilter }: { statusFilter: ApiClarificationStatus }) {
+  const copy =
+    statusFilter === "open"
+      ? "Queue is empty — the agent isn't blocked on anything right now."
+      : statusFilter === "answered"
+        ? "No answered clarifications yet. Once you answer one it shows up here."
+        : "No skipped clarifications yet.";
+  return (
+    <Card>
+      <p className="text-sm text-white/70">{copy}</p>
+    </Card>
+  );
+}
+
+function ClarificationRow({
+  row,
+  workspaceId,
+  repoName,
+  statusFilter,
+  focused,
+}: {
+  row: ApiClarification;
+  workspaceId: string;
+  repoName: string | null;
+  statusFilter: ApiClarificationStatus;
+  focused: boolean;
+}) {
+  const context = row.context || {};
+  const contextKeys = Object.keys(context);
+  const created = new Date(row.created_at);
+
+  return (
+    <li
+      className={`rounded-xl border px-4 py-4 transition ${
+        focused
+          ? "border-aqua/40 bg-aqua/5"
+          : "border-white/10 bg-white/[0.02]"
+      }`}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2 text-[11px] text-white/45">
+            {row.ticket_ref ? <Badge>{row.ticket_ref}</Badge> : null}
+            {repoName ? <span>{repoName}</span> : null}
+            <span>{created.toLocaleString()}</span>
+            {row.pipeline_run_id ? (
+              <span>
+                from run{" "}
+                <span className="font-mono text-white/55">
+                  {row.pipeline_run_id.slice(0, 8)}
+                </span>
+              </span>
+            ) : null}
+          </div>
+          <p className="mt-2 text-sm text-white/85">{row.question}</p>
+          {contextKeys.length > 0 ? (
+            <details className="mt-2">
+              <summary className="cursor-pointer text-[11px] text-white/45 hover:text-white/70">
+                context ({contextKeys.length})
+              </summary>
+              <pre className="mt-2 overflow-x-auto rounded bg-black/30 p-2 text-[11px] text-white/70">
+                {JSON.stringify(context, null, 2)}
+              </pre>
+            </details>
+          ) : null}
+        </div>
+      </div>
+
+      {row.status === "answered" ? (
+        <div className="mt-3 rounded-lg bg-emerald-500/5 p-3 text-[13px] text-emerald-100">
+          <div className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-wider text-emerald-200/70">
+            <span>
+              Answered{" "}
+              {row.answered_by_email ? <>by {row.answered_by_email}</> : null}
+            </span>
+            <span>
+              {row.answered_at
+                ? new Date(row.answered_at).toLocaleString()
+                : ""}
+            </span>
+          </div>
+          <div className="whitespace-pre-wrap">{row.answer}</div>
+        </div>
+      ) : row.status === "skipped" ? (
+        <div className="mt-3 text-[12px] text-white/50">
+          Skipped{" "}
+          {row.answered_by_email ? <>by {row.answered_by_email}</> : null}
+          {row.answered_at
+            ? ` · ${new Date(row.answered_at).toLocaleString()}`
+            : ""}
+        </div>
+      ) : null}
+
+      {statusFilter === "open" ? (
+        <form
+          action="/api/clarifications/answer"
+          method="POST"
+          className="mt-3 flex flex-col gap-2"
+        >
+          <input type="hidden" name="ws" value={workspaceId} />
+          <input type="hidden" name="id" value={row.id} />
+          <input type="hidden" name="status_filter" value={statusFilter} />
+          <textarea
+            name="answer"
+            placeholder="Answer the agent's question…"
+            className="min-h-[72px] w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white placeholder-white/30 focus:border-aqua focus:outline-none"
+            autoFocus={focused}
+          />
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="submit"
+              name="action"
+              value="answer"
+              className="rounded-md bg-aqua px-3 py-1.5 text-xs font-semibold text-black hover:bg-aqua/90"
+            >
+              Send answer
+            </button>
+            <button
+              type="submit"
+              name="action"
+              value="skip"
+              className="rounded-md border border-white/10 px-3 py-1.5 text-xs font-semibold text-white/70 hover:bg-white/5"
+            >
+              Not relevant
+            </button>
+          </div>
+        </form>
+      ) : (
+        <form
+          action="/api/clarifications/answer"
+          method="POST"
+          className="mt-3"
+        >
+          <input type="hidden" name="ws" value={workspaceId} />
+          <input type="hidden" name="id" value={row.id} />
+          <input type="hidden" name="status_filter" value={statusFilter} />
+          <button
+            type="submit"
+            name="action"
+            value="reopen"
+            className="text-[11px] font-semibold text-white/55 hover:text-white"
+          >
+            Reopen
+          </button>
+        </form>
+      )}
+    </li>
+  );
+}
+
+function renderUnavailable(err: unknown) {
+  const msg =
+    err instanceof ApiUnavailableError
+      ? err.message
+      : err instanceof Error
+        ? err.message
+        : String(err);
+  return (
+    <AppShell title="Clarifications">
+      <Card>
+        <CardHeader
+          title="Backend unavailable"
+          subtitle="The console couldn't reach the Ship API. Retry in a moment."
+        />
+        <p className="mt-2 font-mono text-[11px] text-rose-300">{msg}</p>
+      </Card>
+    </AppShell>
+  );
+}

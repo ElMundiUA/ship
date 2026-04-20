@@ -31,6 +31,7 @@ import logging
 import secrets
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Final
 
@@ -166,6 +167,90 @@ def _decode_run_token(token: str, settings: Settings) -> uuid.UUID:
 
 def _hash_run_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Shared run-token dependency (used by callback + agent-surface ingress)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RunTokenContext:
+    """Validated run-token claims bundled with the resolved run row.
+
+    Produced by :func:`get_run_token_context` so downstream handlers
+    (pipeline-authored clarifications, improvements, chat messages)
+    never re-validate the token themselves. Treat every field as
+    already authenticated — the dependency guarantees:
+
+    - JWT signature ok, ``sub`` == ``ship.pipeline.run.callback``,
+      ``exp`` in the future.
+    - ``run_id`` matches an existing :class:`PipelineRun` row.
+    - SHA-256 of the raw token matches
+      :attr:`PipelineRun.run_token_hash` (belt-and-braces against a
+      forged token signed with a leaked secret).
+
+    ``workspace_id`` + ``pipeline_id`` are snapshotted at validation
+    time to avoid re-issuing a SELECT in the handler body.
+    """
+
+    run_id: uuid.UUID
+    pipeline_id: uuid.UUID
+    workspace_id: uuid.UUID
+    raw_token: str
+
+
+async def get_run_token_context(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> RunTokenContext:
+    """FastAPI dependency that validates the ``Authorization`` header.
+
+    Used by any endpoint that must only be callable from a dispatched
+    Ship workflow. Raises ``401`` on every failure mode so tenants
+    can't fingerprint our validator; ``404`` is reserved for the run-
+    missing case (the legitimate race where a run got deleted between
+    token issuance and callback — still authenticated, just orphaned).
+    """
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="missing bearer token",
+        )
+    raw_token = authorization.split(" ", 1)[1].strip()
+    if not raw_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="empty bearer token",
+        )
+
+    run_id = _decode_run_token(raw_token, settings)
+    run = await session.get(PipelineRun, run_id)
+    if (
+        run is None
+        or run.run_token_hash is None
+        or not secrets.compare_digest(
+            run.run_token_hash, _hash_run_token(raw_token)
+        )
+    ):
+        # Collapse "run gone", "token never issued", and "hash
+        # mismatch" into a single 401 so tenants can't fingerprint
+        # which branch they hit. The legitimate "run deleted between
+        # dispatch and callback" race degrades to 401, which the
+        # workflow treats as "don't retry" — matches our desired
+        # behaviour (fire and forget; webhook reconciliation is the
+        # canonical status source anyway).
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="run token is invalid, expired, or for a missing run",
+        )
+    return RunTokenContext(
+        run_id=run.id,
+        pipeline_id=run.pipeline_id,
+        workspace_id=run.workspace_id,
+        raw_token=raw_token,
+    )
 
 
 def _read_starter_yaml(kind: str) -> str:
@@ -1004,9 +1089,8 @@ async def list_pipeline_runs(
 async def report_run_result(
     run_id: uuid.UUID = Path(...),
     payload: PipelineRunResultIn = ...,
-    authorization: str | None = Header(default=None, alias="Authorization"),
+    ctx: RunTokenContext = Depends(get_run_token_context),
     session: AsyncSession = Depends(get_session),
-    settings: Settings = Depends(get_settings),
 ) -> PipelineRunOut:
     """Callback endpoint dispatched workflows hit to report their result.
 
@@ -1035,37 +1119,15 @@ async def report_run_result(
                 f"got {payload.status!r}"
             ),
         )
-    if not authorization or not authorization.lower().startswith("bearer "):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="missing bearer token",
-        )
-    raw_token = authorization.split(" ", 1)[1].strip()
-    if not raw_token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="empty bearer token",
-        )
-
-    decoded_run_id = _decode_run_token(raw_token, settings)
-    if decoded_run_id != run_id:
+    if ctx.run_id != run_id:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="run token does not match path run_id",
         )
 
     run = await session.get(PipelineRun, run_id)
-    if run is None or run.run_token_hash is None:
+    if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    if not secrets.compare_digest(run.run_token_hash, _hash_run_token(raw_token)):
-        # JWT was structurally fine but the hash didn't match — either
-        # a leaked secret was used to mint a fake token, or we already
-        # rotated the run_token for this run (we don't, but document
-        # the safety net).
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="run token hash mismatch",
-        )
 
     if run.status in _TERMINAL_STATUSES:
         # Idempotent: workflow's `if: always()` reporter sometimes
