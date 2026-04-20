@@ -907,6 +907,14 @@ async def install_pipeline_workflow(
         session, pipeline, explicit_repo_id=explicit_repo_id
     )
     content = _read_starter_yaml(pipeline.kind)
+    # Deep-link back to the dashboard so the user doesn't get stuck
+    # on github.com after merging. ``console_url`` is the console
+    # origin (``https://app.ship.…``); we add enough context to show
+    # a "welcome back" banner next load.
+    return_url = (
+        f"{settings.console_url.rstrip('/')}/?ws={workspace_id}"
+        f"&installed={pipeline_id}&reason=back_from_pr"
+    )
     try:
         result: StarterWorkflowPR = await commit_starter_workflow(
             repo,
@@ -915,6 +923,7 @@ async def install_pipeline_workflow(
             content=content,
             pipeline_kind=pipeline.kind,
             settings=settings,
+            return_url=return_url,
         )
     except WorkflowDispatchError as exc:
         raise HTTPException(
