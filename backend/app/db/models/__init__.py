@@ -2,6 +2,12 @@
 so Alembic ``--autogenerate`` and `Base.metadata.create_all` see them all.
 """
 
+from backend.app.db.models.agent_surface import (
+    ChatMessage,
+    ChatThread,
+    Clarification,
+    Improvement,
+)
 from backend.app.db.models.integrations import GitHubInstallation, WorkspaceRepo
 from backend.app.db.models.pipelines import (
     Pipeline,
@@ -27,7 +33,11 @@ __all__ = [
     "ApiToken",
     "ArtifactRepo",
     "AuditLog",
+    "ChatMessage",
+    "ChatThread",
+    "Clarification",
     "GitHubInstallation",
+    "Improvement",
     "Integration",
     "Org",
     "OrgMember",

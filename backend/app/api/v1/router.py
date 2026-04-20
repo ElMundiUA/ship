@@ -15,9 +15,12 @@ from backend.app.api.v1.routes import (
     audit,
     auth,
     catalog,
+    chat,
+    clarifications,
     dashboard,
     github_app,
     health,
+    improvements,
     integrations,
     invites,
     knowledge,
@@ -70,3 +73,16 @@ api_router.include_router(catalog.router)
 # authenticated accept at ``/invites/{token}``.
 api_router.include_router(invites.workspace_router)
 api_router.include_router(invites.invite_router)
+# Clarifications inbox (C9 — human-in-the-loop Q&A). Session-auth
+# admin routes under /workspaces/{ws}; run-token pipeline ingress
+# under /clarifications/pipeline.
+api_router.include_router(clarifications.router)
+api_router.include_router(clarifications.pipeline_router)
+# Improvements (C8 — agent proposals with yes/no/later decisions).
+# Same split as clarifications: session admin on /workspaces/{ws};
+# run-token ingress on /improvements/pipeline.
+api_router.include_router(improvements.router)
+api_router.include_router(improvements.pipeline_router)
+# Chat (C10 — conversational scoping with the agent). Stub replies
+# for the pilot; real model plugs into backend.app.api.v1.routes.chat:_agent_reply.
+api_router.include_router(chat.router)
