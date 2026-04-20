@@ -78,7 +78,7 @@ type StreamEvent =
     }
   | { type: "assistant_message"; message: Message }
   | { type: "end"; reason: string }
-  | { type: "error"; detail: string };
+  | { type: "error"; detail?: string; error?: string };
 
 type InitialState = {
   workspaceId: string;
@@ -199,7 +199,7 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
           return;
         }
         case "error": {
-          setErrorText(evt.detail);
+          setErrorText(evt.detail ?? evt.error ?? "Agent error");
           setStreaming(false);
           return;
         }

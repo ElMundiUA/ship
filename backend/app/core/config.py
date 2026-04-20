@@ -76,6 +76,25 @@ def _swap_driver(url: str, target_prefix: str) -> str:
 
 _LIBPQ_ONLY_KEYS = frozenset({"sslmode", "channel_binding", "sslrootcert", "sslcert", "sslkey"})
 
+# When ``AGENT_VENDOR=anthropic`` but operators only flip the vendor switch
+# and leave ``AGENT_MODEL_*`` at the OpenAI defaults, Anthropic returns 404
+# ("model: gpt-4o"). These ids match ``documentation/internal/agent-setup.md``.
+_DEFAULT_ANTHROPIC_MODEL_MAIN = "claude-sonnet-4-5-20250929"
+_DEFAULT_ANTHROPIC_MODEL_FAST = "claude-haiku-4-5-20250929"
+
+
+def _looks_like_openai_chat_model_id(model: str) -> bool:
+    """Return True when ``model`` is clearly an OpenAI chat id, not a Claude id."""
+    m = model.strip().lower()
+    if not m:
+        return False
+    if m.startswith("gpt-"):
+        return True
+    # OpenAI "omni" families — not valid on Anthropic.
+    if m.startswith("o1") or m.startswith("o3") or m.startswith("o4"):
+        return True
+    return False
+
 
 def _strip_libpq_only_params(url: str, *, for_asyncpg: bool) -> str:
     """Drop libpq-only query params from the URL when targeting asyncpg.
@@ -372,6 +391,28 @@ class Settings(BaseSettings):
                 "OAuth callback origins. Set the following env vars to your "
                 "real public hostnames and redeploy: " + ", ".join(offenders)
             )
+        return self
+
+    @model_validator(mode="after")
+    def _anthropic_models_not_openai_ids(self) -> "Settings":
+        """If Anthropic is the active vendor, never send OpenAI model ids upstream.
+
+        ``AGENT_MODEL_MAIN`` / ``AGENT_MODEL_FAST`` default to ``gpt-4o`` /
+        ``gpt-4o-mini`` for the OpenAI path. Operators who set
+        ``AGENT_VENDOR=anthropic`` + ``ANTHROPIC_API_KEY`` often forget to
+        retarget the model env vars; Anthropic then 404s with
+        ``model: gpt-4o``. Swap only when we are sure the Anthropic client will
+        be selected (vendor + key). If vendor is ``anthropic`` but the key is
+        missing, :func:`pick_default_client` falls back to OpenAI — leave
+        OpenAI-shaped defaults intact in that case.
+        """
+        vendor = (self.agent_vendor or "openai").lower().strip()
+        if vendor != "anthropic" or not (self.anthropic_api_key or "").strip():
+            return self
+        if _looks_like_openai_chat_model_id(self.agent_model_main):
+            self.agent_model_main = _DEFAULT_ANTHROPIC_MODEL_MAIN
+        if _looks_like_openai_chat_model_id(self.agent_model_fast):
+            self.agent_model_fast = _DEFAULT_ANTHROPIC_MODEL_FAST
         return self
 
     @property
