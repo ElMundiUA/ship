@@ -60,16 +60,68 @@ class CatalogError(RuntimeError):
     """
 
 
-def _project_root() -> Path:
-    """Walk up until we hit the repo root (where ``artifacts/`` lives)."""
+import logging as _logging
+import os as _os
+
+
+_logger = _logging.getLogger(__name__)
+
+
+def _discover_artifacts_root() -> Path:
+    """Resolve the ``artifacts/`` directory at *import* time.
+
+    Three lookup strategies, in order:
+
+    1. ``SHIP_ARTIFACTS_ROOT`` env var — absolute override for air-gapped
+       or non-standard deploys.
+    2. Walk upward from this file's directory until we hit a parent
+       that contains an ``artifacts/`` folder. Works for in-tree dev
+       runs and for the Docker image where the repo root is ``/app``.
+    3. Fall back to ``<cwd>/artifacts`` (useful when the image layout
+       changes but CWD still holds the catalog, e.g. a stripped-down
+       container rebuild).
+
+    Crucially, this helper **never raises**. If none of the strategies
+    resolve to a real directory we log a warning and hand back the
+    would-be path anyway; every downstream helper degrades to "empty
+    catalog" instead of nuking the uvicorn boot path. The Phase-3
+    incident (Bunny crashloop because ``COPY artifacts`` was missing
+    from the backend Dockerfile) is the exact failure mode this
+    guard is protecting against.
+    """
+    override = _os.environ.get("SHIP_ARTIFACTS_ROOT")
+    if override:
+        candidate = Path(override).expanduser().resolve()
+        if candidate.is_dir():
+            return candidate
+        _logger.warning(
+            "SHIP_ARTIFACTS_ROOT=%s does not point at an existing directory; "
+            "falling back to auto-discovery.",
+            override,
+        )
+
     here = Path(__file__).resolve()
     for parent in here.parents:
-        if (parent / "artifacts").is_dir():
-            return parent
-    raise CatalogError("could not locate artifacts/ relative to backend package")
+        candidate = parent / "artifacts"
+        if candidate.is_dir():
+            return candidate
+
+    fallback = (Path.cwd() / "artifacts").resolve()
+    if fallback.is_dir():
+        return fallback
+
+    _logger.warning(
+        "Could not locate the artifacts/ directory (checked "
+        "SHIP_ARTIFACTS_ROOT, parents of %s, and CWD=%s). Catalog "
+        "endpoints will return empty lists until the directory is "
+        "mounted or the image is rebuilt with COPY artifacts.",
+        here,
+        Path.cwd(),
+    )
+    return fallback
 
 
-ARTIFACTS_ROOT: Final[Path] = _project_root() / "artifacts"
+ARTIFACTS_ROOT: Final[Path] = _discover_artifacts_root()
 
 
 _PLURAL_BY_KIND: Final[dict[str, str]] = {
