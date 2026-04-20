@@ -40,10 +40,12 @@ from backend.app.api.v1.routes.workspaces import (
     ROLES_READ,
     _require_membership,
 )
+from backend.app.core.config import Settings, get_settings
 from backend.app.db.models.agent_surface import Clarification
 from backend.app.db.models.pipelines import PipelineRun
 from backend.app.db.models.tenancy import AuditLog, User
 from backend.app.db.session import get_session
+from backend.app.services import clarifications_sync
 
 
 router = APIRouter(
@@ -65,6 +67,13 @@ class ClarificationOut(BaseModel):
     answer: str | None
     status: str
     context: dict
+    # D13 projection fields — surfaced so the console can render a
+    # "from tracker" badge + deep link without re-resolving the
+    # tracker on every page view.
+    source: str
+    tracker_provider: str | None
+    tracker_issue_key: str | None
+    tracker_issue_url: str | None
     answered_by_email: str | None
     answered_at: datetime | None
     created_at: datetime
@@ -103,6 +112,10 @@ def _to_out(row: Clarification, answered_by_email: str | None) -> ClarificationO
         answer=row.answer,
         status=row.status,
         context=row.context,
+        source=row.source,
+        tracker_provider=row.tracker_provider,
+        tracker_issue_key=row.tracker_issue_key,
+        tracker_issue_url=row.tracker_issue_url,
         answered_by_email=answered_by_email,
         answered_at=row.answered_at,
         created_at=row.created_at,
@@ -201,6 +214,7 @@ async def update_clarification(
     payload: ClarificationPatchIn,
     auth: AuthContext = Depends(get_current_auth),
     session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
 ) -> ClarificationOut:
     """Answer, skip, or re-open a clarification.
 
@@ -215,6 +229,15 @@ async def update_clarification(
       actually informative.
     - Body without ``status`` but with ``answer`` is shorthand for
       ``status='answered'``.
+
+    When ``source='tracker'`` (D13 projection), we also write the
+    answer back to the customer's tracker and strip the
+    ``ship:needs-clarification`` label. The tracker is the source of
+    truth; Ship's row is a cached projection. Write-back is
+    synchronous: if the tracker call fails we surface a 502 and roll
+    back the DB mutation (FastAPI's unit-of-work auto-commits only on
+    a clean return), so the admin can retry without a split-brain
+    between Ship and the tracker.
     """
     await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
     row = (
@@ -241,12 +264,14 @@ async def update_clarification(
         )
 
     now = datetime.now(timezone.utc)
+    answer_for_writeback: str | None = None
     if new_status == "answered":
         row.status = "answered"
         if payload.answer is not None:
             row.answer = payload.answer
         row.answered_by_user_id = auth.user.id
         row.answered_at = now
+        answer_for_writeback = row.answer
     elif new_status == "skipped":
         row.status = "skipped"
         row.answered_by_user_id = auth.user.id
@@ -258,6 +283,30 @@ async def update_clarification(
         row.answered_at = None
     # ``stale`` is only set by server-side sweepers — rejected on the
     # API for now so a malicious client can't mass-mark inbox stale.
+
+    # Write-back BEFORE flushing the DB: if the tracker is down or
+    # misconfigured, we want the admin to see a 502 and not a silent
+    # "Ship says answered, tracker still labelled" divergence. The
+    # row is still dirty in the session at this point — the 502 path
+    # below raises, which short-circuits the implicit commit in
+    # ``backend.app.db.session.get_session``.
+    if row.source == "tracker" and new_status == "answered" and answer_for_writeback:
+        try:
+            await clarifications_sync.writeback_answer(
+                session=session,
+                settings=settings,
+                row=row,
+                answer_text=answer_for_writeback,
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=(
+                    f"Tracker write-back failed: {exc}. Ship row unchanged;"
+                    " retry once the tracker is reachable."
+                ),
+            ) from exc
+        row.tracker_synced_at = now
 
     await session.flush()
     # Refresh server-side computed fields (``updated_at``) before
@@ -274,6 +323,61 @@ async def update_clarification(
         if user is not None:
             email = user.email
     return _to_out(row, email)
+
+
+# ---------------------------------------------------------------------------
+# Tracker projection — admin-triggered + cron-backed sync (D13)
+# ---------------------------------------------------------------------------
+
+
+class ClarificationSyncReportOut(BaseModel):
+    """Shape returned by ``POST .../clarifications/sync``."""
+
+    workspace_id: uuid.UUID
+    ingested: int
+    updated: int
+    stale_marked: int
+    errors: list[str]
+
+
+@router.post(
+    "/sync",
+    response_model=ClarificationSyncReportOut,
+    status_code=status.HTTP_200_OK,
+)
+async def sync_clarifications(
+    workspace_id: uuid.UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> ClarificationSyncReportOut:
+    """Run the tracker→Ship projection for this workspace on demand.
+
+    The cron already runs this every few minutes; the manual hook is
+    useful (a) for onboarding ("I just added the Linear integration,
+    show me my questions now"), and (b) for debugging — the route
+    returns a breakdown of what was ingested / updated / marked stale.
+
+    Admin-only: a full tenant listing of tracker issues would leak
+    labels outside the ``owner`` / ``admin`` trust boundary otherwise.
+    """
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+    report = await clarifications_sync.sync_workspace(
+        session, settings=settings, workspace_id=workspace_id
+    )
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=auth.user.id,
+            actor_token_id=None,
+            action="clarification.sync",
+            target_kind="workspace",
+            target_id=str(workspace_id),
+            payload=report.as_dict(),
+        )
+    )
+    await session.flush()
+    return ClarificationSyncReportOut(**report.as_dict())
 
 
 # ---------------------------------------------------------------------------
@@ -336,6 +440,11 @@ async def create_from_pipeline(
         ticket_ref=payload.ticket_ref,
         question=payload.question,
         context=payload.context,
+        # D13: distinguish runtime-authored rows so the PATCH
+        # writeback path (which targets a tracker) stays a no-op
+        # for pipeline-authored ones. Legacy workflows that haven't
+        # moved to the tracker-comment model still land here.
+        source="pipeline",
     )
     session.add(row)
     session.add(

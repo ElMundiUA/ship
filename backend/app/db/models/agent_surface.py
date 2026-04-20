@@ -81,6 +81,18 @@ class Clarification(Base):
         Index(
             "ix_clarifications_repo_id", "repo_id"
         ),
+        # Projection dedup: the same tracker comment must never create
+        # two rows, even if the sync cron races with a webhook. Partial
+        # index so manual (``source='manual'``) rows — which carry no
+        # tracker identifiers — aren't hemmed in by the uniqueness.
+        Index(
+            "uq_clarifications_tracker_comment",
+            "workspace_id",
+            "tracker_provider",
+            "tracker_comment_id",
+            unique=True,
+            postgresql_where=text("tracker_comment_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = _pk()
@@ -108,6 +120,35 @@ class Clarification(Base):
     )
     context: Mapped[dict] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+
+    # Provenance discriminator.
+    #
+    # - ``manual``   — POSTed from the Ship console by an admin.
+    # - ``pipeline`` — run-token ingress (``POST /clarifications/pipeline``).
+    # - ``tracker``  — projected from a customer tracker ticket labelled
+    #                  ``ship:needs-clarification`` (D13).
+    #
+    # The value drives write-back behaviour: PATCH on a ``tracker`` row
+    # posts the answer back to the tracker and strips the label; PATCH
+    # on a ``manual``/``pipeline`` row is Ship-local only.
+    source: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'manual'")
+    )
+    # Vendor identifier (``linear`` / ``github_issues`` / ``notion``).
+    # Paired with :attr:`tracker_comment_id` in the partial unique index
+    # so we can re-run the projection without creating duplicates.
+    tracker_provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Human-readable issue key (``ENG-42``, ``owner/repo#123``, Notion
+    # page UUID). Surfaced in the UI as the deep-link identifier; also
+    # used by the projection to spot "the label vanished" → ``stale``.
+    tracker_issue_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    tracker_issue_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    # Vendor comment identifier — the specific comment that contains
+    # the ``@ship clarification:`` marker Ship projected.
+    tracker_comment_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    tracker_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
 
     answered_by_user_id: Mapped[uuid.UUID | None] = mapped_column(

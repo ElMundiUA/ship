@@ -15,11 +15,17 @@ enough that re-fetching the token costs nothing.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 import httpx
 
-from backend.app.integrations.gateway.tracker import CreatedTicket, TicketRef
+from backend.app.integrations.gateway.tracker import (
+    CommentRef,
+    CreatedTicket,
+    ListedIssue,
+    TicketRef,
+)
 
 
 LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql"
@@ -201,6 +207,152 @@ class LinearTracker:
             display_id=str(issue.get("identifier") or issue["id"]),
         )
 
+    # -----------------------------------------------------------------
+    # Clarifications projection surface (D13)
+    # -----------------------------------------------------------------
+
+    async def list_issues_with_label(
+        self, label: str, *, limit: int = 100
+    ) -> list[ListedIssue]:
+        """Open issues carrying ``label``.
+
+        We filter on Linear's ``labels.name`` server-side so the
+        projection cron doesn't pull the full backlog and filter
+        client-side. ``state.type != 'completed'`` because a
+        done/cancelled ticket with the ``ship:needs-clarification``
+        label is almost certainly a stale marker — the cron will
+        mark the matching Ship row ``stale`` without erroring.
+        """
+        query = """
+        query ShipLabelledIssues($label: String!, $first: Int!) {
+          issues(
+            first: $first,
+            filter: {
+              labels: { name: { eq: $label } },
+              state: { type: { nin: ["completed","canceled"] } }
+            },
+            orderBy: updatedAt
+          ) {
+            nodes {
+              id
+              identifier
+              url
+              team { id }
+            }
+          }
+        }
+        """
+        data = await self._gql(
+            query, {"label": label, "first": max(1, min(limit, 100))}
+        )
+        nodes = (data.get("issues") or {}).get("nodes") or []
+        out: list[ListedIssue] = []
+        for node in nodes:
+            if not node.get("id"):
+                continue
+            out.append(
+                ListedIssue(
+                    ref=TicketRef(
+                        kind="linear",
+                        workspace_hint=((node.get("team") or {}).get("id")),
+                        id=str(node["id"]),
+                    ),
+                    display_id=str(node.get("identifier") or node["id"]),
+                    url=node.get("url"),
+                )
+            )
+        return out
+
+    async def list_comments(self, ticket: TicketRef) -> list[CommentRef]:
+        """All comments on the issue, oldest first.
+
+        Linear's ``issue(id:).comments`` paginates by 50; for the
+        clarifications path we cap at 100 because the projection
+        only cares about recent exchange (and a Linear issue with
+        200 comments is unusual). If that ever bites, add a cursor
+        loop — the sync service doesn't care about the mechanics.
+        """
+        if ticket.kind != "linear":
+            raise ValueError(
+                f"LinearTracker can't list_comments for kind={ticket.kind}"
+            )
+        query = """
+        query ShipComments($id: String!) {
+          issue(id: $id) {
+            comments(first: 100) {
+              nodes {
+                id
+                body
+                createdAt
+                url
+                user { displayName email }
+              }
+            }
+          }
+        }
+        """
+        data = await self._gql(query, {"id": ticket.id})
+        nodes = (
+            ((data.get("issue") or {}).get("comments") or {}).get("nodes") or []
+        )
+        out: list[CommentRef] = []
+        for node in nodes:
+            created_raw = node.get("createdAt")
+            try:
+                created_at = _parse_iso8601(created_raw) if created_raw else datetime.min
+            except ValueError:
+                created_at = datetime.min
+            user = node.get("user") or {}
+            out.append(
+                CommentRef(
+                    id=str(node.get("id") or ""),
+                    body=str(node.get("body") or ""),
+                    author=(user.get("displayName") or user.get("email")),
+                    created_at=created_at,
+                    url=node.get("url"),
+                )
+            )
+        out.sort(key=lambda c: c.created_at)
+        return out
+
+    async def remove_label(self, ticket: TicketRef, label: str) -> None:
+        """Strip ``label`` from the issue (no-op if not present)."""
+        if ticket.kind != "linear":
+            raise ValueError(
+                f"LinearTracker can't remove_label for kind={ticket.kind}"
+            )
+        # Linear removes labels via ``issueUpdate`` with the residual
+        # label id set (no dedicated removeLabel mutation). Fetch the
+        # current list, strip the match, push it back.
+        resolve = """
+        query ShipIssueLabels($id: String!) {
+          issue(id: $id) {
+            labels { nodes { id name } }
+          }
+        }
+        """
+        data = await self._gql(resolve, {"id": ticket.id})
+        nodes = (
+            ((data.get("issue") or {}).get("labels") or {}).get("nodes") or []
+        )
+        wanted = label.lower()
+        remaining = [
+            str(n["id"]) for n in nodes
+            if str(n.get("name", "")).lower() != wanted
+        ]
+        if len(remaining) == len(nodes):
+            return  # Label wasn't attached; nothing to do.
+        mutation = """
+        mutation ShipStripLabel($id: String!, $labelIds: [String!]!) {
+          issueUpdate(id: $id, input: { labelIds: $labelIds }) { success }
+        }
+        """
+        await self._gql(mutation, {"id": ticket.id, "labelIds": remaining})
+
+    # -----------------------------------------------------------------
+    # Private helpers
+    # -----------------------------------------------------------------
+
     async def _resolve_team_id(self, hint: str | None) -> str:
         """Accept ``None`` / UUID / team key, return a team UUID."""
         if hint:
@@ -247,6 +399,17 @@ class LinearTracker:
         )
         want = {lbl.lower() for lbl in labels}
         return [str(n["id"]) for n in nodes if str(n.get("name", "")).lower() in want]
+
+
+def _parse_iso8601(raw: str) -> datetime:
+    """Parse Linear's ``createdAt`` (ISO-8601 with ``Z`` suffix).
+
+    ``datetime.fromisoformat`` only accepts ``+00:00`` before 3.11;
+    we're on 3.12 but Linear still ships the ``Z``. Normalise it
+    before handing off to keep the adapter portable.
+    """
+    cleaned = raw.replace("Z", "+00:00") if raw.endswith("Z") else raw
+    return datetime.fromisoformat(cleaned)
 
 
 __all__ = ["LinearTracker", "LINEAR_GRAPHQL_URL"]

@@ -20,6 +20,7 @@ from arq.connections import RedisSettings
 
 from backend.app.core.config import get_settings
 from backend.app.core.sentry import init_sentry
+from backend.app.workers.clarifications import cron_sync_tracker_clarifications
 from backend.app.workers.secret_probe import cron_probe_pending_secrets
 
 
@@ -66,6 +67,15 @@ class WorkerSettings:
         # rotated upstream tokens that operators left untouched. Bounded
         # (32 rows, 6s/probe) so it never starves the heartbeat tick.
         cron(cron_probe_pending_secrets, minute=set(range(0, 60)), second={0, 30}),
+        # D13 — project tracker-labelled clarifications into Ship's
+        # inbox every 5 minutes. The admin-triggered sync route covers
+        # onboarding; this is the steady-state safety net so questions
+        # the agent raised show up in the console without operators
+        # clicking "sync" manually.
+        cron(
+            cron_sync_tracker_clarifications,
+            minute={0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55},
+        ),
     ]
     keep_result = 60
     job_timeout = 300
