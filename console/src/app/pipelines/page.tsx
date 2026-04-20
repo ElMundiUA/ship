@@ -2,7 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { AppShell } from "@/components/app-shell";
-import { Badge, ButtonGhost, Card, CardHeader } from "@/components/ui";
+import { Badge, Card, CardHeader, ToggleSwitch } from "@/components/ui";
 import {
   type ApiActivatedRepo,
   ApiHttpError,
@@ -287,9 +287,13 @@ function PipelineLaneCard({
             name="enabled"
             value={pipeline.enabled ? "off" : "on"}
           />
-          <ButtonGhost type="submit">
-            {pipeline.enabled ? "Disable" : "Enable"}
-          </ButtonGhost>
+          <ToggleSwitch
+            checked={pipeline.enabled}
+            label={pipeline.enabled ? "Disable pipeline" : "Enable pipeline"}
+          />
+          <span className="text-[11px] font-semibold text-white/55">
+            {pipeline.enabled ? "enabled" : "disabled"}
+          </span>
         </form>
         {state === "run-ready" && (
           <form
