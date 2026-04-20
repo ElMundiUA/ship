@@ -6,7 +6,13 @@
 > pick repos → connect tracker → "You're wired in" dashboard with
 > default pipelines seeded. PR webhook loop pending real-world fire
 > (this very PR is the smoke test).
-> **Source chats:** [Pilot scope discussion](442f31fa-34f0-47da-888b-a2d10a773f8e), [Day 1+2+3 build](48ef7ed3-881c-42e6-a823-1f670f4907ac)
+>
+> **Post-pilot work in flight (2026-04-20):** A/B/C/D post-pilot
+> backlog — see "[Post-pilot feature backlog](#post-pilot-feature-backlog-abcd-phases)"
+> below. Currently: **A1–A3, B5–B9, C8–C10 shipped**; **D11 in flight**;
+> A4/A5, B10/B11, C11/C12, D12/D13 pending.
+>
+> **Source chats:** [Pilot scope discussion](442f31fa-34f0-47da-888b-a2d10a773f8e), [Day 1+2+3 build](48ef7ed3-881c-42e6-a823-1f670f4907ac), [Post-pilot A/B/C sprint](48ef7ed3-881c-42e6-a823-1f670f4907ac)
 > **Owner:** Denys / Ship core
 > **Target:** 3-day pilot demo with WOW onboarding (sign-in → working dashboard in < 5 min)
 
@@ -930,6 +936,73 @@ SENTRY_SERVICE_NAME=ship-console
 | **#3 Atlassian + Slack**        | 2-3 weeks                         | Jira Cloud + Slack                                                                           |
 | **#4 Long-tail**                | on demand                         | GitLab Cloud, Bitbucket Cloud, ClickUp, Asana, Sentry-as-source, Datadog-as-source           |
 | **#5 Enterprise tier (broker)** | when first paying enterprise asks | Self-hosted broker for on-prem GHES / GitLab SM / ADO Server. **Paywall.**                   |
+
+---
+
+## Post-pilot feature backlog (A/B/C/D phases)
+
+> **Purpose:** a single, canonical list of everything we've agreed
+> to build after the WOW-onboarding pilot landed. Kept in sync with
+> todos in the active chat; the section below is the durable one,
+> so if we restart fresh this is where the plan is picked up.
+>
+> **Letter meaning:** A = WOW-onboarding depth, B = workspace /
+> repo management, C = agent-surface UX, D = observability / real
+> executor. Numbers are stable once assigned — never renumbered,
+> even if we skip or drop an item, so chat history stays grep-able.
+> Status legend: ✅ shipped · 🟡 in flight · 🔜 next up · ⏳ pending.
+
+### A — WOW onboarding
+
+| #  | Item | Status | Notes |
+| -- | ---- | ------ | ----- |
+| A1 | Multi-preset install in one PR (YAMLs + `.ship/` + auto-dispatch post-merge) | ✅ | Commit `7cd5f27` (prior sprint). |
+| A2 | Auto-dispatch `code_map` + `tech_debt` after repo activation (no empty dashboard) | ✅ | Same sprint as A1. |
+| A3 | Per-repo Ship status card on dashboard + `/pipelines` page | ✅ | Swimlane UI. |
+| A4 | **Return-to-Ship after PR merge** — webhook `pull_request.closed` → banner on `/` + optional email ping so the user lands back in the app after merging the onboarding PR on github.com | ⏳ | Important for the "no dead end" UX the user flagged. Small (≈half day). |
+| A5 | Self-heal auto-trigger on `workflow_run.failure` — dispatcher already exists, just wire the webhook→pipeline_run fanout and surface it on the card | ⏳ | Extension of A3. |
+
+### B — Workspace / repo management
+
+| #   | Item | Status | Notes |
+| --- | ---- | ------ | ----- |
+| B5  | Toggle switches instead of Enable/Disable (cosmetic) | ✅ | Commit `7cd5f27`. |
+| B6  | Disconnect Ship from repo (cascade deletes pipelines + runs; GitHub App untouched) | ✅ | `DELETE /v1/workspaces/{ws}/repos/{id}`. |
+| B7  | Team management / invites / seats | ✅ | Bulk invites + one-shot cookie for accept URLs. |
+| B8  | Onboarding resume pointer (skip completed steps) | ✅ | `resumeStep()` in `/onboarding`. |
+| B9  | Per-repo preset picker (change preset on activated repo) | ✅ | `PATCH /repos/{id}` with `reshape` flag. |
+| B10 | **Secrets per-repo UI** — DB model `RepoSecret` (AES-GCM + KMS stub → SOPS/age later), CRUD UI under repo settings, inject into `workflow_dispatch` inputs when the lane requires it | ⏳ | Blocks real agent (C12) because we can't supply `LINEAR_API_KEY` / `ANTHROPIC_API_KEY` otherwise. |
+| B11 | **Team seats + usage limits** — pricing-tier gate on invites + API calls. Per-workspace `plan` column + simple counter middleware | ⏳ | Extension of B7. Only matters when we start charging. |
+
+### C — Agent surface UX
+
+| #   | Item | Status | Notes |
+| --- | ---- | ------ | ----- |
+| C8  | Improvements page (accept / decline+reason / later) | ✅ | Commit `7645469`. |
+| C9  | Clarifications inbox (agent Q&A in one place) | ✅ | Same commit. Run-token ingress from dispatched workflows. |
+| C10 | Chat window for task creation with agent (stub `_agent_reply`) | ✅ | Same commit. Resolve → optional `Improvement` spawn. |
+| C11 | **Pipeline preset editor** — mutate preset composition (which kinds are enabled by default) without editing `default_pipelines.py`. Admin-only UI under workspace settings | ⏳ | Needed once we have >2 preset variants customers ask for. |
+| C12 | **Real agent** — replace `_agent_reply` stub (and the knowledge-gathering pipelines' body) with Claude/GPT via a thin `AgentClient` abstraction. Reads `B10` secrets | ⏳ | Biggest single ROI, depends on B10. |
+
+### D — Observability / real executor
+
+| #   | Item | Status | Notes |
+| --- | ---- | ------ | ----- |
+| D11 | **SHIP-book metrics dashboard** — DORA-ish panel (deploy freq, lead time, CFR, MTTR) + Ship-native (pipeline success %, clarifications resolved, improvements accepted %, chat→ticket rate). Aggregated endpoint `GET /metrics/overview?window=7d\|30d\|90d`. Simple stat cards + breakdown tables; no charting lib in MVP | 🔜 | *Starting now.* |
+| D12 | Audit log surface — proper `/audit` page with actor/action/target/date filters (the table exists, only a stub page today) | ⏳ | Half-day; gives compliance story. |
+| D13 | Real knowledge-gathering pipeline executor — beyond the `workflow_dispatch` stub, run the catalog workflow body against the repo (checkout → agent prompt → artifact upload → callback). Replaces the honest executor's "it dispatched" semantics with "it actually did the thing" | ⏳ | Largest piece; wraps C12 + B10 into the existing dispatcher path. |
+
+### Scratch / not-yet-numbered ideas
+
+> Things that surfaced in discussion but haven't earned a number
+> yet. Move them up to A/B/C/D when we decide to commit.
+
+- Knowledge-base editor (edit markdown patterns / workflows from the
+  console instead of only via PR on `elmundi/ship`).
+- Agent performance leaderboard (which agent + which lane produces
+  the most accepted improvements). Needs D11 numbers first.
+- Slack / Teams bridge for clarifications (answer from the DM).
+- "Why didn't Ship fire?" explainer on repos with 0 pipeline runs.
 
 
 ---
