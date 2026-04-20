@@ -9,8 +9,8 @@
 >
 > **Post-pilot work in flight (2026-04-20):** A/B/C/D post-pilot
 > backlog — see "[Post-pilot feature backlog](#post-pilot-feature-backlog-abcd-phases)"
-> below. Currently: **A1–A3, B5–B9, C8–C10, C12, D11–D12 shipped**;
-> A4/A5, B10/B11, C11, D13 pending.
+> below. Currently: **A1–A5, B5–B9, C8–C10, C12, D11–D12 shipped**;
+> B10/B11, C11, D13 pending.
 >
 > **Source chats:** [Pilot scope discussion](442f31fa-34f0-47da-888b-a2d10a773f8e), [Day 1+2+3 build](48ef7ed3-881c-42e6-a823-1f670f4907ac), [Post-pilot A/B/C sprint](48ef7ed3-881c-42e6-a823-1f670f4907ac)
 > **Owner:** Denys / Ship core
@@ -959,8 +959,8 @@ SENTRY_SERVICE_NAME=ship-console
 | A1 | Multi-preset install in one PR (YAMLs + `.ship/` + auto-dispatch post-merge) | ✅ | Commit `7cd5f27` (prior sprint). |
 | A2 | Auto-dispatch `code_map` + `tech_debt` after repo activation (no empty dashboard) | ✅ | Same sprint as A1. |
 | A3 | Per-repo Ship status card on dashboard + `/pipelines` page | ✅ | Swimlane UI. |
-| A4 | **Return-to-Ship after PR merge** — webhook `pull_request.closed` → banner on `/` + optional email ping so the user lands back in the app after merging the onboarding PR on github.com | ⏳ | Important for the "no dead end" UX the user flagged. Small (≈half day). |
-| A5 | Self-heal auto-trigger on `workflow_run.failure` — dispatcher already exists, just wire the webhook→pipeline_run fanout and surface it on the card | ⏳ | Extension of A3. |
+| A4 | **Return-to-Ship after PR merge** — webhook `pull_request.closed(merged=true)` → dismissible "PR merged" banner on `/` backed by `workspace_notifications` (dedupe keyed on PR external id so replays don't stack) | ✅ | Dashboard rail surfaces the newest 5 open banners; install PRs stay silent (they already get the `back_from_pr` query-string banner + knowledge-lane auto-dispatch). Full list + dismiss-all at `GET /v1/workspaces/{ws}/notifications`. |
+| A5 | **Self-heal auto-trigger on `workflow_run.failure`** — webhook fans out to `auto_dispatch_self_heal(...)` which mirrors A2's pattern (enabled-pipeline lookup → catalog filename probe → `workflow_dispatch` → audit) and mints a `self_heal_dispatched` / `self_heal_skipped` notification so the dashboard surfaces the intervention | ✅ | Skip cases (disabled lane, YAML not installed, no pipeline row) post a `self_heal_skipped` banner with the reason; our own `Ship · …` workflows are excluded to avoid recursive self-heal loops. Dedupe keyed on failed run id. |
 
 ### B — Workspace / repo management
 
@@ -989,7 +989,7 @@ SENTRY_SERVICE_NAME=ship-console
 | #   | Item | Status | Notes |
 | --- | ---- | ------ | ----- |
 | D11 | **SHIP-book metrics dashboard** — DORA-ish panel (deploy freq, lead time, CFR, MTTR) + Ship-native (pipeline success %, clarifications resolved, improvements accepted %, chat→ticket rate). Aggregated endpoint `GET /metrics/overview?window=7d\|30d\|90d`. Simple stat cards + breakdown tables; no charting lib in MVP | ✅ | Endpoint `backend/app/api/v1/routes/metrics.py`; page `console/src/app/metrics/page.tsx`; 5 new tests (`test_v1_metrics.py`). MTTR returned as `null` with "coming soon" label until we wire failure→recovery linking (D13 territory). |
-| D12 | Audit log surface — proper `/audit` page with actor/action/target/date filters | ✅ | Backend `GET /v1/workspaces/{ws}/audit-log` now takes `?actor=`, `?target_kind=`, `?since=`, `?until=` on top of the pre-existing `?action=` / cursor pagination. Console `/audit` got a real filter form (action chips + actor substring + target-kind select + date range) and expandable JSON payload cells via `<details>`. 3 new tests in `test_v1_audit.py`; suite 286 passing. |
+| D12 | Audit log surface — proper `/audit` page with actor/action/target/date filters | ✅ | Backend `GET /v1/workspaces/{ws}/audit-log` now takes `?actor=`, `?target_kind=`, `?since=`, `?until=` on top of the pre-existing `?action=` / cursor pagination. Console `/audit` got a real filter form (action chips + actor substring + target-kind select + date range) and expandable JSON payload cells via `<details>`. 3 new tests in `test_v1_audit.py`; suite 286 passing. After A4+A5 ship the full suite is 299 passing (13 new cases covering both sides of the webhook→notification wire). |
 | D13 | Real knowledge-gathering pipeline executor — beyond the `workflow_dispatch` stub, run the catalog workflow body against the repo (checkout → agent prompt → artifact upload → callback). Replaces the honest executor's "it dispatched" semantics with "it actually did the thing" | ⏳ | Largest piece; wraps C12 + B10 into the existing dispatcher path. |
 
 ### Scratch / not-yet-numbered ideas

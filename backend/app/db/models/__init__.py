@@ -15,6 +15,7 @@ from backend.app.db.models.agent_surface import (
     Improvement,
 )
 from backend.app.db.models.integrations import GitHubInstallation, WorkspaceRepo
+from backend.app.db.models.notifications import WorkspaceNotification
 from backend.app.db.models.pipelines import (
     Pipeline,
     PipelineRun,
@@ -59,6 +60,7 @@ __all__ = [
     "Workspace",
     "WorkspaceInvite",
     "WorkspaceMember",
+    "WorkspaceNotification",
     "WorkspaceRepo",
     "WorkflowRun",
 ]
