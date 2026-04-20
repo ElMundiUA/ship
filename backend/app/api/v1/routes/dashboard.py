@@ -29,9 +29,10 @@ from backend.app.api.v1.deps import AuthContext, get_current_auth
 from backend.app.api.v1.routes.pipelines import (
     PipelineOut,
     PipelineRunOut,
-    _row_to_out,
     _run_to_out,
+    enrich_pipelines,
 )
+from backend.app.core.config import Settings, get_settings
 from backend.app.api.v1.routes.workspaces import (
     ROLES_READ,
     _require_membership,
@@ -141,6 +142,7 @@ async def get_dashboard(
     workspace_id: uuid.UUID,
     auth: AuthContext = Depends(get_current_auth),
     session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
 ) -> DashboardOut:
     await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
 
@@ -222,7 +224,7 @@ async def get_dashboard(
             open_pull_requests=int(open_pr_count or 0),
             runs_last_24h=int(runs_24h or 0),
         ),
-        pipelines=[_row_to_out(p) for p in pipelines],
+        pipelines=await enrich_pipelines(session, list(pipelines), settings=settings),
         pull_requests=[_pr_to_out(p) for p in pulls],
         workflow_runs=[_wfrun_to_out(r) for r in runs],
         pipeline_runs=[_run_to_out(r) for r in pipeline_runs],

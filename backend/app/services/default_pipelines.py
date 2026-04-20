@@ -81,6 +81,7 @@ async def seed_default_pipelines(
     workspace_id: uuid.UUID,
     *,
     specs: Iterable[DefaultPipelineSpec] = DEFAULT_PIPELINES,
+    default_repo_id: uuid.UUID | None = None,
 ) -> list[Pipeline]:
     """Insert any of ``specs`` that don't already exist for the workspace.
 
@@ -91,10 +92,22 @@ async def seed_default_pipelines(
     The function is intentionally *additive only*: we never disable or
     rename rows the user may have customised. If a tenant turned off
     PR review, re-activating a repo won't re-enable it.
+
+    When ``default_repo_id`` is provided, newly seeded pipelines are
+    bound to that repo via ``Pipeline.repo_id`` so the Day-4
+    dispatcher can resolve the workflow file without prompting the
+    user. Pre-existing rows that still lack a binding are *also*
+    backfilled to the same repo so re-activating a repo upgrades
+    legacy stub pipelines without forcing a manual remap.
     """
     existing_stmt = select(Pipeline).where(Pipeline.workspace_id == workspace_id)
     existing_rows = (await session.execute(existing_stmt)).scalars().all()
     existing_kinds: set[str] = {row.kind for row in existing_rows}
+
+    if default_repo_id is not None:
+        for row in existing_rows:
+            if row.repo_id is None:
+                row.repo_id = default_repo_id
 
     new_rows: list[Pipeline] = []
     for spec in specs:
@@ -107,11 +120,12 @@ async def seed_default_pipelines(
             workflow_id=spec.workflow_id,
             enabled=spec.enabled,
             config={},
+            repo_id=default_repo_id,
         )
         session.add(row)
         new_rows.append(row)
 
-    if new_rows:
+    if new_rows or default_repo_id is not None:
         await session.flush()
 
     return [*existing_rows, *new_rows]

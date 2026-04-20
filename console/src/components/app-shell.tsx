@@ -38,6 +38,7 @@ const ALL_NAV: { section: string; items: (NavItem & { stub?: boolean })[] }[] = 
     section: "Operate",
     items: [
       { href: "/", label: "Dashboard", icon: <DotIcon /> },
+      { href: "/pipelines", label: "Pipelines", icon: <DotIcon /> },
       { href: "/daily", label: "Daily & retro", icon: <DotIcon />, badge: "3", stub: true },
       { href: "/workflows", label: "Workflow runs", icon: <DotIcon />, stub: true },
     ],
@@ -92,20 +93,55 @@ function isActive(pathname: string | null, href: string): boolean {
   return pathname === href || pathname.startsWith(href + "/");
 }
 
+export type AppShellWorkspace = {
+  id: string;
+  name: string;
+  slug: string;
+};
+
+export type AppShellRepo = {
+  id: string;
+  full_name: string;
+};
+
+export type AppShellScope = {
+  repos: AppShellRepo[];
+  selectedRepoId?: string | null;
+};
+
 export function AppShell({
   children,
   title,
   kicker,
   actions,
+  workspace,
+  scope,
 }: {
   children: ReactNode;
   title: string;
   kicker?: string;
   actions?: ReactNode;
+  workspace?: AppShellWorkspace;
+  scope?: AppShellScope;
 }) {
   const pathname = usePathname();
+  const [scopeOpen, setScopeOpen] = useState(false);
   const [wsOpen, setWsOpen] = useState(false);
-  const ws = workspaces[0];
+  const mockWs = workspaces[0];
+  // The sidebar block is the active *project / repo* (a.k.a. "scope"),
+  // not the workspace — workspace switching is intentionally a small
+  // header chip so it's hard to fat-finger. When the live dashboard
+  // hasn't bound a repo yet (and on the marketing-mock build), we
+  // gracefully fall back to a label that says so.
+  const scopeRepos = scope?.repos ?? [];
+  const selectedRepo =
+    scopeRepos.find((r) => r.id === scope?.selectedRepoId) ?? scopeRepos[0] ?? null;
+  const scopeLabel = selectedRepo?.full_name ?? "No repo bound";
+  const scopeOwner = scopeLabel.includes("/")
+    ? scopeLabel.split("/", 1)[0]
+    : "Project";
+  const wsLabel = workspace?.name ?? mockWs.name;
+  const wsKicker = workspace?.slug ?? mockWs.org;
 
   return (
     <div className="min-h-screen bg-ink text-mist">
@@ -122,47 +158,78 @@ export function AppShell({
           </div>
 
           <div className="border-b border-white/10 px-3 py-3">
+            <div className="px-1 pb-1.5 text-[9px] font-bold uppercase tracking-[0.2em] text-white/35">
+              Project / Repo
+            </div>
             <button
               type="button"
-              onClick={() => setWsOpen((s) => !s)}
-              className="group flex w-full items-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-2 text-left transition hover:border-white/20 hover:bg-white/[0.08]"
+              onClick={() => setScopeOpen((s) => !s)}
+              disabled={scopeRepos.length === 0}
+              className={cn(
+                "group flex w-full items-center gap-2 rounded-lg border px-2.5 py-2 text-left transition",
+                scopeRepos.length === 0
+                  ? "cursor-not-allowed border-white/5 bg-white/[0.02]"
+                  : "border-white/10 bg-white/[0.04] hover:border-white/20 hover:bg-white/[0.08]",
+              )}
+              aria-haspopup="listbox"
+              aria-expanded={scopeOpen}
             >
               <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-gradient-to-br from-lilac via-aqua to-coral text-[10px] font-bold text-ink">
-                {initialsOf(ws.org)}
+                {initialsOf(scopeOwner)}
               </span>
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[10px] font-semibold uppercase tracking-widest text-white/45">
-                  {ws.org}
+                  {scopeOwner}
                 </span>
-                <span className="block truncate text-sm font-semibold text-white">{ws.name}</span>
+                <span className="block truncate text-sm font-semibold text-white">
+                  {selectedRepo
+                    ? selectedRepo.full_name.split("/").slice(1).join("/") ||
+                      selectedRepo.full_name
+                    : "No repo bound"}
+                </span>
               </span>
-              <span className="text-white/40 transition group-hover:text-white">⌄</span>
+              {scopeRepos.length > 1 && (
+                <span className="text-white/40 transition group-hover:text-white">⌄</span>
+              )}
             </button>
-            {wsOpen && (
+            {scopeOpen && scopeRepos.length > 0 && (
               <div className="mt-2 overflow-hidden rounded-lg border border-white/10 bg-black/40 shadow-lg">
-                {workspaces.map((w) => (
+                {scopeRepos.map((r) => (
                   <button
-                    key={w.id}
+                    key={r.id}
                     type="button"
                     className={cn(
                       "flex w-full items-center gap-2 border-b border-white/5 px-3 py-2 text-left text-xs transition last:border-b-0",
-                      w.id === ws.id ? "bg-white/[0.06] text-white" : "text-white/70 hover:bg-white/[0.04] hover:text-white"
+                      r.id === selectedRepo?.id
+                        ? "bg-white/[0.06] text-white"
+                        : "text-white/70 hover:bg-white/[0.04] hover:text-white",
                     )}
                   >
                     <span className="grid h-5 w-5 shrink-0 place-items-center rounded bg-white/10 text-[9px] font-bold text-white/80">
-                      {initialsOf(w.org)}
+                      {initialsOf(r.full_name.split("/", 1)[0] ?? "?")}
                     </span>
                     <span className="flex-1 truncate">
-                      <span className="block truncate font-medium">{w.name}</span>
-                      <span className="block truncate text-[10px] text-white/40">{w.org} · {w.plan}</span>
+                      <span className="block truncate font-medium">
+                        {r.full_name.split("/").slice(1).join("/") || r.full_name}
+                      </span>
+                      <span className="block truncate text-[10px] text-white/40">
+                        {r.full_name}
+                      </span>
                     </span>
-                    {w.id === ws.id && <span className="text-aqua">●</span>}
+                    {r.id === selectedRepo?.id && <span className="text-aqua">●</span>}
                   </button>
                 ))}
                 <div className="border-t border-white/10 bg-white/[0.02] p-2 text-center">
-                  <button className="text-[11px] font-semibold text-aqua hover:underline">
-                    + new workspace
-                  </button>
+                  <Link
+                    href={
+                      workspace
+                        ? `/onboarding?step=repos&ws=${encodeURIComponent(workspace.id)}`
+                        : "/onboarding?step=repos"
+                    }
+                    className="text-[11px] font-semibold text-aqua hover:underline"
+                  >
+                    + add repos
+                  </Link>
                 </div>
               </div>
             )}
@@ -240,14 +307,41 @@ export function AppShell({
           <header className="sticky top-0 z-40 border-b border-white/10 bg-ink/80 backdrop-blur-xl">
             <div className="flex items-center gap-3 px-6 py-4 lg:px-8">
               <div className="min-w-0 flex-1">
-                {kicker && (
-                  <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-aqua/80">
-                    {kicker}
-                  </div>
-                )}
-                <h1 className="font-display truncate text-xl font-bold leading-tight text-white sm:text-2xl">
+                <div className="flex items-center gap-2">
+                  <WorkspaceChip
+                    label={wsLabel}
+                    kicker={wsKicker}
+                    open={wsOpen}
+                    onToggle={() => setWsOpen((s) => !s)}
+                  />
+                  {kicker && kicker !== wsKicker && (
+                    <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-aqua/80">
+                      {kicker}
+                    </div>
+                  )}
+                </div>
+                <h1 className="font-display mt-1 truncate text-xl font-bold leading-tight text-white sm:text-2xl">
                   {title}
                 </h1>
+                {wsOpen && (
+                  <div className="absolute left-6 top-[68px] z-50 w-72 overflow-hidden rounded-xl border border-white/10 bg-black/80 shadow-2xl backdrop-blur-xl lg:left-8">
+                    <div className="border-b border-white/10 px-4 py-3 text-[11px] uppercase tracking-widest text-white/45">
+                      Switch workspace
+                    </div>
+                    <div className="px-4 py-3 text-[11px] leading-snug text-white/55">
+                      Multi-workspace switching ships in a follow-up. For now this
+                      account has access to{" "}
+                      <span className="font-semibold text-white/80">{wsLabel}</span>{" "}
+                      only.
+                    </div>
+                    <Link
+                      href="/settings"
+                      className="block border-t border-white/10 bg-white/[0.02] px-4 py-2.5 text-center text-[11px] font-semibold text-aqua hover:underline"
+                    >
+                      Workspace settings →
+                    </Link>
+                  </div>
+                )}
               </div>
               <div className="hidden items-center gap-2 md:flex">{actions}</div>
             </div>
@@ -256,6 +350,45 @@ export function AppShell({
         </div>
       </div>
     </div>
+  );
+}
+
+function WorkspaceChip({
+  label,
+  kicker,
+  open,
+  onToggle,
+}: {
+  label: string;
+  kicker: string;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-haspopup="menu"
+      aria-expanded={open}
+      title="Switch workspace"
+      className={cn(
+        "group inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] transition",
+        open
+          ? "border-aqua/50 bg-aqua/10 text-aqua"
+          : "border-white/10 bg-white/[0.04] text-white/70 hover:border-white/20 hover:text-white",
+      )}
+    >
+      <span className="grid h-4 w-4 shrink-0 place-items-center rounded-sm bg-gradient-to-br from-lilac via-aqua to-coral text-[8px] font-bold text-ink">
+        {initialsOf(label).slice(0, 1)}
+      </span>
+      <span className="max-w-[14ch] truncate normal-case tracking-normal">
+        {label}
+      </span>
+      <span className="text-[8px] tracking-wider text-white/40 group-hover:text-white/70">
+        {kicker}
+      </span>
+      <span className="ml-0.5 text-white/40">⌄</span>
+    </button>
   );
 }
 

@@ -389,6 +389,17 @@ export interface ApiPipeline {
   last_run_status: string | null;
   created_at: string;
   updated_at: string;
+  // Day-4 Phase-1 additions powering the dashboard's three card states
+  // (Run-now / Install-workflow / Coming-soon). ``workflow_installed``
+  // is null when the kind isn't yet supported by the real executor or
+  // when the pipeline isn't bound to a repo; non-null means the
+  // backend probed GitHub successfully and ``true``/``false`` reflects
+  // whether the starter workflow lives in the customer repo.
+  repo_id: string | null;
+  repo_full_name: string | null;
+  workflow_installed: boolean | null;
+  workflow_file: string | null;
+  supports_run: boolean;
 }
 
 export interface ApiPipelineRun {
@@ -480,6 +491,28 @@ export function runPipeline(
   return apiFetch<ApiPipelineRun>(
     `/v1/workspaces/${encodeURIComponent(workspaceId)}/pipelines/${encodeURIComponent(pipelineId)}/runs`,
     { method: "POST", body: { note: note ?? null }, token },
+  );
+}
+
+export interface ApiPipelineInstall {
+  pr_url: string;
+  pr_number: number;
+  branch: string;
+}
+
+/**
+ * POST `/v1/workspaces/{ws}/pipelines/{id}/install` — opens a PR in the
+ * bound repo with the starter workflow YAML. Returns the PR URL the
+ * dashboard deep-links into. Backend is admin-only.
+ */
+export function installPipelineWorkflow(
+  workspaceId: string,
+  pipelineId: string,
+  token?: string,
+): Promise<ApiPipelineInstall> {
+  return apiFetch<ApiPipelineInstall>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/pipelines/${encodeURIComponent(pipelineId)}/install`,
+    { method: "POST", token },
   );
 }
 

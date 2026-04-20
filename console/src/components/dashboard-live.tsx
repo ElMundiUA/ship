@@ -29,6 +29,7 @@ import type {
 
 const RUN_REASONS: Record<string, { tone: BadgeTone; label: string }> = {
   ran: { tone: "ok", label: "Pipeline run finished." },
+  dispatched: { tone: "info", label: "Dispatch sent — watch the run land in seconds." },
   enabled: { tone: "ok", label: "Pipeline enabled." },
   disabled: { tone: "warn", label: "Pipeline disabled." },
   forbidden: { tone: "err", label: "You need admin to do that." },
@@ -36,6 +37,49 @@ const RUN_REASONS: Record<string, { tone: BadgeTone; label: string }> = {
   missing: { tone: "err", label: "That pipeline is gone — refresh." },
   api_unavailable: { tone: "err", label: "Backend is unreachable. Try again." },
   unknown: { tone: "err", label: "Something went wrong. Try again." },
+  // Day-4 Phase-1 dispatcher precondition codes
+  precondition_workflow_not_installed: {
+    tone: "warn",
+    label: "Install the workflow PR first — Run now needs the YAML in your repo.",
+  },
+  precondition_pipeline_not_bound: {
+    tone: "warn",
+    label: "Pipeline isn't tied to a repo — re-activate one in the Repos tab.",
+  },
+  precondition_kind_not_supported_yet: {
+    tone: "neutral",
+    label: "This pipeline lane lights up with Phase 2 presets.",
+  },
+  precondition_github_app_missing: {
+    tone: "err",
+    label: "GitHub App is gone — reinstall to keep dispatching.",
+  },
+  precondition_precondition: {
+    tone: "warn",
+    label: "Precondition failed — refresh and try again.",
+  },
+  dispatch_failed: { tone: "err", label: "GitHub rejected the dispatch — see audit log." },
+  installed: { tone: "ok", label: "Install PR opened — merge it to unlock Run now." },
+  install_kind_not_supported_yet: {
+    tone: "neutral",
+    label: "No starter workflow for this kind yet — Phase 2.",
+  },
+  install_pipeline_not_bound: {
+    tone: "warn",
+    label: "Bind the pipeline to a repo first.",
+  },
+  install_github_app_missing: {
+    tone: "err",
+    label: "GitHub App is gone — reinstall before installing the workflow.",
+  },
+  install_install_pr_failed: {
+    tone: "err",
+    label: "GitHub refused the install PR — check repo permissions.",
+  },
+  install_upstream: {
+    tone: "err",
+    label: "GitHub refused the install PR — try again or check perms.",
+  },
 };
 
 export function DashboardLive({
@@ -91,21 +135,10 @@ export function DashboardLive({
         />
       </section>
 
-      <section className="mt-8">
-        <h3 className="mb-3 font-display text-base font-bold text-white">
-          Pipelines
-        </h3>
-        <p className="mb-4 text-xs text-white/55">
-          Five baked-in lanes auto-created when you activated repos. Toggle
-          off to mute, &ldquo;Run now&rdquo; to fire a manual execution.
-        </p>
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {data.pipelines.length === 0 && <EmptyPipelines />}
-          {data.pipelines.map((p) => (
-            <PipelineCard key={p.id} pipeline={p} workspaceId={workspaceId} />
-          ))}
-        </div>
-      </section>
+      <RecommendedActions
+        pipelines={data.pipelines}
+        workspaceId={workspaceId}
+      />
 
       <section className="mt-8 grid grid-cols-1 gap-5 lg:grid-cols-3">
         <Card className="lg:col-span-2">
@@ -228,6 +261,111 @@ function pipelineById(rows: ApiPipeline[]): Record<string, ApiPipeline> {
   return Object.fromEntries(rows.map((p) => [p.id, p]));
 }
 
+/**
+ * Dashboard "Recommended actions" strip.
+ *
+ * Distinct from the dedicated Pipelines page (``/pipelines``): the
+ * dashboard only ever surfaces pipelines you can fire *right now* —
+ * a small, opinionated set of quick CTAs ("re-run PR gate on the
+ * default repo", etc.) — so the operator doesn't have to read a
+ * five-card matrix every time they open the home page. Anything that
+ * needs an Install-PR or is a Phase-2 preset is a navigation away,
+ * not in the operator's face.
+ */
+function RecommendedActions({
+  pipelines,
+  workspaceId,
+}: {
+  pipelines: ApiPipeline[];
+  workspaceId: string;
+}) {
+  const ready = pipelines.filter(
+    (p) => pipelineCardState(p) === "run-ready" && p.enabled,
+  );
+  return (
+    <section className="mt-8">
+      <div className="mb-3 flex items-end justify-between gap-3">
+        <div>
+          <h3 className="font-display text-base font-bold text-white">
+            Recommended actions
+          </h3>
+          <p className="mt-1 text-xs text-white/55">
+            Quick triggers for the manual lanes that are wired up right now.
+            Full lane catalog lives under{" "}
+            <Link href="/pipelines" className="text-aqua hover:underline">
+              Pipelines
+            </Link>
+            .
+          </p>
+        </div>
+        <Link
+          href="/pipelines"
+          className="hidden whitespace-nowrap text-xs font-semibold text-aqua hover:underline sm:inline"
+        >
+          See all pipelines →
+        </Link>
+      </div>
+      {ready.length === 0 ? (
+        <RecommendedActionsEmpty pipelines={pipelines} />
+      ) : (
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {ready.map((p) => (
+            <PipelineCard key={p.id} pipeline={p} workspaceId={workspaceId} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function RecommendedActionsEmpty({ pipelines }: { pipelines: ApiPipeline[] }) {
+  // Tell the operator *why* there's nothing to click: have we never
+  // seeded any lanes (no repo activated), or are they all gated on an
+  // Install PR? The two states want different next steps.
+  const needsInstall = pipelines.some(
+    (p) => pipelineCardState(p) === "needs-install",
+  );
+  return (
+    <Card className="border-white/10">
+      {pipelines.length === 0 ? (
+        <p className="text-sm text-white/70">
+          No pipelines yet. Pick at least one repo on the wizard and the
+          default lanes appear automatically.
+        </p>
+      ) : needsInstall ? (
+        <p className="text-sm text-white/70">
+          Default lanes are seeded but their workflow YAMLs aren&rsquo;t in
+          the repo yet. Open{" "}
+          <Link href="/pipelines" className="text-aqua hover:underline">
+            Pipelines
+          </Link>{" "}
+          to file the install PR for the lanes you want to use.
+        </p>
+      ) : (
+        <p className="text-sm text-white/70">
+          Nothing to fire manually right now. Open{" "}
+          <Link href="/pipelines" className="text-aqua hover:underline">
+            Pipelines
+          </Link>{" "}
+          for the full lane catalog.
+        </p>
+      )}
+    </Card>
+  );
+}
+
+type PipelineCardState = "run-ready" | "needs-install" | "coming-soon";
+
+function pipelineCardState(p: ApiPipeline): PipelineCardState {
+  if (!p.supports_run) return "coming-soon";
+  if (p.workflow_installed === true) return "run-ready";
+  // workflow_installed === false (probed, missing) OR null (unbound /
+  // probe failed). Both surface the same "Install workflow" CTA — the
+  // backend's 412 ``code`` will pick the right banner if anything
+  // else is broken (unbound, app missing).
+  return "needs-install";
+}
+
 function PipelineCard({
   pipeline,
   workspaceId,
@@ -235,6 +373,7 @@ function PipelineCard({
   pipeline: ApiPipeline;
   workspaceId: string;
 }) {
+  const state = pipelineCardState(pipeline);
   const lastRunLabel = pipeline.last_run_at
     ? `${pipeline.last_run_status ?? "run"} · ${relativeTime(pipeline.last_run_at)}`
     : "no runs yet";
@@ -243,19 +382,30 @@ function PipelineCard({
       ? "ok"
       : pipeline.last_run_status === "failed"
         ? "err"
-        : pipeline.last_run_status
-          ? "warn"
-          : "neutral";
+        : pipeline.last_run_status === "running"
+          ? "info"
+          : pipeline.last_run_status
+            ? "warn"
+            : "neutral";
 
   return (
     <Card>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <Badge tone="info">{pipeline.kind.replace("_", " ")}</Badge>
             <Badge tone={pipeline.enabled ? "ok" : "neutral"}>
               {pipeline.enabled ? "enabled" : "disabled"}
             </Badge>
+            {state === "coming-soon" && (
+              <Badge tone="neutral">phase 2 preset</Badge>
+            )}
+            {state === "needs-install" && (
+              <Badge tone="warn">workflow not installed</Badge>
+            )}
+            {state === "run-ready" && pipeline.workflow_installed && (
+              <Badge tone="ok">workflow installed</Badge>
+            )}
           </div>
           <h4 className="mt-2 font-display text-sm font-bold text-white">
             {pipeline.name}
@@ -265,6 +415,14 @@ function PipelineCard({
             <code className="rounded bg-white/[0.06] px-1.5 py-0.5">
               {pipeline.workflow_id}
             </code>
+            {pipeline.repo_full_name && (
+              <>
+                {" · "}
+                <code className="rounded bg-white/[0.06] px-1.5 py-0.5">
+                  {pipeline.repo_full_name}
+                </code>
+              </>
+            )}
           </p>
         </div>
       </div>
@@ -293,28 +451,76 @@ function PipelineCard({
           </ButtonGhost>
         </form>
 
-        <form
-          action="/api/dashboard/run-pipeline"
-          method="POST"
-          className="flex items-center gap-2"
-        >
-          <input type="hidden" name="ws" value={workspaceId} />
-          <input type="hidden" name="pipeline" value={pipeline.id} />
-          <button
-            type="submit"
-            disabled={!pipeline.enabled}
-            className={
-              "inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-bold transition " +
-              (pipeline.enabled
-                ? "bg-gradient-to-r from-coral via-lilac to-aqua text-ink shadow-glow hover:brightness-110"
-                : "cursor-not-allowed border border-white/10 bg-white/[0.04] text-white/40")
-            }
-          >
-            Run now
-          </button>
-        </form>
+        <PipelineActionButton
+          state={state}
+          pipeline={pipeline}
+          workspaceId={workspaceId}
+        />
       </div>
     </Card>
+  );
+}
+
+function PipelineActionButton({
+  state,
+  pipeline,
+  workspaceId,
+}: {
+  state: PipelineCardState;
+  pipeline: ApiPipeline;
+  workspaceId: string;
+}) {
+  if (state === "coming-soon") {
+    return (
+      <button
+        type="button"
+        disabled
+        title="Phase 2 ships a starter workflow for this pipeline kind."
+        className="inline-flex cursor-not-allowed items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-1.5 text-xs font-bold text-white/40"
+      >
+        Coming with presets
+      </button>
+    );
+  }
+  if (state === "needs-install") {
+    return (
+      <form
+        action="/api/dashboard/install-pipeline"
+        method="POST"
+        className="flex items-center gap-2"
+      >
+        <input type="hidden" name="ws" value={workspaceId} />
+        <input type="hidden" name="pipeline" value={pipeline.id} />
+        <button
+          type="submit"
+          className="inline-flex items-center gap-1.5 rounded-full border border-aqua/40 bg-aqua/[0.08] px-3.5 py-1.5 text-xs font-bold text-aqua hover:bg-aqua/[0.16]"
+        >
+          Install workflow PR →
+        </button>
+      </form>
+    );
+  }
+  return (
+    <form
+      action="/api/dashboard/run-pipeline"
+      method="POST"
+      className="flex items-center gap-2"
+    >
+      <input type="hidden" name="ws" value={workspaceId} />
+      <input type="hidden" name="pipeline" value={pipeline.id} />
+      <button
+        type="submit"
+        disabled={!pipeline.enabled}
+        className={
+          "inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-bold transition " +
+          (pipeline.enabled
+            ? "bg-gradient-to-r from-coral via-lilac to-aqua text-ink shadow-glow hover:brightness-110"
+            : "cursor-not-allowed border border-white/10 bg-white/[0.04] text-white/40")
+        }
+      >
+        Run now
+      </button>
+    </form>
   );
 }
 
