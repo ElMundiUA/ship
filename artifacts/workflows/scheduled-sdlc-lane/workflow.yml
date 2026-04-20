@@ -1,11 +1,11 @@
 name: Ship · Scheduled SDLC lane
 # Day-4 Phase-2 starter workflow for the `daily_standup` pipeline kind.
 # Runs on a cron (default 09:00 UTC) and via dashboard "Run now"
-# (workflow_dispatch). The body is a thin stub — replace the `lane`
-# step with a real intake → clarification → BA → developer pick once
-# your tracker is wired up. The reporting contract matches
-# pr-and-ci-gate so Ship can reconcile the run via both the callback
-# and the `workflow_run` webhook.
+# (workflow_dispatch). The reporting contract matches pr-and-ci-gate.
+#
+# Note: `schedule` runs have **no** `workflow_dispatch` inputs — the
+# "Report back to Ship" step is skipped unless you add a repository
+# secret–based path later. Dashboard "Run now" supplies the callback.
 
 on:
   workflow_dispatch:
@@ -33,16 +33,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install shipctl
+        run: npm install -g @elmundi/ship-cli@0.11.1
+
       - name: Run SDLC lane pick
         id: lane
-        # Placeholder: produce an empty pick so the run stays green
-        # until the tenant wires their tracker. Replace with a call to
-        # `shipctl sdlc pick` or a GraphQL query against Linear / GitHub
-        # Projects that yields a single ticket id.
         run: |
           set -euo pipefail
+          shipctl kickoff --pattern kickoff > /tmp/ship-kickoff.md || true
           echo "status=succeeded" >> "$GITHUB_OUTPUT"
-          echo "summary=Scheduled SDLC lane completed (starter stub — no pick queued)" >> "$GITHUB_OUTPUT"
+          echo "summary=Scheduled SDLC lane completed (starter stub — wire tracker pick + agent)" >> "$GITHUB_OUTPUT"
 
       - name: Report back to Ship
         if: always() && inputs.ship_callback_url != ''
@@ -56,17 +61,9 @@ jobs:
           GH_RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
-          curl --fail-with-body --show-error --silent \
-            -X POST "$SHIP_CALLBACK_URL" \
-            -H "Authorization: Bearer $SHIP_RUN_TOKEN" \
-            -H "Content-Type: application/json" \
-            --data @- <<JSON
-          {
-            "status": "$GATE_STATUS",
-            "summary": "$GATE_SUMMARY",
-            "metrics": {
-              "gh_workflow_run_id": $GH_RUN_ID,
-              "gh_html_url": "$GH_RUN_URL"
-            }
-          }
-          JSON
+          CB=failed
+          if [ "$GATE_STATUS" = "succeeded" ]; then CB=ok; fi
+          shipctl callback --status "$CB" \
+            --summary "$GATE_SUMMARY" \
+            --metric "gh_workflow_run_id=$GH_RUN_ID" \
+            --metric "gh_html_url=$GH_RUN_URL"

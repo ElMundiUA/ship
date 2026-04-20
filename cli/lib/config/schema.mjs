@@ -64,7 +64,7 @@ const SEMVER_OR_RANGE_REGEX =
 export function DEFAULT_CONFIG() {
   return {
     version: CONFIG_SCHEMA_VERSION,
-    shipctl_min: "0.3.0",
+    shipctl_min: "0.11.1",
     api: {
       base_url: "https://ship.elmundi.com",
       channel: "stable",
@@ -110,7 +110,8 @@ const KNOWN_TOP_LEVEL = new Set([
 ]);
 
 const KNOWN_API = new Set(["base_url", "channel", "ttl_hours", "offline_ok"]);
-const KNOWN_STACK = new Set(["tracker", "ci", "agents", "language", "preset"]);
+const KNOWN_STACK = new Set(["tracker", "ci", "agents", "agent", "language", "preset"]);
+const KNOWN_STACK_AGENT = new Set(["provider"]);
 const KNOWN_ARTIFACTS = new Set(["pins", "auto_update"]);
 const KNOWN_CACHE = new Set(["vcs_tracked"]);
 const KNOWN_TELEMETRY = new Set(["share", "anonymous_id", "scope"]);
@@ -210,6 +211,21 @@ export function validateConfig(obj) {
           if (typeof a !== "string" || !AGENT_IDS.includes(a)) {
             errors.push(
               `stack.agents: ${JSON.stringify(a)} is not valid. Expected one of: ${AGENT_IDS.join(", ")}`,
+            );
+          }
+        }
+      }
+    }
+    if (stack.agent !== undefined) {
+      if (!isPlainObject(stack.agent)) {
+        errors.push("stack.agent: must be an object");
+      } else {
+        pushUnknownKeyWarnings(stack.agent, KNOWN_STACK_AGENT, "stack.agent", warnings);
+        const p = stack.agent.provider;
+        if (p !== undefined && p !== null) {
+          if (typeof p !== "string" || p.length < 1 || p.length > 64) {
+            errors.push(
+              "stack.agent.provider: must be a non-empty string (≤64 chars), e.g. claude-code or cursor-cloud",
             );
           }
         }

@@ -49,6 +49,9 @@ COMMANDS
                                      — report a pipeline run's terminal status to Ship.
                                        Used inside workflow.yml 'if: always()' steps;
                                        reads SHIP_RUN_TOKEN + SHIP_CALLBACK_URL from env.
+  shipctl kickoff [--pattern kickoff] [--version …] [--raw] [--json] [--cwd …]
+                                     — print the kickoff / workload pattern body for piping
+                                       into the customer's agent in CI (see artifacts/patterns/kickoff).
   shipctl bootstrap   (stub)
 
 GLOBAL FLAGS

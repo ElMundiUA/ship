@@ -1,15 +1,7 @@
 name: Ship · Pipeline self-heal
 # Day-4 Phase-2 starter workflow for the `self_heal` pipeline kind.
-# Intent: detect workflow/config drift (broken cron, stale secret
-# names, starved runners) WITHOUT stealing the SDLC intake slot.
-# Default cadence is 04:00 UTC so logs are legible and the schedule
-# doesn't collide with the daily-standup lane.
-#
-# The starter body is a diagnostics stub — it records the runner's
-# own metadata as evidence and reports green. Replace with a real
-# probe (e.g. `shipctl doctor --json` or a bespoke lint of
-# `.github/workflows/*.yml`) that can flip the status to `failed`
-# when drift is detected.
+# Intent: detect workflow/config drift WITHOUT stealing the SDLC intake slot.
+# Default cadence is 04:00 UTC.
 
 on:
   workflow_dispatch:
@@ -37,6 +29,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install shipctl
+        run: npm install -g @elmundi/ship-cli@0.11.1
+
       - name: Collect diagnostics
         id: diag
         run: |
@@ -59,18 +59,10 @@ jobs:
           WORKFLOW_COUNT: ${{ steps.diag.outputs.workflows || 0 }}
         run: |
           set -euo pipefail
-          curl --fail-with-body --show-error --silent \
-            -X POST "$SHIP_CALLBACK_URL" \
-            -H "Authorization: Bearer $SHIP_RUN_TOKEN" \
-            -H "Content-Type: application/json" \
-            --data @- <<JSON
-          {
-            "status": "$GATE_STATUS",
-            "summary": "$GATE_SUMMARY",
-            "metrics": {
-              "gh_workflow_run_id": $GH_RUN_ID,
-              "gh_html_url": "$GH_RUN_URL",
-              "workflows_scanned": $WORKFLOW_COUNT
-            }
-          }
-          JSON
+          CB=failed
+          if [ "$GATE_STATUS" = "succeeded" ]; then CB=ok; fi
+          shipctl callback --status "$CB" \
+            --summary "$GATE_SUMMARY" \
+            --metric "gh_workflow_run_id=$GH_RUN_ID" \
+            --metric "gh_html_url=$GH_RUN_URL" \
+            --metric "workflows_scanned=$WORKFLOW_COUNT"

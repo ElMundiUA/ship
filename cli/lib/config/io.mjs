@@ -30,7 +30,8 @@ export function findShipRoot(startCwd) {
 const KEY_ORDER = {
   __root: ["version", "shipctl_min", "api", "stack", "artifacts", "cache", "telemetry"],
   api: ["base_url", "channel", "ttl_hours", "offline_ok"],
-  stack: ["tracker", "ci", "agents", "language", "preset"],
+  stack: ["tracker", "ci", "agents", "agent", "language", "preset"],
+  "stack.agent": ["provider"],
   artifacts: ["pins", "auto_update"],
   cache: ["vcs_tracked"],
   telemetry: ["share", "anonymous_id", "scope"],
