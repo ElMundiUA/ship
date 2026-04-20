@@ -69,6 +69,7 @@ class Pipeline(Base):
             "workspace_id", "kind", name="uq_pipelines_workspace_kind"
         ),
         Index("ix_pipelines_workspace_id", "workspace_id"),
+        Index("ix_pipelines_repo_id", "repo_id"),
     )
 
     id: Mapped[uuid.UUID] = _pk()
@@ -76,6 +77,17 @@ class Pipeline(Base):
         UUID(as_uuid=True),
         ForeignKey("workspaces.id", ondelete="CASCADE"),
         nullable=False,
+    )
+    # Optional binding to a specific activated repo. The honest
+    # dispatcher (Day-4 Phase-1) resolves the install + workflow file
+    # through this FK, which is set when the pipeline gets seeded on
+    # repo activation. Nullable because legacy rows from before Day-4
+    # have no binding, and the API surfaces a ``not_bound`` 412 in
+    # that case.
+    repo_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspace_repos.id", ondelete="SET NULL"),
+        nullable=True,
     )
     kind: Mapped[str] = mapped_column(String(64), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -143,6 +155,14 @@ class PipelineRun(Base):
     summary: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     payload: Mapped[dict] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    # SHA-256 of the short-lived JWT we hand to the dispatched workflow
+    # via ``inputs.ship_run_token``. The result-callback endpoint
+    # rejects anything that doesn't match so a stolen ``run_id`` alone
+    # can't fake a "succeeded" report. NULL on legacy pre-Day-4 stub
+    # rows where the run never had an outbound dispatch.
+    run_token_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
     )
 
     created_at: Mapped[datetime] = _ts_created()

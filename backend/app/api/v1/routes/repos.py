@@ -345,7 +345,27 @@ async def activate_repos(
             select(Pipeline.id).where(Pipeline.workspace_id == workspace_id)
         )
     ).scalars().all()
-    seeded_pipelines = await seed_default_pipelines(session, workspace_id)
+
+    # Pick a "default" repo to bind newly seeded pipelines to. Pilot
+    # heuristic: lexicographically smallest ``full_name`` from the
+    # currently desired set keeps the choice deterministic across
+    # re-activations (whatever the user re-toggles, the binding is
+    # stable so workflow_dispatch lands in the same repo every time).
+    default_repo_id: uuid.UUID | None = None
+    if desired_ids:
+        binding_stmt = (
+            select(WorkspaceRepo)
+            .where(WorkspaceRepo.workspace_id == workspace_id)
+            .where(WorkspaceRepo.external_id.in_(desired_ids))
+            .order_by(WorkspaceRepo.full_name)
+        )
+        default_row = (await session.execute(binding_stmt)).scalars().first()
+        if default_row is not None:
+            default_repo_id = default_row.id
+
+    seeded_pipelines = await seed_default_pipelines(
+        session, workspace_id, default_repo_id=default_repo_id
+    )
 
     session.add(
         AuditLog(
