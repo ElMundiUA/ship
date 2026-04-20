@@ -61,6 +61,11 @@ const RUN_REASONS: Record<string, { tone: BadgeTone; label: string }> = {
   },
   dispatch_failed: { tone: "err", label: "GitHub rejected the dispatch — see audit log." },
   installed: { tone: "ok", label: "Install PR opened — merge it to unlock Run now." },
+  back_from_pr: {
+    tone: "ok",
+    label:
+      "Welcome back! If you merged the install PR, refresh in ~30s — the dashboard probes GitHub on a 60s TTL.",
+  },
   install_kind_not_supported_yet: {
     tone: "neutral",
     label: "No starter workflow for this kind yet — Phase 2.",

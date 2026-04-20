@@ -514,6 +514,29 @@ async def _apply_pull_request_event(
 
     logger.debug("pull_request cached action=%s pr_id=%s", action, external_id)
 
+    # When a ``ship/install-*`` PR merges we own the cache that decides
+    # whether the dashboard still shows "Install workflow PR →" or
+    # flips to "Run now". Bust it eagerly so the next render (or the
+    # ``back_from_pr`` landing bounce) reflects reality inside a
+    # second instead of waiting out the 60s probe TTL.
+    head_ref = str((pr.get("head") or {}).get("ref") or "")
+    if merged and state == "merged" and head_ref.startswith("ship/install-"):
+        from backend.app.integrations.github.workflows import (
+            invalidate_workflow_list_cache,
+        )
+
+        install_id = install.get("id")
+        if isinstance(install_id, int):
+            invalidate_workflow_list_cache(
+                installation_id=install_id, full_name=repo_row.full_name
+            )
+            logger.info(
+                "busted workflow-list cache after install PR merge "
+                "repo=%s branch=%s",
+                repo_row.full_name,
+                head_ref,
+            )
+
 
 async def _apply_workflow_run_event(
     session: AsyncSession, payload: dict[str, Any], action: str | None

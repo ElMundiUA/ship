@@ -272,6 +272,7 @@ async def commit_starter_workflow(
     pipeline_kind: str,
     settings: Settings,
     client: httpx.AsyncClient | None = None,
+    return_url: str | None = None,
 ) -> StarterWorkflowPR:
     """Open a PR in ``repo`` adding ``.github/workflows/<workflow_file>``.
 
@@ -337,6 +338,18 @@ async def commit_starter_workflow(
     )
     _raise_for(put_resp)
 
+    # Return-link deep-links the user straight back to the Ship
+    # dashboard after they merge the PR on github.com. Without it the
+    # user ends up on an empty github.com/…/pull/N page with no
+    # obvious "back to Ship" affordance — the #1 pilot complaint.
+    return_fragment = (
+        f"\n\n---\n\n### ← Back to Ship\n\n"
+        f"After merging this PR, jump back to the Ship dashboard to "
+        f"dispatch the first run:\n\n"
+        f"[**Open Ship dashboard →**]({return_url})\n"
+        if return_url
+        else ""
+    )
     pr_resp = await _request(
         "POST",
         f"/repos/{owner}/{name}/pulls",
@@ -353,6 +366,7 @@ async def commit_starter_workflow(
                 "dispatch this workflow and stream its result back into the "
                 "pipeline timeline.\n\n"
                 "Generated automatically by the Ship App. Safe to merge as-is."
+                f"{return_fragment}"
             ),
             "maintainer_can_modify": True,
         },
