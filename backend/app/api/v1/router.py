@@ -52,5 +52,10 @@ api_router.include_router(linear_oauth.router)
 # Notion OAuth (pilot Day 2 — tracker WOW flow). Same shape as Linear.
 api_router.include_router(notion_oauth.router)
 # Pipelines API + dashboard summary (pilot Day 3 — main app surface).
+# ``pipelines.router`` is workspace-scoped (RBAC); ``pipelines.public_router``
+# hosts the ``/pipelines/runs/{id}/result`` callback that dispatched
+# GitHub Actions workflows hit with a bearer ``run_token`` (no session,
+# no workspace prefix).
 api_router.include_router(pipelines.router)
+api_router.include_router(pipelines.public_router)
 api_router.include_router(dashboard.router)

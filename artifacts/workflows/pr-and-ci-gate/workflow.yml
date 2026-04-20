@@ -1,0 +1,78 @@
+name: Ship · PR review gate
+# Day-4 Phase-1 starter workflow. Installed by the Ship App into a
+# customer repo via the dashboard "Install workflow" button (opens a
+# PR; the file lands when the PR is merged).
+#
+# The pilot wires the skeleton end-to-end:
+#   dashboard "Run now" → workflow_dispatch → this job →
+#   POST result back to Ship via inputs.ship_callback_url
+#
+# Real PR-review business logic (lint, coverage, LLM summary, etc.)
+# lands in a follow-up artifact — the contract here is just the run
+# loop. Anything you add to the `gate` step is preserved as long as
+# it sets the `status` output to "succeeded" or "failed" and you keep
+# the "Report back to Ship" step pointing at the same callback.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ship_run_id:
+        description: "Ship pipeline_run id we should report against"
+        required: true
+      ship_callback_url:
+        description: "URL Ship is listening on for the result callback"
+        required: true
+      ship_run_token:
+        description: "Short-lived bearer token Ship issued for this run"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  pr_review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run PR gate
+        id: gate
+        # Replace the body below with your real gate. Keep the
+        # `status` output: Ship reads it to decide whether the run is
+        # "succeeded" or "failed".
+        run: |
+          set -euo pipefail
+          echo "status=succeeded" >> "$GITHUB_OUTPUT"
+          echo "summary=PR review gate completed (starter workflow)" >> "$GITHUB_OUTPUT"
+
+      - name: Report back to Ship
+        if: always()
+        env:
+          SHIP_RUN_ID: ${{ inputs.ship_run_id }}
+          SHIP_CALLBACK_URL: ${{ inputs.ship_callback_url }}
+          SHIP_RUN_TOKEN: ${{ inputs.ship_run_token }}
+          GATE_STATUS: ${{ steps.gate.outputs.status || 'failed' }}
+          GATE_SUMMARY: ${{ steps.gate.outputs.summary || 'PR review gate failed before reporting' }}
+          GH_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          GH_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # `--fail-with-body` so curl exits non-zero when Ship rejects
+          # the callback (bad token, etc.) and the workflow surfaces it
+          # as a step failure instead of silently lying.
+          curl --fail-with-body --show-error --silent \
+            -X POST "$SHIP_CALLBACK_URL" \
+            -H "Authorization: Bearer $SHIP_RUN_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data @- <<JSON
+          {
+            "status": "$GATE_STATUS",
+            "summary": "$GATE_SUMMARY",
+            "metrics": {
+              "gh_workflow_run_id": $GH_RUN_ID,
+              "gh_html_url": "$GH_RUN_URL"
+            }
+          }
+          JSON

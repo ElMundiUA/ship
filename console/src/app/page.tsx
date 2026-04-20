@@ -13,11 +13,13 @@ import {
   StatTile,
 } from "@/components/ui";
 import {
+  type ApiActivatedRepo,
   type ApiDashboard,
   ApiHttpError,
   ApiUnavailableError,
   getDashboard,
   isApiConfigured,
+  listActivatedRepos,
   listWorkspaces,
 } from "@/lib/api/client";
 import type { ApiWorkspace } from "@/lib/api/types";
@@ -70,6 +72,7 @@ export default async function CloudHomePage({
 type LiveContext = {
   workspace: ApiWorkspace;
   data: ApiDashboard;
+  repos: ApiActivatedRepo[];
 };
 
 async function loadLiveContext(
@@ -87,8 +90,13 @@ async function loadLiveContext(
 
   const workspace = list[0];
   try {
-    const data = await getDashboard(workspace.id, token);
-    return { workspace, data };
+    // Repos load is best-effort — a 5xx here shouldn't blank the
+    // dashboard, the chip just falls back to "no repo bound".
+    const [data, repos] = await Promise.all([
+      getDashboard(workspace.id, token),
+      listActivatedRepos(workspace.id, token).catch(() => [] as ApiActivatedRepo[]),
+    ]);
+    return { workspace, data, repos };
   } catch (err) {
     if (err instanceof ApiHttpError && err.status === 401) return "unauthorized";
     if (err instanceof ApiUnavailableError) return "down";
@@ -97,12 +105,23 @@ async function loadLiveContext(
 }
 
 function renderLiveDashboard(ctx: LiveContext, params: SearchParams) {
-  const { workspace, data } = ctx;
+  const { workspace, data, repos } = ctx;
   const banner = pickBanner(params);
+  // Pick the lexicographically-smallest repo as the default scope so
+  // that the sidebar matches what ``activate_repos`` chose as the
+  // pipelines' default binding (see backend/.../repos.py).
+  const sortedRepos = [...repos].sort((a, b) =>
+    a.full_name.localeCompare(b.full_name),
+  );
+  const selectedRepo = sortedRepos[0];
   return (
     <AppShell
-      kicker={workspace.slug}
       title="Operating dashboard"
+      workspace={{ id: workspace.id, name: workspace.name, slug: workspace.slug }}
+      scope={{
+        repos: sortedRepos.map((r) => ({ id: r.id, full_name: r.full_name })),
+        selectedRepoId: selectedRepo?.id ?? null,
+      }}
       actions={
         <>
           <Link
@@ -149,6 +168,7 @@ function pickBanner(
   const reason = Array.isArray(reasonRaw) ? reasonRaw[0] : reasonRaw;
   if (params.ran) return { kind: "Run", reason };
   if (params.toggled) return { kind: "Toggle", reason };
+  if (params.installed) return { kind: "Install", reason };
   return undefined;
 }
 

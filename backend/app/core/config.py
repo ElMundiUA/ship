@@ -15,7 +15,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import base64
 import binascii
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -317,6 +317,41 @@ class Settings(BaseSettings):
     notion_client_secret: str | None = Field(
         default=None, alias="NOTION_CLIENT_SECRET"
     )
+
+    @model_validator(mode="after")
+    def _no_localhost_urls_in_cloud(self) -> "Settings":
+        """Refuse to start in cloud mode with localhost-shaped public URLs.
+
+        ``SHIP_PUBLIC_URL`` and ``SHIP_CONSOLE_URL`` are baked into every
+        OAuth callback the backend hands to GitHub / Linear / Notion, plus
+        the redirect target on the install callback. Forgetting to set
+        them in the cloud env used to silently fall back to the local
+        Next.js dev defaults — so the install completed, then GitHub
+        bounced the user to ``http://localhost:3001/...`` and the WOW
+        onboarding ended on a "site can't be reached" tab.
+
+        We can't do that to operators, so cloud (``SHIP_AUTH_MODE=auth0``)
+        bootstrap fails fast with a clear message. Local docker-compose
+        (``SHIP_AUTH_MODE=local``) keeps the dev defaults so ``make up``
+        works out of the box.
+        """
+        if self.auth_mode != "auth0":
+            return self
+        offenders: list[str] = []
+        for env_name, value in (
+            ("SHIP_PUBLIC_URL", self.public_url),
+            ("SHIP_CONSOLE_URL", self.console_url),
+        ):
+            host = value.lower()
+            if "localhost" in host or "127.0.0.1" in host or host.startswith("http://0.0.0.0"):
+                offenders.append(f"{env_name}={value!r}")
+        if offenders:
+            raise ValueError(
+                "Cloud (auth_mode=auth0) cannot use localhost URLs for the "
+                "OAuth callback origins. Set the following env vars to your "
+                "real public hostnames and redeploy: " + ", ".join(offenders)
+            )
+        return self
 
     @property
     def resolved_auth0_issuer(self) -> str | None:

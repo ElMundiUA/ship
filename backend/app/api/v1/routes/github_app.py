@@ -29,14 +29,14 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.api.v1.deps import AuthContext, get_current_auth
 from backend.app.api.v1.routes.workspaces import ROLES_ADMIN, _require_membership
 from backend.app.core.config import Settings, get_settings
 from backend.app.db.models.integrations import GitHubInstallation, WorkspaceRepo
-from backend.app.db.models.pipelines import PullRequest, WorkflowRun
+from backend.app.db.models.pipelines import Pipeline, PipelineRun, PullRequest, WorkflowRun
 from backend.app.db.models.tenancy import AuditLog
 from backend.app.db.session import get_session
 from backend.app.integrations.github.app_auth import (
@@ -593,7 +593,150 @@ async def _apply_workflow_run_event(
                 _parse_iso(run.get("updated_at")) or existing.finished_at
             )
 
+    # Day-4 Phase-1: if the webhook describes a workflow we
+    # dispatched (the starter file uses ``name: Ship · ...``), enrich
+    # the matching :class:`PipelineRun` with the GitHub-side run id +
+    # html_url so the dashboard can deep-link, and let the webhook
+    # win the terminal-state race when the in-runner callback
+    # couldn't reach us (e.g. customer egress firewalls).
+    if name.startswith("Ship · "):
+        await _reconcile_pipeline_run_from_webhook(
+            session,
+            repo_row,
+            run,
+            html_url=html_url,
+        )
+
     logger.debug("workflow_run cached action=%s run_id=%s", action, external_id)
+
+
+# Map GitHub ``workflow_run.conclusion`` values onto our
+# :class:`PipelineRun.status` vocabulary. ``timed_out`` and ``action_required``
+# both map to ``failed`` because the dashboard's run timeline only
+# colour-codes terminal failures vs successes; finer detail lives in
+# the linked GitHub Actions UI.
+_GH_CONCLUSION_TO_STATUS: dict[str, str] = {
+    "success": "succeeded",
+    "failure": "failed",
+    "timed_out": "failed",
+    "action_required": "failed",
+    "neutral": "succeeded",
+    "cancelled": "cancelled",
+    "skipped": "cancelled",
+    "stale": "failed",
+}
+
+
+async def _reconcile_pipeline_run_from_webhook(
+    session: AsyncSession,
+    repo_row: WorkspaceRepo,
+    run: dict[str, Any],
+    *,
+    html_url: str,
+) -> None:
+    """Bind a GitHub ``workflow_run`` event back to our :class:`PipelineRun`.
+
+    Correlation strategy: pick the most-recent ``queued``/``running``
+    pipeline run for this workspace whose pipeline is bound to the
+    same repo. Pilot only dispatches one workflow at a time per
+    pipeline kind, so the freshest in-flight run is the right match;
+    when more than one is in flight we still bind to the freshest one
+    rather than guessing wrong with a stale row.
+
+    The callback endpoint is the *primary* truth source — it carries
+    a per-pipeline summary the workflow author chose. The webhook
+    only fills in fields the callback can't (the GitHub Actions
+    ``html_url`` + the upstream ``conclusion`` for cases where the
+    callback failed to reach us).
+    """
+    gh_run_id_raw = run.get("id")
+    try:
+        gh_run_id = int(gh_run_id_raw) if gh_run_id_raw is not None else None
+    except (TypeError, ValueError):
+        gh_run_id = None
+
+    # Try the cheap path first: is this exactly the run we already
+    # know about (callback recorded gh_workflow_run_id)?
+    pipeline_run: PipelineRun | None = None
+    if gh_run_id is not None:
+        cast_id = str(gh_run_id)
+        # ``payload`` is JSONB; ``->'metrics'->>'gh_workflow_run_id'``
+        # via the ORM is awkward, so we filter in Python after a
+        # bounded "recent runs in this workspace" prefilter. Pilot
+        # volumes make this fine; we'd revisit if it ever shows up.
+        candidate_stmt = (
+            select(PipelineRun)
+            .join(Pipeline, Pipeline.id == PipelineRun.pipeline_id)
+            .where(Pipeline.repo_id == repo_row.id)
+            .where(PipelineRun.workspace_id == repo_row.workspace_id)
+            .order_by(desc(PipelineRun.started_at), desc(PipelineRun.created_at))
+            .limit(50)
+        )
+        candidates = (await session.execute(candidate_stmt)).scalars().all()
+        for cand in candidates:
+            metrics = (cand.payload or {}).get("metrics") or {}
+            if str(metrics.get("gh_workflow_run_id") or "") == cast_id:
+                pipeline_run = cand
+                break
+
+    if pipeline_run is None:
+        # Fallback: most-recent in-flight run for this repo.
+        in_flight_stmt = (
+            select(PipelineRun)
+            .join(Pipeline, Pipeline.id == PipelineRun.pipeline_id)
+            .where(Pipeline.repo_id == repo_row.id)
+            .where(PipelineRun.workspace_id == repo_row.workspace_id)
+            .where(PipelineRun.status.in_(("queued", "running")))
+            .order_by(desc(PipelineRun.started_at), desc(PipelineRun.created_at))
+            .limit(1)
+        )
+        pipeline_run = (
+            await session.execute(in_flight_stmt)
+        ).scalars().first()
+
+    if pipeline_run is None:
+        # Nothing to enrich. The user might have triggered the
+        # workflow themselves via the GitHub UI, in which case we
+        # leave it at the cached ``WorkflowRun`` row.
+        return
+
+    payload = dict(pipeline_run.payload or {})
+    metrics = dict(payload.get("metrics") or {})
+    if gh_run_id is not None:
+        metrics.setdefault("gh_workflow_run_id", gh_run_id)
+    if html_url:
+        metrics["gh_html_url"] = html_url[:1024]
+    if metrics:
+        payload["metrics"] = metrics
+        pipeline_run.payload = payload
+
+    gh_status = run.get("status") or ""
+    gh_conclusion = run.get("conclusion") or ""
+    now = datetime.now(timezone.utc)
+    pipeline_row: Pipeline | None = None
+
+    if gh_status == "completed" and pipeline_run.status not in {
+        "succeeded",
+        "failed",
+        "cancelled",
+    }:
+        # Callback hasn't landed (firewall, runner crash, etc.) —
+        # accept the webhook's verdict so the dashboard doesn't show
+        # "running" forever.
+        mapped = _GH_CONCLUSION_TO_STATUS.get(gh_conclusion, "failed")
+        pipeline_run.status = mapped
+        pipeline_run.finished_at = (
+            _parse_iso(run.get("updated_at")) or now
+        )
+        if not pipeline_run.summary:
+            pipeline_run.summary = (
+                f"Reconciled from workflow_run webhook ({gh_conclusion or 'unknown'})"
+            )
+        pipeline_row = await session.get(Pipeline, pipeline_run.pipeline_id)
+        if pipeline_row is not None:
+            pipeline_row.last_run_status = mapped
+            pipeline_row.last_run_at = pipeline_run.finished_at or now
+    pipeline_run.updated_at = now
 
 
 __all__ = ["router", "InstallStartResponse", "InstallationOut"]
