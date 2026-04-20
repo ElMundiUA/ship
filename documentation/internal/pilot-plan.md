@@ -9,7 +9,7 @@
 >
 > **Post-pilot work in flight (2026-04-20):** A/B/C/D post-pilot
 > backlog — see "[Post-pilot feature backlog](#post-pilot-feature-backlog-abcd-phases)"
-> below. Currently: **A1–A3, B5–B9, C8–C10 shipped**; **D11 in flight**;
+> below. Currently: **A1–A3, B5–B9, C8–C10, D11 shipped**;
 > A4/A5, B10/B11, C11/C12, D12/D13 pending.
 >
 > **Source chats:** [Pilot scope discussion](442f31fa-34f0-47da-888b-a2d10a773f8e), [Day 1+2+3 build](48ef7ed3-881c-42e6-a823-1f670f4907ac), [Post-pilot A/B/C sprint](48ef7ed3-881c-42e6-a823-1f670f4907ac)
@@ -988,7 +988,7 @@ SENTRY_SERVICE_NAME=ship-console
 
 | #   | Item | Status | Notes |
 | --- | ---- | ------ | ----- |
-| D11 | **SHIP-book metrics dashboard** — DORA-ish panel (deploy freq, lead time, CFR, MTTR) + Ship-native (pipeline success %, clarifications resolved, improvements accepted %, chat→ticket rate). Aggregated endpoint `GET /metrics/overview?window=7d\|30d\|90d`. Simple stat cards + breakdown tables; no charting lib in MVP | 🔜 | *Starting now.* |
+| D11 | **SHIP-book metrics dashboard** — DORA-ish panel (deploy freq, lead time, CFR, MTTR) + Ship-native (pipeline success %, clarifications resolved, improvements accepted %, chat→ticket rate). Aggregated endpoint `GET /metrics/overview?window=7d\|30d\|90d`. Simple stat cards + breakdown tables; no charting lib in MVP | ✅ | Endpoint `backend/app/api/v1/routes/metrics.py`; page `console/src/app/metrics/page.tsx`; 5 new tests (`test_v1_metrics.py`). MTTR returned as `null` with "coming soon" label until we wire failure→recovery linking (D13 territory). |
 | D12 | Audit log surface — proper `/audit` page with actor/action/target/date filters (the table exists, only a stub page today) | ⏳ | Half-day; gives compliance story. |
 | D13 | Real knowledge-gathering pipeline executor — beyond the `workflow_dispatch` stub, run the catalog workflow body against the repo (checkout → agent prompt → artifact upload → callback). Replaces the honest executor's "it dispatched" semantics with "it actually did the thing" | ⏳ | Largest piece; wraps C12 + B10 into the existing dispatcher path. |
 

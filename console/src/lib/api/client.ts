@@ -681,6 +681,100 @@ export function resolveChatThread(
   );
 }
 
+// ---------------------------------------------------------------------------
+// D11 — SHIP-book metrics dashboard
+// ---------------------------------------------------------------------------
+
+export type MetricsWindow = "7d" | "30d" | "90d";
+
+export interface ApiMetricsKindCount {
+  kind: string;
+  total: number;
+  succeeded: number;
+  failed: number;
+  success_rate: number | null;
+}
+
+export interface ApiMetricsBucket {
+  key: string;
+  value: number;
+}
+
+export interface ApiMetricsOverview {
+  window_days: number;
+  window_start: string;
+  window_end: string;
+  pipelines: {
+    total: number;
+    enabled: number;
+    disabled: number;
+    by_kind: ApiMetricsKindCount[];
+  };
+  runs: {
+    total: number;
+    succeeded: number;
+    failed: number;
+    running: number;
+    other: number;
+    success_rate: number | null;
+    avg_duration_seconds: number | null;
+    by_kind: ApiMetricsKindCount[];
+    by_trigger: ApiMetricsBucket[];
+  };
+  clarifications: {
+    total: number;
+    open: number;
+    answered: number;
+    skipped: number;
+    stale: number;
+    answer_rate: number | null;
+    median_resolution_hours: number | null;
+  };
+  improvements: {
+    total: number;
+    pending: number;
+    accepted: number;
+    declined: number;
+    deferred: number;
+    accept_rate: number | null;
+  };
+  chat: {
+    threads_total: number;
+    threads_active: number;
+    threads_resolved: number;
+    threads_archived: number;
+    messages_total: number;
+    ticket_rate: number | null;
+  };
+  dora: {
+    prs_opened: number;
+    prs_merged: number;
+    deploy_frequency_per_day: number | null;
+    avg_lead_time_hours: number | null;
+    workflow_runs_total: number;
+    workflow_runs_failed: number;
+    change_failure_rate: number | null;
+    mttr_hours: number | null;
+  };
+}
+
+/**
+ * Single-trip fetch for the ``/metrics`` page. Every panel maps 1:1
+ * to a top-level key on the response so the page can render without
+ * further aggregation client-side.
+ */
+export function getMetricsOverview(
+  workspaceId: string,
+  window: MetricsWindow = "30d",
+  options: { token?: string } = {},
+): Promise<ApiMetricsOverview> {
+  const qs = new URLSearchParams({ window }).toString();
+  return apiFetch<ApiMetricsOverview>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/metrics/overview?${qs}`,
+    { token: options.token },
+  );
+}
+
 /**
  * Patch a single activated repo. Today the only mutable field is
  * ``preset``; ``reshape`` tells the backend to re-apply the preset's

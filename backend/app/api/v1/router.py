@@ -26,6 +26,7 @@ from backend.app.api.v1.routes import (
     knowledge,
     linear_oauth,
     members,
+    metrics,
     notion_oauth,
     pipelines,
     repos,
@@ -86,3 +87,6 @@ api_router.include_router(improvements.pipeline_router)
 # Chat (C10 — conversational scoping with the agent). Stub replies
 # for the pilot; real model plugs into backend.app.api.v1.routes.chat:_agent_reply.
 api_router.include_router(chat.router)
+# Metrics overview (D11 — SHIP-book dashboard). Single aggregator
+# endpoint under /workspaces/{ws}/metrics/overview.
+api_router.include_router(metrics.router)
