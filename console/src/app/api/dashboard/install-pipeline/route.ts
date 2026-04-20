@@ -26,6 +26,12 @@ export async function POST(request: Request) {
   const form = await request.formData();
   const wsId = (form.get("ws") ?? "").toString();
   const pipelineId = (form.get("pipeline") ?? "").toString();
+  // Explicit repo context: the card was fired from a specific repo's
+  // swimlane, so the backend rebinds the pipeline to that repo rather
+  // than running the sole-repo auto-bind heuristic. Harmless when
+  // omitted — the backend still falls back to the existing binding.
+  const repoIdRaw = (form.get("repo_id") ?? "").toString().trim();
+  const repoId = repoIdRaw || null;
 
   if (!wsId || !pipelineId) {
     return NextResponse.redirect(new URL("/", origin), 303);
@@ -35,7 +41,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const result = await installPipelineWorkflow(wsId, pipelineId);
+    const result = await installPipelineWorkflow(wsId, pipelineId, { repoId });
     // Belt-and-braces: redirect straight to the PR so the user lands
     // on github.com to review and merge — the dashboard surfaces the
     // banner on the next manual refresh.

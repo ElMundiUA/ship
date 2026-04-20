@@ -495,11 +495,13 @@ export function runPipeline(
   workspaceId: string,
   pipelineId: string,
   note?: string,
-  token?: string,
+  options?: { repoId?: string | null; token?: string },
 ): Promise<ApiPipelineRun> {
+  const body: Record<string, unknown> = { note: note ?? null };
+  if (options?.repoId) body.repo_id = options.repoId;
   return apiFetch<ApiPipelineRun>(
     `/v1/workspaces/${encodeURIComponent(workspaceId)}/pipelines/${encodeURIComponent(pipelineId)}/runs`,
-    { method: "POST", body: { note: note ?? null }, token },
+    { method: "POST", body, token: options?.token },
   );
 }
 
@@ -517,11 +519,17 @@ export interface ApiPipelineInstall {
 export function installPipelineWorkflow(
   workspaceId: string,
   pipelineId: string,
-  token?: string,
+  options?: { repoId?: string | null; token?: string },
 ): Promise<ApiPipelineInstall> {
+  const body: Record<string, unknown> = {};
+  if (options?.repoId) body.repo_id = options.repoId;
   return apiFetch<ApiPipelineInstall>(
     `/v1/workspaces/${encodeURIComponent(workspaceId)}/pipelines/${encodeURIComponent(pipelineId)}/install`,
-    { method: "POST", token },
+    {
+      method: "POST",
+      body: Object.keys(body).length > 0 ? body : undefined,
+      token: options?.token,
+    },
   );
 }
 

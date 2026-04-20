@@ -282,6 +282,145 @@ async def test_run_pipeline_412_when_not_bound(
 
 
 @pytest.mark.asyncio
+async def test_run_pipeline_rebinds_when_explicit_repo_id(
+    monkeypatch, v1_client, db_session, seed_repo_and_install
+) -> None:
+    """When the card posts a ``repo_id`` from a specific swimlane, the
+    backend dispatches against that repo and rebinds the pipeline —
+    even if it was previously bound to a different repo."""
+    from datetime import datetime, timezone
+
+    from backend.app.api.v1.routes import pipelines as pipelines_route
+    from backend.app.db.models.integrations import WorkspaceRepo
+    from backend.app.integrations.github import workflows as workflows_mod
+
+    raw, workspace, install, first_repo = seed_repo_and_install
+    # Seed a second activated repo in the same workspace — this is
+    # the one the user will target explicitly via the swimlane card.
+    second_repo = WorkspaceRepo(
+        workspace_id=workspace.id,
+        installation_id=install.id,
+        provider="github",
+        external_id=7_000_000,
+        full_name="acme/second",
+        default_branch="main",
+        private=False,
+        html_url="https://github.com/acme/second",
+        activated_at=datetime.now(timezone.utc),
+    )
+    db_session.add(second_repo)
+    await db_session.flush()
+
+    pipelines = await _seed_bound_pipelines(db_session, workspace.id, first_repo.id)
+    target = pipelines["pr_review"]
+
+    captured: dict[str, object] = {}
+
+    async def _probe(repo, install, *, settings, **_):
+        captured["probe_repo"] = repo.full_name
+        return frozenset({"pr-and-ci-gate.yml"})
+
+    async def _dispatch(repo, install, workflow_file, *, inputs, settings, **_):
+        captured["dispatch_repo"] = repo.full_name
+
+    monkeypatch.setattr(pipelines_route, "list_repo_workflows", _probe)
+    monkeypatch.setattr(pipelines_route, "dispatch_workflow", _dispatch)
+    monkeypatch.setattr(workflows_mod, "list_repo_workflows", _probe)
+    monkeypatch.setattr(workflows_mod, "dispatch_workflow", _dispatch)
+
+    response = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/pipelines/{target.id}/runs",
+        headers={"Authorization": f"Bearer {raw}"},
+        json={"repo_id": str(second_repo.id)},
+    )
+    assert response.status_code == 202, response.text
+    assert captured["dispatch_repo"] == "acme/second"
+    assert captured["probe_repo"] == "acme/second"
+
+    # Rebind persisted: next Run-now without ``repo_id`` would target
+    # the second repo, not the original.
+    await db_session.refresh(target)
+    assert target.repo_id == second_repo.id
+
+
+@pytest.mark.asyncio
+async def test_run_pipeline_rejects_unknown_explicit_repo_id(
+    v1_client, db_session, seed_repo_and_install
+) -> None:
+    """Explicit ``repo_id`` must resolve to a repo in the same
+    workspace; passing an unknown UUID 412s instead of silently
+    rebinding to a stored repo or to the default."""
+    raw, workspace, _install, repo = seed_repo_and_install
+    pipelines = await _seed_bound_pipelines(db_session, workspace.id, repo.id)
+    target = pipelines["pr_review"]
+
+    phantom = uuid.uuid4()
+    assert phantom != repo.id
+
+    response = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/pipelines/{target.id}/runs",
+        headers={"Authorization": f"Bearer {raw}"},
+        json={"repo_id": str(phantom)},
+    )
+    assert response.status_code == 412, response.text
+    assert response.json()["detail"]["code"] == "pipeline_not_bound"
+
+
+@pytest.mark.asyncio
+async def test_install_pipeline_workflow_rebinds_when_explicit_repo_id(
+    monkeypatch, v1_client, db_session, seed_repo_and_install
+) -> None:
+    """Install PR targets the repo the user posted from the swimlane,
+    not the pipeline's pre-existing binding."""
+    from datetime import datetime, timezone
+
+    from backend.app.api.v1.routes import pipelines as pipelines_route
+    from backend.app.db.models.integrations import WorkspaceRepo
+    from backend.app.integrations.github.workflows import StarterWorkflowPR
+
+    raw, workspace, install, first_repo = seed_repo_and_install
+    second_repo = WorkspaceRepo(
+        workspace_id=workspace.id,
+        installation_id=install.id,
+        provider="github",
+        external_id=7_100_000,
+        full_name="acme/install-target",
+        default_branch="main",
+        private=False,
+        html_url="https://github.com/acme/install-target",
+        activated_at=datetime.now(timezone.utc),
+    )
+    db_session.add(second_repo)
+    await db_session.flush()
+
+    pipelines = await _seed_bound_pipelines(db_session, workspace.id, first_repo.id)
+    target = pipelines["pr_review"]
+
+    captured: dict[str, object] = {}
+
+    async def _commit(repo, install, *, workflow_file, content, pipeline_kind, settings, **_):
+        captured["repo"] = repo.full_name
+        return StarterWorkflowPR(
+            pr_url="https://github.com/acme/install-target/pull/7",
+            pr_number=7,
+            branch="ship/install-pr_review-1",
+        )
+
+    monkeypatch.setattr(pipelines_route, "commit_starter_workflow", _commit)
+
+    response = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/pipelines/{target.id}/install",
+        headers={"Authorization": f"Bearer {raw}"},
+        json={"repo_id": str(second_repo.id)},
+    )
+    assert response.status_code == 201, response.text
+    assert captured["repo"] == "acme/install-target"
+
+    await db_session.refresh(target)
+    assert target.repo_id == second_repo.id
+
+
+@pytest.mark.asyncio
 async def test_run_pipeline_auto_binds_when_single_repo(
     monkeypatch, v1_client, db_session, seed_repo_and_install
 ) -> None:

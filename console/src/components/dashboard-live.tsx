@@ -493,6 +493,12 @@ function PipelineActionButton({
       >
         <input type="hidden" name="ws" value={workspaceId} />
         <input type="hidden" name="pipeline" value={pipeline.id} />
+        {/* Always post the repo the card lives under — "Recommended actions"
+         * only surfaces bound pipelines, so ``repo_id`` is always present
+         * and the backend targets that exact repo (and rebinds if needed). */}
+        {pipeline.repo_id && (
+          <input type="hidden" name="repo_id" value={pipeline.repo_id} />
+        )}
         <button
           type="submit"
           className="inline-flex items-center gap-1.5 rounded-full border border-aqua/40 bg-aqua/[0.08] px-3.5 py-1.5 text-xs font-bold text-aqua hover:bg-aqua/[0.16]"
@@ -510,6 +516,9 @@ function PipelineActionButton({
     >
       <input type="hidden" name="ws" value={workspaceId} />
       <input type="hidden" name="pipeline" value={pipeline.id} />
+      {pipeline.repo_id && (
+        <input type="hidden" name="repo_id" value={pipeline.repo_id} />
+      )}
       <button
         type="submit"
         disabled={!pipeline.enabled}
