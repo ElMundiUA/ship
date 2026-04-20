@@ -61,6 +61,8 @@ def rsa_keypair() -> tuple[str, dict[str, Any]]:
 def settings() -> Settings:
     return Settings(
         SHIP_AUTH_MODE="auth0",
+        SHIP_PUBLIC_URL="https://api.ship.test",
+        SHIP_CONSOLE_URL="https://app.ship.test",
         AUTH0_DOMAIN="ship-test.eu.auth0.com",
         AUTH0_AUDIENCE="https://api.ship.test",
         AUTH0_JWKS_URL="https://jwks.test/jwks.json",

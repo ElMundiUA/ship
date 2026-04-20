@@ -1,8 +1,11 @@
 # Ship pilot plan — WOW onboarding (Cloud SaaS, Model A)
 
-> **Status:** **Day 1 + Day 2 + Day 3 shipped (2026-04-19); WOW wizard
-> tightened to the planned 3-step shape (2026-04-20).** Pilot scope
-> complete; live smoke test pending.
+> **Status:** **WOW onboarding live in production (2026-04-20).**
+> End-to-end flow verified at <https://app.ship.elmundi.com>: Auth0
+> sign-in → 3-step wizard → install our `ship-elmundi` GitHub App →
+> pick repos → connect tracker → "You're wired in" dashboard with
+> default pipelines seeded. PR webhook loop pending real-world fire
+> (this very PR is the smoke test).
 > **Source chats:** [Pilot scope discussion](442f31fa-34f0-47da-888b-a2d10a773f8e), [Day 1+2+3 build](48ef7ed3-881c-42e6-a823-1f670f4907ac)
 > **Owner:** Denys / Ship core
 > **Target:** 3-day pilot demo with WOW onboarding (sign-in → working dashboard in < 5 min)
@@ -33,8 +36,74 @@ No pilot work on it.
 > per-day sections below describe the *plan* (with status badges), this
 > section describes the *state of the repo right now*.
 
-**Last updated:** 2026-04-20, after the WOW-wizard re-cut (see "Wizard
-re-cut" section below).
+**Last updated:** 2026-04-20, after the cloud rollout (Auth0 + GitHub App
++ Bunny + Neon all live, see "Cloud rollout" section below).
+
+### Cloud rollout — ✅ shipped (2026-04-20)
+
+The pilot is live at <https://app.ship.elmundi.com> (console) backed
+by <https://api.ship.elmundi.com> (FastAPI on Bunny Magic Containers,
+Neon Postgres in FRA). Several real-world papercuts surfaced and were
+fixed during the rollout — capturing them here so the next operator
+doesn't relearn them:
+
+- **GitHub App slug auto-discovery.** `GITHUB_APP_SLUG` is no longer
+  required: the backend mints an App JWT and reads the slug from
+  `GET https://api.github.com/app` (cached 1h per pod). Set the env
+  var only when you want to pin a staging slug. Saved us the entire
+  "App was renamed → install URL 404s" debugging loop.
+- **PEM in single-line env stores.** Bunny / Fly / k8s Secret YAML
+  paste boxes drop newlines. `GITHUB_APP_PRIVATE_KEY` now accepts
+  three on-the-wire shapes — native PEM, `\n`-escaped, or **base64 of
+  the entire PEM block** (recommended; one shell command:
+  `base64 -i key.pem | tr -d '\n' | pbcopy`). See `_normalize_pem` in
+  `backend/app/core/config.py`.
+- **No localhost in cloud mode.** A model validator now refuses to
+  boot the backend when `SHIP_AUTH_MODE=auth0` and `SHIP_PUBLIC_URL`
+  / `SHIP_CONSOLE_URL` still point at `localhost`. Without this, the
+  install callback redirected real users to
+  `http://localhost:3001/...` and the WOW onboarding ended on a
+  "site can't be reached" tab. Local dev (`SHIP_AUTH_MODE=local`)
+  keeps the friendly defaults.
+- **Auth0 `/userinfo` fallback for JIT users.** Access tokens scoped
+  to a custom API audience don't carry an `email` claim by default.
+  When the claim is missing the backend now calls
+  `${issuer}/userinfo` with the same access token to pull email +
+  name, then JIT-creates the User row. Operators don't have to
+  configure a custom Auth0 Action.
+- **Install callback tolerates missing `state`.** GitHub omits the
+  state JWT whenever the user enters the install picker outside of
+  our wizard (clicking "Configure" on the App page, repo-tweak from
+  org settings, bookmarked install URL). The callback used to 422 in
+  their face; now it falls back to an idempotent refresh when the
+  installation is already known, or bounces them to the wizard with
+  `error=missing_state` when it isn't.
+- **Required env vars in production** (set on the `Ship-API`
+  container in Bunny):
+
+  | Key                          | Value (prod)                                     |
+  |------------------------------|--------------------------------------------------|
+  | `SHIP_AUTH_MODE`             | `auth0`                                          |
+  | `SHIP_PUBLIC_URL`            | `https://api.ship.elmundi.com`                   |
+  | `SHIP_CONSOLE_URL`           | `https://app.ship.elmundi.com`                   |
+  | `DATABASE_URL`               | Neon DSN (FRA, `?sslmode=require`)               |
+  | `JWT_SECRET`                 | random 32+ bytes                                 |
+  | `ENCRYPTION_KEY`             | Fernet key (`cryptography.fernet.Fernet.generate_key()`) |
+  | `AUTH0_DOMAIN`               | `dev-xxx.us.auth0.com`                           |
+  | `AUTH0_AUDIENCE`             | matches `SHIP_PUBLIC_URL`                        |
+  | `GITHUB_APP_ID`              | App "About" page                                 |
+  | `GITHUB_APP_PRIVATE_KEY`     | base64 of the downloaded PEM (no newlines)       |
+  | `GITHUB_APP_WEBHOOK_SECRET`  | matches the webhook secret in App settings       |
+
+  GitHub App settings (set in `github.com/organizations/<org>/settings/apps/<app>`):
+
+  - **Callback URL** = `${SHIP_PUBLIC_URL}/v1/integrations/github/install/callback`
+  - **Setup URL (optional)** = same as Callback URL, with **Redirect on update** ✅
+  - **Webhook URL** = `${SHIP_PUBLIC_URL}/v1/webhooks/github`
+  - **Webhook secret** = `GITHUB_APP_WEBHOOK_SECRET`
+  - Permissions / events: see `github-app-setup.md`.
+
+### Wizard re-cut — ✅ shipped (2026-04-20)
 
 ### Wizard re-cut — ✅ shipped (2026-04-20)
 
