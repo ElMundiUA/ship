@@ -1325,9 +1325,174 @@ async def auto_dispatch_knowledge_pipelines(
     return created
 
 
+# ---------------------------------------------------------------------------
+# Auto-dispatch (self-heal lane on CI failure)
+# ---------------------------------------------------------------------------
+
+
+class SelfHealDispatchResult(BaseModel):
+    """Return shape for :func:`auto_dispatch_self_heal`.
+
+    ``status`` is one of:
+
+    - ``"dispatched"`` — we enqueued a :class:`PipelineRun` and GitHub
+      accepted the ``workflow_dispatch`` call. ``run_id`` is set.
+    - ``"skipped:<reason>"`` — we recognised the failure but chose not
+      to auto-heal. Reasons:
+      - ``pipeline_missing`` — no ``self_heal`` :class:`Pipeline` row.
+      - ``pipeline_disabled`` — row exists but ``enabled=False``.
+      - ``workflow_not_installed`` — YAML not on the default branch.
+      - ``kind_not_supported`` — catalog missing install target.
+    - ``"failed:<reason>"`` — dispatch attempted but GitHub refused
+      (token expiry, scope regression, …). ``run_id`` *is* set because
+      we still persist the failed :class:`PipelineRun` for audit.
+    """
+
+    status: str
+    run_id: uuid.UUID | None = None
+
+
+async def auto_dispatch_self_heal(
+    session: AsyncSession,
+    repo: WorkspaceRepo,
+    install: GitHubInstallation,
+    *,
+    settings: Settings,
+    failed_run_external_id: int,
+    failed_workflow_name: str,
+    trigger: str = "auto_self_heal",
+) -> SelfHealDispatchResult:
+    """Fire the ``self_heal`` lane in response to a failed CI run.
+
+    Mirrors :func:`auto_dispatch_knowledge_pipelines` but scoped to a
+    single kind and wired to the webhook caller so the status can be
+    surfaced as a dashboard notification. The failed-run context
+    (``failed_run_external_id`` + ``failed_workflow_name``) is baked
+    into ``PipelineRun.payload`` so the operator can trace the
+    self-heal back to the failure that triggered it from either end.
+    """
+    pipeline = (
+        await session.execute(
+            select(Pipeline).where(
+                Pipeline.workspace_id == repo.workspace_id,
+                Pipeline.repo_id == repo.id,
+                Pipeline.kind == "self_heal",
+            )
+        )
+    ).scalars().first()
+    if pipeline is None:
+        return SelfHealDispatchResult(status="skipped:pipeline_missing")
+    if not pipeline.enabled:
+        return SelfHealDispatchResult(status="skipped:pipeline_disabled")
+    if not _supports_run(pipeline.kind):
+        return SelfHealDispatchResult(status="skipped:kind_not_supported")
+    workflow_file = _workflow_file_for_kind(pipeline.kind)
+    if workflow_file is None:
+        return SelfHealDispatchResult(status="skipped:kind_not_supported")
+    try:
+        files = await list_repo_workflows(repo, install, settings=settings)
+    except Exception as exc:  # pragma: no cover - upstream flake
+        logger.warning(
+            "self-heal auto-dispatch skipped (workflow probe failed): %s", exc
+        )
+        return SelfHealDispatchResult(status="skipped:workflow_probe_failed")
+    if workflow_file not in files:
+        return SelfHealDispatchResult(status="skipped:workflow_not_installed")
+
+    now = datetime.now(timezone.utc)
+    run = PipelineRun(
+        pipeline_id=pipeline.id,
+        workspace_id=pipeline.workspace_id,
+        trigger=trigger,
+        status="queued",
+        started_at=now,
+        summary=(
+            f"Auto self-heal for {repo.full_name} — "
+            f"{failed_workflow_name[:120]} failed"
+        ),
+        payload={
+            "auto_trigger": trigger,
+            "failed_run_external_id": failed_run_external_id,
+            "failed_workflow_name": failed_workflow_name,
+        },
+    )
+    session.add(run)
+    await session.flush()
+    token = _mint_run_token(run.id, settings)
+    run.run_token_hash = _hash_run_token(token)
+    inputs = {
+        "ship_run_id": str(run.id),
+        "ship_callback_url": _callback_url(settings, run.id),
+        "ship_run_token": token,
+        "ship_failed_run_id": str(failed_run_external_id),
+    }
+    try:
+        await dispatch_workflow(
+            repo,
+            install,
+            workflow_file,
+            inputs=inputs,
+            settings=settings,
+        )
+    except WorkflowDispatchError as exc:
+        logger.warning(
+            "self-heal auto-dispatch failed repo=%s status=%s: %s",
+            repo.full_name,
+            exc.status_code,
+            exc.message[:200],
+        )
+        run.status = "failed"
+        run.finished_at = datetime.now(timezone.utc)
+        run.summary = (
+            f"Self-heal dispatch failed (HTTP {exc.status_code}): "
+            f"{exc.message[:200]}"
+        )
+        pipeline.last_run_status = "failed"
+        pipeline.last_run_at = run.finished_at
+        pipeline.updated_at = run.finished_at
+        await session.flush()
+        return SelfHealDispatchResult(
+            status=f"failed:upstream_{exc.status_code}", run_id=run.id
+        )
+
+    run.status = "running"
+    pipeline.last_run_at = now
+    pipeline.last_run_status = "running"
+    pipeline.updated_at = now
+    session.add(
+        AuditLog(
+            workspace_id=pipeline.workspace_id,
+            actor_user_id=None,
+            actor_token_id=None,
+            action="pipeline.run",
+            target_kind="pipeline",
+            target_id=str(pipeline.id),
+            payload={
+                "kind": pipeline.kind,
+                "trigger": trigger,
+                "run_id": str(run.id),
+                "repo_full_name": repo.full_name,
+                "workflow_file": workflow_file,
+                "failed_run_external_id": failed_run_external_id,
+                "failed_workflow_name": failed_workflow_name,
+            },
+        )
+    )
+    await session.flush()
+    logger.info(
+        "auto-dispatched self-heal repo=%s failed_run=%s -> run=%s",
+        repo.full_name,
+        failed_run_external_id,
+        run.id,
+    )
+    return SelfHealDispatchResult(status="dispatched", run_id=run.id)
+
+
 __all__ = [
     "router",
     "public_router",
     "auto_dispatch_knowledge_pipelines",
+    "auto_dispatch_self_heal",
+    "SelfHealDispatchResult",
     "KNOWLEDGE_PIPELINE_KINDS",
 ]

@@ -487,6 +487,11 @@ async def _apply_pull_request_event(
         )
     ).scalars().first()
 
+    # Capture whether the *prior* cached state already knew this PR as
+    # merged — we only want to mint the A4 "PR merged" banner on the
+    # *transition*, not on every replayed webhook.
+    was_merged_before = bool(existing.merged) if existing is not None else False
+
     if existing is None:
         session.add(
             PullRequest(
@@ -524,13 +529,46 @@ async def _apply_pull_request_event(
 
     logger.debug("pull_request cached action=%s pr_id=%s", action, external_id)
 
+    head_ref = str((pr.get("head") or {}).get("ref") or "")
+    just_merged = merged and state == "merged" and not was_merged_before
+    is_install_pr = head_ref.startswith("ship/install-")
+
+    # A4 "Return-to-Ship": when a PR that *isn't* our own install PR
+    # merges, mint a dashboard banner so the user who clicked Merge
+    # on github.com lands back on a welcoming callout instead of an
+    # unchanged dashboard. Install PRs already get their own
+    # ``back_from_pr`` banner + knowledge-lane auto-dispatch below,
+    # so skipping them avoids double-notification noise.
+    if just_merged and not is_install_pr:
+        from backend.app.services.notifications import (
+            record_pr_merged_notification,
+        )
+
+        try:
+            await record_pr_merged_notification(
+                session,
+                workspace_id=repo_row.workspace_id,
+                pr_external_id=int(external_id),
+                pr_number=int(pr.get("number") or 0),
+                repo_full_name=repo_row.full_name,
+                title=title,
+                html_url=html_url,
+                author=(user.get("login") or None),
+            )
+        except Exception as exc:  # pragma: no cover - log & move on
+            logger.warning(
+                "pr_merged banner write failed repo=%s pr=%s: %s",
+                repo_row.full_name,
+                external_id,
+                exc,
+            )
+
     # When a ``ship/install-*`` PR merges we own the cache that decides
     # whether the dashboard still shows "Install workflow PR →" or
     # flips to "Run now". Bust it eagerly so the next render (or the
     # ``back_from_pr`` landing bounce) reflects reality inside a
     # second instead of waiting out the 60s probe TTL.
-    head_ref = str((pr.get("head") or {}).get("ref") or "")
-    if merged and state == "merged" and head_ref.startswith("ship/install-"):
+    if merged and state == "merged" and is_install_pr:
         from backend.app.integrations.github.workflows import (
             invalidate_workflow_list_cache,
         )
@@ -672,7 +710,8 @@ async def _apply_workflow_run_event(
     # html_url so the dashboard can deep-link, and let the webhook
     # win the terminal-state race when the in-runner callback
     # couldn't reach us (e.g. customer egress firewalls).
-    if name.startswith("Ship · "):
+    is_ship_workflow = name.startswith("Ship · ")
+    if is_ship_workflow:
         await _reconcile_pipeline_run_from_webhook(
             session,
             repo_row,
@@ -681,6 +720,23 @@ async def _apply_workflow_run_event(
         )
 
     logger.debug("workflow_run cached action=%s run_id=%s", action, external_id)
+
+    # A5 "Self-heal auto-trigger": when a non-Ship workflow completes
+    # with conclusion=failure, dispatch the self-heal lane (if the
+    # pipeline is enabled & the YAML is installed) and post a banner
+    # so the dashboard surfaces the intervention.
+    #
+    # We skip our own ``Ship · …`` workflows to avoid a feedback
+    # loop: self_heal lanes can themselves fail (bad config, upstream
+    # outage) and recursively auto-dispatching another self_heal on
+    # that failure would amplify the noise we're trying to damp.
+    await _maybe_trigger_self_heal(
+        session,
+        repo_row,
+        run,
+        html_url=html_url,
+        is_ship_workflow=is_ship_workflow,
+    )
 
 
 async def _apply_push_event_for_kb(
@@ -775,6 +831,145 @@ _GH_CONCLUSION_TO_STATUS: dict[str, str] = {
     "skipped": "cancelled",
     "stale": "failed",
 }
+
+
+async def _maybe_trigger_self_heal(
+    session: AsyncSession,
+    repo_row: WorkspaceRepo,
+    run: dict[str, Any],
+    *,
+    html_url: str,
+    is_ship_workflow: bool,
+) -> None:
+    """A5: on ``workflow_run.failure`` auto-dispatch the self_heal lane.
+
+    Preconditions stacked in order of cheapest check first: ignore
+    non-terminal events, ignore our own ``Ship · …`` workflows (to
+    avoid recursive self-heal-on-self-heal loops), then look up the
+    installation for ``workflow_dispatch`` and defer to
+    :func:`auto_dispatch_self_heal` for the heavy lifting.
+
+    Every branch that *could* have auto-healed (dispatched, skipped,
+    failed-at-dispatch) drops a :class:`WorkspaceNotification` so the
+    dashboard's banner rail reflects reality; silent branches (non-
+    failure events, our own workflows) leave no trace.
+    """
+    if is_ship_workflow:
+        return
+    if run.get("status") != "completed":
+        return
+    if run.get("conclusion") != "failure":
+        return
+    external_id = run.get("id")
+    if not isinstance(external_id, int):
+        return
+
+    name = (run.get("name") or run.get("display_title") or "Workflow")[:255]
+
+    # Late import: avoids an import cycle — pipelines.py already
+    # imports from backend.app.services.notifications (via
+    # auto_dispatch_self_heal's result) and github_app is imported by
+    # pipelines.py indirectly through the webhook router registration.
+    from backend.app.api.v1.routes.pipelines import auto_dispatch_self_heal
+    from backend.app.core.config import get_settings
+    from backend.app.services.notifications import (
+        record_self_heal_notification,
+    )
+
+    # Resolve the installation so auto_dispatch_self_heal can mint the
+    # workflow_dispatch JWT. If it's gone we still record a "skipped"
+    # banner — the user needs to know Ship *tried* to act.
+    install_id = repo_row.installation_id
+    install_row = None
+    if install_id is not None:
+        install_row = (
+            await session.execute(
+                select(GitHubInstallation).where(
+                    GitHubInstallation.id == install_id
+                )
+            )
+        ).scalars().first()
+    if install_row is None:
+        try:
+            await record_self_heal_notification(
+                session,
+                workspace_id=repo_row.workspace_id,
+                kind="self_heal_skipped",
+                failed_run_external_id=int(external_id),
+                repo_full_name=repo_row.full_name,
+                failed_workflow_name=name,
+                failed_run_url=html_url or None,
+                reason="GitHub App installation missing",
+            )
+        except Exception as exc:  # pragma: no cover - log & move on
+            logger.warning(
+                "self_heal notification write failed repo=%s: %s",
+                repo_row.full_name,
+                exc,
+            )
+        return
+
+    try:
+        result = await auto_dispatch_self_heal(
+            session,
+            repo_row,
+            install_row,
+            settings=get_settings(),
+            failed_run_external_id=int(external_id),
+            failed_workflow_name=name,
+        )
+    except Exception as exc:  # pragma: no cover - upstream flake
+        logger.warning(
+            "self-heal auto-dispatch raised repo=%s run=%s: %s",
+            repo_row.full_name,
+            external_id,
+            exc,
+        )
+        return
+
+    notif_kind: str
+    notif_reason: str | None = None
+    if result.status == "dispatched":
+        notif_kind = "self_heal_dispatched"
+    elif result.status.startswith("failed:"):
+        notif_kind = "self_heal_skipped"
+        notif_reason = f"dispatch error ({result.status.split(':', 1)[1]})"
+    elif result.status == "skipped:pipeline_missing":
+        # No self_heal row at all — this is the user's first repo
+        # activation without our default lane seeded. Stay quiet:
+        # advertising an un-configured feature on every CI failure
+        # would be spammy.
+        return
+    elif result.status == "skipped:pipeline_disabled":
+        notif_kind = "self_heal_skipped"
+        notif_reason = "self_heal pipeline is disabled"
+    elif result.status == "skipped:workflow_not_installed":
+        notif_kind = "self_heal_skipped"
+        notif_reason = "self_heal workflow YAML not installed in the repo"
+    elif result.status == "skipped:kind_not_supported":
+        return
+    else:
+        notif_kind = "self_heal_skipped"
+        notif_reason = result.status
+
+    try:
+        await record_self_heal_notification(
+            session,
+            workspace_id=repo_row.workspace_id,
+            kind=notif_kind,
+            failed_run_external_id=int(external_id),
+            repo_full_name=repo_row.full_name,
+            failed_workflow_name=name,
+            failed_run_url=html_url or None,
+            healing_run_id=result.run_id,
+            reason=notif_reason,
+        )
+    except Exception as exc:  # pragma: no cover - log & move on
+        logger.warning(
+            "self_heal notification write failed repo=%s: %s",
+            repo_row.full_name,
+            exc,
+        )
 
 
 async def _reconcile_pipeline_run_from_webhook(

@@ -27,6 +27,7 @@ from backend.app.api.v1.routes import (
     linear_oauth,
     members,
     metrics,
+    notifications,
     notion_oauth,
     pipelines,
     repos,
@@ -92,3 +93,7 @@ api_router.include_router(chat.router)
 # Metrics overview (D11 — SHIP-book dashboard). Single aggregator
 # endpoint under /workspaces/{ws}/metrics/overview.
 api_router.include_router(metrics.router)
+# Dashboard notifications / dismissible banners (A4 "PR-merged" +
+# A5 "self-heal auto-triggered"). Reader + dismiss surface; writes
+# happen from the webhook handlers via `services.notifications`.
+api_router.include_router(notifications.router)

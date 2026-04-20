@@ -1062,12 +1062,25 @@ export interface ApiDashboardCounts {
   runs_last_24h: number;
 }
 
+export interface ApiWorkspaceNotification {
+  id: string;
+  kind: string;
+  title: string;
+  body: string | null;
+  href: string | null;
+  payload: Record<string, unknown>;
+  dedupe_key: string | null;
+  dismissed_at: string | null;
+  created_at: string;
+}
+
 export interface ApiDashboard {
   counts: ApiDashboardCounts;
   pipelines: ApiPipeline[];
   pull_requests: ApiDashboardPullRequest[];
   workflow_runs: ApiDashboardWorkflowRun[];
   pipeline_runs: ApiPipelineRun[];
+  notifications: ApiWorkspaceNotification[];
 }
 
 export function listPipelines(
@@ -1154,6 +1167,27 @@ export function getDashboard(
   return apiFetch<ApiDashboard>(
     `/v1/workspaces/${encodeURIComponent(workspaceId)}/dashboard`,
     { token },
+  );
+}
+
+export function dismissNotification(
+  workspaceId: string,
+  notificationId: string,
+  token?: string,
+): Promise<void> {
+  return apiFetch<void>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/notifications/${encodeURIComponent(notificationId)}/dismiss`,
+    { method: "POST", token },
+  );
+}
+
+export function dismissAllNotifications(
+  workspaceId: string,
+  token?: string,
+): Promise<void> {
+  return apiFetch<void>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/notifications/dismiss-all`,
+    { method: "POST", token },
   );
 }
 

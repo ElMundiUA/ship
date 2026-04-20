@@ -15,6 +15,7 @@ import type {
   ApiDashboardWorkflowRun,
   ApiPipeline,
   ApiPipelineRun,
+  ApiWorkspaceNotification,
 } from "@/lib/api/client";
 
 /**
@@ -188,9 +189,17 @@ export function DashboardLive({
 }) {
   const bannerInfo = banner ? RUN_REASONS[banner.reason] ?? null : null;
   const setupComplete = data.counts.active_repos > 0;
+  const notifications = data.notifications ?? [];
 
   return (
     <>
+      {notifications.length > 0 && (
+        <NotificationRail
+          workspaceId={workspaceId}
+          notifications={notifications}
+        />
+      )}
+
       {bannerInfo && (
         <div
           className="mb-4 flex flex-col gap-1 rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm"
@@ -1091,4 +1100,145 @@ function relativeTime(iso: string): string {
   if (hr < 24) return `${hr}h ago`;
   const days = Math.round(hr / 24);
   return `${days}d ago`;
+}
+
+/**
+ * A4 "PR merged" + A5 "self-heal dispatched" banners, rendered as a
+ * dismissible rail above the dashboard. The rail is *authoritative*
+ * for onboarding ping-backs: the query-string ``?reason=`` banner
+ * above it is a one-shot navigation side effect, but these rows live
+ * in the database and stay visible across refreshes until the user
+ * clears them.
+ *
+ * Implemented as plain ``<form method="POST">`` so dismissing works
+ * even with JS disabled (useful when the dashboard is framed inside
+ * a restrictive CSP context, e.g. during enterprise evaluation).
+ */
+function NotificationRail({
+  workspaceId,
+  notifications,
+}: {
+  workspaceId: string;
+  notifications: ApiWorkspaceNotification[];
+}) {
+  return (
+    <div className="mb-4 flex flex-col gap-2">
+      <div className="flex items-baseline justify-between gap-3">
+        <h2 className="text-xs font-semibold uppercase tracking-[0.2em] text-white/55">
+          What’s new
+        </h2>
+        {notifications.length > 1 && (
+          <form
+            action="/api/dashboard/dismiss-notification"
+            method="POST"
+            className="inline"
+          >
+            <input type="hidden" name="ws" value={workspaceId} />
+            <input type="hidden" name="all" value="1" />
+            <button
+              type="submit"
+              className="text-[11px] font-semibold text-white/55 hover:text-white/80"
+            >
+              Clear all
+            </button>
+          </form>
+        )}
+      </div>
+      {notifications.map((n) => (
+        <NotificationCard
+          key={n.id}
+          workspaceId={workspaceId}
+          notification={n}
+        />
+      ))}
+    </div>
+  );
+}
+
+const NOTIFICATION_TONES: Record<string, BadgeTone> = {
+  pr_merged: "ok",
+  self_heal_dispatched: "info",
+  self_heal_skipped: "warn",
+};
+
+const NOTIFICATION_LABELS: Record<string, string> = {
+  pr_merged: "PR merged",
+  self_heal_dispatched: "Self-heal",
+  self_heal_skipped: "Self-heal skipped",
+};
+
+function NotificationCard({
+  workspaceId,
+  notification,
+}: {
+  workspaceId: string;
+  notification: ApiWorkspaceNotification;
+}) {
+  const tone = NOTIFICATION_TONES[notification.kind] ?? "neutral";
+  const label = NOTIFICATION_LABELS[notification.kind] ?? notification.kind;
+  // href can point at github.com (PR URL) or an internal route. We
+  // open external links in a new tab so the dashboard stays put, but
+  // internal routes (``/pipelines/...``) navigate in-place for a
+  // normal app feel.
+  const isExternal =
+    !!notification.href && /^https?:\/\//i.test(notification.href);
+  return (
+    <div
+      className="flex flex-col gap-2 rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4"
+      role="status"
+    >
+      <div className="flex flex-1 flex-col gap-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge tone={tone}>{label}</Badge>
+          <span className="text-sm font-semibold text-white">
+            {notification.title}
+          </span>
+          <span className="text-[11px] text-white/45">
+            {relativeTime(notification.created_at)}
+          </span>
+        </div>
+        {notification.body && (
+          <p className="text-xs leading-snug text-white/70">
+            {notification.body}
+          </p>
+        )}
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        {notification.href &&
+          (isExternal ? (
+            <a
+              href={notification.href}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="inline-flex items-center rounded-full border border-aqua/40 bg-aqua/10 px-3 py-1 text-[11px] font-semibold text-aqua hover:bg-aqua/20"
+            >
+              Open ↗
+            </a>
+          ) : (
+            <Link
+              href={notification.href}
+              className="inline-flex items-center rounded-full border border-aqua/40 bg-aqua/10 px-3 py-1 text-[11px] font-semibold text-aqua hover:bg-aqua/20"
+            >
+              Open →
+            </Link>
+          ))}
+        <form
+          action="/api/dashboard/dismiss-notification"
+          method="POST"
+          className="inline"
+        >
+          <input type="hidden" name="ws" value={workspaceId} />
+          <input type="hidden" name="notification" value={notification.id} />
+          <button
+            type="submit"
+            aria-label="Dismiss notification"
+            title="Dismiss"
+            className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/10 text-white/55 hover:border-white/30 hover:text-white"
+          >
+            ×
+          </button>
+        </form>
+      </div>
+    </div>
+  );
 }

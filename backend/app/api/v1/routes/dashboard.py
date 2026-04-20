@@ -26,6 +26,7 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.api.v1.deps import AuthContext, get_current_auth
+from backend.app.api.v1.routes.notifications import NotificationOut, _to_out as _notif_to_out
 from backend.app.api.v1.routes.pipelines import (
     PipelineOut,
     PipelineRunOut,
@@ -38,6 +39,7 @@ from backend.app.api.v1.routes.workspaces import (
     _require_membership,
 )
 from backend.app.db.models.integrations import WorkspaceRepo
+from backend.app.db.models.notifications import WorkspaceNotification
 from backend.app.db.models.pipelines import (
     Pipeline,
     PipelineRun,
@@ -54,6 +56,11 @@ router = APIRouter(
 
 
 _RECENT_LIMIT = 10
+# A4 + A5: cap the dashboard's banner rail so a noisy webhook burst
+# can't pile up a wall of "PR merged" callouts. The dismiss UX stays
+# one-click; if a user hits that limit they clear a few and the next
+# refresh reveals the rest.
+_NOTIFICATION_LIMIT = 5
 
 
 class PullRequestOut(BaseModel):
@@ -100,6 +107,10 @@ class DashboardOut(BaseModel):
     pull_requests: list[PullRequestOut]
     workflow_runs: list[WorkflowRunOut]
     pipeline_runs: list[PipelineRunOut]
+    # Dismissible banner rail populated by webhook handlers (A4 "PR
+    # merged", A5 "self-heal dispatched"). Capped at `_NOTIFICATION_LIMIT`
+    # — the full list lives at /notifications.
+    notifications: list[NotificationOut]
 
 
 def _pr_to_out(row: PullRequest) -> PullRequestOut:
@@ -217,6 +228,18 @@ async def get_dashboard(
         )
     ).scalars().all()
 
+    notifications = (
+        await session.execute(
+            select(WorkspaceNotification)
+            .where(
+                WorkspaceNotification.workspace_id == workspace_id,
+                WorkspaceNotification.dismissed_at.is_(None),
+            )
+            .order_by(desc(WorkspaceNotification.created_at))
+            .limit(_NOTIFICATION_LIMIT)
+        )
+    ).scalars().all()
+
     return DashboardOut(
         counts=DashboardCounts(
             active_repos=int(repo_count or 0),
@@ -228,6 +251,7 @@ async def get_dashboard(
         pull_requests=[_pr_to_out(p) for p in pulls],
         workflow_runs=[_wfrun_to_out(r) for r in runs],
         pipeline_runs=[_run_to_out(r) for r in pipeline_runs],
+        notifications=[_notif_to_out(n) for n in notifications],
     )
 
 
