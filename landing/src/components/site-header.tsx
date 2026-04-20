@@ -55,11 +55,18 @@ const NAV: NavItem[] = [
  */
 function activeHrefFor(pathname: string | null): string | null {
   if (!pathname) return null;
-  let best: { href: string; len: number } | null = null;
+  // Store state behind a ref-like holder so TypeScript can't narrow
+  // the mutation through a closure. Without this wrapper, the
+  // `let best: T | null = null` pattern gets narrowed to `never`
+  // after the `consider` closure, which blocks the final
+  // `best?.href` access (known TS narrowing limitation).
+  const state: { best: { href: string; len: number } | null } = {
+    best: null,
+  };
   const consider = (matchPath: string, canonicalHref: string) => {
     if (pathname === matchPath || pathname.startsWith(matchPath + "/")) {
-      if (!best || matchPath.length > best.len) {
-        best = { href: canonicalHref, len: matchPath.length };
+      if (!state.best || matchPath.length > state.best.len) {
+        state.best = { href: canonicalHref, len: matchPath.length };
       }
     }
   };
@@ -69,7 +76,7 @@ function activeHrefFor(pathname: string | null): string | null {
       consider(alias, item.href);
     }
   }
-  return best?.href ?? null;
+  return state.best ? state.best.href : null;
 }
 
 export function SiteHeader() {
