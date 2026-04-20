@@ -498,7 +498,7 @@ function EmptyHint() {
   return (
     <div className="flex h-full items-center justify-center text-center text-[12px] text-white/35">
       <div>
-        <p className="font-semibold text-white/60">Single window, one chat.</p>
+        <p className="font-semibold text-white/60">Navigator — single window.</p>
         <p className="mt-1 max-w-sm">
           Ask the agent anything about this workspace. It can search the
           repo knowledge base, read files, create tickets, and file

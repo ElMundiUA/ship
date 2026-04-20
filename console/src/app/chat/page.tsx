@@ -35,11 +35,11 @@ export const dynamic = "force-dynamic";
 export default async function ChatPage() {
   if (!isApiConfigured()) {
     return (
-      <AppShell title="Chat">
+      <AppShell title="Navigator">
         <Card>
           <CardHeader
             title="Backend not configured"
-            subtitle="Set SHIP_API_URL to start chatting with the agent."
+            subtitle="Set SHIP_API_URL to use Navigator with the agent."
           />
         </Card>
       </AppShell>
@@ -77,7 +77,7 @@ export default async function ChatPage() {
       // error instead of the raw "Precondition Failed" page.
       return (
         <AppShell
-          title="Chat"
+          title="Navigator"
           workspace={{ id: workspace.id, name: workspace.name, slug: workspace.slug }}
         >
           <Card>
@@ -95,7 +95,7 @@ export default async function ChatPage() {
 
   return (
     <AppShell
-      title="Chat"
+      title="Navigator"
       workspace={{ id: workspace.id, name: workspace.name, slug: workspace.slug }}
       scope={{
         repos: repos.map((r) => ({ id: r.id, full_name: r.full_name })),
@@ -138,7 +138,7 @@ function renderUnavailable(err: unknown) {
         ? err.message
         : String(err);
   return (
-    <AppShell title="Chat">
+    <AppShell title="Navigator">
       <Card>
         <CardHeader
           title="Backend unavailable"
