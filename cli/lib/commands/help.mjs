@@ -45,6 +45,10 @@ COMMANDS
   shipctl feedback draft|list|show|edit|submit|remove
                                      — local markdown drafts; submit creates a GitHub issue
                                        via POST /feedback and moves the draft to sent/.
+  shipctl callback --status <ok|fail|cancelled> [--summary "..."] [--metric k=v]...
+                                     — report a pipeline run's terminal status to Ship.
+                                       Used inside workflow.yml 'if: always()' steps;
+                                       reads SHIP_RUN_TOKEN + SHIP_CALLBACK_URL from env.
   shipctl bootstrap   (stub)
 
 GLOBAL FLAGS
