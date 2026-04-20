@@ -17,6 +17,7 @@ output/playwright/
 .env
 .env.*
 !.env.example
+!e2e/.env.deployed.example
 
 .DS_Store
 agent-run-*.log

@@ -1,0 +1,19 @@
+{
+  "name": "@elmundi/ship-e2e",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Playwright E2E — Ship console onboarding and wired-repo checks (test sandbox)",
+  "scripts": {
+    "test": "playwright test",
+    "test:deployed": "playwright test -g @deployed",
+    "test:ui": "playwright test --ui",
+    "test:headed": "playwright test --headed",
+    "report": "playwright show-report",
+    "codegen": "playwright codegen"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.51.0",
+    "@types/node": "^22.14.0",
+    "typescript": "^5.8.2"
+  }
+}

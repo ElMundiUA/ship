@@ -5,7 +5,8 @@
   "description": "Ship framework — instruction-first docs, prompts, and reference implementations",
   "workspaces": [
     "landing",
-    "cli"
+    "cli",
+    "e2e"
   ],
   "scripts": {
     "landing:dev": "npm run dev --prefix landing",
@@ -16,7 +17,10 @@
     "version:show": "node scripts/version.mjs show",
     "version:check": "node scripts/version.mjs check",
     "version:sync": "node scripts/version.mjs sync",
-    "version:bump": "node scripts/version.mjs bump"
+    "version:bump": "node scripts/version.mjs bump",
+    "e2e": "npm run test --prefix e2e",
+    "e2e:deployed": "npm run test:deployed --prefix e2e",
+    "e2e:ui": "npm run test:ui --prefix e2e"
   },
   "keywords": [],
   "author": "Denys Kuzin",
