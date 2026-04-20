@@ -449,6 +449,7 @@ function GitHubStep({
         <input type="hidden" name="ws" value={wsId} suppressHydrationWarning />
         <button
           type="submit"
+          data-testid="onboarding-install-github"
           className="rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-5 py-2.5 text-sm font-bold text-ink shadow-glow transition hover:brightness-110"
         >
           Install Ship on GitHub &rarr;
@@ -658,6 +659,7 @@ function ReposStep({
             </Link>
             <button
               type="submit"
+              data-testid="onboarding-wire-repos"
               className="rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-4 py-2.5 text-sm font-bold text-ink shadow-glow transition hover:brightness-110"
             >
               Wire selected repos &rarr;
@@ -830,6 +832,7 @@ function TrackerStep({
           </button>
           <button
             type="submit"
+            data-testid="onboarding-tracker-continue"
             className="rounded-full border border-aqua/40 bg-aqua/[0.08] px-4 py-2 text-xs font-bold text-aqua hover:bg-aqua/[0.16]"
           >
             Continue &rarr;
@@ -850,7 +853,10 @@ function DoneStep() {
       <div className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-aqua/20 text-2xl text-aqua">
         ✓
       </div>
-      <h1 className="mt-4 font-display text-3xl font-bold">
+      <h1
+        className="mt-4 font-display text-3xl font-bold"
+        data-testid="onboarding-done-title"
+      >
         You&apos;re wired in.
       </h1>
       <p className="mt-2 text-sm text-white/70">
