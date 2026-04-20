@@ -25,6 +25,11 @@ COPY documentation ./documentation
 COPY artifacts ./artifacts
 COPY backend ./backend
 COPY scripts ./scripts
+# `/cli` page in the landing reads cli/README.md at build time via
+# readFileSync (see landing/src/app/cli/page.tsx::readCliReadme). We
+# already COPY cli/package.json above for `npm ci`; the README has to
+# land in the workspace before `next build` runs.
+COPY cli ./cli
 
 RUN npm run landing:build
 
