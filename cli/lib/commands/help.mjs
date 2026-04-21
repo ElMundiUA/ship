@@ -52,6 +52,8 @@ COMMANDS
   shipctl kickoff [--pattern kickoff] [--version …] [--raw] [--json] [--cwd …]
                                      — print the kickoff / workload pattern body for piping
                                        into the customer's agent in CI (see artifacts/patterns/kickoff).
+  shipctl migrate [--dry-run] [--yes] [--json] [--cwd …]
+                                     — upgrade .ship/config.yml from v1 to v2 (lanes-as-config).
   shipctl knowledge init [--workspace <id>] [--repo <id|owner/name>] [--only <csv>] [--json]
                                      — open a PR that seeds .ship/knowledge/*.md starter
                                        buckets (code-style, ui-runbook). Reads SHIP_API_TOKEN.
