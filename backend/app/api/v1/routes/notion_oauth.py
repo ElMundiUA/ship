@@ -156,7 +156,7 @@ async def notion_install_callback(
     except NotionMisconfigured:
         return RedirectResponse(
             url=_console_onboarding_url(
-                settings, workspace_id=workspace_id, error="not_configured"
+                settings, workspace_id=workspace_id, error="not_configured_notion"
             ),
             status_code=303,
         )

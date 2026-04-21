@@ -94,7 +94,11 @@ const TRACKER_ERRORS: Record<string, string> = {
   bad_kind: "Pick one of the supported trackers.",
   forbidden: "You need admin role on this workspace to add an integration.",
   not_configured:
-    "OAuth credentials for that tracker aren't configured on this deployment. Ask ops to wire {LINEAR,NOTION}_CLIENT_ID/SECRET.",
+    "OAuth credentials for that tracker aren't configured on this deployment. You can still use GitHub Issues — it's already connected via the GitHub App.",
+  not_configured_linear:
+    "Linear OAuth isn't configured on this deployment (missing LINEAR_CLIENT_ID / LINEAR_CLIENT_SECRET). You can skip for now and use GitHub Issues — it's already connected via the GitHub App — or ask ops to wire Linear credentials.",
+  not_configured_notion:
+    "Notion OAuth isn't configured on this deployment (missing NOTION_CLIENT_ID / NOTION_CLIENT_SECRET). You can skip for now and use GitHub Issues — it's already connected via the GitHub App — or ask ops to wire Notion credentials.",
   bad_state:
     "OAuth handshake failed (state expired or tampered). Start the flow again.",
   exchange_failed:
@@ -769,11 +773,16 @@ function TrackerStep({
         </div>
       )}
 
-      {message && (
-        <div className="mt-5 rounded-lg border border-coral/40 bg-coral/10 px-3 py-2 text-xs text-coral">
-          {message}
-        </div>
-      )}
+      {message &&
+        (error?.startsWith("not_configured") ? (
+          <div className="mt-5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+            {message}
+          </div>
+        ) : (
+          <div className="mt-5 rounded-lg border border-coral/40 bg-coral/10 px-3 py-2 text-xs text-coral">
+            {message}
+          </div>
+        ))}
 
       <div className="mt-7 grid grid-cols-1 gap-4 md:grid-cols-3">
         {tiles.map((tile) => (
