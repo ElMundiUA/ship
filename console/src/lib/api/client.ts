@@ -1576,6 +1576,73 @@ export async function listDistillerRuns(
   return Array.isArray(payload) ? payload : [];
 }
 
+/**
+ * Upload a text / markdown file to the given bucket.
+ *
+ * This is the Phase 7 external-static ingest surface: the backend
+ * decodes the bytes as UTF-8, runs the Distiller against the target
+ * bucket, and returns the same `DistillOut` shape as the JSON
+ * `distillBucket` endpoint. Must be called from a server component /
+ * server action (file has already been streamed from the client).
+ */
+export async function uploadToBucket(
+  workspaceId: string,
+  slug: string,
+  input: {
+    file: Blob;
+    filename: string;
+    classifier?: ApiDistillerClassifier;
+  },
+  options: { token?: string } = {},
+): Promise<ApiDistillOut> {
+  const base = baseUrl();
+  if (base === null) {
+    throw new ApiUnavailableError("SHIP_API_URL is not set");
+  }
+  const token =
+    options.token === undefined ? await getSessionToken() : options.token;
+
+  const form = new FormData();
+  form.append("file", input.file, input.filename);
+  if (input.classifier) form.append("classifier", input.classifier);
+
+  const headers: Record<string, string> = { accept: "application/json" };
+  if (token) headers.authorization = `Bearer ${token}`;
+
+  const url = `${base}/v1/workspaces/${encodeURIComponent(
+    workspaceId,
+  )}/buckets/${encodeURIComponent(slug)}/upload`;
+
+  let res: Response;
+  try {
+    res = await fetch(url, { method: "POST", body: form, headers });
+  } catch (err) {
+    throw new ApiUnavailableError(
+      `cannot reach ${url}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
+  const text = await res.text();
+  let data: unknown = null;
+  if (text.length > 0) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = text;
+    }
+  }
+  if (!res.ok) {
+    const detail =
+      data && typeof data === "object" && "detail" in data
+        ? (data as { detail: unknown }).detail
+        : data;
+    const summary =
+      typeof detail === "string" ? detail : `HTTP ${res.status} on ${url}`;
+    throw new ApiHttpError(res.status, detail, summary);
+  }
+  return data as ApiDistillOut;
+}
+
 // --- API tokens ------------------------------------------------------------
 
 export function mintToken(

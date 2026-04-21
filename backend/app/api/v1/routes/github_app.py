@@ -563,6 +563,37 @@ async def _apply_pull_request_event(
                 exc,
             )
 
+        # Phase 6c — Distiller ingest. The adapter is idempotent on
+        # replays (content_sha + deterministic pr-<n> slug) so we're
+        # safe to call on every merged-transition. Best-effort: the
+        # banner above already lit up, don't let a knowledge write
+        # failure 500 the webhook.
+        from backend.app.services.distiller_sources import ingest_pr_merge
+
+        try:
+            outcome = await ingest_pr_merge(
+                session,
+                workspace_id=repo_row.workspace_id,
+                repo=repo_row,
+                payload=payload,
+            )
+            if outcome is not None:
+                logger.info(
+                    "distiller: pr_merged ingest repo=%s pr=%s decision=%s "
+                    "article_ids=%s",
+                    repo_row.full_name,
+                    external_id,
+                    outcome.decision,
+                    outcome.article_ids,
+                )
+        except Exception as exc:  # pragma: no cover - log & move on
+            logger.warning(
+                "distiller pr_merged ingest failed repo=%s pr=%s: %s",
+                repo_row.full_name,
+                external_id,
+                exc,
+            )
+
     # When a ``ship/install-*`` PR merges we own the cache that decides
     # whether the dashboard still shows "Install workflow PR →" or
     # flips to "Run now". Bust it eagerly so the next render (or the
