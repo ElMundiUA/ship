@@ -14,6 +14,7 @@ from backend.app.api.v1.routes import (
     artifact_repos,
     audit,
     auth,
+    buckets_resolver,
     catalog,
     chat,
     clarifications,
@@ -86,6 +87,11 @@ api_router.include_router(clarifications.pipeline_router)
 # run-token ingress on /improvements/pipeline.
 api_router.include_router(improvements.router)
 api_router.include_router(improvements.pipeline_router)
+# Buckets resolver — Phase 3 of the knowledge consolidation. Included
+# BEFORE chat.router so ``/buckets/resolved`` matches the literal path
+# here instead of being captured by chat's ``/buckets/{slug}`` route.
+# See backend/docs/knowledge-consolidation.md.
+api_router.include_router(buckets_resolver.router)
 # Chat (C12 — real agent, single-window SSE). The module also hosts
 # the buckets CRUD and artifact-feedback routes because they all
 # belong to the same "conversational surface" object and share a
