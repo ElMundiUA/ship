@@ -63,6 +63,12 @@ def _auth(raw: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {raw}"}
 
 
+# Stub classifier keeps these phase-6a tests deterministic even when
+# an ``OPENAI_API_KEY`` is present in the test environment (the
+# phase-6b default is ``auto`` which picks the LLM when available).
+_STUB = {"classifier": "stub"}
+
+
 @pytest.mark.asyncio
 async def test_distill_new_article_inserted_and_run_recorded(
     v1_client, seed_workspace, seeded_bucket, db_session
@@ -78,6 +84,7 @@ async def test_distill_new_article_inserted_and_run_recorded(
             "source_kind": "external_static",
             "title_hint": "Auth refactor notes",
             "slug_hint": "auth-refactor-v2",
+            **_STUB,
         },
     )
     assert resp.status_code == 200, resp.text
@@ -117,6 +124,7 @@ async def test_distill_update_supersedes_previous_article(
             "body_md": "v1 body",
             "source_kind": "external_static",
             "slug_hint": "edge-case",
+            **_STUB,
         },
     )
     assert first.status_code == 200
@@ -129,6 +137,7 @@ async def test_distill_update_supersedes_previous_article(
             "body_md": "v2 body — meaningfully different",
             "source_kind": "external_static",
             "slug_hint": "edge-case",
+            **_STUB,
         },
     )
     assert second.status_code == 200, second.text
@@ -170,7 +179,7 @@ async def test_distill_skip_on_empty_body(
     resp = await v1_client.post(
         f"/v1/workspaces/{workspace.id}/buckets/{bucket.slug}/distill",
         headers=_auth(raw),
-        json={"body_md": "   ", "source_kind": "external_static"},
+        json={"body_md": "   ", "source_kind": "external_static", **_STUB},
     )
     assert resp.status_code == 200, resp.text
     payload = resp.json()
@@ -197,6 +206,7 @@ async def test_distill_skip_when_content_unchanged(
             "body_md": body,
             "source_kind": "external_static",
             "slug_hint": "idempotent",
+            **_STUB,
         },
     )
     assert first.status_code == 200
@@ -209,6 +219,7 @@ async def test_distill_skip_when_content_unchanged(
             "body_md": body,
             "source_kind": "external_static",
             "slug_hint": "idempotent",
+            **_STUB,
         },
     )
     assert second.status_code == 200
@@ -227,7 +238,7 @@ async def test_distill_rejects_unknown_source_kind(
     resp = await v1_client.post(
         f"/v1/workspaces/{workspace.id}/buckets/{bucket.slug}/distill",
         headers=_auth(raw),
-        json={"body_md": "x", "source_kind": "telepathy"},
+        json={"body_md": "x", "source_kind": "telepathy", **_STUB},
     )
     assert resp.status_code == 400, resp.text
     assert "source_kind" in resp.text
@@ -241,7 +252,7 @@ async def test_distill_404_on_missing_bucket(
     resp = await v1_client.post(
         f"/v1/workspaces/{workspace.id}/buckets/does-not-exist/distill",
         headers=_auth(raw),
-        json={"body_md": "x", "source_kind": "external_static"},
+        json={"body_md": "x", "source_kind": "external_static", **_STUB},
     )
     assert resp.status_code == 404
 
@@ -261,6 +272,7 @@ async def test_distiller_runs_endpoint_lists_recent_runs(
                 "body_md": f"body {i}",
                 "source_kind": "external_static",
                 "slug_hint": f"doc-{i}",
+                **_STUB,
             },
         )
 

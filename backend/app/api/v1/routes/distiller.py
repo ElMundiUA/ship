@@ -25,9 +25,10 @@ We lean on the schemas from ``chat.py`` for the bucket lookup
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -46,10 +47,63 @@ from backend.app.db.models.agent_memory import (
     DistillerRun,
 )
 from backend.app.db.session import get_session
+from backend.app.services.agent.client import AgentClient, pick_default_client
 from backend.app.services.distiller import (
+    Classifier,
     DistillerInput,
+    classify_stub,
     run_distiller,
 )
+from backend.app.services.distiller_llm import make_llm_classifier
+
+
+logger = logging.getLogger(__name__)
+
+
+# Override hook for tests — lets the fixture inject a fake agent
+# client without patching ``pick_default_client`` globally.
+_client_override: AgentClient | None = None
+
+
+def set_distiller_agent_client(client: AgentClient | None) -> None:
+    """Test-only: pin the AgentClient used by the ``llm``/``auto`` paths."""
+    global _client_override
+    _client_override = client
+
+
+def _resolve_classifier(mode: str) -> tuple[Classifier, str]:
+    """Pick the classifier impl for one request.
+
+    * ``stub`` — always deterministic rules (used by tests + when
+      the operator wants hand-off audits for a run).
+    * ``llm`` — LLM required; raises 503 if no agent is configured.
+    * ``auto`` — try LLM, fall back to stub if ``pick_default_client``
+      can't resolve credentials. This is the product default.
+    """
+    choice = (mode or "auto").strip().lower()
+    if choice == "stub":
+        return classify_stub, "stub"
+
+    if _client_override is not None:
+        return make_llm_classifier(_client_override), "llm"
+
+    try:
+        client = pick_default_client()
+    except RuntimeError as exc:
+        if choice == "llm":
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=(
+                    "LLM classifier unavailable: no agent API key "
+                    f"configured ({exc})"
+                ),
+            )
+        logger.info(
+            "distiller: auto classifier → stub (no agent client: %s)", exc
+        )
+        return classify_stub, "stub"
+
+    return make_llm_classifier(client), "llm"
 
 
 router = APIRouter(
@@ -79,6 +133,11 @@ class DistillIn(BaseModel):
     slug_hint: str | None = Field(default=None, max_length=120)
     provenance: dict[str, Any] = Field(default_factory=dict)
     input_ref: dict[str, Any] = Field(default_factory=dict)
+    # ``auto`` = LLM when an agent is configured, stub otherwise.
+    # Explicit ``stub`` pins deterministic rules (used by tests and
+    # for replaying an ingest without model variance). Explicit
+    # ``llm`` forces the LLM path and 503s if no key is configured.
+    classifier: Literal["auto", "stub", "llm"] = "auto"
 
 
 class DistillerRunOut(BaseModel):
@@ -111,6 +170,7 @@ class DistillOut(BaseModel):
     decision: str
     article_ids: list[uuid.UUID]
     reason: str | None = None
+    classifier: str = "stub"
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +237,8 @@ async def distill_bucket(
             detail=f"source_kind must be one of {BucketSource.ALL}",
         )
 
+    classifier, resolved_mode = _resolve_classifier(payload.classifier)
+
     outcome = await run_distiller(
         session,
         workspace_id=workspace_id,
@@ -190,6 +252,7 @@ async def distill_bucket(
             provenance=payload.provenance or None,
             input_ref=payload.input_ref or None,
         ),
+        classifier=classifier,
     )
 
     run = (
@@ -203,6 +266,7 @@ async def distill_bucket(
         decision=outcome.decision,
         article_ids=outcome.article_ids,
         reason=outcome.reason,
+        classifier=outcome.classifier or resolved_mode,
     )
 
 

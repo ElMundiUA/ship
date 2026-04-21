@@ -1,6 +1,6 @@
 # Knowledge buckets consolidation — plan
 
-**Status:** Phases 1–3, 4a, 4b, 5a, 5b, 5c, 5d, 6a landed. Backend
+**Status:** Phases 1–3, 4a, 4b, 5a, 5b, 5c, 5d, 6a, 6b landed. Backend
 consolidation closed — `bucket_articles` is the sole read surface
 (retriever, agent tools, `/articles` endpoint, `summary_count` on
 bucket listings); `bucket_summaries` is maintained for write-back
@@ -8,9 +8,13 @@ compat only (deprecated, removal in Phase 9). Phase 4a + 4b shipped
 the scope pill + scope-aware `/knowledge`, `/catalog`,
 `/clarifications`, `/improvements`, `/chat`. Phase 6a shipped the
 Distiller stub: `POST /buckets/{slug}/distill` writes a run row
-and a published `BucketArticle`, `GET …/runs` lists history. Next:
-Phase 6b (LLM classifier) or Phase 7 (inbound sources:
-external-static upload + connector-proxy).
+and a published `BucketArticle`, `GET …/runs` lists history. Phase
+6b added the LLM-backed classifier: `POST /distill` now accepts a
+`classifier` field (`auto` / `stub` / `llm`), defaults to `auto`,
+falls back to the stub on transport / parse errors, and records
+the classifier name + reasoning under `run.output_refs.classifier`
+for audit. Next: Phase 6c (inbound adapters: PR-merged webhook,
+external-static upload, connector-proxy).
 **Scope:** unify the three "knowledge" surfaces (agent-memory buckets,
 `.ship/knowledge/*.md` disk-lister, `KbChunk` RAG index) under one
 `Scope × Source × Article` model, so every knowledge bucket has an
@@ -292,10 +296,33 @@ Console client helpers (`distillBucket`, `listDistillerRuns`) live
 in `console/src/lib/api/client.ts`. No UI yet — Phase 7 adds the
 ingest surfaces that drive it.
 
-**Phase 6b (pending).** Replace `_classify` in
-`backend/app/services/distiller.py` with an LLM call; the public
-contract and stored row shape are deliberately stable so the swap
-is a services-layer edit only.
+**Phase 6b (shipped).** LLM-backed classifier. `run_distiller`
+gained a `classifier: Classifier | None = None` parameter; the
+stub is now `classify_stub` in `backend/app/services/distiller.py`
+and the LLM impl lives in `backend/app/services/distiller_llm.py`.
+The LLM variant pulls up to 20 published articles from the target
+bucket (newest first), renders a single-turn prompt that asks for
+a strict JSON verdict (`decision`, `slug`, `title`, `target_slug`,
+`reason`, `reasoning`), and calls `AgentClient.acomplete` with
+`response_format={"type": "json_object"}` + temperature 0.1. A
+reconciliation pass (`_reconcile_classification`) then validates
+the verdict against DB reality — mapping `update`-with-unknown-
+target to `new`, demoting `new`-over-live-slug to `update`, and
+forcing `skip` on empty bodies — so the LLM can never cause an
+incorrect supersede.
+
+The HTTP layer (`backend/app/api/v1/routes/distiller.py`) exposes
+a `classifier` field on `DistillIn` (`auto` | `stub` | `llm`).
+`auto` picks the LLM when `pick_default_client()` resolves and
+silently falls back to the stub when it doesn't; `stub` pins the
+deterministic classifier for replays; `llm` requires an agent
+client and returns 503 otherwise. Any classifier exception inside
+`run_distiller` is caught and demoted to the stub — ingest never
+hard-fails because the model is flaky.
+
+Audit trail: the run row's `output_refs.classifier` now carries
+`{ name: "stub" | "llm", reasoning, vendor? }` so operators can
+trace every decision.
 
 **Phase 6c (pending).** Wire the inbound sources — PR-merged
 webhook, external-static upload route, connector-proxy fetch — into
@@ -418,6 +445,25 @@ Improvements also respect it.
   tests cover new / update / skip-empty / skip-same-hash / 404 /
   400 / history listing. Console typed helpers added
   (`distillBucket`, `listDistillerRuns`); no UI yet.
+- **2026-04-21** — Phase 6b shipped: LLM classifier for the
+  Distiller. Introduced a `Classifier` protocol in
+  `backend/app/services/distiller.py`; renamed the stub to
+  `classify_stub`; added `_reconcile_classification` to tighten
+  any verdict against DB reality before the write path runs.
+  New module `backend/app/services/distiller_llm.py` implements
+  `classify_with_llm` (and a `make_llm_classifier` adapter)
+  talking to `AgentClient.acomplete` in JSON mode, with robust
+  parsing + salvage-on-prose. `POST /distill` now accepts a
+  `classifier` field (`auto` / `stub` / `llm`, default `auto`);
+  `auto` falls back silently to the stub when no agent client
+  resolves, `llm` returns 503 if none is configured. Every run
+  records `{name, reasoning, vendor}` under
+  `output_refs.classifier`. Five new unit tests (update /
+  skip-with-reason / malformed-JSON-fallback / llm-503 /
+  auto-fallback) on top of the seven phase-6a tests, all
+  stub-pinned to stay deterministic in CI. Console client types
+  extended (`classifier` on `DistillInput`, same on
+  `ApiDistillOut`); no UI change yet.
 - **2026-04-21** — Phase 4b shipped: scope pill propagated to
   `/catalog`, `/clarifications`, `/improvements`, and `/chat`.
   Client-side filters on `source_repo_id` (catalog) and

@@ -1524,11 +1524,16 @@ export interface ApiDistillerRun {
   updated_at: string;
 }
 
+export type ApiDistillerClassifier = "auto" | "stub" | "llm";
+
 export interface ApiDistillOut {
   run: ApiDistillerRun;
   decision: Exclude<ApiDistillerRunDecision, null>;
   article_ids: string[];
   reason: string | null;
+  /** Classifier implementation that actually produced the verdict — if the
+   * caller picked "auto" and no LLM was configured, this will be "stub". */
+  classifier: ApiDistillerClassifier | "stub" | "llm";
 }
 
 export interface DistillInput {
@@ -1538,6 +1543,10 @@ export interface DistillInput {
   slug_hint?: string | null;
   provenance?: Record<string, unknown>;
   input_ref?: Record<string, unknown>;
+  /** Default "auto": use the LLM when an agent key is configured, stub
+   * otherwise. Pin "stub" for replays / tests, "llm" to require the LLM
+   * path (returns 503 if no agent is configured). */
+  classifier?: ApiDistillerClassifier;
 }
 
 export function distillBucket(

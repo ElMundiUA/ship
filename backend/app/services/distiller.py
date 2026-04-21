@@ -11,15 +11,15 @@ classifier answers one question per input:
   row to ``superseded``, and insert the replacement as
   ``published``.
 - **skip** — nothing to ingest (empty body, content already live
-  under the same ``content_sha``).
+  under the same ``content_sha``, or the LLM decided the blob
+  adds no information).
 
-Phase 6a (this module) implements the stub classifier: simple,
-deterministic, no LLM. It's good enough to prove the plumbing
-(queue row + article write + provenance trail) and to let the
-console drive an ingest from the Knowledge page today. Phase 6b
-replaces :func:`_classify` with an LLM call, Phase 6c wires the
-inbound sources; both swap in without touching the endpoint
-surface or the stored-row shape.
+Phase 6a introduced the stub classifier (deterministic, no LLM)
+and the end-to-end plumbing. Phase 6b (this module) generalises
+the dispatch: :func:`run_distiller` now takes an optional
+``classifier`` callable and defaults to the stub. The LLM impl
+lives in :mod:`backend.app.services.distiller_llm` and is
+selected by the HTTP layer.
 
 The module intentionally does not know about workspaces or
 RBAC — the HTTP layer in ``v1/routes/distiller.py`` owns the
@@ -33,9 +33,9 @@ from __future__ import annotations
 import hashlib
 import logging
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -93,6 +93,47 @@ class DistillerOutcome:
     article_ids: list[uuid.UUID]
     status: str
     reason: str | None = None
+    classifier: str = "stub"
+
+
+@dataclass(slots=True)
+class Classification:
+    """Classifier verdict for one input.
+
+    All write-path branching in :func:`run_distiller` is driven
+    off this record. The stub and the LLM both produce instances
+    of it, so the write path stays single-source-of-truth.
+
+    Fields:
+      * ``decision`` — one of
+        :class:`backend.app.db.models.agent_memory.DistillerRunDecision`
+        (excluding ``error``).
+      * ``slug`` — final slug to write under. The classifier is
+        free to override the caller-provided hint (typical for
+        an LLM that picks a cleaner taxonomy).
+      * ``title`` — final title. ``None`` means "derive from body".
+      * ``target_article`` — existing published row that
+        ``update`` supersedes; ``None`` for ``new`` / ``skip``.
+      * ``reason`` — short, user-facing explanation for ``skip``.
+      * ``reasoning`` — classifier audit trail, stashed into the
+        run's ``output_refs.classifier`` so operators can debug.
+      * ``name`` — classifier implementation label ("stub"/"llm").
+    """
+
+    decision: str
+    slug: str
+    title: str | None = None
+    target_article: BucketArticle | None = None
+    reason: str | None = None
+    reasoning: str | None = None
+    name: str = "stub"
+    extras: dict[str, Any] = field(default_factory=dict)
+
+
+Classifier = Callable[
+    [AsyncSession, KnowledgeBucket, "DistillerInput"],
+    Awaitable[Classification],
+]
 
 
 # ---------------------------------------------------------------------------
@@ -146,39 +187,63 @@ def _derive_title(inp: DistillerInput, slug: str) -> str:
     return slug[:512]
 
 
-async def _classify(
-    session: AsyncSession,
-    *,
-    bucket: KnowledgeBucket,
-    slug: str,
-    body: str,
-) -> tuple[str, BucketArticle | None]:
-    """Phase 6a stub — deterministic rules, no LLM.
-
-    Returns a ``(decision, current_published_article_or_None)``
-    pair. The HTTP layer uses ``current`` to branch between
-    insert-new and supersede-existing write paths.
-    """
-    if not body.strip():
-        return DistillerRunDecision.SKIP, None
-
-    current = (
+async def _lookup_published(
+    session: AsyncSession, *, bucket_id: uuid.UUID, slug: str
+) -> BucketArticle | None:
+    return (
         await session.execute(
             select(BucketArticle).where(
-                BucketArticle.bucket_id == bucket.id,
+                BucketArticle.bucket_id == bucket_id,
                 BucketArticle.slug == slug,
                 BucketArticle.status == BucketArticleStatus.PUBLISHED,
             )
         )
     ).scalars().first()
 
+
+async def classify_stub(
+    session: AsyncSession,
+    bucket: KnowledgeBucket,
+    inp: "DistillerInput",
+) -> Classification:
+    """Deterministic classifier — no LLM.
+
+    Slug is derived from the incoming hints only; update vs new
+    is inferred from whether a published article already owns
+    that slug; skip fires on empty bodies and unchanged content.
+    This is the default classifier and also the fallback when
+    the LLM variant refuses to produce a usable verdict.
+    """
+    slug = _derive_slug(inp)
+    body = inp.body_md
+    if not body.strip():
+        return Classification(
+            decision=DistillerRunDecision.SKIP,
+            slug=slug,
+            reason="empty body",
+            name="stub",
+        )
+
+    current = await _lookup_published(session, bucket_id=bucket.id, slug=slug)
     if current is None:
-        return DistillerRunDecision.NEW, None
+        return Classification(
+            decision=DistillerRunDecision.NEW, slug=slug, name="stub"
+        )
 
     if current.content_sha == _sha256_hex(body):
-        # Same body already live — skip instead of churning versions.
-        return DistillerRunDecision.SKIP, current
-    return DistillerRunDecision.UPDATE, current
+        return Classification(
+            decision=DistillerRunDecision.SKIP,
+            slug=slug,
+            target_article=current,
+            reason="content already published under this slug",
+            name="stub",
+        )
+    return Classification(
+        decision=DistillerRunDecision.UPDATE,
+        slug=slug,
+        target_article=current,
+        name="stub",
+    )
 
 
 async def _next_version(
@@ -228,6 +293,7 @@ async def run_distiller(
     bucket: KnowledgeBucket,
     actor_user_id: uuid.UUID | None,
     inp: DistillerInput,
+    classifier: Classifier | None = None,
 ) -> DistillerOutcome:
     """Execute one ingest attempt end-to-end.
 
@@ -235,7 +301,14 @@ async def run_distiller(
     article rows, and flushes. All side effects share the caller's
     transaction so a failure in the article insert rolls the run
     row back too.
+
+    ``classifier`` defaults to :func:`classify_stub` (deterministic
+    rules). The HTTP layer can inject :func:`classify_with_llm` from
+    :mod:`backend.app.services.distiller_llm` to turn on the LLM
+    path. Any classifier that raises falls back to the stub so
+    ingest never hard-fails on a misbehaving model.
     """
+    chosen = classifier or classify_stub
     now = datetime.now(timezone.utc)
     run = DistillerRun(
         id=uuid.uuid4(),
@@ -258,29 +331,36 @@ async def run_distiller(
     await session.flush()
 
     try:
-        slug = _derive_slug(inp)
-        decision, current = await _classify(
-            session, bucket=bucket, slug=slug, body=inp.body_md
-        )
+        try:
+            cls = await chosen(session, bucket, inp)
+        except Exception as exc:  # noqa: BLE001 — classifier is untrusted
+            logger.warning(
+                "distiller: classifier %r raised, falling back to stub (%s)",
+                getattr(chosen, "__name__", chosen),
+                exc,
+            )
+            cls = await classify_stub(session, bucket, inp)
+            cls.reasoning = (
+                f"fallback to stub after {type(exc).__name__}: {exc!s}"[:512]
+            )
+
+        cls = await _reconcile_classification(session, bucket, inp, cls)
 
         article_ids: list[uuid.UUID] = []
-        diff: dict[str, Any] = {"slug": slug}
-        reason: str | None = None
+        diff: dict[str, Any] = {"slug": cls.slug}
+        reason: str | None = cls.reason
 
-        if decision == DistillerRunDecision.SKIP:
-            reason = (
-                "empty body"
-                if not inp.body_md.strip()
-                else "content already published under this slug"
-            )
+        if cls.decision == DistillerRunDecision.SKIP:
+            pass
         else:
             body = inp.body_md
             content_sha = _sha256_hex(body)
             new_version = await _next_version(
-                session, bucket_id=bucket.id, slug=slug
+                session, bucket_id=bucket.id, slug=cls.slug
             )
             supersedes_id: uuid.UUID | None = None
-            if decision == DistillerRunDecision.UPDATE and current is not None:
+            current = cls.target_article
+            if cls.decision == DistillerRunDecision.UPDATE and current is not None:
                 current.status = BucketArticleStatus.SUPERSEDED
                 supersedes_id = current.id
                 new_version = current.version + 1
@@ -294,11 +374,12 @@ async def run_distiller(
             }
             embedding = await _maybe_embed(body)
 
+            title = (cls.title or _derive_title(inp, cls.slug))[:512]
             article = BucketArticle(
                 id=uuid.uuid4(),
                 bucket_id=bucket.id,
-                slug=slug,
-                title=_derive_title(inp, slug),
+                slug=cls.slug,
+                title=title,
                 body_md=body,
                 content_sha=content_sha,
                 version=new_version,
@@ -313,22 +394,28 @@ async def run_distiller(
             diff["new_article_id"] = str(article.id)
             diff["new_version"] = new_version
 
-        run.decision = decision
+        run.decision = cls.decision
         run.status = DistillerRunStatus.DONE
         run.finished_at = datetime.now(timezone.utc)
         run.output_refs = {
             "article_ids": [str(a) for a in article_ids],
             "diff": diff,
             "reason": reason,
+            "classifier": {
+                "name": cls.name,
+                "reasoning": cls.reasoning,
+                **({"extras": cls.extras} if cls.extras else {}),
+            },
         }
         await session.flush()
 
         return DistillerOutcome(
             run_id=run.id,
-            decision=decision,
+            decision=cls.decision,
             article_ids=article_ids,
             status=run.status,
             reason=reason,
+            classifier=cls.name,
         )
     except Exception as exc:  # noqa: BLE001 — want the row to record error
         run.status = DistillerRunStatus.FAILED
@@ -339,8 +426,76 @@ async def run_distiller(
         raise
 
 
+async def _reconcile_classification(
+    session: AsyncSession,
+    bucket: KnowledgeBucket,
+    inp: DistillerInput,
+    cls: Classification,
+) -> Classification:
+    """Validate a classifier verdict and tighten it against reality.
+
+    LLM classifiers can hallucinate: pick a slug that doesn't exist
+    for ``update``, or claim ``new`` for a slug that's already
+    published. This guard rails the verdict so the write path only
+    ever sees consistent state:
+
+    * empty body → force SKIP (the LLM has no business overriding
+      "nothing to ingest").
+    * UPDATE with no / unknown target → either look up by slug or
+      demote to NEW.
+    * NEW with an already-published slug → bump to UPDATE against
+      that row.
+    * Missing / empty slug → fall back to the hint-derived slug.
+    """
+    slug = (cls.slug or "").strip() or _derive_slug(inp)
+    cls.slug = _slugify(slug) or _derive_slug(inp)
+
+    if not inp.body_md.strip():
+        cls.decision = DistillerRunDecision.SKIP
+        cls.reason = cls.reason or "empty body"
+        cls.target_article = None
+        return cls
+
+    if cls.decision == DistillerRunDecision.UPDATE and cls.target_article is None:
+        candidate = await _lookup_published(
+            session, bucket_id=bucket.id, slug=cls.slug
+        )
+        if candidate is None:
+            cls.decision = DistillerRunDecision.NEW
+        else:
+            cls.target_article = candidate
+
+    if cls.decision == DistillerRunDecision.NEW:
+        existing = await _lookup_published(
+            session, bucket_id=bucket.id, slug=cls.slug
+        )
+        if existing is not None:
+            if existing.content_sha == _sha256_hex(inp.body_md):
+                cls.decision = DistillerRunDecision.SKIP
+                cls.target_article = existing
+                cls.reason = (
+                    cls.reason
+                    or "content already published under this slug"
+                )
+            else:
+                cls.decision = DistillerRunDecision.UPDATE
+                cls.target_article = existing
+
+    if cls.decision == DistillerRunDecision.UPDATE and cls.target_article:
+        if cls.target_article.content_sha == _sha256_hex(inp.body_md):
+            cls.decision = DistillerRunDecision.SKIP
+            cls.reason = (
+                cls.reason or "content already published under this slug"
+            )
+
+    return cls
+
+
 __all__ = [
+    "Classification",
+    "Classifier",
     "DistillerInput",
     "DistillerOutcome",
+    "classify_stub",
     "run_distiller",
 ]
