@@ -129,6 +129,7 @@ class PipelineRun(Base):
     __table_args__ = (
         Index("ix_pipeline_runs_pipeline_id_started", "pipeline_id", "started_at"),
         Index("ix_pipeline_runs_workspace_id", "workspace_id"),
+        Index("ix_pipeline_runs_lane_id", "lane_id"),
     )
 
     id: Mapped[uuid.UUID] = _pk()
@@ -165,6 +166,16 @@ class PipelineRun(Base):
     # rows where the run never had an outbound dispatch.
     run_token_hash: Mapped[str | None] = mapped_column(
         String(64), nullable=True
+    )
+    # RFC-0007 Phase 7: optional back-link to the :class:`Lane` a run
+    # was triggered against. ``NULL`` for legacy starter-pipeline runs
+    # (seeded ``Pipeline`` rows) and for any run that doesn't originate
+    # from a ``.ship/config.yml`` lane. Populated by future "Trigger
+    # lane now" paths.
+    lane_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("lanes.id", ondelete="SET NULL"),
+        nullable=True,
     )
 
     created_at: Mapped[datetime] = _ts_created()

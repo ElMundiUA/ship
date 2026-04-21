@@ -29,6 +29,7 @@ from backend.app.api.v1.routes import (
     integrations,
     invites,
     knowledge,
+    lanes,
     linear_oauth,
     members,
     metrics,
@@ -119,3 +120,7 @@ api_router.include_router(notifications.router)
 # service layer syncs to GitHub so cron/push/dispatch workflows all
 # see the values as ``${{ secrets.X }}``.
 api_router.include_router(repo_secrets.router)
+# Lanes — projection of customer ``.ship/config.yml`` lanes (RFC-0007
+# Phase 7). List + per-repo sync trigger. Webhook-driven re-syncs on
+# pushes to ``.ship/config.yml`` live in ``routes.github_app``.
+api_router.include_router(lanes.router)
