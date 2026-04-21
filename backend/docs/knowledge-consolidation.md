@@ -11,18 +11,20 @@ Phase 9). Phase 4a + 4b shipped the scope pill + scope-aware
 LLM-backed classifier (`classifier=auto|stub|llm`). Phase 6c
 shipped the inbound adapters. Phase 7a added the console upload
 surface. Phase 7b wired the connector-bucket create+sync surface
-with a stub body. Phase 7c slots in the first real connector
-fetcher: `backend/app/services/connectors/` now hosts a registry
-of fetchers (dispatched by `Integration.kind`) and a Notion fetcher
-that renders a single Notion page (`resource_ref={page_id}`) into
-markdown — headings, lists, to-do, quote, callout, code, divider,
-inline formatting — so the Distiller ingests the real page body
-instead of the Phase 7b stand-in. Unsupported `resource_ref`
-shapes (e.g. `{database_id}`) fall back to the stub with a
-logged warning, so Phase 7b buckets keep working. Next: extending
-the Notion fetcher to database listing + child-block recursion,
-Confluence / Linear fetchers (same registry), Phase 8 (offboarding
-audio transcript ingestion), Phase 9 (scope-driven sidebar IA).
+with a stub body. Phase 7c slots in real connector fetchers:
+`backend/app/services/connectors/` now hosts a registry
+(dispatched by `Integration.kind`) plus two concrete fetchers —
+**Notion** (`resource_ref={page_id}`, renders page blocks to
+markdown: headings, lists, to-do, quote, callout, code, divider,
+inline formatting) and **Linear** (`resource_ref={issue_id}`,
+renders a Linear issue into an H1 header + summary callout +
+verbatim description + priority/team/labels/updated metadata
+block). Both use GraphQL/REST via injectable `httpx.AsyncClient`
+for deterministic tests. Unsupported `resource_ref` shapes fall
+back to the stub with a logged warning, so Phase 7b buckets keep
+working. Next: multi-page sync (Notion database, Linear team),
+Confluence fetcher (same registry), Phase 8 (offboarding audio
+transcript ingestion), Phase 9 (scope-driven sidebar IA).
 **Scope:** unify the three "knowledge" surfaces (agent-memory buckets,
 `.ship/knowledge/*.md` disk-lister, `KbChunk` RAG index) under one
 `Scope × Source × Article` model, so every knowledge bucket has an
@@ -546,6 +548,37 @@ Per-source surface:
   re-sync is `skip`, missing-secret is 502, Notion 404 is 502.
   Together with the Phase 7b tests that use `notion` + unsupported
   shape, the fallback invariant is nailed on both sides.
+- `backend/app/services/connectors/linear.py` — second registered
+  fetcher. Handles `resource_ref={"issue_id": "<id or ELM-42>"}`
+  by POSTing one GraphQL query to `api.linear.app/graphql` and
+  rendering the returned issue as:
+  `# <identifier> · <title>` header, one summary callout line
+  (`> [Open in Linear](…) · state: … · assignee: …`), the raw
+  Linear `description` (already markdown), and a footer meta
+  block (priority label, team key+name, sorted labels,
+  `updatedAt`). Deterministic enough that re-sync with unchanged
+  upstream collapses to `skip`. Error mapping: 401/403 → immediate
+  `ConnectorConfigError` (reconnect); GraphQL `FORBIDDEN` /
+  `AUTHENTICATION_ERROR` in the error envelope → `ConnectorConfigError`
+  with "is the integration shared with the issue's team?" hint;
+  `data.issue==null` (id doesn't exist, or isn't visible to the
+  token) → `ConnectorConfigError` with a "not visible" hint;
+  other GraphQL errors → `RuntimeError` for 502. No `page_ref`
+  normalisation — we pass through whatever identifier the operator
+  gave us (Linear's API accepts both UUID and `ENG-123`).
+- `backend/tests/test_connectors_linear.py` — 9 unit tests
+  (MockTransport-backed): ELM-style happy path renders full
+  markdown, `{team_key}` and missing `issue_id` fall back,
+  shape-check-before-secret invariant, missing secret → ConfigError,
+  401 → ConfigError, GraphQL FORBIDDEN → share hint,
+  `data.issue=null` → not-visible hint, empty description renders
+  a stable `_(no description)_` placeholder so `content_sha` is
+  deterministic.
+- `backend/tests/test_v1_connector_sync_linear.py` — 4 endpoint
+  integration tests mirroring the Notion suite. Real Linear path
+  ingests real markdown, re-sync → `skip`, missing-secret → 502,
+  401 → 502. Combined Phase 7c regression: 32 connector tests
+  pass, no flakes on repeat runs.
 
 ### Phase 8 — User-memory bucket
 
@@ -588,6 +621,20 @@ Improvements also respect it.
 
 ## Changelog
 
+- **2026-04-21** — Phase 7c extended: Linear fetcher landed.
+  New module `backend/app/services/connectors/linear.py` registers
+  for `Integration.kind='linear'` and handles
+  `resource_ref={"issue_id": "<id or ELM-42>"}`. Fires one GraphQL
+  query against `api.linear.app/graphql`, renders the issue as a
+  deterministic markdown page (header, summary callout, verbatim
+  description, priority/team/labels/updated footer). Error
+  mapping: 401/403, GraphQL FORBIDDEN, and `data.issue=null` all
+  become `ConnectorConfigError` with actionable hints instead of
+  silent 502s. Dispatcher eager-loads both `notion` and `linear`
+  modules at first call. 13 new tests: 9 fetcher unit
+  (`test_connectors_linear.py`, MockTransport-backed) + 4 endpoint
+  integration (`test_v1_connector_sync_linear.py`, via
+  `set_http_client_override`). Combined connector suite: 32 pass.
 - **2026-04-21** — Phase 7c shipped: first real connector fetcher.
   New package `backend/app/services/connectors/` holds a
   fetcher registry (`@register(kind)` decorator, `fetch_connector_pages`

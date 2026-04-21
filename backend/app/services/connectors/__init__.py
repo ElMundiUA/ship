@@ -139,7 +139,10 @@ def _ensure_loaded() -> None:
     module graph shallow and to let tests clear + re-register
     cleanly without dragging in every connector's httpx footprint.
     """
-    for module in ("backend.app.services.connectors.notion",):
+    for module in (
+        "backend.app.services.connectors.notion",
+        "backend.app.services.connectors.linear",
+    ):
         try:
             importlib.import_module(module)
         except Exception:
