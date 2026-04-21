@@ -315,11 +315,38 @@ class ApiToken(Base):
 
 
 class Integration(Base):
+    """A workspace- or repo-scoped connection to a third-party service.
+
+    ``repo_id`` is ``NULL`` for workspace-level integrations (Notion
+    knowledge store, OTLP sink, slack/teams notifications — anything
+    that's global to the tenant). It is set for per-repo integrations,
+    today only tracker kinds (``linear`` / ``jira`` / ``github``)
+    where the wizard asks "where do tickets for this repo live".
+
+    Uniqueness is enforced by two partial indexes created in
+    :mod:`backend.migrations.versions.0019_repo_scoped_integrations`:
+
+    - ``uq_integrations_ws_kind_global`` — ``(workspace_id, kind)``
+      WHERE ``repo_id IS NULL``;
+    - ``uq_integrations_ws_repo_kind`` — ``(workspace_id, repo_id, kind)``
+      WHERE ``repo_id IS NOT NULL``.
+
+    This lets a workspace default (``repo_id = NULL``) coexist with a
+    per-repo override (``repo_id = <uuid>``) for the same ``kind``
+    — callers that need "what tracker does repo X use" should look
+    up the per-repo row first and fall back to the workspace-level
+    row when absent.
+    """
+
     __tablename__ = "integrations"
+    # Uniqueness comes from two partial unique indexes — see the
+    # migration. SQLAlchemy doesn't need to know about them for ORM
+    # operations (we don't UPSERT by constraint name), and modelling
+    # them here would require ``postgresql_where=`` Index entries
+    # that every non-Postgres backend (unit tests etc.) would have
+    # to special-case.
     __table_args__ = (
-        UniqueConstraint(
-            "workspace_id", "kind", name="uq_integrations_workspace_id_kind"
-        ),
+        Index("ix_integrations_repo_id", "repo_id"),
     )
 
     id: Mapped[uuid.UUID] = _pk()
@@ -327,6 +354,14 @@ class Integration(Base):
         UUID(as_uuid=True),
         ForeignKey("workspaces.id", ondelete="CASCADE"),
         nullable=False,
+    )
+    # NULL → workspace-scoped. UUID → per-repo (today: tracker only).
+    # ON DELETE CASCADE so uninstalling / deleting a repo doesn't
+    # leave orphaned tracker rows pointing at a dead id.
+    repo_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspace_repos.id", ondelete="CASCADE"),
+        nullable=True,
     )
     # linear | jira | github | slack | otlp | webhook | s3-export | …
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
