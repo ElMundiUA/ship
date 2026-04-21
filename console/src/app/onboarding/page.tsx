@@ -725,7 +725,7 @@ function TrackerStep({
       name: "GitHub Issues",
       blurb:
         "Reuses the GitHub App you installed earlier — no extra OAuth, no extra secret.",
-      tag: "Already connected",
+      tag: "Reuses GH App \u00b7 no OAuth",
     },
   ];
   return (
