@@ -1239,6 +1239,350 @@ async def update_repo(
 
 
 # ---------------------------------------------------------------------------
+# Wizard v2 unified seed PR (iter 5)
+#
+# Single-shot replacement for ``install_bundle`` + ``knowledge_seed``:
+# one PR carrying the preset workflows, ``.ship/config.yml``, optional
+# knowledge starters, and the tracker FSM doc. Also mints the long-
+# lived ``SHIP_RUN_TOKEN`` Actions secret *before* opening the PR so
+# the lanes the PR installs can authenticate the moment the merge
+# fires their first schedule tick. Plaintext never touches the DB —
+# see ``services.repo_tokens`` for the hash-only persistence story.
+# ---------------------------------------------------------------------------
+
+
+class WizardSeedIn(BaseModel):
+    """Body for ``POST /workspaces/{ws}/repos/{repo_id}/wizard_seed``."""
+
+    presets: list[str] | None = Field(
+        default=None,
+        description=(
+            "Preset ids to bundle. Defaults to the repo's persisted "
+            "preset; pass multiple to combine (same semantics as "
+            "install_bundle)."
+        ),
+    )
+    knowledge_slugs: list[str] | None = Field(
+        default=None,
+        description=(
+            "Knowledge starter slugs to seed. ``null`` seeds every "
+            "catalog entry; ``[]`` skips knowledge seeding."
+        ),
+    )
+    # The tracker kind to render into the FSM doc. Normally derived
+    # from the repo's tracker binding, but the wizard lets the user
+    # preview the seed before saving the binding — the request body
+    # carries whatever was picked in the wizard so the FSM doc is
+    # consistent with the PR's .ship/config.yml review.
+    tracker_kind: str | None = Field(
+        default=None,
+        description=(
+            "Tracker kind the FSM doc should address. ``null`` drops "
+            "a \"not connected yet\" header. When omitted, the server "
+            "reads the repo's persisted tracker binding."
+        ),
+    )
+    include_fsm: bool = True
+    # Force-rotate SHIP_RUN_TOKEN even if one already exists. First
+    # wizard run always rotates (no hash on the row yet); later runs
+    # default to "keep the existing token" to avoid invalidating
+    # in-flight runners every time the operator re-opens the wizard.
+    rotate_run_token: bool = False
+
+
+class WizardSeedOut(BaseModel):
+    pr_url: str
+    pr_number: int
+    branch: str
+    files: list[str]
+    presets: list[str]
+    knowledge_slugs: list[str]
+    tracker_kind: str | None = None
+    run_token_prefix: str | None = None
+    run_token_rotated: bool = False
+
+
+@router.post("/{repo_id}/wizard_seed", response_model=WizardSeedOut)
+async def wizard_seed(
+    workspace_id: uuid.UUID,
+    repo_id: uuid.UUID,
+    payload: WizardSeedIn | None = None,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> WizardSeedOut:
+    """Open the single wizard seed PR for a repo.
+
+    Admin-only. The flow is:
+
+    1. Resolve the preset list (explicit or repo-persisted) and reject
+       unknown ids with 422 so a stale wizard tab can't smuggle values
+       past ``KNOWN_PRESETS``.
+    2. Resolve the tracker kind (body override, else the per-repo
+       binding, else the workspace default).
+    3. Mint a fresh ``SHIP_RUN_TOKEN`` if one doesn't exist or if the
+       caller asked to rotate. Plaintext is PUT to GitHub Actions
+       *before* the PR opens so the workflows installed by the PR can
+       authenticate on their first tick. On any failure here the PR is
+       never opened — a PR without the secret would silently break
+       every schedule-triggered lane it installs.
+    4. Compose the file list via ``services.seed_bundle.compose_seed_files``.
+    5. Open one PR via ``commit_bundle_pr``.
+    6. Audit-log the wizard seed with every file path (no plaintext).
+    """
+
+    from backend.app.integrations.github.workflows import (
+        WorkflowDispatchError,
+        commit_bundle_pr,
+    )
+    from backend.app.services.repo_tokens import mint_repo_callback_token
+    from backend.app.services.seed_bundle import compose_seed_files
+
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+
+    repo_row = (
+        await session.execute(
+            select(WorkspaceRepo).where(
+                WorkspaceRepo.id == repo_id,
+                WorkspaceRepo.workspace_id == workspace_id,
+            )
+        )
+    ).scalars().first()
+    if repo_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Repo not found in this workspace.",
+        )
+
+    install_row = (
+        await session.execute(
+            select(GitHubInstallation).where(
+                GitHubInstallation.id == repo_row.installation_id
+            )
+        )
+    ).scalars().first()
+    if install_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_412_PRECONDITION_FAILED,
+            detail={
+                "code": "github_app_missing",
+                "message": (
+                    "Ship's GitHub App isn't installed for the workspace. "
+                    "Reconnect it before opening the wizard seed PR."
+                ),
+            },
+        )
+
+    payload = payload or WizardSeedIn()
+
+    # ── Resolve presets (wizard override → repo persisted) ────────
+    requested = payload.presets if payload.presets else None
+    if requested is None:
+        requested = [repo_row.preset] if repo_row.preset else []
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for pid in requested:
+        pid = (pid or "").strip()
+        if not pid or pid in seen:
+            continue
+        if pid not in KNOWN_PRESETS:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Unknown preset {pid!r}. Expected one of: "
+                    f"{sorted(KNOWN_PRESETS)}"
+                ),
+            )
+        cleaned.append(pid)
+        seen.add(pid)
+    if not cleaned:
+        raise HTTPException(
+            status_code=status.HTTP_412_PRECONDITION_FAILED,
+            detail={
+                "code": "preset_required",
+                "message": (
+                    "Pass at least one preset or set it on the repo before "
+                    "opening the wizard seed PR."
+                ),
+            },
+        )
+
+    # ── Resolve tracker kind for the FSM doc ──────────────────────
+    # Preference order: explicit body → per-repo binding → workspace
+    # default. Reading the bindings here avoids a second server
+    # roundtrip from the wizard ("save tracker" → "get tracker" →
+    # "seed").
+    from backend.app.db.models.tenancy import Integration
+
+    tracker_kind = (payload.tracker_kind or "").strip().lower() or None
+    repo_binding_kind: str | None = None
+    workspace_default_kind: str | None = None
+    if tracker_kind is None:
+        repo_binding = (
+            await session.execute(
+                select(Integration)
+                .where(
+                    Integration.workspace_id == workspace_id,
+                    Integration.repo_id == repo_id,
+                    Integration.kind.in_(("linear", "github", "jira")),
+                )
+                .order_by(Integration.updated_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if repo_binding is not None:
+            tracker_kind = repo_binding.kind
+            repo_binding_kind = repo_binding.kind
+    # Always resolve the workspace default for the FSM header,
+    # regardless of where the tracker kind came from — operators
+    # want to see "overrides default" when the repo diverges.
+    ws_default_row = (
+        await session.execute(
+            select(Integration)
+            .where(
+                Integration.workspace_id == workspace_id,
+                Integration.repo_id.is_(None),
+                Integration.kind.in_(("linear", "github", "jira")),
+            )
+            .order_by(Integration.updated_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if ws_default_row is not None:
+        workspace_default_kind = ws_default_row.kind
+        if tracker_kind is None:
+            tracker_kind = ws_default_row.kind
+
+    # ── Mint SHIP_RUN_TOKEN before opening the PR ────────────────
+    should_mint = (
+        repo_row.run_token_hash is None or bool(payload.rotate_run_token)
+    )
+    rotated = False
+    if should_mint:
+        try:
+            await mint_repo_callback_token(
+                session,
+                repo_row,
+                install_row,
+                settings=settings,
+            )
+            rotated = True
+        except Exception as exc:  # pragma: no cover — surfaced as 502
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail={
+                    "code": "run_token_push_failed",
+                    "message": (
+                        "Couldn't push SHIP_RUN_TOKEN to the repo's GitHub "
+                        "Actions secrets. The seed PR was not opened."
+                    ),
+                },
+            ) from exc
+
+    # ── Compose the file bundle (pure) ────────────────────────────
+    bundle = compose_seed_files(
+        presets=cleaned,
+        knowledge_slugs=payload.knowledge_slugs,
+        tracker_kind=tracker_kind,
+        workspace_default_tracker_kind=workspace_default_kind,
+        include_fsm=payload.include_fsm,
+        repo_full_name=repo_row.full_name,
+    )
+
+    if not bundle.files:
+        raise HTTPException(
+            status_code=status.HTTP_412_PRECONDITION_FAILED,
+            detail={
+                "code": "empty_bundle",
+                "message": (
+                    f"Preset(s) {cleaned!r} + selected options resolved to "
+                    "zero installable files."
+                ),
+            },
+        )
+
+    # ── Open the PR ──────────────────────────────────────────────
+    return_url = (
+        f"{settings.console_url.rstrip('/')}/?ws={workspace_id}"
+        f"&installed=wizard&reason=back_from_pr"
+    )
+    tracker_line = (
+        f"**Tracker**: `{tracker_kind}`"
+        if tracker_kind
+        else "**Tracker**: _not connected yet_"
+    )
+    body_header = (
+        "This PR wires Ship into this repo in a single merge.\n\n"
+        f"**Presets**: {', '.join('`' + p + '`' for p in cleaned)}\n"
+        f"{tracker_line}\n"
+        f"**Knowledge**: {', '.join('`' + s + '`' for s in bundle.knowledge_slugs) or '_none_'}\n\n"
+        "Merge once. Ship's first scheduled lanes will start running "
+        "against this repo as soon as GitHub picks the new workflows up."
+    )
+    try:
+        result = await commit_bundle_pr(
+            repo_row,
+            install_row,
+            files=bundle.files,
+            title=f"Ship: wizard seed ({', '.join(cleaned)})",
+            branch_label=f"wizard-{'-'.join(cleaned)}",
+            pr_body_header=body_header,
+            settings=settings,
+            return_url=return_url,
+        )
+    except WorkflowDispatchError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "code": "wizard_seed_failed",
+                "upstream_status": exc.status_code,
+                "message": exc.message[:512],
+            },
+        ) from exc
+
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=auth.user.id,
+            actor_token_id=auth.token.id if auth.token else None,
+            action="repo.wizard_seed",
+            target_kind="workspace_repo",
+            target_id=str(repo_row.id),
+            payload={
+                "presets": cleaned,
+                "knowledge_slugs": bundle.knowledge_slugs,
+                "tracker_kind": tracker_kind,
+                "tracker_source": (
+                    "body"
+                    if payload.tracker_kind
+                    else ("repo" if repo_binding_kind else ("workspace" if ws_default_row else "none"))
+                ),
+                "files": [p for p, _ in bundle.files],
+                "pr_number": result.pr_number,
+                "pr_url": result.pr_url,
+                "branch": result.branch,
+                "run_token_rotated": rotated,
+                # run_token_prefix only; plaintext never persisted.
+                "run_token_prefix": repo_row.run_token_prefix,
+            },
+        )
+    )
+    await session.flush()
+
+    return WizardSeedOut(
+        pr_url=result.pr_url,
+        pr_number=result.pr_number,
+        branch=result.branch,
+        files=[p for p, _ in bundle.files],
+        presets=cleaned,
+        knowledge_slugs=bundle.knowledge_slugs,
+        tracker_kind=tracker_kind,
+        run_token_prefix=repo_row.run_token_prefix,
+        run_token_rotated=rotated,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Disconnect (B6)
 # ---------------------------------------------------------------------------
 
