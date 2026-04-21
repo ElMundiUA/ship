@@ -289,10 +289,12 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
         setAwaitingFirstDelta(false);
         // Finalize: drop the streaming flag on whichever assistant
         // row was live, so new tool calls in a *future* turn don't
-        // re-target the same row. We intentionally do NOT clear
-        // ``tools`` here — the tool trail stays visible as a
-        // compact log of what the agent did on this turn. It gets
-        // cleared on the next ``send`` / ``resetConversation``.
+        // re-target the same row. We intentionally do NOT touch
+        // ``bottomSpacerPx`` here — collapsing it at ``end`` would
+        // yank the scroller's runway out from under the reader
+        // and the pinned user prompt would snap back down to the
+        // bottom of the viewport. The spacer is only reset on the
+        // next ``send`` / ``resetConversation``.
         setMessages((prev) => {
           const idx = findLastIndex(
             prev,
@@ -303,14 +305,14 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
           next[idx] = { ...next[idx], streaming: false };
           return next;
         });
-        setBottomSpacerPx(0);
         return;
       }
       case "error": {
         setErrorText(evt.detail ?? evt.error ?? "Agent error");
         setStreaming(false);
         setAwaitingFirstDelta(false);
-        setBottomSpacerPx(0);
+        // Same rationale as ``end`` — don't yank the spacer out
+        // from under the user when the turn errors.
         return;
       }
     }
