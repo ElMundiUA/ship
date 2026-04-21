@@ -146,6 +146,17 @@ class BucketOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     summary_count: int
+    # Consolidation surface (Phase 1) — echoed so UI + CLI can
+    # distinguish workspace/agent-memory (the historical shape) from
+    # repo/project/user and non-agent-memory sources introduced by the
+    # later phases. Defaults line up with the DB server_defaults, so
+    # responses for old rows stay stable for existing consumers.
+    scope_kind: str = "workspace"
+    source_kind: str = "agent_memory"
+    source_ref: dict[str, Any] | None = None
+    project_id: uuid.UUID | None = None
+    repo_id: uuid.UUID | None = None
+    user_id: uuid.UUID | None = None
 
 
 class BucketSummaryOut(BaseModel):
@@ -865,18 +876,7 @@ async def list_buckets(
                 select(BucketSummary.id).where(BucketSummary.bucket_id == b.id)
             )
         ).scalars().all()
-        out.append(
-            BucketOut(
-                id=b.id,
-                slug=b.slug,
-                name=b.name,
-                description=b.description,
-                archived_at=b.archived_at,
-                created_at=b.created_at,
-                updated_at=b.updated_at,
-                summary_count=len(count),
-            )
-        )
+        out.append(_serialize_bucket(b, summary_count=len(count)))
     return out
 
 
@@ -918,16 +918,7 @@ async def create_bucket(
     # expires the attribute post-flush; an explicit refresh pulls the
     # freshly generated value without tripping the sync-IO guard.
     await session.refresh(row)
-    return BucketOut(
-        id=row.id,
-        slug=row.slug,
-        name=row.name,
-        description=row.description,
-        archived_at=row.archived_at,
-        created_at=row.created_at,
-        updated_at=row.updated_at,
-        summary_count=0,
-    )
+    return _serialize_bucket(row, summary_count=0)
 
 
 @router.get("/buckets/{slug}", response_model=BucketOut)
@@ -944,16 +935,7 @@ async def get_bucket(
             select(BucketSummary.id).where(BucketSummary.bucket_id == row.id)
         )
     ).scalars().all()
-    return BucketOut(
-        id=row.id,
-        slug=row.slug,
-        name=row.name,
-        description=row.description,
-        archived_at=row.archived_at,
-        created_at=row.created_at,
-        updated_at=row.updated_at,
-        summary_count=len(count),
-    )
+    return _serialize_bucket(row, summary_count=len(count))
 
 
 @router.patch("/buckets/{slug}", response_model=BucketOut)
@@ -979,16 +961,7 @@ async def update_bucket(
             select(BucketSummary.id).where(BucketSummary.bucket_id == row.id)
         )
     ).scalars().all()
-    return BucketOut(
-        id=row.id,
-        slug=row.slug,
-        name=row.name,
-        description=row.description,
-        archived_at=row.archived_at,
-        created_at=row.created_at,
-        updated_at=row.updated_at,
-        summary_count=len(count),
-    )
+    return _serialize_bucket(row, summary_count=len(count))
 
 
 @router.get(
@@ -1025,17 +998,49 @@ async def list_bucket_summaries(
 async def _load_bucket(
     session: AsyncSession, workspace_id: uuid.UUID, slug: str
 ) -> KnowledgeBucket:
+    # Phase 1 note: slugs are unique per ``(workspace, scope, carrier)``;
+    # this lookup is still safe because the CRUD API only creates
+    # workspace-scoped buckets today, and ``uq_knowledge_buckets_workspace_slug``
+    # keeps that uniqueness. When Phase 2 starts syncing repo-scoped
+    # buckets, this helper has to take a ``scope`` hint.
     row = (
         await session.execute(
             select(KnowledgeBucket).where(
                 KnowledgeBucket.workspace_id == workspace_id,
                 KnowledgeBucket.slug == slug,
+                KnowledgeBucket.scope_kind == "workspace",
             )
         )
     ).scalars().first()
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     return row
+
+
+def _serialize_bucket(row: KnowledgeBucket, *, summary_count: int) -> BucketOut:
+    """Unified ``KnowledgeBucket`` → ``BucketOut`` projection.
+
+    Echoes the Phase 1 consolidation fields alongside the historical
+    shape so clients can branch on ``scope_kind`` / ``source_kind``
+    without hitting a separate endpoint.
+    """
+
+    return BucketOut(
+        id=row.id,
+        slug=row.slug,
+        name=row.name,
+        description=row.description,
+        archived_at=row.archived_at,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+        summary_count=summary_count,
+        scope_kind=row.scope_kind,
+        source_kind=row.source_kind,
+        source_ref=row.source_ref,
+        project_id=row.project_id,
+        repo_id=row.repo_id,
+        user_id=row.user_id,
+    )
 
 
 def _slugify(value: str) -> str:
