@@ -436,15 +436,7 @@ export function RepoCard({
           you paste here go straight to GitHub and are never stored on Ship.
         </p>
         {initial.probe_errors?.agents && (
-          <p className="mt-2 rounded border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] leading-snug text-amber-200">
-            Couldn&apos;t probe GitHub Actions secrets on this repo:{" "}
-            <code className="font-mono">{initial.probe_errors.agents}</code>.
-            Most often this means the Ship GitHub App is missing the{" "}
-            <strong>Secrets: read &amp; write</strong> repository permission.
-            Grant it on the App&apos;s installation page and reload. You can
-            still pick a preset and open the seed PR — agent keys can be
-            added later.
-          </p>
+          <AgentsProbeError message={initial.probe_errors.agents} />
         )}
         <div className="mt-2 space-y-2">
           {agents.map((a) => {
@@ -737,6 +729,86 @@ function PresetBadge({ preset }: { preset: PresetId | null }) {
 function pickConfig(config: Record<string, unknown>, key: string): string | undefined {
   const v = config?.[key];
   return typeof v === "string" ? v : undefined;
+}
+
+/**
+ * Render the amber banner shown when the agent-secrets probe failed.
+ *
+ * Backend 412 payloads carry a ``code`` field that narrows the cause
+ * (missing_secrets_permission / installation_token_rejected /
+ * actions_disabled / github_upstream_error). We pluck it out of the
+ * message string (which ``formatProbeError`` built as ``HTTP 412 — {...}``)
+ * and pick copy accordingly. For anything else (generic 500, network
+ * blip, etc.) we fall through to the legacy "most often this means"
+ * copy — it's a reasonable default since that's the #1 cause in the
+ * wild.
+ */
+function AgentsProbeError({ message }: { message: string }) {
+  const code = extractProbeCode(message);
+  if (code === "missing_secrets_permission") {
+    return (
+      <p className="mt-2 rounded border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] leading-snug text-amber-200">
+        The Ship GitHub App is missing the{" "}
+        <strong>Secrets: read &amp; write</strong> repository permission, so
+        we can&apos;t check which agent keys are already wired. Grant it on
+        the App&apos;s{" "}
+        <a
+          href="https://github.com/settings/installations"
+          target="_blank"
+          rel="noreferrer"
+          className="underline hover:text-amber-100"
+        >
+          installation page
+        </a>{" "}
+        (or the org-level equivalent), accept the new permissions on the
+        repo, and reload. Meanwhile you can still pick a preset and open
+        the seed PR — agent keys can be added later.
+      </p>
+    );
+  }
+  if (code === "installation_token_rejected") {
+    return (
+      <p className="mt-2 rounded border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] leading-snug text-amber-200">
+        GitHub rejected our installation token (401). The Ship App may
+        have been suspended or reinstalled since the wizard started —
+        try reinstalling from step 1 and come back here.
+      </p>
+    );
+  }
+  if (code === "actions_disabled") {
+    return (
+      <p className="mt-2 rounded border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] leading-snug text-amber-200">
+        GitHub Actions is disabled on this repo, so there&apos;s no
+        secrets store to probe. Enable Actions in repo Settings → Actions
+        → General and reload.
+      </p>
+    );
+  }
+  return (
+    <p className="mt-2 rounded border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] leading-snug text-amber-200">
+      Couldn&apos;t probe GitHub Actions secrets on this repo:{" "}
+      <code className="font-mono">{message}</code>. Most often this means
+      the Ship GitHub App is missing the{" "}
+      <strong>Secrets: read &amp; write</strong> repository permission.
+      Grant it on the App&apos;s installation page and reload. You can
+      still pick a preset and open the seed PR — agent keys can be added
+      later.
+    </p>
+  );
+}
+
+function extractProbeCode(message: string): string | null {
+  // ``formatProbeError`` shapes the string as ``HTTP <n> — {"code":"...",...}``.
+  // Fish the JSON out; be lenient because fetch layers may truncate
+  // or stringify the payload slightly differently across runtimes.
+  const m = message.match(/\{.*\}/);
+  if (!m) return null;
+  try {
+    const parsed = JSON.parse(m[0]) as { code?: unknown };
+    return typeof parsed.code === "string" ? parsed.code : null;
+  } catch {
+    return null;
+  }
 }
 
 function missingBlockers(

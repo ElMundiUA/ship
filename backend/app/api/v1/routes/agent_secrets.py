@@ -41,6 +41,7 @@ from backend.app.core.config import Settings, get_settings
 from backend.app.db.models.integrations import GitHubInstallation, WorkspaceRepo
 from backend.app.db.models.tenancy import AuditLog
 from backend.app.db.session import get_session
+from backend.app.integrations.github.workflows import WorkflowDispatchError
 from backend.app.services.agent_secrets import (
     AGENT_SECRET_CATALOG,
     AgentSecretStatus,
@@ -209,13 +210,53 @@ async def check_agent_secrets(
         # reloads since it doesn't change per-user.
         requested = [spec.slug for spec in AGENT_SECRET_CATALOG]
 
-    statuses = await resolve_agent_secret_status(
-        repo, install, slugs=requested, settings=settings
-    )
+    try:
+        statuses = await resolve_agent_secret_status(
+            repo, install, slugs=requested, settings=settings
+        )
+    except WorkflowDispatchError as exc:
+        # GitHub-side failure listing Actions secrets. Most common
+        # cause on a fresh install is the App not having the
+        # ``Secrets: read & write`` permission granted yet (403/404);
+        # rarer: repo has Actions disabled (409) or the installation
+        # token got revoked mid-flight (401). We translate to a 412
+        # "precondition failed" with a machine-readable reason code
+        # so the wizard can show a crisp remediation banner instead
+        # of a generic 500.
+        reason = _classify_github_secrets_error(exc.status_code)
+        raise HTTPException(
+            status_code=status.HTTP_412_PRECONDITION_FAILED,
+            detail={
+                "code": reason,
+                "upstream_status": exc.status_code,
+                "message": str(exc),
+            },
+        ) from exc
+
     return AgentSecretsCheckOut(
         repo_id=repo_id,
         agents=[_status_out(s) for s in statuses],
     )
+
+
+def _classify_github_secrets_error(status_code: int) -> str:
+    """Map a GitHub HTTP status to a short reason code for the wizard.
+
+    The frontend uses this to pick a remediation copy block; adding
+    cases is cheap, so prefer narrow labels over a catch-all.
+    """
+
+    if status_code in (403, 404):
+        # GitHub returns 404 (not 403) when the App lacks the
+        # ``secrets`` scope on a private repo — it hides the
+        # endpoint's existence to avoid leaking repo metadata. Treat
+        # both the same: operator needs to grant the permission.
+        return "missing_secrets_permission"
+    if status_code == 401:
+        return "installation_token_rejected"
+    if status_code == 409:
+        return "actions_disabled"
+    return "github_upstream_error"
 
 
 @router.post("", response_model=AgentSecretsPushOut, status_code=status.HTTP_200_OK)
