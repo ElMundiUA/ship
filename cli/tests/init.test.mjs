@@ -185,7 +185,12 @@ test("init writes config, gitignore, state; installs cursor rule from cached art
     const cfg = YAML.parse(fs.readFileSync(cfgPath, "utf8"));
     assert.equal(cfg.telemetry.share, false);
     assert.deepEqual(cfg.stack.agents, ["cursor"]);
-    assert.equal(cfg.version, 1);
+    /* `shipctl init` now emits schema v2 (RFC-0007). The v2 shape adds
+     * `agent` and `lanes` at the top level but keeps everything else
+     * v1-compatible. */
+    assert.equal(cfg.version, 2);
+    assert.ok(cfg.agent && typeof cfg.agent === "object", "v2 init must seed `agent`");
+    assert.ok(cfg.lanes && typeof cfg.lanes === "object", "v2 init must seed `lanes` (empty ok)");
 
     const rulePath = path.join(dir, ".cursor", "rules", "ship-artifacts-protocol.mdc");
     assert.ok(fs.existsSync(rulePath), "cursor rule should be installed");
