@@ -1,37 +1,27 @@
 # Knowledge buckets consolidation — plan
 
-**Status:** Phases 1–3, 4a, 4b, 5a, 5b, 5c, 5d, 6a, 6b, 6c, 7a,
-7b, 7c, 8 landed. Backend consolidation closed — `bucket_articles` is
-the sole read surface (retriever, agent tools, `/articles`
-endpoint, `summary_count` on bucket listings); `bucket_summaries`
-is maintained for write-back compat only (deprecated, removal in
-Phase 9). Phase 4a + 4b shipped the scope pill + scope-aware
-`/knowledge`, `/catalog`, `/clarifications`, `/improvements`,
-`/chat`. Phase 6a shipped the Distiller stub; Phase 6b added the
-LLM-backed classifier (`classifier=auto|stub|llm`). Phase 6c
-shipped the inbound adapters. Phase 7a added the console upload
-surface. Phase 7b wired the connector-bucket create+sync surface
-with a stub body. Phase 7c slots in real connector fetchers:
-`backend/app/services/connectors/` now hosts a registry
-(dispatched by `Integration.kind`) plus two concrete fetchers —
-**Notion** (`resource_ref={page_id}`, renders page blocks to
-markdown: headings, lists, to-do, quote, callout, code, divider,
-inline formatting) and **Linear** (`resource_ref={issue_id}`,
-renders a Linear issue into an H1 header + summary callout +
-verbatim description + priority/team/labels/updated metadata
-block). Both use GraphQL/REST via injectable `httpx.AsyncClient`
-for deterministic tests. Unsupported `resource_ref` shapes fall
-back to the stub with a logged warning, so Phase 7b buckets keep
-working. Phase 8 slots in the per-user memory bucket: a shared
-visibility helper (`scope=user` rows only visible to owner) is now
-enforced across `retrieve_buckets`, `search_buckets` tool,
-`list_buckets`, and `create_bucket`; `ensure_user_memory_bucket`
-helper lazily mints `my-memory` (slug stable) on first use; new
-`POST /chat/threads/{id}/save-to-memory` packs a thread into the
-caller's private bucket without archiving. Next: multi-page
-sync (Notion database, Linear team), Confluence fetcher (same
-registry), consent toggle for auto-save, Phase 9 (scope-driven
-sidebar IA).
+**Status:** Phases 1–3, 4a, 4b, 5a–5d, 6a–6c, 7a–7c, 8 landed on
+`main`. Phase 9 (IA restructure + sidebar, final
+`bucket_summaries` removal) is the next milestone. See the
+[Phase matrix](#phase-matrix) just below for the one-screen view
+of what ships where.
+
+Backend consolidation is closed: `bucket_articles` is the sole
+read surface (retriever, agent tools, `/articles` endpoint,
+`summary_count` on bucket listings). `bucket_summaries` is
+maintained for write-back compat only — it goes away in Phase 9
+once the frontend stops referencing its shape.
+
+**What's live end-to-end today:** scope-aware sidebar pill
+(`/knowledge`, `/catalog`, `/clarifications`, `/improvements`,
+`/chat`), Distiller with stub + LLM classifiers, inbound adapters
+for PR-merged / console uploads / connector proxies, real Notion
+and Linear fetchers in the registry, per-user private memory
+buckets with visibility enforced at every retrieval choke point,
+and an explicit `save-to-memory` endpoint. Multi-page connector
+sync, Confluence, and auto-save consent live in the "out of
+current initiative" list at the bottom of the matrix.
+
 **Scope:** unify the three "knowledge" surfaces (agent-memory buckets,
 `.ship/knowledge/*.md` disk-lister, `KbChunk` RAG index) under one
 `Scope × Source × Article` model, so every knowledge bucket has an
@@ -39,6 +29,51 @@ explicit visibility layer and an explicit content provenance.
 
 This doc is the source of truth for the phasing. Keep it up to date
 when a phase lands — it's what the next colleague opens first.
+
+---
+
+## Phase matrix
+
+At-a-glance view of every phase, where it shipped, and the one
+place in the tree you'd open to find it. Keep this table in sync
+when a phase lands — it's cheaper than re-reading the changelog.
+
+Statuses: **shipped** (on `main`) · **in-flight** (branch or
+partial) · **planned** (designed, no code yet) · **deferred**
+(scoped out of this initiative).
+
+| Phase | Name | Status | Commit | Key artifact | Notes |
+|------:|------|:------:|--------|--------------|-------|
+|   1   | Foundation (schema / migrations) | shipped | `a7c8edd` | `migrations/0014_bucket_scope_source.py` | `BucketScope`, `BucketSource`, carrier FKs, CHECK constraint |
+|   2   | `.ship/knowledge/*.md` → DB buckets | shipped | `f5ea287` | `services/knowledge_kb_sync.py` | mirror from disk / push webhook |
+|   3   | Resolver (scope ladder) | shipped | `d4a982a` | `routes/buckets_resolver.py` | `GET /buckets/resolved` |
+|  4a   | Scope pill (AppShell + `/knowledge`) | shipped | `d9e106a` | `console/src/components/scope/*` | first visible frontend slice |
+|  4b   | Scope pill → catalog/clarif/impr/chat | shipped | `df16dba` | same, extended | propagates everywhere |
+|  5a   | `bucket_articles` table + dual-write | shipped | `0b85a6d` | `migrations/0016_bucket_articles.py` | starts with `repo_files` source |
+|  5b   | Mirror `bucket_summaries` → articles | shipped | `4b7af5e` | `services/bucket_summary_articles.py` | catch-up + incremental |
+|  5c   | Retriever cutover to articles | shipped | `9d2c4f3` | `services/agent/topic.py` | reads drop `bucket_summaries` |
+|  5d   | Agent tools + `/articles` read surface | shipped | `64821a6` | `routes/articles.py`, `agent/tools.py` | `summary_count` backed by articles |
+|  6a   | Distiller stub | shipped | `08f8314` | `services/distiller.py` | `POST /buckets/{slug}/distill` |
+|  6b   | LLM-backed classifier | shipped | `f041d5b` | same | `classifier=auto\|stub\|llm` |
+|  6c   | Inbound adapters (PR / upload / connector) | shipped | `c8fb5a1` | `services/distiller_sources.py` | `ensure_bucket` + per-source fns |
+|  7a   | Console upload surface | shipped | `8fdebd4` | `console/src/app/knowledge/[slug]/*` | external-static uploads |
+|  7b   | Connector-bucket create + sync (stub body) | shipped | `3d6bf6b` | `routes/distiller.py` | `/buckets/{slug}/sync` with stand-in markdown |
+|  7c   | Notion connector (real fetch) | shipped | `d160fc5` | `services/connectors/notion.py` | `resource_ref={page_id}` |
+|  7c   | Linear connector (real fetch) | shipped | `c72a52e` | `services/connectors/linear.py` | `resource_ref={issue_id}` |
+|   8   | Per-user memory bucket + visibility guards | shipped | `aeeec74` | `services/bucket_visibility.py`, `save-to-memory` endpoint | `scope=user` private overlay |
+|   9   | IA restructure + sidebar | planned | — | (frontend) | left nav grouped by scope; also retires `bucket_summaries` |
+
+Out of the current initiative (tracked elsewhere / later):
+
+- Notion database listing + child-block recursion — extends 7c's
+  single-page shape to multi-page; depends on changing
+  `DistillOut` to a list response or paging the dispatcher.
+- Linear team mirror (`resource_ref={team_key}`) — same story.
+- Confluence connector — third fetcher in the 7c registry.
+- Auto-save consent toggle (end-of-thread auto pack into
+  `my-memory`) — needs a product decision on opt-in/opt-out; the
+  write path from Phase 8 already supports it.
+- "Forget this" / per-user quota on `my-memory` — Phase 8 follow-up.
 
 ---
 
