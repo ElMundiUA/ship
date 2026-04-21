@@ -317,6 +317,11 @@ async def github_webhook(
         # crisp 502 when embeddings are misconfigured instead of a
         # silent delivery-succeeded / indexer-failed split.
         await _apply_push_event_for_kb(session, payload, settings=settings)
+        # RFC-0007 Phase 7: same push, different mirror — re-pull
+        # ``.ship/config.yml`` into the :class:`Lane` projection when
+        # the file is in the commit diff. Runs *after* the KB hook
+        # so a YAML-only change still gets its fast path.
+        await _apply_push_event_for_lanes(session, payload, settings=settings)
         await session.flush()
     else:
         # Day-1: silently 200 every other event. We log at debug to keep
@@ -750,6 +755,30 @@ async def _apply_workflow_run_event(
             html_url=html_url,
         )
 
+    # RFC-0007 Phase 7: if this was a lane wrapper
+    # (``.github/workflows/ship-<lane_id>.yml``) pin the lane's
+    # ``last_run_at`` / ``last_run_status`` so the Console can render
+    # freshness without polling GitHub per row.
+    if run.get("status") == "completed":
+        try:
+            from backend.app.services.lanes_sync import (
+                apply_workflow_run_completion,
+            )
+
+            await apply_workflow_run_completion(
+                session=session,
+                repo=repo_row,
+                workflow_path=run.get("path"),
+                conclusion=run.get("conclusion"),
+                finished_at=_parse_iso(run.get("updated_at")),
+            )
+        except Exception as exc:  # pragma: no cover — defensive
+            logger.warning(
+                "workflow_run → lane reconcile skipped for %s: %s",
+                repo_row.full_name,
+                exc,
+            )
+
     logger.debug("workflow_run cached action=%s run_id=%s", action, external_id)
 
     # A5 "Self-heal auto-trigger": when a non-Ship workflow completes
@@ -874,6 +903,100 @@ async def _apply_push_event_for_kb(
             repo_row.full_name,
             exc,
         )
+
+
+async def _apply_push_event_for_lanes(
+    session: AsyncSession,
+    payload: dict[str, Any],
+    *,
+    settings: Settings,
+) -> None:
+    """Re-sync :class:`Lane` rows when a push touches ``.ship/config.yml``.
+
+    Same preconditions as :func:`_apply_push_event_for_kb`: default
+    branch only, inactive repos ignored, commits array drives the
+    fast-path check. Failures log at ``warning`` and don't propagate;
+    the Console's "Sync now" button is the backstop.
+    """
+    from backend.app.services.lanes_sync import (
+        CONFIG_PATH,
+        sync_lanes_for_repo,
+    )
+
+    install_id = (payload.get("installation") or {}).get("id")
+    repo_ext_id = (payload.get("repository") or {}).get("id")
+    repo_row = await _resolve_workspace_repo(session, install_id, repo_ext_id)
+    if repo_row is None:
+        return
+
+    ref_name = str(payload.get("ref") or "")
+    default_branch = repo_row.default_branch or "main"
+    if ref_name != f"refs/heads/{default_branch}":
+        return
+
+    commits = payload.get("commits") or []
+    if commits:
+        touched = False
+        for commit in commits:
+            for key in ("added", "modified", "removed"):
+                for path in commit.get(key) or []:
+                    if isinstance(path, str) and path == CONFIG_PATH:
+                        touched = True
+                        break
+                if touched:
+                    break
+            if touched:
+                break
+        if not touched:
+            return
+
+    if repo_row.installation_id is None:
+        return
+    install = await session.get(GitHubInstallation, repo_row.installation_id)
+    if install is None or install.suspended_at is not None:
+        return
+
+    try:
+        report = await sync_lanes_for_repo(
+            session=session,
+            repo=repo_row,
+            install=install,
+            settings=settings,
+        )
+    except FileNotFoundError:
+        # Operator deleted ``.ship/config.yml`` — treat it as "zero
+        # lanes declared" and drop the projection.
+        from backend.app.db.models.lanes import Lane
+
+        existing = (
+            await session.execute(
+                select(Lane).where(Lane.repo_id == repo_row.id)
+            )
+        ).scalars().all()
+        for row in existing:
+            await session.delete(row)
+        logger.info(
+            "push → lanes: %s removed from %s (config.yml deleted)",
+            len(existing),
+            repo_row.full_name,
+        )
+        return
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.warning(
+            "push → lanes sync skipped for %s: %s",
+            repo_row.full_name,
+            exc,
+        )
+        return
+
+    logger.info(
+        "push → lanes sync for %s: added=%d updated=%d removed=%d errors=%d",
+        repo_row.full_name,
+        report.added,
+        report.updated,
+        report.removed,
+        len(report.errors),
+    )
 
 
 # Map GitHub ``workflow_run.conclusion`` values onto our
