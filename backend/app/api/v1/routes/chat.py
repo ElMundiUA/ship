@@ -62,6 +62,8 @@ from backend.app.api.v1.routes.workspaces import (
 from backend.app.core.config import Settings, get_settings
 from backend.app.db.models.agent_memory import (
     ArtifactFeedback,
+    BucketArticle,
+    BucketArticleStatus,
     BucketSummary,
     KnowledgeBucket,
 )
@@ -166,6 +168,29 @@ class BucketSummaryOut(BaseModel):
     title: str
     summary: str
     created_at: datetime
+
+
+class BucketArticleOut(BaseModel):
+    """Phase 5d: canonical article shape the new UI reads.
+
+    Exposed by ``GET /v1/workspaces/{ws}/buckets/{slug}/articles``.
+    Mirrors the :class:`BucketArticle` row but trims internals
+    (``content_sha``, ``supersedes_id``) that aren't useful on the
+    wire. ``version`` + ``status`` are kept so a future read-detail
+    view can show "v3, published" without a second call.
+    """
+
+    id: uuid.UUID
+    bucket_id: uuid.UUID
+    slug: str
+    title: str
+    body_md: str
+    version: int
+    status: str
+    provenance: dict[str, Any]
+    created_at: datetime
+    updated_at: datetime
+    archived_at: datetime | None
 
 
 class BucketCreateIn(BaseModel):
@@ -852,6 +877,32 @@ async def pack_thread(
 # ---------------------------------------------------------------------------
 
 
+async def _count_articles(
+    session: AsyncSession, bucket_id: uuid.UUID
+) -> int:
+    """Count published, unarchived articles in a bucket.
+
+    Phase 5d: ``BucketOut.summary_count`` is now backed by the
+    consolidated ``bucket_articles`` table instead of the legacy
+    ``bucket_summaries``. The name "summary_count" is preserved on
+    the wire for backward compat (the Phase 4 frontend reads it);
+    semantically the value is now "number of published articles".
+    For agent_memory buckets this is 1:1 with the old meaning because
+    of the Phase 5b dual-write; for repo_files buckets it reports
+    the number of mirrored files, which is a strict improvement over
+    the previous hard-coded 0.
+    """
+    rows = (
+        await session.execute(
+            select(BucketArticle.id)
+            .where(BucketArticle.bucket_id == bucket_id)
+            .where(BucketArticle.status == BucketArticleStatus.PUBLISHED)
+            .where(BucketArticle.archived_at.is_(None))
+        )
+    ).scalars().all()
+    return len(rows)
+
+
 @router.get("/buckets", response_model=list[BucketOut])
 async def list_buckets(
     workspace_id: uuid.UUID,
@@ -871,12 +922,8 @@ async def list_buckets(
 
     out: list[BucketOut] = []
     for b in buckets:
-        count = (
-            await session.execute(
-                select(BucketSummary.id).where(BucketSummary.bucket_id == b.id)
-            )
-        ).scalars().all()
-        out.append(_serialize_bucket(b, summary_count=len(count)))
+        count = await _count_articles(session, b.id)
+        out.append(_serialize_bucket(b, summary_count=count))
     return out
 
 
@@ -930,12 +977,8 @@ async def get_bucket(
 ) -> BucketOut:
     await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
     row = await _load_bucket(session, workspace_id, slug)
-    count = (
-        await session.execute(
-            select(BucketSummary.id).where(BucketSummary.bucket_id == row.id)
-        )
-    ).scalars().all()
-    return _serialize_bucket(row, summary_count=len(count))
+    count = await _count_articles(session, row.id)
+    return _serialize_bucket(row, summary_count=count)
 
 
 @router.patch("/buckets/{slug}", response_model=BucketOut)
@@ -956,12 +999,8 @@ async def update_bucket(
         row.archived_at = datetime.now(timezone.utc) if payload.archived else None
     await session.flush()
     await session.refresh(row)
-    count = (
-        await session.execute(
-            select(BucketSummary.id).where(BucketSummary.bucket_id == row.id)
-        )
-    ).scalars().all()
-    return _serialize_bucket(row, summary_count=len(count))
+    count = await _count_articles(session, row.id)
+    return _serialize_bucket(row, summary_count=count)
 
 
 @router.get(
@@ -973,6 +1012,13 @@ async def list_bucket_summaries(
     auth: AuthContext = Depends(get_current_auth),
     session: AsyncSession = Depends(get_session),
 ) -> list[BucketSummaryOut]:
+    """Legacy endpoint — reads from ``bucket_summaries`` directly.
+
+    Deprecated in favour of ``/buckets/{slug}/articles`` (Phase 5d)
+    which surfaces the consolidated ``bucket_articles`` table. Kept
+    as-is until the frontend migration lands so a partial Phase 4 UI
+    deploy doesn't break. Removal target: Phase 9.
+    """
     await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
     bucket = await _load_bucket(session, workspace_id, slug)
     rows = (
@@ -992,6 +1038,63 @@ async def list_bucket_summaries(
             created_at=r.created_at,
         )
         for r in rows
+    ]
+
+
+@router.get(
+    "/buckets/{slug}/articles", response_model=list[BucketArticleOut]
+)
+async def list_bucket_articles(
+    workspace_id: uuid.UUID,
+    slug: str,
+    include_archived: bool = False,
+    include_superseded: bool = False,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> list[BucketArticleOut]:
+    """Phase 5d: canonical article listing for a bucket.
+
+    By default returns only published, unarchived rows — the same set
+    ``retrieve_buckets`` (Phase 5c) searches, and what the Phase 4
+    scope-pill UI will surface. ``include_superseded`` exposes Phase
+    5a's version history for a future article-timeline view, and
+    ``include_archived`` lets an admin inspect files that used to be
+    in ``.ship/knowledge/`` but have since been deleted from the repo.
+    """
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
+    bucket = await _load_bucket(session, workspace_id, slug)
+
+    stmt = (
+        select(BucketArticle)
+        .where(BucketArticle.bucket_id == bucket.id)
+        .order_by(desc(BucketArticle.created_at), BucketArticle.slug)
+    )
+    if not include_superseded:
+        # Default view hides supersession history to keep the UI
+        # focused on "what exists now". Set ``include_superseded=true``
+        # for a version timeline.
+        stmt = stmt.where(
+            BucketArticle.status == BucketArticleStatus.PUBLISHED
+        )
+    if not include_archived:
+        stmt = stmt.where(BucketArticle.archived_at.is_(None))
+    rows = (await session.execute(stmt)).scalars().all()
+
+    return [
+        BucketArticleOut(
+            id=a.id,
+            bucket_id=a.bucket_id,
+            slug=a.slug,
+            title=a.title,
+            body_md=a.body_md,
+            version=a.version,
+            status=a.status,
+            provenance=a.provenance or {},
+            created_at=a.created_at,
+            updated_at=a.updated_at,
+            archived_at=a.archived_at,
+        )
+        for a in rows
     ]
 
 

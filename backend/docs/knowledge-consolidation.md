@@ -1,9 +1,12 @@
 # Knowledge buckets consolidation — plan
 
-**Status:** Phases 1–3, 5a, 5b, 5c landed. Data-layer consolidation
-closed — `bucket_articles` is the read surface, `bucket_summaries`
-is maintained for write-back compat (deprecated, removal in Phase 6).
-Phase 4 (scope-pill in AppShell) is the next user-visible slice.
+**Status:** Phases 1–3, 5a, 5b, 5c, 5d landed. Backend consolidation
+closed — `bucket_articles` is the sole read surface (retriever, agent
+tools, new `/articles` endpoint, `summary_count` on bucket listings);
+`bucket_summaries` is maintained for write-back compat only, reads
+removed outside the legacy `/summaries` endpoint (deprecated, removal
+in Phase 9). Phase 4 (scope-pill in AppShell) is the next
+user-visible slice.
 **Scope:** unify the three "knowledge" surfaces (agent-memory buckets,
 `.ship/knowledge/*.md` disk-lister, `KbChunk` RAG index) under one
 `Scope × Source × Article` model, so every knowledge bucket has an
@@ -199,12 +202,29 @@ Split into three landing slices so we can ship incrementally:
   ranks and pulls from `bucket_articles` (published + unarchived +
   embedding-present + scope=agent_memory). `BucketHit.summary_id`
   renamed to `article_id`; `BucketHit.summary` now carries
-  `article.body_md`. The console detail page and agent tool
-  `get_knowledge_bucket` stay on the legacy `BucketSummary` read
-  (no external contract change yet) and will move in Phase 5d
-  alongside the frontend refactor; write-back to
-  `bucket_summaries` is preserved by the pack_topic dual-write so
-  the legacy reads are still correct.
+  `article.body_md`. Write-back to `bucket_summaries` is preserved by
+  the pack_topic dual-write so the still-legacy reads stay correct.
+- **Phase 5d (landed).** Finishes the backend read-path cutover:
+  - Agent tools `search_buckets`, `get_knowledge_bucket`,
+    `list_buckets` now rank/project over `bucket_articles`. Same
+    JSON keys on the wire (`summaries` / `summary_count` are
+    preserved) but `articles` / `article_count` are exposed as the
+    new canonical names so the Phase 4 UI + a future tool-spec
+    refresh can pick them up.
+  - New endpoint `GET /v1/workspaces/{ws}/buckets/{slug}/articles`
+    returns articles with `{id, slug, title, body_md, version,
+    status, provenance, created_at, updated_at, archived_at}`.
+    Optional `include_superseded` / `include_archived` flags expose
+    Phase 5a's version history for an admin timeline view; the
+    default view mirrors the retriever's filter.
+  - `BucketOut.summary_count` in the `/v1/workspaces/{ws}/buckets`
+    list / get / patch now counts published articles (1:1 with
+    summaries for agent_memory thanks to Phase 5b; a real,
+    non-zero count for repo_files buckets for the first time).
+  - Legacy `GET /v1/workspaces/{ws}/buckets/{slug}/summaries`
+    remains unchanged (reads `bucket_summaries` directly) and is
+    marked deprecated; removal target is Phase 9 after the frontend
+    migration to `/articles` lands.
 
 ### Phase 6 — Distiller contract
 
@@ -310,3 +330,12 @@ Improvements also respect it.
   `_format_bucket_memory`) is unchanged. 5 new tests guard source-scope,
   superseded/archived filtering, similarity threshold, and NULL-embedding
   tolerance. Backend suite: 365 passed.
+- **2026-04-21** — Phase 5d shipped: finishes the backend cutover.
+  Agent tools `search_buckets` / `get_knowledge_bucket` / `list_buckets`
+  read from `bucket_articles`; new console endpoint `GET /v1/workspaces/
+  {ws}/buckets/{slug}/articles` returns the canonical article shape with
+  optional `include_superseded` / `include_archived`; `BucketOut.summary_count`
+  switched to counting published articles (now meaningful for repo_files
+  buckets too). Legacy `GET .../summaries` stays as-is and is marked
+  deprecated. 14 new tests (7 agent-tool cutover + 7 endpoint). Backend
+  suite: 379 passed.
