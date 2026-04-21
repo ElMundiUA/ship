@@ -250,3 +250,8 @@ Improvements also respect it.
   rows. Sync triggers: push webhook, manual `kb/reindex`, first-time
   activation. `GET /v1/workspaces/{ws}/knowledge` reads from DB with
   legacy disk-lister as fallback. 10 new tests (sync service + route).
+- **2026-04-21** — Phase 3 shipped: `GET /v1/workspaces/{ws}/buckets/resolved`
+  returns the full scope ladder (workspace ≺ project ≺ repo ⊕ user)
+  with `priority` + `effective_scope` + `effective` flags inline and
+  a `winners_by_slug` quick-dedupe map. Caller's user overlay always
+  included; other users' user-scoped rows invisible. 10 new tests.
