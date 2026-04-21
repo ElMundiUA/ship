@@ -1,25 +1,24 @@
 # Knowledge buckets consolidation — plan
 
-**Status:** Phases 1–3, 4a, 4b, 5a, 5b, 5c, 5d, 6a, 6b, 6c landed.
-Backend consolidation closed — `bucket_articles` is the sole read
-surface (retriever, agent tools, `/articles` endpoint,
+**Status:** Phases 1–3, 4a, 4b, 5a, 5b, 5c, 5d, 6a, 6b, 6c, 7a
+landed. Backend consolidation closed — `bucket_articles` is the
+sole read surface (retriever, agent tools, `/articles` endpoint,
 `summary_count` on bucket listings); `bucket_summaries` is
 maintained for write-back compat only (deprecated, removal in
 Phase 9). Phase 4a + 4b shipped the scope pill + scope-aware
 `/knowledge`, `/catalog`, `/clarifications`, `/improvements`,
 `/chat`. Phase 6a shipped the Distiller stub; Phase 6b added the
 LLM-backed classifier (`classifier=auto|stub|llm`). Phase 6c
-shipped the inbound adapters: `distiller_sources.ingest_pr_merge`
-auto-fires on merged-PR webhooks (repo-scoped `pr-summaries`
-bucket, one article per PR), `ingest_external_static_upload`
-backs the new `POST /buckets/{slug}/upload` multipart route
-(text/markdown, 1 MiB cap, UTF-8 strict), and a
-`connector_proxy` adapter stub documents the shape for the
-next connector integration. `ensure_bucket` is the scope-aware
-get-or-create helper all adapters use. Console client now
-exposes `uploadToBucket`. Next: Phase 7 UI surfaces (upload
-picker in `/knowledge`, connector config) and Phase 8 offboarding
-audio transcript ingestion.
+shipped the inbound adapters. Phase 7a adds the console upload
+surface: `/knowledge/[id]` now dual-loads the legacy repo-files
+body *and* the unified `getBucket` + `listBucketArticles` +
+`listDistillerRuns` fan-out, renders an upload card for
+`external_static`/`audio_transcript` buckets (wired to a server
+action that calls `uploadToBucket` and `revalidatePath`s the
+page), and shows the last 20 Distiller runs alongside articles
+with provenance hints. Next: Phase 7b (connector config UI),
+Phase 8 (offboarding audio transcript ingestion), Phase 9
+(scope-driven sidebar IA).
 **Scope:** unify the three "knowledge" surfaces (agent-memory buckets,
 `.ship/knowledge/*.md` disk-lister, `KbChunk` RAG index) under one
 `Scope × Source × Article` model, so every knowledge bucket has an
@@ -389,6 +388,49 @@ Per-source surface:
   Offboarding flow: agent runs the interview over Navigator, records
   answers, distills into the leaving person's repo/project buckets
   with a review gate before publishing.
+
+#### Phase 7a — Upload picker in `/knowledge` (shipped)
+
+- `console/src/app/knowledge/[id]/page.tsx` — rewired to fan out the
+  legacy `getKnowledgeBucket` fetch alongside the unified
+  `getBucket`, `listBucketArticles`, and `listDistillerRuns` calls.
+  Each sub-fetch tolerates 404/errors independently so repo-files
+  buckets without a unified row (and external-static buckets without
+  a repo mirror) both render cleanly; the page only hard-404s when
+  all the bucket lookups miss.
+- `console/src/app/knowledge/[id]/actions.ts` — server action
+  `uploadBucketFileAction(workspaceId, slug, formData)` decodes the
+  FormData (`file`, `classifier`), validates size (≤1 MB) and
+  extension/mime (`.md|.markdown|.txt`) client-side before routing
+  through `uploadToBucket`. After a successful upload it
+  `revalidatePath`s the bucket page so the articles + runs cards
+  reflect the new row without a client-side refresh. Returns a
+  discriminated `UploadActionResult` instead of throwing so the
+  client can surface the decision / error inline.
+- `console/src/app/knowledge/[id]/upload-card.tsx` — client component
+  with a drag-style file input, classifier selector
+  (`auto | stub | llm`), submit button wired through `useTransition`,
+  and an inline result banner showing the Distiller `decision`,
+  picked `classifier`, and message. Hidden by the server page unless
+  the bucket's `source_kind` is `external_static` or
+  `audio_transcript` so `repo_files` surfaces stay read-only and
+  `agent_memory` buckets aren't tempted into manual edits.
+- Page additions beyond the upload card:
+  - **Articles card** renders the `bucket_articles` rows with
+    title, slug, version, status badge, and a provenance hint
+    (extracts `pr_number`/`author` for PR-merge articles, filename
+    for `external_static_upload`, path for repo files, thread id
+    for agent memory).
+  - **Runs card** lists the last 20 `DistillerRun` rows with
+    decision badge (`new`/`update`/`skip`/`error`), picked
+    classifier name from `output_refs.classifier.name`, and
+    relative timestamp.
+- `e2e/tests/knowledge-upload.wired.spec.ts` — Playwright smoke
+  that seeds a fresh external-static bucket via the Ship API, drops
+  a markdown file through the upload card (pinned to
+  `classifier=stub` for determinism), and asserts the success
+  banner + articles table update. Also covers the oversize rejection
+  path client-side.
 
 ### Phase 8 — User-memory bucket
 
