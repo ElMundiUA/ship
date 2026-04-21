@@ -61,19 +61,19 @@ partial) · **planned** (designed, no code yet) · **deferred**
 |  7c   | Notion connector (real fetch) | shipped | `d160fc5` | `services/connectors/notion.py` | `resource_ref={page_id}` |
 |  7c   | Linear connector (real fetch) | shipped | `c72a52e` | `services/connectors/linear.py` | `resource_ref={issue_id}` |
 |   8   | Per-user memory bucket + visibility guards | shipped | `aeeec74` | `services/bucket_visibility.py`, `save-to-memory` endpoint | `scope=user` private overlay |
-|   9   | IA restructure + sidebar | planned | — | (frontend) | left nav grouped by scope; also retires `bucket_summaries` |
+|  9a   | Sidebar IA (frontend) | planned | — | `console/src/components/AppShell` | scope-grouped nav, collapsible |
+|  9b   | "My knowledge" route | planned | — | `console/src/app/me/knowledge` | depends on 9a for nav link |
+|  9c   | Retire `bucket_summaries` | planned | — | `migrations/0017_drop_bucket_summaries.py` | drop dual-write + legacy table |
+|  9d   | Retire `KbChunk` / `kb_indexer` | planned | — | `migrations/0018_drop_kb_chunks.py` | unify RAG index into `bucket_articles` |
+|  9e   | `/knowledge` off disk | planned | — | `routes/knowledge.py` | delete `services/knowledge_lister.py` |
+|  9f   | Cross-scope global search | planned | — | `GET /v1/workspaces/{ws}/search` | optional; `⌘K` palette |
+|  9g   | ME overlay (Navigator + Tasks) | planned | — | `console/src/app/me/*` | re-homes Navigator; new Tasks page |
 
-Out of the current initiative (tracked elsewhere / later):
-
-- Notion database listing + child-block recursion — extends 7c's
-  single-page shape to multi-page; depends on changing
-  `DistillOut` to a list response or paging the dispatcher.
-- Linear team mirror (`resource_ref={team_key}`) — same story.
-- Confluence connector — third fetcher in the 7c registry.
-- Auto-save consent toggle (end-of-thread auto pack into
-  `my-memory`) — needs a product decision on opt-in/opt-out; the
-  write path from Phase 8 already supports it.
-- "Forget this" / per-user quota on `my-memory` — Phase 8 follow-up.
+See the **Phase 9 — IA restructure + sidebar + final cleanup**
+section below for sub-phase specs, and **Out of the initiative
+(parked ideas)** for everything deliberately outside this plan
+(connector extensions, Phase 8 follow-ups, retrieval quality,
+Distiller polish, ops, security, onboarding, cross-cutting).
 
 ---
 
@@ -682,9 +682,19 @@ Explicitly out of scope (moves to a follow-up): automatic
 end-of-thread save (needs consent UX), cross-thread "forget this"
 button, per-user quota on `my-memory` articles.
 
-### Phase 9 — IA restructure + sidebar
+### Phase 9 — IA restructure + sidebar + final cleanup
 
-Left nav grouped by scope:
+Phase 9 is the wrap-up phase: it closes the consolidation by
+retiring the legacy read/write surfaces, reorganises the left nav
+around the scope model we've been building up, and adds the
+"ME" overlay that surfaces the per-user bucket from Phase 8.
+Breakdown into landable sub-phases, same pattern as 5/6/7 — each
+leaves `main` green on its own.
+
+#### 9a — Sidebar IA (frontend, first visible slice)
+
+Left nav grouped by scope, each group collapsible, visibility
+reacts to the scope pill:
 
 ```
 REPO      · Dashboard · Pipelines · Clarifications · Improvements · Knowledge
@@ -694,8 +704,253 @@ ADMIN     · Settings · Tokens · Billing
 ME        · Navigator · My knowledge · Tasks
 ```
 
-Sidebar visibility reacts to the scope pill; Clarifications +
-Improvements also respect it.
+Concrete deliverables:
+
+- `console/src/components/AppShell/Sidebar.tsx` — group renderer,
+  collapsible per group, remembers collapsed state in
+  localStorage per user.
+- `ME` group always visible regardless of scope (it's the caller's
+  own overlay), everything else follows the scope pill selection.
+- `REPO` and `PROJECT` groups hide when the pill is on `WORKSPACE`
+  (nothing to point at).
+- `ADMIN` group only renders for `org_owner` / workspace `owner`
+  memberships.
+- Accessibility: keyboard-navigable groups, ARIA roles.
+
+#### 9b — "My knowledge" route (frontend)
+
+New route `console/src/app/me/knowledge/page.tsx` that renders the
+caller's `scope=user` buckets — driven by `GET /buckets?scope=user`
+(which the Phase 8 visibility helper already filters to the
+caller). First bucket is `my-memory` (Phase 8 lazy-mint). UI reuses
+the existing `/knowledge/[slug]` bucket-detail page, so it's
+mostly routing + sidebar link.
+
+Depends on: 9a for the nav entry, but ships standalone.
+
+#### 9c — Retire `bucket_summaries` (backend cleanup)
+
+Dual-write has kept the legacy table in sync since Phase 5b, but
+nothing reads it after Phase 5c. Remove:
+
+- `pack_topic` no longer inserts into `bucket_summaries` (drop
+  the `BucketSummary(...)` block; `mirror_summary_to_article` is
+  already the main write path).
+- `BucketSummary` model + routes / serializers that still echo
+  the legacy id shape.
+- `services/bucket_summary_articles.py` mirror — after the
+  dual-write goes, there's nothing left to mirror.
+- Migration `0017_drop_bucket_summaries.py` — irreversible on
+  prod, so a safety window (1 release) where the table exists
+  but is unused gives ops a rollback path.
+
+Tests: delete the compat shims; verify the /articles endpoint
+still works.
+
+#### 9d — Retire `KbChunk` (unify the RAG index)
+
+The `kb_chunks` table indexes `.ship/knowledge/*.md` content
+separately from `bucket_articles`. Post-Phase-2 the same content
+lives in `bucket_articles` as `source_kind=external_static`, so
+the `KbChunk` path is redundant for retrieval.
+
+- Audit whether any agent tool / retrieval path still reads
+  `KbChunk`. (Phase 5c moved `retrieve_buckets` + `search_buckets`
+  off it; anything else is legacy.)
+- Migrate remaining readers to query `bucket_articles` with
+  scope/source filters.
+- Drop the `kb_indexer` push-webhook path (Phase 2's
+  `knowledge_kb_sync` already covers the write side).
+- Migration `0018_drop_kb_chunks.py` after the safety window.
+
+This is the single biggest LOC reduction in Phase 9 — we've been
+carrying kb_chunks since the pilot.
+
+#### 9e — `/knowledge` read surface off disk
+
+`backend/app/services/knowledge_lister.py` still scans
+`.ship/knowledge/*.md` from disk for the `/v1/workspaces/{ws}/knowledge`
+endpoint. Post-Phase-2 the same content is in `bucket_articles`.
+Switch the endpoint to read articles, delete `knowledge_lister`.
+Local `ArtifactRepo` rows stop being special-cased.
+
+#### 9f — Cross-scope global search (optional, punt if tight)
+
+Console-level search box that searches across all visible buckets
+at once — workspace + project + repo + user overlay — using the
+Phase 8 visibility helper to keep privacy correct. Uses
+`bucket_articles.embedding` with the same cosine threshold the
+retriever uses.
+
+- `GET /v1/workspaces/{ws}/search?q=...` endpoint (new).
+- Console command palette (`⌘K`) wired to the endpoint.
+- Result rows show `scope · bucket · title · snippet`, grouped
+  by scope so the hierarchy is visible.
+
+#### 9g — ME overlay: Navigator + Tasks
+
+- **Navigator** page is already live; 9g just re-homes it under
+  the `ME` group in the sidebar.
+- **Tasks** surface (new) — list of things the user personally
+  owns across workspaces: open clarifications, active threads,
+  pending improvements. Aggregates from existing APIs; no new
+  tables.
+
+#### 9 acceptance
+
+- Sidebar renders grouped by scope for every tested role.
+- `bucket_summaries` + `kb_chunks` tables dropped on prod (after
+  safety window) with no read-path regression.
+- `knowledge_lister.py` deleted.
+- Full regression green; Phase 9 feature flag removable.
+
+---
+
+## Out of the initiative (parked ideas)
+
+These are tracked here so they don't get forgotten, but they're
+outside Phase 9 / this consolidation. Each has a one-line "why
+parked" and the Phase that naturally lands it when scheduled.
+
+### Connector extensions (owner: 7c registry)
+
+- **Notion database listing** — `resource_ref={database_id}`
+  mirrors every page in a Notion DB as one article each. Needs
+  the dispatcher to return N pages and `DistillOut` to become a
+  list response, or the endpoint to iterate + return a summary
+  count instead of a single `DistillOut`. Parked because it
+  reshapes the sync response contract.
+- **Notion child-block recursion** — sub-pages as their own
+  articles, with parent/child links in `page_ref`.
+- **Notion incremental sync** — only refetch pages whose
+  `last_edited_time` moved since the bucket's last sync.
+  `Integration.config` can carry the cursor.
+- **Linear team mirror** — `resource_ref={team_key}` fetches
+  every open issue in the team. Same multi-page shape blocker
+  as Notion DB.
+- **Linear comments + attachments** — pull issue comment thread
+  as a follow-up article.
+- **Confluence page fetcher** — third connector in the registry.
+  REST API, paginated child pages. Straightforward port once
+  multi-page shape lands.
+- **Google Docs fetcher** — OAuth scope + Drive/Docs API. One
+  doc → one markdown article.
+- **Slack channel ingestion** — consent-gated; channel ID as
+  resource_ref; daily window packs messages into articles.
+  Compliance review needed before shipping.
+- **GitHub Discussions fetcher** — we already have a GitHub App,
+  this is cheap to add as a new connector kind.
+
+### Phase 8 follow-ups (user memory)
+
+- **Auto-save consent toggle** — per-user flag; when on, every
+  thread end-of-life triggers `save-to-memory`. Needs a
+  `user_preferences` table or a column on `WorkspaceMember`.
+  Write path from Phase 8 unchanged.
+- **"Forget this" button** — article-level delete/archive on
+  `my-memory`. Extend the existing article-archive endpoint with
+  a "caller owns the bucket" guard via the visibility helper.
+- **Per-user `my-memory` quota** — cap articles or byte size
+  per bucket. Needs a background sweep job (same cron hook that
+  runs the Distiller digest today).
+- **Pin important** — promote a `my-memory` article to stick
+  to the top of retrieval regardless of similarity score.
+  Needs a pinned flag + retriever tweak.
+- **Share-with-team** — one-shot export from `scope=user` to
+  `scope=workspace`. Policy: original author stamped in
+  provenance; team gets a read-only copy. Explicit action.
+- **Memory TTL / auto-archive** — background sweep archives
+  articles older than N days that haven't been retrieved in M
+  days. Opt-in.
+
+### Retrieval quality
+
+- **Hybrid ranker** — BM25 + cosine fusion. Today retrieval is
+  pure cosine over `bucket_articles.embedding`. BM25 helps on
+  exact-match queries (error messages, package names) the
+  embedder fuzzes.
+- **Per-scope result mixing** — retriever picks top-K from each
+  scope (workspace / project / repo / user) instead of a single
+  global top-K, so a noisy workspace bucket can't crowd out a
+  relevant user memory.
+- **Per-workspace similarity threshold** — tune cosine
+  threshold from the current global 0.25 based on actual hit
+  quality (metrics below).
+- **Citation surface** — LLM answers link the `article_id` of
+  every retrieved snippet it actually used. Shipped in
+  `ChatMessage.meta.used_article_ids`.
+- **Per-article usage metrics** — count `retrieved` vs `used`
+  for each article so stale ones can be pruned.
+- **Rerank step** — LLM-based rerank on top-N candidates before
+  truncation to top-K. Costs a cheap model call per turn.
+
+### Distiller
+
+- **Manual classifier override** — UI to re-label an article
+  after ingestion. Keeps a provenance trail so the label doesn't
+  silently drift.
+- **Classifier batch backfill** — re-run the LLM classifier
+  over all `auto=stub` articles after a prompt/model upgrade.
+- **Cost budget per-workspace** — cap LLM classifier spend per
+  month. Billing signal exists; just needs wiring.
+- **Global dedup on `content_sha`** — today dedup is bucket-local.
+  A workspace-wide lookup would collapse duplicate uploads
+  across buckets.
+- **Versioning UI** — surface superseded article history on the
+  bucket-detail page. The data already lives in
+  `bucket_articles.archived_at` + `supersedes_id`.
+
+### Observability / ops
+
+- **Per-connector sync health dashboard** — last success, error
+  rate, p95 latency. One query over the existing
+  `distiller_runs` table.
+- **Rate-limit handling** — Notion (3 req/s) and Linear
+  (50 req/min) enforce at the API side. Today we best-effort
+  it; proper token-bucket + `Retry-After` parsing is
+  needed for team-wide mirrors.
+- **Retry/backoff** on transient 5xx from connector APIs.
+  `tenacity` already in the dep set.
+- **Audit log** for user-memory writes — who saved what to
+  `my-memory`, and when. Uses the existing `AuditLog` row.
+- **Alerting** on connector config errors — today they 502 the
+  caller; should also post to ops Slack so drift is caught.
+
+### Security / compliance
+
+- **Export my memory** — user-triggered GDPR export of every
+  `my-memory` article as markdown + provenance.
+- **Delete my memory on offboarding** — when a workspace member
+  is removed, their `scope=user` bucket is archived (not hard-deleted
+  immediately) with a 30-day window for restore.
+- **Signed upload URLs** — the upload surface today goes through
+  the backend; S3 signed URLs would let big uploads bypass our
+  proxy.
+- **Integration secret rotation reminder** — Notion / Linear
+  tokens don't auto-rotate. Surface "last rotated" in the
+  integration listing.
+
+### Onboarding / growth
+
+- **Wizard step: "connect your first page"** — right after
+  GitHub App install, guide the user into connecting Notion /
+  Linear for a starter bucket.
+- **Sample pack / seed data** — one-click demo buckets so new
+  workspaces aren't empty.
+- **Starter `save-to-memory` nudge** — first time a user pastes
+  a long assistant answer into chat, prompt them to save.
+
+### Cross-cutting
+
+- **Bucket-level permissions** — beyond `scope=user` privacy, a
+  workspace admin might want "this bucket is read-only for
+  members". Needs an `acl` column or sibling table.
+- **Cross-workspace bucket sharing** — "publish bucket X to org
+  Y". Big schema change (bucket owned by org, not workspace).
+- **i18n for bucket names / descriptions** — `bucket_translations`
+  sibling. Not urgent; current users are all en/ua.
+- **Archived threads browser** — today `/chat/threads?status=archived`
+  exists but isn't a first-class UI surface.
 
 ---
 
