@@ -58,11 +58,19 @@ export default async function CloudHomePage({
     if (result === "unauthorized") redirect("/login?next=%2F");
     if (result === "empty") redirect("/onboarding?step=github");
     if (result === "down") return renderDownState();
-    // We deliberately do NOT bounce users with active_repos === 0 back
-    // into the wizard. They might have skipped setup on purpose, or come
-    // back after revoking the App, or just want to read the docs. The
-    // dashboard surfaces a "finish setup" callout for that case
-    // (see DashboardLive), but the page itself stays accessible.
+    // Greenfield workspace: user logged in for the first time, Auth0 JIT
+    // created the shell org/workspace, but nothing has been wired yet —
+    // no repos activated, no lanes configured, no PRs, no runs. There's
+    // literally nothing to show on a dashboard, so push them into the
+    // wizard instead of a blank page with a callout they might miss.
+    // The ``?skipWizard=1`` escape hatch lets a returning operator who
+    // actually wants the (mostly-empty) dashboard get there anyway.
+    const skipWizard = params.skipWizard === "1";
+    if (!skipWizard && isGreenfieldWorkspace(result)) {
+      redirect(
+        `/onboarding?step=github&ws=${encodeURIComponent(result.workspace.id)}`,
+      );
+    }
     return renderLiveDashboard(result, params);
   }
 
@@ -74,6 +82,28 @@ type LiveContext = {
   data: ApiDashboard;
   repos: ApiActivatedRepo[];
 };
+
+/**
+ * A workspace is "greenfield" when the operator has signed in but the
+ * backend hasn't seen any wiring yet: zero activated repos, zero
+ * pipelines, zero PRs, zero lane runs. Auth0 JIT creates the shell
+ * org/workspace on first login, so we can't rely on
+ * ``workspaces.length === 0`` anymore to detect "hasn't started setup".
+ *
+ * This intentionally doesn't probe ``github_installations`` separately
+ * — if the App was installed but no repos picked (mid-wizard), the
+ * user still belongs in the wizard to finish step 2.
+ */
+function isGreenfieldWorkspace(ctx: LiveContext): boolean {
+  const c = ctx.data.counts;
+  return (
+    c.active_repos === 0 &&
+    c.enabled_pipelines === 0 &&
+    c.open_pull_requests === 0 &&
+    c.runs_last_24h === 0 &&
+    ctx.repos.length === 0
+  );
+}
 
 async function loadLiveContext(
   token: string,
