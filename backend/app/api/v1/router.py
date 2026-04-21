@@ -39,6 +39,7 @@ from backend.app.api.v1.routes import (
     pipelines,
     repo_secrets,
     repos,
+    tracker_binding,
     workspace_artifacts,
     workspaces,
 )
@@ -129,3 +130,8 @@ api_router.include_router(lanes.router)
 # + push; plaintext lives only in the HTTP hop to GitHub's secrets
 # API and is never persisted by Ship.
 api_router.include_router(agent_secrets.router)
+# Per-repo tracker binding (Wizard v2 iter 4). GET/PUT/DELETE under
+# /workspaces/{ws}/repos/{repo}/tracker. Rides on workspace-level
+# OAuth connections (no per-repo tokens); stores the team/project
+# selection and falls back to the workspace default on read.
+api_router.include_router(tracker_binding.router)
