@@ -27,7 +27,23 @@ type Bucket = {
   created_at: string;
   updated_at: string;
   summary_count: number;
+  // Phase 4b scope fields (optional — tolerate older backends).
+  scope_kind?: "workspace" | "project" | "repo" | "user";
+  source_kind?:
+    | "agent_memory"
+    | "repo_files"
+    | "external_static"
+    | "connector_proxy"
+    | "audio_transcript";
+  repo_id?: string | null;
+  project_id?: string | null;
+  user_id?: string | null;
 };
+
+export type BucketScopeFilter =
+  | { kind: "workspace" }
+  | { kind: "repo"; repoId: string | null }
+  | { kind: "user"; userId: string | null };
 
 type Summary = {
   id: string;
@@ -41,9 +57,21 @@ type Summary = {
 export function BucketsSidebar({
   workspaceId,
   initial,
+  scopeFilter,
 }: {
   workspaceId: string;
   initial: Bucket[];
+  /**
+   * Phase 4b: optional scope pre-filter driven by the AppShell
+   * scope pill. Repo scope keeps buckets visible to that repo
+   * (repo-scoped rows + ambient workspace-scope rows — the same
+   * inheritance model the Phase 3 resolver uses). User scope keeps
+   * the caller's own agent-memory + workspace ambient rows;
+   * someone else's ``scope='user'`` rows are invisible either way
+   * (backend filters them for us). Workspace scope is the
+   * identity filter.
+   */
+  scopeFilter?: BucketScopeFilter;
 }) {
   const [buckets, setBuckets] = useState<Bucket[]>(initial);
   const [selected, setSelected] = useState<string | null>(null);
@@ -137,9 +165,13 @@ export function BucketsSidebar({
     [workspaceId, refreshBuckets],
   );
 
-  const visible = buckets.filter((b) =>
-    showArchived ? true : b.archived_at === null,
-  );
+  // First archival filter, then scope filter. The scope filter is
+  // tolerant: if a bucket doesn't carry ``scope_kind`` yet (older
+  // backend / Phase-0 row that never went through Phase 1), treat
+  // it as workspace-scope so the UI doesn't lose sight of it.
+  const visible = buckets
+    .filter((b) => (showArchived ? true : b.archived_at === null))
+    .filter((b) => matchesScope(b, scopeFilter));
 
   return (
     <aside className="flex h-[calc(100vh-16rem)] min-h-[32rem] flex-col rounded-xl border border-white/10 bg-white/[0.02] p-3">
@@ -210,6 +242,29 @@ export function BucketsSidebar({
       ) : null}
     </aside>
   );
+}
+
+function matchesScope(
+  b: Bucket,
+  filter: BucketScopeFilter | undefined,
+): boolean {
+  if (!filter || filter.kind === "workspace") return true;
+  const kind = b.scope_kind ?? "workspace";
+  if (filter.kind === "repo") {
+    if (kind === "workspace") return true;
+    if (kind === "repo" && filter.repoId && b.repo_id === filter.repoId) {
+      return true;
+    }
+    return false;
+  }
+  // ``user`` scope: caller's agent memory + ambient workspace.
+  if (kind === "workspace") return true;
+  if (kind === "user") {
+    // Backend already filters other users out; accept any user row
+    // that comes back, which belongs to the caller by construction.
+    return true;
+  }
+  return false;
 }
 
 function BucketDetail({

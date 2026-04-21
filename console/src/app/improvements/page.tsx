@@ -2,12 +2,18 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { AppShell } from "@/components/app-shell";
+import {
+  type ResolvedScope,
+  ScopePill,
+  resolveScopeFromSearch,
+} from "@/components/scope-pill";
 import { Badge, Card, CardHeader } from "@/components/ui";
 import {
   type ApiImprovement,
   type ApiImprovementDecision,
   ApiHttpError,
   ApiUnavailableError,
+  getMe,
   isApiConfigured,
   listActivatedRepos,
   listImprovements,
@@ -75,9 +81,13 @@ export default async function ImprovementsPage({
     decision?: string;
     banner?: string;
     focus?: string;
+    scope?: string;
+    repo_id?: string;
+    project_id?: string;
   }>;
 }) {
   const params = await searchParams;
+  const scope = resolveScopeFromSearch(params);
   if (!isApiConfigured()) {
     return (
       <AppShell title="Improvements">
@@ -114,10 +124,12 @@ export default async function ImprovementsPage({
 
   let allRows: ApiImprovement[] = [];
   let repos: Awaited<ReturnType<typeof listActivatedRepos>> = [];
+  let me: Awaited<ReturnType<typeof getMe>> | null = null;
   try {
-    [allRows, repos] = await Promise.all([
+    [allRows, repos, me] = await Promise.all([
       listImprovements(workspace.id, { token }),
       listActivatedRepos(workspace.id, token).catch(() => []),
+      getMe(token).catch(() => null),
     ]);
   } catch (err) {
     if (err instanceof ApiHttpError && err.status === 401)
@@ -125,16 +137,24 @@ export default async function ImprovementsPage({
     return renderUnavailable(err);
   }
 
+  // Phase 4b: repo scope filter is client-side — the backend
+  // improvements list only accepts ``?decision=`` today. User
+  // scope surfaces a banner and falls back to the full list.
+  const scopedRows =
+    scope.kind === "repo" && scope.repoId
+      ? allRows.filter((r) => r.repo_id === scope.repoId)
+      : allRows;
+
   const counts: Record<string, number> = {
     pending: 0,
     accepted: 0,
     declined: 0,
     deferred: 0,
-    total: allRows.length,
+    total: scopedRows.length,
   };
-  for (const r of allRows) counts[r.decision] = (counts[r.decision] ?? 0) + 1;
+  for (const r of scopedRows) counts[r.decision] = (counts[r.decision] ?? 0) + 1;
 
-  const rows = allRows
+  const rows = scopedRows
     .filter((r) => r.decision === decisionFilter)
     .sort(
       (a, b) =>
@@ -144,14 +164,27 @@ export default async function ImprovementsPage({
   const reposById = new Map(repos.map((r) => [r.id, r]));
   const banner = pickBanner(params.banner);
 
+  const scopePill = (
+    <ScopePill
+      workspaceName={workspace.name}
+      repos={repos.map((r) => ({ id: r.id, full_name: r.full_name }))}
+      me={
+        me
+          ? { id: me.id, email: me.email, display_name: me.display_name }
+          : null
+      }
+    />
+  );
+
   return (
     <AppShell
       title="Improvements"
       workspace={{ id: workspace.id, name: workspace.name, slug: workspace.slug }}
       scope={{
         repos: repos.map((r) => ({ id: r.id, full_name: r.full_name })),
-        selectedRepoId: repos[0]?.id ?? null,
+        selectedRepoId: scope.kind === "repo" ? scope.repoId : repos[0]?.id ?? null,
       }}
+      scopePill={scopePill}
       actions={
         <Link
           href="/"
@@ -181,6 +214,14 @@ export default async function ImprovementsPage({
         </div>
       ) : null}
 
+      {scope.kind === "user" ? (
+        <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[12px] text-amber-100/85">
+          User scope doesn&apos;t filter improvements yet — we don&apos;t
+          track &ldquo;assigned to me&rdquo; for proposals. Pick a repo
+          scope to narrow the list.
+        </div>
+      ) : null}
+
       <div className="mb-5 flex flex-wrap gap-2 border-b border-white/10 pb-2">
         {([
           { key: "pending", label: "Pending" },
@@ -190,11 +231,7 @@ export default async function ImprovementsPage({
         ] as const).map((tab) => (
           <Link
             key={tab.key}
-            href={
-              tab.key === "pending"
-                ? "/improvements"
-                : `/improvements?decision=${tab.key}`
-            }
+            href={tabHref("/improvements", { decision: tab.key, scope })}
             className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
               decisionFilter === tab.key
                 ? "bg-white/10 text-white"
@@ -206,7 +243,7 @@ export default async function ImprovementsPage({
           </Link>
         ))}
         <span className="ml-auto text-[11px] text-white/40">
-          {counts.total} total across the workspace
+          {counts.total} total in {scopeLabel(scope, repos, workspace.name)}
         </span>
       </div>
 
@@ -228,6 +265,35 @@ export default async function ImprovementsPage({
       )}
     </AppShell>
   );
+}
+
+function tabHref(
+  base: string,
+  opts: { decision: ApiImprovementDecision; scope: ResolvedScope },
+): string {
+  const qs = new URLSearchParams();
+  if (opts.decision !== "pending") qs.set("decision", opts.decision);
+  if (opts.scope.kind !== "workspace") {
+    qs.set("scope", opts.scope.kind);
+    if (opts.scope.kind === "repo" && opts.scope.repoId) {
+      qs.set("repo_id", opts.scope.repoId);
+    }
+  }
+  const suffix = qs.toString();
+  return suffix ? `${base}?${suffix}` : base;
+}
+
+function scopeLabel(
+  scope: ResolvedScope,
+  repos: { id: string; full_name: string }[],
+  workspaceName: string,
+): string {
+  if (scope.kind === "repo" && scope.repoId) {
+    const r = repos.find((x) => x.id === scope.repoId);
+    return r ? r.full_name : "selected repo";
+  }
+  if (scope.kind === "user") return "your queue";
+  return `${workspaceName} workspace`;
 }
 
 function EmptyState({

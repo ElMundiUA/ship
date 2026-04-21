@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { AppShell } from "@/components/app-shell";
+import { ScopePill, resolveScopeFromSearch } from "@/components/scope-pill";
 import { Card, CardHeader } from "@/components/ui";
 import {
   ApiHttpError,
@@ -9,6 +10,7 @@ import {
   type ApiBucket,
   type ApiChatThread,
   getActiveChatThread,
+  getMe,
   isApiConfigured,
   listActivatedRepos,
   listBuckets,
@@ -16,7 +18,7 @@ import {
 } from "@/lib/api/client";
 import { getSessionToken } from "@/lib/api/session";
 
-import { BucketsSidebar } from "./buckets-sidebar";
+import { type BucketScopeFilter, BucketsSidebar } from "./buckets-sidebar";
 import { SingleWindowChat } from "./single-window-chat";
 
 /**
@@ -32,7 +34,17 @@ import { SingleWindowChat } from "./single-window-chat";
 
 export const dynamic = "force-dynamic";
 
-export default async function ChatPage() {
+export default async function ChatPage({
+  searchParams,
+}: {
+  searchParams: Promise<{
+    scope?: string;
+    repo_id?: string;
+    project_id?: string;
+  }>;
+}) {
+  const params = await searchParams;
+  const scope = resolveScopeFromSearch(params);
   if (!isApiConfigured()) {
     return (
       <AppShell title="Navigator">
@@ -63,11 +75,13 @@ export default async function ChatPage() {
   let thread: ApiChatThread | null = null;
   let buckets: ApiBucket[] = [];
   let repos: Awaited<ReturnType<typeof listActivatedRepos>> = [];
+  let me: Awaited<ReturnType<typeof getMe>> | null = null;
   try {
-    [thread, buckets, repos] = await Promise.all([
+    [thread, buckets, repos, me] = await Promise.all([
       getActiveChatThread(workspace.id, token),
       listBuckets(workspace.id, { token }).catch(() => []),
       listActivatedRepos(workspace.id, token).catch(() => []),
+      getMe(token).catch(() => null),
     ]);
   } catch (err) {
     if (err instanceof ApiHttpError && err.status === 401)
@@ -93,14 +107,38 @@ export default async function ChatPage() {
   }
   if (!thread) return renderUnavailable(new Error("empty chat response"));
 
+  const scopePill = (
+    <ScopePill
+      workspaceName={workspace.name}
+      repos={repos.map((r) => ({ id: r.id, full_name: r.full_name }))}
+      me={
+        me
+          ? { id: me.id, email: me.email, display_name: me.display_name }
+          : null
+      }
+    />
+  );
+
+  // Translate the URL-driven scope into a filter shape the sidebar
+  // knows how to apply. Active-thread selection still ignores
+  // ``repo_id`` (backend work), so scope today only narrows the
+  // sidebar — the conversation surface stays on the same thread.
+  const bucketScope: BucketScopeFilter =
+    scope.kind === "repo"
+      ? { kind: "repo", repoId: scope.repoId }
+      : scope.kind === "user"
+        ? { kind: "user", userId: me?.id ?? null }
+        : { kind: "workspace" };
+
   return (
     <AppShell
       title="Navigator"
       workspace={{ id: workspace.id, name: workspace.name, slug: workspace.slug }}
       scope={{
         repos: repos.map((r) => ({ id: r.id, full_name: r.full_name })),
-        selectedRepoId: repos[0]?.id ?? null,
+        selectedRepoId: scope.kind === "repo" ? scope.repoId : repos[0]?.id ?? null,
       }}
+      scopePill={scopePill}
       actions={
         <Link
           href="/"
@@ -110,6 +148,13 @@ export default async function ChatPage() {
         </Link>
       }
     >
+      {scope.kind !== "workspace" ? (
+        <div className="mb-4 rounded-lg border border-aqua/20 bg-aqua/5 px-3 py-2 text-[12px] text-aqua/85">
+          Scope filter narrows the memory-bucket sidebar. The active
+          conversation still uses the one thread routed to you;
+          repo-scoped threads are on the roadmap.
+        </div>
+      ) : null}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr,320px]">
         <SingleWindowChat
           workspaceId={workspace.id}
@@ -124,7 +169,11 @@ export default async function ChatPage() {
             messages: thread.messages,
           }}
         />
-        <BucketsSidebar workspaceId={workspace.id} initial={buckets} />
+        <BucketsSidebar
+          workspaceId={workspace.id}
+          initial={buckets}
+          scopeFilter={bucketScope}
+        />
       </div>
     </AppShell>
   );

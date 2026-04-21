@@ -99,6 +99,30 @@ test.describe("console surfaces (wired, serial)", () => {
     await expect(pill).toHaveAttribute("data-scope", "workspace");
   });
 
+  test("08c — scope pill is mounted on catalog/clarifications/improvements/chat (Phase 4b)", async ({
+    page,
+  }) => {
+    // One pill test per surface so regressions flag which page lost
+    // the pill rather than one big sweep. All four are the same
+    // assertion shape — default scope is workspace when no query
+    // param is set.
+    const surfaces = [
+      "/catalog",
+      "/clarifications",
+      "/improvements",
+      "/chat",
+    ] as const;
+    for (const path of surfaces) {
+      await page.goto(path);
+      const pill = page.getByTestId("scope-pill");
+      await expect(pill, `pill on ${path}`).toBeVisible({ timeout: 30_000 });
+      await expect(
+        pill,
+        `default scope on ${path}`,
+      ).toHaveAttribute("data-scope", "workspace");
+    }
+  });
+
   test("08b — knowledge respects ?scope=repo URL state", async ({ page }) => {
     // Navigate to a repo-scoped URL directly. The pill should flip
     // to "repo" iff the ``repo_id`` resolves against activated

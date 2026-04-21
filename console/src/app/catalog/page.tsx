@@ -1,6 +1,11 @@
 import Link from "next/link";
 
 import { AppShell } from "@/components/app-shell";
+import {
+  type ResolvedScope,
+  ScopePill,
+  resolveScopeFromSearch,
+} from "@/components/scope-pill";
 
 // Reads cookies + env at runtime; never cache between sessions.
 export const dynamic = "force-dynamic";
@@ -14,12 +19,14 @@ import {
   MockBanner,
 } from "@/components/ui";
 import {
+  getMe,
   isApiConfigured,
+  listActivatedRepos,
   listAllArtifacts,
   listWorkspaces,
 } from "@/lib/api/client";
 import { getSessionToken } from "@/lib/api/session";
-import type { ApiArtifact, ApiArtifactKind } from "@/lib/api/types";
+import type { ApiArtifact, ApiArtifactKind, ApiUser } from "@/lib/api/types";
 import { artifacts as mockArtifacts, relativeTime, workspaces } from "@/lib/mock/cloud";
 
 const FALLBACK_WS = workspaces[0];
@@ -32,6 +39,7 @@ type Row = {
   version: string;
   channel: string;
   source: "global" | "workspace" | "project";
+  sourceRepoId?: string;
   overrides?: "global" | "workspace" | "project";
   updatedAt: string;
   tags: string[];
@@ -41,6 +49,8 @@ type CatalogData = {
   source: "live" | "mock";
   workspace: { id?: string; slug: string; name: string };
   rows: Row[];
+  repos: { id: string; full_name: string }[];
+  me: ApiUser | null;
   reason?: string;
 };
 
@@ -58,11 +68,17 @@ async function loadCatalog(): Promise<CatalogData> {
       return mockData("no workspaces yet — finish onboarding first");
     }
     const ws = wss[0];
-    const all = await listAllArtifacts(ws.id);
+    const [all, repos, me] = await Promise.all([
+      listAllArtifacts(ws.id),
+      listActivatedRepos(ws.id, token).catch(() => []),
+      getMe(token).catch(() => null as ApiUser | null),
+    ]);
     return {
       source: "live",
       workspace: { id: ws.id, slug: ws.slug, name: ws.name },
       rows: all.map(toRow),
+      repos: repos.map((r) => ({ id: r.id, full_name: r.full_name })),
+      me,
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -94,6 +110,8 @@ function mockData(reason: string): CatalogData {
       updatedAt: a.updatedAt,
       tags: a.tags,
     })),
+    repos: [],
+    me: null,
     reason,
   };
 }
@@ -124,25 +142,68 @@ function toRow(a: ApiArtifact & { _kind?: ApiArtifactKind }): Row {
     version: a.version ?? "—",
     channel: a.channel ?? "stable",
     source: a.effective_source,
+    sourceRepoId: a.source_repo_id,
     updatedAt: a.updated_at ?? new Date().toISOString(),
     tags: a.tags ?? [],
   };
 }
 
-export default async function CatalogPage() {
+export default async function CatalogPage({
+  searchParams,
+}: {
+  searchParams: Promise<{
+    scope?: string;
+    repo_id?: string;
+    project_id?: string;
+  }>;
+}) {
+  const params = await searchParams;
+  const scope = resolveScopeFromSearch(params);
   const data = await loadCatalog();
+  // Phase 4b: repo scope filters the merged catalog by
+  // ``source_repo_id`` — every artifact row that carries a concrete
+  // repo of origin (project-scope pins, workspace-authored entries
+  // sourced from a specific repo). Rows without a ``source_repo_id``
+  // (global catalog, workspace-level catalogs not attached to a
+  // single repo) stay visible so the repo-scope view still shows
+  // the ambient catalog the repo inherits. User scope has no
+  // catalog analog today, so it falls back to full.
+  const scopedRows =
+    scope.kind === "repo" && scope.repoId
+      ? data.rows.filter(
+          (r) => !r.sourceRepoId || r.sourceRepoId === scope.repoId,
+        )
+      : data.rows;
   const counts = {
-    total: data.rows.length,
-    global: data.rows.filter((r) => r.source === "global").length,
-    workspace: data.rows.filter((r) => r.source === "workspace").length,
-    project: data.rows.filter((r) => r.source === "project").length,
+    total: scopedRows.length,
+    global: scopedRows.filter((r) => r.source === "global").length,
+    workspace: scopedRows.filter((r) => r.source === "workspace").length,
+    project: scopedRows.filter((r) => r.source === "project").length,
   };
   const ws = data.workspace;
+
+  const scopePill =
+    data.source === "live" ? (
+      <ScopePill
+        workspaceName={ws.name}
+        repos={data.repos}
+        me={
+          data.me
+            ? {
+                id: data.me.id,
+                email: data.me.email,
+                display_name: data.me.display_name,
+              }
+            : null
+        }
+      />
+    ) : undefined;
 
   return (
     <AppShell
       kicker={`${ws.name} · catalog`}
       title="Artifact catalog"
+      scopePill={scopePill}
       actions={
         <>
           <Link
@@ -161,6 +222,23 @@ export default async function CatalogPage() {
       ) : (
         <MockBanner reason={data.reason} />
       )}
+
+      {scope.kind === "user" ? (
+        <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[12px] text-amber-100/85">
+          Catalog is workspace-wide; there&apos;s no per-user overlay
+          (yet). Pick a repo scope to see the ambient catalog plus
+          that repo&apos;s project-level overrides, or stay on
+          workspace for the full picture.
+        </div>
+      ) : null}
+
+      {scope.kind === "repo" && scope.repoId ? (
+        <div className="mb-4 rounded-lg border border-aqua/30 bg-aqua/5 px-3 py-2 text-[12px] text-aqua/85">
+          Showing {catalogScopeLabel(scope, data.repos)} — global /
+          workspace rows are included because every repo inherits
+          them. Project-scope rows from other repos are hidden.
+        </div>
+      ) : null}
 
       <div className="mb-5 flex flex-wrap items-center gap-2">
         <SourcePill label="All" count={counts.total} active />
@@ -195,7 +273,7 @@ export default async function CatalogPage() {
             </tr>
           </thead>
           <tbody>
-            {data.rows.map((a) => (
+            {scopedRows.map((a) => (
               <tr
                 key={`${a.kind}:${a.id}:${a.source}`}
                 className="border-t border-white/5 transition hover:bg-white/[0.025]"
@@ -262,7 +340,7 @@ export default async function CatalogPage() {
                 </td>
               </tr>
             ))}
-            {data.rows.length === 0 && (
+            {scopedRows.length === 0 && (
               <tr>
                 <td colSpan={6} className="px-4 py-12 text-center text-sm text-white/55">
                   No artifacts in any enabled source. Connect a workspace repo or
@@ -287,6 +365,17 @@ export default async function CatalogPage() {
       </Card>
     </AppShell>
   );
+}
+
+function catalogScopeLabel(
+  scope: ResolvedScope,
+  repos: { id: string; full_name: string }[],
+): string {
+  if (scope.kind === "repo" && scope.repoId) {
+    const r = repos.find((x) => x.id === scope.repoId);
+    return r ? r.full_name : "selected repo";
+  }
+  return "workspace";
 }
 
 function SourcePill({
