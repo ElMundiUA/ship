@@ -47,6 +47,11 @@ export const DOCS_NAV: DocsNavGroup[] = [
         blurb: "Every field of .ship/config.yml plus the on-disk layout under .ship/.",
       },
       {
+        href: "/docs/lanes",
+        label: "Lanes",
+        blurb: "The lanes: block, shipctl run + lanes install, and the Console /lanes page.",
+      },
+      {
         href: "/docs/agent-matrix",
         label: "Agent matrix",
         blurb: "Supported agent ids, on-disk markers, install targets, adapter artifact for each.",
