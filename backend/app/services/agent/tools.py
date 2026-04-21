@@ -41,7 +41,7 @@ Tool inventory (C12 Phase 2.2):
   changed files with diff hunks) via the GitHub App.
 - :meth:`list_buckets` — enumerate the workspace's knowledge buckets
   without a semantic query (complement to :meth:`search_buckets`).
-- :meth:`search_buckets` — vector search over :class:`BucketSummary`
+- :meth:`search_buckets` — vector search over :class:`BucketArticle`
   so the agent can recall previously-packed conversations.
 - :meth:`get_catalog_artifact` — fetch the full ``ARTIFACT.md`` body
   for one catalog entry, for "what does this pattern actually do?"
@@ -93,7 +93,9 @@ from sqlalchemy.orm import aliased
 from backend.app.core.config import Settings
 from backend.app.db.models.agent_memory import (
     ArtifactFeedback,
-    BucketSummary,
+    BucketArticle,
+    BucketArticleStatus,
+    BucketSource,
     KbChunk,
     KnowledgeBucket,
 )
@@ -1927,11 +1929,21 @@ class ToolBox:
             stmt = stmt.where(KnowledgeBucket.archived_at.is_(None))
         buckets = (await self._session.execute(stmt)).scalars().all()
 
+        # Phase 5d: ``summary_count`` counts published articles now
+        # (mirrored from bucket_summaries in Phase 5b). ``article_count``
+        # is the new canonical name — we expose both so the agent can
+        # pick up the new one without the old field breaking existing
+        # prompts mid-migration.
         items: list[dict[str, Any]] = []
         for b in buckets:
             count_rows = (
                 await self._session.execute(
-                    select(BucketSummary.id).where(BucketSummary.bucket_id == b.id)
+                    select(BucketArticle.id)
+                    .where(BucketArticle.bucket_id == b.id)
+                    .where(
+                        BucketArticle.status == BucketArticleStatus.PUBLISHED
+                    )
+                    .where(BucketArticle.archived_at.is_(None))
                 )
             ).scalars().all()
             items.append(
@@ -1939,7 +1951,10 @@ class ToolBox:
                     "slug": b.slug,
                     "name": b.name,
                     "description": b.description,
+                    "scope_kind": b.scope_kind,
+                    "source_kind": b.source_kind,
                     "summary_count": len(count_rows),
+                    "article_count": len(count_rows),
                     "archived": b.archived_at is not None,
                     "updated_at": b.updated_at.isoformat() if b.updated_at else None,
                 }
@@ -2610,6 +2625,13 @@ class ToolBox:
         return _json_result({"artifact_repos": items, "count": len(items)})
 
     async def _tool_get_knowledge_bucket(self, args: dict[str, Any]) -> str:
+        # Phase 5d: serves articles from ``bucket_articles``, keeping the
+        # ``summaries`` JSON key for backwards-compat with the LLM's
+        # frozen tool contract (renaming it would force a model retrain
+        # of the agent's tool-use pattern, which isn't worth the win).
+        # We also expose ``articles`` alongside it — structurally the
+        # same list, but the key is the new canonical name for the
+        # Phase 4 frontend rework.
         slug = _require_str(args, "slug")
         include_summaries = bool(args.get("include_summaries", True))
         summary_limit = _clamp_int(
@@ -2632,28 +2654,44 @@ class ToolBox:
             "slug": row.slug,
             "name": row.name,
             "description": row.description,
+            "scope_kind": row.scope_kind,
+            "source_kind": row.source_kind,
             "archived": row.archived_at is not None,
             "updated_at": row.updated_at.isoformat() if row.updated_at else None,
             "summaries": [],
+            "articles": [],
         }
         if include_summaries:
-            sums = (
+            articles = (
                 await self._session.execute(
-                    select(BucketSummary)
-                    .where(BucketSummary.bucket_id == row.id)
-                    .order_by(desc(BucketSummary.created_at))
+                    select(BucketArticle)
+                    .where(BucketArticle.bucket_id == row.id)
+                    .where(
+                        BucketArticle.status == BucketArticleStatus.PUBLISHED
+                    )
+                    .where(BucketArticle.archived_at.is_(None))
+                    .order_by(desc(BucketArticle.created_at))
                     .limit(summary_limit)
                 )
             ).scalars().all()
-            out["summaries"] = [
+            payload = [
                 {
-                    "id": str(s.id),
-                    "title": s.title,
-                    "summary": _truncate(s.summary, 2000),
-                    "created_at": s.created_at.isoformat() if s.created_at else None,
+                    "id": str(a.id),
+                    "slug": a.slug,
+                    "title": a.title,
+                    # ``summary`` for backward compat; ``body_md`` is
+                    # the new canonical field name matching the column.
+                    "summary": _truncate(a.body_md, 2000),
+                    "body_md": _truncate(a.body_md, 2000),
+                    "version": a.version,
+                    "created_at": (
+                        a.created_at.isoformat() if a.created_at else None
+                    ),
                 }
-                for s in sums
+                for a in articles
             ]
+            out["summaries"] = payload
+            out["articles"] = payload
         return _json_result(out)
 
     async def _tool_list_artifact_feedback(self, args: dict[str, Any]) -> str:
@@ -2687,6 +2725,13 @@ class ToolBox:
         return _json_result({"feedback": items, "count": len(items)})
 
     async def _tool_search_buckets(self, args: dict[str, Any]) -> str:
+        # Phase 5d: ranks over ``bucket_articles`` instead of
+        # ``bucket_summaries``. Mirrors :meth:`TopicService.retrieve_buckets`
+        # — same WHERE clause (published + unarchived + embedded +
+        # agent_memory scope). The LLM-visible shape is unchanged; only
+        # the data source moved. ``bucket_summaries`` is still written
+        # by ``pack_topic`` (dual-write), so nothing downstream that
+        # reads the legacy table breaks.
         query = _require_str(args, "query")
         limit = _clamp_int(
             args.get("limit"), default=4, low=1, high=_MAX_BUCKET_RESULTS
@@ -2695,29 +2740,36 @@ class ToolBox:
 
         stmt = (
             select(
-                BucketSummary,
+                BucketArticle,
                 KnowledgeBucket.slug,
                 KnowledgeBucket.name,
-                BucketSummary.embedding.cosine_distance(qvec).label("dist"),
+                BucketArticle.embedding.cosine_distance(qvec).label("dist"),
             )
             .join(
                 KnowledgeBucket,
-                KnowledgeBucket.id == BucketSummary.bucket_id,
+                KnowledgeBucket.id == BucketArticle.bucket_id,
             )
             .where(KnowledgeBucket.workspace_id == self._workspace_id)
             .where(KnowledgeBucket.archived_at.is_(None))
+            .where(BucketArticle.status == BucketArticleStatus.PUBLISHED)
+            .where(BucketArticle.archived_at.is_(None))
+            .where(BucketArticle.embedding.isnot(None))
+            # Keep the "prior conversations" semantic — the tool spec
+            # tells the LLM this is about packed chats. Broadening to
+            # repo_files would change the contract.
+            .where(KnowledgeBucket.source_kind == BucketSource.AGENT_MEMORY)
             .order_by("dist")
             .limit(limit)
         )
         rows = (await self._session.execute(stmt)).all()
         results = []
-        for summary, slug, name, dist in rows:
+        for article, slug, name, dist in rows:
             results.append(
                 {
                     "bucket_slug": slug,
                     "bucket_name": name,
-                    "title": summary.title,
-                    "summary": _truncate(summary.summary, 600),
+                    "title": article.title,
+                    "summary": _truncate(article.body_md, 600),
                     "similarity": round(1.0 - float(dist), 4),
                 }
             )
