@@ -747,6 +747,156 @@ async def test_callback_idempotent_for_terminal_runs(
 
 
 # ---------------------------------------------------------------------------
+# Callback via long-lived repo token (RFC-0007 lane path)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_callback_accepts_long_lived_repo_token(
+    monkeypatch, v1_client, db_session, seed_repo_and_install
+) -> None:
+    """Lane-triggered runners (cron / push / PR) have no JWT — they
+    auth via ``secrets.SHIP_RUN_TOKEN``. Prove the callback endpoint
+    accepts that path, maps the bearer to the repo, and lands the
+    same audit trail with ``auth_mode: "repo"`` so operators can
+    tell the two flows apart.
+    """
+    from backend.app.api.v1.routes import pipelines as pipelines_route
+    from backend.app.core.config import get_settings
+    from backend.app.db.models.tenancy import AuditLog
+    from backend.app.services import repo_tokens
+
+    raw, workspace, install, repo = seed_repo_and_install
+    pipelines = await _seed_bound_pipelines(db_session, workspace.id, repo.id)
+    target = pipelines["pr_review"]
+    settings = get_settings()
+
+    # Mint a ``SHIP_RUN_TOKEN`` without touching the real GitHub API.
+    async def _fake_put(*args, **kwargs):
+        return "keyid-stub"
+
+    monkeypatch.setattr(repo_tokens, "put_repo_secret", _fake_put)
+    shipctoken = await repo_tokens.mint_repo_callback_token(
+        db_session, repo, install, settings=settings
+    )
+    await db_session.commit()
+
+    # Dispatch a run through the normal flow so we have a concrete
+    # ``run_id`` bound to this repo's pipeline.
+    async def _probe(repo, install, *, settings, **_):
+        return frozenset({"pr-and-ci-gate.yml"})
+
+    async def _dispatch(repo, install, workflow_file, *, inputs, settings, **_):
+        return None
+
+    monkeypatch.setattr(pipelines_route, "list_repo_workflows", _probe)
+    monkeypatch.setattr(pipelines_route, "dispatch_workflow", _dispatch)
+
+    dispatch_resp = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/pipelines/{target.id}/runs",
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    run_id = dispatch_resp.json()["id"]
+
+    # Callback under the long-lived token. The opaque bearer can't
+    # carry ``rid``, so the endpoint's cross-check is
+    # ``pipeline.repo_id == repo.id`` — that's what we're proving.
+    callback_resp = await v1_client.post(
+        f"/v1/pipelines/runs/{run_id}/result",
+        headers={"Authorization": f"Bearer {shipctoken}"},
+        json={"status": "succeeded", "summary": "lane ok"},
+    )
+    assert callback_resp.status_code == 200, callback_resp.text
+    assert callback_resp.json()["status"] == "succeeded"
+
+    from sqlalchemy import select as _sa_select
+
+    audit = (
+        await db_session.execute(
+            _sa_select(AuditLog).where(
+                AuditLog.action == "pipeline.run.callback",
+                AuditLog.target_id == run_id,
+            )
+        )
+    ).scalar_one()
+    assert audit.payload.get("auth_mode") == "repo"
+
+
+@pytest.mark.asyncio
+async def test_callback_rejects_repo_token_for_foreign_run(
+    monkeypatch, v1_client, db_session, seed_repo_and_install
+) -> None:
+    """Cross-repo forgery guard: a valid ``SHIP_RUN_TOKEN`` for repo A
+    must not be able to land results against a run belonging to
+    repo B. We insert a sibling repo + its own pipeline, mint a
+    token for repo A, then target repo B's run. The endpoint must
+    401 without leaking which check failed.
+    """
+    from datetime import datetime, timezone
+
+    from backend.app.api.v1.routes import pipelines as pipelines_route
+    from backend.app.core.config import get_settings
+    from backend.app.db.models.integrations import WorkspaceRepo
+    from backend.app.services import repo_tokens
+
+    raw, workspace, install, repo_a = seed_repo_and_install
+
+    repo_b = WorkspaceRepo(
+        workspace_id=workspace.id,
+        installation_id=install.id,
+        provider="github",
+        external_id=42_424_243,
+        full_name="acme/other",
+        default_branch="main",
+        private=False,
+        html_url="https://github.com/acme/other",
+        description=None,
+        activated_at=datetime.now(timezone.utc),
+    )
+    db_session.add(repo_b)
+    await db_session.flush()
+
+    pipelines_b = await _seed_bound_pipelines(db_session, workspace.id, repo_b.id)
+    target_b = pipelines_b["pr_review"]
+
+    settings = get_settings()
+
+    async def _fake_put(*args, **kwargs):
+        return "keyid-stub"
+
+    monkeypatch.setattr(repo_tokens, "put_repo_secret", _fake_put)
+    # Token for repo A.
+    shipctoken_a = await repo_tokens.mint_repo_callback_token(
+        db_session, repo_a, install, settings=settings
+    )
+    await db_session.commit()
+
+    async def _probe(repo, install, *, settings, **_):
+        return frozenset({"pr-and-ci-gate.yml"})
+
+    async def _dispatch(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(pipelines_route, "list_repo_workflows", _probe)
+    monkeypatch.setattr(pipelines_route, "dispatch_workflow", _dispatch)
+
+    # Dispatch against repo B so the resulting run is bound to B.
+    dispatch_resp = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/pipelines/{target_b.id}/runs",
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    run_id_b = dispatch_resp.json()["id"]
+
+    # Present repo A's token against repo B's run → 401.
+    resp = await v1_client.post(
+        f"/v1/pipelines/runs/{run_id_b}/result",
+        headers={"Authorization": f"Bearer {shipctoken_a}"},
+        json={"status": "succeeded"},
+    )
+    assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
 # Install endpoint
 # ---------------------------------------------------------------------------
 
