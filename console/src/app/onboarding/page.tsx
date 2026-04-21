@@ -42,7 +42,9 @@ import {
   listAvailableRepos,
   listWorkspaces,
   type ApiActivatedRepo,
+  type ApiAgentSecretStatus,
   type ApiAvailableRepo,
+  type ApiTrackerBinding,
 } from "@/lib/api/client";
 import { getSessionToken } from "@/lib/api/session";
 
@@ -284,9 +286,22 @@ export default async function OnboardingPage({
         ),
       );
     } catch (err) {
+      // Next's ``redirect()`` signals via a thrown sentinel — bubble it
+      // up untouched or the wizard will swallow our own redirect and
+      // land on a broken banner.
+      if (
+        err &&
+        typeof err === "object" &&
+        "digest" in err &&
+        typeof (err as { digest: unknown }).digest === "string" &&
+        (err as { digest: string }).digest.startsWith("NEXT_REDIRECT")
+      ) {
+        throw err;
+      }
       if (err instanceof ApiHttpError && err.status === 401) {
         redirect("/login?next=%2Fonboarding");
       }
+      console.error("[onboarding] configure step load failed", err);
       configureLoadError = "load_failed";
     }
   }
@@ -992,19 +1007,62 @@ function DoneStep({ wsId }: { wsId: string | null }) {
  * with fresh ``present`` flags. The two calls are independent so we
  * run them in parallel.
  *
- * Failures bubble up; the caller surfaces one compact "load failed"
- * banner rather than rendering a half-populated card that the user
- * would need to guess at.
+ * Resilience contract: a probe failure (e.g. the App lacks the
+ * ``Secrets`` permission so GitHub returns 403 on listing secrets)
+ * must **not** take down the whole step. We degrade gracefully —
+ * default-shaped binding, empty agent list — and carry a short hint
+ * in ``probe_errors`` so the card can render the actual remediation
+ * instead of a generic "reload" banner. The full message is logged
+ * server-side for ops to triage.
  */
 async function loadRepoCardInitial(
   wsId: string,
   repo: ApiActivatedRepo,
   token: string | undefined,
 ): Promise<RepoCardInitial> {
-  const [tracker, secrets] = await Promise.all([
+  const [trackerRes, secretsRes] = await Promise.allSettled([
     getRepoTrackerBinding(wsId, repo.id, token),
     checkAgentSecrets(wsId, repo.id, { token }),
   ]);
+
+  const probe_errors: { tracker?: string; agents?: string } = {};
+
+  let tracker: ApiTrackerBinding;
+  if (trackerRes.status === "fulfilled") {
+    tracker = trackerRes.value;
+  } else {
+    const msg = formatProbeError(trackerRes.reason);
+    console.error(
+      `[onboarding] tracker probe failed for repo=${repo.full_name}: ${msg}`,
+    );
+    probe_errors.tracker = msg;
+    // Neutral default so the dropdown still renders and the user can
+    // bind a tracker manually. ``workspace_default_kind: null`` matches
+    // what the backend returns on a truly unbound workspace.
+    tracker = {
+      repo_id: repo.id,
+      kind: null,
+      config: {},
+      source: "none",
+      workspace_default_kind: null,
+    };
+  }
+
+  let agents: ApiAgentSecretStatus[];
+  if (secretsRes.status === "fulfilled") {
+    agents = secretsRes.value.agents;
+  } else {
+    const msg = formatProbeError(secretsRes.reason);
+    console.error(
+      `[onboarding] agent-secrets probe failed for repo=${repo.full_name}: ${msg}`,
+    );
+    probe_errors.agents = msg;
+    // Empty catalog on failure — the user can still pick a preset and
+    // open a seed PR. The card surfaces ``probe_errors.agents`` so
+    // they know the secret check is stale.
+    agents = [];
+  }
+
   return {
     repo: {
       id: repo.id,
@@ -1013,13 +1071,39 @@ async function loadRepoCardInitial(
       default_branch: repo.default_branch,
     },
     tracker,
-    agents: secrets.agents,
+    agents,
     // Wizard v2 doesn't yet persist "last seed PR" server-side; the
     // card starts out in the editable state and switches to the
     // seeded row after the user clicks the button here. Iter 8 will
     // surface pending-merge PRs on the dashboard.
     last_seed: null,
+    probe_errors: Object.keys(probe_errors).length > 0 ? probe_errors : undefined,
   };
+}
+
+/**
+ * Turn an arbitrary probe rejection into a short, human-safe string
+ * for the UI and server logs. We keep ``ApiHttpError`` status + path
+ * visible because that's the shape of nearly every real failure
+ * here; for the anything-else case we fall back to ``String(err)``
+ * which is conservative enough not to leak stack traces.
+ */
+function formatProbeError(err: unknown): string {
+  if (err instanceof ApiHttpError) {
+    let detail = "";
+    if (typeof err.detail === "string") {
+      detail = err.detail;
+    } else if (err.detail != null) {
+      try {
+        detail = JSON.stringify(err.detail);
+      } catch {
+        detail = String(err.detail);
+      }
+    }
+    return `HTTP ${err.status}${detail ? ` — ${detail.slice(0, 200)}` : ""}`;
+  }
+  if (err instanceof Error) return err.message;
+  return String(err);
 }
 
 function BootstrapError({ reason }: { reason: string }) {
