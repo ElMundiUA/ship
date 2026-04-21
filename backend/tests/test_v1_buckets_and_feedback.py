@@ -33,6 +33,17 @@ async def test_bucket_lifecycle(v1_client, seed_workspace) -> None:
     created = resp.json()
     assert created["slug"] == "auth-refactor"
     assert created["name"] == "Auth refactor"
+    # Phase 1 consolidation surface: every bucket created via the
+    # public API defaults to workspace/agent-memory, no carrier FKs.
+    # UI / CLI use these fields to decide how to render the row
+    # (agent-memory = "packed chat memory", workspace = "shared across
+    # all projects/repos").
+    assert created["scope_kind"] == "workspace"
+    assert created["source_kind"] == "agent_memory"
+    assert created["source_ref"] is None
+    assert created["project_id"] is None
+    assert created["repo_id"] is None
+    assert created["user_id"] is None
 
     # Duplicate slug → 409.
     dup = await v1_client.post(

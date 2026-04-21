@@ -25,9 +25,11 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -54,25 +56,114 @@ from backend.app.db.models.tenancy import (
 EMBED_DIM = 1536
 
 
+# -----------------------------------------------------------------------------
+# Scope + source enums. Plain string constants (not ``enum.Enum``) because we
+# store them as ``String(…)`` in Postgres and want the raw wire value to be
+# self-explanatory when you ``psql`` into the DB or ``grep`` the JSON in logs.
+# Keep the allowed-value sets in sync with the CHECK constraint in migration
+# ``0014_bucket_scope_source``.
+# -----------------------------------------------------------------------------
+
+
+class BucketScope:
+    """Visibility layer a bucket belongs to.
+
+    Phase 1 ships with four scopes; ``global`` (cross-workspace, platform
+    policies) will be introduced in a later migration once the platform
+    admin surfaces exist and ``knowledge_buckets.workspace_id`` is made
+    nullable. Until then, any cross-workspace sharing is a resolver
+    concern rather than a storage one.
+
+    Inheritance / resolution order (low → high priority — later wins):
+    ``workspace → project → repo`` for team buckets, plus ``user`` as a
+    parallel private layer that can overlay any of those for the
+    signed-in user only.
+    """
+
+    WORKSPACE = "workspace"
+    PROJECT = "project"
+    REPO = "repo"
+    USER = "user"
+
+    ALL: tuple[str, ...] = (WORKSPACE, PROJECT, REPO, USER)
+
+
+class BucketSource:
+    """How the bucket obtains its content.
+
+    - ``agent_memory`` — packed chat summaries (the Navigator's existing
+      surface). Writes happen via ``pack_topic`` in ``TopicService``.
+    - ``repo_files`` — markdown files under ``.ship/knowledge/`` in an
+      activated repo. Authoritative source is git; Ship mirrors the
+      index so the resolver + RAG can serve them.
+    - ``external_static`` — files/URLs uploaded or pasted into Ship
+      directly; authoritative source is Ship's object store.
+    - ``connector_proxy`` — bucket is a thin index over a live
+      third-party source (Confluence space, ServiceNow KB, Notion
+      database); content is fetched on read, not stored.
+    - ``audio_transcript`` — transcripts ingested from recorded
+      interviews (e.g. offboarding); becomes articles via the Distiller.
+    """
+
+    AGENT_MEMORY = "agent_memory"
+    REPO_FILES = "repo_files"
+    EXTERNAL_STATIC = "external_static"
+    CONNECTOR_PROXY = "connector_proxy"
+    AUDIO_TRANSCRIPT = "audio_transcript"
+
+    ALL: tuple[str, ...] = (
+        AGENT_MEMORY,
+        REPO_FILES,
+        EXTERNAL_STATIC,
+        CONNECTOR_PROXY,
+        AUDIO_TRANSCRIPT,
+    )
+
+
 class KnowledgeBucket(Base):
     """User-curated bucket holding packed summaries of past topics.
 
-    ``slug`` is unique per workspace and is the stable handle used
-    across the API (``/buckets/{slug}``); ``name`` is the displayable
-    label, which can change while the slug stays put.
+    ``slug`` is unique per ``(workspace, scope_kind, carrier)`` — for
+    workspace-scoped buckets that collapses back to the historical
+    ``(workspace, slug)`` rule, for repo/project/user scopes the slug
+    is unique within that carrier. Slugs stay stable across renames;
+    ``name`` is the displayable label.
 
     ``embedding`` is optional because an empty bucket has nothing to
     embed yet — we only compute it when the user explicitly pins one.
-    For retrieval we primarily use :class:`BucketSummary.embedding`
-    which covers the "what's in this bucket" semantics more densely.
+    For agent-memory buckets we primarily use
+    :class:`BucketSummary.embedding` for retrieval; other source kinds
+    will rely on :class:`KbChunk` (Phase 5 unifies articles across
+    sources).
+
+    ``scope_kind`` / ``source_kind`` / ``source_ref`` are the Phase 1
+    consolidation surface — see :class:`BucketScope` + :class:`BucketSource`
+    for the allowed values and migration ``0014_bucket_scope_source``
+    for the CHECK constraint that keeps them aligned with the scope
+    carrier FKs (``project_id`` / ``repo_id`` / ``user_id``).
     """
 
     __tablename__ = "knowledge_buckets"
     __table_args__ = (
-        UniqueConstraint(
-            "workspace_id", "slug", name="uq_knowledge_buckets_workspace_slug"
-        ),
+        # Partial unique indexes live alongside the table via the
+        # migration; SQLAlchemy's ``UniqueConstraint`` can't express
+        # ``WHERE`` clauses portably, so we declare them only in the
+        # Alembic op and rely on Postgres to enforce them.
         Index("ix_knowledge_buckets_workspace_id", "workspace_id"),
+        Index("ix_knowledge_buckets_scope_kind", "workspace_id", "scope_kind"),
+        Index(
+            "ix_knowledge_buckets_source_kind", "workspace_id", "source_kind"
+        ),
+        CheckConstraint(
+            (
+                "(scope_kind = 'workspace' AND project_id IS NULL "
+                "AND repo_id IS NULL AND user_id IS NULL) "
+                "OR (scope_kind = 'project' AND project_id IS NOT NULL) "
+                "OR (scope_kind = 'repo' AND repo_id IS NOT NULL) "
+                "OR (scope_kind = 'user' AND user_id IS NOT NULL)"
+            ),
+            name="ck_knowledge_buckets_scope_carrier",
+        ),
     )
 
     id: Mapped[uuid.UUID] = _pk()
@@ -84,6 +175,39 @@ class KnowledgeBucket(Base):
     slug: Mapped[str] = mapped_column(String(120), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # --- Consolidation surface (Phase 1) ---------------------------------
+    # See :class:`BucketScope` for allowed values. Default keeps existing
+    # behaviour: every current row is a workspace-scoped agent-memory
+    # bucket.
+    scope_kind: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'workspace'")
+    )
+    source_kind: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=text("'agent_memory'")
+    )
+    source_ref: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True
+    )
+
+    # Scope carriers: exactly one is non-null (except ``workspace``
+    # which has none). Enforced at DB level by the CHECK above.
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    repo_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspace_repos.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
     embedding: Mapped[list[float] | None] = mapped_column(
         Vector(EMBED_DIM), nullable=True
     )
@@ -223,6 +347,8 @@ class ArtifactFeedback(Base):
 
 __all__ = [
     "ArtifactFeedback",
+    "BucketScope",
+    "BucketSource",
     "BucketSummary",
     "EMBED_DIM",
     "KbChunk",
