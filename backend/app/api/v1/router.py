@@ -40,6 +40,7 @@ from backend.app.api.v1.routes import (
     repo_secrets,
     repos,
     tracker_binding,
+    tracker_fsm,
     workspace_artifacts,
     workspaces,
 )
@@ -135,3 +136,9 @@ api_router.include_router(agent_secrets.router)
 # OAuth connections (no per-repo tokens); stores the team/project
 # selection and falls back to the workspace default on read.
 api_router.include_router(tracker_binding.router)
+# Tracker FSM catalog (Wizard v2 iter 7). Read-only surface: the
+# canonical Ship states, per-tracker mapping hints, and (optional)
+# rendered markdown previews per activated repo — exactly what the
+# seed PR writes into ``.ship/tracker-fsm.md``. Source of truth is
+# the committed file; this endpoint just mirrors it for the console.
+api_router.include_router(tracker_fsm.router)

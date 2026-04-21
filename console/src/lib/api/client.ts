@@ -422,6 +422,170 @@ export function knowledgeSeed(
   );
 }
 
+// --- Per-repo tracker binding (Wizard v2 iter 4) ---------------------------
+
+export const TRACKER_KINDS = ["linear", "github", "jira"] as const;
+export type TrackerKind = (typeof TRACKER_KINDS)[number];
+
+export interface ApiTrackerBinding {
+  repo_id: string;
+  kind: TrackerKind | null;
+  config: Record<string, unknown>;
+  /** ``repo`` = per-repo row. ``workspace`` = inherited default. ``none`` = nothing bound. */
+  source: "repo" | "workspace" | "none";
+  workspace_default_kind: TrackerKind | null;
+}
+
+export function getRepoTrackerBinding(
+  workspaceId: string,
+  repoId: string,
+  token?: string,
+): Promise<ApiTrackerBinding> {
+  return apiFetch<ApiTrackerBinding>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/tracker`,
+    { token },
+  );
+}
+
+export function setRepoTrackerBinding(
+  workspaceId: string,
+  repoId: string,
+  body: { kind: TrackerKind; config?: Record<string, unknown> },
+  token?: string,
+): Promise<ApiTrackerBinding> {
+  return apiFetch<ApiTrackerBinding>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/tracker`,
+    { method: "PUT", body, token },
+  );
+}
+
+export function deleteRepoTrackerBinding(
+  workspaceId: string,
+  repoId: string,
+  token?: string,
+): Promise<void> {
+  return apiFetch<void>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/tracker`,
+    { method: "DELETE", token },
+  );
+}
+
+// --- Per-repo agent secrets (Wizard v2 iter 3) -----------------------------
+
+export interface ApiAgentSecretStatus {
+  slug: string;
+  label: string;
+  secret_name: string | null;
+  vendor_url: string | null;
+  description: string | null;
+  required: boolean;
+  present: boolean;
+}
+
+export interface ApiAgentSecretCheck {
+  repo_id: string;
+  agents: ApiAgentSecretStatus[];
+}
+
+export function checkAgentSecrets(
+  workspaceId: string,
+  repoId: string,
+  options: { slugs?: string[]; token?: string } = {},
+): Promise<ApiAgentSecretCheck> {
+  const qs = options.slugs?.length
+    ? `?slugs=${encodeURIComponent(options.slugs.join(","))}`
+    : "";
+  return apiFetch<ApiAgentSecretCheck>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/agent-secrets${qs}`,
+    { token: options.token },
+  );
+}
+
+export interface ApiAgentSecretPush {
+  pushed: string[];
+  failed: { slug: string; reason: string }[];
+}
+
+export function pushAgentSecrets(
+  workspaceId: string,
+  repoId: string,
+  secrets: { slug: string; plaintext: string }[],
+  token?: string,
+): Promise<ApiAgentSecretPush> {
+  return apiFetch<ApiAgentSecretPush>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/agent-secrets`,
+    { method: "POST", body: { secrets }, token },
+  );
+}
+
+// --- Tracker FSM catalog (Wizard v2 iter 7) --------------------------------
+
+export interface ApiFsmState {
+  id: string;
+  label: string;
+  description: string;
+  transitions: string[];
+}
+
+export interface ApiRepoFsm {
+  repo_id: string;
+  full_name: string;
+  tracker_kind: TrackerKind | null;
+  source: "repo" | "workspace" | "none";
+  markdown: string;
+}
+
+export interface ApiTrackerFsm {
+  install_path: string;
+  states: ApiFsmState[];
+  mapping_hints: Record<string, Record<string, string>>;
+  workspace_default_kind: TrackerKind | null;
+  repos: ApiRepoFsm[];
+}
+
+export function getTrackerFsm(
+  workspaceId: string,
+  options: { includeRepos?: boolean; token?: string } = {},
+): Promise<ApiTrackerFsm> {
+  const qs = options.includeRepos === false ? "?repos=false" : "";
+  return apiFetch<ApiTrackerFsm>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/tracker-fsm${qs}`,
+    { token: options.token },
+  );
+}
+
+// --- Unified wizard seed PR (Wizard v2 iter 5) -----------------------------
+
+export interface ApiWizardSeedResult {
+  pr_url: string;
+  pr_number: number;
+  branch: string;
+  files: string[];
+  presets: string[];
+  knowledge_slugs: string[];
+  tracker_kind: string | null;
+  run_token_prefix: string | null;
+  run_token_rotated: boolean;
+}
+
+export function wizardSeed(
+  workspaceId: string,
+  repoId: string,
+  body: {
+    presets?: string[] | null;
+    knowledge_slugs?: KnowledgeStarterSlug[] | null;
+    tracker_kind?: TrackerKind | null;
+    include_fsm?: boolean;
+    rotate_run_token?: boolean;
+  },
+  token?: string,
+): Promise<ApiWizardSeedResult> {
+  return apiFetch<ApiWizardSeedResult>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/wizard_seed`,
+    { method: "POST", body, token },
+  );
+}
+
 // --- Team invites (B7) ------------------------------------------------------
 
 export interface ApiInvite {

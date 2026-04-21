@@ -1,23 +1,32 @@
 /**
- * WOW onboarding wizard (3 steps, GitHub-App driven).
+ * WOW onboarding wizard v2 — 5-step, per-repo GitHub-App driven flow.
  *
- * Per `documentation/internal/pilot-plan.md` we never clone customer
- * repos and we never make the user paste a URL or invent a workspace
- * name. The whole flow is:
+ * Architecture notes (see RFC-0007 / Wizard v2 plan):
  *
- *   1. github  — install the Ship GitHub App on the chosen account
- *   2. repos   — pick repos from the live App-installation list and
- *                let `seed_default_pipelines` materialise the lanes
- *   3. tracker — optional Linear / Notion OAuth, or skip with one click
+ *   1. **github**    — install the Ship GitHub App on the chosen account.
+ *   2. **repos**     — pick repos from the live App install list. Activation
+ *                      only; preset is chosen per-repo on the next step.
+ *   3. **tracker**   — workspace-level Linear / Notion OAuth (or skip).
+ *                      These credentials are shared by all repos; each
+ *                      repo can still override which tracker kind (and
+ *                      team/project) in step 4.
+ *   4. **configure** — per-repo loop (new): preset → tracker binding →
+ *                      agent GitHub Actions secrets → open seed PR.
+ *                      All four sub-steps live in one page so the user
+ *                      can see progress per-repo side-by-side.
+ *   5. **done**      — summary of seeded PRs + "initial tasks will run
+ *                      once merged" banner.
  *
  * Pre-wizard: the page redirects unauthenticated visitors straight to
  * `/login?next=/onboarding`. After login we look up (or JIT-create) the
  * user's workspace via `GET /v1/workspaces` and stick its id in the URL
  * so every step has a stable handle.
  *
- * Step transitions are still server-rendered native form POSTs to
- * `/api/onboard/*` route handlers, which 303-redirect back here with
- * the next `step=` parameter set.
+ * Step transitions for 1-3 are still server-rendered native form POSTs
+ * to `/api/onboard/*` route handlers (303-redirect back here). Step 4
+ * is a client-driven page that calls JSON route handlers per-repo
+ * (no full navigations) — this is the only way to keep secret-input
+ * state and per-repo mutation isolated without reloading.
  */
 
 import Link from "next/link";
@@ -26,95 +35,31 @@ import { redirect } from "next/navigation";
 import {
   ApiHttpError,
   ApiUnavailableError,
-  KNOWLEDGE_STARTERS,
+  checkAgentSecrets,
+  getRepoTrackerBinding,
   isApiConfigured,
   listActivatedRepos,
   listAvailableRepos,
   listWorkspaces,
+  type ApiActivatedRepo,
   type ApiAvailableRepo,
-  type KnowledgeStarterSlug,
 } from "@/lib/api/client";
 import { getSessionToken } from "@/lib/api/session";
 
+import { type PresetId } from "./presets";
+import { RepoCard, type RepoCardInitial } from "./repo-card";
+
 export const dynamic = "force-dynamic";
 
-type StepId = "github" | "repos" | "tracker" | "knowledge" | "done";
+type StepId = "github" | "repos" | "tracker" | "configure" | "done";
 
 const STEPS: { id: StepId; label: string }[] = [
   { id: "github", label: "Install GitHub App" },
   { id: "repos", label: "Pick repos" },
-  { id: "tracker", label: "Connect tracker" },
-  { id: "knowledge", label: "Seed knowledge" },
+  { id: "tracker", label: "Workspace tracker" },
+  { id: "configure", label: "Configure repos" },
 ];
 
-// Must stay in lockstep with ``backend.app.services.default_pipelines.KNOWN_PRESETS``
-// (the route handler also whitelists them before forwarding). Order
-// here drives the picker order; ``adoption-minimum`` sits last because
-// it's the "I'll wire the rest later" option.
-const PRESETS: {
-  id:
-    | "web-app"
-    | "api-backend"
-    | "mobile-app"
-    | "cli"
-    | "monorepo"
-    | "marketing"
-    | "adoption-minimum";
-  name: string;
-  blurb: string;
-  // Short list of pipelines that ship *enabled* for this preset — cosmetic.
-  lanes: string;
-}[] = [
-  {
-    id: "web-app",
-    name: "Web app",
-    blurb:
-      "Next.js / Remix / SPA — full Elmundi-grade SDLC: PR review gate, daily standup, tech-debt scan, self-heal, code map.",
-    lanes: "PR gate · Standup · Tech-debt · Self-heal · Code map",
-  },
-  {
-    id: "api-backend",
-    name: "API backend",
-    blurb:
-      "FastAPI / Go / Rails service — identical operational baseline as web-app, tailored for server repos.",
-    lanes: "PR gate · Standup · Tech-debt · Code map",
-  },
-  {
-    id: "mobile-app",
-    name: "Mobile app",
-    blurb:
-      "iOS / Android / RN — same four lanes; hosted E2E ships once a device-lab preset lands.",
-    lanes: "PR gate · Standup · Tech-debt · Code map",
-  },
-  {
-    id: "cli",
-    name: "CLI / library",
-    blurb:
-      "CLI tools or libraries — quieter cadence: PR gate + tech-debt + code map only.",
-    lanes: "PR gate · Tech-debt · Code map",
-  },
-  {
-    id: "monorepo",
-    name: "Monorepo",
-    blurb:
-      "Large multi-package repo — opts into pipeline self-heal on top of the baseline.",
-    lanes: "PR gate · Standup · Tech-debt · Self-heal · Code map",
-  },
-  {
-    id: "marketing",
-    name: "Marketing site",
-    blurb:
-      "Landing pages, docs, blogs, campaign microsites — copy-first review, publishing-cadence standup, site-structure map.",
-    lanes: "PR gate · Standup · Code map",
-  },
-  {
-    id: "adoption-minimum",
-    name: "Minimum",
-    blurb:
-      "Just the PR review gate + code map. Flip extra lanes on later from the Pipelines page.",
-    lanes: "PR gate · Code map",
-  },
-];
 
 const GITHUB_ERRORS: Record<string, string> = {
   api_unavailable: "Backend not reachable.",
@@ -137,39 +82,9 @@ const REPOS_ERRORS: Record<string, string> = {
   unknown: "Couldn't save the repo selection. Try again.",
 };
 
-const KNOWLEDGE_ERRORS: Record<string, string> = {
-  api_unavailable: "Backend not reachable.",
-  bad_intent: "Pick Seed or Skip — nothing else can be submitted.",
-  empty_selection: "Pick at least one bucket, or hit Skip to come back later.",
-  forbidden: "You need admin role on this workspace to open a seed PR.",
-  github_app_missing:
-    "GitHub App isn't installed for this workspace. Reconnect it and try again.",
-  bad_selection:
-    "Selection contains an unknown bucket. Tick one of the offered options.",
-  github_api_error:
-    "GitHub rejected the PR open. Retry in a minute, or skip for now.",
-  no_repo:
-    "Couldn't find the sandbox repo you just activated. Step back to Pick repos.",
-  repo_lookup_failed: "Couldn't load your activated repos. Try again.",
-  unknown: "Couldn't open the seed PR. Try again or skip for now.",
-};
-
-const KNOWLEDGE_STARTER_META: Record<
-  KnowledgeStarterSlug,
-  { name: string; blurb: string; path: string }
-> = {
-  "code-style": {
-    name: "Code style",
-    blurb:
-      "Starter conventions for languages, naming, imports, testing, and a PR review checklist — the first thing Ship reads when reviewing diffs.",
-    path: ".ship/knowledge/code-style.md",
-  },
-  "ui-runbook": {
-    name: "UI runbook",
-    blurb:
-      "Design system usage, layout, accessibility, loading / error / empty states, and perf budgets. Keeps Ship's UI suggestions consistent with your product.",
-    path: ".ship/knowledge/ui-runbook.md",
-  },
+const CONFIGURE_ERRORS: Record<string, string> = {
+  load_failed:
+    "Couldn't load your activated repos. Refresh; if it persists, check the backend is reachable.",
 };
 
 const TRACKER_ERRORS: Record<string, string> = {
@@ -206,6 +121,9 @@ function hasExplicitStep(raw: string | string[] | undefined): boolean {
     v === "github" ||
     v === "repos" ||
     v === "tracker" ||
+    v === "configure" ||
+    // ``knowledge`` is legacy (wizard v1) — keep the pin working so
+    // old email links / bookmarks still land somewhere sensible.
     v === "knowledge" ||
     v === "done"
   );
@@ -216,11 +134,15 @@ function pickStep(raw: string | string[] | undefined): StepId {
   if (
     v === "repos" ||
     v === "tracker" ||
-    v === "knowledge" ||
+    v === "configure" ||
     v === "done"
   ) {
     return v;
   }
+  // Legacy wizard v1 routed to ``?step=knowledge`` after the tracker
+  // OAuth callback. Funnel those hits into the new configure step so
+  // nobody lands on a blank screen.
+  if (v === "knowledge") return "configure";
   return "github";
 }
 
@@ -249,7 +171,11 @@ async function resumeStep(
 ): Promise<StepId> {
   try {
     const activated = await listActivatedRepos(wsId, token);
-    if (activated.length > 0) return "tracker";
+    // Activated at least one repo → user is past the linear prefix and
+    // wants to configure them. The configure step is its own landing
+    // pad (per-repo cards), and tracker/step-3 is a sibling they can
+    // click back to from the stepper if they want to re-do OAuth.
+    if (activated.length > 0) return "configure";
   } catch {
     /* fall through — treat as unknown */
   }
@@ -336,6 +262,35 @@ export default async function OnboardingPage({
     }
   }
 
+  // Configure step: load every activated repo plus the per-repo
+  // tracker binding and agent-secret status, so the RepoCard client
+  // components render fully populated on first paint. We parallelise
+  // the per-repo reads with ``Promise.all`` — they're independent.
+  let configureCards: RepoCardInitial[] | null = null;
+  let configureLoadError: string | null = null;
+  if (step === "configure" && wsId && apiConfigured) {
+    try {
+      const activated = await listActivatedRepos(wsId, sessionToken ?? undefined);
+      if (activated.length === 0) {
+        // No repos → bounce to the picker. Soft redirect via URL
+        // param so the banner explains what happened.
+        redirect(
+          `/onboarding?step=repos&ws=${encodeURIComponent(wsId)}&error=empty`,
+        );
+      }
+      configureCards = await Promise.all(
+        activated.map((r) =>
+          loadRepoCardInitial(wsId, r, sessionToken ?? undefined),
+        ),
+      );
+    } catch (err) {
+      if (err instanceof ApiHttpError && err.status === 401) {
+        redirect("/login?next=%2Fonboarding");
+      }
+      configureLoadError = "load_failed";
+    }
+  }
+
   return (
     <div className="relative min-h-screen overflow-hidden bg-ink text-white">
       <div
@@ -396,16 +351,14 @@ export default async function OnboardingPage({
             reposJustWired={pick(params.repos) === "wired"}
           />
         )}
-        {step === "knowledge" && wsId && (
-          <KnowledgeStep wsId={wsId} error={error} />
-        )}
-        {step === "done" && (
-          <DoneStep
-            knowledgeSeeded={pick(params.knowledge) === "seeded"}
-            knowledgePrUrl={pick(params.pr_url)}
-            knowledgePrNumber={pick(params.pr)}
+        {step === "configure" && wsId && (
+          <ConfigureReposStep
+            wsId={wsId}
+            cards={configureCards}
+            loadError={configureLoadError}
           />
         )}
+        {step === "done" && <DoneStep wsId={wsId ?? null} />}
       </main>
     </div>
   );
@@ -577,15 +530,15 @@ function ReposStep({
   return (
     <section>
       <p className="font-mono text-[11px] uppercase tracking-[0.3em] text-aqua/85">
-        Step 2 of 3 &middot; Pick repos
+        Step 2 of 4 &middot; Pick repos
       </p>
       <h1 className="mt-2 font-display text-4xl font-bold leading-tight">
         Which repos should Ship watch?
       </h1>
       <p className="mt-3 max-w-2xl text-sm leading-relaxed text-white/70">
-        We pulled this list straight from your GitHub App installation. Tick the
-        ones we should attach the five default pipelines to. You can change this
-        any time from the dashboard.
+        We pulled this list straight from your GitHub App installation. Tick
+        the ones you want Ship to work with. You&apos;ll pick a preset and
+        wire a tracker per-repo on the next-next step — no one-size-fits-all.
       </p>
 
       {justInstalled && (
@@ -625,49 +578,20 @@ function ReposStep({
           suppressHydrationWarning
         >
           <input type="hidden" name="ws" value={wsId} suppressHydrationWarning />
-
-          <fieldset className="rounded-2xl border border-white/10 bg-white/[0.025] p-3">
-            <legend className="px-2 text-[11px] font-bold uppercase tracking-widest text-white/55">
-              Preset — shapes the default lanes
-            </legend>
-            <div className="grid grid-cols-1 gap-2 p-1 md:grid-cols-2">
-              {PRESETS.map((p, i) => (
-                <label
-                  key={p.id}
-                  className="flex cursor-pointer items-start gap-3 rounded-xl border border-white/5 bg-white/[0.02] p-3 has-[:checked]:border-aqua/50 has-[:checked]:bg-aqua/[0.06]"
-                >
-                  <input
-                    type="radio"
-                    name="preset"
-                    value={p.id}
-                    defaultChecked={i === 0}
-                    className="mt-1"
-                    suppressHydrationWarning
-                  />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-semibold text-white">
-                        {p.name}
-                      </span>
-                      <span className="rounded bg-white/5 px-1.5 py-0.5 font-mono text-[10px] tracking-wide text-white/45">
-                        {p.id}
-                      </span>
-                    </div>
-                    <div className="mt-1 text-[11px] leading-snug text-white/60">
-                      {p.blurb}
-                    </div>
-                    <div className="mt-1 font-mono text-[10px] text-aqua/70">
-                      {p.lanes}
-                    </div>
-                  </div>
-                </label>
-              ))}
-            </div>
-            <p className="mt-2 px-2 text-[11px] leading-snug text-white/45">
-              Preset only picks which lanes arrive <em>enabled</em>. Every lane
-              is still seeded — flip extras on later from the Pipelines page.
-            </p>
-          </fieldset>
+          {/*
+            Wizard v2 moved preset selection to the per-repo configure
+            step, but the existing ``repos-activate`` handler still accepts
+            it as a bulk default. We pin ``adoption-minimum`` so any repo
+            that gets activated here but never re-visited later still has
+            a sane preset bound — the configure step lets the user change
+            it before opening the seed PR anyway.
+          */}
+          <input
+            type="hidden"
+            name="preset"
+            value="adoption-minimum"
+            suppressHydrationWarning
+          />
 
           <fieldset className="space-y-2 rounded-2xl border border-white/10 bg-white/[0.025] p-3 max-h-[420px] overflow-y-auto">
             <legend className="px-2 text-[11px] font-bold uppercase tracking-widest text-white/55">
@@ -788,22 +712,24 @@ function TrackerStep({
   return (
     <section>
       <p className="font-mono text-[11px] uppercase tracking-[0.3em] text-aqua/85">
-        Step 3 of 3 &middot; Optional
+        Step 3 of 4 &middot; Workspace tracker (OAuth)
       </p>
       <h1 className="mt-2 font-display text-4xl font-bold leading-tight">
-        Pick a tracker.
+        Connect your tracker.
       </h1>
       <p className="mt-3 max-w-2xl text-sm leading-relaxed text-white/70">
-        The daily lane mirrors approved actions as tickets. OAuth tokens are
-        encrypted with the workspace key — the API only ever exposes{" "}
+        This workspace-level OAuth is reused by <em>every</em> repo — next
+        step lets you pick a tracker kind per repo (Linear, GitHub Issues,
+        Jira) and the team/project it writes to. OAuth tokens are encrypted
+        with the workspace key; the API only ever exposes{" "}
         <code className="rounded bg-white/5 px-1 py-[1px] text-aqua">
           has_secret: true
         </code>{" "}
-        from here on. You can skip this step and wire one up later from{" "}
+        from here on. Skip and wire one up later from{" "}
         <Link href="/integrations" className="text-aqua underline">
           Integrations
-        </Link>
-        .
+        </Link>{" "}
+        if you only want GitHub Issues.
       </p>
 
       {reposJustWired && (
@@ -912,116 +838,83 @@ function TrackerStep({
 }
 
 // ---------------------------------------------------------------------------
-// Step 4 — Seed starter knowledge buckets
+// Step 4 — Configure repos (per-repo preset + tracker + secrets + seed PR)
 // ---------------------------------------------------------------------------
 
-function KnowledgeStep({
+function ConfigureReposStep({
   wsId,
-  error,
+  cards,
+  loadError,
 }: {
   wsId: string;
-  error?: string;
+  cards: RepoCardInitial[] | null;
+  loadError: string | null;
 }) {
-  const message = error ? KNOWLEDGE_ERRORS[error] ?? error : null;
+  const message = loadError ? CONFIGURE_ERRORS[loadError] ?? loadError : null;
+  const total = cards?.length ?? 0;
+  const doneHref = `/onboarding?step=done&ws=${encodeURIComponent(wsId)}`;
   return (
     <section>
       <p className="font-mono text-[11px] uppercase tracking-[0.3em] text-aqua/85">
-        Step 4 of 4 &middot; Seed starter knowledge
+        Step 4 of 4 &middot; Configure each repo
       </p>
       <h1 className="mt-2 font-display text-4xl font-bold leading-tight">
-        Give Ship a head start.
+        One PR per repo, then you&apos;re off.
       </h1>
       <p className="mt-3 max-w-2xl text-sm leading-relaxed text-white/70">
-        Ship reads markdown files under{" "}
-        <code className="rounded bg-white/10 px-1.5 py-0.5 text-[12px] text-white">
-          .ship/knowledge/
-        </code>{" "}
-        in your repo when it reviews PRs, writes clarifications, or makes UI
-        suggestions. Ticking a bucket below opens a single PR that drops a
-        starter template into your repo — merge it, then edit the file
-        in-place to match your team&rsquo;s conventions.
+        For each repo: pick a preset, bind a tracker (or inherit the
+        workspace default), paste any agent API keys we need (they go
+        straight to GitHub Actions secrets — never stored on Ship), and
+        open one seed PR. The PR carries the CLI, the GitHub Actions
+        workflows, the scheduled lanes, a base{" "}
+        <code className="rounded bg-white/5 px-1 text-aqua">.ship/config.yml</code>{" "}
+        and the tracker FSM spec. Merge each PR once; the rest runs on
+        its own.
       </p>
 
       {message && (
-        <div
-          className="mt-5 rounded-lg border border-coral/40 bg-coral/10 px-3 py-2 text-xs text-coral"
-          data-testid="onboarding-knowledge-error"
-        >
+        <div className="mt-5 rounded-lg border border-coral/40 bg-coral/10 px-3 py-2 text-xs text-coral">
           {message}
         </div>
       )}
 
-      <form
-        action="/api/onboard/knowledge"
-        method="POST"
-        className="mt-7"
-        suppressHydrationWarning
-      >
-        <input type="hidden" name="ws" value={wsId} suppressHydrationWarning />
-        <input type="hidden" name="intent" value="seed" suppressHydrationWarning />
-
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          {KNOWLEDGE_STARTERS.map((slug) => {
-            const meta = KNOWLEDGE_STARTER_META[slug];
-            return (
-              <label
-                key={slug}
-                className="flex h-full cursor-pointer flex-col rounded-2xl border border-white/10 bg-white/[0.03] p-4 transition hover:border-aqua/40"
-              >
-                <div className="flex items-start gap-3">
-                  <input
-                    type="checkbox"
-                    name="slug"
-                    value={slug}
-                    defaultChecked
-                    data-testid={`onboarding-knowledge-${slug}`}
-                    className="mt-1 h-4 w-4 rounded border-white/30 bg-white/5 text-aqua focus:ring-aqua/50"
-                  />
-                  <div className="flex-1">
-                    <div className="flex items-center justify-between gap-2">
-                      <h3 className="font-display text-lg font-bold text-white">
-                        {meta.name}
-                      </h3>
-                      <code className="rounded bg-white/[0.06] px-1.5 py-0.5 text-[10px] text-white/55">
-                        {meta.path}
-                      </code>
-                    </div>
-                    <p className="mt-1 text-[12px] leading-relaxed text-white/65">
-                      {meta.blurb}
-                    </p>
-                  </div>
-                </div>
-              </label>
-            );
-          })}
+      {cards && cards.length > 0 && (
+        <div className="mt-7 space-y-4">
+          {cards.map((c) => (
+            <RepoCard key={c.repo.id} workspaceId={wsId} initial={c} />
+          ))}
         </div>
+      )}
 
-        <div className="mt-7 flex items-center justify-between gap-3 border-t border-white/10 pt-5">
-          <span className="text-[11px] text-white/45">
-            We open one PR with the selected files. Merge at your own pace.
-          </span>
-          <div className="flex items-center gap-3">
-            <button
-              type="submit"
-              formAction="/api/onboard/knowledge"
-              name="intent"
-              value="skip"
-              data-testid="onboarding-knowledge-skip"
-              className="text-xs text-white/55 hover:text-white"
-              formNoValidate
-            >
-              Skip for now &rarr;
-            </button>
-            <button
-              type="submit"
-              data-testid="onboarding-knowledge-seed"
-              className="rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-5 py-2.5 text-sm font-bold text-ink shadow-glow transition hover:brightness-110"
-            >
-              Open seed PR &rarr;
-            </button>
-          </div>
+      {cards && cards.length === 0 && !loadError && (
+        <div className="mt-7 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-xs text-white/70">
+          No activated repos. Step back to <em>Pick repos</em> and activate at
+          least one before seeding.
         </div>
-      </form>
+      )}
+
+      <div className="mt-8 flex items-center justify-between gap-3 border-t border-white/10 pt-5">
+        <span className="text-[11px] text-white/45">
+          {total > 0
+            ? `${total} repo${total === 1 ? "" : "s"} ready to configure. Seed PRs don't auto-merge — you're in control.`
+            : "Nothing to configure yet."}
+        </span>
+        <div className="flex items-center gap-3">
+          <Link
+            href={`/onboarding?step=repos&ws=${encodeURIComponent(wsId)}`}
+            className="text-xs text-white/55 hover:text-white"
+          >
+            &larr; Back to repo picker
+          </Link>
+          <Link
+            href={doneHref}
+            data-testid="onboarding-configure-continue"
+            className="rounded-full border border-aqua/40 bg-aqua/[0.08] px-4 py-2 text-xs font-bold text-aqua hover:bg-aqua/[0.16]"
+          >
+            I&apos;m done configuring &rarr;
+          </Link>
+        </div>
+      </div>
     </section>
   );
 }
@@ -1030,17 +923,12 @@ function KnowledgeStep({
 // Done + bootstrap-error fallbacks
 // ---------------------------------------------------------------------------
 
-function DoneStep({
-  knowledgeSeeded,
-  knowledgePrUrl,
-  knowledgePrNumber,
-}: {
-  knowledgeSeeded?: boolean;
-  knowledgePrUrl?: string;
-  knowledgePrNumber?: string;
-}) {
+function DoneStep({ wsId }: { wsId: string | null }) {
+  const configureHref = wsId
+    ? `/onboarding?step=configure&ws=${encodeURIComponent(wsId)}`
+    : "/onboarding";
   return (
-    <section className="mx-auto max-w-xl rounded-3xl border border-aqua/30 bg-aqua/[0.04] p-10 text-center">
+    <section className="mx-auto max-w-2xl rounded-3xl border border-aqua/30 bg-aqua/[0.04] p-10 text-center">
       <div className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-aqua/20 text-2xl text-aqua">
         ✓
       </div>
@@ -1050,34 +938,41 @@ function DoneStep({
       >
         You&apos;re wired in.
       </h1>
-      <p className="mt-2 text-sm text-white/70">
-        Workspace ready, GitHub repos selected, default pipelines seeded. Open
-        the dashboard and watch them light up as PRs and CI runs flow in.
+      <p className="mx-auto mt-2 max-w-lg text-sm text-white/75">
+        Workspace is set up, tracker is connected, and each repo has its own
+        seed PR opened (with the CLI, GitHub Actions, scheduled lanes, base
+        config, knowledge starters and the tracker FSM).
       </p>
-      {knowledgeSeeded && knowledgePrUrl && (
-        <div
-          data-testid="onboarding-knowledge-pr"
-          className="mt-5 rounded-xl border border-aqua/30 bg-aqua/[0.06] px-4 py-3 text-xs text-white/85"
-        >
-          <strong className="text-aqua">Starter knowledge PR opened.</strong>{" "}
-          Review and merge{" "}
-          <a
-            href={knowledgePrUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline decoration-aqua/60 underline-offset-2 hover:text-white"
-          >
-            PR #{knowledgePrNumber ?? "—"}
-          </a>{" "}
-          to turn on Ship&rsquo;s knowledge context.
-        </div>
-      )}
+      <div className="mx-auto mt-5 max-w-lg rounded-xl border border-aqua/30 bg-aqua/[0.06] px-4 py-3 text-left text-xs leading-relaxed text-white/80">
+        <strong className="block text-aqua">What happens next:</strong>
+        <ol className="mt-1 list-decimal space-y-0.5 pl-4">
+          <li>
+            <strong className="text-white">Merge each seed PR.</strong> That
+            installs the workflows and unlocks the scheduled lanes.
+          </li>
+          <li>
+            <strong className="text-white">Initial tasks run.</strong> On
+            merge, Ship&apos;s first sweeps fire (code map, knowledge refresh,
+            standup) and start populating the dashboard.
+          </li>
+          <li>
+            <strong className="text-white">Pick up from the dashboard.</strong>{" "}
+            Review, approve, tweak prompts, and let the lanes do the work.
+          </li>
+        </ol>
+      </div>
       <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
         <Link
           href="/"
           className="rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-5 py-2.5 text-sm font-bold text-ink shadow-glow transition hover:brightness-110"
         >
           Open dashboard &rarr;
+        </Link>
+        <Link
+          href={configureHref}
+          className="rounded-full border border-white/15 bg-white/[0.04] px-5 py-2.5 text-sm font-bold text-white/85 hover:border-aqua/40 hover:text-white"
+        >
+          Back to repo configure
         </Link>
         <Link
           href="/settings"
@@ -1088,6 +983,43 @@ function DoneStep({
       </div>
     </section>
   );
+}
+
+/**
+ * Pull everything a ``RepoCard`` needs to render without another
+ * round-trip on first paint: the tracker binding (even if it's
+ * inherited from the workspace default) and the agent-secret catalog
+ * with fresh ``present`` flags. The two calls are independent so we
+ * run them in parallel.
+ *
+ * Failures bubble up; the caller surfaces one compact "load failed"
+ * banner rather than rendering a half-populated card that the user
+ * would need to guess at.
+ */
+async function loadRepoCardInitial(
+  wsId: string,
+  repo: ApiActivatedRepo,
+  token: string | undefined,
+): Promise<RepoCardInitial> {
+  const [tracker, secrets] = await Promise.all([
+    getRepoTrackerBinding(wsId, repo.id, token),
+    checkAgentSecrets(wsId, repo.id, { token }),
+  ]);
+  return {
+    repo: {
+      id: repo.id,
+      full_name: repo.full_name,
+      preset: (repo.preset as PresetId | null) ?? null,
+      default_branch: repo.default_branch,
+    },
+    tracker,
+    agents: secrets.agents,
+    // Wizard v2 doesn't yet persist "last seed PR" server-side; the
+    // card starts out in the editable state and switches to the
+    // seeded row after the user clicks the button here. Iter 8 will
+    // surface pending-merge PRs on the dashboard.
+    last_seed: null,
+  };
 }
 
 function BootstrapError({ reason }: { reason: string }) {
