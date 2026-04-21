@@ -144,6 +144,12 @@ try {
     process.exit(0);
   }
 
+  if (cmd === "migrate") {
+    const { migrateCommand } = await import("../lib/commands/migrate.mjs");
+    await migrateCommand(ctx, rest);
+    process.exit(0);
+  }
+
   console.error(`Unknown command: ${cmd}\nRun: shipctl help`);
   process.exit(1);
 } catch (err) {
