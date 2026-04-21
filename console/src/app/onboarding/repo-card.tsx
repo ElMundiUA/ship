@@ -53,6 +53,23 @@ export interface RepoCardInitial {
     pr_url: string;
     pr_number: number;
   } | null;
+  /**
+   * Non-fatal per-probe failures from the server render. Each entry is a
+   * short human-readable message. The card stays interactive — missing
+   * tracker data is treated as "none", missing secrets as "unknown" —
+   * and surfaces these hints so the operator can reason about what's
+   * actually wired vs. probed.
+   *
+   * Why the fields aren't just absent: users reported the whole step 4
+   * bombing with "Couldn't load your activated repos" when a single
+   * probe 500'd (App missing Secrets permission is the common cause).
+   * Carrying a soft error lets us render the rest and point the user
+   * at the actual fix instead of a cryptic banner.
+   */
+  probe_errors?: {
+    tracker?: string;
+    agents?: string;
+  };
 }
 
 export function RepoCard({
@@ -266,6 +283,13 @@ export function RepoCard({
         <legend className="text-[11px] font-bold uppercase tracking-widest text-white/55">
           Tracker
         </legend>
+        {initial.probe_errors?.tracker && (
+          <p className="mt-2 rounded border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] leading-snug text-amber-200">
+            Couldn&apos;t read the current tracker binding:{" "}
+            <code className="font-mono">{initial.probe_errors.tracker}</code>.
+            Pick a tracker below to overwrite whatever&apos;s stored.
+          </p>
+        )}
         <div className="mt-2 flex flex-wrap items-center gap-2">
           {(["linear", "github", "jira"] as TrackerKind[]).map((k) => {
             const selected = trackerDraft.kind === k;
@@ -411,6 +435,17 @@ export function RepoCard({
           Ship reads these from the repo&apos;s GitHub Actions secrets. Keys
           you paste here go straight to GitHub and are never stored on Ship.
         </p>
+        {initial.probe_errors?.agents && (
+          <p className="mt-2 rounded border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] leading-snug text-amber-200">
+            Couldn&apos;t probe GitHub Actions secrets on this repo:{" "}
+            <code className="font-mono">{initial.probe_errors.agents}</code>.
+            Most often this means the Ship GitHub App is missing the{" "}
+            <strong>Secrets: read &amp; write</strong> repository permission.
+            Grant it on the App&apos;s installation page and reload. You can
+            still pick a preset and open the seed PR — agent keys can be
+            added later.
+          </p>
+        )}
         <div className="mt-2 space-y-2">
           {agents.map((a) => {
             const hasDraft = secretDrafts[a.slug]?.length > 0;
