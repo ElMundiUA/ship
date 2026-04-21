@@ -815,6 +815,35 @@ async def _apply_push_event_for_kb(
         report.chunks_written,
     )
 
+    # Phase 2 consolidation: mirror the KB push into ``knowledge_buckets``
+    # as repo-scoped ``repo_files`` rows so the console's /knowledge list,
+    # the scope resolver, and the CLI all see one bucket per file. The
+    # sync fast-paths unchanged files on SHA, so the cost on a quiet push
+    # is bounded by the list-tree call. A failure here must not poison
+    # the webhook — the indexer already succeeded and a subsequent push
+    # (or the manual reindex) will retry the mirror.
+    try:
+        from backend.app.services.bucket_repo_files_sync import (
+            sync_repo_files,
+        )
+
+        bucket_report = await sync_repo_files(
+            session, repo_row, install, settings=settings
+        )
+        logger.info(
+            "push → bucket sync for %s: created=%d updated=%d archived=%d",
+            repo_row.full_name,
+            bucket_report.buckets_created,
+            bucket_report.buckets_updated,
+            bucket_report.buckets_archived,
+        )
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.warning(
+            "push → bucket sync skipped for %s: %s",
+            repo_row.full_name,
+            exc,
+        )
+
 
 # Map GitHub ``workflow_run.conclusion`` values onto our
 # :class:`PipelineRun.status` vocabulary. ``timed_out`` and ``action_required``

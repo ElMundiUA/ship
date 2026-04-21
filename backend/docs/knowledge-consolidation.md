@@ -244,4 +244,9 @@ Improvements also respect it.
 
 ## Changelog
 
-- **2026-04-21** — Phase 1 shipped (`a7c8edd`). Doc created.
+- **2026-04-21** — Phase 1 shipped (`a7c8edd`). Doc created (`821ff8d`).
+- **2026-04-21** — Phase 2 shipped: `.ship/knowledge/*.md` files mirror
+  into `knowledge_buckets` as `scope='repo'` / `source='repo_files'`
+  rows. Sync triggers: push webhook, manual `kb/reindex`, first-time
+  activation. `GET /v1/workspaces/{ws}/knowledge` reads from DB with
+  legacy disk-lister as fallback. 10 new tests (sync service + route).
