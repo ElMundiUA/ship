@@ -1493,6 +1493,80 @@ export async function listBucketArticles(
   return Array.isArray(payload) ? payload : [];
 }
 
+// ---------------------------------------------------------------------------
+// Distiller (Phase 6a) — ingest blob → BucketArticle + audit-row.
+// The console has no UI yet; these helpers exist so internal tooling and
+// the upcoming Knowledge "Distill" panel share one typed surface.
+// ---------------------------------------------------------------------------
+
+export type ApiDistillerRunStatus = "queued" | "running" | "done" | "failed";
+export type ApiDistillerRunDecision =
+  | "new"
+  | "update"
+  | "skip"
+  | "error"
+  | null;
+
+export interface ApiDistillerRun {
+  id: string;
+  workspace_id: string;
+  bucket_id: string;
+  source_kind: import("./types").ApiBucketSource;
+  status: ApiDistillerRunStatus;
+  decision: ApiDistillerRunDecision;
+  input_ref: Record<string, unknown>;
+  output_refs: Record<string, unknown>;
+  error: string | null;
+  created_by_user_id: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ApiDistillOut {
+  run: ApiDistillerRun;
+  decision: Exclude<ApiDistillerRunDecision, null>;
+  article_ids: string[];
+  reason: string | null;
+}
+
+export interface DistillInput {
+  body_md: string;
+  source_kind?: import("./types").ApiBucketSource;
+  title_hint?: string | null;
+  slug_hint?: string | null;
+  provenance?: Record<string, unknown>;
+  input_ref?: Record<string, unknown>;
+}
+
+export function distillBucket(
+  workspaceId: string,
+  slug: string,
+  payload: DistillInput,
+  options: { token?: string } = {},
+): Promise<ApiDistillOut> {
+  return apiFetch<ApiDistillOut>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/buckets/${encodeURIComponent(slug)}/distill`,
+    { method: "POST", body: payload, token: options.token },
+  );
+}
+
+export async function listDistillerRuns(
+  workspaceId: string,
+  slug: string,
+  opts: { limit?: number; token?: string } = {},
+): Promise<ApiDistillerRun[]> {
+  const qs = new URLSearchParams();
+  if (opts.limit != null) qs.set("limit", String(opts.limit));
+  const suffix = qs.size ? `?${qs.toString()}` : "";
+  const payload = await apiFetch<ApiDistillerRun[]>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/buckets/${encodeURIComponent(slug)}/distill/runs${suffix}`,
+    { token: opts.token },
+  );
+  return Array.isArray(payload) ? payload : [];
+}
+
 // --- API tokens ------------------------------------------------------------
 
 export function mintToken(

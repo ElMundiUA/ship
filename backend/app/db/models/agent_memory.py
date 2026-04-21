@@ -440,6 +440,116 @@ class ArtifactFeedback(Base):
     updated_at: Mapped[datetime] = _ts_updated()
 
 
+class DistillerRunStatus:
+    """Lifecycle of a :class:`DistillerRun`.
+
+    Phase 6a ships the stub ingest path only — ``queued`` → ``done``
+    happens in-process in a single request. Phase 6b plugs the LLM
+    classifier in behind a worker queue; ``running`` becomes the
+    visible mid-state and ``failed`` the retry-on-error exit.
+    """
+
+    QUEUED = "queued"
+    RUNNING = "running"
+    DONE = "done"
+    FAILED = "failed"
+
+    ALL: tuple[str, ...] = (QUEUED, RUNNING, DONE, FAILED)
+
+
+class DistillerRunDecision:
+    """Outcome the Distiller reached for a given input blob.
+
+    Mirrors ``{decision: "new" | "update" | "skip"}`` in the public
+    contract documented in ``backend/docs/knowledge-consolidation.md``.
+    ``error`` is the terminal outcome when the run itself failed
+    (distinct from ``skip``, which is a legitimate "nothing to do").
+    """
+
+    NEW = "new"
+    UPDATE = "update"
+    SKIP = "skip"
+    ERROR = "error"
+
+    ALL: tuple[str, ...] = (NEW, UPDATE, SKIP, ERROR)
+
+
+class DistillerRun(Base):
+    """One ingest attempt against a :class:`KnowledgeBucket`.
+
+    Created by ``POST /v1/workspaces/{ws}/buckets/{slug}/distill``.
+    Each run owns the input summary (``input_ref``) and the resulting
+    decision (``new`` / ``update`` / ``skip``). When the decision
+    lands a :class:`BucketArticle`, the article ids are persisted in
+    ``output_refs['article_ids']`` so a future audit trail or
+    regenerate-on-edit flow can walk the provenance.
+
+    Phase 6a persists the full row even for the happy-path stub. The
+    decision + output schema is stable enough to consume from the
+    console; Phase 6b swaps the classifier without migration work.
+    """
+
+    __tablename__ = "distiller_runs"
+    __table_args__ = (
+        Index("ix_distiller_runs_workspace_id", "workspace_id"),
+        Index("ix_distiller_runs_bucket_id", "bucket_id"),
+        Index("ix_distiller_runs_status", "status"),
+        CheckConstraint(
+            "status IN ('queued', 'running', 'done', 'failed')",
+            name="ck_distiller_runs_status",
+        ),
+        CheckConstraint(
+            "decision IS NULL "
+            "OR decision IN ('new', 'update', 'skip', 'error')",
+            name="ck_distiller_runs_decision",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    bucket_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("knowledge_buckets.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    source_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'queued'")
+    )
+    decision: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # Inbound blob metadata — not the content itself (that is the
+    # article body). ``{"title_hint": "...", "slug_hint": "...",
+    # "bytes": 1234, "source_ref": {...}}`` is the canonical shape.
+    input_ref: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    # Outputs produced by the run. ``{"article_ids": ["..."], "diff":
+    # {...}}`` for ``new``/``update``; ``{"reason": "..."}`` for
+    # ``skip``/``error``.
+    output_refs: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    created_at: Mapped[datetime] = _ts_created()
+    updated_at: Mapped[datetime] = _ts_updated()
+
+
 __all__ = [
     "ArtifactFeedback",
     "BucketArticle",
@@ -447,6 +557,9 @@ __all__ = [
     "BucketScope",
     "BucketSource",
     "BucketSummary",
+    "DistillerRun",
+    "DistillerRunDecision",
+    "DistillerRunStatus",
     "EMBED_DIM",
     "KbChunk",
     "KnowledgeBucket",

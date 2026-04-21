@@ -1,14 +1,16 @@
 # Knowledge buckets consolidation — plan
 
-**Status:** Phases 1–3, 4a, 4b, 5a, 5b, 5c, 5d landed. Backend
+**Status:** Phases 1–3, 4a, 4b, 5a, 5b, 5c, 5d, 6a landed. Backend
 consolidation closed — `bucket_articles` is the sole read surface
 (retriever, agent tools, `/articles` endpoint, `summary_count` on
 bucket listings); `bucket_summaries` is maintained for write-back
 compat only (deprecated, removal in Phase 9). Phase 4a + 4b shipped
-the first user-visible UI slice: scope pill in AppShell and
-scope-aware `/knowledge`, `/catalog`, `/clarifications`,
-`/improvements`, `/chat`. Next: Phase 6 (Distiller pipeline) or
-Phase 7 (new sources — external-static upload, connector-proxy).
+the scope pill + scope-aware `/knowledge`, `/catalog`,
+`/clarifications`, `/improvements`, `/chat`. Phase 6a shipped the
+Distiller stub: `POST /buckets/{slug}/distill` writes a run row
+and a published `BucketArticle`, `GET …/runs` lists history. Next:
+Phase 6b (LLM classifier) or Phase 7 (inbound sources:
+external-static upload + connector-proxy).
 **Scope:** unify the three "knowledge" surfaces (agent-memory buckets,
 `.ship/knowledge/*.md` disk-lister, `KbChunk` RAG index) under one
 `Scope × Source × Article` model, so every knowledge bucket has an
@@ -263,11 +265,42 @@ Split into three landing slices so we can ship incrementally:
 
 ### Phase 6 — Distiller contract
 
-`POST /v1/buckets/{id}/distill` with an input blob (PR diff, upload,
-webhook payload, transcript chunk) → `{ decision: "new" | "update" |
-"skip", article_ids, diff }`. Phase 6a ships as a stub that always
-creates a new article. Phase 6b plugs in the LLM classifier. Phase 6c
-wires in the inbound sources (push-based, not pull).
+`POST /v1/workspaces/{ws}/buckets/{slug}/distill` with an input blob
+(PR diff, upload, webhook payload, transcript chunk) →
+`{ run, decision: "new" | "update" | "skip", article_ids, reason }`.
+
+**Phase 6a (shipped).** Synchronous stub classifier backed by a new
+`distiller_runs` table (migration `0017_distiller_runs.py`). Every
+ingest writes a run row (audit trail) and decides deterministically:
+
+- existing published article under the same slug with the same
+  `content_sha` → `skip`;
+- existing published article with a different body → `update`
+  (old row flipped to `superseded`, version bumped, new row
+  inserted as `published`);
+- empty body → `skip`;
+- otherwise → `new` (insert version 1 with a derived slug +
+  first-line title + best-effort embedding).
+
+A companion `GET /buckets/{slug}/distill/runs` endpoint surfaces
+history newest-first so the upcoming Knowledge panel can render
+"what the Distiller did against this bucket" without joining on
+`bucket_articles` directly. RBAC: `ROLES_MAINTAIN` to write,
+`ROLES_READ` to read.
+
+Console client helpers (`distillBucket`, `listDistillerRuns`) live
+in `console/src/lib/api/client.ts`. No UI yet — Phase 7 adds the
+ingest surfaces that drive it.
+
+**Phase 6b (pending).** Replace `_classify` in
+`backend/app/services/distiller.py` with an LLM call; the public
+contract and stored row shape are deliberately stable so the swap
+is a services-layer edit only.
+
+**Phase 6c (pending).** Wire the inbound sources — PR-merged
+webhook, external-static upload route, connector-proxy fetch — into
+`run_distiller`. Each source becomes a thin adapter that builds a
+`DistillerInput` and calls the same entry point.
 
 ### Phase 7 — New sources
 
@@ -374,6 +407,17 @@ Improvements also respect it.
   buckets too). Legacy `GET .../summaries` stays as-is and is marked
   deprecated. 14 new tests (7 agent-tool cutover + 7 endpoint). Backend
   suite: 379 passed.
+- **2026-04-21** — Phase 6a shipped: Distiller stub.
+  `distiller_runs` table (migration 0017) + service in
+  `backend/app/services/distiller.py` + v1 routes under
+  `backend/app/api/v1/routes/distiller.py`. Deterministic classifier
+  (empty → skip, matching content_sha → skip, different body
+  same slug → update with version bump + supersedes, else new).
+  Best-effort embedding keeps the article searchable when
+  `OPENAI_API_KEY` is set; silently skipped otherwise. Seven unit
+  tests cover new / update / skip-empty / skip-same-hash / 404 /
+  400 / history listing. Console typed helpers added
+  (`distillBucket`, `listDistillerRuns`); no UI yet.
 - **2026-04-21** — Phase 4b shipped: scope pill propagated to
   `/catalog`, `/clarifications`, `/improvements`, and `/chat`.
   Client-side filters on `source_repo_id` (catalog) and

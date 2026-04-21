@@ -19,6 +19,7 @@ from backend.app.api.v1.routes import (
     chat,
     clarifications,
     dashboard,
+    distiller,
     github_app,
     health,
     improvements,
@@ -92,6 +93,12 @@ api_router.include_router(improvements.pipeline_router)
 # here instead of being captured by chat's ``/buckets/{slug}`` route.
 # See backend/docs/knowledge-consolidation.md.
 api_router.include_router(buckets_resolver.router)
+# Distiller — Phase 6 ingest surface for bucket articles. Mounted
+# BEFORE chat.router so ``/buckets/{slug}/distill`` and
+# ``/buckets/{slug}/distill/runs`` take precedence over chat's
+# generic ``/buckets/{slug}`` PATCH/DELETE. See
+# backend/docs/knowledge-consolidation.md Phase 6.
+api_router.include_router(distiller.router)
 # Chat (C12 — real agent, single-window SSE). The module also hosts
 # the buckets CRUD and artifact-feedback routes because they all
 # belong to the same "conversational surface" object and share a
