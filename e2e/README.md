@@ -64,6 +64,38 @@ ffmpeg -y -i test-results/<name>/video.webm \
 
 Чтобы записать **полный 4-step flow** (с knowledge step, который пока только локально), запусти console локально (`cd console && npm run dev`), сохрани свежий `storageState` против `http://127.0.0.1:3001`, и пропиши `E2E_CONSOLE_BASE_URL=http://127.0.0.1:3001` + `E2E_SHIP_API_BASE` на тот backend, который видит локальную консоль.
 
+### Single-take product tour
+
+`tests/product-tour.wired.spec.ts` — один тест, который за ~95 секунд проходит весь продукт:
+
+```
+wizard (опц.) → dashboard → pipelines → pipeline run → clarifications →
+improvements → feedback → navigator → knowledge → catalog →
+repo secrets → metrics → settings → members → integrations →
+audit → dashboard
+```
+
+Между экранами пауза `E2E_TOUR_DWELL_MS` (по умолчанию 2500ms). Поэтому Playwright записывает один непрерывный `video.webm` (~2 МБ) без склейки. Запуск:
+
+```bash
+cd e2e
+E2E_RUN_PRODUCT_TOUR=1 \
+E2E_TOUR_INCLUDE_WIZARD=1 \
+E2E_RUN_KNOWLEDGE_SEED=1 \
+npx playwright test product-tour.wired.spec.ts \
+  --config=playwright.demo.config.ts
+```
+
+Без `E2E_TOUR_INCLUDE_WIZARD=1` тур начинается прямо с дашборда (быстрее, не трогает sandbox). С `E2E_RUN_KNOWLEDGE_SEED=1` wizard реально откроет seed-PR в sandbox-репе.
+
+После прогона:
+
+```bash
+ffmpeg -y -i $(find test-results -name 'video.webm' | head -1) \
+  -c:v libx264 -pix_fmt yuv420p -movflags +faststart -preset slow -crf 22 \
+  demo-recordings/product-tour.mp4
+```
+
 ## Run locally
 
 ```bash
