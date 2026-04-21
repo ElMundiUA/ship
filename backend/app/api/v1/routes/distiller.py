@@ -63,6 +63,12 @@ from backend.app.services.distiller import (
     run_distiller,
 )
 from backend.app.services.distiller_llm import make_llm_classifier
+from backend.app.services.connectors import (
+    ConnectorConfigError,
+    ConnectorError,
+    ConnectorPage,
+    fetch_connector_pages,
+)
 from backend.app.services.distiller_sources import (
     ingest_connector_page,
     ingest_external_static_upload,
@@ -405,27 +411,33 @@ async def sync_connector_bucket(
     auth: AuthContext = Depends(get_current_auth),
     session: AsyncSession = Depends(get_session),
 ) -> DistillOut:
-    """Phase 7b — manually trigger a connector-proxy bucket refresh.
+    """Phase 7c — manually refresh a connector-proxy bucket.
 
-    The real connector fetch layer (Confluence / Notion / Linear
-    page readers) will live under ``backend/app/services/connectors/*``
-    in a later phase. Until then we synthesize a compact description
-    of the connector target so the upstream flow ("user clicks Sync
-    now → article lands in the bucket") closes end-to-end and the
-    Distiller's transitions (``new`` / ``update`` / ``skip``) can be
-    validated in the UI without a network round-trip.
+    Resolution order for the body the Distiller sees:
 
-    Each invocation records one :class:`DistillerRun`. Repeated
-    syncs against an unchanged ``source_ref`` resolve to ``skip``
-    via ``content_sha`` dedup, which is how the console's
-    "already up to date" state gets expressed.
+    1. The connector registry
+       (:mod:`backend.app.services.connectors`) is asked for a
+       fetcher matching ``Integration.kind``. If one is registered
+       and it can handle the stored ``resource_ref``, we fetch the
+       real third-party page and ingest its markdown. Notion is the
+       first kind wired via this path.
+    2. If no fetcher is registered, or the fetcher declines the
+       shape (e.g. Notion v1 only handles ``{page_id}``, not
+       ``{database_id}``), we fall back to the Phase 7b stub body
+       so the bucket's sync loop keeps working in the UI without
+       forcing every connector to land at the same time.
+    3. Each invocation records one :class:`DistillerRun`. Repeated
+       syncs against unchanged content resolve to ``skip`` via
+       ``content_sha`` dedup — same as Phase 7b.
 
-    4xx codes:
+    4xx/5xx codes:
       * ``400`` — bucket is not ``connector_proxy`` or the stored
-        ``source_ref`` is missing the connector handle the stub
-        needs to build its stand-in page.
+        ``source_ref`` is missing the connector handle.
       * ``403`` — caller lacks ``ROLES_MAINTAIN``.
       * ``404`` — bucket slug not found under the workspace.
+      * ``502`` — a real fetcher raised a
+        :class:`ConnectorConfigError` (bad token, missing grant,
+        upstream 4xx). Re-connect the integration and retry.
     """
 
     await _require_membership(
@@ -456,38 +468,91 @@ async def sync_connector_bucket(
     if not isinstance(resource_ref, dict):
         resource_ref = {}
 
-    # Stub body — compact enough that the classifier + embedding
-    # path doesn't warp, descriptive enough that an operator who
-    # hits the articles endpoint can see what the sync produced.
-    # When the real fetcher layer arrives it'll replace this block
-    # with the actual page body; the surrounding DistillerRun
-    # bookkeeping stays intact.
-    page_ref: dict[str, Any] = {
-        "slug": f"{integration_kind}-index",
-        "title": f"{integration_kind.title()} · {slug}",
-        "resource_ref": resource_ref,
-    }
-    lines = [
-        f"# {integration_kind.title()} · {bucket.name}",
-        "",
-        f"- Source kind: `{bucket.source_kind}`",
-        f"- Integration: `{integration_kind}`",
-    ]
-    if resource_ref:
-        pairs = ", ".join(f"{k}={v!r}" for k, v in sorted(resource_ref.items()))
-        lines.append(f"- Resource: {pairs}")
-    lines.extend(
-        [
-            "",
-            "> Connector fetcher is not wired yet — this page is a stand-in "
-            "so the Distiller end-to-end flow is observable. Re-sync "
-            "after the real connector layer lands (see "
-            "`backend/docs/knowledge-consolidation.md`, Phase 7c).",
-        ]
+    # Load the integration row so the fetcher can decrypt its
+    # secret. We load it even when we don't have a fetcher wired —
+    # that way a broken integration (deleted row, revoked token) is
+    # a clean 400 before we commit to the ingest path.
+    integration_row = await _load_integration(
+        session,
+        workspace_id=workspace_id,
+        source_ref=source_ref,
+        kind=integration_kind,
     )
-    body_md = "\n".join(lines).strip()
 
     classifier, resolved_mode = _resolve_classifier("stub")
+
+    # ---- Real fetcher path (Phase 7c) -------------------------------
+    pages: list[ConnectorPage] = []
+    if integration_row is not None:
+        try:
+            pages = await fetch_connector_pages(integration_row, resource_ref)
+        except ConnectorConfigError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"connector config error: {exc}",
+            ) from exc
+        except ConnectorError as exc:
+            logger.exception(
+                "connector sync: fetcher failure kind=%s slug=%s",
+                integration_kind,
+                slug,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"connector fetch failed: {exc}",
+            ) from exc
+
+    # Single-page semantics for v1 — if a fetcher returned multiple
+    # pages we still only ingest the first and log the rest so the
+    # operator can see what was skipped. Multi-page sync is a
+    # natural Phase 7d extension but would require switching the
+    # response shape, which we keep stable here.
+    if len(pages) > 1:
+        logger.info(
+            "connector sync: fetcher returned %d pages; ingesting first only "
+            "(multi-page support is Phase 7d work)",
+            len(pages),
+        )
+
+    page_ref: dict[str, Any]
+    body_md: str
+    if pages:
+        first = pages[0]
+        page_ref = {
+            "slug": first.slug,
+            "title": first.title,
+            **dict(first.page_ref),
+            "resource_ref": resource_ref,
+        }
+        body_md = first.body_md
+    else:
+        # ---- Stub fallback (preserved from Phase 7b) ----------------
+        page_ref = {
+            "slug": f"{integration_kind}-index",
+            "title": f"{integration_kind.title()} · {slug}",
+            "resource_ref": resource_ref,
+        }
+        lines = [
+            f"# {integration_kind.title()} · {bucket.name}",
+            "",
+            f"- Source kind: `{bucket.source_kind}`",
+            f"- Integration: `{integration_kind}`",
+        ]
+        if resource_ref:
+            pairs = ", ".join(
+                f"{k}={v!r}" for k, v in sorted(resource_ref.items())
+            )
+            lines.append(f"- Resource: {pairs}")
+        lines.extend(
+            [
+                "",
+                "> Connector fetcher is not wired for this integration or "
+                "resource_ref shape. This is a stand-in body so the Distiller "
+                "loop stays observable. See `backend/docs/"
+                "knowledge-consolidation.md` Phase 7c for wired connectors.",
+            ]
+        )
+        body_md = "\n".join(lines).strip()
 
     outcome = await ingest_connector_page(
         session,
@@ -513,6 +578,52 @@ async def sync_connector_bucket(
         reason=outcome.reason,
         classifier=outcome.classifier or resolved_mode,
     )
+
+
+async def _load_integration(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    source_ref: dict[str, Any],
+    kind: str,
+):
+    """Resolve the Integration row a connector bucket points at.
+
+    Returns ``None`` when the row can't be found — the caller falls
+    back to the stub body with a logged warning rather than 4xx'ing
+    because the bucket row is still referentially valid; only the
+    fetch half is degraded.
+    """
+
+    from backend.app.db.models.tenancy import Integration
+
+    raw_id = source_ref.get("integration_id")
+    candidates = []
+    if isinstance(raw_id, str) and raw_id.strip():
+        try:
+            candidates.append(uuid.UUID(raw_id.strip()))
+        except ValueError:
+            logger.info(
+                "connector sync: source_ref.integration_id=%r isn't a UUID",
+                raw_id,
+            )
+
+    stmt = select(Integration).where(
+        Integration.workspace_id == workspace_id,
+        Integration.kind == kind,
+    )
+    if candidates:
+        stmt = stmt.where(Integration.id == candidates[0])
+
+    row = (await session.execute(stmt)).scalar_one_or_none()
+    if row is None:
+        logger.warning(
+            "connector sync: integration row missing for kind=%s ws=%s — "
+            "falling back to stub body",
+            kind,
+            workspace_id,
+        )
+    return row
 
 
 @router.get(

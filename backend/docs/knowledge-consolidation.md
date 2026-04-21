@@ -1,26 +1,28 @@
 # Knowledge buckets consolidation — plan
 
 **Status:** Phases 1–3, 4a, 4b, 5a, 5b, 5c, 5d, 6a, 6b, 6c, 7a,
-7b landed. Backend consolidation closed — `bucket_articles` is the
-sole read surface (retriever, agent tools, `/articles` endpoint,
-`summary_count` on bucket listings); `bucket_summaries` is
-maintained for write-back compat only (deprecated, removal in
+7b, 7c landed. Backend consolidation closed — `bucket_articles` is
+the sole read surface (retriever, agent tools, `/articles`
+endpoint, `summary_count` on bucket listings); `bucket_summaries`
+is maintained for write-back compat only (deprecated, removal in
 Phase 9). Phase 4a + 4b shipped the scope pill + scope-aware
 `/knowledge`, `/catalog`, `/clarifications`, `/improvements`,
 `/chat`. Phase 6a shipped the Distiller stub; Phase 6b added the
 LLM-backed classifier (`classifier=auto|stub|llm`). Phase 6c
 shipped the inbound adapters. Phase 7a added the console upload
-surface. Phase 7b extends `POST /v1/workspaces/{ws}/buckets` to
-mint connector-proxy buckets (validates `source_ref.integration_id`
-against the caller's workspace), adds `POST /buckets/{slug}/sync`
-that drives `ingest_connector_page` with a deterministic stub body
-so the UI round-trip is observable before real fetchers land, and
-teaches `/knowledge` to host a new-bucket dialog (Upload / Connector
-tabs) plus a connector card + "Sync now" button on the detail page.
-Next: Phase 7c (real connector fetchers — Notion/Confluence/Linear
-readers under `backend/app/services/connectors/*`), Phase 8
-(offboarding audio transcript ingestion), Phase 9 (scope-driven
-sidebar IA).
+surface. Phase 7b wired the connector-bucket create+sync surface
+with a stub body. Phase 7c slots in the first real connector
+fetcher: `backend/app/services/connectors/` now hosts a registry
+of fetchers (dispatched by `Integration.kind`) and a Notion fetcher
+that renders a single Notion page (`resource_ref={page_id}`) into
+markdown — headings, lists, to-do, quote, callout, code, divider,
+inline formatting — so the Distiller ingests the real page body
+instead of the Phase 7b stand-in. Unsupported `resource_ref`
+shapes (e.g. `{database_id}`) fall back to the stub with a
+logged warning, so Phase 7b buckets keep working. Next: extending
+the Notion fetcher to database listing + child-block recursion,
+Confluence / Linear fetchers (same registry), Phase 8 (offboarding
+audio transcript ingestion), Phase 9 (scope-driven sidebar IA).
 **Scope:** unify the three "knowledge" surfaces (agent-memory buckets,
 `.ship/knowledge/*.md` disk-lister, `KbChunk` RAG index) under one
 `Scope × Source × Article` model, so every knowledge bucket has an
@@ -493,6 +495,58 @@ Per-source surface:
   connector card mounts with the right provider + resource_ref,
   clicks Sync now and asserts `new → skip` transitions.
 
+#### Phase 7c — Real connector fetchers (shipped)
+
+- `backend/app/services/connectors/__init__.py` — registry of
+  fetchers keyed by `Integration.kind`. Exposes a `@register(kind)`
+  decorator, a `fetch_connector_pages(integration, resource_ref)`
+  dispatcher, and `set_http_client_override` for test injection
+  (`MockTransport`-based clients). Three error shapes separate
+  "expected fallback" from "operator must act":
+  `ConnectorUnsupported` (fetcher can't handle the shape — caller
+  falls back to stub with a warning), `ConnectorConfigError`
+  (integration row is broken — caller returns 502), plain
+  `ConnectorError` for anything else.
+- `backend/app/services/connectors/notion.py` — first registered
+  fetcher. Handles `resource_ref={"page_id": "<uuid>"}` by calling
+  `GET /v1/pages/{id}` + `GET /v1/blocks/{id}/children` (with
+  pagination and a `_MAX_BLOCKS=200` cap), then renders the blocks
+  to markdown. Covered block types: heading_1/2/3, paragraph,
+  bulleted_list_item, numbered_list_item, to_do, quote, callout
+  (with emoji icon), code (fenced with language), divider,
+  child_page (link). Rich-text renderer supports bold/italic/
+  strikethrough/code/link. Secret decrypt runs *after* the shape
+  check so an integration missing its token but targeting an
+  unsupported shape still resolves to stub fallback instead of
+  502'ing. Notion 401/403/404 are surfaced as
+  `ConnectorConfigError` with a "is the integration shared with
+  the page?" hint — the single most common operator error.
+- `backend/app/api/v1/routes/distiller.py` — `/buckets/{slug}/sync`
+  now resolves the `Integration` row and tries the registry. If a
+  fetcher returns a page, its body drives `ingest_connector_page`.
+  If it doesn't (no fetcher registered or shape rejected), the
+  Phase 7b stub body path runs unchanged. `ConnectorConfigError`
+  becomes 502 with the fetcher's detail message; a missing
+  integration row logs + falls back to stub (the bucket row is
+  still referentially valid). Response shape
+  (`DistillOut` — single run, single `article_ids` entry) is
+  unchanged, so the console's `syncConnectorBucketAction` keeps
+  working. Multi-page sync is deferred: if a fetcher ever returns
+  more than one page we ingest the first and log the rest for
+  follow-on Phase 7d.
+- `backend/tests/test_connectors_notion.py` — 7 unit tests
+  against `httpx.MockTransport`: kitchen-sink block rendering,
+  `{database_id}` and missing `page_id` return empty (fallback),
+  shape-check-before-secret invariant, missing secret raises
+  ConfigError, Notion 404 produces share hint, pagination follows
+  `next_cursor`.
+- `backend/tests/test_v1_connector_sync_notion.py` — 4 endpoint
+  integration tests using `set_http_client_override`. Real
+  fetcher path ingests real markdown (not the stub banner),
+  re-sync is `skip`, missing-secret is 502, Notion 404 is 502.
+  Together with the Phase 7b tests that use `notion` + unsupported
+  shape, the fallback invariant is nailed on both sides.
+
 ### Phase 8 — User-memory bucket
 
 Per-user bucket (scope='user') auto-created on first sign-in.
@@ -534,6 +588,27 @@ Improvements also respect it.
 
 ## Changelog
 
+- **2026-04-21** — Phase 7c shipped: first real connector fetcher.
+  New package `backend/app/services/connectors/` holds a
+  fetcher registry (`@register(kind)` decorator, `fetch_connector_pages`
+  dispatcher, `set_http_client_override` test hook) plus a Notion
+  fetcher that converts a single Notion page
+  (`resource_ref={"page_id": "..."}`) into markdown via
+  `GET /v1/pages/{id}` + paginated `GET /v1/blocks/{id}/children`.
+  Renderer covers heading_1/2/3, paragraph, bulleted/numbered list,
+  to_do, quote, callout (with emoji), code (fenced with language),
+  divider, child_page link, and rich-text bold/italic/strike/code/
+  href. Shape check runs before secret decrypt so buckets with
+  unsupported shapes (e.g. `{database_id}`) fall back to the Phase 7b
+  stub with a warning — 502 is reserved for "real fetcher, real
+  breakage" cases (missing token, Notion 401/403/404). `/sync`
+  endpoint rewired: Integration row resolved → registry dispatched
+  → real body ingested if available, stub fallback otherwise.
+  Single-page semantics preserve the `DistillOut` response shape
+  unchanged for the console. 11 new tests: 7 fetcher unit
+  (`test_connectors_notion.py`, MockTransport-backed) + 4 endpoint
+  integration (`test_v1_connector_sync_notion.py`, using the
+  override hook). Full bucket/distiller regression: 72 pass.
 - **2026-04-21** — Phase 1 shipped (`a7c8edd`). Doc created (`821ff8d`).
 - **2026-04-21** — Phase 2 shipped: `.ship/knowledge/*.md` files mirror
   into `knowledge_buckets` as `scope='repo'` / `source='repo_files'`
