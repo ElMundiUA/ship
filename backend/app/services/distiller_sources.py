@@ -32,6 +32,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.db.models.agent_memory import (
@@ -113,20 +114,52 @@ async def ensure_bucket(
     if existing is not None:
         return existing
 
-    row = KnowledgeBucket(
-        id=uuid.uuid4(),
-        workspace_id=workspace_id,
-        slug=slug,
-        name=name,
-        description=description,
-        scope_kind=scope_kind,
-        source_kind=source_kind,
-        repo_id=repo_id,
-        project_id=project_id,
-        user_id=user_id,
-    )
-    session.add(row)
-    await session.flush()
+    # Wrap the INSERT in a SAVEPOINT so a CHECK/integrity failure
+    # here doesn't poison the surrounding transaction. Callers (PR
+    # webhook, save-to-memory, upload handler) are composed of many
+    # independent writes inside one request-scoped session; before
+    # this block was nested, a flush crash left the Session in an
+    # aborted state and every subsequent ``await session.flush()``
+    # from that request raised ``PendingRollbackError`` -- which
+    # presented downstream (Navigator, dashboard) as "server-side
+    # exception" even though the Distiller was the one at fault.
+    # Nested transactions roll back just the SAVEPOINT, so the outer
+    # work the caller already did (notifications, audit rows) stays
+    # intact and their ``try/except`` can decide what to do.
+    savepoint = await session.begin_nested()
+    try:
+        row = KnowledgeBucket(
+            id=uuid.uuid4(),
+            workspace_id=workspace_id,
+            slug=slug,
+            name=name,
+            description=description,
+            scope_kind=scope_kind,
+            source_kind=source_kind,
+            repo_id=repo_id,
+            project_id=project_id,
+            user_id=user_id,
+        )
+        session.add(row)
+        await session.flush()
+    except IntegrityError as exc:
+        await savepoint.rollback()
+        logger.error(
+            "distiller_sources.ensure_bucket flush failed: "
+            "workspace_id=%s slug=%r scope=%s source=%s "
+            "repo_id=%s project_id=%s user_id=%s exc=%s",
+            workspace_id,
+            slug,
+            scope_kind,
+            source_kind,
+            repo_id,
+            project_id,
+            user_id,
+            exc,
+        )
+        raise
+    else:
+        await savepoint.commit()
     logger.info(
         "distiller_sources: ensured bucket slug=%s scope=%s src=%s",
         slug,
@@ -274,6 +307,24 @@ async def ingest_pr_merge(
     head_ref = ((pr.get("head") or {}).get("ref") or "").strip()
     if head_ref.startswith("ship/install-"):
         logger.debug("ingest_pr_merge: skipping install PR %s", head_ref)
+        return None
+
+    # Belt-and-braces: the repo row came from
+    # ``_resolve_workspace_repo`` in the webhook handler, so ``.id``
+    # should always be set; but we've hit a production case where the
+    # downstream ``ensure_bucket`` flush failed with the CHECK
+    # constraint fingerprinting a NULL ``repo_id``. Bail out loudly
+    # here instead of handing the adapter a blank carrier and letting
+    # Postgres tell us about it with a less actionable trace.
+    if not getattr(repo, "id", None) or not getattr(repo, "workspace_id", None):
+        logger.error(
+            "ingest_pr_merge: repo row missing identity "
+            "(repo.id=%s workspace_id=%s full_name=%s pr_number=%s) — skipping",
+            getattr(repo, "id", None),
+            getattr(repo, "workspace_id", None),
+            getattr(repo, "full_name", None),
+            pr.get("number"),
+        )
         return None
 
     bucket = await ensure_bucket(
