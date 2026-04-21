@@ -38,6 +38,15 @@ class DefaultPipelineSpec:
     name: str
     workflow_id: str
     enabled: bool = True
+    # Config-v2 lane trigger. ``lanes_sync`` parses ``.ship/config.yml``
+    # as a mapping where every lane declares exactly one of
+    # ``once`` / ``event`` / ``schedule`` — this is the payload the
+    # seed bundle emits per kind. ``None`` means "don't surface this
+    # kind as a lane" (e.g. ``code_map``, which is resolver-only and
+    # has no YAML). Extra keys (``pattern`` / ``idempotency_key``)
+    # ride along in the mapping so the CLI sees the same config the
+    # console does.
+    lane_trigger: dict[str, str] | None = None
 
 
 # Order matters — the dashboard renders cards in this order so the
@@ -50,11 +59,20 @@ DEFAULT_PIPELINES: tuple[DefaultPipelineSpec, ...] = (
         kind="pr_review",
         name="PR review",
         workflow_id="pr-and-ci-gate",
+        # Triggered on every PR open/update — the starter workflow's
+        # ``workflow_dispatch`` path is for dashboard "Run now"; the
+        # reviewer lane semantically fires on ``pull_request``.
+        lane_trigger={
+            "event": "pull_request",
+            "pattern": "**",
+            "idempotency_key": "{{pr}}",
+        },
     ),
     DefaultPipelineSpec(
         kind="daily_standup",
         name="Daily standup",
         workflow_id="scheduled-sdlc-lane",
+        lane_trigger={"schedule": "0 9 * * 1-5"},
     ),
     DefaultPipelineSpec(
         kind="code_map",
@@ -63,11 +81,16 @@ DEFAULT_PIPELINES: tuple[DefaultPipelineSpec, ...] = (
         # invoked directly by the dashboard "refresh" button.
         name="Code map refresh",
         workflow_id="code-map-refresh",
+        # ``code_map`` is resolver-only with no YAML and no cron —
+        # leave it out of ``.ship/config.yml`` so ``lanes_sync``
+        # doesn't trip over a triggerless lane.
+        lane_trigger=None,
     ),
     DefaultPipelineSpec(
         kind="tech_debt",
         name="Tech-debt scan",
         workflow_id="parallel-audit-lanes",
+        lane_trigger={"schedule": "0 6 * * 1"},
     ),
     DefaultPipelineSpec(
         kind="self_heal",
@@ -75,6 +98,7 @@ DEFAULT_PIPELINES: tuple[DefaultPipelineSpec, ...] = (
         workflow_id="pipeline-self-heal",
         # Fallback off unless the preset explicitly opts in.
         enabled=False,
+        lane_trigger={"schedule": "0 4 * * *"},
     ),
 )
 
