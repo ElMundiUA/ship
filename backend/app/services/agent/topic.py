@@ -59,6 +59,9 @@ from backend.app.services.agent.client import (
     ChatMessage,
 )
 from backend.app.services.agent.embedding import embed_text
+from backend.app.services.bucket_summary_articles import (
+    mirror_summary_to_article,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -350,10 +353,31 @@ class TopicService:
             embedding=summary_embedding,
             created_by_user_id=self._user_id,
         )
+        # Client-side id so the Phase 5b article mirror can reference
+        # it in the same flush without a mid-transaction round-trip.
+        # server_default=gen_random_uuid() still wins whenever the row
+        # is inserted via another path that doesn't go through here.
+        summary_row.id = uuid.uuid4()
         self._session.add(summary_row)
 
         thread.topic_summary = _truncate(summary_text, 2000)
         thread.packed_into_bucket_id = bucket.id
+
+        # Phase 5b: dual-write into ``bucket_articles`` so every new
+        # packed summary immediately has an article mirror. The mirror
+        # is the long-term read surface (Phase 5c); until then it's a
+        # passive shadow, but it's cheaper to keep it in sync on the
+        # happy path than to run a catch-up backfill later. The mirror
+        # is best-effort — a failure here must not block the pack, so
+        # we log and move on.
+        try:
+            await mirror_summary_to_article(self._session, summary_row)
+        except Exception as exc:  # pragma: no cover — defensive
+            logger.warning(
+                "pack_topic: article mirror failed for summary %s: %s",
+                summary_row.id,
+                exc,
+            )
 
         await self._session.flush()
         return summary_row
