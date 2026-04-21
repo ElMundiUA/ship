@@ -49,6 +49,8 @@ __all__ = [
     "list_collections",
     "list_patterns",
     "list_tools",
+    "KNOWLEDGE_STARTERS",
+    "knowledge_starter_files",
 ]
 
 
@@ -504,3 +506,69 @@ def preset_bundle_files(
             config_lines.append(f"  - {kind}")
     files.append((".ship/config.yml", "\n".join(config_lines) + "\n"))
     return files
+
+
+# ---------------------------------------------------------------------------
+# Knowledge starters — one-shot seed for ``.ship/knowledge/*.md`` buckets.
+#
+# Unlike presets, knowledge buckets never live in the Ship backend DB;
+# the tenant commits plain markdown files into its own repo and Ship's
+# knowledge lister scans them on read. "Seeding" therefore means:
+# open a PR that drops a starter template at the conventional path.
+# The tenant reviews + merges the PR exactly like any other bundle; if
+# the file already exists on the default branch the seed becomes a
+# no-op (path stays the same, content gets overwritten only if the
+# tenant hand-rebases — we never force-push over their edits).
+#
+# Sources live under ``artifacts/knowledge-starters/<slug>.md`` so the
+# content is part of the same artifact catalog that ``ship_artifact_check``
+# vets. Keep the slug list in lockstep with the wizard's checkbox labels.
+# ---------------------------------------------------------------------------
+
+KNOWLEDGE_STARTERS: Final[tuple[str, ...]] = ("code-style", "ui-runbook")
+
+
+def knowledge_starter_files(
+    selection: list[str] | tuple[str, ...] | None = None,
+) -> list[tuple[str, str]]:
+    """Return ``(path, content)`` tuples for the selected knowledge starters.
+
+    ``selection`` filters ``KNOWLEDGE_STARTERS``; ``None`` means "seed
+    everything". Unknown slugs raise :class:`CatalogError` so a stale
+    UI can't silently drop a checkbox.
+
+    Each starter source lives at
+    ``artifacts/knowledge-starters/<slug>.md`` and is installed at
+    ``.ship/knowledge/<slug>.md`` — the exact shape
+    :mod:`backend.app.services.knowledge_lister` scans for.
+    """
+    if selection is None:
+        chosen: list[str] = list(KNOWLEDGE_STARTERS)
+    else:
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for raw in selection:
+            slug = raw.strip()
+            if not slug or slug in seen:
+                continue
+            if slug not in KNOWLEDGE_STARTERS:
+                raise CatalogError(
+                    f"Unknown knowledge starter {slug!r}. "
+                    f"Expected one of: {sorted(KNOWLEDGE_STARTERS)}"
+                )
+            cleaned.append(slug)
+            seen.add(slug)
+        chosen = cleaned
+
+    root = ARTIFACTS_ROOT / "knowledge-starters"
+    out: list[tuple[str, str]] = []
+    for slug in chosen:
+        source = root / f"{slug}.md"
+        try:
+            content = source.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise CatalogError(
+                f"Knowledge starter {slug!r} is missing on disk ({source}): {exc}"
+            ) from exc
+        out.append((f".ship/knowledge/{slug}.md", content))
+    return out

@@ -19,6 +19,11 @@ import { hasPlaywrightStorageState } from "../lib/storage";
  * @deployed
  */
 test.describe("tracker: GitHub issue → clarifications projection", () => {
+  // The test body polls Ship for up to 120s waiting for the tracker
+  // adapter to project the GitHub issue into a clarification row;
+  // give the test harness enough budget to actually finish the poll
+  // before Playwright's default 30s timeout fires.
+  test.describe.configure({ timeout: 3 * 60_000 });
   test("@deployed sync + API poll + optional UI", async ({ page, request }) => {
     test.skip(
       !process.env.E2E_SANDBOX_REPO?.includes("/") ||
@@ -80,19 +85,27 @@ test.describe("tracker: GitHub issue → clarifications projection", () => {
     expect(comRes.ok(), `create comment ${comRes.status()}`).toBeTruthy();
 
     const ws = await shipResolveWorkspaceId(request);
-    const sync = await shipApiPost(
-      request,
-      `/v1/workspaces/${encodeURIComponent(ws)}/clarifications/sync`,
-      {},
-    );
-    expect(
-      sync.ok(),
-      `POST clarifications/sync → ${sync.status()} ${await sync.text()}`,
-    ).toBeTruthy();
 
+    // The sync endpoint is synchronous but the GitHub REST API can
+    // briefly omit an issue that was just created in the same request
+    // chain — new-row indexing propagates with a small lag. Instead
+    // of calling ``/sync`` once and polling the DB, we re-sync on
+    // each poll tick until the projection catches up.
     await expect
       .poll(
         async () => {
+          const sync = await shipApiPost(
+            request,
+            `/v1/workspaces/${encodeURIComponent(ws)}/clarifications/sync`,
+            {},
+          );
+          if (!sync.ok()) {
+            // eslint-disable-next-line no-console
+            console.log(
+              `[tracker-e2e] POST /sync → ${sync.status()} ${await sync.text()}`,
+            );
+            return false;
+          }
           const r = await shipApiGet(
             request,
             `/v1/workspaces/${encodeURIComponent(ws)}/clarifications`,
@@ -103,7 +116,7 @@ test.describe("tracker: GitHub issue → clarifications projection", () => {
             (x) => x.source === "tracker" && x.question.includes(marker),
           );
         },
-        { timeout: 120_000 },
+        { timeout: 120_000, intervals: [2_000, 3_000, 5_000] },
       )
       .toBe(true);
 

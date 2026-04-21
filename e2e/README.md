@@ -27,8 +27,42 @@ cd e2e && npm run test:deployed
 | **E — Дашборд + API оркестрации** | UI: «Recommended» + недавние прогоны (`dashboard-delivery.wired.spec.ts`). API: `/v1/workspaces`, pipelines, dashboard, clarifications, improvements, artifact-feedback (`ship-api.sandbox.spec.ts` + `E2E_SHIP_API_*`). GitHub: список workflow runs + опционально label `ship:needs-clarification` (`github-actions.sandbox.spec.ts`) |
 | **F — Сквозные journey** | Clarification: POST → ответ формой в UI (`journey-clarification.wired.spec.ts`). Improvement: POST → Accept (`journey-improvement.wired.spec.ts`). Health dev: `/login` + `GET /v1/health` (`deployed-health.public.spec.ts`). Без сессии: редирект на логин (`session.noauth.spec.ts`, проект `noauth`) |
 | **G — Трекер GitHub → Ship** | Issue + лейбл + коммент `@ship clarification:` → `POST …/clarifications/sync` → poll GET → опционально UI (`tracker-github-clarification.wired.spec.ts`). Нужны репа с Ship App, трекер GitHub Issues в воркспейсе, PAT с `issues:write` |
+| **H — Full journey + reset** | Сквозной Elmundi-подобный путь: GitHub App (опц.) → preset + sandbox-репо → трекер GitHub Issues → done, с проверкой seed pipelines через Ship API (`full-journey.wired.spec.ts`). Откат состояния для повторного прогона: `full-journey-reset.sandbox.spec.ts` |
 
 **Регистрация в Ship не автоматизируется** — нужна уже сохранённая сессия. **Установка GitHub App** — см. фазу B2 (`tests/github-app.wired.spec.ts`); OAuth других трекеров — пока вне scope.
+
+## Запись демо-видео полного journey
+
+`full-journey.wired.spec.ts` оптимизирован под CI: если backend уже считает workspace полностью wired, wizard перепрыгивает шаги и тест проходит за ~4 секунды без визуальной части — для регрессии норм, для записи бесполезно.
+
+Для записи есть отдельный сценарий `tests/demo-full-journey.wired.spec.ts` (тег `@demo`):
+
+- сначала ресетит sandbox (закрывает Ship-PR'ы/issues, отвязывает sandbox-репо, чистит tracker integrations);
+- идёт по каждому шагу через `?step=…` пины (URL-пин выигрывает над auto-resume);
+- на каждом экране кликает реальные кнопки → backend живой;
+- если deployed console ещё на 3-step flow (без knowledge), step 4 проскакивается с аннотацией.
+
+Записать (~25 сек видео):
+
+```bash
+cd e2e
+E2E_RUN_DEMO_JOURNEY=1 \
+E2E_RUN_KNOWLEDGE_SEED=1 \
+npx playwright test demo-full-journey.wired.spec.ts \
+  --config=playwright.demo.config.ts
+```
+
+`playwright.demo.config.ts` включает `video: "on"`, trace, скриншоты, slowMo (350ms по умолчанию, override через `E2E_DEMO_SLOWMO`), 1440×900 viewport.
+
+Видео ляжет в `test-results/<name>/video.webm`. Конвертация в шарабельный mp4:
+
+```bash
+ffmpeg -y -i test-results/<name>/video.webm \
+  -c:v libx264 -pix_fmt yuv420p -movflags +faststart -preset slow -crf 22 \
+  demo-recordings/full-journey.mp4
+```
+
+Чтобы записать **полный 4-step flow** (с knowledge step, который пока только локально), запусти console локально (`cd console && npm run dev`), сохрани свежий `storageState` против `http://127.0.0.1:3001`, и пропиши `E2E_CONSOLE_BASE_URL=http://127.0.0.1:3001` + `E2E_SHIP_API_BASE` на тот backend, который видит локальную консоль.
 
 ## Run locally
 
@@ -111,6 +145,50 @@ export GITHUB_TOKEN=ghp_...   # fine-grained: Contents read on that repo
 npm test
 ```
 
+## Full journey (phase H)
+
+Сквозной сценарий «как в Эльмунди»: один тест проводит аккаунт через мастер, активирует preset + тестовый репозиторий, подключает трекер GitHub Issues и проверяет, что Ship API увидел правильный набор pipelines.
+
+```bash
+export E2E_RUN_FULL_JOURNEY=1
+export E2E_STORAGE_STATE=e2e/.auth/user.json
+export E2E_SANDBOX_REPO=your-org/e2e-sandbox
+export E2E_PRESET=web-app                      # web-app|api-backend|mobile-app|cli|monorepo|adoption-minimum
+export E2E_SHIP_API_BASE=https://api.dev.example.com
+export E2E_SHIP_API_TOKEN=ship_...             # workspace admin
+# Если Ship App ещё не установлен на org, включи автоматизацию:
+# export E2E_RUN_GITHUB_APP_INSTALL=1
+# export E2E_GITHUB_INSTALL_ACCOUNT=YourOrg
+# export E2E_GITHUB_REPO_FULL_NAME=$E2E_SANDBOX_REPO
+
+npx playwright test --project=authenticated tests/full-journey.wired.spec.ts
+```
+
+Тест объявлен `serial` и `@deployed`; сверяет `enabled` pipelines с `PRESET_ENABLED_KINDS` из `backend/app/services/default_pipelines.py`, а также что в `/v1/workspaces/{ws}/integrations` появился `kind=github`.
+
+### Reset sandbox (повторный прогон)
+
+Чтобы сделать новый полный прогон, верни окружение в исходное состояние. Запускается в проекте `sandbox-api` (без браузерной сессии):
+
+```bash
+export E2E_RESET_SANDBOX=1
+export E2E_SANDBOX_REPO=your-org/e2e-sandbox
+export GITHUB_TOKEN=ghp_...                    # репо-админ (issues+pulls+contents write)
+export E2E_SHIP_API_BASE=https://api.dev.example.com
+export E2E_SHIP_API_TOKEN=ship_...             # workspace admin
+# Опционально удалить `ship/*`-ветки в тестовом репо:
+# export E2E_RESET_DELETE_BRANCHES=1
+
+npx playwright test --project=sandbox-api tests/full-journey-reset.sandbox.spec.ts
+```
+
+Что делает сброс:
+
+- **GitHub**: закрывает issues с меткой `ship:needs-clarification` и/или заголовком `[e2e] …`, закрывает PR-ы, автором которых является Ship-бот или ветка начинается с `ship/` / `chore/ship-install-`, опционально удаляет такие ветки. История `main` **не переписывается**.
+- **Ship**: `DELETE /v1/workspaces/{ws}/repos/{id}` для всех активированных репо + `DELETE /v1/workspaces/{ws}/integrations/{kind}` для `github|linear|notion` (404 — ок). Воркспейс остаётся, чтобы следующий прогон стартовал от известного tenant-id.
+
+> Файлы в `.github/workflows/*.yml` и `.ship/config.yml` самого репо **не трогаются** — если ты установил Ship workflows через PR, либо смерж и потом откати отдельным reset-коммитом, либо держи тестовый репо на baseline-теге (`git push -f origin e2e-baseline:main` в отдельном ручном шаге).
+
 ## CI
 
-Workflow `.github/workflows/e2e-console.yml` runs **public** tests against `E2E_CONSOLE_BASE_URL` (required). Add secrets for phased B/C when ready.
+Workflow `.github/workflows/e2e-console.yml` runs **public** tests against `E2E_CONSOLE_BASE_URL` (required). Full-journey / reset шаги опциональны: включаются `workflow_dispatch`-инпутами `run_full_journey` и `reset_sandbox` (см. файл workflow). Секреты: `E2E_PLAYWRIGHT_STORAGE_JSON`, `E2E_SHIP_API_*`, `E2E_SANDBOX_REPO`, `E2E_GITHUB_TOKEN`, опц. `E2E_PRESET`, `E2E_GITHUB_INSTALL_ACCOUNT`.

@@ -4,3 +4,4 @@ playwright-report/
 blob-report/
 playwright/.cache/
 .auth/
+demo-recordings/

@@ -379,6 +379,50 @@ export function activateRepos(
   );
 }
 
+// --- Knowledge seed (one-shot PR of starter markdown) -----------------------
+
+/**
+ * Whitelist of knowledge starter slugs the backend catalog ships today.
+ * Must stay in lockstep with
+ * ``backend.app.services.catalog.KNOWLEDGE_STARTERS``.
+ */
+export const KNOWLEDGE_STARTERS = ["code-style", "ui-runbook"] as const;
+export type KnowledgeStarterSlug = (typeof KNOWLEDGE_STARTERS)[number];
+
+export interface ApiKnowledgeSeedResult {
+  pr_url: string;
+  pr_number: number;
+  branch: string;
+  files: string[];
+  selection: string[];
+}
+
+/**
+ * Opens a PR that drops ``.ship/knowledge/<slug>.md`` starter files
+ * into the tenant repo. Admin-only on the backend.
+ *
+ * ``selection === undefined`` ⇒ seed every starter the catalog ships
+ * today (matches the wizard's "select all" default). Pass an empty
+ * array to get a 412 "empty_knowledge_selection" — useful if you want
+ * to force a UX hint rather than a silent no-op.
+ */
+export function knowledgeSeed(
+  workspaceId: string,
+  repoId: string,
+  options: { selection?: KnowledgeStarterSlug[]; token?: string } = {},
+): Promise<ApiKnowledgeSeedResult> {
+  const body: Record<string, unknown> = {};
+  if (options.selection !== undefined) body.selection = options.selection;
+  return apiFetch<ApiKnowledgeSeedResult>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/knowledge_seed`,
+    {
+      method: "POST",
+      body,
+      token: options.token,
+    },
+  );
+}
+
 // --- Team invites (B7) ------------------------------------------------------
 
 export interface ApiInvite {

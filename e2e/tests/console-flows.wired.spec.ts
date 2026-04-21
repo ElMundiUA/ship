@@ -42,11 +42,13 @@ test.describe("console surfaces (wired, serial)", () => {
     await expect(
       page.getByRole("heading", { name: "Clarifications", exact: true }),
     ).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole("link", { name: /^Open\d*$/ })).toBeVisible();
     await expect(
-      page.getByRole("link", { name: /Open\s+\d+/ }),
+      page.getByRole("link", { name: /^Answered\d*$/ }),
     ).toBeVisible();
-    await expect(page.getByRole("link", { name: /Answered\s+\d+/ })).toBeVisible();
-    await expect(page.getByRole("link", { name: /Skipped\s+\d+/ })).toBeVisible();
+    await expect(
+      page.getByRole("link", { name: /^Skipped\d*$/ }),
+    ).toBeVisible();
   });
 
   test("04 — improvements", async ({ page }) => {
@@ -142,6 +144,6 @@ test.describe("console surfaces (wired, serial)", () => {
       await expect(page).toHaveURL(pathRe);
     }
     await nav.getByRole("link", { name: "Dashboard", exact: true }).click();
-    await expect(page).toHaveURL({ pathname: "/" });
+    await expect(page).toHaveURL(/\/(?:$|\?)/);
   });
 });

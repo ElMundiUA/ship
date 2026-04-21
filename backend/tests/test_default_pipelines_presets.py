@@ -54,6 +54,27 @@ def test_monorepo_preset_opts_into_self_heal():
     assert "self_heal" in PRESET_ENABLED_KINDS["monorepo"]
 
 
+def test_web_app_preset_covers_full_sdlc_grid():
+    """Web-app is the flagship "Elmundi-grade SDLC" preset: every
+    materialised lane is enabled, including ``self_heal``. The UI
+    pitches it as the full Elmundi grid — keep that promise in code."""
+    assert PRESET_ENABLED_KINDS["web-app"] == frozenset(
+        {"pr_review", "daily_standup", "tech_debt", "self_heal", "code_map"}
+    )
+
+
+def test_marketing_preset_covers_copy_and_cadence_lanes():
+    """Marketing preset: PR gate + standup + code_map, no tech-debt,
+    no self-heal. See ``artifacts/collections/preset-marketing/
+    ARTIFACT.md`` for the product-shape rationale."""
+    assert PRESET_ENABLED_KINDS["marketing"] == frozenset(
+        {"pr_review", "daily_standup", "code_map"}
+    )
+    # Guard against the two lanes we intentionally leave off.
+    assert "tech_debt" not in PRESET_ENABLED_KINDS["marketing"]
+    assert "self_heal" not in PRESET_ENABLED_KINDS["marketing"]
+
+
 def test_adoption_minimum_preset_is_minimum():
     kinds = PRESET_ENABLED_KINDS["adoption-minimum"]
     # Contract: minimum = just PR review + code map (so the dashboard

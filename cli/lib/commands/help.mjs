@@ -52,6 +52,9 @@ COMMANDS
   shipctl kickoff [--pattern kickoff] [--version …] [--raw] [--json] [--cwd …]
                                      — print the kickoff / workload pattern body for piping
                                        into the customer's agent in CI (see artifacts/patterns/kickoff).
+  shipctl knowledge init [--workspace <id>] [--repo <id|owner/name>] [--only <csv>] [--json]
+                                     — open a PR that seeds .ship/knowledge/*.md starter
+                                       buckets (code-style, ui-runbook). Reads SHIP_API_TOKEN.
   shipctl bootstrap   (stub)
 
 GLOBAL FLAGS

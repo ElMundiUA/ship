@@ -91,8 +91,9 @@ async def test_install_bundle_opens_single_pr_for_persisted_preset(
     assert body["pr_url"].endswith("/pull/99")
     assert body["presets"] == ["web-app"]
 
-    # web-app enables pr_review/daily_standup/tech_debt/code_map; only
-    # the first three have catalog YAMLs today, plus the .ship stub.
+    # web-app enables pr_review/daily_standup/tech_debt/self_heal/code_map;
+    # every enabled kind with a catalog YAML lands in the bundle (code_map
+    # is still YAML-less), plus the .ship/config.yml stub.
     assert ".ship/config.yml" in body["files"]
     assert any(
         f.startswith(".github/workflows/") for f in body["files"]
