@@ -65,11 +65,19 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Write Playwright storage (optional, for @deployed journeys + wired)
-        if: ${{ secrets.E2E_PLAYWRIGHT_STORAGE_JSON != '' }}
+        # GitHub forbids ``secrets.*`` inside step-level ``if:`` expressions
+        # (actionlint: "context \"secrets\" is not allowed here"). Silently
+        # failing the workflow at parse-time produces 0-job "workflow file
+        # issue" runs, which is what we had before this fix. Instead, always
+        # enter the step and bail in bash when the secret is empty.
         working-directory: e2e
         env:
           STATE_JSON: ${{ secrets.E2E_PLAYWRIGHT_STORAGE_JSON }}
         run: |
+          if [ -z "${STATE_JSON:-}" ]; then
+            echo "E2E_PLAYWRIGHT_STORAGE_JSON not set — skipping storage state write."
+            exit 0
+          fi
           mkdir -p .auth
           printf '%s' "$STATE_JSON" > .auth/ci-storage.json
 
