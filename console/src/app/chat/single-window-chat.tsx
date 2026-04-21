@@ -143,6 +143,16 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
   // reload doesn't replay the last reply's fade-in.
   const animatedIdsRef = useRef<Set<string>>(new Set());
 
+  // Reserved empty space below the last message while a reply is
+  // in flight. Without it the scroller has no room to scroll the
+  // fresh user message to the top of the viewport — ``scrollTo``
+  // silently no-ops because ``scrollHeight === clientHeight``. We
+  // size it to the scroller's visible height on submit and release
+  // it back to zero when the stream ends. This mirrors how ChatGPT
+  // keeps the user prompt pinned at the top while the reply grows
+  // in beneath it.
+  const [bottomSpacerPx, setBottomSpacerPx] = useState(0);
+
   const abortRef = useRef<AbortController | null>(null);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const lastUserAnchorRef = useRef<HTMLDivElement | null>(null);
@@ -290,6 +300,7 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
           return next;
         });
         setTools([]);
+        setBottomSpacerPx(0);
         return;
       }
       case "error": {
@@ -297,6 +308,7 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
         setStreaming(false);
         setAwaitingFirstDelta(false);
         setTools([]);
+        setBottomSpacerPx(0);
         return;
       }
     }
@@ -324,14 +336,29 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
 
       // Smoothly scroll the fresh user message to (close to) the
       // top of the viewport so the upcoming reply has room to
-      // render below without jumping the layout.
+      // render below without jumping the layout. We first reserve
+      // an empty spacer equal to the viewport's height so the
+      // scroller actually *has* runway to move into — otherwise
+      // the user message sits at the bottom of the list and
+      // ``scrollTo`` silently no-ops. Two RAFs: one for the DOM
+      // to lay out the spacer, then the smooth scroll.
+      const scroller = scrollerRef.current;
+      if (scroller) {
+        setBottomSpacerPx(Math.max(scroller.clientHeight - 96, 240));
+      }
       requestAnimationFrame(() => {
-        const anchor = lastUserAnchorRef.current;
-        const el = scrollerRef.current;
-        if (anchor && el) {
-          const top = anchor.offsetTop - 24;
-          el.scrollTo({ top, behavior: "smooth" });
-        }
+        requestAnimationFrame(() => {
+          const anchor = lastUserAnchorRef.current;
+          const el = scrollerRef.current;
+          if (!anchor || !el) return;
+          // Use rect math instead of ``offsetTop`` so we don't
+          // depend on the nearest positioned ancestor being the
+          // scroller itself.
+          const anchorTop = anchor.getBoundingClientRect().top;
+          const elTop = el.getBoundingClientRect().top;
+          const target = el.scrollTop + (anchorTop - elTop) - 16;
+          el.scrollTo({ top: Math.max(0, target), behavior: "smooth" });
+        });
       });
 
       const ac = new AbortController();
@@ -413,6 +440,7 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
       streamingIdRef.current = null;
       setRevealed({});
       animatedIdsRef.current = new Set();
+      setBottomSpacerPx(0);
     },
     [streaming, workspaceId],
   );
@@ -523,6 +551,17 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
                 <ThinkingCard />
               ) : null}
               {tools.length > 0 ? <ToolCallTrail rows={tools} /> : null}
+              {/* Empty runway so the scroller can keep the fresh
+                  user message pinned near the top of the viewport
+                  while the reply streams in below. Shrinks back
+                  to zero as soon as the turn ends. */}
+              {bottomSpacerPx > 0 ? (
+                <div
+                  aria-hidden
+                  style={{ height: bottomSpacerPx }}
+                  className="pointer-events-none"
+                />
+              ) : null}
             </div>
           )}
         </ChoiceProvider>

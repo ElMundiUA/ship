@@ -25,10 +25,22 @@
  * until the turn completes.
  */
 
-import { createContext, useContext, type ReactNode } from "react";
+import { createContext, useContext, useMemo, type ReactNode } from "react";
 import type { Components } from "react-markdown";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+
+// Stable plugin list and per-mode components cache: react-markdown
+// compares React element types by reference, so if we hand it a
+// freshly-allocated ``components`` object on every render it treats
+// every child as a different component and React unmounts/remounts
+// the entire subtree. For the streaming turn that means *every*
+// word span remounts on *every* delta, so the ``chat-word`` fade
+// keyframe replays from scratch and the whole message looks like
+// it's perpetually blur-in. Keeping plugins and components stable
+// lets react-markdown reuse element types across renders so only
+// genuinely new words animate.
+const REMARK_PLUGINS = [remarkGfm];
 
 // ---------------------------------------------------------------------------
 // Context for interactive directives
@@ -73,11 +85,19 @@ function mapChildrenText(node: ReactNode): ReactNode {
     return splitIntoWordSpans(node);
   }
   if (Array.isArray(node)) {
-    return node.map((n, i) => (
-      <span key={i} style={{ display: "contents" }}>
-        {mapChildrenText(n)}
-      </span>
-    ));
+    // Flat Fragment with position-keyed children — adding a new
+    // trailing token never shifts existing keys, so previously
+    // mounted word spans don't re-mount (and therefore don't
+    // replay their fade-in) as the stream grows.
+    return (
+      <>
+        {node.map((n, i) => (
+          <span key={i} style={{ display: "contents" }}>
+            {mapChildrenText(n)}
+          </span>
+        ))}
+      </>
+    );
   }
   return node;
 }
@@ -408,6 +428,15 @@ function isDirectivePre(children: ReactNode): boolean {
   return false;
 }
 
+// Build the two component maps up-front (animate on / animate off)
+// and reuse the exact same reference forever. ``useMemo`` would also
+// work but the decision is purely a function of the ``animate`` bool,
+// so a module-level cache is simpler and gives us byte-perfect
+// referential equality across renders of different <ChatMarkdown>
+// instances, too.
+const COMPONENTS_ANIMATED: Components = buildComponents(true);
+const COMPONENTS_STATIC: Components = buildComponents(false);
+
 export function ChatMarkdown({
   text,
   animate = false,
@@ -416,10 +445,17 @@ export function ChatMarkdown({
   /** Animate newly-rendered word tokens with a short fade-in. */
   animate?: boolean;
 }) {
-  const components = buildComponents(animate);
+  // useMemo is redundant here (the two component maps are
+  // module-level constants) but it makes the "pick one" step
+  // explicit and future-proofs against someone turning
+  // ``buildComponents`` into a per-instance factory again.
+  const components = useMemo(
+    () => (animate ? COMPONENTS_ANIMATED : COMPONENTS_STATIC),
+    [animate],
+  );
   return (
     <div className="chat-md text-[14px] leading-relaxed">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+      <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={components}>
         {text}
       </ReactMarkdown>
     </div>
