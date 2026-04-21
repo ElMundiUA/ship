@@ -14,6 +14,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from backend.app.api.v1.routes import (
+    agent_secrets,
     artifact_repos,
     audit,
     auth,
@@ -124,3 +125,7 @@ api_router.include_router(repo_secrets.router)
 # Phase 7). List + per-repo sync trigger. Webhook-driven re-syncs on
 # pushes to ``.ship/config.yml`` live in ``routes.github_app``.
 api_router.include_router(lanes.router)
+# Per-repo agent API-key wiring (Wizard v2 iter 3). Admin-only check
+# + push; plaintext lives only in the HTTP hop to GitHub's secrets
+# API and is never persisted by Ship.
+api_router.include_router(agent_secrets.router)
