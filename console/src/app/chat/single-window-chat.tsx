@@ -3,27 +3,30 @@
 /**
  * Single-window chat client for the C12 agent.
  *
- * The UX is deliberately "one conversation", not "list of chats":
- * there's always exactly one visible thread at a time. When the
- * user changes topic (or just asks for a fresh start), the current
- * thread gets packed into a named knowledge bucket and a new empty
- * thread replaces it in-place. Packed threads show up in the
- * sidebar as buckets — see ``buckets-sidebar.tsx``.
+ * UX notes (see parent PR for motivation):
  *
- * The surface is deliberately flat: no message bubbles, no boxed
- * scroll panel, no tool-call "strip". Messages read top-to-bottom
- * like a transcript, with a thin role label above each turn. The
- * assistant's reply animates one character at a time via a
- * typewriter layer — the incoming SSE ``delta`` events accumulate
- * into the target string, and a local interval advances the
- * rendered length toward that target so the text feels *typed*
- * rather than dumped in bursts.
+ * - **Scroll discipline.** When the user submits, we smoothly scroll
+ *   their fresh message to the top of the viewport so the reply
+ *   appears below. While the reply streams we deliberately do *not*
+ *   auto-scroll — the user can read from where they are. Autoscroll
+ *   only kicks back in if they're already near the bottom.
+ * - **Word-by-word fade reveal.** As deltas arrive we commit entire
+ *   words to the rendered output on a fast timer. Each newly
+ *   committed word fades in via the ``.chat-word`` CSS animation.
+ *   Markdown is applied from the first delta — the user never sees
+ *   a "plain text → formatted text" flip.
+ * - **Stateful animation.** Only messages born in this session
+ *   animate. Historical messages loaded from the server render
+ *   statically, so reloading the page doesn't replay the last
+ *   reply's reveal.
+ * - **Thinking / tool cards.** Between the user's submit and the
+ *   first delta, an animated "Thinking…" card holds the space so
+ *   the page doesn't feel frozen. Tool calls render as styled
+ *   pill-cards with a running shimmer while they're in flight.
  *
- * The event protocol matches the backend exactly (``thread`` /
+ * The backend event protocol is unchanged (``thread`` /
  * ``user_message`` / ``topic_shift`` / ``delta`` / ``tool_call`` /
- * ``tool_result`` / ``assistant_message`` / ``end`` / ``error``);
- * each type has a dedicated reducer that mutates the local
- * transcript state.
+ * ``tool_result`` / ``assistant_message`` / ``end`` / ``error``).
  */
 
 import {
@@ -36,7 +39,7 @@ import {
   type KeyboardEvent,
 } from "react";
 
-import { ChatMarkdown } from "./chat-markdown";
+import { ChatMarkdown, ChoiceProvider } from "./chat-markdown";
 
 type Role = "user" | "assistant" | "system" | "tool";
 
@@ -83,7 +86,6 @@ type StreamEvent =
       type: "tool_call";
       id: string;
       name: string;
-      /** Backend SSE field — same as ``args``. */
       args?: Record<string, unknown>;
       arguments?: Record<string, unknown>;
     }
@@ -91,7 +93,6 @@ type StreamEvent =
       type: "tool_result";
       id: string;
       name?: string;
-      /** Raw JSON string from the toolbox (success payload or ``{"error":...}``). */
       output?: string;
       ok?: boolean;
       result?: unknown;
@@ -110,176 +111,196 @@ function clientId(): string {
   return "c_" + Math.random().toString(36).slice(2, 10);
 }
 
+// Reveal cadence for the word-by-word fade. We commit at most one
+// word per tick, so the text feels "typed" rather than "pasted".
+// Cadence is adaptive — if the buffer grows faster than we reveal,
+// we speed up so the render doesn't trail the stream.
+const REVEAL_MIN_DELAY = 18;
+const REVEAL_FAR_DELAY = 35;
+
 export function SingleWindowChat({ workspaceId, thread }: InitialState) {
   const [current, setCurrent] = useState<Thread>(thread);
   const [messages, setMessages] = useState<Message[]>(thread.messages);
   const [tools, setTools] = useState<ToolCallRow[]>([]);
   const [shift, setShift] = useState<TopicShift | null>(null);
   const [streaming, setStreaming] = useState(false);
+  // Distinguish "user submitted, nothing back yet" from "agent
+  // started streaming text". Drives the Thinking card.
+  const [awaitingFirstDelta, setAwaitingFirstDelta] = useState(false);
   const [draft, setDraft] = useState("");
   const [errorText, setErrorText] = useState<string | null>(null);
 
-  // Typewriter cursor: how many characters of the *last* assistant
-  // message are currently rendered. Bumped on a timer (see effect
-  // below); reset to 0 whenever a fresh assistant turn starts.
-  const [typedLen, setTypedLen] = useState(0);
-  const currentAssistantIdRef = useRef<string | null>(null);
+  // Per-assistant-message reveal progress (prefix length). Only
+  // the currently-streaming message advances over time; finalized
+  // messages sit at ``body.length`` and never re-animate. Held in
+  // React state so the reveal tick triggers re-renders.
+  const [revealed, setRevealed] = useState<Record<string, number>>({});
+  const streamingIdRef = useRef<string | null>(null);
+
+  // Messages created during this mount get their ids added here so
+  // ``MessageRow`` knows to animate them. Historical messages from
+  // the initial server payload are *not* in this set, so a page
+  // reload doesn't replay the last reply's fade-in.
+  const animatedIdsRef = useRef<Set<string>>(new Set());
 
   const abortRef = useRef<AbortController | null>(null);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const lastUserAnchorRef = useRef<HTMLDivElement | null>(null);
 
-  // Autoscroll to the newest content on every update. ``instant``
-  // because the stream lands in tight bursts and smooth scroll
-  // animations end up chasing their own tail.
+  // Word-by-word reveal tick. Only the currently-streaming message
+  // advances — everything else sits at full length. We step one
+  // word per tick so bursts of delta chars don't dump all at once.
   useEffect(() => {
-    const el = scrollerRef.current;
-    if (el) {
-      el.scrollTop = el.scrollHeight;
-    }
-  }, [messages, tools, streaming, typedLen]);
+    const id = streamingIdRef.current;
+    if (!id) return;
+    const streamingMsg = messages.find((m) => m.id === id);
+    if (!streamingMsg) return;
+    const cur = revealed[id] ?? 0;
+    if (cur >= streamingMsg.body.length) return;
+    const idx = findNextWordBoundary(streamingMsg.body, cur);
+    const nextLen = idx < 0 ? streamingMsg.body.length : idx;
+    const remaining = streamingMsg.body.length - cur;
+    // When the backend has already emitted the full body (end
+    // event fired, ``streaming`` flag cleared) we fast-forward so
+    // the UI doesn't trail behind for several seconds after the
+    // model stopped talking.
+    const streamDone = !streamingMsg.streaming;
+    const delay = streamDone
+      ? 6
+      : remaining > 300
+        ? REVEAL_MIN_DELAY
+        : REVEAL_FAR_DELAY;
+    const h = window.setTimeout(() => {
+      setRevealed((prev) => ({ ...prev, [id]: nextLen }));
+    }, delay);
+    return () => window.clearTimeout(h);
+  }, [messages, revealed]);
 
   useEffect(() => {
-    // Always clean up the fetch abort controller if the component
-    // unmounts mid-stream — the backend treats the dropped body as
-    // "user went away" and stops generating.
     return () => {
       abortRef.current?.abort();
     };
   }, []);
 
-  // Typewriter tick. Speed is adaptive: when we're far behind the
-  // target (big buffer of unreceived chars) we accelerate so the
-  // cursor doesn't crawl for 10 seconds after the model already
-  // finished. Near the tail we slow down for a natural "typing" feel.
-  useEffect(() => {
-    const last = messages[messages.length - 1];
-    if (!last || last.role !== "assistant") return;
-    if (typedLen >= last.body.length) return;
-    const remaining = last.body.length - typedLen;
-    const step = remaining > 400 ? 6 : remaining > 120 ? 3 : remaining > 40 ? 2 : 1;
-    const delay = remaining > 120 ? 10 : remaining > 40 ? 18 : 28;
-    const h = window.setTimeout(() => {
-      setTypedLen((n) => Math.min(last.body.length, n + step));
-    }, delay);
-    return () => window.clearTimeout(h);
-  }, [messages, typedLen]);
-
-  const handleEvent = useCallback(
-    (evt: StreamEvent) => {
-      switch (evt.type) {
-        case "thread": {
-          setCurrent(evt.thread);
-          return;
-        }
-        case "user_message": {
-          // The server-side user_message has the canonical id — replace
-          // any optimistic placeholder we appended on submit.
-          setMessages((prev) => {
-            const trimmed = prev.filter(
-              (m) => !(m.role === "user" && m.id.startsWith("c_")),
-            );
-            return [...trimmed, evt.message];
-          });
-          // A new user turn means the next assistant reply starts
-          // fresh — reset the typewriter cursor so it begins at 0.
-          currentAssistantIdRef.current = null;
-          setTypedLen(0);
-          return;
-        }
-        case "topic_shift": {
-          setShift(evt.shift);
-          return;
-        }
-        case "delta": {
-          // Append into a streaming assistant placeholder at the
-          // tail; create one if we don't have one yet.
-          setMessages((prev) => {
-            const last = prev[prev.length - 1];
-            if (last && last.role === "assistant" && last.streaming) {
-              const next = prev.slice(0, -1);
-              next.push({ ...last, body: last.body + evt.text });
-              return next;
-            }
-            const fresh: Message = {
-              id: clientId(),
-              role: "assistant",
-              body: evt.text,
-              streaming: true,
-            };
-            currentAssistantIdRef.current = fresh.id;
-            return [...prev, fresh];
-          });
-          return;
-        }
-        case "tool_call": {
-          const args =
-            evt.args ??
-            evt.arguments ??
-            ({} as Record<string, unknown>);
-          setTools((prev) => [
-            ...prev,
-            { id: evt.id, name: evt.name, args },
-          ]);
-          return;
-        }
-        case "tool_result": {
-          const normalized = normalizeToolResult(evt);
-          setTools((prev) =>
-            prev.map((t) =>
-              t.id === evt.id
-                ? {
-                    ...t,
-                    result: normalized,
-                  }
-                : t,
-            ),
-          );
-          return;
-        }
-        case "assistant_message": {
-          // Merge the canonical body into the existing streaming
-          // placeholder instead of replacing it with a brand-new
-          // message. This keeps the client id stable, so the
-          // typewriter's progress counter stays meaningful across
-          // the finalization boundary. We *don't* flip streaming
-          // off here — the cursor disappears on its own once the
-          // typewriter catches up to body.length.
-          setMessages((prev) => {
-            const idx = findLastIndex(
-              prev,
-              (m) => m.role === "assistant" && !!m.streaming,
-            );
-            if (idx < 0) {
-              return [
-                ...prev,
-                { ...evt.message, streaming: true },
-              ];
-            }
-            const next = prev.slice();
-            next[idx] = {
-              ...next[idx],
-              body: evt.message.body,
-              meta: evt.message.meta ?? next[idx].meta,
-            };
-            return next;
-          });
-          return;
-        }
-        case "end": {
-          setStreaming(false);
-          setTools([]);
-          return;
-        }
-        case "error": {
-          setErrorText(evt.detail ?? evt.error ?? "Agent error");
-          setStreaming(false);
-          setTools([]);
-          return;
-        }
+  const handleEvent = useCallback((evt: StreamEvent) => {
+    switch (evt.type) {
+      case "thread": {
+        setCurrent(evt.thread);
+        return;
       }
-    },
-    [],
-  );
+      case "user_message": {
+        setMessages((prev) => {
+          const trimmed = prev.filter(
+            (m) => !(m.role === "user" && m.id.startsWith("c_")),
+          );
+          return [...trimmed, evt.message];
+        });
+        // Fresh turn — any in-flight assistant reveal is done; the
+        // streaming slot is free until the first delta lands.
+        streamingIdRef.current = null;
+        return;
+      }
+      case "topic_shift": {
+        setShift(evt.shift);
+        return;
+      }
+      case "delta": {
+        setAwaitingFirstDelta(false);
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          if (last && last.role === "assistant" && last.streaming) {
+            const next = prev.slice(0, -1);
+            next.push({ ...last, body: last.body + evt.text });
+            return next;
+          }
+          const fresh: Message = {
+            id: clientId(),
+            role: "assistant",
+            body: evt.text,
+            streaming: true,
+          };
+          streamingIdRef.current = fresh.id;
+          animatedIdsRef.current.add(fresh.id);
+          // Seed the reveal at 0 so the first word fades in
+          // rather than popping in wholesale.
+          setRevealed((prev) => ({ ...prev, [fresh.id]: 0 }));
+          return [...prev, fresh];
+        });
+        return;
+      }
+      case "tool_call": {
+        const args =
+          evt.args ?? evt.arguments ?? ({} as Record<string, unknown>);
+        setTools((prev) => [
+          ...prev,
+          { id: evt.id, name: evt.name, args },
+        ]);
+        return;
+      }
+      case "tool_result": {
+        const normalized = normalizeToolResult(evt);
+        setTools((prev) =>
+          prev.map((t) =>
+            t.id === evt.id ? { ...t, result: normalized } : t,
+          ),
+        );
+        return;
+      }
+      case "assistant_message": {
+        setMessages((prev) => {
+          const idx = findLastIndex(
+            prev,
+            (m) => m.role === "assistant" && !!m.streaming,
+          );
+          if (idx < 0) {
+            // Server-only finalize (no streaming placeholder) —
+            // still mark as animated since this is a fresh turn.
+            animatedIdsRef.current.add(evt.message.id);
+            return [...prev, { ...evt.message, streaming: true }];
+          }
+          const next = prev.slice();
+          const existing = next[idx];
+          // Keep the client id stable across finalization so the
+          // React key doesn't change — if we swapped to the server
+          // id here, the whole row would re-mount and the reveal
+          // animation would re-play from scratch.
+          next[idx] = {
+            ...existing,
+            body: evt.message.body,
+            meta: { ...(evt.message.meta ?? {}), server_id: evt.message.id },
+          };
+          return next;
+        });
+        return;
+      }
+      case "end": {
+        setStreaming(false);
+        setAwaitingFirstDelta(false);
+        // Finalize: drop the streaming flag on whichever assistant
+        // row was live, so new tool calls in a *future* turn don't
+        // re-target the same row.
+        setMessages((prev) => {
+          const idx = findLastIndex(
+            prev,
+            (m) => m.role === "assistant" && !!m.streaming,
+          );
+          if (idx < 0) return prev;
+          const next = prev.slice();
+          next[idx] = { ...next[idx], streaming: false };
+          return next;
+        });
+        setTools([]);
+        return;
+      }
+      case "error": {
+        setErrorText(evt.detail ?? evt.error ?? "Agent error");
+        setStreaming(false);
+        setAwaitingFirstDelta(false);
+        setTools([]);
+        return;
+      }
+    }
+  }, []);
 
   const send = useCallback(
     async (message: string, opts: { forceNewThread?: boolean } = {}) => {
@@ -287,19 +308,31 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
       if (!trimmed || streaming) return;
       setErrorText(null);
       setStreaming(true);
+      setAwaitingFirstDelta(true);
       setTools([]);
 
-      // Optimistic user message so the textarea feels responsive.
+      const optimisticId = clientId();
       const optimistic: Message = {
-        id: clientId(),
+        id: optimisticId,
         role: "user",
         body: trimmed,
         streaming: false,
       };
       setMessages((prev) => [...prev, optimistic]);
       setDraft("");
-      currentAssistantIdRef.current = null;
-      setTypedLen(0);
+      streamingIdRef.current = null;
+
+      // Smoothly scroll the fresh user message to (close to) the
+      // top of the viewport so the upcoming reply has room to
+      // render below without jumping the layout.
+      requestAnimationFrame(() => {
+        const anchor = lastUserAnchorRef.current;
+        const el = scrollerRef.current;
+        if (anchor && el) {
+          const top = anchor.offsetTop - 24;
+          el.scrollTo({ top, behavior: "smooth" });
+        }
+      });
 
       const ac = new AbortController();
       abortRef.current = ac;
@@ -333,6 +366,7 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
         );
       } finally {
         setStreaming(false);
+        setAwaitingFirstDelta(false);
       }
     },
     [handleEvent, streaming, workspaceId],
@@ -376,8 +410,9 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
       setMessages(fresh.messages ?? []);
       setTools([]);
       setShift(null);
-      currentAssistantIdRef.current = null;
-      setTypedLen(0);
+      streamingIdRef.current = null;
+      setRevealed({});
+      animatedIdsRef.current = new Set();
     },
     [streaming, workspaceId],
   );
@@ -386,15 +421,32 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
     () => messages.filter((m) => m.role !== "system"),
     [messages],
   );
-  const lastAssistantIndex = useMemo(() => {
+  const lastUserIndex = useMemo(() => {
     for (let i = visibleMessages.length - 1; i >= 0; i--) {
-      if (visibleMessages[i].role === "assistant") return i;
+      if (visibleMessages[i].role === "user") return i;
     }
     return -1;
   }, [visibleMessages]);
 
+  // Map each visible message to how many characters we should
+  // render right now. Non-streaming rows (historical + finalized
+  // past turns) always show their full body; only the currently
+  // active assistant slot is clamped by the reveal tick.
+  const revealMap = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const m of visibleMessages) {
+      if (m.id === streamingIdRef.current) {
+        const cur = revealed[m.id] ?? 0;
+        map.set(m.id, Math.min(cur, m.body.length));
+      } else {
+        map.set(m.id, m.body.length);
+      }
+    }
+    return map;
+  }, [visibleMessages, revealed]);
+
   return (
-    <div className="flex h-[calc(100vh-14rem)] min-h-[32rem] flex-col">
+    <div className="flex h-[calc(100vh-12rem)] min-h-[34rem] flex-col">
       <div className="flex items-center gap-3 pb-2">
         <h2 className="text-sm font-semibold text-white/90">{current.title}</h2>
         <span className="text-[11px] text-white/35">
@@ -416,8 +468,7 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
           <span className="mt-0.5 h-1 w-1 shrink-0 rounded-full bg-amber-300" />
           <div className="flex-1">
             <strong className="font-semibold">Topic shift.</strong>{" "}
-            {shift.reason ?? "Looks like you moved on."} Pack this thread
-            into{" "}
+            {shift.reason ?? "Looks like you moved on."} Pack this thread into{" "}
             <code className="text-amber-100">
               {shift.suggested_bucket_name ?? "a new bucket"}
             </code>
@@ -444,25 +495,37 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
         </div>
       ) : null}
 
-      <div
-        ref={scrollerRef}
-        className="flex-1 overflow-y-auto py-4"
-      >
-        {visibleMessages.length === 0 ? (
-          <EmptyHint />
-        ) : (
-          <div className="space-y-6">
-            {visibleMessages.map((m, i) => (
-              <MessageRow
-                key={m.id}
-                message={m}
-                animate={i === lastAssistantIndex}
-                typedLen={typedLen}
-              />
-            ))}
-            {tools.length > 0 ? <ToolCallTrail rows={tools} /> : null}
-          </div>
-        )}
+      <div ref={scrollerRef} className="flex-1 overflow-y-auto py-4">
+        <ChoiceProvider onChoose={(label) => void send(label)}>
+          {visibleMessages.length === 0 ? (
+            <EmptyHint />
+          ) : (
+            <div className="space-y-6">
+              {visibleMessages.map((m, i) => (
+                <MessageRow
+                  key={m.id}
+                  message={m}
+                  animate={animatedIdsRef.current.has(m.id)}
+                  revealLen={revealMap.get(m.id) ?? m.body.length}
+                  anchorRef={
+                    i === lastUserIndex && m.role === "user"
+                      ? lastUserAnchorRef
+                      : null
+                  }
+                />
+              ))}
+              {/* Between submit and first delta → "Thinking" card.
+                  Shown only when there's no streaming assistant yet. */}
+              {awaitingFirstDelta &&
+              !visibleMessages.some(
+                (m) => m.role === "assistant" && m.streaming,
+              ) ? (
+                <ThinkingCard />
+              ) : null}
+              {tools.length > 0 ? <ToolCallTrail rows={tools} /> : null}
+            </div>
+          )}
+        </ChoiceProvider>
       </div>
 
       {errorText ? (
@@ -512,87 +575,152 @@ function EmptyHint() {
 function MessageRow({
   message,
   animate,
-  typedLen,
+  revealLen,
+  anchorRef,
 }: {
   message: Message;
   animate: boolean;
-  typedLen: number;
+  revealLen: number;
+  anchorRef: React.RefObject<HTMLDivElement | null> | null;
 }) {
   const isUser = message.role === "user";
-  const label = isUser ? "You" : message.role === "assistant" ? "Ship" : message.role;
+  const label = isUser
+    ? "You"
+    : message.role === "assistant"
+      ? "Ship"
+      : message.role;
   const labelTint = isUser ? "text-aqua/80" : "text-lilac/80";
 
-  // For the last assistant message we render a prefix of the body
-  // based on the typewriter cursor. Everything else renders fully.
-  const display =
-    animate && message.role === "assistant"
-      ? message.body.slice(0, Math.max(0, Math.min(typedLen, message.body.length)))
+  const displayBody =
+    message.role === "assistant"
+      ? message.body.slice(0, Math.max(0, Math.min(revealLen, message.body.length)))
       : message.body;
-  const showCursor =
-    animate && message.role === "assistant" && typedLen < message.body.length;
-  const useMarkdown =
-    !showCursor && (message.role === "assistant" || message.role === "user");
 
   return (
-    <div className="text-[14px] leading-relaxed">
+    <div ref={anchorRef ?? undefined} className="text-[14px] leading-relaxed">
       <div
         className={`mb-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${labelTint}`}
       >
         {label}
       </div>
-      {useMarkdown ? (
-        <ChatMarkdown text={display} />
-      ) : (
-        <div className="whitespace-pre-wrap text-white/90">
-          {display}
-          {showCursor ? (
-            <span className="ml-0.5 inline-block h-[0.9em] w-[2px] animate-pulse bg-white/60 align-[-0.1em]" />
-          ) : null}
-        </div>
-      )}
+      <ChatMarkdown text={displayBody} animate={animate} />
+    </div>
+  );
+}
+
+function ThinkingCard() {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3">
+      <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-lilac/70">
+        Ship
+      </div>
+      <span className="chat-shimmer text-[13px] font-medium">
+        Thinking…
+      </span>
     </div>
   );
 }
 
 function ToolCallTrail({ rows }: { rows: ToolCallRow[] }) {
   return (
-    <div className="space-y-0.5 text-[11px] text-white/40">
+    <div className="space-y-2">
       {rows.map((t) => (
-        <div key={t.id} className="flex items-start gap-2">
-          <span
-            className={`mt-[7px] inline-block h-1 w-1 shrink-0 rounded-full ${
-              t.result
-                ? t.result.ok
-                  ? "bg-emerald-400/80"
-                  : "bg-rose-400/80"
-                : "animate-pulse bg-aqua/80"
-            }`}
-          />
-          <code className="flex-1 break-all font-mono">
-            {t.name}({shortJson(t.args)})
-            {t.result ? (
-              t.result.ok ? (
-                <span className="ml-1 text-emerald-400/70">→ ok</span>
-              ) : (
-                <span className="ml-1 text-rose-300/80">
-                  → {t.result.error ?? "failed"}
-                </span>
-              )
-            ) : null}
-          </code>
-        </div>
+        <ToolCallCard key={t.id} row={t} />
       ))}
     </div>
   );
 }
 
-function shortJson(value: unknown): string {
-  try {
-    const s = JSON.stringify(value);
-    return s.length > 120 ? s.slice(0, 117) + "…" : s;
-  } catch {
-    return String(value);
+function ToolCallCard({ row }: { row: ToolCallRow }) {
+  const summary = toolArgSummary(row.args);
+  const state = !row.result
+    ? "running"
+    : row.result.ok
+      ? "ok"
+      : "error";
+
+  const toneClass =
+    state === "running"
+      ? "border-white/10 bg-white/[0.03]"
+      : state === "ok"
+        ? "border-emerald-400/25 bg-emerald-400/[0.04]"
+        : "border-rose-400/30 bg-rose-500/[0.05]";
+
+  return (
+    <div
+      className={`rounded-2xl border px-4 py-3 transition ${toneClass}`}
+    >
+      <div className="flex items-center gap-2 text-[11px] font-semibold">
+        <StatusDot state={state} />
+        {state === "running" ? (
+          <span className="chat-shimmer uppercase tracking-[0.2em]">
+            {prettyToolName(row.name)}
+          </span>
+        ) : (
+          <span
+            className={`uppercase tracking-[0.2em] ${
+              state === "ok" ? "text-emerald-300/90" : "text-rose-300/90"
+            }`}
+          >
+            {prettyToolName(row.name)}
+          </span>
+        )}
+        {state !== "running" ? (
+          <span className="text-[10px] font-normal normal-case tracking-normal text-white/40">
+            {state === "ok" ? "done" : row.result?.error ?? "failed"}
+          </span>
+        ) : null}
+      </div>
+      {summary ? (
+        <div className="mt-1 truncate text-[11px] text-white/55">
+          {summary}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function StatusDot({ state }: { state: "running" | "ok" | "error" }) {
+  if (state === "running") {
+    return (
+      <span className="relative inline-flex h-2 w-2 shrink-0 items-center justify-center">
+        <span className="absolute inline-block h-full w-full animate-ping rounded-full bg-aqua/60" />
+        <span className="inline-block h-1.5 w-1.5 rounded-full bg-aqua" />
+      </span>
+    );
   }
+  return (
+    <span
+      className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${
+        state === "ok" ? "bg-emerald-400" : "bg-rose-400"
+      }`}
+    />
+  );
+}
+
+function prettyToolName(name: string): string {
+  return name.replace(/_/g, " ");
+}
+
+function toolArgSummary(args: Record<string, unknown>): string {
+  // Show the first handful of string/number arguments inline — the
+  // point is to give the user a readable hint, not a JSON dump.
+  const parts: string[] = [];
+  for (const [k, v] of Object.entries(args)) {
+    if (typeof v === "string") {
+      parts.push(`${k}=${truncate(v, 64)}`);
+    } else if (typeof v === "number" || typeof v === "boolean") {
+      parts.push(`${k}=${v}`);
+    } else if (Array.isArray(v)) {
+      parts.push(`${k}=[${v.length}]`);
+    }
+    if (parts.length >= 3) break;
+  }
+  return parts.join(" · ");
+}
+
+function truncate(s: string, max: number): string {
+  return s.length > max ? s.slice(0, max - 1) + "…" : s;
 }
 
 function normalizeToolResult(evt: {
@@ -601,7 +729,10 @@ function normalizeToolResult(evt: {
   error?: string;
   output?: string;
 }): { ok: boolean; result?: unknown; error?: string } {
-  if (typeof evt.ok === "boolean" && (evt.error !== undefined || evt.result !== undefined)) {
+  if (
+    typeof evt.ok === "boolean" &&
+    (evt.error !== undefined || evt.result !== undefined)
+  ) {
     return { ok: evt.ok, result: evt.result, error: evt.error };
   }
   const raw = evt.output;
@@ -634,9 +765,27 @@ function findLastIndex<T>(arr: T[], pred: (t: T) => boolean): number {
   return -1;
 }
 
+function findNextWordBoundary(text: string, from: number): number {
+  // Advance past the current token (word or whitespace run) so the
+  // reveal lands on the next word boundary.
+  if (from >= text.length) return -1;
+  let i = from;
+  const ws = /\s/.test(text[i]);
+  while (i < text.length) {
+    const cur = /\s/.test(text[i]);
+    if (cur !== ws) break;
+    i++;
+  }
+  // If we started in whitespace, advance one more word so the
+  // next tick reveals an actual visible word, not just spaces.
+  if (ws) {
+    while (i < text.length && !/\s/.test(text[i])) i++;
+  }
+  return i;
+}
+
 // ---------------------------------------------------------------------------
-// SSE parser — minimal, compatible with the backend's
-// ``event: <name>\ndata: <json>\n\n`` framing.
+// SSE parser
 // ---------------------------------------------------------------------------
 
 async function consumeSSE(
