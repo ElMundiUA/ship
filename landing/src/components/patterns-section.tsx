@@ -44,7 +44,7 @@ export function PatternsSection() {
               Playbooks your teams can discover — not email attachments
             </h2>
             <p className="mt-5 text-lg text-white/70">
-              The goal is legibility: a program manager can browse tools and workflows while an engineer pulls the same
+              The goal is legibility: a program manager can browse tools and patterns while an engineer pulls the same
               pattern text into an agent run — without a separate “internal wiki” that goes stale.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
@@ -53,9 +53,6 @@ export function PatternsSection() {
               </Link>
               <Link href="/tools" className="btn-secondary inline-flex">
                 Tools
-              </Link>
-              <Link href="/workflows" className="btn-secondary inline-flex">
-                Workflows
               </Link>
               <Link href="/collections" className="btn-secondary inline-flex">
                 Collections

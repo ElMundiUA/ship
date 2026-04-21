@@ -92,7 +92,7 @@ export default function DocsHomePage() {
         </p>
         <ul className="mt-6 grid gap-2 text-sm text-white/75 sm:grid-cols-2">
           {[
-            { href: "/kit", label: "The kit — patterns, workflows, collections, tools" },
+            { href: "/kit", label: "The kit — patterns, collections, tools" },
             { href: "/cli", label: "shipctl CLI reference" },
             { href: "/use-cases", label: "Customer stories & reference deployments" },
             { href: "/book", label: "Long-form rationale (the book)" },

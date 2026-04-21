@@ -175,10 +175,6 @@ export default function PatternsPage() {
                 Tools
               </Link>
               {" · "}
-              <Link href="/workflows#cli" className="font-semibold text-aqua underline-offset-2 hover:underline">
-                Workflows
-              </Link>
-              {" · "}
               <Link href="/collections#cli" className="font-semibold text-aqua underline-offset-2 hover:underline">
                 Collections
               </Link>

@@ -4,9 +4,9 @@ import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 
 export const metadata: Metadata = {
-  title: "The Ship kit — patterns, workflows, collections, tools",
+  title: "The Ship kit — patterns, collections, tools",
   description:
-    "One hub for the four kinds of versioned artifacts Ship distributes: patterns (org playbooks), workflows (delivery intents), collections (starter bundles), and tools (integrations). Browseable on the site, fetchable with shipctl.",
+    "One hub for the three kinds of versioned artifacts Ship distributes: patterns (org playbooks), collections (starter bundles), and tools (integrations). Browseable on the site, fetchable with shipctl.",
 };
 
 type Tile = {
@@ -33,15 +33,6 @@ const TILES: Tile[] = [
     accentText: "text-aqua",
     accentBorderHover: "hover:border-aqua/40",
     accentDot: "bg-aqua",
-  },
-  {
-    href: "/workflows",
-    kicker: "Delivery intents",
-    title: "Workflows",
-    body: "Named, end-to-end runbooks that compose patterns and tools — lanes, gates, regression, hygiene. So programs and automation share the same vocabulary.",
-    accentText: "text-lilac",
-    accentBorderHover: "hover:border-lilac/40",
-    accentDot: "bg-lilac",
   },
   {
     href: "/collections",
@@ -146,7 +137,7 @@ export default function KitPage() {
         {/* How to consume */}
         <section className="border-t border-white/10 bg-black/30 py-16 sm:py-20">
           <div className="mx-auto max-w-6xl px-4 sm:px-6">
-            <p className="text-xs font-bold uppercase tracking-[0.22em] text-white/45">One reader for all four</p>
+            <p className="text-xs font-bold uppercase tracking-[0.22em] text-white/45">One reader for every kind</p>
             <h2 className="font-display mt-2 text-2xl font-bold text-white sm:text-3xl">
               <code className="font-mono text-aqua/95">shipctl</code> is the only thing your repo installs.
             </h2>
@@ -161,8 +152,8 @@ export default function KitPage() {
                   body: "Browse the patterns catalog from the terminal. Pair with shipctl search for fuzzy matching.",
                 },
                 {
-                  cmd: "shipctl workflow show <id>",
-                  body: "Print one workflow body to stdout. Fetch the rendered file with shipctl workflow fetch <id>.",
+                  cmd: "shipctl pattern show <id>",
+                  body: "Print one pattern body to stdout. Fetch the rendered file with shipctl pattern fetch <id>.",
                 },
                 {
                   cmd: "shipctl collection list",

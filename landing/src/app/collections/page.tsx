@@ -24,12 +24,11 @@ export default function CollectionsPage() {
           <div className="relative mx-auto max-w-4xl px-4 text-center sm:px-6">
             <p className="text-sm font-bold uppercase tracking-widest text-lilac">Collections</p>
             <h1 className="font-display mt-4 text-4xl font-bold leading-tight text-white sm:text-5xl">
-              One page: workflows + tools + patterns
+              One page: tools + patterns
             </h1>
             <p className="mx-auto mt-6 max-w-2xl text-lg text-white/70">
               A <strong className="text-white">collection</strong> is a curated bundle for a product shape—tables of links into{" "}
-              <Link href="/workflows" className="font-semibold text-lilac underline-offset-2 hover:underline">workflows</Link>,{" "}
-              <Link href="/tools" className="font-semibold text-lilac underline-offset-2 hover:underline">tools</Link>, and{" "}
+              <Link href="/tools" className="font-semibold text-lilac underline-offset-2 hover:underline">tools</Link> and{" "}
               <Link href="/patterns" className="font-semibold text-lilac underline-offset-2 hover:underline">patterns</Link>, plus docs pages when you need prose.
             </p>
             <div className="mt-10 flex flex-wrap justify-center gap-3">
@@ -39,8 +38,8 @@ export default function CollectionsPage() {
               <a href="#cli" className="btn-secondary inline-flex">
                 CLI
               </a>
-              <Link href="/workflows" className="btn-secondary inline-flex">
-                Workflows
+              <Link href="/patterns" className="btn-secondary inline-flex">
+                Patterns
               </Link>
               <Link href="/getting-started" className="btn-secondary inline-flex">
                 Getting started
@@ -98,10 +97,6 @@ export default function CollectionsPage() {
               </div>
             </div>
             <p className="mt-8 text-center text-sm text-white/50">
-              <Link href="/workflows#cli" className="font-semibold text-lilac underline-offset-2 hover:underline">
-                Workflows CLI
-              </Link>
-              {" · "}
               <Link href="/tools#cli" className="font-semibold text-lilac underline-offset-2 hover:underline">
                 Tools CLI
               </Link>

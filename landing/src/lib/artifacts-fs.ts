@@ -3,7 +3,7 @@ import path from "node:path";
 import { repoRoot } from "@/lib/repo-path";
 
 /**
- * Generic artifact entry shape, shared across patterns / workflows / tools /
+ * Generic artifact entry shape, shared across patterns / tools /
  * collections. The catalog page components only read a handful of fields
  * (id, title, summary, path, tags, group); everything else is preserved so
  * detail pages can grow into them without another refactor.
@@ -35,8 +35,6 @@ export interface ArtifactCatalog<E extends ArtifactEntry = ArtifactEntry> {
 const KIND_DESCRIPTIONS: Record<string, string> = {
   patterns:
     "Reviewable markdown prompts agents reach for during scheduled lanes, onboarding, and the cloud-agent grid.",
-  workflows:
-    "Lane intents — schedulers, retries, gates — that turn the catalog into a working CI surface.",
   tools:
     "Vendor-neutral integration descriptors for trackers, CI, e2e, and platform surfaces Ship snaps to.",
   collections:

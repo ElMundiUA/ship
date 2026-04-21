@@ -23,6 +23,7 @@ output/playwright/
 agent-run-*.log
 .ship/agent-runs/
 .ship/cache/
+.ship/state/
 .ship/telemetry-outbox.jsonl
 .ship/feedback-drafts/
 **/__pycache__/

@@ -43,7 +43,7 @@ const NAV: NavItem[] = [
     href: "/kit",
     label: "Kit",
     className: "",
-    alsoActiveOn: ["/patterns", "/workflows", "/collections", "/tools"],
+    alsoActiveOn: ["/patterns", "/collections", "/tools"],
   },
   { href: "/cli", label: "CLI", className: "" },
 ];

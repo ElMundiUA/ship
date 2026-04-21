@@ -99,7 +99,6 @@ export function rewriteDocLinks(source) {
       "tools/index.md": "/tools",
       "collections/index.md": "/collections",
       "patterns/index.md": "/patterns",
-      "workflows/index.md": "/workflows",
       /* Docs pages that were renamed/relocated in v0.11. */
       "adoption/index.md": "/docs",
       "adoption/agent-playbook.md": "/docs/operating",
