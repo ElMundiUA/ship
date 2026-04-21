@@ -1236,6 +1236,98 @@ export interface ApiPipelineInstall {
  * bound repo with the starter workflow YAML. Returns the PR URL the
  * dashboard deep-links into. Backend is admin-only.
  */
+// ---------------------------------------------------------------------
+// Lanes (RFC-0007 Phase 7)
+// ---------------------------------------------------------------------
+
+/**
+ * One row on the Console `/lanes` page. Mirrors the backend
+ * `LaneOut` schema from `backend.app.api.v1.routes.lanes`.
+ */
+export interface ApiLane {
+  id: string;
+  workspace_id: string;
+  repo_id: string;
+  repo_full_name: string;
+  lane_id: string;
+  kind: "once" | "event" | "schedule";
+  pattern: string | null;
+  cron: string | null;
+  idempotency_key: string | null;
+  enabled: boolean;
+  config: Record<string, unknown>;
+  last_run_at: string | null;
+  last_run_status: string | null;
+  synced_at: string;
+  sync_source: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ApiLaneRun {
+  id: string;
+  pipeline_id: string;
+  status: string;
+  trigger: string;
+  summary: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface ApiLaneDetail extends ApiLane {
+  recent_runs: ApiLaneRun[];
+}
+
+export interface ApiLaneSyncResult {
+  repo_id: string;
+  added: number;
+  updated: number;
+  removed: number;
+  unchanged: number;
+  errors: string[];
+  sync_source: string | null;
+}
+
+export async function listLanes(
+  workspaceId: string,
+  opts: { repoId?: string; token?: string } = {},
+): Promise<ApiLane[]> {
+  const qs = opts.repoId ? `?repo_id=${encodeURIComponent(opts.repoId)}` : "";
+  const envelope = await apiFetch<{ lanes: ApiLane[] }>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/lanes${qs}`,
+    { token: opts.token },
+  );
+  return envelope.lanes;
+}
+
+export function getLane(
+  workspaceId: string,
+  laneRowId: string,
+  token?: string,
+): Promise<ApiLaneDetail> {
+  return apiFetch<ApiLaneDetail>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/lanes/${encodeURIComponent(laneRowId)}`,
+    { token },
+  );
+}
+
+/**
+ * POST `/v1/workspaces/{ws}/repos/{repo_id}/lanes/sync` — re-pull the
+ * customer's `.ship/config.yml` and rebuild the Lane projection.
+ * Admin-only on the backend. Returns the per-row add/update/remove
+ * counts plus any per-lane parse errors.
+ */
+export function syncRepoLanes(
+  workspaceId: string,
+  repoId: string,
+  token?: string,
+): Promise<ApiLaneSyncResult> {
+  return apiFetch<ApiLaneSyncResult>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/lanes/sync`,
+    { method: "POST", token },
+  );
+}
+
 export function installPipelineWorkflow(
   workspaceId: string,
   pipelineId: string,

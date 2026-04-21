@@ -6,6 +6,7 @@ The Manual is the operator's reference for Ship: how the framework works on disk
 
 - **Concepts** — the vocabulary. What is an artifact, a kind, a channel, a pin, an install_target, an adapter, a preset. Read this first if any noun on the site looks unfamiliar.
 - **Configuration** — every field of `.ship/config.yml`, the `.ship/` on-disk layout, defaults, examples.
+- **Lanes** — the `lanes:` block, how `shipctl run` + `shipctl lanes install` consume it, and what shows up on the Console `/lanes` page.
 - **Operating** — day-2 work: pinning versions, switching channels, reading `verify` output, debugging `sync`, telemetry on/off, drafting feedback.
 - **Authoring artifacts** — how to write your own pattern, tool, workflow, collection, preset, or adapter; front-matter contract; how to test locally.
 - **Discovery contract** — the Phase 0–4 interview an agent runs before its first PR. Normative for agent integrators.

@@ -1,0 +1,263 @@
+name: Ship · lanes smoke matrix
+# RFC-0007 Phase 7E — end-to-end sanity for `shipctl run` across the
+# three lane kinds (`once`, `event`, `schedule`). Catches regressions
+# in lane → pattern resolution + idempotency-marker paths before a
+# generator bug ships to customer repos.
+#
+# The matrix reuses the same trick the CLI suite does: point
+# `SHIP_REPO` at this monorepo's checkout so `shipctl run` resolves
+# patterns from `artifacts/patterns/` without the methodology API.
+#
+# Each leg stages a temp repo with a hand-written `.ship/config.yml`
+# that declares one lane of the relevant kind, runs `shipctl run`,
+# and asserts the expected exit/JSON payload. For `once` lanes we
+# also verify the idempotency marker and prove a second run
+# short-circuits.
+#
+# Gated on PRs that touch lane-related code + a daily cron so we
+# catch regressions even for in-flight branches that don't touch
+# the CLI themselves.
+
+on:
+  pull_request:
+    paths:
+      - "cli/**"
+      - "artifacts/patterns/seed-knowledge-starters/**"
+      - ".github/workflows/run-agent.yml"
+      - ".github/workflows/lanes-smoke.yml"
+      - "backend/app/services/lanes_sync.py"
+      - "backend/app/api/v1/routes/lanes.py"
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: lane ${{ matrix.lane }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lane: seed
+            kind: once
+            trigger: manual
+            pattern: seed-knowledge-starters
+            idempotency_key: seed-knowledge-starters.smoke.v1
+            expect_status: completed
+            expect_marker: true
+          - lane: pr_review
+            kind: event
+            trigger: event
+            pattern: catalog-a5-pr-self-review
+            expect_status: noop
+            expect_marker: false
+          - lane: daily
+            kind: schedule
+            trigger: schedule
+            pattern: catalog-a13-daily-retro
+            expect_status: noop
+            expect_marker: false
+    steps:
+      - name: Checkout Ship monorepo
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install CLI deps
+        working-directory: cli
+        run: npm ci || npm install
+
+      - name: Link shipctl globally
+        working-directory: cli
+        run: npm link
+
+      - name: Stage fixture repo
+        id: stage
+        shell: bash
+        env:
+          LANE: ${{ matrix.lane }}
+          KIND: ${{ matrix.kind }}
+          PATTERN: ${{ matrix.pattern }}
+          IDEM: ${{ matrix.idempotency_key }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/ship-smoke-${LANE}"
+          mkdir -p "$root/.ship"
+
+          # Config schema v2 per cli/tests/run.test.mjs `baseConfig` +
+          # the same lane shape the suite feeds to `shipctl run`.
+          case "$KIND" in
+            once)
+              cat > "$root/.ship/config.yml" <<CFG
+          version: 2
+          shipctl_min: "0.12.0"
+          api:
+            base_url: https://ship.example.com
+            channel: stable
+          stack:
+            tracker: none
+            ci: manual
+            preset: adoption-minimum
+            language: multi
+          agent:
+            default: { provider: null }
+            overrides: {}
+          lanes:
+            ${LANE}:
+              kind: once
+              pattern: ${PATTERN}
+              idempotency:
+                key: ${IDEM}
+          artifacts:
+            pins: {}
+            auto_update: true
+          cache:
+            vcs_tracked: false
+          telemetry:
+            share: false
+            anonymous_id: null
+            scope:
+              artifact_usage: true
+              improvement_drafts: true
+              errors: false
+          CFG
+              ;;
+            event)
+              cat > "$root/.ship/config.yml" <<CFG
+          version: 2
+          shipctl_min: "0.12.0"
+          api:
+            base_url: https://ship.example.com
+            channel: stable
+          stack:
+            tracker: none
+            ci: manual
+            preset: adoption-minimum
+            language: multi
+          agent:
+            default: { provider: null }
+            overrides: {}
+          lanes:
+            ${LANE}:
+              kind: event
+              pattern: ${PATTERN}
+              on: pull_request
+          artifacts:
+            pins: {}
+            auto_update: true
+          cache:
+            vcs_tracked: false
+          telemetry:
+            share: false
+            anonymous_id: null
+            scope:
+              artifact_usage: true
+              improvement_drafts: true
+              errors: false
+          CFG
+              ;;
+            schedule)
+              cat > "$root/.ship/config.yml" <<CFG
+          version: 2
+          shipctl_min: "0.12.0"
+          api:
+            base_url: https://ship.example.com
+            channel: stable
+          stack:
+            tracker: none
+            ci: manual
+            preset: adoption-minimum
+            language: multi
+          agent:
+            default: { provider: null }
+            overrides: {}
+          lanes:
+            ${LANE}:
+              kind: schedule
+              pattern: ${PATTERN}
+              cron: "0 9 * * *"
+          artifacts:
+            pins: {}
+            auto_update: true
+          cache:
+            vcs_tracked: false
+          telemetry:
+            share: false
+            anonymous_id: null
+            scope:
+              artifact_usage: true
+              improvement_drafts: true
+              errors: false
+          CFG
+              ;;
+          esac
+
+          echo "root=$root" >> "$GITHUB_OUTPUT"
+
+      - name: First run
+        id: run1
+        shell: bash
+        env:
+          SHIP_REPO: ${{ github.workspace }}
+          ROOT: ${{ steps.stage.outputs.root }}
+          LANE: ${{ matrix.lane }}
+          TRIGGER: ${{ matrix.trigger }}
+          EXPECT_STATUS: ${{ matrix.expect_status }}
+        run: |
+          set -euo pipefail
+          out="$(shipctl run --lane "$LANE" --trigger "$TRIGGER" --cwd "$ROOT" --json)"
+          echo "$out"
+          status="$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')"
+          if [ "$status" != "$EXPECT_STATUS" ]; then
+            echo "::error::expected status=$EXPECT_STATUS, got $status"
+            exit 1
+          fi
+
+      - name: Verify once marker landed
+        if: matrix.expect_marker == true
+        shell: bash
+        env:
+          ROOT: ${{ steps.stage.outputs.root }}
+          IDEM: ${{ matrix.idempotency_key }}
+        run: |
+          set -euo pipefail
+          marker="$ROOT/.ship/state/${IDEM}.json"
+          if [ ! -f "$marker" ]; then
+            echo "::error::expected once marker $marker to exist"
+            ls -la "$ROOT/.ship/state" || true
+            exit 1
+          fi
+
+      - name: Second run (once guard should short-circuit)
+        if: matrix.expect_marker == true
+        shell: bash
+        env:
+          SHIP_REPO: ${{ github.workspace }}
+          ROOT: ${{ steps.stage.outputs.root }}
+          LANE: ${{ matrix.lane }}
+          TRIGGER: ${{ matrix.trigger }}
+        run: |
+          set -euo pipefail
+          out="$(shipctl run --lane "$LANE" --trigger "$TRIGGER" --cwd "$ROOT" --json)"
+          echo "$out"
+          reason="$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("reason",""))')"
+          if [ "$reason" != "already-done" ]; then
+            echo "::error::expected reason=already-done on second run, got '$reason'"
+            exit 1
+          fi
+
+      - name: Upload stage dir on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-stage-${{ matrix.lane }}
+          path: ${{ steps.stage.outputs.root }}
+          if-no-files-found: ignore
