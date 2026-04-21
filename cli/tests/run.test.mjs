@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import YAML from "yaml";
 
 import {
@@ -262,4 +263,144 @@ test("decideRun: sha changed + reset_on=manual → no-op", () => {
 test("resolveMarkerPath rejects invalid keys", () => {
   assert.throws(() => resolveMarkerPath(os.tmpdir(), "has space"), /idempotency key/);
   assert.throws(() => resolveMarkerPath(os.tmpdir(), "UPPER"), /idempotency key/);
+});
+
+/* ------------------------------------------------------------------ */
+/* Callback metrics (RFC-0007 Phase 7B)                                */
+/* ------------------------------------------------------------------ */
+
+/* Mock Ship callback endpoint — captures POST bodies so we can assert
+ * shipctl decorated the metrics blob with lane + GH run breadcrumbs. */
+function startMockShip() {
+  return new Promise((resolve) => {
+    const received = [];
+    const server = http.createServer((req, res) => {
+      let buf = "";
+      req.on("data", (c) => (buf += c));
+      req.on("end", () => {
+        let body = null;
+        try {
+          body = buf ? JSON.parse(buf) : null;
+        } catch {
+          body = buf;
+        }
+        received.push({ url: req.url, headers: req.headers, body });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true }));
+      });
+    });
+    server.listen(0, "127.0.0.1", () => {
+      const { address, port } = server.address();
+      resolve({
+        server,
+        received,
+        url: `http://${address}:${port}/v1/pipelines/runs/test/result`,
+        close: () =>
+          new Promise((done) => {
+            server.closeAllConnections?.();
+            server.close(() => done());
+          }),
+      });
+    });
+  });
+}
+
+function runCtlAsync(args, env = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [SHIPCTL_BIN, ...args], {
+      env: { ...process.env, SHIP_REPO: REPO_ROOT, ...env },
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (d) => (stdout += d.toString("utf8")));
+    child.stderr.on("data", (d) => (stderr += d.toString("utf8")));
+    child.on("error", reject);
+    child.on("close", (status) => resolve({ status, stdout, stderr }));
+  });
+}
+
+test("shipctl run callback includes lane + pattern + GH breadcrumbs", async () => {
+  const dir = mktmp();
+  writeConfig(
+    dir,
+    baseConfig({
+      lanes: {
+        seed: {
+          kind: "once",
+          pattern: "seed-knowledge-starters",
+          idempotency: { key: "seed-knowledge-starters.v1" },
+        },
+      },
+    }),
+  );
+  const mock = await startMockShip();
+  try {
+    const r = await runCtlAsync(
+      ["run", "--lane", "seed", "--trigger", "manual", "--cwd", dir, "--json"],
+      {
+        SHIP_CALLBACK_URL: mock.url,
+        SHIP_RUN_TOKEN: "test-token",
+        GITHUB_RUN_ID: "7777",
+        GITHUB_SERVER_URL: "https://github.com",
+        GITHUB_REPOSITORY: "acme/widgets",
+        GITHUB_EVENT_NAME: "workflow_dispatch",
+      },
+    );
+    assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
+    assert.equal(mock.received.length, 1, "expected one callback POST");
+    const body = mock.received[0].body;
+    assert.equal(body.status, "succeeded");
+    assert.ok(body.metrics, "metrics bag should be present");
+    assert.equal(body.metrics.lane_id, "seed");
+    assert.equal(body.metrics.pattern_id, "seed-knowledge-starters");
+    assert.equal(typeof body.metrics.pattern_sha256, "string");
+    assert.equal(body.metrics.gh_workflow_run_id, "7777");
+    assert.equal(
+      body.metrics.gh_html_url,
+      "https://github.com/acme/widgets/actions/runs/7777",
+    );
+    assert.equal(body.metrics.gh_event, "workflow_dispatch");
+  } finally {
+    await mock.close();
+  }
+});
+
+test("shipctl run callback omits GH metrics when env is clean", async () => {
+  const dir = mktmp();
+  writeConfig(
+    dir,
+    baseConfig({
+      lanes: {
+        seed: {
+          kind: "once",
+          pattern: "seed-knowledge-starters",
+          idempotency: { key: "seed-knowledge-starters.v1" },
+        },
+      },
+    }),
+  );
+  const mock = await startMockShip();
+  try {
+    const r = await runCtlAsync(
+      ["run", "--lane", "seed", "--trigger", "manual", "--cwd", dir, "--json"],
+      {
+        SHIP_CALLBACK_URL: mock.url,
+        SHIP_RUN_TOKEN: "test-token",
+        /* Scrub any inherited GH runner vars the host CI might set. */
+        GITHUB_RUN_ID: "",
+        GITHUB_SERVER_URL: "",
+        GITHUB_REPOSITORY: "",
+        GITHUB_EVENT_NAME: "",
+      },
+    );
+    assert.equal(r.status, 0);
+    const body = mock.received[0].body;
+    assert.equal(body.metrics.lane_id, "seed");
+    assert.equal(body.metrics.pattern_id, "seed-knowledge-starters");
+    assert.equal(body.metrics.gh_workflow_run_id, undefined);
+    assert.equal(body.metrics.gh_html_url, undefined);
+    assert.equal(body.metrics.gh_event, undefined);
+  } finally {
+    await mock.close();
+  }
 });

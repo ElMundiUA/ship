@@ -164,7 +164,12 @@ jobs:
           # shipctl run normally writes its own callback. This fallback
           # covers the case where the job died before that code path (e.g.
           # setup-node failed, npm install flaked). Silent on success.
+          # `lane_id` lets the backend reconcile failed runs against the
+          # Lane row even when `shipctl run` died before its own callback
+          # fired (setup-node fault, npm install flake, etc.).
           shipctl callback --status fail \
             --summary "Ship lane ${{ inputs.lane }} failed in GitHub Actions." \
+            --metric "lane_id=${{ inputs.lane }}" \
             --metric "gh_workflow_run_id=${{ github.run_id }}" \
-            --metric "gh_html_url=$GH_RUN_URL" || true
+            --metric "gh_html_url=$GH_RUN_URL" \
+            --metric "gh_event=${{ github.event_name }}" || true

@@ -8,18 +8,15 @@ import { Card, CardHeader } from "@/components/ui";
 import {
   ApiHttpError,
   ApiUnavailableError,
-  type ApiBucket,
   type ApiChatThread,
   getActiveChatThread,
   getMe,
   isApiConfigured,
   listActivatedRepos,
-  listBuckets,
   listWorkspaces,
 } from "@/lib/api/client";
 import { getSessionToken } from "@/lib/api/session";
 
-import { type BucketScopeFilter, BucketsSidebar } from "./buckets-sidebar";
 import { SingleWindowChat } from "./single-window-chat";
 
 /**
@@ -74,13 +71,11 @@ export default async function ChatPage({
   const workspace = workspaces[0];
 
   let thread: ApiChatThread | null = null;
-  let buckets: ApiBucket[] = [];
   let repos: Awaited<ReturnType<typeof listActivatedRepos>> = [];
   let me: Awaited<ReturnType<typeof getMe>> | null = null;
   try {
-    [thread, buckets, repos, me] = await Promise.all([
+    [thread, repos, me] = await Promise.all([
       getActiveChatThread(workspace.id, token),
-      listBuckets(workspace.id, { token }).catch(() => []),
       listActivatedRepos(workspace.id, token).catch(() => []),
       getMe(token).catch(() => null),
     ]);
@@ -120,17 +115,6 @@ export default async function ChatPage({
     />
   );
 
-  // Translate the URL-driven scope into a filter shape the sidebar
-  // knows how to apply. Active-thread selection still ignores
-  // ``repo_id`` (backend work), so scope today only narrows the
-  // sidebar — the conversation surface stays on the same thread.
-  const bucketScope: BucketScopeFilter =
-    scope.kind === "repo"
-      ? { kind: "repo", repoId: scope.repoId }
-      : scope.kind === "user"
-        ? { kind: "user", userId: me?.id ?? null }
-        : { kind: "workspace" };
-
   return (
     <AppShell
       title="Navigator"
@@ -149,14 +133,7 @@ export default async function ChatPage({
         </Link>
       }
     >
-      {scope.kind !== "workspace" ? (
-        <div className="mb-4 rounded-lg border border-aqua/20 bg-aqua/5 px-3 py-2 text-[12px] text-aqua/85">
-          Scope filter narrows the memory-bucket sidebar. The active
-          conversation still uses the one thread routed to you;
-          repo-scoped threads are on the roadmap.
-        </div>
-      ) : null}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr,320px]">
+      <div className="mx-auto w-full max-w-3xl">
         <SingleWindowChat
           workspaceId={workspace.id}
           thread={{
@@ -169,11 +146,6 @@ export default async function ChatPage({
             updated_at: thread.updated_at,
             messages: thread.messages,
           }}
-        />
-        <BucketsSidebar
-          workspaceId={workspace.id}
-          initial={buckets}
-          scopeFilter={bucketScope}
         />
       </div>
     </AppShell>

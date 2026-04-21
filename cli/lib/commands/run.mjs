@@ -202,7 +202,12 @@ export async function runCommand(ctx, rest) {
       reason: "already-done",
       marker: decision.marker,
     };
-    await tryCallback(args, "ok", `lane ${args.lane}: already completed, no-op.`);
+    await tryCallback(
+      args,
+      "ok",
+      `lane ${args.lane}: already completed, no-op.`,
+      { pattern_id: patternId, pattern_sha256: patternSha, noop: true },
+    );
     emitSummary(ctx, args, summary);
     process.exit(EXIT_OK);
   }
@@ -253,6 +258,7 @@ export async function runCommand(ctx, rest) {
     args,
     "ok",
     `lane ${args.lane} completed (pattern ${patternId}@${patternSha.slice(0, 8)}).`,
+    { pattern_id: patternId, pattern_sha256: patternSha },
   );
 
   if (ctx.json || args.json) {
@@ -524,7 +530,41 @@ function resolveMethodologyBase(ctx, config) {
   return fromFlag;
 }
 
-async function tryCallback(args, status, summary) {
+/*
+ * Assemble the callback `metrics` bag so Ship's backend can tie each
+ * run back to its lane + GitHub Actions run without re-parsing logs.
+ *
+ * Always-on breadcrumbs (iff we have the data):
+ *   - lane_id             — id from `.ship/config.yml`; also recoverable
+ *                           from the ship-<lane_id>.yml workflow path,
+ *                           but duplicating here costs us nothing and
+ *                           makes non-GitHub adapters (RFC-0007 Phase 8)
+ *                           cheaper because they won't have that URL.
+ *   - gh_workflow_run_id  — GITHUB_RUN_ID env (empty outside Actions).
+ *   - gh_html_url         — constructed from GITHUB_SERVER_URL / _REPOSITORY
+ *                           / _RUN_ID so the Console can deep-link the
+ *                           GH UI from a Lane detail view.
+ *   - gh_event            — GITHUB_EVENT_NAME (push / schedule / PR /…).
+ *
+ * Caller-supplied extras (pattern id / sha) stack on top. Nothing here
+ * is required; the backend treats unknown keys as opaque forward-compat
+ * payload.
+ */
+function collectCallbackMetrics(args, extra = {}) {
+  const env = process.env;
+  const out = { ...(extra || {}) };
+  if (args && args.lane && !out.lane_id) out.lane_id = args.lane;
+  if (env.GITHUB_RUN_ID && !out.gh_workflow_run_id) {
+    out.gh_workflow_run_id = env.GITHUB_RUN_ID;
+  }
+  if (env.GITHUB_SERVER_URL && env.GITHUB_REPOSITORY && env.GITHUB_RUN_ID && !out.gh_html_url) {
+    out.gh_html_url = `${env.GITHUB_SERVER_URL}/${env.GITHUB_REPOSITORY}/actions/runs/${env.GITHUB_RUN_ID}`;
+  }
+  if (env.GITHUB_EVENT_NAME && !out.gh_event) out.gh_event = env.GITHUB_EVENT_NAME;
+  return out;
+}
+
+async function tryCallback(args, status, summary, extraMetrics = {}) {
   const url = args.callbackUrl || process.env.SHIP_CALLBACK_URL;
   if (!url) return { ok: null, skipped: "no-callback-url" };
   const token = args.runToken || process.env.SHIP_RUN_TOKEN;
@@ -536,6 +576,8 @@ async function tryCallback(args, status, summary) {
   }
   const body = { status: status === "ok" ? "succeeded" : status === "fail" ? "failed" : status };
   if (summary) body.summary = String(summary).slice(0, 1024);
+  const metrics = collectCallbackMetrics(args, extraMetrics);
+  if (Object.keys(metrics).length > 0) body.metrics = metrics;
 
   try {
     const res = await fetch(url, {

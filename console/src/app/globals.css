@@ -25,3 +25,51 @@ body {
   background: rgba(46, 230, 214, 0.35);
   color: #fff;
 }
+
+/* --- Navigator / single-window chat ---------------------------------- */
+
+/* Word-by-word fade reveal used by the streaming assistant turn.
+   The animation is short and soft so fast streams don't feel jittery. */
+@keyframes chatWordFade {
+  from {
+    opacity: 0;
+    filter: blur(3px);
+    transform: translateY(1px);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+    transform: translateY(0);
+  }
+}
+
+.chat-word {
+  display: inline;
+  animation: chatWordFade 180ms ease-out both;
+}
+
+/* Animated greyish gradient used for "thinking" / tool-in-progress
+   placeholders. The gradient pans horizontally to give the copy a
+   gentle shimmer without being loud. */
+@keyframes chatShimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.chat-shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.35) 0%,
+    rgba(255, 255, 255, 0.85) 50%,
+    rgba(255, 255, 255, 0.35) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: chatShimmer 2.4s linear infinite;
+}
