@@ -457,10 +457,6 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
     }
     return -1;
   }, [visibleMessages]);
-  const hasStreamingAssistant = useMemo(
-    () => visibleMessages.some((m) => m.role === "assistant" && !!m.streaming),
-    [visibleMessages],
-  );
 
   // Map each visible message to how many characters we should
   // render right now. Non-streaming rows (historical + finalized
@@ -549,14 +545,16 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
                     {/* Activity for the current turn sits *between*
                         the user prompt and the upcoming/ongoing
                         assistant reply — chronologically correct
-                        and visually decoupled from any bubble. */}
+                        and visually decoupled from any bubble.
+                        No dedicated "Thinking…" line: if the agent
+                        goes straight to tools we show the trail;
+                        if it goes straight to prose we show the
+                        streaming reply. The quiet gap in-between
+                        is intentional — the bottom spacer keeps
+                        the user prompt pinned to the top so it
+                        doesn't feel frozen. */}
                     {isLastUser && tools.length > 0 ? (
                       <ToolCallTrail rows={tools} />
-                    ) : null}
-                    {isLastUser &&
-                    awaitingFirstDelta &&
-                    !hasStreamingAssistant ? (
-                      <ThinkingLine />
                     ) : null}
                   </Fragment>
                 );
@@ -655,12 +653,6 @@ function MessageRow({
       <ChatMarkdown text={displayBody} animate={animate} />
     </div>
   );
-}
-
-function ThinkingLine() {
-  // Plain shimmer line — no bubble / border / background. Sits
-  // inline between the user's prompt and the incoming reply.
-  return <div className="chat-shimmer text-[13px]">Thinking…</div>;
 }
 
 function ToolCallTrail({ rows }: { rows: ToolCallRow[] }) {
