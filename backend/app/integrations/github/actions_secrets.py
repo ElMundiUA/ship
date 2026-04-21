@@ -178,6 +178,59 @@ async def put_repo_secret(
     return key.key_id
 
 
+async def list_repo_secrets(
+    repo: WorkspaceRepo,
+    install: GitHubInstallation,
+    *,
+    settings: Settings,
+    client: httpx.AsyncClient | None = None,
+) -> list[str]:
+    """Return the names of every Actions secret currently on ``repo``.
+
+    GitHub's ``GET /repos/{owner}/{repo}/actions/secrets`` returns
+    ``{total_count, secrets: [{name, created_at, updated_at}]}`` —
+    notably **without** the plaintext values (there is no API to
+    read those once they're set). We only surface names because
+    that's exactly what the wizard needs: "is ``ANTHROPIC_API_KEY``
+    already configured on this repo, yes or no?".
+
+    Paginates through ``per_page=100`` so the full list is returned
+    even on repos that happen to have hundreds of secrets (unusual,
+    but cheap insurance). Returns a plain list, not a set, so
+    callers can log "found N secrets" without re-counting.
+    """
+    token = await fetch_installation_token(
+        install.installation_id, settings=settings, client=client
+    )
+    owner, repo_name = _split_full_name(repo.full_name)
+
+    names: list[str] = []
+    page = 1
+    while True:
+        response = await _request(
+            "GET",
+            f"/repos/{owner}/{repo_name}/actions/secrets",
+            token=token,
+            client=client,
+            params={"per_page": 100, "page": page},
+        )
+        _raise_for(response)
+        body = response.json()
+        chunk = body.get("secrets") or []
+        for entry in chunk:
+            name = entry.get("name")
+            if isinstance(name, str):
+                names.append(name)
+        # GitHub returns all secrets in the first page for
+        # ``total_count`` up to ``per_page`` — stop as soon as a page
+        # comes back shorter than the limit. Avoids issuing a second
+        # request for the 99%+ case.
+        if len(chunk) < 100:
+            break
+        page += 1
+    return names
+
+
 async def delete_repo_secret(
     repo: WorkspaceRepo,
     install: GitHubInstallation,
