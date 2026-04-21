@@ -64,6 +64,7 @@ from backend.app.services.distiller import (
 )
 from backend.app.services.distiller_llm import make_llm_classifier
 from backend.app.services.distiller_sources import (
+    ingest_connector_page,
     ingest_external_static_upload,
 )
 
@@ -376,6 +377,127 @@ async def upload_to_bucket(
         content_type=content_type or None,
         body_md=body_md,
         classifier=chosen,
+    )
+
+    run = (
+        await session.execute(
+            select(DistillerRun).where(DistillerRun.id == outcome.run_id)
+        )
+    ).scalars().one()
+
+    return DistillOut(
+        run=_run_to_out(run),
+        decision=outcome.decision,
+        article_ids=outcome.article_ids,
+        reason=outcome.reason,
+        classifier=outcome.classifier or resolved_mode,
+    )
+
+
+@router.post(
+    "/buckets/{slug}/sync",
+    response_model=DistillOut,
+    status_code=status.HTTP_200_OK,
+)
+async def sync_connector_bucket(
+    workspace_id: uuid.UUID,
+    slug: str,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> DistillOut:
+    """Phase 7b — manually trigger a connector-proxy bucket refresh.
+
+    The real connector fetch layer (Confluence / Notion / Linear
+    page readers) will live under ``backend/app/services/connectors/*``
+    in a later phase. Until then we synthesize a compact description
+    of the connector target so the upstream flow ("user clicks Sync
+    now → article lands in the bucket") closes end-to-end and the
+    Distiller's transitions (``new`` / ``update`` / ``skip``) can be
+    validated in the UI without a network round-trip.
+
+    Each invocation records one :class:`DistillerRun`. Repeated
+    syncs against an unchanged ``source_ref`` resolve to ``skip``
+    via ``content_sha`` dedup, which is how the console's
+    "already up to date" state gets expressed.
+
+    4xx codes:
+      * ``400`` — bucket is not ``connector_proxy`` or the stored
+        ``source_ref`` is missing the connector handle the stub
+        needs to build its stand-in page.
+      * ``403`` — caller lacks ``ROLES_MAINTAIN``.
+      * ``404`` — bucket slug not found under the workspace.
+    """
+
+    await _require_membership(
+        session, workspace_id, auth.user.id, ROLES_MAINTAIN
+    )
+    bucket = await _load_bucket(session, workspace_id, slug)
+
+    if bucket.source_kind != BucketSource.CONNECTOR_PROXY:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"bucket {slug!r} has source_kind={bucket.source_kind!r} "
+                "— sync is only defined for connector_proxy"
+            ),
+        )
+
+    source_ref = bucket.source_ref or {}
+    integration_kind = str(source_ref.get("integration_kind") or "").strip()
+    if not integration_kind:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "connector_proxy bucket is missing source_ref.integration_kind; "
+                "re-create the bucket so the connector handle is recorded"
+            ),
+        )
+    resource_ref = source_ref.get("resource_ref") or {}
+    if not isinstance(resource_ref, dict):
+        resource_ref = {}
+
+    # Stub body — compact enough that the classifier + embedding
+    # path doesn't warp, descriptive enough that an operator who
+    # hits the articles endpoint can see what the sync produced.
+    # When the real fetcher layer arrives it'll replace this block
+    # with the actual page body; the surrounding DistillerRun
+    # bookkeeping stays intact.
+    page_ref: dict[str, Any] = {
+        "slug": f"{integration_kind}-index",
+        "title": f"{integration_kind.title()} · {slug}",
+        "resource_ref": resource_ref,
+    }
+    lines = [
+        f"# {integration_kind.title()} · {bucket.name}",
+        "",
+        f"- Source kind: `{bucket.source_kind}`",
+        f"- Integration: `{integration_kind}`",
+    ]
+    if resource_ref:
+        pairs = ", ".join(f"{k}={v!r}" for k, v in sorted(resource_ref.items()))
+        lines.append(f"- Resource: {pairs}")
+    lines.extend(
+        [
+            "",
+            "> Connector fetcher is not wired yet — this page is a stand-in "
+            "so the Distiller end-to-end flow is observable. Re-sync "
+            "after the real connector layer lands (see "
+            "`backend/docs/knowledge-consolidation.md`, Phase 7c).",
+        ]
+    )
+    body_md = "\n".join(lines).strip()
+
+    classifier, resolved_mode = _resolve_classifier("stub")
+
+    outcome = await ingest_connector_page(
+        session,
+        workspace_id=workspace_id,
+        bucket=bucket,
+        actor_user_id=auth.user.id,
+        connector_kind=integration_kind,
+        page_ref=page_ref,
+        body_md=body_md,
+        classifier=classifier,
     )
 
     run = (

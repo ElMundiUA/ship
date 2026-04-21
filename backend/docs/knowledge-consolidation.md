@@ -1,7 +1,7 @@
 # Knowledge buckets consolidation — plan
 
-**Status:** Phases 1–3, 4a, 4b, 5a, 5b, 5c, 5d, 6a, 6b, 6c, 7a
-landed. Backend consolidation closed — `bucket_articles` is the
+**Status:** Phases 1–3, 4a, 4b, 5a, 5b, 5c, 5d, 6a, 6b, 6c, 7a,
+7b landed. Backend consolidation closed — `bucket_articles` is the
 sole read surface (retriever, agent tools, `/articles` endpoint,
 `summary_count` on bucket listings); `bucket_summaries` is
 maintained for write-back compat only (deprecated, removal in
@@ -9,16 +9,18 @@ Phase 9). Phase 4a + 4b shipped the scope pill + scope-aware
 `/knowledge`, `/catalog`, `/clarifications`, `/improvements`,
 `/chat`. Phase 6a shipped the Distiller stub; Phase 6b added the
 LLM-backed classifier (`classifier=auto|stub|llm`). Phase 6c
-shipped the inbound adapters. Phase 7a adds the console upload
-surface: `/knowledge/[id]` now dual-loads the legacy repo-files
-body *and* the unified `getBucket` + `listBucketArticles` +
-`listDistillerRuns` fan-out, renders an upload card for
-`external_static`/`audio_transcript` buckets (wired to a server
-action that calls `uploadToBucket` and `revalidatePath`s the
-page), and shows the last 20 Distiller runs alongside articles
-with provenance hints. Next: Phase 7b (connector config UI),
-Phase 8 (offboarding audio transcript ingestion), Phase 9
-(scope-driven sidebar IA).
+shipped the inbound adapters. Phase 7a added the console upload
+surface. Phase 7b extends `POST /v1/workspaces/{ws}/buckets` to
+mint connector-proxy buckets (validates `source_ref.integration_id`
+against the caller's workspace), adds `POST /buckets/{slug}/sync`
+that drives `ingest_connector_page` with a deterministic stub body
+so the UI round-trip is observable before real fetchers land, and
+teaches `/knowledge` to host a new-bucket dialog (Upload / Connector
+tabs) plus a connector card + "Sync now" button on the detail page.
+Next: Phase 7c (real connector fetchers — Notion/Confluence/Linear
+readers under `backend/app/services/connectors/*`), Phase 8
+(offboarding audio transcript ingestion), Phase 9 (scope-driven
+sidebar IA).
 **Scope:** unify the three "knowledge" surfaces (agent-memory buckets,
 `.ship/knowledge/*.md` disk-lister, `KbChunk` RAG index) under one
 `Scope × Source × Article` model, so every knowledge bucket has an
@@ -431,6 +433,65 @@ Per-source surface:
   `classifier=stub` for determinism), and asserts the success
   banner + articles table update. Also covers the oversize rejection
   path client-side.
+
+#### Phase 7b — Connector-proxy create + sync (shipped)
+
+- `backend/app/api/v1/routes/chat.py` — `BucketCreateIn` now carries
+  the consolidation surface (`scope_kind`, `source_kind`,
+  `source_ref`, carrier FKs). `create_bucket` validates them against
+  the same rules as `ensure_bucket`, and for `connector_proxy`
+  additionally verifies the `source_ref.integration_id` is a UUID
+  pointing at an `Integration` row in the same workspace. The
+  stored `source_ref` is normalized (adds `integration_kind`
+  echoed from the Integration, preserves whatever `resource_ref`
+  the caller sent). Workspace-level uniqueness stays intact; repo/
+  project/user scopes rely on the partial unique indexes from
+  `0014_bucket_scope_source`.
+- `backend/app/api/v1/routes/distiller.py` — `POST /workspaces/{ws}/
+  buckets/{slug}/sync` drives `ingest_connector_page` with a
+  deterministic stub body (pinned to `classifier=stub`). The stub
+  synthesizes a compact markdown page from `integration_kind` +
+  `resource_ref` so the Distiller's new/update/skip transitions are
+  observable in the UI even before the real fetcher layer exists.
+  The surface contract stays stable once Phase 7c wires actual
+  Confluence/Notion/Linear readers — only the fetched body changes.
+- `backend/tests/test_v1_connector_bucket.py` — new test module
+  covering: create persists normalized `source_ref`, rejects missing
+  `integration_id`, rejects invalid UUID, rejects cross-tenant
+  integration ids; sync creates + records a `DistillerRun`, is
+  idempotent (second sync → `skip`), rejects non-connector buckets,
+  404s on unknown slugs.
+- `console/src/lib/api/client.ts` — `CreateBucketInput` gains the
+  consolidation fields; new `createConnectorBucket` helper shapes
+  the `source_ref` and delegates to `createBucket`. New
+  `syncConnectorBucket` helper wraps the `/sync` route.
+- `console/src/app/knowledge/actions.ts` — `createBucketAction`
+  server action that handles both bucket kinds, redirects to
+  `/knowledge/<slug>` on success, returns an inline error otherwise.
+- `console/src/app/knowledge/new-bucket-dialog.tsx` — inline client
+  panel with Upload / Connector tabs. Loads integrations server-
+  side and renders them in the picker; the Connector tab is
+  disabled when no integrations are configured. Free-form
+  `resource_ref` is a JSON textarea so it's source-agnostic —
+  Notion uses `{database_id}`, Confluence `{space_key}`, etc.
+- `console/src/app/knowledge/[id]/actions.ts` — adds
+  `syncConnectorBucketAction` which wraps `syncConnectorBucket` +
+  `revalidatePath`.
+- `console/src/app/knowledge/[id]/connector-card.tsx` — client
+  component that renders the integration kind, `resource_ref`
+  entries, and a Sync-now button wired through
+  `useTransition`. Inline result banner shows the Distiller
+  decision so the `new → skip` transition on re-sync is visible.
+- `console/src/app/knowledge/[id]/page.tsx` — mounts the connector
+  card when `source_kind === connector_proxy`, and extends
+  `provenanceHint` to render "synced from <connector>" on the
+  articles table.
+- `e2e/tests/knowledge-connector.wired.spec.ts` — Playwright smoke
+  that PUTs a throwaway webhook integration, creates a connector
+  bucket via the API, opens `/knowledge` to confirm the dialog
+  renders both tabs, navigates to the detail page, asserts the
+  connector card mounts with the right provider + resource_ref,
+  clicks Sync now and asserts `new → skip` transitions.
 
 ### Phase 8 — User-memory bucket
 
