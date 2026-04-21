@@ -2,11 +2,11 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { AppShell } from "@/components/app-shell";
+import { ScopePill } from "@/components/scope-pill";
 import {
   type ResolvedScope,
-  ScopePill,
   resolveScopeFromSearch,
-} from "@/components/scope-pill";
+} from "@/lib/scope";
 import { Badge, Card, CardHeader } from "@/components/ui";
 import {
   type ApiImprovement,

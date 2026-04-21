@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
-import { ScopePill, resolveScopeFromSearch } from "@/components/scope-pill";
+import { ScopePill } from "@/components/scope-pill";
+import { resolveScopeFromSearch } from "@/lib/scope";
 
 // Reads cookies + fetches per request.
 export const dynamic = "force-dynamic";

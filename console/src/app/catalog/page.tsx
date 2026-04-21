@@ -1,11 +1,11 @@
 import Link from "next/link";
 
 import { AppShell } from "@/components/app-shell";
+import { ScopePill } from "@/components/scope-pill";
 import {
   type ResolvedScope,
-  ScopePill,
   resolveScopeFromSearch,
-} from "@/components/scope-pill";
+} from "@/lib/scope";
 
 // Reads cookies + env at runtime; never cache between sessions.
 export const dynamic = "force-dynamic";
