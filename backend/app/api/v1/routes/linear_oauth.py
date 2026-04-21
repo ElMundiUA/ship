@@ -200,7 +200,7 @@ async def linear_install_callback(
         # dedicated error code.
         return RedirectResponse(
             url=_console_onboarding_url(
-                settings, workspace_id=workspace_id, error="not_configured"
+                settings, workspace_id=workspace_id, error="not_configured_linear"
             ),
             status_code=303,
         )

@@ -65,9 +65,11 @@ export async function POST(request: Request) {
         );
       if (err.status === 403) return wizardError(origin, wsId, "forbidden");
       // 503 = backend says the OAuth app is not configured (missing
-      // {LINEAR,NOTION}_CLIENT_ID / SECRET).
+      // {LINEAR,NOTION}_CLIENT_ID / SECRET). We embed the kind so the
+      // wizard banner can call out which vendor needs ops attention
+      // (and that GitHub Issues remains a viable alternative).
       if (err.status === 503)
-        return wizardError(origin, wsId, "not_configured");
+        return wizardError(origin, wsId, `not_configured_${kind}`);
       return wizardError(origin, wsId, `http_${err.status}`);
     }
     return wizardError(origin, wsId, "unknown");
