@@ -156,6 +156,12 @@ try {
     process.exit(0);
   }
 
+  if (cmd === "lanes") {
+    const { lanesCommand } = await import("../lib/commands/lanes.mjs");
+    await lanesCommand(ctx, rest);
+    process.exit(0);
+  }
+
   console.error(`Unknown command: ${cmd}\nRun: shipctl help`);
   process.exit(1);
 } catch (err) {

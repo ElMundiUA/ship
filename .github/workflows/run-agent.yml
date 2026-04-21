@@ -1,0 +1,170 @@
+name: Ship · run-agent (reusable)
+# RFC-0007 Phase 3 — the single reusable workflow that every lane wrapper
+# calls. A customer repo never copies this file; instead its generated
+# thin wrapper (see `shipctl lanes install`) does:
+#
+#   jobs:
+#     run:
+#       uses: ElMundiUA/ship/.github/workflows/run-agent.yml@<ref>
+#       with:
+#         lane: pr_review
+#       secrets: inherit
+#
+# The wrapper's sole responsibility is the `on:` block (cron / event /
+# workflow_dispatch) and the lane id. Everything that depends on the
+# shipctl release — flags, JSON payloads, callback URL wiring, artifact
+# upload layout — lives here so upgrading the whole fleet is a single
+# ref bump.
+
+on:
+  workflow_call:
+    inputs:
+      lane:
+        description: "Lane id as declared in .ship/config.yml"
+        type: string
+        required: true
+      trigger:
+        description: "Override trigger (once|event|schedule|manual). Defaults to github.event_name."
+        type: string
+        required: false
+        default: ""
+      shipctl_version:
+        description: "npm dist-tag or semver for @elmundi/ship-cli. Default: latest."
+        type: string
+        required: false
+        default: "latest"
+      node_version:
+        description: "Node.js major version for the runner"
+        type: string
+        required: false
+        default: "20"
+      dry_run:
+        description: "Resolve the lane but neither call the callback nor write the idempotency marker."
+        type: boolean
+        required: false
+        default: false
+      offline:
+        description: "Do not talk to the methodology API; read patterns from the local .ship/cache."
+        type: boolean
+        required: false
+        default: false
+      ship_run_id:
+        description: "Pipeline-run id the callback should report against (set by Ship dispatch)."
+        type: string
+        required: false
+        default: ""
+      ship_callback_url:
+        description: "Ship callback URL (set by Ship dispatch)."
+        type: string
+        required: false
+        default: ""
+      upload_prompt:
+        description: "Upload the rendered prompt as a workflow artifact named `ship-prompt`."
+        type: boolean
+        required: false
+        default: true
+    secrets:
+      SHIP_API_TOKEN:
+        description: "Methodology API token (optional; required for private patterns / callbacks)."
+        required: false
+      SHIP_RUN_TOKEN:
+        description: "Short-lived bearer token Ship issued when dispatching this run."
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    name: "ship run --lane ${{ inputs.lane }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout caller repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+
+      - name: Install shipctl
+        run: npm install -g @elmundi/ship-cli@${{ inputs.shipctl_version }}
+
+      - name: Resolve trigger
+        id: trigger
+        env:
+          OVERRIDE: ${{ inputs.trigger }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ -n "${OVERRIDE:-}" ]; then
+            echo "value=$OVERRIDE" >> "$GITHUB_OUTPUT"
+          else
+            case "$EVENT" in
+              workflow_dispatch) echo "value=manual" >> "$GITHUB_OUTPUT" ;;
+              schedule)          echo "value=schedule" >> "$GITHUB_OUTPUT" ;;
+              *)                 echo "value=event" >> "$GITHUB_OUTPUT" ;;
+            esac
+          fi
+
+      - name: shipctl run
+        id: run
+        env:
+          SHIP_API_TOKEN: ${{ secrets.SHIP_API_TOKEN }}
+          SHIP_RUN_TOKEN: ${{ secrets.SHIP_RUN_TOKEN }}
+          SHIP_RUN_ID: ${{ inputs.ship_run_id }}
+          SHIP_CALLBACK_URL: ${{ inputs.ship_callback_url }}
+        run: |
+          set -euo pipefail
+          mkdir -p .ship/run-output
+          ARGS=(run --lane "${{ inputs.lane }}" --trigger "${{ steps.trigger.outputs.value }}")
+          [ "${{ inputs.dry_run }}" = "true" ] && ARGS+=(--dry-run)
+          [ "${{ inputs.offline }}" = "true" ] && ARGS+=(--offline)
+          [ -n "${SHIP_RUN_ID:-}" ]      && ARGS+=(--ship-run-id "$SHIP_RUN_ID")
+          [ -n "${SHIP_CALLBACK_URL:-}" ] && ARGS+=(--ship-callback-url "$SHIP_CALLBACK_URL")
+          [ -n "${SHIP_RUN_TOKEN:-}" ]    && ARGS+=(--ship-run-token "$SHIP_RUN_TOKEN")
+
+          # Stream stdout (the rendered prompt) into an artifact file; the
+          # agent step (or a human) consumes it downstream. stderr carries
+          # the `# ship: lane=… agent.provider=…` banner and warnings —
+          # tee it too so the GH Actions log stays self-describing.
+          set +e
+          shipctl "${ARGS[@]}" \
+            1> .ship/run-output/prompt.md \
+            2> .ship/run-output/shipctl.log
+          STATUS=$?
+          set -e
+
+          cat .ship/run-output/shipctl.log >&2 || true
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          if [ "$STATUS" -ne 0 ]; then
+            echo "::error::shipctl run exited with $STATUS"
+            exit "$STATUS"
+          fi
+
+      - name: Upload prompt artifact
+        if: ${{ inputs.upload_prompt && (success() || failure()) }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ship-prompt-${{ inputs.lane }}
+          path: .ship/run-output/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Report failure to Ship
+        if: ${{ failure() && inputs.ship_callback_url != '' }}
+        env:
+          SHIP_RUN_ID: ${{ inputs.ship_run_id }}
+          SHIP_CALLBACK_URL: ${{ inputs.ship_callback_url }}
+          SHIP_RUN_TOKEN: ${{ secrets.SHIP_RUN_TOKEN }}
+          GH_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # shipctl run normally writes its own callback. This fallback
+          # covers the case where the job died before that code path (e.g.
+          # setup-node failed, npm install flaked). Silent on success.
+          shipctl callback --status fail \
+            --summary "Ship lane ${{ inputs.lane }} failed in GitHub Actions." \
+            --metric "gh_workflow_run_id=${{ github.run_id }}" \
+            --metric "gh_html_url=$GH_RUN_URL" || true

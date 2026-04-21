@@ -60,6 +60,14 @@ COMMANDS
                                      — RFC-0007 entry-point: resolve a lane from
                                        .ship/config.yml, fetch its pattern, check idempotency,
                                        emit the prompt, and report the callback.
+  shipctl lanes install [--only <csv>] [--ref <git-ref>] [--owner …] [--repo …]
+                        [--shipctl-version <v>] [--dry-run] [--force] [--json] [--cwd …]
+                                     — generate .github/workflows/ship-<lane>.yml thin
+                                       wrappers that delegate to the reusable run-agent.yml.
+  shipctl lanes list [--json] [--cwd …]
+                                     — print the lane map from .ship/config.yml.
+  shipctl lanes remove [--only <csv>] [--dry-run] [--json] [--cwd …]
+                                     — delete generated ship-<lane>.yml wrappers.
   shipctl knowledge init [--workspace <id>] [--repo <id|owner/name>] [--only <csv>] [--json]
                                      — open a PR that seeds .ship/knowledge/*.md starter
                                        buckets (code-style, ui-runbook). Reads SHIP_API_TOKEN.
