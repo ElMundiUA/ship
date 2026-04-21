@@ -61,6 +61,7 @@ export async function POST(request: Request) {
     "mobile-app",
     "cli",
     "monorepo",
+    "marketing",
     "adoption-minimum",
   ]);
   const preset = knownPresets.has(rawPreset) ? rawPreset : null;

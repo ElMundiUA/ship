@@ -5,6 +5,30 @@ name: E2E console (Playwright)
 
 on:
   workflow_dispatch:
+    inputs:
+      run_full_journey:
+        description: "Run the full onboarding journey spec (tests/full-journey.wired.spec.ts)"
+        type: boolean
+        default: false
+      run_github_app_install:
+        description: "Let the journey install Ship GitHub App via UI (requires github.com cookies in storage)"
+        type: boolean
+        default: false
+      reset_sandbox:
+        description: "Reset the sandbox repo + Ship workspace (destructive, runs only tests/full-journey-reset.sandbox.spec.ts)"
+        type: boolean
+        default: false
+      preset:
+        description: "Preset id to pick in the wizard when run_full_journey=true"
+        type: choice
+        default: "web-app"
+        options:
+          - web-app
+          - api-backend
+          - mobile-app
+          - cli
+          - monorepo
+          - adoption-minimum
   schedule:
     - cron: "42 6 * * *"
 
@@ -60,11 +84,25 @@ jobs:
           E2E_SANDBOX_REPO: ${{ secrets.E2E_SANDBOX_REPO }}
           GITHUB_TOKEN: ${{ secrets.E2E_GITHUB_TOKEN }}
           E2E_EXPECT_SHIP_CLARIFICATION_LABEL: ${{ secrets.E2E_EXPECT_SHIP_CLARIFICATION_LABEL }}
+          E2E_GITHUB_INSTALL_ACCOUNT: ${{ secrets.E2E_GITHUB_INSTALL_ACCOUNT }}
+          E2E_GITHUB_REPO_FULL_NAME: ${{ secrets.E2E_GITHUB_REPO_FULL_NAME }}
+          E2E_GITHUB_USERNAME: ${{ secrets.E2E_GITHUB_USERNAME }}
+          E2E_GITHUB_PASSWORD: ${{ secrets.E2E_GITHUB_PASSWORD }}
+          E2E_RUN_FULL_JOURNEY: ${{ inputs.run_full_journey && '1' || '' }}
+          E2E_RUN_GITHUB_APP_INSTALL: ${{ inputs.run_github_app_install && '1' || '' }}
+          E2E_RESET_SANDBOX: ${{ inputs.reset_sandbox && '1' || '' }}
+          E2E_PRESET: ${{ inputs.preset }}
         run: |
           if [ -f .auth/ci-storage.json ]; then
             export E2E_STORAGE_STATE="$PWD/.auth/ci-storage.json"
           fi
-          npm test
+          if [ "${E2E_RESET_SANDBOX:-}" = "1" ]; then
+            # Destructive path: run only the reset spec, skip the journey and the
+            # rest of the suite so rollback never races with active tests.
+            npx playwright test --project=sandbox-api tests/full-journey-reset.sandbox.spec.ts
+          else
+            npm test
+          fi
 
       - uses: actions/upload-artifact@v4
         if: always()

@@ -94,19 +94,25 @@ KNOWN_PRESETS: Final[tuple[str, ...]] = (
     "mobile-app",
     "cli",
     "monorepo",
+    "marketing",
     "adoption-minimum",
 )
 
 # ``adoption-minimum`` is deliberately tiny — the WOW flow promise is
 # "sign up and Ship reviews your next PR"; anything beyond that needs
-# the tenant to flip it on. ``monorepo`` opts into self-heal because
-# the drift-detection story is most useful on big repos with many
-# workflows. Web-app / api-backend / mobile-app share the same
-# "operational baseline" (PR gate + standup + audit) — presets that
-# need more lanes (e.g. hosted E2E) add them later via the catalog's
+# the tenant to flip it on. ``web-app`` is the flagship "Elmundi-grade
+# SDLC" preset: the whole grid on, including self-heal, so a brand-new
+# tenant starts with the same lane coverage the reference implementation
+# runs in production. ``monorepo`` matches ``web-app`` (self-heal is
+# most useful there anyway). ``api-backend`` / ``mobile-app`` share the
+# "operational baseline" (PR gate + standup + audit) without self-heal,
+# because service / device-lab repos generally have fewer workflows to
+# babysit — presets that need more add them later via the catalog's
 # "available workflows" dashboard, not here.
 PRESET_ENABLED_KINDS: Final[dict[str, frozenset[str]]] = {
-    "web-app": frozenset({"pr_review", "daily_standup", "tech_debt", "code_map"}),
+    "web-app": frozenset(
+        {"pr_review", "daily_standup", "tech_debt", "self_heal", "code_map"}
+    ),
     "api-backend": frozenset(
         {"pr_review", "daily_standup", "tech_debt", "code_map"}
     ),
@@ -117,6 +123,12 @@ PRESET_ENABLED_KINDS: Final[dict[str, frozenset[str]]] = {
     "monorepo": frozenset(
         {"pr_review", "daily_standup", "tech_debt", "self_heal", "code_map"}
     ),
+    # Marketing sites: copy-and-cadence flavour — PR gate for copy
+    # reviews, standup to track publishing cadence, code_map so Ship
+    # can answer "where does this claim live?". Tech-debt and
+    # self-heal are intentionally off; see
+    # ``artifacts/collections/preset-marketing/ARTIFACT.md``.
+    "marketing": frozenset({"pr_review", "daily_standup", "code_map"}),
     "adoption-minimum": frozenset({"pr_review", "code_map"}),
 }
 

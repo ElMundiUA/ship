@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-17T21:15:32.596580+00:00"
-content_sha256: dbb16b397574575786877f4cd96f0a599d11a050fd28babff340d1fe1b730ba4
+content_sha256: fddfaf65bd1a96c75d9d8e808edc9161239ab3ddc353eb22970edf1885629684
 deprecated: false
 replaced_by: null
 yanked: false
@@ -37,6 +37,21 @@ server-rendered framework (Next.js, Remix, Nuxt) that users
 consume in the browser. Bounded context is **"the browsing
 session"** — URL state, auth cookies, feature flags, and the
 preview URL every PR produces.
+
+## Default Ship pipelines (seed on activate)
+
+Picking this preset wires the full Elmundi-grade SDLC grid:
+
+- `pr_review` — PR-and-CI gate (blocking checks, auto-comments).
+- `daily_standup` — scheduled SDLC lane digest.
+- `tech_debt` — parallel audit lanes (debt, risk, refactor).
+- `self_heal` — pipeline-self-heal (detects workflow drift, opens
+  remediation PRs automatically).
+- `code_map` — code-map refresh (keeps the agent's mental model
+  of the repo current).
+
+Tenants turn individual lanes off in the console if they need to;
+the preset merely decides which start enabled.
 
 ## SDLC columns the preset expects
 

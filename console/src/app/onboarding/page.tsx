@@ -26,22 +26,25 @@ import { redirect } from "next/navigation";
 import {
   ApiHttpError,
   ApiUnavailableError,
+  KNOWLEDGE_STARTERS,
   isApiConfigured,
   listActivatedRepos,
   listAvailableRepos,
   listWorkspaces,
   type ApiAvailableRepo,
+  type KnowledgeStarterSlug,
 } from "@/lib/api/client";
 import { getSessionToken } from "@/lib/api/session";
 
 export const dynamic = "force-dynamic";
 
-type StepId = "github" | "repos" | "tracker" | "done";
+type StepId = "github" | "repos" | "tracker" | "knowledge" | "done";
 
 const STEPS: { id: StepId; label: string }[] = [
   { id: "github", label: "Install GitHub App" },
   { id: "repos", label: "Pick repos" },
   { id: "tracker", label: "Connect tracker" },
+  { id: "knowledge", label: "Seed knowledge" },
 ];
 
 // Must stay in lockstep with ``backend.app.services.default_pipelines.KNOWN_PRESETS``
@@ -55,6 +58,7 @@ const PRESETS: {
     | "mobile-app"
     | "cli"
     | "monorepo"
+    | "marketing"
     | "adoption-minimum";
   name: string;
   blurb: string;
@@ -65,8 +69,8 @@ const PRESETS: {
     id: "web-app",
     name: "Web app",
     blurb:
-      "Next.js / Remix / SPA — PR review gate, daily standup, tech-debt scan, code map.",
-    lanes: "PR gate · Standup · Tech-debt · Code map",
+      "Next.js / Remix / SPA — full Elmundi-grade SDLC: PR review gate, daily standup, tech-debt scan, self-heal, code map.",
+    lanes: "PR gate · Standup · Tech-debt · Self-heal · Code map",
   },
   {
     id: "api-backend",
@@ -97,6 +101,13 @@ const PRESETS: {
     lanes: "PR gate · Standup · Tech-debt · Self-heal · Code map",
   },
   {
+    id: "marketing",
+    name: "Marketing site",
+    blurb:
+      "Landing pages, docs, blogs, campaign microsites — copy-first review, publishing-cadence standup, site-structure map.",
+    lanes: "PR gate · Standup · Code map",
+  },
+  {
     id: "adoption-minimum",
     name: "Minimum",
     blurb:
@@ -124,6 +135,41 @@ const REPOS_ERRORS: Record<string, string> = {
     "GitHub rejected our installation token. Reinstall the Ship app and try again.",
   empty: "Pick at least one repo, or use Skip to come back later.",
   unknown: "Couldn't save the repo selection. Try again.",
+};
+
+const KNOWLEDGE_ERRORS: Record<string, string> = {
+  api_unavailable: "Backend not reachable.",
+  bad_intent: "Pick Seed or Skip — nothing else can be submitted.",
+  empty_selection: "Pick at least one bucket, or hit Skip to come back later.",
+  forbidden: "You need admin role on this workspace to open a seed PR.",
+  github_app_missing:
+    "GitHub App isn't installed for this workspace. Reconnect it and try again.",
+  bad_selection:
+    "Selection contains an unknown bucket. Tick one of the offered options.",
+  github_api_error:
+    "GitHub rejected the PR open. Retry in a minute, or skip for now.",
+  no_repo:
+    "Couldn't find the sandbox repo you just activated. Step back to Pick repos.",
+  repo_lookup_failed: "Couldn't load your activated repos. Try again.",
+  unknown: "Couldn't open the seed PR. Try again or skip for now.",
+};
+
+const KNOWLEDGE_STARTER_META: Record<
+  KnowledgeStarterSlug,
+  { name: string; blurb: string; path: string }
+> = {
+  "code-style": {
+    name: "Code style",
+    blurb:
+      "Starter conventions for languages, naming, imports, testing, and a PR review checklist — the first thing Ship reads when reviewing diffs.",
+    path: ".ship/knowledge/code-style.md",
+  },
+  "ui-runbook": {
+    name: "UI runbook",
+    blurb:
+      "Design system usage, layout, accessibility, loading / error / empty states, and perf budgets. Keeps Ship's UI suggestions consistent with your product.",
+    path: ".ship/knowledge/ui-runbook.md",
+  },
 };
 
 const TRACKER_ERRORS: Record<string, string> = {
@@ -156,12 +202,25 @@ function pick(raw: string | string[] | undefined): string | undefined {
  */
 function hasExplicitStep(raw: string | string[] | undefined): boolean {
   const v = Array.isArray(raw) ? raw[0] : raw;
-  return v === "github" || v === "repos" || v === "tracker" || v === "done";
+  return (
+    v === "github" ||
+    v === "repos" ||
+    v === "tracker" ||
+    v === "knowledge" ||
+    v === "done"
+  );
 }
 
 function pickStep(raw: string | string[] | undefined): StepId {
   const v = Array.isArray(raw) ? raw[0] : raw;
-  if (v === "repos" || v === "tracker" || v === "done") return v;
+  if (
+    v === "repos" ||
+    v === "tracker" ||
+    v === "knowledge" ||
+    v === "done"
+  ) {
+    return v;
+  }
   return "github";
 }
 
@@ -337,7 +396,16 @@ export default async function OnboardingPage({
             reposJustWired={pick(params.repos) === "wired"}
           />
         )}
-        {step === "done" && <DoneStep />}
+        {step === "knowledge" && wsId && (
+          <KnowledgeStep wsId={wsId} error={error} />
+        )}
+        {step === "done" && (
+          <DoneStep
+            knowledgeSeeded={pick(params.knowledge) === "seeded"}
+            knowledgePrUrl={pick(params.pr_url)}
+            knowledgePrNumber={pick(params.pr)}
+          />
+        )}
       </main>
     </div>
   );
@@ -844,10 +912,133 @@ function TrackerStep({
 }
 
 // ---------------------------------------------------------------------------
+// Step 4 — Seed starter knowledge buckets
+// ---------------------------------------------------------------------------
+
+function KnowledgeStep({
+  wsId,
+  error,
+}: {
+  wsId: string;
+  error?: string;
+}) {
+  const message = error ? KNOWLEDGE_ERRORS[error] ?? error : null;
+  return (
+    <section>
+      <p className="font-mono text-[11px] uppercase tracking-[0.3em] text-aqua/85">
+        Step 4 of 4 &middot; Seed starter knowledge
+      </p>
+      <h1 className="mt-2 font-display text-4xl font-bold leading-tight">
+        Give Ship a head start.
+      </h1>
+      <p className="mt-3 max-w-2xl text-sm leading-relaxed text-white/70">
+        Ship reads markdown files under{" "}
+        <code className="rounded bg-white/10 px-1.5 py-0.5 text-[12px] text-white">
+          .ship/knowledge/
+        </code>{" "}
+        in your repo when it reviews PRs, writes clarifications, or makes UI
+        suggestions. Ticking a bucket below opens a single PR that drops a
+        starter template into your repo — merge it, then edit the file
+        in-place to match your team&rsquo;s conventions.
+      </p>
+
+      {message && (
+        <div
+          className="mt-5 rounded-lg border border-coral/40 bg-coral/10 px-3 py-2 text-xs text-coral"
+          data-testid="onboarding-knowledge-error"
+        >
+          {message}
+        </div>
+      )}
+
+      <form
+        action="/api/onboard/knowledge"
+        method="POST"
+        className="mt-7"
+        suppressHydrationWarning
+      >
+        <input type="hidden" name="ws" value={wsId} suppressHydrationWarning />
+        <input type="hidden" name="intent" value="seed" suppressHydrationWarning />
+
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          {KNOWLEDGE_STARTERS.map((slug) => {
+            const meta = KNOWLEDGE_STARTER_META[slug];
+            return (
+              <label
+                key={slug}
+                className="flex h-full cursor-pointer flex-col rounded-2xl border border-white/10 bg-white/[0.03] p-4 transition hover:border-aqua/40"
+              >
+                <div className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    name="slug"
+                    value={slug}
+                    defaultChecked
+                    data-testid={`onboarding-knowledge-${slug}`}
+                    className="mt-1 h-4 w-4 rounded border-white/30 bg-white/5 text-aqua focus:ring-aqua/50"
+                  />
+                  <div className="flex-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <h3 className="font-display text-lg font-bold text-white">
+                        {meta.name}
+                      </h3>
+                      <code className="rounded bg-white/[0.06] px-1.5 py-0.5 text-[10px] text-white/55">
+                        {meta.path}
+                      </code>
+                    </div>
+                    <p className="mt-1 text-[12px] leading-relaxed text-white/65">
+                      {meta.blurb}
+                    </p>
+                  </div>
+                </div>
+              </label>
+            );
+          })}
+        </div>
+
+        <div className="mt-7 flex items-center justify-between gap-3 border-t border-white/10 pt-5">
+          <span className="text-[11px] text-white/45">
+            We open one PR with the selected files. Merge at your own pace.
+          </span>
+          <div className="flex items-center gap-3">
+            <button
+              type="submit"
+              formAction="/api/onboard/knowledge"
+              name="intent"
+              value="skip"
+              data-testid="onboarding-knowledge-skip"
+              className="text-xs text-white/55 hover:text-white"
+              formNoValidate
+            >
+              Skip for now &rarr;
+            </button>
+            <button
+              type="submit"
+              data-testid="onboarding-knowledge-seed"
+              className="rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-5 py-2.5 text-sm font-bold text-ink shadow-glow transition hover:brightness-110"
+            >
+              Open seed PR &rarr;
+            </button>
+          </div>
+        </div>
+      </form>
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Done + bootstrap-error fallbacks
 // ---------------------------------------------------------------------------
 
-function DoneStep() {
+function DoneStep({
+  knowledgeSeeded,
+  knowledgePrUrl,
+  knowledgePrNumber,
+}: {
+  knowledgeSeeded?: boolean;
+  knowledgePrUrl?: string;
+  knowledgePrNumber?: string;
+}) {
   return (
     <section className="mx-auto max-w-xl rounded-3xl border border-aqua/30 bg-aqua/[0.04] p-10 text-center">
       <div className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-aqua/20 text-2xl text-aqua">
@@ -863,6 +1054,24 @@ function DoneStep() {
         Workspace ready, GitHub repos selected, default pipelines seeded. Open
         the dashboard and watch them light up as PRs and CI runs flow in.
       </p>
+      {knowledgeSeeded && knowledgePrUrl && (
+        <div
+          data-testid="onboarding-knowledge-pr"
+          className="mt-5 rounded-xl border border-aqua/30 bg-aqua/[0.06] px-4 py-3 text-xs text-white/85"
+        >
+          <strong className="text-aqua">Starter knowledge PR opened.</strong>{" "}
+          Review and merge{" "}
+          <a
+            href={knowledgePrUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline decoration-aqua/60 underline-offset-2 hover:text-white"
+          >
+            PR #{knowledgePrNumber ?? "—"}
+          </a>{" "}
+          to turn on Ship&rsquo;s knowledge context.
+        </div>
+      )}
       <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
         <Link
           href="/"

@@ -75,8 +75,12 @@ export async function POST(request: Request) {
 }
 
 function forward(origin: string, wsId: string) {
+  // Forward to the knowledge-seed step (not done) — users get one
+  // last opt-in to let Ship open a PR that drops starter knowledge
+  // buckets. The knowledge step has its own Skip CTA that bounces
+  // them to ``done`` if they don't want the seed PR today.
   const url = new URL("/onboarding", origin);
-  url.searchParams.set("step", "done");
+  url.searchParams.set("step", "knowledge");
   url.searchParams.set("ws", wsId);
   return NextResponse.redirect(url, 303);
 }

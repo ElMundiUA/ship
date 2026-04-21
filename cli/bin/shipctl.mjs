@@ -138,6 +138,12 @@ try {
     process.exit(0);
   }
 
+  if (cmd === "knowledge") {
+    const { knowledgeCommand } = await import("../lib/commands/knowledge.mjs");
+    await knowledgeCommand(ctx, rest);
+    process.exit(0);
+  }
+
   console.error(`Unknown command: ${cmd}\nRun: shipctl help`);
   process.exit(1);
 } catch (err) {

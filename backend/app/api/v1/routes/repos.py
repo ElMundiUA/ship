@@ -861,6 +861,191 @@ async def install_bundle(
 
 
 # ---------------------------------------------------------------------------
+# One-shot knowledge seed (Phase 2a)
+#
+# Counterpart to ``install_bundle`` but for ``.ship/knowledge/*.md``
+# starter buckets. The bucket-selection UI lives in the onboarding
+# wizard (step 4, checkboxes for ``code-style`` / ``ui-runbook``); the
+# endpoint opens a single PR that drops the selected markdown files at
+# the Ship-scanned path. Idempotent by convention: merging a second
+# PR over the same file is a no-op *review* (no content change unless
+# the tenant edited the seed).
+# ---------------------------------------------------------------------------
+
+
+class KnowledgeSeedIn(BaseModel):
+    """Body for ``POST /workspaces/{ws}/repos/{repo_id}/knowledge_seed``."""
+
+    # Knowledge-starter slugs to seed. ``None`` means "seed everything
+    # the catalog ships today" — matches the "Select all" default on
+    # the wizard checkbox group.
+    selection: list[str] | None = Field(
+        default=None,
+        description=(
+            "Knowledge-starter slugs to commit (e.g. ['code-style']). "
+            "Defaults to seeding every starter in the catalog."
+        ),
+    )
+
+
+class KnowledgeSeedOut(BaseModel):
+    pr_url: str
+    pr_number: int
+    branch: str
+    files: list[str]
+    selection: list[str]
+
+
+@router.post("/{repo_id}/knowledge_seed", response_model=KnowledgeSeedOut)
+async def knowledge_seed(
+    workspace_id: uuid.UUID,
+    repo_id: uuid.UUID,
+    payload: KnowledgeSeedIn | None = None,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> KnowledgeSeedOut:
+    """Open a PR that seeds ``.ship/knowledge/<slug>.md`` starter buckets.
+
+    Admin-only. Reuses ``commit_bundle_pr`` so the review experience
+    is identical to a preset bundle install — one branch, one PR, one
+    merge. After merge, the knowledge lister picks up the new files
+    on the next workspace read (no cache invalidation needed).
+    """
+    from backend.app.db.models.integrations import GitHubInstallation
+    from backend.app.integrations.github.workflows import (
+        WorkflowDispatchError,
+        commit_bundle_pr,
+    )
+    from backend.app.services import catalog as catalog_service
+
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+
+    repo_row = (
+        await session.execute(
+            select(WorkspaceRepo).where(
+                WorkspaceRepo.id == repo_id,
+                WorkspaceRepo.workspace_id == workspace_id,
+            )
+        )
+    ).scalars().first()
+    if repo_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Repo not found in this workspace.",
+        )
+
+    install_row = (
+        await session.execute(
+            select(GitHubInstallation).where(
+                GitHubInstallation.id == repo_row.installation_id
+            )
+        )
+    ).scalars().first()
+    if install_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_412_PRECONDITION_FAILED,
+            detail={
+                "code": "github_app_missing",
+                "message": (
+                    "Ship's GitHub App isn't installed for the workspace. "
+                    "Reconnect it before opening a knowledge-seed PR."
+                ),
+            },
+        )
+
+    requested = payload.selection if payload and payload.selection else None
+    try:
+        files = catalog_service.knowledge_starter_files(requested)
+    except catalog_service.CatalogError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+    if not files:
+        raise HTTPException(
+            status_code=status.HTTP_412_PRECONDITION_FAILED,
+            detail={
+                "code": "empty_knowledge_selection",
+                "message": (
+                    "Selection resolved to zero starter files — pick at "
+                    "least one knowledge bucket."
+                ),
+            },
+        )
+
+    # ``selection`` for the audit row — reverse-map the resolved paths
+    # back to slugs so the log is readable even if future versions
+    # rename the on-disk layout.
+    selected_slugs = [
+        path.removeprefix(".ship/knowledge/").removesuffix(".md")
+        for path, _ in files
+    ]
+
+    return_url = (
+        f"{settings.console_url.rstrip('/')}/?ws={workspace_id}"
+        f"&installed=knowledge&reason=back_from_pr"
+    )
+    try:
+        result = await commit_bundle_pr(
+            repo_row,
+            install_row,
+            files=files,
+            title=(
+                "Ship: seed starter knowledge buckets "
+                f"({', '.join(selected_slugs)})"
+            ),
+            branch_label="knowledge-seed",
+            pr_body_header=(
+                "This PR drops Ship's starter knowledge buckets into "
+                "`.ship/knowledge/`. Merge once; edit the markdown files "
+                "in-place afterwards to match your team's conventions — "
+                "Ship always reads the latest committed content.\n\n"
+                f"**Buckets**: {', '.join('`' + s + '`' for s in selected_slugs)}"
+            ),
+            settings=settings,
+            return_url=return_url,
+        )
+    except WorkflowDispatchError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "code": "knowledge_seed_failed",
+                "upstream_status": exc.status_code,
+                "message": exc.message[:512],
+            },
+        ) from exc
+
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=auth.user.id,
+            actor_token_id=auth.token.id if auth.token else None,
+            action="repo.knowledge_seed",
+            target_kind="workspace_repo",
+            target_id=str(repo_row.id),
+            payload={
+                "selection": selected_slugs,
+                "files": [p for p, _ in files],
+                "pr_number": result.pr_number,
+                "pr_url": result.pr_url,
+                "branch": result.branch,
+            },
+        )
+    )
+    await session.flush()
+
+    return KnowledgeSeedOut(
+        pr_url=result.pr_url,
+        pr_number=result.pr_number,
+        branch=result.branch,
+        files=[p for p, _ in files],
+        selection=selected_slugs,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Per-repo preset picker (B9)
 # ---------------------------------------------------------------------------
 
