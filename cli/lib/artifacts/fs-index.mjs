@@ -14,12 +14,11 @@ import path from "node:path";
 const KIND_TO_PLURAL = {
   pattern: "patterns",
   tool: "tools",
-  workflow: "workflows",
   collection: "collections",
 };
 
 /**
- * @param {"pattern"|"tool"|"workflow"|"collection"} kind
+ * @param {"pattern"|"tool"|"collection"} kind
  */
 export function pluralFor(kind) {
   return KIND_TO_PLURAL[kind] || `${kind}s`;
@@ -30,7 +29,7 @@ export function pluralFor(kind) {
  * legacy manifest).
  *
  * @param {string} repoRoot
- * @param {"pattern"|"tool"|"workflow"|"collection"} kind
+ * @param {"pattern"|"tool"|"collection"} kind
  * @returns {Array<Record<string, any>>}
  */
 export function scanArtifacts(repoRoot, kind) {
@@ -67,7 +66,7 @@ export function scanArtifacts(repoRoot, kind) {
  * messages they did before.
  *
  * @param {string} repoRoot
- * @param {"pattern"|"tool"|"workflow"|"collection"} kind
+ * @param {"pattern"|"tool"|"collection"} kind
  * @param {string} id
  */
 export function readArtifactFile(repoRoot, kind, id) {

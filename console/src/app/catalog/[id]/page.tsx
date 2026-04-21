@@ -413,16 +413,14 @@ function toneFor(source: string): "global" | "workspace" | "project" {
 
 function guessKind(detail: ApiArtifact): string {
   if (typeof detail.path === "string") {
-    const m = detail.path.match(/artifacts\/(patterns|tools|workflows|collections)\//);
+    const m = detail.path.match(/artifacts\/(patterns|tools|collections)\//);
     if (m) {
       const plural = m[1];
       return plural === "patterns"
         ? "pattern"
         : plural === "tools"
           ? "tool"
-          : plural === "workflows"
-            ? "workflow"
-            : "collection";
+          : "collection";
     }
   }
   return "artifact";

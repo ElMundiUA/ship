@@ -4,7 +4,7 @@ export function printHelp() {
 ARTIFACTS PROTOCOL (RFC-0001)
   1) shipctl search <query>          — vector search (POST /search) over docs + prompts
   2) shipctl docs fetch <path>       — full markdown body by repo-relative path
-     shipctl pattern|tool|workflow|collection show|fetch <id>
+     shipctl pattern|tool|collection show|fetch <id>
                                      — versioned artifact body (POST /fetch { kind, id, version? })
   3) shipctl docs feedback …         — improvement / retro note (POST /feedback)
 
@@ -18,7 +18,7 @@ COMMANDS
   shipctl docs feedback --title "..." --summary "..." [--recommendation "…"]... [--source-context "…"]
 
   shipctl pattern list | shipctl pattern show <id> | shipctl pattern fetch <id> | shipctl pattern search <query> [--top-k N]
-  shipctl tool … | shipctl workflow … | shipctl collection …   (same subcommands; plural aliases: patterns, tools, …)
+  shipctl tool … | shipctl collection …   (same subcommands; plural aliases: patterns, tools, …)
 
   shipctl init [--yes] [--force] [--dry-run] [--json] [--cwd <dir>]
                [--agents <csv>]
@@ -82,7 +82,7 @@ GLOBAL FLAGS
   --json           Machine-readable JSON
 
 LOCAL TREE
-  pattern / tool / workflow / collection list|show|fetch scan
+  pattern / tool / collection list|show|fetch scan
   artifacts/<plural>/<id>/ARTIFACT.md on disk when cwd or SHIP_REPO is inside
   the Ship monorepo (search always uses HTTP).
 

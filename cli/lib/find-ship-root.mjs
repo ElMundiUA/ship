@@ -4,7 +4,6 @@ import path from "node:path";
 const MARKER_DIRS = [
   "artifacts/patterns",
   "artifacts/tools",
-  "artifacts/workflows",
   "artifacts/collections",
 ];
 
@@ -44,7 +43,7 @@ export function findShipRepoRoot() {
     const r = path.resolve(env);
     if (!markersOk(r)) {
       throw new Error(
-        `SHIP_REPO=${r} is not the Ship monorepo (expected artifacts/{patterns,tools,workflows,collections}/ at repo root).`,
+        `SHIP_REPO=${r} is not the Ship monorepo (expected artifacts/{patterns,tools,collections}/ at repo root).`,
       );
     }
     return r;
@@ -67,7 +66,7 @@ export function resolveShipRepoRootForCatalog() {
     const r = path.resolve(env);
     if (!markersOk(r)) {
       throw new Error(
-        `SHIP_REPO=${r} is not the Ship monorepo (expected artifacts/{patterns,tools,workflows,collections}/ at repo root).`,
+        `SHIP_REPO=${r} is not the Ship monorepo (expected artifacts/{patterns,tools,collections}/ at repo root).`,
       );
     }
     return r;

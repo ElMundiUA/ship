@@ -1,6 +1,6 @@
 """Artifact catalog service — typed access to ``artifacts/**/ARTIFACT.md``.
 
-The catalog is the source of truth for patterns, tools, workflows and
+The catalog is the source of truth for patterns, tools and
 collections (the latter group includes presets like ``preset-web-app``).
 Until Day-4 Phase-2 the operator console and pipeline runtime only
 talked to a small hardcoded slice of it — we knew about
@@ -14,10 +14,15 @@ This module closes that gap with a single typed accessor that:
 * Walks ``artifacts/<plural>/<slug>/ARTIFACT.md`` once per signature
   (``plural + mtime + count``) and caches the parsed frontmatter — the
   same shape :mod:`backend.app.main` already uses for the public
-  ``/patterns`` / ``/workflows`` endpoints.
+  ``/patterns`` / ``/tools`` / ``/collections`` endpoints.
 * Exposes convenience look-ups for the dispatcher and the install flow:
-  ``install_target`` / ``install_filename`` / ``read_starter_yaml`` /
-  ``list_presets`` / ``list_workflows``.
+  ``workflow_install_filename`` / ``read_starter_yaml`` /
+  ``list_presets``. The workflow helpers are thin shims over
+  :mod:`backend.app.services.starter_workflows` — RFC-0007 Phase 6
+  retired the public ``artifact_kind=workflow`` layer but the
+  Pipeline install flow still needs to commit four baked-in starter
+  YAMLs into ``.github/workflows/``; those now live in the backend
+  ``resources/`` tree, not the public catalog.
 * Deliberately swallows no errors silently: a malformed ARTIFACT.md
   raises :class:`CatalogError` so callers can decide whether to degrade
   (dashboard) or 500 (install endpoint).
@@ -38,14 +43,11 @@ __all__ = [
     "CatalogError",
     "CatalogArtifact",
     "ARTIFACTS_ROOT",
-    "get_workflow",
     "get_collection",
-    "workflow_install_target",
     "preset_bundle_files",
     "workflow_install_filename",
     "read_starter_yaml",
     "list_presets",
-    "list_workflows",
     "list_collections",
     "list_patterns",
     "list_tools",
@@ -130,7 +132,6 @@ ARTIFACTS_ROOT: Final[Path] = _discover_artifacts_root()
 _PLURAL_BY_KIND: Final[dict[str, str]] = {
     "pattern": "patterns",
     "tool": "tools",
-    "workflow": "workflows",
     "collection": "collections",
 }
 
@@ -239,54 +240,10 @@ class CatalogArtifact:
         self.raw = meta
         self.source_path = source_path
 
-    # -- convenience for workflow artifacts --------------------------------
-
-    @property
-    def install_target(self) -> str | None:
-        """Where a workflow wants to land in the customer repo.
-
-        Comes from ``spec.install_target`` in ARTIFACT.md (e.g.
-        ``.github/workflows/pr-and-ci-gate.yml``). ``None`` when the
-        artifact doesn't declare a physical installation path (patterns,
-        most tools, collections).
-        """
-        target = self.spec.get("install_target")
-        return target if isinstance(target, str) and target else None
-
-    @property
-    def install_filename(self) -> str | None:
-        target = self.install_target
-        if not target:
-            return None
-        return target.rsplit("/", 1)[-1]
-
     @property
     def preset_id(self) -> str | None:
         preset = self.spec.get("preset_id")
         return preset if isinstance(preset, str) and preset else None
-
-    @property
-    def required_secrets(self) -> list[str]:
-        """GitHub Actions secret names this workflow needs at runtime.
-
-        Declared in ``spec.required_secrets`` as a list of uppercase
-        names (``[ANTHROPIC_API_KEY, LINEAR_API_KEY]``). The dashboard
-        cross-checks against the workspace's :class:`RepoSecret`
-        inventory to warn before a lane is dispatched with missing
-        credentials. Deduplicated + upper-cased here so downstream
-        consumers don't have to normalise on every read.
-        """
-        raw = self.spec.get("required_secrets")
-        if not isinstance(raw, (list, tuple)):
-            return []
-        seen: list[str] = []
-        for item in raw:
-            if not isinstance(item, str):
-                continue
-            candidate = item.strip().upper()
-            if candidate and candidate not in seen:
-                seen.append(candidate)
-        return seen
 
     def to_summary(self) -> dict[str, Any]:
         """Serialisation shape mirrored at ``/v1/catalog/*`` endpoints."""
@@ -305,9 +262,7 @@ class CatalogArtifact:
             "replaced_by": self.replaced_by,
             "yanked": self.yanked,
             "spec": dict(self.spec),
-            "install_target": self.install_target,
             "preset_id": self.preset_id,
-            "required_secrets": self.required_secrets,
         }
 
 
@@ -393,10 +348,6 @@ def list_tools() -> list[CatalogArtifact]:
     return _load_kind("tool")
 
 
-def list_workflows() -> list[CatalogArtifact]:
-    return _load_kind("workflow")
-
-
 def list_collections() -> list[CatalogArtifact]:
     return _load_kind("collection")
 
@@ -406,13 +357,6 @@ def list_presets() -> list[CatalogArtifact]:
     return [c for c in list_collections() if c.group == "preset"]
 
 
-def get_workflow(workflow_id: str) -> CatalogArtifact | None:
-    for entry in list_workflows():
-        if entry.id == workflow_id:
-            return entry
-    return None
-
-
 def get_collection(collection_id: str) -> CatalogArtifact | None:
     for entry in list_collections():
         if entry.id == collection_id:
@@ -420,30 +364,26 @@ def get_collection(collection_id: str) -> CatalogArtifact | None:
     return None
 
 
-def workflow_install_target(workflow_id: str) -> str | None:
-    entry = get_workflow(workflow_id)
-    return entry.install_target if entry else None
+# ---------------------------------------------------------------------------
+# Starter workflow shims (RFC-0007 Phase 6)
+#
+# Kept here so existing Pipeline-install callers don't have to import
+# yet another module. The helpers delegate to
+# :mod:`backend.app.services.starter_workflows`; the artifact catalog
+# itself no longer knows anything about workflow YAMLs.
+# ---------------------------------------------------------------------------
 
 
 def workflow_install_filename(workflow_id: str) -> str | None:
-    entry = get_workflow(workflow_id)
-    return entry.install_filename if entry else None
+    from backend.app.services import starter_workflows
+
+    return starter_workflows.install_filename(workflow_id)
 
 
 def read_starter_yaml(workflow_id: str) -> str | None:
-    """Return the contents of ``artifacts/workflows/<id>/workflow.yml`` or ``None``.
+    from backend.app.services import starter_workflows
 
-    Some workflow artifacts (e.g. ``code-map-refresh`` before Day-5)
-    ship only an ARTIFACT.md — the caller decides whether that's a hard
-    error or a signal that Run-now is "coming with presets".
-    """
-    entry = get_workflow(workflow_id)
-    if entry is None:
-        return None
-    path = entry.source_path.parent / "workflow.yml"
-    if not path.is_file():
-        return None
-    return path.read_text(encoding="utf-8")
+    return starter_workflows.read_yaml(workflow_id)
 
 
 def preset_bundle_files(
@@ -454,18 +394,18 @@ def preset_bundle_files(
     """Return ``(path, content)`` tuples to commit for a preset's install bundle.
 
     Contains one workflow YAML per pipeline kind that the preset
-    enables (skipping kinds whose catalog entry is still YAML-less,
-    i.e. ``code_map``) plus a ``.ship/config.yml`` stub identifying
-    the preset so downstream ``shipctl`` / agent tooling knows which
+    enables (skipping kinds whose starter is YAML-less, i.e.
+    ``code_map``) plus a ``.ship/config.yml`` stub identifying the
+    preset so downstream ``shipctl`` / agent tooling knows which
     shape to assume.
 
     The caller (``install_bundle`` route) is responsible for passing
-    the list into ``commit_bundle_pr``. Kept here so the install
-    logic stays decoupled from the catalog's on-disk layout — the
-    moment we move from ``artifacts/`` to a registry API, only this
-    function needs to change.
+    the list into ``commit_bundle_pr``.
     """
-    # Lazy-import to avoid catalog <-> default_pipelines cycle at boot.
+    # Lazy imports keep the module import graph flat and also mean we
+    # don't pay the cost of loading default_pipelines on every catalog
+    # lookup.
+    from backend.app.services import starter_workflows
     from backend.app.services.default_pipelines import (
         DEFAULT_PIPELINES,
         PRESET_ENABLED_KINDS,
@@ -477,16 +417,13 @@ def preset_bundle_files(
     for spec in DEFAULT_PIPELINES:
         if spec.kind not in enabled_kinds:
             continue
-        entry = get_workflow(spec.workflow_id)
+        entry = starter_workflows.get(spec.workflow_id)
         if entry is None:
             continue
-        target = entry.install_target
-        if not target or not target.startswith(".github/workflows/"):
-            continue
-        content = read_starter_yaml(spec.workflow_id)
+        content = entry.read_yaml()
         if not content:
             continue
-        files.append((target, content))
+        files.append((entry.install_target, content))
         included_kinds.append(spec.kind)
 
     # .ship/config.yml — minimal, declarative. Lets the CLI and future

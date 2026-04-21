@@ -184,7 +184,7 @@ Telemetry is opt-in and OFF by default. Nothing leaves the repo until you flip t
   2. Set `api.base_url` in `.ship/config.yml` to your endpoint root (telemetry shares the same base URL as the rest of the CLI).
   3. `shipctl telemetry status` to confirm the new base URL is in use; `shipctl telemetry flush --dry-run` previews the destination.
 - **What to check:** the dry-run shows `would flush <n> events to <your-host>/telemetry`; a real flush returns success.
-- **Common pitfall:** mixing self-hosted telemetry with the public artifact API — if `api.base_url` is your internal host, `shipctl sync` also goes there. Run a thin proxy that forwards `/patterns`, `/tools`, `/workflows`, `/collections`, `/fetch` to `ship.elmundi.com` if you only want to intercept telemetry.
+- **Common pitfall:** mixing self-hosted telemetry with the public artifact API — if `api.base_url` is your internal host, `shipctl sync` also goes there. Run a thin proxy that forwards `/patterns`, `/tools`, `/collections`, `/fetch` to `ship.elmundi.com` if you only want to intercept telemetry.
 
 ## Feedback
 

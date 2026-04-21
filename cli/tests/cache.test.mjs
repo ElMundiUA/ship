@@ -51,7 +51,6 @@ function startFetchServer({ kind, id, version, body }) {
   };
   const PLURAL_BY_SINGULAR = {
     pattern: "patterns",
-    workflow: "workflows",
     tool: "tools",
     collection: "collections",
   };
@@ -60,7 +59,7 @@ function startFetchServer({ kind, id, version, body }) {
     req.on("data", (c) => chunks.push(c));
     req.on("end", () => {
       const url = new URL(req.url, "http://localhost");
-      const perKindMatch = url.pathname.match(/^\/(patterns|workflows|tools|collections)$/);
+      const perKindMatch = url.pathname.match(/^\/(patterns|tools|collections)$/);
       if (req.method === "GET" && perKindMatch) {
         const plural = perKindMatch[1];
         const expectedPlural = PLURAL_BY_SINGULAR[entry.kind];

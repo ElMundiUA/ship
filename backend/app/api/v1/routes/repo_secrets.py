@@ -44,7 +44,7 @@ from backend.app.db.models.repo_secrets import RepoSecret
 from backend.app.db.models.tenancy import AuditLog
 from backend.app.db.session import get_session
 from backend.app.integrations.github.workflows import WorkflowDispatchError
-from backend.app.services.catalog import get_workflow
+from backend.app.services.starter_workflows import get as get_starter_workflow
 from backend.app.services.repo_secrets import (
     SecretListRow,
     SecretSyncError,
@@ -299,7 +299,7 @@ async def list_required_secrets(
     # "PR review needs ANTHROPIC_API_KEY" rather than per-row.
     required_by: dict[str, list[str]] = {}
     for pipeline in pipelines:
-        entry = get_workflow(pipeline.workflow_id)
+        entry = get_starter_workflow(pipeline.workflow_id)
         if entry is None:
             continue
         for name in entry.required_secrets:

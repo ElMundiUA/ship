@@ -275,7 +275,7 @@ export async function syncArtifacts(options = {}) {
 
   if (dryRun && verbose) {
     console.log(
-      `plan: GET ${baseUrl}/{patterns,workflows,tools,collections} (channel=${channel})`,
+      `plan: GET ${baseUrl}/{patterns,tools,collections} (channel=${channel})`,
     );
   }
 

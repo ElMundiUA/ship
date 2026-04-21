@@ -7,6 +7,13 @@ created: 2026-04-17
 
 # RFC-0002 — `.ship/config.yml` schema
 
+> **Update (2026-04, via [RFC-0007](rfc-0007-lanes-and-run-agent.md)):**
+> `artifact_kind=workflow` has been retired. `artifacts.pins` no longer
+> accepts `workflow/<id>` keys — the validator rejects them. Examples
+> below still reference `workflow/scheduled-sdlc-lane` as the historical
+> shape; treat them as illustrative of the v1 schema, not as a copy-paste
+> template. Lanes now live under a `lanes:` section described in RFC-0007.
+
 ## Summary
 
 Every Ship-enabled repository owns a single standalone `.ship/config.yml` at its root. The schema is identical regardless of language, stack, or tracker: the same file drives a TypeScript monorepo, a Python API, a Swift mobile app, or a Rust CLI. `shipctl` reads this file on every command; no Ship configuration lives elsewhere.

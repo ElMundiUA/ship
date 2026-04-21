@@ -20,7 +20,7 @@ function isoDay(daysAgo: number): string {
 }
 
 export type ArtifactSource = "global" | "workspace" | "project";
-export type ArtifactKind = "pattern" | "tool" | "workflow" | "collection";
+export type ArtifactKind = "pattern" | "tool" | "collection";
 
 export type WorkspaceMock = {
   id: string;
@@ -117,7 +117,7 @@ export const artifacts: ArtifactRow[] = [
   },
   {
     id: "pr-and-ci-gate",
-    kind: "workflow",
+    kind: "pattern",
     name: "PR + CI gate",
     summary:
       "Block merge until checks green and reviewer assigned; opens an Action Item if a bypass happens.",
@@ -131,7 +131,7 @@ export const artifacts: ArtifactRow[] = [
   },
   {
     id: "scheduled-sdlc-lane",
-    kind: "workflow",
+    kind: "pattern",
     name: "Scheduled SDLC lane",
     summary: "Runs the daily + retro lanes on cron and posts the digest to Slack.",
     version: "0.4.0",
@@ -254,7 +254,7 @@ export const pullRequests: PullRequestRow[] = [
     author: "Sam Chen",
     authorAvatarInitials: "SC",
     artifactId: "pipeline-self-heal",
-    artifactKind: "workflow",
+    artifactKind: "pattern",
     diffSummary: { added: 31, removed: 14, files: 2 },
     status: "open",
     ci: "failing",

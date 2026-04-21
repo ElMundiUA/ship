@@ -1,23 +1,21 @@
 """Default-pipeline seeding for the WOW-onboarding flow.
 
-The pilot ships five baked-in pipelines. They map 1:1 onto entries in
-the workflow catalog under ``artifacts/workflows/`` (workflow IDs are
-the slugs the wizard's "Install workflows" step already understands),
-plus one pipeline kind that has no catalog backing yet (``code_map``)
-because it's pure infra.
+The pilot ships five baked-in pipelines. Four of them map 1:1 onto
+starter workflow YAMLs in
+:mod:`backend.app.services.starter_workflows` (the ``.github/workflows/``
+templates the Pipeline install flow commits into customer repos); the
+fifth kind (``code_map``) is resolver-only and has no YAML.
 
-Day-4 Phase-2 ties the seeding to a **catalog preset** — one of
+Day-4 Phase-2 introduced the **catalog preset** layer — one of
 ``web-app`` / ``api-backend`` / ``mobile-app`` / ``cli`` / ``monorepo``
-/ ``adoption-minimum``. The preset only decides which of the five
-lanes ship *enabled*; every lane is still materialised so the
-dashboard's "Pipelines" page can show the full catalogue with a clear
-"disabled — flip me on" CTA. That keeps the seeding idempotent
-(re-activating a repo never clobbers a tenant override) and means the
-preset is a hint about the default shape, not a gate on what's
-possible later.
+/ ``adoption-minimum`` — which only decides which of these lanes ship
+*enabled*. Every lane is still materialised so the dashboard's
+"Pipelines" page can show the full catalogue with a clear
+"disabled — flip me on" CTA.
 
-Idempotent on ``(workspace_id, kind)`` so re-activating a repo (or
-running the migration on existing tenants) is safe to call repeatedly.
+The seeding stays idempotent on ``(workspace_id, kind)`` so
+re-activating a repo (or running the migration on existing tenants) is
+safe to call repeatedly.
 """
 
 from __future__ import annotations

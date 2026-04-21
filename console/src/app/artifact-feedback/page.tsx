@@ -22,8 +22,8 @@ import { FeedbackRow } from "./feedback-row";
  *
  * This is the counterpart to the improvements page: improvements
  * are proposed changes to the tenant's repo, feedback is the
- * user's complaints against *our* catalog (patterns, workflows,
- * tools). The agent can file feedback too via the
+ * user's complaints against *our* catalog (patterns, tools,
+ * collections). The agent can file feedback too via the
  * ``create_artifact_feedback`` tool, so every row here has both
  * human and agent contributors.
  *
@@ -112,8 +112,8 @@ export default async function ArtifactFeedbackPage({
       }
     >
       <p className="mb-4 max-w-2xl text-xs text-white/55">
-        Complaints against catalog artifacts — patterns, workflows,
-        tools. The agent files these automatically when a user reports
+        Complaints against catalog artifacts — patterns, tools,
+        collections. The agent files these automatically when a user reports
         that a recipe was wrong; humans can file them from any
         artifact page.
       </p>

@@ -11,7 +11,6 @@ Instruction-first companion API for agents — and the foundation of the Ship cl
 - `GET /patterns` — list curated org patterns scanned from `artifacts/patterns/<id>/ARTIFACT.md` (frontmatter only).
 - `GET /patterns/{id}` — one pattern plus full `ARTIFACT.md` (frontmatter + body).
 - `GET /tools`, `GET /tools/{id}` — tools index + body.
-- `GET /workflows`, `GET /workflows/{id}` — workflows index + body.
 - `GET /collections`, `GET /collections/{id}` — collections index + body.
 - `POST /search` — vector search over methodology files (`documentation/`, `artifacts/**/ARTIFACT.md`, `README.md`).
 - `POST /fetch` — fetch full content for a selected file or catalog entry.

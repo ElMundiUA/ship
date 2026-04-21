@@ -46,13 +46,15 @@ from backend.app.db.models.tenancy import (
 class Pipeline(Base):
     """One configured automation lane for a workspace.
 
-    Each row is a thin instance of a *workflow* artifact (the markdown
-    catalog under ``artifacts/workflows/<slug>/``). ``workflow_id`` is
-    the catalog slug (e.g. ``pr-and-ci-gate``); ``kind`` is the broad
-    bucket the dashboard groups by (``pr_review`` / ``daily_standup`` /
-    ``code_map`` / ``tech_debt`` / ``self_heal``). Keeping both lets us
-    later support multiple pipelines of the same kind without losing
-    the link back to the catalog source.
+    Each row is a thin instance of a starter GitHub Actions workflow
+    (served from :mod:`backend.app.services.starter_workflows` — see
+    RFC-0007 Phase 6, which retired the ``artifact_kind=workflow``
+    catalog layer). ``workflow_id`` is the starter slug (e.g.
+    ``pr-and-ci-gate``); ``kind`` is the broad bucket the dashboard
+    groups by (``pr_review`` / ``daily_standup`` / ``code_map`` /
+    ``tech_debt`` / ``self_heal``). Keeping both lets us later support
+    multiple pipelines of the same kind without losing the link back
+    to the starter.
 
     ``enabled`` is the UI toggle. ``config`` is a free-form JSONB bag
     for vendor-specific knobs (e.g. ``{"branch": "main"}``) — the
