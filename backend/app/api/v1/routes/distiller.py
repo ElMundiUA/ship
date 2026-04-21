@@ -30,7 +30,15 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    UploadFile,
+    status,
+)
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -55,6 +63,26 @@ from backend.app.services.distiller import (
     run_distiller,
 )
 from backend.app.services.distiller_llm import make_llm_classifier
+from backend.app.services.distiller_sources import (
+    ingest_external_static_upload,
+)
+
+
+# Hard cap on upload size. 1 MiB keeps prompts small and makes the
+# "paste a runbook" flow cheap; larger files should go through a
+# URL-import later. We enforce this manually instead of relying on
+# FastAPI because we want to stream-check against a clean error.
+_MAX_UPLOAD_BYTES = 1_000_000
+
+# Content types we accept for text uploads. Extension fallback covers
+# editors that send ``application/octet-stream`` for ``.md``.
+_ALLOWED_CONTENT_TYPES: set[str] = {
+    "text/plain",
+    "text/markdown",
+    "text/x-markdown",
+    "application/octet-stream",
+}
+_ALLOWED_EXTENSIONS: set[str] = {".md", ".markdown", ".txt"}
 
 
 logger = logging.getLogger(__name__)
@@ -253,6 +281,101 @@ async def distill_bucket(
             input_ref=payload.input_ref or None,
         ),
         classifier=classifier,
+    )
+
+    run = (
+        await session.execute(
+            select(DistillerRun).where(DistillerRun.id == outcome.run_id)
+        )
+    ).scalars().one()
+
+    return DistillOut(
+        run=_run_to_out(run),
+        decision=outcome.decision,
+        article_ids=outcome.article_ids,
+        reason=outcome.reason,
+        classifier=outcome.classifier or resolved_mode,
+    )
+
+
+@router.post(
+    "/buckets/{slug}/upload",
+    response_model=DistillOut,
+    status_code=status.HTTP_200_OK,
+)
+async def upload_to_bucket(
+    workspace_id: uuid.UUID,
+    slug: str,
+    file: UploadFile = File(..., description="Text / markdown file to ingest"),
+    classifier: str = Form(default="auto"),
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> DistillOut:
+    """Phase 7 entry — external-static upload surface.
+
+    Accepts a single text/markdown file via multipart/form-data,
+    decodes the bytes as UTF-8 (strict — we don't want silent
+    replacement chars trashing the index), and hands the content
+    off to :func:`ingest_external_static_upload`. The Distiller
+    then decides new/update/skip under the bucket's taxonomy and
+    writes a :class:`BucketArticle` row.
+
+    4xx codes:
+      * ``400`` — file exceeded size cap, wrong content type, or
+        non-UTF-8 bytes.
+      * ``403`` — caller lacks ``ROLES_MAINTAIN``.
+      * ``404`` — bucket slug not found under the workspace.
+    """
+    await _require_membership(
+        session, workspace_id, auth.user.id, ROLES_MAINTAIN
+    )
+    bucket = await _load_bucket(session, workspace_id, slug)
+
+    filename = (file.filename or "upload").strip()
+    content_type = (file.content_type or "").lower()
+
+    extension = ""
+    if "." in filename:
+        extension = "." + filename.rsplit(".", 1)[1].lower()
+
+    if (
+        content_type
+        and content_type.split(";", 1)[0].strip() not in _ALLOWED_CONTENT_TYPES
+        and extension not in _ALLOWED_EXTENSIONS
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"unsupported content type {content_type!r} "
+                f"(allowed: text/plain, text/markdown)"
+            ),
+        )
+
+    raw = await file.read()
+    if len(raw) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"file too large ({len(raw)} bytes, max {_MAX_UPLOAD_BYTES})",
+        )
+
+    try:
+        body_md = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"file is not valid UTF-8: {exc}",
+        )
+
+    chosen, resolved_mode = _resolve_classifier(classifier)
+    outcome = await ingest_external_static_upload(
+        session,
+        workspace_id=workspace_id,
+        bucket=bucket,
+        actor_user_id=auth.user.id,
+        filename=filename,
+        content_type=content_type or None,
+        body_md=body_md,
+        classifier=chosen,
     )
 
     run = (

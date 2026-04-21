@@ -6,6 +6,9 @@ fastapi>=0.115,<1
 uvicorn[standard]>=0.30,<1
 pydantic[email]>=2.7,<3
 pydantic-settings>=2.4,<3
+# multipart parser for ``UploadFile`` / ``Form`` on routes like
+# ``POST /buckets/{slug}/upload`` (Phase 7 external-static ingest).
+python-multipart>=0.0.9,<1
 
 # --- HTTP client (used by /search, /feedback, integrations) ---
 httpx>=0.27,<1

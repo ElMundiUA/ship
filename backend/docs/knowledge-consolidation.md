@@ -1,20 +1,25 @@
 # Knowledge buckets consolidation — plan
 
-**Status:** Phases 1–3, 4a, 4b, 5a, 5b, 5c, 5d, 6a, 6b landed. Backend
-consolidation closed — `bucket_articles` is the sole read surface
-(retriever, agent tools, `/articles` endpoint, `summary_count` on
-bucket listings); `bucket_summaries` is maintained for write-back
-compat only (deprecated, removal in Phase 9). Phase 4a + 4b shipped
-the scope pill + scope-aware `/knowledge`, `/catalog`,
-`/clarifications`, `/improvements`, `/chat`. Phase 6a shipped the
-Distiller stub: `POST /buckets/{slug}/distill` writes a run row
-and a published `BucketArticle`, `GET …/runs` lists history. Phase
-6b added the LLM-backed classifier: `POST /distill` now accepts a
-`classifier` field (`auto` / `stub` / `llm`), defaults to `auto`,
-falls back to the stub on transport / parse errors, and records
-the classifier name + reasoning under `run.output_refs.classifier`
-for audit. Next: Phase 6c (inbound adapters: PR-merged webhook,
-external-static upload, connector-proxy).
+**Status:** Phases 1–3, 4a, 4b, 5a, 5b, 5c, 5d, 6a, 6b, 6c landed.
+Backend consolidation closed — `bucket_articles` is the sole read
+surface (retriever, agent tools, `/articles` endpoint,
+`summary_count` on bucket listings); `bucket_summaries` is
+maintained for write-back compat only (deprecated, removal in
+Phase 9). Phase 4a + 4b shipped the scope pill + scope-aware
+`/knowledge`, `/catalog`, `/clarifications`, `/improvements`,
+`/chat`. Phase 6a shipped the Distiller stub; Phase 6b added the
+LLM-backed classifier (`classifier=auto|stub|llm`). Phase 6c
+shipped the inbound adapters: `distiller_sources.ingest_pr_merge`
+auto-fires on merged-PR webhooks (repo-scoped `pr-summaries`
+bucket, one article per PR), `ingest_external_static_upload`
+backs the new `POST /buckets/{slug}/upload` multipart route
+(text/markdown, 1 MiB cap, UTF-8 strict), and a
+`connector_proxy` adapter stub documents the shape for the
+next connector integration. `ensure_bucket` is the scope-aware
+get-or-create helper all adapters use. Console client now
+exposes `uploadToBucket`. Next: Phase 7 UI surfaces (upload
+picker in `/knowledge`, connector config) and Phase 8 offboarding
+audio transcript ingestion.
 **Scope:** unify the three "knowledge" surfaces (agent-memory buckets,
 `.ship/knowledge/*.md` disk-lister, `KbChunk` RAG index) under one
 `Scope × Source × Article` model, so every knowledge bucket has an
@@ -324,10 +329,51 @@ Audit trail: the run row's `output_refs.classifier` now carries
 `{ name: "stub" | "llm", reasoning, vendor? }` so operators can
 trace every decision.
 
-**Phase 6c (pending).** Wire the inbound sources — PR-merged
-webhook, external-static upload route, connector-proxy fetch — into
-`run_distiller`. Each source becomes a thin adapter that builds a
-`DistillerInput` and calls the same entry point.
+**Phase 6c (shipped).** Inbound adapters live in
+`backend/app/services/distiller_sources.py` — three thin
+`Classifier`-agnostic functions that every transport (webhook,
+HTTP upload, connector job) routes through, plus an
+`ensure_bucket` helper that satisfies the `(workspace_id,
+scope_kind, carrier_id, slug)` uniqueness invariant before
+calling `run_distiller`.
+
+- `ingest_pr_merge(session, workspace_id, repo, payload)` —
+  builds a markdown body from the PR (title, author, merged-by,
+  merged-at, branch, description), deterministic slug
+  `pr-<number>`, provenance `{kind:"pr_merged", pr_number,
+  html_url, author, merged_at, head_ref, base_ref}`. Idempotent
+  on replay (content_sha dedupe). Skips unmerged payloads and
+  `ship/install-*` PRs. Called from `_apply_pull_request_event`
+  inside a best-effort try/except so a flaky Distiller never
+  poisons the webhook 200.
+
+- `ingest_external_static_upload(session, bucket, filename,
+  content_type, body_md)` — slug derived from filename (strip
+  ext, slugify), provenance `{kind:"external_static_upload",
+  filename, content_type, uploaded_at}`. Wired to
+  `POST /v1/workspaces/{ws}/buckets/{slug}/upload` (multipart,
+  `file` + optional `classifier`), 1 MiB cap, UTF-8 strict,
+  allowed types `text/plain|text/markdown` or `.md/.markdown/.txt`.
+
+- `ingest_connector_page(session, bucket, connector_kind,
+  page_ref, body_md)` — stub shape for the future
+  Notion/Confluence/ServiceNow adapter. Records connector name +
+  page ref on provenance; actual fetchers will live under
+  `backend/app/services/connectors/*`.
+
+Tests: `backend/tests/test_distiller_sources.py` (8) covers
+`ensure_bucket` happy + two error paths, PR-merge happy +
+idempotent replay + unmerged/install skips, upload filename →
+slug; `backend/tests/test_distiller_pr_webhook.py` (2) locks
+the webhook → adapter wire and the unmerged skip;
+`backend/tests/test_v1_distiller_upload.py` (6) covers the HTTP
+upload route end-to-end (new, replay-skip, oversize 400, wrong
+content-type 400, non-UTF-8 400, missing-bucket 404). Console
+client now exposes `uploadToBucket` for the server-side surface
+Phase 7 will mount.
+
+Added dependency: `python-multipart` (FastAPI's multipart form
+parser) in `requirements-backend.txt`.
 
 ### Phase 7 — New sources
 
@@ -464,6 +510,25 @@ Improvements also respect it.
   stub-pinned to stay deterministic in CI. Console client types
   extended (`classifier` on `DistillInput`, same on
   `ApiDistillOut`); no UI change yet.
+- **2026-04-21** — Phase 6c shipped: inbound adapters.
+  New module `backend/app/services/distiller_sources.py`
+  exposes `ensure_bucket` (scope-aware get-or-create) and three
+  classifier-agnostic inbound shims: `ingest_pr_merge` (hooked
+  from `_apply_pull_request_event` in `github_app.py`, writes to
+  a repo-scoped `pr-summaries` bucket with provenance
+  `{kind:"pr_merged", pr_number, html_url, author, merged_at,
+  head_ref, base_ref}`, skips `ship/install-*` PRs, idempotent
+  on webhook replay), `ingest_external_static_upload` (backs the
+  new `POST /v1/workspaces/{ws}/buckets/{slug}/upload` multipart
+  route — 1 MiB cap, UTF-8 strict, `text/plain|text/markdown`),
+  and `ingest_connector_page` (stub for the next connector
+  integration). Console client gains `uploadToBucket`. Tests:
+  8 unit (`test_distiller_sources.py`) + 2 webhook integration
+  (`test_distiller_pr_webhook.py`) + 6 HTTP upload route
+  (`test_v1_distiller_upload.py`) = 16 new tests, all green.
+  A4 PR-merged-notification suite (6) still passes — the new
+  Distiller hook is additive and best-effort. Dep added:
+  `python-multipart` in `requirements-backend.txt`.
 - **2026-04-21** — Phase 4b shipped: scope pill propagated to
   `/catalog`, `/clarifications`, `/improvements`, and `/chat`.
   Client-side filters on `source_repo_id` (catalog) and
