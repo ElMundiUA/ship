@@ -16,6 +16,15 @@ import {
   cachePath,
   verifyCachedOnDisk,
 } from "../cache/store.mjs";
+import { resolveShipRepoRootForCatalog } from "../find-ship-root.mjs";
+import { readArtifactFile, scanArtifacts } from "../artifacts/fs-index.mjs";
+import {
+  writeLockfile,
+  entryFromBody,
+  lockKey,
+  LOCKFILE_SCHEMA_VERSION,
+} from "../state/lockfile.mjs";
+import { getCliVersion } from "../version.mjs";
 
 function parseSyncArgs(rest) {
   const out = {
@@ -25,6 +34,8 @@ function parseSyncArgs(rest) {
     forceUnpin: false,
     channel: null,
     only: [],
+    lock: false,
+    json: false,
   };
   const copy = [...rest];
   while (copy.length) {
@@ -41,6 +52,16 @@ function parseSyncArgs(rest) {
     }
     if (a === "--force-unpin") {
       out.forceUnpin = true;
+      copy.shift();
+      continue;
+    }
+    if (a === "--lock") {
+      out.lock = true;
+      copy.shift();
+      continue;
+    }
+    if (a === "--json") {
+      out.json = true;
       copy.shift();
       continue;
     }
@@ -402,9 +423,222 @@ export async function syncArtifacts(options = {}) {
   return { ...summary, notes, entries };
 }
 
+/**
+ * Produce a lockfile covering every pattern the config's lanes depend on,
+ * plus any pattern the config pins explicitly. Other artifact kinds are
+ * out of scope today — lanes only reference patterns, and pins for tools
+ * or collections don't need reproducibility guarantees at run-time (yet).
+ *
+ * Resolution order per pattern:
+ *   1. `.ship/cache/pattern/<id>@<v>/ARTIFACT.md` (materialised by sync).
+ *   2. Ship monorepo fallback (`artifacts/patterns/<id>/ARTIFACT.md`).
+ *   3. One-shot POST /fetch to the methodology API.
+ *
+ * Returns a structured report instead of writing to disk directly so the
+ * caller can roll it into the overall sync summary and fail the job on
+ * unresolved patterns.
+ *
+ * @param {Object} opts
+ * @param {string} opts.shipRoot
+ * @param {Object} opts.config
+ * @param {string} opts.baseUrl
+ * @param {string} opts.channel
+ * @param {boolean} [opts.verbose]
+ * @returns {Promise<{ lockfile:object, resolved:Array<object>, unresolved:Array<object>, notes:string[] }>}
+ */
+export async function buildLockfile({ shipRoot, config, baseUrl, channel, verbose = false }) {
+  /** @type {Record<string, object>} */
+  const artifacts = {};
+  /** @type {Array<{kind:string,id:string,version:string,source:string,pinned:boolean}>} */
+  const resolved = [];
+  /** @type {Array<{kind:string,id:string,reason:string}>} */
+  const unresolved = [];
+  /** @type {string[]} */
+  const notes = [];
+
+  const pins = config.artifacts?.pins || {};
+  const lanePatterns = Object.entries(config.lanes || {})
+    .map(([laneId, lane]) => ({ laneId, lane }))
+    .filter((r) => r.lane && typeof r.lane.pattern === "string");
+  const pinPatterns = Object.keys(pins)
+    .filter((k) => k.startsWith("pattern/"))
+    .map((k) => ({ laneId: null, lane: { pattern: k.slice("pattern/".length) } }));
+
+  /* De-duplicate on pattern id while preserving lane provenance (useful
+   * for the `notes` field — operators want to know which lane pinned a
+   * given pattern when they read the diff). */
+  const seen = new Map();
+  for (const row of [...lanePatterns, ...pinPatterns]) {
+    const pid = row.lane.pattern;
+    if (!seen.has(pid)) seen.set(pid, { id: pid, by: [] });
+    seen.get(pid).by.push(row.laneId || "config.artifacts.pins");
+  }
+
+  const shipRepo = resolveShipRepoRootForCatalog();
+  const cached = listCached(shipRoot);
+
+  for (const [patternId, ctx] of seen) {
+    const pinKey = `pattern/${patternId}`;
+    const isPinned = Object.prototype.hasOwnProperty.call(pins, pinKey);
+
+    /* 1) Look for an already-cached copy. */
+    const localAll = cached.filter((c) => c.kind === "pattern" && c.id === patternId);
+    if (localAll.length) {
+      localAll.sort((a, b) => cmpSemver(b.version, a.version));
+      const latest = localAll[0];
+      const body = readCached(shipRoot, "pattern", patternId, latest.version);
+      if (body && body.content) {
+        artifacts[lockKey("pattern", patternId)] = entryFromBody({
+          body: body.content,
+          version: latest.version,
+          cachedPath: path.relative(
+            shipRoot,
+            cachePath(shipRoot, "pattern", patternId, latest.version),
+          ),
+          source: "http",
+          pinned: isPinned,
+          channel: body.meta?.channel || channel,
+        });
+        resolved.push({
+          kind: "pattern",
+          id: patternId,
+          version: latest.version,
+          source: "cache",
+          pinned: isPinned,
+          lanes: ctx.by,
+        });
+        continue;
+      }
+    }
+
+    /* 2) Running inside the Ship monorepo — read from artifacts/ and
+     * materialise the body into the customer's local cache so the
+     * lockfile's `cached_path` is always inside ship_root. This keeps
+     * `shipctl run --offline` working without SHIP_REPO set at run
+     * time (important for `act`-style local CI reproductions and
+     * enterprise forks where the monorepo isn't on the runner). */
+    if (shipRepo) {
+      const file = readArtifactFile(shipRepo, "pattern", patternId);
+      if (file) {
+        const version = parseVersionFromFrontmatter(file.content) || "0.0.0-monorepo";
+        writeCached(shipRoot, "pattern", patternId, version, file.content, {
+          kind: "pattern",
+          id: patternId,
+          version,
+          channel,
+        });
+        const cachedAbs = cachePath(shipRoot, "pattern", patternId, version);
+        artifacts[lockKey("pattern", patternId)] = entryFromBody({
+          body: file.content,
+          version,
+          cachedPath: path.relative(shipRoot, cachedAbs).replace(/\\/g, "/"),
+          source: "monorepo",
+          pinned: isPinned,
+          channel,
+        });
+        resolved.push({
+          kind: "pattern",
+          id: patternId,
+          version,
+          source: "monorepo",
+          pinned: isPinned,
+          lanes: ctx.by,
+        });
+        continue;
+      }
+    }
+
+    /* 3) Last resort — fetch fresh from the API. We can't cache-write
+     * without a known version, so only the sha256 + body go into the
+     * lockfile; subsequent `shipctl sync --lock` runs will promote it
+     * into the cache on the normal sync pass. */
+    try {
+      const pin = pins[pinKey];
+      const { content, meta } = await fetchArtifact(baseUrl, "pattern", patternId, pin || undefined);
+      const version = meta.version || "0.0.0";
+      // Promote into cache immediately so subsequent --offline runs find it.
+      writeCached(shipRoot, "pattern", patternId, version, content, {
+        ...meta,
+        channel: meta.channel || channel,
+      });
+      artifacts[lockKey("pattern", patternId)] = entryFromBody({
+        body: content,
+        version,
+        cachedPath: path.relative(
+          shipRoot,
+          cachePath(shipRoot, "pattern", patternId, version),
+        ),
+        source: "http",
+        pinned: isPinned,
+        channel: meta.channel || channel,
+      });
+      resolved.push({
+        kind: "pattern",
+        id: patternId,
+        version,
+        source: "http",
+        pinned: isPinned,
+        lanes: ctx.by,
+      });
+    } catch (err) {
+      unresolved.push({
+        kind: "pattern",
+        id: patternId,
+        reason: err instanceof Error ? err.message : String(err),
+      });
+      notes.push(`unresolved: pattern/${patternId}: ${err instanceof Error ? err.message : err}`);
+      if (verbose) {
+        console.error(
+          `warn: lock: could not resolve pattern/${patternId}: ${err instanceof Error ? err.message : err}`,
+        );
+      }
+    }
+  }
+
+  const lockfile = {
+    version: LOCKFILE_SCHEMA_VERSION,
+    generated_at: new Date().toISOString(),
+    shipctl_version: getCliVersion(),
+    source: { base_url: baseUrl, channel },
+    artifacts,
+    notes: notes.slice(),
+  };
+
+  return { lockfile, resolved, unresolved, notes };
+}
+
+function parseVersionFromFrontmatter(content) {
+  if (!content.startsWith("---")) return null;
+  const end = content.indexOf("\n---", 3);
+  if (end < 0) return null;
+  const header = content.slice(3, end);
+  const m = header.match(/^version:\s*['"]?([^'"\n]+)['"]?/m);
+  return m ? m[1].trim() : null;
+}
+
+function cmpSemver(a, b) {
+  const parts = (s) =>
+    String(s)
+      .split(/[.-]/)
+      .map((x) => (Number.isNaN(Number(x)) ? x : Number(x)));
+  const pa = parts(a);
+  const pb = parts(b);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const xa = pa[i];
+    const xb = pb[i];
+    if (xa === undefined) return -1;
+    if (xb === undefined) return 1;
+    if (xa === xb) continue;
+    if (typeof xa === typeof xb) return xa < xb ? -1 : 1;
+    return typeof xa === "number" ? -1 : 1;
+  }
+  return 0;
+}
+
 export async function syncCommand(ctx, rest) {
   const args = parseSyncArgs(rest);
   if (ctx?.dryRun) args.dryRun = true;
+  if (ctx?.json) args.json = true;
 
   let result;
   try {
@@ -416,24 +650,100 @@ export async function syncCommand(ctx, rest) {
       checkOnly: args.checkOnly,
       forceUnpin: args.forceUnpin,
       only: args.only,
-      verbose: true,
+      verbose: !args.json,
     });
   } catch (e) {
-    const code = typeof e.exitCode === "number" ? e.exitCode : 1;
-    console.error(e.message);
-    process.exit(code);
+    /* When `--lock` is requested we treat manifest failures as soft:
+     * the lockfile build has its own resolution chain (cache → monorepo
+     * → HTTP) and will report its own unresolved entries. This keeps
+     * `shipctl sync --lock` useful for customers who only run Ship-
+     * locally (e.g. internal forks) or are offline with a mirrored
+     * monorepo on SHIP_REPO. */
+    if (!args.lock) {
+      const code = typeof e.exitCode === "number" ? e.exitCode : 1;
+      console.error(e.message);
+      process.exit(code);
+    }
+    if (!args.json) console.error(`warn: manifest sync skipped (${e.message || e})`);
+    result = {
+      up_to_date: 0,
+      updated: 0,
+      skipped_pin: 0,
+      deprecated: 0,
+      yanked: 0,
+      failed: 0,
+      notes: [`manifest sync skipped (${e.message || e})`],
+      entries: [],
+    };
   }
 
-  const lines = [
-    `up_to_date: ${result.up_to_date}`,
-    `updated:    ${result.updated}`,
-    `skipped_pin:${result.skipped_pin}`,
-    `deprecated: ${result.deprecated}${result.deprecated ? " (…)" : ""}`,
-    `yanked:     ${result.yanked}`,
-    `failed:     ${result.failed}`,
-  ];
-  for (const l of lines) console.log(l);
-  for (const n of result.notes) console.log(`  - ${n}`);
+  /* --lock: walk the lane patterns, make sure every body is materialised
+   * under .ship/cache, and dump a lockfile so `shipctl run --offline` has
+   * a content-sha to compare against. Only runs after a successful-ish
+   * normal sync (we don't care if individual artifacts failed upstream —
+   * lockfile generation has its own fallback chain). */
+  let lockResult = null;
+  if (args.lock && !args.dryRun && !args.checkOnly) {
+    const shipRoot = findShipRoot(args.cwd);
+    if (!shipRoot) {
+      console.error("--lock: .ship/ not found; run 'shipctl init' first.");
+      process.exit(10);
+    }
+    const { config } = readConfig(shipRoot);
+    const baseUrl = (
+      ctx?.baseUrl ||
+      process.env.SHIP_API_BASE ||
+      config.api?.base_url ||
+      "https://ship.elmundi.com"
+    ).replace(/\/$/, "");
+    const channel = args.channel || process.env.SHIP_CHANNEL || config.api?.channel || "stable";
+    try {
+      lockResult = await buildLockfile({
+        shipRoot,
+        config,
+        baseUrl,
+        channel,
+        verbose: !args.json,
+      });
+      writeLockfile(shipRoot, lockResult.lockfile);
+    } catch (err) {
+      console.error(`--lock: ${err instanceof Error ? err.message : err}`);
+      process.exit(20);
+    }
+  }
+
+  if (args.json) {
+    const payload = { ...result };
+    if (lockResult) {
+      payload.lock = {
+        path: path.join(".ship", "shipctl.lock.json"),
+        entries: Object.keys(lockResult.lockfile.artifacts).length,
+        resolved: lockResult.resolved,
+        unresolved: lockResult.unresolved,
+      };
+    }
+    console.log(JSON.stringify(payload, null, 2));
+  } else {
+    const lines = [
+      `up_to_date: ${result.up_to_date}`,
+      `updated:    ${result.updated}`,
+      `skipped_pin:${result.skipped_pin}`,
+      `deprecated: ${result.deprecated}${result.deprecated ? " (…)" : ""}`,
+      `yanked:     ${result.yanked}`,
+      `failed:     ${result.failed}`,
+    ];
+    for (const l of lines) console.log(l);
+    for (const n of result.notes) console.log(`  - ${n}`);
+
+    if (lockResult) {
+      const entryCount = Object.keys(lockResult.lockfile.artifacts).length;
+      console.log(
+        `lock:       wrote .ship/shipctl.lock.json (${entryCount} entries, ${lockResult.unresolved.length} unresolved)`,
+      );
+      for (const n of lockResult.notes) console.log(`  - ${n}`);
+    }
+  }
 
   if (result.failed > 0) process.exit(20);
+  if (lockResult && lockResult.unresolved.length > 0) process.exit(20);
 }

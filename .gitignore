@@ -22,6 +22,9 @@ output/playwright/
 .DS_Store
 agent-run-*.log
 .ship/agent-runs/
+.ship/cache/
+.ship/telemetry-outbox.jsonl
+.ship/feedback-drafts/
 **/__pycache__/
 backend/.chroma/
 
