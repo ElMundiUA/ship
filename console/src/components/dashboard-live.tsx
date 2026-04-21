@@ -447,8 +447,18 @@ function RepoStatusStrip({
             return hit?.last_run_status ?? null;
           })();
 
+          // Wizard v2 + preset-aware installs only ship workflows for
+          // the lanes the preset actually enables, so comparing
+          // installed to *total* leaves the repo permanently "1
+          // install pending" for any lane the preset intentionally
+          // leaves off. The right semantic is "everything that
+          // should be live, is live" — so we gate on the *enabled*
+          // count instead.
+          const enabledInstalledLanes = laneRows.filter(
+            (p) => p.enabled && p.workflow_installed === true,
+          ).length;
           const setupComplete =
-            totalLanes > 0 && installedLanes === totalLanes;
+            enabledLanes > 0 && enabledInstalledLanes === enabledLanes;
           const tone: BadgeTone = setupComplete
             ? "ok"
             : needsInstallLanes > 0
@@ -512,24 +522,25 @@ function RepoStatusStrip({
               </dl>
 
               {!setupComplete && (
-                <form
-                  action="/api/dashboard/install-bundle"
-                  method="POST"
-                  className="flex items-center justify-between gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2"
+                // Wizard v2 owns the seed flow — unified PR with
+                // workflows, ``.ship/config.yml``, tracker FSM,
+                // rotated ``SHIP_RUN_TOKEN``. The legacy dashboard
+                // ``install-bundle`` CTA lived here previously and
+                // double-seeded repos for anyone who completed the
+                // wizard and then came back to the dashboard, so we
+                // funnel everyone through the same flow now.
+                <Link
+                  href={`/onboarding?step=configure&ws=${encodeURIComponent(workspaceId)}`}
+                  className="flex items-center justify-between gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 transition hover:border-aqua/40"
                 >
-                  <input type="hidden" name="ws" value={workspaceId} />
-                  <input type="hidden" name="repo_id" value={repo.id} />
                   <div className="min-w-0 text-[11px] leading-snug text-white/65">
-                    One PR adds every workflow + <code>.ship/</code> so lanes
-                    come live at once.
+                    Lanes aren&apos;t live yet. Re-run the setup wizard to
+                    open a seed PR with workflows, config &amp; FSM.
                   </div>
-                  <button
-                    type="submit"
-                    className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-3 py-1 text-[11px] font-bold text-ink shadow-glow transition hover:brightness-110"
-                  >
-                    Install everything →
-                  </button>
-                </form>
+                  <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-3 py-1 text-[11px] font-bold text-ink shadow-glow transition hover:brightness-110">
+                    Open wizard →
+                  </span>
+                </Link>
               )}
 
               <div className="mt-auto flex flex-wrap items-center justify-between gap-2 text-[11px] font-semibold text-white/55">
