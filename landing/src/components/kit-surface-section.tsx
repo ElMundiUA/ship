@@ -8,10 +8,10 @@ const tiles = [
     body: "Who plugs into what — trackers, CI, browsers, agents — spelled out so security and platform teams can review once.",
   },
   {
-    href: "/workflows",
-    kicker: "How work moves",
-    title: "Workflows",
-    body: "Named delivery intents — lanes, gates, regression, hygiene — so programs and automation share the same vocabulary.",
+    href: "/patterns",
+    kicker: "Org playbooks",
+    title: "Patterns",
+    body: "Versioned markdown prompts for agents — onboarding, lane playbooks, scheduled roles — so teams and automation share the same vocabulary.",
   },
   {
     href: "/collections",
@@ -34,7 +34,7 @@ export function KitSurfaceSection() {
         <p className="text-sm font-bold uppercase tracking-widest text-aqua/90">What you get in the box</p>
         <h2 className="font-display mt-2 text-3xl font-bold text-white sm:text-4xl">Docs, book, and catalogs — one experience</h2>
         <p className="mt-4 max-w-3xl text-lg text-white/65">
-          Buyers read the narrative; operators browse tools and workflows; engineers deep-link into chapters. Everything
+          Buyers read the narrative; operators browse tools and patterns; engineers deep-link into chapters. Everything
           ships from the same repository so the story and the wiring cannot silently diverge.
         </p>
         <div className="mt-12 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
@@ -57,7 +57,7 @@ export function KitSurfaceSection() {
             <p className="text-xs font-bold uppercase tracking-widest text-aqua/90">Toolchain</p>
             <h3 className="font-display mt-2 text-xl font-bold text-white">Ship CLI — unified control</h3>
             <p className="mt-3 text-sm leading-relaxed text-white/65">
-              One terminal entry point lists patterns, tools, workflows, and collections from the same manifests this site
+              One terminal entry point lists patterns, tools, and collections from the same manifests this site
               renders — so operators, scripts, and agents never argue about which copy is “current.”
             </p>
             <p className="mt-4 text-xs text-white/45">Shipped with the repo; documented under Getting started.</p>

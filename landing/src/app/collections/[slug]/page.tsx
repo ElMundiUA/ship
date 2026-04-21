@@ -80,9 +80,6 @@ export default async function CollectionDetailPage({ params }: { params: Promise
             <Link href="/collections#cli" className="btn-secondary inline-flex !py-2 !text-sm">
               CLI reference
             </Link>
-            <Link href="/workflows" className="btn-secondary inline-flex !py-2 !text-sm">
-              Workflows
-            </Link>
             <Link href="/tools" className="btn-secondary inline-flex !py-2 !text-sm">
               Tools
             </Link>

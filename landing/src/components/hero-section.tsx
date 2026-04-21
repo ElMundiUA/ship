@@ -82,10 +82,6 @@ export function HeroSection() {
             Tools
           </Link>
           <span className="text-white/25" aria-hidden>·</span>
-          <Link className="text-aqua transition hover:text-white" href="/workflows">
-            Workflows
-          </Link>
-          <span className="text-white/25" aria-hidden>·</span>
           <Link className="text-aqua transition hover:text-white" href="/collections">
             Collections
           </Link>

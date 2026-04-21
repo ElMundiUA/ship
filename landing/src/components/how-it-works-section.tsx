@@ -33,7 +33,7 @@ export function HowItWorksSection() {
           One protocol for every agent you run
         </h2>
         <p className="mt-4 max-w-3xl text-lg text-white/65">
-          Ship serves versioned artifacts — patterns, tools, workflows, collections — from the same site you are reading.
+          Ship serves versioned artifacts — patterns, tools, collections — from the same site you are reading.
           <code className="mx-1 rounded bg-white/10 px-1.5 py-0.5 font-mono text-[0.92em] text-aqua">shipctl</code> caches
           them locally under <code className="mx-1 rounded bg-white/10 px-1.5 py-0.5 font-mono text-[0.92em] text-aqua">.ship/cache/</code>,
           so agents run offline-first and record the exact versions they consumed in each pull request. Telemetry is opt-in.

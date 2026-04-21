@@ -40,7 +40,7 @@ const STORIES: Story[] = [
     org: "Ship (this kit)",
     headline: "Shipped the methodology like enterprise software so procurement stops blocking pilots",
     outcome:
-      "Packaged forty chapters of operating doctrine, a versioned artifact catalog (patterns / tools / workflows / collections), a CLI, and a small agent API behind one Apache-2.0 surface — so security review is a license check, not a vendor questionnaire.",
+      "Packaged forty chapters of operating doctrine, a versioned artifact catalog (patterns / tools / collections), a CLI, and a small agent API behind one Apache-2.0 surface — so security review is a license check, not a vendor questionnaire.",
     bullets: [
       "Apache-2.0 + public repo removes the legal-review gate before a pilot can start",
       "Docs, catalog, and CLI all read the same source of truth — no drift between sales deck and runbook",

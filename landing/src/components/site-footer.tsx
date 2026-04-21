@@ -51,9 +51,6 @@ export function SiteFooter() {
                 <Link className="text-white/70 transition hover:text-aqua" href="/patterns">
                   Patterns
                 </Link>
-                <Link className="text-white/70 transition hover:text-aqua" href="/workflows">
-                  Workflows
-                </Link>
                 <Link className="text-white/70 transition hover:text-aqua" href="/collections">
                   Collections
                 </Link>

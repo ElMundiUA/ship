@@ -46,7 +46,7 @@ export default function ShipUseCasePage() {
         <UseCaseHero
           eyebrow="Customer story · Developer tools · Open methodology"
           title="Ship shipped the methodology like enterprise software so procurement stops blocking pilots"
-          subtitle="One Next.js surface holds forty chapters of operating doctrine, a versioned artifact catalog (patterns, tools, workflows, collections), an installable CLI, and a small agent API. All of it is Apache-2.0, in a public git repository, and rendered from the same source the team itself runs on."
+          subtitle="One Next.js surface holds forty chapters of operating doctrine, a versioned artifact catalog (patterns, tools, collections), an installable CLI, and a small agent API. All of it is Apache-2.0, in a public git repository, and rendered from the same source the team itself runs on."
           executive="Ship exists because the methodology behind agentic SDLC was being lost in the gap between vendor decks and engineering wikis. By packaging the doctrine, the catalog, the tooling, and the API as one open-source surface, the kit removes the two biggest friction points for enterprise adoption: legal review and the &quot;does this match what you actually do?&quot; question. Pilots that used to take weeks of vendor meetings now start with a CLI command and a chapter."
         />
 
@@ -108,7 +108,7 @@ export default function ShipUseCasePage() {
               chapter-by-chapter in the same chrome as the rest of the site.
             </li>
             <li>
-              <strong>The catalog</strong> — versioned <em>patterns</em>, <em>tools</em>, <em>workflows</em>, and{" "}
+              <strong>The catalog</strong> — versioned <em>patterns</em>, <em>tools</em>, and{" "}
               <em>collections</em> as folder-per-artifact units with structured frontmatter. Searchable from the CLI,
               citable from a ticket, diffable in git.
             </li>
