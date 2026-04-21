@@ -1,6 +1,6 @@
 # Knowledge buckets consolidation — plan
 
-**Status:** Phase 1 landed (`a7c8edd`), Phase 2 in progress.
+**Status:** Phases 1–3 landed. Phase 5a (articles table + dual-write) landed.
 **Scope:** unify the three "knowledge" surfaces (agent-memory buckets,
 `.ship/knowledge/*.md` disk-lister, `KbChunk` RAG index) under one
 `Scope × Source × Article` model, so every knowledge bucket has an
@@ -173,12 +173,26 @@ Clarifications, Improvements, Navigator (context prefilter).
 
 ### Phase 5 — Article table
 
-New `bucket_articles` (`id, bucket_id, slug, title, body_md, version,
-supersedes_id, provenance jsonb, status, embedding`). Migrate
-`BucketSummary` into it (preserving thread_id in provenance). Repo
-files become articles with `body_md` pulled by the indexer. All
-downstream reads (agent tool `get_knowledge_bucket`, console detail
-page) switch to articles.
+Split into three landing slices so we can ship incrementally:
+
+- **Phase 5a (landed).** New `bucket_articles` table
+  (`id, bucket_id, slug, title, body_md, content_sha, version,
+  supersedes_id, status, provenance jsonb, embedding,
+  archived_at`). `sync_repo_files` dual-writes one article per
+  `repo_files` bucket (slug=`"main"`, version bumps on SHA change,
+  old row flips to `superseded` before the new `published` lands).
+  Migration is add-only; no reads are cut over yet. Backfill for
+  pre-Phase-5a tenants happens lazily on the next sync (the fast
+  path still populates a missing article).
+- **Phase 5b.** Data migration: fold every `bucket_summaries` row
+  into `bucket_articles` (one article per summary, `thread_id`
+  preserved in `provenance`, status=`published`). `agent_memory`
+  buckets then also have articles and we can cut over all write
+  paths.
+- **Phase 5c.** Read-path cutover: agent tool
+  `get_knowledge_bucket`, console detail page, and the Distiller
+  all read from `bucket_articles`. `bucket_summaries` becomes a
+  read-only legacy table until the final drop in Phase 9.
 
 ### Phase 6 — Distiller contract
 
@@ -255,3 +269,12 @@ Improvements also respect it.
   with `priority` + `effective_scope` + `effective` flags inline and
   a `winners_by_slug` quick-dedupe map. Caller's user overlay always
   included; other users' user-scoped rows invisible. 10 new tests.
+- **2026-04-21** — Phase 5a shipped: `bucket_articles` table (migration
+  `0015_bucket_articles`) + `BucketArticle`/`BucketArticleStatus`
+  models + dual-write from `sync_repo_files`. One `main` article per
+  `repo_files` bucket; SHA-based fast-path on no-op; version bumps +
+  supersession on edits; archival on file deletion; resurrection
+  picks `MAX(version)+1` so the partial-unique on published rows
+  never collides with dormant history. Legacy rows without an
+  article get backfilled on the next sync. 6 new tests on top of the
+  existing sync suite (12 total).

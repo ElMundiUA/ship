@@ -219,6 +219,101 @@ class KnowledgeBucket(Base):
     updated_at: Mapped[datetime] = _ts_updated()
 
 
+class BucketArticleStatus:
+    """Lifecycle of a :class:`BucketArticle`.
+
+    - ``draft`` — written but not yet visible to readers (Distiller
+      staging, imports waiting on review).
+    - ``published`` — the current, readable version. The partial
+      unique index ``uq_bucket_articles_published_slug`` guarantees
+      at most one per ``(bucket_id, slug)`` at a time.
+    - ``superseded`` — an older version kept around as history. The
+      incoming ``published`` row points at this one via
+      ``supersedes_id`` so the chain is navigable.
+    - ``archived`` — the source disappeared (file deleted in git,
+      upload hard-removed). Kept because downstream citations /
+      telemetry may reference it; excluded from default reads.
+    """
+
+    DRAFT = "draft"
+    PUBLISHED = "published"
+    SUPERSEDED = "superseded"
+    ARCHIVED = "archived"
+
+    ALL: tuple[str, ...] = (DRAFT, PUBLISHED, SUPERSEDED, ARCHIVED)
+
+
+class BucketArticle(Base):
+    """One content unit inside a :class:`KnowledgeBucket`.
+
+    Versioning is per ``(bucket_id, slug)``: every content change
+    inserts a new row with ``version = prev.version + 1`` and flips
+    the prior row from ``published`` to ``superseded``. The partial
+    unique index on ``(bucket_id, slug) WHERE status='published'``
+    enforces that exactly one version is live at a time.
+
+    Phase 5a scope: one article per ``repo_files`` bucket (slug =
+    ``"main"``, one row total; version bumps on edits but no
+    superseded history yet). Multi-article buckets and full history
+    ride along on the same table in Phase 5c once the Distiller
+    lands.
+    """
+
+    __tablename__ = "bucket_articles"
+    __table_args__ = (
+        # Migration 0015 owns the partial unique index on published
+        # rows — SQLAlchemy can't express ``WHERE status='published'``
+        # portably, so we declare it Alembic-side and Postgres enforces
+        # it. The full (bucket_id, slug, version) uniqueness is here
+        # so SQLAlchemy is aware of it for ORM-level deduping.
+        UniqueConstraint(
+            "bucket_id",
+            "slug",
+            "version",
+            name="uq_bucket_articles_bucket_slug_version",
+        ),
+        Index("ix_bucket_articles_bucket_id", "bucket_id"),
+        Index("ix_bucket_articles_status", "status"),
+        CheckConstraint(
+            "status IN ('draft', 'published', 'superseded', 'archived')",
+            name="ck_bucket_articles_status",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    bucket_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("knowledge_buckets.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    slug: Mapped[str] = mapped_column(String(120), nullable=False)
+    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    body_md: Mapped[str] = mapped_column(Text, nullable=False)
+    content_sha: Mapped[str] = mapped_column(String(64), nullable=False)
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("1")
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'published'")
+    )
+    supersedes_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("bucket_articles.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    provenance: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    embedding: Mapped[list[float] | None] = mapped_column(
+        Vector(EMBED_DIM), nullable=True
+    )
+    archived_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = _ts_created()
+    updated_at: Mapped[datetime] = _ts_updated()
+
+
 class BucketSummary(Base):
     """One summary row inside a :class:`KnowledgeBucket`.
 
@@ -347,6 +442,8 @@ class ArtifactFeedback(Base):
 
 __all__ = [
     "ArtifactFeedback",
+    "BucketArticle",
+    "BucketArticleStatus",
     "BucketScope",
     "BucketSource",
     "BucketSummary",
