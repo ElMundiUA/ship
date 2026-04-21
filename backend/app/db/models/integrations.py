@@ -188,6 +188,31 @@ class WorkspaceRepo(Base):
     activated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+    # Long-lived per-repo callback token (Wizard v2). RFC-0007 lanes
+    # trigger on cron / push / PR — they can't carry a per-run JWT
+    # from ``workflow_dispatch inputs``, so they need a persistent
+    # secret they can read with ``secrets.SHIP_RUN_TOKEN``.
+    #
+    # We never persist the plaintext: minting generates it, pushes
+    # it into GitHub Actions encrypted secrets via the App, and
+    # stores only the sha256 hex here. Callback handlers verify a
+    # presented bearer by re-hashing it and matching ``run_token_hash``.
+    # ``run_token_prefix`` mirrors the first few chars of the hash so
+    # operators can eyeball "is this the one I just rotated?" without
+    # needing the plaintext. ``run_token_rotated_at`` is the audit
+    # stamp for "when was the secret last pushed to GitHub".
+    #
+    # All three are nullable: pre-wizard-v2 repos come out of the
+    # migration with none set; the seed step is what mints the
+    # first one. A future admin-triggered rotation overwrites all
+    # three atomically.
+    run_token_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    run_token_prefix: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    run_token_rotated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     created_at: Mapped[datetime] = _ts_created()
     updated_at: Mapped[datetime] = _ts_updated()
 

@@ -71,9 +71,14 @@ async def list_integrations(
     # (channel ids, account names, etc.) that orgs sometimes treat as
     # confidential.
     await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+    # Workspace-scoped rows only — per-repo tracker rows (``repo_id``
+    # set) belong to the repo-details page, not to this workspace-wide
+    # integrations list. Keeping them out keeps the response schema
+    # stable for existing callers until the per-repo UI lands.
     stmt = (
         select(Integration)
         .where(Integration.workspace_id == workspace_id)
+        .where(Integration.repo_id.is_(None))
         .order_by(Integration.kind)
     )
     rows = (await session.execute(stmt)).scalars().all()
@@ -112,9 +117,14 @@ async def upsert_integration(
     _validate_kind(kind)
     await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
 
+    # This endpoint edits the workspace-level row only. Per-repo
+    # tracker rows have their own dedicated path (wizard / repo
+    # settings) so we don't conflate "edit workspace default" with
+    # "edit repo override" through the same URL.
     stmt = select(Integration).where(
         Integration.workspace_id == workspace_id,
         Integration.kind == kind,
+        Integration.repo_id.is_(None),
     )
     row = (await session.execute(stmt)).scalar_one_or_none()
 
@@ -205,7 +215,9 @@ async def probe_integration(
     await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
 
     stmt = select(Integration).where(
-        Integration.workspace_id == workspace_id, Integration.kind == kind
+        Integration.workspace_id == workspace_id,
+        Integration.kind == kind,
+        Integration.repo_id.is_(None),
     )
     row = (await session.execute(stmt)).scalar_one_or_none()
     if row is None:
@@ -252,6 +264,7 @@ async def delete_integration(
     stmt = select(Integration).where(
         Integration.workspace_id == workspace_id,
         Integration.kind == kind,
+        Integration.repo_id.is_(None),
     )
     row = (await session.execute(stmt)).scalar_one_or_none()
     if row is None:

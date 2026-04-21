@@ -216,9 +216,15 @@ async def linear_install_callback(
     # Upsert the Integration row. We don't run the secret_probe here —
     # the OAuth dance itself proves the token works, and Linear has no
     # cheap "is this token alive" probe.
+    # Workspace-level install only. Per-repo Linear picks (one repo →
+    # one Linear team/project) are written via the wizard's per-repo
+    # flow and carry ``repo_id != NULL``; we don't want to grab one of
+    # those here and overwrite its scope/secret with the workspace
+    # install's values.
     stmt = select(Integration).where(
         Integration.workspace_id == workspace_id,
         Integration.kind == "linear",
+        Integration.repo_id.is_(None),
     )
     row = (await session.execute(stmt)).scalar_one_or_none()
     is_new = row is None

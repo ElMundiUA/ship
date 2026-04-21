@@ -169,9 +169,14 @@ async def notion_install_callback(
             status_code=303,
         )
 
+    # Workspace-scoped row only. Notion is the knowledge-base
+    # integration and is always workspace-level today; if per-repo
+    # Notion databases land later they'll have their own ``repo_id``
+    # rows and this lookup must not accidentally adopt one.
     stmt = select(Integration).where(
         Integration.workspace_id == workspace_id,
         Integration.kind == "notion",
+        Integration.repo_id.is_(None),
     )
     row = (await session.execute(stmt)).scalar_one_or_none()
     is_new = row is None
