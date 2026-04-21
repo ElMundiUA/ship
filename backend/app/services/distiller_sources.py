@@ -137,6 +137,56 @@ async def ensure_bucket(
 
 
 # ---------------------------------------------------------------------------
+# Per-user memory bucket (Phase 8)
+# ---------------------------------------------------------------------------
+
+
+# Stable slug so the Navigator — and any future retrieval surface —
+# can address "my memory" by a predictable key instead of having to
+# look up the id first. The surface is ``source_kind=agent_memory``
+# so retrieval clauses that gate on that (TopicService,
+# search_buckets tool) pick it up with no extra wiring.
+USER_MEMORY_SLUG = "my-memory"
+USER_MEMORY_NAME = "My memory"
+USER_MEMORY_DESCRIPTION = (
+    "Private notes saved from chat threads. Only you can read from or "
+    "write to this bucket."
+)
+
+
+async def ensure_user_memory_bucket(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> KnowledgeBucket:
+    """Return (creating if needed) the caller's ``my-memory`` bucket.
+
+    Thin wrapper around :func:`ensure_bucket` that pins every
+    per-user bucket to a fixed slug and friendly name. This is what
+    the Navigator "save to memory" hook calls before packing a
+    thread summary — idempotent, so multiple concurrent first
+    writes never race to create two rows thanks to the partial
+    ``uq_knowledge_buckets_user_slug`` index.
+
+    Why a shared slug: the resolver's scope ladder makes
+    ``my-memory`` at ``scope=user`` shadow any workspace-level
+    slug collision automatically, so a workspace-wide bucket with
+    the same name would never pollute a user's private memory.
+    """
+    return await ensure_bucket(
+        session,
+        workspace_id=workspace_id,
+        slug=USER_MEMORY_SLUG,
+        name=USER_MEMORY_NAME,
+        scope_kind=BucketScope.USER,
+        source_kind=BucketSource.AGENT_MEMORY,
+        user_id=user_id,
+        description=USER_MEMORY_DESCRIPTION,
+    )
+
+
+# ---------------------------------------------------------------------------
 # PR-merged adapter
 # ---------------------------------------------------------------------------
 

@@ -62,6 +62,7 @@ from backend.app.services.agent.client import (
     ChatMessage,
 )
 from backend.app.services.agent.embedding import embed_text
+from backend.app.services.bucket_visibility import visible_to_user_clause
 from backend.app.services.bucket_summary_articles import (
     mirror_summary_to_article,
 )
@@ -316,6 +317,10 @@ class TopicService:
             # Retrieval scope: preserve v1 semantics — only memory from
             # packed conversations feeds the prompt's "warmed context".
             .where(KnowledgeBucket.source_kind == BucketSource.AGENT_MEMORY)
+            # Phase 8: never surface another user's ``scope=user``
+            # memory. The helper keeps this in sync with Phase 3's
+            # resolver — any tightening there lands here for free.
+            .where(visible_to_user_clause(self._user_id))
             .order_by("dist")
             .limit(max(1, min(limit, 10)))
         )

@@ -74,6 +74,8 @@ from backend.app.db.models.agent_surface import (
     ChatThread,
 )
 from backend.app.db.session import get_session
+from backend.app.services.bucket_visibility import visible_to_user_clause
+from backend.app.services.distiller_sources import ensure_user_memory_bucket
 from backend.app.services.agent.client import (
     AgentClient,
     ChatMessage,
@@ -904,6 +906,97 @@ async def pack_thread(
 
 
 # ---------------------------------------------------------------------------
+# Save thread → user memory bucket (Phase 8)
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/chat/threads/{thread_id}/save-to-memory",
+    response_model=BucketSummaryOut,
+)
+async def save_thread_to_memory(
+    workspace_id: uuid.UUID,
+    thread_id: uuid.UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> BucketSummaryOut:
+    """Pack the thread into the caller's private ``my-memory`` bucket.
+
+    Phase 8 companion to :func:`pack_thread`. Differences:
+
+    - **Target is always the caller's** ``scope=user`` bucket — no
+      ``bucket_id`` / ``bucket_slug`` inputs. The bucket is minted
+      lazily the first time this endpoint fires (idempotent via
+      :func:`ensure_user_memory_bucket`). Running this against a
+      fresh account simply creates ``my-memory`` on the fly.
+    - **No archive.** ``pack_thread`` archives the thread so the UI
+      forces the user into a new one; "save to memory" is
+      non-destructive — users keep chatting after saving, and can
+      save again later if the thread evolves.
+    - **Role is ``ROLES_READ``, not ``ROLES_ADMIN``.** Writing into
+      your own ``scope=user`` bucket is a user-level action, not an
+      admin one; viewers can save. The visibility helper + the
+      Phase 7 resolver still guarantee other members can't read it.
+    - **Explicit action = implicit consent.** Phase 8 deliberately
+      does not auto-save at end of thread; the user has to hit
+      "save to memory" themselves. When we later add an auto-save
+      consent toggle (stored on ``users`` or ``workspace_members``),
+      it reuses this same endpoint — the write path stays stable.
+    """
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
+
+    thread = (
+        await session.execute(
+            select(ChatThread).where(
+                ChatThread.id == thread_id,
+                ChatThread.workspace_id == workspace_id,
+            )
+        )
+    ).scalars().first()
+    if thread is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    memory_bucket = await ensure_user_memory_bucket(
+        session,
+        workspace_id=workspace_id,
+        user_id=auth.user.id,
+    )
+
+    agent = _get_agent_client(settings)
+    topic_service = TopicService(
+        session,
+        settings=settings,
+        client=agent,
+        workspace_id=workspace_id,
+        user_id=auth.user.id,
+    )
+    try:
+        summary = await topic_service.pack_topic(
+            thread,
+            bucket_id=memory_bucket.id,
+        )
+    except ValueError as exc:
+        # Empty thread is the only documented raise from pack_topic.
+        # Surface it as 400 so the console can show a friendly
+        # "nothing to save yet" hint instead of a 500.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+
+    await session.flush()
+
+    return BucketSummaryOut(
+        id=summary.id,
+        bucket_id=summary.bucket_id,
+        thread_id=summary.thread_id,
+        title=summary.title,
+        summary=summary.summary,
+        created_at=summary.created_at,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Buckets CRUD
 # ---------------------------------------------------------------------------
 
@@ -945,6 +1038,11 @@ async def list_buckets(
     stmt = (
         select(KnowledgeBucket)
         .where(KnowledgeBucket.workspace_id == workspace_id)
+        # Phase 8: hide other users' user-scoped rows the same way
+        # the Phase 3 resolver does. ``list_buckets`` is used by the
+        # console and the `/knowledge` surface, both of which must
+        # not leak another user's private memory across tenants.
+        .where(visible_to_user_clause(auth.user.id))
         .order_by(KnowledgeBucket.name)
     )
     if not include_archived:
@@ -1019,11 +1117,23 @@ async def create_bucket(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="repo-scoped bucket requires repo_id",
         )
-    elif payload.scope_kind == BucketScope.USER and not payload.user_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="user-scoped bucket requires user_id",
-        )
+    elif payload.scope_kind == BucketScope.USER:
+        if not payload.user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="user-scoped bucket requires user_id",
+            )
+        # Phase 8: a caller can only mint user-scoped buckets for
+        # themselves. Without this guard an admin could create a
+        # bucket attributed to another user, and that bucket's
+        # content would be invisible to the owner (visibility helper
+        # matches by ``user_id``). Instead of a silent "nobody can
+        # see this" we reject up-front.
+        if payload.user_id != auth.user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="scope_kind=user buckets can only be minted for yourself",
+            )
 
     source_ref = payload.source_ref
     if payload.source_kind == BucketSource.CONNECTOR_PROXY:
