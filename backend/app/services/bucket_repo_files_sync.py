@@ -48,18 +48,22 @@ surrounding plan.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
 import httpx
-from sqlalchemy import and_, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.config import Settings, get_settings
 from backend.app.db.models.agent_memory import (
+    BucketArticle,
+    BucketArticleStatus,
     BucketScope,
     BucketSource,
     KnowledgeBucket,
@@ -91,6 +95,12 @@ _EXCERPT_CHARS: int = 280
 _H1_RE = re.compile(r"^\s*#\s+(.+?)\s*$", re.MULTILINE)
 _WS_RE = re.compile(r"\s+")
 
+# Phase 5a: each ``repo_files`` bucket carries exactly one article, with
+# a fixed slug. Multi-article buckets (Distiller-authored, audio
+# transcripts that split into sections) ship in a later phase and will
+# use per-section slugs on the same table.
+_ARTICLE_SLUG_MAIN: str = "main"
+
 
 @dataclass(slots=True)
 class SyncReport:
@@ -110,6 +120,14 @@ class SyncReport:
     files_skipped_unchanged: int = 0
     files_skipped_binary: int = 0
     files_skipped_too_big: int = 0
+    # Phase 5a: dual-write into ``bucket_articles``. Counted separately
+    # from bucket ops because bucket + article lifecycles can drift
+    # once multi-article buckets land (e.g. a single KB edit may bump
+    # an article without touching the bucket row).
+    articles_created: int = 0
+    articles_updated: int = 0
+    articles_unchanged: int = 0
+    articles_archived: int = 0
     errors: list[str] = field(default_factory=list)
 
 
@@ -209,17 +227,39 @@ async def sync_repo_files(
         existing = existing_by_path.get(path)
         if existing is not None:
             if _source_ref_sha(existing) == blob.sha and existing.archived_at is None:
-                # Fast-path: SHA matches + not archived → no writes.
+                # Fast-path: SHA matches + not archived → no writes on
+                # the bucket. The article still gets a quick sanity
+                # check: if ``bucket_articles`` is missing a row for
+                # this bucket (e.g. we're on a backfill run from before
+                # Phase 5a) we repair it here so the table is eventually
+                # consistent without a separate backfill job.
                 report.files_skipped_unchanged += 1
+                action = await _upsert_article_for_bucket(
+                    session, bucket=existing, blob=blob, repo=repo
+                )
+                _tally_article_action(report, action)
                 continue
             _apply_blob_to_row(existing, blob=blob, repo=repo)
             if existing.archived_at is not None:
                 existing.archived_at = None
             report.buckets_updated += 1
+            bucket_for_article = existing
         else:
             row = _build_row(repo=repo, blob=blob)
+            # Pre-assign id client-side so the article row can carry
+            # the FK inside the same flush without an extra round-trip.
+            # ``server_default=gen_random_uuid()`` still wins if this
+            # is left as None, so behaviour is unchanged for callers
+            # that don't go through this path.
+            row.id = uuid.uuid4()
             session.add(row)
             report.buckets_created += 1
+            bucket_for_article = row
+
+        action = await _upsert_article_for_bucket(
+            session, bucket=bucket_for_article, blob=blob, repo=repo
+        )
+        _tally_article_action(report, action)
 
     # ---- Archive rows whose file vanished ----
     now = datetime.now(timezone.utc)
@@ -232,6 +272,8 @@ async def sync_repo_files(
             continue
         row.archived_at = now
         report.buckets_archived += 1
+        if await _archive_article_for_bucket(session, bucket=row, now=now):
+            report.articles_archived += 1
 
     await session.flush()
     return report
@@ -327,6 +369,132 @@ def _title_from_markdown(text: str) -> str | None:
         return None
     title = match.group(1).strip()
     return title or None
+
+
+async def _upsert_article_for_bucket(
+    session: AsyncSession,
+    *,
+    bucket: KnowledgeBucket,
+    blob: BlobContent,
+    repo: WorkspaceRepo,
+) -> str:
+    """Upsert the canonical ``main`` article for ``bucket`` from ``blob``.
+
+    Returns one of ``"created" | "updated" | "unchanged"`` so the
+    caller can tally the action into :class:`SyncReport`. The
+    ``content_sha`` stored on the article is a hash of the markdown
+    body (not the vendor blob SHA) — two files with identical content
+    pulled from different remotes don't churn versions.
+
+    Versioning semantics (Phase 5a, one-article-per-bucket):
+
+    - No prior article → insert version 1.
+    - Published article with same ``content_sha`` → no-op.
+    - Published article with different ``content_sha`` → flip it to
+      ``superseded`` and insert the next version with
+      ``supersedes_id`` pointing back at it.
+    - No *published* article but archived rows exist → resurrection.
+      Insert version = ``max(existing_versions) + 1`` so the UNIQUE
+      ``(bucket_id, slug, version)`` constraint never collides with
+      dormant history.
+    """
+    body = blob.content
+    content_sha = _sha256_hex(body)
+
+    current = (
+        await session.execute(
+            select(BucketArticle).where(
+                BucketArticle.bucket_id == bucket.id,
+                BucketArticle.slug == _ARTICLE_SLUG_MAIN,
+                BucketArticle.status == BucketArticleStatus.PUBLISHED,
+            )
+        )
+    ).scalars().first()
+
+    if current is not None and current.content_sha == content_sha:
+        return "unchanged"
+
+    if current is not None:
+        # Flip the old row BEFORE inserting the new one. Postgres
+        # evaluates the partial-unique index per-statement, so as long
+        # as the UPDATE precedes the INSERT inside the flush (which it
+        # will — SQLAlchemy orders UPDATEs before INSERTs by default)
+        # there is no transient double-published window.
+        current.status = BucketArticleStatus.SUPERSEDED
+        new_version = current.version + 1
+        supersedes_id: uuid.UUID | None = current.id
+    else:
+        supersedes_id = None
+        max_prev = (
+            await session.execute(
+                select(func.max(BucketArticle.version)).where(
+                    BucketArticle.bucket_id == bucket.id,
+                    BucketArticle.slug == _ARTICLE_SLUG_MAIN,
+                )
+            )
+        ).scalar()
+        new_version = (int(max_prev) if max_prev is not None else 0) + 1
+
+    title = (bucket.name or "").strip() or _humanise(bucket.slug)
+    provenance = {
+        "source_kind": BucketSource.REPO_FILES,
+        "path": blob.path,
+        "vendor_sha": blob.sha,
+        "branch": repo.default_branch or "main",
+    }
+    article = BucketArticle(
+        id=uuid.uuid4(),
+        bucket_id=bucket.id,
+        slug=_ARTICLE_SLUG_MAIN,
+        title=title[:512],
+        body_md=body,
+        content_sha=content_sha,
+        version=new_version,
+        status=BucketArticleStatus.PUBLISHED,
+        supersedes_id=supersedes_id,
+        provenance=provenance,
+    )
+    session.add(article)
+    return "created" if current is None else "updated"
+
+
+async def _archive_article_for_bucket(
+    session: AsyncSession, *, bucket: KnowledgeBucket, now: datetime
+) -> bool:
+    """Flip the current published article to ``archived``.
+
+    Returns ``True`` if something changed, ``False`` if there was no
+    live article to archive (bucket was pre-Phase-5a or never synced).
+    Superseded rows stay as-is; they're part of history and not subject
+    to this lifecycle.
+    """
+    current = (
+        await session.execute(
+            select(BucketArticle).where(
+                BucketArticle.bucket_id == bucket.id,
+                BucketArticle.slug == _ARTICLE_SLUG_MAIN,
+                BucketArticle.status == BucketArticleStatus.PUBLISHED,
+            )
+        )
+    ).scalars().first()
+    if current is None:
+        return False
+    current.status = BucketArticleStatus.ARCHIVED
+    current.archived_at = now
+    return True
+
+
+def _tally_article_action(report: SyncReport, action: str) -> None:
+    if action == "created":
+        report.articles_created += 1
+    elif action == "updated":
+        report.articles_updated += 1
+    elif action == "unchanged":
+        report.articles_unchanged += 1
+
+
+def _sha256_hex(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _excerpt(text: str) -> str | None:
