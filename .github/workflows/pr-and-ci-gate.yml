@@ -1,0 +1,76 @@
+name: Ship · PR review gate
+# Day-4 Phase-1 starter workflow. Installed by the Ship App into a
+# customer repo via the dashboard "Install workflow" button (opens a
+# PR; the file lands when the PR is merged).
+#
+# The pilot wires the skeleton end-to-end:
+#   dashboard "Run now" → workflow_dispatch → this job →
+#   POST result back to Ship via shipctl callback (or the legacy curl
+#   contract — both hit the same `/v1/pipelines/runs/{id}/result` URL).
+#
+# Pin `@elmundi/shipctl` to the same semver family as the Ship release
+# that generated this file (see root VERSION / cli/package.json).
+
+on:
+  workflow_dispatch:
+    inputs:
+      ship_run_id:
+        description: "Ship pipeline_run id we should report against"
+        required: true
+      ship_callback_url:
+        description: "URL Ship is listening on for the result callback"
+        required: true
+      ship_run_token:
+        description: "Short-lived bearer token Ship issued for this run"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  pr_review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install shipctl
+        run: npm install -g @elmundi/ship-cli@0.11.2
+
+      - name: Run PR gate
+        id: gate
+        # Replace the body below with your real gate. Keep the
+        # `status` output: Ship reads it to decide whether the run is
+        # "succeeded" or "failed". `shipctl kickoff` writes a standard
+        # preamble — pipe it with your workload pattern into the agent
+        # you run in CI (Claude Code, Codex, Cursor Cloud, …).
+        run: |
+          set -euo pipefail
+          shipctl kickoff --pattern kickoff > /tmp/ship-kickoff.md || true
+          echo "status=succeeded" >> "$GITHUB_OUTPUT"
+          echo "summary=PR review gate completed (starter workflow — wire agent + workload pattern)" >> "$GITHUB_OUTPUT"
+
+      - name: Report back to Ship
+        if: always() && inputs.ship_callback_url != ''
+        env:
+          SHIP_RUN_ID: ${{ inputs.ship_run_id }}
+          SHIP_CALLBACK_URL: ${{ inputs.ship_callback_url }}
+          SHIP_RUN_TOKEN: ${{ inputs.ship_run_token }}
+          GATE_STATUS: ${{ steps.gate.outputs.status || 'failed' }}
+          GATE_SUMMARY: ${{ steps.gate.outputs.summary || 'PR review gate failed before reporting' }}
+          GH_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          GH_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          CB=failed
+          if [ "$GATE_STATUS" = "succeeded" ]; then CB=ok; fi
+          shipctl callback --status "$CB" \
+            --summary "$GATE_SUMMARY" \
+            --metric "gh_workflow_run_id=$GH_RUN_ID" \
+            --metric "gh_html_url=$GH_RUN_URL"
