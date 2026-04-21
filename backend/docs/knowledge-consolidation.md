@@ -1,13 +1,14 @@
 # Knowledge buckets consolidation — plan
 
-**Status:** Phases 1–3, 4a, 5a, 5b, 5c, 5d landed. Backend consolidation
-closed — `bucket_articles` is the sole read surface (retriever, agent
-tools, new `/articles` endpoint, `summary_count` on bucket listings);
-`bucket_summaries` is maintained for write-back compat only, reads
-removed outside the legacy `/summaries` endpoint (deprecated, removal
-in Phase 9). Phase 4a shipped the first visible UI slice — scope pill
-in AppShell + scope-aware `/knowledge` page. Next: propagate the
-pill to Catalog / Clarifications / Improvements / Navigator.
+**Status:** Phases 1–3, 4a, 4b, 5a, 5b, 5c, 5d landed. Backend
+consolidation closed — `bucket_articles` is the sole read surface
+(retriever, agent tools, `/articles` endpoint, `summary_count` on
+bucket listings); `bucket_summaries` is maintained for write-back
+compat only (deprecated, removal in Phase 9). Phase 4a + 4b shipped
+the first user-visible UI slice: scope pill in AppShell and
+scope-aware `/knowledge`, `/catalog`, `/clarifications`,
+`/improvements`, `/chat`. Next: Phase 6 (Distiller pipeline) or
+Phase 7 (new sources — external-static upload, connector-proxy).
 **Scope:** unify the three "knowledge" surfaces (agent-memory buckets,
 `.ship/knowledge/*.md` disk-lister, `KbChunk` RAG index) under one
 `Scope × Source × Article` model, so every knowledge bucket has an
@@ -188,8 +189,28 @@ workspace default still reads from the legacy
 `/v1/workspaces/{ws}/knowledge` endpoint so we don't regress the
 markdown-card grid users see today.
 
-Follow-up consumers (tracked separately): Catalog list,
-Clarifications, Improvements, Navigator (context prefilter).
+**Phase 4b (shipped)** propagated the pill to `Catalog`,
+`Clarifications`, `Improvements` and `Navigator /chat`. Because the
+underlying list endpoints don't yet accept a `repo_id` filter, the
+pages filter client-side:
+
+- **Catalog** — repo scope keeps rows whose `source_repo_id` matches
+  the selected repo *plus* all global/workspace-authored rows the
+  repo inherits; user scope shows an advisory banner and falls back
+  to full.
+- **Clarifications / Improvements** — repo scope filters by
+  `row.repo_id`; user scope surfaces a banner (no "assigned to me"
+  concept yet) and keeps the full list. Tab links preserve the pill
+  state so flipping `status=answered` doesn't drop the scope.
+- **Navigator** — pill narrows the memory-bucket sidebar via a
+  client-side `BucketScopeFilter`. Active-thread selection still
+  ignores `repo_id` (real repo-scoped threads need backend work);
+  the page shows a banner when scope ≠ workspace so users aren't
+  surprised that the conversation surface is unchanged.
+
+Follow-up consumers (tracked separately): Pipelines, Metrics,
+Improvements analytics — and real backend filters once we push
+`repo_id` into `GET clarifications / improvements / artifacts`.
 
 ### Phase 5 — Article table
 
@@ -353,6 +374,18 @@ Improvements also respect it.
   buckets too). Legacy `GET .../summaries` stays as-is and is marked
   deprecated. 14 new tests (7 agent-tool cutover + 7 endpoint). Backend
   suite: 379 passed.
+- **2026-04-21** — Phase 4b shipped: scope pill propagated to
+  `/catalog`, `/clarifications`, `/improvements`, and `/chat`.
+  Client-side filters on `source_repo_id` (catalog) and
+  `row.repo_id` (clarifications / improvements); Navigator's
+  buckets sidebar gains a `BucketScopeFilter` prop that filters
+  memory buckets by repo/user scope while keeping ambient
+  workspace rows visible (inheritance matches the Phase 3 ladder).
+  Tab links in Clarifications/Improvements preserve the URL scope
+  so status flips don't drop the pill. `ApiBucket` client type
+  gained optional `scope_kind` / `source_kind` / `repo_id` / etc.
+  to match the backend `BucketOut` shape. One new Playwright sweep
+  asserts the pill on all four surfaces.
 - **2026-04-21** — Phase 4a shipped: first user-visible UI slice.
   New `ScopePill` client component in the AppShell header (mounted
   via optional `scopePill` prop so pages that don't care keep the

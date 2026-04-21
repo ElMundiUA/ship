@@ -713,6 +713,15 @@ export interface ApiBucket {
   created_at: string;
   updated_at: string;
   summary_count: number;
+  // Phase 1/5d: scope + source fields surfaced by BucketOut.
+  // Optional so we stay tolerant of older backend builds that
+  // haven't rolled out the migration yet.
+  scope_kind?: import("./types").ApiBucketScope;
+  source_kind?: import("./types").ApiBucketSource;
+  source_ref?: Record<string, unknown> | null;
+  project_id?: string | null;
+  repo_id?: string | null;
+  user_id?: string | null;
 }
 
 export interface ApiBucketSummary {
