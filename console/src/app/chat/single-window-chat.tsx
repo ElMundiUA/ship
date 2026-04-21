@@ -457,6 +457,55 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
     }
     return -1;
   }, [visibleMessages]);
+  const hasStreamingAssistant = useMemo(
+    () => visibleMessages.some((m) => m.role === "assistant" && !!m.streaming),
+    [visibleMessages],
+  );
+  // Single-line status that sits between the user prompt and the
+  // upcoming reply. The content *replaces itself* as the turn
+  // progresses — no stacking:
+  //   Thinking…
+  //   ↓ agent calls tool A
+  //   Calling A…
+  //   ↓ tool A resolves, no next tool yet
+  //   Thinking…
+  //   ↓ agent calls tool B
+  //   Calling B…
+  //   ↓ tool B resolves, agent forms reply
+  //   Thinking…
+  //   ↓ first delta lands
+  //   (status line disappears, reply streams in)
+  const turnStatus = useMemo((): {
+    tone: "shimmer" | "error";
+    text: string;
+  } | null => {
+    // Only show status while the turn is actually in flight. After
+    // the turn ends the line should just disappear — no lingering
+    // "Thinking…" or last-error text under a completed reply.
+    if (!streaming) return null;
+    if (hasStreamingAssistant) return null;
+    const latest = tools.length > 0 ? tools[tools.length - 1] : null;
+    if (latest) {
+      if (!latest.result) {
+        return {
+          tone: "shimmer",
+          text: `Calling ${prettyToolName(latest.name)}…`,
+        };
+      }
+      if (!latest.result.ok) {
+        return {
+          tone: "error",
+          text: `${prettyToolName(latest.name)} — ${latest.result.error ?? "failed"}`,
+        };
+      }
+      // Completed OK — fall through to "Thinking…" so the user
+      // sees that the agent is now composing the answer.
+    }
+    if (awaitingFirstDelta) {
+      return { tone: "shimmer", text: "Thinking…" };
+    }
+    return null;
+  }, [streaming, hasStreamingAssistant, tools, awaitingFirstDelta]);
 
   // Map each visible message to how many characters we should
   // render right now. Non-streaming rows (historical + finalized
@@ -542,19 +591,11 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
                       revealLen={revealMap.get(m.id) ?? m.body.length}
                       anchorRef={isLastUser ? lastUserAnchorRef : null}
                     />
-                    {/* Activity for the current turn sits *between*
-                        the user prompt and the upcoming/ongoing
-                        assistant reply — chronologically correct
-                        and visually decoupled from any bubble.
-                        No dedicated "Thinking…" line: if the agent
-                        goes straight to tools we show the trail;
-                        if it goes straight to prose we show the
-                        streaming reply. The quiet gap in-between
-                        is intentional — the bottom spacer keeps
-                        the user prompt pinned to the top so it
-                        doesn't feel frozen. */}
-                    {isLastUser && tools.length > 0 ? (
-                      <ToolCallTrail rows={tools} />
+                    {/* Single-line turn status between the user
+                        prompt and the incoming reply. Replaces
+                        itself as state changes — never stacks. */}
+                    {isLastUser && turnStatus ? (
+                      <TurnStatusLine {...turnStatus} />
                     ) : null}
                   </Fragment>
                 );
@@ -655,85 +696,22 @@ function MessageRow({
   );
 }
 
-function ToolCallTrail({ rows }: { rows: ToolCallRow[] }) {
-  return (
-    <div className="space-y-1">
-      {rows.map((t) => (
-        <ToolCallRow key={t.id} row={t} />
-      ))}
-    </div>
-  );
-}
-
-function ToolCallRow({ row }: { row: ToolCallRow }) {
-  // Single-line, card-less rendering. Running tools shimmer; done
-  // tools go to a muted static colour; errors go rose. The label
-  // is ``name · key=value · key=value`` so the user can see what
-  // arguments were used without a second row.
-  const state = !row.result ? "running" : row.result.ok ? "ok" : "error";
-  const summary = toolArgSummary(row.args);
-  const name = prettyToolName(row.name);
-  const label = summary ? `${name} · ${summary}` : name;
-  const toneClass =
-    state === "running"
-      ? "chat-shimmer"
-      : state === "ok"
-        ? "text-white/45"
-        : "text-rose-300/80";
-  return (
-    <div className="flex items-center gap-2 text-[12px] leading-snug">
-      <StatusDot state={state} />
-      <span className={`min-w-0 flex-1 truncate ${toneClass}`}>
-        {label}
-        {state === "error" && row.result?.error
-          ? ` — ${row.result.error}`
-          : null}
-      </span>
-    </div>
-  );
-}
-
-function StatusDot({ state }: { state: "running" | "ok" | "error" }) {
-  if (state === "running") {
-    return (
-      <span className="relative inline-flex h-2 w-2 shrink-0 items-center justify-center">
-        <span className="absolute inline-block h-full w-full animate-ping rounded-full bg-aqua/60" />
-        <span className="inline-block h-1.5 w-1.5 rounded-full bg-aqua" />
-      </span>
-    );
-  }
-  return (
-    <span
-      className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${
-        state === "ok" ? "bg-emerald-400" : "bg-rose-400"
-      }`}
-    />
-  );
+function TurnStatusLine({
+  tone,
+  text,
+}: {
+  tone: "shimmer" | "error";
+  text: string;
+}) {
+  const cls =
+    tone === "shimmer"
+      ? "chat-shimmer text-[13px]"
+      : "text-[13px] text-rose-300/80";
+  return <div className={cls}>{text}</div>;
 }
 
 function prettyToolName(name: string): string {
   return name.replace(/_/g, " ");
-}
-
-function toolArgSummary(args: Record<string, unknown>): string {
-  // Show the first handful of string/number arguments inline — the
-  // point is to give the user a readable hint, not a JSON dump.
-  const parts: string[] = [];
-  for (const [k, v] of Object.entries(args)) {
-    if (typeof v === "string") {
-      parts.push(`${k}=${truncate(v, 64)}`);
-    } else if (typeof v === "number" || typeof v === "boolean") {
-      parts.push(`${k}=${v}`);
-    } else if (Array.isArray(v)) {
-      parts.push(`${k}=[${v.length}]`);
-    }
-    if (parts.length >= 3) break;
-  }
-  return parts.join(" · ");
-}
-
-function truncate(s: string, max: number): string {
-  return s.length > max ? s.slice(0, max - 1) + "…" : s;
 }
 
 function normalizeToolResult(evt: {
