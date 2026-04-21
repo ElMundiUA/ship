@@ -26,21 +26,86 @@ export function findShipRoot(startCwd) {
 
 /**
  * Stable top-level and nested key order. Unknown keys are appended alphabetically.
+ *
+ * v2 introduces `agent` and `lanes` at the top level, plus nested keys
+ * under each lane. We keep them in their "natural reading order" so a
+ * human diffing two configs doesn't see a churn just because `shipctl
+ * config set` rewrote the file.
  */
 const KEY_ORDER = {
-  __root: ["version", "shipctl_min", "api", "stack", "artifacts", "cache", "telemetry"],
+  __root: [
+    "version",
+    "shipctl_min",
+    "api",
+    "stack",
+    "agent",
+    "lanes",
+    "artifacts",
+    "cache",
+    "telemetry",
+  ],
   api: ["base_url", "channel", "ttl_hours", "offline_ok"],
   stack: ["tracker", "ci", "agents", "agent", "language", "preset"],
   "stack.agent": ["provider"],
+  agent: ["default", "overrides"],
+  "agent.default": ["provider"],
+  /* lanes.* is handled by LANE_KEY_ORDER below — each lane follows the
+   * same ordering regardless of its id. */
   artifacts: ["pins", "auto_update"],
   cache: ["vcs_tracked"],
   telemetry: ["share", "anonymous_id", "scope"],
   "telemetry.scope": ["artifact_usage", "improvement_drafts", "errors"],
 };
 
+const LANE_KEY_ORDER = [
+  "kind",
+  "pattern",
+  "pattern_version",
+  "on",
+  "when",
+  "cron",
+  "cron_tz",
+  "idempotency",
+  "permissions",
+  "runner",
+  "timeout_minutes",
+  "concurrency",
+];
+
+const LANE_IDEMPOTENCY_KEY_ORDER = ["key", "store", "reset_on"];
+
+function orderForPath(pathKey) {
+  /* lanes.<anything> — single lane entry, always share the same order */
+  if (/^lanes\.[^.]+$/.test(pathKey)) return LANE_KEY_ORDER;
+  if (/^lanes\.[^.]+\.idempotency$/.test(pathKey)) return LANE_IDEMPOTENCY_KEY_ORDER;
+  return KEY_ORDER[pathKey] || [];
+}
+
+const USER_KEYED_LEAF_MAPS = new Set(["artifacts.pins", "agent.overrides"]);
+const USER_KEYED_STRUCT_MAPS = new Set(["lanes"]);
+
 function orderedCopy(obj, pathKey) {
   if (!obj || typeof obj !== "object" || Array.isArray(obj)) return obj;
-  const order = KEY_ORDER[pathKey] || [];
+
+  /* User-keyed leaf map: keep author's key order, don't recurse (values
+   * are simple scalars like a semver string). */
+  if (USER_KEYED_LEAF_MAPS.has(pathKey)) {
+    const out = {};
+    for (const k of Object.keys(obj)) out[k] = obj[k];
+    return out;
+  }
+
+  /* User-keyed struct map: keep author's key order, but recurse into
+   * each entry so its internal fields get normalised. */
+  if (USER_KEYED_STRUCT_MAPS.has(pathKey)) {
+    const out = {};
+    for (const k of Object.keys(obj)) {
+      out[k] = orderedCopy(obj[k], `${pathKey}.${k}`);
+    }
+    return out;
+  }
+
+  const order = orderForPath(pathKey);
   const remaining = new Set(Object.keys(obj));
   const out = {};
   for (const k of order) {
@@ -53,7 +118,6 @@ function orderedCopy(obj, pathKey) {
 
   for (const [k, v] of Object.entries(out)) {
     const childKey = pathKey === "__root" ? k : pathKey ? `${pathKey}.${k}` : k;
-    if (childKey === "artifacts.pins") continue;
     out[k] = orderedCopy(v, childKey);
   }
   return out;
