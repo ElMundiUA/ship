@@ -2,7 +2,8 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { AppShell } from "@/components/app-shell";
-import { ScopePill, resolveScopeFromSearch } from "@/components/scope-pill";
+import { ScopePill } from "@/components/scope-pill";
+import { resolveScopeFromSearch } from "@/lib/scope";
 import { Card, CardHeader } from "@/components/ui";
 import {
   ApiHttpError,

@@ -4,6 +4,15 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
+import type { ScopeKind } from "@/lib/scope";
+
+// Re-exported for call sites that used to import everything from
+// ``@/components/scope-pill``. ``resolveScopeFromSearch`` + the
+// ``ResolvedScope`` / ``ScopeKind`` types now live in
+// ``@/lib/scope`` (server-safe) so Server Components can import
+// them without Next 15.5 refusing the cross-boundary call.
+export type { ResolvedScope, ScopeKind } from "@/lib/scope";
+export { resolveScopeFromSearch } from "@/lib/scope";
 
 /**
  * Phase 4: scope pill for the AppShell header.
@@ -42,8 +51,6 @@ export type ScopePillUser = {
   email: string;
   display_name: string | null;
 };
-
-type ScopeKind = "workspace" | "repo" | "user";
 
 const SCOPE_QS = "scope";
 const REPO_QS = "repo_id";
@@ -300,30 +307,9 @@ function labelFor(
   return { primary: ctx.workspaceName, secondary: "ws" };
 }
 
-// Reading helpers for Server Components that need to mirror the pill
-// state server-side. Kept in the same file as the pill so the URL
-// contract has one source of truth.
-
-export type ResolvedScope = {
-  kind: ScopeKind;
-  repoId: string | null;
-  projectId: string | null;
-};
-
-export function resolveScopeFromSearch(params: {
-  scope?: string | string[];
-  repo_id?: string | string[];
-  project_id?: string | string[];
-}): ResolvedScope {
-  const scope = firstOf(params.scope);
-  const kind: ScopeKind =
-    scope === "repo" || scope === "user" ? scope : "workspace";
-  const repoId = kind === "repo" ? firstOf(params.repo_id) ?? null : null;
-  const projectId = kind === "repo" ? firstOf(params.project_id) ?? null : null;
-  return { kind, repoId, projectId };
-}
-
-function firstOf(v: string | string[] | undefined): string | undefined {
-  if (Array.isArray(v)) return v[0];
-  return v;
-}
+// Reading helpers used to live here, but Next 15.5 rejects calls
+// from Server Components into non-component exports of a ``"use
+// client"`` module. The readers moved to ``@/lib/scope`` and are
+// re-exported from the top of this file so existing call sites
+// (``import { resolveScopeFromSearch } from "@/components/scope-
+// pill"``) keep working.
