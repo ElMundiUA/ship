@@ -184,7 +184,7 @@ class RunTokenContext:
     never re-validate the token themselves. Treat every field as
     already authenticated — the dependency guarantees:
 
-    - JWT signature ok, ``sub`` == ``ship.pipeline.run.callback``,
+    - JWT signature ok, ``sub`` == ``ship.pipeline.run``,
       ``exp`` in the future.
     - ``run_id`` matches an existing :class:`PipelineRun` row.
     - SHA-256 of the raw token matches
@@ -193,27 +193,25 @@ class RunTokenContext:
 
     ``workspace_id`` + ``pipeline_id`` are snapshotted at validation
     time to avoid re-issuing a SELECT in the handler body.
+    ``auth_mode`` records which auth path validated the bearer so
+    audit logs and debug tooling can tell "legacy dispatch" from
+    "lane-scheduled runner" apart without guessing off the token
+    shape.
     """
 
     run_id: uuid.UUID
     pipeline_id: uuid.UUID
     workspace_id: uuid.UUID
     raw_token: str
+    # "jwt" (per-run JWT) or "repo" (long-lived SHIP_RUN_TOKEN).
+    # Only the dual-mode endpoint sets "repo"; handlers that only
+    # mount :func:`get_run_token_context` always see "jwt".
+    auth_mode: str = "jwt"
 
 
-async def get_run_token_context(
-    authorization: str | None = Header(default=None, alias="Authorization"),
-    session: AsyncSession = Depends(get_session),
-    settings: Settings = Depends(get_settings),
-) -> RunTokenContext:
-    """FastAPI dependency that validates the ``Authorization`` header.
+def _parse_bearer(authorization: str | None) -> str:
+    """Extract the raw bearer value; raise 401 on every failure mode."""
 
-    Used by any endpoint that must only be callable from a dispatched
-    Ship workflow. Raises ``401`` on every failure mode so tenants
-    can't fingerprint our validator; ``404`` is reserved for the run-
-    missing case (the legitimate race where a run got deleted between
-    token issuance and callback — still authenticated, just orphaned).
-    """
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -225,6 +223,33 @@ async def get_run_token_context(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="empty bearer token",
         )
+    return raw_token
+
+
+async def get_run_token_context(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> RunTokenContext:
+    """FastAPI dependency that validates the ``Authorization`` header.
+
+    This is the **JWT-only** dependency. Used by clarifications,
+    improvements, and chat pipeline endpoints — paths where the run
+    id lives in the JWT claims and there's no URL path parameter we
+    could cross-check a long-lived repo token against.
+
+    Endpoints on the lane-triggered callback path (cron / push / PR
+    lanes that can't carry a per-run JWT through
+    ``workflow_dispatch.inputs``) use :func:`get_run_or_repo_token_context`
+    instead — it accepts either JWT *or* long-lived ``SHIP_RUN_TOKEN``
+    and requires a ``run_id`` path parameter for cross-check.
+
+    Raises ``401`` on every failure mode so tenants can't fingerprint
+    our validator; ``404`` is reserved for the run-missing case (the
+    legitimate race where a run got deleted between token issuance
+    and callback — still authenticated, just orphaned).
+    """
+    raw_token = _parse_bearer(authorization)
 
     run_id = _decode_run_token(raw_token, settings)
     run = await session.get(PipelineRun, run_id)
@@ -237,11 +262,7 @@ async def get_run_token_context(
     ):
         # Collapse "run gone", "token never issued", and "hash
         # mismatch" into a single 401 so tenants can't fingerprint
-        # which branch they hit. The legitimate "run deleted between
-        # dispatch and callback" race degrades to 401, which the
-        # workflow treats as "don't retry" — matches our desired
-        # behaviour (fire and forget; webhook reconciliation is the
-        # canonical status source anyway).
+        # which branch they hit.
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="run token is invalid, expired, or for a missing run",
@@ -251,6 +272,111 @@ async def get_run_token_context(
         pipeline_id=run.pipeline_id,
         workspace_id=run.workspace_id,
         raw_token=raw_token,
+        auth_mode="jwt",
+    )
+
+
+def _looks_like_jwt(raw_token: str) -> bool:
+    """Cheap shape check: compact JWTs are three base64url segments.
+
+    Used only as a routing hint for the dual-auth dependency — not
+    a security boundary; both validation paths return 401 on
+    failure regardless.
+    """
+
+    return raw_token.count(".") == 2
+
+
+async def get_run_or_repo_token_context(
+    run_id: uuid.UUID = Path(...),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> RunTokenContext:
+    """Dual-mode auth for the ``/runs/{run_id}/result`` callback.
+
+    Accepts **either** a per-run JWT (legacy workflow_dispatch path)
+    **or** a long-lived ``SHIP_RUN_TOKEN`` minted via
+    :mod:`backend.app.services.repo_tokens` and stored in repo
+    Actions secrets. Endpoints that mount this dependency *must*
+    carry a ``{run_id}`` path parameter — it's the cross-reference
+    for both paths.
+
+    Route order:
+
+    1. If the bearer looks like a JWT (three base64url segments)
+       validate via the JWT path exactly like
+       :func:`get_run_token_context`, then confirm ``claims.rid``
+       matches the path ``run_id``.
+    2. Otherwise hash it and look for a matching ``WorkspaceRepo``;
+       if found, fetch the ``Pipeline`` for ``run_id`` and confirm
+       ``pipeline.repo_id == repo.id``.
+
+    Both paths converge on the same :class:`RunTokenContext` shape
+    so downstream handlers don't branch on auth_mode unless they
+    want to.
+    """
+
+    raw_token = _parse_bearer(authorization)
+
+    if _looks_like_jwt(raw_token):
+        jwt_rid = _decode_run_token(raw_token, settings)
+        run = await session.get(PipelineRun, jwt_rid)
+        if (
+            run is None
+            or run.run_token_hash is None
+            or not secrets.compare_digest(
+                run.run_token_hash, _hash_run_token(raw_token)
+            )
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="run token is invalid, expired, or for a missing run",
+            )
+        if run.id != run_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="run token does not match path run_id",
+            )
+        return RunTokenContext(
+            run_id=run.id,
+            pipeline_id=run.pipeline_id,
+            workspace_id=run.workspace_id,
+            raw_token=raw_token,
+            auth_mode="jwt",
+        )
+
+    # Long-lived repo-token path. Local import avoids a potential
+    # circular dep if ``repo_tokens`` ever grows imports from routes.
+    from backend.app.services.repo_tokens import verify_repo_callback_token
+
+    repo = await verify_repo_callback_token(session, raw_token)
+    if repo is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="run token is invalid, expired, or for a missing run",
+        )
+    run = await session.get(PipelineRun, run_id)
+    if run is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="run token is invalid, expired, or for a missing run",
+        )
+    pipeline = await session.get(Pipeline, run.pipeline_id)
+    if pipeline is None or pipeline.repo_id != repo.id:
+        # Forgery case: caller has a valid token for repo A but is
+        # trying to report against a run that belongs to repo B.
+        # Do not disclose which side is the mismatch.
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="run token does not authorize this run",
+        )
+    return RunTokenContext(
+        run_id=run.id,
+        pipeline_id=run.pipeline_id,
+        workspace_id=run.workspace_id,
+        raw_token=raw_token,
+        auth_mode="repo",
     )
 
 
@@ -1119,27 +1245,30 @@ async def get_pipeline_run(
 async def report_run_result(
     run_id: uuid.UUID = Path(...),
     payload: PipelineRunResultIn = ...,
-    ctx: RunTokenContext = Depends(get_run_token_context),
+    ctx: RunTokenContext = Depends(get_run_or_repo_token_context),
     session: AsyncSession = Depends(get_session),
 ) -> PipelineRunOut:
-    """Callback endpoint dispatched workflows hit to report their result.
+    """Callback endpoint dispatched or lane-triggered workflows hit.
 
-    Authentication is *only* the bearer ``run_token`` we minted at
-    dispatch time. We verify in three layers:
+    Authentication is **either** path:
 
-    1. JWT signature + ``sub`` + ``exp`` (rejects a stale token from
-       a previous dispatch).
-    2. ``rid`` claim matches the path ``run_id`` (rejects a token
-       being replayed against a different run).
-    3. SHA-256 of the bearer matches ``PipelineRun.run_token_hash``
-       (rejects a forged JWT signed with a leaked ``JWT_SECRET`` —
-       belt-and-braces; if the secret leaks we have bigger problems,
-       but the hash check costs us nothing).
+    1. Short-lived per-run JWT (legacy ``workflow_dispatch`` flow).
+       Validated in :func:`get_run_or_repo_token_context` by JWT
+       signature + ``sub`` + ``exp`` + ``rid`` matching the path,
+       plus a sha256 hash cross-check against
+       :attr:`PipelineRun.run_token_hash` (belt-and-braces if the
+       JWT secret leaks).
+    2. Long-lived repo-scoped ``SHIP_RUN_TOKEN`` (RFC-0007 lanes on
+       cron / push / PR that have no ``inputs`` channel for a
+       per-run JWT). The token sha256 must match
+       :attr:`WorkspaceRepo.run_token_hash` and the path ``run_id``
+       must belong to a pipeline on the same repo.
 
-    Once accepted we mark the run terminal and mirror the status onto
-    the parent ``Pipeline`` row for the dashboard's "last run" badge.
-    Idempotent: a duplicate callback for an already-terminal run
-    returns 200 with the existing row instead of erroring.
+    Either path lands here with an authenticated
+    :class:`RunTokenContext` and ``run_id`` already cross-checked,
+    so the handler goes straight to state transition. Idempotent:
+    a duplicate callback for an already-terminal run returns 200
+    with the existing row.
     """
     if payload.status not in _TERMINAL_STATUSES:
         raise HTTPException(
@@ -1148,11 +1277,6 @@ async def report_run_result(
                 f"status must be one of {sorted(_TERMINAL_STATUSES)}; "
                 f"got {payload.status!r}"
             ),
-        )
-    if ctx.run_id != run_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="run token does not match path run_id",
         )
 
     run = await session.get(PipelineRun, run_id)
@@ -1191,9 +1315,14 @@ async def report_run_result(
             action="pipeline.run.callback",
             target_kind="pipeline_run",
             target_id=str(run.id),
+            # ``auth_mode`` lets operators triage "which flavour of
+            # SHIP_RUN_TOKEN did this callback come in on" without
+            # grepping logs — useful once both paths coexist in the
+            # wild and we need to see the repo-token rollout ramp.
             payload={
                 "status": payload.status,
                 "metrics": metrics_payload,
+                "auth_mode": ctx.auth_mode,
             },
         )
     )
