@@ -136,6 +136,7 @@ from backend.app.security.encryption import decrypt
 from backend.app.services import catalog as catalog_service
 from backend.app.services.agent.client import ToolSpec
 from backend.app.services.agent.embedding import embed_text
+from backend.app.services.bucket_visibility import visible_to_user_clause
 
 
 logger = logging.getLogger(__name__)
@@ -2758,6 +2759,10 @@ class ToolBox:
             # tells the LLM this is about packed chats. Broadening to
             # repo_files would change the contract.
             .where(KnowledgeBucket.source_kind == BucketSource.AGENT_MEMORY)
+            # Phase 8: don't leak another user's ``scope=user`` memory
+            # through the agent search surface. Mirrors
+            # ``TopicService.retrieve_buckets`` + Phase 3 resolver.
+            .where(visible_to_user_clause(self._user_id))
             .order_by("dist")
             .limit(limit)
         )

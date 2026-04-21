@@ -1,7 +1,7 @@
 # Knowledge buckets consolidation — plan
 
 **Status:** Phases 1–3, 4a, 4b, 5a, 5b, 5c, 5d, 6a, 6b, 6c, 7a,
-7b, 7c landed. Backend consolidation closed — `bucket_articles` is
+7b, 7c, 8 landed. Backend consolidation closed — `bucket_articles` is
 the sole read surface (retriever, agent tools, `/articles`
 endpoint, `summary_count` on bucket listings); `bucket_summaries`
 is maintained for write-back compat only (deprecated, removal in
@@ -22,9 +22,16 @@ verbatim description + priority/team/labels/updated metadata
 block). Both use GraphQL/REST via injectable `httpx.AsyncClient`
 for deterministic tests. Unsupported `resource_ref` shapes fall
 back to the stub with a logged warning, so Phase 7b buckets keep
-working. Next: multi-page sync (Notion database, Linear team),
-Confluence fetcher (same registry), Phase 8 (offboarding audio
-transcript ingestion), Phase 9 (scope-driven sidebar IA).
+working. Phase 8 slots in the per-user memory bucket: a shared
+visibility helper (`scope=user` rows only visible to owner) is now
+enforced across `retrieve_buckets`, `search_buckets` tool,
+`list_buckets`, and `create_bucket`; `ensure_user_memory_bucket`
+helper lazily mints `my-memory` (slug stable) on first use; new
+`POST /chat/threads/{id}/save-to-memory` packs a thread into the
+caller's private bucket without archiving. Next: multi-page
+sync (Notion database, Linear team), Confluence fetcher (same
+registry), consent toggle for auto-save, Phase 9 (scope-driven
+sidebar IA).
 **Scope:** unify the three "knowledge" surfaces (agent-memory buckets,
 `.ship/knowledge/*.md` disk-lister, `KbChunk` RAG index) under one
 `Scope × Source × Article` model, so every knowledge bucket has an
@@ -582,9 +589,63 @@ Per-source surface:
 
 ### Phase 8 — User-memory bucket
 
-Per-user bucket (scope='user') auto-created on first sign-in.
-Navigator writes to it at end-of-thread with consent. Retrieval uses
-it as a private overlay alongside workspace/project/repo buckets.
+Per-user bucket (`scope=user`, `source_kind=agent_memory`) minted
+lazily on first save. Retrieval treats it as a private overlay
+alongside workspace/project/repo buckets (Phase 3 ladder already
+gave it the highest priority for the caller). Navigator writes via
+an explicit user action (`save-to-memory`) rather than an
+automatic end-of-thread summary — when a consent toggle lands it
+will reuse the same endpoint so the write path stays stable.
+
+What landed:
+
+- `backend/app/services/bucket_visibility.py` — one-liner
+  predicate `visible_to_user_clause(caller_user_id)`. Admits every
+  non-USER scope; admits USER-scoped rows only when `user_id`
+  matches the caller. Composes into any existing `select(KB)`
+  without changing callers' workspace / archived / status filters.
+- `backend/app/services/agent/topic.py` — `retrieve_buckets`
+  composes the helper. Same Phase 5c / `agent_memory` / published
+  / embedded filters, plus the visibility clause — another
+  user's packed thread can no longer leak into the caller's
+  warmed-context prompt.
+- `backend/app/services/agent/tools.py` — `search_buckets` tool
+  mirrors the same clause so the LLM can't sidestep privacy by
+  routing through a tool call.
+- `backend/app/api/v1/routes/chat.py`:
+  - `list_buckets` gains the visibility clause so the console
+    /knowledge surface never lists another user's private rows.
+  - `create_bucket` with `scope_kind=user` now rejects a
+    `user_id` that isn't `auth.user.id` with 403 — silent
+    "bucket attributed to a user who can't read it" rows were
+    possible before.
+- `backend/app/services/distiller_sources.py` —
+  `ensure_user_memory_bucket(session, workspace_id, user_id)`.
+  Thin wrapper over the existing `ensure_bucket` with pinned
+  slug (`my-memory`), name (`My memory`), scope (user), and
+  source (agent_memory). Idempotent via the partial unique
+  `uq_knowledge_buckets_user_slug` so concurrent first-writes
+  don't race to create two rows.
+- `POST /v1/workspaces/{ws}/chat/threads/{id}/save-to-memory` —
+  Phase 8's headline endpoint. Loads the thread, mints
+  `my-memory` if missing, and calls `pack_topic(bucket_id=...)`.
+  Key differences from `/pack`: membership role is `ROLES_READ`
+  (packing into your own bucket is a user action, not an admin
+  one), thread stays `active` after save, and the target bucket
+  is always the caller's `scope=user` row — no `bucket_id` /
+  `bucket_slug` / `bucket_name` inputs. Response shape is the
+  same `BucketSummaryOut` the console already renders.
+- `backend/tests/test_v1_user_memory_bucket.py` — 11 tests:
+  helper idempotency + per-user uniqueness, visibility predicate
+  hides other users' USER rows and keeps workspace rows for all,
+  `create_bucket` self-vs-other, `list_buckets` isolation,
+  `save-to-memory` happy path (mints bucket, does not archive),
+  idempotent second call, empty thread → 400, unknown thread
+  → 404. Full regression: **450 / 450 pass**, no new flakes.
+
+Explicitly out of scope (moves to a follow-up): automatic
+end-of-thread save (needs consent UX), cross-thread "forget this"
+button, per-user quota on `my-memory` articles.
 
 ### Phase 9 — IA restructure + sidebar
 
@@ -621,6 +682,27 @@ Improvements also respect it.
 
 ## Changelog
 
+- **2026-04-21** — Phase 8 shipped: per-user memory bucket.
+  Shared visibility helper
+  (`backend/app/services/bucket_visibility.py`) enforces "user
+  sees workspace/project/repo freely, USER-scoped only when they
+  own it" at four choke points: `TopicService.retrieve_buckets`,
+  the `search_buckets` agent tool, the `GET /buckets` list
+  endpoint, and the `POST /buckets` create guard (403 on minting
+  for another user). New `ensure_user_memory_bucket` helper lazily
+  creates the canonical `my-memory` bucket (`scope=user`,
+  `source_kind=agent_memory`) on first save — idempotent via the
+  existing partial unique. New endpoint `POST
+  /v1/workspaces/{ws}/chat/threads/{id}/save-to-memory` packs a
+  thread into the caller's bucket without archiving the thread
+  (companion to `/pack`) — membership role `ROLES_READ`, explicit
+  user action = implicit consent. 11 new tests
+  (`test_v1_user_memory_bucket.py`): helper idempotency + per-user
+  uniqueness, visibility predicate, `create_bucket` self-vs-other,
+  `list_buckets` isolation, save-to-memory happy path / idempotent
+  resave / empty-thread / unknown-thread. Full regression: 450/450
+  pass (pre-existing failures in `test_manifest_and_catalog.py` +
+  `test_v1_workspace_artifacts.py` remain, same as Phase 7c).
 - **2026-04-21** — Phase 7c extended: Linear fetcher landed.
   New module `backend/app/services/connectors/linear.py` registers
   for `Integration.kind='linear'` and handles
