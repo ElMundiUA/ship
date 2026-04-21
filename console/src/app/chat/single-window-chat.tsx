@@ -30,6 +30,7 @@
  */
 
 import {
+  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -288,7 +289,10 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
         setAwaitingFirstDelta(false);
         // Finalize: drop the streaming flag on whichever assistant
         // row was live, so new tool calls in a *future* turn don't
-        // re-target the same row.
+        // re-target the same row. We intentionally do NOT clear
+        // ``tools`` here — the tool trail stays visible as a
+        // compact log of what the agent did on this turn. It gets
+        // cleared on the next ``send`` / ``resetConversation``.
         setMessages((prev) => {
           const idx = findLastIndex(
             prev,
@@ -299,7 +303,6 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
           next[idx] = { ...next[idx], streaming: false };
           return next;
         });
-        setTools([]);
         setBottomSpacerPx(0);
         return;
       }
@@ -307,7 +310,6 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
         setErrorText(evt.detail ?? evt.error ?? "Agent error");
         setStreaming(false);
         setAwaitingFirstDelta(false);
-        setTools([]);
         setBottomSpacerPx(0);
         return;
       }
@@ -455,6 +457,10 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
     }
     return -1;
   }, [visibleMessages]);
+  const hasStreamingAssistant = useMemo(
+    () => visibleMessages.some((m) => m.role === "assistant" && !!m.streaming),
+    [visibleMessages],
+  );
 
   // Map each visible message to how many characters we should
   // render right now. Non-streaming rows (historical + finalized
@@ -529,28 +535,32 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
             <EmptyHint />
           ) : (
             <div className="space-y-6">
-              {visibleMessages.map((m, i) => (
-                <MessageRow
-                  key={m.id}
-                  message={m}
-                  animate={animatedIdsRef.current.has(m.id)}
-                  revealLen={revealMap.get(m.id) ?? m.body.length}
-                  anchorRef={
-                    i === lastUserIndex && m.role === "user"
-                      ? lastUserAnchorRef
-                      : null
-                  }
-                />
-              ))}
-              {/* Between submit and first delta → "Thinking" card.
-                  Shown only when there's no streaming assistant yet. */}
-              {awaitingFirstDelta &&
-              !visibleMessages.some(
-                (m) => m.role === "assistant" && m.streaming,
-              ) ? (
-                <ThinkingCard />
-              ) : null}
-              {tools.length > 0 ? <ToolCallTrail rows={tools} /> : null}
+              {visibleMessages.map((m, i) => {
+                const isLastUser =
+                  i === lastUserIndex && m.role === "user";
+                return (
+                  <Fragment key={m.id}>
+                    <MessageRow
+                      message={m}
+                      animate={animatedIdsRef.current.has(m.id)}
+                      revealLen={revealMap.get(m.id) ?? m.body.length}
+                      anchorRef={isLastUser ? lastUserAnchorRef : null}
+                    />
+                    {/* Activity for the current turn sits *between*
+                        the user prompt and the upcoming/ongoing
+                        assistant reply — chronologically correct
+                        and visually decoupled from any bubble. */}
+                    {isLastUser && tools.length > 0 ? (
+                      <ToolCallTrail rows={tools} />
+                    ) : null}
+                    {isLastUser &&
+                    awaitingFirstDelta &&
+                    !hasStreamingAssistant ? (
+                      <ThinkingLine />
+                    ) : null}
+                  </Fragment>
+                );
+              })}
               {/* Empty runway so the scroller can keep the fresh
                   user message pinned near the top of the viewport
                   while the reply streams in below. Shrinks back
@@ -647,74 +657,46 @@ function MessageRow({
   );
 }
 
-function ThinkingCard() {
-  return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3">
-      <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-lilac/70">
-        Ship
-      </div>
-      <span className="chat-shimmer text-[13px] font-medium">
-        Thinking…
-      </span>
-    </div>
-  );
+function ThinkingLine() {
+  // Plain shimmer line — no bubble / border / background. Sits
+  // inline between the user's prompt and the incoming reply.
+  return <div className="chat-shimmer text-[13px]">Thinking…</div>;
 }
 
 function ToolCallTrail({ rows }: { rows: ToolCallRow[] }) {
   return (
-    <div className="space-y-2">
+    <div className="space-y-1">
       {rows.map((t) => (
-        <ToolCallCard key={t.id} row={t} />
+        <ToolCallRow key={t.id} row={t} />
       ))}
     </div>
   );
 }
 
-function ToolCallCard({ row }: { row: ToolCallRow }) {
+function ToolCallRow({ row }: { row: ToolCallRow }) {
+  // Single-line, card-less rendering. Running tools shimmer; done
+  // tools go to a muted static colour; errors go rose. The label
+  // is ``name · key=value · key=value`` so the user can see what
+  // arguments were used without a second row.
+  const state = !row.result ? "running" : row.result.ok ? "ok" : "error";
   const summary = toolArgSummary(row.args);
-  const state = !row.result
-    ? "running"
-    : row.result.ok
-      ? "ok"
-      : "error";
-
+  const name = prettyToolName(row.name);
+  const label = summary ? `${name} · ${summary}` : name;
   const toneClass =
     state === "running"
-      ? "border-white/10 bg-white/[0.03]"
+      ? "chat-shimmer"
       : state === "ok"
-        ? "border-emerald-400/25 bg-emerald-400/[0.04]"
-        : "border-rose-400/30 bg-rose-500/[0.05]";
-
+        ? "text-white/45"
+        : "text-rose-300/80";
   return (
-    <div
-      className={`rounded-2xl border px-4 py-3 transition ${toneClass}`}
-    >
-      <div className="flex items-center gap-2 text-[11px] font-semibold">
-        <StatusDot state={state} />
-        {state === "running" ? (
-          <span className="chat-shimmer uppercase tracking-[0.2em]">
-            {prettyToolName(row.name)}
-          </span>
-        ) : (
-          <span
-            className={`uppercase tracking-[0.2em] ${
-              state === "ok" ? "text-emerald-300/90" : "text-rose-300/90"
-            }`}
-          >
-            {prettyToolName(row.name)}
-          </span>
-        )}
-        {state !== "running" ? (
-          <span className="text-[10px] font-normal normal-case tracking-normal text-white/40">
-            {state === "ok" ? "done" : row.result?.error ?? "failed"}
-          </span>
-        ) : null}
-      </div>
-      {summary ? (
-        <div className="mt-1 truncate text-[11px] text-white/55">
-          {summary}
-        </div>
-      ) : null}
+    <div className="flex items-center gap-2 text-[12px] leading-snug">
+      <StatusDot state={state} />
+      <span className={`min-w-0 flex-1 truncate ${toneClass}`}>
+        {label}
+        {state === "error" && row.result?.error
+          ? ` — ${row.result.error}`
+          : null}
+      </span>
     </div>
   );
 }
