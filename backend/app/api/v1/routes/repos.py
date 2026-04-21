@@ -415,6 +415,38 @@ async def activate_repos(
         preset=seed_preset,
     )
 
+    # Phase 2 consolidation: on first activation, mirror each new
+    # repo's ``.ship/knowledge/*.md`` into ``knowledge_buckets`` so
+    # the operator sees the /knowledge list populated without having
+    # to push an unrelated commit. Scoped to ``added`` only — updates
+    # and removes are no-ops here; push webhooks + manual reindex own
+    # those paths. Failures are swallowed per-repo so one misbehaving
+    # repo doesn't abort the whole activation transaction.
+    if added:
+        from backend.app.services.bucket_repo_files_sync import (
+            sync_repo_files,
+        )
+
+        for ext_id in added:
+            new_row = (
+                await session.execute(
+                    select(WorkspaceRepo).where(
+                        WorkspaceRepo.workspace_id == workspace_id,
+                        WorkspaceRepo.external_id == ext_id,
+                    )
+                )
+            ).scalars().first()
+            if new_row is None:
+                continue
+            try:
+                await sync_repo_files(session, new_row, install)
+            except Exception:  # pragma: no cover — defensive
+                # Swallow: next push / manual reindex will retry.
+                # Don't log the traceback verbatim; the audit log
+                # already records the activation and the push-webhook
+                # path logs its own failures.
+                continue
+
     session.add(
         AuditLog(
             workspace_id=workspace_id,
@@ -608,6 +640,22 @@ async def reindex_repo_kb_route(
             ),
         ) from exc
 
+    # Phase 2 consolidation: mirror into ``knowledge_buckets`` so the
+    # operator console's /knowledge page reflects the same reindex run.
+    # Failures here are non-fatal for the embedder's audit trail —
+    # logged + captured in the bucket-sync counters, not the 200
+    # response shape (which is the KB indexer's contract).
+    try:
+        from backend.app.services.bucket_repo_files_sync import (
+            sync_repo_files,
+        )
+
+        bucket_report = await sync_repo_files(
+            session, row, install, settings=settings
+        )
+    except Exception:
+        bucket_report = None
+
     session.add(
         AuditLog(
             workspace_id=workspace_id,
@@ -621,6 +669,15 @@ async def reindex_repo_kb_route(
                 "files_indexed": report.files_indexed,
                 "chunks_written": report.chunks_written,
                 "chunks_deleted": report.chunks_deleted,
+                "buckets_created": (
+                    bucket_report.buckets_created if bucket_report else 0
+                ),
+                "buckets_updated": (
+                    bucket_report.buckets_updated if bucket_report else 0
+                ),
+                "buckets_archived": (
+                    bucket_report.buckets_archived if bucket_report else 0
+                ),
             },
         )
     )
