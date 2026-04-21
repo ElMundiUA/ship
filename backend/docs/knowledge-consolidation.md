@@ -1,6 +1,7 @@
 # Knowledge buckets consolidation — plan
 
-**Status:** Phases 1–3 landed. Phase 5a (articles table + dual-write) landed.
+**Status:** Phases 1–3 landed. Phase 5a–5b landed (articles table + dual-write
++ backfill from `bucket_summaries`). Phase 5c (read-path cutover) next.
 **Scope:** unify the three "knowledge" surfaces (agent-memory buckets,
 `.ship/knowledge/*.md` disk-lister, `KbChunk` RAG index) under one
 `Scope × Source × Article` model, so every knowledge bucket has an
@@ -184,11 +185,14 @@ Split into three landing slices so we can ship incrementally:
   Migration is add-only; no reads are cut over yet. Backfill for
   pre-Phase-5a tenants happens lazily on the next sync (the fast
   path still populates a missing article).
-- **Phase 5b.** Data migration: fold every `bucket_summaries` row
-  into `bucket_articles` (one article per summary, `thread_id`
-  preserved in `provenance`, status=`published`). `agent_memory`
-  buckets then also have articles and we can cut over all write
-  paths.
+- **Phase 5b (landed).** Data migration: every `bucket_summaries`
+  row gets a mirror `bucket_articles` row with slug
+  `thread-<uuid-hex>`, the summary's embedding carried over verbatim,
+  and provenance `{source_kind: "agent_memory", summary_id,
+  thread_id, created_by_user_id, packed_at}`. `TopicService.pack_topic`
+  dual-writes on new packs so the mirror stays current. Idempotent by
+  deterministic slug; the bulk Python backfill and the SQL data
+  migration can run in either order.
 - **Phase 5c.** Read-path cutover: agent tool
   `get_knowledge_bucket`, console detail page, and the Distiller
   all read from `bucket_articles`. `bucket_summaries` becomes a
@@ -278,3 +282,15 @@ Improvements also respect it.
   never collides with dormant history. Legacy rows without an
   article get backfilled on the next sync. 6 new tests on top of the
   existing sync suite (12 total).
+- **2026-04-21** — Phase 5b shipped: `bucket_summaries` → `bucket_articles`
+  mirror. New service `backend.app.services.bucket_summary_articles`
+  exposes `mirror_summary_to_article`, `backfill_missing_articles_for_bucket`,
+  `backfill_missing_articles_for_workspace`; `TopicService.pack_topic`
+  dual-writes so new packs land in both stores. Alembic `0016_backfill_summary_articles`
+  does a one-shot SQL backfill (pgcrypto `digest(...,'sha256')` for
+  content_sha, slug `thread-<uuid-hex>`, embedding copied by pgvector
+  cast). Idempotent by deterministic slug. 9 new tests.
+- **2026-04-21** — Fixed `.github/workflows/e2e-console.yml` — the step-level
+  `if: ${{ secrets.* }}` is forbidden by GitHub, which silently broke the
+  workflow on every push. Moved the empty-secret bail into bash inside the
+  step. `actionlint` clean, workflow files parse again.
