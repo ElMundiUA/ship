@@ -32,7 +32,11 @@ COMMANDS
                                        .ship/inventory.json for 'shipctl init --bootstrap'.
 
   shipctl config init|get|set|validate|show|path     — .ship/config.yml management
-  shipctl sync [--check-only] [--only <kind:id>...] [--channel <c>] [--force-unpin] [--dry-run]
+  shipctl sync [--check-only] [--only <kind:id>...] [--channel <c>] [--force-unpin]
+               [--dry-run] [--lock] [--json]
+                                     — fetch artifacts into .ship/cache. With --lock,
+                                       also writes .ship/shipctl.lock.json covering every
+                                       pattern the declared lanes depend on (Phase 4).
 
   shipctl new <name> [--preset ...] [--tracker ...] [--ci ...] [--agents ...] [--here] [--yes]
                                      — bootstrap a fresh repo: git init + README + .ship/config.yml

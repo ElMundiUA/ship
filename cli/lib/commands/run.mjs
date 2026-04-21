@@ -21,6 +21,7 @@
  * warning to stderr).
  */
 
+import fs from "node:fs";
 import path from "node:path";
 
 import { readConfig, findShipRoot } from "../config/io.mjs";
@@ -29,6 +30,7 @@ import { fetchArtifact } from "../http.mjs";
 import { resolveShipRepoRootForCatalog } from "../find-ship-root.mjs";
 import { readArtifactFile } from "../artifacts/fs-index.mjs";
 import { decideRun, readMarker, writeMarker, sha256 } from "../state/idempotency.mjs";
+import { readLockfile, lookupLock, verifyBody } from "../state/lockfile.mjs";
 
 const EXIT_OK = 0;
 const EXIT_USAGE = 1;
@@ -52,8 +54,10 @@ FLAGS
   --trigger <kind>          Force the trigger context (event|schedule|manual|once).
                             If omitted, inferred from GITHUB_EVENT_NAME / SHIP_RUN_TRIGGER.
   --dry-run                 Print the plan without touching idempotency markers or callback.
-  --offline                 Read patterns from .ship/patterns/ instead of the methodology API.
-                            (Phase 4 — today this falls back to the local Ship monorepo copy.)
+  --offline                 Resolve patterns exclusively via .ship/shipctl.lock.json
+                            and .ship/cache/ — never talks to the methodology API.
+                            Fails if the lockfile or a cached body is missing.
+                            Generate one with 'shipctl sync --lock'.
   --ship-run-id <uuid>      Pipeline run id. Falls back to SHIP_RUN_ID env.
   --ship-callback-url <url> Full callback URL. Falls back to SHIP_CALLBACK_URL env.
   --ship-run-token <jwt>    Short-lived bearer. Falls back to SHIP_RUN_TOKEN env.
@@ -381,41 +385,133 @@ function resolveAgentProvider(config, laneId) {
 }
 
 async function fetchPatternBody({ patternId, patternVersion, offline, root, ctx, config }) {
+  /* --offline takes precedence when requested: we MUST NOT hit the
+   * network or fall through to another source. The lockfile is the
+   * single source of truth. This makes CI runs reproducible and keeps
+   * air-gapped installs honest. */
+  if (offline) return fetchFromLockfile({ patternId, root, strict: true });
+
   /* 1) Running inside the Ship monorepo — read from disk. */
   const shipRepo = resolveShipRepoRootForCatalog();
   if (shipRepo) {
     const file = readArtifactFile(shipRepo, "pattern", patternId);
-    if (file) return { ok: true, body: file.content, source: "monorepo" };
-  }
-
-  /* 2) --offline: read from the customer's materialised copy.
-   * Phase 4 will introduce a proper lock file; today we accept any
-   * `.ship/patterns/<id>.md` the operator dropped alongside the config. */
-  if (offline) {
-    const local = path.join(root, ".ship", "patterns", `${patternId}.md`);
-    try {
-      const { readFileSync } = await import("node:fs");
-      const body = readFileSync(local, "utf8");
-      return { ok: true, body, source: "offline" };
-    } catch (err) {
-      return {
-        ok: false,
-        error: `--offline: ${local} not found (${err instanceof Error ? err.message : err}). Phase 4 will add 'shipctl sync --lock' to materialise patterns.`,
-      };
+    if (file) {
+      const verification = verifyAgainstLockfile({
+        root,
+        patternId,
+        body: file.content,
+      });
+      if (verification.warning) console.error(`warn: ${verification.warning}`);
+      return { ok: true, body: file.content, source: "monorepo", lock: verification };
     }
   }
 
-  /* 3) Network: same resolver `shipctl kickoff` uses. */
+  /* 2) Network: same resolver `shipctl kickoff` uses. */
   const base = resolveMethodologyBase(ctx, config);
   try {
     const { content } = await fetchArtifact(base, "pattern", patternId, patternVersion || undefined);
-    return { ok: true, body: content, source: "http" };
+    const verification = verifyAgainstLockfile({ root, patternId, body: content });
+    if (verification.warning) console.error(`warn: ${verification.warning}`);
+    return { ok: true, body: content, source: "http", lock: verification };
   } catch (err) {
+    /* If the network call failed but we have a locked copy on disk, let
+     * the operator fall back with a clear warning. This mirrors the
+     * `npm install --offline` escape hatch when the registry is down. */
+    const fallback = fetchFromLockfile({ patternId, root, strict: false });
+    if (fallback.ok) {
+      console.error(
+        `warn: network fetch failed for pattern/${patternId}; using locked copy (${fallback.source}).`,
+      );
+      return fallback;
+    }
     return {
       ok: false,
       error: `failed to fetch pattern ${patternId}: ${err instanceof Error ? err.message : err}`,
     };
   }
+}
+
+function verifyAgainstLockfile({ root, patternId, body }) {
+  let lock;
+  try {
+    lock = readLockfile(root);
+  } catch (err) {
+    return { present: false, ok: null, warning: `lockfile unreadable: ${err.message}` };
+  }
+  if (!lock) return { present: false, ok: null };
+  const entry = lookupLock(lock, "pattern", patternId);
+  if (!entry) {
+    return {
+      present: true,
+      ok: null,
+      warning: `lockfile present but has no entry for pattern/${patternId}; run 'shipctl sync --lock'.`,
+    };
+  }
+  const result = verifyBody(entry, body);
+  if (!result.ok) {
+    return {
+      present: true,
+      ok: false,
+      reason: result.reason,
+      expected: result.expected,
+      actual: result.actual,
+      warning: `pattern/${patternId} sha256 drift vs lockfile (${result.reason}; expected ${result.expected?.slice(0, 8)} got ${result.actual?.slice(0, 8)})`,
+    };
+  }
+  return { present: true, ok: true, version: entry.version };
+}
+
+function fetchFromLockfile({ patternId, root, strict }) {
+  let lock;
+  try {
+    lock = readLockfile(root);
+  } catch (err) {
+    return {
+      ok: false,
+      error: `lockfile unreadable: ${err.message}. Run 'shipctl sync --lock' to rebuild.`,
+    };
+  }
+  if (!lock) {
+    if (!strict) return { ok: false, error: "lockfile missing" };
+    return {
+      ok: false,
+      error:
+        "--offline requires .ship/shipctl.lock.json. Run 'shipctl sync --lock' in an online environment first.",
+    };
+  }
+  const entry = lookupLock(lock, "pattern", patternId);
+  if (!entry) {
+    return {
+      ok: false,
+      error:
+        strict
+          ? `--offline: pattern/${patternId} missing from .ship/shipctl.lock.json. Run 'shipctl sync --lock' to re-resolve.`
+          : `pattern/${patternId} not in lockfile`,
+    };
+  }
+  const abs = path.join(root, entry.cached_path);
+  let body;
+  try {
+    body = fs.readFileSync(abs, "utf8");
+  } catch (err) {
+    return {
+      ok: false,
+      error: `--offline: cached pattern body unreadable at ${entry.cached_path} (${err instanceof Error ? err.message : err}). Run 'shipctl sync --lock'.`,
+    };
+  }
+  const verification = verifyBody(entry, body);
+  if (!verification.ok) {
+    return {
+      ok: false,
+      error: `--offline: sha256 mismatch for pattern/${patternId} (expected ${verification.expected?.slice(0, 8)}, got ${verification.actual?.slice(0, 8)}). Re-run 'shipctl sync --lock'.`,
+    };
+  }
+  return {
+    ok: true,
+    body,
+    source: "lockfile",
+    lock: { present: true, ok: true, version: entry.version },
+  };
 }
 
 function resolveMethodologyBase(ctx, config) {

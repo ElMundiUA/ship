@@ -298,6 +298,59 @@ repo for non-enterprise customers. Enterprise customers can mirror the
 same file into their own org and point `--owner/--repo` at the fork.
 Inlining the reusable workflow is out of scope for Phase 3.
 
+## Lockfile (`.ship/shipctl.lock.json`)
+
+Phase 4 introduces a version-1 lockfile so `shipctl run` behaves
+deterministically across environments. The file records — for every
+pattern the config's lanes depend on, plus any pattern the config pins
+explicitly — the resolved `version`, a `content_sha256` (same
+RFC-0005 normalisation used by the cache), the on-disk
+`cached_path`, and the provenance (`monorepo`, `http`, or `inline`).
+
+```json
+{
+  "version": 1,
+  "generated_at": "2026-04-21T17:00:00Z",
+  "shipctl_version": "0.12.0",
+  "source": { "base_url": "https://ship.elmundi.com/api/methodology", "channel": "stable" },
+  "artifacts": {
+    "pattern/seed-knowledge-starters": {
+      "version": "1.0.0",
+      "content_sha256": "68ea37b4…",
+      "cached_path": ".ship/cache/pattern/seed-knowledge-starters@1.0.0/ARTIFACT.md",
+      "source": "http",
+      "pinned": false,
+      "channel": "stable"
+    }
+  },
+  "notes": []
+}
+```
+
+Lifecycle
+
+- `shipctl sync --lock` materialises every pattern (cache → monorepo →
+  HTTP fallback) and rewrites the lockfile. It is tolerant of manifest
+  outages: a missing or 5xx manifest is reported as a note but does
+  not block lock-building, which is the behaviour air-gapped or
+  internal-fork customers rely on. Unresolved patterns surface both in
+  the human output and the `--json` payload, and the command exits
+  non-zero.
+- `shipctl run`:
+  - With `--offline`, resolves patterns exclusively via the lockfile +
+    the `cached_path` body, rejecting any sha mismatch.
+  - Without `--offline`, reads via the usual chain (monorepo → HTTP)
+    and, when a lockfile is present, verifies the resolved body's
+    `content_sha256` against the locked entry. A mismatch prints a
+    warning to stderr but does not fail the run — the operator can
+    re-lock explicitly.
+  - If the network fetch fails and a locked body is available on
+    disk, it falls back with a warning (analogous to
+    `npm install --offline`).
+
+The lockfile is always safe to commit; it records only content hashes
+and paths, no secrets.
+
 ## Migration
 
 `shipctl migrate` is a new command. Algorithm:
@@ -359,7 +412,11 @@ README under the development section, added in the same PR series):
 - **Phase 2** — Schema v2 + `shipctl migrate`.
 - **Phase 3** — Reusable `run-agent.yml` + `shipctl lanes install`
   (thin wrapper generator, idempotent, banner-guarded).
-- **Phase 4** — Lock file + offline.
+- **Phase 4** — `shipctl sync --lock` materialises every lane pattern
+  into `.ship/cache/` and writes `.ship/shipctl.lock.json`; `shipctl
+  run --offline` resolves patterns exclusively via the lockfile + cache
+  and enforces `content_sha256` parity. Online runs verify against the
+  lockfile when present and warn on drift.
 - **Phase 5** — Backend idempotency store.
 - **Phase 6** — Deprecation close-out for `artifact_kind=workflow`.
 - **Phase 7** — Console UI + docs.
