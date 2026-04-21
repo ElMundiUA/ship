@@ -8,7 +8,6 @@ export const dynamic = "force-dynamic";
 import {
   Badge,
   ButtonGhost,
-  ButtonPrimary,
   Card,
   CardHeader,
   LiveBanner,
@@ -19,16 +18,20 @@ import {
   getMe,
   isApiConfigured,
   listActivatedRepos,
+  listIntegrations,
   listKnowledgeBuckets,
   listResolvedBuckets,
   listWorkspaces,
 } from "@/lib/api/client";
 import { getSessionToken } from "@/lib/api/session";
 import type {
+  ApiIntegration,
   ApiKnowledgeBucket,
   ApiResolvedBucket,
   ApiUser,
 } from "@/lib/api/types";
+
+import { NewBucketDialog } from "./new-bucket-dialog";
 import {
   formatBytes,
   knowledgeBuckets as mockBuckets,
@@ -51,6 +54,8 @@ type LiveData = {
   resolvedBuckets?: ApiResolvedBucket[];
   repos: ApiActivatedRepo[];
   me: ApiUser | null;
+  /** Integrations available for connector-bucket creation. Empty if admin perms missing. */
+  integrations: ApiIntegration[];
 };
 
 type MockData = {
@@ -86,9 +91,14 @@ async function load(searchParams: SearchParams): Promise<Loaded> {
     // Fan out only the calls we need for the current scope.
     // Repos + me always feed the pill; bucket data is one or the
     // other depending on what the user selected.
-    const [reposRaw, me] = await Promise.all([
+    const [reposRaw, me, integrationsRaw] = await Promise.all([
       listActivatedRepos(ws.id, token).catch(() => [] as ApiActivatedRepo[]),
       getMe(token).catch(() => null as ApiUser | null),
+      // Integrations list is admin-only; viewers get 403 back. Fail
+      // open with an empty list so the page still renders for them
+      // (they just won't see the connector tab in the new-bucket
+      // dialog, which is the correct behaviour).
+      listIntegrations(ws.id, token).catch(() => [] as ApiIntegration[]),
     ]);
 
     let legacyBuckets: ApiKnowledgeBucket[] | undefined;
@@ -122,6 +132,7 @@ async function load(searchParams: SearchParams): Promise<Loaded> {
       resolvedBuckets,
       repos: reposRaw,
       me,
+      integrations: integrationsRaw,
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -160,12 +171,7 @@ export default async function KnowledgeIndexPage({
       kicker={`${ws.name} · knowledge`}
       title="Knowledge buckets"
       scopePill={scopePill}
-      actions={
-        <>
-          <ButtonGhost>Browse global packs</ButtonGhost>
-          <ButtonPrimary>+ New bucket</ButtonPrimary>
-        </>
-      }
+      actions={<ButtonGhost>Browse global packs</ButtonGhost>}
     >
       {data.source === "live" ? (
         <LiveBanner workspace={ws.slug} />
@@ -182,6 +188,21 @@ export default async function KnowledgeIndexPage({
         </code>{" "}
         is still served under &ldquo;workspace&rdquo; scope during the consolidation.
       </p>
+
+      {data.source === "live" && (
+        <div className="mb-6">
+          <NewBucketDialog
+            integrations={data.integrations}
+            defaultScope={
+              data.scope.kind === "repo"
+                ? "repo"
+                : data.scope.kind === "user"
+                  ? "user"
+                  : "workspace"
+            }
+          />
+        </div>
+      )}
 
       {data.source === "live" ? (
         data.scope.kind === "workspace" ? (

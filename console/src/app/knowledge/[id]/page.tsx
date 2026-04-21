@@ -36,6 +36,7 @@ import {
   workspaces,
 } from "@/lib/mock/cloud";
 
+import { ConnectorCard } from "./connector-card";
 import { UploadCard } from "./upload-card";
 
 const FALLBACK_WS = workspaces[0];
@@ -166,6 +167,25 @@ function LiveView({ data }: { data: LiveData }) {
     (bucket.source_kind == null ||
       uploadCompatibleSources.has(bucket.source_kind));
 
+  // Connector card only for connector_proxy buckets; it renders the
+  // stored integration handle + "Sync now" button.
+  const isConnector =
+    bucket !== null && bucket.source_kind === "connector_proxy";
+  const connectorRef = (bucket?.source_ref ?? null) as {
+    integration_kind?: unknown;
+    resource_ref?: unknown;
+  } | null;
+  const connectorKind =
+    typeof connectorRef?.integration_kind === "string"
+      ? connectorRef.integration_kind
+      : null;
+  const connectorResourceRef =
+    connectorRef?.resource_ref &&
+    typeof connectorRef.resource_ref === "object" &&
+    !Array.isArray(connectorRef.resource_ref)
+      ? (connectorRef.resource_ref as Record<string, unknown>)
+      : {};
+
   const scopeKind = bucket?.scope_kind ?? (legacy?.visibility ?? "workspace");
   const sourceKind = bucket?.source_kind ?? "repo_files";
 
@@ -233,6 +253,15 @@ function LiveView({ data }: { data: LiveData }) {
         </div>
 
         <div className="space-y-5">
+          {isConnector && bucket && connectorKind && (
+            <ConnectorCard
+              workspaceId={ws.id}
+              slug={bucket.slug}
+              integrationKind={connectorKind}
+              resourceRef={connectorResourceRef}
+            />
+          )}
+
           {canUpload && bucket && (
             <UploadCard
               workspaceId={ws.id}
@@ -368,6 +397,11 @@ function provenanceHint(article: ApiBucketArticle): string | null {
     return typeof p.filename === "string"
       ? `uploaded: ${p.filename}`
       : "uploaded file";
+  }
+  if (kind === "connector_proxy") {
+    const connector =
+      typeof p.connector_kind === "string" ? p.connector_kind : null;
+    return connector ? `synced from ${connector}` : "synced from connector";
   }
   if (kind === "repo_files" && typeof p.path === "string") {
     return `from ${p.path}`;
