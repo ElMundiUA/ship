@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
+import { ScopePill, resolveScopeFromSearch } from "@/components/scope-pill";
 
 // Reads cookies + fetches per request.
 export const dynamic = "force-dynamic";
@@ -14,12 +15,20 @@ import {
   MockBanner,
 } from "@/components/ui";
 import {
+  type ApiActivatedRepo,
+  getMe,
   isApiConfigured,
+  listActivatedRepos,
   listKnowledgeBuckets,
+  listResolvedBuckets,
   listWorkspaces,
 } from "@/lib/api/client";
 import { getSessionToken } from "@/lib/api/session";
-import type { ApiKnowledgeBucket } from "@/lib/api/types";
+import type {
+  ApiKnowledgeBucket,
+  ApiResolvedBucket,
+  ApiUser,
+} from "@/lib/api/types";
 import {
   formatBytes,
   knowledgeBuckets as mockBuckets,
@@ -30,10 +39,18 @@ import {
 
 const FALLBACK_WS = workspaces[0];
 
+type Scope = { kind: "workspace" | "repo" | "user"; repoId: string | null; projectId: string | null };
+
 type LiveData = {
   source: "live";
   workspace: { id: string; slug: string; name: string };
-  buckets: ApiKnowledgeBucket[];
+  scope: Scope;
+  /** Legacy list (.ship/knowledge mirrors + agent memory) — used when scope='workspace'. */
+  legacyBuckets?: ApiKnowledgeBucket[];
+  /** Phase 3 resolver output — used when scope != 'workspace'. */
+  resolvedBuckets?: ApiResolvedBucket[];
+  repos: ApiActivatedRepo[];
+  me: ApiUser | null;
 };
 
 type MockData = {
@@ -44,7 +61,13 @@ type MockData = {
 
 type Loaded = LiveData | MockData;
 
-async function load(): Promise<Loaded> {
+type SearchParams = {
+  scope?: string | string[];
+  repo_id?: string | string[];
+  project_id?: string | string[];
+};
+
+async function load(searchParams: SearchParams): Promise<Loaded> {
   if (!isApiConfigured()) {
     return { source: "mock", workspace: FALLBACK_WS, reason: "backend not configured (SHIP_API_URL unset)" };
   }
@@ -58,11 +81,47 @@ async function load(): Promise<Loaded> {
       return { source: "mock", workspace: FALLBACK_WS, reason: "no workspaces yet — finish onboarding first" };
     }
     const ws = wss[0];
-    const buckets = await listKnowledgeBuckets(ws.id, token);
+    const scope = resolveScopeFromSearch(searchParams);
+
+    // Fan out only the calls we need for the current scope.
+    // Repos + me always feed the pill; bucket data is one or the
+    // other depending on what the user selected.
+    const [reposRaw, me] = await Promise.all([
+      listActivatedRepos(ws.id, token).catch(() => [] as ApiActivatedRepo[]),
+      getMe(token).catch(() => null as ApiUser | null),
+    ]);
+
+    let legacyBuckets: ApiKnowledgeBucket[] | undefined;
+    let resolvedBuckets: ApiResolvedBucket[] | undefined;
+    if (scope.kind === "workspace") {
+      // Keep the legacy list for the default view — it already mirrors
+      // ``repo_files`` into markdown-card shape the grid below renders.
+      legacyBuckets = await listKnowledgeBuckets(ws.id, token);
+    } else {
+      const resp = await listResolvedBuckets(
+        ws.id,
+        {
+          repoId: scope.kind === "repo" ? scope.repoId : undefined,
+          projectId: scope.kind === "repo" ? scope.projectId : undefined,
+        },
+        token,
+      );
+      // In non-workspace scopes we render the effective winners only
+      // — that's the scope the user is currently "inside" per the
+      // Phase 3 ladder. The ``buckets`` array contains every
+      // ancestor/overlay row too, which is useful for admin views
+      // but noisy on the default page.
+      resolvedBuckets = resp.buckets.filter((b) => b.effective);
+    }
+
     return {
       source: "live",
       workspace: { id: ws.id, slug: ws.slug, name: ws.name },
-      buckets,
+      scope,
+      legacyBuckets,
+      resolvedBuckets,
+      repos: reposRaw,
+      me,
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -70,14 +129,37 @@ async function load(): Promise<Loaded> {
   }
 }
 
-export default async function KnowledgeIndexPage() {
-  const data = await load();
+export default async function KnowledgeIndexPage({
+  searchParams,
+}: {
+  searchParams: Promise<SearchParams>;
+}) {
+  const sp = await searchParams;
+  const data = await load(sp);
   const ws = data.workspace;
+
+  const scopePill =
+    data.source === "live" ? (
+      <ScopePill
+        workspaceName={ws.name}
+        repos={data.repos.map((r) => ({ id: r.id, full_name: r.full_name }))}
+        me={
+          data.me
+            ? {
+                id: data.me.id,
+                email: data.me.email,
+                display_name: data.me.display_name,
+              }
+            : null
+        }
+      />
+    ) : undefined;
 
   return (
     <AppShell
       kicker={`${ws.name} · knowledge`}
       title="Knowledge buckets"
+      scopePill={scopePill}
       actions={
         <>
           <ButtonGhost>Browse global packs</ButtonGhost>
@@ -92,19 +174,24 @@ export default async function KnowledgeIndexPage() {
       )}
 
       <p className="mb-5 max-w-3xl text-sm text-white/65">
-        Each bucket maps to a markdown file under{" "}
+        Each bucket lives at a specific scope — workspace-wide, a repo,
+        or your personal overlay. Use the scope pill in the header to
+        switch between them. The legacy mirror of{" "}
         <code className="rounded bg-white/[0.06] px-1.5 py-0.5 font-mono text-[11px] text-aqua/95">
           .ship/knowledge/&lt;slug&gt;.md
         </code>{" "}
-        in your workspace or project repo. The CLI reads the same files via{" "}
-        <code className="rounded bg-white/[0.06] px-1.5 py-0.5 font-mono text-[11px] text-aqua/95">
-          shipctl knowledge fetch &lt;slug&gt;
-        </code>
-        .
+        is still served under &ldquo;workspace&rdquo; scope during the consolidation.
       </p>
 
       {data.source === "live" ? (
-        <LiveBucketGrid buckets={data.buckets} />
+        data.scope.kind === "workspace" ? (
+          <LegacyBucketGrid buckets={data.legacyBuckets ?? []} />
+        ) : (
+          <ResolvedBucketGrid
+            buckets={data.resolvedBuckets ?? []}
+            scope={data.scope}
+          />
+        )
       ) : (
         <MockBucketGrid />
       )}
@@ -112,7 +199,7 @@ export default async function KnowledgeIndexPage() {
   );
 }
 
-function LiveBucketGrid({ buckets }: { buckets: ApiKnowledgeBucket[] }) {
+function LegacyBucketGrid({ buckets }: { buckets: ApiKnowledgeBucket[] }) {
   if (buckets.length === 0) {
     return (
       <Card className="text-center">
@@ -172,6 +259,79 @@ function LiveBucketGrid({ buckets }: { buckets: ApiKnowledgeBucket[] }) {
       ))}
     </section>
   );
+}
+
+function ResolvedBucketGrid({
+  buckets,
+  scope,
+}: {
+  buckets: ApiResolvedBucket[];
+  scope: Scope;
+}) {
+  if (buckets.length === 0) {
+    return (
+      <Card className="text-center">
+        <p className="text-sm text-white/70">
+          No buckets visible in this scope yet.{" "}
+          {scope.kind === "repo"
+            ? "Push some .ship/knowledge/*.md files to this repo, or open Navigator and pack a conversation into a repo bucket."
+            : "Pack a Navigator conversation into your personal bucket to populate this view."}{" "}
+        </p>
+        <div className="mt-4 flex justify-center gap-2">
+          <Link
+            href="/chat"
+            className="inline-flex items-center gap-1.5 rounded-full border border-aqua/40 bg-aqua/10 px-3 py-1.5 text-xs font-bold text-aqua hover:bg-aqua/20"
+          >
+            Open Navigator →
+          </Link>
+        </div>
+      </Card>
+    );
+  }
+  return (
+    <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+      {buckets.map((b) => (
+        <Card key={b.id} className="flex flex-col" data-testid="resolved-bucket">
+          <div className="flex items-start justify-between gap-3">
+            <div className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-lilac/40 via-aqua/30 to-coral/30 text-xl font-bold text-white">
+              {emojiFor(b.slug)}
+            </div>
+            <div className="flex flex-col items-end gap-1">
+              <Badge tone={scopeTone(b.scope_kind)}>{b.scope_kind}</Badge>
+              <Badge tone="neutral">{b.source_kind.replace("_", " ")}</Badge>
+            </div>
+          </div>
+          <h3 className="mt-3 font-display text-base font-bold text-white">
+            {b.name}
+          </h3>
+          <p className="mt-1 line-clamp-3 text-xs text-white/60">
+            {b.description || "No description."}
+          </p>
+          <dl className="mt-4 grid grid-cols-2 gap-3 text-[11px]">
+            <Stat k="Articles" v={b.summary_count.toString()} />
+            <Stat k="Updated" v={relativeTime(b.updated_at)} />
+          </dl>
+          <div className="mt-auto pt-4">
+            <Link
+              href={`/knowledge/${encodeURIComponent(b.slug)}`}
+              className="font-semibold text-aqua hover:underline"
+            >
+              Open →
+            </Link>
+          </div>
+        </Card>
+      ))}
+    </section>
+  );
+}
+
+function scopeTone(
+  kind: ApiResolvedBucket["scope_kind"],
+): "workspace" | "project" | "ok" | "warn" {
+  if (kind === "workspace") return "workspace";
+  if (kind === "project") return "project";
+  if (kind === "user") return "warn";
+  return "ok";
 }
 
 function MockBucketGrid() {

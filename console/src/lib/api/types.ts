@@ -175,3 +175,77 @@ export type ApiKnowledgeBucket = {
   /** Only present on the detail endpoint. */
   body?: string;
 };
+
+// --- Phase 3: scope-resolved bucket ladder ---------------------------------
+//
+// Backend route: GET /v1/workspaces/{ws}/buckets/resolved
+//   ?repo_id=...&project_id=...
+// One row per ``(scope × slug × source)`` that's visible from the
+// requested context, ordered by priority (workspace ≺ project ≺ repo
+// ⊕ user). ``effective=true`` flags the row that wins its slug in the
+// caller's current scope (what the UI should highlight). See
+// ``backend/docs/knowledge-consolidation.md`` for the scope ladder.
+
+export type ApiBucketScope = "workspace" | "project" | "repo" | "user";
+
+export type ApiBucketSource =
+  | "agent_memory"
+  | "repo_files"
+  | "external_static"
+  | "connector_proxy"
+  | "audio_transcript";
+
+export type ApiResolvedBucket = {
+  id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  scope_kind: ApiBucketScope;
+  source_kind: ApiBucketSource;
+  source_ref: Record<string, unknown> | null;
+  project_id: string | null;
+  repo_id: string | null;
+  user_id: string | null;
+  summary_count: number;
+  archived_at: string | null;
+  created_at: string;
+  updated_at: string;
+  priority: number;
+  effective_scope: ApiBucketScope;
+  effective: boolean;
+};
+
+export type ApiResolvedContext = {
+  workspace_id: string;
+  project_id: string | null;
+  repo_id: string | null;
+  user_id: string;
+};
+
+export type ApiResolvedBucketsResponse = {
+  context: ApiResolvedContext;
+  buckets: ApiResolvedBucket[];
+  winners_by_slug: Record<string, string>;
+};
+
+// --- Phase 5d: canonical article shape -------------------------------------
+
+export type ApiBucketArticleStatus =
+  | "draft"
+  | "published"
+  | "superseded"
+  | "archived";
+
+export type ApiBucketArticle = {
+  id: string;
+  bucket_id: string;
+  slug: string;
+  title: string;
+  body_md: string;
+  version: number;
+  status: ApiBucketArticleStatus;
+  provenance: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  archived_at: string | null;
+};

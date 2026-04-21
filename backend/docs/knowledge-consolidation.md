@@ -1,12 +1,13 @@
 # Knowledge buckets consolidation — plan
 
-**Status:** Phases 1–3, 5a, 5b, 5c, 5d landed. Backend consolidation
+**Status:** Phases 1–3, 4a, 5a, 5b, 5c, 5d landed. Backend consolidation
 closed — `bucket_articles` is the sole read surface (retriever, agent
 tools, new `/articles` endpoint, `summary_count` on bucket listings);
 `bucket_summaries` is maintained for write-back compat only, reads
 removed outside the legacy `/summaries` endpoint (deprecated, removal
-in Phase 9). Phase 4 (scope-pill in AppShell) is the next
-user-visible slice.
+in Phase 9). Phase 4a shipped the first visible UI slice — scope pill
+in AppShell + scope-aware `/knowledge` page. Next: propagate the
+pill to Catalog / Clarifications / Improvements / Navigator.
 **Scope:** unify the three "knowledge" surfaces (agent-memory buckets,
 `.ship/knowledge/*.md` disk-lister, `KbChunk` RAG index) under one
 `Scope × Source × Article` model, so every knowledge bucket has an
@@ -170,11 +171,24 @@ Output sorted low → high priority; consumers can either take all
 (for "what's in scope") or dedupe by slug and keep highest-priority
 (for "effective bucket").
 
-### Phase 4 — Scope pill (frontend, first visible slice)
+### Phase 4 — Scope pill (frontend, first visible slice) — **landed**
 
-AppShell top bar gets a universal `scope-pill` with 5 levels
-(`Everything / Workspace / <Project> / <Repo> / Mine`). URL + cookie
-persisted. First consumers: Knowledge list, Catalog list. Later:
+AppShell top bar gets a universal `scope-pill`. **Phase 4a (shipped)**
+surfaces three levels — `Workspace / <Repo> / Mine` — driven by
+URL query params (`?scope=workspace|repo|user&repo_id=...`). No
+cookie yet; URL is the single source of truth so Server Components
+can mirror the state without hydration dance and bookmarks stay
+valid. `<Project>` appears once the backend exposes a projects API
+(Phase 9).
+
+First consumer: `/knowledge` — when scope is anything other than
+workspace, the page calls `GET /v1/workspaces/{ws}/buckets/resolved`
+(Phase 3) and renders only the rows marked `effective=true`. The
+workspace default still reads from the legacy
+`/v1/workspaces/{ws}/knowledge` endpoint so we don't regress the
+markdown-card grid users see today.
+
+Follow-up consumers (tracked separately): Catalog list,
 Clarifications, Improvements, Navigator (context prefilter).
 
 ### Phase 5 — Article table
@@ -339,3 +353,16 @@ Improvements also respect it.
   buckets too). Legacy `GET .../summaries` stays as-is and is marked
   deprecated. 14 new tests (7 agent-tool cutover + 7 endpoint). Backend
   suite: 379 passed.
+- **2026-04-21** — Phase 4a shipped: first user-visible UI slice.
+  New `ScopePill` client component in the AppShell header (mounted
+  via optional `scopePill` prop so pages that don't care keep the
+  same chrome); `resolveScopeFromSearch` helper for Server Components
+  to mirror the pill state. Typed client helpers `listResolvedBuckets`
+  and `listBucketArticles` added next to the existing knowledge
+  fetchers. `/knowledge` page rewired: workspace scope keeps the
+  legacy `.ship/knowledge/` markdown grid; repo/user scope reads
+  from the Phase 3 resolver and renders `effective=true` rows.
+  Project scope is plumbed through the URL but hidden until the
+  backend projects API ships. 2 new Playwright assertions on the
+  pill's visibility + URL fallback. Console `tsc` + `next lint` +
+  `next build` all green.
