@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "lane": "seed_knowledge_starters",
+  "pattern_id": "seed-knowledge-starters",
+  "pattern_sha256": "1562d90bd191ef0e9ff10b4e02ef38c95000be97526e666b9b05ef2d5702e8d0",
+  "pattern_version": null,
+  "completed_at": "2026-04-21T17:18:19.571Z",
+  "by": {
+    "host": "local"
+  }
+}

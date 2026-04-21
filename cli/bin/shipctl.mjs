@@ -150,6 +150,12 @@ try {
     process.exit(0);
   }
 
+  if (cmd === "run") {
+    const { runCommand } = await import("../lib/commands/run.mjs");
+    await runCommand(ctx, rest);
+    process.exit(0);
+  }
+
   console.error(`Unknown command: ${cmd}\nRun: shipctl help`);
   process.exit(1);
 } catch (err) {

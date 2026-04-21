@@ -54,6 +54,12 @@ COMMANDS
                                        into the customer's agent in CI (see artifacts/patterns/kickoff).
   shipctl migrate [--dry-run] [--yes] [--json] [--cwd …]
                                      — upgrade .ship/config.yml from v1 to v2 (lanes-as-config).
+  shipctl run --lane <id> [--trigger event|schedule|manual|once]
+              [--dry-run] [--offline] [--json] [--cwd …]
+              [--ship-run-id …] [--ship-callback-url …] [--ship-run-token …]
+                                     — RFC-0007 entry-point: resolve a lane from
+                                       .ship/config.yml, fetch its pattern, check idempotency,
+                                       emit the prompt, and report the callback.
   shipctl knowledge init [--workspace <id>] [--repo <id|owner/name>] [--only <csv>] [--json]
                                      — open a PR that seeds .ship/knowledge/*.md starter
                                        buckets (code-style, ui-runbook). Reads SHIP_API_TOKEN.
