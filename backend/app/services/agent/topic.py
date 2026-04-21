@@ -48,6 +48,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.config import Settings
 from backend.app.db.models.agent_memory import (
+    BucketArticle,
+    BucketArticleStatus,
+    BucketSource,
     BucketSummary,
     KbChunk,
     KnowledgeBucket,
@@ -160,12 +163,22 @@ class TopicShiftDecision:
 
 @dataclass(slots=True)
 class BucketHit:
-    """One bucket-summary match returned by :meth:`retrieve_buckets`."""
+    """One bucket-article match returned by :meth:`retrieve_buckets`.
+
+    Phase 5c cutover: the underlying row is a :class:`BucketArticle`
+    now (mirrored from the old :class:`BucketSummary` via Phase 5b),
+    so the field is ``article_id``. The body is the article's
+    ``body_md`` — for an ``agent_memory`` article that's exactly the
+    same text the old ``BucketSummary.summary`` held, so the downstream
+    prompt-assembly layer doesn't need to change shape. ``summary``
+    stays as the attribute name because it's what :func:`_format_bucket_memory`
+    expects; it's the "packed conversation" text regardless of source.
+    """
 
     bucket_id: uuid.UUID
     bucket_slug: str
     bucket_name: str
-    summary_id: uuid.UUID
+    article_id: uuid.UUID
     title: str
     summary: str
     similarity: float
@@ -259,46 +272,67 @@ class TopicService:
     async def retrieve_buckets(
         self, *, query: str, limit: int = 3, similarity_threshold: float = 0.25
     ) -> list[BucketHit]:
-        """Top-K bucket summaries semantically close to ``query``.
+        """Top-K packed-topic articles semantically close to ``query``.
+
+        Phase 5c cutover: reads from :class:`BucketArticle` (mirrored
+        from :class:`BucketSummary` in Phase 5b) instead of
+        :class:`BucketSummary` directly. The behavioural scope is
+        unchanged — only ``agent_memory`` buckets contribute here,
+        because ``repo_files`` content is already surfaced by the
+        dedicated kb_indexer/RAG path, not by the memory retriever.
 
         Returns entries whose cosine-similarity clears
         ``similarity_threshold`` — this keeps "no useful memory"
-        from polluting the prompt with unrelated summaries. The
-        threshold is deliberately permissive (0.25) because
+        from polluting the prompt with unrelated packs. The threshold
+        is deliberately permissive (0.25) because
         text-embedding-3-small's cosine distance distribution is
         narrow; callers can tighten via the argument.
         """
         qvec = await embed_text(query, settings=self._settings)
         stmt = (
             select(
-                BucketSummary,
+                BucketArticle,
                 KnowledgeBucket.slug,
                 KnowledgeBucket.name,
-                BucketSummary.embedding.cosine_distance(qvec).label("dist"),
+                BucketArticle.embedding.cosine_distance(qvec).label("dist"),
             )
             .join(
                 KnowledgeBucket,
-                KnowledgeBucket.id == BucketSummary.bucket_id,
+                KnowledgeBucket.id == BucketArticle.bucket_id,
             )
             .where(KnowledgeBucket.workspace_id == self._workspace_id)
             .where(KnowledgeBucket.archived_at.is_(None))
+            # Only published articles contribute — drafts and the
+            # superseded history from Phase 5a's repo_files versioning
+            # would otherwise re-surface stale content.
+            .where(BucketArticle.status == BucketArticleStatus.PUBLISHED)
+            .where(BucketArticle.archived_at.is_(None))
+            # Without an embedding we can't rank — and agent-memory
+            # articles always carry one over from the summary row
+            # (Phase 5b mirror). Filtering NULL here covers the repo_files
+            # case where Phase 5a hasn't run the embedder yet, and would
+            # otherwise throw at cosine_distance time.
+            .where(BucketArticle.embedding.isnot(None))
+            # Retrieval scope: preserve v1 semantics — only memory from
+            # packed conversations feeds the prompt's "warmed context".
+            .where(KnowledgeBucket.source_kind == BucketSource.AGENT_MEMORY)
             .order_by("dist")
             .limit(max(1, min(limit, 10)))
         )
         rows = (await self._session.execute(stmt)).all()
         hits: list[BucketHit] = []
-        for summary, slug, name, dist in rows:
+        for article, slug, name, dist in rows:
             similarity = 1.0 - float(dist)
             if similarity < similarity_threshold:
                 continue
             hits.append(
                 BucketHit(
-                    bucket_id=summary.bucket_id,
+                    bucket_id=article.bucket_id,
                     bucket_slug=slug,
                     bucket_name=name,
-                    summary_id=summary.id,
-                    title=summary.title,
-                    summary=summary.summary,
+                    article_id=article.id,
+                    title=article.title,
+                    summary=article.body_md,
                     similarity=similarity,
                 )
             )
