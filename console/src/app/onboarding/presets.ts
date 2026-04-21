@@ -1,0 +1,76 @@
+/**
+ * Preset catalog — shared between the old step-2 form handler and
+ * the new wizard v2 per-repo configure card.
+ *
+ * Must stay in lockstep with
+ * ``backend.app.services.default_pipelines.KNOWN_PRESETS``. Ordering
+ * here drives picker order; ``adoption-minimum`` sits last because
+ * it's the "I'll wire the rest later" option.
+ */
+
+export type PresetId =
+  | "web-app"
+  | "api-backend"
+  | "mobile-app"
+  | "cli"
+  | "monorepo"
+  | "marketing"
+  | "adoption-minimum";
+
+export const PRESET_IDS: PresetId[] = [
+  "web-app",
+  "api-backend",
+  "mobile-app",
+  "cli",
+  "monorepo",
+  "marketing",
+  "adoption-minimum",
+];
+
+export const PRESET_META: Record<
+  PresetId,
+  { name: string; blurb: string; lanes: string }
+> = {
+  "web-app": {
+    name: "Web app",
+    blurb:
+      "Next.js / Remix / SPA — full Elmundi-grade SDLC: PR review gate, daily standup, tech-debt scan, self-heal, code map.",
+    lanes: "PR gate · Standup · Tech-debt · Self-heal · Code map",
+  },
+  "api-backend": {
+    name: "API backend",
+    blurb:
+      "FastAPI / Go / Rails service — identical operational baseline as web-app, tailored for server repos.",
+    lanes: "PR gate · Standup · Tech-debt · Code map",
+  },
+  "mobile-app": {
+    name: "Mobile app",
+    blurb:
+      "iOS / Android / RN — same four lanes; hosted E2E ships once a device-lab preset lands.",
+    lanes: "PR gate · Standup · Tech-debt · Code map",
+  },
+  cli: {
+    name: "CLI / library",
+    blurb:
+      "CLI tools or libraries — quieter cadence: PR gate + tech-debt + code map only.",
+    lanes: "PR gate · Tech-debt · Code map",
+  },
+  monorepo: {
+    name: "Monorepo",
+    blurb:
+      "Large multi-package repo — opts into pipeline self-heal on top of the baseline.",
+    lanes: "PR gate · Standup · Tech-debt · Self-heal · Code map",
+  },
+  marketing: {
+    name: "Marketing site",
+    blurb:
+      "Landing pages, docs, blogs, campaign microsites — copy-first review, publishing-cadence standup, site-structure map.",
+    lanes: "PR gate · Standup · Code map",
+  },
+  "adoption-minimum": {
+    name: "Minimum",
+    blurb:
+      "Just the PR review gate + code map. Flip extra lanes on later from the Pipelines page.",
+    lanes: "PR gate · Code map",
+  },
+};

@@ -31,14 +31,21 @@ test.describe("onboarding wizard (authenticated)", () => {
       name: /which repos should ship watch/i,
     });
     const trackerHeading = page.getByRole("heading", {
-      name: /pick a tracker/i,
+      name: /connect your tracker/i,
+    });
+    const configureHeading = page.getByRole("heading", {
+      name: /one pr per repo/i,
     });
     const doneHeading = page.getByRole("heading", {
       name: /you're wired in/i,
     });
 
     await expect(
-      githubHeading.or(reposHeading).or(trackerHeading).or(doneHeading),
+      githubHeading
+        .or(reposHeading)
+        .or(trackerHeading)
+        .or(configureHeading)
+        .or(doneHeading),
     ).toBeVisible({ timeout: 30_000 });
   });
 

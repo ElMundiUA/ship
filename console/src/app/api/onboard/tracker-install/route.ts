@@ -75,12 +75,12 @@ export async function POST(request: Request) {
 }
 
 function forward(origin: string, wsId: string) {
-  // Forward to the knowledge-seed step (not done) — users get one
-  // last opt-in to let Ship open a PR that drops starter knowledge
-  // buckets. The knowledge step has its own Skip CTA that bounces
-  // them to ``done`` if they don't want the seed PR today.
+  // Wizard v2: after the workspace-level tracker OAuth, drop the user
+  // into the per-repo configure step. That's where they pick preset,
+  // bind a tracker per repo, push agent secrets and open a seed PR —
+  // the knowledge-seed PR is rolled into that unified seed now.
   const url = new URL("/onboarding", origin);
-  url.searchParams.set("step", "knowledge");
+  url.searchParams.set("step", "configure");
   url.searchParams.set("ws", wsId);
   return NextResponse.redirect(url, 303);
 }

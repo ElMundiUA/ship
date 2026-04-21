@@ -148,7 +148,10 @@ SHIP_DEFAULT_STATES: Final[tuple[FsmState, ...]] = (
 # which native status slot Ship will target when it reconciles. Left
 # intentionally narrow — if a team runs with non-default Linear
 # workflows they edit the file; Ship reads whatever the file says.
-_TRACKER_MAPPING_HINTS: Final[dict[str, dict[str, str]]] = {
+#
+# Public so the iter 7 ``/v1/workspaces/{ws}/tracker-fsm`` endpoint
+# can hand them to the console without re-parsing the markdown.
+TRACKER_MAPPING_HINTS: Final[dict[str, dict[str, str]]] = {
     "linear": {
         "triage": "Triage (default)",
         "ready": "Backlog → Todo (Ready)",
@@ -281,7 +284,7 @@ def render_tracker_fsm(
     # ── Mapping table ─────────────────────────────────────────────
     lines.append("## Status mapping")
     lines.append("")
-    mapping = _TRACKER_MAPPING_HINTS.get(normalised or "")
+    mapping = TRACKER_MAPPING_HINTS.get(normalised or "")
     if mapping is None:
         lines.append(
             "_No tracker selected yet — once the repo's tracker binding is "
@@ -333,5 +336,6 @@ __all__ = [
     "FSM_INSTALL_PATH",
     "FsmState",
     "SHIP_DEFAULT_STATES",
+    "TRACKER_MAPPING_HINTS",
     "render_tracker_fsm",
 ]
