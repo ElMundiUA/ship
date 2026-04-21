@@ -13,7 +13,7 @@ export async function docsCommand(ctx, args) {
   ship docs feedback --title "..." --summary "..." [--recommendation "line"]... [--source-context "..."]
 
 Vector search:  ship search <query>
-Catalog bodies:  ship pattern|tool|workflow|collection fetch <id>
+Catalog bodies:  ship pattern|tool|collection fetch <id>
 
 Global flags: --base-url URL  --json`);
     return;

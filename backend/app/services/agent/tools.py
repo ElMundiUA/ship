@@ -32,8 +32,8 @@ Tool inventory (C12 Phase 2.2):
   artifact id (``pattern/cloud-base``, …). Persisted to
   :class:`ArtifactFeedback` for the console feedback tab.
 - :meth:`list_catalog_artifacts` — enumerate the global Ship catalog
-  (patterns / workflows / collections / tools) so the agent can
-  recommend or feedback on artifacts it couldn't otherwise name.
+  (patterns / tools / collections) so the agent can recommend or
+  feedback on artifacts it couldn't otherwise name.
 - :meth:`list_recent_activity` — last N pipeline runs / PR / workflow
   events for the workspace, so the agent can ground "what's going
   on?" answers without hitting GitHub live.
@@ -420,7 +420,7 @@ class ToolBox:
                 name="create_artifact_feedback",
                 description=(
                     "File feedback against a Ship catalog artifact "
-                    "(pattern/workflow/collection). Visible in the console "
+                    "(pattern/tool/collection). Visible in the console "
                     "'Feedback' tab; used to drive catalog improvements."
                 ),
                 parameters={
@@ -430,7 +430,7 @@ class ToolBox:
                             "type": "string",
                             "description": (
                                 "Artifact identifier, e.g. "
-                                "'pattern/cloud-base' or 'workflow/pr-gate'."
+                                "'pattern/cloud-base' or 'tool/methodology-api'."
                             ),
                         },
                         "body": {
@@ -683,9 +683,9 @@ class ToolBox:
                 name="list_catalog_artifacts",
                 description=(
                     "Enumerate the Ship global catalog: patterns, "
-                    "workflows, collections (``preset-*`` included) or "
-                    "tools. Use when the user asks what Ship provides, "
-                    "or before filing feedback with "
+                    "collections (``preset-*`` included) or tools. "
+                    "Use when the user asks what Ship provides, or "
+                    "before filing feedback with "
                     "``create_artifact_feedback`` so the id is real."
                 ),
                 parameters={
@@ -695,7 +695,6 @@ class ToolBox:
                             "type": "string",
                             "enum": [
                                 "pattern",
-                                "workflow",
                                 "collection",
                                 "tool",
                             ],
@@ -766,7 +765,6 @@ class ToolBox:
                             "type": "string",
                             "enum": [
                                 "pattern",
-                                "workflow",
                                 "collection",
                                 "tool",
                             ],
@@ -775,7 +773,7 @@ class ToolBox:
                             "type": "string",
                             "description": (
                                 "Artifact id without the kind prefix, "
-                                "e.g. ``pr-and-ci-gate`` or ``cloud-base``."
+                                "e.g. ``adoption-minimum`` or ``methodology-api``."
                             ),
                         },
                     },
@@ -1193,7 +1191,7 @@ class ToolBox:
                 description=(
                     "List catalog artifact feedback filed from the console. "
                     "Use before creating duplicate feedback on the same "
-                    "pattern/workflow."
+                    "pattern/tool."
                 ),
                 parameters={
                     "type": "object",
@@ -1863,10 +1861,10 @@ class ToolBox:
 
     async def _tool_list_catalog_artifacts(self, args: dict[str, Any]) -> str:
         kind = _require_str(args, "kind").lower()
-        if kind not in {"pattern", "workflow", "collection", "tool"}:
+        if kind not in {"pattern", "collection", "tool"}:
             raise ToolInvocationError(
                 f"invalid kind {kind!r}; expected one of "
-                "pattern/workflow/collection/tool"
+                "pattern/collection/tool"
             )
         group = args.get("group")
         tag = args.get("tag")
@@ -1876,7 +1874,6 @@ class ToolBox:
 
         loader = {
             "pattern": catalog_service.list_patterns,
-            "workflow": catalog_service.list_workflows,
             "collection": catalog_service.list_collections,
             "tool": catalog_service.list_tools,
         }[kind]
@@ -1965,10 +1962,10 @@ class ToolBox:
     async def _tool_get_catalog_artifact(self, args: dict[str, Any]) -> str:
         kind = _require_str(args, "kind").lower()
         artifact_id = _require_str(args, "id")
-        if kind not in {"pattern", "workflow", "collection", "tool"}:
+        if kind not in {"pattern", "collection", "tool"}:
             raise ToolInvocationError(
                 f"invalid kind {kind!r}; expected one of "
-                "pattern/workflow/collection/tool"
+                "pattern/collection/tool"
             )
         try:
             entries = catalog_service._load_kind(kind)
@@ -1996,8 +1993,6 @@ class ToolBox:
                 "description": match.description or None,
                 "deprecated": match.deprecated,
                 "replaced_by": match.replaced_by,
-                "install_target": match.install_target,
-                "required_secrets": match.required_secrets,
                 "body": body,
                 "body_truncated": truncated,
             }

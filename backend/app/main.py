@@ -52,7 +52,6 @@ REQUIRED_ENTRY_FIELDS = (
 ARTIFACT_KINDS = {
     "pattern": ("patterns", "patterns"),
     "tool": ("tools", "tools"),
-    "workflow": ("workflows", "workflows"),
     "collection": ("collections", "collections"),
 }
 
@@ -337,7 +336,6 @@ async def healthz() -> dict[str, str]:
 _KIND_DESCRIPTIONS = {
     "pattern": "Catalog of Ship patterns sourced from artifacts/patterns/<id>/ARTIFACT.md.",
     "tool": "Catalog of Ship tools sourced from artifacts/tools/<id>/ARTIFACT.md.",
-    "workflow": "Catalog of Ship workflows sourced from artifacts/workflows/<id>/ARTIFACT.md.",
     "collection": "Catalog of Ship collections sourced from artifacts/collections/<id>/ARTIFACT.md.",
 }
 
@@ -526,10 +524,6 @@ def load_tools_manifest() -> dict[str, Any]:
     return _load_kind("tool")
 
 
-def load_workflows_manifest() -> dict[str, Any]:
-    return _load_kind("workflow")
-
-
 def load_collections_manifest() -> dict[str, Any]:
     return _load_kind("collection")
 
@@ -537,7 +531,6 @@ def load_collections_manifest() -> dict[str, Any]:
 MANIFEST_LOADERS = {
     "pattern": load_patterns_manifest,
     "tool": load_tools_manifest,
-    "workflow": load_workflows_manifest,
     "collection": load_collections_manifest,
 }
 
@@ -687,29 +680,6 @@ def list_tool_versions(item_id: str) -> dict[str, Any]:
     return _versions_for_kind("tool", item_id)
 
 
-@app.get("/workflows")
-def list_workflows(channel: str = Query(default="stable")) -> dict[str, Any]:
-    data = load_workflows_manifest()
-    entries = [e for e in data.get("workflows", []) if isinstance(e, dict)]
-    filtered = _filter_entries_by_channel(entries, channel)
-    return {
-        "version": data.get("version", 1),
-        "description": data.get("description", ""),
-        "workflows": [_entry_summary(e, "workflow") for e in filtered],
-    }
-
-
-@app.get("/workflows/{item_id}")
-def get_workflow(item_id: str, version: str | None = Query(default=None)) -> dict[str, Any]:
-    entry = _resolve_entry_with_version("workflow", item_id, version)
-    return _full_entry_response(entry, "workflow")
-
-
-@app.get("/workflows/{item_id}/versions")
-def list_workflow_versions(item_id: str) -> dict[str, Any]:
-    return _versions_for_kind("workflow", item_id)
-
-
 @app.get("/collections")
 def list_collections(channel: str = Query(default="stable")) -> dict[str, Any]:
     data = load_collections_manifest()
@@ -797,7 +767,7 @@ def fetch(req: FetchRequest) -> dict[str, Any]:
 
     raise HTTPException(
         status_code=400,
-        detail='Provide "path" (repo-relative .md/.txt) or "kind" + "id" (catalog: pattern, tool, workflow, collection).',
+        detail='Provide "path" (repo-relative .md/.txt) or "kind" + "id" (catalog: pattern, tool, collection).',
     )
 
 

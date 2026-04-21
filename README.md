@@ -1,6 +1,6 @@
 # Ship
 
-Ship is an **instruction-first** framework for SDLC automation: a portable operating model plus versioned artifacts (patterns, tools, workflows, collections) that any coding agent — Cursor, Claude, Codex, Copilot, Aider, and friends — can consume to drive real work in a real repo.
+Ship is an **instruction-first** framework for SDLC automation: a portable operating model plus versioned artifacts (patterns, tools, collections) that any coding agent — Cursor, Claude, Codex, Copilot, Aider, and friends — can consume to drive real work in a real repo.
 
 Instead of shipping one hardcoded runtime, Ship ships:
 - a **methodology** (see *The book* under [`/book`](https://ship.elmundi.com.ua/book) on the live site, source in [`documentation/framework/`](documentation/framework/))
@@ -80,7 +80,7 @@ The full Cartesian product is ~14 × 7 × 7 ≈ **686 combos**. Realistically we
 
 | # | Tracker | Agent | Scheduler | Status | Reference |
 |---|---------|-------|-----------|--------|-----------|
-| 1  | Linear         | Cursor             | GitHub Actions   | validated | [`workflows/scheduled-sdlc-lane`](artifacts/workflows/scheduled-sdlc-lane/) |
+| 1  | Linear         | Cursor             | GitHub Actions   | validated | [`patterns/cloud-developer`](artifacts/patterns/cloud-developer/) + `.ship/config.yml` lane |
 | 2  | Linear         | Cursor Cloud       | GitHub Actions   | validated | [`tools/cursor-cloud-agent`](artifacts/tools/cursor-cloud-agent/) |
 | 3  | Linear         | Claude Code        | GitHub Actions   | partial   | [`collections/agent-rules-claude`](artifacts/collections/agent-rules-claude/) |
 | 4  | Linear         | Codex CLI          | GitHub Actions   | partial   | [`collections/agent-rules-codex`](artifacts/collections/agent-rules-codex/) |
@@ -118,8 +118,8 @@ The full Cartesian product is ~14 × 7 × 7 ≈ **686 combos**. Realistically we
 | Path | Purpose |
 |------|---------|
 | [`documentation/`](documentation/) | Source markdown for the **manual** (`/docs/**`), **The book** (`/book`), and the [RFC index](documentation/protocol/). |
-| [`artifacts/`](artifacts/) | Every Ship artifact in folder-per-artifact layout (`artifacts/<kind>/<id>/ARTIFACT.md` + YAML frontmatter — see [RFC-0005](documentation/protocol/rfc-0005-artifact-folder-spec-v2.md)). Subfolders: `patterns/`, `tools/`, `workflows/`, `collections/`. |
-| [`backend/`](backend/) | Methodology FastAPI: `/search`, `/fetch`, `/feedback`, `/patterns`, `/tools`, `/workflows`, `/collections`, `/telemetry`. |
+| [`artifacts/`](artifacts/) | Every Ship artifact in folder-per-artifact layout (`artifacts/<kind>/<id>/ARTIFACT.md` + YAML frontmatter — see [RFC-0005](documentation/protocol/rfc-0005-artifact-folder-spec-v2.md)). Subfolders: `patterns/`, `tools/`, `collections/`. |
+| [`backend/`](backend/) | Methodology FastAPI: `/search`, `/fetch`, `/feedback`, `/patterns`, `/tools`, `/collections`, `/telemetry`. |
 | [`cli/`](cli/) | `@elmundi/ship-cli` (binary `shipctl`) — search, fetch, feedback, catalogs, `init`, `sync`, `verify`, `doctor`, `telemetry`, `feedback`, `new`, `bootstrap`. |
 | [`landing/`](landing/) | Next.js app: marketing, **manual** (`/docs/**`), **The book** (`/book`), **Patterns** (`/patterns`), **Use cases** (`/use-cases`), generated PDF (`/book.pdf`). |
 | [`scripts/`](scripts/) | Repo maintenance (`version.mjs`, `restamp_artifact_shas.py`, `ship_artifact_check.py`, Bunny / Docker helpers). |
@@ -174,7 +174,6 @@ From the repo root:
 npm run shipctl -- help                 # full usage
 npm run shipctl -- pattern list         # plural alias `patterns` also works
 npm run shipctl -- tool list
-npm run shipctl -- workflow list
 npm run shipctl -- collection list
 npm run shipctl -- search "release gates" --top-k 5
 npm run shipctl -- --version
@@ -195,8 +194,8 @@ One HTTP API serves both humans (via the live site) and agents (via the CLI). Al
 | HTTP | `shipctl` |
 |---|---|
 | `GET /patterns`, `GET /patterns/{id}` | `shipctl pattern list`, `shipctl pattern show <id>` |
-| `GET /tools` / `/workflows` / `/collections` (+ `/{id}`) | `shipctl tool\|workflow\|collection list\|show <id>` |
-| `POST /fetch` `{kind,id[,version]}` | `shipctl pattern\|tool\|workflow\|collection fetch <id>` |
+| `GET /tools` / `/collections` (+ `/{id}`) | `shipctl tool\|collection list\|show <id>` |
+| `POST /fetch` `{kind,id[,version]}` | `shipctl pattern\|tool\|collection fetch <id>` |
 | `POST /fetch` `{path}` | `shipctl docs fetch <path>` |
 | `POST /search` | `shipctl search "<query>"` |
 | `POST /feedback` | `shipctl docs feedback …` / `shipctl feedback submit …` |

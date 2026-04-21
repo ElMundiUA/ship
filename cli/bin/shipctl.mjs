@@ -58,11 +58,6 @@ try {
     process.exit(0);
   }
 
-  if (cmd === "workflow" || cmd === "workflows") {
-    await resourceManifestCommand("workflow", ctx, rest);
-    process.exit(0);
-  }
-
   if (cmd === "collection" || cmd === "collections") {
     await resourceManifestCommand("collection", ctx, rest);
     process.exit(0);

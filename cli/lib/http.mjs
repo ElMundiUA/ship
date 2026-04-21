@@ -79,12 +79,13 @@ export async function apiGet(baseUrl, path) {
 }
 
 /**
- * Aggregated catalog. RFC-0005 removed the legacy `/manifest` endpoint;
- * the catalog is now exposed as four per-kind routes (`/patterns`,
- * `/workflows`, `/tools`, `/collections`). This helper fans them out in
- * parallel and stamps a `kind` field on each entry so callers (sync,
- * verify) keep their existing single-list shape. `channel` is applied
- * client-side because the per-kind endpoints don't filter today.
+ * Aggregated catalog. RFC-0005 removed the legacy `/manifest` endpoint
+ * and RFC-0007 Phase 6 retired the ``artifact_kind=workflow`` layer;
+ * the catalog is now exposed as three per-kind routes (`/patterns`,
+ * `/tools`, `/collections`). This helper fans them out in parallel and
+ * stamps a `kind` field on each entry so callers (sync, verify) keep
+ * their existing single-list shape. `channel` is applied client-side
+ * because the per-kind endpoints don't filter today.
  *
  * @param {string} baseUrl
  * @param {{channel?:string}} [opts]
@@ -93,7 +94,6 @@ export async function apiGet(baseUrl, path) {
 export async function fetchManifest(baseUrl, { channel } = {}) {
   const KINDS = [
     { plural: "patterns", singular: "pattern" },
-    { plural: "workflows", singular: "workflow" },
     { plural: "tools", singular: "tool" },
     { plural: "collections", singular: "collection" },
   ];

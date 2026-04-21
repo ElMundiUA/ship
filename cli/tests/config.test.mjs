@@ -130,7 +130,7 @@ test("config get on missing key fails with exit 1", () => {
 test("pins validated against kind/id pattern and semver-ish value", () => {
   const cfg = DEFAULT_CONFIG();
   cfg.artifacts.pins["pattern/cloud-developer"] = "1.4.2";
-  cfg.artifacts.pins["workflow/scheduled-sdlc-lane"] = "~2.1";
+  cfg.artifacts.pins["tool/methodology-api"] = "~2.1";
   const ok = validateConfig(cfg);
   assert.equal(ok.ok, true, JSON.stringify(ok));
 
@@ -138,6 +138,12 @@ test("pins validated against kind/id pattern and semver-ish value", () => {
   bad.artifacts.pins["WRONG:key"] = "1.0.0";
   const r = validateConfig(bad);
   assert.equal(r.ok, false);
+
+  // Phase 6 retired ``workflow`` as a pinnable kind.
+  const retired = DEFAULT_CONFIG();
+  retired.artifacts.pins["workflow/scheduled-sdlc-lane"] = "1.0.0";
+  const r2 = validateConfig(retired);
+  assert.equal(r2.ok, false);
 });
 
 /* ------------------------------------------------------------------ */

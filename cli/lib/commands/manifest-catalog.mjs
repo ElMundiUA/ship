@@ -6,19 +6,13 @@ import { writeCached, cachePath } from "../cache/store.mjs";
 import { searchCommand } from "./search.mjs";
 import { scanArtifacts, readArtifactFile, pluralFor } from "../artifacts/fs-index.mjs";
 
-/** @type {Record<string, { arrayKey: string; name: string; apiPath: string; fetchKind: "tool"|"workflow"|"collection" }>} */
+/** @type {Record<string, { arrayKey: string; name: string; apiPath: string; fetchKind: "tool"|"collection" }>} */
 const RESOURCES = {
   tool: {
     arrayKey: "tools",
     name: "Tools",
     apiPath: "tools",
     fetchKind: "tool",
-  },
-  workflow: {
-    arrayKey: "workflows",
-    name: "Workflows",
-    apiPath: "workflows",
-    fetchKind: "workflow",
   },
   collection: {
     arrayKey: "collections",
@@ -29,7 +23,7 @@ const RESOURCES = {
 };
 
 /**
- * @param {"tool"|"workflow"|"collection"} resource
+ * @param {"tool"|"collection"} resource
  * @param {{ baseUrl: string; json: boolean }} ctx
  * @param {string[]} args
  */
@@ -95,7 +89,7 @@ function parseFetchFlags(rest) {
 }
 
 /**
- * @param {"tool"|"workflow"|"collection"} resource
+ * @param {"tool"|"collection"} resource
  */
 async function manifestFromHosted(resource, spec, ctx, sub, rest) {
   const base = ctx.baseUrl;
@@ -202,7 +196,7 @@ async function manifestFromHosted(resource, spec, ctx, sub, rest) {
 }
 
 /**
- * @param {"tool"|"workflow"|"collection"} resource
+ * @param {"tool"|"collection"} resource
  */
 async function manifestFromDisk(resource, root, spec, ctx, sub, rest) {
   const entries = scanArtifacts(root, spec.fetchKind);

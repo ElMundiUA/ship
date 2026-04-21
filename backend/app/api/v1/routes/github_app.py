@@ -1070,10 +1070,10 @@ async def _lazy_create_pipeline_run_from_webhook(
     Returns ``None`` if we couldn't match the run to a pipeline;
     the caller treats that as "skip enrichment" and moves on.
     """
-    # Late import to keep catalog IO out of webhook startup; the
-    # catalog already caches parsed artifacts internally so repeat
-    # calls are fine.
-    from backend.app.services.catalog import workflow_install_filename
+    # Late import to keep the starter-workflow resource IO out of
+    # webhook startup; the lookup is an O(1) dict hit so repeat calls
+    # are essentially free.
+    from backend.app.services.starter_workflows import install_filename as workflow_install_filename
 
     filename = _run_path_basename(run)
     if filename is None:

@@ -19,7 +19,6 @@ from typing import Any
 KIND_PLURALS: dict[str, str] = {
     "pattern": "patterns",
     "tool": "tools",
-    "workflow": "workflows",
     "collection": "collections",
 }
 

@@ -56,7 +56,7 @@ RFC-0002.`;
 export function cursorRuleMdc(baseUrl) {
   return `---
 name: ship-artifacts-protocol
-description: Resolve, use, and record Ship artifacts (patterns/tools/workflows/collections) via shipctl.
+description: Resolve, use, and record Ship artifacts (patterns/tools/collections) via shipctl.
 ---
 
 ${MARKER}

@@ -105,7 +105,7 @@ There is no `artifacts.disabled` field today; the way to opt out of an artifact 
 artifacts:
   pins:
     pattern/cloud-developer: "1.4.2"
-    workflow/scheduled-sdlc-lane: "~2.1"
+    tool/methodology-api: "~2.1"
     collection/web-application: "^3.0.0"
   auto_update: true
 ```

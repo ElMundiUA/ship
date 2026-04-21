@@ -24,7 +24,7 @@ export type ApiWorkspace = {
   created_at: string;
 };
 
-export type ApiArtifactKind = "pattern" | "tool" | "workflow" | "collection";
+export type ApiArtifactKind = "pattern" | "tool" | "collection";
 
 /** Single resolver entry, as produced by `_build_entry` + resolver `_annotate`. */
 export type ApiArtifact = {
@@ -51,7 +51,7 @@ export type ApiArtifactList = {
   workspace_id: string;
   catalog_sources: Record<string, boolean>;
 } & {
-  // The list lands under the plural key (patterns/tools/workflows/collections).
+  // The list lands under the plural key (patterns/tools/collections).
   [plural: string]: unknown;
 };
 

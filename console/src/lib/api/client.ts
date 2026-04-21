@@ -31,7 +31,6 @@ import { getSessionToken } from "./session";
 const PLURAL: Record<ApiArtifactKind, string> = {
   pattern: "patterns",
   tool: "tools",
-  workflow: "workflows",
   collection: "collections",
 };
 
@@ -201,7 +200,7 @@ export async function listArtifacts(
 }
 
 export async function listAllArtifacts(workspaceId: string): Promise<ApiArtifact[]> {
-  const kinds: ApiArtifactKind[] = ["pattern", "tool", "workflow", "collection"];
+  const kinds: ApiArtifactKind[] = ["pattern", "tool", "collection"];
   const results = await Promise.all(kinds.map((k) => listArtifacts(workspaceId, k).then(
     (rows) => rows.map((r) => ({ ...r, _kind: k })),
   )));
@@ -213,7 +212,7 @@ export async function getArtifactById(
   workspaceId: string,
   artifactId: string,
 ): Promise<ApiArtifactDetail | null> {
-  const kinds: ApiArtifactKind[] = ["workflow", "tool", "pattern", "collection"];
+  const kinds: ApiArtifactKind[] = ["tool", "pattern", "collection"];
   for (const kind of kinds) {
     try {
       return await apiFetch<ApiArtifactDetail>(

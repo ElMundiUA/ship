@@ -28,7 +28,7 @@ export default function CatalogPullRequestsPage() {
 
       <p className="mb-5 max-w-3xl text-sm text-white/65">
         Anyone in your workspace (or the public org, for the global mirror) can
-        propose a new pattern, tool, workflow or collection. Reviews live here
+        propose a new pattern, tool or collection. Reviews live here
         so you don&apos;t have to bounce to GitHub — sign-off here merges the PR
         through the same git branch your CI already protects.
       </p>

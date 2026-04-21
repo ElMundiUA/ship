@@ -24,7 +24,6 @@ function sha256Hex(s) {
 
 const PLURAL_BY_SINGULAR = {
   pattern: "patterns",
-  workflow: "workflows",
   tool: "tools",
   collection: "collections",
 };
@@ -52,7 +51,7 @@ function startServer({ body, version = "1.0.0", kind = "pattern", id = "cloud-de
     req.on("data", (c) => chunks.push(c));
     req.on("end", () => {
       const url = new URL(req.url, "http://localhost");
-      const perKindMatch = url.pathname.match(/^\/(patterns|workflows|tools|collections)$/);
+      const perKindMatch = url.pathname.match(/^\/(patterns|tools|collections)$/);
       if (req.method === "GET" && perKindMatch) {
         const plural = perKindMatch[1];
         const expectedPlural = PLURAL_BY_SINGULAR[entry.kind];
@@ -296,7 +295,7 @@ test("sync --dry-run prints planned HTTP calls without writing cache", async () 
       dir,
     ]);
     assert.equal(dry.status, 0, dry.stderr);
-    assert.match(dry.stdout, /plan: GET .*\/\{patterns,workflows,tools,collections\}/);
+    assert.match(dry.stdout, /plan: GET .*\/\{patterns,tools,collections\}/);
     assert.match(dry.stdout, /plan: POST .*\/fetch/);
 
     const bodyPath = path.join(

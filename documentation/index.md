@@ -18,7 +18,7 @@ The Manual is the operator's reference for Ship: how the framework works on disk
 
 | If you want… | Go to |
 |--------------|-------|
-| The catalog of patterns / tools / workflows / collections | [/patterns](/patterns), [/tools](/tools), [/workflows](/workflows), [/collections](/collections) |
+| The catalog of patterns / tools / collections | [/patterns](/patterns), [/tools](/tools), [/collections](/collections) |
 | `shipctl` command and flag reference | [/cli](/cli) |
 | The long-form rationale (why the loop looks the way it does) | [/book](/book) |
 | Customer stories and reference deployments | [/use-cases](/use-cases) |

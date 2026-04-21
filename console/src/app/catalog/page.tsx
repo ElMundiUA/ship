@@ -121,7 +121,7 @@ function toRow(a: ApiArtifact & { _kind?: ApiArtifactKind }): Row {
   // `_kind` on each entry. Otherwise infer from `path` (artifacts/<plural>/...).
   let kind: ApiArtifactKind = a._kind ?? "pattern";
   if (!a._kind && typeof a.path === "string") {
-    const m = a.path.match(/artifacts\/(patterns|tools|workflows|collections)\//);
+    const m = a.path.match(/artifacts\/(patterns|tools|collections)\//);
     if (m) {
       const plural = m[1];
       kind =
@@ -129,9 +129,7 @@ function toRow(a: ApiArtifact & { _kind?: ApiArtifactKind }): Row {
           ? "pattern"
           : plural === "tools"
             ? "tool"
-            : plural === "workflows"
-              ? "workflow"
-              : "collection";
+            : "collection";
     }
   }
   return {
@@ -254,7 +252,6 @@ export default async function CatalogPage({
             <option>All kinds</option>
             <option>Pattern</option>
             <option>Tool</option>
-            <option>Workflow</option>
             <option>Collection</option>
           </select>
         </span>
@@ -442,7 +439,7 @@ function ResolutionDiagram({ wsName }: { wsName: string }) {
       <Layer
         tone="global"
         title="Global"
-        body="Public Ship monorepo · 24 patterns · 8 tools · 5 workflows · 16 collections"
+        body="Public Ship monorepo · 24 patterns · 8 tools · 16 collections"
       />
       <Layer
         tone="workspace"

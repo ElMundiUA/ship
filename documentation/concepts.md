@@ -4,11 +4,11 @@ The vocabulary. Every other Manual page assumes the words below mean the same th
 
 ## Artifact
 
-A versioned unit of methodology that Ship distributes — a `pattern`, `tool`, `workflow`, or `collection`. An artifact is a folder under `artifacts/<kind>/<id>/` whose required `ARTIFACT.md` carries the YAML front-matter (the single source of truth for metadata) plus the agent-facing body. Artifacts are referenced everywhere by `<kind>:<id>@<version>`, e.g. `pattern:cloud-developer@1.4.2`. The wire and folder shape are normalized in [RFC-0001](/docs/protocol/rfc-0001-artifacts-protocol) and [RFC-0005](/docs/protocol/rfc-0005-artifact-folder-spec-v2); browse the live catalog under [/patterns](/patterns), [/tools](/tools), [/workflows](/workflows), and [/collections](/collections).
+A versioned unit of methodology that Ship distributes — a `pattern`, `tool`, or `collection`. An artifact is a folder under `artifacts/<kind>/<id>/` whose required `ARTIFACT.md` carries the YAML front-matter (the single source of truth for metadata) plus the agent-facing body. Artifacts are referenced everywhere by `<kind>:<id>@<version>`, e.g. `pattern:cloud-developer@1.4.2`. The wire and folder shape are normalized in [RFC-0001](/docs/protocol/rfc-0001-artifacts-protocol) and [RFC-0005](/docs/protocol/rfc-0005-artifact-folder-spec-v2); browse the live catalog under [/patterns](/patterns), [/tools](/tools), and [/collections](/collections). A fourth kind, `workflow`, existed until [RFC-0007](/docs/protocol/rfc-0007-lanes-and-run-agent) retired the public catalog layer; customer cadences now live as [lanes](#lane) in `.ship/config.yml` and render thin GitHub Actions wrappers at install time.
 
 ## Kind
 
-The artifact's category. Ship ships exactly four kinds: `pattern` (a role or lane prompt), `tool` (an integration or adapter description), `workflow` (an end-to-end runbook stitching roles and tools), and `collection` (a curated bundle: a preset, an addendum, or an agent-rules set). The wire surface in [RFC-0001](/docs/protocol/rfc-0001-artifacts-protocol#artifact-kinds) also reserves `doc` for indexed long-form pages under `documentation/`, but `doc` is not authored as a folder — it is anything the site exposes by path. Kind drives the URL (`/<kind>s`), the cache subdirectory, and the CLI subcommand: `shipctl pattern …`, `shipctl tool …`, `shipctl workflow …`, `shipctl collection …`.
+The artifact's category. Ship ships three kinds today: `pattern` (a role or lane prompt), `tool` (an integration or adapter description), and `collection` (a curated bundle: a preset, an addendum, or an agent-rules set). The wire surface in [RFC-0001](/docs/protocol/rfc-0001-artifacts-protocol#artifact-kinds) also reserves `doc` for indexed long-form pages under `documentation/`, but `doc` is not authored as a folder — it is anything the site exposes by path. Kind drives the URL (`/<kind>s`), the cache subdirectory, and the CLI subcommand: `shipctl pattern …`, `shipctl tool …`, `shipctl collection …`. The earlier `workflow` kind was retired by [RFC-0007](/docs/protocol/rfc-0007-lanes-and-run-agent); pinning `workflow/<id>` is now a config validation error.
 
 ## Version
 
@@ -34,7 +34,7 @@ A pin freezes the version `shipctl sync` will accept for an artifact. Pins live 
 artifacts:
   pins:
     pattern/cloud-developer: "1.4.2"
-    workflow/scheduled-sdlc-lane: "~2.1"
+    tool/methodology-api: "~2.1"
 ```
 
 ## Adapter

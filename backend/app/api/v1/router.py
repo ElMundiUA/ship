@@ -1,9 +1,12 @@
 """Top-level router for the v1 API.
 
 Mounted by ``backend.app.main`` under ``/v1``. Existing unversioned routes
-(``/patterns``, ``/tools``, ``/workflows``, ``/collections``, ``/search``,
-``/fetch``, ``/feedback``, ``/telemetry``) stay where they are for the
-already-released ``@elmundi/ship-cli``.
+(``/patterns``, ``/tools``, ``/collections``, ``/search``, ``/fetch``,
+``/feedback``, ``/telemetry``) stay where they are for the
+already-released ``@elmundi/ship-cli``. RFC-0007 Phase 6 retired
+``/workflows`` and ``artifact_kind=workflow``; starter YAMLs now live
+inside ``backend.app.resources`` and are consumed by the internal
+Pipeline install flow only.
 """
 
 from __future__ import annotations
@@ -69,9 +72,9 @@ api_router.include_router(notion_oauth.router)
 api_router.include_router(pipelines.router)
 api_router.include_router(pipelines.public_router)
 api_router.include_router(dashboard.router)
-# Catalog read-only surface (presets / workflows / collections) backed
-# by ``artifacts/**/ARTIFACT.md``. Powers the wizard preset picker and
-# the dashboard's workflow install buttons.
+# Catalog read-only surface (presets / collections) backed by
+# ``artifacts/**/ARTIFACT.md``. Powers the wizard preset picker and
+# pattern/tool pickers.
 api_router.include_router(catalog.router)
 # Team invites (B7 — WOW onboarding team install). Admin-scoped list/
 # create/revoke under ``/workspaces/{ws}/invites``; public peek +

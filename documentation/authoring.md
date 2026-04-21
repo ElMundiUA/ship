@@ -2,7 +2,7 @@
 
 This page is the contributor's reference for adding a new artifact (or adapter)
 to the Ship catalog. The catalog itself is documented elsewhere — `/patterns`,
-`/tools`, `/workflows`, `/collections` for *what exists*; this page is about
+`/tools`, `/collections` for *what exists*; this page is about
 *how to add a new one*. The normative shape is defined in
 [RFC-0005](/docs/protocol/rfc-0005-artifact-folder-spec-v2) (folder layout,
 front-matter, hashing) and [RFC-0004](/docs/protocol/rfc-0004-adapters)
@@ -32,7 +32,6 @@ artifacts/
 │       ├── i18n/                # optional — localised ARTIFACT.md siblings
 │       └── CHANGELOG.md         # recommended once version ≥ 1.0.0
 ├── tools/<id>/ARTIFACT.md
-├── workflows/<id>/ARTIFACT.md
 └── collections/<id>/ARTIFACT.md
 ```
 
@@ -51,9 +50,8 @@ Naming rules:
 
 Names of actual ids in the repo today: `cloud-developer`, `cloud-base`,
 `catalog-a4-developer` (patterns); `linear`, `playwright`, `github-actions`
-(tools); `scheduled-sdlc-lane`, `pr-and-ci-gate` (workflows);
-`preset-web-app`, `agent-rules-cursor`, `addendum-pharma`, `web-application`
-(collections).
+(tools); `preset-web-app`, `agent-rules-cursor`, `addendum-pharma`,
+`web-application` (collections).
 
 ## Front-matter contract
 
@@ -66,7 +64,7 @@ kind-specific. Tables below list only fields that the parser at
 
 | Field            | Req | Type    | Purpose                                                                                       | Example                                                                                  |
 |------------------|-----|---------|-----------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------|
-| `artifact_kind`  | yes | enum    | One of `pattern`, `tool`, `workflow`, `collection`. Must match the parent folder.             | `pattern`                                                                                |
+| `artifact_kind`  | yes | enum    | One of `pattern`, `tool`, `collection`. Must match the parent folder. (`workflow` was retired by RFC-0007.) | `pattern`                                                                                |
 | `id`             | yes | string  | Kebab-case slug, ≤ 64 chars, unique within kind, equal to the folder name.                    | `cloud-developer`                                                                        |
 | `name`           | yes | string  | Human title, ≤ 80 chars. Rendered as the `title` in list responses.                           | `Developer`                                                                              |
 | `description`    | yes | folded  | SKILL.md-style: third person, what + when, ≤ 1024 chars, includes at least one trigger term. | `Implementation role: branch contract, PR shape, evidence. Use when an agent picks…`     |
@@ -107,17 +105,14 @@ kind-specific. Tables below list only fields that the parser at
 | `auth`           | no  | string[]  | Auth modes the adapter supports.                                                       | `[api-key, oauth]`                                |
 | `contracts`      | no  | string[]  | Capability contracts the tool fulfils.                                                 | `[issue-state, label-set, evidence-comment]`      |
 
-### `spec` for `workflow`
+### `spec` for `workflow` — retired
 
-| Field            | Req | Type      | Purpose                                                                                  | Example value (`scheduled-sdlc-lane`)             |
-|------------------|-----|-----------|------------------------------------------------------------------------------------------|---------------------------------------------------|
-| `intent`         | yes | enum      | `cron`, `event`, or `manual`. What kind of trigger this workflow is.                     | `cron`                                            |
-| `runtime`        | yes | enum      | `github-actions`, `gitlab-ci`, `cron-anywhere`. Which CI shape the workflow targets.     | `github-actions`                                  |
-| `install_target` | yes | path      | Where the rendered workflow file lands (`.github/workflows/<file>.yml` or equivalent).   | `.github/workflows/scheduled-sdlc-lane.yml`       |
-| `cadence`        | no  | string    | Informational cron expression — never enforced by the CLI.                               | `"0 */2 * * *"`                                   |
-| `inputs`         | no  | string[]  | Named inputs the workflow consumes.                                                      | `[tracker-tickets, repo]`                         |
-| `outputs`        | no  | string[]  | Named outputs (`pr`, `ci-run`, `ticket-evidence`).                                       | `[pr, ci-run, ticket-evidence]`                   |
-| `requires`       | no  | mapping   | Cross-artifact deps grouped by kind: `tools: [...]`, `patterns: [...]`.                  | `{tools: [tracker, ci], patterns: [cloud-developer]}` |
+`artifact_kind=workflow` was removed by [RFC-0007](/docs/protocol/rfc-0007-lanes-and-run-agent).
+Customer cadences live as [lanes](/docs/concepts#lane) in
+`.ship/config.yml` (v2); installed CI YAMLs are thin wrappers generated
+by `shipctl lanes install`, each calling the reusable
+`ElMundiUA/ship/.github/workflows/run-agent.yml`. Authors no longer
+draft workflow artifacts.
 
 ### `spec` for `collection`
 
@@ -135,7 +130,7 @@ kind-specific. Tables below list only fields that the parser at
 | `addendum_id`            | addendum | string | Stable addendum id.                                                                        | `pharma`                                                                               |
 | `applies_to`             | addendum | string[] | Preset ids this addendum can layer onto.                                                  | `[mobile-app, web-app, api-backend]`                                                   |
 | `regulatory_frameworks`  | addendum | string[] | Frameworks the addendum encodes (HIPAA, GDPR, …).                                         | `[HIPAA, GDPR, 21-CFR-Part-11, EU-AI-Act]`                                             |
-| `composes`               | starter | mapping  | Bundled artifact ids grouped by kind: `patterns: [...]`, `workflows: [...]`, `tools: [...]`. | `{patterns: [cloud-developer], workflows: [scheduled-sdlc-lane], tools: [linear]}`     |
+| `composes`               | starter | mapping  | Bundled artifact ids grouped by kind: `patterns: [...]`, `tools: [...]`. | `{patterns: [cloud-developer], tools: [linear]}`     |
 
 `agent-rules-*` collections set `subkind: agent-rules` and ship the rule body
 inside `ARTIFACT.md`. Their on-disk install path (e.g.
@@ -258,57 +253,28 @@ Worked example: `linear`.
    `shipctl init --bootstrap`, ship the adapter change in the same PR
    under `cli/lib/adapters/trackers/linear.mjs`.
 
-## Authoring a `workflow`
+## Authoring a `workflow` — retired
 
-A workflow turns a CI shape into a Ship lane. The body is what an integrator
-reads while wiring it; the install target is the file the runtime ends up
-writing.
+`artifact_kind=workflow` is no longer a catalog kind; see
+[RFC-0007](/docs/protocol/rfc-0007-lanes-and-run-agent) for the
+replacement model. Instead of drafting a workflow artifact:
 
-Worked example: `scheduled-sdlc-lane`.
+1. Write the prompt as a normal **pattern** under
+   `artifacts/patterns/<id>/ARTIFACT.md` and publish it through the
+   regular pattern review process.
+2. Reference that pattern from a **lane** entry in the customer's
+   `.ship/config.yml` (v2) — `kind: once | event | schedule`, with
+   optional `schedule.cron`, `events.*`, or `idempotency.*` metadata.
+3. `shipctl lanes install` renders one thin wrapper per declared lane
+   (calling `ElMundiUA/ship/.github/workflows/run-agent.yml`) into
+   `.github/workflows/ship-<lane>.yml`.
 
-1. **Pick id, intent, runtime.** `scheduled-sdlc-lane` is `intent: cron`,
-   `runtime: github-actions`, `install_target:
-   .github/workflows/scheduled-sdlc-lane.yml`.
-
-2. **Draft front-matter.** The `spec` block for a workflow is small but
-   normative — the catalog filters by `intent` and `runtime`:
-
-   ```yaml
-   spec:
-     intent: cron
-     runtime: github-actions
-     install_target: .github/workflows/scheduled-sdlc-lane.yml
-   ```
-
-   Add `cadence` (informational) and `requires` (typed deps on tools and
-   patterns) when the workflow only makes sense alongside specific
-   adapters.
-
-3. **Write the body** so it is runnable in any downstream repo:
-
-   - State the **intent** in one sentence.
-   - List the **invariants** (concurrency, queue source, evidence).
-   - List **what you ship in CI** at the shape level (`pick scripts`,
-     `concurrency groups`), not at the byte level (no specific YAML
-     filenames, no hard-coded org slugs, no Linear team ids).
-   - End with a `## Read next` block linking to the tools and patterns the
-     workflow depends on.
-
-   Reference YAML, cron minutes, secret names, and team-specific URLs
-   belong in `documentation/use-cases/<org>/` (e.g.
-   `/use-cases/elmundi`), never in the workflow body.
-
-4. **Test locally.**
-
-   ```bash
-   shipctl workflow show scheduled-sdlc-lane
-   shipctl init --dry-run --preset web-app          # confirms the workflow
-                                                    # ships when the preset
-                                                    # composes it
-   ```
-
-5. **Contribute back.** A workflow PR almost always touches a preset
-   collection too — a workflow nobody references will not be discovered.
+The four starter pipelines historically published as workflow
+artifacts (`pr-and-ci-gate`, `scheduled-sdlc-lane`,
+`parallel-audit-lanes`, `pipeline-self-heal`) now live inside
+`backend/app/resources/starter_workflows/` and are only installed
+through the Pipeline installation flow — they are not authored as
+public artifacts.
 
 ## Authoring a `collection`
 
@@ -319,8 +285,8 @@ before drafting front-matter.
 ### `subkind: starter` — `web-application`
 
 A starter is the easiest case: it composes ids that already exist. Worked
-example: `web-application` lists workflows / tools / patterns in the body
-and sets `spec.subkind: starter`. Its bundled ids live in the body's tables;
+example: `web-application` lists tools / patterns in the body and sets
+`spec.subkind: starter`. Its bundled ids live in the body's tables;
 a future `composes:` mapping under `spec` is normative for new starters.
 
 ### `subkind: preset` — `preset-web-app`
@@ -465,7 +431,6 @@ repo:
 # 1. Show an artifact straight from the local filesystem index.
 shipctl pattern show cloud-developer
 shipctl tool show linear
-shipctl workflow show scheduled-sdlc-lane
 shipctl collection show preset-web-app
 
 # 2. Dry-run init against a scratch fixture (no files written).

@@ -63,6 +63,7 @@ from backend.app.integrations.github.workflows import (
     list_repo_workflows,
 )
 from backend.app.services import catalog as catalog_service
+from backend.app.services import starter_workflows
 from backend.app.services.default_pipelines import DEFAULT_PIPELINES
 
 
@@ -84,16 +85,16 @@ _KIND_TO_WORKFLOW_ID: Final[dict[str, str]] = {
 
 
 def _workflow_file_for_kind(kind: str) -> str | None:
-    """Basename the customer repo will contain, via catalog ``install_target``.
+    """Basename the customer repo will contain, via starter-workflow lookup.
 
-    Returns ``None`` when the kind has no catalog-backed workflow (e.g.
+    Returns ``None`` when the kind has no backed starter (e.g.
     ``code_map`` — resolver-only) so callers know to fall back to the
     "Coming with presets" state instead of 412-ing the user.
     """
     workflow_id = _KIND_TO_WORKFLOW_ID.get(kind)
     if workflow_id is None:
         return None
-    return catalog_service.workflow_install_filename(workflow_id)
+    return starter_workflows.install_filename(workflow_id)
 
 
 def _supports_run(kind: str) -> bool:
@@ -101,10 +102,10 @@ def _supports_run(kind: str) -> bool:
     workflow_id = _KIND_TO_WORKFLOW_ID.get(kind)
     if workflow_id is None:
         return False
-    entry = catalog_service.get_workflow(workflow_id)
-    if entry is None or entry.install_filename is None:
+    entry = starter_workflows.get(workflow_id)
+    if entry is None:
         return False
-    return catalog_service.read_starter_yaml(workflow_id) is not None
+    return starter_workflows.read_yaml(workflow_id) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -256,9 +257,9 @@ async def get_run_token_context(
 def _read_starter_yaml(kind: str) -> str:
     """Return the YAML body for the kind's starter workflow or 412/500.
 
-    ``kind_not_supported_yet`` when we have no catalog mapping for the
-    pipeline kind (e.g. ``code_map`` — resolver-only, no workflow
-    artefact today). ``500`` only when the mapping exists but the YAML
+    ``kind_not_supported_yet`` when we have no starter mapping for the
+    pipeline kind (e.g. ``code_map`` — resolver-only, no starter
+    workflow today). ``500`` only when the mapping exists but the YAML
     file on disk is missing — a release-packaging bug the operator
     needs to see, not a tenant-actionable condition.
     """
@@ -269,12 +270,12 @@ def _read_starter_yaml(kind: str) -> str:
             detail={
                 "code": "kind_not_supported_yet",
                 "message": (
-                    f"Pipeline kind {kind!r} has no catalog workflow. "
+                    f"Pipeline kind {kind!r} has no starter workflow. "
                     "Coming with Phase 3 presets."
                 ),
             },
         )
-    content = catalog_service.read_starter_yaml(workflow_id)
+    content = starter_workflows.read_yaml(workflow_id)
     if content is None:
         raise HTTPException(
             status_code=status.HTTP_412_PRECONDITION_FAILED,
