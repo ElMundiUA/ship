@@ -30,7 +30,6 @@
  */
 
 import {
-  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -463,47 +462,54 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
     () => visibleMessages.some((m) => m.role === "assistant" && !!m.streaming),
     [visibleMessages],
   );
-  // Single-line status that sits between the user prompt and the
-  // upcoming reply. The content *replaces itself* as the turn
-  // progresses — no stacking:
-  //   Thinking…
+  // Single-line status that sits at the *end* of the turn (below
+  // whatever the agent has streamed so far, or below the user
+  // prompt if the agent hasn't started talking yet). It replaces
+  // itself as the turn progresses — no stacking:
+  //
+  //   Thinking…                    ← after send, before any output
   //   ↓ agent calls tool A
-  //   Calling A…
-  //   ↓ tool A resolves, no next tool yet
+  //   Calling A…                   ← overrides Thinking
+  //   ↓ tool A resolves, no next tool yet, no streamed text yet
   //   Thinking…
-  //   ↓ agent calls tool B
-  //   Calling B…
-  //   ↓ tool B resolves, agent forms reply
-  //   Thinking…
-  //   ↓ first delta lands
-  //   (status line disappears, reply streams in)
+  //   ↓ agent starts streaming prose
+  //   (status line disappears — the streaming text *is* the signal)
+  //   ↓ agent calls tool B mid-stream
+  //   Calling B…                   ← appears *below* the streamed text
+  //   ↓ tool B resolves, stream resumes
+  //   (status line disappears again)
+  //   ↓ turn ends
+  //   (status line gone)
+  //
+  // Key: a currently-running tool *always* shows its own status,
+  // even while the assistant is also streaming text — modern
+  // agents interleave delta + tool_call events, and without this
+  // the user has no feedback that a tool is in flight between
+  // prose paragraphs.
   const turnStatus = useMemo((): {
     tone: "shimmer" | "error";
     text: string;
   } | null => {
-    // Only show status while the turn is actually in flight. After
-    // the turn ends the line should just disappear — no lingering
-    // "Thinking…" or last-error text under a completed reply.
     if (!streaming) return null;
-    if (hasStreamingAssistant) return null;
     const latest = tools.length > 0 ? tools[tools.length - 1] : null;
-    if (latest) {
-      if (!latest.result) {
-        return {
-          tone: "shimmer",
-          text: `Calling ${prettyToolName(latest.name)}…`,
-        };
-      }
-      if (!latest.result.ok) {
-        return {
-          tone: "error",
-          text: `${prettyToolName(latest.name)} — ${latest.result.error ?? "failed"}`,
-        };
-      }
-      // Completed OK — fall through to "Thinking…" so the user
-      // sees that the agent is now composing the answer.
+    if (latest && !latest.result) {
+      return {
+        tone: "shimmer",
+        text: `Calling ${prettyToolName(latest.name)}…`,
+      };
     }
-    if (awaitingFirstDelta) {
+    if (latest && latest.result && !latest.result.ok) {
+      return {
+        tone: "error",
+        text: `${prettyToolName(latest.name)} — ${latest.result.error ?? "failed"}`,
+      };
+    }
+    // No running / errored tool at the head of the queue. Only
+    // fill the slot with "Thinking…" if the assistant hasn't
+    // started streaming text yet — once prose is flowing, the
+    // prose itself is the progress indicator and an extra
+    // "Thinking…" line would just be visual noise.
+    if (!hasStreamingAssistant && awaitingFirstDelta) {
       return { tone: "shimmer", text: "Thinking…" };
     }
     return null;
@@ -586,22 +592,20 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
                 const isLastUser =
                   i === lastUserIndex && m.role === "user";
                 return (
-                  <Fragment key={m.id}>
-                    <MessageRow
-                      message={m}
-                      animate={animatedIdsRef.current.has(m.id)}
-                      revealLen={revealMap.get(m.id) ?? m.body.length}
-                      anchorRef={isLastUser ? lastUserAnchorRef : null}
-                    />
-                    {/* Single-line turn status between the user
-                        prompt and the incoming reply. Replaces
-                        itself as state changes — never stacks. */}
-                    {isLastUser && turnStatus ? (
-                      <TurnStatusLine {...turnStatus} />
-                    ) : null}
-                  </Fragment>
+                  <MessageRow
+                    key={m.id}
+                    message={m}
+                    animate={animatedIdsRef.current.has(m.id)}
+                    revealLen={revealMap.get(m.id) ?? m.body.length}
+                    anchorRef={isLastUser ? lastUserAnchorRef : null}
+                  />
                 );
               })}
+              {/* Single-line turn status at the end of the turn
+                  (below the streamed prose if there is any, below
+                  the user prompt if not). Replaces itself as state
+                  changes — never stacks. */}
+              {turnStatus ? <TurnStatusLine {...turnStatus} /> : null}
               {/* Empty runway so the scroller can keep the fresh
                   user message pinned near the top of the viewport
                   while the reply streams in below. Shrinks back
