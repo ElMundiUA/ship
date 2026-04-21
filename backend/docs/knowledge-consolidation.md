@@ -1,7 +1,9 @@
 # Knowledge buckets consolidation — plan
 
-**Status:** Phases 1–3 landed. Phase 5a–5b landed (articles table + dual-write
-+ backfill from `bucket_summaries`). Phase 5c (read-path cutover) next.
+**Status:** Phases 1–3, 5a, 5b, 5c landed. Data-layer consolidation
+closed — `bucket_articles` is the read surface, `bucket_summaries`
+is maintained for write-back compat (deprecated, removal in Phase 6).
+Phase 4 (scope-pill in AppShell) is the next user-visible slice.
 **Scope:** unify the three "knowledge" surfaces (agent-memory buckets,
 `.ship/knowledge/*.md` disk-lister, `KbChunk` RAG index) under one
 `Scope × Source × Article` model, so every knowledge bucket has an
@@ -193,10 +195,16 @@ Split into three landing slices so we can ship incrementally:
   dual-writes on new packs so the mirror stays current. Idempotent by
   deterministic slug; the bulk Python backfill and the SQL data
   migration can run in either order.
-- **Phase 5c.** Read-path cutover: agent tool
-  `get_knowledge_bucket`, console detail page, and the Distiller
-  all read from `bucket_articles`. `bucket_summaries` becomes a
-  read-only legacy table until the final drop in Phase 9.
+- **Phase 5c (landed).** Read-path cutover: `TopicService.retrieve_buckets`
+  ranks and pulls from `bucket_articles` (published + unarchived +
+  embedding-present + scope=agent_memory). `BucketHit.summary_id`
+  renamed to `article_id`; `BucketHit.summary` now carries
+  `article.body_md`. The console detail page and agent tool
+  `get_knowledge_bucket` stay on the legacy `BucketSummary` read
+  (no external contract change yet) and will move in Phase 5d
+  alongside the frontend refactor; write-back to
+  `bucket_summaries` is preserved by the pack_topic dual-write so
+  the legacy reads are still correct.
 
 ### Phase 6 — Distiller contract
 
@@ -294,3 +302,11 @@ Improvements also respect it.
   `if: ${{ secrets.* }}` is forbidden by GitHub, which silently broke the
   workflow on every push. Moved the empty-secret bail into bash inside the
   step. `actionlint` clean, workflow files parse again.
+- **2026-04-21** — Phase 5c shipped: `TopicService.retrieve_buckets` now
+  ranks from `bucket_articles` instead of `bucket_summaries`, filtered to
+  `status='published' AND archived_at IS NULL AND embedding IS NOT NULL
+  AND source_kind='agent_memory'`. `BucketHit.article_id` replaces
+  `summary_id`; the downstream prompt-assembly layer (`assemble_messages`,
+  `_format_bucket_memory`) is unchanged. 5 new tests guard source-scope,
+  superseded/archived filtering, similarity threshold, and NULL-embedding
+  tolerance. Backend suite: 365 passed.
