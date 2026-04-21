@@ -1427,6 +1427,63 @@ export function getKnowledgeBucket(
   );
 }
 
+// --- Phase 3: scope-aware bucket resolver ---------------------------------
+//
+// ``GET /v1/workspaces/{ws}/buckets/resolved`` returns the full ladder
+// (workspace ≺ project ≺ repo ⊕ user) the caller can see. Callers pick
+// one of four modes:
+//
+// - ``{}`` — workspace + caller-user overlay only.
+// - ``{ project_id }`` — add project-scope rows above workspace.
+// - ``{ repo_id }`` — same, but with repo rows; project rows for the
+//   repo's project included by the backend.
+// - ``include_archived: true`` — surface archived rows too (admin).
+//
+// The backend ensures other users' ``scope='user'`` rows stay
+// invisible, so the response is safe to render as-is.
+
+export async function listResolvedBuckets(
+  workspaceId: string,
+  opts: {
+    projectId?: string | null;
+    repoId?: string | null;
+    includeArchived?: boolean;
+  } = {},
+  token?: string,
+): Promise<import("./types").ApiResolvedBucketsResponse> {
+  const qs = new URLSearchParams();
+  if (opts.projectId) qs.set("project_id", opts.projectId);
+  if (opts.repoId) qs.set("repo_id", opts.repoId);
+  if (opts.includeArchived) qs.set("include_archived", "true");
+  const suffix = qs.size ? `?${qs.toString()}` : "";
+  return apiFetch<import("./types").ApiResolvedBucketsResponse>(
+    `/v1/workspaces/${workspaceId}/buckets/resolved${suffix}`,
+    { token },
+  );
+}
+
+// --- Phase 5d: canonical article listing for a single bucket --------------
+
+export async function listBucketArticles(
+  workspaceId: string,
+  slug: string,
+  opts: {
+    includeSuperseded?: boolean;
+    includeArchived?: boolean;
+  } = {},
+  token?: string,
+): Promise<import("./types").ApiBucketArticle[]> {
+  const qs = new URLSearchParams();
+  if (opts.includeSuperseded) qs.set("include_superseded", "true");
+  if (opts.includeArchived) qs.set("include_archived", "true");
+  const suffix = qs.size ? `?${qs.toString()}` : "";
+  const payload = await apiFetch<import("./types").ApiBucketArticle[]>(
+    `/v1/workspaces/${workspaceId}/buckets/${encodeURIComponent(slug)}/articles${suffix}`,
+    { token },
+  );
+  return Array.isArray(payload) ? payload : [];
+}
+
 // --- API tokens ------------------------------------------------------------
 
 export function mintToken(

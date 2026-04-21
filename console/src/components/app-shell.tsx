@@ -121,6 +121,7 @@ export function AppShell({
   actions,
   workspace,
   scope,
+  scopePill,
 }: {
   children: ReactNode;
   title: string;
@@ -128,6 +129,15 @@ export function AppShell({
   actions?: ReactNode;
   workspace?: AppShellWorkspace;
   scope?: AppShellScope;
+  /**
+   * Phase 4: optional scope filter for the header. Pages that care
+   * about scope (e.g. ``/knowledge``) pass the pill pre-rendered
+   * from their server component so it can pass in activated-repo
+   * and current-user data fetched during SSR. Pages that don't
+   * care leave this ``undefined`` and the header stays the same
+   * single-chip shape it's always had.
+   */
+  scopePill?: ReactNode;
 }) {
   const pathname = usePathname();
   const [scopeOpen, setScopeOpen] = useState(false);
@@ -312,13 +322,14 @@ export function AppShell({
           <header className="sticky top-0 z-40 border-b border-white/10 bg-ink/80 backdrop-blur-xl">
             <div className="flex items-center gap-3 px-6 py-4 lg:px-8">
               <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <WorkspaceChip
                     label={wsLabel}
                     kicker={wsKicker}
                     open={wsOpen}
                     onToggle={() => setWsOpen((s) => !s)}
                   />
+                  {scopePill}
                   {kicker && kicker !== wsKicker && (
                     <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-aqua/80">
                       {kicker}

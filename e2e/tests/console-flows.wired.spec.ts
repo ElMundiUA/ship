@@ -92,6 +92,28 @@ test.describe("console surfaces (wired, serial)", () => {
     await expect(
       page.getByRole("heading", { name: "Knowledge buckets", exact: true }),
     ).toBeVisible({ timeout: 30_000 });
+    // Phase 4: the scope pill is mounted in the header and defaults
+    // to "workspace" scope when no ?scope= query param is set.
+    const pill = page.getByTestId("scope-pill");
+    await expect(pill).toBeVisible({ timeout: 10_000 });
+    await expect(pill).toHaveAttribute("data-scope", "workspace");
+  });
+
+  test("08b — knowledge respects ?scope=repo URL state", async ({ page }) => {
+    // Navigate to a repo-scoped URL directly. The pill should flip
+    // to "repo" iff the ``repo_id`` resolves against activated
+    // repos — otherwise it silently falls back to "workspace" so
+    // the empty state doesn't hijack the page. We can't hard-code a
+    // real repo id in a public fixture, so we assert the fallback
+    // path is at least not an error (no crash on unknown repo_id).
+    await page.goto("/knowledge?scope=repo&repo_id=00000000-0000-0000-0000-000000000000");
+    await expect(
+      page.getByRole("heading", { name: "Knowledge buckets", exact: true }),
+    ).toBeVisible({ timeout: 30_000 });
+    const pill = page.getByTestId("scope-pill");
+    await expect(pill).toBeVisible({ timeout: 10_000 });
+    // Unknown repo id → pill stays on workspace (graceful fallback).
+    await expect(pill).toHaveAttribute("data-scope", "workspace");
   });
 
   test("09 — metrics", async ({ page }) => {
