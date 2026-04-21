@@ -127,6 +127,34 @@ async def test_check_filters_by_slug_query(
 
 
 @pytest.mark.asyncio
+async def test_check_translates_github_403_to_412_missing_permission(
+    monkeypatch, v1_client, db_session, seeded_repo_admin
+) -> None:
+    """GitHub returning 403/404 on listing secrets (App lacks the
+    ``Secrets`` permission) must surface as a 412 with
+    ``code=missing_secrets_permission`` so the wizard can render a
+    precise remediation banner instead of a generic 500."""
+    from backend.app.services import agent_secrets as svc
+    from backend.app.integrations.github.workflows import WorkflowDispatchError
+
+    raw, workspace, repo = seeded_repo_admin
+
+    async def _fake_list(*args, **kwargs):
+        raise WorkflowDispatchError(403, "Resource not accessible by integration")
+
+    monkeypatch.setattr(svc, "list_repo_secrets", _fake_list)
+
+    resp = await v1_client.get(
+        f"/v1/workspaces/{workspace.id}/repos/{repo.id}/agent-secrets",
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert resp.status_code == 412, resp.text
+    detail = resp.json()["detail"]
+    assert detail["code"] == "missing_secrets_permission"
+    assert detail["upstream_status"] == 403
+
+
+@pytest.mark.asyncio
 async def test_push_uploads_and_never_persists_plaintext(
     monkeypatch, v1_client, db_session, seeded_repo_admin
 ) -> None:
