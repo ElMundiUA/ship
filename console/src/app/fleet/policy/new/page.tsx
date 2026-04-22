@@ -57,7 +57,11 @@ export default async function NewPolicyPage() {
 
   let patterns: ApiCatalogPattern[] = [];
   try {
-    patterns = await listCatalogPatterns({ mode: "lane", token });
+    patterns = await listCatalogPatterns({
+      mode: "lane",
+      workspaceId: workspace.id,
+      token,
+    });
   } catch (err) {
     if (err instanceof ApiHttpError && err.status === 401) {
       redirect("/login?next=%2Ffleet%2Fpolicy%2Fnew");

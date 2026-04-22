@@ -22,10 +22,20 @@ from __future__ import annotations
 
 from typing import Any
 
+import uuid
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+from sqlalchemy import asc, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.api.v1.deps import AuthContext, get_current_auth
+from backend.app.api.v1.routes.workspaces import (
+    ROLES_READ,
+    _require_membership,
+)
+from backend.app.db.models.custom_patterns import CustomPattern
+from backend.app.db.session import get_session
 from backend.app.services import catalog as catalog_service
 from backend.app.services.lane_recipes import list_lane_recipes
 
@@ -44,8 +54,20 @@ class CatalogEntryOut(BaseModel):
     group: str | None
     tags: list[str]
     description: str
+    # Pre-RFC-0008 frontmatter occasionally stored a numeric ``0``
+    # placeholder instead of a real digest (see RFC-0009 Wave 2
+    # pattern backfill). Coerce any non-string scalar to its ``str``
+    # form so the picker endpoints keep responding 200 while the
+    # catalog backfill is in flight.
     content_sha256: str | None
     updated_at: Any | None = None
+
+    @field_validator("content_sha256", mode="before")
+    @classmethod
+    def _coerce_content_sha256(cls, value: Any) -> Any:
+        if value is None or isinstance(value, str):
+            return value
+        return str(value)
     deprecated: bool
     replaced_by: str | None
     yanked: bool
@@ -65,6 +87,11 @@ class CatalogEntryOut(BaseModel):
     include: list[str] = []
     inputs: list[dict[str, Any]] = []
     enabled_on_install: dict[str, Any] = {}
+    # RFC-0008 §H (PR-6) — ``"builtin"`` for filesystem patterns,
+    # ``"workspace"`` for rows authored via the Console's AI author.
+    # Pickers surface a "custom" badge + delete action only on the
+    # latter.
+    source: str = "builtin"
 
 
 def _serialise(entries: list) -> list[CatalogEntryOut]:
@@ -97,7 +124,16 @@ async def list_patterns(
             "to return every non-``common-*`` pattern."
         ),
     ),
-    _: AuthContext = Depends(get_current_auth),
+    workspace_id: uuid.UUID | None = Query(
+        default=None,
+        description=(
+            "Merge workspace-private patterns (RFC-0008 §H / PR-6) on "
+            "top of the baked-in catalog. Caller must be a member of "
+            "the workspace. Omit to return baked-in only."
+        ),
+    ),
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
 ) -> list[CatalogEntryOut]:
     """Pattern catalog with RFC-0008 metadata — drives Lanes Library + Requests grid.
 
@@ -105,7 +141,9 @@ async def list_patterns(
     ``modes``) are never user-facing entry points. When ``mode`` is
     set, legacy pre-RFC-0008 patterns (no ``modes`` + no ``category``)
     are treated as ``[lane, request]`` so they keep surfacing during
-    the catalog-reform transition.
+    the catalog-reform transition. When ``workspace_id`` is set, the
+    workspace-private catalog layer (``custom_patterns``) is merged
+    on top — collisions resolve in favour of the workspace row.
     """
     if mode is not None and mode not in {"lane", "request"}:
         raise HTTPException(
@@ -115,15 +153,35 @@ async def list_patterns(
                 "message": "mode must be one of 'lane', 'request', or omitted.",
             },
         )
+
+    custom_rows: list[CustomPattern] = []
+    if workspace_id is not None:
+        await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
+        custom_rows = list(
+            (
+                await session.execute(
+                    select(CustomPattern)
+                    .where(CustomPattern.workspace_id == workspace_id)
+                    .order_by(asc(CustomPattern.pattern_id))
+                )
+            )
+            .scalars()
+            .all()
+        )
+
     if mode is None:
+        merged = catalog_service.list_patterns_for_workspace(custom_rows)
         entries = [
-            p for p in catalog_service.list_patterns()
+            p
+            for p in merged
             # Hide ``common-*`` shared fragments (empty modes list) —
             # they're included by other patterns, never picked directly.
             if not (p.modes == [] and (p.category or "") == "common")
         ]
     else:
-        entries = catalog_service.list_patterns_by_mode(mode)
+        entries = catalog_service.list_patterns_by_mode_for_workspace(
+            mode, custom_rows
+        )
     return _serialise(entries)
 
 

@@ -23,6 +23,7 @@ from backend.app.api.v1.routes import (
     catalog,
     chat,
     clarifications,
+    custom_patterns,
     dashboard,
     distiller,
     fleet_requests,
@@ -157,6 +158,12 @@ api_router.include_router(adoption.router)
 # mirror-lane rules + per-repo opt-outs with live compliance
 # rollup. Read is member; create/delete/exception are admin.
 api_router.include_router(policies.router)
+# Workspace-private catalog layer (RFC-0008 §H — PR-6). Authoring
+# (``POST /patterns/draft`` via LLM + ``POST /patterns`` to persist)
+# lives here; reads are served by ``/v1/catalog/patterns`` with the
+# ``workspace_id`` query parameter so every baked-in caller gets
+# merged results "for free".
+api_router.include_router(custom_patterns.router)
 # Per-repo agent API-key wiring (Wizard v2 iter 3). Admin-only check
 # + push; plaintext lives only in the HTTP hop to GitHub's secrets
 # API and is never persisted by Ship.

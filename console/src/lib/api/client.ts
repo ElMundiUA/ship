@@ -1535,17 +1535,138 @@ export interface ApiCatalogPattern {
   include: string[];
   inputs: ApiPatternInput[];
   enabled_on_install: Record<string, unknown>;
+  // RFC-0008 §H / PR-6 — "builtin" for baked-in filesystem patterns,
+  // "workspace" for entries authored at runtime via the AI author
+  // modal. Defaults to "builtin" when the backend predates the field.
+  source?: "builtin" | "workspace";
 }
 
 export function listCatalogPatterns(
-  opts: { mode?: "lane" | "request"; token?: string } = {},
+  opts: {
+    mode?: "lane" | "request";
+    // When set, the backend merges workspace-private patterns on top
+    // of the baked-in catalog. Pickers that surface the AI author
+    // modal always pass this so the freshly-saved pattern shows up
+    // on refresh.
+    workspaceId?: string;
+    token?: string;
+  } = {},
 ): Promise<ApiCatalogPattern[]> {
   const params = new URLSearchParams();
   if (opts.mode) params.set("mode", opts.mode);
+  if (opts.workspaceId) params.set("workspace_id", opts.workspaceId);
   const suffix = params.toString() ? `?${params.toString()}` : "";
   return apiFetch<ApiCatalogPattern[]>(`/v1/catalog/patterns${suffix}`, {
     token: opts.token,
   });
+}
+
+/**
+ * Workspace-private catalog pattern (RFC-0008 §H / PR-6).
+ *
+ * Rows authored via the AI author modal (or Navigator) and stored in
+ * ``custom_patterns``. Baked-in patterns never come back through this
+ * shape — the Console only needs it for management (list + delete on
+ * the workspace settings / pattern picker). For merged reads used by
+ * the pickers themselves call :func:`listCatalogPatterns` with
+ * ``workspaceId``.
+ */
+export interface ApiCustomPattern {
+  id: string;
+  workspace_id: string;
+  pattern_id: string;
+  name: string;
+  description: string;
+  category: string | null;
+  modes: ("lane" | "request")[];
+  inputs: Record<string, unknown>[];
+  spec: Record<string, unknown>;
+  body: string;
+  created_by_user_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Payload the ``/patterns/draft`` endpoint returns and the modal feeds back. */
+export interface ApiPatternDraft {
+  pattern_id: string;
+  name: string;
+  description: string;
+  category: string | null;
+  modes: ("lane" | "request")[];
+  inputs: Record<string, unknown>[];
+  spec: Record<string, unknown>;
+  body: string;
+}
+
+export interface ApiPatternDraftIn {
+  prompt: string;
+  target_modes?: ("lane" | "request")[];
+}
+
+export function draftCustomPattern(
+  workspaceId: string,
+  payload: ApiPatternDraftIn,
+  token?: string,
+): Promise<ApiPatternDraft> {
+  return apiFetch<ApiPatternDraft>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/patterns/draft`,
+    {
+      method: "POST",
+      body: payload,
+      token,
+    },
+  );
+}
+
+export interface ApiCustomPatternIn {
+  pattern_id: string;
+  name: string;
+  description?: string;
+  category?: string | null;
+  modes: ("lane" | "request")[];
+  inputs?: Record<string, unknown>[];
+  spec?: Record<string, unknown>;
+  body?: string;
+}
+
+export function listCustomPatterns(
+  workspaceId: string,
+  token?: string,
+): Promise<ApiCustomPattern[]> {
+  return apiFetch<ApiCustomPattern[]>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/patterns`,
+    { token },
+  );
+}
+
+export function createCustomPattern(
+  workspaceId: string,
+  payload: ApiCustomPatternIn,
+  token?: string,
+): Promise<ApiCustomPattern> {
+  return apiFetch<ApiCustomPattern>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/patterns`,
+    {
+      method: "POST",
+      body: payload,
+      token,
+    },
+  );
+}
+
+export function deleteCustomPattern(
+  workspaceId: string,
+  patternRowId: string,
+  token?: string,
+): Promise<void> {
+  return apiFetch<void>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/patterns/${encodeURIComponent(patternRowId)}`,
+    {
+      method: "DELETE",
+      token,
+    },
+  );
 }
 
 /**

@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { PatternAiAuthor } from "@/components/pattern-ai-author";
 import { Badge, ButtonGhost, ButtonPrimary, Card, CardHeader } from "@/components/ui";
 import type {
   ApiActivatedRepo,
@@ -36,13 +37,16 @@ type FormState =
 export function FleetRequestForm({
   workspaceId,
   repos,
-  patterns,
+  patterns: initialPatterns,
 }: {
   workspaceId: string;
   repos: ApiActivatedRepo[];
   patterns: ApiCatalogPattern[];
 }) {
   const router = useRouter();
+  // Local catalog state so a newly-authored pattern (RFC-0008 §H /
+  // PR-6 — AI author modal) shows up without a full-page reload.
+  const [patterns, setPatterns] = useState<ApiCatalogPattern[]>(initialPatterns);
   const [selectedPatternId, setSelectedPatternId] = useState<string | null>(
     patterns[0]?.id ?? null,
   );
@@ -171,7 +175,48 @@ export function FleetRequestForm({
           <Card>
             <CardHeader
               title="1. Pick a pattern"
-              subtitle="Same catalog the per-repo Requests page uses."
+              subtitle="Same catalog the per-repo Requests page uses. Missing something? Have the AI draft it."
+              action={
+                <PatternAiAuthor
+                  workspaceId={workspaceId}
+                  defaultMode="request"
+                  onPatternSaved={(saved) => {
+                    // Splice the new row into our local catalog view
+                    // in the ``source: "workspace"`` shape the picker
+                    // already knows how to render.
+                    const entry: ApiCatalogPattern = {
+                      kind: "pattern",
+                      id: saved.pattern_id,
+                      name: saved.name,
+                      version: null,
+                      channel: null,
+                      group: null,
+                      tags: [],
+                      description: saved.description,
+                      content_sha256: null,
+                      updated_at: saved.updated_at,
+                      deprecated: false,
+                      replaced_by: null,
+                      yanked: false,
+                      category: saved.category,
+                      modes: saved.modes,
+                      default_trigger: null,
+                      lane_workflow: null,
+                      resolved_lane_workflow: null,
+                      include: [],
+                      inputs: (saved.inputs ?? []) as unknown as ApiPatternInput[],
+                      enabled_on_install: {},
+                      source: "workspace",
+                    };
+                    setPatterns((prev) => [
+                      entry,
+                      ...prev.filter((p) => p.id !== entry.id),
+                    ]);
+                    setSelectedPatternId(entry.id);
+                    setInputs({});
+                  }}
+                />
+              }
             />
             <div className="space-y-5">
               {grouped.map((group) => (
@@ -364,6 +409,9 @@ function PatternChoice({
         {pattern.description || pattern.id}
       </p>
       <div className="mt-1.5 flex flex-wrap items-center gap-1">
+        {pattern.source === "workspace" ? (
+          <Badge tone="workspace">custom</Badge>
+        ) : null}
         {tags.map((t) => (
           <Badge key={t} tone="neutral">
             {t}
