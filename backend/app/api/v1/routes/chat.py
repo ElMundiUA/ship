@@ -610,6 +610,10 @@ async def _run_agent_turn(
         settings=settings,
         workspace_id=workspace_id,
         user_id=user_id,
+        # PR-7C: surface the chat's active repo to ``search_workspace_kb``
+        # so the tool can promote hits from the repo the user is
+        # browsing into the top rank band even on a zero-arg tool call.
+        active_repo_id=thread.repo_id,
     )
 
     messages = await _thread_messages(session, thread.id)

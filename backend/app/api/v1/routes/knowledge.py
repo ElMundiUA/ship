@@ -56,7 +56,6 @@ from backend.app.db.models.agent_memory import (
     BucketArticleStatus,
     BucketScope,
     BucketSource,
-    KbChunk,
     KnowledgeBucket,
 )
 from backend.app.db.models.integrations import GitHubInstallation, WorkspaceRepo
@@ -68,6 +67,11 @@ from backend.app.services.agent.embedding import embed_text
 from backend.app.services.knowledge_dedup import (
     list_fresh_candidates,
     rebuild_candidates,
+)
+from backend.app.services.knowledge_search import (
+    EmbeddingsUnavailable,
+    KnowledgeSearchHit,
+    search_workspace_knowledge as _run_workspace_knowledge_search,
 )
 from backend.app.services.knowledge_lister import (
     bucket_to_dict as legacy_bucket_to_dict,
@@ -293,25 +297,6 @@ class KnowledgeSearchIn(BaseModel):
     limit: int = Field(default=20, ge=1, le=100)
 
 
-class KnowledgeSearchHit(BaseModel):
-    """One result row. ``source`` distinguishes bucket-article hits
-    (structured knowledge) from kb_chunk hits (raw ``.ship/knowledge``
-    markdown). The frontend can group or style by ``rank_bucket``
-    without re-running the ordering logic."""
-
-    id: uuid.UUID
-    source: str
-    bucket_slug: str | None = None
-    bucket_id: uuid.UUID | None = None
-    repo_id: uuid.UUID | None = None
-    scope_kind: str
-    score: float
-    rank_bucket: str
-    snippet: str
-    title: str | None = None
-    repo_full_name: str | None = None
-
-
 class KnowledgeSearchResponse(BaseModel):
     query: str
     hits: list[KnowledgeSearchHit]
@@ -339,49 +324,6 @@ class KnowledgeCanonicalResponse(BaseModel):
     orphan_slugs: list[KnowledgeOrphanSlug]
 
 
-_SNIPPET_MAX_CHARS = 400
-
-
-def _first_paragraph(text: str) -> str:
-    """Pick the first non-empty paragraph from markdown, truncated.
-
-    Best-effort: callers live in a search panel, not a reader, so the
-    cheap ``\\n\\n`` split is fine — nobody cares if we clip mid-bullet
-    when the body is markdown prose.
-    """
-    if not text:
-        return ""
-    stripped = text.strip()
-    if not stripped:
-        return ""
-    for chunk in stripped.split("\n\n"):
-        candidate = chunk.strip()
-        if candidate:
-            if len(candidate) > _SNIPPET_MAX_CHARS:
-                return candidate[: _SNIPPET_MAX_CHARS - 1].rstrip() + "…"
-            return candidate
-    trimmed = stripped[:_SNIPPET_MAX_CHARS]
-    if len(stripped) > _SNIPPET_MAX_CHARS:
-        trimmed = trimmed.rstrip() + "…"
-    return trimmed
-
-
-async def _embed_query(query: str) -> list[float]:
-    """Call the shared embedding helper, translating its RuntimeError
-    into a 412 the console can branch on (same contract the pattern-
-    draft endpoint uses for unconfigured LLM keys)."""
-    try:
-        return await embed_text(query, settings=get_settings())
-    except RuntimeError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_412_PRECONDITION_FAILED,
-            detail={
-                "code": "embeddings_unconfigured",
-                "message": str(exc),
-            },
-        ) from exc
-
-
 @router.post("/search", response_model=KnowledgeSearchResponse)
 async def search_workspace_knowledge(
     workspace_id: uuid.UUID,
@@ -391,131 +333,35 @@ async def search_workspace_knowledge(
 ) -> KnowledgeSearchResponse:
     """Vector search over workspace knowledge.
 
-    Unions two pgvector queries — structured :class:`BucketArticle`
-    rows and raw :class:`KbChunk` markdown — then re-ranks by scope
-    so the caller's current repo always wins over generic workspace
-    hits and those over other repos. Keeps distance ordering inside
-    each band so semantically stronger matches still bubble up.
+    Thin HTTP wrapper — all the vector union + re-rank work lives in
+    :func:`backend.app.services.knowledge_search.search_workspace_knowledge`
+    so the Navigator ``search_workspace_kb`` tool can call the same
+    implementation directly (no cookie round-trip). The 412 on
+    unconfigured embeddings is translated from the service's
+    :class:`EmbeddingsUnavailable` so the Console contract doesn't
+    change.
     """
     await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
 
-    qvec = await _embed_query(payload.query.strip())
-    over_fetch = payload.limit * 3
-
-    article_stmt = (
-        select(
-            BucketArticle,
-            KnowledgeBucket,
-            BucketArticle.embedding.cosine_distance(qvec).label("dist"),
+    try:
+        hits = await _run_workspace_knowledge_search(
+            session,
+            workspace_id=workspace_id,
+            query=payload.query,
+            repo_id=payload.repo_id,
+            limit=payload.limit,
+            settings=get_settings(),
         )
-        .join(KnowledgeBucket, KnowledgeBucket.id == BucketArticle.bucket_id)
-        .where(
-            and_(
-                KnowledgeBucket.workspace_id == workspace_id,
-                BucketArticle.archived_at.is_(None),
-                BucketArticle.embedding.is_not(None),
-                BucketArticle.status == BucketArticleStatus.PUBLISHED,
-            )
-        )
-        .order_by("dist")
-        .limit(over_fetch)
-    )
+    except EmbeddingsUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_412_PRECONDITION_FAILED,
+            detail={
+                "code": "embeddings_unconfigured",
+                "message": str(exc),
+            },
+        ) from exc
 
-    chunk_stmt = (
-        select(KbChunk, KbChunk.embedding.cosine_distance(qvec).label("dist"))
-        .where(
-            and_(
-                KbChunk.workspace_id == workspace_id,
-                KbChunk.embedding.is_not(None),
-            )
-        )
-        .order_by("dist")
-        .limit(over_fetch)
-    )
-
-    article_rows = (await session.execute(article_stmt)).all()
-    chunk_rows = (await session.execute(chunk_stmt)).all()
-
-    # Resolve repo full_names in a single batched query; both article
-    # rows (via bucket.repo_id) and chunk rows reference ``workspace_repos``.
-    repo_ids: set[uuid.UUID] = set()
-    for _, bucket, _ in article_rows:
-        if bucket.repo_id is not None:
-            repo_ids.add(bucket.repo_id)
-    for chunk, _ in chunk_rows:
-        repo_ids.add(chunk.repo_id)
-
-    repo_full_names: dict[uuid.UUID, str | None] = {}
-    if repo_ids:
-        repo_map_rows = (
-            await session.execute(
-                select(WorkspaceRepo.id, WorkspaceRepo.full_name).where(
-                    WorkspaceRepo.id.in_(repo_ids)
-                )
-            )
-        ).all()
-        repo_full_names = {r[0]: r[1] for r in repo_map_rows}
-
-    raw_hits: list[KnowledgeSearchHit] = []
-    for article, bucket, dist in article_rows:
-        hit_repo_id = bucket.repo_id
-        raw_hits.append(
-            KnowledgeSearchHit(
-                id=article.id,
-                source="bucket_article",
-                bucket_slug=bucket.slug,
-                bucket_id=bucket.id,
-                repo_id=hit_repo_id,
-                scope_kind=bucket.scope_kind,
-                score=round(1.0 - float(dist), 4),
-                rank_bucket="other_repo",
-                snippet=_first_paragraph(article.body_md),
-                title=article.title,
-                repo_full_name=(
-                    repo_full_names.get(hit_repo_id)
-                    if hit_repo_id is not None
-                    else None
-                ),
-            )
-        )
-    for chunk, dist in chunk_rows:
-        raw_hits.append(
-            KnowledgeSearchHit(
-                id=chunk.id,
-                source="kb_chunk",
-                bucket_slug=None,
-                bucket_id=None,
-                repo_id=chunk.repo_id,
-                scope_kind="repo",
-                score=round(1.0 - float(dist), 4),
-                rank_bucket="other_repo",
-                snippet=_first_paragraph(chunk.content),
-                title=chunk.source_path,
-                repo_full_name=repo_full_names.get(chunk.repo_id),
-            )
-        )
-
-    # Re-rank: current repo first, then workspace-scope, then every
-    # other repo. Keep distance order inside each band.
-    repo_match: list[KnowledgeSearchHit] = []
-    workspace_hits: list[KnowledgeSearchHit] = []
-    rest: list[KnowledgeSearchHit] = []
-    for hit in raw_hits:
-        if payload.repo_id is not None and hit.repo_id == payload.repo_id:
-            hit.rank_bucket = "repo_match"
-            repo_match.append(hit)
-        elif hit.scope_kind == BucketScope.WORKSPACE:
-            hit.rank_bucket = "workspace"
-            workspace_hits.append(hit)
-        else:
-            hit.rank_bucket = "other_repo"
-            rest.append(hit)
-
-    for band in (repo_match, workspace_hits, rest):
-        band.sort(key=lambda h: h.score, reverse=True)
-
-    ordered = (repo_match + workspace_hits + rest)[: payload.limit]
-    return KnowledgeSearchResponse(query=payload.query, hits=ordered)
+    return KnowledgeSearchResponse(query=payload.query, hits=hits)
 
 
 @router.get("/canonical", response_model=KnowledgeCanonicalResponse)

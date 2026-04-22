@@ -322,12 +322,68 @@ What's *not* in this PR:
 
 ---
 
-## PR-7C — Navigator knowledge tool · pending
+## PR-7C — Navigator knowledge tool · shipped
 
-Adds a workspace-aware Navigator tool backed by
-`POST /knowledge/search`, so agent threads can ambiently pull
-workspace canonical + repo-local context in the same call. Depends
-on 7A for the endpoint and on 7B for reliable canonicals.
+Closes out the three-part PR-7 knowledge track by wiring the
+workspace search surface into the chat agent. Shipped in this PR:
+
+- **`backend/app/services/knowledge_search.py`**. Extracts the
+  vector union + three-band re-rank out of the HTTP route into a
+  plain service function that takes an `AsyncSession` and returns
+  `KnowledgeSearchHit` rows. `EmbeddingsUnavailable` is now a named
+  exception the route translates into its existing
+  `412 embeddings_unconfigured` response. The HTTP behaviour is
+  unchanged — PR-7A's tests continue to pin the invariant.
+- **Navigator `search_workspace_kb` tool.** Declared in
+  `backend/app/services/agent/tools.py` alongside `search_repo_kb`
+  / `search_buckets`. Calls the service directly (no HTTP
+  round-trip), falls back to the chat's active repo when the LLM
+  omits `repo_id` (new optional `active_repo_id` kwarg on
+  `ToolBox`), caps `limit` at 25, clips snippets to 400 chars /
+  title+repo to 200, and returns a structured
+  `{"error": "embeddings_unavailable"}` payload when the embedding
+  provider is off instead of raising. `ToolBox` registers the
+  handler in the same `_handlers()` map as the existing tools.
+- **System-prompt hint** in `backend/app/services/agent/topic.py`.
+  Adds a short *Knowledge lookup order* paragraph steering the
+  model to prefer `search_repo_kb` first, fall back to
+  `search_workspace_kb` on misses or org-wide questions, and not
+  fabricate references when both come back empty.
+- **Tests**: `backend/tests/test_navigator_knowledge_tool.py`
+  covers repo-match ranking through the tool path, the
+  chat-context repo fallback (LLM omits `repo_id`, tool
+  substitutes `ToolBox.active_repo_id`), the structured
+  embeddings-unavailable error (no raise), and the 25-hit limit
+  cap. `backend/tests/test_v1_knowledge_search.py` retargets its
+  `embed_text` monkeypatch from the route module to the new
+  service module so PR-7A's behavioural invariants stay green
+  against the refactored call path.
+
+### PR-7A + 7B + 7C shipped as a set
+
+The RFC-0008 §I "Knowledge graph" entry is closed by the 7A/7B/7C
+trio above:
+
+- `8dbb4c1` — PR-7A: override FK, `/knowledge/search`,
+  `/knowledge/canonical`.
+- `ee97c47` — PR-7B: dedup clustering cache + LLM promotion
+  drafts + persist endpoint.
+- PR-7C (this commit) — Navigator tool + prompt hint, no new
+  tables.
+
+What's explicitly **not** in scope and left for later:
+
+- **Project-scope knowledge layer.** Every bucket is either
+  repo-scope or workspace-canonical; a project layer (carrier for
+  non-repo sources like Notion pages) is not wired yet.
+- **SQL-accelerated dedup clustering.** 7B's union-find runs in
+  pure Python over every non-archived repo-scope article. Fine
+  for MVP workspaces (< low thousands of articles); a pgvector
+  IVF-assisted pairwise pass is the next step when a tenant pushes
+  past the 24h TTL rebuild budget.
+- **Candidate auto-refresh.** Recompute happens on demand or via
+  the admin-gated `POST /candidates/refresh`; no scheduled job.
+  Safe to add later — the cache schema already carries TTLs.
 
 ---
 

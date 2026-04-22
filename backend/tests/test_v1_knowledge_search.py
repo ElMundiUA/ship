@@ -228,7 +228,10 @@ async def seed_search_workspace(db_session, seed_workspace):
 
 
 def _patch_embedder(monkeypatch, embedder: _FakeEmbedder) -> None:
-    import backend.app.api.v1.routes.knowledge as mod
+    # PR-7C extracted the embedding call into
+    # ``backend.app.services.knowledge_search``; the HTTP route now
+    # delegates to that module, so tests patch there.
+    import backend.app.services.knowledge_search as mod
 
     monkeypatch.setattr(mod, "embed_text", embedder)
 
@@ -309,7 +312,7 @@ async def test_search_returns_412_if_embeddings_unconfigured(
     ctx = seed_search_workspace
     headers = {"Authorization": f"Bearer {ctx['raw']}"}
 
-    import backend.app.api.v1.routes.knowledge as mod
+    import backend.app.services.knowledge_search as mod
 
     async def _boom(_query: str, *, settings=None) -> list[float]:
         raise RuntimeError("OPENAI_API_KEY is not configured.")
