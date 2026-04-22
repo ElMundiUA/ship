@@ -23,7 +23,7 @@ This RFC fixes the fundamentals — tenancy model, source-of-truth split, deploy
 1. **One runtime, three deployments.** Same image, same schema, same migrations for laptop / on-prem / SaaS.
 2. **Git as source of truth** for everything a human authors (artifacts, documents, retro reports). Postgres is rebuildable from git + object storage.
 3. **Tenancy from day one.** No bolted-on multi-tenant retrofit later.
-4. **Backwards compatible.** Already-shipped `@elmundi/ship-cli` keeps working against `/patterns`, `/tools`, `/workflows`, `/collections`, `/search`, `/fetch`, `/feedback`, `/telemetry` without changes.
+4. **Backwards compatible.** Already-shipped `@elmundi/ship-cli` keeps working against `/patterns`, `/tools`, `/collections`, `/search`, `/fetch`, `/feedback`, `/telemetry` without changes. (`/workflows` was part of the original surface; it was removed in [RFC-0007](/docs/protocol/rfc-0007-lanes-and-run-agent) Phase 6 along with `artifact_kind=workflow`.)
 5. **Self-serve friendly.** Booting locally is `cp .env.example .env && docker compose up`. No SQLite / no fallbacks / no “works on my machine” surprises.
 
 ## Non-goals
@@ -90,11 +90,18 @@ A single repo, a single image set, three target environments:
 
 ```
 ship-server   FastAPI app (HTTP API + UI server)
-ship-worker   Background jobs (ingestion, indexing, cron, webhook fan-out)
+ship-worker   Background jobs (ingestion, indexing, cron, webhook fan-out) — optional
 postgres      Postgres 16 + pgvector
-redis         Broker for the worker, pub/sub, cache
+redis         Broker for the worker, pub/sub, cache — optional
 minio (S3)    Blob storage for documents
 ```
+
+The `ship-worker` + Redis topology is **optional**. Since 2026-04-20
+the default SaaS deployment runs without a worker or a Redis broker;
+background work happens in-process or is driven by GitHub Actions
+schedules. Self-hosted installations that want async ingestion or
+webhook fan-out still opt into the worker/Redis pair via the Helm
+chart.
 
 | Environment | Postgres | Redis | S3 | Auth | Notes |
 |---|---|---|---|---|---|
@@ -145,7 +152,7 @@ Subsequent RFCs add `artifacts`, `artifact_versions`, `artifact_chunks`, `docume
 ## API surface
 
 - Existing unversioned routes remain for the released CLI:
-  - `GET /patterns`, `/patterns/{id}`, `/tools`, `/workflows`, `/collections`, `POST /search`, `POST /fetch`, `POST /feedback`, `POST /telemetry` (read against the global monorepo, no auth, unchanged behaviour).
+  - `GET /patterns`, `/patterns/{id}`, `/tools`, `/collections`, `POST /search`, `POST /fetch`, `POST /feedback`, `POST /telemetry` (read against the global monorepo, no auth, unchanged behaviour). `GET /workflows`, `GET /workflows/{id}`, `GET /workflows/{id}/versions`, and `/v1/catalog/workflows` were removed in [RFC-0007](/docs/protocol/rfc-0007-lanes-and-run-agent) Phase 6.
 - New versioned, tenant-scoped routes:
   - `POST /v1/auth/exchange` (OAuth code → session) and `POST /v1/auth/tokens` (PAT mint).
   - `GET /v1/workspaces`, `POST /v1/workspaces`, `GET /v1/workspaces/{ws}`.

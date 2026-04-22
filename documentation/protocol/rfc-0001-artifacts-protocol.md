@@ -7,6 +7,18 @@ created: 2026-04-17
 
 # RFC-0001 — Artifacts protocol
 
+> **Status:** partially superseded. Portions of this RFC are superseded by
+> [RFC-0005](/docs/protocol/rfc-0005-artifact-folder-spec-v2) (artifact
+> folder spec v2), [RFC-0007](/docs/protocol/rfc-0007-lanes-and-run-agent)
+> Phase 6 (`artifact_kind=workflow` retired — no public catalog, no
+> `/workflows` routes, no `shipctl workflow[s]`, no `workflow/<id>` pins,
+> no `workflow` feedback kind), and
+> [RFC-0008](/docs/protocol/rfc-0008-catalog-reform) (catalog reform:
+> pattern metadata + `<category>-<name>` naming). When this RFC mentions
+> `artifact_kind=workflow`, treat it as historical — lanes-as-config is
+> now the replacement model (see
+> [RFC-0007](/docs/protocol/rfc-0007-lanes-and-run-agent)).
+
 ## Summary
 
 Ship artifacts — patterns, tools, workflows, collections, and documentation — are versioned units served exclusively by the Ship site over HTTP and cached locally by `shipctl`. Clients never vendor methodology into their own git history; every consumption is an explicit, versioned read from the single source of truth. The protocol below defines the artifact shape, the HTTP surface used to list and fetch them, the local cache layout, and the rules agents follow when they consume an artifact.
@@ -30,7 +42,7 @@ Ship distributes five kinds of artifacts. Any new type must extend this list in 
 |--------------|----------------------------------------------------------------------|--------------------------------------------------|
 | `pattern`    | Instruction slice for a role or lane (prompt-shaped).                | `prompts/**/*.md`                                |
 | `tool`       | Integration or adapter description (CI, tracker, scanner, agent).    | `tools/**/*.md`                                  |
-| `workflow`   | End-to-end runbook connecting multiple roles or tools.               | `workflows/**/*.md`                              |
+| `workflow`   | End-to-end runbook connecting multiple roles or tools. *(retired — [RFC-0007](/docs/protocol/rfc-0007-lanes-and-run-agent) Phase 6)* | `workflows/**/*.md`                              |
 | `collection` | Curated bundle of artifacts for a stack, preset, or vertical.        | `collections/**/*.md`                            |
 | `doc`        | Any other markdown under `documentation/` referenced by the site.    | `documentation/**/*.md`                          |
 
@@ -59,12 +71,12 @@ Required fields per entry:
 | `replaced_by`    | string \| null | New `id` to migrate to when `deprecated=true`; otherwise `null`.                          |
 | `yanked`         | bool      | `true` if the version is permanently withdrawn (broken / unsafe). `GET /<kind>s/{id}` for a yanked entry returns HTTP `410 Gone`. Default `false`. |
 
-Example entry for the `cloud-developer` pattern (JSON, as returned by `GET /patterns/cloud-developer`):
+Example entry for the `role-developer` pattern (JSON, as returned by `GET /patterns/role-developer`):
 
 ```json
 {
   "kind": "pattern",
-  "id": "cloud-developer",
+  "id": "role-developer",
   "title": "Developer",
   "summary": "Implementation role: branch contract, PR shape, evidence.",
   "path": "prompts/cloud-agent/developer.md",
@@ -129,7 +141,7 @@ Response:
 [
   {
     "kind": "pattern",
-    "id": "cloud-developer",
+    "id": "role-developer",
     "version": "1.4.2",
     "content_sha256": "9f1c0a...d7",
     "updated_at": "2026-04-17T09:21:08Z",
@@ -183,7 +195,7 @@ The existing fetch endpoint remains the canonical "give me a body by either path
 ```
 
 ```json
-{ "kind": "pattern", "id": "cloud-developer" }
+{ "kind": "pattern", "id": "role-developer" }
 ```
 
 Optional: `"version": "1.4.2"` pins the exact version. Without `version`, the latest on the configured channel is returned. The response includes the same version fields plus `content`.
@@ -234,7 +246,7 @@ A project can pin individual artifacts or kinds via `.ship/config.yml`:
 ```yaml
 artifacts:
   pins:
-    pattern/cloud-developer: "1.4.2"
+    pattern/role-developer: "1.4.2"
     workflow/scheduled-sdlc-lane: "~2.1"
     collection/web-application: "^3.0.0"
   auto_update: true
@@ -263,7 +275,7 @@ An artifact may exist on both channels with different version timelines. Clients
 Agents that consume Ship artifacts must follow this short contract. It is the same contract whether the agent runs in Cursor, Codex, Claude Code, or a CI job.
 
 1. **Resolve before use.** Before applying any artifact, the agent MUST call `shipctl <kind> show <id>` (or the equivalent CLI). This is local-only when the cache is warm; `shipctl` will auto-fetch if the artifact is missing or stale.
-2. **Record the exact version.** The consumed version MUST be written into the PR description or ticket comment, in the form `<kind>:<id>@<version>` (example: `pattern:cloud-developer@1.4.2`). Multiple artifacts are listed on separate lines. This is the evidence trail used by retros and telemetry.
+2. **Record the exact version.** The consumed version MUST be written into the PR description or ticket comment, in the form `<kind>:<id>@<version>` (example: `pattern:role-developer@1.4.2`). Multiple artifacts are listed on separate lines. This is the evidence trail used by retros and telemetry.
 3. **Do not copy bodies into the repo.** If the agent needs a snippet in-line (for example, a checklist in a PR template), the snippet must reference the artifact id and version next to it, and must not be edited away from the source.
 4. **Feedback is opt-in.** After a session, if `telemetry.share=true`, the agent MAY draft a feedback suggestion with `shipctl feedback draft`. It MUST NOT submit feedback without explicit user consent (see RFC-0003).
 
@@ -272,8 +284,8 @@ Agents that consume Ship artifacts must follow this short contract. It is the sa
 An artifact marked `deprecated=true` keeps serving its last published body for existing clients but produces a warning on fetch:
 
 ```
-warning: pattern:cloud-developer@1.4.2 is deprecated; replaced_by=cloud-developer-v2
-         see GET /patterns/cloud-developer-v2
+warning: pattern:role-developer@1.4.2 is deprecated; replaced_by=role-developer-v2
+         see GET /patterns/role-developer-v2
 ```
 
 ### Response shapes
@@ -313,17 +325,17 @@ Rules:
 A new repository with no `.ship/cache/` runs:
 
 ```bash
-shipctl pattern show cloud-developer
+shipctl pattern show role-developer
 ```
 
 Sequence:
 
 1. `shipctl` loads `.ship/config.yml` → `api.base_url`, `api.channel`, `artifacts.pins`.
 2. No cache exists → skip freshness check.
-3. `POST /fetch` with `{ "kind": "pattern", "id": "cloud-developer" }` (no `version` because no pin).
-4. Server returns entry `cloud-developer@1.4.2` + body.
+3. `POST /fetch` with `{ "kind": "pattern", "id": "role-developer" }` (no `version` because no pin).
+4. Server returns entry `role-developer@1.4.2` + body.
 5. `shipctl` verifies `content_sha256` of the returned body.
-6. On match, writes `.ship/cache/pattern/cloud-developer@1.4.2.md` and `.ship/cache/pattern/cloud-developer@1.4.2.meta.json`.
+6. On match, writes `.ship/cache/pattern/role-developer@1.4.2.md` and `.ship/cache/pattern/role-developer@1.4.2.meta.json`.
 7. Prints the body to stdout.
 
 ### Resolving a pinned pattern with warm cache
@@ -331,16 +343,16 @@ Sequence:
 ```yaml
 artifacts:
   pins:
-    pattern/cloud-developer: "1.4.2"
+    pattern/role-developer: "1.4.2"
 ```
 
 ```bash
-shipctl pattern show cloud-developer
+shipctl pattern show role-developer
 ```
 
 Sequence:
 
-1. Resolve pin → require `pattern/cloud-developer@1.4.2` exactly.
+1. Resolve pin → require `pattern/role-developer@1.4.2` exactly.
 2. Cache hit → read body and `.meta.json`.
 3. `fetched_at` is 2 hours old, `api.ttl_hours=24` → serve from cache without any network.
 
@@ -349,13 +361,13 @@ Sequence:
 Same pin, but `fetched_at` is 30 hours old.
 
 1. `age > ttl_hours` → cheap compare via `/manifest`.
-2. Manifest reports `pattern/cloud-developer@1.4.2` with unchanged `content_sha256`.
+2. Manifest reports `pattern/role-developer@1.4.2` with unchanged `content_sha256`.
 3. Update `fetched_at` on the `.meta.json`, serve cache.
 
 If the server had already published `1.4.3` but the pin forces `1.4.2`, the manifest compare still finds `1.4.2` (the pinned version) identical and nothing upgrades. The next time the user runs `shipctl sync --dry-run`, they see:
 
 ```
-pattern/cloud-developer: pinned 1.4.2 (available: 1.4.3)
+pattern/role-developer: pinned 1.4.2 (available: 1.4.3)
 ```
 
 ### Publishing a new version

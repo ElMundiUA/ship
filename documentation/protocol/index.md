@@ -21,11 +21,18 @@ When an RFC is superseded, its status moves to `Superseded` and the replacement 
 
 | RFC | Title | Status | Summary |
 |---|---|---|---|
-| [0001](rfc-0001-artifacts-protocol.md) | Artifacts protocol | Accepted (amended by 0005) | Versioned artifacts served over HTTP, cached locally by `shipctl`, with semver + content hashes. |
-| [0002](rfc-0002-shipctl-config.md) | `.ship/config.yml` schema | Accepted | Standalone per-repository config; same schema regardless of language or stack. |
+| [0001](rfc-0001-artifacts-protocol.md) | Artifacts protocol | Accepted — partially superseded by 0005, 0007 (Phase 6), 0008 | Versioned artifacts served over HTTP, cached locally by `shipctl`, with semver + content hashes. |
+| [0002](rfc-0002-shipctl-config.md) | `.ship/config.yml` schema | Accepted — v2 defined by 0007 | Standalone per-repository config; same schema regardless of language or stack. |
 | [0003](rfc-0003-telemetry-and-feedback.md) | Telemetry and feedback | Accepted | Opt-in anonymous telemetry about artifact usage; client-drafted feedback becomes GitHub issues. |
 | [0004](rfc-0004-adapters.md) | Adapters | Accepted | CI / tracker / agent / rules adapters as versioned artifacts, not bundled into `shipctl`. |
-| [0005](rfc-0005-artifact-folder-spec-v2.md) | Artifact folder spec v2 | Proposed | Each artifact is a folder with `ARTIFACT.md` (frontmatter as single source of truth); catalog manifests removed from git; backend serves a live FS-derived index. |
+| [0005](rfc-0005-artifact-folder-spec-v2.md) | Artifact folder spec v2 | Implemented (partial — `workflow` retired by 0007 Phase 6) | Each artifact is a folder with `ARTIFACT.md` (frontmatter as single source of truth); catalog manifests removed from git; backend serves a live FS-derived index. |
 | [0006](rfc-0006-cloud-platform-foundations.md) | Cloud platform foundations | Proposed | Multi-tenant `Org → Workspace → Project` model; git-as-source-of-truth for human-authored content; Postgres + pgvector everywhere (Neon for SaaS); `/v1` API alongside backwards-compatible methodology routes. |
-| [0007](rfc-0007-lanes-and-run-agent.md) | Lanes-as-config and single `shipctl run` | Draft | Replace the workflow-artifact layer with lane entries in `.ship/config.yml` (v2) and a single `shipctl run --lane` entry-point; reusable workflow in Ship; `artifact_kind=workflow` retired (Phase 6). |
-| [0008](rfc-0008-catalog-reform.md) | Catalog reform — naming, modes, expansion | Draft | Canonical `<category>-<name>` naming for all patterns; required `modes: [lane\|request]` metadata; retire `DefaultPipelineSpec`; Requests UI becomes a catalog picker; Phase-1 expansion of 10 new patterns. |
+| [0007](rfc-0007-lanes-and-run-agent.md) | Lanes-as-config and single `shipctl run` | Accepted — Phase 6 done | Replace the workflow-artifact layer with lane entries in `.ship/config.yml` (v2) and a single `shipctl run --lane` entry-point; reusable workflow in Ship; `artifact_kind=workflow` retired (Phase 6). |
+| [0008](rfc-0008-catalog-reform.md) | Catalog reform — naming, modes, expansion | Accepted — Phase 0/1 shipped | Canonical `<category>-<name>` naming for all patterns; required `modes: [lane\|request]` metadata; retire `DefaultPipelineSpec`; Requests UI becomes a catalog picker; Phase-1 expansion of 10 new patterns. |
+
+RFC-0001 and RFC-0005 are partially superseded by
+[RFC-0007](rfc-0007-lanes-and-run-agent.md) Phase 6
+(`artifact_kind=workflow` retired) and
+[RFC-0008](rfc-0008-catalog-reform.md) (pattern metadata and
+`<category>-<name>` naming). See each RFC's top-of-file status block
+for the current picture.

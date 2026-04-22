@@ -287,7 +287,115 @@ def test_map_conclusion_normalises_github_values():
     assert map_conclusion_to_status("failure") == "failed"
     assert map_conclusion_to_status("cancelled") == "cancelled"
     assert map_conclusion_to_status(None) == "running"
+
+
+# ---------------------------------------------------------------------------
+# RFC-0008 C3.1 — multi-pattern lanes (``patterns: [ids]``)
+# ---------------------------------------------------------------------------
+
+
+_YAML_V2_MULTI = """
+version: 2
+lanes:
+  tech_debt_audit:
+    schedule: "0 6 * * 1"
+    patterns: [role-tech-architect, role-qa-architect, role-security-officer]
+  pr_review:
+    event: pull_request
+    pattern: flow-pr-self-review
+"""
+
+
+@pytest.mark.asyncio
+async def test_sync_parses_patterns_list_and_keeps_primary_in_column(
+    db_session, seed_workspace, patch_gateway
+) -> None:
+    """RFC-0008 C3.1 — ``patterns: [ids]`` is the canonical shape.
+
+    The DB column ``Lane.pattern`` stays populated with the first id
+    (back-compat with consumers that only read the primary); the full
+    list survives round-trip in ``config_blob['patterns']`` so
+    downstream readers (Console Active calendar, seed derivation)
+    never have to re-parse YAML.
+    """
+    from backend.app.db.models.lanes import Lane
+
+    _workspace, install, repo = await _seed(db_session, seed_workspace)
+    patch_gateway(_YAML_V2_MULTI)
+
+    report = await sync_lanes_for_repo(
+        session=db_session, repo=repo, install=install
+    )
+    assert report.added == 2
+    assert report.errors == []
+
+    rows = {
+        row.lane_id: row
+        for row in (
+            await db_session.execute(
+                Lane.__table__.select().where(Lane.repo_id == repo.id)
+            )
+        ).mappings()
+    }
+
+    # Multi-pattern lane: primary pinned in ``pattern`` column, full
+    # list survives in ``config_blob``.
+    audit = rows["tech_debt_audit"]
+    assert audit["pattern"] == "role-tech-architect"
+    assert audit["config_blob"]["patterns"] == [
+        "role-tech-architect",
+        "role-qa-architect",
+        "role-security-officer",
+    ]
+    # Single-pattern lane: ``patterns`` list is a one-element
+    # normalisation of the legacy ``pattern:`` scalar.
+    pr_row = rows["pr_review"]
+    assert pr_row["pattern"] == "flow-pr-self-review"
+    assert pr_row["config_blob"]["patterns"] == ["flow-pr-self-review"]
+    # Default fanout lands in the blob so downstream consumers don't
+    # have to branch on "is this key missing?".
+    assert audit["config_blob"]["fanout"] == "matrix"
+    assert pr_row["config_blob"]["fanout"] == "matrix"
     assert map_conclusion_to_status("timed_out") == "timed_out"
+
+
+_YAML_V2_MULTI_SEQ = """
+version: 2
+lanes:
+  tech_debt_audit:
+    schedule: "0 6 * * 1"
+    patterns: [role-tech-architect, role-qa-architect]
+    fanout: sequential
+"""
+
+
+@pytest.mark.asyncio
+async def test_sync_preserves_fanout_field(
+    db_session, seed_workspace, patch_gateway
+) -> None:
+    """RFC-0008 C3.2 — `fanout` survives round-trip into ``config_blob``.
+
+    Unknown values fall back to the default so a stale config doesn't
+    break sync; the writer endpoint is the authority on validation.
+    """
+    from backend.app.db.models.lanes import Lane
+
+    _workspace, install, repo = await _seed(db_session, seed_workspace)
+    patch_gateway(_YAML_V2_MULTI_SEQ)
+    report = await sync_lanes_for_repo(
+        session=db_session, repo=repo, install=install
+    )
+    assert report.added == 1
+    row = (
+        await db_session.execute(
+            Lane.__table__.select().where(Lane.repo_id == repo.id)
+        )
+    ).mappings().first()
+    assert row["config_blob"]["fanout"] == "sequential"
+    assert row["config_blob"]["patterns"] == [
+        "role-tech-architect",
+        "role-qa-architect",
+    ]
 
 
 @pytest.mark.asyncio

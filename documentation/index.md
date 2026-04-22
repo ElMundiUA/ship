@@ -6,12 +6,13 @@ The Manual is the operator's reference for Ship: how the framework works on disk
 
 - **Concepts** — the vocabulary. What is an artifact, a kind, a channel, a pin, an install_target, an adapter, a preset. Read this first if any noun on the site looks unfamiliar.
 - **Configuration** — every field of `.ship/config.yml`, the `.ship/` on-disk layout, defaults, examples.
-- **Lanes** — the `lanes:` block, how `shipctl run` + `shipctl lanes install` consume it, and what shows up on the Console `/lanes` page.
+- **Lanes** — lane wiring in `.ship/config.yml`, how `shipctl run` + `shipctl lanes install` consume it, and what shows up on the Console `/lanes` page.
+- **Knowledge buckets** — the scoped knowledge surface (`workspace / project / repo / user`), the Distiller, and how patterns reach for buckets via `spec.knowledge_topics`.
 - **Operating** — day-2 work: pinning versions, switching channels, reading `verify` output, debugging `sync`, telemetry on/off, drafting feedback.
-- **Authoring artifacts** — how to write your own pattern, tool, workflow, collection, preset, or adapter; front-matter contract; how to test locally.
+- **Authoring artifacts** — how to write your own pattern, tool, collection, preset, or adapter; front-matter contract; how to test locally.
 - **Discovery contract** — the Phase 0–4 interview an agent runs before its first PR. Normative for agent integrators.
 - **Agent matrix** — supported agent ids, their on-disk markers, install targets, and the adapter artifact for each.
-- **Protocol** — the RFCs. Normative spec for the artifacts protocol, config schema, telemetry, adapters, and folder layout.
+- **Protocol** — the RFCs. Normative spec for the artifacts protocol, config schema, telemetry, adapters, folder layout, lanes, and the catalog reform.
 - **Troubleshooting** — common errors and what to do about them.
 - **Legal** — license and versioning policy.
 
@@ -26,3 +27,10 @@ The Manual is the operator's reference for Ship: how the framework works on disk
 | The interactive setup wizard | [/docs/getting-started](/docs/getting-started) |
 
 If a page in the Manual repeats one of those surfaces, it is a bug — open an issue.
+
+## Where to next
+
+- [Concepts](/docs/concepts) if any Ship noun looks unfamiliar.
+- [Lanes](/docs/lanes) and [RFC-0007](/docs/protocol/rfc-0007-lanes-and-run-agent) for the `lanes:` / `shipctl run` surface.
+- [Knowledge buckets](/docs/knowledge-buckets) for the scoped knowledge model and the Distiller.
+- [RFC-0008](/docs/protocol/rfc-0008-catalog-reform) for the `<category>-<name>` pattern catalog reform.

@@ -33,6 +33,22 @@ export const LANE_EVENT_TYPES = Object.freeze([
 export const LANE_IDEMPOTENCY_STORES = Object.freeze(["file", "backend"]);
 export const LANE_IDEMPOTENCY_RESET_ON = Object.freeze(["version-change", "manual"]);
 
+/* RFC-0008 C3.2 — fan-out strategy for multi-pattern lanes.
+ *
+ *   matrix      — GitHub Actions matrix: one runner per pattern, parallel.
+ *   sequential  — Single runner, `shipctl run` iterates patterns in order.
+ *   concurrent  — Single runner, `shipctl run` spawns subprocesses in parallel.
+ *
+ * Meaningful only when ``patterns.length > 1``; single-pattern lanes ignore
+ * it (the linter warns if it's set on a single-pattern lane). Default:
+ * ``matrix``. */
+export const LANE_FANOUT_MODES = Object.freeze([
+  "matrix",
+  "sequential",
+  "concurrent",
+]);
+export const LANE_FANOUT_DEFAULT = "matrix";
+
 /* Lane ids travel into file paths (`.ship/state/<key>.json`), workflow
  * file names (`.github/workflows/ship-<lane>.yml`), and env vars, so
  * restrict them conservatively: ASCII lowercase, digits, dash, underscore. */
@@ -331,7 +347,9 @@ function validateV2Lanes(obj, errors, warnings) {
 const KNOWN_LANE_COMMON = new Set([
   "kind",
   "pattern",
+  "patterns",
   "pattern_version",
+  "fanout",
   "permissions",
   "runner",
   "timeout_minutes",
@@ -366,14 +384,57 @@ function validateLane(laneId, lane, errors, warnings) {
       `${prefix}.kind: must be one of ${LANE_KINDS.join("|")}; got ${JSON.stringify(lane.kind)}`,
     );
   }
-  if (typeof lane.pattern !== "string" || !lane.pattern.trim()) {
-    errors.push(`${prefix}.pattern: must be a non-empty pattern id`);
+  // ``patterns: [ids]`` is the canonical multi-pattern form (RFC-0008 C3);
+  // ``pattern: <id>`` is kept as the single-pattern alias so existing
+  // configs keep working. Exactly one of the two must be present.
+  const hasPatterns = Array.isArray(lane.patterns);
+  const hasPattern = typeof lane.pattern === "string";
+  if (hasPatterns && hasPattern) {
+    errors.push(
+      `${prefix}: use either 'pattern' (single) or 'patterns' (list), not both`,
+    );
+  } else if (hasPatterns) {
+    if (lane.patterns.length < 1) {
+      errors.push(`${prefix}.patterns: must contain at least one pattern id`);
+    } else {
+      for (let i = 0; i < lane.patterns.length; i += 1) {
+        const p = lane.patterns[i];
+        if (typeof p !== "string" || !p.trim()) {
+          errors.push(
+            `${prefix}.patterns[${i}]: must be a non-empty pattern id string`,
+          );
+        }
+      }
+    }
+  } else if (hasPattern) {
+    if (!lane.pattern.trim()) {
+      errors.push(`${prefix}.pattern: must be a non-empty pattern id`);
+    }
+  } else {
+    errors.push(
+      `${prefix}: must declare 'pattern' (single) or 'patterns' (list)`,
+    );
   }
   if (
     lane.pattern_version !== undefined &&
     (typeof lane.pattern_version !== "string" || !lane.pattern_version.trim())
   ) {
     errors.push(`${prefix}.pattern_version: must be a non-empty semver string when set`);
+  }
+  // RFC-0008 C3.2 — `fanout` picks how multi-pattern lanes execute.
+  // Single-pattern lanes ignore it (it's a no-op for them); we emit a
+  // warning rather than an error so schedule templates that set it
+  // blindly remain portable across single/multi-pattern use.
+  if (lane.fanout !== undefined) {
+    if (typeof lane.fanout !== "string" || !LANE_FANOUT_MODES.includes(lane.fanout)) {
+      errors.push(
+        `${prefix}.fanout: must be one of ${LANE_FANOUT_MODES.join("|")}; got ${JSON.stringify(lane.fanout)}`,
+      );
+    } else if (hasPattern || (hasPatterns && lane.patterns.length < 2)) {
+      warnings.push(
+        `${prefix}.fanout: ignored for single-pattern lanes (has no effect unless 'patterns' has ≥2 entries)`,
+      );
+    }
   }
   if (lane.permissions !== undefined && !isPlainObject(lane.permissions)) {
     errors.push(`${prefix}.permissions: must be an object when set`);
@@ -647,4 +708,70 @@ export function validateConfig(obj) {
 
   if (errors.length) return { ok: false, errors, warnings };
   return { ok: true, config: obj, warnings };
+}
+
+/**
+ * Return the canonical list of pattern ids for a lane.
+ *
+ * Accepts both the canonical ``patterns: [ids]`` (RFC-0008) and the
+ * legacy ``pattern: <id>`` single-string alias. Use this helper
+ * everywhere that reads ``lane.pattern`` / ``lane.patterns`` so the
+ * call-site never has to branch on the two shapes.
+ *
+ * For lanes that declared neither key (e.g. malformed config that
+ * slipped past validateConfig), returns an empty list rather than
+ * throwing — the caller already surfaced the validation error.
+ *
+ * @param {any} lane
+ * @returns {string[]}
+ */
+export function lanePatterns(lane) {
+  if (!lane || typeof lane !== "object") return [];
+  if (Array.isArray(lane.patterns)) {
+    return lane.patterns
+      .map((p) => (typeof p === "string" ? p.trim() : ""))
+      .filter(Boolean);
+  }
+  if (typeof lane.pattern === "string" && lane.pattern.trim()) {
+    return [lane.pattern.trim()];
+  }
+  return [];
+}
+
+/**
+ * The "primary" pattern id for a lane. Shorthand for ``lanePatterns(lane)[0]``
+ * with an explicit null for lanes that have no pattern.
+ *
+ * Intended for call-sites that currently only consume a single pattern
+ * (shipctl run, the renderer, the dashboard). They read this and will
+ * continue to work until multi-pattern execution lands (C3.2); until
+ * then, a lane with ``patterns.length > 1`` is rejected upstream by
+ * the executor with a clear error.
+ *
+ * @param {any} lane
+ * @returns {string | null}
+ */
+export function lanePrimaryPattern(lane) {
+  const list = lanePatterns(lane);
+  return list.length ? list[0] : null;
+}
+
+/**
+ * Resolve the effective fan-out mode for a lane.
+ *
+ * Returns ``LANE_FANOUT_DEFAULT`` (``matrix``) when the lane doesn't
+ * declare one or has at most one pattern (in which case the concept
+ * doesn't apply but we still want a deterministic value for downstream
+ * consumers). Unknown / invalid values fall back to the default; the
+ * validator already flags them as errors at config-load time.
+ *
+ * @param {any} lane
+ * @returns {"matrix" | "sequential" | "concurrent"}
+ */
+export function laneFanout(lane) {
+  if (!lane || typeof lane !== "object") return LANE_FANOUT_DEFAULT;
+  if (typeof lane.fanout === "string" && LANE_FANOUT_MODES.includes(lane.fanout)) {
+    return lane.fanout;
+  }
+  return LANE_FANOUT_DEFAULT;
 }

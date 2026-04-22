@@ -12,9 +12,10 @@ front-matter, hashing) and [RFC-0004](/docs/protocol/rfc-0004-adapters)
 > **Before you draft a new pattern**, read
 > [Pattern vs knowledge](/docs/authoring/pattern-vs-knowledge) — the editorial
 > rubric that decides whether what you have in mind is a `pattern` or
-> belongs in a `knowledge` bucket (the kind being added in a follow-up
-> RFC). The single biggest cause of pattern bloat is reference material
-> filed as method.
+> belongs in a **knowledge bucket** (see
+> [Knowledge buckets](/docs/knowledge-buckets) for the shipped model).
+> The single biggest cause of pattern bloat is reference material filed
+> as method.
 
 ## Folder layout
 
@@ -49,9 +50,13 @@ Naming rules:
   `examples/foo.md` is a real change and must come with a version bump.
 
 Names of actual ids in the repo today: `role-developer`, `common-base`,
-`flow-daily-retro` (patterns); `linear`, `playwright`, `github-actions`
+`flow-daily-retro`, `scan-tech-debt`, `op-workflow-self-heal`,
+`onboard-adopt` (patterns); `linear`, `playwright`, `github-actions`
 (tools); `preset-web-app`, `agent-rules-cursor`, `addendum-pharma`,
-`web-application` (collections).
+`web-application` (collections). Pattern ids all follow
+[RFC-0008](/docs/protocol/rfc-0008-catalog-reform)'s
+`<category>-<name>` scheme — `role`, `flow`, `scan`, `op`, `onboard`,
+or `common`.
 
 ## Front-matter contract
 
@@ -76,7 +81,7 @@ kind-specific. Tables below list only fields that the parser at
 | `deprecated`     | yes | bool    | `true` if kept for reference but should not be adopted.                                       | `false`                                                                                  |
 | `replaced_by`    | yes | string\|null | New `id` to migrate to when `deprecated=true`.                                            | `null`                                                                                   |
 | `yanked`         | yes | bool    | `true` to permanently withdraw a version (server returns `410 Gone`).                         | `false`                                                                                  |
-| `group`          | yes | string  | Logical grouping for catalog UI (`cloud-agent`, `delivery`, `tracker`, `agent-rules`, …).     | `cloud-agent`                                                                            |
+| `group`          | yes | string  | Logical grouping for catalog UI. For patterns it mirrors [RFC-0008](/docs/protocol/rfc-0008-catalog-reform) `spec.category` (`role`, `common`, `flow`, `scan`, `op`, `onboard`); tools use `tracker`, `ci`, `e2e`, `platform`; `agent-rules` collections use `agent-rules`. | `role`                                                                                   |
 | `tags`           | yes | string[]| Flat list of discovery tags. Used by `shipctl search` and the catalog filter.                 | `[implementation, pr]`                                                                   |
 | `authors`        | yes | string[]| Owners (`@org/team`); the lint refuses an empty list.                                         | `[@elmundi/ship-core]`                                                                   |
 | `license`        | yes | string  | SPDX identifier.                                                                              | `Apache-2.0`                                                                             |
@@ -84,15 +89,35 @@ kind-specific. Tables below list only fields that the parser at
 
 ### `spec` for `pattern`
 
-| Field            | Req | Type      | Purpose                                                                                  | Example value (`role-developer`)                  |
-|------------------|-----|-----------|------------------------------------------------------------------------------------------|----------------------------------------------------|
-| `install_target` | yes | path      | Where the rendered body lands when an agent installs the prompt locally.                 | `prompts/cloud-agent/developer.md`                 |
-| `role`           | no  | string    | If the pattern is a cloud-agent role slot, the role id (`developer`, `ba`, `intake`, …). | `developer`                                        |
-| `template`       | no  | bool      | `true` when the body uses `{{ISSUE}}`, `{{BASE}}`, or other interpolations.              | `true`                                             |
-| `triggers`       | no  | string[]  | Discoverability cues an agent can hit (state names, label names, role names).            | `[linear-state:Ready, label:agent:developer]`      |
-| `inputs`         | no  | string[]  | Named inputs the pattern expects.                                                        | `[issue-key, repo-snapshot]`                       |
-| `outputs`        | no  | string[]  | Named artifacts the pattern produces.                                                    | `[pull-request, evidence-comment]`                 |
-| `evals`          | no  | path      | Path inside the folder to a golden eval fixture.                                         | `tests/golden.yaml`                                |
+The [RFC-0008](/docs/protocol/rfc-0008-catalog-reform) metadata block
+is the source of truth for a pattern's identity and invocation shape.
+Required fields for executable patterns (categories `role`, `flow`,
+`scan`, `op`, `onboard`); `common-*` patterns are fragments —
+`modes: []` and usually no `default_trigger` / `inputs`.
+
+| Field                | Req               | Type      | Purpose                                                                                                                                                      | Example value (`role-developer`)                                       |
+|----------------------|-------------------|-----------|--------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------|
+| `install_target`     | yes               | path      | Where the rendered body lands when an agent installs the prompt locally.                                                                                     | `prompts/role/developer.md`                                            |
+| `category`           | yes               | enum      | `role \| flow \| scan \| op \| onboard \| common` — drives UI grouping, the lane-workflow resolver, and id-prefix conventions.                                | `role`                                                                 |
+| `modes`              | yes               | string[]  | Invocation shape. Non-empty unless `category=common`; values `lane` and/or `request`. `common-*` patterns declare `modes: []` — they're only pulled via `spec.include`. | `[lane, request]`                                                      |
+| `include`            | no                | string[]  | Pattern ids whose bodies are composed into the host pattern's prompt at render time. Canonical way to share `common-*` preambles. Max depth 2, cycles raise. | `[common-base]`                                                        |
+| `default_trigger`    | yes when `lane`   | mapping   | Suggested lane wiring, pre-filled in the Library UI. `kind: event \| schedule` with the kind-specific keys; see [RFC-0008 § Metadata schema](/docs/protocol/rfc-0008-catalog-reform#metadata-schema). | `{kind: event, event: issues.labeled, pattern: "ready:developer"}`     |
+| `inputs`             | yes when `request`| object[]  | Named parameters when dispatched as a request; drives the Requests form. Each entry: `name`, `type` (`text \| textarea \| url \| enum \| bool \| ref`), `required?`, `hint?`, `values?`, `default?`. Replaces the legacy bare-id list. | `[{name: issue_url, type: url, required: true, hint: "Issue URL"}]`    |
+| `enabled_on_install` | no                | mapping   | Which patterns the seed bundle wires per preset. `{default: bool, presets: {<preset>: bool}}`.                                                                | `{default: true, presets: {web-app: true, api-backend: true}}`         |
+| `lane_workflow`      | no                | string    | Override the starter YAML the Pipeline installs. When unset the resolver picks from `category` + `default_trigger` (see below).                              | `scheduled-sdlc-lane`                                                  |
+| `knowledge_topics`   | no                | string[]  | Bucket topics this pattern may consult at render time — the join key with [knowledge buckets](/docs/knowledge-buckets).                                       | `[code-style, architecture]`                                           |
+| `role`               | no                | string    | If the pattern is a role slot, the role id (`developer`, `ba`, `intake`, …).                                                                                 | `developer`                                                            |
+| `template`           | no                | bool      | `true` when the body uses `{{ISSUE}}`, `{{BASE}}`, or other interpolations.                                                                                  | `true`                                                                 |
+| `triggers`           | no                | string[]  | Discoverability cues in addition to `default_trigger` (state names, label names, role names).                                                                | `[linear-state:Ready, label:agent:developer]`                          |
+| `outputs`            | no                | string[]  | Named artifacts the pattern produces.                                                                                                                        | `[pull-request, evidence-comment]`                                     |
+| `evals`              | no                | path      | Path inside the folder to a golden eval fixture.                                                                                                             | `tests/golden.yaml`                                                    |
+
+The starter YAMLs referenced by `lane_workflow` (`scheduled-sdlc-lane`,
+`pr-and-ci-gate`, `parallel-audit-lanes`, `pipeline-self-heal`) live in
+`backend/app/resources/starter_workflows/` and are installed by the
+Pipeline flow — they are never authored as catalog artifacts. When
+`spec.lane_workflow` is unset the backend resolves the default per
+[RFC-0008 § Lane workflow resolution](/docs/protocol/rfc-0008-catalog-reform#lane-workflow-resolution).
 
 ### `spec` for `tool`
 
@@ -107,12 +132,20 @@ kind-specific. Tables below list only fields that the parser at
 
 ### `spec` for `workflow` — retired
 
-`artifact_kind=workflow` was removed by [RFC-0007](/docs/protocol/rfc-0007-lanes-and-run-agent).
-Customer cadences live as [lanes](/docs/concepts#lane) in
-`.ship/config.yml` (v2); installed CI YAMLs are thin wrappers generated
-by `shipctl lanes install`, each calling the reusable
-`ElMundiUA/ship/.github/workflows/run-agent.yml`. Authors no longer
-draft workflow artifacts.
+`artifact_kind=workflow` was removed in
+[RFC-0007 Phase 6](/docs/protocol/rfc-0007-lanes-and-run-agent) and the
+catalog folder `artifacts/workflows/` is gone. Authors never draft a
+workflow artifact — ever. The four starter YAMLs
+(`scheduled-sdlc-lane`, `pr-and-ci-gate`, `parallel-audit-lanes`,
+`pipeline-self-heal`) live inside
+`backend/app/resources/starter_workflows/` and are installed through
+the Pipeline flow only. Per
+[RFC-0008](/docs/protocol/rfc-0008-catalog-reform), the Pipeline picks
+the right starter from a pattern's `category` + `default_trigger`;
+override on a per-pattern basis by setting `spec.lane_workflow` in the
+pattern's frontmatter. Customer cadences live as
+[lanes](/docs/concepts#lane) in `.ship/config.yml` (v2); see
+[Lanes](/docs/lanes) for the operator surface.
 
 ### `spec` for `collection`
 
@@ -150,7 +183,9 @@ Worked example: re-author `role-developer` from scratch.
    `artifacts/patterns/role-developer/ARTIFACT.md`.
 2. **Draft the front-matter.** Use the table above. The fields that change
    most between patterns are `name`, `description`, `tags`, `group`, and
-   `spec.install_target` / `spec.role`:
+   the `spec` block (`category`, `modes`, `default_trigger`, `inputs`,
+   `install_target`, `role`). Match the live shape of
+   [`role-developer`](/patterns/role-developer):
 
    ```yaml
    ---
@@ -165,20 +200,38 @@ Worked example: re-author `role-developer` from scratch.
    deprecated: false
    replaced_by: null
    yanked: false
-   group: cloud-agent
+   group: role
    tags: [implementation, pr]
    authors: [@elmundi/ship-core]
    license: Apache-2.0
    description: >-
-     Implementation role for the scheduled developer slot — defines branch
-     contract, PR shape, and evidence requirements. Use when an agent picks
-     a cloud-agent slot in a Ship lane, when wiring this prompt into a
-     scheduled workflow, or when the catalog tags (implementation, pr)
-     match the current task.
+     Implementation role: branch contract, PR shape, evidence. Use when
+     an agent picks a cloud-agent slot in a Ship lane, when wiring this
+     prompt into a scheduled workflow, or when the catalog tags
+     (implementation, pr) match the current task.
    spec:
-     install_target: prompts/cloud-agent/developer.md
-     role: developer
+     install_target: prompts/role/developer.md
+     category: role
+     modes: [lane, request]
+     include: [common-base]
+     default_trigger:
+       kind: event
+       event: issues.labeled
+       pattern: "ready:developer"
+     inputs:
+       - name: issue_url
+         type: url
+         required: true
+         hint: "Issue URL"
+     enabled_on_install:
+       default: true
+       presets:
+         api-backend: true
+         mobile-app: true
+         monorepo: true
+         web-app: true
      template: true
+     role: developer
    ---
    ```
 
@@ -202,7 +255,14 @@ Worked example: re-author `role-developer` from scratch.
    shipctl pattern show role-developer        # reads from artifacts/patterns/role-developer/
    shipctl pattern list | rg role-developer
    shipctl verify --check artifacts-up-to-date # confirms no drift vs the API
+   shipctl knowledge init --workspace <id>    # seeds .ship/knowledge/ starters in a tenant repo
    ```
+
+   `shipctl knowledge init` exercises the knowledge-bucket seed flow
+   that feeds `spec.knowledge_topics`; see
+   [Knowledge buckets](/docs/knowledge-buckets) for the full bucket
+   surface and `cli/lib/commands/knowledge.mjs` for the live
+   subcommand contract.
 
 5. **Contribute back.** Branch, PR, request review from `@elmundi/ship-core`.
    The lint will fail the PR if `content_sha256` is stale, the description
@@ -255,26 +315,23 @@ Worked example: `linear`.
 
 ## Authoring a `workflow` — retired
 
-`artifact_kind=workflow` is no longer a catalog kind; see
-[RFC-0007](/docs/protocol/rfc-0007-lanes-and-run-agent) for the
-replacement model. Instead of drafting a workflow artifact:
+`artifact_kind=workflow` is not a catalog kind. Removed by
+[RFC-0007 Phase 6](/docs/protocol/rfc-0007-lanes-and-run-agent); the
+four starter YAMLs now live in
+`backend/app/resources/starter_workflows/` and are installed only
+through the Pipeline flow. Nothing else to draft — if you need a new
+cadence:
 
-1. Write the prompt as a normal **pattern** under
-   `artifacts/patterns/<id>/ARTIFACT.md` and publish it through the
-   regular pattern review process.
-2. Reference that pattern from a **lane** entry in the customer's
-   `.ship/config.yml` (v2) — `kind: once | event | schedule`, with
-   optional `schedule.cron`, `events.*`, or `idempotency.*` metadata.
-3. `shipctl lanes install` renders one thin wrapper per declared lane
-   (calling `ElMundiUA/ship/.github/workflows/run-agent.yml`) into
-   `.github/workflows/ship-<lane>.yml`.
-
-The four starter pipelines historically published as workflow
-artifacts (`pr-and-ci-gate`, `scheduled-sdlc-lane`,
-`parallel-audit-lanes`, `pipeline-self-heal`) now live inside
-`backend/app/resources/starter_workflows/` and are only installed
-through the Pipeline installation flow — they are not authored as
-public artifacts.
+1. Author the prompt as a **pattern** under
+   `artifacts/patterns/<id>/ARTIFACT.md` with the full
+   [RFC-0008](/docs/protocol/rfc-0008-catalog-reform) `spec` block
+   (`category`, `modes`, `default_trigger`, `inputs` when appropriate).
+2. Reference that pattern from a **lane** in the customer's
+   `.ship/config.yml` (v2); `shipctl lanes install` renders the thin
+   `.github/workflows/ship-<lane>.yml` wrapper.
+3. If the default starter isn't right, set `spec.lane_workflow` on the
+   pattern or use the console's "Advanced → Override" on the lane
+   itself — no new catalog artifact is needed.
 
 ## Authoring a `collection`
 
@@ -284,10 +341,23 @@ before drafting front-matter.
 
 ### `subkind: starter` — `web-application`
 
-A starter is the easiest case: it composes ids that already exist. Worked
-example: `web-application` lists tools / patterns in the body and sets
-`spec.subkind: starter`. Its bundled ids live in the body's tables;
-a future `composes:` mapping under `spec` is normative for new starters.
+A starter is the easiest case: it composes ids that already exist.
+Worked example: `web-application` today lists tools / patterns in the
+body prose and sets `spec.subkind: starter`. For **new** starters use
+the normative `spec.composes` mapping instead of body prose:
+
+```yaml
+spec:
+  subkind: starter
+  install_target: documentation/collections/web-application.md
+  composes:
+    patterns: [role-developer, role-qa-architect, flow-pr-self-review]
+    tools:    [linear, github-actions, playwright]
+```
+
+The explicit mapping is what `shipctl init` and the catalog index
+consume; body prose is narrative only. Migrate `web-application` to
+`spec.composes` when you touch it next.
 
 ### `subkind: preset` — `preset-web-app`
 
@@ -462,12 +532,19 @@ all line up. Run both before you ask for review.
   in the scope so the changelog generator can group changes.
 - **Semver bumps.** Per RFC-0001 §Version bump rules:
   - **MAJOR** for breaking semantic changes (renaming a role, inverting a
-    gate, changing a contract field).
+    gate, changing a contract field, flipping `spec.modes`, removing an
+    id from `spec.include`).
   - **MINOR** for additive changes (new optional section, new tag, a new
-    evidence requirement that is compatible with earlier behaviour).
+    evidence requirement that is compatible with earlier behaviour, a
+    new entry in `spec.include`, adjusting `spec.default_trigger` to a
+    broader filter).
   - **PATCH** for clarifications (typo, link fix, example tweak).
-  Bumping `version` without a body change is rejected by lint; changing
-  the body without bumping `version` is rejected too — the
+  "Body change" now includes the composed body after `spec.include` is
+  resolved — changing a `common-*` fragment bumps every host that
+  includes it, and changing `spec.default_trigger` counts as a
+  behaviour change because it re-wires the Library default. Bumping
+  `version` without a body change is rejected by lint; changing the
+  body without bumping `version` is rejected too — the
   `content_sha256` over the folder is the source of truth.
 - **Reviewer checklist.** Maintainers look for:
   - `id`, folder name, and `artifact_kind` agree.
@@ -490,9 +567,13 @@ all line up. Run both before you ask for review.
 
 If the artifact you wrote is an agent rule, read the matching
 [`agent-rules-*` collection](/collections) for the install path and the
-marker contract. For the normative shapes consult
-[RFC-0001](/docs/protocol/rfc-0001-artifacts-protocol),
-[RFC-0004](/docs/protocol/rfc-0004-adapters), and
-[RFC-0005](/docs/protocol/rfc-0005-artifact-folder-spec-v2). For the
-end-to-end command surface see the [CLI reference](/cli); for the agent
-launch / detection matrix see the [agent matrix](/docs/agent-matrix).
+marker contract. If it needs project-specific reference material at
+render time, wire the topics through
+[Knowledge buckets](/docs/knowledge-buckets). For the normative shapes
+consult [RFC-0001](/docs/protocol/rfc-0001-artifacts-protocol),
+[RFC-0004](/docs/protocol/rfc-0004-adapters),
+[RFC-0005](/docs/protocol/rfc-0005-artifact-folder-spec-v2),
+[RFC-0007](/docs/protocol/rfc-0007-lanes-and-run-agent), and
+[RFC-0008](/docs/protocol/rfc-0008-catalog-reform). For the end-to-end
+command surface see the [CLI reference](/cli); for the agent launch /
+detection matrix see the [agent matrix](/docs/agent-matrix).

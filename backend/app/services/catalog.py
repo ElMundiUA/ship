@@ -598,7 +598,16 @@ def emit_config_yaml(
         for lane_id, trigger in lanes.items():
             lines.append(f"  {lane_id}:")
             for key, value in trigger.items():
-                lines.append(f"    {key}: {_render_yaml_scalar(value)}")
+                # ``patterns: [ids]`` is the only list-typed key we
+                # currently emit (RFC-0008 C3.1 multi-pattern lanes).
+                # Render it in flow-style so the line stays compact
+                # and the diff against the previous ``pattern: <id>``
+                # form is a single-line swap.
+                if isinstance(value, (list, tuple)):
+                    inner = ", ".join(_render_yaml_scalar(v) for v in value)
+                    lines.append(f"    {key}: [{inner}]")
+                else:
+                    lines.append(f"    {key}: {_render_yaml_scalar(value)}")
 
     return "\n".join(lines) + "\n"
 

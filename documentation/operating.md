@@ -23,7 +23,7 @@ The cache (`.ship/cache/<kind>/<id>@<version>/`) is `.gitignore`d by default. `s
   1. `shipctl config set artifacts.pins.pattern/role-developer 1.4.2` (the dotted key keeps the `<kind>/<id>` slash).
   2. `shipctl sync` — newer manifest versions for that pin show up as `skipped_pin` instead of `updated`.
 - **What to check:** `shipctl config get artifacts.pins.pattern/role-developer` echoes the pin; the next sync summary lists `skipped_pin: 1` for the pinned entry.
-- **Common pitfall:** pinning an artifact that is not in the manifest — `shipctl config validate` fails with exit 13. Pin only ids you have already pulled at least once.
+- **Common pitfall:** pinning an artifact that is not in the manifest — `shipctl config validate` fails with exit 10. Pin only ids you have already pulled at least once.
 
 ### Switch channel
 
@@ -39,12 +39,11 @@ The cache (`.ship/cache/<kind>/<id>@<version>/`) is `.gitignore`d by default. `s
 
 - **Goal:** stop pulling and tracking one artifact without unpinning the rest.
 - **Steps:**
-  1. `shipctl config unset artifacts.pins.<kind>/<id>` (only if you had pinned it).
+  1. Remove the pin. Either hand-edit `.ship/config.yml` to delete the `artifacts.pins.<kind>/<id>` line, then `shipctl config validate`, OR run `shipctl config set artifacts.pins.<kind>/<id> ""` (empty string) which the writer prunes on the next `set`.
   2. `rm -rf .ship/cache/<kind>/<sanitized-id>@*` to drop the cached body.
-  3. Add the id under `artifacts.disabled` in `.ship/config.yml` (see [Configuration](/docs/configuration#artifactsdisabled)).
-  4. `shipctl sync` — the disabled id is skipped even if a preset references it.
-- **What to check:** `shipctl collection show <id>` (or the matching `pattern|tool|workflow`) reports `not in cache`; the next sync does not re-create the folder.
-- **Common pitfall:** deleting the cache folder without setting `artifacts.disabled` — the next preset-driven `sync` will re-pull it because preset collections still resolve the id.
+  3. Check that no declared preset collection still references the id — e.g. `shipctl collection show preset-<preset>` — otherwise `sync` will re-materialise it as a preset dependency.
+- **What to check:** `shipctl <kind> show <id>` (`pattern | tool | collection`) reports `not in cache`; the next sync does not re-create the folder.
+- **Common pitfall:** expecting an `artifacts.disabled: [...]` list or a `shipctl config unset` command to exist — neither does. Ship deliberately treats pins as the opt-in allowlist; the way to "disable" an artifact is to stop pinning it and make sure no preset pulls it in.
 
 ### Recover from a corrupted cache
 
@@ -60,7 +59,7 @@ The cache (`.ship/cache/<kind>/<id>@<version>/`) is `.gitignore`d by default. `s
 
 - **Goal:** know exactly which `<kind>:<id>@<version>` your agent is reading.
 - **Steps:**
-  1. `shipctl pattern show role-developer` (or `tool`, `workflow`, `collection`) prints the cached body and version.
+  1. `shipctl pattern show role-developer` (or `tool`, `collection`) prints the cached body and version.
   2. `shipctl pattern show role-developer --json` if you need it scriptable.
   3. `cat .ship/cache/pattern/role-developer@*/.meta.json` for the recorded `content_sha256`, `fetched_at`, and `channel`.
 - **What to check:** the version on screen matches `shipctl config get artifacts.pins.pattern/role-developer` (when pinned) and the channel manifest entry.
@@ -166,25 +165,69 @@ Telemetry is opt-in and OFF by default. Nothing leaves the repo until you flip t
 - **What to check:** after a successful flush, `outbox_pending=0` in `telemetry status` and `last_flush_at` updates in `.ship/state.json`.
 - **Common pitfall:** editing the outbox file by hand — it is JSONL and any malformed line breaks `flush`. Use `shipctl telemetry off` to nuke it cleanly.
 
-### Denylist a field
+### Understand the denylist
 
-- **Goal:** redact a payload key (in addition to the protocol-level denylist `path, code, diff, branch, remote, email`).
-- **Steps:**
-  1. Decide whether the redaction is local-only (your repo only) or methodology-wide (a server-side change).
-  2. Local: extend `telemetry.denylist` in `.ship/config.yml` (see [Configuration](/docs/configuration#telemetrydenylist)). The CLI strips the listed keys before they hit the outbox.
-  3. `shipctl telemetry buffer` to confirm new events do not contain the redacted key, then `shipctl telemetry flush`.
-- **What to check:** previously-buffered events still contain the key — flush them first, or wipe with `shipctl telemetry off && shipctl telemetry on …`.
-- **Common pitfall:** denylisting `anonymous_id` — the server requires it for rate limiting and rejects single-id batches that are missing it.
+- **Goal:** know which payload keys the CLI strips before anything lands in the outbox.
+- **What is denied:** `path`, `code`, `diff`, `branch`, `remote`, `email` — see `DENYLIST_KEYS` in `cli/lib/telemetry/outbox.mjs`. The list is **protocol-level** (RFC-0003 §Denylist) and identical for every operator.
+- **What is *not* configurable:** there is no `telemetry.denylist` key in `.ship/config.yml`. `shipctl config set telemetry.denylist …` will fail validation (`unknown key`). Local per-repo overrides are deliberately out of scope so telemetry envelopes are portable across teams.
+- **What to check:** `SHIP_DEBUG=1 shipctl telemetry buffer --limit 1` prints `stripped denylisted keys from <event>: <key>` for each redaction the CLI performed.
+- **If you need more redactions:** open a feedback draft against [RFC-0003](/docs/protocol#rfc-0003-telemetry-and-feedback) with the new key you want added. The denylist is changed in the spec, not in your config.
 
 ### Self-host the endpoint
 
 - **Goal:** keep telemetry inside your perimeter.
 - **Steps:**
-  1. Stand up an HTTP service that accepts `POST /telemetry` per [RFC-0003](/docs/protocol#rfc-0003-telemetry-and-feedback) (`202 {accepted, rejected, reasons}`; `400` on denylisted keys; `429` on rate limit).
+  1. Stand up an HTTP service that accepts `POST /telemetry` per [RFC-0003](/docs/protocol#rfc-0003-telemetry-and-feedback) (`202 {accepted, rejected, reasons}`; `400` on denylisted keys; `429` on rate limit). Note: `shipctl run` / `shipctl sync` append `/api/methodology` to `api.base_url` for the artifact endpoints, but the telemetry endpoint posts directly against `<baseUrl>/telemetry`.
   2. Set `api.base_url` in `.ship/config.yml` to your endpoint root (telemetry shares the same base URL as the rest of the CLI).
   3. `shipctl telemetry status` to confirm the new base URL is in use; `shipctl telemetry flush --dry-run` previews the destination.
 - **What to check:** the dry-run shows `would flush <n> events to <your-host>/telemetry`; a real flush returns success.
 - **Common pitfall:** mixing self-hosted telemetry with the public artifact API — if `api.base_url` is your internal host, `shipctl sync` also goes there. Run a thin proxy that forwards `/patterns`, `/tools`, `/collections`, `/fetch` to `ship.elmundi.com` if you only want to intercept telemetry.
+
+## Lanes
+
+Lanes (RFC-0007) are the v2 way to describe triggered automation: one entry per lane in `.ship/config.yml` under `lanes:`, plus a generated `.github/workflows/ship-<lane>.yml` wrapper per entry. The field-level reference is in [Configuration → `lanes`](/docs/configuration#lanes); this section is the day-2 recipes.
+
+### Install lane wrappers after editing `.ship/config.yml`
+
+- **Goal:** regenerate the caller workflows so GitHub knows when to fire each lane.
+- **Steps:**
+  1. Edit `lanes:` in `.ship/config.yml` (add / remove / re-kind). Run `shipctl config validate` — an invalid lane exits `10` before you commit a broken file.
+  2. `shipctl lanes install` — writes one `.github/workflows/ship-<lane>.yml` per declared lane, banner-guarded with `# ship-cli: lanes v1`. Idempotent; re-running is a no-op.
+  3. Inspect each generated wrapper, then `git add .github/workflows/ship-*.yml .ship/config.yml` and commit in the same PR.
+- **What to check:** `shipctl lanes list` prints the same set of lanes you see in `.ship/config.yml`; each generated file contains the reusable-workflow line `uses: ElMundiUA/ship/.github/workflows/run-agent.yml@v<shipctl_min>`.
+- **Common pitfall:** a pre-existing `.github/workflows/ship-<id>.yml` without the Ship banner — `install` refuses to overwrite it. Delete the file or pass `--force` once you've confirmed it's safe.
+
+### Lock lane patterns for reproducible CI
+
+- **Goal:** pin the exact pattern bodies a lane runs so CI is reproducible and air-gapped runners work.
+- **Steps:**
+  1. `shipctl sync --lock` — walks every lane's `pattern` / `patterns`, materialises the body into `.ship/cache/pattern/<id>@<version>/`, and writes `.ship/shipctl.lock.json` with one entry per resolved pattern (`version`, `content_sha256`, `cached_path`).
+  2. Commit `.ship/shipctl.lock.json` alongside `.ship/config.yml`. The lockfile has no secrets; everything in it is reproducible from the public manifest.
+  3. When a live pattern version drifts from the lockfile, `shipctl run` prints a `pattern/<id> sha256 drift vs lockfile` warning on stderr and proceeds with the live body — re-run `shipctl sync --lock` to re-pin.
+- **What to check:** `shipctl sync --lock` reports `wrote .ship/shipctl.lock.json (<N> entries, 0 unresolved)`. Unresolved entries exit `20`; re-run after fixing the pattern id.
+- **Common pitfall:** forgetting to re-lock after bumping a `pattern_version:` — the lockfile pins an older sha and CI noisily warns on every run.
+
+### Run a lane locally (or in CI)
+
+- **Goal:** invoke a lane end-to-end without the GitHub Actions wrapper.
+- **Steps:**
+  1. `shipctl run --lane <id>` — resolves the lane, fetches the pattern, and emits the prompt on stdout (pipe into your agent). Only `kind: once` lanes execute fully today; `kind: event` and `kind: schedule` are recognised but emit `status: noop` on stdout (they rely on the GitHub Actions wrappers until Phase 3 of RFC-0007 wires the reusable workflow).
+  2. In air-gapped CI, add `--offline` — the command resolves exclusively through `.ship/shipctl.lock.json` and `.ship/cache/` and never contacts the methodology API. Fails loud if the lockfile is missing a pattern.
+  3. For local debugging, use `--dry-run` to print the prompt without writing the idempotency marker or firing the callback.
+- **What to check:** `shipctl run --lane <id> --dry-run` prints the expected pattern body and exits `0`; on real runs `.ship/state/<idempotency.key>.json` is created for `kind: once` lanes.
+- **Common pitfall:** running from outside the repo root — `shipctl run` searches upward for `.ship/config.yml` like every other command, but if you `cd` into a submodule it will find the submodule's config instead. Use `--cwd <repo-root>` to be explicit.
+
+### Upgrade a legacy v1 config
+
+- **Goal:** move a repo from the pre-lanes schema onto v2.
+- **Steps:**
+  1. `shipctl migrate --dry-run` — prints the proposed v2 config without writing; review the translation.
+  2. `shipctl migrate --yes` — writes `.ship/config.yml.bak`, then rewrites `.ship/config.yml` with `version: 2`, `shipctl_min: "0.12.0"`, and a `lanes:` map seeded from preset defaults. Moves `stack.agent.provider` → `agent.default.provider`.
+  3. Diff the result (`git diff .ship/config.yml`), then `shipctl config validate`.
+  4. `shipctl lanes install` to render the caller workflows; `shipctl sync --lock` to pin the patterns.
+  5. Commit `.ship/config.yml`, `.ship/shipctl.lock.json`, and the generated wrappers.
+- **What to check:** `shipctl config show | head -5` reports `version: 2`; `shipctl run --lane <id>` no longer exits `2`.
+- **Common pitfall:** running `shipctl migrate` against a v2 config and expecting a no-op to look different — it exits `0` with `already at the latest schema (no changes)`. That's success; keep going.
 
 ## Feedback
 

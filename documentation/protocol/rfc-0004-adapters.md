@@ -334,7 +334,7 @@ Write a PR template that references Ship lanes:
 ```path=".github/PULL_REQUEST_TEMPLATE.md"
 ## Ship artifacts consumed
 
-- pattern:cloud-developer@{{ CLOUD_DEVELOPER_VERSION }}
+- pattern:role-developer@{{ ROLE_DEVELOPER_VERSION }}
 
 ## Tracker
 
@@ -356,7 +356,7 @@ Write a PR template that references Ship lanes:
 
 - `LINEAR_WORKSPACE_SLUG` — Linear workspace slug (required).
 - `LINEAR_DEFAULT_TEAM` — default team name for newly-created issues (required).
-- `CLOUD_DEVELOPER_VERSION` — resolved version of `pattern:cloud-developer` (auto-filled).
+- `ROLE_DEVELOPER_VERSION` — resolved version of `pattern:role-developer` (auto-filled).
 ```
 
 ## Full example: `cursor` agent adapter
