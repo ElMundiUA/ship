@@ -311,7 +311,7 @@ class CatalogArtifact:
     # dashboard can keep a human-friendly lane name that's decoupled
     # from the pattern's own id. The pattern id stays the authoritative
     # *content* identifier; the lane_id is the authoritative *runtime*
-    # identifier (``Pipeline.kind`` in the DB today).
+    # identifier (``Pipeline.lane_id`` in the DB).
     #
     # Absent → pattern id doubles as lane id (Phase 2 / C5 patterns
     # follow this convention).

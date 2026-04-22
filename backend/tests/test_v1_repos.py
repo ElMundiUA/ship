@@ -276,7 +276,7 @@ async def test_activate_with_preset_persists_and_shapes_default_pipelines(
             select(Pipeline).where(Pipeline.workspace_id == workspace_id)
         )
     ).scalars().all()
-    by_kind = {p.kind: p for p in pipelines}
+    by_kind = {p.lane_id: p for p in pipelines}
     # ``monorepo`` is the only preset that opts into self_heal by default.
     assert by_kind["self_heal"].enabled is True
     assert by_kind["pr_review"].enabled is True

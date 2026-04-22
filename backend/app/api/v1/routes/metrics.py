@@ -240,7 +240,7 @@ async def _pipelines_panel(
     """
     rows = (
         await session.execute(
-            select(Pipeline.kind, Pipeline.enabled).where(
+            select(Pipeline.lane_id, Pipeline.enabled).where(
                 Pipeline.workspace_id == workspace_id
             )
         )
@@ -274,7 +274,7 @@ async def _runs_panel(
         PipelineRun.trigger,
         PipelineRun.started_at,
         PipelineRun.finished_at,
-        Pipeline.kind,
+        Pipeline.lane_id,
     ).join(Pipeline, Pipeline.id == PipelineRun.pipeline_id).where(
         PipelineRun.workspace_id == workspace_id,
         PipelineRun.created_at >= window.start,
@@ -300,7 +300,7 @@ async def _runs_panel(
     by_kind_raw: dict[str, dict[str, int]] = {}
     for r in rows:
         bucket = by_kind_raw.setdefault(
-            r.kind, {"total": 0, "succeeded": 0, "failed": 0}
+            r.lane_id, {"total": 0, "succeeded": 0, "failed": 0}
         )
         bucket["total"] += 1
         if r.status == "succeeded":

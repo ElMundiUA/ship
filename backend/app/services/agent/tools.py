@@ -2127,7 +2127,7 @@ class ToolBox:
         stmt = (
             select(Pipeline)
             .where(Pipeline.workspace_id == self._workspace_id)
-            .order_by(Pipeline.kind, Pipeline.name)
+            .order_by(Pipeline.lane_id, Pipeline.name)
             .limit(limit)
         )
         if enabled_only:
@@ -2136,7 +2136,7 @@ class ToolBox:
         items = [
             {
                 "id": str(r.id),
-                "kind": r.kind,
+                "kind": r.lane_id,
                 "name": r.name,
                 "workflow_id": r.workflow_id,
                 "enabled": r.enabled,
@@ -2217,7 +2217,7 @@ class ToolBox:
             {
                 "id": str(run.id),
                 "pipeline_id": str(run.pipeline_id),
-                "pipeline_kind": pipeline.kind if pipeline else None,
+                "pipeline_kind": pipeline.lane_id if pipeline else None,
                 "pipeline_name": pipeline.name if pipeline else None,
                 "workflow_id": pipeline.workflow_id if pipeline else None,
                 "status": run.status,

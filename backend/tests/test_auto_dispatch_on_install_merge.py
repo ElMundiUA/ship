@@ -80,7 +80,7 @@ async def seed_tech_debt_pipeline(db_session, seed_workspace):
     pipeline = Pipeline(
         workspace_id=workspace.id,
         repo_id=repo.id,
-        kind="tech_debt",
+        lane_id="tech_debt",
         name="Tech-debt scan",
         workflow_id="parallel-audit-lanes",
         enabled=True,

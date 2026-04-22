@@ -54,7 +54,7 @@ async def seed_disconnect_workspace(db_session, seed_workspace):
     pipeline = Pipeline(
         workspace_id=workspace.id,
         repo_id=repo.id,
-        kind="pr_review",
+        lane_id="pr_review",
         name="PR review",
         workflow_id="pr-and-ci-gate",
         enabled=True,
@@ -159,7 +159,7 @@ async def test_disconnect_repo_preserves_workspace_level_pipelines(
     unbound = Pipeline(
         workspace_id=workspace.id,
         repo_id=None,
-        kind="self_heal",
+        lane_id="self_heal",
         name="Pipeline self-heal",
         workflow_id="pipeline-self-heal",
         enabled=False,

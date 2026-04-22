@@ -47,7 +47,7 @@ async def test_dashboard_aggregates_counts_and_recent_strips(
 
     user, raw, workspace = seed_workspace
     seeded = await seed_default_pipelines(db_session, workspace.id)
-    pr_review = next(p for p in seeded if p.kind == "pr_review")
+    pr_review = next(p for p in seeded if p.lane_id == "pr_review")
 
     # Activated repo + GitHub install (to drive `active_repos` count
     # and to keep the dashboard's joins happy).

@@ -1216,7 +1216,7 @@ async def update_repo(
             )
         ).scalars().all()
         for lane in bound_lanes:
-            desired = lane.kind in enabled_kinds
+            desired = lane.lane_id in enabled_kinds
             if lane.enabled != desired:
                 lane.enabled = desired
                 reshape_applied += 1

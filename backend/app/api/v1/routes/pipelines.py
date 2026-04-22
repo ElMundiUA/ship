@@ -82,29 +82,29 @@ logger = logging.getLogger(__name__)
 # mtime changes pick up without a process restart.
 
 
-def _kind_to_workflow_id(kind: str) -> str | None:
+def _lane_id_to_workflow_id(lane_id: str) -> str | None:
     for recipe in list_lane_recipes():
-        if recipe.lane_id == kind:
+        if recipe.lane_id == lane_id:
             return recipe.workflow_id
     return None
 
 
-def _workflow_file_for_kind(kind: str) -> str | None:
+def _workflow_file_for_lane_id(lane_id: str) -> str | None:
     """Basename the customer repo will contain, via starter-workflow lookup.
 
-    Returns ``None`` when the kind has no backed starter (e.g.
+    Returns ``None`` when the lane has no backed starter (e.g.
     ``code_map`` — resolver-only) so callers know to fall back to the
     "Coming with presets" state instead of 412-ing the user.
     """
-    workflow_id = _kind_to_workflow_id(kind)
+    workflow_id = _lane_id_to_workflow_id(lane_id)
     if workflow_id is None:
         return None
     return starter_workflows.install_filename(workflow_id)
 
 
-def _supports_run(kind: str) -> bool:
-    """True iff we can both dispatch and (re)install the workflow for ``kind``."""
-    workflow_id = _kind_to_workflow_id(kind)
+def _supports_run(lane_id: str) -> bool:
+    """True iff we can both dispatch and (re)install the workflow for ``lane_id``."""
+    workflow_id = _lane_id_to_workflow_id(lane_id)
     if workflow_id is None:
         return False
     entry = starter_workflows.get(workflow_id)
@@ -385,23 +385,25 @@ async def get_run_or_repo_token_context(
     )
 
 
-def _read_starter_yaml(kind: str) -> str:
-    """Return the YAML body for the kind's starter workflow or 412/500.
+def _read_starter_yaml(lane_id: str) -> str:
+    """Return the YAML body for the lane's starter workflow or 412/500.
 
     ``kind_not_supported_yet`` when we have no starter mapping for the
-    pipeline kind (e.g. ``code_map`` — resolver-only, no starter
-    workflow today). ``500`` only when the mapping exists but the YAML
-    file on disk is missing — a release-packaging bug the operator
-    needs to see, not a tenant-actionable condition.
+    lane (e.g. ``code_map`` — resolver-only, no starter workflow
+    today). ``500`` only when the mapping exists but the YAML file on
+    disk is missing — a release-packaging bug the operator needs to
+    see, not a tenant-actionable condition. The error ``code`` field
+    keeps its pre-rename value to avoid breaking Console clients that
+    branch on it.
     """
-    workflow_id = _kind_to_workflow_id(kind)
+    workflow_id = _lane_id_to_workflow_id(lane_id)
     if workflow_id is None:
         raise HTTPException(
             status_code=status.HTTP_412_PRECONDITION_FAILED,
             detail={
                 "code": "kind_not_supported_yet",
                 "message": (
-                    f"Pipeline kind {kind!r} has no starter workflow. "
+                    f"Pipeline lane {lane_id!r} has no starter workflow. "
                     "Coming with Phase 3 presets."
                 ),
             },
@@ -413,7 +415,7 @@ def _read_starter_yaml(kind: str) -> str:
             detail={
                 "code": "kind_not_supported_yet",
                 "message": (
-                    f"Workflow {workflow_id!r} for kind {kind!r} has no "
+                    f"Workflow {workflow_id!r} for lane {lane_id!r} has no "
                     "installable YAML yet. Coming with presets."
                 ),
             },
@@ -555,10 +557,10 @@ def _row_to_out(
     repo: WorkspaceRepo | None = None,
     workflow_installed: bool | None = None,
 ) -> PipelineOut:
-    workflow_file = _workflow_file_for_kind(row.kind)
+    workflow_file = _workflow_file_for_lane_id(row.lane_id)
     return PipelineOut(
         id=row.id,
-        kind=row.kind,
+        kind=row.lane_id,
         name=row.name,
         workflow_id=row.workflow_id,
         enabled=row.enabled,
@@ -571,7 +573,7 @@ def _row_to_out(
         repo_full_name=repo.full_name if repo else None,
         workflow_installed=workflow_installed,
         workflow_file=workflow_file,
-        supports_run=_supports_run(row.kind),
+        supports_run=_supports_run(row.lane_id),
     )
 
 
@@ -845,8 +847,8 @@ async def enrich_pipelines(
     out: list[PipelineOut] = []
     for row in pipelines:
         repo = repos.get(row.repo_id) if row.repo_id else None
-        workflow_file = _workflow_file_for_kind(row.kind)
-        if repo is None or workflow_file is None or not _supports_run(row.kind):
+        workflow_file = _workflow_file_for_lane_id(row.lane_id)
+        if repo is None or workflow_file is None or not _supports_run(row.lane_id):
             out.append(_row_to_out(row, repo=repo, workflow_installed=None))
             continue
         install = installs.get(repo.installation_id) if repo.installation_id else None
@@ -919,7 +921,7 @@ async def toggle_pipeline(
             action="pipeline.toggle",
             target_kind="pipeline",
             target_id=str(row.id),
-            payload={"kind": row.kind, "enabled": row.enabled},
+            payload={"kind": row.lane_id, "enabled": row.enabled},
         )
     )
     await session.flush()
@@ -964,14 +966,14 @@ async def run_pipeline(
             status_code=status.HTTP_409_CONFLICT,
             detail="Pipeline is disabled. Enable it before running.",
         )
-    workflow_file = _workflow_file_for_kind(pipeline.kind)
-    if workflow_file is None or not _supports_run(pipeline.kind):
+    workflow_file = _workflow_file_for_lane_id(pipeline.lane_id)
+    if workflow_file is None or not _supports_run(pipeline.lane_id):
         raise HTTPException(
             status_code=status.HTTP_412_PRECONDITION_FAILED,
             detail={
                 "code": "kind_not_supported_yet",
                 "message": (
-                    f"Pipeline kind {pipeline.kind!r} doesn't ship with a "
+                    f"Pipeline lane {pipeline.lane_id!r} doesn't ship with a "
                     "catalog workflow yet. Coming with presets."
                 ),
             },
@@ -1069,7 +1071,7 @@ async def run_pipeline(
             target_kind="pipeline",
             target_id=str(pipeline.id),
             payload={
-                "kind": pipeline.kind,
+                "kind": pipeline.lane_id,
                 "trigger": "manual",
                 "note": note,
                 "run_id": str(run.id),
@@ -1107,14 +1109,14 @@ async def install_pipeline_workflow(
     """
     await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
     pipeline = await _load_pipeline(session, workspace_id, pipeline_id)
-    workflow_file = _workflow_file_for_kind(pipeline.kind)
-    if workflow_file is None or not _supports_run(pipeline.kind):
+    workflow_file = _workflow_file_for_lane_id(pipeline.lane_id)
+    if workflow_file is None or not _supports_run(pipeline.lane_id):
         raise HTTPException(
             status_code=status.HTTP_412_PRECONDITION_FAILED,
             detail={
                 "code": "kind_not_supported_yet",
                 "message": (
-                    f"Pipeline kind {pipeline.kind!r} doesn't ship with a "
+                    f"Pipeline lane {pipeline.lane_id!r} doesn't ship with a "
                     "starter workflow yet. Coming with presets."
                 ),
             },
@@ -1123,7 +1125,7 @@ async def install_pipeline_workflow(
     repo, install = await _load_repo_and_install(
         session, pipeline, explicit_repo_id=explicit_repo_id
     )
-    content = _read_starter_yaml(pipeline.kind)
+    content = _read_starter_yaml(pipeline.lane_id)
     # Deep-link back to the dashboard so the user doesn't get stuck
     # on github.com after merging. ``console_url`` is the console
     # origin (``https://app.ship.…``); we add enough context to show
@@ -1138,7 +1140,7 @@ async def install_pipeline_workflow(
             install,
             workflow_file=workflow_file,
             content=content,
-            pipeline_kind=pipeline.kind,
+            pipeline_kind=pipeline.lane_id,
             settings=settings,
             return_url=return_url,
         )
@@ -1170,7 +1172,7 @@ async def install_pipeline_workflow(
             target_kind="pipeline",
             target_id=str(pipeline.id),
             payload={
-                "kind": pipeline.kind,
+                "kind": pipeline.lane_id,
                 "repo_full_name": repo.full_name,
                 "workflow_file": workflow_file,
                 "pr_url": result.pr_url,
@@ -1344,7 +1346,7 @@ async def report_run_result(
 # "initial knowledge" buckets (code map + tech-debt inventory) so the
 # operator's first visit after merging isn't a bunch of empty cards.
 # Write-heavy or noisy lanes (pr_review, daily_standup) stay manual.
-KNOWLEDGE_PIPELINE_KINDS: Final[frozenset[str]] = frozenset(
+KNOWLEDGE_PIPELINE_LANE_IDS: Final[frozenset[str]] = frozenset(
     {"tech_debt", "code_map"}
 )
 
@@ -1375,7 +1377,7 @@ async def auto_dispatch_knowledge_pipelines(
                 Pipeline.workspace_id == repo.workspace_id,
                 Pipeline.repo_id == repo.id,
                 Pipeline.enabled.is_(True),
-                Pipeline.kind.in_(KNOWLEDGE_PIPELINE_KINDS),
+                Pipeline.lane_id.in_(KNOWLEDGE_PIPELINE_LANE_IDS),
             )
         )
     ).scalars().all()
@@ -1385,9 +1387,9 @@ async def auto_dispatch_knowledge_pipelines(
     created: list[uuid.UUID] = []
     files = None  # lazy — only probe if we have something runnable
     for pipeline in candidates:
-        if not _supports_run(pipeline.kind):
+        if not _supports_run(pipeline.lane_id):
             continue
-        workflow_file = _workflow_file_for_kind(pipeline.kind)
+        workflow_file = _workflow_file_for_lane_id(pipeline.lane_id)
         if workflow_file is None:
             continue
         if files is None:
@@ -1403,7 +1405,7 @@ async def auto_dispatch_knowledge_pipelines(
         if workflow_file not in files:
             logger.info(
                 "auto-dispatch skipped kind=%s repo=%s: %s not in repo yet",
-                pipeline.kind,
+                pipeline.lane_id,
                 repo.full_name,
                 workflow_file,
             )
@@ -1441,7 +1443,7 @@ async def auto_dispatch_knowledge_pipelines(
         except WorkflowDispatchError as exc:
             logger.warning(
                 "auto-dispatch failed kind=%s repo=%s status=%s: %s",
-                pipeline.kind,
+                pipeline.lane_id,
                 repo.full_name,
                 exc.status_code,
                 exc.message[:200],
@@ -1470,7 +1472,7 @@ async def auto_dispatch_knowledge_pipelines(
                 target_kind="pipeline",
                 target_id=str(pipeline.id),
                 payload={
-                    "kind": pipeline.kind,
+                    "kind": pipeline.lane_id,
                     "trigger": trigger,
                     "run_id": str(run.id),
                     "repo_full_name": repo.full_name,
@@ -1482,7 +1484,7 @@ async def auto_dispatch_knowledge_pipelines(
         created.append(run.id)
         logger.info(
             "auto-dispatched knowledge lane kind=%s repo=%s run=%s",
-            pipeline.kind,
+            pipeline.lane_id,
             repo.full_name,
             run.id,
         )
@@ -1540,7 +1542,7 @@ async def auto_dispatch_self_heal(
             select(Pipeline).where(
                 Pipeline.workspace_id == repo.workspace_id,
                 Pipeline.repo_id == repo.id,
-                Pipeline.kind == "self_heal",
+                Pipeline.lane_id == "self_heal",
             )
         )
     ).scalars().first()
@@ -1548,9 +1550,9 @@ async def auto_dispatch_self_heal(
         return SelfHealDispatchResult(status="skipped:pipeline_missing")
     if not pipeline.enabled:
         return SelfHealDispatchResult(status="skipped:pipeline_disabled")
-    if not _supports_run(pipeline.kind):
+    if not _supports_run(pipeline.lane_id):
         return SelfHealDispatchResult(status="skipped:kind_not_supported")
-    workflow_file = _workflow_file_for_kind(pipeline.kind)
+    workflow_file = _workflow_file_for_lane_id(pipeline.lane_id)
     if workflow_file is None:
         return SelfHealDispatchResult(status="skipped:kind_not_supported")
     try:
@@ -1632,7 +1634,7 @@ async def auto_dispatch_self_heal(
             target_kind="pipeline",
             target_id=str(pipeline.id),
             payload={
-                "kind": pipeline.kind,
+                "kind": pipeline.lane_id,
                 "trigger": trigger,
                 "run_id": str(run.id),
                 "repo_full_name": repo.full_name,
@@ -1658,5 +1660,5 @@ __all__ = [
     "auto_dispatch_knowledge_pipelines",
     "auto_dispatch_self_heal",
     "SelfHealDispatchResult",
-    "KNOWLEDGE_PIPELINE_KINDS",
+    "KNOWLEDGE_PIPELINE_LANE_IDS",
 ]

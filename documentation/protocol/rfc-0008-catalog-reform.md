@@ -293,8 +293,9 @@ baked-in lane wiring. The new module:
 
 Patterns that back a stable seeded lane declare three new optional
 `spec` fields so the pattern id stays the authoritative *content*
-identifier while the lane_id stays the authoritative *runtime*
-identifier (it's still `Pipeline.kind` in the DB today):
+identifier while the `lane_id` stays the authoritative *runtime*
+identifier — materialised as `Pipeline.lane_id` in the DB since
+C3.4:
 
 ```yaml
 spec:
@@ -313,12 +314,12 @@ deleted — summaries come from each pattern's `spec.lane_summary` (for
 pattern-backed recipes) or inline from `_EXTRA_RECIPES` (for the two
 specials).
 
-`Pipeline.kind` values stay stable across C3.3 (`pr_review`,
-`daily_standup`, `tech_debt`, `self_heal`, `code_map`); C3.4 formally
-renames the column to `lane_id` so the DB schema stops conflating
-"kind of pipeline" with "which lane recipe does this row belong to".
-The table below shows how the stable lane_ids map to the pattern(s)
-that back them today:
+The `lane_id` values stay byte-identical across C3.3 → C3.4
+(`pr_review`, `daily_standup`, `tech_debt`, `self_heal`,
+`code_map`); the C3.4 migration only swaps the column name so the
+DB schema stops conflating "kind of pipeline" with "which lane
+recipe does this row belong to". The table below shows how the
+stable lane_ids map to the pattern(s) that back them today:
 
 | Lane id | Pattern(s) | Notes |
 |---|---|---|
@@ -427,8 +428,18 @@ One PR per phase, merged sequentially:
      and `spec.lane_summary` so the Library card / dashboard keep a
      human-friendly label decoupled from the pattern id.
      *(landed with this RFC)*
-   - **C3.4.** Rename `Pipeline.kind` → `lane_id`. Alembic
-     migration remaps existing rows.
+   - **C3.4.** Rename `Pipeline.kind` → `Pipeline.lane_id` +
+     `uq_pipelines_workspace_kind` → `uq_pipelines_workspace_lane_id`
+     (Alembic `0022_pipelines_rename_kind`). The column type and
+     values are unchanged — this is a pure rename so the seeded
+     lanes and the config-driven `Lane.lane_id` talk the same
+     vocabulary. `_workflow_file_for_kind` / `_kind_to_workflow_id`
+     are renamed to `_workflow_file_for_lane_id` /
+     `_lane_id_to_workflow_id`; `KNOWLEDGE_PIPELINE_KINDS` →
+     `KNOWLEDGE_PIPELINE_LANE_IDS`. The `PipelineOut.kind` JSON
+     field and AuditLog `payload.kind` key stay put so Console and
+     CLI clients don't need a round-trip change. *(landed with this
+     RFC)*
 4. **Phase 3 — Requests catalog UI.** `/requests` rewritten to show
    the catalog grid + dynamic form. Backend accepts
    `{pattern_id, inputs}` and maps that onto the existing

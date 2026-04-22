@@ -86,7 +86,7 @@ async def seed_self_heal(db_session, seed_workspace):
     pipeline = Pipeline(
         workspace_id=workspace.id,
         repo_id=repo.id,
-        kind="self_heal",
+        lane_id="self_heal",
         name="Self-heal",
         workflow_id="pipeline-self-heal",
         enabled=True,

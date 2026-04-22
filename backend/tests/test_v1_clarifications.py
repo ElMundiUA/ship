@@ -219,7 +219,7 @@ async def test_pipeline_ingress_creates_row_and_audit(
     pipeline = Pipeline(
         workspace_id=workspace.id,
         repo_id=repo.id,
-        kind="tech_debt",
+        lane_id="tech_debt",
         name="Tech debt sweep",
         workflow_id="tech-debt-scan",
         enabled=True,

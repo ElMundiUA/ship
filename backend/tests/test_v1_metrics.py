@@ -66,7 +66,7 @@ async def _seed_runs(
     pr = Pipeline(
         workspace_id=workspace_id,
         repo_id=repo_id,
-        kind="pr_review",
+        lane_id="pr_review",
         name="PR review",
         workflow_id="pr-and-ci-gate",
         enabled=True,
@@ -75,7 +75,7 @@ async def _seed_runs(
     td = Pipeline(
         workspace_id=workspace_id,
         repo_id=repo_id,
-        kind="tech_debt",
+        lane_id="tech_debt",
         name="Tech debt",
         workflow_id="parallel-audit-lanes",
         enabled=False,

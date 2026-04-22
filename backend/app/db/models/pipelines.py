@@ -50,25 +50,26 @@ class Pipeline(Base):
     (served from :mod:`backend.app.services.starter_workflows` — see
     RFC-0007 Phase 6, which retired the ``artifact_kind=workflow``
     catalog layer). ``workflow_id`` is the starter slug (e.g.
-    ``pr-and-ci-gate``); ``kind`` is the broad bucket the dashboard
-    groups by (``pr_review`` / ``daily_standup`` / ``code_map`` /
-    ``tech_debt`` / ``self_heal``). Keeping both lets us later support
-    multiple pipelines of the same kind without losing the link back
-    to the starter.
+    ``pr-and-ci-gate``); ``lane_id`` is the stable lane slug the
+    dashboard groups by (``pr_review`` / ``daily_standup`` /
+    ``code_map`` / ``tech_debt`` / ``self_heal``) — same vocabulary
+    as :class:`Lane.lane_id` for config-derived lanes. Keeping both
+    lets us later support multiple pipelines per lane without losing
+    the link back to the starter.
 
     ``enabled`` is the UI toggle. ``config`` is a free-form JSONB bag
     for vendor-specific knobs (e.g. ``{"branch": "main"}``) — the
-    schema is intentionally loose because each kind reads its own
+    schema is intentionally loose because each lane reads its own
     fields.
     """
 
     __tablename__ = "pipelines"
     __table_args__ = (
         # Auto-create logic seeds at most one pipeline per (workspace,
-        # kind) on first repo activation; a unique constraint here
+        # lane_id) on first repo activation; a unique constraint here
         # documents that intent and rules out accidental duplicates.
         UniqueConstraint(
-            "workspace_id", "kind", name="uq_pipelines_workspace_kind"
+            "workspace_id", "lane_id", name="uq_pipelines_workspace_lane_id"
         ),
         Index("ix_pipelines_workspace_id", "workspace_id"),
         Index("ix_pipelines_repo_id", "repo_id"),
@@ -91,7 +92,7 @@ class Pipeline(Base):
         ForeignKey("workspace_repos.id", ondelete="SET NULL"),
         nullable=True,
     )
-    kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    lane_id: Mapped[str] = mapped_column(String(64), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     workflow_id: Mapped[str] = mapped_column(String(120), nullable=False)
     enabled: Mapped[bool] = mapped_column(
