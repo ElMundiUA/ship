@@ -195,6 +195,13 @@ class BucketArticleOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     archived_at: datetime | None
+    # PR-7A: cross-scope override link. ``overrides_workspace_article_id``
+    # is the raw FK to a workspace-canonical article;
+    # ``overrides_workspace_bucket_slug`` is resolved by the route so
+    # the UI can deep-link straight to ``/knowledge/<slug>`` without
+    # a second round-trip.
+    overrides_workspace_article_id: uuid.UUID | None = None
+    overrides_workspace_bucket_slug: str | None = None
 
 
 class BucketCreateIn(BaseModel):
@@ -1378,7 +1385,29 @@ async def list_bucket_articles(
         )
     if not include_archived:
         stmt = stmt.where(BucketArticle.archived_at.is_(None))
-    rows = (await session.execute(stmt)).scalars().all()
+    rows = list((await session.execute(stmt)).scalars().all())
+
+    # Resolve workspace-canonical bucket slugs for any rows that carry
+    # an override link. One extra batched query; keeps the UI from
+    # having to fan-out per-article to get a deep-link target.
+    override_ids = {
+        a.overrides_workspace_article_id
+        for a in rows
+        if a.overrides_workspace_article_id is not None
+    }
+    override_slug_by_article_id: dict[uuid.UUID, str] = {}
+    if override_ids:
+        slug_rows = (
+            await session.execute(
+                select(BucketArticle.id, KnowledgeBucket.slug)
+                .join(
+                    KnowledgeBucket,
+                    KnowledgeBucket.id == BucketArticle.bucket_id,
+                )
+                .where(BucketArticle.id.in_(override_ids))
+            )
+        ).all()
+        override_slug_by_article_id = {r[0]: r[1] for r in slug_rows}
 
     return [
         BucketArticleOut(
@@ -1393,6 +1422,14 @@ async def list_bucket_articles(
             created_at=a.created_at,
             updated_at=a.updated_at,
             archived_at=a.archived_at,
+            overrides_workspace_article_id=a.overrides_workspace_article_id,
+            overrides_workspace_bucket_slug=(
+                override_slug_by_article_id.get(
+                    a.overrides_workspace_article_id
+                )
+                if a.overrides_workspace_article_id is not None
+                else None
+            ),
         )
         for a in rows
     ]

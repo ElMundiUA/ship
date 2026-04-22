@@ -2045,6 +2045,78 @@ export function getKnowledgeBucket(
   );
 }
 
+// --- PR-7A: workspace vector search + canonical inventory -----------------
+
+export type ApiKnowledgeSearchHit = {
+  id: string;
+  source: "bucket_article" | "kb_chunk";
+  bucket_slug: string | null;
+  bucket_id: string | null;
+  repo_id: string | null;
+  scope_kind: "workspace" | "project" | "repo" | "user";
+  score: number;
+  rank_bucket: "repo_match" | "workspace" | "other_repo";
+  snippet: string;
+  title: string | null;
+  repo_full_name: string | null;
+};
+
+export type ApiKnowledgeSearchResponse = {
+  query: string;
+  hits: ApiKnowledgeSearchHit[];
+};
+
+export type ApiKnowledgeCanonicalBucket = {
+  id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  article_count: number;
+  override_count: number;
+};
+
+export type ApiKnowledgeOrphanSlug = {
+  slug: string;
+  repo_count: number;
+  sample_repo_id: string;
+  sample_repo_full_name: string | null;
+};
+
+export type ApiKnowledgeCanonicalResponse = {
+  workspace_id: string;
+  canonical: ApiKnowledgeCanonicalBucket[];
+  orphan_slugs: ApiKnowledgeOrphanSlug[];
+};
+
+export function searchKnowledge(
+  workspaceId: string,
+  payload: { query: string; repoId?: string | null; limit?: number },
+  token?: string,
+): Promise<ApiKnowledgeSearchResponse> {
+  return apiFetch<ApiKnowledgeSearchResponse>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/knowledge/search`,
+    {
+      method: "POST",
+      body: {
+        query: payload.query,
+        repo_id: payload.repoId ?? null,
+        limit: payload.limit ?? 20,
+      },
+      token,
+    },
+  );
+}
+
+export function getKnowledgeCanonical(
+  workspaceId: string,
+  token?: string,
+): Promise<ApiKnowledgeCanonicalResponse> {
+  return apiFetch<ApiKnowledgeCanonicalResponse>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/knowledge/canonical`,
+    { token },
+  );
+}
+
 // --- Phase 3: scope-aware bucket resolver ---------------------------------
 //
 // ``GET /v1/workspaces/{ws}/buckets/resolved`` returns the full ladder

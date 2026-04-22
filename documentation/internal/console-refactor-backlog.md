@@ -200,11 +200,76 @@ Deferred:
 
 ---
 
-## PR-7 — Knowledge graph · pending
+## PR-7A — Workspace knowledge search + override flag · shipped
 
-Workspace-level knowledge primitive. No design yet. Likely reuses
-the existing `KnowledgeBucket` / `KbChunk` schema but exposes a
-graph view (repo ↔ pattern ↔ lane ↔ tag) the Navigator can walk.
+Foundation of the workspace-level knowledge primitive. Splits the
+former "PR-7 — Knowledge graph" stub into three landing PRs
+(7A → 7B → 7C). Shipped in this PR:
+
+- **Migration 0027**: `bucket_articles.overrides_workspace_article_id`
+  (self-FK, ondelete `SET NULL`, partial index on non-null values).
+  NULL = regular article; non-null = this row intentionally overrides
+  the referenced workspace-canonical article. Distinct from
+  `supersedes_id`, which keeps intra-bucket versioning semantics.
+- **`POST /v1/workspaces/{ws}/knowledge/search`**. Embeds the query
+  through the existing agent-embedding helper, runs parallel vector
+  searches over `bucket_articles` + `kb_chunks`, then re-ranks hits
+  into three buckets: `repo_match` (hint repo), `workspace`
+  (workspace-scope canonical), `other_repo` (everything else).
+  Returns 412 if the embedding service is unconfigured, matching the
+  LLM-unconfigured convention from PR-6.
+- **`GET /v1/workspaces/{ws}/knowledge/canonical`**. Lists every
+  workspace-scope bucket with `article_count` and `override_count`
+  (how many per-repo articles currently override it). Also surfaces
+  **orphan slugs**: slugs present in ≥2 repo-scope buckets with no
+  workspace-scope copy — the 7B promotion pipeline consumes this.
+- **Console**:
+  - `searchKnowledge` + `getKnowledgeCanonical` helpers in
+    `lib/api/client.ts`.
+  - `/api/knowledge/{search,canonical}` Next.js proxies keep the
+    session bearer server-side.
+  - `/fleet/knowledge` is no longer a `FleetStub` — it's a Search +
+    Canonical tabbed page driven by the two new endpoints, with a
+    repo-boost dropdown from `listActivatedRepos`.
+  - Per-repo bucket article rows now render a
+    "overrides workspace canonical" badge + deep-link when
+    `overrides_workspace_article_id` is set. `ApiBucketArticle`
+    (and `BucketArticleOut` on the backend) gained the
+    `overrides_workspace_article_id` +
+    `overrides_workspace_bucket_slug` fields.
+- **Tests**: `backend/tests/test_v1_knowledge_search.py` covers
+  repo-match ranking, workspace fallback, 412-on-unconfigured-
+  embeddings, canonical listing, override counting, and orphan-
+  slug detection. Existing suites unchanged (same pre-existing
+  `test_fleet_list_returns_newest_first` flake as before).
+
+What's *not* in this PR:
+
+- No dedup / canonicalisation / LLM promotion — that's 7B.
+- No Navigator tool for ambient knowledge pull — that's 7C.
+- No graph/edge visualisation — RFC decided workspace search
+  replaces the graph idea for the foreseeable future.
+
+---
+
+## PR-7B — Canonicalisation & promotion · pending
+
+Turns the `orphan_slugs` list into actionable promotion flows:
+cluster per-repo articles by content hash / embedding neighbourhood,
+surface "promote this repo-scope bucket to workspace canonical"
+with a diff view, and wire the override flag from 7A so promoted
+canonicals don't silently shadow repo-specific notes. Will consume
+`override_count` (keyed on `bucket_article.id`) — 7B must not
+repurpose that column for a different semantic.
+
+---
+
+## PR-7C — Navigator knowledge tool · pending
+
+Adds a workspace-aware Navigator tool backed by
+`POST /knowledge/search`, so agent threads can ambiently pull
+workspace canonical + repo-local context in the same call. Depends
+on 7A for the endpoint and on 7B for reliable canonicals.
 
 ---
 
