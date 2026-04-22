@@ -39,6 +39,7 @@ from backend.app.api.v1.routes import (
     notifications,
     notion_oauth,
     pipelines,
+    repo_home,
     repo_secrets,
     repos,
     requests_api,
@@ -79,6 +80,10 @@ api_router.include_router(notion_oauth.router)
 api_router.include_router(pipelines.router)
 api_router.include_router(pipelines.public_router)
 api_router.include_router(dashboard.router)
+# Per-repo Home rollup (RFC-0008 §F — PR-4) — a single snapshot the
+# /r/<slug> page renders as Now + Trends tabs without fanning out to
+# the four source endpoints client-side.
+api_router.include_router(repo_home.router)
 # Catalog read-only surface (presets / collections) backed by
 # ``artifacts/**/ARTIFACT.md``. Powers the wizard preset picker and
 # pattern/tool pickers.
