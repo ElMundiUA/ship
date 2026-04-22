@@ -14,10 +14,12 @@ import type {
 import {
   buildBaseline,
   submitProposal,
+  type FanoutMode,
   type LaneDraft,
 } from "./config-draft";
 import { specToCron } from "./cron";
 import { CustomLaneAuthor } from "./custom-author";
+import { FanoutPicker } from "./fanout-picker";
 import { ScheduleWizard, specFromCron } from "./schedule-wizard";
 
 /**
@@ -229,6 +231,10 @@ function RecipeCard({
   const [spec, setSpec] = useState(() =>
     specFromCron(baseline.schedule ?? entry.schedule ?? null),
   );
+  // Fan-out state only matters for ≥2-pattern lanes. Seed from
+  // baseline so editing a lane that already picked ``sequential``
+  // doesn't silently reset it back to ``matrix``.
+  const [fanout, setFanout] = useState<FanoutMode>(baseline.fanout);
 
   async function save(nextDraft: Record<string, LaneDraft>, summary: string) {
     onStateChange({ mode: "saving" });
@@ -259,6 +265,7 @@ function RecipeCard({
         ...baseline,
         enabled: true,
         schedule: cron,
+        fanout,
       },
     };
     const verb = added ? "Update" : "Add";
@@ -341,6 +348,12 @@ function RecipeCard({
             </p>
           )}
 
+          <FanoutPicker
+            patterns={baseline.patterns}
+            value={fanout}
+            onChange={setFanout}
+          />
+
           {state.mode === "error" ? (
             <div className="rounded-md border border-coral/40 bg-coral/10 px-3 py-2 text-[11px] text-coral">
               {state.message}
@@ -359,6 +372,7 @@ function RecipeCard({
               type="button"
               onClick={() => {
                 setSpec(specFromCron(baseline.schedule ?? entry.schedule ?? null));
+                setFanout(baseline.fanout);
                 onClose();
               }}
               className="rounded-md border border-white/15 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold text-white/70 hover:text-white"

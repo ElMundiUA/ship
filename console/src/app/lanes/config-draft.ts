@@ -11,20 +11,37 @@
  *    entire mapping, so we must round-trip every existing entry).
  *
  * The baseline preserves the raw YAML fragment for each lane so
- * custom fields (``pattern``, ``idempotency_key``, ``once``, etc.)
- * round-trip verbatim — the UI only ever edits ``enabled`` and
- * ``schedule``.
+ * custom fields (``pattern``, ``patterns``, ``fanout``,
+ * ``idempotency_key``, ``once``, etc.) round-trip verbatim — the UI
+ * edits ``enabled``, ``schedule``, and (for ≥2-pattern lanes)
+ * ``fanout``. Single-pattern lanes never emit a ``fanout`` key so we
+ * don't add noise to diffs.
  */
 
 import type {
   ApiLane,
   ApiLaneCatalogEntry,
+  ApiLaneTriggerIn,
   ApiRepoConfig,
 } from "@/lib/api/client";
+
+export type FanoutMode = "matrix" | "sequential" | "concurrent";
+
+export const FANOUT_MODES: FanoutMode[] = [
+  "matrix",
+  "sequential",
+  "concurrent",
+];
+
+export const DEFAULT_FANOUT: FanoutMode = "matrix";
 
 export type LaneDraft = {
   enabled: boolean;
   schedule: string | null;
+  /** Patterns in order; single entry for single-pattern lanes. */
+  patterns: string[];
+  /** Effective fan-out mode — always resolved, never null. */
+  fanout: FanoutMode;
   origin: "recipe" | "config-only";
   rawConfig: Record<string, unknown> | null;
 };
@@ -44,24 +61,30 @@ export function buildBaseline(
   for (const entry of catalog) {
     const parsed = parsedLanes[entry.kind];
     const inConfig = parsed !== undefined;
+    const raw = isPlainObject(parsed) ? parsed : null;
     baseline[entry.kind] = {
       enabled: inConfig,
       schedule: entry.schedule
         ? scheduleFromConfig(parsed) ?? entry.schedule
         : null,
+      patterns: patternsFromRaw(raw, entry.pattern),
+      fanout: fanoutFromRaw(raw),
       origin: "recipe",
-      rawConfig: isPlainObject(parsed) ? parsed : null,
+      rawConfig: raw,
     };
   }
 
   for (const laneId of Object.keys(parsedLanes)) {
     if (baseline[laneId]) continue;
     const parsed = parsedLanes[laneId];
+    const raw = isPlainObject(parsed) ? parsed : null;
     baseline[laneId] = {
       enabled: true,
       schedule: scheduleFromConfig(parsed),
+      patterns: patternsFromRaw(raw, null),
+      fanout: fanoutFromRaw(raw),
       origin: "config-only",
-      rawConfig: isPlainObject(parsed) ? parsed : null,
+      rawConfig: raw,
     };
   }
 
@@ -73,6 +96,33 @@ function scheduleFromConfig(raw: unknown): string | null {
   if (!raw || typeof raw !== "object") return null;
   const sched = (raw as Record<string, unknown>).schedule;
   return typeof sched === "string" ? sched : null;
+}
+
+function patternsFromRaw(
+  raw: Record<string, unknown> | null,
+  recipeDefault: string | null,
+): string[] {
+  if (raw) {
+    const list = raw.patterns;
+    if (Array.isArray(list)) {
+      const out = list.filter(
+        (x): x is string => typeof x === "string" && x.trim().length > 0,
+      );
+      if (out.length) return out;
+    }
+    const single = raw.pattern;
+    if (typeof single === "string" && single.trim()) return [single];
+  }
+  return recipeDefault ? [recipeDefault] : [];
+}
+
+function fanoutFromRaw(raw: Record<string, unknown> | null): FanoutMode {
+  if (!raw) return DEFAULT_FANOUT;
+  const v = raw.fanout;
+  if (typeof v === "string" && (FANOUT_MODES as string[]).includes(v)) {
+    return v as FanoutMode;
+  }
+  return DEFAULT_FANOUT;
 }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -89,8 +139,8 @@ export function buildProposalBody({
 }: {
   catalog: ApiLaneCatalogEntry[];
   draft: Record<string, LaneDraft>;
-}): Record<string, Record<string, string | null>> {
-  const out: Record<string, Record<string, string | null>> = {};
+}): Record<string, ApiLaneTriggerIn> {
+  const out: Record<string, ApiLaneTriggerIn> = {};
   const catalogIndex = new Map(catalog.map((e) => [e.kind, e]));
 
   for (const [laneId, d] of Object.entries(draft)) {
@@ -100,7 +150,7 @@ export function buildProposalBody({
       out[laneId] = laneTriggerFromRecipe(entry, d);
       continue;
     }
-    const preserved = preserveRawTrigger(d.rawConfig);
+    const preserved = preserveRawTrigger(d);
     if (preserved) out[laneId] = preserved;
   }
   return out;
@@ -109,45 +159,69 @@ export function buildProposalBody({
 function laneTriggerFromRecipe(
   entry: ApiLaneCatalogEntry,
   draft: LaneDraft,
-): Record<string, string | null> {
-  const trigger: Record<string, string | null> = {};
+): ApiLaneTriggerIn {
+  const trigger: ApiLaneTriggerIn = {};
   if (entry.schedule) {
     trigger.schedule = draft.schedule ?? entry.schedule;
   } else if (entry.event) {
     trigger.event = entry.event;
   }
+  // Pattern resolution order:
+  //   1. draft.patterns (the authoritative list the UI maintains)
+  //   2. recipe default
+  // We always send ``patterns`` as a list when it has ≥2 entries and
+  // fall back to scalar ``pattern`` for the single-pattern case so
+  // the YAML the backend emits stays minimal/stable.
+  const patterns = draft.patterns.length
+    ? draft.patterns
+    : entry.pattern
+      ? [entry.pattern]
+      : [];
+  if (patterns.length >= 2) trigger.patterns = patterns;
+  else if (patterns.length === 1) trigger.pattern = patterns[0];
+
   const raw = draft.rawConfig;
-  const rawPattern =
-    raw && typeof raw.pattern === "string" ? raw.pattern : null;
   const rawIdem =
     raw && typeof raw.idempotency_key === "string" ? raw.idempotency_key : null;
-  if (rawPattern ?? entry.pattern) {
-    trigger.pattern = rawPattern ?? entry.pattern;
-  }
   if (rawIdem ?? entry.idempotency_key) {
     trigger.idempotency_key = rawIdem ?? entry.idempotency_key;
+  }
+  // RFC-0008 C3.2 — fanout only meaningful for multi-pattern lanes,
+  // and the backend omits it when it equals the default.
+  if (patterns.length >= 2 && draft.fanout !== DEFAULT_FANOUT) {
+    trigger.fanout = draft.fanout;
   }
   return trigger;
 }
 
-function preserveRawTrigger(
-  raw: Record<string, unknown> | null,
-): Record<string, string | null> | null {
+function preserveRawTrigger(draft: LaneDraft): ApiLaneTriggerIn | null {
+  const raw = draft.rawConfig;
   if (!raw) return null;
-  const out: Record<string, string | null> = {};
-  const keys = [
-    "once",
-    "event",
-    "schedule",
-    "pattern",
-    "idempotency_key",
-  ] as const;
-  for (const k of keys) {
+  const out: ApiLaneTriggerIn = {};
+  // Trigger discriminator (exactly one of once/event/schedule must be
+  // present — we dropped a lane whose raw YAML fails this invariant
+  // rather than silently materialise a broken entry).
+  for (const k of ["once", "event", "schedule"] as const) {
     const v = raw[k];
     if (typeof v === "string") out[k] = v;
   }
-  const triggerKinds = ["once", "event", "schedule"].filter((k) => out[k]);
+  const triggerKinds = (["once", "event", "schedule"] as const).filter(
+    (k) => out[k],
+  );
   if (triggerKinds.length !== 1) return null;
+
+  if (typeof raw.idempotency_key === "string") {
+    out.idempotency_key = raw.idempotency_key;
+  }
+  // Emit the UI-tracked pattern list (which already reflects any edit
+  // the user made) instead of the raw one. Same scalar-vs-list rule
+  // the recipe path uses, so diffs stay minimal.
+  if (draft.patterns.length >= 2) out.patterns = draft.patterns;
+  else if (draft.patterns.length === 1) out.pattern = draft.patterns[0];
+
+  if (draft.patterns.length >= 2 && draft.fanout !== DEFAULT_FANOUT) {
+    out.fanout = draft.fanout;
+  }
   return out;
 }
 
