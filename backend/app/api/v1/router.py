@@ -39,6 +39,7 @@ from backend.app.api.v1.routes import (
     notifications,
     notion_oauth,
     pipelines,
+    policies,
     repo_home,
     repo_secrets,
     repos,
@@ -152,6 +153,10 @@ api_router.include_router(fleet_requests.router)
 # live from WorkspaceRepo + PipelineRun + WorkflowRun + AgentRequest
 # and returned in one shot.
 api_router.include_router(adoption.router)
+# Workspace-level Policy primitive (RFC-0008 §G — PR-5) —
+# mirror-lane rules + per-repo opt-outs with live compliance
+# rollup. Read is member; create/delete/exception are admin.
+api_router.include_router(policies.router)
 # Per-repo agent API-key wiring (Wizard v2 iter 3). Admin-only check
 # + push; plaintext lives only in the HTTP hop to GitHub's secrets
 # API and is never persisted by Ship.
