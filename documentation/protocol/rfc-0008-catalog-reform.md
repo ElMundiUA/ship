@@ -48,7 +48,7 @@ from the catalog rather than a prompt they type.
 | 1     | Pattern rename to `<category>-<name>`.                       | shipped — commit `e8e6a26` on 2026-04-22 |
 | 2     | Retire `DefaultPipelineSpec` (C3.1–C3.4).                    | planned next |
 | 3     | Requests catalog UI.                                         | partial — landed in the 2026-04-22 Lanes hub + Requests 3-phase overhaul (commit `0506ae9`); pattern-driven form is live, full pattern-input schema still landing |
-| 4     | Expansion pack — 10 new Phase-1 patterns.                    | planned |
+| 4     | Expansion pack — 10 new Phase-1 patterns.                    | landed |
 
 ## Motivation
 
@@ -471,8 +471,18 @@ One PR per phase, merged sequentially:
      dispatch path alive. Recent requests show the pattern id +
      inputs preview when present; otherwise the raw prompt. *(landed
      with this RFC)*
-5. **Phase 4 — Expansion pack.** 10 new Phase-1 patterns land as
-   ARTIFACT.md files plus any starter YAML they need.
+5. **Phase 4 — Expansion pack (C5).** 10 new Phase-1 patterns land
+   as ARTIFACT.md files under `artifacts/patterns/<id>/`. They
+   immediately show up in `/lanes?tab=library` (for `modes.lane`
+   entries) and `/requests` (for `modes.request` entries) because
+   both surfaces now fan out from `list_patterns()` — no starter
+   workflow YAML is required until a user installs the pattern
+   onto a repo. Every new pattern ships with the full RFC-0008
+   metadata (`category`, `modes`, `default_trigger`, `inputs`,
+   `enabled_on_install`) populated so the grid shows the right
+   badges, the Requests form can render the dynamic inputs, and
+   presets that opt in wire the lane on seed.
+   *(landed with this RFC)*
 
 Each phase is independently mergeable; each bumps `BUNDLE_VERSION`
 where the seed payload changes.
