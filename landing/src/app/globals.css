@@ -98,6 +98,82 @@ body {
 }
 
 /* ============================================================ *
+ * Blog ( /blog )                                                *
+ * Essay-flavoured prose. The book chapters are loud on purpose; *
+ * the blog is quiet: single accent, generous air, serif caption *
+ * cards for ECharts infographics.                               *
+ * ============================================================ */
+
+.blog-shell {
+  @apply mx-auto max-w-3xl px-4 sm:px-6;
+}
+
+.blog-prose {
+  @apply text-[1.06rem] leading-[1.75] text-white/80 sm:text-[1.12rem] sm:leading-[1.75];
+}
+
+.blog-prose > p:first-of-type {
+  @apply text-xl leading-relaxed text-white/85 sm:text-[1.35rem];
+}
+
+.blog-prose strong {
+  @apply font-semibold text-white;
+}
+
+.blog-prose em {
+  @apply italic text-white/90;
+}
+
+.blog-prose :is(ul, ol) {
+  @apply my-6 space-y-2 pl-6;
+}
+
+.blog-prose ul {
+  @apply list-disc marker:text-aqua/55;
+}
+
+.blog-prose ol {
+  @apply list-decimal marker:text-aqua/70 marker:font-semibold;
+}
+
+.blog-prose code:not(pre code) {
+  @apply rounded-md border border-white/10 bg-white/[0.06] px-1.5 py-0.5 font-mono text-[0.85em] text-aqua/95;
+}
+
+.blog-prose pre {
+  @apply my-8 overflow-x-auto rounded-2xl border border-white/10 bg-black/55 px-4 py-3.5 font-mono text-[0.82rem] leading-relaxed text-white/90;
+}
+
+.blog-prose pre code {
+  @apply border-0 bg-transparent p-0 text-inherit;
+}
+
+/* Paper-toned card for ECharts infographics (same treatment as /book). */
+.blog-prose figure.blog-chart {
+  @apply my-12 mx-auto rounded-2xl border border-white/10 bg-[#fbf8f1] p-4 shadow-card sm:p-6;
+  max-width: 44rem;
+}
+
+.blog-prose figure.blog-chart > p {
+  margin: 0;
+}
+
+.blog-prose figure.blog-chart img {
+  @apply mx-auto block h-auto w-full;
+}
+
+.blog-prose figure.blog-chart figcaption {
+  @apply mt-3 border-t border-[#d9d2c3] pt-3 text-center text-[0.92rem] leading-snug text-[#4d525c];
+  font-family: "Iowan Old Style", "Charter", "Source Serif Pro", Georgia, "Times New Roman", serif;
+  font-style: italic;
+}
+
+.blog-prose figure.blog-chart figcaption::first-letter {
+  @apply font-bold text-[#a4451b];
+  font-style: normal;
+}
+
+/* ============================================================ *
  * Docs ( /docs )                                                *
  * Shared layout primitives + markdown prose styling. The book   *
  * uses the heavy bordered-card heading look; the docs are a     *
