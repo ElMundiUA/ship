@@ -44,6 +44,26 @@ from backend.app.services.tracker_fsm import (
 )
 
 
+# Bumping this marks every currently-seeded repo as "out of date"
+# on the dashboard — drives the "Update available → Open wizard"
+# CTA on the repo card. Bump when any of the following changes in
+# a way that warrants re-seeding existing tenants:
+#
+# - a starter workflow YAML (trigger cadence, new step, pinned CLI
+#   version drops the ``@latest`` resilience net, etc.)
+# - ``.ship/config.yml`` schema or per-preset lane defaults
+# - ``.ship/tracker-fsm.md`` material
+# - knowledge starter content in ``catalog.knowledge_starter_files``
+#
+# Do NOT bump for changes that only affect freshly-seeded repos
+# (e.g. adding a new preset) — existing repos are unaffected.
+#
+# ``1`` → baseline Wizard-v2 iter-5 bundle (config-schema v1 lanes
+#         list, CLI pinned by exact semver)
+# ``2`` → config-schema v2 ``lanes:`` mapping + CLI ``@latest``
+BUNDLE_VERSION: int = 2
+
+
 @dataclass(frozen=True, slots=True)
 class SeedBundle:
     """Result of :func:`compose_seed_files`.

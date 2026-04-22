@@ -28,6 +28,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     String,
     UniqueConstraint,
     text,
@@ -211,6 +212,17 @@ class WorkspaceRepo(Base):
     run_token_prefix: Mapped[str | None] = mapped_column(String(16), nullable=True)
     run_token_rotated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+    # Snapshot of ``seed_bundle.BUNDLE_VERSION`` the last time Ship
+    # successfully seeded (or re-seeded) this repo. Dashboard uses
+    # the drift between this and the current constant to decide
+    # whether to show the "update available" CTA on the repo card.
+    # ``NULL`` means either never seeded (greenfield wizard state)
+    # or seeded before this column existed — the UI surfaces that
+    # as "run the wizard" rather than "upgrade".
+    installed_bundle_version: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
     )
 
     created_at: Mapped[datetime] = _ts_created()
