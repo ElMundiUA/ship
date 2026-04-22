@@ -46,6 +46,7 @@ const NAV: NavItem[] = [
     alsoActiveOn: ["/patterns", "/collections", "/tools"],
   },
   { href: "/cli", label: "CLI", className: "" },
+  { href: "/blog", label: "Blog", className: "" },
 ];
 
 /**
