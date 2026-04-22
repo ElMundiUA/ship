@@ -34,7 +34,7 @@ additive and introduces no new metadata.
 | Phase | Scope                                                     | Status  |
 |-------|-----------------------------------------------------------|---------|
 | Wave 1 | Cross-cutting quality (7 patterns)                       | shipped — 2026-04-22 |
-| Wave 2 | Mobile (8) + ML (7) + `mobile-app-deep` / `ml-project` presets | planned |
+| Wave 2 | Mobile (8) + ML (7) + `mobile-app-deep` / `ml-project` presets | shipped — 2026-04-22 |
 | Wave 3 | Infra/SRE (8) + Compliance (5) + `platform` / `regulated` presets | planned |
 | Wave 4 | Desktop (5) + Hardware (6) + Games (4) + `desktop-app` / `firmware` / `game` presets | planned |
 
@@ -282,19 +282,33 @@ issue**. The pattern issue spec is identical for every pattern; see
   9. Docs: update `documentation/catalog/README.md`, regenerate
      `BUNDLE_VERSION`, refresh snapshot tests.
 
-### Wave 2 — Mobile + ML
+### Wave 2 — Mobile + ML  ✅ shipped — 2026-04-22
 
 - **Epic:** "RFC-0009 Wave 2 — Mobile-deep + ML packs"
-- **Acceptance:** 15 patterns land, `mobile-app-deep` and
+- **Acceptance:** 15 patterns landed, `mobile-app-deep` and
   `ml-project` added to `KNOWN_PRESETS`, wizard copy updated,
-  `mobile-app` stays as legacy alias.
-- **Issues (17):**
-  1–8. Mobile pack (8 patterns).
-  9–15. ML pack (7 patterns).
-  16. Preset wiring: add `mobile-app-deep` + `ml-project` to
-      `KNOWN_PRESETS`, wire `enabled_on_install.presets`.
-  17. Onboarding wizard: add the two new preset cards +
-      descriptor copy + deprecation hint on `mobile-app`.
+  `mobile-app` stays as the thin legacy preset.
+- **Shipped:**
+  - Mobile pack (8): `scan-app-size-budget`,
+    `scan-mobile-crash-rate`, `scan-store-metadata`,
+    `scan-permissions-audit`, `scan-localization-gap`,
+    `flow-store-submission`, `flow-beta-distribution`,
+    `role-mobile-reviewer`.
+  - ML pack (7): `scan-model-eval`, `scan-data-drift`,
+    `scan-training-repro`, `scan-feature-schema`,
+    `scan-bias-fairness`, `flow-model-card`, `role-ml-reviewer`.
+  - Preset wiring: `mobile-app-deep` + `ml-project` in
+    `backend.app.services.lane_recipes.KNOWN_PRESETS`;
+    `flow-pr-self-review` / `flow-daily-retro` /
+    `tech_debt` gated on the new presets.
+  - Cross-cutting quality pack patterns (Wave 1) opt the two
+    new presets in where relevant.
+  - Onboarding wizard: `console/src/app/onboarding/presets.ts`
+    and CLI `cli/lib/bootstrap/render.mjs` carry descriptor
+    copy + recommended-tool lists for both presets.
+  - New preset collection artefacts:
+    `artifacts/collections/preset-mobile-app-deep/ARTIFACT.md`
+    and `artifacts/collections/preset-ml-project/ARTIFACT.md`.
 
 ### Wave 3 — Infra + Compliance
 

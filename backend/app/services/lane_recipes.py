@@ -52,6 +52,8 @@ KNOWN_PRESETS: Final[tuple[str, ...]] = (
     "web-app",
     "api-backend",
     "mobile-app",
+    "mobile-app-deep",
+    "ml-project",
     "cli",
     "monorepo",
     "marketing",
@@ -124,7 +126,15 @@ _EXTRA_RECIPES: Final[tuple[LaneRecipe, ...]] = (
         fanout="matrix",
         default_enabled=True,
         preset_enabled=frozenset(
-            {"web-app", "api-backend", "mobile-app", "cli", "monorepo"}
+            {
+                "web-app",
+                "api-backend",
+                "mobile-app",
+                "mobile-app-deep",
+                "ml-project",
+                "cli",
+                "monorepo",
+            }
         ),
     ),
 )

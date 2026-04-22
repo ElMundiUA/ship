@@ -3,7 +3,7 @@
  * the new wizard v2 per-repo configure card.
  *
  * Must stay in lockstep with
- * ``backend.app.services.default_pipelines.KNOWN_PRESETS``. Ordering
+ * ``backend.app.services.lane_recipes.KNOWN_PRESETS``. Ordering
  * here drives picker order; ``adoption-minimum`` sits last because
  * it's the "I'll wire the rest later" option.
  */
@@ -12,6 +12,8 @@ export type PresetId =
   | "web-app"
   | "api-backend"
   | "mobile-app"
+  | "mobile-app-deep"
+  | "ml-project"
   | "cli"
   | "monorepo"
   | "marketing"
@@ -21,6 +23,8 @@ export const PRESET_IDS: PresetId[] = [
   "web-app",
   "api-backend",
   "mobile-app",
+  "mobile-app-deep",
+  "ml-project",
   "cli",
   "monorepo",
   "marketing",
@@ -48,6 +52,18 @@ export const PRESET_META: Record<
     blurb:
       "iOS / Android / RN — same four lanes; hosted E2E ships once a device-lab preset lands.",
     lanes: "PR gate · Standup · Tech-debt · Code map",
+  },
+  "mobile-app-deep": {
+    name: "Mobile app — deep",
+    blurb:
+      "iOS / Android with the full mobile pack: app-size & crash-rate gates, permissions audit, i18n sweeps, store submission + beta distribution flows, and a native-code reviewer.",
+    lanes: "PR gate · Standup · Tech-debt · Crash monitor · Store submit",
+  },
+  "ml-project": {
+    name: "ML project",
+    blurb:
+      "Training / inference / data pipelines — model eval gate, data-drift monitor, repro smoke test, feature-schema diff, fairness scanner, model-card flow, and an ML-aware reviewer.",
+    lanes: "PR gate · Standup · Tech-debt · Drift monitor · Model card",
   },
   cli: {
     name: "CLI / library",
