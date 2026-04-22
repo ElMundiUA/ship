@@ -49,7 +49,7 @@ Naming rules:
   `examples/foo.md` is a real change and must come with a version bump.
 
 Names of actual ids in the repo today: `cloud-developer`, `cloud-base`,
-`catalog-a4-developer` (patterns); `linear`, `playwright`, `github-actions`
+`catalog-a13-daily-retro` (patterns); `linear`, `playwright`, `github-actions`
 (tools); `preset-web-app`, `agent-rules-cursor`, `addendum-pharma`,
 `web-application` (collections).
 

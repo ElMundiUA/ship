@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.11.2
 updated_at: "2026-04-20T12:00:00+00:00"
-content_sha256: 04af094df8ea50223b614291f9a8a773985147ddc646bbc494764a8313145ab1
+content_sha256: 5c1563c2f063c5a74b882bfa6b4e8f0bc38051a3ce054f831c60b1ae7ac974d6
 deprecated: false
 replaced_by: null
 yanked: false
@@ -30,7 +30,7 @@ You are executing a **Ship pipeline step inside the customer’s GitHub Actions 
 ### Methodology
 
 - **Patterns, tools, workflows, and collections** are versioned in Ship. Discover them with `shipctl pattern|tool|workflow|collection …` and `shipctl search <query>` against the methodology API (`api.base_url` in `.ship/config.yml`).
-- **Do not assume** a fixed prompt was embedded in the workflow YAML. Fetch the workload pattern your lane needs (for example `catalog-a1-intake`, `cloud-tech-architect`) via `shipctl pattern fetch <id>` or the pins in `.ship/config.yml`.
+- **Do not assume** a fixed prompt was embedded in the workflow YAML. Fetch the workload pattern your lane needs (for example `cloud-intake`, `cloud-tech-architect`) via `shipctl pattern fetch <id>` or the pins in `.ship/config.yml`.
 - **Tracker is authoritative** for tickets, state transitions, and human-visible clarifications. If you need input from a human, add a comment that includes `@ship clarification:` and apply the label `ship:needs-clarification` on the ticket. Do not open a parallel clarification channel only in Ship.
 - **When the lane finishes**, the workflow must call `shipctl callback` with `--status ok|fail` so the Ship dashboard can reconcile the `PipelineRun`. Use the `SHIP_RUN_TOKEN` and `SHIP_CALLBACK_URL` environment variables supplied by the dispatch inputs.
 
