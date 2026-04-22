@@ -148,21 +148,55 @@ Deferred:
 
 ---
 
-## PR-6 — AI-create pattern in Lanes/Requests · pending
+## PR-6 — AI-create pattern in Lanes/Requests · shipped
 
-User-described scope: "on the Lanes/Requests tabs there should be
-a way to quickly create additional patterns with AI when
-something is missing". This is the RFC-0008 follow-on that kills
-the separate Catalog tab.
+Shipped in this PR:
 
-Open questions before we start:
+- **Workspace-private catalog layer.** New `custom_patterns` table
+  (migration `0026`), merged on top of the baked-in catalog via
+  `catalog_service.list_patterns_for_workspace()` so collisions
+  resolve in favour of the workspace row. Every `CatalogEntryOut`
+  now carries a `source: "builtin" | "workspace"` tag.
+- **Backend CRUD + LLM draft.** New router at
+  `/v1/workspaces/{ws}/patterns` covers `GET` / `POST` / `DELETE`
+  plus a non-persistent `POST .../draft` that calls
+  `AgentClient.acomplete` in JSON mode to produce a reviewable
+  `PatternDraft` from a free-form brief. Guards reject built-in
+  id collisions, enforce per-workspace uniqueness, and block
+  deletion if a `WorkspacePolicy` references the pattern.
+- **`GET /v1/catalog/patterns?workspace_id=…`.** Same endpoint as
+  before, but returns a merged view when `workspace_id` is set.
+  Membership checked via `ROLES_READ`.
+- **Console AI author modal** (`pattern-ai-author.tsx`) — two-stage
+  flow (brief → review). Wired into the `New fleet request` and
+  `New policy` forms. Newly-saved workspace patterns are spliced
+  into the local picker state and badged `custom`.
+- **Schema tolerance.** `CatalogEntryOut.content_sha256` now
+  coerces non-string placeholders (e.g. `0`) to `str` so newly-
+  added Wave-2 patterns that haven't had their digest backfilled
+  yet don't 500 the picker endpoints. Temporary shim; drop once
+  the catalog backfill lands.
 
-- Where does the "generate new pattern" button live — Lanes tab,
-  Requests tab, or both?
-- Does it produce a pattern in the shared catalog (persisted) or
-  a one-off scratch pattern for this repo only?
-- What's the guardrail — LLM proposes YAML, we render a diff, user
-  merges? Or do we auto-apply and show a rollback affordance?
+Deferred:
+
+- **Repo-mode integration (Lanes/Requests in `/r/<slug>/…`).** The
+  fleet forms use the unified `ApiCatalogPattern`, but the
+  repo-level Lanes/Requests screens still consume the older
+  `ApiLaneCatalogEntry` / request-form shape. Wiring the same
+  modal there needs a thin adapter — pushed to a follow-up so this
+  PR stays scoped to Fleet forms.
+- **Repo-local patterns in `.ship/config.yml`.** User asked for
+  "both" workspace-private + repo-local. We only ship the first
+  flavour; the second (write-through into `.ship/config.yml`
+  custom_lanes) needs a PR change and is its own PR.
+- **Draft-pattern caching / resume.** The draft endpoint is
+  stateless — regenerate throws the previous JSON away. Fine for
+  MVP, but a "Keep my edits, regenerate the body only" option
+  would cut token cost during iteration.
+- **Fleet-request list sort flake.** Pre-existing test
+  `test_fleet_list_returns_newest_first` is flaky because
+  `created_at` collisions at ms resolution break the deterministic
+  order. Unrelated to PR-6 scope; tracked separately.
 
 ---
 

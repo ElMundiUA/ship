@@ -3,8 +3,9 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { ButtonGhost, ButtonPrimary, Card, CardHeader } from "@/components/ui";
-import type { ApiCatalogPattern } from "@/lib/api/client";
+import { PatternAiAuthor } from "@/components/pattern-ai-author";
+import { Badge, ButtonGhost, ButtonPrimary, Card, CardHeader } from "@/components/ui";
+import type { ApiCatalogPattern, ApiPatternInput } from "@/lib/api/client";
 
 /**
  * Client-side "New policy" form.
@@ -17,13 +18,16 @@ import type { ApiCatalogPattern } from "@/lib/api/client";
  */
 export function NewPolicyForm({
   workspaceId,
-  patterns,
+  patterns: initialPatterns,
 }: {
   workspaceId: string;
   patterns: ApiCatalogPattern[];
 }) {
   const router = useRouter();
 
+  // Local copy so a freshly-authored pattern (RFC-0008 §H / PR-6 AI
+  // author modal) lands in the picker without a full-page reload.
+  const [patterns, setPatterns] = useState<ApiCatalogPattern[]>(initialPatterns);
   const [selectedPatternId, setSelectedPatternId] = useState<string | null>(
     patterns[0]?.id ?? null,
   );
@@ -97,12 +101,53 @@ export function NewPolicyForm({
     }
   }
 
+  // Always provide the AI author affordance — even when the catalog
+  // is empty the operator can author their first pattern here.
+  const aiAuthor = (
+    <PatternAiAuthor
+      workspaceId={workspaceId}
+      defaultMode="lane"
+      onPatternSaved={(saved) => {
+        const entry: ApiCatalogPattern = {
+          kind: "pattern",
+          id: saved.pattern_id,
+          name: saved.name,
+          version: null,
+          channel: null,
+          group: null,
+          tags: [],
+          description: saved.description,
+          content_sha256: null,
+          updated_at: saved.updated_at,
+          deprecated: false,
+          replaced_by: null,
+          yanked: false,
+          category: saved.category,
+          modes: saved.modes,
+          default_trigger: null,
+          lane_workflow: null,
+          resolved_lane_workflow: null,
+          include: [],
+          inputs: (saved.inputs ?? []) as unknown as ApiPatternInput[],
+          enabled_on_install: {},
+          source: "workspace",
+        };
+        setPatterns((prev) => [
+          entry,
+          ...prev.filter((p) => p.id !== entry.id),
+        ]);
+        pickPattern(entry.id);
+      }}
+    />
+  );
+
   if (patterns.length === 0) {
     return (
       <Card>
         <CardHeader
           title="No lane-capable patterns in catalog"
-          subtitle="Only patterns advertising 'lane' mode can back a mirror policy."
+          subtitle="Only patterns advertising 'lane' mode can back a mirror policy. Author one with AI to get started."
+          action={aiAuthor}
         />
       </Card>
     );
@@ -113,7 +158,8 @@ export function NewPolicyForm({
       <Card>
         <CardHeader
           title="Pattern"
-          subtitle="This is the pattern every repo will run as a scheduled lane."
+          subtitle="This is the pattern every repo will run as a scheduled lane. Missing something? Author a custom one."
+          action={aiAuthor}
         />
         <div className="mt-3 max-h-72 overflow-auto rounded-md border border-white/10 bg-black/20 p-2">
           {Object.entries(grouped).map(([category, list]) => (
@@ -135,7 +181,12 @@ export function NewPolicyForm({
                             : "border-transparent text-white/80 hover:border-white/15 hover:bg-white/5"
                         }`}
                       >
-                        <div className="font-mono">{p.id}</div>
+                        <div className="flex items-center gap-1.5 font-mono">
+                          <span>{p.id}</span>
+                          {p.source === "workspace" ? (
+                            <Badge tone="workspace">custom</Badge>
+                          ) : null}
+                        </div>
                         {p.description ? (
                           <div className="mt-0.5 text-[11px] text-white/55">
                             {p.description}

@@ -52,6 +52,9 @@ __all__ = [
     "list_collections",
     "list_patterns",
     "list_patterns_by_mode",
+    "list_patterns_for_workspace",
+    "list_patterns_by_mode_for_workspace",
+    "custom_pattern_to_artifact",
     "resolve_lane_workflow",
     "list_tools",
     "KNOWLEDGE_STARTERS",
@@ -378,6 +381,18 @@ class CatalogArtifact:
         default = spec.get("default")
         return bool(default) if isinstance(default, bool) else False
 
+    @property
+    def source(self) -> str:
+        """``"builtin"`` for filesystem patterns, ``"workspace"`` for DB rows.
+
+        Set by :func:`custom_pattern_to_artifact` when promoting a
+        :class:`~backend.app.db.models.custom_patterns.CustomPattern`;
+        baked-in patterns never populate this frontmatter key so the
+        fallback stays ``builtin``.
+        """
+        raw = self.raw.get("source")
+        return raw if isinstance(raw, str) and raw else "builtin"
+
     def to_summary(self) -> dict[str, Any]:
         """Serialisation shape mirrored at ``/v1/catalog/*`` endpoints."""
         return {
@@ -410,6 +425,7 @@ class CatalogArtifact:
             "include": list(self.include),
             "inputs": list(self.inputs),
             "enabled_on_install": self.enabled_on_install,
+            "source": self.source,
         }
 
 
@@ -801,4 +817,119 @@ def knowledge_starter_files(
                 f"Knowledge starter {slug!r} is missing on disk ({source}): {exc}"
             ) from exc
         out.append((f".ship/knowledge/{slug}.md", content))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Workspace-private catalog layer (RFC-0008 §H — PR-6)
+# ---------------------------------------------------------------------------
+#
+# Workspace admins can author catalog patterns at runtime via the
+# Console's AI author modal (or Navigator, or hand-crafted JSON).
+# Those rows live in ``custom_patterns`` and need to appear in every
+# pattern picker the baked-in catalog already feeds.
+#
+# The adapter below promotes a DB row to an in-memory
+# :class:`CatalogArtifact` by synthesising the frontmatter dict the
+# constructor expects. The merge helpers then overlay the workspace
+# rows on top of :func:`list_patterns` — collisions resolve in favour
+# of the workspace-private entry so operators can shadow a baked-in
+# pattern without forking Ship.
+
+
+def custom_pattern_to_artifact(row: Any) -> CatalogArtifact:
+    """Adapt a :class:`CustomPattern` DB row into a :class:`CatalogArtifact`.
+
+    Kept as a standalone function (rather than a classmethod on the
+    ORM model) so ``backend.app.services.catalog`` stays import-clean
+    for callers that only know about the filesystem catalog.
+    """
+    spec: dict[str, Any] = dict(row.spec or {})
+    # Mirror the frontmatter contract: ``modes`` and ``inputs`` always
+    # live under ``spec`` in baked-in patterns, so we fold the
+    # structured columns back in before handing the dict to the
+    # :class:`CatalogArtifact` constructor.
+    spec.setdefault("modes", list(row.modes or []))
+    spec.setdefault("inputs", list(row.inputs or []))
+    if row.category is not None:
+        spec.setdefault("category", row.category)
+    meta: dict[str, Any] = {
+        "id": row.pattern_id,
+        "name": row.name or row.pattern_id,
+        "description": row.description or "",
+        "spec": spec,
+        "updated_at": row.updated_at,
+        # Marker so downstream code can distinguish workspace-private
+        # rows from baked-in patterns (e.g. the Console surfaces a
+        # "custom" badge and exposes a delete action only on these).
+        "source": "workspace",
+    }
+    # ``source_path`` is required by the constructor but irrelevant
+    # for DB-backed rows; synthesise a sentinel so any ``str(path)``
+    # call stays safe.
+    sentinel = Path(f"<custom:{row.workspace_id}:{row.pattern_id}>")
+    return CatalogArtifact(
+        kind="pattern", meta=meta, body=row.body or "", source_path=sentinel
+    )
+
+
+def _merge_custom(
+    base: list[CatalogArtifact], custom: list[CatalogArtifact]
+) -> list[CatalogArtifact]:
+    """Overlay ``custom`` on top of ``base`` by artifact id.
+
+    Workspace-private entries win on collision — operators can shadow
+    a baked-in pattern without having to pick a different id. Order
+    is stable: base entries keep their position, collisions swap the
+    value in place, and brand-new workspace entries are appended.
+    """
+    if not custom:
+        return list(base)
+    by_id: dict[str, CatalogArtifact] = {}
+    order: list[str] = []
+    for entry in base:
+        by_id[entry.id] = entry
+        order.append(entry.id)
+    for entry in custom:
+        if entry.id not in by_id:
+            order.append(entry.id)
+        by_id[entry.id] = entry
+    return [by_id[pid] for pid in order]
+
+
+def list_patterns_for_workspace(
+    custom_rows: list[Any],
+) -> list[CatalogArtifact]:
+    """Baked-in catalog plus workspace-private rows, merged.
+
+    Callers are expected to load ``custom_rows`` via SQLAlchemy
+    (async) and pass them in — we keep this helper sync so it stays
+    callable from the same code paths that use :func:`list_patterns`.
+    """
+    custom_entries = [custom_pattern_to_artifact(r) for r in custom_rows]
+    return _merge_custom(list_patterns(), custom_entries)
+
+
+def list_patterns_by_mode_for_workspace(
+    mode: str, custom_rows: list[Any]
+) -> list[CatalogArtifact]:
+    """Mode-filtered variant of :func:`list_patterns_for_workspace`.
+
+    Mirrors the legacy-pattern fallback logic in
+    :func:`list_patterns_by_mode` — patterns without declared
+    ``modes`` *and* without a ``category`` slot are treated as
+    attachable in both modes so nothing silently disappears mid-
+    RFC-0008 transition.
+    """
+    if mode not in {"lane", "request"}:
+        raise ValueError(f"unknown pattern mode: {mode!r}")
+    merged = list_patterns_for_workspace(custom_rows)
+    out: list[CatalogArtifact] = []
+    for entry in merged:
+        declared = entry.modes
+        if not declared and entry.category is None:
+            out.append(entry)
+            continue
+        if mode in declared:
+            out.append(entry)
     return out

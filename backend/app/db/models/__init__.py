@@ -14,6 +14,7 @@ from backend.app.db.models.agent_surface import (
     Clarification,
     Improvement,
 )
+from backend.app.db.models.custom_patterns import CustomPattern
 from backend.app.db.models.integrations import GitHubInstallation, WorkspaceRepo
 from backend.app.db.models.lanes import Lane
 from backend.app.db.models.notifications import WorkspaceNotification
@@ -54,6 +55,7 @@ __all__ = [
     "ChatMessage",
     "ChatThread",
     "Clarification",
+    "CustomPattern",
     "FleetRequest",
     "GitHubInstallation",
     "Improvement",

@@ -65,9 +65,11 @@ export default async function NewFleetRequestPage() {
       listActivatedRepos(workspace.id, token).catch(
         () => [] as ApiActivatedRepo[],
       ),
-      listCatalogPatterns({ mode: "request", token }).catch(
-        () => [] as ApiCatalogPattern[],
-      ),
+      listCatalogPatterns({
+        mode: "request",
+        workspaceId: workspace.id,
+        token,
+      }).catch(() => [] as ApiCatalogPattern[]),
     ]);
   } catch (err) {
     if (err instanceof ApiHttpError && err.status === 401) {
