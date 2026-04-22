@@ -6,7 +6,7 @@
  * 15.5 hardened the rule that non-component exports from a client
  * module cannot be invoked from a Server Component: doing so throws
  * the infamous ``Attempted to call X() from the server but X is on
- * the client``. Our five feature pages (``/chat``, ``/catalog``,
+ * the client``. Our scope-aware feature pages (``/chat``, ``/lanes``,
  * ``/knowledge``, ``/clarifications``, ``/improvements``) are all
  * Server Components that need to mirror the pill state in their
  * SSR data load, so the pure reader lives here instead — no React

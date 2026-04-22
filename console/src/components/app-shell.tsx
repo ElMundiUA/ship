@@ -44,14 +44,22 @@ const ALL_NAV: { section: string; items: (NavItem & { stub?: boolean })[] }[] = 
       { href: "/artifact-feedback", label: "Feedback", icon: <DotIcon /> },
       { href: "/chat", label: "Navigator", icon: <DotIcon /> },
       { href: "/daily", label: "Daily & retro", icon: <DotIcon />, badge: "3", stub: true },
+    ],
+  },
+  {
+    // Automation surfaces — everything the operator actively
+    // composes or kicks off against ``.ship/config.yml``.
+    // ``Lanes`` edits the recurring/event-driven side (via PR);
+    // ``Requests`` is the one-shot agent dispatcher.
+    section: "Author",
+    items: [
       { href: "/lanes", label: "Lanes", icon: <DotIcon /> },
+      { href: "/requests", label: "Requests", icon: <DotIcon /> },
     ],
   },
   {
     section: "Knowledge",
     items: [
-      { href: "/catalog", label: "Catalog", icon: <DotIcon /> },
-      { href: "/catalog/pull-requests", label: "Pull requests", icon: <DotIcon />, badge: "4", stub: true },
       { href: "/knowledge", label: "Buckets", icon: <DotIcon /> },
     ],
   },

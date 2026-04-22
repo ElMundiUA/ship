@@ -43,44 +43,47 @@ export default function EmptyStatesGalleryPage() {
           />
         </Surface>
 
-        <Surface label="Catalog" path="/catalog">
+        <Surface label="Lanes · Library" path="/lanes?tab=library">
           <Card>
             <CardHeader
-              title="Workspace catalog is empty"
-              subtitle="Global catalog is on by default — that&apos;s why your CLI still works."
+              title="Pick your first lane recipe"
+              subtitle="Every built-in recipe opens a single PR on your repo — no YAML writing required."
             />
             <div className="rounded-xl border border-dashed border-white/15 bg-white/[0.02] p-6 text-center">
               <p className="text-sm text-white/75">
-                You haven&apos;t added any workspace artifacts yet.
+                PR review, weekday standup, weekly tech-debt audit, nightly self-heal.
               </p>
               <p className="mt-1.5 text-[11px] text-white/45">
-                Register a git repo or local path to overlay the global catalog with your own
-                patterns, tools, and workflows.
+                Phase 1 is read-only; the Add-to-config flow lands with the
+                single-file editor in Phase 2.
               </p>
               <div className="mt-4 flex justify-center gap-2">
-                <ButtonGhost>Browse global catalog</ButtonGhost>
-                <ButtonPrimary>+ Connect artifact repo</ButtonPrimary>
+                <ButtonGhost>Open library</ButtonGhost>
+                <ButtonPrimary>+ Author custom lane</ButtonPrimary>
               </div>
               <p className="mt-3 text-[10px] text-white/35">
-                <Badge tone="global">global</Badge>{" "}
-                <span className="ml-1">98 artifacts available right now from ship/core.</span>
+                <Badge tone="info">4 recipes</Badge>{" "}
+                <span className="ml-1">
+                  from DEFAULT_PIPELINES — resolver-only kinds like code_map are
+                  wired implicitly.
+                </span>
               </p>
             </div>
           </Card>
         </Surface>
 
-        <Surface label="Pull requests" path="/catalog/pull-requests">
+        <Surface label="Requests" path="/requests">
           <Card>
             <CardHeader
-              title="No pull requests pending"
-              subtitle="When a PR opens against a connected artifact repo, it lands here for human approval."
+              title="No one-shot runs yet"
+              subtitle="Ad-hoc agent runs (BA, QA, architect review) dispatched from the console — independent of .ship/config.yml."
             />
             <div className="grid place-items-center rounded-xl border border-dashed border-white/15 bg-white/[0.02] py-12 text-center">
               <PRGlyph />
-              <p className="mt-3 text-sm text-white/75">All clear.</p>
+              <p className="mt-3 text-sm text-white/75">Coming in Phase 3.</p>
               <p className="mt-1 text-[11px] text-white/45">
-                Connect a repo first — once an artifact PR opens, it shows up here within 30s of
-                the GitHub webhook.
+                Pick an agent, attach context (ticket / PR / file), drop a prompt
+                — we dispatch the workflow and track the run here.
               </p>
             </div>
           </Card>

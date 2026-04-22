@@ -1461,6 +1461,103 @@ export interface ApiLaneSyncResult {
   sync_source: string | null;
 }
 
+/**
+ * Built-in lane recipes exposed by `/v1/catalog/lanes`.
+ *
+ * Mirrors ``DefaultPipelineSpec`` from
+ * ``backend/app/services/default_pipelines.py`` but filtered to
+ * entries that actually land in ``.ship/config.yml`` (i.e.
+ * ``lane_trigger is not None``). Resolver-only specs such as
+ * ``code_map`` are omitted server-side because they aren't
+ * user-installable lanes; the installer wires them implicitly.
+ */
+export interface ApiLaneCatalogEntry {
+  kind: string;
+  title: string;
+  summary: string;
+  workflow_id: string;
+  default_enabled: boolean;
+  event: string | null;
+  pattern: string | null;
+  schedule: string | null;
+  idempotency_key: string | null;
+}
+
+export function listLaneCatalog(token?: string): Promise<ApiLaneCatalogEntry[]> {
+  return apiFetch<{ entries: ApiLaneCatalogEntry[] }>(`/v1/catalog/lanes`, {
+    token,
+  }).then((envelope) => envelope.entries);
+}
+
+/**
+ * Live ``.ship/config.yml`` surfaced by the Library editor.
+ *
+ * ``sha`` is the vendor blob SHA; the write endpoint requires it
+ * (``base_sha``) for optimistic locking. ``exists === false`` means
+ * the editor should post ``base_sha: null`` to create the file from
+ * scratch.
+ */
+export interface ApiRepoConfig {
+  repo_id: string;
+  repo_full_name: string;
+  default_branch: string;
+  exists: boolean;
+  sha: string | null;
+  raw_yaml: string | null;
+  parsed: {
+    version?: number;
+    preset?: string;
+    repo?: string;
+    lanes?: Record<string, Record<string, unknown>>;
+  } | null;
+  parse_error: string | null;
+}
+
+export function getRepoConfig(
+  workspaceId: string,
+  repoId: string,
+  token?: string,
+): Promise<ApiRepoConfig> {
+  return apiFetch<ApiRepoConfig>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/config`,
+    { token },
+  );
+}
+
+/** One lane entry as the write endpoint wants to receive it. */
+export interface ApiLaneTriggerIn {
+  once?: string | null;
+  event?: string | null;
+  schedule?: string | null;
+  pattern?: string | null;
+  idempotency_key?: string | null;
+}
+
+export interface ApiRepoConfigProposeIn {
+  lanes: Record<string, ApiLaneTriggerIn>;
+  base_sha: string | null;
+  change_summary?: string;
+  preset?: string | null;
+}
+
+export interface ApiRepoConfigProposeOut {
+  pr_url: string;
+  pr_number: number;
+  branch: string;
+}
+
+export function proposeRepoConfig(
+  workspaceId: string,
+  repoId: string,
+  body: ApiRepoConfigProposeIn,
+  token?: string,
+): Promise<ApiRepoConfigProposeOut> {
+  return apiFetch<ApiRepoConfigProposeOut>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/config/propose`,
+    { method: "POST", token, body },
+  );
+}
+
 export async function listLanes(
   workspaceId: string,
   opts: { repoId?: string; token?: string } = {},
@@ -2106,3 +2203,103 @@ export function deleteWorkspace(
 // Re-export the integration kind so route handlers can validate without
 // poking at types.ts directly.
 export type { ApiIntegrationKind };
+
+// ---------------------------------------------------------------------------
+// Custom lane author (RFC-0007 Phase 3)
+// ---------------------------------------------------------------------------
+
+export interface ApiCustomLaneProposeIn {
+  lane_id: string;
+  agent_slug: string;
+  schedule: string;
+  prompt: string;
+  base_sha: string | null;
+  change_summary?: string;
+}
+
+export interface ApiCustomLaneProposeOut {
+  pr_url: string;
+  pr_number: number;
+  branch: string;
+}
+
+export function proposeCustomLane(
+  workspaceId: string,
+  repoId: string,
+  body: ApiCustomLaneProposeIn,
+  token?: string,
+): Promise<ApiCustomLaneProposeOut> {
+  return apiFetch<ApiCustomLaneProposeOut>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/lanes/propose`,
+    { method: "POST", token, body },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Ad-hoc agent requests (RFC-0007 Phase 3 — "Requests" surface)
+// ---------------------------------------------------------------------------
+
+export interface ApiAgentRequest {
+  id: string;
+  workspace_id: string;
+  repo_id: string;
+  repo_full_name: string;
+  requested_by_email: string | null;
+  agent_slug: string;
+  context_ref: string | null;
+  prompt: string;
+  status: string;
+  summary: string | null;
+  gh_workflow_run_id: number | null;
+  gh_html_url: string | null;
+  created_at: string;
+  finished_at: string | null;
+}
+
+export interface ApiAgentRequestListOut {
+  requests: ApiAgentRequest[];
+}
+
+export interface ApiAgentRequestIn {
+  agent_slug: string;
+  prompt: string;
+  context_ref?: string;
+}
+
+export async function listAgentRequests(
+  workspaceId: string,
+  opts: { repoId?: string; limit?: number; token?: string } = {},
+): Promise<ApiAgentRequest[]> {
+  const params = new URLSearchParams();
+  if (opts.repoId) params.set("repo_id", opts.repoId);
+  if (opts.limit) params.set("limit", String(opts.limit));
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const envelope = await apiFetch<ApiAgentRequestListOut>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/requests${suffix}`,
+    { token: opts.token },
+  );
+  return envelope.requests;
+}
+
+export function getAgentRequest(
+  workspaceId: string,
+  requestId: string,
+  token?: string,
+): Promise<ApiAgentRequest> {
+  return apiFetch<ApiAgentRequest>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/requests/${encodeURIComponent(requestId)}`,
+    { token },
+  );
+}
+
+export function dispatchAgentRequest(
+  workspaceId: string,
+  repoId: string,
+  body: ApiAgentRequestIn,
+  token?: string,
+): Promise<ApiAgentRequest> {
+  return apiFetch<ApiAgentRequest>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/requests`,
+    { method: "POST", token, body },
+  );
+}

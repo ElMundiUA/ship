@@ -89,6 +89,13 @@ _STARTERS: Final[dict[str, StarterWorkflow]] = {
             id="pipeline-self-heal",
             install_target=".github/workflows/pipeline-self-heal.yml",
         ),
+        # Phase 3 "Requests" — one-shot ad-hoc agent dispatcher. Seeded
+        # into every repo alongside the preset workflows so the Console
+        # can ``workflow_dispatch`` it without a secondary install step.
+        StarterWorkflow(
+            id="adhoc-agent-run",
+            install_target=".github/workflows/adhoc-agent-run.yml",
+        ),
     )
 }
 

@@ -260,10 +260,10 @@ export function DashboardLive({
             subtitle="Live from your activated GitHub repos"
             action={
               <Link
-                href="/catalog"
+                href="/lanes"
                 className="text-xs font-semibold text-aqua hover:underline"
               >
-                Open catalog →
+                Open lanes →
               </Link>
             }
           />

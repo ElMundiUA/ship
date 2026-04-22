@@ -61,7 +61,11 @@ from backend.app.services.tracker_fsm import (
 # ``1`` → baseline Wizard-v2 iter-5 bundle (config-schema v1 lanes
 #         list, CLI pinned by exact semver)
 # ``2`` → config-schema v2 ``lanes:`` mapping + CLI ``@latest``
-BUNDLE_VERSION: int = 2
+# ``3`` → Phase 3 "Requests" — bundle now ships
+#         ``.github/workflows/adhoc-agent-run.yml`` so the Console's
+#         ``POST /v1/.../repos/{id}/requests`` endpoint can dispatch
+#         one-shot agent runs without an extra install step.
+BUNDLE_VERSION: int = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +119,10 @@ def compose_seed_files(
     if not presets:
         raise ValueError("compose_seed_files requires at least one preset")
 
+    # Lazy import keeps seed_bundle importable without pulling the
+    # starter_workflows table on catalog-only paths.
+    from backend.app.services import starter_workflows
+
     # ── Preset workflows + baseline .ship/config.yml ──────────────
     # Reuse the existing catalog surface so Wizard v1 installs and
     # Wizard v2 installs emit byte-identical files for the same
@@ -136,6 +144,19 @@ def compose_seed_files(
                 continue
             files.append((path, content))
             seen_paths.add(path)
+
+    # ── Ad-hoc agent dispatcher (Phase 3) ─────────────────────────
+    # Every seeded repo gets ``adhoc-agent-run.yml`` regardless of
+    # preset so the Console's ``/requests`` surface can
+    # ``workflow_dispatch`` one-shot runs immediately after merge. The
+    # file lives under ``.github/workflows/`` with the other starters
+    # so reviewers see a single cohesive PR.
+    adhoc_entry = starter_workflows.get("adhoc-agent-run")
+    if adhoc_entry is not None and adhoc_entry.install_target not in seen_paths:
+        adhoc_body = adhoc_entry.read_yaml()
+        if adhoc_body:
+            files.append((adhoc_entry.install_target, adhoc_body))
+            seen_paths.add(adhoc_entry.install_target)
 
     # ── Knowledge starters ────────────────────────────────────────
     resolved_knowledge: list[str]
