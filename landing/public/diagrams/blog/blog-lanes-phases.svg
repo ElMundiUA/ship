@@ -1,0 +1,63 @@
+<svg preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1" baseProfile="full" viewBox="0 0 760 340">
+<rect width="760" height="340" x="0" y="0" fill="none"></rect>
+<path d="M170.5 8L170.5 324" fill="none" pointer-events="visible" stroke="#d9d2c3" stroke-linecap="round" class="zr8-cls-55"></path>
+<text dominant-baseline="central" text-anchor="end" style="font-size:11px;font-family:Inter, Helvetica Neue, Arial, sans-serif;font-weight:600;" xml:space="preserve" transform="translate(162 25.5556)" fill="#1b1d24">P0 · validators</text>
+<text dominant-baseline="central" text-anchor="end" style="font-size:11px;font-family:Inter, Helvetica Neue, Arial, sans-serif;font-weight:600;" xml:space="preserve" transform="translate(162 60.6667)" fill="#1b1d24">P1 · migrate</text>
+<text dominant-baseline="central" text-anchor="end" style="font-size:11px;font-family:Inter, Helvetica Neue, Arial, sans-serif;font-weight:600;" xml:space="preserve" transform="translate(162 95.7778)" fill="#1b1d24">P2 · run + idempotency</text>
+<text dominant-baseline="central" text-anchor="end" style="font-size:11px;font-family:Inter, Helvetica Neue, Arial, sans-serif;font-weight:600;" xml:space="preserve" transform="translate(162 130.8889)" fill="#1b1d24">P3 · lanes install + CI</text>
+<text dominant-baseline="central" text-anchor="end" style="font-size:11px;font-family:Inter, Helvetica Neue, Arial, sans-serif;font-weight:600;" xml:space="preserve" transform="translate(162 166)" fill="#1b1d24">P4 · sync --lock</text>
+<text dominant-baseline="central" text-anchor="end" style="font-size:11px;font-family:Inter, Helvetica Neue, Arial, sans-serif;font-weight:600;" xml:space="preserve" transform="translate(162 201.1111)" fill="#1b1d24">P6 · retire workflow</text>
+<text dominant-baseline="central" text-anchor="end" style="font-size:11px;font-family:Inter, Helvetica Neue, Arial, sans-serif;font-weight:600;" xml:space="preserve" transform="translate(162 236.2222)" fill="#1b1d24">P7A · lane projection</text>
+<text dominant-baseline="central" text-anchor="end" style="font-size:11px;font-family:Inter, Helvetica Neue, Arial, sans-serif;font-weight:600;" xml:space="preserve" transform="translate(162 271.3333)" fill="#1b1d24">P7B · callback metrics</text>
+<text dominant-baseline="central" text-anchor="end" style="font-size:11px;font-family:Inter, Helvetica Neue, Arial, sans-serif;font-weight:600;" xml:space="preserve" transform="translate(162 306.4444)" fill="#1b1d24">P7C+D+E · UI + docs</text>
+<path d="M170 15.6L701 15.6A3 3 0 0 1 704 18.6L704 32.6A3 3 0 0 1 701 35.6L170 35.6L170 15.6" fill="#4d525c" ecmeta_series_index="0" ecmeta_data_index="0" ecmeta_ssr_type="chart" class="zr8-cls-56"></path>
+<path d="M170 50.7L701 50.7A3 3 0 0 1 704 53.7L704 67.7A3 3 0 0 1 701 70.7L170 70.7L170 50.7" fill="#a4451b" ecmeta_series_index="0" ecmeta_data_index="1" ecmeta_ssr_type="chart" class="zr8-cls-57"></path>
+<path d="M170 85.8L701 85.8A3 3 0 0 1 704 88.8L704 102.8A3 3 0 0 1 701 105.8L170 105.8L170 85.8" fill="#a4451b" ecmeta_series_index="0" ecmeta_data_index="2" ecmeta_ssr_type="chart" class="zr8-cls-57"></path>
+<path d="M170 120.9L701 120.9A3 3 0 0 1 704 123.9L704 137.9A3 3 0 0 1 701 140.9L170 140.9L170 120.9" fill="#b96b3f" ecmeta_series_index="0" ecmeta_data_index="3" ecmeta_ssr_type="chart" class="zr8-cls-58"></path>
+<path d="M170 156L701 156A3 3 0 0 1 704 159L704 173A3 3 0 0 1 701 176L170 176L170 156" fill="#a4451b" ecmeta_series_index="0" ecmeta_data_index="4" ecmeta_ssr_type="chart" class="zr8-cls-57"></path>
+<path d="M170 191.1L701 191.1A3 3 0 0 1 704 194.1L704 208.1A3 3 0 0 1 701 211.1L170 211.1L170 191.1" fill="#9a2f2a" ecmeta_series_index="0" ecmeta_data_index="5" ecmeta_ssr_type="chart" class="zr8-cls-59"></path>
+<path d="M170 226.2L701 226.2A3 3 0 0 1 704 229.2L704 243.2A3 3 0 0 1 701 246.2L170 246.2L170 226.2" fill="#3d6b4f" ecmeta_series_index="0" ecmeta_data_index="6" ecmeta_ssr_type="chart" class="zr8-cls-60"></path>
+<path d="M170 261.3L701 261.3A3 3 0 0 1 704 264.3L704 278.3A3 3 0 0 1 701 281.3L170 281.3L170 261.3" fill="#b96b3f" ecmeta_series_index="0" ecmeta_data_index="7" ecmeta_ssr_type="chart" class="zr8-cls-58"></path>
+<path d="M170 296.4L701 296.4A3 3 0 0 1 704 299.4L704 313.4A3 3 0 0 1 701 316.4L170 316.4L170 296.4" fill="#74a087" ecmeta_series_index="0" ecmeta_data_index="8" ecmeta_ssr_type="chart" class="zr8-cls-61"></path>
+<text dominant-baseline="central" text-anchor="start" style="font-size:10px;font-family:Inter, Helvetica Neue, Arial, sans-serif;" xml:space="preserve" transform="translate(709 25.5556)" fill="#4d525c">74456d3 · proto</text>
+<text dominant-baseline="central" text-anchor="start" style="font-size:10px;font-family:Inter, Helvetica Neue, Arial, sans-serif;" xml:space="preserve" transform="translate(709 60.6667)" fill="#4d525c">d56ae0c · cli</text>
+<text dominant-baseline="central" text-anchor="start" style="font-size:10px;font-family:Inter, Helvetica Neue, Arial, sans-serif;" xml:space="preserve" transform="translate(709 95.7778)" fill="#4d525c">83406b6 · cli</text>
+<text dominant-baseline="central" text-anchor="start" style="font-size:10px;font-family:Inter, Helvetica Neue, Arial, sans-serif;" xml:space="preserve" transform="translate(709 130.8889)" fill="#4d525c">bee62bd · cli+ci</text>
+<text dominant-baseline="central" text-anchor="start" style="font-size:10px;font-family:Inter, Helvetica Neue, Arial, sans-serif;" xml:space="preserve" transform="translate(709 166)" fill="#4d525c">b15f5bd · cli</text>
+<text dominant-baseline="central" text-anchor="start" style="font-size:10px;font-family:Inter, Helvetica Neue, Arial, sans-serif;" xml:space="preserve" transform="translate(709 201.1111)" fill="#4d525c">5da540d · proto</text>
+<text dominant-baseline="central" text-anchor="start" style="font-size:10px;font-family:Inter, Helvetica Neue, Arial, sans-serif;" xml:space="preserve" transform="translate(709 236.2222)" fill="#4d525c">7b24892 · backend</text>
+<text dominant-baseline="central" text-anchor="start" style="font-size:10px;font-family:Inter, Helvetica Neue, Arial, sans-serif;" xml:space="preserve" transform="translate(709 271.3333)" fill="#4d525c">4845b7f · cli+ci</text>
+<text dominant-baseline="central" text-anchor="start" style="font-size:10px;font-family:Inter, Helvetica Neue, Arial, sans-serif;" xml:space="preserve" transform="translate(709 306.4444)" fill="#4d525c">a02160f · console</text>
+<style ><![CDATA[
+.zr8-cls-55:hover {
+pointer-events:none;
+}
+.zr8-cls-56:hover {
+cursor:pointer;
+fill:rgba(84,90,101,1);
+}
+.zr8-cls-57:hover {
+cursor:pointer;
+fill:rgba(180,75,29,1);
+}
+.zr8-cls-58:hover {
+cursor:pointer;
+fill:rgba(203,117,69,1);
+}
+.zr8-cls-59:hover {
+cursor:pointer;
+fill:rgba(169,51,46,1);
+}
+.zr8-cls-60:hover {
+cursor:pointer;
+fill:rgba(67,117,86,1);
+}
+.zr8-cls-61:hover {
+cursor:pointer;
+fill:rgba(127,176,148,1);
+}
+
+]]>
+
+</style>
+</svg>

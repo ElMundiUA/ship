@@ -1,0 +1,54 @@
+<svg preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1" baseProfile="full" viewBox="0 0 760 290">
+<rect width="760" height="290" x="0" y="0" fill="none"></rect>
+<path d="M96.5 20L96.5 270" fill="none" pointer-events="visible" stroke="#d9d2c3" stroke-linecap="round" class="zr6-cls-40"></path>
+<text dominant-baseline="central" text-anchor="end" style="font-size:12px;font-family:Inter, Helvetica Neue, Arial, sans-serif;font-weight:600;" transform="translate(88 40.8333)" fill="#1b1d24">Lifecycle</text>
+<text dominant-baseline="central" text-anchor="end" style="font-size:12px;font-family:Inter, Helvetica Neue, Arial, sans-serif;font-weight:600;" transform="translate(88 82.5)" fill="#1b1d24">Config</text>
+<text dominant-baseline="central" text-anchor="end" style="font-size:12px;font-family:Inter, Helvetica Neue, Arial, sans-serif;font-weight:600;" xml:space="preserve" transform="translate(88 124.1667)" fill="#1b1d24">Sync + cache</text>
+<text dominant-baseline="central" text-anchor="end" style="font-size:12px;font-family:Inter, Helvetica Neue, Arial, sans-serif;font-weight:600;" transform="translate(88 165.8333)" fill="#1b1d24">Catalog</text>
+<text dominant-baseline="central" text-anchor="end" style="font-size:12px;font-family:Inter, Helvetica Neue, Arial, sans-serif;font-weight:600;" transform="translate(88 207.5)" fill="#1b1d24">Telemetry</text>
+<text dominant-baseline="central" text-anchor="end" style="font-size:12px;font-family:Inter, Helvetica Neue, Arial, sans-serif;font-weight:600;" transform="translate(88 249.1667)" fill="#1b1d24">Feedback</text>
+<path d="M96 27.8L346.7 27.8A3 3 0 0 1 349.7 30.8L349.7 50.8A3 3 0 0 1 346.7 53.8L96 53.8L96 27.8" fill="#3d6b4f" ecmeta_series_index="0" ecmeta_data_index="0" ecmeta_ssr_type="chart" class="zr6-cls-41"></path>
+<path d="M96 69.5L515.9 69.5A3 3 0 0 1 518.9 72.5L518.9 92.5A3 3 0 0 1 515.9 95.5L96 95.5L96 69.5" fill="#4d525c" ecmeta_series_index="0" ecmeta_data_index="1" ecmeta_ssr_type="chart" class="zr6-cls-42"></path>
+<path d="M96 111.2L346.7 111.2A3 3 0 0 1 349.7 114.2L349.7 134.2A3 3 0 0 1 346.7 137.2L96 137.2L96 111.2" fill="#b96b3f" ecmeta_series_index="0" ecmeta_data_index="2" ecmeta_ssr_type="chart" class="zr6-cls-43"></path>
+<path d="M96 152.8L600.4 152.8A3 3 0 0 1 603.4 155.8L603.4 175.8A3 3 0 0 1 600.4 178.8L96 178.8L96 152.8" fill="#a4451b" ecmeta_series_index="0" ecmeta_data_index="3" ecmeta_ssr_type="chart" class="zr6-cls-44"></path>
+<path d="M96 194.5L600.4 194.5A3 3 0 0 1 603.4 197.5L603.4 217.5A3 3 0 0 1 600.4 220.5L96 220.5L96 194.5" fill="#74a087" ecmeta_series_index="0" ecmeta_data_index="4" ecmeta_ssr_type="chart" class="zr6-cls-45"></path>
+<path d="M96 236.2L515.9 236.2A3 3 0 0 1 518.9 239.2L518.9 259.2A3 3 0 0 1 515.9 262.2L96 262.2L96 236.2" fill="#7b818d" ecmeta_series_index="0" ecmeta_data_index="5" ecmeta_ssr_type="chart" class="zr6-cls-46"></path>
+<text dominant-baseline="central" text-anchor="start" style="font-size:10px;font-family:Inter, Helvetica Neue, Arial, sans-serif;" xml:space="preserve" transform="translate(354.7143 40.8333)" fill="#4d525c">3 — init · new · adopt</text>
+<text dominant-baseline="central" text-anchor="start" style="font-size:10px;font-family:Inter, Helvetica Neue, Arial, sans-serif;" xml:space="preserve" transform="translate(523.8571 82.5)" fill="#4d525c">5 — init · get · set · validate · show</text>
+<text dominant-baseline="central" text-anchor="start" style="font-size:10px;font-family:Inter, Helvetica Neue, Arial, sans-serif;" xml:space="preserve" transform="translate(354.7143 124.1667)" fill="#4d525c">3 — sync · verify · doctor</text>
+<text dominant-baseline="central" text-anchor="start" style="font-size:10px;font-family:Inter, Helvetica Neue, Arial, sans-serif;" xml:space="preserve" transform="translate(608.4286 165.8333)" fill="#4d525c">6 — search · fetch · pattern · tool · collection · workflow</text>
+<text dominant-baseline="central" text-anchor="start" style="font-size:10px;font-family:Inter, Helvetica Neue, Arial, sans-serif;" xml:space="preserve" transform="translate(608.4286 207.5)" fill="#4d525c">6 — on · off · status · flush · export · delete</text>
+<text dominant-baseline="central" text-anchor="start" style="font-size:10px;font-family:Inter, Helvetica Neue, Arial, sans-serif;" xml:space="preserve" transform="translate(523.8571 249.1667)" fill="#4d525c">5 — draft · list · show · submit · remove</text>
+<style ><![CDATA[
+.zr6-cls-40:hover {
+pointer-events:none;
+}
+.zr6-cls-41:hover {
+cursor:pointer;
+fill:rgba(67,117,86,1);
+}
+.zr6-cls-42:hover {
+cursor:pointer;
+fill:rgba(84,90,101,1);
+}
+.zr6-cls-43:hover {
+cursor:pointer;
+fill:rgba(203,117,69,1);
+}
+.zr6-cls-44:hover {
+cursor:pointer;
+fill:rgba(180,75,29,1);
+}
+.zr6-cls-45:hover {
+cursor:pointer;
+fill:rgba(127,176,148,1);
+}
+.zr6-cls-46:hover {
+cursor:pointer;
+fill:rgba(135,141,155,1);
+}
+
+]]>
+
+</style>
+</svg>
