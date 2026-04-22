@@ -1,8 +1,9 @@
 /**
- * Proxy for the Library editor Save flow.
+ * Proxy for the Library catalog Save flow.
  *
- * Accepts JSON from ``library-editor.tsx`` and forwards to the
- * backend ``POST /v1/workspaces/{ws}/repos/{repo}/config/propose``.
+ * Accepts JSON from ``library-catalog.tsx`` (via
+ * ``config-draft.ts#submitProposal``) and forwards to the backend
+ * ``POST /v1/workspaces/{ws}/repos/{repo}/config/propose``.
  * Lives as an app-router API route (rather than going direct from
  * the browser) so the session cookie is available and the backend
  * URL never leaks into client bundles.
