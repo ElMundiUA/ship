@@ -562,7 +562,7 @@ async def seed_ship_pipeline_without_run(db_session, seed_workspace):
     pipeline = Pipeline(
         workspace_id=workspace.id,
         repo_id=repo.id,
-        kind="daily_standup",
+        lane_id="daily_standup",
         name="Scheduled SDLC lane",
         workflow_id="scheduled-sdlc-lane",
         enabled=True,

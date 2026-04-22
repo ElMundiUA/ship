@@ -294,8 +294,8 @@ async def list_required_secrets(
         )
     ).scalars().all()
 
-    # Merge by secret name, collecting the set of pipeline *kinds*
-    # that demand it. ``kind`` (not ``id``) because the UI groups
+    # Merge by secret name, collecting the set of pipeline *lane_ids*
+    # that demand it. ``lane_id`` (not ``id``) because the UI groups
     # "PR review needs ANTHROPIC_API_KEY" rather than per-row.
     required_by: dict[str, list[str]] = {}
     for pipeline in pipelines:
@@ -304,8 +304,8 @@ async def list_required_secrets(
             continue
         for name in entry.required_secrets:
             bucket = required_by.setdefault(name, [])
-            if pipeline.kind not in bucket:
-                bucket.append(pipeline.kind)
+            if pipeline.lane_id not in bucket:
+                bucket.append(pipeline.lane_id)
 
     if not required_by:
         return RequiredSecretsOut(items=[])

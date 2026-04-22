@@ -96,7 +96,7 @@ async def seed_install_repo_pipeline_run(db_session, seed_workspace):
     pipeline = Pipeline(
         workspace_id=workspace.id,
         repo_id=repo.id,
-        kind="pr_review",
+        lane_id="pr_review",
         name="PR review",
         workflow_id="pr_review",
         enabled=True,

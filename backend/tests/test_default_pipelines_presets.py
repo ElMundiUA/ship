@@ -109,7 +109,7 @@ async def test_seed_default_pipelines_respects_preset_for_new_rows(
     pipelines = await seed_default_pipelines(
         db_session, workspace.id, preset="cli"
     )
-    by_kind = {p.kind: p for p in pipelines}
+    by_kind = {p.lane_id: p for p in pipelines}
     cli_enabled = resolve_enabled_lane_ids("cli")
     for kind, row in by_kind.items():
         assert row.enabled is (kind in cli_enabled), (
@@ -130,7 +130,7 @@ async def test_seed_default_pipelines_is_additive_only(db_session, seed_workspac
     pipelines = await seed_default_pipelines(
         db_session, workspace.id, preset="monorepo"
     )
-    by_kind = {p.kind: p for p in pipelines}
+    by_kind = {p.lane_id: p for p in pipelines}
     # ``self_heal`` was created disabled on the first pass — the second
     # call with a broader preset does NOT re-enable it (additive-only).
     assert by_kind["self_heal"].enabled is False

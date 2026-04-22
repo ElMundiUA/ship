@@ -75,7 +75,7 @@ async def _seed_bound_pipelines(db_session, workspace_id, repo_id):
         db_session, workspace_id, default_repo_id=repo_id
     )
     await db_session.flush()
-    return {p.kind: p for p in pipelines}
+    return {p.lane_id: p for p in pipelines}
 
 
 # ---------------------------------------------------------------------------
@@ -317,7 +317,7 @@ async def test_run_pipeline_412_when_not_bound(
     _, raw, workspace = seed_workspace
     pipelines = await seed_default_pipelines(db_session, workspace.id)
     await db_session.flush()
-    target = next(p for p in pipelines if p.kind == "pr_review")
+    target = next(p for p in pipelines if p.lane_id == "pr_review")
 
     response = await v1_client.post(
         f"/v1/workspaces/{workspace.id}/pipelines/{target.id}/runs",
@@ -483,7 +483,7 @@ async def test_run_pipeline_auto_binds_when_single_repo(
     # is the exact shape legacy pilots observed on Day 3.
     pipelines = await seed_default_pipelines(db_session, workspace.id)
     await db_session.flush()
-    target = next(p for p in pipelines if p.kind == "pr_review")
+    target = next(p for p in pipelines if p.lane_id == "pr_review")
     assert target.repo_id is None
 
     async def _probe(*args, **kwargs):

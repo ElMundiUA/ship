@@ -22,8 +22,10 @@ gating inline in this module.
 
 ``seed_default_pipelines`` / ``resolve_enabled_lane_ids`` preserve
 the pre-RFC call signatures so existing routes and tests don't
-rewrite as part of this commit — ``Pipeline.kind`` stays stable
-(the rename to ``lane_id`` is C3.4's concern).
+need an import sweep. The DB column holding the lane slug was
+renamed from ``Pipeline.kind`` to ``Pipeline.lane_id`` by C3.4 so
+the seeded-lane surface and the config-derived :class:`Lane` model
+now share one vocabulary.
 """
 
 from __future__ import annotations
@@ -331,7 +333,7 @@ async def seed_default_pipelines(
             select(Pipeline).where(Pipeline.workspace_id == workspace_id)
         )
     ).scalars().all()
-    existing_kinds: set[str] = {row.kind for row in existing_rows}
+    existing_lane_ids: set[str] = {row.lane_id for row in existing_rows}
 
     if default_repo_id is not None:
         for row in existing_rows:
@@ -341,7 +343,7 @@ async def seed_default_pipelines(
     enabled_ids = resolve_enabled_lane_ids(preset)
     new_rows: list[Pipeline] = []
     for recipe in recipes:
-        if recipe.lane_id in existing_kinds:
+        if recipe.lane_id in existing_lane_ids:
             continue
         enabled = (
             (recipe.lane_id in enabled_ids)
@@ -350,7 +352,7 @@ async def seed_default_pipelines(
         )
         row = Pipeline(
             workspace_id=workspace_id,
-            kind=recipe.lane_id,
+            lane_id=recipe.lane_id,
             name=recipe.name,
             workflow_id=recipe.workflow_id,
             enabled=enabled,

@@ -54,7 +54,7 @@ async def seed_preset_workspace(db_session, seed_workspace):
         Pipeline(
             workspace_id=workspace.id,
             repo_id=repo.id,
-            kind="pr_review",
+            lane_id="pr_review",
             name="PR review",
             workflow_id="pr-and-ci-gate",
             enabled=True,
@@ -65,7 +65,7 @@ async def seed_preset_workspace(db_session, seed_workspace):
         Pipeline(
             workspace_id=workspace.id,
             repo_id=repo.id,
-            kind="code_map",
+            lane_id="code_map",
             name="Code map",
             workflow_id="knowledge-intake",
             enabled=True,
@@ -96,7 +96,7 @@ async def test_patch_preset_updates_and_adds_missing_lanes(
 
     db_session.expire_all()
     kinds = {
-        row.kind
+        row.lane_id
         for row in (
             await db_session.execute(
                 select(Pipeline).where(Pipeline.workspace_id == ws_id)
@@ -125,7 +125,7 @@ async def test_patch_preset_reshape_flips_enabled_flags(
     pr_review = (
         await db_session.execute(
             select(Pipeline).where(
-                Pipeline.workspace_id == ws_id, Pipeline.kind == "pr_review"
+                Pipeline.workspace_id == ws_id, Pipeline.lane_id == "pr_review"
             )
         )
     ).scalars().one()
@@ -143,7 +143,7 @@ async def test_patch_preset_reshape_flips_enabled_flags(
     pr_review_after = (
         await db_session.execute(
             select(Pipeline).where(
-                Pipeline.workspace_id == ws_id, Pipeline.kind == "pr_review"
+                Pipeline.workspace_id == ws_id, Pipeline.lane_id == "pr_review"
             )
         )
     ).scalars().one()
