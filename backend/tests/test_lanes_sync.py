@@ -124,7 +124,7 @@ lanes:
     pattern: scheduled-sdlc-lane
   seed:
     once: install
-    pattern: seed-knowledge-starters
+    pattern: onboard-seed-knowledge
     idempotency_key: seed-v1
 """
 

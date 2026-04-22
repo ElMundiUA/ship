@@ -110,7 +110,7 @@ spec:
 
 Runtime exposes matching buckets to the pattern body via
 `{{KNOWLEDGE.<topic>}}` (same shape as today's `{{BASE}}` interpolation
-for `cloud-base`).
+for `common-base`).
 
 ## Conditions for success (non-negotiable)
 

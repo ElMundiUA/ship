@@ -25,7 +25,7 @@ USAGE
   shipctl kickoff [--pattern <id>] [--version <semver>] [--raw] [--json] [--cwd <dir>]
 
 DEFAULTS
-  --pattern kickoff
+  --pattern common-kickoff
 
 FLAGS
   --pattern   Catalog pattern id (folder under artifacts/patterns/).
@@ -39,7 +39,7 @@ When .ship/config.yml sets stack.agent.provider, a one-line hint is written
 to stderr so logs show which agent the repo is wired for — unless --json.
 
 EXAMPLE (workflow step)
-  shipctl kickoff --pattern kickoff > kickoff.md
+  shipctl kickoff --pattern common-kickoff > kickoff.md
   # …concatenate workload pattern + kickoff.md into your agent invocation…
 `);
 }
@@ -64,7 +64,7 @@ function resolveMethodologyBase(ctx, config) {
 
 function parseKickoffArgs(rest) {
   const out = {
-    patternId: "kickoff",
+    patternId: "common-kickoff",
     version: null,
     raw: false,
     json: false,

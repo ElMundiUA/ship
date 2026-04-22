@@ -30,7 +30,7 @@ lanes:
 
   seed:
     once: install
-    pattern: seed-knowledge-starters
+    pattern: onboard-seed-knowledge
     idempotency_key: seed-v1
 ```
 
@@ -126,7 +126,7 @@ What used to be a workflow artifact is now a starter lane:
 |--------------------------------------------------|-----------------------------------------------------------------------|
 | `.github/workflows/ship-pr-and-ci-gate.yml`      | `lanes.pr_review.event: pull_request` + `pattern: pr-and-ci-gate`    |
 | `.github/workflows/ship-scheduled-sdlc-lane.yml` | `lanes.daily.schedule: "0 9 * * *"` + `pattern: scheduled-sdlc-lane` |
-| `.github/workflows/ship-seed-knowledge-starters.yml` | `lanes.seed.once: install` + `idempotency_key: seed-v1`          |
+| `.github/workflows/ship-onboard-seed-knowledge.yml` | `lanes.seed.once: install` + `idempotency_key: seed-v1`          |
 
 If your repo still ships a hand-written workflow that hasn't been
 migrated, the generator will refuse to overwrite it; delete the file

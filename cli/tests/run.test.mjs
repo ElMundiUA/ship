@@ -110,8 +110,8 @@ test("shipctl run --dry-run prints pattern for kind=once without marker", () => 
       lanes: {
         seed: {
           kind: "once",
-          pattern: "seed-knowledge-starters",
-          idempotency: { key: "seed-knowledge-starters.v1" },
+          pattern: "onboard-seed-knowledge",
+          idempotency: { key: "onboard-seed-knowledge.v1" },
         },
       },
     }),
@@ -122,7 +122,7 @@ test("shipctl run --dry-run prints pattern for kind=once without marker", () => 
   );
   assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
   assert.match(r.stdout, /Ship · seed knowledge starters/);
-  const markerPath = path.join(dir, ".ship", "state", "seed-knowledge-starters.v1.json");
+  const markerPath = path.join(dir, ".ship", "state", "onboard-seed-knowledge.v1.json");
   assert.ok(!fs.existsSync(markerPath), "dry-run must not write a marker");
 });
 
@@ -134,9 +134,9 @@ test("shipctl run kind=once writes marker and subsequent run is a no-op", () => 
       lanes: {
         seed: {
           kind: "once",
-          pattern: "seed-knowledge-starters",
+          pattern: "onboard-seed-knowledge",
           idempotency: {
-            key: "seed-knowledge-starters.v1",
+            key: "onboard-seed-knowledge.v1",
             reset_on: "version-change",
           },
         },
@@ -150,12 +150,12 @@ test("shipctl run kind=once writes marker and subsequent run is a no-op", () => 
   assert.equal(first.status, 0, `${first.stdout}\n${first.stderr}`);
   const payload = JSON.parse(first.stdout);
   assert.equal(payload.status, "completed");
-  const markerPath = path.join(dir, ".ship", "state", "seed-knowledge-starters.v1.json");
+  const markerPath = path.join(dir, ".ship", "state", "onboard-seed-knowledge.v1.json");
   assert.ok(fs.existsSync(markerPath));
   const marker = JSON.parse(fs.readFileSync(markerPath, "utf8"));
   assert.equal(marker.version, 1);
   assert.equal(marker.lane, "seed");
-  assert.equal(marker.pattern_id, "seed-knowledge-starters");
+  assert.equal(marker.pattern_id, "onboard-seed-knowledge");
   assert.equal(typeof marker.pattern_sha256, "string");
 
   const second = runCtl(
@@ -176,7 +176,7 @@ test("shipctl run kind=event exits 0 with not-yet-wired reason", () => {
       lanes: {
         pr_review: {
           kind: "event",
-          pattern: "catalog-a5-pr-self-review",
+          pattern: "flow-pr-self-review",
           on: "pull_request",
         },
       },
@@ -200,8 +200,8 @@ test("shipctl run rejects mismatched trigger for kind=once", () => {
       lanes: {
         seed: {
           kind: "once",
-          pattern: "seed-knowledge-starters",
-          idempotency: { key: "seed-knowledge-starters.v1" },
+          pattern: "onboard-seed-knowledge",
+          idempotency: { key: "onboard-seed-knowledge.v1" },
         },
       },
     }),
@@ -327,8 +327,8 @@ test("shipctl run callback includes lane + pattern + GH breadcrumbs", async () =
       lanes: {
         seed: {
           kind: "once",
-          pattern: "seed-knowledge-starters",
-          idempotency: { key: "seed-knowledge-starters.v1" },
+          pattern: "onboard-seed-knowledge",
+          idempotency: { key: "onboard-seed-knowledge.v1" },
         },
       },
     }),
@@ -352,7 +352,7 @@ test("shipctl run callback includes lane + pattern + GH breadcrumbs", async () =
     assert.equal(body.status, "succeeded");
     assert.ok(body.metrics, "metrics bag should be present");
     assert.equal(body.metrics.lane_id, "seed");
-    assert.equal(body.metrics.pattern_id, "seed-knowledge-starters");
+    assert.equal(body.metrics.pattern_id, "onboard-seed-knowledge");
     assert.equal(typeof body.metrics.pattern_sha256, "string");
     assert.equal(body.metrics.gh_workflow_run_id, "7777");
     assert.equal(
@@ -373,8 +373,8 @@ test("shipctl run callback omits GH metrics when env is clean", async () => {
       lanes: {
         seed: {
           kind: "once",
-          pattern: "seed-knowledge-starters",
-          idempotency: { key: "seed-knowledge-starters.v1" },
+          pattern: "onboard-seed-knowledge",
+          idempotency: { key: "onboard-seed-knowledge.v1" },
         },
       },
     }),
@@ -396,7 +396,7 @@ test("shipctl run callback omits GH metrics when env is clean", async () => {
     assert.equal(r.status, 0);
     const body = mock.received[0].body;
     assert.equal(body.metrics.lane_id, "seed");
-    assert.equal(body.metrics.pattern_id, "seed-knowledge-starters");
+    assert.equal(body.metrics.pattern_id, "onboard-seed-knowledge");
     assert.equal(body.metrics.gh_workflow_run_id, undefined);
     assert.equal(body.metrics.gh_html_url, undefined);
     assert.equal(body.metrics.gh_event, undefined);

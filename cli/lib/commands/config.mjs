@@ -100,7 +100,7 @@ function getAtPath(obj, dottedKey) {
 
 /**
  * Split a dotted key, preserving `<kind>/<id>` segments under artifacts.pins.
- * Example: artifacts.pins.pattern/cloud-developer → ["artifacts","pins","pattern/cloud-developer"]
+ * Example: artifacts.pins.pattern/role-developer → ["artifacts","pins","pattern/role-developer"]
  */
 function parsePath(dottedKey) {
   const raw = dottedKey.split(".");

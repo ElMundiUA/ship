@@ -104,7 +104,7 @@ There is no `artifacts.disabled` field today; the way to opt out of an artifact 
 ```yaml
 artifacts:
   pins:
-    pattern/cloud-developer: "1.4.2"
+    pattern/role-developer: "1.4.2"
     tool/methodology-api: "~2.1"
     collection/web-application: "^3.0.0"
   auto_update: true
@@ -204,7 +204,7 @@ Common validator messages, with the field they point at:
 - `version: expected 1, got "2"` → bump `shipctl` instead of editing the version by hand.
 - `api.base_url: not a valid URL (…)` → fix the scheme/host or unset the field to take the default.
 - `stack.tracker: "linerar" is not valid. Expected one of: linear, jira, github-issues, azure-boards, clickup, spreadsheet, none` → fix the typo.
-- `artifacts.pins["pattern/cloud-developer"]: value must be a semver or range (got "v1.4.2")` → drop the leading `v`.
+- `artifacts.pins["pattern/role-developer"]: value must be a semver or range (got "v1.4.2")` → drop the leading `v`.
 - `telemetry.anonymous_id: required UUID v4 when telemetry.share=true` → run `shipctl init` once to regenerate, or remove `share: true`.
 
 `shipctl init` and `shipctl doctor` also run the validator on every invocation; an invalid config blocks both.
@@ -227,10 +227,10 @@ The full surface (see [/cli](/cli) for flags):
 Dotted keys split on `.` for every block except `artifacts.pins`. There the third segment is the **rest of the path**, so the slash inside an artifact key (`<kind>/<id>`) survives:
 
 ```bash
-shipctl config set artifacts.pins.pattern/cloud-developer 1.4.2
+shipctl config set artifacts.pins.pattern/role-developer 1.4.2
 ```
 
-This sets `artifacts.pins["pattern/cloud-developer"] = "1.4.2"`. Values are parsed leniently: bare `true`/`false`/`null`, integers and floats, and `[a, b, c]` short-form lists are recognised; everything else is stored as a string. Wrap in single or double quotes to force the string form.
+This sets `artifacts.pins["pattern/role-developer"] = "1.4.2"`. Values are parsed leniently: bare `true`/`false`/`null`, integers and floats, and `[a, b, c]` short-form lists are recognised; everything else is stored as a string. Wrap in single or double quotes to force the string form.
 
 ## Default `.gitignore`
 

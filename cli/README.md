@@ -297,12 +297,12 @@ Value parsing for `config set`:
 - Anything else → string.
 
 Dotted keys under `artifacts.pins` preserve the embedded slash:
-`artifacts.pins.pattern/cloud-developer`.
+`artifacts.pins.pattern/role-developer`.
 
 ```bash
 shipctl config set stack.agents [cursor,codex]
 shipctl config set api.channel edge
-shipctl config set artifacts.pins.pattern/cloud-developer 1.4.2
+shipctl config set artifacts.pins.pattern/role-developer 1.4.2
 ```
 
 ### `shipctl sync`
@@ -311,7 +311,7 @@ shipctl config set artifacts.pins.pattern/cloud-developer 1.4.2
 shipctl sync                         # pull latest for this stack
 shipctl sync --check-only            # report changes without writing cache
 shipctl sync --dry-run               # --check-only + planned HTTP calls
-shipctl sync --only pattern:cloud-developer [--only tool:gh-actions]
+shipctl sync --only pattern:role-developer [--only tool:gh-actions]
 shipctl sync --channel edge
 shipctl sync --force-unpin           # temporarily ignore version pins
 ```
@@ -376,18 +376,18 @@ anywhere:
 
 ```bash
 # create a draft
-shipctl feedback draft --kind pattern --id cloud-developer --version 1.4.2 \
+shipctl feedback draft --kind pattern --id role-developer --version 1.4.2 \
   --title "Missing mobile preview step" \
   --summary "Evidence checklist misses mobile preview" \
   --recommendation "Add a bullet under Evidence"
 
 # review / edit (uses $EDITOR)
 shipctl feedback list
-shipctl feedback show .ship/feedback-drafts/2026-04-17-11-30-15-pattern-cloud-developer.md
-shipctl feedback edit .ship/feedback-drafts/2026-04-17-11-30-15-pattern-cloud-developer.md
+shipctl feedback show .ship/feedback-drafts/2026-04-17-11-30-15-pattern-role-developer.md
+shipctl feedback edit .ship/feedback-drafts/2026-04-17-11-30-15-pattern-role-developer.md
 
 # submit → POST /feedback → GitHub issue URL; draft moves to sent/
-shipctl feedback submit .ship/feedback-drafts/2026-04-17-11-30-15-pattern-cloud-developer.md --yes
+shipctl feedback submit .ship/feedback-drafts/2026-04-17-11-30-15-pattern-role-developer.md --yes
 ```
 
 Submission requires `kind`, `id`, `title`, and `summary`; missing fields fail

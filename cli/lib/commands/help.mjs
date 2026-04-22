@@ -55,7 +55,7 @@ COMMANDS
                                        reads SHIP_RUN_TOKEN + SHIP_CALLBACK_URL from env.
   shipctl kickoff [--pattern kickoff] [--version …] [--raw] [--json] [--cwd …]
                                      — print the kickoff / workload pattern body for piping
-                                       into the customer's agent in CI (see artifacts/patterns/kickoff).
+                                       into the customer's agent in CI (see artifacts/patterns/common-kickoff).
   shipctl migrate [--dry-run] [--yes] [--json] [--cwd …]
                                      — upgrade .ship/config.yml from v1 to v2 (lanes-as-config).
   shipctl run --lane <id> [--trigger event|schedule|manual|once]

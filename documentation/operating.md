@@ -20,9 +20,9 @@ The cache (`.ship/cache/<kind>/<id>@<version>/`) is `.gitignore`d by default. `s
 
 - **Goal:** freeze one artifact at a known-good version while everything else tracks `latest`.
 - **Steps:**
-  1. `shipctl config set artifacts.pins.pattern/cloud-developer 1.4.2` (the dotted key keeps the `<kind>/<id>` slash).
+  1. `shipctl config set artifacts.pins.pattern/role-developer 1.4.2` (the dotted key keeps the `<kind>/<id>` slash).
   2. `shipctl sync` — newer manifest versions for that pin show up as `skipped_pin` instead of `updated`.
-- **What to check:** `shipctl config get artifacts.pins.pattern/cloud-developer` echoes the pin; the next sync summary lists `skipped_pin: 1` for the pinned entry.
+- **What to check:** `shipctl config get artifacts.pins.pattern/role-developer` echoes the pin; the next sync summary lists `skipped_pin: 1` for the pinned entry.
 - **Common pitfall:** pinning an artifact that is not in the manifest — `shipctl config validate` fails with exit 13. Pin only ids you have already pulled at least once.
 
 ### Switch channel
@@ -60,10 +60,10 @@ The cache (`.ship/cache/<kind>/<id>@<version>/`) is `.gitignore`d by default. `s
 
 - **Goal:** know exactly which `<kind>:<id>@<version>` your agent is reading.
 - **Steps:**
-  1. `shipctl pattern show cloud-developer` (or `tool`, `workflow`, `collection`) prints the cached body and version.
-  2. `shipctl pattern show cloud-developer --json` if you need it scriptable.
-  3. `cat .ship/cache/pattern/cloud-developer@*/.meta.json` for the recorded `content_sha256`, `fetched_at`, and `channel`.
-- **What to check:** the version on screen matches `shipctl config get artifacts.pins.pattern/cloud-developer` (when pinned) and the channel manifest entry.
+  1. `shipctl pattern show role-developer` (or `tool`, `workflow`, `collection`) prints the cached body and version.
+  2. `shipctl pattern show role-developer --json` if you need it scriptable.
+  3. `cat .ship/cache/pattern/role-developer@*/.meta.json` for the recorded `content_sha256`, `fetched_at`, and `channel`.
+- **What to check:** the version on screen matches `shipctl config get artifacts.pins.pattern/role-developer` (when pinned) and the channel manifest entry.
 - **Common pitfall:** using `shipctl search` instead — search hits the API and is not aware of which version you have on disk.
 
 ## Verify
@@ -194,7 +194,7 @@ Feedback is always drafted locally before it is sent. Drafts live in `.ship/feed
 
 - **Goal:** open a GitHub issue on the Ship repository against a specific artifact.
 - **Steps:**
-  1. `shipctl feedback draft --kind pattern --id cloud-developer --version 1.4.2 --title "Missing mobile preview step" --summary "Evidence checklist misses mobile preview" --recommendation "Add a bullet under Evidence"`.
+  1. `shipctl feedback draft --kind pattern --id role-developer --version 1.4.2 --title "Missing mobile preview step" --summary "Evidence checklist misses mobile preview" --recommendation "Add a bullet under Evidence"`.
   2. `shipctl feedback list` to see the new draft path; `shipctl feedback edit <path>` opens it in `$EDITOR`.
   3. `shipctl feedback show <path>` for a final review.
   4. `shipctl feedback submit <path> --yes` — the CLI prints the issue URL and moves the file under `sent/`.

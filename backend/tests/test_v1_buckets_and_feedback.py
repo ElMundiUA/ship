@@ -104,7 +104,7 @@ async def test_artifact_feedback_flow(v1_client, seed_workspace) -> None:
         f"/v1/workspaces/{workspace.id}/artifact-feedback",
         headers=auth,
         json={
-            "artifact_id": "pattern/cloud-base",
+            "artifact_id": "pattern/common-base",
             "body": "steps 3-4 assume docker",
             "context": {"hint": "monorepo"},
         },
@@ -112,7 +112,7 @@ async def test_artifact_feedback_flow(v1_client, seed_workspace) -> None:
     assert resp.status_code == 201, resp.text
     created = resp.json()
     assert created["status"] == "open"
-    assert created["artifact_id"] == "pattern/cloud-base"
+    assert created["artifact_id"] == "pattern/common-base"
     assert created["context"] == {"hint": "monorepo"}
 
     # Patch to triaged.

@@ -129,7 +129,7 @@ test("config get on missing key fails with exit 1", () => {
 
 test("pins validated against kind/id pattern and semver-ish value", () => {
   const cfg = DEFAULT_CONFIG();
-  cfg.artifacts.pins["pattern/cloud-developer"] = "1.4.2";
+  cfg.artifacts.pins["pattern/role-developer"] = "1.4.2";
   cfg.artifacts.pins["tool/methodology-api"] = "~2.1";
   const ok = validateConfig(cfg);
   assert.equal(ok.ok, true, JSON.stringify(ok));
@@ -156,22 +156,22 @@ test("v2 config with a full lanes map validates cleanly", () => {
   cfg.lanes = {
     seed_knowledge_starters: {
       kind: "once",
-      pattern: "seed-knowledge-starters",
+      pattern: "onboard-seed-knowledge",
       idempotency: {
-        key: "seed-knowledge-starters.v1",
+        key: "onboard-seed-knowledge.v1",
         store: "file",
         reset_on: "version-change",
       },
     },
     pr_review: {
       kind: "event",
-      pattern: "catalog-a5-pr-self-review",
+      pattern: "flow-pr-self-review",
       on: "pull_request",
       permissions: { contents: "read", "pull-requests": "write" },
     },
     daily_standup: {
       kind: "schedule",
-      pattern: "catalog-a13-daily-retro",
+      pattern: "flow-daily-retro",
       cron: "0 9 * * 1-5",
     },
   };

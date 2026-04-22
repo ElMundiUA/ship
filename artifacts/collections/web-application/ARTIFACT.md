@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-12T04:11:35+03:00"
-content_sha256: 0e36efce1c10670c6b729ee2647b010827fced17b5eb0690bbd0594f5dadad8b
+content_sha256: 46c3394e64fa05cce6944a9306bed9d5cd7d616c7a97f76ae41b5d00656f7285
 deprecated: false
 replaced_by: null
 yanked: false
@@ -50,12 +50,12 @@ A **ready bundle** for teams shipping a **browser app** (SPA/SSR) with hosted pr
 
 | Role / slice | Entry |
 |--------------|-------|
-| Cloud base + guardrails | [/patterns/cloud-base](/patterns/cloud-base) |
-| Developer lane | [/patterns/cloud-developer](/patterns/cloud-developer) |
-| QA architect | [/patterns/cloud-qa-architect](/patterns/cloud-qa-architect) |
-| Preview smoke check | [/patterns/catalog-a7-preview-validation](/patterns/catalog-a7-preview-validation) |
-| Acceptance verification | [/patterns/catalog-a9-qa](/patterns/catalog-a9-qa) |
-| Onboarding | [/patterns/adopt-ship-generic](/patterns/adopt-ship-generic) |
+| Cloud base + guardrails | [/patterns/common-base](/patterns/common-base) |
+| Developer lane | [/patterns/role-developer](/patterns/role-developer) |
+| QA architect | [/patterns/role-qa-architect](/patterns/role-qa-architect) |
+| Preview smoke check | [/patterns/flow-preview-validation](/patterns/flow-preview-validation) |
+| Acceptance verification | [/patterns/flow-qa-acceptance](/patterns/flow-qa-acceptance) |
+| Onboarding | [/patterns/onboard-adopt](/patterns/onboard-adopt) |
 
 ## Manual chapters
 

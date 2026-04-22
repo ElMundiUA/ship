@@ -47,7 +47,7 @@ def test_feedback_with_artifact_payload(client, github_env, monkeypatch):
             "recommendations": ["add mobile preview step"],
             "artifact": {
                 "kind": "pattern",
-                "id": "cloud-developer",
+                "id": "role-developer",
                 "version": "1.0.0",
             },
         },
@@ -56,7 +56,7 @@ def test_feedback_with_artifact_payload(client, github_env, monkeypatch):
     body = resp.json()
     assert body["issue_number"] == 1
     assert body["deduplicated"] is False
-    assert "artifact:pattern:cloud-developer" in body["labels"]
+    assert "artifact:pattern:role-developer" in body["labels"]
     assert "version:1.0.0" in body["labels"]
 
     # Verify the machine-readable footer was included in body posted to GitHub
@@ -64,7 +64,7 @@ def test_feedback_with_artifact_payload(client, github_env, monkeypatch):
     assert len(posts) == 1
     payload = json.loads(posts[0].content.decode("utf-8"))
     assert "ship-feedback-meta" in payload["body"]
-    assert "cloud-developer" in payload["body"]
+    assert "role-developer" in payload["body"]
 
 
 def test_feedback_dedup_attaches_comment(client, github_env, monkeypatch):
@@ -81,7 +81,7 @@ def test_feedback_dedup_attaches_comment(client, github_env, monkeypatch):
                         "html_url": "https://github.com/ElMundiUA/ship/issues/42",
                         "labels": [
                             {"name": "feedback"},
-                            {"name": "artifact:pattern:cloud-developer"},
+                            {"name": "artifact:pattern:role-developer"},
                             {"name": "version:1.0.0"},
                         ],
                     }
@@ -100,7 +100,7 @@ def test_feedback_dedup_attaches_comment(client, github_env, monkeypatch):
             "summary": "Same artifact feedback — should be added as a comment.",
             "artifact": {
                 "kind": "pattern",
-                "id": "cloud-developer",
+                "id": "role-developer",
                 "version": "1.0.0",
             },
         },

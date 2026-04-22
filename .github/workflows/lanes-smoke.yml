@@ -22,7 +22,7 @@ on:
   pull_request:
     paths:
       - "cli/**"
-      - "artifacts/patterns/seed-knowledge-starters/**"
+      - "artifacts/patterns/onboard-seed-knowledge/**"
       - ".github/workflows/run-agent.yml"
       - ".github/workflows/lanes-smoke.yml"
       - "backend/app/services/lanes_sync.py"
@@ -46,20 +46,20 @@ jobs:
           - lane: seed
             kind: once
             trigger: manual
-            pattern: seed-knowledge-starters
-            idempotency_key: seed-knowledge-starters.smoke.v1
+            pattern: onboard-seed-knowledge
+            idempotency_key: onboard-seed-knowledge.smoke.v1
             expect_status: completed
             expect_marker: true
           - lane: pr_review
             kind: event
             trigger: event
-            pattern: catalog-a5-pr-self-review
+            pattern: flow-pr-self-review
             expect_status: noop
             expect_marker: false
           - lane: daily
             kind: schedule
             trigger: schedule
-            pattern: catalog-a13-daily-retro
+            pattern: flow-daily-retro
             expect_status: noop
             expect_marker: false
     steps:

@@ -49,7 +49,7 @@ test("shipctl kickoff prints body from monorepo disk", () => {
   const repoRoot = path.resolve(__dirname, "..", "..");
   const r = spawnSync(
     process.execPath,
-    [BIN, "kickoff", "--pattern", "kickoff", "--cwd", repoRoot],
+    [BIN, "kickoff", "--pattern", "common-kickoff", "--cwd", repoRoot],
     { encoding: "utf8", cwd: path.join(repoRoot, "cli") },
   );
   assert.equal(r.status, 0, r.stderr);

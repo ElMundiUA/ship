@@ -26,7 +26,7 @@ const SHIPCTL_BIN = path.resolve(
 
 /* The sync+run tests below reuse the Ship monorepo as a pattern source
  * so they don't need the methodology API to respond; `SHIP_REPO` points
- * the runtime at the checked-out tree, and the `seed-knowledge-starters`
+ * the runtime at the checked-out tree, and the `onboard-seed-knowledge`
  * pattern we committed in Phase 2 supplies the body. */
 const REPO_ROOT = path.resolve(
   path.dirname(new URL(import.meta.url).pathname),
@@ -52,9 +52,9 @@ function seedRepo(dir, extraLanes = {}) {
       lanes: {
         seed_knowledge_starters: {
           kind: "once",
-          pattern: "seed-knowledge-starters",
+          pattern: "onboard-seed-knowledge",
           idempotency: {
-            key: "seed-knowledge-starters.v1",
+            key: "onboard-seed-knowledge.v1",
             store: "file",
             reset_on: "version-change",
           },
@@ -164,8 +164,8 @@ test("shipctl sync --lock produces a lockfile covering declared lane patterns", 
 
   const lock = readLockfile(dir);
   assert.ok(lock, "lockfile exists on disk");
-  const entry = lookupLock(lock, "pattern", "seed-knowledge-starters");
-  assert.ok(entry, "seed-knowledge-starters recorded");
+  const entry = lookupLock(lock, "pattern", "onboard-seed-knowledge");
+  assert.ok(entry, "onboard-seed-knowledge recorded");
   assert.match(entry.content_sha256, /^[0-9a-f]{64}$/);
   assert.equal(entry.source, "monorepo");
 });
@@ -227,7 +227,7 @@ test("shipctl run --offline rejects a cache body that drifts from the lock", () 
   const { dir } = seedRepo(mktmp());
   assert.equal(runCtl(dir, ["sync", "--lock", "--json"]).status, 0);
   const lock = readLockfile(dir);
-  const entry = lookupLock(lock, "pattern", "seed-knowledge-starters");
+  const entry = lookupLock(lock, "pattern", "onboard-seed-knowledge");
   const abs = path.join(dir, entry.cached_path);
   /* Corrupt the cached body — should trip the sha mismatch. */
   fs.appendFileSync(abs, "\n# tampered\n");
@@ -250,7 +250,7 @@ test("shipctl run online warns when the pattern drifts from the lockfile", () =>
    * lockfile and should emit a warning (but still succeed). */
   const file = lockfilePath(dir);
   const data = JSON.parse(fs.readFileSync(file, "utf8"));
-  data.artifacts["pattern/seed-knowledge-starters"].content_sha256 = "0".repeat(64);
+  data.artifacts["pattern/onboard-seed-knowledge"].content_sha256 = "0".repeat(64);
   fs.writeFileSync(file, JSON.stringify(data, null, 2), "utf8");
 
   const res = runCtl(

@@ -48,8 +48,8 @@ Naming rules:
   `CHANGELOG.md` and the `content_sha256` field itself), so adding
   `examples/foo.md` is a real change and must come with a version bump.
 
-Names of actual ids in the repo today: `cloud-developer`, `cloud-base`,
-`catalog-a13-daily-retro` (patterns); `linear`, `playwright`, `github-actions`
+Names of actual ids in the repo today: `role-developer`, `common-base`,
+`flow-daily-retro` (patterns); `linear`, `playwright`, `github-actions`
 (tools); `preset-web-app`, `agent-rules-cursor`, `addendum-pharma`,
 `web-application` (collections).
 
@@ -65,7 +65,7 @@ kind-specific. Tables below list only fields that the parser at
 | Field            | Req | Type    | Purpose                                                                                       | Example                                                                                  |
 |------------------|-----|---------|-----------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------|
 | `artifact_kind`  | yes | enum    | One of `pattern`, `tool`, `collection`. Must match the parent folder. (`workflow` was retired by RFC-0007.) | `pattern`                                                                                |
-| `id`             | yes | string  | Kebab-case slug, ≤ 64 chars, unique within kind, equal to the folder name.                    | `cloud-developer`                                                                        |
+| `id`             | yes | string  | Kebab-case slug, ≤ 64 chars, unique within kind, equal to the folder name.                    | `role-developer`                                                                        |
 | `name`           | yes | string  | Human title, ≤ 80 chars. Rendered as the `title` in list responses.                           | `Developer`                                                                              |
 | `description`    | yes | folded  | SKILL.md-style: third person, what + when, ≤ 1024 chars, includes at least one trigger term. | `Implementation role: branch contract, PR shape, evidence. Use when an agent picks…`     |
 | `version`        | yes | semver  | `MAJOR.MINOR.PATCH`, no `v` prefix. Bumped whenever any byte in the folder changes.           | `1.4.2`                                                                                  |
@@ -84,7 +84,7 @@ kind-specific. Tables below list only fields that the parser at
 
 ### `spec` for `pattern`
 
-| Field            | Req | Type      | Purpose                                                                                  | Example value (`cloud-developer`)                  |
+| Field            | Req | Type      | Purpose                                                                                  | Example value (`role-developer`)                  |
 |------------------|-----|-----------|------------------------------------------------------------------------------------------|----------------------------------------------------|
 | `install_target` | yes | path      | Where the rendered body lands when an agent installs the prompt locally.                 | `prompts/cloud-agent/developer.md`                 |
 | `role`           | no  | string    | If the pattern is a cloud-agent role slot, the role id (`developer`, `ba`, `intake`, …). | `developer`                                        |
@@ -130,7 +130,7 @@ draft workflow artifacts.
 | `addendum_id`            | addendum | string | Stable addendum id.                                                                        | `pharma`                                                                               |
 | `applies_to`             | addendum | string[] | Preset ids this addendum can layer onto.                                                  | `[mobile-app, web-app, api-backend]`                                                   |
 | `regulatory_frameworks`  | addendum | string[] | Frameworks the addendum encodes (HIPAA, GDPR, …).                                         | `[HIPAA, GDPR, 21-CFR-Part-11, EU-AI-Act]`                                             |
-| `composes`               | starter | mapping  | Bundled artifact ids grouped by kind: `patterns: [...]`, `tools: [...]`. | `{patterns: [cloud-developer], tools: [linear]}`     |
+| `composes`               | starter | mapping  | Bundled artifact ids grouped by kind: `patterns: [...]`, `tools: [...]`. | `{patterns: [role-developer], tools: [linear]}`     |
 
 `agent-rules-*` collections set `subkind: agent-rules` and ship the rule body
 inside `ARTIFACT.md`. Their on-disk install path (e.g.
@@ -144,10 +144,10 @@ block, not at the on-disk rule file.
 
 ## Authoring a `pattern`
 
-Worked example: re-author `cloud-developer` from scratch.
+Worked example: re-author `role-developer` from scratch.
 
-1. **Pick the id and folder.** Slug is `cloud-developer`. Create
-   `artifacts/patterns/cloud-developer/ARTIFACT.md`.
+1. **Pick the id and folder.** Slug is `role-developer`. Create
+   `artifacts/patterns/role-developer/ARTIFACT.md`.
 2. **Draft the front-matter.** Use the table above. The fields that change
    most between patterns are `name`, `description`, `tags`, `group`, and
    `spec.install_target` / `spec.role`:
@@ -155,7 +155,7 @@ Worked example: re-author `cloud-developer` from scratch.
    ```yaml
    ---
    artifact_kind: pattern
-   id: cloud-developer
+   id: role-developer
    name: Developer
    version: 1.0.0
    channel: stable
@@ -191,16 +191,16 @@ Worked example: re-author `cloud-developer` from scratch.
    - A `## Task` numbered list with the contract: branch name, test
      requirements, commit style, PR shape, evidence comment marker.
 
-   Leave out anything that belongs to the cloud-base guardrails (those live
-   in `cloud-base` and are interpolated as `{{BASE}}`), and anything
+   Leave out anything that belongs to the common-base guardrails (those live
+   in `common-base` and are interpolated as `{{BASE}}`), and anything
    org-specific (URLs, image names, host names — those are reference, not
    methodology).
 
 4. **Test locally.** From the Ship repo root:
 
    ```bash
-   shipctl pattern show cloud-developer        # reads from artifacts/patterns/cloud-developer/
-   shipctl pattern list | rg cloud-developer
+   shipctl pattern show role-developer        # reads from artifacts/patterns/role-developer/
+   shipctl pattern list | rg role-developer
    shipctl verify --check artifacts-up-to-date # confirms no drift vs the API
    ```
 
@@ -429,7 +429,7 @@ repo:
 
 ```bash
 # 1. Show an artifact straight from the local filesystem index.
-shipctl pattern show cloud-developer
+shipctl pattern show role-developer
 shipctl tool show linear
 shipctl collection show preset-web-app
 
@@ -456,7 +456,7 @@ all line up. Run both before you ask for review.
   `fix/<artifact-id>`. One artifact per PR is preferred; mixed PRs slow
   review.
 - **Commits.** Conventional Commits style:
-  `feat(patterns): add cloud-tech-architect`,
+  `feat(patterns): add role-tech-architect`,
   `fix(tools): tighten linear adapter detect`,
   `docs(authoring): clarify preset extension`. Reference the artifact id
   in the scope so the changelog generator can group changes.

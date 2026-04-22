@@ -40,18 +40,18 @@ function seedRepo(dir) {
     lanes: {
       seed_knowledge_starters: {
         kind: "once",
-        pattern: "seed-knowledge-starters",
-        idempotency: { key: "seed-knowledge-starters.v1", store: "file", reset_on: "version-change" },
+        pattern: "onboard-seed-knowledge",
+        idempotency: { key: "onboard-seed-knowledge.v1", store: "file", reset_on: "version-change" },
       },
       pr_review: {
         kind: "event",
-        pattern: "catalog-a5-pr-self-review",
+        pattern: "flow-pr-self-review",
         on: "pull_request",
         permissions: { contents: "read", "pull-requests": "write" },
       },
       daily_standup: {
         kind: "schedule",
-        pattern: "catalog-a13-daily-retro",
+        pattern: "flow-daily-retro",
         cron: "0 9 * * 1-5",
       },
     },
@@ -76,7 +76,7 @@ function runShipctl(cwd, args, env = {}) {
 test("renderWrapper emits valid YAML for kind=once", () => {
   const out = renderWrapper({
     laneId: "seed_knowledge_starters",
-    lane: { kind: "once", pattern: "seed-knowledge-starters" },
+    lane: { kind: "once", pattern: "onboard-seed-knowledge" },
     reusable: "ElMundiUA/ship/.github/workflows/run-agent.yml@v0.12.0",
     shipctlVersion: "latest",
   });
@@ -94,7 +94,7 @@ test("renderWrapper emits valid YAML for kind=once", () => {
 test("renderWrapper emits schedule trigger for kind=schedule", () => {
   const out = renderWrapper({
     laneId: "daily_standup",
-    lane: { kind: "schedule", cron: "0 9 * * 1-5", pattern: "catalog-a13-daily-retro" },
+    lane: { kind: "schedule", cron: "0 9 * * 1-5", pattern: "flow-daily-retro" },
     reusable: "owner/repo/.github/workflows/run-agent.yml@main",
     shipctlVersion: "0.12.0",
   });
@@ -229,7 +229,7 @@ test("shipctl lanes list returns the lane map under --json", () => {
   assert.equal(bySlug.pr_review.kind, "event");
   assert.equal(bySlug.pr_review.on, "pull_request");
   assert.equal(bySlug.daily_standup.cron, "0 9 * * 1-5");
-  assert.equal(bySlug.seed_knowledge_starters.idempotency_key, "seed-knowledge-starters.v1");
+  assert.equal(bySlug.seed_knowledge_starters.idempotency_key, "onboard-seed-knowledge.v1");
 });
 
 test("shipctl lanes remove deletes generated wrappers and leaves foreign files alone", () => {

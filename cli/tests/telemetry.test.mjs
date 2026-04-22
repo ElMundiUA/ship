@@ -97,7 +97,7 @@ test("outbox: denylisted key (path) is stripped", () => {
     anonymous_id: config.telemetry.anonymous_id,
     payload: {
       kind: "pattern",
-      id: "cloud-developer",
+      id: "role-developer",
       version: "1.0.0",
       source: "cache",
       ttl_age_h: 0,

@@ -88,7 +88,7 @@ export type ArtifactRow = {
 
 export const artifacts: ArtifactRow[] = [
   {
-    id: "adopt-ship-generic",
+    id: "onboard-adopt",
     kind: "pattern",
     name: "Adopt Ship — generic baseline",
     summary:
@@ -102,7 +102,7 @@ export const artifacts: ArtifactRow[] = [
     group: "onboarding",
   },
   {
-    id: "adopt-ship-generic",
+    id: "onboard-adopt",
     kind: "pattern",
     name: "Adopt Ship — Helio override",
     summary: "Helio-flavoured queue names + on-call routing baked in.",
@@ -641,7 +641,7 @@ export type TelemetryEvent = {
 };
 
 export const telemetryEvents: TelemetryEvent[] = [
-  { id: "ev_1", ts: ago({ minutes: 2 }),  kind: "shipctl.pattern.fetch", actor: "denis@helio.dev",      object: "pattern/adopt-ship-generic@1.4.0", result: "ok"   },
+  { id: "ev_1", ts: ago({ minutes: 2 }),  kind: "shipctl.pattern.fetch", actor: "denis@helio.dev",      object: "pattern/onboard-adopt@1.4.0", result: "ok"   },
   { id: "ev_2", ts: ago({ minutes: 5 }),  kind: "workflow.run",          actor: "scheduled-sdlc-lane",  object: "lane/daily",                       result: "ok"   },
   { id: "ev_3", ts: ago({ minutes: 8 }),  kind: "shipctl.pattern.search",actor: "mira@helio.dev",       object: "query='on-call rotation'",         result: "ok"   },
   { id: "ev_4", ts: ago({ minutes: 14 }), kind: "knowledge.embed",       actor: "kb_pay_design/uploads",object: "doc_pay_specs.pptx",               result: "warn" },
@@ -714,7 +714,7 @@ export type ArtifactVersion = {
 };
 
 export const artifactVersions: Record<string, ArtifactVersion[]> = {
-  "adopt-ship-generic": [
+  "onboard-adopt": [
     {
       version: "1.4.0+helio.3",
       channel: "stable",
@@ -759,11 +759,11 @@ export type ArtifactReadme = {
 };
 
 export const artifactReadmes: Record<string, ArtifactReadme> = {
-  "adopt-ship-generic": {
+  "onboard-adopt": {
     intro:
       "Wires a fresh repo into the Ship cadence. Installs the daily + retro lanes, opens the project-state queues, and lays down the agent rules collection your project's stack expects.",
     usage:
-      "shipctl pattern apply adopt-ship-generic --workspace <slug> --project <id>",
+      "shipctl pattern apply onboard-adopt --workspace <slug> --project <id>",
     inputs: [
       { name: "tracker", required: true, help: "Tracker provider for action items: linear | jira | github" },
       { name: "slack_channel", required: false, default: "#ship-daily", help: "Daily-digest target" },
@@ -871,7 +871,7 @@ export type AdoptionByPattern = {
 };
 
 export const adoptionByPattern: AdoptionByPattern[] = [
-  { pattern: "adopt-ship-generic",    installedIn: 11, totalProjects: 12 },
+  { pattern: "onboard-adopt",    installedIn: 11, totalProjects: 12 },
   { pattern: "pr-and-ci-gate",        installedIn: 12, totalProjects: 12 },
   { pattern: "scheduled-sdlc-lane",   installedIn:  9, totalProjects: 12 },
   { pattern: "agent-rules-cursor",    installedIn:  8, totalProjects: 12 },

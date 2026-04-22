@@ -30,8 +30,8 @@ Agent protocol (must follow before applying an artifact):
 
 \`\`\`bash
 shipctl pattern list
-shipctl pattern show cloud-developer              # resolves latest or pin
-shipctl pattern fetch cloud-developer --version 1.4.2
+shipctl pattern show role-developer              # resolves latest or pin
+shipctl pattern fetch role-developer --version 1.4.2
 shipctl search "release gates and qa split" --top-k 8
 shipctl docs fetch documentation/adoption/delivery-quality-and-release-process.md
 shipctl sync                                       # reconcile .ship/cache/
@@ -41,7 +41,7 @@ shipctl sync                                       # reconcile .ship/cache/
 
 \`\`\`bash
 curl -sS -X POST "${baseUrl}/fetch" -H "Content-Type: application/json" \\
-  -d '{"kind":"pattern","id":"cloud-developer"}'
+  -d '{"kind":"pattern","id":"role-developer"}'
 curl -sS "${baseUrl}/patterns"
 \`\`\`
 

@@ -107,12 +107,12 @@ function mktmp() {
 test("writeCached -> readCached round-trips", () => {
   const root = mktmp();
   const content = "# Hello\nWorld\n";
-  const { meta } = writeCached(root, "pattern", "cloud-developer", "1.4.2", content, {
+  const { meta } = writeCached(root, "pattern", "role-developer", "1.4.2", content, {
     updated_at: "2026-04-17T09:21:08Z",
     source_url: "https://ship.example/api/fetch",
   });
   assert.ok(meta.content_sha256);
-  const got = readCached(root, "pattern", "cloud-developer", "1.4.2");
+  const got = readCached(root, "pattern", "role-developer", "1.4.2");
   assert.ok(got);
   assert.equal(got.content, content);
   assert.equal(got.meta.content_sha256, meta.content_sha256);

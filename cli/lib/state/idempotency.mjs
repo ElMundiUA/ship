@@ -12,7 +12,7 @@
  *   {
  *     "version": 1,
  *     "lane": "seed_knowledge_starters",
- *     "pattern_id": "seed-knowledge-starters",
+ *     "pattern_id": "onboard-seed-knowledge",
  *     "pattern_sha256": "…",
  *     "pattern_version": "1.0.0",
  *     "completed_at": "2026-04-21T14:20:00Z",

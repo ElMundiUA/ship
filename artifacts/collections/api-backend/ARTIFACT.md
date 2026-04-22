@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-12T04:11:35+03:00"
-content_sha256: 63cd860effbeae84516c2e9462ed74ef567e8a28c80b65261a3dcded58079213
+content_sha256: 8dae685fc999980336a0363143ee53e7a4f31ec18a0ea61bf847c6b2bbf52506
 deprecated: false
 replaced_by: null
 yanked: false
@@ -49,8 +49,8 @@ Hosted browser E2E is **optional**; if you skip it, invest in **contract / API t
 
 | Slice | Link |
 |-------|------|
-| Developer | [/patterns/cloud-developer](/patterns/cloud-developer) |
-| Tech architect | [/patterns/cloud-tech-architect](/patterns/cloud-tech-architect) |
-| Security officer | [/patterns/cloud-security-officer](/patterns/cloud-security-officer) |
-| Check failure recovery | [/patterns/catalog-a6-check-failure-recovery](/patterns/catalog-a6-check-failure-recovery) |
-| Onboarding | [/patterns/adopt-ship-generic](/patterns/adopt-ship-generic) |
+| Developer | [/patterns/role-developer](/patterns/role-developer) |
+| Tech architect | [/patterns/role-tech-architect](/patterns/role-tech-architect) |
+| Security officer | [/patterns/role-security-officer](/patterns/role-security-officer) |
+| Check failure recovery | [/patterns/flow-check-failure-recovery](/patterns/flow-check-failure-recovery) |
+| Onboarding | [/patterns/onboard-adopt](/patterns/onboard-adopt) |
