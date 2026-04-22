@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-07T20:41:22+03:00"
-content_sha256: dcce45c49c49bfcf196963c96725ee4d7f112bf32ba84aaf6f812433b3ef2037
+content_sha256: b281ecbcf5e8aa0ab221d3f2938068379ff20d167eadeef53044caf153c85179
 deprecated: false
 replaced_by: null
 yanked: false
@@ -36,6 +36,9 @@ spec:
       adoption-minimum: true
       api-backend: true
       cli: true
+      desktop-app: true
+      firmware: true
+      game: true
       marketing: true
       ml-project: true
       mobile-app: true

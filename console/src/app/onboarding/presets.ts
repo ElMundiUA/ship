@@ -16,6 +16,9 @@ export type PresetId =
   | "ml-project"
   | "platform"
   | "regulated"
+  | "desktop-app"
+  | "firmware"
+  | "game"
   | "cli"
   | "monorepo"
   | "marketing"
@@ -29,6 +32,9 @@ export const PRESET_IDS: PresetId[] = [
   "ml-project",
   "platform",
   "regulated",
+  "desktop-app",
+  "firmware",
+  "game",
   "cli",
   "monorepo",
   "marketing",
@@ -80,6 +86,24 @@ export const PRESET_META: Record<
     blurb:
       "Fintech / healthtech / SOC2 / HIPAA / PCI — PII leakage sweep, IAM policy-diff review, hourly audit-log integrity check, consent-coverage drift, and a compliance-artifact refresh flow per audit window.",
     lanes: "PR gate · Standup · PII sweep · IAM diff · Audit integrity",
+  },
+  "desktop-app": {
+    name: "Desktop app",
+    blurb:
+      "Electron / Tauri / native shell shipped to end users — code-signing + notarization gate on every release, per-PR installer-size budget, weekly OS-support drift check, canary auto-update rollout flow, native-surface PR reviewer for IPC / FS bridges / tray.",
+    lanes: "PR gate · Standup · Tech-debt · Installer size · Signing · Auto-update",
+  },
+  firmware: {
+    name: "Hardware / firmware",
+    blurb:
+      "Embedded / IoT firmware with bench lab + OTA — flash & RAM budget, BOM-delta with lifecycle + cost, HAL ABI lock, nightly power profile, staged OTA rollout, and quarterly CE / FCC / UL compliance bundle.",
+    lanes: "PR gate · Standup · Tech-debt · Firmware size · BOM · Power · OTA",
+  },
+  game: {
+    name: "Game",
+    blurb:
+      "Unity / Unreal / Godot / custom engine with art pipeline + live ops — per-scene asset budget, nightly headless frametime benchmark, live-ops calendar sync against branch readiness, balance-tuning PR reviewer for data-table diffs.",
+    lanes: "PR gate · Standup · Tech-debt · Asset budget · Frametime · Live ops",
   },
   cli: {
     name: "CLI / library",
