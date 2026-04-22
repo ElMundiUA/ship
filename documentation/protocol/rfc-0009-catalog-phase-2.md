@@ -33,7 +33,7 @@ additive and introduces no new metadata.
 
 | Phase | Scope                                                     | Status  |
 |-------|-----------------------------------------------------------|---------|
-| Wave 1 | Cross-cutting quality (7 patterns)                       | planned |
+| Wave 1 | Cross-cutting quality (7 patterns)                       | shipped — 2026-04-22 |
 | Wave 2 | Mobile (8) + ML (7) + `mobile-app-deep` / `ml-project` presets | planned |
 | Wave 3 | Infra/SRE (8) + Compliance (5) + `platform` / `regulated` presets | planned |
 | Wave 4 | Desktop (5) + Hardware (6) + Games (4) + `desktop-app` / `firmware` / `game` presets | planned |
