@@ -6,7 +6,9 @@
  *     │
  *     ├─ package.json                (root)
  *     ├─ landing/package.json
+ *     ├─ console/package.json
  *     ├─ cli/package.json
+ *     ├─ e2e/package.json
  *     └─ backend/app/main.py         (FastAPI(title=…, version="…"))
  *
  * Two subcommands, both safe to run repeatedly:
@@ -38,7 +40,9 @@ const SEMVER_RE = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
 const TARGETS = [
   jsonTarget("package.json", "version"),
   jsonTarget("landing/package.json", "version"),
+  jsonTarget("console/package.json", "version"),
   jsonTarget("cli/package.json", "version"),
+  jsonTarget("e2e/package.json", "version"),
   pythonFastApiTarget("backend/app/main.py"),
 ];
 
