@@ -339,6 +339,15 @@ export interface ApiActivatedRepo {
    * ``adoption-minimum``-shaped defaults.
    */
   preset: string | null;
+  /**
+   * Snapshot of ``seed_bundle.BUNDLE_VERSION`` written the last time
+   * this repo was successfully seeded (install_bundle / wizard_seed).
+   * ``null`` means never seeded (fresh activation) or seeded before
+   * the column existed — UI surfaces that as "run the wizard".
+   */
+  installed_bundle_version: number | null;
+  /** Current ``BUNDLE_VERSION`` the backend would emit on a re-seed. */
+  current_bundle_version: number;
 }
 
 export function listAvailableRepos(

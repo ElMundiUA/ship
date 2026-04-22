@@ -454,8 +454,15 @@ function RepoStatusStrip({
           // leaves off. The right semantic is "everything that
           // should be live, is live" — so we gate on the *enabled*
           // count instead.
+          //
+          // ``workflow_installed === null`` means the pipeline kind
+          // has no workflow YAML by design (resolver-only, e.g.
+          // ``code_map``). Those lanes don't need an install
+          // artifact so we count them as satisfied — otherwise any
+          // preset that includes ``code_map`` can never reach
+          // "setup complete".
           const enabledInstalledLanes = laneRows.filter(
-            (p) => p.enabled && p.workflow_installed === true,
+            (p) => p.enabled && p.workflow_installed !== false,
           ).length;
           const setupComplete =
             enabledLanes > 0 && enabledInstalledLanes === enabledLanes;
@@ -521,27 +528,63 @@ function RepoStatusStrip({
                 </div>
               </dl>
 
-              {!setupComplete && (
-                // Wizard v2 owns the seed flow — unified PR with
-                // workflows, ``.ship/config.yml``, tracker FSM,
-                // rotated ``SHIP_RUN_TOKEN``. The legacy dashboard
-                // ``install-bundle`` CTA lived here previously and
-                // double-seeded repos for anyone who completed the
-                // wizard and then came back to the dashboard, so we
-                // funnel everyone through the same flow now.
-                <Link
-                  href={`/onboarding?step=configure&ws=${encodeURIComponent(workspaceId)}`}
-                  className="flex items-center justify-between gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 transition hover:border-aqua/40"
-                >
-                  <div className="min-w-0 text-[11px] leading-snug text-white/65">
-                    Lanes aren&apos;t live yet. Re-run the setup wizard to
-                    open a seed PR with workflows, config &amp; FSM.
-                  </div>
-                  <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-3 py-1 text-[11px] font-bold text-ink shadow-glow transition hover:brightness-110">
-                    Open wizard →
-                  </span>
-                </Link>
-              )}
+              {(() => {
+                // Four states drive the install CTA:
+                //
+                // 1. Never seeded (``installed_bundle_version === null``):
+                //    prompt to open the wizard, first-time onboarding.
+                // 2. Seeded, bundle version drift: prompt to re-open
+                //    the wizard (same endpoint), explain it's an
+                //    upgrade with a neutral tone.
+                // 3. Seeded, up-to-date bundle, lanes not live yet:
+                //    partial install — same wizard, red tone.
+                // 4. Seeded, up-to-date, lanes live: hide entirely.
+                const installedBundle = repo.installed_bundle_version;
+                const currentBundle = repo.current_bundle_version;
+                const neverSeeded = installedBundle == null;
+                const bundleOutdated =
+                  !neverSeeded && installedBundle < currentBundle;
+
+                if (setupComplete && !bundleOutdated) {
+                  return null;
+                }
+
+                if (bundleOutdated) {
+                  return (
+                    <Link
+                      href={`/onboarding?step=configure&ws=${encodeURIComponent(workspaceId)}`}
+                      className="flex items-center justify-between gap-2 rounded-lg border border-aqua/30 bg-aqua/[0.06] px-3 py-2 transition hover:border-aqua/60"
+                    >
+                      <div className="min-w-0 text-[11px] leading-snug text-white/75">
+                        Ship shipped template v{currentBundle} — you&apos;re
+                        on v{installedBundle}. Re-run the wizard to open
+                        an upgrade PR (workflows, config, FSM).
+                      </div>
+                      <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-aqua/50 bg-aqua/10 px-3 py-1 text-[11px] font-bold text-aqua transition hover:bg-aqua/20">
+                        Upgrade →
+                      </span>
+                    </Link>
+                  );
+                }
+
+                const headline = neverSeeded
+                  ? "Run the setup wizard to open a seed PR with workflows, config & FSM."
+                  : "Lanes aren't live yet. Re-open the wizard to finish the install.";
+
+                return (
+                  <Link
+                    href={`/onboarding?step=configure&ws=${encodeURIComponent(workspaceId)}`}
+                    className="flex items-center justify-between gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 transition hover:border-aqua/40"
+                  >
+                    <div className="min-w-0 text-[11px] leading-snug text-white/65">
+                      {headline}
+                    </div>
+                    <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-3 py-1 text-[11px] font-bold text-ink shadow-glow transition hover:brightness-110">
+                      Open wizard →
+                    </span>
+                  </Link>
+                );
+              })()}
 
               <div className="mt-auto flex flex-wrap items-center justify-between gap-2 text-[11px] font-semibold text-white/55">
                 <div className="flex flex-wrap items-center gap-3">

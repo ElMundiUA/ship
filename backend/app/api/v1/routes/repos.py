@@ -48,6 +48,7 @@ from backend.app.services.default_pipelines import (
     KNOWN_PRESETS,
     seed_default_pipelines,
 )
+from backend.app.services.seed_bundle import BUNDLE_VERSION as _BUNDLE_VERSION
 
 
 router = APIRouter(
@@ -93,6 +94,12 @@ class ActivatedRepoOut(BaseModel):
     activated_at: datetime | None
     provider: str
     preset: str | None
+    # Dashboard uses these to decide whether to show the "Open wizard"
+    # CTA (never seeded), "Update available" CTA (drift), or no CTA
+    # (up to date). ``current`` mirrors ``seed_bundle.BUNDLE_VERSION``
+    # so the client doesn't need a separate meta endpoint.
+    installed_bundle_version: int | None = None
+    current_bundle_version: int = _BUNDLE_VERSION
 
 
 class RepoActivateIn(BaseModel):
@@ -191,6 +198,8 @@ def _row_to_out(row: WorkspaceRepo) -> ActivatedRepoOut:
         activated_at=row.activated_at,
         provider=row.provider,
         preset=row.preset,
+        installed_bundle_version=row.installed_bundle_version,
+        current_bundle_version=_BUNDLE_VERSION,
     )
 
 
@@ -889,6 +898,10 @@ async def install_bundle(
             },
         ) from exc
 
+    # Stamp the bundle version so the dashboard can tell "up to date"
+    # from "upgrade available" next render.
+    repo_row.installed_bundle_version = _BUNDLE_VERSION
+
     session.add(
         AuditLog(
             workspace_id=workspace_id,
@@ -903,6 +916,7 @@ async def install_bundle(
                 "pr_number": result.pr_number,
                 "pr_url": result.pr_url,
                 "branch": result.branch,
+                "bundle_version": _BUNDLE_VERSION,
             },
         )
     )
@@ -1540,6 +1554,10 @@ async def wizard_seed(
             },
         ) from exc
 
+    # Stamp the bundle version so the dashboard can tell "up to date"
+    # from "upgrade available" next render.
+    repo_row.installed_bundle_version = _BUNDLE_VERSION
+
     session.add(
         AuditLog(
             workspace_id=workspace_id,
@@ -1564,6 +1582,7 @@ async def wizard_seed(
                 "run_token_rotated": rotated,
                 # run_token_prefix only; plaintext never persisted.
                 "run_token_prefix": repo_row.run_token_prefix,
+                "bundle_version": _BUNDLE_VERSION,
             },
         )
     )
