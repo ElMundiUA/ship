@@ -25,7 +25,13 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { readConfig, findShipRoot } from "../config/io.mjs";
-import { validateConfig, CONFIG_SCHEMA_VERSION } from "../config/schema.mjs";
+import {
+  validateConfig,
+  CONFIG_SCHEMA_VERSION,
+  lanePatterns,
+  laneFanout,
+  LANE_FANOUT_MODES,
+} from "../config/schema.mjs";
 import { fetchArtifact } from "../http.mjs";
 import { resolveShipRepoRootForCatalog } from "../find-ship-root.mjs";
 import { readArtifactFile } from "../artifacts/fs-index.mjs";
@@ -44,13 +50,23 @@ function printHelp() {
   console.log(`shipctl run — execute a Ship lane end-to-end.
 
 USAGE
-  shipctl run --lane <id> [--trigger <event|schedule|manual|once>]
+  shipctl run --lane <id> [--pattern <id>] [--fanout <matrix|sequential|concurrent>]
+              [--trigger <event|schedule|manual|once>]
               [--dry-run] [--offline]
               [--ship-run-id <uuid>] [--ship-callback-url <url>] [--ship-run-token <jwt>]
               [--cwd <dir>] [--json]
 
 FLAGS
   --lane <id>               Lane id declared in .ship/config.yml. Required.
+  --pattern <id>            For multi-pattern lanes: run only this pattern. This
+                            is the per-entry call issued by the matrix workflow
+                            (one matrix job per pattern). Must be one of the
+                            lane's declared patterns.
+  --fanout <mode>           Override the lane's configured fan-out for this run
+                            (matrix|sequential|concurrent). Meaningful only
+                            when the lane has ≥2 patterns and --pattern is not
+                            set. Matrix mode without --pattern is rejected;
+                            it requires a driving workflow.
   --trigger <kind>          Force the trigger context (event|schedule|manual|once).
                             If omitted, inferred from GITHUB_EVENT_NAME / SHIP_RUN_TRIGGER.
   --dry-run                 Print the plan without touching idempotency markers or callback.
@@ -167,22 +183,56 @@ export async function runCommand(ctx, rest) {
 
   /* --- kind=once path ------------------------------------------------ */
 
-  const patternId = String(lane.pattern);
-  const patternFetch = await fetchPatternBody({
-    patternId,
-    patternVersion: lane.pattern_version || null,
-    offline: args.offline,
-    root,
-    ctx,
-    config,
-  });
-  if (!patternFetch.ok) {
-    die(EXIT_USAGE, patternFetch.error);
+  // RFC-0008 C3.1/C3.2: resolve the list of patterns that this invocation
+  // should execute.
+  //
+  //   --pattern <id>     → run only that pattern (the per-entry call
+  //                         issued by the matrix workflow). The pattern
+  //                         must be one of the lane's declared patterns,
+  //                         otherwise we refuse so typos don't silently
+  //                         execute an unrelated pattern.
+  //   (none)             → run every pattern the lane declares, using
+  //                         the lane's fan-out mode. Matrix mode without
+  //                         --pattern is rejected because it requires a
+  //                         driving workflow (see run-agent.yml).
+  const allPatterns = lanePatterns(lane);
+  if (allPatterns.length === 0) {
+    die(EXIT_USAGE, `lane ${JSON.stringify(args.lane)} declares no patterns.`);
   }
 
-  const patternBody = patternFetch.body;
-  const patternSha = sha256(patternBody);
+  const effectiveFanout = args.fanout || laneFanout(lane);
+  let patternsToRun;
+  let runMode; // ``single`` | ``sequential`` | ``concurrent``
+  if (args.pattern) {
+    if (!allPatterns.includes(args.pattern)) {
+      die(
+        EXIT_USAGE,
+        `--pattern=${JSON.stringify(args.pattern)} is not declared on lane ${JSON.stringify(args.lane)}. ` +
+          `Known patterns: ${allPatterns.join(", ")}.`,
+      );
+    }
+    patternsToRun = [args.pattern];
+    runMode = "single";
+  } else if (allPatterns.length === 1) {
+    patternsToRun = allPatterns;
+    runMode = "single";
+  } else if (effectiveFanout === "matrix") {
+    die(
+      EXIT_USAGE,
+      `lane ${JSON.stringify(args.lane)} has fanout=matrix and ${allPatterns.length} patterns ` +
+        `but no --pattern was provided. Matrix mode dispatches one 'shipctl run --pattern <id>' per ` +
+        `pattern via the workflow (see run-agent.yml). To run them in-process instead, pass ` +
+        `--fanout sequential or --fanout concurrent.`,
+    );
+  } else {
+    patternsToRun = allPatterns;
+    runMode = effectiveFanout;
+  }
 
+  // Idempotency markers are lane-scoped (not per-pattern) so we read
+  // once up front; per-pattern decisions are derived from the
+  // concatenated pattern SHA set below so a change to any member of
+  // the list re-triggers the run (expected behaviour for audit lanes).
   const idem = lane.idempotency;
   let marker = null;
   try {
@@ -192,7 +242,44 @@ export async function runCommand(ctx, rest) {
     die(EXIT_IDEMPOTENCY, err instanceof Error ? err.message : String(err));
   }
 
-  const decision = decideRun(marker, patternBody, idem.reset_on || "version-change");
+  // Fetch every pattern body first so we can reject the whole run
+  // atomically if any one is unavailable — partial success is worse
+  // than a hard failure here (the caller can retry once the fetch
+  // error is cleared).
+  const fetchJobs = patternsToRun.map((patternId) =>
+    fetchPatternBody({
+      patternId,
+      patternVersion: lane.pattern_version || null,
+      offline: args.offline,
+      root,
+      ctx,
+      config,
+    }).then((result) => ({ patternId, result })),
+  );
+  // `sequential` vs `concurrent` only differ for future in-process agent
+  // invocation; today's CLI just emits the pattern bodies to stdout, so
+  // both modes fetch in parallel and print in declared order. We still
+  // record the requested mode on the summary so downstream consumers
+  // (and future work) can see the intent.
+  const fetched = await Promise.all(fetchJobs);
+  for (const { patternId, result } of fetched) {
+    if (!result.ok) {
+      die(EXIT_USAGE, `pattern ${patternId}: ${result.error}`);
+    }
+  }
+  const runs = fetched.map(({ patternId, result }) => ({
+    patternId,
+    body: result.body,
+    source: result.source,
+    sha256: sha256(result.body),
+  }));
+
+  // Composite SHA over all pattern bodies. ``reset_on=version-change``
+  // fires when any member's body drifts — which is the correct
+  // semantics for a multi-pattern audit lane: if one role's playbook
+  // updates, we want the whole lane to re-run.
+  const compositeBody = runs.map((r) => `#${r.patternId}\n${r.body}`).join("\n---\n");
+  const decision = decideRun(marker, compositeBody, idem.reset_on || "version-change");
   if (!decision.run) {
     const summary = {
       lane: args.lane,
@@ -201,20 +288,25 @@ export async function runCommand(ctx, rest) {
       status: "noop",
       reason: "already-done",
       marker: decision.marker,
+      patterns: runs.map((r) => ({ id: r.patternId, sha256: r.sha256 })),
     };
     await tryCallback(
       args,
       "ok",
       `lane ${args.lane}: already completed, no-op.`,
-      { pattern_id: patternId, pattern_sha256: patternSha, noop: true },
+      runMode === "single"
+        ? { pattern_id: runs[0].patternId, pattern_sha256: runs[0].sha256, noop: true }
+        : { patterns: runs.map((r) => r.patternId), noop: true },
     );
     emitSummary(ctx, args, summary);
     process.exit(EXIT_OK);
   }
 
   /* Dry-run stops here — no marker write, no callback, just print the
-   * plan. We still emit the pattern body to stdout so operators can
-   * eyeball what the agent would receive. */
+   * plan. We still emit the pattern bodies to stdout so operators can
+   * eyeball what the agent would receive. Multi-pattern runs print
+   * each body preceded by a ``# ship: pattern=<id>`` banner so the
+   * agent-side (or a human) can split them back apart. */
   if (args.dryRun || ctx.dryRun) {
     const summary = {
       lane: args.lane,
@@ -222,64 +314,107 @@ export async function runCommand(ctx, rest) {
       trigger: effectiveTrigger.trigger,
       status: "dry-run",
       reason: decision.reason,
-      pattern: { id: patternId, sha256: patternSha, source: patternFetch.source },
+      mode: runMode,
+      patterns: runs.map((r) => ({ id: r.patternId, sha256: r.sha256, source: r.source })),
     };
+    if (runs.length === 1) {
+      summary.pattern = { id: runs[0].patternId, sha256: runs[0].sha256, source: runs[0].source };
+    }
     if (ctx.json || args.json) {
-      console.log(JSON.stringify({ ...summary, pattern_body: patternBody }, null, 2));
+      console.log(
+        JSON.stringify(
+          { ...summary, pattern_bodies: Object.fromEntries(runs.map((r) => [r.patternId, r.body])) },
+          null,
+          2,
+        ),
+      );
     } else {
-      console.error(`# ship: lane=${args.lane} kind=${lane.kind} trigger=${effectiveTrigger.trigger} (dry-run)`);
-      process.stdout.write(patternBody.endsWith("\n") ? patternBody : `${patternBody}\n`);
+      console.error(
+        `# ship: lane=${args.lane} kind=${lane.kind} trigger=${effectiveTrigger.trigger} mode=${runMode} (dry-run)`,
+      );
+      emitPatternBodies(runs, { json: false });
     }
     process.exit(EXIT_OK);
   }
 
-  /* Emit the prompt for the agent to consume (same contract as
-   * `shipctl kickoff`). The reusable workflow pipes this into the
-   * configured agent runtime. */
+  /* Emit the prompt(s) for the agent to consume (same contract as
+   * `shipctl kickoff`). The reusable workflow pipes stdout into the
+   * configured agent runtime; multi-pattern output is delimited by a
+   * banner line per pattern so consumers can split on it. */
   if (!(ctx.json || args.json)) {
     const provider = resolveAgentProvider(config, args.lane);
-    if (provider) console.error(`# ship: lane=${args.lane} agent.provider=${provider}`);
-    process.stdout.write(patternBody.endsWith("\n") ? patternBody : `${patternBody}\n`);
+    if (provider) console.error(`# ship: lane=${args.lane} agent.provider=${provider} mode=${runMode}`);
+    emitPatternBodies(runs, { json: false });
   }
 
   try {
     writeMarker(cwd, idem.key, {
       lane: args.lane,
-      pattern_id: patternId,
-      pattern_sha256: patternSha,
+      pattern_id: runs[0].patternId,
+      pattern_sha256: sha256(compositeBody),
       pattern_version: lane.pattern_version || null,
+      patterns: runs.map((r) => ({ id: r.patternId, sha256: r.sha256 })),
     });
   } catch (err) {
     await tryCallback(args, "fail", `idempotency write failed: ${err.message}`);
     die(EXIT_IDEMPOTENCY, err instanceof Error ? err.message : String(err));
   }
 
-  const callbackResult = await tryCallback(
-    args,
-    "ok",
-    `lane ${args.lane} completed (pattern ${patternId}@${patternSha.slice(0, 8)}).`,
-    { pattern_id: patternId, pattern_sha256: patternSha },
-  );
+  const callbackMetrics = runMode === "single"
+    ? { pattern_id: runs[0].patternId, pattern_sha256: runs[0].sha256 }
+    : {
+        pattern_id: runs[0].patternId,
+        pattern_sha256: runs[0].sha256,
+        patterns: runs.map((r) => r.patternId).join(","),
+      };
+  const callbackSummary = runMode === "single"
+    ? `lane ${args.lane} completed (pattern ${runs[0].patternId}@${runs[0].sha256.slice(0, 8)}).`
+    : `lane ${args.lane} completed (${runs.length} patterns, mode=${runMode}).`;
+  const callbackResult = await tryCallback(args, "ok", callbackSummary, callbackMetrics);
 
   if (ctx.json || args.json) {
-    console.log(
-      JSON.stringify(
-        {
-          lane: args.lane,
-          kind: lane.kind,
-          trigger: effectiveTrigger.trigger,
-          status: "completed",
-          pattern: { id: patternId, sha256: patternSha, source: patternFetch.source },
-          callback: callbackResult,
-        },
-        null,
-        2,
-      ),
-    );
+    // For single-pattern runs we keep the legacy ``pattern: {…}`` key
+    // alongside the new ``patterns: […]`` list so existing consumers
+    // (and tests) don't break when they upgrade shipctl before
+    // starting to declare multi-pattern lanes.
+    const summaryPayload = {
+      lane: args.lane,
+      kind: lane.kind,
+      trigger: effectiveTrigger.trigger,
+      status: "completed",
+      mode: runMode,
+      patterns: runs.map((r) => ({ id: r.patternId, sha256: r.sha256, source: r.source })),
+      callback: callbackResult,
+    };
+    if (runs.length === 1) {
+      summaryPayload.pattern = { id: runs[0].patternId, sha256: runs[0].sha256, source: runs[0].source };
+    }
+    console.log(JSON.stringify(summaryPayload, null, 2));
   }
 
   process.exit(callbackResult.ok === false ? EXIT_CALLBACK : EXIT_OK);
 }
+
+/**
+ * Stream pattern bodies to stdout. For single-pattern runs we write
+ * the body as-is (identical byte output to the pre-multi-pattern
+ * behaviour, keeping the test harness stable). For multi-pattern
+ * runs we precede each body with a ``# ship: pattern=<id>`` banner so
+ * downstream consumers can re-split the stream.
+ */
+function emitPatternBodies(runs, _opts) {
+  if (runs.length === 1) {
+    const body = runs[0].body;
+    process.stdout.write(body.endsWith("\n") ? body : `${body}\n`);
+    return;
+  }
+  for (const r of runs) {
+    process.stdout.write(`# ship: pattern=${r.patternId} sha256=${r.sha256}\n`);
+    const body = r.body;
+    process.stdout.write(body.endsWith("\n") ? body : `${body}\n`);
+  }
+}
+
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -288,6 +423,8 @@ export async function runCommand(ctx, rest) {
 function parseArgs(rest) {
   const out = {
     lane: null,
+    pattern: null,
+    fanout: null,
     trigger: null,
     dryRun: false,
     offline: false,
@@ -336,6 +473,8 @@ function parseArgs(rest) {
       continue;
     }
     if (str("--lane", "lane")) continue;
+    if (str("--pattern", "pattern")) continue;
+    if (str("--fanout", "fanout")) continue;
     if (str("--trigger", "trigger")) continue;
     if (str("--ship-run-id", "runId")) continue;
     if (str("--ship-callback-url", "callbackUrl")) continue;
@@ -351,6 +490,15 @@ function parseArgs(rest) {
       EXIT_USAGE,
       `--trigger must be one of ${[...VALID_TRIGGERS].join("|")}; got ${out.trigger}`,
     );
+  }
+  if (out.fanout && !LANE_FANOUT_MODES.includes(out.fanout)) {
+    die(
+      EXIT_USAGE,
+      `--fanout must be one of ${LANE_FANOUT_MODES.join("|")}; got ${out.fanout}`,
+    );
+  }
+  if (out.pattern !== null && (typeof out.pattern !== "string" || !out.pattern.trim())) {
+    die(EXIT_USAGE, "--pattern: must be a non-empty pattern id");
   }
   return out;
 }

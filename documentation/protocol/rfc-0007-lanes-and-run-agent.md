@@ -1,7 +1,7 @@
 ---
 rfc: 0007
 title: "Lanes-as-config and the single `shipctl run` entry-point"
-status: Draft
+status: Accepted
 created: 2026-04-21
 supersedes_in_part: [rfc-0002]
 ---
@@ -36,6 +36,23 @@ cadence multiplies three files. This RFC collapses the model:
   starter pipeline YAMLs live inside
   `backend.app.services.starter_workflows` and are only reachable
   through the Pipeline installation flow.
+
+## Implementation status
+
+| Phase | Scope                                                        | Status  |
+|-------|--------------------------------------------------------------|---------|
+| 0     | This RFC.                                                    | shipped |
+| 1     | `shipctl run` with `kind=once`.                              | shipped |
+| 2     | Schema v2 + `shipctl migrate`.                               | shipped |
+| 3     | Reusable `run-agent.yml` + `shipctl lanes install`.          | shipped |
+| 4     | `shipctl sync --lock` + lockfile-driven `--offline`.         | shipped |
+| 5     | Backend idempotency store.                                   | shipped |
+| 6     | `artifact_kind=workflow` retired.                            | shipped |
+| 7     | Console UI + docs.                                           | partial (Console Lanes hub landed 2026-04-22; docs rewritten in this pass) |
+| 8     | Non-GitHub scheduler adapters.                               | planned |
+
+Detailed phase notes live at the bottom of this file; the table above
+is the quick-reference.
 
 ## Motivation
 
@@ -138,6 +155,12 @@ shipctl run --lane <id> [--dry-run] [--offline] [--trigger <event|schedule|manua
             [--ship-run-id <uuid>] [--ship-callback-url <url>] [--ship-run-token <jwt>]
             [--cwd <dir>] [--json]
 ```
+
+> **Status note.** `kind: once` is fully wired today; `kind: event` and
+> `kind: schedule` are parsed and validated end-to-end but `shipctl run`
+> currently emits an exit-0 no-op for them (Phase 3) — dispatch
+> continues through the reusable workflow's agent step, which the
+> wrapper invokes directly.
 
 Execution order:
 

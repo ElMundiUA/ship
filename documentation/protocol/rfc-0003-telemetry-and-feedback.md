@@ -47,6 +47,13 @@ All events share a shape: an event `type`, the `anonymous_id`, a UTC timestamp, 
 | `feedback.submit`  | `shipctl feedback submit`                             | `anonymous_id, artifact:{kind,id,version}, summary, suggestion, stack:{tracker,ci,agents,preset}` |
 | `doctor.result`    | `shipctl doctor` if `scope.errors=true`               | `anonymous_id, stack, findings_hash`                                                       |
 
+`kind` in every event payload is one of `pattern | tool | collection | doc`
+— the authoritative list lives in `cli/lib/commands/feedback.mjs`
+(`ALLOWED_KINDS`) and `cli/lib/config/schema.mjs` (`KINDS`). The
+`workflow` kind was retired by
+[RFC-0007](/docs/protocol/rfc-0007-lanes-and-run-agent) Phase 6 and
+MUST NOT appear in feedback envelopes or telemetry payloads.
+
 Examples:
 
 ```json
@@ -58,7 +65,7 @@ Examples:
   "stack_preset": "web-app",
   "payload": {
     "kind": "pattern",
-    "id": "cloud-developer",
+    "id": "role-developer",
     "version": "1.4.2",
     "source": "network",
     "ttl_age_h": 0
@@ -74,7 +81,7 @@ Examples:
   "shipctl_version": "0.3.2",
   "stack_preset": "web-app",
   "payload": {
-    "artifact": { "kind": "pattern", "id": "cloud-developer", "version": "1.4.2" },
+    "artifact": { "kind": "pattern", "id": "role-developer", "version": "1.4.2" },
     "summary": "Developer PR checklist misses mobile preview step",
     "suggestion": "Add a 'mobile preview attached' bullet under evidence.",
     "stack": { "tracker": "linear", "ci": "gh-actions", "agents": ["cursor"], "preset": "web-app" }
@@ -193,7 +200,7 @@ Each draft has YAML front-matter plus free-form markdown:
 ```markdown
 ---
 kind: pattern
-id: cloud-developer
+id: role-developer
 version: 1.4.2
 tags: ["checklist", "mobile"]
 title: "Developer PR checklist misses mobile preview step"
@@ -211,7 +218,7 @@ when the change touches mobile surfaces.
 
 ## Context
 
-- Seen on pattern:cloud-developer@1.4.2 in a web-app preset.
+- Seen on pattern:role-developer@1.4.2 in a web-app preset.
 - CI: gh-actions. Tracker: linear. Agent: cursor.
 ```
 
@@ -220,7 +227,7 @@ Drafts are private until `shipctl feedback submit` is called.
 ## Submit flow
 
 ```
-shipctl feedback submit .ship/feedback-drafts/2026-04-17-113015-pattern-cloud-developer.md
+shipctl feedback submit .ship/feedback-drafts/2026-04-17-113015-pattern-role-developer.md
 ```
 
 Pipeline:
@@ -255,12 +262,12 @@ Failure modes:
 Examples:
 
 ```bash
-shipctl feedback draft --kind pattern --id cloud-developer --version 1.4.2 \
+shipctl feedback draft --kind pattern --id role-developer --version 1.4.2 \
   --title "Missing mobile preview step" \
   --summary "Evidence checklist misses mobile preview"
 
 shipctl feedback list
-shipctl feedback submit .ship/feedback-drafts/2026-04-17-113015-pattern-cloud-developer.md
+shipctl feedback submit .ship/feedback-drafts/2026-04-17-113015-pattern-role-developer.md
 ```
 
 ## Privacy
@@ -300,7 +307,7 @@ Per-event payload shapes:
 
 ```json
 {
-  "kind": "pattern|tool|workflow|collection|doc",
+  "kind": "pattern|tool|collection|doc",
   "id": "<slug>",
   "version": "<semver>",
   "source": "cache|network",
@@ -312,7 +319,7 @@ Per-event payload shapes:
 
 ```json
 {
-  "kind": "pattern|tool|workflow|collection|doc",
+  "kind": "pattern|tool|collection|doc",
   "id": "<slug>",
   "version": "<semver>",
   "agent": "cursor|codex|claude|..."
@@ -323,7 +330,7 @@ Per-event payload shapes:
 
 ```json
 {
-  "categories": ["pattern", "workflow", "collection"],
+  "categories": ["pattern", "tool", "collection"],
   "updates_count": <int>,
   "failures_count": <int>
 }
@@ -333,7 +340,7 @@ Per-event payload shapes:
 
 ```json
 {
-  "artifact": { "kind": "pattern", "id": "cloud-developer", "version": "1.4.2" },
+  "artifact": { "kind": "pattern", "id": "role-developer", "version": "1.4.2" },
   "summary": "<one-line>",
   "suggestion": "<one-paragraph>",
   "stack": { "tracker": "linear", "ci": "gh-actions", "agents": ["cursor"], "preset": "web-app" }
@@ -356,10 +363,10 @@ Per-event payload shapes:
 Cursor kicks off a developer run inside a web-app preset. The session fetches and uses one pattern, syncs, and the user files feedback. With `telemetry.share=true` and `scope.improvement_drafts=true`, the outbox grows:
 
 ```
-{ "type": "artifact.fetch", ... "payload": { "kind":"pattern", "id":"cloud-developer", "version":"1.4.2", "source":"network", "ttl_age_h":0 } }
-{ "type": "artifact.use",   ... "payload": { "kind":"pattern", "id":"cloud-developer", "version":"1.4.2", "agent":"cursor" } }
-{ "type": "artifact.sync",  ... "payload": { "categories":["pattern","workflow"], "updates_count":2, "failures_count":0 } }
-{ "type": "feedback.submit",... "payload": { "artifact":{"kind":"pattern","id":"cloud-developer","version":"1.4.2"}, "summary":"...", "suggestion":"...", "stack":{ ... } } }
+{ "type": "artifact.fetch", ... "payload": { "kind":"pattern", "id":"role-developer", "version":"1.4.2", "source":"network", "ttl_age_h":0 } }
+{ "type": "artifact.use",   ... "payload": { "kind":"pattern", "id":"role-developer", "version":"1.4.2", "agent":"cursor" } }
+{ "type": "artifact.sync",  ... "payload": { "categories":["pattern","tool"], "updates_count":2, "failures_count":0 } }
+{ "type": "feedback.submit",... "payload": { "artifact":{"kind":"pattern","id":"role-developer","version":"1.4.2"}, "summary":"...", "suggestion":"...", "stack":{ ... } } }
 ```
 
 All four ship in one `POST /telemetry` batch at the next command boundary.
@@ -372,7 +379,7 @@ Request:
 
 ```json
 {
-  "artifact": { "kind": "pattern", "id": "cloud-developer", "version": "1.4.2" },
+  "artifact": { "kind": "pattern", "id": "role-developer", "version": "1.4.2" },
   "title": "Developer PR checklist misses mobile preview step",
   "summary": "...",
   "suggestion": "...",
@@ -388,7 +395,7 @@ Response:
 {
   "issue_url": "https://github.com/elmundi/ship/issues/1234",
   "issue_number": 1234,
-  "labels": ["feedback", "artifact:pattern:cloud-developer", "version:1.4.2"],
+  "labels": ["feedback", "artifact:pattern:role-developer", "version:1.4.2"],
   "deduplicated": false
 }
 ```
@@ -433,7 +440,7 @@ The GitHub issue body is assembled server-side:
 
 ```markdown
 ## Artifact
-pattern:cloud-developer@1.4.2
+pattern:role-developer@1.4.2
 
 ## Stack
 tracker: linear

@@ -219,6 +219,147 @@ test("v2 lane id regex enforced", () => {
   assert.ok(res.errors.some((e) => e.includes("invalid id")));
 });
 
+/* ------------------------------------------------------------------ */
+/* RFC-0008 C3.1 — lanes.<id>.patterns: [ids] (multi-pattern lanes)    */
+/* ------------------------------------------------------------------ */
+
+test("v2 lane accepts `patterns: [ids]` canonical form", () => {
+  const cfg = DEFAULT_CONFIG();
+  ensureAnonymousId(cfg);
+  cfg.lanes = {
+    tech_debt_audit: {
+      kind: "schedule",
+      patterns: ["role-tech-architect", "role-qa-architect", "role-security-officer"],
+      cron: "0 6 * * 1",
+    },
+  };
+  const res = validateConfig(cfg);
+  assert.equal(res.ok, true, JSON.stringify(res.errors || []));
+});
+
+test("v2 lane rejects empty `patterns` list", () => {
+  const cfg = DEFAULT_CONFIG();
+  cfg.lanes = { a: { kind: "event", patterns: [], on: "pull_request" } };
+  const res = validateConfig(cfg);
+  assert.equal(res.ok, false);
+  assert.ok(res.errors.some((e) => e.includes("patterns: must contain at least one")));
+});
+
+test("v2 lane rejects both `pattern` and `patterns`", () => {
+  const cfg = DEFAULT_CONFIG();
+  cfg.lanes = {
+    a: {
+      kind: "event",
+      pattern: "flow-pr-self-review",
+      patterns: ["flow-pr-self-review"],
+      on: "pull_request",
+    },
+  };
+  const res = validateConfig(cfg);
+  assert.equal(res.ok, false);
+  assert.ok(res.errors.some((e) => e.includes("not both")));
+});
+
+test("v2 lane rejects non-string entry in `patterns`", () => {
+  const cfg = DEFAULT_CONFIG();
+  cfg.lanes = { a: { kind: "event", patterns: ["x", 42], on: "pull_request" } };
+  const res = validateConfig(cfg);
+  assert.equal(res.ok, false);
+  assert.ok(res.errors.some((e) => e.includes("patterns[1]")));
+});
+
+test("v2 lane requires either `pattern` or `patterns`", () => {
+  const cfg = DEFAULT_CONFIG();
+  cfg.lanes = { a: { kind: "event", on: "pull_request" } };
+  const res = validateConfig(cfg);
+  assert.equal(res.ok, false);
+  assert.ok(res.errors.some((e) => e.includes("must declare 'pattern'")));
+});
+
+test("lanePatterns() normalises both shapes to a list", async () => {
+  const { lanePatterns, lanePrimaryPattern } = await import("../lib/config/schema.mjs");
+  assert.deepEqual(lanePatterns({ pattern: "a" }), ["a"]);
+  assert.deepEqual(lanePatterns({ patterns: ["a", "b"] }), ["a", "b"]);
+  assert.deepEqual(lanePatterns({}), []);
+  assert.equal(lanePrimaryPattern({ patterns: ["x", "y"] }), "x");
+  assert.equal(lanePrimaryPattern({ pattern: "z" }), "z");
+  assert.equal(lanePrimaryPattern({}), null);
+});
+
+/* -------------------------------------------------------------------- */
+/* RFC-0008 C3.2 — lane.fanout (multi-pattern execution strategy)       */
+/* -------------------------------------------------------------------- */
+
+test("v2 lane accepts fanout=matrix (default)", () => {
+  const cfg = DEFAULT_CONFIG();
+  cfg.lanes = {
+    a: {
+      kind: "schedule",
+      cron: "0 6 * * 1",
+      patterns: ["role-tech-architect", "role-qa-architect"],
+      fanout: "matrix",
+    },
+  };
+  const res = validateConfig(cfg);
+  assert.equal(res.ok, true, JSON.stringify(res.errors));
+});
+
+test("v2 lane accepts fanout=sequential and fanout=concurrent", () => {
+  for (const mode of ["sequential", "concurrent"]) {
+    const cfg = DEFAULT_CONFIG();
+    cfg.lanes = {
+      a: {
+        kind: "schedule",
+        cron: "0 6 * * 1",
+        patterns: ["role-tech-architect", "role-qa-architect"],
+        fanout: mode,
+      },
+    };
+    const res = validateConfig(cfg);
+    assert.equal(res.ok, true, `mode=${mode}: ${JSON.stringify(res.errors)}`);
+  }
+});
+
+test("v2 lane rejects unknown fanout values", () => {
+  const cfg = DEFAULT_CONFIG();
+  cfg.lanes = {
+    a: {
+      kind: "schedule",
+      cron: "0 6 * * 1",
+      patterns: ["role-tech-architect", "role-qa-architect"],
+      fanout: "magical",
+    },
+  };
+  const res = validateConfig(cfg);
+  assert.equal(res.ok, false);
+  assert.ok(res.errors.some((e) => e.includes("fanout: must be one of")));
+});
+
+test("v2 lane warns when fanout is set on a single-pattern lane", () => {
+  const cfg = DEFAULT_CONFIG();
+  cfg.lanes = {
+    a: {
+      kind: "event",
+      on: "pull_request",
+      pattern: "flow-pr-self-review",
+      fanout: "sequential",
+    },
+  };
+  const res = validateConfig(cfg);
+  assert.equal(res.ok, true);
+  assert.ok(res.warnings.some((w) => w.includes("fanout: ignored for single-pattern")));
+});
+
+test("laneFanout() resolves to default when unset or invalid", async () => {
+  const { laneFanout, LANE_FANOUT_DEFAULT } = await import("../lib/config/schema.mjs");
+  assert.equal(laneFanout({}), LANE_FANOUT_DEFAULT);
+  assert.equal(laneFanout(null), LANE_FANOUT_DEFAULT);
+  assert.equal(laneFanout({ fanout: "matrix" }), "matrix");
+  assert.equal(laneFanout({ fanout: "sequential" }), "sequential");
+  assert.equal(laneFanout({ fanout: "concurrent" }), "concurrent");
+  assert.equal(laneFanout({ fanout: "bogus" }), LANE_FANOUT_DEFAULT);
+});
+
 test("v1 config is accepted with a deprecation warning", () => {
   const cfg = {
     version: 1,

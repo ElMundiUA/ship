@@ -7,12 +7,16 @@ created: 2026-04-17
 
 # RFC-0002 — `.ship/config.yml` schema
 
-> **Update (2026-04, via [RFC-0007](rfc-0007-lanes-and-run-agent.md)):**
-> `artifact_kind=workflow` has been retired. `artifacts.pins` no longer
-> accepts `workflow/<id>` keys — the validator rejects them. Examples
-> below still reference `workflow/scheduled-sdlc-lane` as the historical
-> shape; treat them as illustrative of the v1 schema, not as a copy-paste
-> template. Lanes now live under a `lanes:` section described in RFC-0007.
+> **Status:** partially superseded by
+> [RFC-0007](/docs/protocol/rfc-0007-lanes-and-run-agent).
+> `artifact_kind=workflow` was retired in Phase 6 — `artifacts.pins` no
+> longer accepts `workflow/<id>` keys, and the validator rejects them.
+> Schema v2 (RFC-0007 §"Normative schema — `.ship/config.yml` v2")
+> introduces a first-class `lanes:` map, `agent.default.provider`, and
+> `agent.overrides.<lane>.provider`. Examples below that still reference
+> `workflow/<id>` pins are preserved as **historical v1 shape** — see
+> the "v2 canonical" example in the Full schema section for the current
+> template.
 
 ## Summary
 
@@ -30,6 +34,13 @@ Rationale: one obvious home for Ship config keeps onboarding, doctor checks, and
 
 ## Full schema
 
+### Historical (v1)
+
+The original config shape. v1 is still validated by `shipctl` and
+converted to v2 via `shipctl migrate` (see
+[RFC-0007](/docs/protocol/rfc-0007-lanes-and-run-agent)). New projects
+should write v2 directly.
+
 ```yaml
 version: 1
 shipctl_min: "0.3.0"
@@ -46,8 +57,10 @@ stack:
   preset: "web-app"                       # web-app|api-backend|mobile-app|cli|monorepo|adoption-minimum
 artifacts:
   pins:                                   # pinned versions; sync won't touch
-    pattern/cloud-developer: "1.4.2"
-    workflow/scheduled-sdlc-lane: "~2.1"
+    pattern/role-developer: "1.4.2"
+    # workflow/<id> pins were valid under v1 but are rejected by the
+    # current validator — artifact_kind=workflow was retired in
+    # RFC-0007 Phase 6.
   auto_update: true                       # init/doctor trigger sync automatically
 cache:
   vcs_tracked: false                      # if true, .ship/cache/ is committed
@@ -59,6 +72,73 @@ telemetry:
     improvement_drafts: true
     errors: false
 ```
+
+### v2 canonical (current)
+
+Schema v2 is defined normatively in
+[RFC-0007](/docs/protocol/rfc-0007-lanes-and-run-agent) §"Normative
+schema — `.ship/config.yml` v2". Lanes are first-class; agent provider
+selection lives under `agent.default` / `agent.overrides`.
+
+```yaml
+version: 2
+shipctl_min: "0.12.0"
+preset: web-app
+repo: ElMundiUA/ship
+
+api:
+  base_url: "https://ship.elmundi.com"
+  channel: stable
+  ttl_hours: 24
+  offline_ok: true
+
+agent:
+  default:
+    provider: cursor-cloud
+  overrides:
+    pr_review:
+      provider: claude-code
+
+lanes:
+  seed_knowledge:
+    kind: once
+    pattern: onboard-seed-knowledge
+    idempotency:
+      key: seed-knowledge.v1
+      store: file
+      reset_on: version-change
+  pr_review:
+    kind: event
+    on: pull_request
+    pattern: flow-pr-self-review
+    permissions:
+      contents: read
+      pull-requests: write
+  daily_retro:
+    kind: schedule
+    cron: "0 9 * * 1-5"
+    pattern: flow-daily-retro
+
+artifacts:
+  pins:
+    pattern/role-developer: "1.4.2"
+  auto_update: true
+
+cache:
+  vcs_tracked: false
+
+telemetry:
+  share: false
+  anonymous_id: "uuid-v4"
+  scope:
+    artifact_usage: true
+    improvement_drafts: true
+    errors: false
+```
+
+`workflow/<id>` keys are no longer accepted under `artifacts.pins` in
+either schema version — the catalog no longer exposes
+`artifact_kind=workflow`.
 
 ## Field reference
 
@@ -124,19 +204,23 @@ Fully specified in RFC-0003. The config-side surface is:
 
 | Command                                         | Behavior                                                                           |
 |-------------------------------------------------|------------------------------------------------------------------------------------|
+| `shipctl config init`                           | Writes a new `.ship/config.yml` with detected defaults.                            |
 | `shipctl config get <key>`                      | Prints the value at the dotted path, resolving env/CLI precedence.                 |
 | `shipctl config set <key> <value>`              | Writes the YAML value in place, preserving comments; validates before saving.      |
-| `shipctl config unset <key>`                    | Removes the key; reverts to schema default on next read.                           |
-| `shipctl config validate`                       | Parses the file, enforces enums and required fields, exits non-zero on failure.    |
 | `shipctl config show [--effective]`             | Prints the config (`--effective` resolves env + CLI overrides).                    |
+| `shipctl config validate`                       | Parses the file, enforces enums and required fields, exits non-zero on failure.    |
+| `shipctl config path`                           | Prints the absolute path to the resolved `.ship/config.yml`.                       |
+
+The real subcommand surface today is `init | get | set | show |
+validate | path`. There is no `shipctl config unset`; to clear a key,
+edit the file directly or overwrite via `shipctl config set`.
 
 Example usage:
 
 ```bash
 shipctl config get api.channel
 shipctl config set api.channel edge
-shipctl config set artifacts.pins.pattern/cloud-developer 1.4.2
-shipctl config unset artifacts.pins.workflow/scheduled-sdlc-lane
+shipctl config set artifacts.pins.pattern/role-developer 1.4.2
 shipctl config validate
 shipctl config show --effective
 ```
@@ -261,8 +345,7 @@ stack:
   preset: "web-app"
 artifacts:
   pins:
-    pattern/cloud-developer: "1.4.2"
-    workflow/scheduled-sdlc-lane: "~2.1"
+    pattern/role-developer: "1.4.2"
     collection/web-application: "^3.0.0"
   auto_update: true
 cache:
@@ -294,7 +377,7 @@ stack:
   preset: "api-backend"
 artifacts:
   pins:
-    pattern/cloud-developer: "1.4.2"
+    pattern/role-developer: "1.4.2"
     collection/addendum-pharma: "1.0.0"
   auto_update: false   # reviewed upgrades only
 cache:

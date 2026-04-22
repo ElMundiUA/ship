@@ -8,6 +8,14 @@ supersedes_in_part: [rfc-0001]
 
 # RFC-0005 — Artifact folder spec v2
 
+> **Status:** partially implemented, partially superseded. The folder
+> layout and frontmatter-as-source-of-truth model are in production; the
+> `workflow` folder tree + `artifact_kind: workflow` entry in the kind
+> union were retired by
+> [RFC-0007](/docs/protocol/rfc-0007-lanes-and-run-agent) Phase 6.
+> Pattern metadata and `<category>-<name>` naming are extended in
+> [RFC-0008](/docs/protocol/rfc-0008-catalog-reform).
+
 ## Summary
 
 Each Ship artifact becomes a **folder** containing an `ARTIFACT.md` whose YAML frontmatter is the **single source of truth** for the artifact's metadata, version, and integration contract. The body of `ARTIFACT.md` is the agent-facing instruction. Optional sibling files (`examples/`, `reference/`, `scripts/`, `tests/`, `i18n/`, `CHANGELOG.md`) ship inside the same folder. The catalog `manifest.json` files (one per kind) are removed from git; the methodology API serves a live, FS-derived index from the same folders. CLI fetches an artifact as a folder, not a file. Drift is detected by lint, not by hand-syncing JSON.
@@ -30,7 +38,7 @@ The goal of this RFC is to remove duplicate state, give artifacts room to grow, 
 ```
 artifacts/
 ├── patterns/
-│   ├── cloud-developer/
+│   ├── role-developer/
 │   │   ├── ARTIFACT.md          (required, single source of truth)
 │   │   ├── examples/            (optional)
 │   │   │   └── implementation-pr.md
@@ -44,9 +52,6 @@ artifacts/
 │   │   │   └── uk/ARTIFACT.md
 │   │   └── CHANGELOG.md         (recommended for v ≥ 1.0)
 │   └── ...
-├── workflows/
-│   └── scheduled-sdlc-lane/
-│       └── ARTIFACT.md
 ├── tools/
 │   └── linear/
 │       └── ARTIFACT.md
@@ -57,12 +62,20 @@ artifacts/
 
 The `artifacts/` root sits at the repo root, not under `documentation/`, because artifacts are the **product** that the CLI distributes. `documentation/` keeps its current role as long-form prose for humans (the book, RFCs, getting started, examples).
 
+`artifacts/workflows/` was present in the original v2 tree; it was
+removed by [RFC-0007](/docs/protocol/rfc-0007-lanes-and-run-agent)
+Phase 6 (`artifact_kind=workflow` retired). Starter YAMLs now live
+under `backend/app/resources/starter_workflows/` and are consumed only
+through the Pipeline installation flow.
+
 ## Frontmatter — required for every kind
 
 ```yaml
 ---
-artifact_kind: pattern              # pattern | workflow | tool | collection
-id: cloud-developer                 # kebab-case, ≤ 64 chars, unique within kind
+artifact_kind: pattern              # pattern | tool | collection | doc
+                                    # (workflow retired by RFC-0007 Phase 6)
+id: role-developer                  # kebab-case, ≤ 64 chars, unique within kind
+                                    # (RFC-0008 requires a `<category>-<name>` id)
 name: Developer (cloud lane)        # human title, ≤ 80 chars
 description: >                      # SKILL.md style: third person, what + when
   Implementation prompt for the scheduled developer role: defines branch
@@ -114,19 +127,10 @@ spec:
   evals: tests/golden.yaml                     # path inside this folder, optional
 ```
 
-```yaml
-# workflows/<id>/ARTIFACT.md
-spec:
-  intent: cron                                 # cron | event | manual
-  cadence: "0 */2 * * *"                       # informational, not enforced
-  runtime: github-actions                      # github-actions | gitlab-ci | cron-anywhere
-  inputs: [tracker-tickets, repo]
-  outputs: [pr, ci-run, ticket-evidence]
-  install_target: .github/workflows/sdlc-scheduled.yml
-  requires:
-    tools: [tracker, ci]
-    patterns: [cloud-developer, cloud-intake]
-```
+> The `workflows/<id>/ARTIFACT.md` `spec:` payload was retired by
+> [RFC-0007](/docs/protocol/rfc-0007-lanes-and-run-agent) Phase 6 along
+> with the rest of `artifact_kind=workflow`. Cadences are now declared
+> as lanes in `.ship/config.yml` (v2).
 
 ```yaml
 # tools/<id>/ARTIFACT.md
@@ -144,8 +148,8 @@ spec:
   subkind: preset                              # preset | addendum | starter
   applies_to: [mobile-app]
   composes:
-    patterns: [cloud-developer, cloud-intake, cloud-qa-architect]
-    workflows: [scheduled-sdlc-lane, hosted-e2e-regression]
+    patterns: [role-developer, role-intake, role-qa-architect]
+    # `workflows:` was removed alongside artifact_kind=workflow (RFC-0007 Phase 6).
     tools: [tracker-contract, github-actions, playwright]
   addendums_compatible_with: [pharma]
   regulatory_frameworks: []                    # only addendums populate this
@@ -161,7 +165,7 @@ The exact algorithm, sorted file list, and canonical byte representation are nor
 
 ## Catalog manifests — removed from git
 
-The current `patterns/manifest.json`, `workflows/manifest.json`, `tools/manifest.json`, `collections/manifest.json` files are deleted in Wave 1. They are replaced by:
+The current `patterns/manifest.json`, `tools/manifest.json`, `collections/manifest.json` files are deleted in Wave 1 (`workflows/manifest.json` went away with the rest of `artifact_kind=workflow` in RFC-0007 Phase 6). They are replaced by:
 
 - An **in-memory index** built by the methodology API at startup from `artifacts/**/ARTIFACT.md`, refreshed on filesystem watch in dev. Served as `GET /api/<kind>` (list) and `GET /api/<kind>/<id>` (single artifact, including a directory listing for nested files).
 - An **optional release-time bundle** (`shipctl release-bundle.tar.gz` + `index.json`), produced by `scripts/build_release_bundle.py`, attached to GitHub releases for offline / firewalled adoption. This is **not** committed to the repo.
@@ -182,7 +186,14 @@ New:
 
 Deprecated and removed in v0.x:
 
-- `GET /manifest` — was a fan-out across kinds; recreate client-side as `Promise.all([list(patterns), list(workflows), …])` or as a release bundle.
+- `GET /manifest` — was a fan-out across kinds; recreate client-side as `Promise.all([list(patterns), list(tools), list(collections)])` or as a release bundle.
+
+> **Footnote (implementation reality).** `documentation/concepts.md` and
+> this RFC describe the current on-disk model: per-kind
+> `manifest.json` files are **not** generated. The backend serves a
+> live FS-derived index off `artifacts/<kind>/<id>/ARTIFACT.md`
+> frontmatter; older paragraphs in this RFC that read as if
+> `manifest.json` is still emitted should be treated as historical.
 
 ## Status (as-built)
 
@@ -203,7 +214,7 @@ Followups still on the roadmap (no migration involved):
 
 ## Out of scope for this RFC
 
-- A new artifact kind beyond the existing four (`pattern`, `workflow`, `tool`, `collection`). Adding one is an RFC-0006-shaped follow-up and must satisfy the SKILL.md-style description bar from day one.
+- A new artifact kind beyond the existing three executable kinds (`pattern`, `tool`, `collection`) plus `doc`. Adding one is an RFC-0006-shaped follow-up and must satisfy the SKILL.md-style description bar from day one. (`workflow` was the fifth kind in the original RFC-0005 draft; it was retired in RFC-0007 Phase 6.)
 - An evals format. `tests/golden.yaml` is sketched here as a directory convention; the schema for evals is RFC-0007.
 - A custom MCP surface. The methodology API stays HTTP. If a thin MCP wrapper is wanted, it is built later as a tiny adapter over the same routes.
 

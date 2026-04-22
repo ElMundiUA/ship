@@ -365,6 +365,212 @@ test("shipctl run callback includes lane + pattern + GH breadcrumbs", async () =
   }
 });
 
+/* ------------------------------------------------------------------ */
+/* RFC-0008 C3.2 — multi-pattern lanes                                 */
+/* ------------------------------------------------------------------ */
+
+// The monorepo ships these three patterns on disk; we use them because
+// `shipctl run` resolves patterns via SHIP_REPO when available, which
+// keeps the tests hermetic (no network).
+const AUDIT_PATTERNS = [
+  "role-tech-architect",
+  "role-qa-architect",
+  "role-security-officer",
+];
+
+test("shipctl run rejects multi-pattern matrix lane without --pattern", () => {
+  const dir = mktmp();
+  writeConfig(
+    dir,
+    baseConfig({
+      lanes: {
+        audit: {
+          kind: "once",
+          patterns: AUDIT_PATTERNS,
+          idempotency: { key: "audit.v1" },
+          // fanout defaults to matrix
+        },
+      },
+    }),
+  );
+  const r = runCtl(
+    ["run", "--lane", "audit", "--trigger", "manual", "--cwd", dir],
+    { SHIP_REPO: REPO_ROOT },
+  );
+  assert.equal(r.status, 1, `${r.stdout}\n${r.stderr}`);
+  assert.match(r.stderr, /fanout=matrix/);
+  assert.match(r.stderr, /--pattern/);
+});
+
+test("shipctl run --pattern executes a single pattern from a matrix lane", () => {
+  const dir = mktmp();
+  writeConfig(
+    dir,
+    baseConfig({
+      lanes: {
+        audit: {
+          kind: "once",
+          patterns: AUDIT_PATTERNS,
+          idempotency: { key: "audit.v1" },
+        },
+      },
+    }),
+  );
+  const r = runCtl(
+    [
+      "run",
+      "--lane",
+      "audit",
+      "--pattern",
+      "role-qa-architect",
+      "--trigger",
+      "manual",
+      "--cwd",
+      dir,
+      "--json",
+    ],
+    { SHIP_REPO: REPO_ROOT },
+  );
+  assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
+  const payload = JSON.parse(r.stdout);
+  assert.equal(payload.status, "completed");
+  assert.equal(payload.mode, "single");
+  assert.equal(payload.patterns.length, 1);
+  assert.equal(payload.patterns[0].id, "role-qa-architect");
+});
+
+test("shipctl run --pattern rejects patterns not declared on the lane", () => {
+  const dir = mktmp();
+  writeConfig(
+    dir,
+    baseConfig({
+      lanes: {
+        audit: {
+          kind: "once",
+          patterns: AUDIT_PATTERNS,
+          idempotency: { key: "audit.v1" },
+        },
+      },
+    }),
+  );
+  const r = runCtl(
+    [
+      "run",
+      "--lane",
+      "audit",
+      "--pattern",
+      "role-intake",
+      "--trigger",
+      "manual",
+      "--cwd",
+      dir,
+    ],
+    { SHIP_REPO: REPO_ROOT },
+  );
+  assert.equal(r.status, 1, `${r.stdout}\n${r.stderr}`);
+  assert.match(r.stderr, /not declared on lane/);
+});
+
+test("shipctl run fanout=sequential emits every pattern's body with a banner", () => {
+  const dir = mktmp();
+  writeConfig(
+    dir,
+    baseConfig({
+      lanes: {
+        audit: {
+          kind: "once",
+          patterns: AUDIT_PATTERNS,
+          fanout: "sequential",
+          idempotency: { key: "audit.v1" },
+        },
+      },
+    }),
+  );
+  const r = runCtl(
+    ["run", "--lane", "audit", "--trigger", "manual", "--cwd", dir],
+    { SHIP_REPO: REPO_ROOT },
+  );
+  assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
+  for (const id of AUDIT_PATTERNS) {
+    assert.match(r.stdout, new RegExp(`# ship: pattern=${id} sha256=[0-9a-f]{64}`));
+  }
+});
+
+test("shipctl run --fanout=sequential overrides a matrix-configured lane", () => {
+  const dir = mktmp();
+  writeConfig(
+    dir,
+    baseConfig({
+      lanes: {
+        audit: {
+          kind: "once",
+          patterns: AUDIT_PATTERNS,
+          idempotency: { key: "audit.v1" },
+        },
+      },
+    }),
+  );
+  const r = runCtl(
+    [
+      "run",
+      "--lane",
+      "audit",
+      "--fanout",
+      "sequential",
+      "--trigger",
+      "manual",
+      "--cwd",
+      dir,
+      "--json",
+    ],
+    { SHIP_REPO: REPO_ROOT },
+  );
+  assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
+  const payload = JSON.parse(r.stdout);
+  assert.equal(payload.mode, "sequential");
+  assert.equal(payload.patterns.length, AUDIT_PATTERNS.length);
+  assert.deepEqual(
+    payload.patterns.map((p) => p.id),
+    AUDIT_PATTERNS,
+  );
+});
+
+test("shipctl run multi-pattern callback lists all patterns in metrics", async () => {
+  const dir = mktmp();
+  writeConfig(
+    dir,
+    baseConfig({
+      lanes: {
+        audit: {
+          kind: "once",
+          patterns: AUDIT_PATTERNS,
+          fanout: "sequential",
+          idempotency: { key: "audit.v1" },
+        },
+      },
+    }),
+  );
+  const mock = await startMockShip();
+  try {
+    const r = await runCtlAsync(
+      ["run", "--lane", "audit", "--trigger", "manual", "--cwd", dir, "--json"],
+      { SHIP_CALLBACK_URL: mock.url, SHIP_RUN_TOKEN: "tok" },
+    );
+    assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
+    assert.equal(mock.received.length, 1);
+    const body = mock.received[0].body;
+    assert.equal(body.status, "succeeded");
+    assert.match(body.summary, /3 patterns/);
+    assert.equal(body.metrics.lane_id, "audit");
+    assert.equal(
+      body.metrics.patterns,
+      "role-tech-architect,role-qa-architect,role-security-officer",
+    );
+  } finally {
+    await mock.close();
+  }
+});
+
 test("shipctl run callback omits GH metrics when env is clean", async () => {
   const dir = mktmp();
   writeConfig(

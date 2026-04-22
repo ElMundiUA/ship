@@ -1745,12 +1745,24 @@ class LaneTriggerIn(BaseModel):
     ``once`` / ``event`` / ``schedule`` is required. We keep both
     ``cron``-style (``schedule``) and pattern/idempotency metadata
     flat here so the emitter can copy them straight through.
+
+    RFC-0008 C3.1 introduced the canonical ``patterns: [ids]`` list
+    for multi-pattern lanes; ``pattern: <id>`` stays as the
+    single-pattern alias. The console still posts ``pattern`` for
+    single-pattern lanes — that keeps existing diffs minimal — and
+    the emitter prefers ``patterns`` only when the list has more
+    than one entry.
     """
 
     once: str | None = None
     event: str | None = None
     schedule: str | None = None
     pattern: str | None = None
+    patterns: list[str] | None = None
+    # RFC-0008 C3.2 — fan-out strategy for multi-pattern lanes. Only
+    # meaningful when ``patterns`` has ≥2 entries; validator below
+    # surfaces a clear error if an unknown value is sent.
+    fanout: str | None = None
     idempotency_key: str | None = None
 
 
@@ -2029,11 +2041,80 @@ async def propose_repo_config(
                     ),
                 },
             )
-        # Preserve insertion order: trigger first, then pattern,
+        # ``patterns`` (list) and ``pattern`` (single alias) are
+        # mutually exclusive; reject a payload that sends both so
+        # downstream YAML can't silently drop one.
+        patterns_list: list[str] | None = None
+        if trigger.patterns is not None and trigger.pattern is not None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_pattern_shape",
+                    "message": (
+                        f"lane {lane_id!r}: send either 'pattern' "
+                        "(single) or 'patterns' (list), not both"
+                    ),
+                },
+            )
+        if trigger.patterns is not None:
+            patterns_list = [
+                p.strip() for p in trigger.patterns if isinstance(p, str) and p.strip()
+            ]
+            if not patterns_list:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={
+                        "code": "invalid_patterns",
+                        "message": (
+                            f"lane {lane_id!r}: 'patterns' must contain "
+                            "at least one pattern id"
+                        ),
+                    },
+                )
+
+        # Preserve insertion order: trigger first, then pattern(s),
         # then idempotency_key so diffs stay minimal and predictable.
+        # Emit ``pattern:`` (single) for the common one-entry case so
+        # existing configs get byte-identical round-trips; only
+        # surface ``patterns:`` (list) when the lane really has >1
+        # pattern. A caller that explicitly sent ``patterns: [only]``
+        # gets the single-form back — the list shape has no value on
+        # disk for one entry and churn-free diffs win.
         flat: dict[str, Any] = {trigger_kinds[0]: getattr(trigger, trigger_kinds[0])}
-        if trigger.pattern is not None:
+        if patterns_list is not None:
+            if len(patterns_list) == 1:
+                flat["pattern"] = patterns_list[0]
+            else:
+                flat["patterns"] = list(patterns_list)
+        elif trigger.pattern is not None:
             flat["pattern"] = trigger.pattern
+        # RFC-0008 C3.2 — fanout applies only to multi-pattern lanes.
+        # Skip it for single-pattern lanes (even when the caller sent
+        # one) to keep diffs clean; reject unknown modes with a 422 so
+        # the editor doesn't silently produce a config the CLI will
+        # refuse to validate.
+        if trigger.fanout is not None:
+            if trigger.fanout not in ("matrix", "sequential", "concurrent"):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={
+                        "code": "invalid_fanout",
+                        "message": (
+                            f"lane {lane_id!r}: 'fanout' must be one of "
+                            "matrix|sequential|concurrent"
+                        ),
+                    },
+                )
+            effective_pattern_count = (
+                len(patterns_list)
+                if patterns_list is not None
+                else (1 if trigger.pattern is not None else 0)
+            )
+            # Only emit fanout when it's meaningful (≥2 patterns) and
+            # not the default ``matrix``. A single-pattern lane that
+            # sets fanout=matrix renders to a no-op key, so omit it.
+            if effective_pattern_count >= 2 and trigger.fanout != "matrix":
+                flat["fanout"] = trigger.fanout
         if trigger.idempotency_key is not None:
             flat["idempotency_key"] = trigger.idempotency_key
         normalised[lane_id] = flat

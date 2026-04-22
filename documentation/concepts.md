@@ -8,7 +8,39 @@ A versioned unit of methodology that Ship distributes — a `pattern`, `tool`, o
 
 ## Kind
 
-The artifact's category. Ship ships three kinds today: `pattern` (a role or lane prompt), `tool` (an integration or adapter description), and `collection` (a curated bundle: a preset, an addendum, or an agent-rules set). The wire surface in [RFC-0001](/docs/protocol/rfc-0001-artifacts-protocol#artifact-kinds) also reserves `doc` for indexed long-form pages under `documentation/`, but `doc` is not authored as a folder — it is anything the site exposes by path. Kind drives the URL (`/<kind>s`), the cache subdirectory, and the CLI subcommand: `shipctl pattern …`, `shipctl tool …`, `shipctl collection …`. The earlier `workflow` kind was retired by [RFC-0007](/docs/protocol/rfc-0007-lanes-and-run-agent); pinning `workflow/<id>` is now a config validation error.
+The artifact's category. Ship ships three kinds today: `pattern` (a role or lane prompt), `tool` (an integration or adapter description), and `collection` (a curated bundle: a preset, an addendum, or an agent-rules set). The wire surface in [RFC-0001](/docs/protocol/rfc-0001-artifacts-protocol#artifact-kinds) also reserves `doc` for indexed long-form pages under `documentation/`, but `doc` is not authored as a folder — it is anything the site exposes by path. Kind drives the URL (`/<kind>s`), the cache subdirectory, and the CLI subcommand: `shipctl pattern …`, `shipctl tool …`, `shipctl collection …`. The earlier `workflow` kind was retired by [RFC-0007 Phase 6](/docs/protocol/rfc-0007-lanes-and-run-agent); pinning `workflow/<id>` is a config validation error.
+
+## Category
+
+The sub-type of a `pattern`. [RFC-0008](/docs/protocol/rfc-0008-catalog-reform) fixes six values — `role`, `flow`, `scan`, `op`, `onboard`, `common` — matching the id prefix (`role-developer`, `flow-daily-retro`, `scan-tech-debt`, …). The category drives how the Library UI groups cards, which starter YAML the Pipeline resolver picks by default, and whether a pattern is directly invokable (`common-*` patterns carry `modes: []` and are only referenced via `spec.include`). Declared as `spec.category` in the pattern's frontmatter, mirrored on `group:` for historical UIs.
+
+## Mode
+
+The invocation shape a pattern supports. `spec.modes: [lane, request]` lists one or both of the two dispatch surfaces: **lane** (scheduled or event-driven, wired from `.ship/config.yml`) and **request** (ad-hoc one-shot dispatched from the Requests UI). The Library filters to `modes.lane`; `/requests` filters to `modes.request`. `common-*` fragments declare `modes: []` — not directly invokable, pulled in via `spec.include`. See [RFC-0008 § Metadata schema](/docs/protocol/rfc-0008-catalog-reform#metadata-schema).
+
+## Lane
+
+A triggered execution unit declared under `lanes:` in `.ship/config.yml` (v2) — one entry binds a trigger (`event`, `schedule`, or `once`) to one or more patterns. `shipctl lanes install` renders `.github/workflows/ship-<lane>.yml` wrappers; `shipctl run <lane>` is the dispatch entry point. Full reference: [Lanes](/docs/lanes), normative spec in [RFC-0007](/docs/protocol/rfc-0007-lanes-and-run-agent).
+
+## Request
+
+An ad-hoc one-shot dispatch of a pattern from the console's Requests UI. Patterns with `modes` containing `request` expose their `spec.inputs` as a dynamic form; the console posts `{pattern_id, inputs}` to the backend which maps onto `adhoc-agent-run.yml`. The replacement for the old free-form prompt field — operators now pick from the catalog. See [RFC-0008](/docs/protocol/rfc-0008-catalog-reform).
+
+## Include
+
+A pattern id listed under `spec.include: [...]` whose body is composed into the host pattern's prompt at render time (max depth 2, cycles raise). Canonical way to share boilerplate — the shared rules that used to be duplicated across role prompts now live in `pattern:common-base`, and every `role-*` pattern pulls them in via `include: [common-base]`. See [RFC-0008 § Include resolution](/docs/protocol/rfc-0008-catalog-reform#include-resolution).
+
+## Knowledge bucket
+
+A scoped collection of retrievable **articles** (`bucket_articles` rows) the agent can consult at render time. Scopes form a ladder — `workspace → project → repo → user` — and the resolver returns the most specific hit first. Sources include `.ship/knowledge/*.md` files mirrored from a repo, external uploads, Notion / Linear connectors, and per-user memory; all pass through the Distiller classifier before landing. Patterns wire buckets via `spec.knowledge_topics: [...]`. Full reference: [Knowledge buckets](/docs/knowledge-buckets).
+
+## Scope ladder
+
+The resolution order for `knowledge_buckets`: `workspace → project → repo → user`. The console's scope pill in AppShell switches the active context; the backend resolver walks the ladder and returns the most-specific article per topic, with the `user` overlay acting as a parallel private layer for the signed-in user. Authoritative enum in `backend/app/db/models/agent_memory.py:BucketScope`.
+
+## Distiller
+
+The LLM-backed classifier (`backend/app/services/distiller.py`) that turns raw inbound content — repo-mirrored markdown, uploads, connector fetches — into structured `bucket_articles` rows tagged with topic + scope. Endpoint: `POST /v1/workspaces/{ws}/buckets/{slug}/distill`; run history lives at `/buckets/{slug}/distill/runs` and is visible on the bucket detail page. Inbound adapters live under `backend/app/services/distiller_sources.py`.
 
 ## Version
 
@@ -88,4 +120,4 @@ A markdown file `shipctl feedback draft` writes under `.ship/feedback-drafts/YYY
 
 ## Where to next
 
-Read [Configuration](/docs/configuration) to see these terms expressed as fields of `.ship/config.yml` and the rest of the `.ship/` layout; read [Authoring](/docs/authoring) to write a new artifact end-to-end against the v2 folder spec; read the [Protocol RFCs](/docs/protocol) for the normative definitions ([RFC-0001](/docs/protocol/rfc-0001-artifacts-protocol) for the wire and version rules, [RFC-0002](/docs/protocol/rfc-0002-shipctl-config) for the config schema, [RFC-0003](/docs/protocol/rfc-0003-telemetry-and-feedback) for telemetry and feedback, [RFC-0004](/docs/protocol/rfc-0004-adapters) for adapters, [RFC-0005](/docs/protocol/rfc-0005-artifact-folder-spec-v2) for the folder layout).
+Read [Configuration](/docs/configuration) to see these terms expressed as fields of `.ship/config.yml` and the rest of the `.ship/` layout; read [Lanes](/docs/lanes) and [Knowledge buckets](/docs/knowledge-buckets) for the two surfaces most contributors touch next; read [Authoring](/docs/authoring) to write a new artifact end-to-end against the v2 folder spec; read the [Protocol RFCs](/docs/protocol) for the normative definitions ([RFC-0001](/docs/protocol/rfc-0001-artifacts-protocol) for the wire and version rules, [RFC-0002](/docs/protocol/rfc-0002-shipctl-config) for the config schema, [RFC-0003](/docs/protocol/rfc-0003-telemetry-and-feedback) for telemetry and feedback, [RFC-0004](/docs/protocol/rfc-0004-adapters) for adapters, [RFC-0005](/docs/protocol/rfc-0005-artifact-folder-spec-v2) for the folder layout, [RFC-0007](/docs/protocol/rfc-0007-lanes-and-run-agent) for lanes, [RFC-0008](/docs/protocol/rfc-0008-catalog-reform) for the catalog reform).

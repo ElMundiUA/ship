@@ -75,13 +75,20 @@ Before writing any file, the agent MUST follow the **artifact protocol**
   (addendums tighten or annotate; they never silently relax a base rule).
 
 After installation the agent records every consumed artifact in the final
-PR description as `<kind>:<id>@<version>`, one per line:
+PR description as `<kind>:<id>@<version>`, one per line. The list is paired
+with the v2 lane block that actually runs each pattern (schema v2 is the
+default for new installs; for repos still on v1, run `shipctl migrate`
+before authoring the lane block):
 
 ```
 collection:agent-rules-cursor@1.0.0
 collection:preset-web-app@2.1.3
 pattern:role-developer@1.4.2
-workflow:scheduled-sdlc-lane@2.1.0
+pattern:flow-daily-retro@1.2.0
+
+lanes.daily_retro.kind: schedule
+lanes.daily_retro.cron: "0 9 * * 1-5"
+lanes.daily_retro.pattern: flow-daily-retro
 ```
 
 Concrete deliverables for Phase 3:

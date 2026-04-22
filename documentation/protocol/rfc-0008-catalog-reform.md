@@ -40,6 +40,16 @@ entry point. This RFC completes the unification by making the Requests
 pathway `shipctl run --pattern <id>` — a pattern the operator picks
 from the catalog rather than a prompt they type.
 
+## Implementation status
+
+| Phase | Scope                                                        | Status  |
+|-------|--------------------------------------------------------------|---------|
+| 0     | Schema contract (parse `category` / `modes` / `default_trigger` / `inputs` / `enabled_on_install`). | shipped — commit `e8e6a26` on 2026-04-22 |
+| 1     | Pattern rename to `<category>-<name>`.                       | shipped — commit `e8e6a26` on 2026-04-22 |
+| 2     | Retire `DefaultPipelineSpec` (C3.1–C3.4).                    | planned next |
+| 3     | Requests catalog UI.                                         | partial — landed in the 2026-04-22 Lanes hub + Requests 3-phase overhaul (commit `0506ae9`); pattern-driven form is live, full pattern-input schema still landing |
+| 4     | Expansion pack — 10 new Phase-1 patterns.                    | planned |
+
 ## Motivation
 
 Three concrete problems:
@@ -214,6 +224,54 @@ For the Requests form generator:
 - `bool` — checkbox
 - `ref` — reference to another artifact (resolved in form via autocomplete)
 
+## Schema v2.1 — multi-pattern lanes
+
+RFC-0006 fixed one pattern per lane (`lanes.<id>.pattern: <pattern-id>`).
+RFC-0008 promotes the general case — a lane is a **bundle of patterns
+that share a trigger** — because the retired `DefaultPipelineSpec`
+already treated `tech_debt` as three parallel role runs, and Phase-1
+expansion adds more bundles (e.g. a "release hardening" lane running
+`scan-security-deps` + `scan-api-contract`).
+
+Canonical shape (v2.1):
+
+```yaml
+lanes:
+  tech_debt_audit:
+    schedule: "0 6 * * 1"
+    patterns:
+      - role-tech-architect
+      - role-qa-architect
+      - role-security-officer
+```
+
+Compatibility rules:
+
+- `pattern: <id>` (scalar) is accepted as a **back-compat alias** for
+  `patterns: [<id>]`. Single-pattern lanes keep the scalar shape on
+  write so existing configs see zero diff.
+- Exactly one of `pattern` / `patterns` is required per lane; sending
+  both is rejected (`invalid_pattern_shape`).
+- The emitter produces an inline YAML flow list (`patterns: [a, b,
+  c]`) for multi-pattern lanes to keep diffs readable.
+
+Runtime semantics:
+
+- `shipctl run <lane>` currently rejects multi-pattern lanes with a
+  usage error pointing at `parallel-audit-lanes.yml` (C3.2, next).
+- `shipctl sync` / `shipctl lanes list` walk the full patterns list;
+  the lockfile records provenance for every member pattern.
+- The backend lanes-sync writes the full list into
+  `Lane.config_blob.patterns` and keeps `Lane.pattern` = first element
+  for existing single-pattern consumers until C3.4 renames `kind`.
+
+Helpers (single source of truth):
+
+- `cli/lib/config/schema.mjs` exports `lanePatterns(lane): string[]`
+  (canonical list) and `lanePrimaryPattern(lane): string | null`.
+- `backend/app/services/lanes_sync.py` does the same normalisation on
+  parse.
+
 ## Retire DefaultPipelineSpec
 
 `backend/app/services/default_pipelines.py` stops being the source of
@@ -321,10 +379,19 @@ One PR per phase, merged sequentially:
    references (collections, docs, tests, CLI templates, UI, starter
    workflows). Populate the new metadata fields per the rename table.
    Restamp SHAs. No backward-compat aliases; one breaking PR.
-3. **Phase 2 — retire DefaultPipelineSpec.** Seed bundle + lane
-   catalog endpoint + `Pipeline` seeding all pivot to walking
-   patterns with `modes.lane`. Alembic migration remaps existing
-   `Pipeline.kind` values. `default_pipelines.py` deleted.
+3. **Phase 2 — retire DefaultPipelineSpec.** Sub-steps C3.1–C3.4:
+   - **C3.1.** Extend v2 schema (CLI + backend) to accept
+     `lanes.<id>.patterns: [ids]`; `pattern: <id>` stays as alias.
+     Emitter prefers `patterns: [...]`. Single-pattern lanes keep
+     the scalar shape. *(landed with this RFC)*
+   - **C3.2.** `parallel-audit-lanes.yml` becomes parametric over
+     the lane's patterns list instead of three hard-coded entries.
+   - **C3.3.** Seed bundle + lane catalog endpoint + `Pipeline`
+     seeding all pivot to walking patterns with `modes.lane` and
+     `enabled_on_install.presets`. `PRESET_ENABLED_KINDS` is gone.
+   - **C3.4.** Rename `Pipeline.kind` → `lane_id`. Alembic
+     migration remaps existing rows. `default_pipelines.py`
+     deleted.
 4. **Phase 3 — Requests catalog UI.** `/requests` rewritten to show
    the catalog grid + dynamic form. Backend accepts
    `{pattern_id, inputs}` and maps that onto the existing

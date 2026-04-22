@@ -280,3 +280,235 @@ async def test_propose_rejects_empty_lanes(
     )
     assert response.status_code == 422, response.text
     assert response.json()["detail"]["code"] == "empty_lanes"
+
+
+# ---------------------------------------------------------------------------
+# RFC-0008 C3.1 — ``patterns: [ids]`` on POST /config/propose
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_propose_emits_patterns_list_for_multi_pattern_lane(
+    monkeypatch, v1_client, seed_workspace_with_repo
+) -> None:
+    """Multi-pattern lanes round-trip through the emitter as a flow list.
+
+    Single-pattern lanes keep the compact ``pattern: <id>`` shape so
+    existing configs see no diff; only lanes that genuinely have more
+    than one pattern upgrade to ``patterns: [a, b, c]``.
+    """
+    from backend.app.integrations.github.workflows import StarterWorkflowPR
+
+    raw, workspace, _install, repo = seed_workspace_with_repo
+    _patch_blob(monkeypatch, content=_SAMPLE_CONFIG, sha="sha-abc")
+
+    captured: dict[str, object] = {}
+
+    async def _commit(
+        repo, install, *, files, title, branch_label, pr_body_header, settings,
+        return_url=None, client=None,
+    ):
+        captured["files"] = files
+        return StarterWorkflowPR(
+            pr_url="https://github.com/acme/lanes-config/pull/9",
+            pr_number=9,
+            branch="ship/lanes-config-multi",
+        )
+
+    monkeypatch.setattr(
+        "backend.app.integrations.github.workflows.commit_bundle_pr", _commit
+    )
+
+    response = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/repos/{repo.id}/config/propose",
+        headers={"Authorization": f"Bearer {raw}"},
+        json={
+            "base_sha": "sha-abc",
+            "change_summary": "Audit lane now fans out to three roles",
+            "lanes": {
+                "tech_debt_audit": {
+                    "schedule": "0 6 * * 1",
+                    "patterns": [
+                        "role-tech-architect",
+                        "role-qa-architect",
+                        "role-security-officer",
+                    ],
+                },
+                # Single-pattern lane stays on the scalar alias so the
+                # diff against the previous config is minimal.
+                "pr_review": {
+                    "event": "pull_request",
+                    "pattern": "flow-pr-self-review",
+                },
+            },
+        },
+    )
+    assert response.status_code == 200, response.text
+
+    files = captured["files"]
+    assert len(files) == 1
+    _, content = files[0]
+    # Multi-pattern lane → inline flow list, alphabetic-preserving order.
+    assert (
+        "patterns: [role-tech-architect, role-qa-architect, role-security-officer]"
+        in content
+    )
+    # Single-pattern lane stays on ``pattern:`` scalar.
+    assert "pattern: flow-pr-self-review" in content
+    # And the old scalar form didn't leak into the multi lane.
+    assert "pattern: role-tech-architect" not in content
+
+
+@pytest.mark.asyncio
+async def test_propose_rejects_patterns_and_pattern_together(
+    monkeypatch, v1_client, seed_workspace_with_repo
+) -> None:
+    raw, workspace, _install, repo = seed_workspace_with_repo
+    _patch_blob(monkeypatch, content=_SAMPLE_CONFIG, sha="sha-abc")
+
+    response = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/repos/{repo.id}/config/propose",
+        headers={"Authorization": f"Bearer {raw}"},
+        json={
+            "base_sha": "sha-abc",
+            "lanes": {
+                "confused": {
+                    "event": "pull_request",
+                    "pattern": "flow-pr-self-review",
+                    "patterns": ["flow-pr-self-review"],
+                },
+            },
+        },
+    )
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"]["code"] == "invalid_pattern_shape"
+
+
+@pytest.mark.asyncio
+async def test_propose_emits_fanout_only_for_multi_pattern_lanes(
+    monkeypatch, v1_client, seed_workspace_with_repo
+) -> None:
+    """`fanout` is only useful when ≥2 patterns fan out together.
+
+    For single-pattern lanes (even when the caller sent fanout) the
+    emitter drops the key so we don't pollute diffs with fields that
+    have no runtime effect. For multi-pattern lanes ``matrix``
+    (default) is also omitted; ``sequential`` / ``concurrent`` are
+    written through.
+    """
+    from backend.app.integrations.github.workflows import StarterWorkflowPR
+
+    raw, workspace, _install, repo = seed_workspace_with_repo
+    _patch_blob(monkeypatch, content=_SAMPLE_CONFIG, sha="sha-abc")
+
+    captured: dict[str, object] = {}
+
+    async def _commit(
+        repo, install, *, files, title, branch_label, pr_body_header, settings,
+        return_url=None, client=None,
+    ):
+        captured["files"] = files
+        return StarterWorkflowPR(
+            pr_url="https://github.com/acme/lanes-config/pull/11",
+            pr_number=11,
+            branch="ship/lanes-fanout",
+        )
+
+    monkeypatch.setattr(
+        "backend.app.integrations.github.workflows.commit_bundle_pr", _commit
+    )
+
+    response = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/repos/{repo.id}/config/propose",
+        headers={"Authorization": f"Bearer {raw}"},
+        json={
+            "base_sha": "sha-abc",
+            "change_summary": "Pick sequential fanout for the audit lane",
+            "lanes": {
+                # Single-pattern lane: fanout is not emitted even if
+                # the caller sent it — it has no runtime effect.
+                "pr_review": {
+                    "event": "pull_request",
+                    "pattern": "flow-pr-self-review",
+                    "fanout": "sequential",
+                },
+                # Multi-pattern lane with default fanout=matrix: key
+                # omitted (matrix is the runtime default, no diff).
+                "tech_debt_default": {
+                    "schedule": "0 6 * * 1",
+                    "patterns": ["role-tech-architect", "role-qa-architect"],
+                    "fanout": "matrix",
+                },
+                # Multi-pattern with an explicit non-default fanout:
+                # the key lands in the YAML so the CLI honours it.
+                "tech_debt_seq": {
+                    "schedule": "0 7 * * 1",
+                    "patterns": [
+                        "role-tech-architect",
+                        "role-qa-architect",
+                        "role-security-officer",
+                    ],
+                    "fanout": "sequential",
+                },
+            },
+        },
+    )
+    assert response.status_code == 200, response.text
+
+    files = captured["files"]
+    _, content = files[0]
+    # pr_review: single-pattern → no fanout key anywhere near it.
+    pr_block = content.split("pr_review:")[1].split("tech_debt_default")[0]
+    assert "fanout" not in pr_block
+    # tech_debt_default: multi-pattern but matrix is the default → still no fanout.
+    td_default = content.split("tech_debt_default:")[1].split("tech_debt_seq")[0]
+    assert "fanout" not in td_default
+    # tech_debt_seq: explicit non-default → key is written.
+    td_seq = content.split("tech_debt_seq:")[1]
+    assert "fanout: sequential" in td_seq
+
+
+@pytest.mark.asyncio
+async def test_propose_rejects_unknown_fanout(
+    monkeypatch, v1_client, seed_workspace_with_repo
+) -> None:
+    raw, workspace, _install, repo = seed_workspace_with_repo
+    _patch_blob(monkeypatch, content=_SAMPLE_CONFIG, sha="sha-abc")
+
+    response = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/repos/{repo.id}/config/propose",
+        headers={"Authorization": f"Bearer {raw}"},
+        json={
+            "base_sha": "sha-abc",
+            "lanes": {
+                "audit": {
+                    "schedule": "0 6 * * 1",
+                    "patterns": ["role-tech-architect", "role-qa-architect"],
+                    "fanout": "teleport",
+                },
+            },
+        },
+    )
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"]["code"] == "invalid_fanout"
+
+
+@pytest.mark.asyncio
+async def test_propose_rejects_empty_patterns_list(
+    monkeypatch, v1_client, seed_workspace_with_repo
+) -> None:
+    raw, workspace, _install, repo = seed_workspace_with_repo
+    _patch_blob(monkeypatch, content=_SAMPLE_CONFIG, sha="sha-abc")
+
+    response = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/repos/{repo.id}/config/propose",
+        headers={"Authorization": f"Bearer {raw}"},
+        json={
+            "base_sha": "sha-abc",
+            "lanes": {
+                "empty": {"schedule": "0 9 * * *", "patterns": []},
+            },
+        },
+    )
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"]["code"] == "invalid_patterns"

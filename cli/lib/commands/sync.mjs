@@ -7,7 +7,7 @@ import {
   writeState,
   findShipRoot,
 } from "../config/io.mjs";
-import { validateConfig } from "../config/schema.mjs";
+import { validateConfig, lanePatterns as lanePatternList } from "../config/schema.mjs";
 import { fetchManifest, fetchArtifact } from "../http.mjs";
 import {
   readCached,
@@ -457,19 +457,26 @@ export async function buildLockfile({ shipRoot, config, baseUrl, channel, verbos
   const notes = [];
 
   const pins = config.artifacts?.pins || {};
-  const lanePatterns = Object.entries(config.lanes || {})
-    .map(([laneId, lane]) => ({ laneId, lane }))
-    .filter((r) => r.lane && typeof r.lane.pattern === "string");
-  const pinPatterns = Object.keys(pins)
+  /* Flatten each lane into one (laneId, patternId) row per pattern so
+   * lanes that declare ``patterns: [a, b]`` (RFC-0008 C3.1) feed both
+   * into the sync/lockfile pipeline. Legacy ``pattern: <id>`` lanes
+   * normalise to a single-element list via lanePatternList(). */
+  const laneRows = [];
+  for (const [laneId, lane] of Object.entries(config.lanes || {})) {
+    for (const pid of lanePatternList(lane)) {
+      laneRows.push({ laneId, patternId: pid });
+    }
+  }
+  const pinRows = Object.keys(pins)
     .filter((k) => k.startsWith("pattern/"))
-    .map((k) => ({ laneId: null, lane: { pattern: k.slice("pattern/".length) } }));
+    .map((k) => ({ laneId: null, patternId: k.slice("pattern/".length) }));
 
   /* De-duplicate on pattern id while preserving lane provenance (useful
    * for the `notes` field — operators want to know which lane pinned a
    * given pattern when they read the diff). */
   const seen = new Map();
-  for (const row of [...lanePatterns, ...pinPatterns]) {
-    const pid = row.lane.pattern;
+  for (const row of [...laneRows, ...pinRows]) {
+    const pid = row.patternId;
     if (!seen.has(pid)) seen.set(pid, { id: pid, by: [] });
     seen.get(pid).by.push(row.laneId || "config.artifacts.pins");
   }

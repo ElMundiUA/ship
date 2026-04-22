@@ -52,6 +52,11 @@ export const DOCS_NAV: DocsNavGroup[] = [
         blurb: "The lanes: block, shipctl run + lanes install, and the Console /lanes page.",
       },
       {
+        href: "/docs/knowledge-buckets",
+        label: "Knowledge buckets",
+        blurb: "Scoped bucket model, Distiller inbound adapters, and how patterns reach knowledge via spec.knowledge_topics.",
+      },
+      {
         href: "/docs/agent-matrix",
         label: "Agent matrix",
         blurb: "Supported agent ids, on-disk markers, install targets, adapter artifact for each.",
@@ -75,7 +80,7 @@ export const DOCS_NAV: DocsNavGroup[] = [
       {
         href: "/docs/authoring",
         label: "Authoring",
-        blurb: "Write your own pattern, tool, workflow, collection, preset, or adapter.",
+        blurb: "Write your own pattern, tool, collection, preset, or adapter (workflow artifacts were retired in RFC-0007 Phase 6).",
       },
     ],
   },

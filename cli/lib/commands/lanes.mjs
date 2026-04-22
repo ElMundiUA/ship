@@ -24,7 +24,13 @@ import path from "node:path";
 import YAML from "yaml";
 
 import { findShipRoot, readConfig } from "../config/io.mjs";
-import { validateConfig, CONFIG_SCHEMA_VERSION } from "../config/schema.mjs";
+import {
+  validateConfig,
+  CONFIG_SCHEMA_VERSION,
+  lanePatterns,
+  lanePrimaryPattern,
+  laneFanout,
+} from "../config/schema.mjs";
 
 const EXIT_OK = 0;
 const EXIT_USAGE = 2;
@@ -174,14 +180,25 @@ async function installCmd(ctx, rest) {
 function listCmd(ctx, rest) {
   const args = parseListArgs(rest);
   const { config } = loadConfig(args.cwd);
-  const rows = Object.entries(config.lanes || {}).map(([id, lane]) => ({
-    lane: id,
-    kind: lane.kind,
-    pattern: lane.pattern || null,
-    on: lane.kind === "event" ? lane.on || null : null,
-    cron: lane.kind === "schedule" ? lane.cron || null : null,
-    idempotency_key: lane.kind === "once" ? lane.idempotency?.key || null : null,
-  }));
+  const rows = Object.entries(config.lanes || {}).map(([id, lane]) => {
+    const pats = lanePatterns(lane);
+    return {
+      lane: id,
+      kind: lane.kind,
+      // ``pattern`` keeps the single-string shape for humans/scripts
+      // that eyeball the first pattern; ``patterns`` always lists all
+      // so multi-pattern lanes (RFC-0008 C3.1) surface correctly.
+      pattern: pats[0] || null,
+      patterns: pats,
+      // ``fanout`` resolves to the runtime default (``matrix``) when
+      // the lane doesn't declare one, so the workflow plan step
+      // doesn't have to branch on "is this key missing?" (RFC-0008 C3.2).
+      fanout: laneFanout(lane),
+      on: lane.kind === "event" ? lane.on || null : null,
+      cron: lane.kind === "schedule" ? lane.cron || null : null,
+      idempotency_key: lane.kind === "once" ? lane.idempotency?.key || null : null,
+    };
+  });
   if (ctx.json || args.json) {
     console.log(JSON.stringify({ ok: true, lanes: rows }, null, 2));
     return;
@@ -197,8 +214,12 @@ function listCmd(ctx, rest) {
         : row.kind === "schedule"
           ? `cron ${JSON.stringify(row.cron)}`
           : `once ${row.idempotency_key || ""}`;
+    const patternLabel =
+      row.patterns.length > 1
+        ? `patterns=[${row.patterns.join(", ")}]`
+        : `pattern=${row.pattern || "-"}`;
     console.log(
-      `  ${row.lane.padEnd(28)} kind=${row.kind.padEnd(9)} ${trigger}  (pattern=${row.pattern || "-"})`,
+      `  ${row.lane.padEnd(28)} kind=${row.kind.padEnd(9)} ${trigger}  (${patternLabel})`,
     );
   }
 }

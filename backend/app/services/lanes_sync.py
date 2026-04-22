@@ -103,11 +103,40 @@ def _parse_lane_entry(
             break
     if kind is None:
         return None
+    # Accept both the canonical ``patterns: [ids]`` (RFC-0008 C3.1) and
+    # the single-pattern alias ``pattern: <id>``. Normalise to an
+    # explicit list so the DB layer / downstream readers don't have to
+    # branch; ``pattern`` (scalar) keeps the first entry so the
+    # existing ``Lane.pattern`` column stays populated for repos that
+    # haven't migrated to the list form yet.
+    raw_patterns = raw.get("patterns")
+    raw_pattern = raw.get("pattern")
+    patterns_list: list[str] = []
+    if isinstance(raw_patterns, list):
+        for entry in raw_patterns:
+            if isinstance(entry, str) and entry.strip():
+                patterns_list.append(entry.strip())
+    elif isinstance(raw_pattern, str) and raw_pattern.strip():
+        patterns_list.append(raw_pattern.strip())
+    primary_pattern = patterns_list[0] if patterns_list else None
+    # RFC-0008 C3.2 — fan-out mode for multi-pattern lanes. Normalise
+    # here so downstream consumers (API, scheduler, UI) always see one
+    # of the canonical modes; validation is enforced by the writer
+    # (``repos.propose_repo_config``) so the syncer trusts what's in
+    # the YAML, but silently falls back to the default when the field
+    # is absent or unrecognised.
+    raw_fanout = raw.get("fanout")
+    if isinstance(raw_fanout, str) and raw_fanout in {"matrix", "sequential", "concurrent"}:
+        fanout = raw_fanout
+    else:
+        fanout = "matrix"
     flat = {
         "lane_id": lane_id,
         "kind": kind,
         "trigger": raw.get(kind),
-        "pattern": raw.get("pattern"),
+        "pattern": primary_pattern,
+        "patterns": patterns_list,
+        "fanout": fanout,
         "cron": raw.get("schedule") if kind == "schedule" else None,
         "idempotency_key": raw.get("idempotency_key"),
         # Carry the whole thing so forward-compat fields land in
