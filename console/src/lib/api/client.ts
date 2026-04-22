@@ -707,11 +707,18 @@ export interface ApiClarification {
 
 export function listClarifications(
   workspaceId: string,
-  opts: { status?: ApiClarificationStatus; token?: string } = {},
+  opts: {
+    status?: ApiClarificationStatus;
+    repoId?: string;
+    token?: string;
+  } = {},
 ): Promise<ApiClarification[]> {
-  const qs = opts.status ? `?status=${encodeURIComponent(opts.status)}` : "";
+  const params = new URLSearchParams();
+  if (opts.status) params.set("status", opts.status);
+  if (opts.repoId) params.set("repo_id", opts.repoId);
+  const qs = params.toString();
   return apiFetch<ApiClarification[]>(
-    `/v1/workspaces/${encodeURIComponent(workspaceId)}/clarifications${qs}`,
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/clarifications${qs ? `?${qs}` : ""}`,
     { token: opts.token },
   );
 }
@@ -777,13 +784,18 @@ export interface ApiImprovement {
 
 export function listImprovements(
   workspaceId: string,
-  opts: { decision?: ApiImprovementDecision; token?: string } = {},
+  opts: {
+    decision?: ApiImprovementDecision;
+    repoId?: string;
+    token?: string;
+  } = {},
 ): Promise<ApiImprovement[]> {
-  const qs = opts.decision
-    ? `?decision=${encodeURIComponent(opts.decision)}`
-    : "";
+  const params = new URLSearchParams();
+  if (opts.decision) params.set("decision", opts.decision);
+  if (opts.repoId) params.set("repo_id", opts.repoId);
+  const qs = params.toString();
   return apiFetch<ApiImprovement[]>(
-    `/v1/workspaces/${encodeURIComponent(workspaceId)}/improvements${qs}`,
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/improvements${qs ? `?${qs}` : ""}`,
     { token: opts.token },
   );
 }

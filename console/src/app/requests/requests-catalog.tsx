@@ -57,14 +57,24 @@ export function RequestsCatalog({
   workspaceId,
   repos,
   patterns,
+  lockedRepoId,
 }: {
   workspaceId: string;
   repos: ApiActivatedRepo[];
   patterns: ApiCatalogPattern[];
+  /**
+   * Repo-mode locks the dropdown to a specific repo. When set, the
+   * repo selector is hidden and every dispatched request targets
+   * ``lockedRepoId``. In workspace-mode this stays ``undefined`` so
+   * the user picks freely from ``repos``.
+   */
+  lockedRepoId?: string;
 }) {
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [cardState, setCardState] = useState<CardState>({ mode: "idle" });
-  const [repoId, setRepoId] = useState<string>(repos[0]?.id ?? "");
+  const [repoId, setRepoId] = useState<string>(
+    lockedRepoId ?? repos[0]?.id ?? "",
+  );
 
   const grouped = useMemo(() => {
     const byCategory = new Map<string, ApiCatalogPattern[]>();
@@ -123,25 +133,35 @@ export function RequestsCatalog({
           title="New request"
           subtitle="Pick a pattern below — each one ships with the inputs it needs."
         />
-        <div className="mt-4">
-          <label className="block text-[10px] font-semibold uppercase tracking-widest text-white/55">
-            Repo
-          </label>
-          <select
-            value={repoId}
-            onChange={(e) => setRepoId(e.target.value)}
-            className="mt-1 w-full rounded-md border border-white/15 bg-black/30 px-3 py-1.5 text-sm text-white focus:border-aqua focus:outline-none"
-          >
-            {repos.map((r) => (
-              <option key={r.id} value={r.id}>
-                {r.full_name}
-              </option>
-            ))}
-          </select>
-          <p className="mt-1 text-[11px] text-white/45">
-            Request fires against this repo&rsquo;s default branch.
+        {lockedRepoId ? (
+          <p className="mt-4 text-[11px] text-white/55">
+            Requests dispatch against{" "}
+            <span className="font-mono text-white/80">
+              {repos.find((r) => r.id === lockedRepoId)?.full_name ?? "this repo"}
+            </span>
+            &rsquo;s default branch.
           </p>
-        </div>
+        ) : (
+          <div className="mt-4">
+            <label className="block text-[10px] font-semibold uppercase tracking-widest text-white/55">
+              Repo
+            </label>
+            <select
+              value={repoId}
+              onChange={(e) => setRepoId(e.target.value)}
+              className="mt-1 w-full rounded-md border border-white/15 bg-black/30 px-3 py-1.5 text-sm text-white focus:border-aqua focus:outline-none"
+            >
+              {repos.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.full_name}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-[11px] text-white/45">
+              Request fires against this repo&rsquo;s default branch.
+            </p>
+          </div>
+        )}
       </Card>
 
       {grouped.length === 0 ? (

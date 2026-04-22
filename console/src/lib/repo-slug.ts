@@ -1,32 +1,37 @@
 /**
- * Phase-1 two-mode shell: the ``/r/[...slug]`` route family uses a
- * catch-all segment so the URL can mirror the GitHub ``owner/repo``
- * shape (``/r/acme/api/lanes``). Slash-agnostic backends (underscore,
- * double-dash) were considered and rejected — the readable form wins
- * because the chrome (header chip, breadcrumbs, share links) echoes
- * what the user typed in GitHub verbatim.
+ * Phase-1 two-mode shell: the ``/r/[owner]/[repo]`` route family
+ * uses two explicit dynamic segments so the URL can mirror the
+ * GitHub ``owner/repo`` shape (``/r/acme/api/lanes``).
+ * Slash-agnostic backends (underscore, double-dash) were considered
+ * and rejected — the readable form wins because the chrome (header
+ * chip, breadcrumbs, share links) echoes what the user typed in
+ * GitHub verbatim.
  *
  * All segment parsing + lookup funnels through here so the repo
  * layout, nav builder, and any future deep links agree on one
  * canonical shape.
+ *
+ * A previous revision used a ``[...slug]`` catch-all. It silently
+ * swallowed sub-paths (``/r/acme/api/lanes``) and rendered the repo
+ * home for every nested URL, so every link in the repo sidebar and
+ * on the home tiles looked broken. Explicit ``[owner]/[repo]``
+ * segments lift that restriction: Next can now match concrete
+ * child routes (``lanes``, ``requests``, …) underneath.
  */
 
 import type { ApiActivatedRepo } from "@/lib/api/client";
 
+export type RepoRouteParams = { owner?: string; repo?: string };
+
 /**
- * Joins Next's ``[...slug]`` array into the ``owner/repo`` form, or
- * returns ``null`` when the shape is wrong. Extra trailing segments
- * (``/r/acme/api/lanes/active``) are dropped — only the first two
- * segments identify the repo.
+ * Joins Next's ``[owner]/[repo]`` params into the ``owner/repo``
+ * form, or returns ``null`` when either segment is missing/empty.
  */
-export function slugFromSegments(
-  slug: string | string[] | undefined,
-): string | null {
-  if (!slug) return null;
-  const parts = Array.isArray(slug) ? slug : [slug];
-  const clean = parts.filter(Boolean);
-  if (clean.length < 2) return null;
-  return `${clean[0]}/${clean[1]}`;
+export function slugFromParams(params: RepoRouteParams): string | null {
+  const owner = params.owner?.trim();
+  const repo = params.repo?.trim();
+  if (!owner || !repo) return null;
+  return `${owner}/${repo}`;
 }
 
 /**

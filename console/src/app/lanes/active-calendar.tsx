@@ -32,11 +32,19 @@ export function ActiveCalendar({
   lanes,
   repos,
   catalog,
+  basePath = "/lanes",
 }: {
   workspaceId: string;
   lanes: ApiLane[];
   repos: ApiActivatedRepo[];
   catalog: ApiLaneCatalogEntry[];
+  /**
+   * Root URL for the Lanes page. Workspace-mode leaves the default
+   * ``/lanes``; repo-mode passes ``/r/<owner>/<repo>/lanes`` so
+   * "edit lane" and the empty-state CTA stay inside the repo
+   * surface instead of kicking the user up to workspace scope.
+   */
+  basePath?: string;
 }) {
   const hasAnyLane = lanes.length > 0;
 
@@ -55,13 +63,19 @@ export function ActiveCalendar({
     // and expands itself with the wizard seeded from this lane's
     // cron. For custom (config-only) lanes we still land in Library
     // so the user can at least see them in context.
-    window.location.href = `/lanes?tab=library&open=${encodeURIComponent(
+    window.location.href = `${basePath}?tab=library&open=${encodeURIComponent(
       lane.lane_id,
     )}&repo_id=${encodeURIComponent(lane.repo_id)}`;
   }
 
   if (!hasAnyLane) {
-    return <EmptyActive workspaceId={workspaceId} repos={repos} />;
+    return (
+      <EmptyActive
+        workspaceId={workspaceId}
+        repos={repos}
+        basePath={basePath}
+      />
+    );
   }
 
   return (
@@ -80,9 +94,11 @@ export function ActiveCalendar({
 function EmptyActive({
   workspaceId,
   repos,
+  basePath,
 }: {
   workspaceId: string;
   repos: ApiActivatedRepo[];
+  basePath: string;
 }) {
   return (
     <Card>
@@ -96,7 +112,7 @@ function EmptyActive({
           <li>
             Open the{" "}
             <Link
-              href="/lanes?tab=library"
+              href={`${basePath}?tab=library`}
               className="text-aqua hover:underline"
             >
               Library

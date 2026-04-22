@@ -145,6 +145,7 @@ async def _enrich(
 async def list_clarifications(
     workspace_id: uuid.UUID,
     status_filter: str | None = Query(default=None, alias="status"),
+    repo_id: uuid.UUID | None = Query(default=None),
     auth: AuthContext = Depends(get_current_auth),
     session: AsyncSession = Depends(get_session),
 ) -> list[ClarificationOut]:
@@ -155,6 +156,12 @@ async def list_clarifications(
     row so the ``/clarifications`` page can render tab counts
     without extra calls. Sorted by ``created_at`` desc so the newest
     questions sit on top.
+
+    ``repo_id`` (query) narrows to a single activated repo — the
+    repo-mode console (``/r/<owner>/<repo>/clarifications``) passes
+    it so the page doesn't have to fetch the entire workspace inbox
+    just to filter client-side. Omitting it preserves legacy
+    workspace-wide behaviour.
     """
     await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
     stmt = (
@@ -172,6 +179,8 @@ async def list_clarifications(
                 ),
             )
         stmt = stmt.where(Clarification.status == status_filter)
+    if repo_id is not None:
+        stmt = stmt.where(Clarification.repo_id == repo_id)
     rows = (await session.execute(stmt)).scalars().all()
     return await _enrich(session, list(rows))
 
