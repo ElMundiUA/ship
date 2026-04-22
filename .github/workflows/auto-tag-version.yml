@@ -1,0 +1,88 @@
+name: auto-tag version
+
+# When a push to ``main`` changes the canonical ``VERSION`` file,
+# create and push a matching ``v<x.y.z>`` git tag. That tag is what
+# the npm-publish workflow (``npm-publish-cli.yml``) and the Bunny
+# deploy keyed off, so this closes the long-standing trap where a
+# contributor bumps ``VERSION`` + ``package.json`` + ``main.py`` in
+# a PR, merges it, and then forgets the ``git tag && git push
+# --tags`` step — leaving the new CLI version un-published on npm
+# and scheduled lanes stuck on ``ETARGET``.
+#
+# Idempotent: if the tag already exists (e.g. it was pushed
+# manually or by a previous run) the workflow skips silently.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "VERSION"
+
+concurrency:
+  group: auto-tag-version
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # We need history to confirm that ``VERSION`` actually
+          # changed in the merge commit vs. the tree before it, so
+          # pull at least two commits.
+          fetch-depth: 2
+          # Default ``GITHUB_TOKEN`` is enough to push tags because
+          # tags are a ``contents: write`` operation.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Read canonical VERSION
+        id: read
+        run: |
+          VER="$(node scripts/version.mjs show)"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "Canonical VERSION = $VER"
+
+      - name: Verify all targets are in sync before tagging
+        # Stops the workflow from tagging a half-bumped state where
+        # some ``package.json`` still points at the old release.
+        run: node scripts/version.mjs check
+
+      - name: Check if tag already exists
+        id: check
+        env:
+          VERSION: ${{ steps.read.outputs.version }}
+        run: |
+          TAG="v$VERSION"
+          if git rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Tag $TAG already exists locally — nothing to do."
+            exit 0
+          fi
+          # Also check on origin (someone may have pushed it
+          # manually between the commit and this workflow firing).
+          if git ls-remote --exit-code --tags origin "$TAG" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Tag $TAG already exists on origin — nothing to do."
+            exit 0
+          fi
+          echo "exists=false" >> "$GITHUB_OUTPUT"
+
+      - name: Create and push tag
+        if: steps.check.outputs.exists == 'false'
+        env:
+          VERSION: ${{ steps.read.outputs.version }}
+        run: |
+          TAG="v$VERSION"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release $TAG (auto-tagged on VERSION bump)"
+          git push origin "$TAG"
+          echo "::notice title=Release tag created::$TAG — npm-publish workflow should pick this up automatically."
