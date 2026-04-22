@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-07T20:41:22+03:00"
-content_sha256: 3ffcb71173ba1cb9229e60caf65f321ff9056e76578a1cf95692589feb17f25b
+content_sha256: 157289b38400a5dc6684fc254c79a1ba559c69b221c1e97d10842224efc05286
 deprecated: false
 replaced_by: null
 yanked: false
@@ -21,6 +21,10 @@ spec:
   category: op
   modes: [lane]
   include: [common-base]
+  lane_id: self_heal
+  lane_name: "Pipeline self-heal"
+  lane_summary: >-
+    Nightly sweep of Ship-owned workflows — re-runs flaky CI, opens a PR when a starter template drifts.
   default_trigger:
     kind: schedule
     cron: "0 4 * * *"

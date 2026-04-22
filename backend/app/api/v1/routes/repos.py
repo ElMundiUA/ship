@@ -46,7 +46,7 @@ from backend.app.db.session import get_session
 from backend.app.integrations.gateway.code_host import RepoRef, RepoSummary
 from backend.app.integrations.github.code_host_adapter import GitHubCodeHost
 from backend.app.services.agent.kb_indexer import reindex_repo_kb
-from backend.app.services.default_pipelines import (
+from backend.app.services.lane_recipes import (
     KNOWN_PRESETS,
     seed_default_pipelines,
 )
@@ -1156,11 +1156,12 @@ async def update_repo(
 
     Behavioural notes:
 
-    - If ``reshape`` is true the new preset's
-      ``PRESET_ENABLED_KINDS`` is applied to every ``Pipeline`` in
-      the workspace whose ``repo_id`` matches this row. Workspace-
-      level (unbound) lanes are untouched — they keep their hand-
-      toggled state because they're shared across repos.
+    - If ``reshape`` is true the new preset's enabled lane set
+      (derived via :func:`resolve_enabled_lane_ids`) is applied to
+      every ``Pipeline`` in the workspace whose ``repo_id`` matches
+      this row. Workspace-level (unbound) lanes are untouched — they
+      keep their hand-toggled state because they're shared across
+      repos.
     - The seed helper is invoked afterwards so a tenant that picked
       e.g. ``monorepo`` later gets the ``self_heal`` lane created if
       it didn't exist yet.
@@ -1169,9 +1170,8 @@ async def update_repo(
       flip on overnight" later.
     """
     from backend.app.db.models.pipelines import Pipeline
-    from backend.app.services.default_pipelines import (
-        PRESET_ENABLED_KINDS,
-        resolve_enabled_kinds,
+    from backend.app.services.lane_recipes import (
+        resolve_enabled_lane_ids,
         seed_default_pipelines,
     )
 
@@ -1209,9 +1209,7 @@ async def update_repo(
         # Limit reshape to lanes actually bound to this repo; shared
         # workspace-level lanes stay untouched (they may be driving
         # other repos in the same workspace).
-        enabled_kinds = PRESET_ENABLED_KINDS.get(
-            new_preset, resolve_enabled_kinds(new_preset)
-        )
+        enabled_kinds = resolve_enabled_lane_ids(new_preset)
         bound_lanes = (
             await session.execute(
                 select(Pipeline).where(Pipeline.repo_id == repo_row.id)

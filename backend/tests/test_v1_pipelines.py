@@ -69,7 +69,7 @@ async def seed_repo_and_install(db_session, seed_workspace):
 
 
 async def _seed_bound_pipelines(db_session, workspace_id, repo_id):
-    from backend.app.services.default_pipelines import seed_default_pipelines
+    from backend.app.services.lane_recipes import seed_default_pipelines
 
     pipelines = await seed_default_pipelines(
         db_session, workspace_id, default_repo_id=repo_id
@@ -88,7 +88,7 @@ async def test_list_pipelines_returns_seeded_defaults(
     monkeypatch, v1_client, db_session, seed_repo_and_install
 ) -> None:
     from backend.app.api.v1.routes import pipelines as pipelines_route
-    from backend.app.services.default_pipelines import DEFAULT_PIPELINES
+    from backend.app.services.lane_recipes import list_lane_recipes
 
     raw, workspace, _install, repo = seed_repo_and_install
     await _seed_bound_pipelines(db_session, workspace.id, repo.id)
@@ -106,8 +106,9 @@ async def test_list_pipelines_returns_seeded_defaults(
     )
     assert response.status_code == 200, response.text
     body = response.json()
-    assert {p["kind"] for p in body} == {p.kind for p in DEFAULT_PIPELINES}
-    assert [p["kind"] for p in body] == [p.kind for p in DEFAULT_PIPELINES]
+    expected_ids = [r.lane_id for r in list_lane_recipes()]
+    assert {p["kind"] for p in body} == set(expected_ids)
+    assert [p["kind"] for p in body] == expected_ids
     by_kind = {p["kind"]: p for p in body}
     # PR review is installed (probe stub says so).
     assert by_kind["pr_review"]["workflow_installed"] is True
@@ -311,7 +312,7 @@ async def test_run_pipeline_412_when_workflow_not_installed(
 async def test_run_pipeline_412_when_not_bound(
     v1_client, db_session, seed_workspace
 ) -> None:
-    from backend.app.services.default_pipelines import seed_default_pipelines
+    from backend.app.services.lane_recipes import seed_default_pipelines
 
     _, raw, workspace = seed_workspace
     pipelines = await seed_default_pipelines(db_session, workspace.id)
@@ -475,7 +476,7 @@ async def test_run_pipeline_auto_binds_when_single_repo(
     then proceeds as if the pipeline had been bound from day one."""
     from backend.app.api.v1.routes import pipelines as pipelines_route
     from backend.app.integrations.github import workflows as workflows_mod
-    from backend.app.services.default_pipelines import seed_default_pipelines
+    from backend.app.services.lane_recipes import seed_default_pipelines
 
     raw, workspace, _install, repo = seed_repo_and_install
     # Seed without ``default_repo_id`` so rows come out unbound — this
