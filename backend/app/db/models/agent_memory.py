@@ -301,6 +301,18 @@ class BucketArticle(Base):
         ForeignKey("bucket_articles.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # Cross-scope override link (PR-7A). NULL = regular article.
+    # Non-NULL = this row intentionally overrides the referenced
+    # workspace-scope article in a narrower scope (e.g. repo).
+    # Distinct from ``supersedes_id`` which captures intra-bucket
+    # version history; this column spans buckets/scopes and is the
+    # foundation for the workspace-knowledge resolver + override
+    # count on canonical buckets.
+    overrides_workspace_article_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("bucket_articles.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     provenance: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )

@@ -338,12 +338,30 @@ function ArticlesCard({ articles }: { articles: ApiBucketArticle[] }) {
           {articles.map((a) => (
             <tr key={a.id} className="border-t border-white/5">
               <td className="px-4 py-2.5 align-top">
-                <div className="font-semibold text-white">{a.title}</div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-semibold text-white">{a.title}</span>
+                  {a.overrides_workspace_article_id && (
+                    <Badge tone="warn" dot>
+                      overrides workspace canonical
+                    </Badge>
+                  )}
+                </div>
                 {provenanceHint(a) && (
                   <div className="mt-0.5 text-[10px] text-white/45">
                     {provenanceHint(a)}
                   </div>
                 )}
+                {a.overrides_workspace_article_id &&
+                  a.overrides_workspace_bucket_slug && (
+                    <div className="mt-0.5 text-[10px]">
+                      <Link
+                        href={`/knowledge/${encodeURIComponent(a.overrides_workspace_bucket_slug)}`}
+                        className="text-aqua/80 hover:underline"
+                      >
+                        View workspace canonical →
+                      </Link>
+                    </div>
+                  )}
               </td>
               <td className="px-4 py-2.5 align-top font-mono text-[11px] text-aqua/85">
                 {a.slug}
