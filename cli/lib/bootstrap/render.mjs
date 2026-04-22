@@ -263,6 +263,19 @@ function buildRecommendedTools({ preset }) {
       "Detox or Maestro for device-farm E2E",
       "Expo Updates or CodePush for OTA patches",
     ],
+    "mobile-app-deep": [
+      "EAS Build / Fastlane for iOS + Android signed builds",
+      "Detox or Maestro for device-farm E2E",
+      "Expo Updates or CodePush for OTA patches",
+      "Crashlytics or Sentry for post-release crash-rate tracking",
+      "TestFlight external testing + Play closed-testing tracks",
+    ],
+    "ml-project": [
+      "DVC / LakeFS / Delta Lake for dataset + model versioning",
+      "MLflow or Weights & Biases for eval tracking",
+      "Feast / Tecton / Databricks Feature Store for feature contracts",
+      "Great Expectations / Pandera for data validation",
+    ],
     "web-app": [
       "Playwright (hosted) for PR preview E2E",
       "Preview deployments (Vercel / Netlify / Fly) per PR",
