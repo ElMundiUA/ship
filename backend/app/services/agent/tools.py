@@ -43,6 +43,11 @@ Tool inventory (C12 Phase 2.2):
   without a semantic query (complement to :meth:`search_buckets`).
 - :meth:`search_buckets` — vector search over :class:`BucketArticle`
   so the agent can recall previously-packed conversations.
+- :meth:`search_workspace_kb` — workspace-wide vector search across
+  every repo's ``.ship/knowledge`` + workspace-canonical buckets
+  (PR-7C), with a repo-match band that prefers hits from the chat's
+  active repo. Complements :meth:`search_repo_kb` when the question
+  is platform/organisation-wide.
 - :meth:`get_catalog_artifact` — fetch the full ``ARTIFACT.md`` body
   for one catalog entry, for "what does this pattern actually do?"
   follow-ups to :meth:`list_catalog_artifacts`.
@@ -175,6 +180,11 @@ _MAX_AUDIT_EVENTS = 50
 _MAX_ARTIFACT_FEEDBACK_LIST = 50
 _MAX_BUCKET_SUMMARIES = 40
 _KB_GLOB_PREFETCH_CAP = 80
+# PR-7C: hard cap on the workspace-knowledge tool's hit list. The LLM
+# rarely benefits from more than a handful of results and the 400-char
+# snippet per hit adds up fast — 25 keeps the worst case bounded at
+# ~10 kB of tool output.
+_MAX_WORKSPACE_KB_RESULTS = 25
 
 
 @dataclass(slots=True)
@@ -202,11 +212,19 @@ class ToolBox:
         settings: Settings,
         workspace_id: uuid.UUID,
         user_id: uuid.UUID,
+        active_repo_id: uuid.UUID | None = None,
     ) -> None:
         self._session = session
         self._settings = settings
         self._workspace_id = workspace_id
         self._user_id = user_id
+        # PR-7C: optional "current repo" context for the chat turn.
+        # ``search_workspace_kb`` uses this as a fallback when the LLM
+        # doesn't pass ``repo_id`` explicitly, so that hits from the
+        # repo the user is browsing rank first even on a zero-arg
+        # tool call. ``None`` means "workspace-wide, no preferred
+        # repo" which is the pre-7C behaviour of every existing tool.
+        self._active_repo_id = active_repo_id
 
     # ------------------------------------------------------------------
     # Tool specs — the "what the LLM sees" side of the surface
@@ -518,6 +536,49 @@ class ToolBox:
                             "minimum": 1,
                             "maximum": _MAX_BUCKET_RESULTS,
                             "default": 4,
+                        },
+                    },
+                    "required": ["query"],
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="search_workspace_kb",
+                description=(
+                    "Search knowledge across the entire workspace (all "
+                    "repos + workspace-canonical buckets). Use this "
+                    "when ``search_repo_kb`` returns no hits for the "
+                    "current repo, or when the question is "
+                    "platform/organisation-wide rather than "
+                    "repo-specific. Ranks current-repo matches first, "
+                    "then workspace canonical, then other repos as "
+                    "hints."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Natural-language query.",
+                        },
+                        "repo_id": {
+                            "type": "string",
+                            "description": (
+                                "Optional repo UUID to prioritise hits "
+                                "from. When omitted, the agent runtime "
+                                "fills in the chat's active repo if "
+                                "known."
+                            ),
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": (
+                                "Max hits to return "
+                                "(default 10, max 25)."
+                            ),
+                            "default": 10,
+                            "minimum": 1,
+                            "maximum": _MAX_WORKSPACE_KB_RESULTS,
                         },
                     },
                     "required": ["query"],
@@ -1258,6 +1319,7 @@ class ToolBox:
             "get_pull_request": self._tool_get_pull_request,
             "list_buckets": self._tool_list_buckets,
             "search_buckets": self._tool_search_buckets,
+            "search_workspace_kb": self._tool_search_workspace_kb,
             "get_catalog_artifact": self._tool_get_catalog_artifact,
             "list_integrations": self._tool_list_integrations,
             "list_pull_requests": self._tool_list_pull_requests,
@@ -2774,6 +2836,87 @@ class ToolBox:
                 }
             )
         return _json_result({"results": results})
+
+    async def _tool_search_workspace_kb(self, args: dict[str, Any]) -> str:
+        """Workspace-wide vector search surfaced to the Navigator (PR-7C).
+
+        Thin adapter over
+        :func:`backend.app.services.knowledge_search.search_workspace_knowledge`.
+        Fallback chain for ``repo_id``:
+
+        1. ``args["repo_id"]`` if the LLM passed one.
+        2. Otherwise ``self._active_repo_id`` when the chat runtime
+           told us which repo the user is browsing.
+        3. Otherwise ``None`` — the service will then produce the
+           non-preferred ranking (``workspace`` then ``other_repo``).
+
+        Embedding provider unconfigured is returned as a structured
+        ``{"error": "embeddings_unavailable"}`` payload rather than
+        raised, so the LLM keeps the turn and can tell the user the
+        feature is off instead of seeing an opaque tool-call failure.
+        """
+        from backend.app.services.knowledge_search import (
+            EmbeddingsUnavailable,
+            search_workspace_knowledge,
+        )
+
+        query = _require_str(args, "query")
+        limit = _clamp_int(
+            args.get("limit"),
+            default=10,
+            low=1,
+            high=_MAX_WORKSPACE_KB_RESULTS,
+        )
+
+        repo_id_raw = args.get("repo_id")
+        repo_id: uuid.UUID | None = None
+        if repo_id_raw:
+            try:
+                repo_id = uuid.UUID(str(repo_id_raw))
+            except ValueError as exc:
+                raise ToolInvocationError(
+                    f"invalid repo_id: {repo_id_raw!r}"
+                ) from exc
+        elif self._active_repo_id is not None:
+            repo_id = self._active_repo_id
+
+        try:
+            hits = await search_workspace_knowledge(
+                self._session,
+                workspace_id=self._workspace_id,
+                query=query,
+                repo_id=repo_id,
+                limit=limit,
+                settings=self._settings,
+            )
+        except EmbeddingsUnavailable as exc:
+            return _json_result(
+                {
+                    "error": "embeddings_unavailable",
+                    "message": str(exc),
+                }
+            )
+
+        out_hits: list[dict[str, Any]] = []
+        for hit in hits:
+            scope = (
+                "workspace" if hit.scope_kind == "workspace" else "repo"
+            )
+            out_hits.append(
+                {
+                    "title": _truncate(hit.title or "", 200),
+                    "source": hit.source,
+                    "bucket_slug": hit.bucket_slug,
+                    "scope": scope,
+                    "repo": _truncate(hit.repo_full_name or "", 200)
+                    if hit.repo_full_name
+                    else None,
+                    "rank_bucket": hit.rank_bucket,
+                    "score": hit.score,
+                    "snippet": _truncate(hit.snippet or "", 400),
+                }
+            )
+        return _json_result({"query": query, "hits": out_hits})
 
     # ------------------------------------------------------------------
     # Helpers
