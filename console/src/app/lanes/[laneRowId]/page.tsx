@@ -96,14 +96,9 @@ export default async function LaneDetailPage({
             </Row>
             <Row label="Pattern">
               {detail.pattern ? (
-                <Link
-                  href={`/catalog?q=${encodeURIComponent(detail.pattern)}`}
-                  className="text-aqua hover:underline"
-                >
-                  <code className="rounded bg-white/[0.06] px-1.5 py-0.5">
-                    {detail.pattern}
-                  </code>
-                </Link>
+                <code className="rounded bg-white/[0.06] px-1.5 py-0.5">
+                  {detail.pattern}
+                </code>
               ) : (
                 <span className="text-white/45">(none)</span>
               )}

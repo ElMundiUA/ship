@@ -299,4 +299,71 @@ class WorkflowRun(Base):
     updated_at: Mapped[datetime] = _ts_updated()
 
 
-__all__ = ["Pipeline", "PipelineRun", "PullRequest", "WorkflowRun"]
+class AgentRequest(Base):
+    """Phase 3 "Requests" — one-shot agent runs dispatched via GitHub.
+
+    Rows are created when the operator submits a ``New request`` form
+    on the Console (``POST /v1/workspaces/{ws}/repos/{id}/requests``):
+    Ship calls ``workflow_dispatch`` against the
+    ``adhoc-agent-run.yml`` starter on the target repo and records a
+    row here so the Console's ``/requests`` list can show status +
+    who dispatched what.
+
+    Unlike :class:`Pipeline` / :class:`PipelineRun`, there's no FK to
+    an owning pipeline because ad-hoc runs have no lane / recipe;
+    each row stands on its own. Updates come from the ``shipctl
+    callback`` emitted by the workflow itself (same contract as
+    scheduled lanes).
+    """
+
+    __tablename__ = "agent_requests"
+    __table_args__ = (
+        Index("ix_agent_requests_workspace_created", "workspace_id", "created_at"),
+        Index("ix_agent_requests_repo_created", "repo_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    repo_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspace_repos.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    requested_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    agent_slug: Mapped[str] = mapped_column(String(64), nullable=False)
+    context_ref: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    prompt: Mapped[str] = mapped_column(String(4096), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=text("'dispatched'")
+    )
+    summary: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    gh_workflow_run_id: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
+    gh_html_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    run_token_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    created_at: Mapped[datetime] = _ts_created()
+    updated_at: Mapped[datetime] = _ts_updated()
+
+
+__all__ = [
+    "AgentRequest",
+    "Pipeline",
+    "PipelineRun",
+    "PullRequest",
+    "WorkflowRun",
+]

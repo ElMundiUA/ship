@@ -1,0 +1,71 @@
+name: Ship · Custom lane · {{LANE_SLUG}}
+# Phase 3 authoring template — emitted once per lane the operator
+# creates through the Console's `/lanes?tab=new` form. The render
+# layer substitutes ``{{LANE_SLUG}}`` and ``{{LANE_SCHEDULE}}`` before
+# committing the file. The ``prompt`` / ``system instruction`` sits
+# beside this workflow at ``.ship/lanes/<slug>.md`` so the reviewer
+# and the agent read from the same source of truth.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ship_run_id:
+        description: "Ship pipeline_run id we should report against"
+        required: false
+        default: ""
+      ship_callback_url:
+        description: "URL Ship is listening on for the result callback"
+        required: false
+        default: ""
+      ship_run_token:
+        description: "Short-lived bearer token Ship issued for this run"
+        required: false
+        default: ""
+  schedule:
+    - cron: "{{LANE_SCHEDULE}}"
+
+permissions:
+  contents: read
+
+jobs:
+  custom_lane:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install shipctl
+        run: npm install -g @elmundi/ship-cli@latest
+
+      - name: Run custom lane
+        id: lane
+        run: |
+          set -euo pipefail
+          shipctl run --lane {{LANE_SLUG}} --prompt-file .ship/lanes/{{LANE_SLUG}}.md
+          echo "status=succeeded" >> "$GITHUB_OUTPUT"
+          echo "summary=Custom lane {{LANE_SLUG}} completed" >> "$GITHUB_OUTPUT"
+
+      - name: Report back to Ship
+        if: always() && inputs.ship_callback_url != ''
+        env:
+          SHIP_RUN_ID: ${{ inputs.ship_run_id }}
+          SHIP_CALLBACK_URL: ${{ inputs.ship_callback_url }}
+          SHIP_RUN_TOKEN: ${{ inputs.ship_run_token }}
+          GATE_STATUS: ${{ steps.lane.outputs.status || 'failed' }}
+          GATE_SUMMARY: ${{ steps.lane.outputs.summary || 'Custom lane {{LANE_SLUG}} failed' }}
+          GH_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          GH_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          CB=failed
+          if [ "$GATE_STATUS" = "succeeded" ]; then CB=ok; fi
+          shipctl callback --status "$CB" \
+            --summary "$GATE_SUMMARY" \
+            --metric "gh_workflow_run_id=$GH_RUN_ID" \
+            --metric "gh_html_url=$GH_RUN_URL"
