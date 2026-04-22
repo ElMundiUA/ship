@@ -29,6 +29,7 @@ When an RFC is superseded, its status moves to `Superseded` and the replacement 
 | [0006](rfc-0006-cloud-platform-foundations.md) | Cloud platform foundations | Proposed | Multi-tenant `Org → Workspace → Project` model; git-as-source-of-truth for human-authored content; Postgres + pgvector everywhere (Neon for SaaS); `/v1` API alongside backwards-compatible methodology routes. |
 | [0007](rfc-0007-lanes-and-run-agent.md) | Lanes-as-config and single `shipctl run` | Accepted — Phase 6 done | Replace the workflow-artifact layer with lane entries in `.ship/config.yml` (v2) and a single `shipctl run --lane` entry-point; reusable workflow in Ship; `artifact_kind=workflow` retired (Phase 6). |
 | [0008](rfc-0008-catalog-reform.md) | Catalog reform — naming, modes, expansion | Accepted — Phase 0/1 shipped | Canonical `<category>-<name>` naming for all patterns; required `modes: [lane\|request]` metadata; retire `DefaultPipelineSpec`; Requests UI becomes a catalog picker; Phase-1 expansion of 10 new patterns. |
+| [0009](rfc-0009-catalog-phase-2.md) | Catalog Phase-2 — beyond web & backend | Draft | 50 new patterns across 8 packs (mobile, desktop, hardware, ML, games, infra/SRE, compliance, cross-cutting quality); 7 new presets (`mobile-app-deep`, `desktop-app`, `firmware`, `ml-project`, `platform`, `regulated`, `game`); 4 rollout waves. |
 
 RFC-0001 and RFC-0005 are partially superseded by
 [RFC-0007](rfc-0007-lanes-and-run-agent.md) Phase 6
