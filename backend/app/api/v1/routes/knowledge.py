@@ -33,16 +33,20 @@ consumers that opt in:
 
 from __future__ import annotations
 
+import logging
+import re
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
-from sqlalchemy import and_, func, select
+from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import and_, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.api.v1.deps import AuthContext, get_current_auth
 from backend.app.api.v1.routes.workspaces import (
+    ROLES_ADMIN,
     ROLES_READ,
     _require_membership,
 )
@@ -56,14 +60,27 @@ from backend.app.db.models.agent_memory import (
     KnowledgeBucket,
 )
 from backend.app.db.models.integrations import GitHubInstallation, WorkspaceRepo
+from backend.app.db.models.knowledge_promotion import KnowledgePromotionCandidate
 from backend.app.db.models.tenancy import Workspace
 from backend.app.db.session import get_session
+from backend.app.services.agent.client import pick_default_client
 from backend.app.services.agent.embedding import embed_text
+from backend.app.services.knowledge_dedup import (
+    list_fresh_candidates,
+    rebuild_candidates,
+)
 from backend.app.services.knowledge_lister import (
     bucket_to_dict as legacy_bucket_to_dict,
     get_bucket as legacy_get_bucket,
     list_buckets as legacy_list_buckets,
 )
+from backend.app.services.knowledge_promotion import (
+    PromotionDraft,
+    draft_canonical,
+)
+
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter(
@@ -663,6 +680,483 @@ async def list_canonical_knowledge(
         workspace_id=workspace_id,
         canonical=canonical_out,
         orphan_slugs=orphans,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Promotion candidates + drafting + persist (PR-7B)
+# ---------------------------------------------------------------------------
+
+
+class KnowledgeCandidateMember(BaseModel):
+    article_id: uuid.UUID
+    bucket_id: uuid.UUID
+    bucket_slug: str
+    repo_id: uuid.UUID | None
+    repo_full_name: str | None
+    title: str | None
+    preview: str
+
+
+class KnowledgeCandidate(BaseModel):
+    id: uuid.UUID
+    fingerprint: str
+    slug_hint: str
+    centroid_score: float
+    member_count: int
+    repo_count: int
+    members: list[KnowledgeCandidateMember]
+
+
+class KnowledgeCandidatesResponse(BaseModel):
+    workspace_id: uuid.UUID
+    candidates: list[KnowledgeCandidate]
+    computed_at: datetime
+    is_fresh: bool
+
+
+class PromotionDraftIn(BaseModel):
+    article_ids: list[uuid.UUID] | None = None
+
+
+_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9\-]{0,119}$")
+_PREVIEW_CHARS = 200
+_MAX_BODY_CHARS = 64_000
+
+
+class PromotionIn(BaseModel):
+    slug: str
+    title: str = Field(..., min_length=1, max_length=512)
+    body: str = Field(..., min_length=1, max_length=_MAX_BODY_CHARS)
+    summary: str | None = None
+    source_article_ids: list[uuid.UUID] = Field(default_factory=list)
+    mark_sources_as_overrides: bool = True
+
+    @field_validator("slug")
+    @classmethod
+    def _validate_slug(cls, v: str) -> str:
+        if not _SLUG_RE.match(v):
+            raise ValueError(
+                "slug must be kebab-case, start with [a-z0-9], and be ≤ 120 chars"
+            )
+        return v
+
+    @field_validator("title")
+    @classmethod
+    def _validate_title(cls, v: str) -> str:
+        s = (v or "").strip()
+        if not s:
+            raise ValueError("title must be non-empty")
+        return s
+
+    @field_validator("body")
+    @classmethod
+    def _validate_body(cls, v: str) -> str:
+        s = (v or "").strip()
+        if not s:
+            raise ValueError("body must be non-empty")
+        return s
+
+
+class PromotionOut(BaseModel):
+    workspace_bucket_id: uuid.UUID
+    workspace_article_id: uuid.UUID
+    overridden_article_ids: list[uuid.UUID]
+
+
+def _preview(text: str | None) -> str:
+    if not text:
+        return ""
+    compact = " ".join(text.split())
+    if len(compact) > _PREVIEW_CHARS:
+        return compact[: _PREVIEW_CHARS - 1].rstrip() + "…"
+    return compact
+
+
+async def _render_candidates(
+    session: AsyncSession,
+    workspace_id: uuid.UUID,
+    rows: list[KnowledgePromotionCandidate],
+) -> list[KnowledgeCandidate]:
+    """Hydrate candidate rows with member article + repo context.
+
+    One batch query each for articles, buckets, and repo full_names
+    — no N+1 even for a workspace with a hundred candidates.
+    """
+    if not rows:
+        return []
+
+    all_article_ids: set[uuid.UUID] = set()
+    for row in rows:
+        for s in row.article_ids or []:
+            try:
+                all_article_ids.add(uuid.UUID(str(s)))
+            except (ValueError, TypeError):
+                continue
+    if not all_article_ids:
+        return []
+
+    article_rows = (
+        await session.execute(
+            select(BucketArticle, KnowledgeBucket)
+            .join(KnowledgeBucket, KnowledgeBucket.id == BucketArticle.bucket_id)
+            .where(
+                BucketArticle.id.in_(all_article_ids),
+                KnowledgeBucket.workspace_id == workspace_id,
+            )
+        )
+    ).all()
+
+    article_map: dict[uuid.UUID, BucketArticle] = {
+        r[0].id: r[0] for r in article_rows
+    }
+    bucket_map: dict[uuid.UUID, KnowledgeBucket] = {
+        r[1].id: r[1] for r in article_rows
+    }
+
+    repo_ids = {
+        b.repo_id
+        for b in bucket_map.values()
+        if b.repo_id is not None
+    }
+    repo_name_map: dict[uuid.UUID, str | None] = {}
+    if repo_ids:
+        repo_name_map = {
+            r[0]: r[1]
+            for r in (
+                await session.execute(
+                    select(WorkspaceRepo.id, WorkspaceRepo.full_name).where(
+                        WorkspaceRepo.id.in_(repo_ids)
+                    )
+                )
+            ).all()
+        }
+
+    out: list[KnowledgeCandidate] = []
+    for row in rows:
+        members: list[KnowledgeCandidateMember] = []
+        repo_ids_in_cluster: set[uuid.UUID] = set()
+        for s in row.article_ids or []:
+            try:
+                aid = uuid.UUID(str(s))
+            except (ValueError, TypeError):
+                continue
+            article = article_map.get(aid)
+            if article is None:
+                continue
+            bucket = bucket_map.get(article.bucket_id)
+            if bucket is None:
+                continue
+            if bucket.repo_id is not None:
+                repo_ids_in_cluster.add(bucket.repo_id)
+            members.append(
+                KnowledgeCandidateMember(
+                    article_id=article.id,
+                    bucket_id=bucket.id,
+                    bucket_slug=bucket.slug,
+                    repo_id=bucket.repo_id,
+                    repo_full_name=(
+                        repo_name_map.get(bucket.repo_id)
+                        if bucket.repo_id is not None
+                        else None
+                    ),
+                    title=article.title,
+                    preview=_preview(article.body_md),
+                )
+            )
+        if not members:
+            continue
+        out.append(
+            KnowledgeCandidate(
+                id=row.id,
+                fingerprint=row.fingerprint,
+                slug_hint=row.slug_hint,
+                centroid_score=float(row.centroid_score or 0.0),
+                member_count=len(members),
+                repo_count=len(repo_ids_in_cluster),
+                members=members,
+            )
+        )
+
+    out.sort(key=lambda c: (-c.member_count, -c.centroid_score, c.slug_hint))
+    return out
+
+
+@router.get("/candidates", response_model=KnowledgeCandidatesResponse)
+async def list_promotion_candidates(
+    workspace_id: uuid.UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> KnowledgeCandidatesResponse:
+    """List cached promotion candidates, recomputing on cache miss.
+
+    ``is_fresh=True`` means we served purely from cache; ``False``
+    means we just rebuilt. Either way the response is the same shape
+    so the Console can render without branching.
+    """
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
+
+    rows = await list_fresh_candidates(session, workspace_id)
+    is_fresh = True
+    if rows is None:
+        rows = await rebuild_candidates(session, workspace_id)
+        is_fresh = False
+    candidates = await _render_candidates(session, workspace_id, list(rows))
+    return KnowledgeCandidatesResponse(
+        workspace_id=workspace_id,
+        candidates=candidates,
+        computed_at=datetime.now(timezone.utc),
+        is_fresh=is_fresh,
+    )
+
+
+@router.post(
+    "/candidates/refresh", response_model=KnowledgeCandidatesResponse
+)
+async def refresh_promotion_candidates(
+    workspace_id: uuid.UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> KnowledgeCandidatesResponse:
+    """Force a rebuild of the candidate cache.
+
+    Admin-gated because recompute walks every repo-scope article in
+    the workspace; we don't want a read-only viewer triggering it.
+    """
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+    rows = await rebuild_candidates(session, workspace_id)
+    candidates = await _render_candidates(session, workspace_id, list(rows))
+    return KnowledgeCandidatesResponse(
+        workspace_id=workspace_id,
+        candidates=candidates,
+        computed_at=datetime.now(timezone.utc),
+        is_fresh=False,
+    )
+
+
+@router.post(
+    "/candidates/{candidate_id}/draft", response_model=PromotionDraft
+)
+async def draft_promotion_candidate(
+    workspace_id: uuid.UUID,
+    candidate_id: uuid.UUID,
+    payload: PromotionDraftIn,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> PromotionDraft:
+    """LLM-backed canonical draft for a candidate cluster.
+
+    404 if the candidate doesn't belong to this workspace; 400 if
+    the provided ``article_ids`` aren't a subset of the cluster; 412
+    if the LLM isn't configured (mirrors the custom-pattern draft
+    endpoint so the Console can surface the same banner).
+    """
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+
+    candidate = await session.get(KnowledgePromotionCandidate, candidate_id)
+    if candidate is None or candidate.workspace_id != workspace_id:
+        raise HTTPException(status_code=404, detail="candidate not found")
+
+    cluster_ids: list[uuid.UUID] = []
+    for s in candidate.article_ids or []:
+        try:
+            cluster_ids.append(uuid.UUID(str(s)))
+        except (ValueError, TypeError):
+            continue
+    if not cluster_ids:
+        raise HTTPException(
+            status_code=422, detail="candidate has no resolvable articles"
+        )
+
+    if payload.article_ids is None:
+        chosen = cluster_ids
+    else:
+        if not payload.article_ids:
+            raise HTTPException(
+                status_code=400, detail="article_ids must be non-empty"
+            )
+        cluster_set = set(cluster_ids)
+        extras = [a for a in payload.article_ids if a not in cluster_set]
+        if extras:
+            raise HTTPException(
+                status_code=400,
+                detail="article_ids must be a subset of the candidate cluster",
+            )
+        # Preserve caller-provided order so "representative" stays
+        # first when the Console passes the cluster in its own order.
+        seen: set[uuid.UUID] = set()
+        chosen = []
+        for a in payload.article_ids:
+            if a in seen:
+                continue
+            seen.add(a)
+            chosen.append(a)
+
+    try:
+        client = pick_default_client(get_settings())
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_412_PRECONDITION_FAILED,
+            detail={"code": "llm_unconfigured", "message": str(exc)},
+        ) from exc
+
+    try:
+        draft = await draft_canonical(
+            session, workspace_id, chosen, llm_client=client
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={"code": "llm_unparseable", "message": str(exc)},
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:  # pragma: no cover — upstream network errors
+        logger.exception("knowledge-promotion draft failed")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={"code": "llm_failed", "message": str(exc)},
+        ) from exc
+
+    return draft
+
+
+@router.post("/promote", response_model=PromotionOut)
+async def promote_knowledge(
+    workspace_id: uuid.UUID,
+    payload: PromotionIn,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> PromotionOut:
+    """Persist the operator's canonical draft to workspace scope.
+
+    Creates (or reuses) the workspace-scope :class:`KnowledgeBucket`
+    for ``slug``, writes one :class:`BucketArticle` with ``title`` /
+    ``body`` / ``summary``, best-effort embedding, and (optionally)
+    marks each ``source_article_ids`` as an override pointing at the
+    new canonical. Source articles are NEVER archived — promotion is
+    additive.
+    """
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+
+    bucket = (
+        await session.execute(
+            select(KnowledgeBucket).where(
+                and_(
+                    KnowledgeBucket.workspace_id == workspace_id,
+                    KnowledgeBucket.scope_kind == BucketScope.WORKSPACE,
+                    KnowledgeBucket.slug == payload.slug,
+                    KnowledgeBucket.archived_at.is_(None),
+                )
+            )
+        )
+    ).scalar_one_or_none()
+
+    if bucket is None:
+        bucket = KnowledgeBucket(
+            workspace_id=workspace_id,
+            slug=payload.slug,
+            name=payload.title,
+            description=payload.summary,
+            scope_kind=BucketScope.WORKSPACE,
+            source_kind=BucketSource.PROMOTED,
+            project_id=None,
+            repo_id=None,
+            user_id=None,
+        )
+        session.add(bucket)
+        await session.flush()
+
+    # Best-effort embedding: ``embed_text`` raises when unconfigured;
+    # we swallow that — the article still persists, it just won't
+    # rank in ``/search`` until a later reindex.
+    embedding: list[float] | None = None
+    try:
+        embedding = await embed_text(payload.body, settings=get_settings())
+    except RuntimeError:
+        embedding = None
+    except Exception:  # pragma: no cover — network failures
+        logger.exception("promotion embedding failed; proceeding without")
+        embedding = None
+
+    import hashlib as _hashlib
+
+    content_sha = _hashlib.sha256(payload.body.encode("utf-8")).hexdigest()
+    provenance: dict[str, Any] = {"kind": "promoted"}
+    if payload.summary:
+        provenance["summary"] = payload.summary
+    if payload.source_article_ids:
+        provenance["source_article_ids"] = [
+            str(a) for a in payload.source_article_ids
+        ]
+    article = BucketArticle(
+        bucket_id=bucket.id,
+        slug=payload.slug,
+        title=payload.title,
+        body_md=payload.body,
+        content_sha=content_sha,
+        status=BucketArticleStatus.PUBLISHED,
+        version=1,
+        embedding=embedding,
+        provenance=provenance,
+    )
+    session.add(article)
+    await session.flush()
+
+    overridden: list[uuid.UUID] = []
+    if payload.mark_sources_as_overrides and payload.source_article_ids:
+        sources = (
+            await session.execute(
+                select(BucketArticle, KnowledgeBucket)
+                .join(
+                    KnowledgeBucket,
+                    KnowledgeBucket.id == BucketArticle.bucket_id,
+                )
+                .where(
+                    BucketArticle.id.in_(payload.source_article_ids),
+                    KnowledgeBucket.workspace_id == workspace_id,
+                )
+            )
+        ).all()
+        for src_article, _src_bucket in sources:
+            # Don't silently clobber an operator-authored override — a
+            # source already pointing elsewhere stays unchanged, and
+            # the caller sees it absent from the response list.
+            if src_article.overrides_workspace_article_id is not None:
+                continue
+            src_article.overrides_workspace_article_id = article.id
+            overridden.append(src_article.id)
+
+    # Invalidate any cached candidate whose cluster included a
+    # promoted source. Overlap check is in-Python because
+    # ``article_ids`` is a JSONB list of strings; Postgres array
+    # overlap would need a cast + GIN index we haven't created.
+    if payload.source_article_ids:
+        source_strs = {str(a) for a in payload.source_article_ids}
+        cached = (
+            await session.execute(
+                select(KnowledgePromotionCandidate).where(
+                    KnowledgePromotionCandidate.workspace_id == workspace_id
+                )
+            )
+        ).scalars().all()
+        stale_ids = [
+            c.id
+            for c in cached
+            if any(str(s) in source_strs for s in (c.article_ids or []))
+        ]
+        if stale_ids:
+            await session.execute(
+                delete(KnowledgePromotionCandidate).where(
+                    KnowledgePromotionCandidate.id.in_(stale_ids)
+                )
+            )
+
+    await session.flush()
+    return PromotionOut(
+        workspace_bucket_id=bucket.id,
+        workspace_article_id=article.id,
+        overridden_article_ids=overridden,
     )
 
 

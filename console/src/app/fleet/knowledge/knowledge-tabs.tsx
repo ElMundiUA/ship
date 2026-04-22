@@ -27,13 +27,15 @@ import type {
   ApiKnowledgeSearchResponse,
 } from "@/lib/api/client";
 
+import { CandidatesPanel } from "./candidates-panel";
+
 type Props = {
   workspaceId: string;
   canonical: ApiKnowledgeCanonicalResponse;
   repos: ApiActivatedRepo[];
 };
 
-type Tab = "search" | "canonical";
+type Tab = "search" | "canonical" | "promote";
 
 const GROUP_LABEL: Record<ApiKnowledgeSearchHit["rank_bucket"], string> = {
   repo_match: "In this repo",
@@ -66,13 +68,19 @@ export function KnowledgeTabs({ workspaceId, canonical, repos }: Props) {
         >
           Canonical
         </TabButton>
+        <TabButton
+          active={tab === "promote"}
+          onClick={() => setTab("promote")}
+        >
+          Promote candidates
+        </TabButton>
       </div>
 
-      {tab === "search" ? (
+      {tab === "search" && (
         <SearchTab workspaceId={workspaceId} repos={repos} />
-      ) : (
-        <CanonicalTab canonical={canonical} />
       )}
+      {tab === "canonical" && <CanonicalTab canonical={canonical} />}
+      {tab === "promote" && <CandidatesPanel workspaceId={workspaceId} />}
     </div>
   );
 }

@@ -16,6 +16,7 @@ from backend.app.db.models.agent_surface import (
 )
 from backend.app.db.models.custom_patterns import CustomPattern
 from backend.app.db.models.integrations import GitHubInstallation, WorkspaceRepo
+from backend.app.db.models.knowledge_promotion import KnowledgePromotionCandidate
 from backend.app.db.models.lanes import Lane
 from backend.app.db.models.notifications import WorkspaceNotification
 from backend.app.db.models.pipelines import (
@@ -62,6 +63,7 @@ __all__ = [
     "Integration",
     "KbChunk",
     "KnowledgeBucket",
+    "KnowledgePromotionCandidate",
     "Lane",
     "Org",
     "OrgMember",
