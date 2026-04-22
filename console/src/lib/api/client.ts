@@ -1490,6 +1490,65 @@ export function listLaneCatalog(token?: string): Promise<ApiLaneCatalogEntry[]> 
 }
 
 /**
+ * One input slot declared by a pattern (``pattern.spec.inputs[i]``).
+ *
+ * Drives the ``/requests`` page's dynamic form — the ``type`` slot
+ * tells the UI which widget to render (free-text, URL, enum dropdown).
+ * Fields not listed in the union default to ``text``.
+ */
+export interface ApiPatternInput {
+  name: string;
+  type?: "text" | "url" | "enum" | "multiline" | string;
+  required?: boolean;
+  default?: string | null;
+  hint?: string;
+  values?: string[];
+}
+
+/**
+ * Catalog pattern exposed by ``/v1/catalog/patterns``.
+ *
+ * Mirrors ``CatalogEntryOut`` from
+ * ``backend/app/api/v1/routes/catalog.py``. The Console's Lanes
+ * Library + Requests grid both consume this shape (Library groups
+ * by ``category``; Requests filters to ``modes.includes("request")``).
+ */
+export interface ApiCatalogPattern {
+  kind: string;
+  id: string;
+  name: string | null;
+  version: string | null;
+  channel: string | null;
+  group: string | null;
+  tags: string[];
+  description: string;
+  content_sha256: string | null;
+  updated_at: string | null;
+  deprecated: boolean;
+  replaced_by: string | null;
+  yanked: boolean;
+  category: string | null;
+  modes: string[];
+  default_trigger: Record<string, unknown> | null;
+  lane_workflow: string | null;
+  resolved_lane_workflow: string | null;
+  include: string[];
+  inputs: ApiPatternInput[];
+  enabled_on_install: Record<string, unknown>;
+}
+
+export function listCatalogPatterns(
+  opts: { mode?: "lane" | "request"; token?: string } = {},
+): Promise<ApiCatalogPattern[]> {
+  const params = new URLSearchParams();
+  if (opts.mode) params.set("mode", opts.mode);
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return apiFetch<ApiCatalogPattern[]>(`/v1/catalog/patterns${suffix}`, {
+    token: opts.token,
+  });
+}
+
+/**
  * Live ``.ship/config.yml`` surfaced by the Library editor.
  *
  * ``sha`` is the vendor blob SHA; the write endpoint requires it
@@ -2260,6 +2319,16 @@ export interface ApiAgentRequest {
   repo_full_name: string;
   requested_by_email: string | null;
   agent_slug: string;
+  /**
+   * RFC-0008 C4 — catalog pattern that backed the dispatch (``null``
+   * for legacy ad-hoc rows created before the pattern path shipped).
+   */
+  pattern_id: string | null;
+  /**
+   * Structured form payload the pattern's ``spec.inputs`` collected.
+   * Empty for legacy ad-hoc rows.
+   */
+  inputs: Record<string, string>;
   context_ref: string | null;
   prompt: string;
   status: string;
@@ -2274,9 +2343,22 @@ export interface ApiAgentRequestListOut {
   requests: ApiAgentRequest[];
 }
 
+/**
+ * Request body for ``POST /v1/.../repos/{id}/requests``.
+ *
+ * Two shapes are supported:
+ *
+ * - **Pattern-backed** (preferred): set ``pattern_id`` + ``inputs``,
+ *   leave ``agent_slug``/``prompt`` empty (the backend fills them
+ *   from pattern metadata).
+ * - **Ad-hoc**: omit ``pattern_id`` and send ``agent_slug`` + ``prompt``
+ *   for free-form dispatches.
+ */
 export interface ApiAgentRequestIn {
-  agent_slug: string;
-  prompt: string;
+  pattern_id?: string;
+  inputs?: Record<string, string>;
+  agent_slug?: string;
+  prompt?: string;
   context_ref?: string;
 }
 

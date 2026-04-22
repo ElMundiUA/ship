@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
 from backend.app.api.v1.deps import AuthContext, get_current_auth
@@ -85,6 +85,46 @@ async def list_collections(
 ) -> list[CatalogEntryOut]:
     """Every collection (presets, addendums, agent-rules) for tooling pickers."""
     return _serialise(catalog_service.list_collections())
+
+
+@router.get("/patterns", response_model=list[CatalogEntryOut])
+async def list_patterns(
+    mode: str | None = Query(
+        default=None,
+        description=(
+            "Filter to patterns whose ``spec.modes`` contains this "
+            "invocation surface. Accepts ``lane`` or ``request``; omit "
+            "to return every non-``common-*`` pattern."
+        ),
+    ),
+    _: AuthContext = Depends(get_current_auth),
+) -> list[CatalogEntryOut]:
+    """Pattern catalog with RFC-0008 metadata — drives Lanes Library + Requests grid.
+
+    Non-``common-*`` patterns only; the ``common-*`` helpers (empty
+    ``modes``) are never user-facing entry points. When ``mode`` is
+    set, legacy pre-RFC-0008 patterns (no ``modes`` + no ``category``)
+    are treated as ``[lane, request]`` so they keep surfacing during
+    the catalog-reform transition.
+    """
+    if mode is not None and mode not in {"lane", "request"}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "invalid_mode",
+                "message": "mode must be one of 'lane', 'request', or omitted.",
+            },
+        )
+    if mode is None:
+        entries = [
+            p for p in catalog_service.list_patterns()
+            # Hide ``common-*`` shared fragments (empty modes list) —
+            # they're included by other patterns, never picked directly.
+            if not (p.modes == [] and (p.category or "") == "common")
+        ]
+    else:
+        entries = catalog_service.list_patterns_by_mode(mode)
+    return _serialise(entries)
 
 
 # ---------------------------------------------------------------------------

@@ -440,10 +440,37 @@ One PR per phase, merged sequentially:
      field and AuditLog `payload.kind` key stay put so Console and
      CLI clients don't need a round-trip change. *(landed with this
      RFC)*
-4. **Phase 3 — Requests catalog UI.** `/requests` rewritten to show
-   the catalog grid + dynamic form. Backend accepts
+4. **Phase 3 — Requests catalog UI (C4).** `/requests` rewritten to
+   show the catalog grid + dynamic form. Backend accepts
    `{pattern_id, inputs}` and maps that onto the existing
    `adhoc-agent-run.yml` workflow dispatch payload.
+   - New `/v1/catalog/patterns` endpoint returns `CatalogEntryOut` for
+     every non-`common-*` pattern and supports `?mode=request|lane`
+     for the two picker surfaces. Legacy pre-RFC-0008 patterns (no
+     `category` / `modes`) are still returned so the Library/Requests
+     grids keep rendering during the transition.
+   - `AgentRequest` grows two columns: `pattern_id` (FK-shaped text
+     slug, nullable) and `inputs` (JSONB, default `{}`) — Alembic
+     `0023_agent_requests_pattern`. Pre-existing ad-hoc rows get
+     `NULL` / `{}` and keep their free-form `agent_slug`+`prompt`
+     semantics.
+   - `POST /v1/workspaces/{ws}/repos/{id}/requests` accepts both
+     shapes: pattern-backed (`{pattern_id, inputs}`) is preferred and
+     validated against `pattern.spec.inputs` (required fields,
+     `type: enum` value-set, type coercion); legacy
+     (`{agent_slug, prompt, context_ref}`) still round-trips so older
+     clients don't break. `pattern_id` + `pattern_inputs_json` are
+     forwarded as `workflow_dispatch` inputs so `adhoc-agent-run.yml`
+     can render the cataloged template via `shipctl run
+     --pattern <id>`; empty when the caller uses the legacy shape.
+   - Console `/requests` page is now a catalog grid grouped by
+     `category` with one-card-at-a-time expansion. Each card renders
+     a form built from `pattern.inputs` (text / url / enum /
+     multiline widgets, required-field enforcement, sensible
+     defaults). A separate "Ad-hoc prompt" card keeps the free-form
+     dispatch path alive. Recent requests show the pattern id +
+     inputs preview when present; otherwise the raw prompt. *(landed
+     with this RFC)*
 5. **Phase 4 — Expansion pack.** 10 new Phase-1 patterns land as
    ARTIFACT.md files plus any starter YAML they need.
 

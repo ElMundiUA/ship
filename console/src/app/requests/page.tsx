@@ -6,19 +6,21 @@ import { Badge, Card, CardHeader } from "@/components/ui";
 import {
   type ApiActivatedRepo,
   type ApiAgentRequest,
+  type ApiCatalogPattern,
   ApiHttpError,
   ApiUnavailableError,
   isApiConfigured,
   listActivatedRepos,
   listAgentRequests,
+  listCatalogPatterns,
   listWorkspaces,
 } from "@/lib/api/client";
 import { getSessionToken } from "@/lib/api/session";
 
-import { NewRequestForm } from "./new-request";
+import { RequestsCatalog } from "./requests-catalog";
 
 /**
- * Requests — one-shot agent runs.
+ * Requests — one-shot agent runs (RFC-0008 C4).
  *
  * The counterpart to ``/lanes``: ``/lanes`` edits the recurring /
  * trigger-driven side of ``.ship/config.yml``; ``/requests`` fires
@@ -27,8 +29,13 @@ import { NewRequestForm } from "./new-request";
  * live in ``.ship/config.yml`` — a one-shot with inputs has no
  * business being a cron entry.
  *
- * The server component fetches recent requests + the activated-repo
- * list; the ``NewRequestForm`` client component handles dispatch.
+ * Under RFC-0008 the page is a catalog grid of request-mode patterns
+ * (``modes: [request]`` in the pattern frontmatter). Clicking a card
+ * opens a dynamic form wired to the pattern's declared ``inputs``,
+ * so every request carries a validated payload instead of a
+ * free-form prompt. A dedicated "Ad-hoc prompt" card at the end
+ * keeps the legacy free-form dispatch path alive for cases nothing
+ * in the catalog fits.
  */
 
 export const dynamic = "force-dynamic";
@@ -65,13 +72,17 @@ export default async function RequestsPage() {
 
   let repos: ApiActivatedRepo[] = [];
   let requests: ApiAgentRequest[] = [];
+  let patterns: ApiCatalogPattern[] = [];
   try {
-    [repos, requests] = await Promise.all([
+    [repos, requests, patterns] = await Promise.all([
       listActivatedRepos(workspace.id, token).catch(
         () => [] as ApiActivatedRepo[],
       ),
       listAgentRequests(workspace.id, { token, limit: 25 }).catch(
         () => [] as ApiAgentRequest[],
+      ),
+      listCatalogPatterns({ mode: "request", token }).catch(
+        () => [] as ApiCatalogPattern[],
       ),
     ]);
   } catch (err) {
@@ -106,10 +117,9 @@ export default async function RequestsPage() {
         </Link>
       }
     >
-      <p className="mb-4 max-w-2xl text-xs text-white/55">
-        Pick an agent, attach a piece of context (ticket, PR, file
-        path, free-form description), drop a prompt — we dispatch the
-        workflow once and track the run here. Unlike{" "}
+      <p className="mb-5 max-w-3xl text-xs text-white/55">
+        Pick a ready-made agent (BA, QA, architect review…), fill in
+        the pattern&rsquo;s inputs, dispatch. Unlike{" "}
         <Link href="/lanes" className="text-aqua hover:underline">
           lanes
         </Link>
@@ -117,12 +127,17 @@ export default async function RequestsPage() {
         <code className="rounded bg-white/[0.06] px-1.5 py-0.5">
           .ship/config.yml
         </code>{" "}
-        — they&apos;re one-shot dispatches.
+        — they&apos;re one-shot dispatches against the repo&apos;s
+        default branch.
       </p>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
         <div className="lg:col-span-3">
-          <NewRequestForm workspaceId={workspace.id} repos={sortedRepos} />
+          <RequestsCatalog
+            workspaceId={workspace.id}
+            repos={sortedRepos}
+            patterns={patterns}
+          />
         </div>
 
         <Card className="lg:col-span-2">
@@ -134,8 +149,8 @@ export default async function RequestsPage() {
             <div className="mt-5 rounded-lg border border-dashed border-white/10 bg-white/[0.02] p-6 text-center text-xs text-white/55">
               <p>Nothing dispatched yet.</p>
               <p className="mt-1 text-[11px] text-white/40">
-                Fire your first one on the left — it&apos;ll show up
-                here with a link to the Actions run.
+                Pick a pattern on the left — it&apos;ll show up here
+                with a link to the Actions run.
               </p>
             </div>
           ) : (
@@ -155,7 +170,11 @@ function RequestRow({ request }: { request: ApiAgentRequest }) {
   const body = (
     <>
       <div className="flex flex-wrap items-center gap-2">
-        <Badge tone="info">{request.agent_slug}</Badge>
+        {request.pattern_id ? (
+          <Badge tone="info">{request.pattern_id}</Badge>
+        ) : (
+          <Badge tone="neutral">{request.agent_slug}</Badge>
+        )}
         <Badge tone={statusTone(request.status)} dot>
           {request.status}
         </Badge>
@@ -166,9 +185,20 @@ function RequestRow({ request }: { request: ApiAgentRequest }) {
       <p className="mt-1 font-mono text-[11px] text-white/55">
         {request.repo_full_name}
       </p>
-      <p className="mt-1 line-clamp-2 text-[12px] text-white/75">
-        {request.prompt}
-      </p>
+      {request.pattern_id && Object.keys(request.inputs ?? {}).length > 0 ? (
+        <ul className="mt-1 space-y-0.5 text-[11px] text-white/60">
+          {Object.entries(request.inputs).slice(0, 3).map(([k, v]) => (
+            <li key={k} className="truncate">
+              <span className="font-mono text-white/45">{k}:</span>{" "}
+              <span className="font-mono">{v}</span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-1 line-clamp-2 text-[12px] text-white/75">
+          {request.prompt}
+        </p>
+      )}
       {request.context_ref ? (
         <p className="mt-1 truncate font-mono text-[10px] text-white/45">
           ctx: {request.context_ref}
@@ -196,11 +226,7 @@ function RequestRow({ request }: { request: ApiAgentRequest }) {
       </li>
     );
   }
-  return (
-    <li className={className}>
-      {body}
-    </li>
-  );
+  return <li className={className}>{body}</li>;
 }
 
 function statusTone(status: string): "ok" | "warn" | "err" | "neutral" | "info" {

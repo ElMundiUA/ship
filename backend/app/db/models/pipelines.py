@@ -340,6 +340,15 @@ class AgentRequest(Base):
         nullable=True,
     )
     agent_slug: Mapped[str] = mapped_column(String(64), nullable=False)
+    # RFC-0008 C4 — pattern-backed requests. When set, the row points
+    # at a catalog pattern id (e.g. ``role-ba``) and ``inputs`` holds
+    # the form values collected from ``pattern.spec.inputs``. Ad-hoc
+    # free-form dispatches (pre-C4 API shape) leave both ``NULL`` /
+    # ``{}`` and rely on ``agent_slug`` + ``prompt`` alone.
+    pattern_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    inputs: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
     context_ref: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     prompt: Mapped[str] = mapped_column(String(4096), nullable=False)
     status: Mapped[str] = mapped_column(

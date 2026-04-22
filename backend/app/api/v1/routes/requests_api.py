@@ -20,6 +20,7 @@ wire ``shipctl callback`` updates, the sink will live next to
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from typing import Any
@@ -41,6 +42,8 @@ from backend.app.db.models.integrations import GitHubInstallation, WorkspaceRepo
 from backend.app.db.models.pipelines import AgentRequest
 from backend.app.db.models.tenancy import AuditLog
 from backend.app.db.session import get_session
+from backend.app.services import catalog as catalog_service
+from backend.app.services.catalog import CatalogArtifact
 
 
 logger = logging.getLogger(__name__)
@@ -72,15 +75,27 @@ _ALLOWED_AGENT_SLUGS = {"claude", "gpt", "gemini", "custom"}
 class AgentRequestIn(BaseModel):
     """Body for ``POST /{repo_id}/requests``.
 
-    All fields echo what the Console's "New request" form collects
-    (see ``console/src/app/requests/page.tsx``). ``context_ref`` is
-    optional because not every prompt needs a PR / ticket / file to
-    focus on; when set the workflow exposes it as ``inputs.context_ref``
-    so ``shipctl run-adhoc`` can handle it agent-side.
+    Two supported shapes driving the Console's ``/requests`` page:
+
+    * **Pattern-backed (RFC-0008 C4, preferred).** Set ``pattern_id``
+      to a catalog entry advertising ``modes: request`` (e.g.
+      ``role-ba``) and populate ``inputs`` with the key/value map the
+      pattern's ``spec.inputs`` demands. ``agent_slug`` / ``prompt``
+      become optional — when omitted we fall back to the pattern's
+      own definition and Ship's default runner.
+    * **Ad-hoc free-form (legacy).** Omit ``pattern_id`` and send
+      ``agent_slug`` + ``prompt`` directly. Kept so the form can
+      still dispatch a custom-prompt run when no cataloged pattern
+      fits the task.
+
+    ``context_ref`` is always optional — when set the workflow
+    exposes it as ``inputs.context_ref`` for agent-side grounding.
     """
 
-    agent_slug: str = Field(..., min_length=1, max_length=64)
-    prompt: str = Field(..., min_length=1, max_length=4096)
+    pattern_id: str | None = Field(default=None, max_length=120)
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    agent_slug: str | None = Field(default=None, min_length=1, max_length=64)
+    prompt: str | None = Field(default=None, max_length=4096)
     context_ref: str | None = Field(default=None, max_length=1024)
 
 
@@ -90,6 +105,8 @@ class AgentRequestOut(BaseModel):
     repo_id: uuid.UUID
     repo_full_name: str
     agent_slug: str
+    pattern_id: str | None = None
+    inputs: dict[str, Any] = Field(default_factory=dict)
     context_ref: str | None
     prompt: str
     status: str
@@ -159,6 +176,8 @@ def _serialize(row: AgentRequest, repo_full_name: str, requester_email: str | No
         repo_id=row.repo_id,
         repo_full_name=repo_full_name,
         agent_slug=row.agent_slug,
+        pattern_id=row.pattern_id,
+        inputs=dict(row.inputs or {}),
         context_ref=row.context_ref,
         prompt=row.prompt,
         status=row.status,
@@ -168,6 +187,184 @@ def _serialize(row: AgentRequest, repo_full_name: str, requester_email: str | No
         requested_by_email=requester_email,
         finished_at=row.finished_at.isoformat() if row.finished_at else None,
         created_at=row.created_at.isoformat() if row.created_at else "",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Pattern resolution + input validation (RFC-0008 C4)
+# ---------------------------------------------------------------------------
+
+
+class _ResolvedRequest:
+    """What the dispatcher needs after ``pattern_id``/``inputs`` normalisation.
+
+    Consolidates the two input shapes (pattern-backed vs ad-hoc) into
+    the legacy ``{agent_slug, prompt, context_ref, inputs, pattern_id}``
+    tuple the downstream dispatch path already understood.
+    """
+
+    __slots__ = ("pattern_id", "pattern", "agent_slug", "prompt", "context_ref", "inputs")
+
+    def __init__(
+        self,
+        *,
+        pattern_id: str | None,
+        pattern: CatalogArtifact | None,
+        agent_slug: str,
+        prompt: str,
+        context_ref: str | None,
+        inputs: dict[str, Any],
+    ) -> None:
+        self.pattern_id = pattern_id
+        self.pattern = pattern
+        self.agent_slug = agent_slug
+        self.prompt = prompt
+        self.context_ref = context_ref
+        self.inputs = inputs
+
+
+def _coerce_input_value(spec: dict[str, Any], raw: Any) -> str:
+    """Convert a submitted input value into a workflow-safe string.
+
+    GitHub Actions ``workflow_dispatch`` inputs are strings; we
+    normalise booleans / numbers / lists client-side into a stable
+    representation the pattern's prompt template can consume. Enum
+    values are validated against ``spec.values`` so a stale UI can't
+    dispatch a mistyped choice.
+    """
+    if raw is None:
+        return ""
+    kind = str(spec.get("type") or "text").strip().lower()
+    if kind == "enum":
+        allowed = spec.get("values") or []
+        if not isinstance(allowed, list) or not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_pattern",
+                    "message": (
+                        f"Pattern input {spec.get('name')!r} declares "
+                        "type=enum without any values."
+                    ),
+                },
+            )
+        value = str(raw)
+        if value not in {str(v) for v in allowed}:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_input_value",
+                    "message": (
+                        f"{spec.get('name')!r} must be one of "
+                        f"{list(allowed)}; got {value!r}."
+                    ),
+                },
+            )
+        return value
+    if isinstance(raw, bool):
+        return "true" if raw else "false"
+    return str(raw)
+
+
+def _resolve_pattern_request(payload: AgentRequestIn) -> _ResolvedRequest:
+    """Normalise both request shapes into a single dispatch-ready tuple.
+
+    * When ``pattern_id`` is set we look up the catalog entry, ensure
+      it advertises ``modes: request``, fill in missing required
+      inputs, coerce enum values, and derive a default prompt +
+      agent_slug from pattern metadata if the caller didn't override.
+    * When ``pattern_id`` is absent we fall back to the legacy ad-hoc
+      shape and require ``agent_slug`` + ``prompt``.
+    """
+    if payload.pattern_id:
+        pattern = next(
+            (p for p in catalog_service.list_patterns() if p.id == payload.pattern_id),
+            None,
+        )
+        if pattern is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "code": "pattern_not_found",
+                    "message": f"No catalog pattern with id={payload.pattern_id!r}.",
+                },
+            )
+        if "request" not in pattern.modes:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "pattern_not_request_mode",
+                    "message": (
+                        f"Pattern {pattern.id!r} can't be dispatched as a "
+                        "one-shot request (missing 'request' in spec.modes)."
+                    ),
+                },
+            )
+        raw_inputs = payload.inputs or {}
+        normalised: dict[str, str] = {}
+        missing: list[str] = []
+        for input_spec in pattern.inputs:
+            name = input_spec.get("name")
+            if not isinstance(name, str):
+                continue
+            if name in raw_inputs and raw_inputs[name] not in (None, ""):
+                normalised[name] = _coerce_input_value(input_spec, raw_inputs[name])
+                continue
+            default = input_spec.get("default")
+            if default not in (None, ""):
+                normalised[name] = _coerce_input_value(input_spec, default)
+                continue
+            if input_spec.get("required"):
+                missing.append(name)
+        if missing:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "missing_required_inputs",
+                    "message": (
+                        f"Pattern {pattern.id!r} is missing required "
+                        f"input(s): {missing}."
+                    ),
+                    "missing": missing,
+                },
+            )
+        # Pattern-derived defaults for the ad-hoc columns. A cataloged
+        # pattern doesn't need a free-form prompt (``shipctl run`` will
+        # render the pattern body), but we still persist a human-
+        # readable fallback so the Console's list view has something to
+        # show when the caller didn't supply one.
+        agent_slug = (payload.agent_slug or "custom").strip() or "custom"
+        prompt = (payload.prompt or pattern.description or pattern.id)[:4096]
+        return _ResolvedRequest(
+            pattern_id=pattern.id,
+            pattern=pattern,
+            agent_slug=agent_slug,
+            prompt=prompt,
+            context_ref=payload.context_ref or None,
+            inputs=normalised,
+        )
+
+    # Legacy ad-hoc shape — ``agent_slug`` + ``prompt`` required.
+    agent_slug = (payload.agent_slug or "").strip()
+    prompt = (payload.prompt or "").strip()
+    if not agent_slug or not prompt:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "missing_required_fields",
+                "message": (
+                    "Provide either a ``pattern_id`` (preferred) or both "
+                    "``agent_slug`` and ``prompt`` for an ad-hoc request."
+                ),
+            },
+        )
+    return _ResolvedRequest(
+        pattern_id=None,
+        pattern=None,
+        agent_slug=agent_slug,
+        prompt=prompt,
+        context_ref=payload.context_ref or None,
+        inputs={},
     )
 
 
@@ -202,7 +399,9 @@ async def dispatch_request(
 
     await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
 
-    if payload.agent_slug not in _ALLOWED_AGENT_SLUGS:
+    resolved = _resolve_pattern_request(payload)
+
+    if resolved.agent_slug not in _ALLOWED_AGENT_SLUGS:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={
@@ -219,18 +418,20 @@ async def dispatch_request(
         workspace_id=workspace_id,
         repo_id=repo_id,
         requested_by_user_id=auth.user.id,
-        agent_slug=payload.agent_slug,
-        context_ref=payload.context_ref or None,
-        prompt=payload.prompt,
+        agent_slug=resolved.agent_slug,
+        pattern_id=resolved.pattern_id,
+        inputs=dict(resolved.inputs),
+        context_ref=resolved.context_ref,
+        prompt=resolved.prompt,
         status="dispatching",
     )
     session.add(row)
     await session.flush()
 
     inputs: dict[str, str] = {
-        "agent": payload.agent_slug,
-        "prompt": payload.prompt,
-        "context_ref": payload.context_ref or "",
+        "agent": resolved.agent_slug,
+        "prompt": resolved.prompt,
+        "context_ref": resolved.context_ref or "",
         # Keep the callback channel pre-wired so when the callback
         # sink ships, existing rows start reporting retroactively.
         "ship_run_id": str(row.id),
@@ -240,6 +441,14 @@ async def dispatch_request(
         "ship_callback_url": "",
         "ship_run_token": "",
     }
+    # RFC-0008 C4 — pattern-backed dispatches also forward the pattern
+    # id + structured inputs so ``adhoc-agent-run.yml`` can render the
+    # cataloged template via ``shipctl run --pattern <id>`` instead of
+    # the free-form prompt path. The workflow ignores ``pattern_id``
+    # when empty so legacy dispatches stay source-compatible.
+    if resolved.pattern_id:
+        inputs["pattern_id"] = resolved.pattern_id
+        inputs["pattern_inputs_json"] = json.dumps(resolved.inputs, sort_keys=True)
 
     try:
         await dispatch_workflow(
@@ -289,7 +498,8 @@ async def dispatch_request(
             payload={
                 "repo_id": str(repo_id),
                 "repo_full_name": repo_row.full_name,
-                "agent_slug": payload.agent_slug,
+                "agent_slug": resolved.agent_slug,
+                "pattern_id": resolved.pattern_id,
                 "workflow_file": _ADHOC_WORKFLOW_FILE,
             },
         )
