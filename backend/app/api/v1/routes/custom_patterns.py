@@ -37,7 +37,6 @@ Console as-is — editing and persistence happen on the save step.
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 import uuid
@@ -61,6 +60,7 @@ from backend.app.db.session import get_session
 from backend.app.services import catalog as catalog_service
 from backend.app.core.config import get_settings
 from backend.app.services.agent.client import ChatMessage, pick_default_client
+from backend.app.services.json_utils import salvage_json as _salvage_json_util
 
 
 logger = logging.getLogger(__name__)
@@ -255,29 +255,12 @@ separate patterns.
 
 
 def _salvage_json(raw: str) -> dict[str, Any]:
-    """Best-effort JSON extraction — tolerates stray prose/fences.
+    """Thin local alias for :func:`backend.app.services.json_utils.salvage_json`.
 
-    OpenAI's JSON mode is reliable; Anthropic is looser. Pattern is
-    lifted from :mod:`backend.app.services.distiller_llm` which has
-    the same contract (trust the model for the verdict, salvage the
-    syntax).
+    Kept as a module-level name so existing callers / tests that
+    ``monkeypatch`` the symbol here keep working unchanged.
     """
-    text = str(raw or "").strip()
-    try:
-        data = json.loads(text)
-        return data if isinstance(data, dict) else {}
-    except (json.JSONDecodeError, TypeError):
-        pass
-    # Look for the outermost ``{ ... }``.
-    start = text.find("{")
-    end = text.rfind("}")
-    if start == -1 or end <= start:
-        return {}
-    try:
-        data = json.loads(text[start : end + 1])
-        return data if isinstance(data, dict) else {}
-    except (json.JSONDecodeError, TypeError):
-        return {}
+    return _salvage_json_util(raw)
 
 
 @router.post(

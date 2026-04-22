@@ -252,15 +252,73 @@ What's *not* in this PR:
 
 ---
 
-## PR-7B — Canonicalisation & promotion · pending
+## PR-7B — Dedup clustering + LLM promotion drafts · shipped
 
-Turns the `orphan_slugs` list into actionable promotion flows:
-cluster per-repo articles by content hash / embedding neighbourhood,
-surface "promote this repo-scope bucket to workspace canonical"
-with a diff view, and wire the override flag from 7A so promoted
-canonicals don't silently shadow repo-specific notes. Will consume
-`override_count` (keyed on `bucket_article.id`) — 7B must not
-repurpose that column for a different semantic.
+Turns the `orphan_slugs` discovery feed from 7A into an actionable
+promotion flow. Shipped in this PR:
+
+- **Migration 0028**: `knowledge_promotion_candidates` cache table
+  (workspace_id + fingerprint unique, ttl_expires_at index). One row
+  per cluster; `article_ids` is a JSONB list, `slug_hint` +
+  `centroid_score` drive the Console's ranking/hint UX.
+- **`knowledge_dedup` service.** On-demand clustering: loads every
+  non-archived, repo-scope `bucket_article` with an embedding, runs
+  pairwise cosine similarity (pure-Python pass — documented choice
+  for MVP-size workspaces), unions edges ≥ `0.85` into connected
+  components, keeps components with ≥2 members drawn from ≥2 repos.
+  Upserts the fresh fingerprint set, deletes stale rows, stamps a
+  24h TTL.
+- **`knowledge_promotion` service.** `draft_canonical(session, ws,
+  article_ids, llm_client)` loads the cluster's articles + parent
+  buckets, asks the model via `AgentClient.acomplete` in JSON mode
+  for a `{slug, title, body, summary, notes}` payload, salvages the
+  JSON via a new `services/json_utils.salvage_json` helper shared
+  with the custom-pattern drafter.
+- **New endpoints** (all under `/v1/workspaces/{ws}/knowledge`):
+  - `GET  /candidates` — fresh cache or recompute, always hydrated
+    with member + repo context; `is_fresh` tells the Console whether
+    we just rebuilt.
+  - `POST /candidates/refresh` — admin-gated forced recompute.
+  - `POST /candidates/{id}/draft` — admin-gated LLM draft; 412 when
+    the LLM is unconfigured (same banner the pattern drafter uses).
+  - `POST /promote` — creates the workspace-scope bucket + article,
+    optionally sets `overrides_workspace_article_id` on each source
+    (skipping ones already pointing elsewhere), invalidates every
+    candidate row that overlaps the promoted sources.
+- **Console**:
+  - `listKnowledgeCandidates` / `refreshKnowledgeCandidates` /
+    `draftKnowledgePromotion` / `promoteKnowledge` in
+    `lib/api/client.ts`, with Next.js proxies at
+    `/api/knowledge/{candidates,candidates/[id]/draft,promote}`.
+  - Third `/fleet/knowledge` tab **Promote candidates**. Each card
+    shows slug hint, member / repo counts, centroid as a percentage,
+    and a preview of up to four members. "Draft with AI" opens a
+    modal with spinner → editable slug/title/body → Regenerate /
+    Promote. Successful promotion closes the modal, shows a success
+    banner, and re-fetches the list.
+- **Schema tolerance.** `BucketSource` gains a `"promoted"` literal.
+  `knowledge_buckets.source_kind` is an unconstrained `String` at
+  the DB layer (confirmed via migration `0014`), so no schema change
+  is needed beyond the new Python constant.
+- **Tests**: `backend/tests/test_v1_knowledge_promotion.py` covers
+  cross-repo cluster detection, same-repo skip, the similarity
+  threshold, cache freshness (`is_fresh` flip), forced recompute
+  after an embedding mutation, the LLM happy path with a fake
+  `AgentClient`, 412 when the LLM is unconfigured, promotion
+  mechanics (bucket + article creation, override linking, respecting
+  pre-existing overrides), and cache invalidation after promote.
+  Existing suites unchanged (same pre-existing
+  `test_fleet_list_returns_newest_first` flake as before).
+
+What's *not* in this PR:
+
+- No Navigator tool. That's 7C.
+- No background scheduler — clustering is on-demand with a 24h TTL;
+  fine for MVP-size workspaces. A scheduled recomputer can come
+  later without a schema change.
+- No partial-cluster invalidation. On any promote overlap we wipe
+  the matching rows; the next GET recomputes the full candidate
+  set. Cheap at MVP scale, simpler than read-through revalidation.
 
 ---
 

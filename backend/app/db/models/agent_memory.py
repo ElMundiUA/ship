@@ -103,6 +103,10 @@ class BucketSource:
       database); content is fetched on read, not stored.
     - ``audio_transcript`` — transcripts ingested from recorded
       interviews (e.g. offboarding); becomes articles via the Distiller.
+    - ``promoted`` — a workspace-scope canonical article synthesised
+      from a dedup cluster of repo-scope articles (RFC-0008 §I / PR-7B).
+      Authoritative source is the promotion flow; the operator edits
+      the canonical directly inside the bucket from then on.
     """
 
     AGENT_MEMORY = "agent_memory"
@@ -110,6 +114,7 @@ class BucketSource:
     EXTERNAL_STATIC = "external_static"
     CONNECTOR_PROXY = "connector_proxy"
     AUDIO_TRANSCRIPT = "audio_transcript"
+    PROMOTED = "promoted"
 
     ALL: tuple[str, ...] = (
         AGENT_MEMORY,
@@ -117,6 +122,7 @@ class BucketSource:
         EXTERNAL_STATIC,
         CONNECTOR_PROXY,
         AUDIO_TRANSCRIPT,
+        PROMOTED,
     )
 
 
