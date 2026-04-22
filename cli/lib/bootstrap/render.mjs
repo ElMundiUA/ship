@@ -276,6 +276,19 @@ function buildRecommendedTools({ preset }) {
       "Feast / Tecton / Databricks Feature Store for feature contracts",
       "Great Expectations / Pandera for data validation",
     ],
+    platform: [
+      "Terraform + a state backend you can audit (S3 / Terraform Cloud)",
+      "Kyverno / OPA / Conftest for manifest-level policy gating",
+      "Infracost or cloud-pricing API for per-PR cost deltas",
+      "Prometheus / Datadog / CloudWatch for SLO burn-rate queries",
+      "Syft / Trivy / Grype for SBOM generation at release",
+    ],
+    regulated: [
+      "Presidio / Nightfall / Transcend for PII detection helpers",
+      "An audit log store with hash-chain integrity (append-only DB / S3 with object-lock)",
+      "Vault / AWS Secrets Manager for scoped compliance credentials",
+      "Drata / Vanta / Secureframe for evidence-bundle sync (optional)",
+    ],
     "web-app": [
       "Playwright (hosted) for PR preview E2E",
       "Preview deployments (Vercel / Netlify / Fly) per PR",

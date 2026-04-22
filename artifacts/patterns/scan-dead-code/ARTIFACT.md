@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: 726076a0f93de7acd62e681a9763047bfa5daebd04803b73fe32de4050243df2
+content_sha256: efaef7fcfd5bb933c4e8e4bf3b84fdb086ce3527309e21ba76297308589382cf
 deprecated: false
 replaced_by: null
 yanked: false
@@ -40,6 +40,8 @@ spec:
       api-backend: true
       mobile-app-deep: true
       ml-project: true
+      platform: true
+      regulated: true
       monorepo: true
       cli: true
 ---

@@ -14,6 +14,8 @@ export type PresetId =
   | "mobile-app"
   | "mobile-app-deep"
   | "ml-project"
+  | "platform"
+  | "regulated"
   | "cli"
   | "monorepo"
   | "marketing"
@@ -25,6 +27,8 @@ export const PRESET_IDS: PresetId[] = [
   "mobile-app",
   "mobile-app-deep",
   "ml-project",
+  "platform",
+  "regulated",
   "cli",
   "monorepo",
   "marketing",
@@ -64,6 +68,18 @@ export const PRESET_META: Record<
     blurb:
       "Training / inference / data pipelines — model eval gate, data-drift monitor, repro smoke test, feature-schema diff, fairness scanner, model-card flow, and an ML-aware reviewer.",
     lanes: "PR gate · Standup · Tech-debt · Drift monitor · Model card",
+  },
+  platform: {
+    name: "Platform / SRE",
+    blurb:
+      "Infra repos with Terraform / Kubernetes / SLOs — drift monitor, policy gate, SLO burn paging, SBOM diff at release, cost-delta and blast-radius comments per PR, runbook-freshness sweep, on-call handoff flow.",
+    lanes: "PR gate · Standup · Tech-debt · Drift · SLO burn · Blast radius",
+  },
+  regulated: {
+    name: "Regulated industry",
+    blurb:
+      "Fintech / healthtech / SOC2 / HIPAA / PCI — PII leakage sweep, IAM policy-diff review, hourly audit-log integrity check, consent-coverage drift, and a compliance-artifact refresh flow per audit window.",
+    lanes: "PR gate · Standup · PII sweep · IAM diff · Audit integrity",
   },
   cli: {
     name: "CLI / library",

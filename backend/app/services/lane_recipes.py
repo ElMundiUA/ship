@@ -54,6 +54,8 @@ KNOWN_PRESETS: Final[tuple[str, ...]] = (
     "mobile-app",
     "mobile-app-deep",
     "ml-project",
+    "platform",
+    "regulated",
     "cli",
     "monorepo",
     "marketing",
@@ -132,6 +134,7 @@ _EXTRA_RECIPES: Final[tuple[LaneRecipe, ...]] = (
                 "mobile-app",
                 "mobile-app-deep",
                 "ml-project",
+                "platform",
                 "cli",
                 "monorepo",
             }
