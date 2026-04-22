@@ -2399,3 +2399,167 @@ export function dispatchAgentRequest(
     { method: "POST", token, body },
   );
 }
+
+// ---------------------------------------------------------------------------
+// Fleet requests (RFC-0008 §D — workspace-level fan-out across repos)
+// ---------------------------------------------------------------------------
+
+export interface ApiFleetRequest {
+  id: string;
+  workspace_id: string;
+  title: string | null;
+  pattern_id: string | null;
+  agent_slug: string | null;
+  inputs: Record<string, string>;
+  context_ref: string | null;
+  status: string;
+  target_count: number;
+  dispatched_count: number;
+  rejected_count: number;
+  requested_by_email: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ApiFleetRequestRejection {
+  repo_id: string;
+  repo_full_name: string | null;
+  code: string;
+  message: string;
+  agent_request_id: string | null;
+}
+
+export interface ApiFleetRequestIn {
+  pattern_id?: string;
+  inputs?: Record<string, string>;
+  agent_slug?: string;
+  prompt?: string;
+  context_ref?: string;
+  repo_ids: string[];
+  title?: string;
+}
+
+export interface ApiFleetRequestCreateOut {
+  fleet_request: ApiFleetRequest;
+  children: ApiAgentRequest[];
+  rejections: ApiFleetRequestRejection[];
+}
+
+export interface ApiFleetRequestListOut {
+  requests: ApiFleetRequest[];
+}
+
+export async function listFleetRequests(
+  workspaceId: string,
+  opts: { limit?: number; token?: string } = {},
+): Promise<ApiFleetRequest[]> {
+  const params = new URLSearchParams();
+  if (opts.limit) params.set("limit", String(opts.limit));
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const envelope = await apiFetch<ApiFleetRequestListOut>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/fleet/requests${suffix}`,
+    { token: opts.token },
+  );
+  return envelope.requests;
+}
+
+export function getFleetRequest(
+  workspaceId: string,
+  fleetRequestId: string,
+  token?: string,
+): Promise<ApiFleetRequestCreateOut> {
+  return apiFetch<ApiFleetRequestCreateOut>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/fleet/requests/${encodeURIComponent(fleetRequestId)}`,
+    { token },
+  );
+}
+
+export function createFleetRequest(
+  workspaceId: string,
+  body: ApiFleetRequestIn,
+  token?: string,
+): Promise<ApiFleetRequestCreateOut> {
+  return apiFetch<ApiFleetRequestCreateOut>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/fleet/requests`,
+    { method: "POST", token, body },
+  );
+}
+
+export function cancelFleetRequest(
+  workspaceId: string,
+  fleetRequestId: string,
+  token?: string,
+): Promise<ApiFleetRequestCreateOut> {
+  return apiFetch<ApiFleetRequestCreateOut>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/fleet/requests/${encodeURIComponent(fleetRequestId)}/cancel`,
+    { method: "POST", token },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Adoption funnel (RFC-0008 §E)
+// ---------------------------------------------------------------------------
+
+export type ApiAdoptionStage =
+  | "installed"
+  | "activated"
+  | "seeded"
+  | "first_run"
+  | "steady";
+
+export type ApiAdoptionFlag =
+  | "install_missing"
+  | "bundle_out_of_date"
+  | "stuck"
+  | "cold";
+
+export interface ApiAdoptionTotals {
+  installed: number;
+  activated: number;
+  seeded: number;
+  first_run: number;
+  steady: number;
+  stuck: number;
+  install_missing: number;
+  bundle_out_of_date: number;
+  cold: number;
+}
+
+export interface ApiAdoptionRepo {
+  repo_id: string;
+  full_name: string;
+  preset: string | null;
+  installed_bundle_version: number | null;
+  current_bundle_version: number;
+  activated_at: string | null;
+  stage: ApiAdoptionStage;
+  runs_in_window: number;
+  last_run_at: string | null;
+  successes_in_window: number;
+  success_rate_in_window: number | null;
+  flags: ApiAdoptionFlag[];
+}
+
+export interface ApiAdoptionReport {
+  workspace_id: string;
+  generated_at: string;
+  window_days: number;
+  current_bundle_version: number;
+  totals: ApiAdoptionTotals;
+  repos: ApiAdoptionRepo[];
+}
+
+export async function getAdoptionReport(
+  workspaceId: string,
+  opts: { windowDays?: number; token?: string } = {},
+): Promise<ApiAdoptionReport> {
+  const params = new URLSearchParams();
+  if (opts.windowDays !== undefined) {
+    params.set("window_days", String(opts.windowDays));
+  }
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return apiFetch<ApiAdoptionReport>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/adoption${suffix}`,
+    { token: opts.token },
+  );
+}

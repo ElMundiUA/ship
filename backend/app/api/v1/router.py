@@ -14,6 +14,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from backend.app.api.v1.routes import (
+    adoption,
     agent_secrets,
     artifact_repos,
     audit,
@@ -24,6 +25,7 @@ from backend.app.api.v1.routes import (
     clarifications,
     dashboard,
     distiller,
+    fleet_requests,
     github_app,
     health,
     improvements,
@@ -132,6 +134,19 @@ api_router.include_router(lanes.router)
 # list + per-repo dispatch endpoint. Dispatches ``adhoc-agent-run.yml``
 # that's seeded into every activated repo by the wizard bundle.
 api_router.include_router(requests_api.router)
+# Fleet Requests (RFC-0008 §D) — workspace-level fan-out of a single
+# catalog pattern across many repos. Best-effort: pre-flight
+# rejections (repo not found, GitHub App missing) land on the
+# parent's ``rejections`` JSONB without blocking the rest; dispatch-
+# time failures persist on the child :class:`AgentRequest` row with
+# ``status=dispatch_failed``.
+api_router.include_router(fleet_requests.router)
+# Adoption funnel (RFC-0008 §E) — workspace-level rollup of "how far
+# has Ship landed across these repos" (installed → activated →
+# seeded → first_run → steady). Read-only; the rollup is computed
+# live from WorkspaceRepo + PipelineRun + WorkflowRun + AgentRequest
+# and returned in one shot.
+api_router.include_router(adoption.router)
 # Per-repo agent API-key wiring (Wizard v2 iter 3). Admin-only check
 # + push; plaintext lives only in the HTTP hop to GitHub's secrets
 # API and is never persisted by Ship.
