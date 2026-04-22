@@ -35,7 +35,7 @@ additive and introduces no new metadata.
 |-------|-----------------------------------------------------------|---------|
 | Wave 1 | Cross-cutting quality (7 patterns)                       | shipped — 2026-04-22 |
 | Wave 2 | Mobile (8) + ML (7) + `mobile-app-deep` / `ml-project` presets | shipped — 2026-04-22 |
-| Wave 3 | Infra/SRE (8) + Compliance (5) + `platform` / `regulated` presets | planned |
+| Wave 3 | Infra/SRE (8) + Compliance (5) + `platform` / `regulated` presets | shipped — 2026-04-23 |
 | Wave 4 | Desktop (5) + Hardware (6) + Games (4) + `desktop-app` / `firmware` / `game` presets | planned |
 
 Each wave is independently mergeable, bumps `BUNDLE_VERSION`, and
@@ -310,20 +310,36 @@ issue**. The pattern issue spec is identical for every pattern; see
     `artifacts/collections/preset-mobile-app-deep/ARTIFACT.md`
     and `artifacts/collections/preset-ml-project/ARTIFACT.md`.
 
-### Wave 3 — Infra + Compliance
+### Wave 3 — Infra + Compliance  ✅ shipped — 2026-04-23
 
 - **Epic:** "RFC-0009 Wave 3 — Platform + Regulated packs"
-- **Acceptance:** 13 patterns land, `platform` + `regulated` presets
-  added. Cross-preset overlap (`scan-iam-policy-diff`,
+- **Acceptance:** 13 patterns landed, `platform` + `regulated`
+  presets added. Cross-preset overlap (`scan-iam-policy-diff`,
   `scan-audit-log-integrity`) enabled on both.
-- **Issues (16):**
-  1–8. Infra/SRE pack.
-  9–13. Compliance pack.
-  14. Preset wiring for `platform` + `regulated`.
-  15. Wizard copy for two new presets (incl. regulated-industry
-      questionnaire gate — ask for framework before install).
-  16. Docs: add compliance-framework mapping table in
-      `documentation/catalog/README.md`.
+- **Shipped:**
+  - Infra / SRE pack (8): `scan-terraform-drift`,
+    `scan-k8s-policy`, `scan-cost-delta`, `scan-slo-health`,
+    `scan-sbom-drift`, `flow-runbook-freshness`,
+    `flow-blast-radius`, `flow-oncall-handoff`.
+  - Compliance pack (5): `scan-pii-leakage`,
+    `scan-iam-policy-diff`, `scan-audit-log-integrity`,
+    `scan-consent-drift`, `flow-compliance-artifact`.
+  - Preset wiring: `platform` + `regulated` in
+    `backend.app.services.lane_recipes.KNOWN_PRESETS`;
+    `tech_debt` gating extended to `platform`; `pr_review` /
+    `daily_standup` enabled for both via pattern
+    `enabled_on_install.presets`. Infra pack also flipped on for
+    `monorepo`. Cross-cutting quality pack (Wave 1) pre-enabled
+    for both new presets.
+  - Onboarding wizard: `console/src/app/onboarding/presets.ts`
+    and CLI `cli/lib/bootstrap/render.mjs` carry descriptor copy
+    + recommended-tool lists for both presets. `regulated`
+    declares a one-question wizard gate (`framework`) on its
+    preset collection so the compliance-artifact flow inherits
+    the answer.
+  - New preset collection artefacts:
+    `artifacts/collections/preset-platform/ARTIFACT.md` and
+    `artifacts/collections/preset-regulated/ARTIFACT.md`.
 
 ### Wave 4 — Desktop + Hardware + Games
 
