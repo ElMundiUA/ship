@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Repo pre-commit hook.
+#
+# Enable once after cloning:
+#   git config core.hooksPath .githooks
+#   (or run ``npm run hooks:install`` from the repo root)
+#
+# What it guards:
+#   1. Canonical release-version sync (VERSION vs package.json files
+#      vs backend/app/main.py). Same check the ``version-check`` CI
+#      job runs on every PR, caught locally before push.
+#   2. Bundle-version drift, but only when the staged diff actually
+#      touches seed-bundle sources. This mirrors the
+#      ``bundle-version-check`` CI job.
+#
+# Bypass (rare, e.g. rebase-in-progress with unrelated conflict
+# fixes): ``git commit --no-verify``.
+
+set -euo pipefail
+
+# Fail fast if someone wired this hook on a machine without Node.
+if ! command -v node >/dev/null 2>&1; then
+  echo "pre-commit: node not found on PATH — skipping version checks." >&2
+  echo "            install Node 20+ or run 'git commit --no-verify'." >&2
+  exit 0
+fi
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+# --- 1. Release-version sync ---------------------------------------
+# This script already exits non-zero if any target drifts.
+node scripts/version.mjs check
+
+# --- 2. Bundle-version drift ---------------------------------------
+# Only run when the staged diff mentions any of the bundle source
+# paths — the script itself re-filters, but cheap-gating here keeps
+# the 99% of commits that don't touch the bundle from spawning an
+# extra node process.
+STAGED="$(git diff --cached --name-only --diff-filter=ACMRTD || true)"
+
+if printf '%s\n' "$STAGED" | grep -qE '^(backend/app/services/(seed_bundle|catalog|default_pipelines|tracker_fsm|starter_workflows)\.py|backend/app/resources/starter_workflows/|artifacts/knowledge-starters/)'; then
+  # Diff the index against HEAD — that's what's actually about to
+  # be committed. Using ``HEAD`` as the base means a partial
+  # BUNDLE_VERSION bump already staged on top of HEAD counts.
+  node scripts/bundle-version-check.mjs --base HEAD
+fi

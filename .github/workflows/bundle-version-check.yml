@@ -1,0 +1,48 @@
+name: bundle-version-check
+
+# Fails a PR that changes seed-bundle source material without
+# bumping ``BUNDLE_VERSION``. This is the signal the Console uses
+# to show "Update available →" on already-seeded tenant repos; if
+# it doesn't move, nobody notices the upgrade exists.
+#
+# The list of tracked paths lives in ``scripts/bundle-version-check.mjs``.
+
+on:
+  pull_request:
+    paths:
+      - "backend/app/services/seed_bundle.py"
+      - "backend/app/services/catalog.py"
+      - "backend/app/services/default_pipelines.py"
+      - "backend/app/services/tracker_fsm.py"
+      - "backend/app/services/starter_workflows.py"
+      - "backend/app/resources/starter_workflows/**"
+      - "artifacts/knowledge-starters/**"
+      - "scripts/bundle-version-check.mjs"
+      - ".github/workflows/bundle-version-check.yml"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need the PR's base commit reachable so we can diff
+          # against it; fetch-depth: 0 is the simplest correct
+          # answer and the repo is small enough not to care.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Verify BUNDLE_VERSION was bumped
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ -z "${BASE_SHA}" ]; then
+            echo "No base SHA (not a PR?) — falling back to origin/main."
+            BASE_REF="origin/main"
+          else
+            BASE_REF="${BASE_SHA}"
+          fi
+          node scripts/bundle-version-check.mjs --base "$BASE_REF"
