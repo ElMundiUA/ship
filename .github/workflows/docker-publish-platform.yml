@@ -1,16 +1,19 @@
-# Build & push the Ship cloud platform Docker images (RFC-0006).
+# Build & push every Ship Docker image, then roll out to Bunny Magic Containers.
 #
-# Two images live in this repo:
+# Three images live in this repo and they are always built together so
+# we never end up with a console expecting a backend that hasn't
+# shipped yet (or a landing site that links to a feature the console
+# hasn't deployed). Path filters were removed on purpose: any push to
+# `main` rebuilds all three images so the `sha-<short>` tag is in lock-
+# step across the whole platform.
 #
 #   dekus/ship-backend  — FastAPI (`ship-server`) + arq worker (`ship-worker`)
 #                         share one image; the runtime command differs.
 #                         Dockerfile: deploy/backend/Dockerfile
 #   dekus/ship-console  — Next.js operator UI (standalone build).
 #                         Dockerfile: deploy/console/Dockerfile
-#
-# The marketing landing image (`dekus/ship-docs`) is built by the sibling
-# workflow `docker-publish-bunny.yml`. Keep these two pipelines independent
-# so a slow console build never blocks a docs hotfix.
+#   dekus/ship-docs     — Marketing landing + `/docs` manual + `/book`.
+#                         Dockerfile: ./Dockerfile (repo root)
 #
 # Tagging:
 #   - `latest`              — only on `main` pushes
@@ -18,9 +21,8 @@
 #   - `pr-<number>`         — on pull_request, push=false (smoke build only)
 #
 # Bunny rollout: every `main` push (after a successful build) PATCHes the
-# two Magic Container apps with the new `sha-<short>` tag + the registry
-# digest, then polls until both rollouts report healthy. Required repo
-# config:
+# three Magic Container apps with the new `sha-<short>` tag + the
+# registry digest, then triggers a deploy. Required repo config:
 #
 #   secrets:
 #     DOCKER_HUB_TOKEN          Docker Hub PAT with push perms
@@ -28,33 +30,35 @@
 #   vars (Settings → Variables → Actions, optional unless noted):
 #     BUNNY_BACKEND_APP_ID      *required* — MC app id for ship-server
 #     BUNNY_CONSOLE_APP_ID      *required* — MC app id for ship-console
+#     BUNNY_APP_ID              *required* — MC app id for ship-docs (landing)
+#     SHIP_MC_APP_NAME          default "ship-docs" — MC app name for landing
 #     BUNNY_BACKEND_CONTAINER   default "ship-server" — template name in the backend MC app
 #     BUNNY_CONSOLE_CONTAINER   default "console"     — template name in the console MC app
+#     BUNNY_CONTAINER_NAME      default "Container-1" — template name in the landing MC app
 #     BUNNY_WORKER_CONTAINER    leave empty for cloud SaaS (no worker)
 #     DOCKERHUB_USERNAME        default "dekus"
 #     DOCKER_IMAGE_NAME_BACKEND default "dekus/ship-backend"
 #     DOCKER_IMAGE_NAME_CONSOLE default "dekus/ship-console"
+#     DOCKER_IMAGE_NAME         default "dekus/ship-docs"
 
-name: Ship — platform images (backend + console)
+name: Ship — platform images (backend + console + landing)
 
 on:
   push:
     branches: [main]
-    paths:
-      - "backend/**"
-      - "console/**"
-      - "deploy/backend/**"
-      - "deploy/console/**"
-      - "requirements-backend.txt"
-      - "VERSION"
-      - ".github/workflows/docker-publish-platform.yml"
   pull_request:
     paths:
       - "backend/**"
       - "console/**"
+      - "landing/**"
+      - "documentation/**"
       - "deploy/backend/**"
       - "deploy/console/**"
+      - "Dockerfile"
       - "requirements-backend.txt"
+      - "package.json"
+      - "package-lock.json"
+      - "VERSION"
       - ".github/workflows/docker-publish-platform.yml"
   workflow_dispatch:
 
@@ -87,9 +91,11 @@ jobs:
             image_var: DOCKER_IMAGE_NAME_CONSOLE
             dockerfile: ./deploy/console/Dockerfile
             context: .
-    # Matrix outputs collide on the same key; we read the deploy tag from
-    # GITHUB_SHA in the deploy job instead and fetch per-image digests from
-    # Docker Hub there. Outputs left intentionally empty.
+          - name: landing
+            image_default: dekus/ship-docs
+            image_var: DOCKER_IMAGE_NAME
+            dockerfile: ./Dockerfile
+            context: .
     steps:
       - uses: actions/checkout@v4
 
@@ -141,7 +147,7 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # Per-image cache scope so backend and console don't trash each other.
+          # Per-image cache scope so backend/console/landing don't trash each other.
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
           # Single arch on purpose — Bunny Magic Containers run linux/amd64.
@@ -167,8 +173,8 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-  deploy-bunny:
-    name: Roll out to Bunny Magic Containers
+  deploy-platform:
+    name: Roll out backend + console to Bunny Magic Containers
     needs: [build]
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
@@ -226,7 +232,7 @@ jobs:
             echo "- console: \`${CONSOLE_DIG}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Patch + roll out both Bunny apps
+      - name: Patch + roll out backend & console Bunny apps
         env:
           BUNNY_ACCESS_KEY: ${{ secrets.BUNNY_MAIN_API_KEY }}
           BUNNY_BACKEND_APP_ID: ${{ vars.BUNNY_BACKEND_APP_ID }}
@@ -264,8 +270,110 @@ jobs:
           TAG: ${{ steps.vars.outputs.tag }}
         run: |
           {
-            echo "### Bunny rollout"
+            echo "### Bunny rollout (platform)"
             echo "- Tag: \`${TAG}\`"
             echo "- ship-server app: \`${{ vars.BUNNY_BACKEND_APP_ID || '(unset)' }}\`"
             echo "- ship-console app: \`${{ vars.BUNNY_CONSOLE_APP_ID || '(unset)' }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy-landing:
+    name: Roll out landing (ship-docs) to Bunny Magic Containers
+    needs: [build]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Resolve deploy tag + image
+        id: vars
+        env:
+          IMG: ${{ vars.DOCKER_IMAGE_NAME || 'dekus/ship-docs' }}
+        run: |
+          short="${GITHUB_SHA:0:7}"
+          echo "tag=sha-${short}" >> "$GITHUB_OUTPUT"
+          echo "image=${IMG}" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure Magic Container application exists
+        id: mc
+        env:
+          BUNNY_ACCESS_KEY: ${{ secrets.BUNNY_MAIN_API_KEY }}
+          BUNNY_ACCESS_KEY_FALLBACK: ${{ secrets.BUNNYNET_API_KEY }}
+          BUNNY_APP_ID: ${{ vars.BUNNY_APP_ID }}
+          SHIP_MC_APP_NAME: ${{ vars.SHIP_MC_APP_NAME || 'ship-docs' }}
+          DOCKER_IMAGE_NAME: ${{ steps.vars.outputs.image }}
+          MC_CONTAINER_NAME: ${{ vars.BUNNY_CONTAINER_NAME || 'Container-1' }}
+          IMAGE_TAG: ${{ steps.vars.outputs.tag }}
+        run: node scripts/bunny-ship-docs.mjs ensure
+
+      # Digest from the build can differ from what Docker Hub serves (manifest list,
+      # timing). Bunny compares registry digest to the template — same tag +
+      # different digest ⇒ orange "Apply update".
+      - name: Resolve image digest from Docker Hub (source of truth for Bunny)
+        id: hub_digest
+        env:
+          REPO: ${{ steps.vars.outputs.image }}
+          TAG: ${{ steps.vars.outputs.tag }}
+        run: |
+          set -euo pipefail
+          TOKEN="$(curl -sS "https://auth.docker.io/token?service=registry.docker.io&scope=repository:${REPO}:pull" | jq -r .token)"
+          [[ -n "$TOKEN" && "$TOKEN" != "null" ]]
+          DIG="$(curl -sSI \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -H "Accept: application/vnd.docker.distribution.manifest.list.v2+json" \
+            -H "Accept: application/vnd.oci.image.index.v1+json" \
+            -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+            "https://registry-1.docker.io/v2/${REPO}/manifests/${TAG}" \
+            | grep -i '^docker-content-digest:' | awk '{print $2}' | tr -d '\r')"
+          [[ -n "$DIG" ]]
+          echo "Registry digest for ${REPO}:${TAG} → ${DIG}"
+          echo "digest=${DIG}" >> "$GITHUB_OUTPUT"
+
+      - name: Patch container image (await Bunny API)
+        env:
+          BUNNY_ACCESS_KEY: ${{ secrets.BUNNY_MAIN_API_KEY }}
+          BUNNY_ACCESS_KEY_FALLBACK: ${{ secrets.BUNNYNET_API_KEY }}
+          BUNNY_APP_ID: ${{ steps.mc.outputs.app_id }}
+          MC_CONTAINER_NAME: ${{ steps.mc.outputs.mc_container_name }}
+          IMAGE_TAG: ${{ steps.vars.outputs.tag }}
+          IMAGE_DIGEST: ${{ steps.hub_digest.outputs.digest }}
+        run: node scripts/bunny-patch-container.mjs
+
+      - name: Trigger Magic Container deploy (rollout)
+        env:
+          APP_ID: ${{ steps.mc.outputs.app_id }}
+        run: |
+          set -euo pipefail
+          KEY='${{ secrets.BUNNY_MAIN_API_KEY }}'
+          if [[ -z "${KEY}" ]]; then KEY='${{ secrets.BUNNYNET_API_KEY }}'; fi
+          if [[ -z "${KEY}" ]]; then
+            echo "::error::Set repository secret BUNNY_MAIN_API_KEY (or BUNNYNET_API_KEY) for Bunny Magic Containers."
+            exit 1
+          fi
+          code="$(curl -sS -o /tmp/deploy.body -w "%{http_code}" \
+            -X POST "https://api.bunny.net/mc/apps/${APP_ID}/deploy" \
+            -H "Accept: application/json" \
+            -H "AccessKey: ${KEY}")"
+          echo "POST /mc/apps/${APP_ID}/deploy → HTTP ${code}"
+          if [[ "${code}" != "200" ]]; then
+            echo "::error::Bunny deploy failed. Body:"; cat /tmp/deploy.body || true
+            exit 1
+          fi
+          echo "Bunny deploy triggered OK." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Landing deploy summary
+        if: always()
+        env:
+          TAG: ${{ steps.vars.outputs.tag }}
+        run: |
+          {
+            echo "### Bunny rollout (landing)"
+            echo "- Tag: \`${TAG}\`"
+            echo "- ship-docs app: \`${{ steps.mc.outputs.app_id || '(unset)' }}\`"
+            echo "- Default host: \`${{ steps.mc.outputs.bunny_default_host || '(n/a)' }}\`"
           } >> "$GITHUB_STEP_SUMMARY"

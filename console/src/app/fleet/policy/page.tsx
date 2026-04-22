@@ -78,8 +78,8 @@ export default async function FleetPolicyPage() {
     >
       <p className="mb-5 max-w-3xl text-xs text-white/55">
         Workspace-level rules enforced across all activated repos.
-        Each mirror policy says "this pattern runs as this lane on
-        every repo" — opt out per-repo for the ones that manage
+        Each mirror policy says &ldquo;this pattern runs as this lane on
+        every repo&rdquo; — opt out per-repo for the ones that manage
         themselves. Autofix via Navigator lands in a follow-up.
       </p>
 
