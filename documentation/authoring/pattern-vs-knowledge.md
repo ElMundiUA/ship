@@ -78,12 +78,12 @@ Use them to calibrate.
 
 | Today                                                                    | Verdict       | Where it should live                                                                  |
 |--------------------------------------------------------------------------|---------------|---------------------------------------------------------------------------------------|
-| `cloud-developer` — branch contract, PR shape, evidence comment marker   | Pattern       | Stays as `pattern:cloud-developer`                                                    |
+| `role-developer` — branch contract, PR shape, evidence comment marker   | Pattern       | Stays as `pattern:role-developer`                                                    |
 | `scheduled-sdlc-lane` — pick scripts, concurrency groups, evidence types | Workflow      | Stays as `workflow:scheduled-sdlc-lane`                                               |
 | `web-design-guidelines` — colour tokens, type scale, motion rules        | **Knowledge** | New bucket `knowledge:web-design-guidelines`, scope `presentation`, advisory          |
 | `pdf-generation-handbook` — print bleed, embedded fonts, paginated TOC   | **Knowledge** | New bucket `knowledge:pdf-generation`, scope `delivery`, mandatory when generating PDFs |
 | `brand-book-elmundi` — logo lockups, voice, do/don't pairs               | **Knowledge** | New bucket `knowledge:brand-elmundi`, scope `presentation`, mandatory when public-facing |
-| `cloud-base` — guardrails the developer pattern interpolates as `{{BASE}}` | Pattern (template fragment) | Stays — it is composed at runtime, not consulted by name |
+| `common-base` — guardrails the developer pattern interpolates as `{{BASE}}` | Pattern (template fragment) | Stays — it is composed at runtime, not consulted by name |
 | Hypothetical `pattern:write-good-copy`                                   | Smell         | Probably a knowledge bucket on tone + a pattern with a clear trigger ("when authoring landing copy") |
 
 The smell to look for: a "pattern" whose body is a long list of "always
@@ -151,7 +151,7 @@ template fragment uses today. A pattern may also resolve a bucket by id
 if it knows it must (e.g. PDF generation knows it needs
 `knowledge:pdf-generation`).
 
-The result: one universal `pattern:cloud-developer` ships in every Ship
+The result: one universal `pattern:role-developer` ships in every Ship
 install, but its rendered prompt in your repo composes with whichever
 project-specific knowledge buckets the topic match brings in. **No more
 "web-design-guidelines pattern" per project.**

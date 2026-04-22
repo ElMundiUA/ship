@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-12T04:11:35+03:00"
-content_sha256: 7a046d3a110a4264ae74888cfba33285d2a9e7577bb93b639839a396e344daea
+content_sha256: 6355edb469158cfbb029eab9452a99c269e6660054769dddb2f21702be46326c
 deprecated: false
 replaced_by: null
 yanked: false
@@ -46,9 +46,9 @@ Use a **manual** or lightly scheduled process until the board is boring—then p
 
 | Slice | Link |
 |-------|------|
-| Generic adoption | [/patterns/adopt-ship-generic](/patterns/adopt-ship-generic) |
-| Cloud base | [/patterns/cloud-base](/patterns/cloud-base) |
-| Structured intake | [/patterns/cloud-intake](/patterns/cloud-intake) |
+| Generic adoption | [/patterns/onboard-adopt](/patterns/onboard-adopt) |
+| Cloud base | [/patterns/common-base](/patterns/common-base) |
+| Structured intake | [/patterns/role-intake](/patterns/role-intake) |
 
 ## Manual
 

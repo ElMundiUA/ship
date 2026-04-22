@@ -34,23 +34,23 @@ import { CONFIG_SCHEMA_VERSION, LEGACY_CONFIG_SCHEMA_VERSION } from "./schema.mj
 const V1_LANE_DEFAULTS = Object.freeze({
   pr_review: {
     kind: "event",
-    pattern: "catalog-a5-pr-self-review",
+    pattern: "flow-pr-self-review",
     on: "pull_request",
     permissions: { contents: "read", "pull-requests": "write" },
   },
   daily_standup: {
     kind: "schedule",
-    pattern: "catalog-a13-daily-retro",
+    pattern: "flow-daily-retro",
     cron: "0 9 * * 1-5",
   },
   tech_debt: {
     kind: "schedule",
-    pattern: "catalog-a12-learning",
+    pattern: "flow-learning-capture",
     cron: "0 10 * * 1",
   },
   self_heal: {
     kind: "event",
-    pattern: "cloud-workflow-self-heal",
+    pattern: "op-workflow-self-heal",
     on: "workflow_run",
     when: { conclusion: "failure" },
     permissions: { contents: "read", actions: "read", "pull-requests": "write" },

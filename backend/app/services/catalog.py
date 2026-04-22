@@ -51,6 +51,8 @@ __all__ = [
     "list_presets",
     "list_collections",
     "list_patterns",
+    "list_patterns_by_mode",
+    "resolve_lane_workflow",
     "list_tools",
     "KNOWLEDGE_STARTERS",
     "knowledge_starter_files",
@@ -246,6 +248,99 @@ class CatalogArtifact:
         preset = self.spec.get("preset_id")
         return preset if isinstance(preset, str) and preset else None
 
+    # ------------------------------------------------------------------
+    # RFC-0008 metadata (category / modes / trigger / inputs).
+    #
+    # Fields are optional at the frontmatter layer so pre-RFC artifacts
+    # keep loading. The loader never invents values — ``None`` means
+    # "legacy artifact, the caller should decide the default". Rename
+    # phase (RFC-0008 §Phase 1) populates them for every pattern.
+    # ------------------------------------------------------------------
+
+    @property
+    def category(self) -> str | None:
+        """One of role|flow|scan|op|onboard|sys, or ``None`` for legacy."""
+        value = self.spec.get("category")
+        return value if isinstance(value, str) and value else None
+
+    @property
+    def modes(self) -> list[str]:
+        """Invocation modes: subset of ``{"lane", "request"}``.
+
+        Empty list = the pattern isn't attachable (``sys-*`` helpers).
+        ``None`` in frontmatter = legacy artifact; callers should
+        default to ``["lane", "request"]`` during the transition
+        unless the pattern's original group says otherwise.
+        """
+        raw = self.spec.get("modes")
+        if not isinstance(raw, (list, tuple)):
+            return []
+        valid = {"lane", "request"}
+        return [m for m in raw if isinstance(m, str) and m in valid]
+
+    @property
+    def default_trigger(self) -> dict[str, Any] | None:
+        """Lane wiring hint (event/schedule). ``None`` for request-only."""
+        raw = self.spec.get("default_trigger")
+        return dict(raw) if isinstance(raw, dict) else None
+
+    @property
+    def include(self) -> list[str]:
+        """``common-*`` pattern ids to prepend at render time."""
+        raw = self.spec.get("include")
+        if not isinstance(raw, (list, tuple)):
+            return []
+        return [s for s in raw if isinstance(s, str) and s]
+
+    @property
+    def lane_workflow(self) -> str | None:
+        """Explicit starter YAML id from frontmatter (override).
+
+        When absent, the effective starter is computed by
+        :func:`resolve_lane_workflow`, which falls back to
+        :attr:`category` + :attr:`default_trigger`.
+        """
+        raw = self.spec.get("lane_workflow")
+        return raw if isinstance(raw, str) and raw else None
+
+    @property
+    def inputs(self) -> list[dict[str, Any]]:
+        """Named parameters the Requests form should render."""
+        raw = self.spec.get("inputs")
+        if not isinstance(raw, (list, tuple)):
+            return []
+        cleaned: list[dict[str, Any]] = []
+        for item in raw:
+            if isinstance(item, dict) and isinstance(item.get("name"), str):
+                cleaned.append(dict(item))
+        return cleaned
+
+    @property
+    def enabled_on_install(self) -> dict[str, Any]:
+        """Which presets turn this lane on by default at seed time."""
+        raw = self.spec.get("enabled_on_install")
+        if not isinstance(raw, dict):
+            return {}
+        return dict(raw)
+
+    def enabled_for_preset(self, preset_id: str | None) -> bool:
+        """Resolve ``enabled_on_install`` against a preset id.
+
+        Unknown preset or missing metadata → fall back to the
+        ``default`` key (then to ``False``). Phase-2 migration reads
+        this to project patterns onto seed bundle lanes.
+        """
+        spec = self.enabled_on_install
+        if not spec:
+            return False
+        presets = spec.get("presets")
+        if preset_id and isinstance(presets, dict):
+            value = presets.get(preset_id)
+            if isinstance(value, bool):
+                return value
+        default = spec.get("default")
+        return bool(default) if isinstance(default, bool) else False
+
     def to_summary(self) -> dict[str, Any]:
         """Serialisation shape mirrored at ``/v1/catalog/*`` endpoints."""
         return {
@@ -264,6 +359,17 @@ class CatalogArtifact:
             "yanked": self.yanked,
             "spec": dict(self.spec),
             "preset_id": self.preset_id,
+            # RFC-0008 metadata (Draft). ``None``/``[]`` on pre-RFC
+            # artifacts; the Library/Requests UIs treat missing values
+            # as legacy defaults.
+            "category": self.category,
+            "modes": self.modes,
+            "default_trigger": self.default_trigger,
+            "lane_workflow": self.lane_workflow,
+            "resolved_lane_workflow": resolve_lane_workflow(self),
+            "include": list(self.include),
+            "inputs": list(self.inputs),
+            "enabled_on_install": self.enabled_on_install,
         }
 
 
@@ -351,6 +457,70 @@ def list_tools() -> list[CatalogArtifact]:
 
 def list_collections() -> list[CatalogArtifact]:
     return _load_kind("collection")
+
+
+# ---------------------------------------------------------------------------
+# RFC-0008 mode/workflow resolution helpers
+# ---------------------------------------------------------------------------
+
+
+def list_patterns_by_mode(mode: str) -> list[CatalogArtifact]:
+    """Patterns that advertise ``mode`` in their ``spec.modes``.
+
+    Non-RFC-0008 patterns (legacy ids, no ``modes`` declared) are
+    treated as ``[lane, request]`` so the Library / Requests UIs keep
+    rendering them during the transition.
+    """
+    if mode not in {"lane", "request"}:
+        raise ValueError(f"unknown pattern mode: {mode!r}")
+    out: list[CatalogArtifact] = []
+    for entry in list_patterns():
+        declared = entry.modes
+        # Legacy (pre-RFC-0008) patterns have neither ``category`` nor
+        # ``modes`` set. Default to both modes until Phase 1 rename
+        # populates every pattern.
+        if not declared and entry.category is None:
+            out.append(entry)
+            continue
+        if mode in declared:
+            out.append(entry)
+    return out
+
+
+def resolve_lane_workflow(entry: CatalogArtifact) -> str | None:
+    """Pick a starter YAML id for a pattern about to be wired as a lane.
+
+    Priority (first non-None wins):
+
+    1. Explicit ``spec.lane_workflow`` in the pattern's frontmatter.
+    2. ``pr-and-ci-gate`` when ``default_trigger.event`` is
+       ``pull_request`` / ``pull_request_target`` — these need PR
+       permissions and the special comment-posting reporter.
+    3. ``pipeline-self-heal`` for ``op-workflow-*`` patterns (workflow
+       rewriting needs ``actions: write``).
+    4. ``parallel-audit-lanes`` for ``category: scan`` (matrix fan-out
+       reporter).
+    5. ``scheduled-sdlc-lane`` — the universal agent-run path. Covers
+       ``role`` / ``flow`` / most ``op`` / ``onboard`` / non-matrix
+       ``scan``.
+
+    Returns ``None`` when the pattern isn't lane-attachable at all
+    (``modes`` empty — ``common-*`` patterns).
+    """
+    if "lane" not in entry.modes and entry.category is not None:
+        return None
+    explicit = entry.lane_workflow
+    if explicit:
+        return explicit
+    trigger = entry.default_trigger or {}
+    event = trigger.get("event")
+    if isinstance(event, str) and event.startswith("pull_request"):
+        return "pr-and-ci-gate"
+    if entry.id.startswith("op-workflow-"):
+        return "pipeline-self-heal"
+    if entry.category == "scan":
+        return "parallel-audit-lanes"
+    return "scheduled-sdlc-lane"
 
 
 def list_presets() -> list[CatalogArtifact]:

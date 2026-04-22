@@ -32,7 +32,7 @@ const STOPS = [
   { path: "/onboarding", hold: 2200 },
   { path: "/", hold: 2200, scroll: true, label: "Operating dashboard" },
   { path: "/catalog", hold: 1800, scroll: true, label: "Catalog" },
-  { path: "/catalog/adopt-ship-generic", hold: 2400, scroll: true, label: "Artifact detail" },
+  { path: "/catalog/onboard-adopt", hold: 2400, scroll: true, label: "Artifact detail" },
   { path: "/catalog/pull-requests", hold: 2000, scroll: true, label: "Catalog PRs" },
   { path: "/knowledge", hold: 1800, scroll: true, label: "Knowledge buckets" },
   { path: "/knowledge/kb_devops", hold: 2400, scroll: true, label: "Bucket detail" },

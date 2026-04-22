@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-17T21:15:32.596519+00:00"
-content_sha256: 5c223c7550ed96e02639467c7291ac03916dad3f8fd477f98dad8f910467579b
+content_sha256: 06a90e0657a99fb9363803f451166fbbc1e707fff2b955c956f91c31d12cf102
 deprecated: false
 replaced_by: null
 yanked: false
@@ -56,7 +56,7 @@ contract is `documentation/protocol/rfc-0001-artifacts-protocol.md`.
    local copy.
 2. **Record the exact version.** Put `<kind>:<id>@<version>` in the PR
    description (one per line) for every artifact you consumed. Example:
-   `pattern:cloud-developer@1.4.2`. This line is the evidence trail used
+   `pattern:role-developer@1.4.2`. This line is the evidence trail used
    by retros and telemetry.
 3. **Do not copy bodies into the repo.** If you need a snippet inline,
    reference the artifact id and version next to it. Never edit the
@@ -69,8 +69,8 @@ contract is `documentation/protocol/rfc-0001-artifacts-protocol.md`.
 
 ```bash
 shipctl pattern list
-shipctl pattern show cloud-developer              # resolves latest or pin
-shipctl pattern fetch cloud-developer --version 1.4.2
+shipctl pattern show role-developer              # resolves latest or pin
+shipctl pattern fetch role-developer --version 1.4.2
 shipctl search "release gates and qa split" --top-k 8
 shipctl docs fetch documentation/adoption/delivery-quality-and-release-process.md
 shipctl sync                                       # reconcile .ship/cache/
@@ -81,7 +81,7 @@ shipctl sync                                       # reconcile .ship/cache/
 ```bash
 curl -sS -X POST "https://ship.elmundi.com/api/methodology/fetch" \
   -H "Content-Type: application/json" \
-  -d '{"kind":"pattern","id":"cloud-developer"}'
+  -d '{"kind":"pattern","id":"role-developer"}'
 curl -sS "https://ship.elmundi.com/api/methodology/manifest"
 ```
 

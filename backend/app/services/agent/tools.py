@@ -29,7 +29,7 @@ Tool inventory (C12 Phase 2.2):
 - :meth:`list_tickets` — read back recently-updated tickets from the
   connected tracker (was previously write-only).
 - :meth:`create_artifact_feedback` — file feedback against a catalog
-  artifact id (``pattern/cloud-base``, …). Persisted to
+  artifact id (``pattern/common-base``, …). Persisted to
   :class:`ArtifactFeedback` for the console feedback tab.
 - :meth:`list_catalog_artifacts` — enumerate the global Ship catalog
   (patterns / tools / collections) so the agent can recommend or
@@ -430,7 +430,7 @@ class ToolBox:
                             "type": "string",
                             "description": (
                                 "Artifact identifier, e.g. "
-                                "'pattern/cloud-base' or 'tool/methodology-api'."
+                                "'pattern/common-base' or 'tool/methodology-api'."
                             ),
                         },
                         "body": {

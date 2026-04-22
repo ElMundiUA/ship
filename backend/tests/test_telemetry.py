@@ -15,7 +15,7 @@ def _event(anon: str, type_: str = "artifact.fetch", payload=None):
         "timestamp": "2026-04-17T10:00:00Z",
         "payload": payload or {
             "kind": "pattern",
-            "id": "cloud-developer",
+            "id": "role-developer",
             "version": "1.0.0",
             "source": "network",
         },
@@ -59,7 +59,7 @@ def test_telemetry_denylist_reject(client):
                     anon,
                     payload={
                         "kind": "pattern",
-                        "id": "cloud-developer",
+                        "id": "role-developer",
                         "path": "/Users/secret/project/file.md",
                     },
                 )

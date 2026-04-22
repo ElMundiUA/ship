@@ -13,7 +13,7 @@ agent-surface models:
 - :class:`KbChunk` — ``.ship/knowledge/**/*.md`` content, chunked + embedded
   so the ``search_repo_kb`` tool is a single pgvector query.
 - :class:`ArtifactFeedback` — feedback filed against a specific artifact
-  id (``pattern/cloud-base``, ``workflow/pr-and-ci-gate``, …). Different
+  id (``pattern/common-base``, ``workflow/pr-and-ci-gate``, …). Different
   from ``improvements`` (those are proposed changes to the tenant repo);
   this is "hey, this catalog entry is wrong / incomplete".
 

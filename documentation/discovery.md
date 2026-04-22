@@ -80,7 +80,7 @@ PR description as `<kind>:<id>@<version>`, one per line:
 ```
 collection:agent-rules-cursor@1.0.0
 collection:preset-web-app@2.1.3
-pattern:cloud-developer@1.4.2
+pattern:role-developer@1.4.2
 workflow:scheduled-sdlc-lane@2.1.0
 ```
 

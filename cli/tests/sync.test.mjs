@@ -28,7 +28,7 @@ const PLURAL_BY_SINGULAR = {
   collection: "collections",
 };
 
-function startServer({ body, version = "1.0.0", kind = "pattern", id = "cloud-developer" } = {}) {
+function startServer({ body, version = "1.0.0", kind = "pattern", id = "role-developer" } = {}) {
   const shaExpected = sha256Hex(body);
   const entry = {
     kind,
@@ -120,7 +120,7 @@ test("sync --check-only reports updated:1; second sync reports up_to_date:1", as
     const setPin = await runCtlAsync([
       "config",
       "set",
-      "artifacts.pins.pattern/cloud-developer",
+      "artifacts.pins.pattern/role-developer",
       "1.0.0",
       "--cwd",
       dir,
@@ -148,7 +148,7 @@ test("sync --check-only reports updated:1; second sync reports up_to_date:1", as
       ".ship",
       "cache",
       "pattern",
-      "cloud-developer@1.0.0",
+      "role-developer@1.0.0",
       "ARTIFACT.md",
     );
     assert.ok(fs.existsSync(bodyPath), `expected cache at ${bodyPath}`);
@@ -179,7 +179,7 @@ test("sync re-fetches when the cached .md body drifted from its meta sha (Bug F)
     await runCtlAsync([
       "config",
       "set",
-      "artifacts.pins.pattern/cloud-developer",
+      "artifacts.pins.pattern/role-developer",
       "1.0.0",
       "--cwd",
       dir,
@@ -195,7 +195,7 @@ test("sync re-fetches when the cached .md body drifted from its meta sha (Bug F)
       ".ship",
       "cache",
       "pattern",
-      "cloud-developer@1.0.0",
+      "role-developer@1.0.0",
       "ARTIFACT.md",
     );
     // Corrupt the on-disk body without updating the sidecar meta.
@@ -207,7 +207,7 @@ test("sync re-fetches when the cached .md body drifted from its meta sha (Bug F)
     assert.match(repair.stdout, /up_to_date:\s*0/);
     assert.match(
       repair.stdout,
-      /refetch:.*pattern\/cloud-developer@1\.0\.0.*drifted/,
+      /refetch:.*pattern\/role-developer@1\.0\.0.*drifted/,
       `expected a 'refetch: …drifted' note, got: ${repair.stdout}`,
     );
     assert.equal(fs.readFileSync(bodyPath, "utf8"), body);
@@ -231,7 +231,7 @@ test("sync re-fetches when the cached .md body was deleted while meta remains (B
     await runCtlAsync([
       "config",
       "set",
-      "artifacts.pins.pattern/cloud-developer",
+      "artifacts.pins.pattern/role-developer",
       "1.0.0",
       "--cwd",
       dir,
@@ -245,7 +245,7 @@ test("sync re-fetches when the cached .md body was deleted while meta remains (B
       ".ship",
       "cache",
       "pattern",
-      "cloud-developer@1.0.0",
+      "role-developer@1.0.0",
       "ARTIFACT.md",
     );
     const metaPath = path.join(
@@ -253,7 +253,7 @@ test("sync re-fetches when the cached .md body was deleted while meta remains (B
       ".ship",
       "cache",
       "pattern",
-      "cloud-developer@1.0.0",
+      "role-developer@1.0.0",
       ".meta.json",
     );
     fs.rmSync(bodyPath);
@@ -280,7 +280,7 @@ test("sync --dry-run prints planned HTTP calls without writing cache", async () 
     await runCtlAsync([
       "config",
       "set",
-      "artifacts.pins.pattern/cloud-developer",
+      "artifacts.pins.pattern/role-developer",
       "1.0.0",
       "--cwd",
       dir,
@@ -303,7 +303,7 @@ test("sync --dry-run prints planned HTTP calls without writing cache", async () 
       ".ship",
       "cache",
       "pattern",
-      "cloud-developer@1.0.0",
+      "role-developer@1.0.0",
       "ARTIFACT.md",
     );
     assert.equal(fs.existsSync(bodyPath), false);

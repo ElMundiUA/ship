@@ -54,7 +54,7 @@ test("createDraft writes front-matter + body; listDrafts enumerates", () => {
   initRepo(dir);
   const fp = createDraft(dir, {
     kind: "pattern",
-    id: "cloud-developer",
+    id: "role-developer",
     version: "1.4.2",
     title: "Missing mobile preview step",
     summary: "Evidence checklist misses mobile preview",
@@ -68,7 +68,7 @@ test("createDraft writes front-matter + body; listDrafts enumerates", () => {
   const text = fs.readFileSync(fp, "utf8");
   assert.match(text, /^---\n/);
   assert.match(text, /kind: pattern/);
-  assert.match(text, /id: cloud-developer/);
+  assert.match(text, /id: role-developer/);
   assert.match(text, /# Missing mobile preview step/);
   assert.match(text, /\*\*Summary\*\*: Evidence checklist/);
   assert.match(text, /\*\*Recommendation\*\*: Add a bullet/);
@@ -77,7 +77,7 @@ test("createDraft writes front-matter + body; listDrafts enumerates", () => {
 
   const { meta, body } = readDraft(fp);
   assert.equal(meta.kind, "pattern");
-  assert.equal(meta.id, "cloud-developer");
+  assert.equal(meta.id, "role-developer");
   assert.equal(meta.version, "1.4.2");
   assert.equal(meta.title, "Missing mobile preview step");
   assert.ok(body.includes("Missing mobile preview step"));
@@ -96,7 +96,7 @@ test("feedback draft command creates a file with front-matter", () => {
     "--kind",
     "pattern",
     "--id",
-    "cloud-developer",
+    "role-developer",
     "--version",
     "1.0.0",
     "--title",
@@ -111,12 +111,12 @@ test("feedback draft command creates a file with front-matter", () => {
   assert.ok(fs.existsSync(fp));
   const text = fs.readFileSync(fp, "utf8");
   assert.match(text, /kind: pattern/);
-  assert.match(text, /id: cloud-developer/);
+  assert.match(text, /id: role-developer/);
   assert.match(text, /# example/);
 
   const list = runCtl(["feedback", "list", "--cwd", dir]);
   assert.equal(list.status, 0, list.stderr);
-  assert.match(list.stdout, /pattern\/cloud-developer@1\.0\.0 — example/);
+  assert.match(list.stdout, /pattern\/role-developer@1\.0\.0 — example/);
 });
 
 test("feedback submit: missing title fails with exit 1", () => {
@@ -175,7 +175,7 @@ test("feedback submit: draft moved to sent/ on success", async () => {
     "--kind",
     "pattern",
     "--id",
-    "cloud-developer",
+    "role-developer",
     "--version",
     "1.0.0",
     "--title",
@@ -217,7 +217,7 @@ test("feedback submit: draft moved to sent/ on success", async () => {
     const body = getReceived();
     assert.equal(body.title, "Missing mobile preview step");
     assert.equal(body.artifact.kind, "pattern");
-    assert.equal(body.artifact.id, "cloud-developer");
+    assert.equal(body.artifact.id, "role-developer");
     assert.equal(body.artifact.version, "1.0.0");
     assert.deepEqual(body.recommendations, ["Add a bullet"]);
   } finally {

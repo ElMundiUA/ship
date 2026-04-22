@@ -6,7 +6,7 @@ version: 1.1.0
 channel: stable
 min_shipctl: 0.10.0
 updated_at: "2026-04-19T03:00:00+03:00"
-content_sha256: f022ea13a829f94367d3f06662b9bbaa9e6220654e57550333763067dd4274d9
+content_sha256: 3ec7569fffd9f4723f51a3e528f81fc1edb945f7821941c91b117e9b0e6806d6
 deprecated: false
 replaced_by: null
 yanked: false
@@ -50,8 +50,8 @@ Run `shipctl help` for all subcommands (or `npm run shipctl -- help` from a clon
 
 ```bash
 shipctl pattern list
-shipctl pattern show adopt-ship-generic
-shipctl pattern fetch adopt-ship-generic
+shipctl pattern show onboard-adopt
+shipctl pattern fetch onboard-adopt
 shipctl tool list
 shipctl tool show playwright
 shipctl workflow list
@@ -76,10 +76,10 @@ Response shape:
   "description": "...",
   "patterns": [
     {
-      "id": "adopt-ship-generic",
+      "id": "onboard-adopt",
       "title": "Adopt Ship (generic)",
       "summary": "...",
-      "path": "artifacts/patterns/adopt-ship-generic/ARTIFACT.md",
+      "path": "artifacts/patterns/onboard-adopt/ARTIFACT.md",
       "version": "1.0.0",
       "channel": "stable",
       "tags": ["adoption"],
@@ -93,10 +93,10 @@ Response shape:
 
 Returns the same fields as one list item, plus a `content` string with the full `ARTIFACT.md` (frontmatter + body) so agents can re-validate the version/sha they cached locally.
 
-Example (same as `shipctl pattern show adopt-ship-generic --json` without `--json`):
+Example (same as `shipctl pattern show onboard-adopt --json` without `--json`):
 
 ```bash
-curl -sS "http://127.0.0.1:8100/patterns/adopt-ship-generic"
+curl -sS "http://127.0.0.1:8100/patterns/onboard-adopt"
 ```
 
 ### `GET /tools`
@@ -153,7 +153,7 @@ Returns full markdown/text content.
 ```json
 {
   "kind": "pattern",
-  "id": "cloud-intake"
+  "id": "role-intake"
 }
 ```
 
@@ -262,7 +262,7 @@ entry (the current manifest version):
 
 ```json
 {
-  "id": "cloud-developer",
+  "id": "role-developer",
   "versions": [
     {
       "version": "1.0.0",
@@ -286,7 +286,7 @@ Request now accepts an optional `artifact` object:
   "recommendations": ["add mobile preview bullet"],
   "artifact": {
     "kind": "pattern",
-    "id": "cloud-developer",
+    "id": "role-developer",
     "version": "1.0.0"
   }
 }
@@ -297,7 +297,7 @@ When `artifact` is present the server:
 1. Applies labels `feedback`, `retro`, `artifact:<kind>:<id>`,
    `version:<version>` to the resulting issue.
 2. Embeds a machine-readable footer in the issue body:
-   `<!-- ship-feedback-meta: {"kind":"pattern","id":"cloud-developer","version":"1.0.0"} -->`.
+   `<!-- ship-feedback-meta: {"kind":"pattern","id":"role-developer","version":"1.0.0"} -->`.
 3. **Dedupes**: before creating a new issue the server queries open issues
    with the same `artifact:*` and `version:*` labels. If an open issue
    exists, the submission becomes a new comment on that issue and the
@@ -309,7 +309,7 @@ Response:
 {
   "issue_url": "https://github.com/…/issues/42",
   "issue_number": 42,
-  "labels": ["feedback", "retro", "artifact:pattern:cloud-developer", "version:1.0.0"],
+  "labels": ["feedback", "retro", "artifact:pattern:role-developer", "version:1.0.0"],
   "redactions_applied": 0,
   "deduplicated": false
 }
@@ -328,7 +328,7 @@ event augmented with `received_at`.
       "type": "artifact.fetch",
       "anonymous_id": "11111111-2222-4333-8444-555555555555",
       "timestamp": "2026-04-17T10:05:13+00:00",
-      "payload": {"kind": "pattern", "id": "cloud-developer", "version": "1.0.0"}
+      "payload": {"kind": "pattern", "id": "role-developer", "version": "1.0.0"}
     }
   ]
 }

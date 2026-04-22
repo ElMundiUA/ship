@@ -79,3 +79,122 @@ def test_preset_exposes_preset_id():
     entry = catalog.get_collection("preset-web-app")
     assert entry is not None
     assert entry.preset_id == "web-app"
+
+
+# ---------------------------------------------------------------------------
+# RFC-0008 metadata & workflow resolution
+# ---------------------------------------------------------------------------
+
+
+class _FakeArtifact:
+    """Shim that mimics :class:`CatalogArtifact` for the resolver tests.
+
+    Only the fields ``resolve_lane_workflow`` inspects matter, so we
+    avoid building a full on-disk artifact per test case.
+    """
+
+    def __init__(
+        self,
+        *,
+        pattern_id: str,
+        category: str | None,
+        modes: list[str],
+        default_trigger: dict | None = None,
+        lane_workflow: str | None = None,
+    ) -> None:
+        self.id = pattern_id
+        self.category = category
+        self.modes = modes
+        self.default_trigger = default_trigger
+        self.lane_workflow = lane_workflow
+
+
+def test_resolve_lane_workflow_explicit_override():
+    fake = _FakeArtifact(
+        pattern_id="scan-foo",
+        category="scan",
+        modes=["lane"],
+        lane_workflow="my-custom",
+    )
+    assert catalog.resolve_lane_workflow(fake) == "my-custom"
+
+
+def test_resolve_lane_workflow_pr_review_by_trigger():
+    fake = _FakeArtifact(
+        pattern_id="flow-pr-self-review",
+        category="flow",
+        modes=["lane"],
+        default_trigger={"kind": "event", "event": "pull_request"},
+    )
+    assert catalog.resolve_lane_workflow(fake) == "pr-and-ci-gate"
+
+
+def test_resolve_lane_workflow_self_heal_by_prefix():
+    fake = _FakeArtifact(
+        pattern_id="op-workflow-self-heal",
+        category="op",
+        modes=["lane"],
+        default_trigger={"kind": "schedule", "cron": "0 4 * * *"},
+    )
+    assert catalog.resolve_lane_workflow(fake) == "pipeline-self-heal"
+
+
+def test_resolve_lane_workflow_scan_by_category():
+    fake = _FakeArtifact(
+        pattern_id="scan-tech-debt",
+        category="scan",
+        modes=["lane"],
+        default_trigger={"kind": "schedule", "cron": "0 6 * * 1"},
+    )
+    assert catalog.resolve_lane_workflow(fake) == "parallel-audit-lanes"
+
+
+def test_resolve_lane_workflow_defaults_to_scheduled_sdlc_lane():
+    fake = _FakeArtifact(
+        pattern_id="role-ba",
+        category="role",
+        modes=["lane", "request"],
+        default_trigger={"kind": "event", "event": "issues.labeled"},
+    )
+    assert catalog.resolve_lane_workflow(fake) == "scheduled-sdlc-lane"
+
+
+def test_resolve_lane_workflow_returns_none_for_common_patterns():
+    fake = _FakeArtifact(
+        pattern_id="common-base",
+        category="common",
+        modes=[],
+    )
+    assert catalog.resolve_lane_workflow(fake) is None
+
+
+def test_list_patterns_by_mode_filters_by_modes_field():
+    """Post-RFC-0008: every pattern declares ``modes`` explicitly.
+
+    ``common-*`` patterns (shared fragments, ``modes: []``) are
+    non-executable and must not appear in either the lane picker or
+    the request picker. Every other pattern must declare at least one
+    of ``lane`` / ``request``.
+    """
+    lane_patterns = catalog.list_patterns_by_mode("lane")
+    request_patterns = catalog.list_patterns_by_mode("request")
+    all_patterns = catalog.list_patterns()
+
+    common_ids = {p.id for p in all_patterns if p.id.startswith("common-")}
+    assert common_ids, "expected at least one common-* pattern (shared fragment)"
+
+    lane_ids = {p.id for p in lane_patterns}
+    request_ids = {p.id for p in request_patterns}
+    # Shared fragments must be excluded from both pickers.
+    assert common_ids.isdisjoint(lane_ids)
+    assert common_ids.isdisjoint(request_ids)
+
+    # Every non-common pattern must surface in at least one picker.
+    executable = {p.id for p in all_patterns} - common_ids
+    assert executable <= (lane_ids | request_ids)
+
+
+def test_list_patterns_by_mode_rejects_unknown_mode():
+    import pytest
+    with pytest.raises(ValueError):
+        catalog.list_patterns_by_mode("bogus")

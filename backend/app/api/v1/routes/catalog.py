@@ -51,6 +51,20 @@ class CatalogEntryOut(BaseModel):
     yanked: bool
     # Preset-only field (``None`` unless ``spec.preset_id`` is set).
     preset_id: str | None = None
+    # RFC-0008 metadata. ``None``/``[]`` on pre-RFC artifacts so the UI
+    # can treat missing values as "legacy, show everywhere". Phase-1
+    # (rename) populates them for every pattern.
+    category: str | None = None
+    modes: list[str] = []
+    default_trigger: dict[str, Any] | None = None
+    lane_workflow: str | None = None
+    # Convenience — backend-computed starter YAML id (falls back to a
+    # default when ``lane_workflow`` is absent). The UI reads this when
+    # it renders the "Advanced → Override" widget.
+    resolved_lane_workflow: str | None = None
+    include: list[str] = []
+    inputs: list[dict[str, Any]] = []
+    enabled_on_install: dict[str, Any] = {}
 
 
 def _serialise(entries: list) -> list[CatalogEntryOut]:

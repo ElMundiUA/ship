@@ -4,7 +4,7 @@ The vocabulary. Every other Manual page assumes the words below mean the same th
 
 ## Artifact
 
-A versioned unit of methodology that Ship distributes — a `pattern`, `tool`, or `collection`. An artifact is a folder under `artifacts/<kind>/<id>/` whose required `ARTIFACT.md` carries the YAML front-matter (the single source of truth for metadata) plus the agent-facing body. Artifacts are referenced everywhere by `<kind>:<id>@<version>`, e.g. `pattern:cloud-developer@1.4.2`. The wire and folder shape are normalized in [RFC-0001](/docs/protocol/rfc-0001-artifacts-protocol) and [RFC-0005](/docs/protocol/rfc-0005-artifact-folder-spec-v2); browse the live catalog under [/patterns](/patterns), [/tools](/tools), and [/collections](/collections). A fourth kind, `workflow`, existed until [RFC-0007](/docs/protocol/rfc-0007-lanes-and-run-agent) retired the public catalog layer; customer cadences now live as [lanes](#lane) in `.ship/config.yml` and render thin GitHub Actions wrappers at install time.
+A versioned unit of methodology that Ship distributes — a `pattern`, `tool`, or `collection`. An artifact is a folder under `artifacts/<kind>/<id>/` whose required `ARTIFACT.md` carries the YAML front-matter (the single source of truth for metadata) plus the agent-facing body. Artifacts are referenced everywhere by `<kind>:<id>@<version>`, e.g. `pattern:role-developer@1.4.2`. The wire and folder shape are normalized in [RFC-0001](/docs/protocol/rfc-0001-artifacts-protocol) and [RFC-0005](/docs/protocol/rfc-0005-artifact-folder-spec-v2); browse the live catalog under [/patterns](/patterns), [/tools](/tools), and [/collections](/collections). A fourth kind, `workflow`, existed until [RFC-0007](/docs/protocol/rfc-0007-lanes-and-run-agent) retired the public catalog layer; customer cadences now live as [lanes](#lane) in `.ship/config.yml` and render thin GitHub Actions wrappers at install time.
 
 ## Kind
 
@@ -33,7 +33,7 @@ A pin freezes the version `shipctl sync` will accept for an artifact. Pins live 
 ```yaml
 artifacts:
   pins:
-    pattern/cloud-developer: "1.4.2"
+    pattern/role-developer: "1.4.2"
     tool/methodology-api: "~2.1"
 ```
 

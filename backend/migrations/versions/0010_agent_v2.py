@@ -17,7 +17,7 @@ C12 "real agent" layer on top of the existing agent-surface tables:
   per chunk, with pgvector embedding + content SHA for idempotent re-
   indexing.
 - ``artifact_feedback`` — asynchronous feedback the agent (or a user)
-  files against a specific artifact id (`pattern/cloud-base`, etc.).
+  files against a specific artifact id (`pattern/common-base`, etc.).
   Separate from ``improvements`` because improvements are proposed
   *changes* to the tenant's repo while feedback is about the *Ship
   catalog* itself (or a repo artifact).

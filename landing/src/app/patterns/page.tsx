@@ -158,7 +158,7 @@ export default function PatternsPage() {
               </div>
               <div>
                 <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-white/40">Print one pattern (markdown body)</p>
-                <pre className="overflow-x-auto whitespace-pre-wrap break-all">shipctl pattern show adopt-ship-generic</pre>
+                <pre className="overflow-x-auto whitespace-pre-wrap break-all">shipctl pattern show onboard-adopt</pre>
               </div>
               <div>
                 <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-white/40">Semantic search (optional)</p>
