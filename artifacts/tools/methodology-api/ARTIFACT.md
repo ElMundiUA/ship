@@ -6,7 +6,7 @@ version: 1.1.0
 channel: stable
 min_shipctl: 0.10.0
 updated_at: "2026-04-19T03:00:00+03:00"
-content_sha256: 2a26fd8e1c55b5e542b2f4d8c0e47682df934196a1187e8465c112aac4ae7d70
+content_sha256: f022ea13a829f94367d3f06662b9bbaa9e6220654e57550333763067dd4274d9
 deprecated: false
 replaced_by: null
 yanked: false
@@ -153,7 +153,7 @@ Returns full markdown/text content.
 ```json
 {
   "kind": "pattern",
-  "id": "catalog-a1-intake"
+  "id": "cloud-intake"
 }
 ```
 

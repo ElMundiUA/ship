@@ -11,7 +11,6 @@ For *how* installation works (commands, flags, ordering), see [/cli](/cli). For 
 | `collection/agent-rules-<agent>` | Per-agent rule artifact (RFC-0004); `shipctl init --copy-rules` installs it. |
 | `collection/preset-<preset>` | Per-preset bootstrap content (CI workflow, labels, secrets). |
 | [`pattern/adopt-ship-generic`](/patterns/adopt-ship-generic) | Universal adoption prompt for the discovery interview. |
-| [`pattern/adopt-ship-elmundi`](/patterns/adopt-ship-elmundi) | ElMundi-specific adoption delta. |
 | [Discovery contract](/docs/discovery) | Interactive Phase 0–4 contract the agent runs before its first PR. |
 
 ## Detection + injection matrix

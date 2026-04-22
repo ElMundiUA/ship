@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-12T04:11:35+03:00"
-content_sha256: f6b4c4f78ae87afb5ead9604590f40ebcb5f67f5bfa405295fa77758ddc8cdb6
+content_sha256: 0e36efce1c10670c6b729ee2647b010827fced17b5eb0690bbd0594f5dadad8b
 deprecated: false
 replaced_by: null
 yanked: false
@@ -55,7 +55,7 @@ A **ready bundle** for teams shipping a **browser app** (SPA/SSR) with hosted pr
 | QA architect | [/patterns/cloud-qa-architect](/patterns/cloud-qa-architect) |
 | Preview smoke check | [/patterns/catalog-a7-preview-validation](/patterns/catalog-a7-preview-validation) |
 | Acceptance verification | [/patterns/catalog-a9-qa](/patterns/catalog-a9-qa) |
-| Onboarding | [/patterns/adopt-ship-generic](/patterns/adopt-ship-generic) · [/patterns/adopt-ship-elmundi](/patterns/adopt-ship-elmundi) (reference org addendum) |
+| Onboarding | [/patterns/adopt-ship-generic](/patterns/adopt-ship-generic) |
 
 ## Manual chapters
 
