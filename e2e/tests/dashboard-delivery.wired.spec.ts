@@ -5,8 +5,13 @@ import { hasPlaywrightStorageState } from "../lib/storage";
 /**
  * Узкий UI-слой поверх dashboard: «Recommended actions» и блоки недавних прогонов.
  * Требует онбординг + бэкенд с дашбордом (не mock-only).
+ *
+ * Phase-1 two-mode shell: `/` больше не рендерит DashboardLive,
+ * дашборд переедет под `/r/<owner>/<repo>` в PR-4. Тест на паузе
+ * до того момента — заодно ещё раз перепроверим, что переехавший
+ * вид сохранил семантику "Recommended actions" + run-strips.
  */
-test.describe("dashboard delivery signals (wired)", () => {
+test.describe.skip("dashboard delivery signals (wired) — pending PR-4 migration", () => {
   test.beforeEach(() => {
     test.skip(
       !hasPlaywrightStorageState(),

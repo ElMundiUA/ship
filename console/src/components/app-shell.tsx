@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { type ReactNode, useState } from "react";
 import { cn } from "@/lib/cn";
 import { currentUser, workspaces } from "@/lib/mock/cloud";
+import { NavigatorLauncher } from "@/components/navigator-launcher";
 
 /**
  * App shell for the in-app cloud platform console (separate Next.js app).
@@ -24,7 +25,10 @@ type NavItem = {
   label: string;
   icon: ReactNode;
   badge?: string;
+  stub?: boolean;
 };
+
+type NavGroup = { section: string; items: NavItem[] };
 
 // Pages that aren't backed by real `/v1` endpoints yet — kept around as
 // rendered routes for design reference but hidden from the operator nav so
@@ -33,64 +37,107 @@ type NavItem = {
 // development.
 const SHOW_STUBS = process.env.NEXT_PUBLIC_SHIP_SHOW_STUBS === "1";
 
-const ALL_NAV: { section: string; items: (NavItem & { stub?: boolean })[] }[] = [
-  {
-    section: "Operate",
-    items: [
-      { href: "/", label: "Dashboard", icon: <DotIcon /> },
-      { href: "/pipelines", label: "Pipelines", icon: <DotIcon /> },
-      { href: "/clarifications", label: "Clarifications", icon: <DotIcon /> },
-      { href: "/improvements", label: "Improvements", icon: <DotIcon /> },
-      { href: "/artifact-feedback", label: "Feedback", icon: <DotIcon /> },
-      { href: "/chat", label: "Navigator", icon: <DotIcon /> },
-      { href: "/daily", label: "Daily & retro", icon: <DotIcon />, badge: "3", stub: true },
-    ],
-  },
-  {
-    // Automation surfaces — everything the operator actively
-    // composes or kicks off against ``.ship/config.yml``.
-    // ``Lanes`` edits the recurring/event-driven side (via PR);
-    // ``Requests`` is the one-shot agent dispatcher.
-    section: "Author",
-    items: [
-      { href: "/lanes", label: "Lanes", icon: <DotIcon /> },
-      { href: "/requests", label: "Requests", icon: <DotIcon /> },
-    ],
-  },
-  {
-    section: "Knowledge",
-    items: [
-      { href: "/knowledge", label: "Buckets", icon: <DotIcon /> },
-    ],
-  },
-  {
-    section: "Observe",
-    items: [
-      { href: "/metrics", label: "Metrics", icon: <DotIcon /> },
-      { href: "/effectiveness", label: "Effectiveness", icon: <DotIcon />, stub: true },
-      { href: "/telemetry", label: "Telemetry", icon: <DotIcon />, stub: true },
-    ],
-  },
-  {
-    section: "Configure",
-    items: [
-      { href: "/settings", label: "Workspace settings", icon: <DotIcon /> },
-      { href: "/settings/tracker/fsm", label: "Tracker FSM", icon: <DotIcon /> },
-      { href: "/members", label: "Members", icon: <DotIcon /> },
-      { href: "/integrations", label: "Integrations", icon: <DotIcon /> },
-      { href: "/audit", label: "Audit log", icon: <DotIcon /> },
-    ],
-  },
-];
+/**
+ * Phase-1 two-mode shell: the sidebar flips between a **workspace**
+ * nav (``/`` + ``/fleet/*`` + workspace-wide configure) and a
+ * **repo** nav (everything scoped to ``/r/<owner>/<repo>/...``).
+ *
+ * Rationale: legacy per-repo pages (Lanes, Requests, Pipelines,
+ * Clarifications, …) do NOT belong at the workspace level — the
+ * user explicitly rejected "union of all repos" pages. They live
+ * under the repo segment and only appear in that sidebar. The
+ * workspace level surfaces workspace-unique primitives (Fleet
+ * Requests, Policy, Adoption, Knowledge Graph) plus cross-repo
+ * configure pages (workspace settings, members, integrations,
+ * audit log). No duplication between the two modes.
+ *
+ * Old top-level paths (``/lanes``, ``/metrics``, …) keep rendering
+ * for now so migration can happen page-by-page; they simply drop
+ * out of the sidebar. Subsequent PRs move their content under
+ * ``/r/<slug>/*`` or retire them entirely.
+ */
+function buildWorkspaceNav(): NavGroup[] {
+  return [
+    {
+      section: "Workspace",
+      items: [
+        { href: "/", label: "Home", icon: <DotIcon /> },
+      ],
+    },
+    {
+      section: "Fleet",
+      items: [
+        { href: "/fleet/requests", label: "Fleet requests", icon: <DotIcon /> },
+        { href: "/fleet/policy", label: "Policy", icon: <DotIcon /> },
+        { href: "/fleet/adoption", label: "Adoption", icon: <DotIcon /> },
+        { href: "/fleet/knowledge", label: "Knowledge graph", icon: <DotIcon /> },
+      ],
+    },
+    {
+      section: "Configure",
+      items: [
+        { href: "/settings", label: "Workspace settings", icon: <DotIcon /> },
+        { href: "/settings/tracker/fsm", label: "Tracker FSM", icon: <DotIcon /> },
+        { href: "/members", label: "Members", icon: <DotIcon /> },
+        { href: "/integrations", label: "Integrations", icon: <DotIcon /> },
+        { href: "/audit", label: "Audit log", icon: <DotIcon /> },
+      ],
+    },
+  ];
+}
 
-const NAV: { section: string; items: NavItem[] }[] = ALL_NAV
-  .map((section) => ({
-    section: section.section,
-    items: SHOW_STUBS
-      ? section.items
-      : section.items.filter((item) => !item.stub),
-  }))
-  .filter((section) => section.items.length > 0);
+function buildRepoNav(slugPath: string): NavGroup[] {
+  const base = `/r/${slugPath}`;
+  return [
+    {
+      section: "Operate",
+      items: [
+        { href: base, label: "Home", icon: <DotIcon /> },
+        { href: `${base}/lanes`, label: "Lanes", icon: <DotIcon /> },
+        { href: `${base}/requests`, label: "Requests", icon: <DotIcon /> },
+        { href: `${base}/clarifications`, label: "Clarifications", icon: <DotIcon /> },
+        { href: `${base}/improvements`, label: "Improvements", icon: <DotIcon /> },
+        { href: `${base}/artifact-feedback`, label: "Feedback", icon: <DotIcon /> },
+      ],
+    },
+    {
+      section: "Knowledge",
+      items: [
+        { href: `${base}/knowledge`, label: "Buckets", icon: <DotIcon /> },
+      ],
+    },
+    {
+      section: "Configure",
+      items: [
+        { href: `${base}/settings`, label: "Repo settings", icon: <DotIcon /> },
+      ],
+    },
+  ];
+}
+
+/**
+ * Extracts ``owner/repo`` from a ``/r/<owner>/<repo>[/...]`` pathname.
+ * Returns ``null`` when not in repo mode. The ``[...slug]`` catch-all
+ * stores at least two segments; anything shorter is treated as a
+ * malformed repo URL (the layout will 404 separately).
+ */
+function parseRepoSlug(pathname: string | null): string | null {
+  if (!pathname || !pathname.startsWith("/r/")) return null;
+  const parts = pathname.slice(3).split("/").filter(Boolean);
+  if (parts.length < 2) return null;
+  return `${parts[0]}/${parts[1]}`;
+}
+
+function navFor(pathname: string | null): NavGroup[] {
+  const slug = parseRepoSlug(pathname);
+  const raw = slug ? buildRepoNav(slug) : buildWorkspaceNav();
+  return raw
+    .map((g) => ({
+      section: g.section,
+      items: SHOW_STUBS ? g.items : g.items.filter((i) => !i.stub),
+    }))
+    .filter((g) => g.items.length > 0);
+}
 
 function DotIcon() {
   return (
@@ -149,23 +196,23 @@ export function AppShell({
   scopePill?: ReactNode;
 }) {
   const pathname = usePathname();
-  const [scopeOpen, setScopeOpen] = useState(false);
   const [wsOpen, setWsOpen] = useState(false);
   const mockWs = workspaces[0];
-  // The sidebar block is the active *project / repo* (a.k.a. "scope"),
-  // not the workspace — workspace switching is intentionally a small
-  // header chip so it's hard to fat-finger. When the live dashboard
-  // hasn't bound a repo yet (and on the marketing-mock build), we
-  // gracefully fall back to a label that says so.
-  const scopeRepos = scope?.repos ?? [];
-  const selectedRepo =
-    scopeRepos.find((r) => r.id === scope?.selectedRepoId) ?? scopeRepos[0] ?? null;
-  const scopeLabel = selectedRepo?.full_name ?? "No repo bound";
-  const scopeOwner = scopeLabel.includes("/")
-    ? scopeLabel.split("/", 1)[0]
-    : "Project";
   const wsLabel = workspace?.name ?? mockWs.name;
   const wsKicker = workspace?.slug ?? mockWs.org;
+  const NAV = navFor(pathname);
+  const repoSlug = parseRepoSlug(pathname);
+  // Repo-mode header chip: show the repo the URL resolves to. In
+  // workspace mode there is no "current repo" concept — the sidebar
+  // is a list of workspace-level primitives, so we hide the block.
+  const repoChip = repoSlug
+    ? {
+        slug: repoSlug,
+        // In repo mode pages also pass ``scope`` with the resolved
+        // repo id, but we only need the human-readable slug for the
+        // chip. The id is used elsewhere (scope-pill, forms).
+      }
+    : null;
 
   return (
     <div className="min-h-screen bg-ink text-mist">
@@ -181,83 +228,34 @@ export function AppShell({
             </Link>
           </div>
 
-          <div className="border-b border-white/10 px-3 py-3">
-            <div className="px-1 pb-1.5 text-[9px] font-bold uppercase tracking-[0.2em] text-white/35">
-              Project / Repo
-            </div>
-            <button
-              type="button"
-              onClick={() => setScopeOpen((s) => !s)}
-              disabled={scopeRepos.length === 0}
-              className={cn(
-                "group flex w-full items-center gap-2 rounded-lg border px-2.5 py-2 text-left transition",
-                scopeRepos.length === 0
-                  ? "cursor-not-allowed border-white/5 bg-white/[0.02]"
-                  : "border-white/10 bg-white/[0.04] hover:border-white/20 hover:bg-white/[0.08]",
-              )}
-              aria-haspopup="listbox"
-              aria-expanded={scopeOpen}
-            >
-              <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-gradient-to-br from-lilac via-aqua to-coral text-[10px] font-bold text-ink">
-                {initialsOf(scopeOwner)}
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-[10px] font-semibold uppercase tracking-widest text-white/45">
-                  {scopeOwner}
+          {repoChip && (
+            <div className="border-b border-white/10 px-3 py-3">
+              <Link
+                href="/"
+                className="mb-2 inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-widest text-white/45 hover:text-white"
+                title="Back to workspace home"
+              >
+                <span aria-hidden>←</span>
+                <span>Workspace</span>
+              </Link>
+              <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-2">
+                <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-gradient-to-br from-lilac via-aqua to-coral text-[10px] font-bold text-ink">
+                  {initialsOf(
+                    repoChip.slug.split("/", 1)[0] ?? repoChip.slug,
+                  )}
                 </span>
-                <span className="block truncate text-sm font-semibold text-white">
-                  {selectedRepo
-                    ? selectedRepo.full_name.split("/").slice(1).join("/") ||
-                      selectedRepo.full_name
-                    : "No repo bound"}
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[10px] font-semibold uppercase tracking-widest text-white/45">
+                    {repoChip.slug.split("/", 1)[0]}
+                  </span>
+                  <span className="block truncate text-sm font-semibold text-white">
+                    {repoChip.slug.split("/").slice(1).join("/") ||
+                      repoChip.slug}
+                  </span>
                 </span>
-              </span>
-              {scopeRepos.length > 1 && (
-                <span className="text-white/40 transition group-hover:text-white">⌄</span>
-              )}
-            </button>
-            {scopeOpen && scopeRepos.length > 0 && (
-              <div className="mt-2 overflow-hidden rounded-lg border border-white/10 bg-black/40 shadow-lg">
-                {scopeRepos.map((r) => (
-                  <button
-                    key={r.id}
-                    type="button"
-                    className={cn(
-                      "flex w-full items-center gap-2 border-b border-white/5 px-3 py-2 text-left text-xs transition last:border-b-0",
-                      r.id === selectedRepo?.id
-                        ? "bg-white/[0.06] text-white"
-                        : "text-white/70 hover:bg-white/[0.04] hover:text-white",
-                    )}
-                  >
-                    <span className="grid h-5 w-5 shrink-0 place-items-center rounded bg-white/10 text-[9px] font-bold text-white/80">
-                      {initialsOf(r.full_name.split("/", 1)[0] ?? "?")}
-                    </span>
-                    <span className="flex-1 truncate">
-                      <span className="block truncate font-medium">
-                        {r.full_name.split("/").slice(1).join("/") || r.full_name}
-                      </span>
-                      <span className="block truncate text-[10px] text-white/40">
-                        {r.full_name}
-                      </span>
-                    </span>
-                    {r.id === selectedRepo?.id && <span className="text-aqua">●</span>}
-                  </button>
-                ))}
-                <div className="border-t border-white/10 bg-white/[0.02] p-2 text-center">
-                  <Link
-                    href={
-                      workspace
-                        ? `/onboarding?step=repos&ws=${encodeURIComponent(workspace.id)}`
-                        : "/onboarding?step=repos"
-                    }
-                    className="text-[11px] font-semibold text-aqua hover:underline"
-                  >
-                    + add repos
-                  </Link>
-                </div>
               </div>
-            )}
-          </div>
+            </div>
+          )}
 
           <nav className="flex-1 overflow-y-auto px-2 py-3">
             {NAV.map((group) => (
@@ -368,7 +366,10 @@ export function AppShell({
                   </div>
                 )}
               </div>
-              <div className="hidden items-center gap-2 md:flex">{actions}</div>
+              <div className="flex shrink-0 items-center gap-2">
+                <NavigatorLauncher />
+                <div className="hidden items-center gap-2 md:flex">{actions}</div>
+              </div>
             </div>
           </header>
           <main className="px-6 pb-16 pt-6 lg:px-8 lg:pb-20 lg:pt-8">{children}</main>

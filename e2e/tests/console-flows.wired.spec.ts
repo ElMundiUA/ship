@@ -18,11 +18,20 @@ test.describe("console surfaces (wired, serial)", () => {
     );
   });
 
-  test("01 — dashboard loads", async ({ page }) => {
+  test("01 — workspace home loads", async ({ page }) => {
+    // Phase-1 two-mode shell: `/` is the workspace home, not the
+    // per-repo "Operating dashboard" (that moved under
+    // `/r/<owner>/<repo>` and reaches full content in PR-4).
     await page.goto("/");
     await expect(
-      page.getByRole("heading", { name: "Operating dashboard", exact: true }),
+      page.getByRole("heading", { name: "Workspace home", exact: true }),
     ).toBeVisible({ timeout: 30_000 });
+    await expect(
+      page.getByRole("heading", { name: "Repos", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Fleet", exact: true }),
+    ).toBeVisible();
   });
 
   test("02 — pipelines", async ({ page }) => {
@@ -175,21 +184,79 @@ test.describe("console surfaces (wired, serial)", () => {
     ).toBeVisible({ timeout: 30_000 });
   });
 
-  test("14 — rail: primary Operate links resolve", async ({ page }) => {
+  test("14 — rail: workspace nav exposes Fleet + Configure", async ({
+    page,
+  }) => {
+    // Phase-1 two-mode shell: on `/` the sidebar shows only
+    // workspace-unique primitives. Per-repo surfaces (Pipelines /
+    // Clarifications / Improvements / Feedback) moved under
+    // `/r/<owner>/<repo>/...` and are not reachable from the
+    // workspace rail by design.
     await page.goto("/");
     const nav = page.locator("aside nav");
     const checks: [string, RegExp][] = [
-      ["Pipelines", /\/pipelines$/],
-      ["Clarifications", /\/clarifications$/],
-      ["Improvements", /\/improvements$/],
-      ["Feedback", /\/artifact-feedback$/],
-      ["Navigator", /\/chat$/],
+      ["Fleet requests", /\/fleet\/requests$/],
+      ["Policy", /\/fleet\/policy$/],
+      ["Adoption", /\/fleet\/adoption$/],
+      ["Knowledge graph", /\/fleet\/knowledge$/],
+      ["Workspace settings", /\/settings$/],
+      ["Members", /\/members$/],
+      ["Integrations", /\/integrations$/],
+      ["Audit log", /\/audit$/],
     ];
     for (const [label, pathRe] of checks) {
       await nav.getByRole("link", { name: label, exact: true }).click();
       await expect(page).toHaveURL(pathRe);
     }
-    await nav.getByRole("link", { name: "Dashboard", exact: true }).click();
+    await nav.getByRole("link", { name: "Home", exact: true }).click();
     await expect(page).toHaveURL(/\/(?:$|\?)/);
+  });
+
+  test("14b — header Navigator launcher opens /chat", async ({ page }) => {
+    await page.goto("/");
+    const launcher = page.getByTestId("navigator-launcher");
+    await expect(launcher).toBeVisible({ timeout: 15_000 });
+    await launcher.click();
+    await expect(page).toHaveURL(/\/chat(?:\?|$)/);
+  });
+
+  test("15 — repo mode: click a repo card → /r/<owner>/<repo>", async ({
+    page,
+  }) => {
+    // Phase-1 two-mode shell: the workspace home lists activated
+    // repos as channels. Clicking one must land on
+    // `/r/<owner>/<repo>` and swap the sidebar to the repo nav.
+    // We pick the first repo tile that the backend fed in.
+    await page.goto("/");
+    const firstRepoLink = page.getByTestId("repo-channel").first();
+    const ok = await firstRepoLink
+      .waitFor({ state: "visible", timeout: 10_000 })
+      .then(() => true)
+      .catch(() => false);
+    if (!ok) {
+      test.info().annotations.push({
+        type: "skip",
+        description:
+          "No activated repos in this workspace; repo-mode flow can't be exercised.",
+      });
+      return;
+    }
+    await firstRepoLink.click();
+    await expect(page).toHaveURL(/\/r\/[^/]+\/[^/?#]+(?:\?|$)/, {
+      timeout: 15_000,
+    });
+    // Repo-mode sidebar shows repo-scoped operate items (Lanes,
+    // Requests). The workspace-only "Fleet requests" entry must
+    // NOT appear on the same rail.
+    const nav = page.locator("aside nav");
+    await expect(
+      nav.getByRole("link", { name: "Lanes", exact: true }),
+    ).toBeVisible({ timeout: 10_000 });
+    await expect(
+      nav.getByRole("link", { name: "Requests", exact: true }),
+    ).toBeVisible();
+    await expect(
+      nav.getByRole("link", { name: "Fleet requests", exact: true }),
+    ).toHaveCount(0);
   });
 });

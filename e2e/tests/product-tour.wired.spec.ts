@@ -229,9 +229,10 @@ test.describe("product tour (deployed dev)", () => {
     }
 
     // -----------------------------------------------------------------
-    // 1. Dashboard
+    // 1. Workspace home (Phase-1 two-mode shell — `/` is the
+    // workspace landing, not a per-repo "Operating dashboard").
     // -----------------------------------------------------------------
-    await visit(page, "/", "Operating dashboard");
+    await visit(page, "/", "Workspace home");
 
     // -----------------------------------------------------------------
     // 2. Pipelines (repo-grouped swimlanes — proves workflows installed)
@@ -356,8 +357,8 @@ test.describe("product tour (deployed dev)", () => {
     await visit(page, "/audit", "Audit log");
 
     // -----------------------------------------------------------------
-    // 16. Back to dashboard — close on the home card.
+    // 16. Back to workspace home — close on the landing card.
     // -----------------------------------------------------------------
-    await visit(page, "/", "Operating dashboard", { dwell: DWELL + 1500 });
+    await visit(page, "/", "Workspace home", { dwell: DWELL + 1500 });
   });
 });

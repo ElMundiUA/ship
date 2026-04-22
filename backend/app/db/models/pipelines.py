@@ -321,6 +321,10 @@ class AgentRequest(Base):
     __table_args__ = (
         Index("ix_agent_requests_workspace_created", "workspace_id", "created_at"),
         Index("ix_agent_requests_repo_created", "repo_id", "created_at"),
+        Index(
+            "ix_agent_requests_fleet_request_id",
+            "fleet_request_id",
+        ),
     )
 
     id: Mapped[uuid.UUID] = _pk()
@@ -337,6 +341,15 @@ class AgentRequest(Base):
     requested_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    # RFC-0008 D (Fleet Requests) — when this row was spawned as part
+    # of a workspace-level fan-out, points back to the parent
+    # :class:`FleetRequest`. NULL for single-repo dispatches from the
+    # legacy per-repo form; the pivot view joins on this FK.
+    fleet_request_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("fleet_requests.id", ondelete="SET NULL"),
         nullable=True,
     )
     agent_slug: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -370,8 +383,97 @@ class AgentRequest(Base):
     updated_at: Mapped[datetime] = _ts_updated()
 
 
+class FleetRequest(Base):
+    """Fan-out parent for a workspace-level agent request (RFC-0008 D).
+
+    One row per ``POST /v1/workspaces/{ws}/fleet/requests`` — captures
+    the catalog pattern + inputs selected once, then sprays N child
+    :class:`AgentRequest` rows across the operator-chosen repos. The
+    parent's job is twofold:
+
+    * keep the Console's "Fleet Requests" surface O(1) in the pivot
+      view (join on ``agent_requests.fleet_request_id`` instead of
+      reconstructing the group by pattern + timestamp), and
+    * act as the cancel / rollup anchor — a single toggle on the
+      parent can short-circuit every still-running child.
+
+    Validation of ``pattern_id`` + ``inputs`` happens *before* the
+    parent lands (one decode, one error response), so the row always
+    starts with a resolved payload. The per-repo fan-out is
+    **best-effort** (RFC-0008 §D): repos that fail the pre-dispatch
+    check (missing installation, suspended app, …) are captured on
+    ``rejections`` and the parent transitions to ``partial`` instead
+    of rolling back the whole batch.
+    """
+
+    __tablename__ = "fleet_requests"
+    __table_args__ = (
+        Index(
+            "ix_fleet_requests_workspace_created",
+            "workspace_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    requested_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    # Human-readable label copied from the pattern name at dispatch
+    # time (``role-ba`` etc.) — purely cosmetic; the Console list view
+    # uses it as the row title. Nullable because legacy ad-hoc
+    # dispatches (no pattern) fall back to ``agent_slug``.
+    title: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    # RFC-0008 C4 — the catalog pattern id that all children dispatch
+    # with. Free-form ad-hoc fan-outs leave this NULL and store the
+    # agent slug instead.
+    pattern_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    agent_slug: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Frozen inputs — the same dict we forward to every child, so the
+    # pivot shows exactly what was dispatched even if the pattern's
+    # catalog entry changes later.
+    inputs: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    context_ref: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    # ``dispatching`` (initial) → ``dispatched`` (all children created)
+    # → ``partial`` (some repos rejected) → ``cancel_requested`` /
+    # ``cancelled``. We don't roll up child success/failure here —
+    # the Console's pivot computes that from the children live.
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=text("'dispatching'")
+    )
+    # How many target repos the operator picked. Stored so the pivot
+    # can show "3 of 5 dispatched" even when some children were never
+    # created (e.g. GitHub App missing on a few repos).
+    target_count: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("0")
+    )
+    # Pre-flight rejections (repo not found, GitHub App missing) —
+    # persisted here because no child :class:`AgentRequest` row is
+    # created for them, so a refresh of the detail view would
+    # otherwise lose the information. Each entry is
+    # ``{repo_id, repo_full_name?, code, message}``. Dispatch-time
+    # failures land on the child row's ``status=dispatch_failed`` +
+    # ``summary`` instead, so they round-trip via the children join.
+    rejections: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+
+    created_at: Mapped[datetime] = _ts_created()
+    updated_at: Mapped[datetime] = _ts_updated()
+
+
 __all__ = [
     "AgentRequest",
+    "FleetRequest",
     "Pipeline",
     "PipelineRun",
     "PullRequest",
