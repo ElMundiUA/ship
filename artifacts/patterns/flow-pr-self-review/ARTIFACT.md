@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-07T20:41:22+03:00"
-content_sha256: c6cf8020aeb969964c74ba1d606164038ccd98f4415f9efb765fa8ce9224666d
+content_sha256: 2662690a9a40d300c968902f31c293f39bb84e159de743d6a9c32a4150faca25
 deprecated: false
 replaced_by: null
 yanked: false
@@ -21,6 +21,10 @@ spec:
   category: flow
   modes: [lane]
   include: [common-base]
+  lane_id: pr_review
+  lane_name: "PR review"
+  lane_summary: >-
+    Reviews every pull request against your gates (lint, tests, security, architecture). Posts findings as PR comments.
   default_trigger:
     kind: event
     event: pull_request
@@ -29,7 +33,10 @@ spec:
   enabled_on_install:
     default: true
     presets:
+      adoption-minimum: true
       api-backend: true
+      cli: true
+      marketing: true
       mobile-app: true
       monorepo: true
       web-app: true

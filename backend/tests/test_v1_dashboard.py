@@ -43,7 +43,7 @@ async def test_dashboard_aggregates_counts_and_recent_strips(
         PullRequest,
         WorkflowRun,
     )
-    from backend.app.services.default_pipelines import seed_default_pipelines
+    from backend.app.services.lane_recipes import seed_default_pipelines
 
     user, raw, workspace = seed_workspace
     seeded = await seed_default_pipelines(db_session, workspace.id)

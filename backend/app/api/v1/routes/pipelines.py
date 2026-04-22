@@ -64,7 +64,7 @@ from backend.app.integrations.github.workflows import (
 )
 from backend.app.services import catalog as catalog_service
 from backend.app.services import starter_workflows
-from backend.app.services.default_pipelines import DEFAULT_PIPELINES
+from backend.app.services.lane_recipes import list_lane_recipes
 
 
 logger = logging.getLogger(__name__)
@@ -74,14 +74,19 @@ logger = logging.getLogger(__name__)
 # Pipeline kind ↔ catalog workflow mapping
 # ---------------------------------------------------------------------------
 
-# ``DEFAULT_PIPELINES`` is the authoritative kind → workflow_id map
-# (``pr_review`` → ``pr-and-ci-gate``, ``self_heal`` → ``pipeline-self-heal``,
-# …). Everything filename-related comes from the workflow's catalog entry
-# so adding a new lane = dropping a new ARTIFACT.md + workflow.yml pair
-# and extending ``DEFAULT_PIPELINES`` — no code churn in this module.
-_KIND_TO_WORKFLOW_ID: Final[dict[str, str]] = {
-    spec.kind: spec.workflow_id for spec in DEFAULT_PIPELINES
-}
+# ``list_lane_recipes`` is the authoritative lane → workflow_id map
+# post-RFC-0008 C3.3 (``pr_review`` → ``pr-and-ci-gate``, ``self_heal``
+# → ``pipeline-self-heal``, …). Adding a new lane = dropping a new
+# pattern ARTIFACT.md with ``lane_id`` + workflow.yml pair, no code
+# churn in this module. We compute the map lazily per-call so catalog
+# mtime changes pick up without a process restart.
+
+
+def _kind_to_workflow_id(kind: str) -> str | None:
+    for recipe in list_lane_recipes():
+        if recipe.lane_id == kind:
+            return recipe.workflow_id
+    return None
 
 
 def _workflow_file_for_kind(kind: str) -> str | None:
@@ -91,7 +96,7 @@ def _workflow_file_for_kind(kind: str) -> str | None:
     ``code_map`` — resolver-only) so callers know to fall back to the
     "Coming with presets" state instead of 412-ing the user.
     """
-    workflow_id = _KIND_TO_WORKFLOW_ID.get(kind)
+    workflow_id = _kind_to_workflow_id(kind)
     if workflow_id is None:
         return None
     return starter_workflows.install_filename(workflow_id)
@@ -99,7 +104,7 @@ def _workflow_file_for_kind(kind: str) -> str | None:
 
 def _supports_run(kind: str) -> bool:
     """True iff we can both dispatch and (re)install the workflow for ``kind``."""
-    workflow_id = _KIND_TO_WORKFLOW_ID.get(kind)
+    workflow_id = _kind_to_workflow_id(kind)
     if workflow_id is None:
         return False
     entry = starter_workflows.get(workflow_id)
@@ -389,7 +394,7 @@ def _read_starter_yaml(kind: str) -> str:
     file on disk is missing — a release-packaging bug the operator
     needs to see, not a tenant-actionable condition.
     """
-    workflow_id = _KIND_TO_WORKFLOW_ID.get(kind)
+    workflow_id = _kind_to_workflow_id(kind)
     if workflow_id is None:
         raise HTTPException(
             status_code=status.HTTP_412_PRECONDITION_FAILED,

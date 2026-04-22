@@ -1,64 +1,71 @@
-"""Unit tests for :mod:`backend.app.services.default_pipelines` presets.
+"""Preset → lane resolution tests.
 
-Covers only the in-process resolution + seeding logic. Full end-to-end
-preset-flow coverage (HTTP contract, persistence, audit log) lives in
+Post-RFC-0008 C3.3 the source of truth moved from the old
+``default_pipelines`` module into:
+
+- Pattern ``spec.enabled_on_install.presets`` — the catalog says which
+  presets enable which pattern-backed lanes.
+- :data:`backend.app.services.lane_recipes._EXTRA_RECIPES` — the two
+  lanes that don't have a pattern today (``code_map`` /
+  ``tech_debt``); preset gating lives inline there.
+
+These tests lock the combined behaviour so a stray edit to either
+surface can't silently disable a lane for a preset that used to have
+it. Full HTTP-contract / persistence coverage still lives in
 ``test_v1_repos.py::test_activate_with_preset_*``.
 """
 
 from __future__ import annotations
 
-import uuid
-
 import pytest
 
-from backend.app.services.default_pipelines import (
-    DEFAULT_PIPELINES,
+from backend.app.services.lane_recipes import (
     KNOWN_PRESETS,
-    PRESET_ENABLED_KINDS,
-    resolve_enabled_kinds,
+    list_lane_recipes,
+    resolve_enabled_lane_ids,
     seed_default_pipelines,
 )
 
 
-DEFAULT_KINDS = {spec.kind for spec in DEFAULT_PIPELINES}
+DEFAULT_LANE_IDS = {r.lane_id for r in list_lane_recipes()}
 
 
-def test_known_presets_match_preset_enabled_map():
-    """Guards against a preset being added to one side and not the other —
-    the wizard + repos route both use ``KNOWN_PRESETS`` for validation."""
-    assert set(KNOWN_PRESETS) == set(PRESET_ENABLED_KINDS)
+def test_recipes_cover_the_five_stable_lane_ids():
+    """The Console, dashboard and a handful of tests hard-code the
+    lane ids that ship out of the box. Guard the set so renaming a
+    pattern's ``lane_id`` surfaces here, not in a production 500."""
+    assert DEFAULT_LANE_IDS == {
+        "pr_review",
+        "daily_standup",
+        "code_map",
+        "tech_debt",
+        "self_heal",
+    }
 
 
-def test_preset_enabled_kinds_only_reference_real_pipelines():
-    """Typos in ``PRESET_ENABLED_KINDS`` would silently disable the
-    whole preset's lane set; fail loud in tests instead."""
-    for preset, kinds in PRESET_ENABLED_KINDS.items():
-        unknown = kinds - DEFAULT_KINDS
-        assert not unknown, f"preset {preset} references unknown kinds: {unknown}"
-
-
-def test_resolve_enabled_kinds_falls_back_for_unknown_presets():
-    # Unknown preset → default (everything except self-heal).
-    fallback = resolve_enabled_kinds("not-a-preset")
+def test_resolve_enabled_lane_ids_falls_back_for_unknown_presets():
+    # Unknown preset → default (every recipe whose ``default_enabled``
+    # is truthy — everything except ``self_heal``).
+    fallback = resolve_enabled_lane_ids("not-a-preset")
     assert "self_heal" not in fallback
     assert "pr_review" in fallback
 
 
-def test_resolve_enabled_kinds_handles_none():
-    none_fallback = resolve_enabled_kinds(None)
+def test_resolve_enabled_lane_ids_handles_none():
+    none_fallback = resolve_enabled_lane_ids(None)
     assert "pr_review" in none_fallback
     assert "self_heal" not in none_fallback
 
 
 def test_monorepo_preset_opts_into_self_heal():
-    assert "self_heal" in PRESET_ENABLED_KINDS["monorepo"]
+    assert "self_heal" in resolve_enabled_lane_ids("monorepo")
 
 
 def test_web_app_preset_covers_full_sdlc_grid():
     """Web-app is the flagship "Elmundi-grade SDLC" preset: every
     materialised lane is enabled, including ``self_heal``. The UI
-    pitches it as the full Elmundi grid — keep that promise in code."""
-    assert PRESET_ENABLED_KINDS["web-app"] == frozenset(
+    pitches it as the full Elmundi grid — keep that promise."""
+    assert resolve_enabled_lane_ids("web-app") == frozenset(
         {"pr_review", "daily_standup", "tech_debt", "self_heal", "code_map"}
     )
 
@@ -67,20 +74,30 @@ def test_marketing_preset_covers_copy_and_cadence_lanes():
     """Marketing preset: PR gate + standup + code_map, no tech-debt,
     no self-heal. See ``artifacts/collections/preset-marketing/
     ARTIFACT.md`` for the product-shape rationale."""
-    assert PRESET_ENABLED_KINDS["marketing"] == frozenset(
-        {"pr_review", "daily_standup", "code_map"}
-    )
+    marketing = resolve_enabled_lane_ids("marketing")
+    assert marketing == frozenset({"pr_review", "daily_standup", "code_map"})
     # Guard against the two lanes we intentionally leave off.
-    assert "tech_debt" not in PRESET_ENABLED_KINDS["marketing"]
-    assert "self_heal" not in PRESET_ENABLED_KINDS["marketing"]
+    assert "tech_debt" not in marketing
+    assert "self_heal" not in marketing
 
 
 def test_adoption_minimum_preset_is_minimum():
-    kinds = PRESET_ENABLED_KINDS["adoption-minimum"]
+    ids = resolve_enabled_lane_ids("adoption-minimum")
     # Contract: minimum = just PR review + code map (so the dashboard
     # isn't empty on a brand-new workspace). Tighten if the product
     # direction changes.
-    assert kinds == frozenset({"pr_review", "code_map"})
+    assert ids == frozenset({"pr_review", "code_map"})
+
+
+def test_every_known_preset_resolves_to_something():
+    """Regression guard — a preset missing from any pattern's
+    ``enabled_on_install.presets`` AND from the ``_EXTRA_RECIPES``
+    gating is still a valid preset string, but resolves to an empty
+    set which silently disables the entire dashboard for that
+    preset. Assert every preset turns *something* on."""
+    for preset in KNOWN_PRESETS:
+        ids = resolve_enabled_lane_ids(preset)
+        assert ids, f"preset {preset} enables no lanes"
 
 
 @pytest.mark.asyncio
@@ -93,7 +110,7 @@ async def test_seed_default_pipelines_respects_preset_for_new_rows(
         db_session, workspace.id, preset="cli"
     )
     by_kind = {p.kind: p for p in pipelines}
-    cli_enabled = PRESET_ENABLED_KINDS["cli"]
+    cli_enabled = resolve_enabled_lane_ids("cli")
     for kind, row in by_kind.items():
         assert row.enabled is (kind in cli_enabled), (
             f"{kind} enabled={row.enabled}; expected {kind in cli_enabled}"

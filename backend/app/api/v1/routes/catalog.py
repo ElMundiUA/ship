@@ -27,7 +27,7 @@ from pydantic import BaseModel
 
 from backend.app.api.v1.deps import AuthContext, get_current_auth
 from backend.app.services import catalog as catalog_service
-from backend.app.services.default_pipelines import DEFAULT_PIPELINES
+from backend.app.services.lane_recipes import list_lane_recipes
 
 
 router = APIRouter(prefix="/catalog", tags=["catalog"])
@@ -100,30 +100,6 @@ async def list_collections(
 # never land in config.yml by design; showing them as "available
 # recipes" would mis-communicate the contract.
 
-# Human-readable summaries for each built-in kind. Lives here rather
-# than on ``DefaultPipelineSpec`` because that struct is currently the
-# machine contract for the seeder; the summary is purely presentational
-# copy that belongs with the surface that renders it.
-_LANE_SUMMARIES: dict[str, str] = {
-    "pr_review": (
-        "Reviews every pull request against your gates (lint, tests, "
-        "security, architecture). Posts findings as PR comments."
-    ),
-    "daily_standup": (
-        "Weekday digest of open PRs, failing checks and FSM "
-        "transitions. Lands in your tracker or Slack."
-    ),
-    "tech_debt": (
-        "Weekly parallel audit: security, perf, type coverage, dead "
-        "code. Files the findings as tracker tickets."
-    ),
-    "self_heal": (
-        "Nightly sweep of Ship-owned workflows — re-runs flaky CI, "
-        "opens a PR when a starter template drifts."
-    ),
-}
-
-
 class LaneCatalogEntryOut(BaseModel):
     """Lane recipe as the console Library tab wants to render it."""
 
@@ -138,6 +114,12 @@ class LaneCatalogEntryOut(BaseModel):
     pattern: str | None
     schedule: str | None
     idempotency_key: str | None
+    # RFC-0008 C3.1 — canonical multi-pattern list. ``pattern`` above
+    # is retained for single-pattern back-compat; ``patterns`` is always
+    # populated so the Library UI can count patterns and decide whether
+    # to surface the fan-out picker.
+    patterns: list[str] = []
+    fanout: str = "matrix"
 
 
 class LaneCatalogResponse(BaseModel):
@@ -150,28 +132,33 @@ async def list_lane_catalog(
 ) -> LaneCatalogResponse:
     """Built-in lane recipes the console Library tab can propose.
 
-    Filters out resolver-only specs (``lane_trigger is None``) — they
+    Filters out resolver-only recipes (``trigger is None``) — they
     aren't user-installable as ``.ship/config.yml`` lanes. The wire
-    format flattens ``lane_trigger`` into explicit ``event`` /
-    ``schedule`` / ``pattern`` / ``idempotency_key`` slots so the UI
-    doesn't have to guess which key is the discriminator.
+    format flattens ``trigger`` into explicit ``event`` / ``schedule``
+    / ``pattern`` / ``idempotency_key`` slots so the UI doesn't have
+    to guess which key is the discriminator, and surfaces the
+    multi-pattern ``patterns`` list + ``fanout`` alongside so the
+    Library card can render the fan-out picker.
     """
     entries: list[LaneCatalogEntryOut] = []
-    for spec in DEFAULT_PIPELINES:
-        if spec.lane_trigger is None:
+    for recipe in list_lane_recipes():
+        trigger = recipe.trigger
+        if trigger is None:
             continue
-        trigger = spec.lane_trigger
+        patterns = list(recipe.patterns)
         entries.append(
             LaneCatalogEntryOut(
-                kind=spec.kind,
-                title=spec.name,
-                summary=_LANE_SUMMARIES.get(spec.kind, spec.name),
-                workflow_id=spec.workflow_id,
-                default_enabled=spec.enabled,
+                kind=recipe.lane_id,
+                title=recipe.name,
+                summary=recipe.summary or recipe.name,
+                workflow_id=recipe.workflow_id,
+                default_enabled=recipe.default_enabled,
                 event=trigger.get("event"),
-                pattern=trigger.get("pattern"),
+                pattern=patterns[0] if len(patterns) == 1 else trigger.get("pattern"),
                 schedule=trigger.get("schedule"),
                 idempotency_key=trigger.get("idempotency_key"),
+                patterns=patterns,
+                fanout=recipe.fanout,
             )
         )
     return LaneCatalogResponse(entries=entries)

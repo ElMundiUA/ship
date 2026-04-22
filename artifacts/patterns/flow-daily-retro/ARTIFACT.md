@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-19T00:00:00+03:00"
-content_sha256: b1c3f0b6a17e5c6b23c39e03a2eddf532631bf9468cae39ac765bade3b21ed28
+content_sha256: 8eac6adc746ef32bdc947d18615e342a7e05aa555d8a229ecda5183aaf320e7e
 deprecated: false
 replaced_by: null
 yanked: false
@@ -21,6 +21,10 @@ spec:
   category: flow
   modes: [lane, request]
   include: [common-base]
+  lane_id: daily_standup
+  lane_name: "Daily standup"
+  lane_summary: >-
+    Weekday digest of open PRs, failing checks and FSM transitions. Lands in your tracker or Slack.
   default_trigger:
     kind: schedule
     cron: "0 9 * * 1-5"
@@ -28,6 +32,7 @@ spec:
     default: true
     presets:
       api-backend: true
+      marketing: true
       mobile-app: true
       monorepo: true
       web-app: true

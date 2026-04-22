@@ -7,9 +7,9 @@ are the forward path, and external callers no longer need a browsable
 (``POST /v1/pipelines/install``, the GitHub-App auto-install webhook,
 and the repo-secrets matrix) still commits a starter ``.yml`` into
 ``.github/workflows/`` on first adoption. That use-case is small and
-well-scoped — four baked-in starters tied to pipeline kinds in
-:mod:`backend.app.services.default_pipelines` — so we keep it alive as
-an **internal** lookup, detached from the artifact catalog.
+well-scoped — four baked-in starters tied to lane recipes in
+:mod:`backend.app.services.lane_recipes` — so we keep it alive as an
+**internal** lookup, detached from the artifact catalog.
 
 This module is the single source of truth for that detached lookup:
 
@@ -66,7 +66,7 @@ class StarterWorkflow:
             ) from exc
 
 
-# Order matches :data:`DEFAULT_PIPELINES` so the dashboard's install
+# Order matches :func:`lane_recipes.list_lane_recipes` so the dashboard's install
 # ordering stays stable. Keep this dict narrow — adding a row here is a
 # product decision (one more baked-in starter workflow), not a catalog
 # change; richer workflow configurations belong in lanes now.

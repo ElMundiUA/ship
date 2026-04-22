@@ -303,6 +303,43 @@ class CatalogArtifact:
         raw = self.spec.get("lane_workflow")
         return raw if isinstance(raw, str) and raw else None
 
+    # ------------------------------------------------------------------
+    # RFC-0008 C3.3 — lane identity.
+    #
+    # Patterns that back one of the built-in seeded lanes declare a
+    # stable ``lane_id`` slug (e.g. ``pr_review``) so the seeder /
+    # dashboard can keep a human-friendly lane name that's decoupled
+    # from the pattern's own id. The pattern id stays the authoritative
+    # *content* identifier; the lane_id is the authoritative *runtime*
+    # identifier (``Pipeline.kind`` in the DB today).
+    #
+    # Absent → pattern id doubles as lane id (Phase 2 / C5 patterns
+    # follow this convention).
+    # ------------------------------------------------------------------
+
+    @property
+    def lane_id(self) -> str | None:
+        """Stable lane slug this pattern participates in, or ``None``.
+
+        Multiple patterns can declare the same ``lane_id`` — the
+        lane-recipe builder merges them into one multi-pattern lane
+        (RFC-0008 C3.2).
+        """
+        raw = self.spec.get("lane_id")
+        return raw if isinstance(raw, str) and raw else None
+
+    @property
+    def lane_name(self) -> str | None:
+        """Human-readable lane label (Library card title / Dashboard row)."""
+        raw = self.spec.get("lane_name")
+        return raw if isinstance(raw, str) and raw else None
+
+    @property
+    def lane_summary(self) -> str | None:
+        """One-line Library tagline. Falls back to ``description`` if absent."""
+        raw = self.spec.get("lane_summary")
+        return raw if isinstance(raw, str) and raw else None
+
     @property
     def inputs(self) -> list[dict[str, Any]]:
         """Named parameters the Requests form should render."""
@@ -367,6 +404,9 @@ class CatalogArtifact:
             "default_trigger": self.default_trigger,
             "lane_workflow": self.lane_workflow,
             "resolved_lane_workflow": resolve_lane_workflow(self),
+            "lane_id": self.lane_id,
+            "lane_name": self.lane_name,
+            "lane_summary": self.lane_summary,
             "include": list(self.include),
             "inputs": list(self.inputs),
             "enabled_on_install": self.enabled_on_install,
@@ -568,7 +608,7 @@ def emit_config_yaml(
     Used by two write paths:
 
     - ``preset_bundle_files`` — the wizard seed / install-bundle flow,
-      which derives ``lanes`` from ``DefaultPipelineSpec.lane_trigger``.
+      which derives ``lanes`` from :data:`lane_recipes.LaneRecipe` records.
     - ``POST /v1/.../repos/{id}/config/propose`` — the Library editor
       in the console, which receives an already-edited mapping from the
       operator and opens a single-file PR.
@@ -646,40 +686,49 @@ def preset_bundle_files(
     The caller (``install_bundle`` route) is responsible for passing
     the list into ``commit_bundle_pr``.
     """
-    # Lazy imports keep the module import graph flat and also mean we
-    # don't pay the cost of loading default_pipelines on every catalog
-    # lookup.
+    # Lazy imports keep the module import graph flat and also avoid a
+    # cycle (lane_recipes pulls pattern catalog metadata which lives in
+    # this module).
     from backend.app.services import starter_workflows
-    from backend.app.services.default_pipelines import (
-        DEFAULT_PIPELINES,
-        PRESET_ENABLED_KINDS,
+    from backend.app.services.lane_recipes import (
+        list_lane_recipes,
+        resolve_enabled_lane_ids,
     )
 
-    enabled_kinds = PRESET_ENABLED_KINDS.get(preset_id, frozenset())
+    enabled_ids = resolve_enabled_lane_ids(preset_id)
     files: list[tuple[str, str]] = []
-    # ``included_specs`` keeps the full spec so the config writer can
-    # reach both the kind name and the v2 ``lane_trigger`` mapping.
-    included_specs: list = []
-    for spec in DEFAULT_PIPELINES:
-        if spec.kind not in enabled_kinds:
+    included_recipes: list = []
+    for recipe in list_lane_recipes():
+        if recipe.lane_id not in enabled_ids:
             continue
-        entry = starter_workflows.get(spec.workflow_id)
+        entry = starter_workflows.get(recipe.workflow_id)
         if entry is None:
             continue
         content = entry.read_yaml()
         if not content:
             continue
         files.append((entry.install_target, content))
-        included_specs.append(spec)
+        included_recipes.append(recipe)
 
     # .ship/config.yml — config schema v2. Emits ``lanes:`` as a
     # mapping so ``lanes_sync`` can parse trigger/pattern/idempotency
-    # per-lane. Lanes without a trigger (``code_map``) are omitted.
-    lanes_map: dict[str, Mapping[str, object]] = {
-        spec.kind: spec.lane_trigger
-        for spec in included_specs
-        if spec.lane_trigger is not None
-    }
+    # per-lane. Resolver-only recipes (``trigger is None``, e.g.
+    # ``code_map``) are skipped. Multi-pattern recipes emit the
+    # ``patterns: [ids]`` list (RFC-0008 C3.1) and fan-out mode
+    # (C3.2); single-pattern recipes emit the scalar ``pattern: <id>``
+    # form so diffs against older bundles stay minimal.
+    lanes_map: dict[str, Mapping[str, object]] = {}
+    for recipe in included_recipes:
+        if recipe.trigger is None:
+            continue
+        entry_map: dict[str, object] = dict(recipe.trigger)
+        if len(recipe.patterns) >= 2:
+            entry_map["patterns"] = list(recipe.patterns)
+            if recipe.fanout != "matrix":
+                entry_map["fanout"] = recipe.fanout
+        elif len(recipe.patterns) == 1:
+            entry_map.setdefault("pattern", recipe.patterns[0])
+        lanes_map[recipe.lane_id] = entry_map
     yaml_body = emit_config_yaml(
         preset_id=preset_id,
         repo_full_name=repo_full_name,

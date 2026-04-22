@@ -274,37 +274,59 @@ Helpers (single source of truth):
 
 ## Retire DefaultPipelineSpec
 
-`backend/app/services/default_pipelines.py` stops being the source of
-truth for lane wiring. Instead:
+`backend/app/services/default_pipelines.py` is replaced by
+`backend/app/services/lane_recipes.py` as the source of truth for
+baked-in lane wiring. The new module:
 
-1. The seed bundle (`preset_bundle_files`) walks
-   `list_patterns()`, filters to `modes` containing `lane` and
-   `enabled_on_install.presets[<preset>] is true`, and emits one
-   `.ship/config.yml` lane entry per match using
-   `pattern.default_trigger`.
-2. `/v1/catalog/lanes` similarly walks patterns and projects them to
-   the `LaneCatalogEntryOut` shape (kind = pattern id).
-3. The `Pipeline` DB model rows are seeded from the same walk —
-   `kind` = pattern id, `workflow_id` = `spec.lane_workflow`.
-4. `code_map` loses its pseudo-pipeline row; the resolver endpoint
-   stays (it's invoked directly by the dashboard, not as a lane).
+1. Walks `list_patterns()`, filters to patterns whose `modes` contains
+   `lane` *and* which declare a stable `spec.lane_id`, and groups them
+   by `lane_id` into :class:`LaneRecipe` records. Multiple patterns
+   sharing a `lane_id` merge into a multi-pattern recipe.
+2. Folds in two **non-pattern specials** (`code_map` — resolver-only,
+   `tech_debt` — schedule-only placeholder until C5 lands the `scan-*`
+   family). These specials keep their preset gating inline in the
+   module; everything else derives from pattern
+   `enabled_on_install.presets`.
+3. `preset_bundle_files` / `/v1/catalog/lanes` / `seed_default_pipelines`
+   all iterate `list_lane_recipes()` and gate on
+   `resolve_enabled_lane_ids(preset)`.
+
+Patterns that back a stable seeded lane declare three new optional
+`spec` fields so the pattern id stays the authoritative *content*
+identifier while the lane_id stays the authoritative *runtime*
+identifier (it's still `Pipeline.kind` in the DB today):
+
+```yaml
+spec:
+  modes: [lane]
+  lane_id: pr_review            # stable slug shared with .ship/config.yml
+  lane_name: "PR review"        # Library card title
+  lane_summary: >-
+    Reviews every pull request …   # Library card tagline
+```
 
 `DEFAULT_PIPELINES`, `PRESET_ENABLED_KINDS`, `DefaultPipelineSpec`,
-`seed_default_pipelines`, `resolve_enabled_kinds` — all go.
-`_LANE_SUMMARIES` in the catalog router moves to each pattern's
-`description` (where it already duplicates most of the text).
+`resolve_enabled_kinds` — all gone. `seed_default_pipelines` and
+`KNOWN_PRESETS` keep their old signatures and just move to
+`lane_recipes`. The catalog router's `_LANE_SUMMARIES` table is
+deleted — summaries come from each pattern's `spec.lane_summary` (for
+pattern-backed recipes) or inline from `_EXTRA_RECIPES` (for the two
+specials).
 
-The 5 legacy `Pipeline.kind` values (`pr_review`, `daily_standup`,
-`tech_debt`, `self_heal`, `code_map`) are reassigned in a migration to
-the equivalent pattern ids:
+`Pipeline.kind` values stay stable across C3.3 (`pr_review`,
+`daily_standup`, `tech_debt`, `self_heal`, `code_map`); C3.4 formally
+renames the column to `lane_id` so the DB schema stops conflating
+"kind of pipeline" with "which lane recipe does this row belong to".
+The table below shows how the stable lane_ids map to the pattern(s)
+that back them today:
 
-| Legacy kind | New pattern id |
-|---|---|
-| `pr_review` | `flow-pr-self-review` |
-| `daily_standup` | `flow-daily-retro` |
-| `tech_debt` | `scan-tech-debt` (new, see Expansion) |
-| `self_heal` | `op-workflow-self-heal` |
-| `code_map` | *(removed — resolver-only, no pattern)* |
+| Lane id | Pattern(s) | Notes |
+|---|---|---|
+| `pr_review` | `flow-pr-self-review` | Single pattern |
+| `daily_standup` | `flow-daily-retro` | Single pattern |
+| `self_heal` | `op-workflow-self-heal` | Single pattern |
+| `tech_debt` | *(none yet)* | Picks up `scan-tech-debt` / `scan-security-deps` / `scan-architecture` with Expansion — C5 |
+| `code_map` | *(none — resolver-only)* | Never lands in `.ship/config.yml` |
 
 ## Expansion — Phase 1 (10 new patterns)
 
@@ -395,10 +417,18 @@ One PR per phase, merged sequentially:
      lanes never surface the picker and never emit a `fanout` key.
    - **C3.3.** Seed bundle + lane catalog endpoint + `Pipeline`
      seeding all pivot to walking patterns with `modes.lane` and
-     `enabled_on_install.presets`. `PRESET_ENABLED_KINDS` is gone.
+     `enabled_on_install.presets`. `PRESET_ENABLED_KINDS` is gone
+     and `default_pipelines.py` is replaced by
+     `backend/app/services/lane_recipes.py`, which folds catalog
+     patterns and two non-pattern specials (`code_map` resolver-only,
+     `tech_debt` multi-pattern placeholder) into a single ordered
+     `LaneRecipe` list. Patterns that back a stable seeded lane
+     declare `spec.lane_id` (e.g. `pr_review`), `spec.lane_name`
+     and `spec.lane_summary` so the Library card / dashboard keep a
+     human-friendly label decoupled from the pattern id.
+     *(landed with this RFC)*
    - **C3.4.** Rename `Pipeline.kind` → `lane_id`. Alembic
-     migration remaps existing rows. `default_pipelines.py`
-     deleted.
+     migration remaps existing rows.
 4. **Phase 3 — Requests catalog UI.** `/requests` rewritten to show
    the catalog grid + dynamic form. Backend accepts
    `{pattern_id, inputs}` and maps that onto the existing
