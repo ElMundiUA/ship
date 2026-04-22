@@ -18,10 +18,16 @@ from backend.app.db.models.integrations import GitHubInstallation, WorkspaceRepo
 from backend.app.db.models.lanes import Lane
 from backend.app.db.models.notifications import WorkspaceNotification
 from backend.app.db.models.pipelines import (
+    AgentRequest,
+    FleetRequest,
     Pipeline,
     PipelineRun,
     PullRequest,
     WorkflowRun,
+)
+from backend.app.db.models.policies import (
+    WorkspacePolicy,
+    WorkspacePolicyException,
 )
 from backend.app.db.models.repo_secrets import RepoSecret
 from backend.app.db.models.tenancy import (
@@ -39,6 +45,7 @@ from backend.app.db.models.tenancy import (
 )
 
 __all__ = [
+    "AgentRequest",
     "ApiToken",
     "ArtifactFeedback",
     "ArtifactRepo",
@@ -47,6 +54,7 @@ __all__ = [
     "ChatMessage",
     "ChatThread",
     "Clarification",
+    "FleetRequest",
     "GitHubInstallation",
     "Improvement",
     "Integration",
@@ -65,6 +73,8 @@ __all__ = [
     "WorkspaceInvite",
     "WorkspaceMember",
     "WorkspaceNotification",
+    "WorkspacePolicy",
+    "WorkspacePolicyException",
     "WorkspaceRepo",
     "WorkflowRun",
 ]
