@@ -1524,12 +1524,26 @@ export function getRepoConfig(
   );
 }
 
-/** One lane entry as the write endpoint wants to receive it. */
+/**
+ * One lane entry as the write endpoint wants to receive it.
+ *
+ * ``patterns`` (list) is the RFC-0008 C3.1 canonical form; ``pattern``
+ * (scalar) stays as a single-pattern alias. Senders use one or the
+ * other — never both — and the backend round-trips by emitting
+ * ``patterns:`` only when the list has ≥2 entries.
+ *
+ * ``fanout`` only applies to multi-pattern lanes (RFC-0008 C3.2).
+ * ``matrix`` (default), ``sequential``, ``concurrent``. The backend
+ * omits it from the YAML when it's the default or when the lane has
+ * a single pattern.
+ */
 export interface ApiLaneTriggerIn {
   once?: string | null;
   event?: string | null;
   schedule?: string | null;
   pattern?: string | null;
+  patterns?: string[] | null;
+  fanout?: string | null;
   idempotency_key?: string | null;
 }
 

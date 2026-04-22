@@ -384,8 +384,15 @@ One PR per phase, merged sequentially:
      `lanes.<id>.patterns: [ids]`; `pattern: <id>` stays as alias.
      Emitter prefers `patterns: [...]`. Single-pattern lanes keep
      the scalar shape. *(landed with this RFC)*
-   - **C3.2.** `parallel-audit-lanes.yml` becomes parametric over
-     the lane's patterns list instead of three hard-coded entries.
+   - **C3.2.** `run-agent.yml` is rewritten as `plan → run(matrix) →
+     aggregate` so multi-pattern lanes dispatch one job per pattern
+     (default `fanout: matrix`) or a single job that iterates the
+     patterns internally (`sequential` / `concurrent`). The aggregate
+     job collapses per-pattern outcomes into a single callback to
+     Ship, so the backend still sees one `pipeline_run` per lane.
+     The Library card editor exposes the three fan-out modes as a
+     picker whenever the lane declares ≥2 patterns; single-pattern
+     lanes never surface the picker and never emit a `fanout` key.
    - **C3.3.** Seed bundle + lane catalog endpoint + `Pipeline`
      seeding all pivot to walking patterns with `modes.lane` and
      `enabled_on_install.presets`. `PRESET_ENABLED_KINDS` is gone.
