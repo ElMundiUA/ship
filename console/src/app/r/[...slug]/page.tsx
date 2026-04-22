@@ -4,50 +4,72 @@ import { notFound, redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import {
   Badge,
+  type BadgeTone,
   ButtonGhost,
   ButtonPrimary,
   Card,
   CardHeader,
   MockBanner,
+  StatTile,
 } from "@/components/ui";
 import {
   ApiHttpError,
   ApiUnavailableError,
+  getRepoHome,
   isApiConfigured,
   listActivatedRepos,
   listWorkspaces,
 } from "@/lib/api/client";
 import { getSessionToken } from "@/lib/api/session";
-import type { ApiActivatedRepo } from "@/lib/api/client";
+import type {
+  ApiActivatedRepo,
+  ApiRepoHomeActivityKind,
+  ApiRepoHomeActivityStatus,
+  ApiRepoHomeReport,
+} from "@/lib/api/client";
 import type { ApiWorkspace } from "@/lib/api/types";
 import { findRepoBySlug, slugFromSegments } from "@/lib/repo-slug";
 
 /**
  * Repo home (``/r/<owner>/<repo>``).
  *
- * PR-1 scope: render the repo-mode shell with the per-repo sidebar
- * (Lanes / Requests / Clarifications / …) and a "Now vs Trends"
- * placeholder explaining that the rich dashboard (migrated from
- * today's ``/``) lands in PR-4. The shell itself is the deliverable
- * — operators can navigate to every repo surface from here, and
- * shared links (``/r/acme/api``) now pin scope to the URL.
+ * PR-4 puts Now/Trends back on the per-repo surface (RFC-0008 §F).
+ * Two lightweight tabs over a single backend snapshot
+ * (``/v1/workspaces/{ws}/repos/{id}/home``):
+ * - **Now** — in-flight counters, last-24h activity, lane health,
+ *   bundle/install flags, a newest-first activity feed.
+ * - **Trends** — 30-day histogram bucketed by UTC day (success/fail/
+ *   other stacked) plus a per-lane breakdown.
+ *
+ * Everything below the tabs (repo-facts card, quick-nav tiles) is
+ * unchanged scope-setting from PR-1.
  */
 
 export const dynamic = "force-dynamic";
 
 type Params = { slug?: string[] };
+type Search = Record<string, string | string[] | undefined>;
+type Tab = "now" | "trends";
+
+function parseTab(raw: string | string[] | undefined): Tab {
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  return v === "trends" ? "trends" : "now";
+}
 
 export default async function RepoHomePage({
   params,
+  searchParams,
 }: {
   params: Promise<Params>;
+  searchParams: Promise<Search>;
 }) {
-  const resolved = await params;
+  const [resolved, search] = await Promise.all([params, searchParams]);
   const slug = slugFromSegments(resolved.slug);
   if (!slug) notFound();
+  const tab = parseTab(search.tab);
 
   if (!isApiConfigured()) {
-    return renderMock(slug);
+    return renderMock(slug, tab);
   }
 
   const token = await getSessionToken();
@@ -63,7 +85,19 @@ export default async function RepoHomePage({
   if (ctx === "empty") redirect("/onboarding?step=github");
   if (ctx === "not-found") notFound();
 
-  return renderRepoHome(ctx);
+  let report: ApiRepoHomeReport | null = null;
+  try {
+    report = await getRepoHome(ctx.workspace.id, ctx.repo.id, { token });
+  } catch (err) {
+    if (err instanceof ApiHttpError && err.status === 401) {
+      redirect(`/login?next=${encodeURIComponent(`/r/${slug}`)}`);
+    }
+    // Down / transient — let the page render with the tabs disabled
+    // instead of 500-ing the shell.
+    report = null;
+  }
+
+  return renderRepoHome(ctx, report, tab);
 }
 
 type Ctx = {
@@ -99,7 +133,7 @@ async function loadContext(
   return { workspace, repo, repos };
 }
 
-function renderRepoHome(ctx: Ctx) {
+function renderRepoHome(ctx: Ctx, report: ApiRepoHomeReport | null, tab: Tab) {
   const { workspace, repo, repos } = ctx;
   const base = `/r/${repo.full_name}`;
   return (
@@ -125,12 +159,12 @@ function renderRepoHome(ctx: Ctx) {
         </>
       }
     >
-      <RepoHomeBody repo={repo} base={base} />
+      <RepoHomeBody repo={repo} base={base} report={report} tab={tab} />
     </AppShell>
   );
 }
 
-function renderMock(slug: string) {
+function renderMock(slug: string, tab: Tab) {
   const base = `/r/${slug}`;
   const ownerRepo = slug;
   return (
@@ -154,6 +188,8 @@ function renderMock(slug: string) {
           } as ApiActivatedRepo
         }
         base={base}
+        report={null}
+        tab={tab}
       />
     </AppShell>
   );
@@ -177,6 +213,347 @@ function renderDownState(slug: string) {
 }
 
 function RepoHomeBody({
+  repo,
+  base,
+  report,
+  tab,
+}: {
+  repo: ApiActivatedRepo;
+  base: string;
+  report: ApiRepoHomeReport | null;
+  tab: Tab;
+}) {
+  return (
+    <>
+      <HomeTabs base={base} tab={tab} disabled={report === null} />
+
+      {report === null ? (
+        <Card>
+          <CardHeader
+            title="Home rollup unavailable"
+            subtitle="Couldn't load Now/Trends — try again in a few seconds."
+          />
+        </Card>
+      ) : tab === "now" ? (
+        <NowTab report={report} />
+      ) : (
+        <TrendsTab report={report} />
+      )}
+
+      <RepoFactsAndNav repo={repo} base={base} />
+    </>
+  );
+}
+
+function HomeTabs({
+  base,
+  tab,
+  disabled,
+}: {
+  base: string;
+  tab: Tab;
+  disabled: boolean;
+}) {
+  const tabs: { key: Tab; label: string; hint: string }[] = [
+    { key: "now", label: "Now", hint: "Live state + last 24h" },
+    { key: "trends", label: "Trends", hint: "30-day histogram + per-lane" },
+  ];
+  return (
+    <nav
+      className="mb-4 inline-flex rounded-full border border-white/10 bg-white/[0.03] p-1 text-xs font-semibold"
+      aria-label="Repo home tabs"
+    >
+      {tabs.map((t) => {
+        const active = tab === t.key;
+        const href = t.key === "now" ? base : `${base}?tab=${t.key}`;
+        return (
+          <Link
+            key={t.key}
+            href={href}
+            aria-disabled={disabled}
+            title={t.hint}
+            className={
+              active
+                ? "rounded-full bg-white/15 px-4 py-1.5 text-white"
+                : "rounded-full px-4 py-1.5 text-white/60 transition hover:text-white"
+            }
+          >
+            {t.label}
+          </Link>
+        );
+      })}
+    </nav>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Now tab
+// ---------------------------------------------------------------------------
+
+function NowTab({ report }: { report: ApiRepoHomeReport }) {
+  const n = report.now;
+  const successRate =
+    n.runs_last_24h > 0
+      ? Math.round((n.successes_last_24h / n.runs_last_24h) * 100)
+      : null;
+
+  const flags: { tone: BadgeTone; label: string }[] = [];
+  if (n.install_missing) flags.push({ tone: "err", label: "install missing" });
+  if (n.install_suspended)
+    flags.push({ tone: "err", label: "install suspended" });
+  if (n.bundle_drift) flags.push({ tone: "warn", label: "bundle out of date" });
+
+  return (
+    <>
+      <section className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+        <StatTile
+          label="In flight"
+          value={String(n.runs_in_flight)}
+          hint={
+            n.dispatches_in_flight > 0
+              ? `${n.dispatches_in_flight} agent · ${n.runs_in_flight - n.dispatches_in_flight} lane`
+              : "lane + agent runs currently open"
+          }
+        />
+        <StatTile
+          label="Last 24h"
+          value={String(n.runs_last_24h)}
+          hint={
+            successRate === null
+              ? "no activity"
+              : `${n.successes_last_24h} ok · ${n.failures_last_24h} fail · ${successRate}% success`
+          }
+        />
+        <StatTile
+          label="Lanes wired"
+          value={`${n.lanes_enabled}/${n.lanes_total}`}
+          hint="enabled / total"
+        />
+        <StatTile
+          label="Last run"
+          value={n.last_run_at ? formatRelative(n.last_run_at) : "—"}
+          hint={
+            n.last_success_at
+              ? `success ${formatRelative(n.last_success_at)}`
+              : "no success yet"
+          }
+        />
+      </section>
+
+      {flags.length > 0 ? (
+        <Card className="mb-4">
+          <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/45">
+            Needs attention
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {flags.map((f) => (
+              <Badge key={f.label} tone={f.tone} dot>
+                {f.label}
+              </Badge>
+            ))}
+          </div>
+        </Card>
+      ) : null}
+
+      <Card padded={false} className="mb-6">
+        <div className="border-b border-white/[0.08] px-5 py-3 text-[10px] font-bold uppercase tracking-[0.18em] text-white/45">
+          Recent activity
+        </div>
+        {n.recent_activity.length === 0 ? (
+          <div className="px-5 py-6 text-center text-sm text-white/50">
+            No runs yet. Kick one off from{" "}
+            <span className="font-mono text-aqua">Requests</span> or wire a
+            lane.
+          </div>
+        ) : (
+          <ul className="divide-y divide-white/[0.06]">
+            {n.recent_activity.map((a, i) => (
+              <li
+                key={`${a.kind}-${i}-${a.at}`}
+                className="flex flex-wrap items-center gap-3 px-5 py-3"
+              >
+                <Badge tone={statusTone(a.status)} dot>
+                  {a.status}
+                </Badge>
+                <span className="font-mono text-[11px] uppercase tracking-wider text-white/50">
+                  {kindLabel(a.kind)}
+                </span>
+                <span className="min-w-0 flex-1 truncate text-sm text-white">
+                  {a.title}
+                </span>
+                <span className="text-[11px] text-white/45">
+                  {formatRelative(a.at)}
+                </span>
+                {a.html_url ? (
+                  <a
+                    href={a.html_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-[11px] font-semibold text-aqua hover:underline"
+                  >
+                    open ↗
+                  </a>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Trends tab
+// ---------------------------------------------------------------------------
+
+function TrendsTab({ report }: { report: ApiRepoHomeReport }) {
+  const t = report.trends;
+  const rate =
+    t.totals.success_rate === null
+      ? null
+      : Math.round(t.totals.success_rate * 100);
+
+  return (
+    <>
+      <section className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+        <StatTile
+          label={`Runs · ${t.window_days}d`}
+          value={String(t.totals.runs)}
+          hint="all sources combined"
+        />
+        <StatTile
+          label="Success"
+          value={String(t.totals.successes)}
+          hint={rate === null ? "no runs" : `${rate}% rate`}
+        />
+        <StatTile
+          label="Fail"
+          value={String(t.totals.failures)}
+          hint={t.totals.other > 0 ? `${t.totals.other} other` : "0 other"}
+        />
+        <StatTile
+          label="Active lanes"
+          value={String(t.lanes.filter((l) => l.runs > 0).length)}
+          hint="fired inside window"
+        />
+      </section>
+
+      <Card className="mb-4">
+        <div className="mb-3 flex items-baseline justify-between">
+          <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/45">
+            Daily activity
+          </div>
+          <div className="text-[11px] text-white/45">
+            success · fail · other
+          </div>
+        </div>
+        <Histogram buckets={t.buckets} />
+      </Card>
+
+      <Card padded={false}>
+        <div className="border-b border-white/[0.08] px-5 py-3 text-[10px] font-bold uppercase tracking-[0.18em] text-white/45">
+          Lanes
+        </div>
+        {t.lanes.length === 0 ? (
+          <div className="px-5 py-6 text-center text-sm text-white/50">
+            No lane activity in the last {t.window_days} days.
+          </div>
+        ) : (
+          <ul className="divide-y divide-white/[0.06]">
+            {t.lanes.map((lane) => {
+              const laneRate =
+                lane.runs > 0
+                  ? Math.round((lane.successes / lane.runs) * 100)
+                  : null;
+              return (
+                <li
+                  key={lane.lane_id}
+                  className="flex flex-wrap items-center gap-3 px-5 py-3"
+                >
+                  <span className="min-w-0 flex-1 truncate font-mono text-sm text-white">
+                    {lane.lane_id}
+                  </span>
+                  <span className="font-mono text-[11px] text-white/65">
+                    {lane.runs} runs
+                  </span>
+                  <Badge
+                    tone={
+                      laneRate === null
+                        ? "neutral"
+                        : laneRate >= 80
+                          ? "ok"
+                          : laneRate >= 50
+                            ? "warn"
+                            : "err"
+                    }
+                  >
+                    {laneRate === null ? "—" : `${laneRate}% ok`}
+                  </Badge>
+                  <span className="text-[11px] text-white/45">
+                    {lane.last_run_at
+                      ? formatRelative(lane.last_run_at)
+                      : "never"}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </Card>
+    </>
+  );
+}
+
+function Histogram({
+  buckets,
+}: {
+  buckets: ApiRepoHomeReport["trends"]["buckets"];
+}) {
+  const max = buckets.reduce((m, b) => Math.max(m, b.total), 0);
+  return (
+    <div className="flex items-end gap-[3px]">
+      {buckets.map((b) => {
+        const h = max === 0 ? 0 : Math.max(2, Math.round((b.total / max) * 96));
+        const ok = b.total === 0 ? 0 : (b.successes / b.total) * h;
+        const fail = b.total === 0 ? 0 : (b.failures / b.total) * h;
+        const other = h - ok - fail;
+        return (
+          <div
+            key={b.day}
+            title={`${b.day}: ${b.total} (${b.successes} ok, ${b.failures} fail, ${b.other} other)`}
+            className="flex h-24 w-full max-w-[18px] flex-1 flex-col justify-end rounded-sm bg-white/[0.04]"
+          >
+            {other > 0 ? (
+              <div
+                className="bg-sky-500/60"
+                style={{ height: `${other}px` }}
+              />
+            ) : null}
+            {fail > 0 ? (
+              <div
+                className="bg-coral/80"
+                style={{ height: `${fail}px` }}
+              />
+            ) : null}
+            {ok > 0 ? (
+              <div
+                className="bg-emerald-500/80"
+                style={{ height: `${ok}px` }}
+              />
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Repo facts + nav (unchanged scope-setting block)
+// ---------------------------------------------------------------------------
+
+function RepoFactsAndNav({
   repo,
   base,
 }: {
@@ -229,28 +606,7 @@ function RepoHomeBody({
 
   return (
     <>
-      <section className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <Card>
-          <CardHeader
-            title="Repo home"
-            subtitle="PR-1 shell — Now/Trends dashboard content lands in PR-4."
-          />
-          <p className="text-sm leading-relaxed text-white/70">
-            You're in <span className="font-semibold text-white">repo mode</span>
-            . Everything the sidebar links is scoped to{" "}
-            <span className="font-mono text-aqua">{repo.full_name}</span>. Back
-            out to the workspace via the arrow above the sidebar; share this URL
-            and collaborators land in the same repo context.
-          </p>
-          <div className="mt-4 flex flex-wrap gap-2">
-            <ButtonPrimary>
-              <Link href={`${base}/requests`}>Open requests catalog</Link>
-            </ButtonPrimary>
-            <ButtonGhost>
-              <Link href={`${base}/lanes`}>Review lanes</Link>
-            </ButtonGhost>
-          </div>
-        </Card>
+      <section className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
         <Card>
           <CardHeader
             title="Repo facts"
@@ -275,7 +631,7 @@ function RepoHomeBody({
               value={repo.activated_at ? relativeDate(repo.activated_at) : "—"}
             />
           </dl>
-          <div className="mt-4">
+          <div className="mt-4 flex gap-2">
             <a
               href={repo.html_url}
               target="_blank"
@@ -284,6 +640,20 @@ function RepoHomeBody({
             >
               View on GitHub ↗
             </a>
+          </div>
+        </Card>
+        <Card>
+          <CardHeader
+            title="Jump to"
+            subtitle="Common repo surfaces."
+          />
+          <div className="flex flex-wrap gap-2">
+            <ButtonPrimary>
+              <Link href={`${base}/requests`}>Requests catalog</Link>
+            </ButtonPrimary>
+            <ButtonGhost>
+              <Link href={`${base}/lanes`}>Review lanes</Link>
+            </ButtonGhost>
           </div>
         </Card>
       </section>
@@ -326,4 +696,43 @@ function relativeDate(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   return d.toISOString().slice(0, 10);
+}
+
+function statusTone(status: ApiRepoHomeActivityStatus): BadgeTone {
+  switch (status) {
+    case "succeeded":
+      return "ok";
+    case "failed":
+      return "err";
+    case "running":
+      return "info";
+    case "cancelled":
+      return "neutral";
+    case "other":
+      return "neutral";
+  }
+}
+
+function kindLabel(kind: ApiRepoHomeActivityKind): string {
+  switch (kind) {
+    case "pipeline":
+      return "lane";
+    case "workflow":
+      return "gh";
+    case "agent":
+      return "request";
+  }
+}
+
+function formatRelative(iso: string): string {
+  const ts = new Date(iso).getTime();
+  if (!Number.isFinite(ts)) return iso;
+  const sec = Math.max(1, Math.round((Date.now() - ts) / 1000));
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const days = Math.round(hr / 24);
+  return `${days}d ago`;
 }

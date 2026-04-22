@@ -2549,6 +2549,101 @@ export interface ApiAdoptionReport {
   repos: ApiAdoptionRepo[];
 }
 
+// ---------------------------------------------------------------------------
+// Repo home (RFC-0008 §F — PR-4 "Now/Trends")
+// ---------------------------------------------------------------------------
+
+export type ApiRepoHomeActivityKind = "pipeline" | "workflow" | "agent";
+export type ApiRepoHomeActivityStatus =
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled"
+  | "other";
+
+export interface ApiRepoHomeRecentActivity {
+  kind: ApiRepoHomeActivityKind;
+  status: ApiRepoHomeActivityStatus;
+  title: string;
+  at: string;
+  html_url: string | null;
+}
+
+export interface ApiRepoHomeNow {
+  runs_in_flight: number;
+  runs_last_24h: number;
+  successes_last_24h: number;
+  failures_last_24h: number;
+  last_run_at: string | null;
+  last_success_at: string | null;
+  dispatches_in_flight: number;
+  lanes_enabled: number;
+  lanes_total: number;
+  bundle_installed_version: number | null;
+  bundle_current_version: number;
+  bundle_drift: boolean;
+  install_suspended: boolean;
+  install_missing: boolean;
+  recent_activity: ApiRepoHomeRecentActivity[];
+}
+
+export interface ApiRepoHomeTrendBucket {
+  day: string;
+  total: number;
+  successes: number;
+  failures: number;
+  other: number;
+}
+
+export interface ApiRepoHomeTrendTotals {
+  runs: number;
+  successes: number;
+  failures: number;
+  other: number;
+  success_rate: number | null;
+}
+
+export interface ApiRepoHomeLaneBreakdown {
+  lane_id: string;
+  runs: number;
+  successes: number;
+  failures: number;
+  last_run_at: string | null;
+}
+
+export interface ApiRepoHomeTrends {
+  window_days: number;
+  buckets: ApiRepoHomeTrendBucket[];
+  totals: ApiRepoHomeTrendTotals;
+  lanes: ApiRepoHomeLaneBreakdown[];
+}
+
+export interface ApiRepoHomeReport {
+  workspace_id: string;
+  repo_id: string;
+  full_name: string;
+  generated_at: string;
+  window_days: number;
+  now: ApiRepoHomeNow;
+  trends: ApiRepoHomeTrends;
+}
+
+export async function getRepoHome(
+  workspaceId: string,
+  repoId: string,
+  opts: { windowDays?: number; token?: string } = {},
+): Promise<ApiRepoHomeReport> {
+  const params = new URLSearchParams();
+  if (opts.windowDays !== undefined) {
+    params.set("window_days", String(opts.windowDays));
+  }
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return apiFetch<ApiRepoHomeReport>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/home${suffix}`,
+    { token: opts.token },
+  );
+}
+
 export async function getAdoptionReport(
   workspaceId: string,
   opts: { windowDays?: number; token?: string } = {},
