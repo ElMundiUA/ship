@@ -14,11 +14,8 @@ import {
 } from "@/components/ui";
 import {
   ApiHttpError,
-  ApiUnavailableError,
   getRepoHome,
   isApiConfigured,
-  listActivatedRepos,
-  listWorkspaces,
 } from "@/lib/api/client";
 import { getSessionToken } from "@/lib/api/session";
 import type {
@@ -27,8 +24,8 @@ import type {
   ApiRepoHomeActivityStatus,
   ApiRepoHomeReport,
 } from "@/lib/api/client";
-import type { ApiWorkspace } from "@/lib/api/types";
-import { findRepoBySlug, slugFromSegments } from "@/lib/repo-slug";
+import { resolveRepoContext, type RepoContext } from "@/lib/repo-context";
+import { slugFromParams, type RepoRouteParams } from "@/lib/repo-slug";
 
 /**
  * Repo home (``/r/<owner>/<repo>``).
@@ -47,7 +44,6 @@ import { findRepoBySlug, slugFromSegments } from "@/lib/repo-slug";
 
 export const dynamic = "force-dynamic";
 
-type Params = { slug?: string[] };
 type Search = Record<string, string | string[] | undefined>;
 type Tab = "now" | "trends";
 
@@ -60,11 +56,11 @@ export default async function RepoHomePage({
   params,
   searchParams,
 }: {
-  params: Promise<Params>;
+  params: Promise<RepoRouteParams>;
   searchParams: Promise<Search>;
 }) {
   const [resolved, search] = await Promise.all([params, searchParams]);
-  const slug = slugFromSegments(resolved.slug);
+  const slug = slugFromParams(resolved);
   if (!slug) notFound();
   const tab = parseTab(search.tab);
 
@@ -77,14 +73,15 @@ export default async function RepoHomePage({
     redirect(`/login?next=${encodeURIComponent(`/r/${slug}`)}`);
   }
 
-  const ctx = await loadContext(token, slug);
-  if (ctx === "unauthorized") {
+  const result = await resolveRepoContext(token, slug);
+  if (result.kind === "unauthorized") {
     redirect(`/login?next=${encodeURIComponent(`/r/${slug}`)}`);
   }
-  if (ctx === "down") return renderDownState(slug);
-  if (ctx === "empty") redirect("/onboarding?step=github");
-  if (ctx === "not-found") notFound();
+  if (result.kind === "down") return renderDownState(slug);
+  if (result.kind === "empty") redirect("/onboarding?step=github");
+  if (result.kind === "not-found") notFound();
 
+  const ctx = result.ctx;
   let report: ApiRepoHomeReport | null = null;
   try {
     report = await getRepoHome(ctx.workspace.id, ctx.repo.id, { token });
@@ -100,40 +97,7 @@ export default async function RepoHomePage({
   return renderRepoHome(ctx, report, tab);
 }
 
-type Ctx = {
-  workspace: ApiWorkspace;
-  repo: ApiActivatedRepo;
-  repos: ApiActivatedRepo[];
-};
-
-async function loadContext(
-  token: string,
-  slug: string,
-): Promise<Ctx | "unauthorized" | "down" | "empty" | "not-found"> {
-  let workspaces: ApiWorkspace[];
-  try {
-    workspaces = await listWorkspaces(token);
-  } catch (err) {
-    if (err instanceof ApiHttpError && err.status === 401) return "unauthorized";
-    if (err instanceof ApiUnavailableError) return "down";
-    return "down";
-  }
-  if (workspaces.length === 0) return "empty";
-  const workspace = workspaces[0];
-  let repos: ApiActivatedRepo[];
-  try {
-    repos = await listActivatedRepos(workspace.id, token);
-  } catch (err) {
-    if (err instanceof ApiHttpError && err.status === 401) return "unauthorized";
-    if (err instanceof ApiUnavailableError) return "down";
-    return "down";
-  }
-  const repo = findRepoBySlug(repos, slug);
-  if (!repo) return "not-found";
-  return { workspace, repo, repos };
-}
-
-function renderRepoHome(ctx: Ctx, report: ApiRepoHomeReport | null, tab: Tab) {
+function renderRepoHome(ctx: RepoContext, report: ApiRepoHomeReport | null, tab: Tab) {
   const { workspace, repo, repos } = ctx;
   const base = `/r/${repo.full_name}`;
   return (

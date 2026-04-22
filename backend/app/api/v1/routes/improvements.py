@@ -139,10 +139,17 @@ async def _enrich(
 async def list_improvements(
     workspace_id: uuid.UUID,
     decision_filter: str | None = Query(default=None, alias="decision"),
+    repo_id: uuid.UUID | None = Query(default=None),
     auth: AuthContext = Depends(get_current_auth),
     session: AsyncSession = Depends(get_session),
 ) -> list[ImprovementOut]:
-    """List improvements, optionally narrowed to a decision bucket."""
+    """List improvements, optionally narrowed to a decision bucket.
+
+    ``repo_id`` (query) narrows to a single activated repo — the
+    repo-mode console (``/r/<owner>/<repo>/improvements``) passes it
+    so the page doesn't have to fetch the entire workspace backlog
+    just to filter client-side.
+    """
     await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
     stmt = (
         select(Improvement)
@@ -159,6 +166,8 @@ async def list_improvements(
                 ),
             )
         stmt = stmt.where(Improvement.decision == decision_filter)
+    if repo_id is not None:
+        stmt = stmt.where(Improvement.repo_id == repo_id)
     rows = (await session.execute(stmt)).scalars().all()
     return await _enrich(session, list(rows))
 
