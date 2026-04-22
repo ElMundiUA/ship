@@ -1,28 +1,32 @@
 /**
- * Proxy for the Requests dispatcher (``/requests`` New request form).
+ * Proxy for the Requests dispatcher (``/requests`` catalog form).
  *
- * Accepts JSON from ``new-request.tsx`` and forwards to the backend
+ * Accepts JSON from the client-side Requests form and forwards to
  * ``POST /v1/workspaces/{ws}/repos/{repo}/requests``. Lives as an
  * app-router API route (rather than going direct from the browser)
  * so the session cookie is available and the backend URL never leaks
  * into client bundles.
+ *
+ * RFC-0008 C4 — the form now prefers the pattern-backed shape
+ * (``{pattern_id, inputs}``) but legacy free-form dispatches
+ * (``{agent_slug, prompt}``) still round-trip through the same route
+ * so older clients keep working during the catalog transition.
  */
 
 import { NextResponse } from "next/server";
 
 import {
+  type ApiAgentRequestIn,
   ApiHttpError,
   ApiUnavailableError,
   dispatchAgentRequest,
   isApiConfigured,
 } from "@/lib/api/client";
+import { getSessionToken } from "@/lib/api/session";
 
-type RequestBody = {
+type RequestBody = ApiAgentRequestIn & {
   workspaceId: string;
   repoId: string;
-  agent_slug: string;
-  prompt: string;
-  context_ref?: string;
 };
 
 export async function POST(request: Request) {
@@ -49,10 +53,14 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
-  if (!body.agent_slug || !body.prompt) {
+
+  const hasPatternShape = !!body.pattern_id;
+  const hasAdhocShape = !!body.agent_slug && !!body.prompt;
+  if (!hasPatternShape && !hasAdhocShape) {
     return NextResponse.json(
       {
-        error: "agent_slug and prompt are required.",
+        error:
+          "Provide either a pattern_id (preferred) or both agent_slug and prompt.",
         code: "bad_request",
       },
       { status: 400 },
@@ -60,11 +68,20 @@ export async function POST(request: Request) {
   }
 
   try {
-    const result = await dispatchAgentRequest(body.workspaceId, body.repoId, {
+    const token = (await getSessionToken()) ?? undefined;
+    const payload: ApiAgentRequestIn = {
+      pattern_id: body.pattern_id,
+      inputs: body.inputs,
       agent_slug: body.agent_slug,
       prompt: body.prompt,
       context_ref: body.context_ref,
-    });
+    };
+    const result = await dispatchAgentRequest(
+      body.workspaceId,
+      body.repoId,
+      payload,
+      token,
+    );
     return NextResponse.json(result, { status: 201 });
   } catch (err) {
     if (err instanceof ApiUnavailableError) {
