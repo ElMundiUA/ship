@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: b1ec2e54e2486ee25b27981b77111a5ac7277bf5b4f1737059638b78ad4e1060
+content_sha256: 271516066d5196759c247422d4170590a289ed928fd16c6ef0fb8cc7914ee6d5
 deprecated: false
 replaced_by: null
 yanked: false
@@ -44,6 +44,8 @@ spec:
       ml-project: true
       platform: true
       regulated: true
+      desktop-app: true
+      game: true
       monorepo: true
       cli: true
 ---

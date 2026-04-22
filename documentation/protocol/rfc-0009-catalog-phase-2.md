@@ -36,7 +36,7 @@ additive and introduces no new metadata.
 | Wave 1 | Cross-cutting quality (7 patterns)                       | shipped — 2026-04-22 |
 | Wave 2 | Mobile (8) + ML (7) + `mobile-app-deep` / `ml-project` presets | shipped — 2026-04-22 |
 | Wave 3 | Infra/SRE (8) + Compliance (5) + `platform` / `regulated` presets | shipped — 2026-04-23 |
-| Wave 4 | Desktop (5) + Hardware (6) + Games (4) + `desktop-app` / `firmware` / `game` presets | planned |
+| Wave 4 | Desktop (5) + Hardware (6) + Games (4) + `desktop-app` / `firmware` / `game` presets | shipped — 2026-04-23 |
 
 Each wave is independently mergeable, bumps `BUNDLE_VERSION`, and
 is its own Linear epic. Linear tickets are listed in the
@@ -341,20 +341,37 @@ issue**. The pattern issue spec is identical for every pattern; see
     `artifacts/collections/preset-platform/ARTIFACT.md` and
     `artifacts/collections/preset-regulated/ARTIFACT.md`.
 
-### Wave 4 — Desktop + Hardware + Games
+### Wave 4 — Desktop + Hardware + Games  ✅ shipped — 2026-04-23
 
 - **Epic:** "RFC-0009 Wave 4 — Desktop + Firmware + Game packs"
-- **Acceptance:** 15 patterns land, 3 new presets
-  (`desktop-app`, `firmware`, `game`), wizard updated.
-- **Issues (18):**
-  1–5. Desktop pack.
-  6–11. Hardware pack.
-  12–15. Games pack.
-  16. Preset wiring (3 presets).
-  17. Wizard copy + icons for 3 new presets.
-  18. Docs refresh + `BUNDLE_VERSION` bump + snapshot tests.
+- **Acceptance:** 15 patterns landed, 3 new presets
+  (`desktop-app`, `firmware`, `game`) added, wizard updated.
+- **Shipped:**
+  - Desktop pack (5): `scan-signing-notarization`,
+    `scan-installer-size`, `scan-os-support-matrix`,
+    `flow-autoupdate-rollout`, `role-desktop-reviewer`.
+  - Hardware / firmware pack (6): `scan-firmware-size`,
+    `scan-bom-delta`, `scan-hal-abi-lock`, `scan-power-profile`,
+    `flow-ota-channel`, `flow-cert-compliance`.
+  - Games pack (4): `scan-asset-budget`, `scan-build-frametime`,
+    `flow-live-ops-calendar`, `role-game-balance-reviewer`.
+  - Preset wiring: `desktop-app`, `firmware`, `game` added to
+    `backend.app.services.lane_recipes.KNOWN_PRESETS`;
+    `tech_debt` gating extended to all three. Cross-cutting
+    quality pack (`scan-test-coverage`, `scan-dead-code`,
+    `scan-license-deps`, `flow-pr-self-review`, `flow-daily-retro`)
+    pre-enabled on every Wave 4 preset; `scan-env-var-catalog`
+    enabled on `desktop-app` + `game`; `scan-a11y` and
+    `role-designer` enabled on `desktop-app`.
+  - Onboarding wizard: `console/src/app/onboarding/presets.ts`
+    and CLI `cli/lib/bootstrap/render.mjs` carry descriptor copy
+    + recommended-tool lists for all three new presets.
+  - New preset collection artefacts:
+    `artifacts/collections/preset-desktop-app/ARTIFACT.md`,
+    `artifacts/collections/preset-firmware/ARTIFACT.md`,
+    `artifacts/collections/preset-game/ARTIFACT.md`.
 
-Total: 4 epics, 60 Linear issues.
+Total: 4 epics shipped.
 
 ## Per-pattern definition of done
 
