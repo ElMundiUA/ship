@@ -68,6 +68,10 @@ from backend.app.integrations.gateway.tracker import (
 )
 from backend.app.integrations.github.issues_tracker import GitHubIssuesTracker
 from backend.app.integrations.linear.tracker_adapter import LinearTracker
+from backend.app.services.inbox.dual_write import (
+    mirror_clarification_create,
+    mirror_clarification_resolve,
+)
 
 
 if TYPE_CHECKING:
@@ -370,7 +374,7 @@ async def sync_workspace(
                 )
                 continue
 
-            _project_issue(
+            await _project_issue(
                 session=session,
                 workspace_id=workspace_id,
                 binding=binding,
@@ -393,11 +397,20 @@ async def sync_workspace(
         row.status = "stale"
         row.tracker_synced_at = now
         report.stale_marked += 1
+        # Best-effort: mirror the stale → dismissed transition into
+        # the inbox. Tracker projection runs without an HTTP user
+        # context, so the audit event is stamped ``actor_kind='system'``.
+        await mirror_clarification_resolve(
+            session,
+            clarification=row,
+            actor_user_id=None,
+            actor_kind="system",
+        )
 
     return report
 
 
-def _project_issue(
+async def _project_issue(
     *,
     session: AsyncSession,
     workspace_id: uuid.UUID,
@@ -464,6 +477,16 @@ def _project_issue(
                 session.add(row)
                 by_comment[key] = row
                 report.ingested += 1
+                # Flush so the row carries an id before the dual-write
+                # mirrors it; the tracker projection has no HTTP user
+                # context, so the create event will be stamped
+                # ``actor_kind='system'`` by intake.emit_legacy_record.
+                await session.flush()
+                await mirror_clarification_create(
+                    session,
+                    clarification=row,
+                    actor_user_id=None,
+                )
             else:
                 # Refresh mutable metadata without touching lifecycle
                 # fields (status / answer). Humans may have moved the
@@ -501,6 +524,15 @@ def _project_issue(
                 latest.answered_at = now
                 latest.tracker_synced_at = now
                 report.updated += 1
+                # Auto-close came from the tracker UI (not a Ship
+                # PATCH); mirror the resolution with system actor so
+                # the audit timeline reflects the source of truth.
+                await mirror_clarification_resolve(
+                    session,
+                    clarification=latest,
+                    actor_user_id=None,
+                    actor_kind="system",
+                )
 
 
 def _fallback_issue_url(

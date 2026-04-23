@@ -46,6 +46,10 @@ from backend.app.db.models.pipelines import PipelineRun
 from backend.app.db.models.tenancy import AuditLog, User
 from backend.app.db.session import get_session
 from backend.app.services import clarifications_sync
+from backend.app.services.inbox.dual_write import (
+    mirror_clarification_create,
+    mirror_clarification_resolve,
+)
 
 
 router = APIRouter(
@@ -213,6 +217,9 @@ async def create_clarification(
     session.add(row)
     await session.flush()
     await session.refresh(row)
+    await mirror_clarification_create(
+        session, clarification=row, actor_user_id=auth.user.id
+    )
     return _to_out(row, None)
 
 
@@ -322,6 +329,13 @@ async def update_clarification(
     # serialising, otherwise Pydantic's model construction triggers
     # a lazy-load outside the greenlet context.
     await session.refresh(row)
+    if new_status in ("answered", "skipped"):
+        await mirror_clarification_resolve(
+            session,
+            clarification=row,
+            actor_user_id=auth.user.id,
+            actor_kind="user",
+        )
     email: str | None = None
     if row.answered_by_user_id:
         user = (
@@ -472,6 +486,9 @@ async def create_from_pipeline(
     )
     await session.flush()
     await session.refresh(row)
+    await mirror_clarification_create(
+        session, clarification=row, actor_user_id=None
+    )
     return _to_out(row, None)
 
 

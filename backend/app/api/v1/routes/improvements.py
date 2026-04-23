@@ -45,6 +45,10 @@ from backend.app.db.models.agent_surface import Improvement
 from backend.app.db.models.pipelines import PipelineRun
 from backend.app.db.models.tenancy import AuditLog, User
 from backend.app.db.session import get_session
+from backend.app.services.inbox.dual_write import (
+    mirror_improvement_create,
+    mirror_improvement_resolve,
+)
 
 
 router = APIRouter(
@@ -197,6 +201,7 @@ async def create_improvement(
     session.add(row)
     await session.flush()
     await session.refresh(row)
+    await mirror_improvement_create(session, improvement=row)
     return _to_out(row, None)
 
 
@@ -262,6 +267,13 @@ async def update_improvement(
 
     await session.flush()
     await session.refresh(row)
+    if new_decision in ("accepted", "declined", "deferred"):
+        await mirror_improvement_resolve(
+            session,
+            improvement=row,
+            actor_user_id=auth.user.id,
+            actor_kind="user",
+        )
     email: str | None = None
     if row.decided_by_user_id:
         user = (
@@ -345,6 +357,7 @@ async def create_from_pipeline(
     )
     await session.flush()
     await session.refresh(row)
+    await mirror_improvement_create(session, improvement=row)
     return _to_out(row, None)
 
 
