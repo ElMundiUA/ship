@@ -45,6 +45,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.db.models.inbox import (
@@ -117,6 +118,20 @@ _TITLE_MAX_LEN = 250  # leaves headroom under the inbox_items.title VARCHAR(255)
 _SUMMARY_MAX_LEN = 8 * 1024
 _APPROVAL_TYPE = "approval"
 _SILENT_PROFILE_NAME = "silent"
+
+
+# RFC-0010 P3-02 — every inbox item created with a ``run_id`` gets a
+# linkage row in ``run_escalations``; the bucket below is the coarse
+# machine-readable label we stamp on it. Keep it stable: the
+# disposition side-effects (``side_effects._close_run_escalations``)
+# and any future analytics will key off these strings.
+_ESCALATION_REASON_BY_TYPE: dict[str, str] = {
+    "approval": "requires_approval",
+    "failure": "play_failed_repeatedly",
+    "clarification": "needs_clarification",
+    "improvement": "improvement_proposed",
+    "exception": "play_exception",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -286,7 +301,7 @@ async def emit_for_run(
     *,
     workspace_id: uuid.UUID,
     repo_id: uuid.UUID | None,
-    run_id: uuid.UUID,
+    run_id: uuid.UUID | None,
     play_key: str,
     pattern_meta: dict,
     findings: list[RunSummaryFinding],
@@ -306,10 +321,17 @@ async def emit_for_run(
        for an owner, then insert :class:`InboxItem` +
        :class:`InboxItemEvent`. Routing failures are logged and
        recorded but never raise.
-    3. If the pattern opts into run escalation
-       (``spec.inbox.escalate=True``) and any finding required
-       approval, also insert a :class:`RunEscalation` row pointing
-       at the run.
+    3. **P3-02 (universal run linkage).** Every inbox item that
+       lands with ``run_id IS NOT NULL`` gets a corresponding
+       :class:`RunEscalation` row inserted via PostgreSQL
+       ``ON CONFLICT DO NOTHING`` against the
+       ``(run_id, inbox_item_id)`` unique constraint, so re-runs
+       of this function on the same input are idempotent. The
+       ``escalation_reason`` column is filled from the
+       :data:`_ESCALATION_REASON_BY_TYPE` map keyed off the
+       item's effective type. Each freshly-inserted linkage row
+       also writes an ``escalation_linked`` audit event on the
+       inbox item so the timeline records the system action.
 
     Never opens or commits a transaction — the caller owns the
     session boundary. We call ``session.flush()`` between item and
@@ -332,12 +354,8 @@ async def emit_for_run(
         return report
 
     ctx_source_row = dict(source_row or {})
-    saw_requires_approval = False
 
     for index, finding in enumerate(findings):
-        if finding.requires_approval:
-            saw_requires_approval = True
-
         rule, effective_type = _select_emit_rule(profile, finding)
 
         if not rule.enabled:
@@ -425,24 +443,85 @@ async def emit_for_run(
                 item.id,
             )
 
-    if saw_requires_approval and _wants_run_escalation(pattern_meta):
-        # One escalation per run captures "this run kicked something
-        # over to a human". The linkage row points at the run; the
-        # specific inbox items it produced are discoverable via
-        # ``inbox_items.run_id``. We attach to the first
-        # approval-typed item created (if any) so the UI can deeplink.
-        target_item_id = _first_approval_item_id(report, findings)
-        if target_item_id is not None:
-            escalation = RunEscalation(
+        # P3-02 — universal run→inbox linkage. Skip when the caller
+        # didn't supply a run_id (legacy paths that mirror existing
+        # rows without an originating pipeline run).
+        if run_id is not None:
+            await _link_item_to_run(
+                session,
                 run_id=run_id,
-                inbox_item_id=target_item_id,
-                escalation_reason="requires_approval",
+                item=item,
+                effective_type=effective_type,
+                report=report,
             )
-            session.add(escalation)
-            await session.flush()
-            report.escalations_created.append(escalation.id)
 
     return report
+
+
+async def _link_item_to_run(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    item: InboxItem,
+    effective_type: str,
+    report: IntakeReport,
+) -> None:
+    """Insert a :class:`RunEscalation` row linking ``item`` to ``run_id``.
+
+    The ``(run_id, inbox_item_id)`` uniqueness constraint
+    (``uq_run_escalations_run_item``) plus ``ON CONFLICT DO
+    NOTHING`` keeps this idempotent: re-running :func:`emit_for_run`
+    against the same finding set does not duplicate linkage rows.
+    Only freshly-inserted rows (``RETURNING id`` populated) are
+    counted in :attr:`IntakeReport.escalations_created` and only
+    those rows trigger an ``escalation_linked`` audit event — so
+    the audit trail also stays free of dupes when callers retry.
+    """
+    reason = _ESCALATION_REASON_BY_TYPE.get(effective_type)
+    if reason is None:
+        # Defence in depth: every value in INBOX_TYPES has a row in
+        # the map, so this branch only fires if a future type is
+        # added to the catalog without updating the constant. Skip
+        # silently rather than break intake — the inbox item still
+        # lands, just without a linkage row.
+        logger.warning(
+            "inbox intake: no escalation_reason mapping for "
+            "effective_type=%r (item=%s, run=%s); skipping linkage",
+            effective_type,
+            item.id,
+            run_id,
+        )
+        return
+
+    stmt = (
+        pg_insert(RunEscalation)
+        .values(
+            run_id=run_id,
+            inbox_item_id=item.id,
+            escalation_reason=reason,
+        )
+        .on_conflict_do_nothing(
+            constraint="uq_run_escalations_run_item",
+        )
+        .returning(RunEscalation.id)
+    )
+    inserted_id = (await session.execute(stmt)).scalar_one_or_none()
+    if inserted_id is None:
+        # Row already existed — re-emission case; the audit event
+        # for the original linkage is already in the timeline.
+        return
+
+    report.escalations_created.append(inserted_id)
+    session.add(
+        InboxItemEvent(
+            item_id=item.id,
+            actor_user_id=None,
+            actor_kind="system",
+            action="escalation_linked",
+            payload={"run_id": str(run_id), "reason": reason},
+        )
+    )
+    await session.flush()
 
 
 async def emit_legacy_record(
@@ -548,6 +627,12 @@ def _wants_run_escalation(pattern_meta: dict) -> bool:
     The frontmatter shape is operator-authored; we treat anything
     that isn't a strict ``True`` as opt-out so a typo doesn't
     silently start writing :class:`RunEscalation` rows.
+
+    DEPRECATED: superseded by P3-02 universal linkage. Every inbox
+    item created with a non-NULL ``run_id`` now gets a
+    :class:`RunEscalation` row regardless of the pattern opt-in;
+    this function is kept for one release so external imports
+    don't break, but :func:`emit_for_run` no longer calls it.
     """
     spec: Any = pattern_meta.get("spec") if isinstance(pattern_meta, dict) else None
     inbox_cfg = spec.get("inbox") if isinstance(spec, dict) else None
@@ -560,6 +645,10 @@ def _first_approval_item_id(
     report: IntakeReport, findings: list[RunSummaryFinding]
 ) -> uuid.UUID | None:
     """Pick the first created item that came from an approval finding.
+
+    DEPRECATED: superseded by P3-02 universal linkage. Kept for one
+    release so external imports don't break; :func:`emit_for_run`
+    no longer calls it (every item now gets its own linkage row).
 
     ``IntakeReport.items_created`` is order-aligned with the input
     ``findings`` list filtered down to the ones that were actually
