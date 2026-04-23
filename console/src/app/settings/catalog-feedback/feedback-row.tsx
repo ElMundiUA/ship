@@ -1,6 +1,8 @@
 "use client";
 
 /**
+ * MIGRATED: feedback-row moved to /settings/catalog-feedback per RFC-0010 P2-18.
+ *
  * One feedback row with inline status + linked-PR edit.
  *
  * Tiny by design — triage is a two-field form (status + linked PR

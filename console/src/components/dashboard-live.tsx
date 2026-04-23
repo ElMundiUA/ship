@@ -260,10 +260,10 @@ export function DashboardLive({
             subtitle="Live from your activated GitHub repos"
             action={
               <Link
-                href="/lanes"
+                href="/automations"
                 className="text-xs font-semibold text-aqua hover:underline"
               >
-                Open lanes →
+                Open automations →
               </Link>
             }
           />
@@ -378,7 +378,7 @@ function pipelineById(rows: ApiPipeline[]): Record<string, ApiPipeline> {
 /**
  * Dashboard "Recommended actions" strip.
  *
- * Distinct from the dedicated Pipelines page (``/pipelines``): the
+ * Distinct from the dedicated Runs page (``/runs``, fka ``/pipelines``): the
  * dashboard only ever surfaces pipelines you can fire *right now* —
  * a small, opinionated set of quick CTAs ("re-run PR gate on the
  * default repo", etc.) — so the operator doesn't have to read a
@@ -393,7 +393,7 @@ function pipelineById(rows: ApiPipeline[]): Record<string, ApiPipeline> {
  *
  * This answers the operator's first question on the dashboard —
  * "is Ship actually live on my repo?" — without making them scan the
- * whole Recommended-actions grid or jump to ``/pipelines``.
+ * whole Recommended-actions grid or jump to ``/runs``.
  */
 function RepoStatusStrip({
   repos,
@@ -589,10 +589,10 @@ function RepoStatusStrip({
               <div className="mt-auto flex flex-wrap items-center justify-between gap-2 text-[11px] font-semibold text-white/55">
                 <div className="flex flex-wrap items-center gap-3">
                   <Link
-                    href={`/pipelines?repo=${encodeURIComponent(repo.full_name)}`}
+                    href={`/runs?scope=repo&repo=${encodeURIComponent(repo.id)}`}
                     className="hover:text-aqua"
                   >
-                    Open lanes →
+                    Open runs →
                   </Link>
                   <Link
                     href={`/repos/${encodeURIComponent(repo.id)}/secrets`}
@@ -719,17 +719,17 @@ function RecommendedActions({
           <p className="mt-1 text-xs text-white/55">
             Quick triggers for the manual lanes that are wired up right now.
             Full lane catalog lives under{" "}
-            <Link href="/pipelines" className="text-aqua hover:underline">
-              Pipelines
+            <Link href="/runs" className="text-aqua hover:underline">
+              Runs
             </Link>
             .
           </p>
         </div>
         <Link
-          href="/pipelines"
+          href="/runs"
           className="hidden whitespace-nowrap text-xs font-semibold text-aqua hover:underline sm:inline"
         >
-          See all pipelines →
+          See all runs →
         </Link>
       </div>
       {ready.length === 0 ? (
@@ -763,16 +763,16 @@ function RecommendedActionsEmpty({ pipelines }: { pipelines: ApiPipeline[] }) {
         <p className="text-sm text-white/70">
           Default lanes are seeded but their workflow YAMLs aren&rsquo;t in
           the repo yet. Open{" "}
-          <Link href="/pipelines" className="text-aqua hover:underline">
-            Pipelines
+          <Link href="/runs" className="text-aqua hover:underline">
+            Runs
           </Link>{" "}
           to file the install PR for the lanes you want to use.
         </p>
       ) : (
         <p className="text-sm text-white/70">
           Nothing to fire manually right now. Open{" "}
-          <Link href="/pipelines" className="text-aqua hover:underline">
-            Pipelines
+          <Link href="/runs" className="text-aqua hover:underline">
+            Runs
           </Link>{" "}
           for the full lane catalog.
         </p>
@@ -1106,7 +1106,7 @@ function PipelineRunsList({
         <tbody>
           {rows.map((run) => {
             const pipeline = pipelinesById[run.pipeline_id];
-            const detailHref = `/pipelines/${encodeURIComponent(run.pipeline_id)}/runs/${encodeURIComponent(run.id)}?ws=${encodeURIComponent(workspaceId)}`;
+            const detailHref = `/runs/${encodeURIComponent(run.id)}?ws=${encodeURIComponent(workspaceId)}`;
             return (
               <tr
                 key={run.id}
@@ -1253,7 +1253,7 @@ function NotificationCard({
   const label = NOTIFICATION_LABELS[notification.kind] ?? notification.kind;
   // href can point at github.com (PR URL) or an internal route. We
   // open external links in a new tab so the dashboard stays put, but
-  // internal routes (``/pipelines/...``) navigate in-place for a
+  // internal routes (``/runs/...``) navigate in-place for a
   // normal app feel.
   const isExternal =
     !!notification.href && /^https?:\/\//i.test(notification.href);

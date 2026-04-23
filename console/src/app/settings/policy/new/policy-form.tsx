@@ -51,7 +51,7 @@ export function NewPolicyForm({ workspaceId }: { workspaceId: string }) {
         const eb = await res.json().catch(() => ({}));
         throw new Error(eb?.error ?? `HTTP ${res.status}`);
       }
-      router.push("/fleet/policy");
+      router.push("/settings/policy");
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create");
@@ -129,7 +129,7 @@ export function NewPolicyForm({ workspaceId }: { workspaceId: string }) {
 
       <div className="flex justify-end gap-2">
         <ButtonGhost
-          onClick={() => router.push("/fleet/policy")}
+          onClick={() => router.push("/settings/policy")}
           type="button"
         >
           Cancel

@@ -21,6 +21,158 @@ const nextConfig: NextConfig = {
     if (!backend) return [];
     return [{ source: "/api/:path*", destination: `${backend}/v1/:path*` }];
   },
+  // RFC-0010 URL migration (Plays/Inbox redesign — P1-05..P1-08, P2-17,
+  // P2-18). Each entry maps a legacy URL to its new home. Order
+  // matters: more-specific ``has`` matches MUST come before the
+  // generic same-source rule (Next walks the array top-down and stops
+  // at the first hit). Every entry is ``permanent: true`` (HTTP 308 /
+  // 301 semantics) — these moves are not coming back. Param-aware
+  // redirects that need a server-side lookup (slug → repo_id) live in
+  // dedicated redirect-page files under ``src/app`` instead.
+  async redirects() {
+    return [
+      // ----- P1-05: workspace top-level renames --------------------
+      // ``/lanes?tab=library`` is the catalog tab → folds into Plays.
+      // Listed BEFORE the generic ``/lanes`` rule so the specific
+      // ``has`` match wins.
+      {
+        source: "/lanes",
+        has: [{ type: "query", key: "tab", value: "library" }],
+        destination: "/plays",
+        permanent: true,
+      },
+      // Everything else under /lanes (including ``?tab=active``) maps
+      // 1:1 to /automations. Next preserves the rest of the query
+      // string by default.
+      { source: "/lanes", destination: "/automations", permanent: true },
+      {
+        source: "/lanes/:id",
+        destination: "/automations/:id",
+        permanent: true,
+      },
+      { source: "/pipelines", destination: "/runs", permanent: true },
+      // Legacy run-detail URL embedded both pipelineId and runId; the
+      // new shape is keyed off runId alone.
+      {
+        source: "/pipelines/:pipelineId/runs/:runId",
+        destination: "/runs/:runId",
+        permanent: true,
+      },
+      // /requests = the catalog form, which folded into /plays.
+      { source: "/requests", destination: "/plays", permanent: true },
+
+      // ----- P1-06: fleet/{lanes,requests} retired -----------------
+      // Fleet surface collapses into a ``?scope=fleet`` query on the
+      // workspace pages. Catch-alls drop sub-routes like ``new`` /
+      // ``[id]`` since v1 doesn't preserve them.
+      {
+        source: "/fleet/lanes",
+        destination: "/automations?scope=fleet",
+        permanent: true,
+      },
+      {
+        source: "/fleet/lanes/:rest*",
+        destination: "/automations?scope=fleet",
+        permanent: true,
+      },
+      {
+        source: "/fleet/requests",
+        destination: "/runs?scope=fleet",
+        permanent: true,
+      },
+      {
+        source: "/fleet/requests/:rest*",
+        destination: "/runs?scope=fleet",
+        permanent: true,
+      },
+
+      // ----- P1-07: per-repo clarifications/improvements/feedback --
+      // The lanes/requests per-repo redirects need a slug→repo_id
+      // lookup, so they live in dedicated redirect-pages
+      // (``src/app/r/[owner]/[repo]/{lanes,requests}/page.tsx``).
+      // The three below don't need the lookup — they fold into
+      // workspace surfaces that already understand cross-repo data.
+      {
+        source: "/r/:owner/:repo/clarifications",
+        destination: "/inbox?type=clarification",
+        permanent: true,
+      },
+      {
+        source: "/r/:owner/:repo/clarifications/:id",
+        destination: "/inbox?type=clarification&legacy_id=:id",
+        permanent: true,
+      },
+      {
+        source: "/r/:owner/:repo/improvements",
+        destination: "/inbox?type=improvement",
+        permanent: true,
+      },
+      {
+        source: "/r/:owner/:repo/improvements/:id",
+        destination: "/inbox?type=improvement&legacy_id=:id",
+        permanent: true,
+      },
+      {
+        source: "/r/:owner/:repo/artifact-feedback",
+        destination: "/settings/catalog-feedback",
+        permanent: true,
+      },
+
+      // ----- P1-08: fleet/policy moved, fleet/adoption gone --------
+      {
+        source: "/fleet/policy",
+        destination: "/settings/policy",
+        permanent: true,
+      },
+      {
+        source: "/fleet/policy/:rest*",
+        destination: "/settings/policy/:rest*",
+        permanent: true,
+      },
+      // Coverage tab on /automations isn't built yet (P4-05). Per
+      // planning, acceptable to redirect to the (currently 404)
+      // anchor — this is a placeholder.
+      {
+        source: "/fleet/adoption",
+        destination: "/automations?tab=coverage",
+        permanent: true,
+      },
+
+      // ----- P2-17: clarifications + improvements → unified inbox --
+      // Legacy clarification/improvement IDs do NOT match inbox_item
+      // IDs (mirrored via ``source_table`` + ``source_id`` server-
+      // side). v1 drops them on the inbox list page with a
+      // ``legacy_id`` hint so the list can show a "this moved" banner;
+      // proper id-to-id mapping is a follow-up.
+      {
+        source: "/clarifications",
+        destination: "/inbox?type=clarification",
+        permanent: true,
+      },
+      {
+        source: "/clarifications/:id",
+        destination: "/inbox?type=clarification&legacy_id=:id",
+        permanent: true,
+      },
+      {
+        source: "/improvements",
+        destination: "/inbox?type=improvement",
+        permanent: true,
+      },
+      {
+        source: "/improvements/:id",
+        destination: "/inbox?type=improvement&legacy_id=:id",
+        permanent: true,
+      },
+
+      // ----- P2-18: artifact-feedback → admin-only settings page ---
+      {
+        source: "/artifact-feedback",
+        destination: "/settings/catalog-feedback",
+        permanent: true,
+      },
+    ];
+  },
 };
 
 // Wrapping with Sentry adds the build-time integration (source maps,

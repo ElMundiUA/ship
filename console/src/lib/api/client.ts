@@ -384,6 +384,40 @@ export function listActivatedRepos(
   );
 }
 
+/**
+ * Resolve an ``owner/repo`` slug to its activated repo row.
+ *
+ * Used by the ``/r/[owner]/[repo]/...`` legacy redirect-pages
+ * (RFC-0010 P1-07) — they need the workspace + repo_id to build
+ * the new ``/automations?scope=repo&repo=<id>`` style URLs. Picks
+ * the first workspace the caller belongs to (matches every other
+ * repo-mode page in the console today; multi-workspace UI is
+ * deferred). Returns ``null`` on any failure or miss so callers
+ * can fall back to a graceful default redirect.
+ */
+export async function resolveRepoBySlug(
+  owner: string,
+  repo: string,
+  token?: string,
+): Promise<{ workspace_id: string; repo_id: string; full_name: string } | null> {
+  const target = `${owner}/${repo}`.toLowerCase();
+  try {
+    const workspaces = await listWorkspaces(token);
+    if (workspaces.length === 0) return null;
+    const workspace = workspaces[0];
+    const repos = await listActivatedRepos(workspace.id, token);
+    const match = repos.find((r) => r.full_name.toLowerCase() === target);
+    if (!match) return null;
+    return {
+      workspace_id: workspace.id,
+      repo_id: match.id,
+      full_name: match.full_name,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function activateRepos(
   workspaceId: string,
   externalIds: number[],

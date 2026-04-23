@@ -43,7 +43,7 @@ export default function EmptyStatesGalleryPage() {
           />
         </Surface>
 
-        <Surface label="Lanes · Library" path="/lanes?tab=library">
+        <Surface label="Plays" path="/plays">
           <Card>
             <CardHeader
               title="Pick your first lane recipe"
@@ -72,7 +72,7 @@ export default function EmptyStatesGalleryPage() {
           </Card>
         </Surface>
 
-        <Surface label="Requests" path="/requests">
+        <Surface label="Plays · Requests" path="/plays?tab=requests">
           <Card>
             <CardHeader
               title="No one-shot runs yet"

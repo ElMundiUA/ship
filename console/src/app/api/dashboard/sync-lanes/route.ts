@@ -1,10 +1,14 @@
 /**
  * Form handler — re-pull `.ship/config.yml` for one repo.
  *
- * Wires the `/lanes` page's "Sync now" button to the backend's
- * `POST /v1/workspaces/{ws}/repos/{repo_id}/lanes/sync`. Admin-only
- * on the backend side — non-admins get bounced back with a
- * `?reason=forbidden` so the UI can render a banner.
+ * Wires the `/automations` page's "Sync now" button to the
+ * backend's `POST /v1/workspaces/{ws}/repos/{repo_id}/lanes/sync`.
+ * Admin-only on the backend side — non-admins get bounced back
+ * with a `?reason=forbidden` so the UI can render a banner.
+ *
+ * Naming history: the page lived at ``/lanes`` until RFC-0010 P1-01
+ * relabelled it to ``/automations`` (P1-05 keeps the old URL alive
+ * as a 301).
  *
  * Form-driven (no fetch from the browser) to keep the session token
  * in the httpOnly cookie and the whole page server-renderable.
@@ -27,7 +31,7 @@ export async function POST(request: Request) {
   const repoId = (form.get("repo") ?? "").toString();
 
   if (!wsId || !repoId) {
-    return NextResponse.redirect(new URL("/lanes", origin), 303);
+    return NextResponse.redirect(new URL("/automations", origin), 303);
   }
   if (!isApiConfigured()) {
     return back(origin, wsId, repoId, "api_unavailable");
@@ -64,7 +68,7 @@ function back(
   reason: string,
   changed?: string,
 ) {
-  const url = new URL("/lanes", origin);
+  const url = new URL("/automations", origin);
   url.searchParams.set("ws", wsId);
   url.searchParams.set("synced", repoId);
   url.searchParams.set("reason", reason);
