@@ -703,6 +703,97 @@ async def test_callback_rejects_wrong_token(
 
 
 @pytest.mark.asyncio
+async def test_callback_persists_full_run_summary_outcome(
+    monkeypatch, v1_client, db_session, seed_repo_and_install
+) -> None:
+    """End-to-end: shipctl-emitted RunSummary survives the wire round-trip.
+
+    P3-03 [BE/CLI]: agent reporters emit ``outcome_text`` + structured
+    findings. This test exercises the *backend wire path* with a
+    representative payload so the CLI side (covered by
+    ``cli/tests/callback.test.mjs``) and the schema side (sibling A's
+    P3-01) compose. We POST a complete RunSummary blob and assert it
+    persists on ``PipelineRun.outcome``.
+    """
+    from sqlalchemy import select
+
+    from backend.app.api.v1.routes import pipelines as pipelines_route
+    from backend.app.db.models.pipelines import PipelineRun
+
+    raw, workspace, _install, repo = seed_repo_and_install
+    pipelines = await _seed_bound_pipelines(db_session, workspace.id, repo.id)
+    target = pipelines["pr_review"]
+
+    captured: dict[str, str] = {}
+
+    async def _probe(repo, install, *, settings, **_):
+        return frozenset({"pr-and-ci-gate.yml"})
+
+    async def _dispatch(repo, install, workflow_file, *, inputs, settings, **_):
+        captured.update(inputs)
+
+    monkeypatch.setattr(pipelines_route, "list_repo_workflows", _probe)
+    monkeypatch.setattr(pipelines_route, "dispatch_workflow", _dispatch)
+
+    dispatch_resp = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/pipelines/{target.id}/runs",
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    run_id = dispatch_resp.json()["id"]
+    token = captured["ship_run_token"]
+
+    outcome = {
+        "outcome_text": "3 issues found · 1 PR opened",
+        "findings_count": 3,
+        "findings_by_severity": {"low": 1, "medium": 1, "high": 1},
+        "artifacts": [
+            {
+                "type": "pr",
+                "title": "Fix null check",
+                "ref": "https://github.com/acme/widgets/pull/42",
+            }
+        ],
+        "requires_approval": True,
+        "approval_payload": {"kind": "merge_pr", "pr_number": 42},
+        "escalations": [
+            {"type": "approval", "reason": "autofix_proposed"},
+        ],
+    }
+
+    callback_resp = await v1_client.post(
+        f"/v1/pipelines/runs/{run_id}/result",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "status": "succeeded",
+            "summary": "PR gate green",
+            "outcome": outcome,
+        },
+    )
+    assert callback_resp.status_code == 200, callback_resp.text
+
+    refreshed = (
+        await db_session.execute(
+            select(PipelineRun).where(PipelineRun.id == uuid.UUID(run_id))
+        )
+    ).scalar_one()
+    assert refreshed.status == "succeeded"
+    persisted_outcome = getattr(refreshed, "outcome", None)
+    assert persisted_outcome is not None, (
+        "P3-01 must add a PipelineRun.outcome attribute mapped to the new "
+        "JSONB column."
+    )
+    assert persisted_outcome["outcome_text"] == outcome["outcome_text"]
+    # P3-01's RunSummaryFindingsBySeverity defaults missing severities to 0,
+    # so the persisted dict is a superset of what we sent. Compare the keys
+    # we explicitly authored rather than full equality.
+    for sev, count in outcome["findings_by_severity"].items():
+        assert persisted_outcome["findings_by_severity"][sev] == count
+    assert persisted_outcome["requires_approval"] is True
+    assert persisted_outcome["artifacts"][0]["ref"].endswith("/pull/42")
+    assert persisted_outcome["escalations"][0]["type"] == "approval"
+
+
+@pytest.mark.asyncio
 async def test_callback_idempotent_for_terminal_runs(
     monkeypatch, v1_client, db_session, seed_repo_and_install
 ) -> None:

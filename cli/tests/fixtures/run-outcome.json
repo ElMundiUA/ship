@@ -1,0 +1,21 @@
+{
+  "outcome_text": "env-provided baseline · 2 issues",
+  "findings_count": 2,
+  "findings_by_severity": {
+    "low": 1,
+    "high": 1
+  },
+  "artifacts": [
+    {
+      "type": "issue",
+      "title": "Stale dependency",
+      "ref": "https://github.com/owner/repo/issues/77"
+    }
+  ],
+  "escalations": [
+    {
+      "type": "improvement",
+      "reason": "recurring_finding_detected"
+    }
+  ]
+}
