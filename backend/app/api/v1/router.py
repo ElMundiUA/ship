@@ -26,6 +26,7 @@ from backend.app.api.v1.routes import (
     custom_patterns,
     dashboard,
     distiller,
+    feature_flags,
     fleet_lanes,
     fleet_requests,
     github_app,
@@ -210,3 +211,8 @@ api_router.include_router(tracker_binding.router)
 # seed PR writes into ``.ship/tracker-fsm.md``. Source of truth is
 # the committed file; this endpoint just mirrors it for the console.
 api_router.include_router(tracker_fsm.router)
+# Workspace feature flags (P2-19) — single JSONB-backed dict on the
+# workspace row, gated read=member / write=owner. Adds the lever
+# the inbox redesign rollout needs without coupling the inbox
+# routes to the helper yet (that's a follow-up ticket).
+api_router.include_router(feature_flags.router)

@@ -20,11 +20,12 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import datetime
+from typing import Literal
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import desc, select
+from sqlalchemy import asc, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.api.v1.deps import AuthContext, get_current_auth
@@ -34,6 +35,7 @@ from backend.app.api.v1.routes.workspaces import (
     _require_membership,
 )
 from backend.app.core.config import Settings, get_settings
+from backend.app.db.models.fleet_lanes import FleetLane
 from backend.app.db.models.integrations import GitHubInstallation, WorkspaceRepo
 from backend.app.db.models.lanes import Lane
 from backend.app.db.models.pipelines import PipelineRun
@@ -59,26 +61,57 @@ router = APIRouter(
 # ---------------------------------------------------------------------------
 
 
+LaneScope = Literal["repo", "fleet"]
+
+
 class LaneOut(BaseModel):
-    """One row on the ``/lanes`` list."""
+    """Unified row on the ``/lanes`` list — covers both repo-scoped and
+    workspace fleet lanes (P1-09).
+
+    The console reads one shape regardless of ``?scope=`` so list /
+    detail components don't have to branch. Repo-only fields stay
+    populated for ``scope='repo'`` rows; fleet-only fields populate
+    for ``scope='fleet'`` rows. Common fields (``id``, ``workspace_id``,
+    ``lane_id``, ``kind``, ``enabled``, timestamps) are always set.
+    """
 
     id: uuid.UUID
     workspace_id: uuid.UUID
-    repo_id: uuid.UUID
-    repo_full_name: str
+    # Discriminator. ``repo`` rows mirror the legacy ``Lane`` shape;
+    # ``fleet`` rows hydrate from :class:`FleetLane`.
+    scope: LaneScope
     lane_id: str
-    kind: str = Field(..., description="``once`` | ``event`` | ``schedule``.")
-    pattern: str | None
-    cron: str | None
-    idempotency_key: str | None
+    kind: str = Field(
+        ...,
+        description=(
+            "``once`` | ``event`` | ``schedule`` for repo-scoped lanes; "
+            "``mirror_lane`` (or future fleet kinds) for fleet lanes."
+        ),
+    )
     enabled: bool
-    config: dict
-    last_run_at: datetime | None
-    last_run_status: str | None
-    synced_at: datetime
-    sync_source: str | None
     created_at: datetime
     updated_at: datetime
+
+    # Repo-scoped fields — present iff ``scope == 'repo'``.
+    repo_id: uuid.UUID | None = None
+    repo_full_name: str | None = None
+    pattern: str | None = None
+    cron: str | None = None
+    idempotency_key: str | None = None
+    config: dict | None = None
+    last_run_at: datetime | None = None
+    last_run_status: str | None = None
+    synced_at: datetime | None = None
+    sync_source: str | None = None
+
+    # Fleet-scoped fields — present iff ``scope == 'fleet'``. Mirror
+    # the columns on :class:`FleetLane` so the console never needs a
+    # second round-trip to render either side.
+    name: str | None = None
+    pattern_id: str | None = None
+    cadence: str | None = None
+    agent_slug: str | None = None
+    inputs: dict | None = None
 
 
 class LaneListOut(BaseModel):
@@ -121,6 +154,7 @@ def _row_to_out(row: Lane, *, repo_full_name: str) -> LaneOut:
     return LaneOut(
         id=row.id,
         workspace_id=row.workspace_id,
+        scope="repo",
         repo_id=row.repo_id,
         repo_full_name=repo_full_name,
         lane_id=row.lane_id,
@@ -139,6 +173,63 @@ def _row_to_out(row: Lane, *, repo_full_name: str) -> LaneOut:
     )
 
 
+def _fleet_row_to_out(row: FleetLane) -> LaneOut:
+    """Project a :class:`FleetLane` row onto the unified :class:`LaneOut`.
+
+    Repo-scoped fields (``repo_id``, ``pattern``, ``cron``, ``config``,
+    ``last_run_*``, ``sync_source``) stay ``None`` because fleet lanes
+    aren't tied to a single repo or a synced ``.ship/config.yml`` file.
+    """
+    return LaneOut(
+        id=row.id,
+        workspace_id=row.workspace_id,
+        scope="fleet",
+        lane_id=row.lane_id,
+        kind=row.kind,
+        enabled=row.enabled,
+        name=row.name,
+        pattern_id=row.pattern_id,
+        cadence=row.cadence,
+        agent_slug=row.agent_slug,
+        inputs=dict(row.inputs or {}),
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+def _validate_scope_repo_xor(
+    scope: str, repo_id: uuid.UUID | None
+) -> None:
+    """Enforce the ``scope`` ↔ ``repo_id`` invariant from P1-09.
+
+    - ``scope='repo'`` **requires** ``repo_id`` (422 otherwise).
+    - ``scope='fleet'`` **rejects** ``repo_id`` (422 — combination
+      meaningless: fleet lanes are workspace-scoped).
+    - ``scope='all'`` accepts ``repo_id`` as a *legacy filter*: when
+      provided we narrow repo-scoped rows to that repo and still
+      union with fleet lanes. This keeps every pre-P1-09 caller
+      working unchanged (the original endpoint took bare
+      ``?repo_id=``) while preserving the spec's strict combinations
+      under explicit scopes.
+
+    Raises ``HTTPException(422)`` with a human-readable detail string
+    on violation. Centralised so lanes + pipelines share one error
+    vocabulary for the same misuse.
+    """
+    if scope == "repo":
+        if repo_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="repo_id is required when scope=repo",
+            )
+        return
+    if scope == "fleet" and repo_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="repo_id is only valid when scope=repo",
+        )
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -147,28 +238,89 @@ def _row_to_out(row: Lane, *, repo_full_name: str) -> LaneOut:
 @router.get("/lanes", response_model=LaneListOut)
 async def list_lanes_route(
     workspace_id: uuid.UUID,
-    repo_id: uuid.UUID | None = Query(default=None),
+    scope: Literal["all", "fleet", "repo"] = Query(
+        default="all",
+        description=(
+            "``all`` (default) returns workspace + fleet lanes; ``fleet`` "
+            "returns only :class:`FleetLane` rows projected onto the "
+            "unified shape; ``repo`` returns only :class:`Lane` rows for "
+            "the given ``repo_id`` (required when ``scope=repo``)."
+        ),
+    ),
+    repo_id: uuid.UUID | None = Query(
+        default=None,
+        description=(
+            "Workspace repo to narrow ``scope=repo`` results to. 422 when "
+            "set together with ``scope=fleet`` / ``scope=all``."
+        ),
+    ),
     auth: AuthContext = Depends(get_current_auth),
     session: AsyncSession = Depends(get_session),
 ) -> LaneListOut:
-    """List lanes for the workspace, optionally narrowed to one repo."""
+    """List lanes for the workspace under one of three scopes (P1-09).
+
+    Default behaviour (``scope=all``, no ``repo_id``) is the union of
+    repo-declared lanes and workspace fleet lanes — preserves the
+    pre-P1-09 contract for callers that haven't moved off the
+    legacy ``/lanes`` URL.
+    """
     await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
+    _validate_scope_repo_xor(scope, repo_id)
 
-    stmt = select(Lane, WorkspaceRepo).join(
-        WorkspaceRepo, WorkspaceRepo.id == Lane.repo_id
-    ).where(Lane.workspace_id == workspace_id).order_by(
-        WorkspaceRepo.full_name, Lane.lane_id
-    )
-    if repo_id is not None:
-        stmt = stmt.where(Lane.repo_id == repo_id)
+    if scope == "repo":
+        # ``repo_id`` is guaranteed not-None by the XOR validator. We
+        # additionally pin it to the workspace so cross-tenant repo
+        # ids return 422 rather than silently filtering to an empty
+        # set (mirrors the spec's "must be a workspace_repo" rule).
+        target_repo = (
+            await session.execute(
+                select(WorkspaceRepo).where(
+                    WorkspaceRepo.workspace_id == workspace_id,
+                    WorkspaceRepo.id == repo_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if target_repo is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="repo_id must reference a repo in this workspace",
+            )
 
-    rows = (await session.execute(stmt)).all()
-    return LaneListOut(
-        lanes=[
+    out: list[LaneOut] = []
+    if scope in {"all", "repo"}:
+        stmt = (
+            select(Lane, WorkspaceRepo)
+            .join(WorkspaceRepo, WorkspaceRepo.id == Lane.repo_id)
+            .where(Lane.workspace_id == workspace_id)
+            .order_by(WorkspaceRepo.full_name, Lane.lane_id)
+        )
+        if repo_id is not None:
+            # Applies under scope=repo (validated above) AND under
+            # scope=all when callers pass legacy ``?repo_id=`` to
+            # narrow down without spelling out the new scope param.
+            stmt = stmt.where(Lane.repo_id == repo_id)
+        rows = (await session.execute(stmt)).all()
+        out.extend(
             _row_to_out(lane, repo_full_name=repo.full_name)
             for (lane, repo) in rows
-        ]
-    )
+        )
+    # Skip fleet lanes when the caller is filtering by a specific
+    # repo: a repo filter implies "scope down to that repo's lanes",
+    # and fleet lanes are workspace-wide, not repo-attached.
+    if scope == "fleet" or (scope == "all" and repo_id is None):
+        fleet_rows = (
+            (
+                await session.execute(
+                    select(FleetLane)
+                    .where(FleetLane.workspace_id == workspace_id)
+                    .order_by(asc(FleetLane.created_at))
+                )
+            )
+            .scalars()
+            .all()
+        )
+        out.extend(_fleet_row_to_out(row) for row in fleet_rows)
+    return LaneListOut(lanes=out)
 
 
 @router.get("/lanes/{lane_row_id}", response_model=LaneDetailOut)
