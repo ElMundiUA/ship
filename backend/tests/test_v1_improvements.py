@@ -264,3 +264,34 @@ async def test_pipeline_ingress_creates_row(
         )
     ).scalars().all()
     assert len(audits) == 1
+
+
+@pytest.mark.asyncio
+async def test_create_improvement_mirrors_to_inbox(
+    v1_client, db_session, seed_workspace
+) -> None:
+    """P2-08 sanity: admin POST yields one legacy + one mirror row."""
+    from backend.app.db.models.agent_surface import Improvement
+    from backend.app.db.models.inbox import InboxItem
+
+    _, raw, workspace = seed_workspace
+    resp = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/improvements",
+        headers={"Authorization": f"Bearer {raw}"},
+        json={"kind": "doc", "title": "mirror sanity", "body": "body"},
+    )
+    assert resp.status_code == 201, resp.text
+    legacy_id = uuid.UUID(resp.json()["id"])
+
+    db_session.expire_all()
+    legacy = await db_session.get(Improvement, legacy_id)
+    assert legacy is not None
+    mirror = (
+        await db_session.execute(
+            select(InboxItem).where(
+                InboxItem.source_table == "improvements",
+                InboxItem.source_id == legacy_id,
+            )
+        )
+    ).scalars().all()
+    assert len(mirror) == 1
