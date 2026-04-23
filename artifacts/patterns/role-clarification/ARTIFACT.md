@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-07T20:41:22+03:00"
-content_sha256: 6777e99b8d18862d529e79398b965bc59f1cf28a0048697eadd639d2d367af47
+content_sha256: 3cd78bc2ff2c9d080d54c86ec08fdf1b9e36309e01856353f7ca3ed3dbaa053b
 deprecated: false
 replaced_by: null
 yanked: false
@@ -21,6 +21,8 @@ spec:
   category: role
   modes: [lane, request]
   include: [common-base]
+  inbox:
+    profile: flow_incident
   default_trigger:
     kind: event
     event: issues.labeled

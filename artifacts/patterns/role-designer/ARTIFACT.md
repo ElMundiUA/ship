@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: a0aba8dd0330206ae4a803eee6c4a83bdc348019ab4d709491c759fd78e2ec17
+content_sha256: 36937cfa2dcc0525b9da03e82a7b06600b65ff3f2323c32425ba237b55c599ef
 deprecated: false
 replaced_by: null
 yanked: false
@@ -21,6 +21,8 @@ spec:
   category: role
   modes: [lane, request]
   include: [common-base]
+  inbox:
+    profile: role_reviewer
   default_trigger:
     kind: event
     event: pull_request
