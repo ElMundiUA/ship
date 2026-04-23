@@ -31,7 +31,9 @@ from backend.app.api.v1.routes import (
     github_app,
     health,
     improvements,
+    inbox,
     inbox_groups,
+    inbox_routing,
     integrations,
     invites,
     knowledge,
@@ -68,6 +70,19 @@ api_router.include_router(members.router)
 # eng_managers, on_call_eng) used by inbox_routing_rules to resolve
 # symbolic handles into concrete owners.
 api_router.include_router(inbox_groups.router)
+# Inbox routing rules (RFC-0010 §6). Maps symbolic handles
+# (`secops`, `repo_maintainer`, …) to concrete users/groups/
+# strategies; consulted by services.inbox.routing.resolve_handle
+# at intake time. Admin-only mutations; preview endpoint is
+# explicitly side-effect free for "what would this do?" UX.
+# Mounted BEFORE `inbox.router` so the literal `/inbox/routing*`
+# paths win over `inbox`'s `/inbox/{item_id}` parameter capture.
+api_router.include_router(inbox_routing.router)
+# Unified inbox surface (RFC-0010 §5). List/detail/disposition over
+# inbox_items + inbox_item_events. Reassignment delegates to the
+# routing service (services.inbox.routing). Owner-or-admin RBAC for
+# mutations; member RBAC for reads.
+api_router.include_router(inbox.router)
 api_router.include_router(workspace_artifacts.router)
 # Workspace repo activations (pilot Day 2 — picker UI + Code Map MVP).
 # Lives next to artifact_repos but is keyed off GitHub App installations
