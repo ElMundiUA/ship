@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: c74640cde58f4bb67f215648839337441ce2e77f541628e92c3e82a838e002f9
+content_sha256: e6c0062b43da74cb2d5b2f1a6137baa14fe3a4231cc3d07e1e3b3e7216857f64
 deprecated: false
 replaced_by: null
 yanked: false
@@ -21,6 +21,8 @@ spec:
   category: scan
   modes: [lane, request]
   include: [common-base]
+  inbox:
+    profile: scan_default
   default_trigger:
     kind: schedule
     cron: "0 8 * * 1"
