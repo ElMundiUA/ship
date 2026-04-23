@@ -119,6 +119,15 @@ export default async function ChatPage({
     <AppShell
       title="Navigator"
       workspace={{ id: workspace.id, name: workspace.name, slug: workspace.slug }}
+      me={
+        me
+          ? {
+              name: me.display_name?.trim() || me.email,
+              email: me.email,
+              initials: initialsFromMe(me.display_name, me.email),
+            }
+          : null
+      }
       scope={{
         repos: repos.map((r) => ({ id: r.id, full_name: r.full_name })),
         selectedRepoId: scope.kind === "repo" ? scope.repoId : repos[0]?.id ?? null,
@@ -150,6 +159,13 @@ export default async function ChatPage({
       </div>
     </AppShell>
   );
+}
+
+function initialsFromMe(displayName: string | null, email: string): string {
+  const source = displayName?.trim() || email;
+  const parts = source.split(/[\s@.]+/).filter(Boolean);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return (parts[0]?.slice(0, 2) ?? "??").toUpperCase();
 }
 
 function renderUnavailable(err: unknown) {
