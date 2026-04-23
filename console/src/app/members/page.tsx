@@ -140,6 +140,7 @@ export default async function MembersPage({
   })();
   const inviteErrorCode = typeof params.invite_error === "string" ? params.invite_error : null;
   const wasRevoked = params.revoked === "1";
+  const resentStatus = typeof params.resent === "string" ? params.resent : null;
   const owners = members.filter((m) => m.role === "owner");
   const admins = members.filter((m) => m.role === "admin");
   const pending = members.filter((m) => m.pending);
@@ -217,6 +218,7 @@ export default async function MembersPage({
         invitedCount={invitedCount}
         inviteErrorCode={inviteErrorCode}
         wasRevoked={wasRevoked}
+        resentStatus={resentStatus}
       />
 
       <Card className="mt-6" id="invite">
@@ -276,9 +278,10 @@ export default async function MembersPage({
           </div>
         </form>
         <p className="mt-3 text-[11px] text-white/55">
-          Send the invitee a sign-in link out-of-band (Auth0 dashboard → Users
-          → ‘Invite’). When they sign in with this email, Ship binds their
-          IdP subject to the row above and the “pending” badge flips off.
+          Legacy path: pre-creates the row but does not email anyone. Use the
+          team-invites form above for the full flow (token + welcome email).
+          When they eventually sign in with this email, Ship binds their IdP
+          subject to the row above and the &ldquo;pending&rdquo; badge flips off.
         </p>
       </Card>
     </AppShell>
@@ -499,6 +502,7 @@ function TeamInvitesSection({
   invitedCount,
   inviteErrorCode,
   wasRevoked,
+  resentStatus,
 }: {
   workspaceId: string;
   invites: ApiInvite[];
@@ -506,6 +510,7 @@ function TeamInvitesSection({
   invitedCount: number | null;
   inviteErrorCode: string | null;
   wasRevoked: boolean;
+  resentStatus: string | null;
 }) {
   const pending = invites.filter((i) => !i.accepted_at && !i.revoked_at);
   const history = invites
@@ -516,19 +521,26 @@ function TeamInvitesSection({
     <Card className="mt-6" id="team-invites">
       <CardHeader
         title="Team invites"
-        subtitle="Bulk-paste emails, mint one shareable accept URL per invitee. We don't send the email — forward the URL via Slack/email/etc."
+        subtitle="Bulk-paste emails — Ship sends each invitee a welcome email and keeps the accept URL handy as a copy-link fallback."
       />
 
       {invitedCount !== null && (
         <div className="mb-4 rounded-xl border border-aqua/30 bg-aqua/10 px-3 py-2 text-xs text-white/85">
           {invitedCount === 1
-            ? "Invite minted. Copy the accept URL below and send it."
-            : `${invitedCount} invites minted. Copy the accept URLs below and send them.`}
+            ? "Invite minted and emailed. Forward the accept URL below if the email gets stuck."
+            : `${invitedCount} invites minted and emailed. Forward the accept URLs below if any email gets stuck.`}
         </div>
       )}
       {wasRevoked && (
         <div className="mb-4 rounded-xl border border-white/20 bg-white/[0.04] px-3 py-2 text-xs text-white/75">
           Invite revoked. Issue a fresh one whenever they&rsquo;re ready.
+        </div>
+      )}
+      {resentStatus && (
+        <div className="mb-4 rounded-xl border border-aqua/30 bg-aqua/10 px-3 py-2 text-xs text-white/85">
+          {resentStatus === "skipped"
+            ? "Invite re-issued. Email transport is disabled (EMAIL_PROVIDER=none); copy the new accept URL below."
+            : "Invite re-issued and emailed. The previous accept URL stops working immediately."}
         </div>
       )}
       {inviteErrorCode && (
@@ -603,6 +615,7 @@ function TeamInvitesSection({
               <tr>
                 <th className="px-3 py-2 text-left font-semibold">Email</th>
                 <th className="px-3 py-2 text-left font-semibold">Role</th>
+                <th className="px-3 py-2 text-left font-semibold">Email</th>
                 <th className="px-3 py-2 text-left font-semibold">Expires</th>
                 <th className="px-3 py-2 text-left font-semibold">
                   Accept URL
@@ -620,6 +633,9 @@ function TeamInvitesSection({
                   >
                     <td className="px-3 py-2 text-white">{invite.email}</td>
                     <td className="px-3 py-2 text-white/75">{invite.role}</td>
+                    <td className="px-3 py-2">
+                      <EmailStatusBadge status={invite.email_status} />
+                    </td>
                     <td className="px-3 py-2 text-white/55">
                       {new Date(invite.expires_at).toLocaleDateString()}
                     </td>
@@ -630,40 +646,64 @@ function TeamInvitesSection({
                         </code>
                       ) : freshIds.has(invite.id) ? (
                         <span className="text-[11px] text-white/50">
-                          (session expired — reissue)
+                          (session expired — resend to mint a new link)
                         </span>
                       ) : (
                         <span className="text-[11px] text-white/50">
                           —{" "}
                           <span className="italic">
-                            (shown only once when minted)
+                            (resend to mint a fresh URL)
                           </span>
                         </span>
                       )}
                     </td>
                     <td className="px-3 py-2 text-right">
-                      <form
-                        action="/api/team/revoke-invite"
-                        method="POST"
-                        className="inline-block"
-                      >
-                        <input
-                          type="hidden"
-                          name="ws"
-                          value={workspaceId}
-                        />
-                        <input
-                          type="hidden"
-                          name="invite_id"
-                          value={invite.id}
-                        />
-                        <button
-                          type="submit"
-                          className="text-[11px] font-semibold text-coral/80 hover:text-coral"
+                      <div className="inline-flex items-center gap-3">
+                        <form
+                          action="/api/team/resend-invite"
+                          method="POST"
+                          className="inline-block"
                         >
-                          Revoke
-                        </button>
-                      </form>
+                          <input
+                            type="hidden"
+                            name="ws"
+                            value={workspaceId}
+                          />
+                          <input
+                            type="hidden"
+                            name="invite_id"
+                            value={invite.id}
+                          />
+                          <button
+                            type="submit"
+                            className="text-[11px] font-semibold text-aqua/80 hover:text-aqua"
+                          >
+                            Resend
+                          </button>
+                        </form>
+                        <form
+                          action="/api/team/revoke-invite"
+                          method="POST"
+                          className="inline-block"
+                        >
+                          <input
+                            type="hidden"
+                            name="ws"
+                            value={workspaceId}
+                          />
+                          <input
+                            type="hidden"
+                            name="invite_id"
+                            value={invite.id}
+                          />
+                          <button
+                            type="submit"
+                            className="text-[11px] font-semibold text-coral/80 hover:text-coral"
+                          >
+                            Revoke
+                          </button>
+                        </form>
+                      </div>
                     </td>
                   </tr>
                 );
@@ -691,6 +731,40 @@ function TeamInvitesSection({
         </div>
       )}
     </Card>
+  );
+}
+
+function EmailStatusBadge({
+  status,
+}: {
+  status: ApiInvite["email_status"];
+}) {
+  // ``null`` covers two distinct cases: pre-email-feature rows and
+  // the GET /invites endpoint, which never returns an email status
+  // because nothing is sent on a list call. Render a neutral
+  // placeholder so the column reads well without leaking
+  // implementation detail to the operator.
+  if (status === null || status === undefined) {
+    return <span className="text-[11px] text-white/35">—</span>;
+  }
+  if (status === "queued") {
+    return (
+      <Badge tone="ok" dot>
+        sent
+      </Badge>
+    );
+  }
+  if (status === "skipped") {
+    return (
+      <Badge tone="warn" dot>
+        skipped
+      </Badge>
+    );
+  }
+  return (
+    <Badge tone="warn" dot>
+      disabled
+    </Badge>
   );
 }
 

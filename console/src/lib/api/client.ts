@@ -610,6 +610,18 @@ export interface ApiInvite {
   token: string | null;
   /** Convenience accept URL for the admin to copy/forward. */
   accept_url: string | null;
+  /**
+   * Outcome of the welcome-email handoff for this invite.
+   *
+   * - ``"queued"`` — backend accepted the message and handed it to
+   *   the email transport in the background.
+   * - ``"skipped"`` — ``EMAIL_PROVIDER=none`` is configured; no
+   *   email was rendered. Admin should copy the accept URL.
+   * - ``"disabled"`` — reserved for future per-workspace opt-outs.
+   * - ``null`` — pre-email-feature row, or the field was not set
+   *   (e.g. on the list endpoint, which never sends).
+   */
+  email_status: "queued" | "skipped" | "disabled" | null;
 }
 
 export interface ApiInvitePeek {
@@ -660,6 +672,17 @@ export function revokeInvite(
   return apiFetch<void>(
     `/v1/workspaces/${encodeURIComponent(workspaceId)}/invites/${encodeURIComponent(inviteId)}`,
     { method: "DELETE", token: options.token },
+  );
+}
+
+export function resendInvite(
+  workspaceId: string,
+  inviteId: string,
+  options: { token?: string } = {},
+): Promise<ApiInvite> {
+  return apiFetch<ApiInvite>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/invites/${encodeURIComponent(inviteId)}/resend`,
+    { method: "POST", token: options.token },
   );
 }
 

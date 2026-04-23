@@ -4,6 +4,13 @@ Covers the admin create/list/revoke loop and the invitee
 peek/accept loop, including edge cases: duplicate emails within a
 single bulk request collapse to one row; expired/revoked/accepted
 invites return 410; accepting as the wrong email returns 403.
+
+Also asserts the email handoff added in the SendGrid integration:
+``POST /invites`` schedules a transactional email per recipient (via
+FastAPI ``BackgroundTasks``) and the ``POST /invites/{id}/resend``
+endpoint rotates the token + re-queues the email. Both paths use a
+patched :func:`_send_invite_email_in_background` so the test never
+touches a real SendGrid account or a separate DB session.
 """
 
 from __future__ import annotations
@@ -13,6 +20,30 @@ from datetime import datetime, timedelta, timezone
 import pytest
 import pytest_asyncio
 from sqlalchemy import select
+
+
+@pytest.fixture(autouse=True)
+def _silence_invite_emails(monkeypatch):
+    """Stop the invite email background task from touching a real DB.
+
+    The route schedules :func:`_send_invite_email_in_background` via
+    ``BackgroundTasks``; left unpatched it would open its own session
+    through ``get_sessionmaker()`` (i.e. the *global* engine, not the
+    per-test transactional one) and commit an ``AuditLog`` row that
+    leaks past the test rollback. The dedicated email tests below
+    override this with their own capture; everyone else gets a no-op.
+    """
+    from backend.app.api.v1.routes import invites as invites_module
+
+    async def _noop(**kwargs):
+        del kwargs
+
+    monkeypatch.setattr(
+        invites_module,
+        "_send_invite_email_in_background",
+        _noop,
+    )
+    yield
 
 
 @pytest_asyncio.fixture
@@ -228,3 +259,142 @@ async def test_expired_invite_returns_410(
         headers={"Authorization": f"Bearer {invitee_raw}"},
     )
     assert accept.status_code == 410
+
+
+@pytest.mark.asyncio
+async def test_create_invites_queues_email_per_recipient(
+    v1_client, monkeypatch, seed_workspace
+) -> None:
+    """``POST /invites`` must hand each row to ``BackgroundTasks``.
+
+    The send itself is patched out — we only assert the dispatcher
+    was called once per (deduped) recipient with the right kwargs,
+    so we don't drag a real SMTP round-trip into the unit suite.
+    """
+    from backend.app.api.v1.routes import invites as invites_module
+
+    sent: list[dict] = []
+
+    async def _capture(**kwargs):
+        sent.append(kwargs)
+
+    monkeypatch.setattr(
+        invites_module,
+        "_send_invite_email_in_background",
+        _capture,
+    )
+
+    _, raw, workspace = seed_workspace
+    response = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/invites",
+        headers={"Authorization": f"Bearer {raw}"},
+        json={
+            "emails": "one@acme.dev, two@acme.dev",
+            "default_role": "member",
+        },
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert {row["email_status"] for row in body} == {"queued"}
+
+    assert len(sent) == 2
+    recipients = {kw["recipient_email"] for kw in sent}
+    assert recipients == {"one@acme.dev", "two@acme.dev"}
+    for kw in sent:
+        assert kw["workspace_id"] == workspace.id
+        assert kw["accept_url"].startswith("http")
+        assert kw["role"] == "member"
+
+
+@pytest.mark.asyncio
+async def test_resend_invite_rotates_token_and_requeues_email(
+    v1_client, monkeypatch, db_session, seed_workspace
+) -> None:
+    """``POST /invites/{id}/resend`` issues a fresh token + new email.
+
+    The original token must stop working (the new one is what we
+    audit + send), and the email handoff fires again with the
+    rotated accept URL — that's the whole point of the endpoint:
+    "resend a working link", not "re-mail the dead one".
+    """
+    from backend.app.api.v1.routes import invites as invites_module
+
+    sent: list[dict] = []
+
+    async def _capture(**kwargs):
+        sent.append(kwargs)
+
+    monkeypatch.setattr(
+        invites_module,
+        "_send_invite_email_in_background",
+        _capture,
+    )
+
+    _, raw, workspace = seed_workspace
+    create = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/invites",
+        headers={"Authorization": f"Bearer {raw}"},
+        json={"emails": "resend@acme.dev"},
+    )
+    assert create.status_code == 201, create.text
+    row = create.json()[0]
+    invite_id = row["id"]
+    original_token = row["token"]
+    assert len(sent) == 1
+    sent.clear()
+
+    resend = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/invites/{invite_id}/resend",
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert resend.status_code == 200, resend.text
+    new_row = resend.json()
+    assert new_row["id"] == invite_id
+    assert new_row["token"] and new_row["token"] != original_token
+    assert new_row["accept_url"]
+    assert new_row["email_status"] == "queued"
+
+    assert len(sent) == 1
+    assert sent[0]["recipient_email"] == "resend@acme.dev"
+    assert sent[0]["accept_url"] == new_row["accept_url"]
+
+    # The old token must be dead — the rotation is what makes
+    # "resend" safe (otherwise a leaked old link would still work).
+    peek = await v1_client.get(f"/v1/invites/{original_token}")
+    assert peek.status_code in (404, 410)
+
+
+@pytest.mark.asyncio
+async def test_resend_revoked_invite_returns_409(
+    v1_client, monkeypatch, seed_workspace
+) -> None:
+    """Resending a revoked invite is a 409 — caller should re-create."""
+    from backend.app.api.v1.routes import invites as invites_module
+
+    async def _noop(**kwargs):
+        return None
+
+    monkeypatch.setattr(
+        invites_module,
+        "_send_invite_email_in_background",
+        _noop,
+    )
+
+    _, raw, workspace = seed_workspace
+    create = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/invites",
+        headers={"Authorization": f"Bearer {raw}"},
+        json={"emails": "deadrow@acme.dev"},
+    )
+    invite_id = create.json()[0]["id"]
+    revoke = await v1_client.delete(
+        f"/v1/workspaces/{workspace.id}/invites/{invite_id}",
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert revoke.status_code == 204
+
+    resend = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/invites/{invite_id}/resend",
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert resend.status_code == 409
