@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: e6c0062b43da74cb2d5b2f1a6137baa14fe3a4231cc3d07e1e3b3e7216857f64
+content_sha256: 9510429176e32e260e58e2f15690629704fa70471e63b67ec78e34e4b68f7ee2
 deprecated: false
 replaced_by: null
 yanked: false
@@ -77,3 +77,28 @@ label before opening a new one.
 
 **Output:** per-ticket comment with findings + summary comment on
 the lane run listing cluster counts.
+
+---
+
+## Reporting
+
+When you finish, call ``shipctl callback`` so Ship can render an
+outcome-first row in the Runs list and link any escalations into the
+Inbox. The ``--outcome-text`` you author here is what operators see in
+``/runs`` — keep it concise and concrete, no "completed successfully"
+filler.
+
+For this play, a typical outcome looks like: **"7 stale docs · 2 critical"**.
+
+```bash
+shipctl callback --status ok \
+  --outcome-text "{N} stale doc(s) ({M} critical)" \
+  --findings-count {stale_count} \
+  --severity critical={critical} --severity medium={moderate} \
+  --artifact doc:"Freshness audit":"{report_url}"
+```
+
+Replace ``{...}`` placeholders with values you collected during the
+run. Severities are aggregated into ``findings_by_severity`` — use the
+buckets the operator filters on (``low``/``medium``/``high``/``critical``)
+rather than custom labels. Skip flags whose value would be 0 or empty.

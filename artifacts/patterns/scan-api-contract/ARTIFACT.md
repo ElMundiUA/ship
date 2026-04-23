@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: 48fb1fac1d52b07490d481cee471e5eaa51efee418c7ee38cc5c10e86eb9efd0
+content_sha256: 9c277099534d9744432e90bbda3d9cde368cc204cc0c7e31c8cc6af2b7c62950
 deprecated: false
 replaced_by: null
 yanked: false
@@ -78,3 +78,28 @@ You are the API Contract Scanner agent.
 anchor) — update it on each push instead of stacking comments.
 
 **Output:** one PR comment; optional `changes-requested` review.
+
+---
+
+## Reporting
+
+When you finish, call ``shipctl callback`` so Ship can render an
+outcome-first row in the Runs list and link any escalations into the
+Inbox. The ``--outcome-text`` you author here is what operators see in
+``/runs`` — keep it concise and concrete, no "completed successfully"
+filler.
+
+For this play, a typical outcome looks like: **"3 contract drifts (1 breaking)"**.
+
+```bash
+shipctl callback --status ok \
+  --outcome-text "{N} contract drift(s) ({M} breaking)" \
+  --findings-count {drift_count} \
+  --severity critical={breaking} --severity medium={non_breaking} \
+  --artifact doc:"OpenAPI diff":"{diff_url}"
+```
+
+Replace ``{...}`` placeholders with values you collected during the
+run. Severities are aggregated into ``findings_by_severity`` — use the
+buckets the operator filters on (``low``/``medium``/``high``/``critical``)
+rather than custom labels. Skip flags whose value would be 0 or empty.

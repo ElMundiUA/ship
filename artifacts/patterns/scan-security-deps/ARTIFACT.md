@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: b926d8921f152f124629e1dcd84428785dc31649488c8064a8b828901c2d0887
+content_sha256: 62c29c463fff45e0d247929f78191044365cd7335b1d490f56edc05c3905ad35
 deprecated: false
 replaced_by: null
 yanked: false
@@ -80,3 +80,29 @@ resolved; then it closes the ticket with a `resolved` comment.
 
 **Output:** single ticket or in-place update, plus lane-run
 summary line counting `critical / high / medium` separately.
+
+---
+
+## Reporting
+
+When you finish, call ``shipctl callback`` so Ship can render an
+outcome-first row in the Runs list and link any escalations into the
+Inbox. The ``--outcome-text`` you author here is what operators see in
+``/runs`` — keep it concise and concrete, no "completed successfully"
+filler.
+
+For this play, a typical outcome looks like: **"5 vulnerable deps (1 critical · 2 high)"**.
+
+```bash
+shipctl callback --status ok \
+  --outcome-text "{N} vulnerable dep(s) ({critical} critical · {high} high)" \
+  --findings-count {total_vulns} \
+  --severity critical={n_crit} --severity high={n_high} \
+  --severity medium={n_med} --severity low={n_low} \
+  [--requires-approval --approval-payload '{"kind":"upgrade_deps","prs":[...]}']
+```
+
+Replace ``{...}`` placeholders with values you collected during the
+run. Severities are aggregated into ``findings_by_severity`` — use the
+buckets the operator filters on (``low``/``medium``/``high``/``critical``)
+rather than custom labels. Skip flags whose value would be 0 or empty.
