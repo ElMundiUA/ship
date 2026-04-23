@@ -304,7 +304,11 @@ function labelFor(
       secondary: "me",
     };
   }
-  return { primary: ctx.workspaceName, secondary: "ws" };
+  // Workspace scope. The workspace identity is already shown in the
+  // ``WorkspaceChip`` next to this pill, so repeating the workspace
+  // name here just made the header look like it had two switchers.
+  // Surface the *filter intent* instead.
+  return { primary: "All shared", secondary: "scope" };
 }
 
 // Reading helpers used to live here, but Next 15.5 rejects calls

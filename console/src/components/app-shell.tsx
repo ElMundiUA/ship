@@ -170,6 +170,12 @@ export type AppShellScope = {
   selectedRepoId?: string | null;
 };
 
+export type AppShellUser = {
+  name: string;
+  email: string;
+  initials: string;
+};
+
 export function AppShell({
   children,
   title,
@@ -178,6 +184,7 @@ export function AppShell({
   workspace,
   scope,
   scopePill,
+  me,
 }: {
   children: ReactNode;
   title: string;
@@ -194,12 +201,26 @@ export function AppShell({
    * single-chip shape it's always had.
    */
   scopePill?: ReactNode;
+  /**
+   * Currently signed-in operator, threaded down from the page
+   * server component so the sidebar footer can display the real
+   * email + initials instead of the mock fallback. Pages that
+   * haven't been wired up yet (or surfaces that intentionally
+   * render the marketing-style preview) leave this ``undefined``
+   * and the mock ``currentUser`` shows through.
+   */
+  me?: AppShellUser | null;
 }) {
   const pathname = usePathname();
   const [wsOpen, setWsOpen] = useState(false);
   const mockWs = workspaces[0];
   const wsLabel = workspace?.name ?? mockWs.name;
   const wsKicker = workspace?.slug ?? mockWs.org;
+  const userInfo = me ?? {
+    name: currentUser.name,
+    email: currentUser.email,
+    initials: currentUser.avatarInitials,
+  };
   const NAV = navFor(pathname);
   const repoSlug = parseRepoSlug(pathname);
   // Repo-mode header chip: show the repo the URL resolves to. In
@@ -297,11 +318,11 @@ export function AppShell({
           <div className="border-t border-white/10 p-3">
             <div className="flex items-center gap-2 rounded-md px-2 py-1.5">
               <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-gradient-to-br from-aqua via-lilac to-coral text-[10px] font-bold text-ink">
-                {currentUser.avatarInitials}
+                {userInfo.initials}
               </span>
               <div className="min-w-0 flex-1">
-                <div className="truncate text-xs font-semibold text-white">{currentUser.name}</div>
-                <div className="truncate text-[10px] text-white/40">{currentUser.email}</div>
+                <div className="truncate text-xs font-semibold text-white">{userInfo.name}</div>
+                <div className="truncate text-[10px] text-white/40">{userInfo.email}</div>
               </div>
               <Link
                 href="/settings"

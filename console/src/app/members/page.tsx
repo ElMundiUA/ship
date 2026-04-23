@@ -24,6 +24,7 @@ import {
 import {
   ApiHttpError,
   ApiUnavailableError,
+  getMe,
   isApiConfigured,
   listInvites,
   listMembers,
@@ -34,6 +35,7 @@ import { consumeInviteTokens } from "@/lib/api/invite-stash";
 import type {
   ApiMember,
   ApiMemberRole,
+  ApiUser,
   ApiWorkspace,
 } from "@/lib/api/types";
 import { getSessionToken } from "@/lib/api/session";
@@ -55,6 +57,7 @@ type Mode =
       workspace: ApiWorkspace;
       members: ApiMember[];
       invites: ApiInvite[];
+      me: ApiUser | null;
     }
   | { source: "mock"; reason: string };
 
@@ -91,11 +94,12 @@ async function load(): Promise<Mode> {
         reason: "Create a workspace first to manage members",
       };
     const target = ws[0];
-    const [members, invites] = await Promise.all([
+    const [members, invites, me] = await Promise.all([
       listMembers(target.id, token),
       listInvites(target.id, token).catch(() => [] as ApiInvite[]),
+      getMe(token).catch(() => null as ApiUser | null),
     ]);
-    return { source: "live", workspace: target, members, invites };
+    return { source: "live", workspace: target, members, invites, me };
   } catch (err) {
     if (err instanceof ApiHttpError && err.status === 401)
       return { source: "mock", reason: "Session expired — sign in again" };
@@ -107,11 +111,25 @@ async function load(): Promise<Mode> {
 
 function initialsFor(member: ApiMember): string {
   const source = member.display_name?.trim() || member.email;
+  return initialsFromSource(source);
+}
+
+function initialsFromSource(source: string): string {
   const parts = source.split(/[\s@.]+/).filter(Boolean);
   if (parts.length >= 2) {
     return (parts[0][0] + parts[1][0]).toUpperCase();
   }
   return (parts[0]?.slice(0, 2) ?? "??").toUpperCase();
+}
+
+function meToShellUser(me: ApiUser | null) {
+  if (!me) return null;
+  const name = me.display_name?.trim() || me.email;
+  return {
+    name,
+    email: me.email,
+    initials: initialsFromSource(name),
+  };
 }
 
 export default async function MembersPage({
@@ -130,7 +148,7 @@ export default async function MembersPage({
     return <MockView reason={data.reason} errorCode={errorCode} />;
   }
 
-  const { workspace, members, invites } = data;
+  const { workspace, members, invites, me } = data;
   const freshTokens = await consumeInviteTokens();
   const invitedCount = (() => {
     const raw = params.invited;
@@ -147,8 +165,10 @@ export default async function MembersPage({
 
   return (
     <AppShell
-      kicker={`${workspace.name} · access`}
+      kicker="access"
       title="Members"
+      workspace={{ id: workspace.id, name: workspace.name, slug: workspace.slug }}
+      me={meToShellUser(me)}
       actions={
         <>
           <ButtonGhost>Open invite link</ButtonGhost>
