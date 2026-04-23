@@ -65,12 +65,12 @@ from backend.app.api.v1.routes.workspaces import (
 from backend.app.db.models.inbox import (
     InboxItem,
     InboxItemEvent,
-    RunEscalation,
 )
 from backend.app.db.models.tenancy import AuditLog, User, WorkspaceMember
 from backend.app.db.session import get_session
 from backend.app.services.inbox.profiles import INBOX_TYPES
 from backend.app.services.inbox.routing import RoutingContext, resolve_handle
+from backend.app.services.inbox.side_effects import apply_side_effects
 
 
 logger = logging.getLogger(__name__)
@@ -854,20 +854,6 @@ async def post_disposition(
         )
     )
 
-    # Approvals close their RunEscalation linkage so a run can show
-    # "approved at <ts>" without re-walking the inbox tail.
-    if body.action in ("approve", "reject"):
-        escalations_stmt = select(RunEscalation).where(
-            RunEscalation.inbox_item_id == item.id
-        )
-        for esc in (await session.execute(escalations_stmt)).scalars():
-            # ``RunEscalation`` has no ``resolved_at`` column today,
-            # but rows referencing a resolved item are implicitly
-            # closed — left as a no-op marker so future schema
-            # additions can wire the column without changing this
-            # call site.
-            _ = esc
-
     session.add(
         AuditLog(
             workspace_id=workspace_id,
@@ -883,6 +869,36 @@ async def post_disposition(
             },
         )
     )
+
+    # Disposition-specific side-effects (escalation close, legacy
+    # writebacks, retry signal, …) live in the dedicated dispatcher
+    # so the route stays focused on validation + state transitions.
+    # Best-effort: any failure surfaces in ``report.failures`` and
+    # never short-circuits the disposition itself.
+    report = await apply_side_effects(
+        session,
+        item=item,
+        action=body.action,
+        payload=payload,
+        actor_user_id=auth.user.id,
+    )
+    logger.info(
+        "inbox disposition side-effects: writebacks=%d, "
+        "escalations_closed=%d, retry=%d, failures=%d",
+        len(report.legacy_writebacks),
+        len(report.escalations_closed),
+        len(report.retry_requests_recorded),
+        len(report.failures),
+    )
+    for failure in report.failures:
+        logger.warning(
+            "inbox disposition side-effect FAILED (item=%s, action=%s): "
+            "kind=%s error=%s",
+            item.id,
+            body.action,
+            failure.get("kind"),
+            failure.get("error"),
+        )
 
     await session.flush()
     await session.refresh(item)
