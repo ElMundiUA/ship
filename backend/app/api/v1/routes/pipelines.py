@@ -33,12 +33,12 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Final, Literal
+from typing import Any, Final, Literal
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, status
 from jose import JWTError, jwt
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -474,6 +474,80 @@ class PipelineToggleIn(BaseModel):
     enabled: bool
 
 
+class RunSummaryArtifact(BaseModel):
+    """One artifact a play produced (PR, issue, comment, doc, …).
+
+    ``ref`` is the URL or external identifier (PR url, issue
+    number, doc id) — left optional because some artifact types
+    (e.g. an inline ``comment``) don't have an addressable ref.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: str = Field(..., description="'pr' | 'issue' | 'comment' | 'doc' | …")
+    title: str
+    ref: str | None = None
+
+
+class RunSummaryFindingsBySeverity(BaseModel):
+    """Per-severity finding bucket (RFC-0010 §RunSummary)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    low: int = Field(default=0, ge=0)
+    medium: int = Field(default=0, ge=0)
+    high: int = Field(default=0, ge=0)
+    critical: int = Field(default=0, ge=0)
+
+
+class RunSummaryEscalation(BaseModel):
+    """Hint that the run already kicked an inbox item to a human.
+
+    Pattern-emitted diagnostic — the *authoritative* escalation
+    record is :class:`backend.app.db.models.inbox.RunEscalation`,
+    written by the intake service. This list is kept on the run
+    purely so the Runs detail UI can render badges without an
+    extra hop.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["clarification", "improvement", "failure", "approval", "exception"]
+    reason: str = Field(
+        ..., description="Matches a profile rule's ``when:`` key."
+    )
+
+
+class RunSummary(BaseModel):
+    """RFC-0010 §RunSummary contract — outcome of a pipeline run.
+
+    All fields optional; an empty dict ``{}`` is a valid summary
+    (and the column default for legacy rows). Pattern-authored,
+    never derived in the UI: ``outcome_text`` is the single-line
+    sentence the Runs list renders verbatim, the rest are
+    structured signals the FE cards / Inbox intake consume.
+
+    ``extra='forbid'`` so a typo in a pattern's reporter trips a
+    422 at the callback rather than silently dropping data into
+    a key the UI never looks at.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    outcome_text: str | None = Field(default=None, max_length=500)
+    headline: str | None = Field(default=None, max_length=200)
+
+    findings_count: int | None = Field(default=None, ge=0)
+    findings_by_severity: RunSummaryFindingsBySeverity | None = None
+
+    artifacts: list[RunSummaryArtifact] = Field(default_factory=list, max_length=50)
+
+    requires_approval: bool = False
+    approval_payload: dict[str, Any] = Field(default_factory=dict)
+
+    escalations: list[RunSummaryEscalation] = Field(default_factory=list)
+
+
 class PipelineRunOut(BaseModel):
     id: uuid.UUID
     pipeline_id: uuid.UUID
@@ -483,6 +557,11 @@ class PipelineRunOut(BaseModel):
     finished_at: datetime | None
     summary: str | None
     payload: dict
+    # RFC-0010 §RunSummary — surfaced on every run row so the FE list
+    # / detail can render outcome-first. Defaults to an empty
+    # ``RunSummary()`` for legacy rows whose ``pipeline_runs.outcome``
+    # is ``{}::jsonb``.
+    outcome: RunSummary = Field(default_factory=RunSummary)
     created_at: datetime
 
 
@@ -531,7 +610,14 @@ class PipelineInstallOut(BaseModel):
 
 
 class PipelineRunResultIn(BaseModel):
-    """Body of the ``POST /pipelines/runs/{run_id}/result`` callback."""
+    """Body of the ``POST /pipelines/runs/{run_id}/result`` callback.
+
+    Backwards-compatible: pre-P3-01 callers send only
+    ``status`` (+ optional ``summary`` / ``metrics``); P3-01 adds
+    ``outcome`` for pattern-authored RunSummary payloads. When
+    ``outcome`` is absent we leave ``pipeline_runs.outcome`` at its
+    default ``{}::jsonb`` so the legacy reporter shape keeps working.
+    """
 
     status: str = Field(
         ...,
@@ -542,6 +628,14 @@ class PipelineRunResultIn(BaseModel):
     )
     summary: str | None = Field(default=None, max_length=1024)
     metrics: dict = Field(default_factory=dict)
+    outcome: RunSummary | None = Field(
+        default=None,
+        description=(
+            "RFC-0010 §RunSummary contract. When present, replaces "
+            "``pipeline_runs.outcome``. When absent, the column is left "
+            "untouched (so a re-callback can clear nothing it didn't set)."
+        ),
+    )
 
 
 _TERMINAL_STATUSES: Final[set[str]] = {"succeeded", "failed", "cancelled"}
@@ -579,6 +673,12 @@ def _row_to_out(
 
 
 def _run_to_out(row: PipelineRun) -> PipelineRunOut:
+    # ``outcome`` was added in P3-01 (migration 0033). Validate via
+    # :class:`RunSummary` so a row with stale / future-shape JSON
+    # surfaces loudly here rather than as a silent client-side parse
+    # error. Empty dicts (legacy default) round-trip as ``RunSummary()``.
+    raw_outcome = row.outcome or {}
+    outcome = RunSummary.model_validate(raw_outcome)
     return PipelineRunOut(
         id=row.id,
         pipeline_id=row.pipeline_id,
@@ -588,6 +688,7 @@ def _run_to_out(row: PipelineRun) -> PipelineRunOut:
         finished_at=row.finished_at,
         summary=row.summary,
         payload=row.payload or {},
+        outcome=outcome,
         created_at=row.created_at,
     )
 
@@ -1366,6 +1467,12 @@ async def report_run_result(
         existing = dict(run.payload or {})
         existing.setdefault("metrics", {}).update(metrics_payload)
         run.payload = existing
+    if payload.outcome is not None:
+        # ``model_dump`` preserves field defaults so empty buckets like
+        # ``artifacts: []`` and ``approval_payload: {}`` land in the JSONB
+        # column verbatim. Downstream readers (Inbox intake, Runs UI)
+        # treat the dict as authoritative and don't have to re-merge.
+        run.outcome = payload.outcome.model_dump(mode="json")
     run.updated_at = now
 
     pipeline = await session.get(Pipeline, run.pipeline_id)

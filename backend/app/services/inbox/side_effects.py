@@ -218,6 +218,15 @@ def _add_event(
 # Columns the future migration is expected to add to ``run_escalations``
 # so the close becomes a real mutation. Until they exist we treat the
 # "close" as a marker-only operation (audit + event) and log a TODO.
+#
+# Status as of P3-02 (RFC-0010 Phase 3 partial-progress milestone): the
+# *creation* half of the contract is now solid — every inbox item
+# emitted by ``intake.emit_for_run`` with a non-NULL ``run_id`` lands a
+# linkage row, so ``_find_matching_escalations`` always has something to
+# work with. The *closing* half is still gated on this column set
+# landing; tracking PR will bind a real ``resolved_at`` / ``resolution``
+# / ``resolved_by_user_id`` write once the FE settles on closure
+# semantics.
 _ESCALATION_RESOLUTION_COLUMNS: tuple[str, ...] = (
     "resolved_at",
     "resolution",
@@ -316,9 +325,11 @@ async def _close_run_escalations(
     if not columns_present:
         # TODO(rfc-0010): once ``run_escalations`` grows
         # ``resolved_at`` / ``resolution`` / ``resolved_by_user_id``
-        # the close becomes a real UPDATE. Until then we emit the
-        # audit trail so ops can reconcile and we don't lose the
-        # signal.
+        # the close becomes a real UPDATE. P3-02 made the *linkage*
+        # half ironclad (every inbox item with a run_id has a row),
+        # but the *closing* half is still marker-only. Until then we
+        # emit the audit trail so ops can reconcile and we don't lose
+        # the signal.
         logger.warning(
             "inbox side-effect: RunEscalation has no resolution "
             "columns (resolved_at/resolution/resolved_by_user_id); "

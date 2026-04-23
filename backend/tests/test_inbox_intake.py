@@ -233,12 +233,17 @@ async def test_finding_emits_inbox_item_with_routed_owner(
 
     events = (
         await db_session.execute(
-            select(InboxItemEvent).where(InboxItemEvent.item_id == item.id)
+            select(InboxItemEvent)
+            .where(InboxItemEvent.item_id == item.id)
+            .order_by(InboxItemEvent.created_at)
         )
     ).scalars().all()
-    assert len(events) == 1
-    assert events[0].action == "created"
-    assert events[0].actor_kind == "system"
+    # P3-02 — every item with a run_id also gets a system-issued
+    # ``escalation_linked`` event (in addition to ``created``) so the
+    # audit trail captures the linkage.
+    actions = [event.action for event in events]
+    assert actions == ["created", "escalation_linked"]
+    assert all(event.actor_kind == "system" for event in events)
 
 
 @pytest.mark.asyncio
@@ -507,15 +512,19 @@ async def test_event_row_has_handle_and_route_in_payload(
         findings=[finding],
     )
     assert len(report.items_created) == 1
-    event = (
+    # P3-02: timeline now carries both ``created`` and the universal
+    # ``escalation_linked`` event. Filter to the ``created`` row so
+    # the assertion is specific to the routing payload it carries.
+    created_event = (
         await db_session.execute(
             select(InboxItemEvent).where(
-                InboxItemEvent.item_id == report.items_created[0]
+                InboxItemEvent.item_id == report.items_created[0],
+                InboxItemEvent.action == "created",
             )
         )
     ).scalar_one()
-    assert event.payload["handle"] == "workspace_owner"
-    assert event.payload["route"] == "round_robin:workspace-owners"
+    assert created_event.payload["handle"] == "workspace_owner"
+    assert created_event.payload["route"] == "round_robin:workspace-owners"
 
 
 @pytest.mark.asyncio
@@ -587,9 +596,16 @@ async def test_emit_for_run_preserves_finding_order_in_items_created(
 
 
 @pytest.mark.asyncio
-async def test_run_escalation_emitted_when_pattern_opts_in(
+async def test_run_escalation_emitted_for_approval_finding(
     db_session: AsyncSession, seeded_run, fake_resolve
 ):
+    """Approval finding still produces a ``requires_approval`` linkage row.
+
+    Under P3-02 the linkage is universal (no longer gated on
+    ``spec.inbox.escalate``). This test pins the historical
+    approval case so any regression to the old "only when
+    pattern opts in" behaviour fails loudly.
+    """
     workspace, run, owner_user_id = seeded_run
     finding = RunSummaryFinding(
         type="improvement",
@@ -605,7 +621,10 @@ async def test_run_escalation_emitted_when_pattern_opts_in(
         repo_id=None,
         run_id=run.id,
         play_key="scan-security-deps",
-        pattern_meta=_pattern_meta("scan_with_autofix", escalate=True),
+        # No ``escalate=True`` opt-in — proves P3-02 made the gate
+        # unconditional. The pattern profile is what matters; the
+        # legacy frontmatter flag is now ignored by intake.
+        pattern_meta=_pattern_meta("scan_with_autofix"),
         findings=[finding],
     )
 

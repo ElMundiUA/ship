@@ -160,6 +160,16 @@ class PipelineRun(Base):
     payload: Mapped[dict] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
+    # RFC-0010 §RunSummary contract (P3-01). Structured, pattern-authored
+    # outcome — drives both the Runs list outcome-first row layout and the
+    # Inbox intake pipeline's approval / escalation decisions. Validated by
+    # :class:`backend.app.api.v1.routes.pipelines.RunSummary` (extras
+    # forbidden) on the way in. Defaults to ``{}`` so legacy callers that
+    # don't send an ``outcome`` key still land cleanly and pre-P3-01 rows
+    # read back as an empty contract rather than ``NULL``.
+    outcome: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
     # SHA-256 of the short-lived JWT we hand to the dispatched workflow
     # via ``inputs.ship_run_token``. The result-callback endpoint
     # rejects anything that doesn't match so a stolen ``run_id`` alone
