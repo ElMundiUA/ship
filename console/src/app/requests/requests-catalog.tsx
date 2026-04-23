@@ -2,11 +2,15 @@
 
 import { useMemo, useState } from "react";
 
-import { Badge, Card, CardHeader } from "@/components/ui";
+import {
+  PlayCard,
+  resolvePlayMode,
+  type CardState as PlayCardState,
+} from "@/components/play-card";
+import { Card, CardHeader } from "@/components/ui";
 import type {
   ApiActivatedRepo,
   ApiCatalogPattern,
-  ApiPatternInput,
 } from "@/lib/api/client";
 
 /**
@@ -23,11 +27,7 @@ import type {
  * reload the page so "Recent requests" picks up the new row.
  */
 
-type CardState =
-  | { mode: "idle" }
-  | { mode: "open" }
-  | { mode: "saving" }
-  | { mode: "error"; message: string; code?: string };
+type CardState = PlayCardState;
 
 const ADHOC_KEY = "__adhoc__";
 
@@ -180,9 +180,24 @@ export function RequestsCatalog({
           </h3>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {group.patterns.map((p) => (
-              <PatternCard
+              <PlayCard
                 key={p.id}
+                id={p.id}
+                title={p.name ?? p.id}
+                description={p.description || p.id}
+                tags={[p.category, ...p.tags.slice(0, 2)].filter(
+                  (v): v is string => !!v,
+                )}
+                mode={resolvePlayMode(p.modes)}
                 pattern={p}
+                ctaLayout={{
+                  // Every catalog pattern on /requests has ``modes:
+                  // [request]`` (we filter to that mode upstream), so
+                  // both CTAs render. Lane-only Plays only show on
+                  // /plays where the page passes a different layout.
+                  showRunNow: true,
+                  showAutomate: true,
+                }}
                 expanded={openKey === p.id}
                 state={openKey === p.id ? cardState : { mode: "idle" }}
                 onToggle={() => {
@@ -281,211 +296,11 @@ export function RequestsCatalog({
   );
 }
 
-function PatternCard({
-  pattern,
-  expanded,
-  state,
-  onToggle,
-  onSubmit,
-}: {
-  pattern: ApiCatalogPattern;
-  expanded: boolean;
-  state: CardState;
-  onToggle: () => void;
-  onSubmit: (inputs: Record<string, string>) => void;
-}) {
-  const title = pattern.name ?? pattern.id;
-  const summary = pattern.description || pattern.id;
-  const tags = [pattern.category, ...pattern.tags.slice(0, 2)].filter(
-    (v): v is string => !!v,
-  );
-
-  return (
-    <div
-      className={
-        "rounded-lg border bg-white/[0.02] p-3 transition " +
-        (expanded
-          ? "border-aqua/40 bg-aqua/[0.04]"
-          : "border-white/10 hover:border-white/25")
-      }
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="truncate text-sm font-semibold text-white">{title}</p>
-          <p className="mt-0.5 line-clamp-2 text-[11px] text-white/55">
-            {summary}
-          </p>
-          <div className="mt-1.5 flex flex-wrap items-center gap-1">
-            {tags.map((t) => (
-              <Badge key={t} tone="neutral">
-                {t}
-              </Badge>
-            ))}
-            <span className="font-mono text-[10px] text-white/40">
-              {pattern.id}
-            </span>
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={onToggle}
-          className={
-            "shrink-0 rounded-md border px-3 py-1 text-[11px] font-semibold transition " +
-            (expanded
-              ? "border-white/25 bg-white/[0.06] text-white/75 hover:bg-white/[0.10]"
-              : "border-aqua/50 bg-aqua/15 text-aqua hover:bg-aqua/25")
-          }
-        >
-          {expanded ? "Cancel" : "Run"}
-        </button>
-      </div>
-
-      {expanded ? (
-        <PatternForm pattern={pattern} state={state} onSubmit={onSubmit} />
-      ) : null}
-    </div>
-  );
-}
-
-function PatternForm({
-  pattern,
-  state,
-  onSubmit,
-}: {
-  pattern: ApiCatalogPattern;
-  state: CardState;
-  onSubmit: (inputs: Record<string, string>) => void;
-}) {
-  const [values, setValues] = useState<Record<string, string>>(() => {
-    const seeded: Record<string, string> = {};
-    for (const input of pattern.inputs) {
-      if (typeof input.default === "string") {
-        seeded[input.name] = input.default;
-      }
-    }
-    return seeded;
-  });
-
-  const missing = pattern.inputs
-    .filter((i) => i.required && !(values[i.name] ?? "").trim())
-    .map((i) => i.name);
-
-  const canSubmit = state.mode !== "saving" && missing.length === 0;
-
-  return (
-    <form
-      className="mt-4 space-y-3 border-t border-white/10 pt-4"
-      onSubmit={(e) => {
-        e.preventDefault();
-        if (!canSubmit) return;
-        const cleaned: Record<string, string> = {};
-        for (const [k, v] of Object.entries(values)) {
-          const trimmed = v.trim();
-          if (trimmed) cleaned[k] = trimmed;
-        }
-        onSubmit(cleaned);
-      }}
-    >
-      {pattern.inputs.length === 0 ? (
-        <p className="text-[11px] text-white/55">
-          This pattern doesn&rsquo;t take any inputs — hit Dispatch to
-          run it against the selected repo.
-        </p>
-      ) : (
-        pattern.inputs.map((input) => (
-          <InputField
-            key={input.name}
-            input={input}
-            value={values[input.name] ?? ""}
-            onChange={(next) =>
-              setValues((prev) => ({ ...prev, [input.name]: next }))
-            }
-          />
-        ))
-      )}
-
-      {state.mode === "error" ? (
-        <div className="rounded-md border border-coral/40 bg-coral/10 px-3 py-2 text-xs text-coral">
-          {state.message}
-        </div>
-      ) : null}
-
-      <div className="flex items-center justify-end gap-2">
-        <button
-          type="submit"
-          disabled={!canSubmit}
-          className={
-            "rounded-md border px-4 py-1.5 text-xs font-semibold transition " +
-            (canSubmit
-              ? "border-aqua/50 bg-aqua/15 text-aqua hover:bg-aqua/25"
-              : "cursor-not-allowed border-white/15 bg-white/[0.04] text-white/45")
-          }
-        >
-          {state.mode === "saving" ? "Dispatching…" : "Dispatch"}
-        </button>
-      </div>
-    </form>
-  );
-}
-
-function InputField({
-  input,
-  value,
-  onChange,
-}: {
-  input: ApiPatternInput;
-  value: string;
-  onChange: (next: string) => void;
-}) {
-  const kind = (input.type ?? "text").toLowerCase();
-  const label =
-    input.name +
-    (input.required ? " *" : "");
-
-  if (kind === "enum" && Array.isArray(input.values) && input.values.length > 0) {
-    return (
-      <Field label={label} hint={input.hint}>
-        <select
-          value={value || input.default || ""}
-          onChange={(e) => onChange(e.target.value)}
-          className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-1.5 text-sm text-white focus:border-aqua focus:outline-none"
-        >
-          {!input.required ? <option value="">(unset)</option> : null}
-          {input.values.map((v) => (
-            <option key={v} value={v}>
-              {v}
-            </option>
-          ))}
-        </select>
-      </Field>
-    );
-  }
-
-  if (kind === "multiline") {
-    return (
-      <Field label={label} hint={input.hint}>
-        <textarea
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          rows={4}
-          className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 font-mono text-[13px] leading-relaxed text-white focus:border-aqua focus:outline-none"
-        />
-      </Field>
-    );
-  }
-
-  return (
-    <Field label={label} hint={input.hint}>
-      <input
-        type={kind === "url" ? "url" : "text"}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={input.default ?? ""}
-        className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-1.5 font-mono text-sm text-white focus:border-aqua focus:outline-none"
-      />
-    </Field>
-  );
-}
+// ``PatternCard`` / ``PatternForm`` / ``InputField`` used to live
+// here; P1-10 + P1-11 extracted them into the shared
+// ``components/play-card.tsx`` so ``/plays`` and ``/requests`` can
+// render the same card. ``AdhocCard`` stays local because it's
+// request-only (no Plays equivalent).
 
 function AdhocCard({
   expanded,

@@ -65,6 +65,7 @@ export function LibraryCatalog({
   config,
   configError,
   initialOpenKind,
+  basePath = "/lanes",
 }: {
   workspaceId: string;
   selectedRepo: ApiActivatedRepo | null;
@@ -74,6 +75,13 @@ export function LibraryCatalog({
   config: ApiRepoConfig | null;
   configError: string | null;
   initialOpenKind?: string | null;
+  /**
+   * Root URL where this Library lives. Threaded down to the
+   * ``RepoSwitcher`` so its links anchor on the route the user
+   * arrived from (``/lanes`` legacy vs. ``/automations`` post
+   * P1-01). Defaults to ``/lanes`` for the legacy mount point.
+   */
+  basePath?: string;
 }) {
   const baseline = useMemo(
     () => buildBaseline(catalog, config, lanes),
@@ -136,7 +144,11 @@ export function LibraryCatalog({
   return (
     <div className="space-y-4">
       {repos.length > 1 ? (
-        <RepoSwitcher repos={repos} selectedRepo={selectedRepo} />
+        <RepoSwitcher
+          repos={repos}
+          selectedRepo={selectedRepo}
+          basePath={basePath}
+        />
       ) : null}
 
       {configError ? (
@@ -503,9 +515,11 @@ function ProposeToPublic() {
 function RepoSwitcher({
   repos,
   selectedRepo,
+  basePath,
 }: {
   repos: ApiActivatedRepo[];
   selectedRepo: ApiActivatedRepo;
+  basePath: string;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2 text-xs text-white/55">
@@ -513,7 +527,7 @@ function RepoSwitcher({
       {repos.map((r) => (
         <Link
           key={r.id}
-          href={`/lanes?tab=library&repo_id=${encodeURIComponent(r.id)}`}
+          href={`${basePath}?tab=library&repo_id=${encodeURIComponent(r.id)}`}
           className={
             "rounded-full border px-2.5 py-1 font-mono text-[11px] transition " +
             (r.id === selectedRepo.id
