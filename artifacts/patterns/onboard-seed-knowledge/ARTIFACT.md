@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.12.0
 updated_at: "2026-04-21T14:00:00+00:00"
-content_sha256: df5167be1ab08f1692264e122933aa81fc92430a691d8aceb3896d796cf6c1dd
+content_sha256: c50067a3d5e7e2e6983a3ca4f93d6f9b2618e7ad895ad7d996ca32e55e8b79e9
 deprecated: false
 replaced_by: null
 yanked: false
@@ -25,6 +25,8 @@ spec:
   install_target: prompts/onboard/seed-knowledge.md
   category: onboard
   modes: [request]
+  inbox:
+    profile: onboarding
   template: true
 ---
 

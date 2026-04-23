@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-07T20:41:22+03:00"
-content_sha256: 80367aaad9b480c466c880e6df627620772388761a27d32a937bbd3f4697dfb4
+content_sha256: 41b590c88218ec8f92c6ec9e029b2f20afc5887ae3c8f1cfd3492dd09baab3bf
 deprecated: false
 replaced_by: null
 yanked: false
@@ -20,6 +20,8 @@ spec:
   install_target: prompts/common/_base.md
   category: common
   modes: []
+  inbox:
+    profile: silent
   template: true
 ---
 
