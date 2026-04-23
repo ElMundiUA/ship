@@ -33,10 +33,10 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Final
+from typing import Final, Literal
 
 import httpx
-from fastapi import APIRouter, Depends, Header, HTTPException, Path, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, status
 from jose import JWTError, jwt
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
@@ -49,6 +49,7 @@ from backend.app.api.v1.routes.workspaces import (
     _require_membership,
 )
 from backend.app.core.config import Settings, get_settings
+from backend.app.db.models.fleet_lanes import FleetLane
 from backend.app.db.models.integrations import GitHubInstallation, WorkspaceRepo
 from backend.app.db.models.pipelines import Pipeline, PipelineRun
 from backend.app.db.models.tenancy import AuditLog
@@ -882,17 +883,76 @@ async def enrich_pipelines(
 @router.get("", response_model=list[PipelineOut])
 async def list_pipelines(
     workspace_id: uuid.UUID,
+    scope: Literal["all", "fleet", "repo"] = Query(
+        default="all",
+        description=(
+            "P1-09 scope filter, mirroring ``GET /workspaces/{ws}/lanes``. "
+            "``all`` (default) returns every pipeline; ``fleet`` returns "
+            "only pipelines whose ``lane_id`` is materialised by a "
+            ":class:`FleetLane` in the workspace; ``repo`` returns "
+            "pipelines bound to the given ``repo_id`` (required when "
+            "``scope=repo``)."
+        ),
+    ),
+    repo_id: uuid.UUID | None = Query(
+        default=None,
+        description=(
+            "Workspace repo to narrow ``scope=repo`` results to. 422 "
+            "when set together with ``scope=fleet`` / ``scope=all``."
+        ),
+    ),
     auth: AuthContext = Depends(get_current_auth),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> list[PipelineOut]:
-    """All pipelines for the workspace, with workflow-availability flags."""
+    """All pipelines for the workspace, with workflow-availability flags.
+
+    Accepts the P1-09 ``scope`` + ``repo_id`` filters so the unified
+    ``/runs`` console route can drive lanes, fleet, and per-repo
+    surfaces against this single endpoint without per-tab branching.
+    """
     await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
+    # Local import to avoid cycles (lanes.py imports nothing from
+    # pipelines.py today, but the validator lives there as the
+    # canonical owner of the scope/repo_id contract).
+    from backend.app.api.v1.routes.lanes import _validate_scope_repo_xor
+
+    _validate_scope_repo_xor(scope, repo_id)
+
+    if scope == "repo":
+        target_repo = (
+            await session.execute(
+                select(WorkspaceRepo).where(
+                    WorkspaceRepo.workspace_id == workspace_id,
+                    WorkspaceRepo.id == repo_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if target_repo is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="repo_id must reference a repo in this workspace",
+            )
+
     stmt = (
         select(Pipeline)
         .where(Pipeline.workspace_id == workspace_id)
         .order_by(Pipeline.created_at)
     )
+    if scope == "repo":
+        stmt = stmt.where(Pipeline.repo_id == repo_id)
+    elif scope == "fleet":
+        # Project FleetLane.lane_id values into a subquery so the
+        # filter scales with the fleet-lane count, not the pipeline
+        # count. Returns no rows when the workspace hasn't declared
+        # any fleet lanes (which is the right answer — there's
+        # nothing to mirror).
+        fleet_lane_ids = (
+            select(FleetLane.lane_id)
+            .where(FleetLane.workspace_id == workspace_id)
+            .scalar_subquery()
+        )
+        stmt = stmt.where(Pipeline.lane_id.in_(fleet_lane_ids))
     rows = (await session.execute(stmt)).scalars().all()
     return await enrich_pipelines(session, list(rows), settings=settings)
 
