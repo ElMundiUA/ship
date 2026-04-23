@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-12T04:11:35+03:00"
-content_sha256: d6df7a19c7016e5a916aadacafd3b5d9cd567ce742a539b1e00f3f9b57e11f4d
+content_sha256: 887a30f31c2d1dfbcbb67f1b0d87c4cfe7c9007fdda03674e6da8bd28080503e
 deprecated: false
 replaced_by: null
 yanked: false
@@ -20,6 +20,8 @@ spec:
   install_target: prompts/onboard/adopt.md
   category: onboard
   modes: [request]
+  inbox:
+    profile: onboarding
 ---
 
 # Ship — interactive adoption playbook (instruction-first)

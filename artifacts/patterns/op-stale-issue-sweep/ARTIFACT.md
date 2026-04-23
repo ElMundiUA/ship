@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: c23d3d8f39044e892c53dd386ce368b19bedaaa7f1619a119dda658aa617b1d0
+content_sha256: 7785bb3d97345d289a5546e0bb00ed48bc89bc46620d0271ee9025d731ecc2ca
 deprecated: false
 replaced_by: null
 yanked: false
@@ -21,6 +21,8 @@ spec:
   category: op
   modes: [lane]
   include: [common-base]
+  inbox:
+    profile: silent
   default_trigger:
     kind: schedule
     cron: "0 3 * * 3"

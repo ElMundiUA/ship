@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-07T20:41:22+03:00"
-content_sha256: 157289b38400a5dc6684fc254c79a1ba559c69b221c1e97d10842224efc05286
+content_sha256: 14bf2be5c21c1d2cef1b7715020e605b3a4168fb817ed6c4309bc205f64d4181
 deprecated: false
 replaced_by: null
 yanked: false
@@ -21,6 +21,8 @@ spec:
   category: op
   modes: [lane]
   include: [common-base]
+  inbox:
+    profile: silent
   lane_id: self_heal
   lane_name: "Pipeline self-heal"
   lane_summary: >-

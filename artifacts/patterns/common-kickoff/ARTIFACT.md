@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.11.2
 updated_at: "2026-04-20T12:00:00+00:00"
-content_sha256: faf1c940ae9e3c91ff86f5a126dc797d1bd984a9e544089bebfa97dfa0c2a585
+content_sha256: c7ca115a8cc6bb54ddabb41b8162d234c38f1a1d1f9aab5b26c7ef9b60763804
 deprecated: false
 replaced_by: null
 yanked: false
@@ -23,6 +23,8 @@ spec:
   install_target: prompts/common/kickoff.md
   category: common
   modes: []
+  inbox:
+    profile: silent
   template: true
 ---
 
