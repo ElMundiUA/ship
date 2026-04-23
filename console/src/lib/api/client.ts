@@ -1384,6 +1384,15 @@ export interface ApiPipelineRun {
   summary: string | null;
   payload: Record<string, unknown>;
   created_at: string;
+  /**
+   * RFC-0010 §RunSummary — the structured outcome a pattern authors
+   * and persists on ``pipeline_runs.outcome``. Optional in TS so
+   * legacy clients / older API builds (or test fixtures hand-rolled
+   * before Wave 6 Phase 3 landed) don't break the contract; the
+   * canonical shape mirror lives further down this module
+   * ({@link RunSummary}).
+   */
+  outcome?: RunSummary;
 }
 
 export interface ApiDashboardPullRequest {
@@ -1916,6 +1925,173 @@ export function getPipelineRun(
     `/v1/workspaces/${encodeURIComponent(workspaceId)}/pipelines/${encodeURIComponent(pipelineId)}/runs/${encodeURIComponent(runId)}`,
     { token },
   );
+}
+
+// ---------------------------------------------------------------------
+// RFC-0010 §RunSummary + run-detail surface (P3-04 / P3-05)
+// ---------------------------------------------------------------------
+
+/**
+ * RFC-0010 §RunSummary contract — the structured outcome a pattern
+ * authors and persists on ``pipeline_runs.outcome``.
+ *
+ * Mirrors the Pydantic ``RunSummary`` shape declared in
+ * ``backend/app/api/v1/routes/pipelines.py``. Sibling subagent C
+ * is also extending {@link ApiPipelineRun} to carry an
+ * ``outcome: RunSummary`` field — once that lands, this type
+ * remains the canonical client-side mirror.
+ */
+export type RunSummaryArtifact = {
+  type: string;
+  title: string;
+  ref?: string | null;
+};
+
+export type RunSummaryFindingsBySeverity = {
+  low?: number;
+  medium?: number;
+  high?: number;
+  critical?: number;
+};
+
+export type RunSummaryEscalationHint = {
+  type: "clarification" | "improvement" | "failure" | "approval" | "exception";
+  reason: string;
+};
+
+export type RunSummary = {
+  outcome_text?: string | null;
+  headline?: string | null;
+  findings_count?: number | null;
+  findings_by_severity?: RunSummaryFindingsBySeverity | null;
+  artifacts?: RunSummaryArtifact[];
+  requires_approval?: boolean;
+  approval_payload?: Record<string, unknown>;
+  escalations?: RunSummaryEscalationHint[];
+};
+
+/**
+ * Detail-view extension of {@link ApiPipelineRun}. Once sibling C's
+ * client.ts changes land, ``ApiPipelineRun`` itself will carry
+ * ``outcome`` + ``lane_id`` and this alias collapses to the base
+ * type. Until then, the optional fields keep us forward-compatible
+ * without forcing every other call-site to widen.
+ */
+export type ApiPipelineRunWithOutcome = ApiPipelineRun & {
+  outcome?: RunSummary;
+  lane_id?: string | null;
+};
+
+/**
+ * Bundle returned by {@link getRunDetail}: the run row plus the
+ * parent {@link ApiPipeline}. The pipeline ships alongside so the
+ * detail page can render the play / lane / repo metadata without
+ * a second client hop. ``pipeline`` is nullable because the run
+ * may belong to a pipeline that's been disabled or deleted while
+ * the row itself survives.
+ */
+export type RunDetail = {
+  run: ApiPipelineRunWithOutcome;
+  pipeline: ApiPipeline | null;
+};
+
+/**
+ * One row from ``/v1/workspaces/{ws}/runs/{run_id}/escalations``.
+ *
+ * **Backend endpoint TODO** (P3-05-BE): the route does not yet
+ * exist server-side. The frontend assumes the join shape declared
+ * here — ``inbox_item`` denormalised onto each escalation — so the
+ * detail page never has to fan out a second GET per row. Until the
+ * backend lands, {@link listRunEscalations} catches the 404 and
+ * returns ``[]``.
+ */
+export type ApiRunEscalation = {
+  id: string;
+  run_id: string;
+  inbox_item_id: string;
+  escalation_reason: string;
+  created_at: string;
+  /** Joined inbox_items projection. May be ``null`` if the linked item was deleted. */
+  inbox_item: {
+    id: string;
+    type: "clarification" | "improvement" | "failure" | "approval" | "exception";
+    title: string;
+    status: string;
+    owner:
+      | {
+          user_id: string;
+          email: string;
+          display_name: string | null;
+        }
+      | null;
+  } | null;
+};
+
+/**
+ * Resolve a run by id alone. The legacy detail endpoint is keyed by
+ * ``(workspaceId, pipelineId, runId)`` — there is no
+ * "find run by id alone" route yet (see
+ * ``backend/app/api/v1/routes/pipelines.py``). We resolve the
+ * parent ``pipelineId`` server-side by listing pipelines and
+ * scanning each pipeline's recent runs for the matching ``runId``.
+ *
+ * O(pipelines × runs) and fine for the pilot tenant; once the
+ * backend exposes ``GET /v1/workspaces/{ws}/runs/{runId}`` (tracked
+ * separately) we can replace the loop with a single fetch.
+ *
+ * Returns ``null`` when no pipeline in the workspace records a run
+ * with that id in the recent window. Callers render a 404 card.
+ */
+export async function getRunDetail(
+  workspaceId: string,
+  runId: string,
+  token?: string,
+): Promise<RunDetail | null> {
+  const pipelines = await listPipelines(workspaceId, token);
+  for (const pipeline of pipelines) {
+    let runs: ApiPipelineRun[];
+    try {
+      runs = await listPipelineRuns(workspaceId, pipeline.id, 50, token);
+    } catch {
+      continue;
+    }
+    if (runs.some((r) => r.id === runId)) {
+      const run = await getPipelineRun(
+        workspaceId,
+        pipeline.id,
+        runId,
+        token,
+      );
+      return { run: run as ApiPipelineRunWithOutcome, pipeline };
+    }
+  }
+  return null;
+}
+
+/**
+ * GET ``/v1/workspaces/{ws}/runs/{run_id}/escalations`` — pull the
+ * authoritative ``run_escalations`` rows joined with their target
+ * ``inbox_items``. The endpoint is **not yet implemented** (P3-05
+ * scoped a frontend-only ticket); a graceful 404 fallback returns
+ * an empty list so the run-detail page renders without escalations
+ * until the backend lands.
+ */
+export async function listRunEscalations(
+  workspaceId: string,
+  runId: string,
+  token?: string,
+): Promise<ApiRunEscalation[]> {
+  try {
+    return await apiFetch<ApiRunEscalation[]>(
+      `/v1/workspaces/${encodeURIComponent(workspaceId)}/runs/${encodeURIComponent(runId)}/escalations`,
+      { token },
+    );
+  } catch (err) {
+    // TODO(P3-05-BE): drop this fallback once
+    // ``GET /v1/workspaces/{ws}/runs/{run_id}/escalations`` ships.
+    if (err instanceof ApiHttpError && err.status === 404) return [];
+    throw err;
+  }
 }
 
 export function getDashboard(

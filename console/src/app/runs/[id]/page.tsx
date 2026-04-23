@@ -1,41 +1,42 @@
+/**
+ * ``/runs/[id]`` — outcome-first run detail surface (RFC-0010
+ * Wave 6 / Phase 3 ticket P3-05).
+ *
+ * Server component that owns auth + data fetching and hands off to
+ * the presentational :func:`RunDetail` view. Two parallel fetches:
+ *
+ *   1. {@link getRunDetail}        — primary; the run row + parent
+ *      pipeline. Resolves the parent ``pipelineId`` server-side
+ *      because the legacy GET endpoint is keyed by
+ *      ``(workspaceId, pipelineId, runId)``.
+ *   2. {@link listRunEscalations}  — secondary; the joined
+ *      ``run_escalations`` rows. Endpoint isn't shipped yet
+ *      (TODO P3-05-BE) — the client returns ``[]`` on 404 so the
+ *      detail page degrades gracefully.
+ *
+ * If escalations error out we still render the rest of the page
+ * (the page-level error banner just notes the partial state).
+ * Same applies to escalations endpoint not yet existing — the page
+ * keeps reading correctly without it.
+ */
+
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { AppShell } from "@/components/app-shell";
 import { Card, CardHeader } from "@/components/ui";
 import {
+  type ApiRunEscalation,
   ApiHttpError,
   ApiUnavailableError,
+  getRunDetail,
   isApiConfigured,
-  listPipelines,
-  listPipelineRuns,
+  listRunEscalations,
   listWorkspaces,
 } from "@/lib/api/client";
 import { getSessionToken } from "@/lib/api/session";
 
-import { RunDetailView } from "../../pipelines/run-detail-view";
-
-/**
- * ``/runs/[id]`` — new IA mount point for the per-run detail
- * surface (RFC-0010 §3 / P1-01). Re-uses the legacy
- * :func:`RunDetailView` body; only the breadcrumb + login redirect
- * targets differ.
- *
- * **Fallback strategy.** The legacy detail endpoint is keyed by
- * ``(workspaceId, pipelineId, runId)`` — no
- * "find run by id alone" route exists yet (see
- * ``backend/app/api/v1/routes/`` :: pipelines). The new IA URL only
- * carries ``runId``, so we resolve the parent pipelineId server-
- * side by listing pipelines and scanning each pipeline's recent
- * runs for the matching ``runId``. This is O(pipelines × runs) and
- * fine for the pilot tenant; once the backend exposes
- * ``GET /v1/workspaces/{ws}/runs/{runId}`` (tracked separately) we
- * can replace this loop with a single fetch.
- *
- * If the run isn't found, we fall through to ``RunDetailView`` with
- * a sentinel pipelineId — it will surface the standard "Run not
- * found" 404 card.
- */
+import { RunDetail } from "./run-detail";
 
 export const dynamic = "force-dynamic";
 
@@ -44,14 +45,17 @@ type PageProps = {
   searchParams: Promise<{ ws?: string }>;
 };
 
-export default async function RunDetailPage({ params, searchParams }: PageProps) {
+export default async function RunDetailPage({
+  params,
+  searchParams,
+}: PageProps) {
   const { id: runId } = await params;
   const { ws: wsQuery } = await searchParams;
   const loginNext = encodeURIComponent("/runs");
 
   if (!isApiConfigured()) {
     return (
-      <AppShell title="Run">
+      <AppShell title="Run" kicker="RUN">
         <Card>
           <CardHeader
             title="Backend not configured"
@@ -80,36 +84,31 @@ export default async function RunDetailPage({ params, searchParams }: PageProps)
     workspaces[0];
   if (!workspace) redirect("/onboarding?step=github");
 
-  // Resolve pipelineId by scanning recent runs across all pipelines.
-  // First match wins. ``listPipelineRuns`` is paginated — we ask for
-  // the standard window (50) which covers Phase-1's pilot volume.
-  let pipelineId: string | null = null;
-  try {
-    const pipelines = await listPipelines(workspace.id, token);
-    for (const p of pipelines) {
-      let runs;
-      try {
-        runs = await listPipelineRuns(workspace.id, p.id, 50, token);
-      } catch {
-        continue;
-      }
-      if (runs.some((r) => r.id === runId)) {
-        pipelineId = p.id;
-        break;
-      }
-    }
-  } catch (err) {
+  // Two fetches in parallel — see file-level docstring. Each catches
+  // independently so a hiccup on one doesn't blow up the other.
+  const [runResult, escalationsResult] = await Promise.allSettled([
+    getRunDetail(workspace.id, runId, token),
+    listRunEscalations(workspace.id, runId, token),
+  ]);
+
+  if (runResult.status === "rejected") {
+    const err = runResult.reason;
     if (err instanceof ApiHttpError && err.status === 401) {
       redirect(`/login?next=${loginNext}`);
     }
-    return renderError(err);
+    return renderError(err, {
+      workspaceId: workspace.id,
+      workspaceName: workspace.name,
+      workspaceSlug: workspace.slug,
+    });
   }
 
-  if (!pipelineId) {
+  const detail = runResult.value;
+  if (!detail) {
     return (
       <AppShell
         title="Run"
-        kicker="HISTORY"
+        kicker="RUN"
         workspace={{
           id: workspace.id,
           name: workspace.name,
@@ -120,7 +119,7 @@ export default async function RunDetailPage({ params, searchParams }: PageProps)
             href="/runs"
             className="text-xs font-semibold text-white/65 hover:text-white"
           >
-            ← All runs
+            {"\u2190"} All runs
           </Link>
         }
       >
@@ -134,24 +133,67 @@ export default async function RunDetailPage({ params, searchParams }: PageProps)
     );
   }
 
+  let escalations: ApiRunEscalation[] = [];
+  let escalationsError = false;
+  if (escalationsResult.status === "fulfilled") {
+    escalations = escalationsResult.value;
+  } else {
+    escalationsError = true;
+  }
+
   return (
-    <RunDetailView
-      pipelineId={pipelineId}
-      runId={runId}
-      wsQuery={wsQuery}
-      basePath="/runs"
-      indexPath="/runs"
-      indexLabel="Runs"
-      backHref="/runs"
-      backLabel="← All runs"
-    />
+    <AppShell
+      title="Run"
+      kicker="RUN"
+      workspace={{
+        id: workspace.id,
+        name: workspace.name,
+        slug: workspace.slug,
+      }}
+      actions={
+        <Link
+          href="/runs"
+          className="text-xs font-semibold text-white/65 hover:text-white"
+        >
+          {"\u2190"} All runs
+        </Link>
+      }
+    >
+      <RunDetail
+        workspaceId={workspace.id}
+        workspaceSlug={workspace.slug}
+        run={detail.run}
+        pipeline={detail.pipeline}
+        escalations={escalations}
+        escalationsError={escalationsError}
+      />
+    </AppShell>
   );
 }
 
-function renderError(err: unknown) {
+function renderError(
+  err: unknown,
+  workspace?: {
+    workspaceId: string;
+    workspaceName: string;
+    workspaceSlug: string;
+  },
+) {
   const isUnavailable = err instanceof ApiUnavailableError;
   return (
-    <AppShell title="Run">
+    <AppShell
+      title="Run"
+      kicker="RUN"
+      workspace={
+        workspace
+          ? {
+              id: workspace.workspaceId,
+              name: workspace.workspaceName,
+              slug: workspace.workspaceSlug,
+            }
+          : undefined
+      }
+    >
       <Card>
         <CardHeader
           title="Couldn't load run"
