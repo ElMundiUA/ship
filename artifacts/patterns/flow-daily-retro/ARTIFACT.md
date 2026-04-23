@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-19T00:00:00+03:00"
-content_sha256: 6b01a9960dd87b9b0192dc3aa21753045844d55f9bd22428d9ccb6be9e7d28ab
+content_sha256: 6633c685e93c4ee7cd18eaef545796dd5761a57e7f603c049825c10ab8a3ce44
 deprecated: false
 replaced_by: null
 yanked: false
@@ -21,6 +21,8 @@ spec:
   category: flow
   modes: [lane, request]
   include: [common-base]
+  inbox:
+    profile: flow_reporting
   lane_id: daily_standup
   lane_name: "Daily standup"
   lane_summary: >-

@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: fd4a5bdcb7c0111a9afbd90e7026dda54b734745dedb763f49d1dffaa8f37515
+content_sha256: 74b1789184dc870ffd3ede77b74f51f315a4549df3b96ed2a1f3dc6e15d8e5cc
 deprecated: false
 replaced_by: null
 yanked: false
@@ -21,6 +21,8 @@ spec:
   category: flow
   modes: [request]
   include: [common-base]
+  inbox:
+    profile: flow_reporting
   inputs:
     - name: sprint_length_days
       type: enum

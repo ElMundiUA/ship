@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: 5eb0ff6e4aa9af069ef8a581271675afe822f7877f4384a8b2f4b6f09316bed0
+content_sha256: ef3cc86b7956bbb98f1ee6c14f4f8c2d44e2ffdcbb9fc2f438cc445caf475d7c
 deprecated: false
 replaced_by: null
 yanked: false
@@ -21,6 +21,8 @@ spec:
   category: flow
   modes: [lane, request]
   include: [common-base]
+  inbox:
+    profile: flow_release
   default_trigger:
     kind: schedule
     cron: "0 5 * * 2"

@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: 9ca7f67bcdaa188016ac281dc0f9f371372257daac285af589ad3d75d7d7c9fc
+content_sha256: 1376c871ed84716edb9f6216a6e92a68e0a49dd7249f75de6684c379f4f4f912
 deprecated: false
 replaced_by: null
 yanked: false
@@ -21,6 +21,8 @@ spec:
   category: flow
   modes: [request]
   include: [common-base]
+  inbox:
+    profile: flow_release
   inputs:
     - name: platform
       type: enum

@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-23T00:00:00+00:00"
-content_sha256: f8e3305535683d2aabe376692797c5ff741eaa6a4e91d4bdcfeed8faf54ff46f
+content_sha256: b1e3e28f076976e9142e4a7e2edb597b4731b19c06d7a3fbd54a2104ff61c0d5
 deprecated: false
 replaced_by: null
 yanked: false
@@ -21,6 +21,8 @@ spec:
   category: flow
   modes: [request]
   include: [common-base]
+  inbox:
+    profile: flow_incident
   inputs:
     - name: shift_from
       type: text

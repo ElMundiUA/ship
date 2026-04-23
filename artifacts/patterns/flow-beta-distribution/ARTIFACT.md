@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: 8a38371dc40a5dcc66f6cb80e1878f0cd2c64a2c270ae0b2c6d102bf837df950
+content_sha256: 9fbade82da12263fb9031b91afe96a60285ac017f4fd00e449367ba38898d4e6
 deprecated: false
 replaced_by: null
 yanked: false
@@ -21,6 +21,8 @@ spec:
   category: flow
   modes: [lane, request]
   include: [common-base]
+  inbox:
+    profile: flow_release
   default_trigger:
     kind: event
     event: push

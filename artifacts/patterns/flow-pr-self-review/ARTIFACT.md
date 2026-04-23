@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-07T20:41:22+03:00"
-content_sha256: b281ecbcf5e8aa0ab221d3f2938068379ff20d167eadeef53044caf153c85179
+content_sha256: 248ba682118e8a4a296439fcf65f5bacc5f4c42f745d0f5e2cb776b2ba5a7f75
 deprecated: false
 replaced_by: null
 yanked: false
@@ -21,6 +21,8 @@ spec:
   category: flow
   modes: [lane]
   include: [common-base]
+  inbox:
+    profile: flow_pr
   lane_id: pr_review
   lane_name: "PR review"
   lane_summary: >-
