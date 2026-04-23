@@ -22,8 +22,8 @@ Endpoints
   merged reads go through that endpoint with ``workspace_id=``).
 * ``DELETE /workspaces/{ws}/patterns/{id}`` — remove. Guards against
   deleting a pattern that is currently referenced by a
-  ``WorkspacePolicy`` or wired into ``pipelines`` so the audit trail
-  stays consistent.
+  :class:`FleetLane` (mirror-lane rule) or wired into ``pipelines``
+  so the audit trail stays consistent.
 
 LLM draft contract
 ------------------
@@ -55,7 +55,7 @@ from backend.app.api.v1.routes.workspaces import (
     _require_membership,
 )
 from backend.app.db.models.custom_patterns import CustomPattern
-from backend.app.db.models.policies import WorkspacePolicy
+from backend.app.db.models.fleet_lanes import FleetLane
 from backend.app.db.session import get_session
 from backend.app.services import catalog as catalog_service
 from backend.app.core.config import get_settings
@@ -462,8 +462,8 @@ async def delete_workspace_pattern(
     """Delete a workspace-private pattern.
 
     Blocks deletion while the pattern is referenced by any active
-    :class:`WorkspacePolicy` (mirror-lane rule) — removing it out
-    from under a live policy would leave the Console rendering
+    :class:`FleetLane` (mirror-lane rule) — removing it out from
+    under a live Fleet lane would leave the Console rendering
     orphaned ids in the compliance rollup. Historical agent/fleet
     requests are not gated; they carry the id as an audit artefact
     and the UI already renders unresolved ids defensively.
@@ -483,22 +483,22 @@ async def delete_workspace_pattern(
 
     # Referenced-by check. Compliance code uses ``pattern_id`` (string)
     # not the PK, so we look both tables up by the textual id.
-    policy_ref = (
+    fleet_lane_ref = (
         await session.execute(
-            select(WorkspacePolicy.id).where(
-                WorkspacePolicy.workspace_id == workspace_id,
-                WorkspacePolicy.pattern_id == row.pattern_id,
+            select(FleetLane.id).where(
+                FleetLane.workspace_id == workspace_id,
+                FleetLane.pattern_id == row.pattern_id,
             ).limit(1)
         )
     ).scalar_one_or_none()
-    if policy_ref is not None:
+    if fleet_lane_ref is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
-                "code": "pattern_in_use_policy",
+                "code": "pattern_in_use_fleet_lane",
                 "message": (
-                    "Pattern is referenced by a workspace policy. Remove "
-                    "the policy first."
+                    "Pattern is referenced by a Fleet lane. Remove the "
+                    "Fleet lane first."
                 ),
             },
         )

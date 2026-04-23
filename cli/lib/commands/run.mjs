@@ -340,10 +340,21 @@ export async function runCommand(ctx, rest) {
   /* Emit the prompt(s) for the agent to consume (same contract as
    * `shipctl kickoff`). The reusable workflow pipes stdout into the
    * configured agent runtime; multi-pattern output is delimited by a
-   * banner line per pattern so consumers can split on it. */
+   * banner line per pattern so consumers can split on it.
+   *
+   * Workspace policy injection (RFC-Workspace-policy): before any
+   * pattern body, fetch the workspace's prose-rule policies from the
+   * backend and prepend them as a markdown block. This makes the
+   * agent treat the policies as hard preamble — the same shape the
+   * Navigator chat injects into ``TopicService.assemble_messages``.
+   * Best-effort: a missing token, missing callback URL, or a network
+   * failure quietly skips the prepend so local / offline runs still
+   * work. */
   if (!(ctx.json || args.json)) {
     const provider = resolveAgentProvider(config, args.lane);
     if (provider) console.error(`# ship: lane=${args.lane} agent.provider=${provider} mode=${runMode}`);
+    const preamble = await fetchPoliciesPreamble(args);
+    if (preamble) emitPoliciesPreamble(preamble);
     emitPatternBodies(runs, { json: false });
   }
 
@@ -412,6 +423,77 @@ function emitPatternBodies(runs, _opts) {
     process.stdout.write(`# ship: pattern=${r.patternId} sha256=${r.sha256}\n`);
     const body = r.body;
     process.stdout.write(body.endsWith("\n") ? body : `${body}\n`);
+  }
+}
+
+/**
+ * Print the workspace-policies preamble once at the top of stdout,
+ * before the first pattern body. Trailing ``---`` separator visually
+ * distinguishes the preamble from the pattern markdown the agent is
+ * about to consume; an extra blank line above the separator keeps
+ * the markdown well-formed if the preamble already ends with one.
+ */
+function emitPoliciesPreamble(preamble) {
+  const trimmed = preamble.endsWith("\n") ? preamble : `${preamble}\n`;
+  process.stdout.write(trimmed);
+  process.stdout.write("\n---\n");
+}
+
+/**
+ * Fetch the workspace prose-rule policies for the current run from
+ * the Ship backend. The endpoint URL is derived from the callback
+ * URL by swapping the trailing ``/result`` segment for
+ * ``/policies-preamble`` — both share the same auth dependency
+ * (per-run JWT or long-lived ``SHIP_RUN_TOKEN``), so we can reuse
+ * the same bearer.
+ *
+ * Returns the preamble markdown or ``null`` when:
+ *  - there's no callback URL / token (local invocation),
+ *  - the URL doesn't end in ``/result`` (someone overrode the
+ *    callback endpoint to a non-canonical path — too risky to
+ *    guess),
+ *  - the backend has no enabled policies (``preamble: null``),
+ *  - or the request fails for any reason.
+ *
+ * Failures are surfaced as ``warn:`` lines on stderr so an operator
+ * can debug them without breaking the lane execution.
+ */
+async function fetchPoliciesPreamble(args) {
+  const callbackUrl = args.callbackUrl || process.env.SHIP_CALLBACK_URL;
+  if (!callbackUrl) return null;
+  const token = args.runToken || process.env.SHIP_RUN_TOKEN;
+  if (!token) return null;
+  if (!callbackUrl.endsWith("/result")) {
+    console.error(
+      `warn: SHIP_CALLBACK_URL does not end in /result; skipping policies-preamble fetch (got ${callbackUrl}).`,
+    );
+    return null;
+  }
+  const url = `${callbackUrl.slice(0, -"/result".length)}/policies-preamble`;
+  try {
+    const res = await fetch(url, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+    });
+    if (!res.ok) {
+      console.error(
+        `warn: policies-preamble fetch returned HTTP ${res.status} ${res.statusText}; continuing without policies.`,
+      );
+      return null;
+    }
+    const body = await res.json().catch(() => null);
+    if (!body || typeof body !== "object") return null;
+    const preamble = body.preamble;
+    if (typeof preamble !== "string" || !preamble.trim()) return null;
+    return preamble;
+  } catch (err) {
+    console.error(
+      `warn: policies-preamble fetch failed: ${err instanceof Error ? err.message : err}`,
+    );
+    return null;
   }
 }
 

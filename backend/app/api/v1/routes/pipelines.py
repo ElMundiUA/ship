@@ -1337,6 +1337,53 @@ async def report_run_result(
     return _run_to_out(run)
 
 
+class PoliciesPreambleOut(BaseModel):
+    """Workspace policies rendered as a markdown preamble.
+
+    ``preamble`` is ``None`` when the workspace has no enabled
+    policies — the CLI uses that as the signal to skip prepending
+    anything to its stdout (avoiding a stray separator).
+    """
+
+    preamble: str | None = Field(
+        default=None,
+        description=(
+            "Markdown rendering of the enabled workspace policies, "
+            "ready to prepend to the agent prompt. ``null`` when "
+            "the workspace has no enabled policies."
+        ),
+    )
+
+
+@public_router.get(
+    "/runs/{run_id}/policies-preamble",
+    response_model=PoliciesPreambleOut,
+)
+async def get_run_policies_preamble(
+    run_id: uuid.UUID = Path(...),
+    ctx: RunTokenContext = Depends(get_run_or_repo_token_context),
+    session: AsyncSession = Depends(get_session),
+) -> PoliciesPreambleOut:
+    """Return the workspace's prose policies for the run's workspace.
+
+    ``shipctl run`` calls this just before emitting pattern bodies
+    to stdout and prepends ``preamble`` ahead of the first pattern.
+    Same render path as the Navigator-chat injection (see
+    ``services.policies.render_policies_preamble``) so both surfaces
+    stay in lock-step on what the agent sees.
+
+    Auth mirrors ``POST /runs/{run_id}/result``: per-run JWT or
+    long-lived ``SHIP_RUN_TOKEN``. The dependency cross-checks the
+    run id against the credential, so the workspace is implicitly
+    authorised by membership of the ``PipelineRun`` row.
+    """
+
+    from backend.app.services.policies import render_policies_preamble
+
+    preamble = await render_policies_preamble(session, ctx.workspace_id)
+    return PoliciesPreambleOut(preamble=preamble)
+
+
 # ---------------------------------------------------------------------------
 # Auto-dispatch (knowledge-gathering pipelines)
 # ---------------------------------------------------------------------------

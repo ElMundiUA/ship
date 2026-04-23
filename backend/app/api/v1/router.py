@@ -26,6 +26,7 @@ from backend.app.api.v1.routes import (
     custom_patterns,
     dashboard,
     distiller,
+    fleet_lanes,
     fleet_requests,
     github_app,
     health,
@@ -154,9 +155,18 @@ api_router.include_router(fleet_requests.router)
 # live from WorkspaceRepo + PipelineRun + WorkflowRun + AgentRequest
 # and returned in one shot.
 api_router.include_router(adoption.router)
-# Workspace-level Policy primitive (RFC-0008 §G — PR-5) —
-# mirror-lane rules + per-repo opt-outs with live compliance
-# rollup. Read is member; create/delete/exception are admin.
+# Workspace-level Fleet lanes primitive (RFC-0008 §G — PR-5,
+# previously called "policies") — mirror-lane rules + per-repo
+# opt-outs with live compliance rollup. Read is member;
+# create/delete/exception are admin. Renamed from "policies" to
+# free up that name for free-text standing rules injected into
+# agent instructions; see ``routes.fleet_lanes`` docstring.
+api_router.include_router(fleet_lanes.router)
+# Workspace prose-rule policies (Workspace policy injection) —
+# free-text standing rules ("Always work via PR", "Never commit
+# secrets") that get rendered into the agent system prompt at
+# runtime, both in Navigator chat and in `shipctl run` stdout.
+# See ``services.policies`` for the shared rendering helper.
 api_router.include_router(policies.router)
 # Workspace-private catalog layer (RFC-0008 §H — PR-6). Authoring
 # (``POST /patterns/draft`` via LLM + ``POST /patterns`` to persist)

@@ -222,17 +222,17 @@ async def test_delete_custom_pattern(
 
 
 @pytest.mark.asyncio
-async def test_delete_blocked_by_policy(
+async def test_delete_blocked_by_fleet_lane(
     v1_client, seed_pattern_workspace, db_session
 ) -> None:
-    """A custom pattern referenced by an active policy can't be deleted.
+    """A custom pattern referenced by an active Fleet lane can't be deleted.
 
-    We insert the :class:`WorkspacePolicy` row directly (bypasses the
-    policies API, which validates against the baked-in catalog for
-    ``modes`` — irrelevant here; the delete-guard reads ``pattern_id``
-    textually off the DB).
+    We insert the :class:`FleetLane` row directly (bypasses the
+    fleet-lanes API, which validates against the baked-in catalog
+    for ``modes`` — irrelevant here; the delete-guard reads
+    ``pattern_id`` textually off the DB).
     """
-    from backend.app.db.models.policies import WorkspacePolicy
+    from backend.app.db.models.fleet_lanes import FleetLane
 
     raw, workspace = seed_pattern_workspace
     headers = {"Authorization": f"Bearer {raw}"}
@@ -250,7 +250,7 @@ async def test_delete_blocked_by_policy(
     row_id = create.json()["id"]
 
     db_session.add(
-        WorkspacePolicy(
+        FleetLane(
             workspace_id=workspace.id,
             kind="mirror_lane",
             name="Guarded mirror",
@@ -266,7 +266,7 @@ async def test_delete_blocked_by_policy(
         f"/v1/workspaces/{workspace.id}/patterns/{row_id}", headers=headers
     )
     assert resp.status_code == 409
-    assert resp.json()["detail"]["code"] == "pattern_in_use_policy"
+    assert resp.json()["detail"]["code"] == "pattern_in_use_fleet_lane"
 
 
 @pytest.mark.asyncio

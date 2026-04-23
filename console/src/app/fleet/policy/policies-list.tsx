@@ -1,32 +1,26 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 
-import { repoBasePath } from "@/lib/repo-slug";
-import type {
-  ApiPolicy,
-  ApiPolicyRepoCompliance,
-} from "@/lib/api/client";
 import {
   Badge,
   ButtonDanger,
   ButtonGhost,
+  ButtonPrimary,
   Card,
   CardHeader,
-  StatTile,
 } from "@/components/ui";
+import type { ApiPolicy } from "@/lib/api/client";
+import { cn } from "@/lib/cn";
 
 /**
- * Client island for the Policy list.
+ * Client island for the workspace-policies list.
  *
- * Keeps the per-policy compliance tiles + repo rows interactive
- * (opt-out toggle, policy delete) without pulling the whole page
- * into a client component. Optimistic updates: the server response
- * after a POST/DELETE returns the full ``ApiPolicy`` including the
- * recomputed compliance rollup, so we swap it in place rather than
- * refetching the list.
+ * Inline edit (textarea), enable/disable toggle and delete — all
+ * three POST/PATCH/DELETE responses round-trip through
+ * ``/api/policies`` and return the full updated row, so we replace
+ * in place rather than refetching the list.
  */
 export function PoliciesList({
   workspaceId,
@@ -74,14 +68,64 @@ function PolicyCard({
   onRemove: () => void;
 }) {
   const router = useRouter();
-  const [expanded, setExpanded] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [title, setTitle] = useState(policy.title);
+  const [body, setBody] = useState(policy.body);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
-  async function deletePolicy() {
+  function reset() {
+    setTitle(policy.title);
+    setBody(policy.body);
+    setError(null);
+  }
+
+  async function patch(payload: Record<string, unknown>) {
+    const res = await fetch(`/api/policies/${policy.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ workspaceId, ...payload }),
+    });
+    if (!res.ok) {
+      const eb = await res.json().catch(() => ({}));
+      throw new Error(eb?.error ?? `HTTP ${res.status}`);
+    }
+    return (await res.json()) as ApiPolicy;
+  }
+
+  function save() {
+    startTransition(async () => {
+      setError(null);
+      try {
+        if (!title.trim() || !body.trim()) {
+          throw new Error("Title and body are required");
+        }
+        const updated = await patch({ title, body });
+        onReplace(updated);
+        setEditing(false);
+        router.refresh();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to save");
+      }
+    });
+  }
+
+  function toggleEnabled() {
+    startTransition(async () => {
+      setError(null);
+      try {
+        const updated = await patch({ enabled: !policy.enabled });
+        onReplace(updated);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to toggle");
+      }
+    });
+  }
+
+  function deletePolicy() {
     if (
       !window.confirm(
-        `Delete policy "${policy.name}"? This doesn't remove already-wired lanes on repos.`,
+        `Delete policy "${policy.title}"? Agent prompts will stop including this rule immediately.`,
       )
     ) {
       return;
@@ -94,8 +138,8 @@ function PolicyCard({
           { method: "DELETE" },
         );
         if (!res.ok && res.status !== 204) {
-          const body = await res.json().catch(() => ({}));
-          throw new Error(body?.error ?? `HTTP ${res.status}`);
+          const eb = await res.json().catch(() => ({}));
+          throw new Error(eb?.error ?? `HTTP ${res.status}`);
         }
         onRemove();
         router.refresh();
@@ -105,56 +149,16 @@ function PolicyCard({
     });
   }
 
-  async function toggleException(
-    repo: ApiPolicyRepoCompliance,
-    shouldExcept: boolean,
-  ) {
-    startTransition(async () => {
-      setError(null);
-      try {
-        const url = `/api/policies/${policy.id}/exceptions/${repo.repo_id}`;
-        const res = shouldExcept
-          ? await fetch(url, {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ workspaceId }),
-            })
-          : await fetch(
-              `${url}?workspaceId=${encodeURIComponent(workspaceId)}`,
-              { method: "DELETE" },
-            );
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
-          throw new Error(body?.error ?? `HTTP ${res.status}`);
-        }
-        const updated = (await res.json()) as ApiPolicy;
-        onReplace(updated);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed");
-      }
-    });
-  }
-
-  const { compliance } = policy;
-  const percent =
-    compliance.total_repos > 0
-      ? Math.round(
-          (compliance.compliant / compliance.total_repos) * 100,
-        )
-      : 0;
-
   return (
     <Card padded={false}>
       <div className="flex flex-wrap items-start gap-4 border-b border-white/[0.08] px-5 py-4">
         <div className="min-w-0 flex-1">
           <CardHeader
-            title={policy.name}
+            title={policy.title}
             subtitle={
-              <span className="font-mono text-[11px]">
-                {policy.pattern_id} · lane{" "}
-                <span className="text-white/80">{policy.lane_id}</span> ·{" "}
-                {policy.cadence}
-                {policy.agent_slug ? ` · agent ${policy.agent_slug}` : null}
+              <span className="text-[11px] text-white/45">
+                sort {policy.sort_order} · updated{" "}
+                {new Date(policy.updated_at).toLocaleString()}
               </span>
             }
           />
@@ -165,8 +169,16 @@ function PolicyCard({
           ) : null}
         </div>
         <div className="flex items-center gap-2">
-          <ButtonGhost onClick={() => setExpanded((v) => !v)}>
-            {expanded ? "Hide repos" : "Show repos"}
+          <ButtonGhost onClick={toggleEnabled}>
+            {pending ? "…" : policy.enabled ? "Disable" : "Enable"}
+          </ButtonGhost>
+          <ButtonGhost
+            onClick={() => {
+              if (editing) reset();
+              setEditing((v) => !v);
+            }}
+          >
+            {editing ? "Cancel" : "Edit"}
           </ButtonGhost>
           <ButtonDanger onClick={deletePolicy}>
             {pending ? "…" : "Delete"}
@@ -174,91 +186,61 @@ function PolicyCard({
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 px-5 py-4 md:grid-cols-4">
-        <StatTile
-          label="Repos"
-          value={String(compliance.total_repos)}
-          hint="Total activated"
-        />
-        <StatTile
-          label="Compliant"
-          value={String(compliance.compliant)}
-          hint={
-            compliance.total_repos > 0
-              ? `${percent}% of fleet`
-              : "No repos yet"
-          }
-        />
-        <StatTile
-          label="Missing"
-          value={String(compliance.missing)}
-          hint="Lane not wired"
-        />
-        <StatTile
-          label="Excepted"
-          value={String(compliance.excepted)}
-          hint="Opted out"
-        />
-      </div>
+      {editing ? (
+        <div className="flex flex-col gap-3 px-5 py-4">
+          <label className="flex flex-col gap-1">
+            <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/45">
+              Title
+            </span>
+            <input
+              type="text"
+              value={title}
+              maxLength={160}
+              onChange={(e) => setTitle(e.target.value)}
+              className="rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none focus:border-aqua/50"
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/45">
+              Body (markdown)
+            </span>
+            <textarea
+              value={body}
+              rows={8}
+              onChange={(e) => setBody(e.target.value)}
+              className="rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 font-mono text-xs leading-relaxed text-white outline-none focus:border-aqua/50"
+            />
+          </label>
+          <div className="flex justify-end gap-2">
+            <ButtonGhost
+              onClick={() => {
+                reset();
+                setEditing(false);
+              }}
+            >
+              Cancel
+            </ButtonGhost>
+            <ButtonPrimary onClick={save}>
+              {pending ? "Saving…" : "Save"}
+            </ButtonPrimary>
+          </div>
+        </div>
+      ) : (
+        <div
+          className={cn(
+            "whitespace-pre-wrap px-5 py-4 font-mono text-xs leading-relaxed text-white/75",
+            !policy.enabled && "opacity-60",
+          )}
+        >
+          {policy.body}
+        </div>
+      )}
 
       {error ? (
         <div className="border-t border-white/[0.08] bg-rose-500/10 px-5 py-2 text-xs text-rose-200">
           {error}
         </div>
       ) : null}
-
-      {expanded ? (
-        <div className="border-t border-white/[0.08]">
-          <div className="px-5 py-3 text-[10px] font-bold uppercase tracking-[0.18em] text-white/45">
-            Per-repo status
-          </div>
-          <ul className="divide-y divide-white/[0.06]">
-            {compliance.repos.map((repo) => (
-              <li
-                key={repo.repo_id}
-                className="flex flex-wrap items-center gap-3 px-5 py-3"
-              >
-                <Link
-                  href={repoBasePath({ full_name: repo.full_name })}
-                  className="min-w-0 flex-1 font-mono text-sm text-white/90 hover:text-white"
-                >
-                  {repo.full_name}
-                </Link>
-                <Badge tone={statusTone(repo.status)} dot>
-                  {repo.status}
-                </Badge>
-                {repo.exception_reason ? (
-                  <span className="text-[11px] text-white/50">
-                    {repo.exception_reason}
-                  </span>
-                ) : null}
-                {repo.status === "excepted" ? (
-                  <ButtonGhost onClick={() => toggleException(repo, false)}>
-                    Remove opt-out
-                  </ButtonGhost>
-                ) : (
-                  <ButtonGhost onClick={() => toggleException(repo, true)}>
-                    Opt out
-                  </ButtonGhost>
-                )}
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
     </Card>
   );
-}
-
-function statusTone(
-  status: ApiPolicyRepoCompliance["status"],
-): "ok" | "warn" | "neutral" {
-  switch (status) {
-    case "compliant":
-      return "ok";
-    case "missing":
-      return "warn";
-    case "excepted":
-      return "neutral";
-  }
 }

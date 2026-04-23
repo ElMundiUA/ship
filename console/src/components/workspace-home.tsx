@@ -48,10 +48,16 @@ const FLEET_TILES: {
     body: "Fan one catalog pattern out across many repos in a single click.",
   },
   {
+    href: "/fleet/lanes",
+    label: "Fleet lanes",
+    shipsIn: "PR-5",
+    body: "Cross-repo rules + mirror patterns enforced at the workspace level.",
+  },
+  {
     href: "/fleet/policy",
     label: "Policy",
     shipsIn: "PR-5",
-    body: "Cross-repo rules + mirror patterns enforced at the workspace level.",
+    body: "Standing rules ('Always work via PR') injected into agent instructions.",
   },
   {
     href: "/fleet/adoption",

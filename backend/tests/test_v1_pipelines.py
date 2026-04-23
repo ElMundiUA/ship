@@ -898,6 +898,117 @@ async def test_callback_rejects_repo_token_for_foreign_run(
 
 
 # ---------------------------------------------------------------------------
+# Policies preamble (Workspace policy injection — shipctl side)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_policies_preamble_returns_null_when_empty(
+    monkeypatch, v1_client, db_session, seed_repo_and_install
+) -> None:
+    from backend.app.api.v1.routes import pipelines as pipelines_route
+
+    raw, workspace, _install, repo = seed_repo_and_install
+    pipelines = await _seed_bound_pipelines(db_session, workspace.id, repo.id)
+    target = pipelines["pr_review"]
+
+    captured: dict[str, str] = {}
+
+    async def _probe(repo, install, *, settings, **_):
+        return frozenset({"pr-and-ci-gate.yml"})
+
+    async def _dispatch(repo, install, workflow_file, *, inputs, settings, **_):
+        captured.update(inputs)
+
+    monkeypatch.setattr(pipelines_route, "list_repo_workflows", _probe)
+    monkeypatch.setattr(pipelines_route, "dispatch_workflow", _dispatch)
+
+    dispatch_resp = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/pipelines/{target.id}/runs",
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    run_id = dispatch_resp.json()["id"]
+    token = captured["ship_run_token"]
+
+    resp = await v1_client.get(
+        f"/v1/pipelines/runs/{run_id}/policies-preamble",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"preamble": None}
+
+
+@pytest.mark.asyncio
+async def test_policies_preamble_renders_enabled_only(
+    monkeypatch, v1_client, db_session, seed_repo_and_install
+) -> None:
+    from backend.app.api.v1.routes import pipelines as pipelines_route
+    from backend.app.db.models.policies import WorkspacePolicy
+
+    raw, workspace, _install, repo = seed_repo_and_install
+    pipelines = await _seed_bound_pipelines(db_session, workspace.id, repo.id)
+    target = pipelines["pr_review"]
+
+    db_session.add_all(
+        [
+            WorkspacePolicy(
+                workspace_id=workspace.id,
+                title="Always work via PR",
+                body="Never push directly to main.",
+                enabled=True,
+                sort_order=0,
+            ),
+            WorkspacePolicy(
+                workspace_id=workspace.id,
+                title="Disabled rule",
+                body="Should not render.",
+                enabled=False,
+                sort_order=-1,
+            ),
+        ]
+    )
+    await db_session.flush()
+
+    captured: dict[str, str] = {}
+
+    async def _probe(repo, install, *, settings, **_):
+        return frozenset({"pr-and-ci-gate.yml"})
+
+    async def _dispatch(repo, install, workflow_file, *, inputs, settings, **_):
+        captured.update(inputs)
+
+    monkeypatch.setattr(pipelines_route, "list_repo_workflows", _probe)
+    monkeypatch.setattr(pipelines_route, "dispatch_workflow", _dispatch)
+
+    dispatch_resp = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/pipelines/{target.id}/runs",
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    run_id = dispatch_resp.json()["id"]
+    token = captured["ship_run_token"]
+
+    resp = await v1_client.get(
+        f"/v1/pipelines/runs/{run_id}/policies-preamble",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200, resp.text
+    preamble = resp.json()["preamble"]
+    assert preamble is not None
+    assert preamble.startswith("# Workspace policies")
+    assert "## Always work via PR" in preamble
+    assert "Never push directly to main." in preamble
+    assert "Disabled rule" not in preamble
+
+
+@pytest.mark.asyncio
+async def test_policies_preamble_rejects_missing_bearer(v1_client) -> None:
+    resp = await v1_client.get(
+        f"/v1/pipelines/runs/{uuid.uuid4()}/policies-preamble",
+    )
+    assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
 # Install endpoint
 # ---------------------------------------------------------------------------
 

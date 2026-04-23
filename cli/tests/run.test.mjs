@@ -270,8 +270,15 @@ test("resolveMarkerPath rejects invalid keys", () => {
 /* ------------------------------------------------------------------ */
 
 /* Mock Ship callback endpoint — captures POST bodies so we can assert
- * shipctl decorated the metrics blob with lane + GH run breadcrumbs. */
-function startMockShip() {
+ * shipctl decorated the metrics blob with lane + GH run breadcrumbs.
+ *
+ * Optional ``policiesPreamble`` (string|null|undefined) controls the
+ * response of ``GET /v1/pipelines/runs/.../policies-preamble``: a
+ * string serves it back as the rendered preamble, ``null`` returns
+ * ``{preamble: null}`` (the empty-policies path the backend takes
+ * when no rules are enabled), and ``undefined`` makes the GET 404 so
+ * tests can pin the "fail closed and continue" CLI behaviour. */
+function startMockShip(opts = {}) {
   return new Promise((resolve) => {
     const received = [];
     const server = http.createServer((req, res) => {
@@ -284,7 +291,17 @@ function startMockShip() {
         } catch {
           body = buf;
         }
-        received.push({ url: req.url, headers: req.headers, body });
+        received.push({ method: req.method, url: req.url, headers: req.headers, body });
+        if (req.method === "GET" && /\/policies-preamble$/.test(req.url || "")) {
+          if (opts.policiesPreamble === undefined) {
+            res.writeHead(404, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ detail: "not found" }));
+            return;
+          }
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ preamble: opts.policiesPreamble }));
+          return;
+        }
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: true }));
       });
@@ -606,6 +623,116 @@ test("shipctl run callback omits GH metrics when env is clean", async () => {
     assert.equal(body.metrics.gh_workflow_run_id, undefined);
     assert.equal(body.metrics.gh_html_url, undefined);
     assert.equal(body.metrics.gh_event, undefined);
+  } finally {
+    await mock.close();
+  }
+});
+
+/* ------------------------------------------------------------------ */
+/* Workspace policy injection — preamble prepended to stdout         */
+/* ------------------------------------------------------------------ */
+
+test("shipctl run prepends policies-preamble to pattern body", async () => {
+  const dir = mktmp();
+  writeConfig(
+    dir,
+    baseConfig({
+      lanes: {
+        seed: {
+          kind: "once",
+          pattern: "onboard-seed-knowledge",
+          idempotency: { key: "onboard-seed-knowledge.v1" },
+        },
+      },
+    }),
+  );
+  const preamble =
+    "# Workspace policies\n\n" +
+    "These standing rules apply to all work in this workspace. Follow them strictly.\n\n" +
+    "## Always work via PR\nNever push directly to main.\n";
+  const mock = await startMockShip({ policiesPreamble: preamble });
+  try {
+    const r = await runCtlAsync(
+      ["run", "--lane", "seed", "--trigger", "manual", "--cwd", dir],
+      { SHIP_CALLBACK_URL: mock.url, SHIP_RUN_TOKEN: "tok" },
+    );
+    assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
+    // Preamble first, separator, then the pattern body.
+    assert.ok(
+      r.stdout.startsWith("# Workspace policies\n"),
+      `expected stdout to start with the policies preamble; got:\n${r.stdout.slice(0, 200)}`,
+    );
+    assert.match(r.stdout, /## Always work via PR/);
+    assert.match(r.stdout, /\n---\n/);
+    // Mock should have observed the GET to /policies-preamble.
+    const fetches = mock.received.filter(
+      (e) => e.method === "GET" && /\/policies-preamble$/.test(e.url || ""),
+    );
+    assert.equal(fetches.length, 1, "expected one GET /policies-preamble");
+    assert.equal(fetches[0].headers.authorization, "Bearer tok");
+  } finally {
+    await mock.close();
+  }
+});
+
+test("shipctl run skips preamble when backend returns null", async () => {
+  const dir = mktmp();
+  writeConfig(
+    dir,
+    baseConfig({
+      lanes: {
+        seed: {
+          kind: "once",
+          pattern: "onboard-seed-knowledge",
+          idempotency: { key: "onboard-seed-knowledge.v1" },
+        },
+      },
+    }),
+  );
+  const mock = await startMockShip({ policiesPreamble: null });
+  try {
+    const r = await runCtlAsync(
+      ["run", "--lane", "seed", "--trigger", "manual", "--cwd", dir],
+      { SHIP_CALLBACK_URL: mock.url, SHIP_RUN_TOKEN: "tok" },
+    );
+    assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
+    assert.ok(
+      !r.stdout.includes("# Workspace policies"),
+      "stdout should not contain a policies preamble when backend returns null",
+    );
+  } finally {
+    await mock.close();
+  }
+});
+
+test("shipctl run continues without preamble when fetch fails", async () => {
+  const dir = mktmp();
+  writeConfig(
+    dir,
+    baseConfig({
+      lanes: {
+        seed: {
+          kind: "once",
+          pattern: "onboard-seed-knowledge",
+          idempotency: { key: "onboard-seed-knowledge.v1" },
+        },
+      },
+    }),
+  );
+  // No ``policiesPreamble`` opt → mock returns 404 to the GET. The
+  // CLI should warn and proceed to emit the pattern body unchanged.
+  const mock = await startMockShip();
+  try {
+    const r = await runCtlAsync(
+      ["run", "--lane", "seed", "--trigger", "manual", "--cwd", dir],
+      { SHIP_CALLBACK_URL: mock.url, SHIP_RUN_TOKEN: "tok" },
+    );
+    assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
+    assert.ok(
+      !r.stdout.includes("# Workspace policies"),
+      "stdout must not contain a preamble when the fetch failed",
+    );
+    assert.match(r.stderr, /policies-preamble fetch returned HTTP 404/);
   } finally {
     await mock.close();
   }

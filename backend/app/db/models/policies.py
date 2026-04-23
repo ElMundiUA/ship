@@ -1,18 +1,22 @@
-"""Workspace-level policies (RFC-0008 §G — PR-5).
+"""Workspace prose-rule policies (Workspace policy injection).
 
-Policies are workspace-owned rules that span *all* activated repos.
-The first kind we land is ``mirror_lane``: "pattern X runs as a lane
-with cadence Y on every activated repo, unless explicitly excepted".
-That single primitive lets a platform team set "every repo runs the
-security-scan lane nightly" without editing N ``.ship/config.yml``
-files by hand.
+A *workspace policy* is a free-text standing rule a workspace admin
+declares once and Ship enforces by **injecting it into the agent's
+system prompt** every time work is dispatched in this workspace.
+Examples: "Always work via PR", "Never commit secrets", "Run lint
+before opening a PR". The injection happens in two places:
 
-Future kinds (``required_request``, ``required_check``, …) can slot
-into the same table via ``kind`` discrimination; for PR-5 only
-``mirror_lane`` is validated. Repos can opt out of a policy via the
-companion :class:`WorkspacePolicyException` table — the roll-up
-endpoint subtracts those rows from the "missing" bucket so compliance
-numbers don't panic operators over deliberate exceptions.
+1. Navigator chat — :func:`TopicService.assemble_messages` adds a
+   system message immediately after the base agent prompt with the
+   rendered policy preamble.
+2. ``shipctl run`` — fetches the rendered preamble and prepends it
+   to the pattern markdown emitted on stdout, so the GitHub-Actions
+   agent step consumes it as part of its instructions.
+
+This is the **new** ``WorkspacePolicy`` model. The previous concept
+(mirror-lane rules) was renamed to :class:`FleetLane` in revision
+``0029`` so this name could be repurposed for the prose-rule
+feature without breaking the API surface.
 """
 
 from __future__ import annotations
@@ -24,11 +28,12 @@ from sqlalchemy import (
     Boolean,
     ForeignKey,
     Index,
+    Integer,
     String,
-    UniqueConstraint,
+    Text,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.app.db.base import Base
@@ -40,25 +45,23 @@ from backend.app.db.models.tenancy import (
 
 
 class WorkspacePolicy(Base):
-    """One workspace-level rule. See module docstring for context.
+    """One free-text standing rule for a workspace.
 
-    ``lane_id`` is the string slug the materialised ``Pipeline`` row
-    uses on each repo — matching this is how the compliance roll-up
-    decides "is repo R covered by this policy?". ``pattern_id`` is
-    the catalog pattern the lane should run; ``cadence`` is a free
-    string (cron expression or ``@daily`` / ``@weekly`` sugar; the
-    materialiser validates it when it actually wires the workflow).
-    ``inputs`` holds default pattern inputs that all repos inherit.
+    The combination of ``enabled`` + ``sort_order`` lets admins
+    re-order rules in the Console without renumbering and toggle
+    individual rules off without losing the body. The renderer
+    iterates ``enabled=true`` rows ordered by ``(sort_order,
+    created_at)`` so the preamble layout is stable across requests.
     """
 
     __tablename__ = "workspace_policies"
     __table_args__ = (
-        UniqueConstraint(
+        Index(
+            "ix_workspace_policies_workspace_enabled_sort",
             "workspace_id",
-            "lane_id",
-            name="uq_workspace_policies_lane",
+            "enabled",
+            "sort_order",
         ),
-        Index("ix_workspace_policies_workspace_id", "workspace_id"),
     )
 
     id: Mapped[uuid.UUID] = _pk()
@@ -68,70 +71,17 @@ class WorkspacePolicy(Base):
         nullable=False,
     )
 
-    # Discriminator. Only ``mirror_lane`` is accepted by the
-    # PR-5 endpoints; other kinds can be added later without
-    # schema changes.
-    kind: Mapped[str] = mapped_column(
-        String(32),
-        nullable=False,
-        server_default=text("'mirror_lane'"),
-    )
-    name: Mapped[str] = mapped_column(String(120), nullable=False)
-    pattern_id: Mapped[str] = mapped_column(String(120), nullable=False)
-    lane_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    cadence: Mapped[str] = mapped_column(String(120), nullable=False)
-    agent_slug: Mapped[str | None] = mapped_column(
-        String(64), nullable=True
-    )
-    inputs: Mapped[dict] = mapped_column(
-        JSONB, nullable=False, server_default=text("'{}'::jsonb")
-    )
+    title: Mapped[str] = mapped_column(String(160), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
     enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("true")
     )
+    sort_order: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
 
     created_at: Mapped[datetime] = _ts_created()
     updated_at: Mapped[datetime] = _ts_updated()
 
 
-class WorkspacePolicyException(Base):
-    """Per-repo opt-out from a policy.
-
-    A row here means "repo R should *not* be counted as missing this
-    policy's lane". It does not prevent the repo from wiring the lane
-    manually later — it just excludes the repo from the compliance
-    rollup's "needs attention" bucket. One row per ``(policy,
-    repo)``; toggling an opt-out deletes the row.
-    """
-
-    __tablename__ = "workspace_policy_exceptions"
-    __table_args__ = (
-        UniqueConstraint(
-            "policy_id",
-            "repo_id",
-            name="uq_workspace_policy_exceptions_repo",
-        ),
-        Index(
-            "ix_workspace_policy_exceptions_policy_id",
-            "policy_id",
-        ),
-    )
-
-    id: Mapped[uuid.UUID] = _pk()
-    policy_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("workspace_policies.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    repo_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("workspace_repos.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    reason: Mapped[str | None] = mapped_column(String(512), nullable=True)
-
-    created_at: Mapped[datetime] = _ts_created()
-    updated_at: Mapped[datetime] = _ts_updated()
-
-
-__all__ = ["WorkspacePolicy", "WorkspacePolicyException"]
+__all__ = ["WorkspacePolicy"]

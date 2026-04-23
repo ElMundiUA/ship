@@ -2900,27 +2900,30 @@ export interface ApiAdoptionReport {
 }
 
 // ---------------------------------------------------------------------------
-// Workspace policies (RFC-0008 §G — PR-5)
+// Workspace Fleet lanes (was: workspace policies, RFC-0008 §G — PR-5)
 // ---------------------------------------------------------------------------
 
-export type ApiPolicyComplianceStatus = "compliant" | "missing" | "excepted";
+export type ApiFleetLaneComplianceStatus =
+  | "compliant"
+  | "missing"
+  | "excepted";
 
-export interface ApiPolicyRepoCompliance {
+export interface ApiFleetLaneRepoCompliance {
   repo_id: string;
   full_name: string;
-  status: ApiPolicyComplianceStatus;
+  status: ApiFleetLaneComplianceStatus;
   exception_reason: string | null;
 }
 
-export interface ApiPolicyCompliance {
+export interface ApiFleetLaneCompliance {
   total_repos: number;
   compliant: number;
   missing: number;
   excepted: number;
-  repos: ApiPolicyRepoCompliance[];
+  repos: ApiFleetLaneRepoCompliance[];
 }
 
-export interface ApiPolicy {
+export interface ApiFleetLane {
   id: string;
   workspace_id: string;
   kind: string;
@@ -2933,10 +2936,10 @@ export interface ApiPolicy {
   enabled: boolean;
   created_at: string;
   updated_at: string;
-  compliance: ApiPolicyCompliance;
+  compliance: ApiFleetLaneCompliance;
 }
 
-export interface ApiPolicyCreateIn {
+export interface ApiFleetLaneCreateIn {
   name: string;
   pattern_id: string;
   lane_id: string;
@@ -2944,6 +2947,93 @@ export interface ApiPolicyCreateIn {
   agent_slug?: string | null;
   inputs?: Record<string, unknown>;
   enabled?: boolean;
+}
+
+export async function listFleetLanes(
+  workspaceId: string,
+  token?: string,
+): Promise<ApiFleetLane[]> {
+  const envelope = await apiFetch<{ fleet_lanes: ApiFleetLane[] }>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/fleet-lanes`,
+    { token },
+  );
+  return envelope.fleet_lanes;
+}
+
+export async function createFleetLane(
+  workspaceId: string,
+  body: ApiFleetLaneCreateIn,
+  token?: string,
+): Promise<ApiFleetLane> {
+  return apiFetch<ApiFleetLane>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/fleet-lanes`,
+    { method: "POST", body, token },
+  );
+}
+
+export async function deleteFleetLane(
+  workspaceId: string,
+  fleetLaneId: string,
+  token?: string,
+): Promise<void> {
+  await apiFetch<void>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/fleet-lanes/${encodeURIComponent(fleetLaneId)}`,
+    { method: "DELETE", token },
+  );
+}
+
+export async function addFleetLaneException(
+  workspaceId: string,
+  fleetLaneId: string,
+  repoId: string,
+  body: { reason?: string | null } = {},
+  token?: string,
+): Promise<ApiFleetLane> {
+  return apiFetch<ApiFleetLane>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/fleet-lanes/${encodeURIComponent(fleetLaneId)}/exceptions/${encodeURIComponent(repoId)}`,
+    { method: "POST", body, token },
+  );
+}
+
+export async function removeFleetLaneException(
+  workspaceId: string,
+  fleetLaneId: string,
+  repoId: string,
+  token?: string,
+): Promise<ApiFleetLane> {
+  return apiFetch<ApiFleetLane>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/fleet-lanes/${encodeURIComponent(fleetLaneId)}/exceptions/${encodeURIComponent(repoId)}`,
+    { method: "DELETE", token },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Workspace prose-rule policies (Workspace policy injection)
+// ---------------------------------------------------------------------------
+
+export interface ApiPolicy {
+  id: string;
+  workspace_id: string;
+  title: string;
+  body: string;
+  enabled: boolean;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ApiPolicyCreateIn {
+  title: string;
+  body: string;
+  enabled?: boolean;
+  sort_order?: number;
+}
+
+export interface ApiPolicyUpdateIn {
+  title?: string;
+  body?: string;
+  enabled?: boolean;
+  sort_order?: number;
 }
 
 export async function listPolicies(
@@ -2968,6 +3058,18 @@ export async function createPolicy(
   );
 }
 
+export async function updatePolicy(
+  workspaceId: string,
+  policyId: string,
+  body: ApiPolicyUpdateIn,
+  token?: string,
+): Promise<ApiPolicy> {
+  return apiFetch<ApiPolicy>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/policies/${encodeURIComponent(policyId)}`,
+    { method: "PATCH", body, token },
+  );
+}
+
 export async function deletePolicy(
   workspaceId: string,
   policyId: string,
@@ -2975,31 +3077,6 @@ export async function deletePolicy(
 ): Promise<void> {
   await apiFetch<void>(
     `/v1/workspaces/${encodeURIComponent(workspaceId)}/policies/${encodeURIComponent(policyId)}`,
-    { method: "DELETE", token },
-  );
-}
-
-export async function addPolicyException(
-  workspaceId: string,
-  policyId: string,
-  repoId: string,
-  body: { reason?: string | null } = {},
-  token?: string,
-): Promise<ApiPolicy> {
-  return apiFetch<ApiPolicy>(
-    `/v1/workspaces/${encodeURIComponent(workspaceId)}/policies/${encodeURIComponent(policyId)}/exceptions/${encodeURIComponent(repoId)}`,
-    { method: "POST", body, token },
-  );
-}
-
-export async function removePolicyException(
-  workspaceId: string,
-  policyId: string,
-  repoId: string,
-  token?: string,
-): Promise<ApiPolicy> {
-  return apiFetch<ApiPolicy>(
-    `/v1/workspaces/${encodeURIComponent(workspaceId)}/policies/${encodeURIComponent(policyId)}/exceptions/${encodeURIComponent(repoId)}`,
     { method: "DELETE", token },
   );
 }

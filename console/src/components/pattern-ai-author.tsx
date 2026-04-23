@@ -53,7 +53,7 @@ export function PatternAiAuthor({
   triggerLabel = "+ Generate with AI",
 }: {
   workspaceId: string;
-  /** Bias the draft toward a mode (used by /fleet/policy/new → "lane"). */
+  /** Bias the draft toward a mode (used by /fleet/lanes/new → "lane"). */
   defaultMode?: "lane" | "request";
   /** Fired after a successful save. Parent refetches the catalog. */
   onPatternSaved: (pattern: ApiCustomPattern) => void;

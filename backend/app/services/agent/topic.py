@@ -66,6 +66,7 @@ from backend.app.services.bucket_visibility import visible_to_user_clause
 from backend.app.services.bucket_summary_articles import (
     mirror_summary_to_article,
 )
+from backend.app.services.policies import render_policies_preamble
 
 
 logger = logging.getLogger(__name__)
@@ -575,19 +576,37 @@ class TopicService:
         Layering:
 
         1. System prompt.
-        2. Optional "memory context" system message with the bucket
+        2. Workspace policies preamble (Workspace policy injection):
+           prose standing rules ("Always work via PR", "Never commit
+           secrets") rendered just after the system prompt so the
+           model treats them as hard constraints, not soft hints.
+           Skipped when the workspace has no enabled policies.
+        3. Optional "memory context" system message with the bucket
            summaries we retrieved. This is what makes the single-
            window experience work — the agent reads the warmed
            buckets as if they had always been in its system prompt.
-        3. Optional "knowledge context" system message with
+        4. Optional "knowledge context" system message with
            ``.ship/knowledge`` snippets.
-        4. The live thread history (bounded to ``_MAX_HISTORY_TURNS``
+        5. The live thread history (bounded to ``_MAX_HISTORY_TURNS``
            so a long-running thread doesn't chew the context window).
-        5. The new user message as the final turn.
+        6. The new user message as the final turn.
         """
         out: list[ChatMessage] = [
             ChatMessage(role="system", content=_AGENT_SYSTEM_PROMPT),
         ]
+        # Policies preamble lives between the static system prompt and
+        # the dynamic per-thread context (topic summary / buckets / kb)
+        # so that workspace-level invariants take precedence over the
+        # warmed memory the agent might otherwise lean on. One DB read
+        # per assemble — workspaces have a handful of policies at most,
+        # so this is cheap enough not to need a memo cache.
+        policies_preamble = await render_policies_preamble(
+            self._session, self._workspace_id
+        )
+        if policies_preamble:
+            out.append(
+                ChatMessage(role="system", content=policies_preamble)
+            )
         if thread.topic_summary:
             out.append(
                 ChatMessage(
