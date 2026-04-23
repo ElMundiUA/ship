@@ -34,6 +34,13 @@ arq>=0.26,<1
 # --- Object storage (documents bucket source files) ---
 aioboto3>=13.1,<14
 
+# --- Email (Twilio SendGrid). Activated only when SENDGRID_API_KEY is
+#     set + EMAIL_PROVIDER=sendgrid. Without those the ``log`` provider
+#     keeps the API surface intact but sends nothing — laptop dev does
+#     not need credentials.
+sendgrid>=6.11,<7
+jinja2>=3.1,<4
+
 # --- Auth / secrets ---
 python-jose[cryptography]>=3.3,<4
 passlib[bcrypt]>=1.7,<2

@@ -179,6 +179,16 @@ _MAX_CODE_SEARCH = 20
 _MAX_AUDIT_EVENTS = 50
 _MAX_ARTIFACT_FEEDBACK_LIST = 50
 _MAX_BUCKET_SUMMARIES = 40
+# Hard ceiling on the navigator's ``send_email_to_self`` tool. Even
+# though the destination is fixed to the caller's own address, a
+# misbehaving model could fan out dozens of emails in a single chat
+# turn — this cap keeps the worst case to one digest per ~12 minutes.
+# Tracked in-process; resets on restart, which is the right "soft
+# eventual reset" behaviour for an abuse guardrail.
+_NAVIGATOR_EMAIL_HOURLY_CAP = 5
+_NAVIGATOR_EMAIL_MAX_SUBJECT = 120
+_NAVIGATOR_EMAIL_MAX_BODY = 16_000
+_navigator_email_history: dict[uuid.UUID, list[float]] = {}
 _KB_GLOB_PREFETCH_CAP = 80
 # PR-7C: hard cap on the workspace-knowledge tool's hit list. The LLM
 # rarely benefits from more than a handful of results and the 400-char
@@ -1277,6 +1287,42 @@ class ToolBox:
                     "additionalProperties": False,
                 },
             ),
+            ToolSpec(
+                name="send_email_to_self",
+                description=(
+                    "Email the signed-in user a Markdown summary of the "
+                    "current conversation (or any text you've drafted "
+                    "with them). Use ONLY when they explicitly ask you "
+                    "to email it — never autosend. The address is fixed "
+                    "to the caller's account email; you cannot pick a "
+                    "recipient. Subject + body are yours; keep the body "
+                    "Markdown-light (headings, lists, fenced code, "
+                    "links). Hard-rate-limited per user per hour."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "subject": {
+                            "type": "string",
+                            "description": (
+                                "Email subject line. Aim for <=120 "
+                                "characters; longer values are clipped."
+                            ),
+                        },
+                        "body_markdown": {
+                            "type": "string",
+                            "description": (
+                                "Markdown body. Supported subset: "
+                                "headings, ordered/unordered lists, "
+                                "fenced code blocks, **bold**, "
+                                "*italic*, `code`, [links](https://...)."
+                            ),
+                        },
+                    },
+                    "required": ["subject", "body_markdown"],
+                    "additionalProperties": False,
+                },
+            ),
         ]
 
     # ------------------------------------------------------------------
@@ -1337,6 +1383,7 @@ class ToolBox:
             "list_workspace_artifact_repos": self._tool_list_workspace_artifact_repos,
             "get_knowledge_bucket": self._tool_get_knowledge_bucket,
             "list_artifact_feedback": self._tool_list_artifact_feedback,
+            "send_email_to_self": self._tool_send_email_to_self,
         }
 
     # ------------------------------------------------------------------
@@ -2781,6 +2828,158 @@ class ToolBox:
             for r in rows
         ]
         return _json_result({"feedback": items, "count": len(items)})
+
+    async def _tool_send_email_to_self(self, args: dict[str, Any]) -> str:
+        """Email the caller a Markdown summary they explicitly asked for.
+
+        The recipient is hard-coded to the authenticated user's
+        account email — the LLM cannot pick a target. This is the
+        primary abuse guardrail: even a model that hallucinates
+        recipients can only spam its own user.
+
+        Other guards:
+
+        - In-process per-user rate limit
+          (:data:`_NAVIGATOR_EMAIL_HOURLY_CAP`).
+        - Subject + body are truncated to fixed caps so a runaway
+          completion can't ship 1MB of model output to inbox.
+        - We require the user row to have a verified-looking email
+          (``user.email`` is the source of truth for invites and
+          login; we reject blanks defensively).
+        - All sends are logged via :class:`AuditLog` (``navigator.email.sent``
+          / ``navigator.email.failed``) so the operator can trace
+          abuse or transport issues post-hoc.
+        """
+        import time
+
+        from backend.app.services.email import (
+            EmailAddress,
+            EmailMessage,
+            get_email_sender,
+            render_navigator_summary_email,
+        )
+
+        subject = _require_str(args, "subject").strip()
+        body = _require_str(args, "body_markdown")
+        if len(subject) > _NAVIGATOR_EMAIL_MAX_SUBJECT:
+            subject = subject[: _NAVIGATOR_EMAIL_MAX_SUBJECT - 1] + "…"
+        if len(body) > _NAVIGATOR_EMAIL_MAX_BODY:
+            body = body[:_NAVIGATOR_EMAIL_MAX_BODY] + "\n\n…(truncated)"
+
+        provider = (
+            (self._settings.email_provider or "log").lower().strip()
+        )
+        if provider == "none":
+            raise ToolInvocationError(
+                "Email transport is disabled (EMAIL_PROVIDER=none); "
+                "the operator has to enable SendGrid before this tool works."
+            )
+
+        user = await self._session.get(TenancyUser, self._user_id)
+        if user is None or not (user.email or "").strip():
+            raise ToolInvocationError(
+                "Could not resolve a destination email for the signed-in user."
+            )
+        recipient_email = user.email.strip()
+        recipient_name = user.display_name or None
+
+        # Per-user rate limit. Trim entries older than the rolling
+        # 1-hour window first so the cap is genuinely "last hour".
+        now = time.monotonic()
+        window = 3600.0
+        history = _navigator_email_history.setdefault(self._user_id, [])
+        history[:] = [t for t in history if now - t < window]
+        if len(history) >= _NAVIGATOR_EMAIL_HOURLY_CAP:
+            wait_seconds = int(window - (now - history[0]))
+            raise ToolInvocationError(
+                f"Hourly email cap reached ({_NAVIGATOR_EMAIL_HOURLY_CAP}). "
+                f"Try again in ~{max(60, wait_seconds) // 60} minute(s)."
+            )
+
+        rendered = render_navigator_summary_email(
+            subject=subject,
+            body_markdown=body,
+            conversation_url=None,
+        )
+        message = EmailMessage(
+            to=EmailAddress(email=recipient_email, name=recipient_name),
+            subject=rendered.subject,
+            html=rendered.html,
+            text=rendered.text,
+            tags={
+                "kind": "navigator_summary",
+                "workspace_id": str(self._workspace_id),
+                "user_id": str(self._user_id),
+            },
+        )
+
+        sender = get_email_sender(self._settings)
+        try:
+            result = await sender.send(message)
+        except Exception as exc:  # noqa: BLE001 — defensive
+            logger.exception(
+                "navigator email send raised user=%s", self._user_id
+            )
+            self._session.add(
+                AuditLog(
+                    workspace_id=self._workspace_id,
+                    actor_user_id=self._user_id,
+                    actor_token_id=None,
+                    action="navigator.email.failed",
+                    target_kind="user",
+                    target_id=str(self._user_id),
+                    payload={
+                        "subject": subject,
+                        "provider": sender.provider,
+                        "detail": f"unhandled: {exc}",
+                    },
+                )
+            )
+            raise ToolInvocationError(
+                f"send_email_to_self failed: {exc}"
+            ) from exc
+
+        history.append(now)
+
+        self._session.add(
+            AuditLog(
+                workspace_id=self._workspace_id,
+                actor_user_id=self._user_id,
+                actor_token_id=None,
+                action=(
+                    "navigator.email.sent"
+                    if result.sent
+                    else "navigator.email.failed"
+                ),
+                target_kind="user",
+                target_id=str(self._user_id),
+                payload={
+                    "subject": subject,
+                    "provider": result.provider,
+                    "detail": result.detail,
+                    "message_id": result.message_id,
+                },
+            )
+        )
+
+        if not result.sent:
+            return _json_result(
+                {
+                    "sent": False,
+                    "to": recipient_email,
+                    "provider": result.provider,
+                    "detail": result.detail,
+                }
+            )
+        return _json_result(
+            {
+                "sent": True,
+                "to": recipient_email,
+                "provider": result.provider,
+                "subject": subject,
+                "message_id": result.message_id,
+            }
+        )
 
     async def _tool_search_buckets(self, args: dict[str, Any]) -> str:
         # Phase 5d: ranks over ``bucket_articles`` instead of

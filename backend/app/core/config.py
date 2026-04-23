@@ -358,6 +358,69 @@ class Settings(BaseSettings):
         default=None, alias="NOTION_CLIENT_SECRET"
     )
 
+    # --- Email / Twilio SendGrid -------------------------------------------
+    # Email is opt-in: when ``email_provider`` is ``"log"`` (default) the
+    # backend renders messages and writes them to the application log
+    # without contacting any vendor — this keeps laptop dev and the
+    # entire test suite credential-free. Flip to ``"sendgrid"`` and set
+    # the API key + verified sender to actually deliver mail. ``"none"``
+    # is a kill switch: the API surface stays intact but every send is
+    # a no-op (used by tests that should not even render templates).
+    email_provider: str = Field(default="log", alias="EMAIL_PROVIDER")
+    sendgrid_api_key: str | None = Field(
+        default=None, alias="SENDGRID_API_KEY"
+    )
+    # Must be a sender already verified in the SendGrid dashboard
+    # (Settings → Sender Authentication). SendGrid rejects unverified
+    # senders with HTTP 403 at send time, not at API-key validation.
+    sendgrid_from_email: str | None = Field(
+        default=None, alias="SENDGRID_FROM_EMAIL"
+    )
+    sendgrid_from_name: str = Field(
+        default="Ship", alias="SENDGRID_FROM_NAME"
+    )
+    sendgrid_reply_to: str | None = Field(
+        default=None, alias="SENDGRID_REPLY_TO"
+    )
+    # SendGrid's REST API has no nativ async client, so the SendGridSender
+    # offloads the blocking call to a worker thread. This is the timeout
+    # for that call; the FastAPI request that triggered the send already
+    # ran in a BackgroundTask, so a small bound here is fine.
+    email_send_timeout_seconds: float = Field(
+        default=10.0, alias="EMAIL_SEND_TIMEOUT_SECONDS", gt=0.0
+    )
+
+    @model_validator(mode="after")
+    def _validate_email_provider(self) -> "Settings":
+        """Refuse to start in ``email_provider=sendgrid`` without credentials.
+
+        We catch this at boot rather than at first-send so a misconfigured
+        prod deploy fails with an obvious error instead of silently
+        eating outgoing invites.
+        """
+        provider = (self.email_provider or "log").lower().strip()
+        if provider == "sendgrid":
+            missing = [
+                name
+                for name, value in (
+                    ("SENDGRID_API_KEY", self.sendgrid_api_key),
+                    ("SENDGRID_FROM_EMAIL", self.sendgrid_from_email),
+                )
+                if not (value or "").strip()
+            ]
+            if missing:
+                raise ValueError(
+                    "EMAIL_PROVIDER=sendgrid requires "
+                    + ", ".join(missing)
+                    + ". Set them or fall back to EMAIL_PROVIDER=log."
+                )
+        elif provider not in {"log", "none"}:
+            raise ValueError(
+                f"unknown EMAIL_PROVIDER {self.email_provider!r}; "
+                "expected one of: sendgrid, log, none"
+            )
+        return self
+
     @model_validator(mode="after")
     def _no_localhost_urls_in_cloud(self) -> "Settings":
         """Refuse to start in cloud mode with localhost-shaped public URLs.

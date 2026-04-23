@@ -4,12 +4,17 @@ Surface area:
 
 - ``POST   /v1/workspaces/{ws}/invites`` — admin creates 1..N invites.
   The response returns the freshly-minted token string **once** — we
-  never echo it again; the admin's job is to forward the accept URL
-  out-of-band (Slack/email).
+  never echo it again; the admin still gets the accept URL back so
+  the UI can show "copy link" as a fallback when the email transport
+  is down. The same call also queues a transactional email to each
+  invitee through :mod:`backend.app.services.email`.
 - ``GET    /v1/workspaces/{ws}/invites`` — admin lists pending + past
   invites for the workspace.
 - ``DELETE /v1/workspaces/{ws}/invites/{id}`` — admin revokes a
   pending invite (expired / accepted are left alone).
+- ``POST   /v1/workspaces/{ws}/invites/{id}/resend`` — admin re-mints
+  the token for a pending invite and re-emails the recipient. Useful
+  when the original email got lost or the TTL is about to lapse.
 - ``GET    /v1/invites/{token}`` — prospective member peeks at the
   invite before logging in (shows workspace name + role + inviter).
   Unauthenticated but token-bearing; leak-safe because the token is
@@ -18,22 +23,24 @@ Surface area:
   accepts and becomes a workspace member. Email match is enforced
   so you can't redeem an invite intended for someone else.
 
-We deliberately don't ship an email sender in the pilot — the admin
-bulk-pastes emails, copies the accept-URL once per invite, and
-forwards them via their existing tools. A future iteration will add
-SMTP + SendGrid.
+Email delivery is best-effort and asynchronous: we hand the rendered
+message to FastAPI's ``BackgroundTasks`` so the API responds the
+moment the rows are committed. Failures land in the audit log
+(``invite.email.sent`` / ``invite.email.failed``) and the admin can
+hit the ``/resend`` endpoint to try again.
 """
 
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -52,7 +59,17 @@ from backend.app.db.models.tenancy import (
     WorkspaceInvite,
     WorkspaceMember,
 )
-from backend.app.db.session import get_session
+from backend.app.db.session import get_session, get_sessionmaker
+from backend.app.services.email import (
+    EmailAddress,
+    EmailDeliveryResult,
+    EmailMessage,
+    get_email_sender,
+    render_invite_email,
+)
+
+
+logger = logging.getLogger(__name__)
 
 
 INVITE_DEFAULT_TTL = timedelta(days=7)
@@ -116,6 +133,14 @@ class InviteOut(BaseModel):
     # emit plaintext tokens. ``None`` everywhere else.
     token: str | None = None
     accept_url: str | None = None
+    # Delivery state for the welcome email. ``"queued"`` means we
+    # handed it to ``BackgroundTasks`` and the audit log will record
+    # the outcome; ``"skipped"`` means the workspace's email
+    # provider is ``none`` (kill switch) so we did not even render;
+    # ``"disabled"`` is reserved for future per-workspace opt-outs.
+    # Older clients that ignore the field keep working — the value
+    # is purely informational; the row is committed either way.
+    email_status: Literal["queued", "skipped", "disabled"] | None = None
 
 
 class InvitePeekOut(BaseModel):
@@ -155,6 +180,132 @@ def _row_to_out(row: WorkspaceInvite, inviter_email: str | None) -> InviteOut:
         revoked_at=row.revoked_at,
         created_at=row.created_at,
     )
+
+
+async def _send_invite_email_in_background(
+    *,
+    workspace_id: uuid.UUID,
+    invite_id: uuid.UUID,
+    workspace_name: str,
+    role: str,
+    recipient_email: str,
+    accept_url: str,
+    expires_at: datetime,
+    inviter_email: str | None,
+    inviter_user_id: uuid.UUID | None,
+) -> None:
+    """Render + send one invite email; record the outcome in the audit log.
+
+    Runs in :class:`BackgroundTasks` so the response to the admin is
+    never blocked on SendGrid latency. Opens its own DB session
+    because the request session has already been committed and closed
+    by the time this fires.
+
+    Failures are swallowed — anything bubbling out of a background
+    task lands in uvicorn logs but cannot be surfaced to the original
+    request. The audit log row is the operator-facing trace.
+    """
+    settings = get_settings()
+    provider = (settings.email_provider or "log").lower().strip()
+    sender = get_email_sender(settings)
+
+    if provider == "none":
+        logger.debug(
+            "invite.email skipped (provider=none) workspace=%s invite=%s",
+            workspace_id,
+            invite_id,
+        )
+        return
+
+    rendered = render_invite_email(
+        workspace_name=workspace_name,
+        role=role,
+        recipient_email=recipient_email,
+        accept_url=accept_url,
+        expires_at=expires_at,
+        inviter_email=inviter_email,
+    )
+    message = EmailMessage(
+        to=EmailAddress(email=recipient_email),
+        subject=rendered.subject,
+        html=rendered.html,
+        text=rendered.text,
+        tags={
+            "kind": "invite",
+            "workspace_id": str(workspace_id),
+            "invite_id": str(invite_id),
+        },
+    )
+
+    try:
+        result = await sender.send(message)
+    except Exception as exc:  # noqa: BLE001 — defensive; sender swallows but be safe
+        logger.exception(
+            "invite.email send raised workspace=%s invite=%s",
+            workspace_id,
+            invite_id,
+        )
+        result = EmailDeliveryResult(
+            sent=False,
+            provider=sender.provider,
+            detail=f"unhandled: {exc}",
+        )
+
+    sessionmaker = get_sessionmaker()
+    async with sessionmaker() as session:
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=inviter_user_id,
+                actor_token_id=None,
+                action="invite.email.sent" if result.sent else "invite.email.failed",
+                target_kind="workspace_invite",
+                target_id=str(invite_id),
+                payload={
+                    "email": recipient_email,
+                    "provider": result.provider,
+                    "detail": result.detail,
+                    "message_id": result.message_id,
+                },
+            )
+        )
+        await session.commit()
+
+
+def _queue_invite_email(
+    background_tasks: BackgroundTasks,
+    *,
+    workspace: Workspace,
+    invite: WorkspaceInvite,
+    accept_url: str,
+    inviter_email: str | None,
+    inviter_user_id: uuid.UUID | None,
+) -> Literal["queued", "skipped", "disabled"]:
+    """Schedule one invite email and return the value for ``email_status``.
+
+    Wraps :func:`_send_invite_email_in_background` so callers don't
+    have to know about the kill-switch path. We snapshot every value
+    the background task needs into the closure so it can run after
+    the request session has closed.
+    """
+    settings = get_settings()
+    provider = (settings.email_provider or "log").lower().strip()
+    if provider == "none":
+        return "skipped"
+
+    background_tasks.add_task(
+        _send_invite_email_in_background,
+        workspace_id=workspace.id,
+        invite_id=invite.id,
+        workspace_name=workspace.name,
+        role=invite.role,
+        recipient_email=invite.email,
+        accept_url=accept_url,
+        expires_at=invite.expires_at,
+        inviter_email=inviter_email,
+        inviter_user_id=inviter_user_id,
+    )
+    return "queued"
 
 
 async def _inviter_emails(
@@ -208,6 +359,7 @@ async def list_invites(
 async def create_invites(
     workspace_id: uuid.UUID,
     payload: InviteBulkCreateIn,
+    background_tasks: BackgroundTasks,
     auth: AuthContext = Depends(get_current_auth),
     session: AsyncSession = Depends(get_session),
 ) -> list[InviteOut]:
@@ -306,13 +458,104 @@ async def create_invites(
     )
     await session.flush()
 
+    workspace = await session.get(Workspace, workspace_id)
     out: list[InviteOut] = []
     for row, token in created:
+        accept_url = _build_accept_url(token)
         entry = _row_to_out(row, auth.user.email)
         entry.token = token
-        entry.accept_url = _build_accept_url(token)
+        entry.accept_url = accept_url
+        if workspace is not None:
+            entry.email_status = _queue_invite_email(
+                background_tasks,
+                workspace=workspace,
+                invite=row,
+                accept_url=accept_url,
+                inviter_email=auth.user.email,
+                inviter_user_id=auth.user.id,
+            )
         out.append(entry)
     return out
+
+
+@workspace_router.post(
+    "/{invite_id}/resend", response_model=InviteOut
+)
+async def resend_invite(
+    workspace_id: uuid.UUID,
+    invite_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> InviteOut:
+    """Re-mint the token on a pending invite and queue a fresh email.
+
+    The original token is invalidated (we only store the SHA-256 of
+    one token per row) and a new accept URL is returned. We do not
+    reset ``created_at`` so the audit trail stays meaningful, but
+    ``expires_at`` is bumped by the same TTL the row originally had
+    so the recipient gets a usable window.
+    """
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+
+    row = (
+        await session.execute(
+            select(WorkspaceInvite).where(
+                WorkspaceInvite.id == invite_id,
+                WorkspaceInvite.workspace_id == workspace_id,
+            )
+        )
+    ).scalars().first()
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Invite not found."
+        )
+    if row.accepted_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Invite was already accepted — remove the member instead.",
+        )
+    if row.revoked_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Invite was revoked — issue a fresh one instead.",
+        )
+
+    token = secrets.token_urlsafe(32)
+    row.token_hash = _hash_token(token)
+    # Reset the TTL window from "now" using the same default as the
+    # bulk-create path. We keep ``invited_by_user_id`` intact so the
+    # original sender stays the on-file inviter.
+    row.expires_at = datetime.now(timezone.utc) + INVITE_DEFAULT_TTL
+    accept_url = _build_accept_url(token)
+
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=auth.user.id,
+            actor_token_id=auth.token.id if auth.token else None,
+            action="invite.resend",
+            target_kind="workspace_invite",
+            target_id=str(invite_id),
+            payload={"email": row.email},
+        )
+    )
+    await session.flush()
+
+    workspace = await session.get(Workspace, workspace_id)
+    entry = _row_to_out(row, auth.user.email)
+    entry.token = token
+    entry.accept_url = accept_url
+    if workspace is not None:
+        entry.email_status = _queue_invite_email(
+            background_tasks,
+            workspace=workspace,
+            invite=row,
+            accept_url=accept_url,
+            inviter_email=auth.user.email,
+            inviter_user_id=auth.user.id,
+        )
+    return entry
 
 
 @workspace_router.delete("/{invite_id}", status_code=status.HTTP_204_NO_CONTENT)
