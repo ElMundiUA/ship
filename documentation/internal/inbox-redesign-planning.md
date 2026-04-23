@@ -1,0 +1,705 @@
+# Plays / Automations / Runs / Inbox — execution planning
+
+Tactical execution doc for [RFC-0010](../protocol/rfc-0010-plays-and-inbox.md).
+Single source of truth for the redesign sprint: locked decisions,
+ticket-level phase breakdown, risks, definition of done, day-1
+actions.
+
+The RFC carries the design contract; this doc carries the
+execution detail. Treat anything in here as living — strike
+through tickets as they ship, append follow-ups in each phase's
+"Deferred" sub-section (mirroring the
+[`console-refactor-backlog.md`](console-refactor-backlog.md)
+convention).
+
+---
+
+## §1 · Locked decisions
+
+Carried over from pre-planning conversation. Do not re-litigate.
+
+### Naming
+
+- Catalog item = **Play**
+- Backend `lane` term unchanged
+- Five inbox types: `clarification` · `improvement` · `failure` · `approval` · `exception`
+- `ArtifactFeedback` exits operator inbox → admin-only at `/settings/catalog-feedback`
+
+### Engineering policies
+
+| Policy | Value |
+|---|---|
+| Routing storage | DB primary; YAML export available; no YAML import in v1 |
+| Failure → Inbox threshold | scheduled/event = 3 consecutive · manual = always |
+| Group owner picker default | `round_robin` (with `last_assigned_user_id` state) |
+| Run summary contract | unified shape (RFC-0010 §RunSummary) |
+| Composite Plays | Ship-curated catalog only; workspace cannot define new composites in v1 |
+| External channels | OUT of v1 |
+
+### Resolved IA questions
+
+| Q | Resolution |
+|---|---|
+| Plays categories | 7 categories (see §3) |
+| Coverage view | List with progress bars + critical-uncovered red badge; matrix deferred to v2 |
+| Settings IA for Members/Groups/Routing | Members + Groups in one page (tabs); Inbox routing as separate Settings sub-page |
+| Repo Home v1 | `Waiting on you · Recent runs · Active automations · Coverage hint` (in this order) |
+
+---
+
+## §2 · Plays categories — final mapping
+
+### Seven categories
+
+```
+1. Code review              12 patterns
+2. Health checks            32 patterns  (sub-facets: Security · Performance · Compliance · Cost · ML quality)
+3. Release ops              10 patterns
+4. Incident response         5 patterns
+5. Knowledge & Docs          4 patterns
+6. Planning & Process        6 patterns
+7. Reviewers (role personas) 8 patterns
+                            ──
+                            77 user-facing Plays
+```
+
+Patterns excluded from the user-facing catalog (system-internal,
+profile = `silent`):
+
+- `common-base`, `common-kickoff`
+- `op-retry-sweep`, `op-stale-issue-sweep`, `op-workflow-self-heal`
+
+### Per-category content
+
+**Code review** (12) — PR-attached flows.
+
+`flow-pr-self-review` · `flow-blast-radius` · `flow-qa-acceptance` ·
+`flow-preview-validation` · `flow-preview-failure-recovery` ·
+`flow-check-failure-recovery` · `flow-human-handoff` ·
+`scan-test-coverage` · `scan-api-contract` · `scan-tech-debt` ·
+`scan-dead-code` · `scan-docs-freshness`
+
+Composite candidates (catalog-curated):
+
+- *PR review* = `flow-pr-self-review` + `flow-blast-radius` + `scan-test-coverage` (separate workflows)
+- *Technical audit* = `role-tech-architect` + `role-qa-architect` + `role-security-officer` (parallel)
+
+**Health checks** (32) — scheduled scanners.
+
+Sub-facets (UI sub-grouping inside the category):
+
+- *Security* — `scan-security-deps` · `scan-license-deps` · `scan-pii-leakage` · `scan-permissions-audit` · `scan-iam-policy-diff` · `scan-k8s-policy` · `scan-signing-notarization` · `scan-audit-log-integrity`
+- *Performance* — `scan-performance-budget` · `scan-app-size-budget` · `scan-firmware-size` · `scan-installer-size` · `scan-asset-budget` · `scan-power-profile` · `scan-build-frametime` · `scan-mobile-crash-rate` · `scan-slo-health`
+- *Compliance* — `scan-consent-drift` · `scan-store-metadata` · `scan-localization-gap` · `scan-os-support-matrix` · `scan-hal-abi-lock`
+- *Cost* — `scan-cost-delta` · `scan-terraform-drift` · `scan-env-var-catalog`
+- *ML quality* — `scan-data-drift` · `scan-bias-fairness` · `scan-model-eval` · `scan-feature-schema` · `scan-training-repro`
+- *Other* — `scan-a11y` · `scan-bom-delta` · `scan-sbom-drift`
+
+**Release ops** (10).
+
+`flow-release-notes` · `flow-store-submission` · `flow-cert-compliance` ·
+`flow-compliance-artifact` · `flow-autoupdate-rollout` · `flow-ota-channel` ·
+`flow-beta-distribution` · `flow-model-card` · `flow-dependency-update` ·
+`flow-live-ops-calendar`
+
+Composite candidate: *Release readiness* = `flow-release-notes` +
+`flow-compliance-artifact` + `flow-dependency-update` +
+`scan-test-coverage` (sequential).
+
+**Incident response** (5).
+
+`flow-incident-postmortem` · `flow-oncall-handoff` ·
+`flow-runbook-freshness` · `flow-human-handoff` · `role-clarification`
+
+**Knowledge & Docs** (4).
+
+`scan-docs-freshness` · `flow-runbook-freshness` ·
+`flow-learning-capture` · `onboard-seed-knowledge`
+
+> Note: `scan-docs-freshness` and `flow-runbook-freshness` appear
+> in two categories. Acceptable — discoverability beats taxonomic
+> purity.
+
+**Planning & Process** (6).
+
+`flow-sprint-plan` · `flow-daily-retro` · `role-ba` ·
+`role-product-manager` · `role-intake` · `role-developer`
+
+**Reviewers — role personas, standalone** (8).
+
+`role-tech-architect` · `role-qa-architect` · `role-security-officer` ·
+`role-designer` · `role-mobile-reviewer` · `role-desktop-reviewer` ·
+`role-ml-reviewer` · `role-game-balance-reviewer`
+
+### Critical Plays
+
+Marked `critical: true` in frontmatter (Coverage red badge when
+coverage < 100% across activated repos). Final list to confirm
+in planning kickoff:
+
+- `flow-pr-self-review`
+- `scan-security-deps`
+- `scan-license-deps`
+- `scan-pii-leakage`
+- `flow-incident-postmortem`
+- `flow-release-notes`
+- `flow-cert-compliance`
+
+---
+
+## §3 · Inbox profiles
+
+Nine profiles cover the catalog; pattern frontmatter references a
+profile + optional overrides.
+
+### §3.1 Profile definitions
+
+```yaml
+inbox_profiles:
+
+  silent:
+    # System-internal, never emits to operator inbox.
+    clarification: { enabled: false }
+    approval:      { enabled: false }
+    failure:       { enabled: false }
+    improvement:   { enabled: false }
+    exception:     { enabled: false }
+
+  scan_default:
+    # Scheduled scanners. Findings = Run only. Human only on dysfunction.
+    clarification: { enabled: false }
+    approval:      { enabled: false }
+    failure:
+      enabled: true
+      handle: ops_oncall
+      when: [play_failed_repeatedly]
+    improvement:
+      enabled: true
+      handle: workspace_owner
+      when: [recurring_finding_detected, automation_candidate_detected]
+    exception:
+      enabled: true
+      handle: workspace_owner
+      when: [budget_breach_allowance_requested]
+
+  scan_with_autofix:
+    # Scanners that propose autofix PRs requiring approval before merge.
+    inherits: scan_default
+    approval:
+      enabled: true
+      handle: code_owner
+      when: [autofix_proposed, risky_remediation_proposed]
+
+  flow_pr:
+    # PR-attached flows. Author owns clarifications, code-owner owns approvals.
+    clarification:
+      enabled: true
+      handle: pr_author
+      when: [missing_context, ambiguous_requirement, unclear_change_intent]
+    approval:
+      enabled: true
+      handle: code_owner
+      when: [architectural_risk, security_sensitive_change, protected_area_changed]
+    failure:
+      enabled: true
+      handle: repo_maintainer
+      when: [play_failed_repeatedly]
+    improvement: { enabled: false }
+    exception:
+      enabled: true
+      handle: repo_maintainer
+      when: [policy_override_required]
+
+  flow_release:
+    # Release-time gates. Approval and exception are first-class.
+    clarification:
+      enabled: true
+      handle: release_manager
+      when: [target_release_unclear, missing_release_metadata, version_scope_ambiguous]
+    approval:
+      enabled: true
+      handle: release_manager
+      when: [release_blocker_found, conditional_go_decision_required]
+    failure:
+      enabled: true
+      handle: ops_oncall
+      when: [play_failed_repeatedly, release_signal_source_unavailable]
+    improvement:
+      enabled: true
+      handle: release_manager
+      when: [repeated_release_gap_detected]
+    exception:
+      enabled: true
+      handle: release_manager
+      when: [allow_release_with_known_risk, waive_release_policy]
+
+  flow_incident:
+    # Incident lifecycle. Incident commander owns clarifications and exceptions.
+    clarification:
+      enabled: true
+      handle: incident_commander
+      when: [timeline_gap_detected, missing_incident_artifacts, unclear_decision_owner]
+    approval:
+      enabled: true
+      handle: eng_manager
+      when: [corrective_actions_affect_multiple_teams, high_cost_remediation_proposed]
+    failure:
+      enabled: true
+      handle: ops_oncall
+      when: [play_failed_repeatedly, incident_data_unavailable]
+    improvement:
+      enabled: true
+      handle: workspace_owner
+      when: [recurring_incident_pattern_detected, automation_candidate_detected]
+    exception:
+      enabled: true
+      handle: incident_commander
+      when: [unresolved_root_cause, followup_owner_missing]
+
+  flow_reporting:
+    # Digest/retro/planning. Inbox traffic is rare.
+    clarification:
+      enabled: true
+      handle: requested_by
+      when: [report_scope_unclear, input_sources_missing]
+    approval: { enabled: false }
+    failure:
+      enabled: true
+      handle: repo_maintainer
+      when: [play_failed_repeatedly]
+    improvement:
+      enabled: true
+      handle: workspace_owner
+      when: [repeated_reporting_gap_detected, new_digest_candidate_detected]
+    exception: { enabled: false }
+
+  role_reviewer:
+    # Generic reviewer persona (security, QA, architect, etc.)
+    clarification:
+      enabled: true
+      handle: pr_author
+      when: [missing_context, requirement_unclear]
+    approval:
+      enabled: true
+      handle: code_owner
+      when: [risk_threshold_exceeded]
+    failure:
+      enabled: true
+      handle: repo_maintainer
+      when: [play_failed_repeatedly]
+    improvement: { enabled: false }
+    exception: { enabled: false }
+
+  onboarding:
+    clarification:
+      enabled: true
+      handle: workspace_owner
+      when: [setup_input_missing]
+    approval: { enabled: false }
+    failure:
+      enabled: true
+      handle: workspace_owner
+      when: [play_failed_repeatedly]
+    improvement: { enabled: false }
+    exception: { enabled: false }
+```
+
+### §3.2 Workspace handle resolver (per-tenant)
+
+```yaml
+version: 1
+inbox:
+  routing:
+    fallback:
+      target: group:workspace-owners
+      assignment: round_robin
+
+    handles:
+      # User/group-backed handles
+      workspace_owner:    { target: group:workspace-owners,    assignment: round_robin }
+      eng_manager:        { target: group:engineering-managers, assignment: round_robin }
+      qa_lead:            { target: group:qa-leads,            assignment: round_robin }
+      security_officer:   { target: group:secops,              assignment: round_robin }
+      release_manager:    { target: group:release-managers,    assignment: round_robin }
+      ops_oncall:         { target: group:ops-oncall,          assignment: oncall }
+      incident_commander: { target: group:incident-commanders, assignment: oncall }
+
+      # Strategy-backed handles (compute owner from runtime context)
+      pr_author:        { strategy: pr_author }
+      code_owner:       { strategy: codeowners }
+      requested_by:     { strategy: requested_by }
+      repo_maintainer:  { strategy: repo_role,     role: maintainer }
+      repo_owner:       { strategy: repo_metadata, field: owner }
+
+  groups:
+    workspace-owners:    { members: [denys] }
+    engineering-managers: { members: [anna, petro] }
+    qa-leads:            { members: [olena, maksym] }
+    secops:              { members: [iryna, serhii] }
+    release-managers:    { members: [dmytro] }
+    ops-oncall:          { members: [oleksii, roman, yuliia] }
+    incident-commanders: { members: [oleksii, anna] }
+```
+
+### §3.3 Profile assignment for all 77 user-facing Plays
+
+| Profile | Patterns |
+|---|---|
+| **silent** | `common-base` · `common-kickoff` · `op-retry-sweep` · `op-stale-issue-sweep` · `op-workflow-self-heal` |
+| **scan_default** | `scan-a11y` · `scan-asset-budget` · `scan-app-size-budget` · `scan-audit-log-integrity` · `scan-bias-fairness` · `scan-bom-delta` · `scan-build-frametime` · `scan-cost-delta` · `scan-data-drift` · `scan-dead-code` · `scan-docs-freshness` · `scan-env-var-catalog` · `scan-feature-schema` · `scan-firmware-size` · `scan-hal-abi-lock` · `scan-installer-size` · `scan-localization-gap` · `scan-mobile-crash-rate` · `scan-model-eval` · `scan-os-support-matrix` · `scan-performance-budget` · `scan-permissions-audit` · `scan-power-profile` · `scan-sbom-drift` · `scan-slo-health` · `scan-store-metadata` · `scan-tech-debt` · `scan-test-coverage` · `scan-training-repro` |
+| **scan_with_autofix** | `scan-api-contract` · `scan-consent-drift` · `scan-iam-policy-diff` · `scan-k8s-policy` · `scan-license-deps` · `scan-pii-leakage` · `scan-security-deps` · `scan-signing-notarization` · `scan-terraform-drift` |
+| **flow_pr** | `flow-pr-self-review` · `flow-blast-radius` · `flow-qa-acceptance` · `flow-preview-validation` · `flow-preview-failure-recovery` · `flow-check-failure-recovery` · `flow-human-handoff` |
+| **flow_release** | `flow-release-notes` · `flow-store-submission` · `flow-cert-compliance` · `flow-compliance-artifact` · `flow-autoupdate-rollout` · `flow-ota-channel` · `flow-beta-distribution` · `flow-model-card` · `flow-dependency-update` · `flow-live-ops-calendar` |
+| **flow_incident** | `flow-incident-postmortem` · `flow-oncall-handoff` · `flow-runbook-freshness` · `role-clarification` |
+| **flow_reporting** | `flow-daily-retro` · `flow-sprint-plan` · `flow-learning-capture` |
+| **role_reviewer** | `role-tech-architect` · `role-qa-architect` · `role-security-officer` · `role-designer` · `role-mobile-reviewer` · `role-desktop-reviewer` · `role-ml-reviewer` · `role-game-balance-reviewer` · `role-ba` · `role-product-manager` · `role-intake` · `role-developer` |
+| **onboarding** | `onboard-adopt` · `onboard-seed-knowledge` |
+
+### Per-pattern overrides to confirm during implementation
+
+- `flow-runbook-freshness` — fits `flow_incident` but `failure` should target `repo_maintainer` (not `ops_oncall`)
+- `role-intake` — fits `role_reviewer` but is the *first-contact* persona; `clarification` should target `requested_by` (not `pr_author`)
+- `scan-cost-delta` — fits `scan_default` but `improvement` should target `eng_manager` (cost ownership) not `workspace_owner`
+- `flow-dependency-update` — currently in `flow_release`; could move to `flow_pr` since it's ongoing maintenance — decide during impl
+
+---
+
+## §4 · Inbox v1 data model — DDL
+
+```sql
+-- Operational groups (separate from permission roles)
+CREATE TABLE member_groups (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id  UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  key           VARCHAR(64)  NOT NULL,                 -- 'secops', 'on-call'
+  display_name  VARCHAR(160) NOT NULL,
+  description   TEXT,
+  created_at    TIMESTAMPTZ  NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ  NOT NULL DEFAULT now(),
+  UNIQUE (workspace_id, key)
+);
+
+CREATE TABLE member_group_members (
+  group_id  UUID NOT NULL REFERENCES member_groups(id) ON DELETE CASCADE,
+  user_id   UUID NOT NULL REFERENCES users(id)         ON DELETE CASCADE,
+  added_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (group_id, user_id)
+);
+
+-- Round-robin pointer per group (so rotation is honest under contention)
+CREATE TABLE group_assignment_state (
+  group_id              UUID PRIMARY KEY REFERENCES member_groups(id) ON DELETE CASCADE,
+  last_assigned_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Workspace-level handle → target mapping
+CREATE TABLE inbox_routing_rules (
+  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id        UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  handle_key          VARCHAR(64)  NOT NULL,           -- 'security_officer'
+  target_type         VARCHAR(16)  NOT NULL,           -- 'group' | 'user' | 'strategy'
+  target_value        VARCHAR(160) NOT NULL,           -- group key / user id / strategy name
+  assignment_strategy VARCHAR(16),                     -- 'round_robin' | 'oncall' | 'first' | NULL
+  strategy_config     JSONB        NOT NULL DEFAULT '{}',  -- e.g. {"role": "maintainer"}
+  is_enabled          BOOLEAN      NOT NULL DEFAULT true,
+  created_at          TIMESTAMPTZ  NOT NULL DEFAULT now(),
+  updated_at          TIMESTAMPTZ  NOT NULL DEFAULT now(),
+  UNIQUE (workspace_id, handle_key)
+);
+
+-- The Inbox itself
+CREATE TABLE inbox_items (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id  UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  repo_id       UUID REFERENCES workspace_repos(id) ON DELETE SET NULL,
+
+  -- Source linkage
+  type          VARCHAR(16) NOT NULL,            -- 'clarification'|'improvement'|'failure'|'approval'|'exception'
+  source_table  VARCHAR(32),                     -- 'clarifications'|'improvements'|NULL
+  source_id     UUID,                            -- weak FK; preserved on source delete
+  play_key      VARCHAR(128),                    -- e.g. 'flow-pr-self-review'
+  run_id        UUID REFERENCES pipeline_runs(id) ON DELETE SET NULL,
+
+  -- Content
+  title         VARCHAR(255) NOT NULL,
+  summary       TEXT,
+  payload       JSONB        NOT NULL DEFAULT '{}',
+
+  -- Lifecycle
+  status        VARCHAR(16) NOT NULL DEFAULT 'new',  -- 'new'|'snoozed'|'resolved'|'dismissed'
+  owner_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  intake_handle VARCHAR(64),                     -- which handle resolved this assignment
+  intake_reason TEXT,                            -- 'codeowners:secops'|'fallback'|'round_robin:secops'
+
+  -- Timing
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  due_at              TIMESTAMPTZ,
+  snoozed_until       TIMESTAMPTZ,
+  resolved_at         TIMESTAMPTZ,
+  resolved_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  resolution          VARCHAR(32)                  -- 'answered'|'approved'|'rejected'|'accepted'|'dismissed'|'retried'|'acknowledged'
+);
+
+CREATE INDEX ix_inbox_owner_status      ON inbox_items (workspace_id, owner_user_id, status);
+CREATE INDEX ix_inbox_workspace_status  ON inbox_items (workspace_id, status, created_at DESC);
+CREATE INDEX ix_inbox_repo              ON inbox_items (repo_id) WHERE repo_id IS NOT NULL;
+CREATE INDEX ix_inbox_run               ON inbox_items (run_id) WHERE run_id IS NOT NULL;
+CREATE INDEX ix_inbox_source_lookup     ON inbox_items (source_table, source_id) WHERE source_table IS NOT NULL;
+
+-- Audit trail (every disposition, every reassign, every snooze)
+CREATE TABLE inbox_item_events (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  item_id       UUID NOT NULL REFERENCES inbox_items(id) ON DELETE CASCADE,
+  actor_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  actor_kind    VARCHAR(16) NOT NULL,            -- 'user' | 'system' | 'agent'
+  action        VARCHAR(32) NOT NULL,            -- 'created'|'assigned'|'reassigned'|'snoozed'|'unsnoozed'|'resolved'|'dismissed'|'commented'
+  payload       JSONB       NOT NULL DEFAULT '{}',
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX ix_inbox_events_item ON inbox_item_events (item_id, created_at DESC);
+
+-- Run → Inbox linkage (drives "what did this run produce" view)
+CREATE TABLE run_escalations (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  run_id            UUID NOT NULL REFERENCES pipeline_runs(id) ON DELETE CASCADE,
+  inbox_item_id     UUID NOT NULL REFERENCES inbox_items(id)   ON DELETE CASCADE,
+  escalation_reason VARCHAR(64) NOT NULL,        -- e.g. 'play_failed_repeatedly' | 'requires_approval'
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (run_id, inbox_item_id)
+);
+```
+
+### Backfill from existing tables
+
+`clarifications` and `improvements` keep their tables. `inbox_items`
+gains rows pointing to them via `(source_table, source_id)`:
+
+```sql
+INSERT INTO inbox_items (
+  workspace_id, repo_id, type, source_table, source_id, play_key,
+  title, summary, payload, status, owner_user_id, created_at, resolved_at
+)
+SELECT
+  c.workspace_id,
+  c.repo_id,
+  'clarification',
+  'clarifications',
+  c.id,
+  NULL,
+  LEFT(c.question, 250),
+  c.question,
+  jsonb_build_object('ticket_ref', c.ticket_ref, 'context', c.context),
+  CASE c.status
+    WHEN 'open'     THEN 'new'
+    WHEN 'answered' THEN 'resolved'
+    WHEN 'skipped'  THEN 'dismissed'
+    ELSE 'new'
+  END,
+  c.answered_by_user_id,
+  c.created_at,
+  c.answered_at
+FROM clarifications c;
+
+-- Improvements analogous:
+-- pending → new, accepted/declined → resolved, deferred → snoozed
+```
+
+---
+
+## §5 · Inbox state machine
+
+### States
+
+| State | Meaning | Next allowed |
+|---|---|---|
+| `new` | Created, awaiting first action | snoozed · resolved · dismissed |
+| `snoozed` | Hidden until `snoozed_until` | new (auto on timer) · resolved · dismissed |
+| `resolved` | Disposition completed positively | — (terminal) |
+| `dismissed` | Closed without action (won't-do / dup) | — (terminal) |
+
+### Transitions
+
+| From | To | Trigger | Guard | Side-effect |
+|---|---|---|---|---|
+| (none) | `new` | `intake.create` | routing resolves owner | events: `created` + `assigned` |
+| `new` | `new` | `reassign(user_id)` | owner ≠ target | event `reassigned` |
+| `new` | `snoozed` | `snooze(until)` | until > now() | event `snoozed`; clear from `Mine` view |
+| `snoozed` | `new` | timer or `unsnooze` | now() ≥ snoozed_until | event `unsnoozed` |
+| `new` / `snoozed` | `resolved` | `disposition.X` (Approve/Answer/Accept/Retry/Acknowledge) | type-specific | event `resolved`; write back to source table |
+| `new` / `snoozed` | `dismissed` | `disposition.dismiss` | — | event `dismissed`; record reason |
+
+### Disposition matrix
+
+| Type | Allowed dispositions | Resolution value | Side-effect on source |
+|---|---|---|---|
+| `clarification` | Answer · Reassign · Snooze · Dismiss | `answered` / `dismissed` | UPDATE `clarifications.answer`, `status='answered'` |
+| `improvement` | Accept · Decline · Defer · Reassign | `accepted` / `dismissed` | UPDATE `improvements.decision`; if Accept → enqueue Automation creation |
+| `failure` | Retry · Disable automation · Acknowledge · Reassign | `retried` / `acknowledged` | optionally trigger pipeline retry; optionally toggle lane `enabled=false` |
+| `approval` | Approve · Reject · Request changes · Reassign | `approved` / `rejected` | callback to originating run; payload to agent for resume |
+| `exception` | Allow once · Update policy · Pause automation · Reassign | `acknowledged` / `dismissed` | optionally write `workspace_policy` override |
+
+---
+
+## §6 · Migration phases — ticket breakdown
+
+Sized for 1-2 day PRs each. Suffix: `[BE]` backend · `[FE]` frontend ·
+`[INFRA]` ops · `[CAT]` catalog.
+
+### Phase 1 — IA rename + collapse (target: 1.5 weeks)
+
+- [ ] **P1-01 [FE]** Add `/automations` and `/runs` routes; render via existing components from `/lanes` and `/pipelines`
+- [ ] **P1-02 [FE]** Add `/plays` route merging existing `LibraryCatalog` + `RequestsCatalog` into one grid with category filter (placeholder categories OK)
+- [ ] **P1-03 [FE]** Update `app-shell.tsx` `buildWorkspaceNav()` → new IA: `Home · Inbox · Plays · Automations · Runs · Knowledge · Settings`. Inbox route is stub.
+- [ ] **P1-04 [FE]** Update `buildRepoNav()` → collapse to `Repo Home · Repo Settings`
+- [ ] **P1-05 [FE]** 301 redirects: `/lanes → /automations`, `/lanes?tab=library → /plays`, `/requests → /plays`, `/pipelines → /runs`, `/lanes/[id] → /automations/[id]`, `/pipelines/[pid]/runs/[rid] → /runs/[rid]`
+- [ ] **P1-06 [FE]** Delete `/fleet/lanes`, `/fleet/requests` routes; redirect to `/automations?scope=fleet` and `/runs?scope=fleet`
+- [ ] **P1-07 [FE]** Delete per-repo `lanes`/`requests` routes; redirect to workspace surfaces with `?repo=<id>`
+- [ ] **P1-08 [FE]** Move `/fleet/policy` → `/settings/policy`; `/fleet/adoption` → `/automations?tab=coverage` (stub)
+- [ ] **P1-09 [BE]** Add `?scope=fleet|repo|all` and `?repo=<id>` query params to `/v1/workspaces/{id}/lanes` and pipelines endpoints
+- [ ] **P1-10 [FE]** Pattern card copy: business name + "Includes N reviews · runs in {mode}"
+- [ ] **P1-11 [FE]** Play card CTAs: `Run now` (primary) + `Automate` (secondary). Wire `Run now` to existing one-shot dispatch endpoint.
+
+**DoD:** Old URLs redirect cleanly. New IA renders existing data. No regression in agent dispatch flow. Stale Inbox tab exists with "coming soon".
+
+### Phase 2 — Inbox v1 + routing (target: 3-4 weeks)
+
+- [ ] **P2-01 [BE]** Alembic migration `0031_inbox_v1`: create all §4 tables
+- [ ] **P2-02 [BE]** Backfill migration: populate `inbox_items` from `clarifications` + `improvements`
+- [ ] **P2-03 [BE]** New routes file `app/api/v1/routes/inbox.py`:
+  - `GET /v1/workspaces/{id}/inbox` (filters: type, owner=me|all|user_id, status, repo_id)
+  - `GET /v1/inbox/{id}` (detail + events)
+  - `POST /v1/inbox/{id}/disposition` (typed action body)
+  - `POST /v1/inbox/{id}/reassign`
+  - `POST /v1/inbox/{id}/snooze`
+- [ ] **P2-04 [BE]** New routes file `app/api/v1/routes/groups.py`: CRUD for `member_groups` and `member_group_members`
+- [ ] **P2-05 [BE]** New routes file `app/api/v1/routes/inbox_routing.py`:
+  - List/upsert/delete `inbox_routing_rules`
+  - `POST /v1/workspaces/{id}/inbox/routing/export` → YAML
+- [ ] **P2-06 [BE]** Routing resolver `app/services/inbox/routing.py`:
+  - Strategies: `pr_author`, `codeowners`, `requested_by`, `repo_role`, `repo_metadata`
+  - `round_robin` (transactional update of `group_assignment_state`)
+  - `oncall` (stub for v1; falls through to `round_robin` if no schedule)
+- [ ] **P2-07 [BE]** Intake service `app/services/inbox/intake.py`: `create_inbox_item(type, source, payload, context) → inbox_item` (resolves owner, writes events)
+- [ ] **P2-08 [BE]** Wire intake into existing flows:
+  - Clarifications creation path → also create `inbox_item`
+  - Improvements creation path → also create `inbox_item`
+  - Pipeline run failure detector → if 3 consecutive failures (or `manual=true`), create `failure` inbox item
+  - Run completion handler → if `outcome.requires_approval`, create `approval` inbox item
+- [ ] **P2-09 [BE]** Disposition handlers (write-back to source tables, `Accept → create-automation` path)
+- [ ] **P2-10 [CAT]** Add `inbox.profile` to all 77 user-facing pattern frontmatters (mapping per §3.3); split into separate PRs by group (scan / flow / role / op+common)
+- [ ] **P2-11 [BE]** Profile resolver: pattern frontmatter `inbox.profile` → `inbox_profiles.<name>` lookup with overrides merge
+- [ ] **P2-12 [FE]** `/inbox` page: list with filters (`Mine`/`All`/`Unassigned`, type, status), sorted by oldest
+- [ ] **P2-13 [FE]** `/inbox/[id]` page: detail + typed disposition buttons + reassign + snooze + audit trail
+- [ ] **P2-14 [FE]** Stale badge component (2d yellow / 7d red) on item rows
+- [ ] **P2-15 [FE]** `/settings/members` with Members + Groups tabs
+- [ ] **P2-16 [FE]** `/settings/inbox-routing` page: rules table + handle resolver preview
+- [ ] **P2-17 [FE]** Delete `/clarifications`, `/improvements`, `/r/.../clarifications`, `/r/.../improvements` routes; 301 to `/inbox?type=...`
+- [ ] **P2-18 [FE]** Move `/artifact-feedback` → `/settings/catalog-feedback` (admin-only)
+- [ ] **P2-19 [INFRA]** Feature flag `inbox_v1_enabled` per workspace; rollout to pilot first
+
+**DoD:** Pilot tenant can: see clarifications + improvements in Inbox · receive auto-assigned items · take all 5 disposition types · reassign · snooze · see audit trail. Routing rules editable in Settings.
+
+### Phase 3 — Outcome-first Runs (target: 2 weeks)
+
+- [ ] **P3-01 [BE]** Extend `pipeline_runs.outcome` JSONB schema (RFC-0010 §RunSummary); validation in API
+- [ ] **P3-02 [BE]** `run_escalations` populated whenever intake creates inbox_item with `run_id`
+- [ ] **P3-03 [BE]** Update agent run reporters (`shipctl`, in-process patterns) to emit `outcome_text` + structured findings
+- [ ] **P3-04 [FE]** Rewrite `/runs` list: outcome-first row layout (`outcome_text` headline + findings counts + escalation badges)
+- [ ] **P3-05 [FE]** `/runs/[id]` detail: artifacts grid + escalation deeplinks to inbox items
+- [ ] **P3-06 [FE]** Filter chips: by play · by repo · by status · by trigger (`manual`/`scheduled`/`event`) · `has escalations`
+- [ ] **P3-07 [CAT]** Update top 10 most-used patterns to populate `outcome_text` properly (rest fall back to default formatter)
+
+**DoD:** Runs list reads as outcomes ("3 issues found · 1 PR opened"), not events. Each run links to its escalations.
+
+### Phase 4 — Plays polish (target: 1 week)
+
+- [ ] **P4-00 [BE]** Aggregation endpoint for Coverage data (`play.assignments_count` per repo, `critical: true` flag)
+- [ ] **P4-01 [FE]** Category sidebar on `/plays` (7 categories + Health-checks sub-facets)
+- [ ] **P4-02 [FE]** Play detail drawer: business description · what it produces · what's included · default execution mode
+- [ ] **P4-03 [FE]** "Last run for this play in this workspace" mini-strip on each card
+- [ ] **P4-04 [FE]** After-success banner on run-result page: `→ Run this {play} every Monday automatically` with one-click Automate wizard
+- [ ] **P4-05 [FE]** `Coverage` tab in `/automations`: list with progress bars per Q2 spec (sorted by uncovered DESC, critical-uncovered red badge, drill-down to covered/uncovered split + `Apply to all uncovered` CTA)
+- [ ] **P4-06 [CAT]** Add `category:` field to all pattern frontmatter (mapping from §2)
+- [ ] **P4-07 [CAT]** Mark critical plays with `critical: true` (final list per §2)
+
+**DoD:** Catalog discoverable via categories. Coverage view drives automation creation. After-run banner converts manual runs into automations.
+
+### Phase 5 — External channels (OUT of scope, parked roadmap)
+
+Email · Slack · Teams · PR comment ingestion. Each = separate
+adapter + auth + threading. Tracked separately.
+
+---
+
+## §7 · Risks register
+
+| # | Risk | Phase | Mitigation |
+|---|---|---|---|
+| R1 | Pilot tenant has live `clarifications`/`improvements` data; backfill drift between read (inbox) and write (legacy tables) creates ghost items | P2 | Wrap legacy create endpoints to write both sides atomically; nightly reconciliation job; monitoring |
+| R2 | Routing resolver fails (CODEOWNERS API down, repo metadata stale) → items end up at fallback only → fallback owner buried under unrelated traffic | P2 | Resolver returns `intake_reason` always; failed strategies logged; UI shows "couldn't resolve `code_owner`, fell back — fix?" with deeplink to routing rule |
+| R3 | Round-robin pointer race (two intakes pick same user) | P2 | `group_assignment_state` updates wrapped in `SELECT FOR UPDATE`; transactional with item insert |
+| R4 | Pattern profile bulk update touches 77 files at once → catalog PR is unreviewable | P2/P4 | Split CAT tickets by group: scan-* (PR), flow-* (PR), role-* (PR), op/common (PR) |
+| R5 | Composite Plays not yet defined; implementation might force new YAML schema | P4 | Defer composites to Phase 4.5; v1 catalog Plays all map 1:1 to single pattern; flag composites as Phase 5 prep |
+| R6 | `requires_approval` flow breaks because patterns don't currently know how to set it | P3 | Roll out P3 with one pilot pattern (`scan-license-deps` autofix); validate end-to-end before mass adoption |
+| R7 | Repo Home becomes the new "kitchen sink" surface as PMs ask for more widgets | P1/P4 | Lock the 4-widget set in §1 as design contract; new widgets require explicit ADR |
+| R8 | Permission roles vs operational groups confusion in UI ("why can't I assign to this admin?") | P2 | Settings copy: "Roles control what people CAN do. Groups control what people SHOULD do." Both visible on each member row. |
+| R9 | Old URL bookmarks → 404 storm if redirects miss a case | P1 | 301 with `?from=legacy_<route>` query for telemetry; monitor 404s for 30 days post-launch |
+| R10 | Coverage view requires aggregations that don't exist | P4 | P4-00 prerequisite ticket for backend aggregation endpoint |
+
+---
+
+## §8 · Definition of Done — per phase
+
+| Phase | DoD checklist |
+|---|---|
+| P1 | Old URLs return 301 to new ones · sidebar shows new IA · `/plays`, `/automations`, `/runs` render existing data with new naming · Inbox tab exists as stub · pilot tenant smoketest passes |
+| P2 | Inbox tab shows real items · routing rules CRUD works · all 5 disposition types tested end-to-end · audit trail visible · `clarifications`/`improvements` legacy routes redirect · feature flag default-on for pilot |
+| P3 | Runs list shows outcome sentences for top-10 patterns · run detail links to inbox items · all old triggers/filters work in new view |
+| P4 | All Plays categorized · Coverage view shipped · after-success Automate banner functional · pattern frontmatter linted to require `category` and `inbox.profile` |
+
+---
+
+## §9 · Day-1 action items (right after planning kickoff)
+
+1. **[BE]** Open RFC PR for §4 schema + §3 YAML — get backend lead sign-off before P2 starts
+2. **[CAT]** Bulk PR adding `inbox.profile` to all 77 patterns (mapping from §3.3) — purely additive, mergeable independently
+3. **[FE]** Create `/inbox` route stub + sidebar entry — unblocks design iteration
+4. **[INFRA]** Add `inbox_v1_enabled` feature flag to pilot tenant config
+5. **[CAT]** Triage 4 edge-case patterns from §3.3 → final calls
+6. **[PM]** Lock category mapping & critical-play list (§2)
+7. **[design]** Wireframes for Inbox list, Inbox detail, Settings/Routing — 3 net-new screens
+
+---
+
+## §10 · Out of scope (explicit list)
+
+- Email / Slack / Teams ingestion
+- Inbox SLA matrix · escalation chains beyond stale badge
+- Workspace-defined composite Plays
+- Multi-owner inbox items / shared queues
+- Visual rule builder for routing
+- Per-Play policy override editor surfaced to operators
+- Inbox item nested threads / replies
+- Inbox cross-workspace queries
+- Mobile-optimized Inbox UI
+- Coverage matrix / heatmap (deferred to v2)
+
+---
+
+## §11 · Glossary
+
+| Term | Definition |
+|---|---|
+| **Play** | A ready-made operational procedure in the catalog. Atomic or composite. |
+| **Automation** | A Play assigned to a scope with a cadence. |
+| **Run** | A single execution of a Play (manual or automated). |
+| **Inbox item** | A work item requiring human disposition. Always has one owner. |
+| **Handle** | A symbolic role declared by a Play; resolved by workspace routing rules. |
+| **Group** | A workspace-level operational set of users. Distinct from permission role. |
+| **Disposition** | A typed action that resolves an Inbox item. |
+| **Coverage** | How many activated repos have a given Play assigned. |
+| **Lane** | *(internal)* Persisted record in `.ship/config.yml` for an Automation. Not user-facing. |
+| **Pattern** | *(internal)* Atomic executable definition (markdown + frontmatter). Not user-facing. |
+| **Workflow** | *(internal)* Orchestration mode of a composite Play (`parallel` / `sequential` / `separate_workflows`). Not user-facing. |
