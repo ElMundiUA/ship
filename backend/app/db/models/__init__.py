@@ -16,6 +16,15 @@ from backend.app.db.models.agent_surface import (
 )
 from backend.app.db.models.custom_patterns import CustomPattern
 from backend.app.db.models.fleet_lanes import FleetLane, FleetLaneException
+from backend.app.db.models.inbox import (
+    GroupAssignmentState,
+    InboxItem,
+    InboxItemEvent,
+    InboxRoutingRule,
+    MemberGroup,
+    MemberGroupMember,
+    RunEscalation,
+)
 from backend.app.db.models.integrations import GitHubInstallation, WorkspaceRepo
 from backend.app.db.models.knowledge_promotion import KnowledgePromotionCandidate
 from backend.app.db.models.lanes import Lane
@@ -59,12 +68,18 @@ __all__ = [
     "FleetLaneException",
     "FleetRequest",
     "GitHubInstallation",
+    "GroupAssignmentState",
     "Improvement",
+    "InboxItem",
+    "InboxItemEvent",
+    "InboxRoutingRule",
     "Integration",
     "KbChunk",
     "KnowledgeBucket",
     "KnowledgePromotionCandidate",
     "Lane",
+    "MemberGroup",
+    "MemberGroupMember",
     "Org",
     "OrgMember",
     "Pipeline",
@@ -72,6 +87,7 @@ __all__ = [
     "Project",
     "PullRequest",
     "RepoSecret",
+    "RunEscalation",
     "User",
     "Workspace",
     "WorkspaceInvite",
