@@ -1,0 +1,167 @@
+# RFC-0010 inbox profile catalog. Each profile defines emit rules per
+# inbox type (clarification | approval | failure | improvement | exception).
+# Pattern frontmatter references a profile by name and may add per-type
+# overrides (see scan-cost-delta for an example).
+#
+# Edit this file with care: every change ships across all patterns that
+# reference the profile. Per-pattern divergences belong in the pattern's
+# `spec.inbox.overrides` block, not here.
+#
+# Schema (per emit type):
+#   enabled: bool
+#   handle:  symbolic role (workspace resolves via inbox_routing_rules)
+#   when:    list of trigger conditions (free-form strings; intake
+#            service interprets)
+#
+# `silent` profile: every type disabled (system-internal patterns).
+# `inherits:` key: shallow-merge the named profile, then apply own
+# overrides on top (currently used by `scan_with_autofix` extending
+# `scan_default`).
+
+inbox_profiles:
+
+  silent:
+    # System-internal, never emits to operator inbox.
+    clarification: { enabled: false }
+    approval:      { enabled: false }
+    failure:       { enabled: false }
+    improvement:   { enabled: false }
+    exception:     { enabled: false }
+
+  scan_default:
+    # Scheduled scanners. Findings = Run only. Human only on dysfunction.
+    clarification: { enabled: false }
+    approval:      { enabled: false }
+    failure:
+      enabled: true
+      handle: ops_oncall
+      when: [play_failed_repeatedly]
+    improvement:
+      enabled: true
+      handle: workspace_owner
+      when: [recurring_finding_detected, automation_candidate_detected]
+    exception:
+      enabled: true
+      handle: workspace_owner
+      when: [budget_breach_allowance_requested]
+
+  scan_with_autofix:
+    # Scanners that propose autofix PRs requiring approval before merge.
+    inherits: scan_default
+    approval:
+      enabled: true
+      handle: code_owner
+      when: [autofix_proposed, risky_remediation_proposed]
+
+  flow_pr:
+    # PR-attached flows. Author owns clarifications, code-owner owns approvals.
+    clarification:
+      enabled: true
+      handle: pr_author
+      when: [missing_context, ambiguous_requirement, unclear_change_intent]
+    approval:
+      enabled: true
+      handle: code_owner
+      when: [architectural_risk, security_sensitive_change, protected_area_changed]
+    failure:
+      enabled: true
+      handle: repo_maintainer
+      when: [play_failed_repeatedly]
+    improvement: { enabled: false }
+    exception:
+      enabled: true
+      handle: repo_maintainer
+      when: [policy_override_required]
+
+  flow_release:
+    # Release-time gates. Approval and exception are first-class.
+    clarification:
+      enabled: true
+      handle: release_manager
+      when: [target_release_unclear, missing_release_metadata, version_scope_ambiguous]
+    approval:
+      enabled: true
+      handle: release_manager
+      when: [release_blocker_found, conditional_go_decision_required]
+    failure:
+      enabled: true
+      handle: ops_oncall
+      when: [play_failed_repeatedly, release_signal_source_unavailable]
+    improvement:
+      enabled: true
+      handle: release_manager
+      when: [repeated_release_gap_detected]
+    exception:
+      enabled: true
+      handle: release_manager
+      when: [allow_release_with_known_risk, waive_release_policy]
+
+  flow_incident:
+    # Incident lifecycle. Incident commander owns clarifications and exceptions.
+    clarification:
+      enabled: true
+      handle: incident_commander
+      when: [timeline_gap_detected, missing_incident_artifacts, unclear_decision_owner]
+    approval:
+      enabled: true
+      handle: eng_manager
+      when: [corrective_actions_affect_multiple_teams, high_cost_remediation_proposed]
+    failure:
+      enabled: true
+      handle: ops_oncall
+      when: [play_failed_repeatedly, incident_data_unavailable]
+    improvement:
+      enabled: true
+      handle: workspace_owner
+      when: [recurring_incident_pattern_detected, automation_candidate_detected]
+    exception:
+      enabled: true
+      handle: incident_commander
+      when: [unresolved_root_cause, followup_owner_missing]
+
+  flow_reporting:
+    # Digest/retro/planning. Inbox traffic is rare.
+    clarification:
+      enabled: true
+      handle: requested_by
+      when: [report_scope_unclear, input_sources_missing]
+    approval: { enabled: false }
+    failure:
+      enabled: true
+      handle: repo_maintainer
+      when: [play_failed_repeatedly]
+    improvement:
+      enabled: true
+      handle: workspace_owner
+      when: [repeated_reporting_gap_detected, new_digest_candidate_detected]
+    exception: { enabled: false }
+
+  role_reviewer:
+    # Generic reviewer persona (security, QA, architect, etc.)
+    clarification:
+      enabled: true
+      handle: pr_author
+      when: [missing_context, requirement_unclear]
+    approval:
+      enabled: true
+      handle: code_owner
+      when: [risk_threshold_exceeded]
+    failure:
+      enabled: true
+      handle: repo_maintainer
+      when: [play_failed_repeatedly]
+    improvement: { enabled: false }
+    exception: { enabled: false }
+
+  onboarding:
+    clarification:
+      enabled: true
+      handle: workspace_owner
+      when: [setup_input_missing]
+    approval: { enabled: false }
+    failure:
+      enabled: true
+      handle: workspace_owner
+      when: [play_failed_repeatedly]
+    improvement: { enabled: false }
+    exception: { enabled: false }
