@@ -16,25 +16,31 @@ import { getSessionToken } from "@/lib/api/session";
 import { PoliciesList } from "./policies-list";
 
 /**
- * Fleet Policy — workspace-unique rules (RFC-0008 §G, PR-5).
+ * Workspace policies — prose standing rules (Workspace policy
+ * injection). Plain markdown rules ("Always work via PR", "Never
+ * commit secrets") that the backend prepends to the agent system
+ * prompt at runtime — both in Navigator chat
+ * (``TopicService.assemble_messages``) and in ``shipctl run``
+ * stdout (``cli/lib/commands/run.mjs``).
  *
- * Mirror-lane MVP: "pattern X runs as lane Y nightly on every
- * activated repo unless explicitly excepted". The list view shows
- * a compliance rollup per policy; the client island underneath
- * handles per-repo opt-out toggles and policy deletion without a
- * full page reload.
+ * The list view is a server component; per-row enable/disable,
+ * inline edit and delete live in the client island below.
+ *
+ * Naming history: ``/fleet/policy`` previously hosted what is now
+ * ``/fleet/lanes`` (mirror-lane rules). The "Policy" name was
+ * repurposed for the prose-rule injection feature.
  */
 
 export const dynamic = "force-dynamic";
 
-export default async function FleetPolicyPage() {
+export default async function PoliciesPage() {
   if (!isApiConfigured()) {
     return (
       <AppShell title="Policy" kicker="fleet">
         <Card>
           <CardHeader
             title="Backend not configured"
-            subtitle="Set SHIP_API_URL to wire policies."
+            subtitle="Set SHIP_API_URL to manage workspace policies."
           />
         </Card>
       </AppShell>
@@ -77,17 +83,19 @@ export default async function FleetPolicyPage() {
       }
     >
       <p className="mb-5 max-w-3xl text-xs text-white/55">
-        Workspace-level rules enforced across all activated repos.
-        Each mirror policy says &ldquo;this pattern runs as this lane on
-        every repo&rdquo; — opt out per-repo for the ones that manage
-        themselves. Autofix via Navigator lands in a follow-up.
+        Standing rules injected into the agent system prompt for
+        every Navigator chat and every <code>shipctl run</code> in
+        this workspace. Use them for invariants like &ldquo;Always
+        work via PR&rdquo; or &ldquo;Never commit secrets&rdquo;.
+        Disabled rules are kept around but not rendered into the
+        prompt.
       </p>
 
       {policies.length === 0 ? (
         <Card>
           <CardHeader
             title="No policies yet"
-            subtitle="Create one to mirror a pattern across every activated repo."
+            subtitle="Add one to enforce a standing rule across every agent run."
           />
           <div className="mt-3">
             <Link href="/fleet/policy/new">
@@ -114,7 +122,7 @@ function renderUnavailable(err: unknown) {
       <Card>
         <CardHeader
           title="Backend unreachable"
-          subtitle={`The policies rollup is currently unavailable (${message}). Retry in a moment.`}
+          subtitle={`Workspace policies are currently unavailable (${message}). Retry in a moment.`}
         />
       </Card>
     </AppShell>

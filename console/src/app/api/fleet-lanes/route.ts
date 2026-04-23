@@ -1,24 +1,24 @@
 /**
- * Browser-side proxy for creating a workspace prose-rule policy
- * (``POST /v1/workspaces/{ws}/policies``).
+ * Browser-side proxy for creating a workspace Fleet lane
+ * (``POST /v1/workspaces/{ws}/fleet-lanes``).
  *
- * Mirrors ``/api/fleet-lanes`` — passes the session bearer through
- * and normalises the error envelope so the client doesn't need to
- * know about ``ApiHttpError``.
+ * Admin-only on the backend; this route just passes the session
+ * bearer through and normalises the error envelope so the client
+ * doesn't need to know about ``ApiHttpError``.
  */
 
 import { NextResponse } from "next/server";
 
 import {
-  type ApiPolicyCreateIn,
+  type ApiFleetLaneCreateIn,
   ApiHttpError,
   ApiUnavailableError,
-  createPolicy,
+  createFleetLane,
   isApiConfigured,
 } from "@/lib/api/client";
 import { getSessionToken } from "@/lib/api/session";
 
-type Body = ApiPolicyCreateIn & { workspaceId: string };
+type Body = ApiFleetLaneCreateIn & { workspaceId: string };
 
 export async function POST(request: Request) {
   if (!isApiConfigured()) {
@@ -44,10 +44,10 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
-  if (!body.title?.trim() || !body.body?.trim()) {
+  if (!body.name || !body.pattern_id || !body.lane_id || !body.cadence) {
     return NextResponse.json(
       {
-        error: "title and body are both required.",
+        error: "name, pattern_id, lane_id and cadence are all required.",
         code: "bad_request",
       },
       { status: 400 },
@@ -56,13 +56,16 @@ export async function POST(request: Request) {
 
   try {
     const token = (await getSessionToken()) ?? undefined;
-    const payload: ApiPolicyCreateIn = {
-      title: body.title,
-      body: body.body,
+    const payload: ApiFleetLaneCreateIn = {
+      name: body.name,
+      pattern_id: body.pattern_id,
+      lane_id: body.lane_id,
+      cadence: body.cadence,
+      agent_slug: body.agent_slug,
+      inputs: body.inputs,
       enabled: body.enabled,
-      sort_order: body.sort_order,
     };
-    const result = await createPolicy(body.workspaceId, payload, token);
+    const result = await createFleetLane(body.workspaceId, payload, token);
     return NextResponse.json(result, { status: 201 });
   } catch (err) {
     return errorResponse(err);

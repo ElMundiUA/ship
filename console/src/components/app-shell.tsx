@@ -68,6 +68,7 @@ function buildWorkspaceNav(): NavGroup[] {
       section: "Fleet",
       items: [
         { href: "/fleet/requests", label: "Fleet requests", icon: <DotIcon /> },
+        { href: "/fleet/lanes", label: "Fleet lanes", icon: <DotIcon /> },
         { href: "/fleet/policy", label: "Policy", icon: <DotIcon /> },
         { href: "/fleet/adoption", label: "Adoption", icon: <DotIcon /> },
         { href: "/fleet/knowledge", label: "Knowledge graph", icon: <DotIcon /> },

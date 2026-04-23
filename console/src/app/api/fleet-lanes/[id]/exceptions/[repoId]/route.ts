@@ -1,9 +1,9 @@
 /**
- * Browser-side proxy for toggling a per-repo policy exception
+ * Browser-side proxy for toggling a per-repo Fleet-lane exception
  * (``POST`` adds/updates, ``DELETE`` removes).
  *
- * Both verbs return the full updated ``ApiPolicy`` so the client
- * can swap the in-memory row without a refetch.
+ * Both verbs return the full updated ``ApiFleetLane`` so the
+ * client can swap the in-memory row without a refetch.
  */
 
 import { NextResponse } from "next/server";
@@ -11,9 +11,9 @@ import { NextResponse } from "next/server";
 import {
   ApiHttpError,
   ApiUnavailableError,
-  addPolicyException,
+  addFleetLaneException,
   isApiConfigured,
-  removePolicyException,
+  removeFleetLaneException,
 } from "@/lib/api/client";
 import { getSessionToken } from "@/lib/api/session";
 
@@ -41,7 +41,7 @@ export async function POST(
 
   try {
     const token = (await getSessionToken()) ?? undefined;
-    const result = await addPolicyException(
+    const result = await addFleetLaneException(
       body.workspaceId,
       id,
       repoId,
@@ -72,7 +72,12 @@ export async function DELETE(
 
   try {
     const token = (await getSessionToken()) ?? undefined;
-    const result = await removePolicyException(workspaceId, id, repoId, token);
+    const result = await removeFleetLaneException(
+      workspaceId,
+      id,
+      repoId,
+      token,
+    );
     return NextResponse.json(result);
   } catch (err) {
     return errorResponse(err);

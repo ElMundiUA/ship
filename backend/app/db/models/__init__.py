@@ -15,6 +15,7 @@ from backend.app.db.models.agent_surface import (
     Improvement,
 )
 from backend.app.db.models.custom_patterns import CustomPattern
+from backend.app.db.models.fleet_lanes import FleetLane, FleetLaneException
 from backend.app.db.models.integrations import GitHubInstallation, WorkspaceRepo
 from backend.app.db.models.knowledge_promotion import KnowledgePromotionCandidate
 from backend.app.db.models.lanes import Lane
@@ -27,10 +28,7 @@ from backend.app.db.models.pipelines import (
     PullRequest,
     WorkflowRun,
 )
-from backend.app.db.models.policies import (
-    WorkspacePolicy,
-    WorkspacePolicyException,
-)
+from backend.app.db.models.policies import WorkspacePolicy
 from backend.app.db.models.repo_secrets import RepoSecret
 from backend.app.db.models.tenancy import (
     ApiToken,
@@ -57,6 +55,8 @@ __all__ = [
     "ChatThread",
     "Clarification",
     "CustomPattern",
+    "FleetLane",
+    "FleetLaneException",
     "FleetRequest",
     "GitHubInstallation",
     "Improvement",
@@ -78,7 +78,6 @@ __all__ = [
     "WorkspaceMember",
     "WorkspaceNotification",
     "WorkspacePolicy",
-    "WorkspacePolicyException",
     "WorkspaceRepo",
     "WorkflowRun",
 ]
