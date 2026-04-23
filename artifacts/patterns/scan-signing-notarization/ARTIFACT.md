@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-23T00:00:00+00:00"
-content_sha256: b45f37a331018db481f6b74483973d073da0ed1942938c3599dd371a70e15454
+content_sha256: 6989cf2e4828bb3b1dc8cbde123498aea4281826e707d0ce88452320f7044871
 deprecated: false
 replaced_by: null
 yanked: false
@@ -21,6 +21,8 @@ spec:
   category: scan
   modes: [lane, request]
   include: [common-base]
+  inbox:
+    profile: scan_with_autofix
   default_trigger:
     kind: event
     event: push

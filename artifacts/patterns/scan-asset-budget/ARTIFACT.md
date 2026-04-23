@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-23T00:00:00+00:00"
-content_sha256: 158b68f98d516b4a2804b24eafe9ef972543ca48c5363d4a03cd22e3cf23ecc6
+content_sha256: 6b8af2921e8e059d5bd180dc150b98d54d563cbef9e86c8de99ce5504bc40a7a
 deprecated: false
 replaced_by: null
 yanked: false
@@ -21,6 +21,8 @@ spec:
   category: scan
   modes: [lane, request]
   include: [common-base]
+  inbox:
+    profile: scan_default
   default_trigger:
     kind: event
     event: pull_request
