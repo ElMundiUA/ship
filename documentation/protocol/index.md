@@ -30,10 +30,15 @@ When an RFC is superseded, its status moves to `Superseded` and the replacement 
 | [0007](rfc-0007-lanes-and-run-agent.md) | Lanes-as-config and single `shipctl run` | Accepted — Phase 6 done | Replace the workflow-artifact layer with lane entries in `.ship/config.yml` (v2) and a single `shipctl run --lane` entry-point; reusable workflow in Ship; `artifact_kind=workflow` retired (Phase 6). |
 | [0008](rfc-0008-catalog-reform.md) | Catalog reform — naming, modes, expansion | Accepted — Phase 0/1 shipped | Canonical `<category>-<name>` naming for all patterns; required `modes: [lane\|request]` metadata; retire `DefaultPipelineSpec`; Requests UI becomes a catalog picker; Phase-1 expansion of 10 new patterns. |
 | [0009](rfc-0009-catalog-phase-2.md) | Catalog Phase-2 — beyond web & backend | Draft | 50 new patterns across 8 packs (mobile, desktop, hardware, ML, games, infra/SRE, compliance, cross-cutting quality); 7 new presets (`mobile-app-deep`, `desktop-app`, `firmware`, `ml-project`, `platform`, `regulated`, `game`); 4 rollout waves. |
+| [0010](rfc-0010-plays-and-inbox.md) | Plays, Automations, Runs, Inbox — operator IA | Draft — partially supersedes 0008 | Reframes the console around four operator-facing surfaces (Plays · Automations · Runs · Inbox), collapses fleet/per-repo navigation duplication, and introduces a single attention surface with handle-based routing, operational groups, and typed dispositions. Internal `lane`/`pattern`/`workflow` vocabulary preserved. |
 
 RFC-0001 and RFC-0005 are partially superseded by
 [RFC-0007](rfc-0007-lanes-and-run-agent.md) Phase 6
 (`artifact_kind=workflow` retired) and
 [RFC-0008](rfc-0008-catalog-reform.md) (pattern metadata and
-`<category>-<name>` naming). See each RFC's top-of-file status block
-for the current picture.
+`<category>-<name>` naming). RFC-0008 is in turn partially
+superseded by [RFC-0010](rfc-0010-plays-and-inbox.md) for
+user-facing terminology and IA only — the catalog contract,
+naming convention, and pattern frontmatter additions from 0008 all
+stand. See each RFC's top-of-file status block for the current
+picture.
