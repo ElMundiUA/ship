@@ -109,6 +109,24 @@ export type InboxItem = {
 export type InboxItemDetail = InboxItem & {
   payload: Record<string, unknown>;
   events: InboxItemEvent[];
+  source_table: string | null;
+  source_id: string | null;
+};
+
+export type InboxListResponse = {
+  items: InboxItem[];
+  total: number;
+  counts_by_type: Record<string, number>;
+  counts_by_status: Record<string, number>;
+  next_cursor: string | null;
+};
+
+export type InboxCountsResponse = {
+  mine: number;
+  unassigned: number;
+  all_open: number;
+  by_type: Record<string, number>;
+  by_status: Record<string, number>;
 };
 
 export type InboxItemEvent = {
@@ -144,16 +162,43 @@ export type InboxGroup = {
   created_at: string;
 };
 
+export type InboxRoutingTargetType = "user" | "group" | "strategy";
+export type InboxAssignmentStrategy = "round_robin" | "oncall" | "first";
+
 export type InboxRoutingRule = {
   id: string;
   workspace_id: string;
   handle: string;
-  priority: number;
-  target_type: "user" | "group" | "strategy";
+  target_type: InboxRoutingTargetType;
   target_user_id: string | null;
   target_group_id: string | null;
-  assignment_strategy: "round_robin" | "oncall" | "first" | null;
+  target_strategy: string | null;
+  assignment_strategy: InboxAssignmentStrategy | null;
+  strategy_config: Record<string, unknown>;
+  is_enabled: boolean;
   created_at: string;
+  updated_at: string;
+};
+
+export type InboxRoutingRuleDetail = InboxRoutingRule & {
+  target_user_email: string | null;
+  target_group_key: string | null;
+  target_group_name: string | null;
+};
+
+export type InboxRoutingHandlesOut = {
+  bound_handles: string[];
+  used_handles: string[];
+  orphaned_handles: string[];
+  unbound_handles: string[];
+};
+
+export type InboxRoutingPreviewOut = {
+  handle: string;
+  resolved_user_id: string | null;
+  resolved_user_email: string | null;
+  intake_handle: string;
+  intake_reason: string;
 };
 
 /**
