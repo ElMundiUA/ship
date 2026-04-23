@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-07T20:41:22+03:00"
-content_sha256: c99c11db4e7a99c10ea5d0c285080ef93af63fa1e6041b26dc530a8339906931
+content_sha256: 75b410fa7d064855d36323537bb3fddc543959d456b3535163002280b2f83b0b
 deprecated: false
 replaced_by: null
 yanked: false
@@ -21,6 +21,8 @@ spec:
   category: flow
   modes: [lane]
   include: [common-base]
+  inbox:
+    profile: flow_pr
   default_trigger:
     kind: event
     event: check_run.completed
