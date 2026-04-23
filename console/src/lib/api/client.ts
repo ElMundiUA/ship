@@ -26,6 +26,20 @@ import type {
   ApiUser,
   ApiWorkspace,
 } from "./types";
+import type {
+  InboxItem,
+  InboxItemDetail,
+  InboxItemEvent,
+  InboxListResponse,
+  InboxCountsResponse,
+  InboxFilterState,
+  InboxRoutingRule,
+  InboxRoutingRuleDetail,
+  InboxRoutingHandlesOut,
+  InboxRoutingPreviewOut,
+  InboxRoutingTargetType,
+  InboxAssignmentStrategy,
+} from "@/lib/inbox-types";
 import { getSessionToken } from "./session";
 
 const PLURAL: Record<ApiArtifactKind, string> = {
@@ -2686,6 +2700,234 @@ export function removeInboxGroupMember(
 ): Promise<void> {
   return apiFetch<void>(
     `/v1/workspaces/${workspaceId}/inbox/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(userId)}`,
+    { method: "DELETE", token },
+  );
+}
+
+// --- Inbox: list / detail / disposition (RFC-0010 §5) ---------------------
+
+export type InboxListQuery = Partial<InboxFilterState> & {
+  repo_id?: string;
+  play_key?: string;
+  cursor?: string | null;
+  limit?: number;
+};
+
+function buildInboxQuery(opts: InboxListQuery): string {
+  const params = new URLSearchParams();
+  if (opts.ownership) params.set("ownership", opts.ownership);
+  for (const t of opts.types ?? []) params.append("type", t);
+  for (const s of opts.statuses ?? []) params.append("status", s);
+  if (opts.repo_id) params.set("repo_id", opts.repo_id);
+  if (opts.play_key) params.set("play_key", opts.play_key);
+  if (opts.cursor) params.set("cursor", opts.cursor);
+  if (opts.limit !== undefined) params.set("limit", String(opts.limit));
+  const qs = params.toString();
+  return qs ? `?${qs}` : "";
+}
+
+export function listInboxItems(
+  workspaceId: string,
+  opts: InboxListQuery = {},
+  token?: string,
+): Promise<InboxListResponse> {
+  return apiFetch<InboxListResponse>(
+    `/v1/workspaces/${workspaceId}/inbox${buildInboxQuery(opts)}`,
+    { token },
+  );
+}
+
+export function getInboxCounts(
+  workspaceId: string,
+  token?: string,
+): Promise<InboxCountsResponse> {
+  return apiFetch<InboxCountsResponse>(
+    `/v1/workspaces/${workspaceId}/inbox/counts`,
+    { token },
+  );
+}
+
+export function getInboxItem(
+  workspaceId: string,
+  itemId: string,
+  token?: string,
+): Promise<InboxItemDetail> {
+  return apiFetch<InboxItemDetail>(
+    `/v1/workspaces/${workspaceId}/inbox/${encodeURIComponent(itemId)}`,
+    { token },
+  );
+}
+
+export type InboxDispositionAction =
+  | "resolve"
+  | "dismiss"
+  | "approve"
+  | "reject"
+  | "answer"
+  | "accept"
+  | "retry"
+  | "acknowledge";
+
+export function applyInboxDisposition(
+  workspaceId: string,
+  itemId: string,
+  body: {
+    action: InboxDispositionAction;
+    resolution?: string | null;
+    answer?: string | null;
+    payload?: Record<string, unknown>;
+  },
+  token?: string,
+): Promise<InboxItemDetail> {
+  return apiFetch<InboxItemDetail>(
+    `/v1/workspaces/${workspaceId}/inbox/${encodeURIComponent(itemId)}/disposition`,
+    { method: "POST", body, token },
+  );
+}
+
+export function snoozeInboxItem(
+  workspaceId: string,
+  itemId: string,
+  snoozedUntil: string,
+  token?: string,
+): Promise<InboxItemDetail> {
+  return apiFetch<InboxItemDetail>(
+    `/v1/workspaces/${workspaceId}/inbox/${encodeURIComponent(itemId)}/snooze`,
+    { method: "POST", body: { snoozed_until: snoozedUntil }, token },
+  );
+}
+
+export function unsnoozeInboxItem(
+  workspaceId: string,
+  itemId: string,
+  token?: string,
+): Promise<InboxItemDetail> {
+  return apiFetch<InboxItemDetail>(
+    `/v1/workspaces/${workspaceId}/inbox/${encodeURIComponent(itemId)}/unsnooze`,
+    { method: "POST", token },
+  );
+}
+
+export function reassignInboxItem(
+  workspaceId: string,
+  itemId: string,
+  body: { user_id?: string; handle?: string },
+  token?: string,
+): Promise<InboxItemDetail> {
+  return apiFetch<InboxItemDetail>(
+    `/v1/workspaces/${workspaceId}/inbox/${encodeURIComponent(itemId)}/reassign`,
+    { method: "POST", body, token },
+  );
+}
+
+export function appendInboxEvent(
+  workspaceId: string,
+  itemId: string,
+  body: { body: string; payload?: Record<string, unknown> },
+  token?: string,
+): Promise<InboxItemEvent> {
+  return apiFetch<InboxItemEvent>(
+    `/v1/workspaces/${workspaceId}/inbox/${encodeURIComponent(itemId)}/events`,
+    { method: "POST", body, token },
+  );
+}
+
+// --- Inbox: routing rules (RFC-0010 §6) -----------------------------------
+
+export function listInboxRoutingRules(
+  workspaceId: string,
+  token?: string,
+): Promise<InboxRoutingRule[]> {
+  return apiFetch<InboxRoutingRule[]>(
+    `/v1/workspaces/${workspaceId}/inbox/routing`,
+    { token },
+  );
+}
+
+export function getInboxRoutingRule(
+  workspaceId: string,
+  ruleId: string,
+  token?: string,
+): Promise<InboxRoutingRuleDetail> {
+  return apiFetch<InboxRoutingRuleDetail>(
+    `/v1/workspaces/${workspaceId}/inbox/routing/${encodeURIComponent(ruleId)}`,
+    { token },
+  );
+}
+
+export function getInboxRoutingHandles(
+  workspaceId: string,
+  token?: string,
+): Promise<InboxRoutingHandlesOut> {
+  return apiFetch<InboxRoutingHandlesOut>(
+    `/v1/workspaces/${workspaceId}/inbox/routing/handles`,
+    { token },
+  );
+}
+
+export function previewInboxRouting(
+  workspaceId: string,
+  body: {
+    handle: string;
+    repo_id?: string;
+    run_id?: string;
+    source_row?: Record<string, unknown>;
+  },
+  token?: string,
+): Promise<InboxRoutingPreviewOut> {
+  return apiFetch<InboxRoutingPreviewOut>(
+    `/v1/workspaces/${workspaceId}/inbox/routing/preview`,
+    { method: "POST", body, token },
+  );
+}
+
+export function createInboxRoutingRule(
+  workspaceId: string,
+  body: {
+    handle: string;
+    target_type: InboxRoutingTargetType;
+    target_user_id?: string | null;
+    target_group_id?: string | null;
+    target_strategy?: string | null;
+    assignment_strategy?: InboxAssignmentStrategy | null;
+    strategy_config?: Record<string, unknown>;
+    is_enabled?: boolean;
+  },
+  token?: string,
+): Promise<InboxRoutingRule> {
+  return apiFetch<InboxRoutingRule>(
+    `/v1/workspaces/${workspaceId}/inbox/routing`,
+    { method: "POST", body, token },
+  );
+}
+
+export function updateInboxRoutingRule(
+  workspaceId: string,
+  ruleId: string,
+  body: {
+    target_type?: InboxRoutingTargetType;
+    target_user_id?: string | null;
+    target_group_id?: string | null;
+    target_strategy?: string | null;
+    assignment_strategy?: InboxAssignmentStrategy | null;
+    strategy_config?: Record<string, unknown>;
+    is_enabled?: boolean;
+  },
+  token?: string,
+): Promise<InboxRoutingRule> {
+  return apiFetch<InboxRoutingRule>(
+    `/v1/workspaces/${workspaceId}/inbox/routing/${encodeURIComponent(ruleId)}`,
+    { method: "PATCH", body, token },
+  );
+}
+
+export function deleteInboxRoutingRule(
+  workspaceId: string,
+  ruleId: string,
+  token?: string,
+): Promise<void> {
+  return apiFetch<void>(
+    `/v1/workspaces/${workspaceId}/inbox/routing/${encodeURIComponent(ruleId)}`,
     { method: "DELETE", token },
   );
 }
