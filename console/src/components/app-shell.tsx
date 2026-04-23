@@ -62,24 +62,20 @@ function buildWorkspaceNav(): NavGroup[] {
       section: "Workspace",
       items: [
         { href: "/", label: "Home", icon: <DotIcon /> },
-      ],
-    },
-    {
-      section: "Fleet",
-      items: [
-        { href: "/fleet/requests", label: "Fleet requests", icon: <DotIcon /> },
-        { href: "/fleet/lanes", label: "Fleet lanes", icon: <DotIcon /> },
-        { href: "/fleet/policy", label: "Policy", icon: <DotIcon /> },
-        { href: "/fleet/adoption", label: "Adoption", icon: <DotIcon /> },
-        { href: "/fleet/knowledge", label: "Knowledge graph", icon: <DotIcon /> },
+        { href: "/inbox", label: "Inbox", icon: <DotIcon /> },
+        { href: "/plays", label: "Plays", icon: <DotIcon /> },
+        { href: "/automations", label: "Automations", icon: <DotIcon /> },
+        { href: "/runs", label: "Runs", icon: <DotIcon /> },
+        { href: "/fleet/knowledge", label: "Knowledge", icon: <DotIcon /> },
       ],
     },
     {
       section: "Configure",
       items: [
-        { href: "/settings", label: "Workspace settings", icon: <DotIcon /> },
-        { href: "/settings/tracker/fsm", label: "Tracker FSM", icon: <DotIcon /> },
+        { href: "/settings", label: "Settings", icon: <DotIcon /> },
         { href: "/members", label: "Members", icon: <DotIcon /> },
+        { href: "/settings/groups", label: "Groups", icon: <DotIcon /> },
+        { href: "/settings/inbox-routing", label: "Routing", icon: <DotIcon /> },
         { href: "/integrations", label: "Integrations", icon: <DotIcon /> },
         { href: "/audit", label: "Audit log", icon: <DotIcon /> },
       ],
@@ -94,23 +90,7 @@ function buildRepoNav(slugPath: string): NavGroup[] {
       section: "Operate",
       items: [
         { href: base, label: "Home", icon: <DotIcon /> },
-        { href: `${base}/lanes`, label: "Lanes", icon: <DotIcon /> },
-        { href: `${base}/requests`, label: "Requests", icon: <DotIcon /> },
-        { href: `${base}/clarifications`, label: "Clarifications", icon: <DotIcon /> },
-        { href: `${base}/improvements`, label: "Improvements", icon: <DotIcon /> },
-        { href: `${base}/artifact-feedback`, label: "Feedback", icon: <DotIcon /> },
-      ],
-    },
-    {
-      section: "Knowledge",
-      items: [
-        { href: `${base}/knowledge`, label: "Buckets", icon: <DotIcon /> },
-      ],
-    },
-    {
-      section: "Configure",
-      items: [
-        { href: `${base}/settings`, label: "Repo settings", icon: <DotIcon /> },
+        { href: `${base}/settings`, label: "Settings", icon: <DotIcon /> },
       ],
     },
   ];
