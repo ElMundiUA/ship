@@ -118,7 +118,9 @@ function renderRepoHome(ctx: RepoContext, report: ApiRepoHomeReport | null, tab:
             Repo settings
           </Link>
           <ButtonPrimary>
-            <Link href={`${base}/requests`}>Start a request →</Link>
+            <Link href={`/plays?scope=repo&repo=${encodeURIComponent(repo.id)}`}>
+              Start a request →
+            </Link>
           </ButtonPrimary>
         </>
       }
@@ -530,34 +532,32 @@ function RepoFactsAndNav({
     body: string;
     tone: "ok" | "info" | "warn";
   }[] = [
+    // RFC-0010: per-repo lanes/requests/clarifications/improvements/
+    // artifact-feedback retired; tiles now point at the workspace
+    // surfaces that own the data, with the repo's id pre-filtered
+    // via ``?scope=repo&repo=<id>`` (or ``?type=`` for inbox folds).
     {
-      href: `${base}/lanes`,
-      label: "Lanes",
+      href: `/automations?scope=repo&repo=${encodeURIComponent(repo.id)}`,
+      label: "Automations",
       body: "Scheduled + event-driven patterns wired from .ship/config.yml.",
       tone: "info",
     },
     {
-      href: `${base}/requests`,
-      label: "Requests",
+      href: `/runs?scope=repo&repo=${encodeURIComponent(repo.id)}`,
+      label: "Runs",
       body: "Catalog of one-shot agent patterns dispatched from this repo.",
       tone: "info",
     },
     {
-      href: `${base}/clarifications`,
+      href: `/inbox?type=clarification`,
       label: "Clarifications",
       body: "Tracker-projected items waiting on a human decision.",
       tone: "warn",
     },
     {
-      href: `${base}/improvements`,
+      href: `/inbox?type=improvement`,
       label: "Improvements",
       body: "Agent-proposed refactors, housekeeping, follow-ups.",
-      tone: "info",
-    },
-    {
-      href: `${base}/artifact-feedback`,
-      label: "Feedback",
-      body: "Complaints + approvals against catalog artifacts for this repo.",
       tone: "info",
     },
     {
@@ -613,10 +613,14 @@ function RepoFactsAndNav({
           />
           <div className="flex flex-wrap gap-2">
             <ButtonPrimary>
-              <Link href={`${base}/requests`}>Requests catalog</Link>
+              <Link href={`/plays?scope=repo&repo=${encodeURIComponent(repo.id)}`}>
+                Plays catalog
+              </Link>
             </ButtonPrimary>
             <ButtonGhost>
-              <Link href={`${base}/lanes`}>Review lanes</Link>
+              <Link href={`/automations?scope=repo&repo=${encodeURIComponent(repo.id)}`}>
+                Review automations
+              </Link>
             </ButtonGhost>
           </div>
         </Card>

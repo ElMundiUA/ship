@@ -1,3 +1,21 @@
+/**
+ * MIGRATED: /fleet/policy → /settings/policy per RFC-0010 P1-08.
+ *
+ * Workspace policies — prose standing rules (Workspace policy
+ * injection). Plain markdown rules ("Always work via PR", "Never
+ * commit secrets") that the backend prepends to the agent system
+ * prompt at runtime — both in Navigator chat
+ * (``TopicService.assemble_messages``) and in ``shipctl run``
+ * stdout (``cli/lib/commands/run.mjs``).
+ *
+ * The list view is a server component; per-row enable/disable,
+ * inline edit and delete live in the client island below.
+ *
+ * Naming history: ``/fleet/policy`` previously hosted what is now
+ * ``/fleet/lanes`` (mirror-lane rules). The "Policy" name was
+ * repurposed for the prose-rule injection feature, then moved
+ * under Settings as part of the Plays/Inbox redesign.
+ */
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
@@ -15,28 +33,12 @@ import { getSessionToken } from "@/lib/api/session";
 
 import { PoliciesList } from "./policies-list";
 
-/**
- * Workspace policies — prose standing rules (Workspace policy
- * injection). Plain markdown rules ("Always work via PR", "Never
- * commit secrets") that the backend prepends to the agent system
- * prompt at runtime — both in Navigator chat
- * (``TopicService.assemble_messages``) and in ``shipctl run``
- * stdout (``cli/lib/commands/run.mjs``).
- *
- * The list view is a server component; per-row enable/disable,
- * inline edit and delete live in the client island below.
- *
- * Naming history: ``/fleet/policy`` previously hosted what is now
- * ``/fleet/lanes`` (mirror-lane rules). The "Policy" name was
- * repurposed for the prose-rule injection feature.
- */
-
 export const dynamic = "force-dynamic";
 
 export default async function PoliciesPage() {
   if (!isApiConfigured()) {
     return (
-      <AppShell title="Policy" kicker="fleet">
+      <AppShell title="Policy" kicker="settings">
         <Card>
           <CardHeader
             title="Backend not configured"
@@ -48,14 +50,14 @@ export default async function PoliciesPage() {
   }
 
   const token = await getSessionToken();
-  if (!token) redirect("/login?next=%2Ffleet%2Fpolicy");
+  if (!token) redirect("/login?next=%2Fsettings%2Fpolicy");
 
   let workspaces: Awaited<ReturnType<typeof listWorkspaces>>;
   try {
     workspaces = await listWorkspaces(token);
   } catch (err) {
     if (err instanceof ApiHttpError && err.status === 401) {
-      redirect("/login?next=%2Ffleet%2Fpolicy");
+      redirect("/login?next=%2Fsettings%2Fpolicy");
     }
     return renderUnavailable(err);
   }
@@ -67,7 +69,7 @@ export default async function PoliciesPage() {
     policies = await listPolicies(workspace.id, token);
   } catch (err) {
     if (err instanceof ApiHttpError && err.status === 401) {
-      redirect("/login?next=%2Ffleet%2Fpolicy");
+      redirect("/login?next=%2Fsettings%2Fpolicy");
     }
     return renderUnavailable(err);
   }
@@ -75,9 +77,9 @@ export default async function PoliciesPage() {
   return (
     <AppShell
       title="Policy"
-      kicker="fleet"
+      kicker="settings"
       actions={
-        <Link href="/fleet/policy/new">
+        <Link href="/settings/policy/new">
           <ButtonPrimary>New policy</ButtonPrimary>
         </Link>
       }
@@ -98,7 +100,7 @@ export default async function PoliciesPage() {
             subtitle="Add one to enforce a standing rule across every agent run."
           />
           <div className="mt-3">
-            <Link href="/fleet/policy/new">
+            <Link href="/settings/policy/new">
               <ButtonPrimary>New policy</ButtonPrimary>
             </Link>
           </div>
@@ -118,7 +120,7 @@ function renderUnavailable(err: unknown) {
         ? err.message
         : "Unknown error";
   return (
-    <AppShell title="Policy" kicker="fleet">
+    <AppShell title="Policy" kicker="settings">
       <Card>
         <CardHeader
           title="Backend unreachable"

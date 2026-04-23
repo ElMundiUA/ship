@@ -42,25 +42,25 @@ const FLEET_TILES: {
   body: string;
 }[] = [
   {
-    href: "/fleet/requests",
-    label: "Fleet requests",
+    href: "/runs?scope=fleet",
+    label: "Fleet runs",
     shipsIn: "PR-2",
     body: "Fan one catalog pattern out across many repos in a single click.",
   },
   {
-    href: "/fleet/lanes",
-    label: "Fleet lanes",
+    href: "/automations?scope=fleet",
+    label: "Fleet automations",
     shipsIn: "PR-5",
     body: "Cross-repo rules + mirror patterns enforced at the workspace level.",
   },
   {
-    href: "/fleet/policy",
+    href: "/settings/policy",
     label: "Policy",
     shipsIn: "PR-5",
     body: "Standing rules ('Always work via PR') injected into agent instructions.",
   },
   {
-    href: "/fleet/adoption",
+    href: "/automations?tab=coverage",
     label: "Adoption",
     shipsIn: "PR-3",
     body: "Rollout funnel from installed → activated → steady state.",
