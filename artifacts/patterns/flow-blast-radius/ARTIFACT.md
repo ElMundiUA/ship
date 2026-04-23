@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-23T00:00:00+00:00"
-content_sha256: 16c5ee4d2c558518fce4b01278ac64d76f975d51d10348891d3cf5865937f879
+content_sha256: fe1edc419ff52ea21f8292648d31c89b20efebb26552a2fe19ac7d2d86910802
 deprecated: false
 replaced_by: null
 yanked: false
@@ -97,3 +97,28 @@ You are the PR Blast-Radius agent.
 
 **Output:** one PR comment + lane-run summary. End with:
 `[GitHub SDLC:blast-radius]`.
+
+---
+
+## Reporting
+
+When you finish, call ``shipctl callback`` so Ship can render an
+outcome-first row in the Runs list and link any escalations into the
+Inbox. The ``--outcome-text`` you author here is what operators see in
+``/runs`` — keep it concise and concrete, no "completed successfully"
+filler.
+
+For this play, a typical outcome looks like: **"Blast radius: 4 services · 2 owners pinged"**.
+
+```bash
+shipctl callback --status ok \
+  --outcome-text "Blast radius: {N} services · {M} owners pinged" \
+  --findings-count {affected_services_count} \
+  --severity {severity}={count} \
+  --artifact comment:"Blast-radius report":"{pr_comment_url}"
+```
+
+Replace ``{...}`` placeholders with values you collected during the
+run. Severities are aggregated into ``findings_by_severity`` — use the
+buckets the operator filters on (``low``/``medium``/``high``/``critical``)
+rather than custom labels. Skip flags whose value would be 0 or empty.

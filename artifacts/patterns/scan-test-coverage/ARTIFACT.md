@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: 3e496eeadab5f920f23a394d504e5d1e9f09cdc207fcfbbb799b4e4ede7a51e6
+content_sha256: 375d03f2c14f0f57e991786b25c8423ef637b9040d6b3985e224a8aea726436d
 deprecated: false
 replaced_by: null
 yanked: false
@@ -97,3 +97,28 @@ You are the Test Coverage Gate agent.
 **Idempotency:** one comment per PR (`coverage-report` anchor).
 
 **Output:** one PR comment + optional `changes-requested` review.
+
+---
+
+## Reporting
+
+When you finish, call ``shipctl callback`` so Ship can render an
+outcome-first row in the Runs list and link any escalations into the
+Inbox. The ``--outcome-text`` you author here is what operators see in
+``/runs`` — keep it concise and concrete, no "completed successfully"
+filler.
+
+For this play, a typical outcome looks like: **"Coverage 78% (-2.1% from baseline)"**.
+
+```bash
+shipctl callback --status ok \
+  --outcome-text "Coverage {pct}% ({signed_delta}% from baseline)" \
+  --findings-count {uncovered_files} \
+  --severity {severity}={count} \
+  --artifact doc:"Coverage report":"{report_url}"
+```
+
+Replace ``{...}`` placeholders with values you collected during the
+run. Severities are aggregated into ``findings_by_severity`` — use the
+buckets the operator filters on (``low``/``medium``/``high``/``critical``)
+rather than custom labels. Skip flags whose value would be 0 or empty.

@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: ff34a468336396474e82b4ed030a316a252a5a3f3fb5d13f78a8cf4feded5454
+content_sha256: 70bf2be725162ffd78c357d27b9fa6aa4da7a85bfe843090d001574650b85c96
 deprecated: false
 replaced_by: null
 yanked: false
@@ -80,3 +80,28 @@ the same file path — reuse if exists (bump severity comment).
 
 **Output:** per-ticket comment with findings + summary comment on
 the lane run.
+
+---
+
+## Reporting
+
+When you finish, call ``shipctl callback`` so Ship can render an
+outcome-first row in the Runs list and link any escalations into the
+Inbox. The ``--outcome-text`` you author here is what operators see in
+``/runs`` — keep it concise and concrete, no "completed successfully"
+filler.
+
+For this play, a typical outcome looks like: **"12 debt items · 8% of touched code"**.
+
+```bash
+shipctl callback --status ok \
+  --outcome-text "{N} debt item(s) · {pct}% of touched code" \
+  --findings-count {debt_items} \
+  --severity {severity}={count} \
+  --artifact doc:"Tech-debt report":"{report_url}"
+```
+
+Replace ``{...}`` placeholders with values you collected during the
+run. Severities are aggregated into ``findings_by_severity`` — use the
+buckets the operator filters on (``low``/``medium``/``high``/``critical``)
+rather than custom labels. Skip flags whose value would be 0 or empty.

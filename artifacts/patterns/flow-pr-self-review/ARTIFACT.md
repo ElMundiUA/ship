@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-07T20:41:22+03:00"
-content_sha256: 248ba682118e8a4a296439fcf65f5bacc5f4c42f745d0f5e2cb776b2ba5a7f75
+content_sha256: e0d8fa9e8996a9d662e5bdbbd25e36237598661ed25a8d6ab5cc5d6f1e178bed
 deprecated: false
 replaced_by: null
 yanked: false
@@ -102,3 +102,28 @@ You are the PR Self-Review Agent.
 7. Do NOT merge. Wait for CI and preview deployment.
 
 **Output:** PR comments, optional fix commits. No status changes — CI/deploy flows handle those.
+
+---
+
+## Reporting
+
+When you finish, call ``shipctl callback`` so Ship can render an
+outcome-first row in the Runs list and link any escalations into the
+Inbox. The ``--outcome-text`` you author here is what operators see in
+``/runs`` — keep it concise and concrete, no "completed successfully"
+filler.
+
+For this play, a typical outcome looks like: **"Reviewed PR · 3 suggestions · 1 fix applied"**.
+
+```bash
+shipctl callback --status ok \
+  --outcome-text "Reviewed PR · {N} suggestions · {N} fix(es) applied" \
+  --findings-count {total_suggestions} \
+  --artifact comment:"PR self-review summary":"{pr_comment_url}" \
+  [--artifact pr:"Auto-fix: {fix_title}":"{commit_url}"]
+```
+
+Replace ``{...}`` placeholders with values you collected during the
+run. Severities are aggregated into ``findings_by_severity`` — use the
+buckets the operator filters on (``low``/``medium``/``high``/``critical``)
+rather than custom labels. Skip flags whose value would be 0 or empty.

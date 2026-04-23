@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-07T20:41:22+03:00"
-content_sha256: 75b410fa7d064855d36323537bb3fddc543959d456b3535163002280b2f83b0b
+content_sha256: 95a08b30cddb8dd2b3a78a171163d8f51870744dca1d900da2791b84e33a7d95
 deprecated: false
 replaced_by: null
 yanked: false
@@ -86,3 +86,29 @@ You are the Check Failure Recovery Agent.
 **Retry policy:** Max 2–3 automatic repair cycles. Then escalate.
 
 **Output:** Fix commits, Linear updates, or escalation comment.
+
+---
+
+## Reporting
+
+When you finish, call ``shipctl callback`` so Ship can render an
+outcome-first row in the Runs list and link any escalations into the
+Inbox. The ``--outcome-text`` you author here is what operators see in
+``/runs`` — keep it concise and concrete, no "completed successfully"
+filler.
+
+For this play, a typical outcome looks like: **"4 CI failures triaged · 2 fixes proposed"**.
+
+```bash
+shipctl callback --status ok \
+  --outcome-text "{N} CI failure(s) triaged · {M} fix(es) proposed" \
+  --findings-count {failure_count} \
+  --severity high={blocking_failures} --severity medium={flaky_failures} \
+  [--artifact pr:"Fix: {failure_summary}":"{fix_pr_url}"] \
+  [--requires-approval --approval-payload '{"kind":"merge_recovery_pr"}']
+```
+
+Replace ``{...}`` placeholders with values you collected during the
+run. Severities are aggregated into ``findings_by_severity`` — use the
+buckets the operator filters on (``low``/``medium``/``high``/``critical``)
+rather than custom labels. Skip flags whose value would be 0 or empty.

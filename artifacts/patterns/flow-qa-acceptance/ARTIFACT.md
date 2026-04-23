@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-07T20:41:22+03:00"
-content_sha256: fe73dfb502cca71df1d11a6cf0d1363f4ceea25e9af3be27e24c0700ac69bc61
+content_sha256: 7b7885c2318d631fa6fcd1add9d64dee354252499e32f82fd7374bb762b340f7
 deprecated: false
 replaced_by: null
 yanked: false
@@ -72,3 +72,28 @@ You are the QA Agent.
 5. Process at most 1 per run.
 
 **Output:** QA report comment, status change.
+
+---
+
+## Reporting
+
+When you finish, call ``shipctl callback`` so Ship can render an
+outcome-first row in the Runs list and link any escalations into the
+Inbox. The ``--outcome-text`` you author here is what operators see in
+``/runs`` — keep it concise and concrete, no "completed successfully"
+filler.
+
+For this play, a typical outcome looks like: **"3 acceptance gaps · 1 blocker"**.
+
+```bash
+shipctl callback --status ok \
+  --outcome-text "{N} acceptance gap(s) · {M} blocker(s)" \
+  --findings-count {gap_count} \
+  --severity high={blockers} --severity medium={non_blockers} \
+  --artifact comment:"QA acceptance review":"{pr_comment_url}"
+```
+
+Replace ``{...}`` placeholders with values you collected during the
+run. Severities are aggregated into ``findings_by_severity`` — use the
+buckets the operator filters on (``low``/``medium``/``high``/``critical``)
+rather than custom labels. Skip flags whose value would be 0 or empty.

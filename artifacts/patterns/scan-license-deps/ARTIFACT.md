@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: 0bb2b4e051a4607a3be7ba48f135e45a890c5e429a3da7033f8eccb2acb3d4d5
+content_sha256: 7956cbb322ccc1bc539110047d6b379bf1f96f6c62c4538064e9f9bea9f5b086
 deprecated: false
 replaced_by: null
 yanked: false
@@ -101,3 +101,28 @@ You are the Dependency License Scanner agent.
 **Idempotency:** one comment per PR (`license-report` anchor).
 
 **Output:** one PR comment + optional `changes-requested` review.
+
+---
+
+## Reporting
+
+When you finish, call ``shipctl callback`` so Ship can render an
+outcome-first row in the Runs list and link any escalations into the
+Inbox. The ``--outcome-text`` you author here is what operators see in
+``/runs`` — keep it concise and concrete, no "completed successfully"
+filler.
+
+For this play, a typical outcome looks like: **"2 license issues (1 GPL contagion)"**.
+
+```bash
+shipctl callback --status ok \
+  --outcome-text "{N} license issue(s) ({M} blocking)" \
+  --findings-count {issue_count} \
+  --severity high={blocking} --severity low={advisory} \
+  --artifact doc:"License report":"{report_url}"
+```
+
+Replace ``{...}`` placeholders with values you collected during the
+run. Severities are aggregated into ``findings_by_severity`` — use the
+buckets the operator filters on (``low``/``medium``/``high``/``critical``)
+rather than custom labels. Skip flags whose value would be 0 or empty.
