@@ -31,6 +31,7 @@ from backend.app.api.v1.routes import (
     github_app,
     health,
     improvements,
+    inbox_groups,
     integrations,
     invites,
     knowledge,
@@ -62,6 +63,11 @@ api_router.include_router(audit.router)
 api_router.include_router(integrations.router)
 api_router.include_router(knowledge.router)
 api_router.include_router(members.router)
+# Operational groups for inbox routing (RFC-0010 §5). Distinct from
+# WorkspaceMember roles — these are "who handles X" buckets (secops,
+# eng_managers, on_call_eng) used by inbox_routing_rules to resolve
+# symbolic handles into concrete owners.
+api_router.include_router(inbox_groups.router)
 api_router.include_router(workspace_artifacts.router)
 # Workspace repo activations (pilot Day 2 — picker UI + Code Map MVP).
 # Lives next to artifact_repos but is keyed off GitHub App installations
