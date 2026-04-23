@@ -2576,6 +2576,120 @@ export function removeMember(
   );
 }
 
+// --- Inbox: operational groups (RFC-0010 §5) ------------------------------
+
+export type ApiInboxGroup = {
+  id: string;
+  workspace_id: string;
+  key: string;
+  name: string;
+  description: string | null;
+  assignment_strategy: "round_robin" | "oncall" | "first";
+  member_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ApiInboxGroupMember = {
+  user_id: string;
+  email: string;
+  display_name: string | null;
+  added_at: string;
+  on_call: boolean;
+};
+
+export type ApiInboxGroupDetail = ApiInboxGroup & {
+  members: ApiInboxGroupMember[];
+};
+
+export function listInboxGroups(
+  workspaceId: string,
+  token?: string,
+): Promise<ApiInboxGroup[]> {
+  return apiFetch<ApiInboxGroup[]>(
+    `/v1/workspaces/${workspaceId}/inbox/groups`,
+    { token },
+  );
+}
+
+export function createInboxGroup(
+  workspaceId: string,
+  input: {
+    key: string;
+    name: string;
+    description?: string | null;
+    assignment_strategy?: "round_robin" | "oncall" | "first";
+  },
+  token?: string,
+): Promise<ApiInboxGroup> {
+  return apiFetch<ApiInboxGroup>(
+    `/v1/workspaces/${workspaceId}/inbox/groups`,
+    { method: "POST", body: input, token },
+  );
+}
+
+export function getInboxGroup(
+  workspaceId: string,
+  groupId: string,
+  token?: string,
+): Promise<ApiInboxGroupDetail> {
+  return apiFetch<ApiInboxGroupDetail>(
+    `/v1/workspaces/${workspaceId}/inbox/groups/${encodeURIComponent(groupId)}`,
+    { token },
+  );
+}
+
+export function updateInboxGroup(
+  workspaceId: string,
+  groupId: string,
+  patch: {
+    name?: string;
+    description?: string | null;
+    assignment_strategy?: "round_robin" | "oncall" | "first";
+  },
+  token?: string,
+): Promise<ApiInboxGroup> {
+  return apiFetch<ApiInboxGroup>(
+    `/v1/workspaces/${workspaceId}/inbox/groups/${encodeURIComponent(groupId)}`,
+    { method: "PATCH", body: patch, token },
+  );
+}
+
+export function deleteInboxGroup(
+  workspaceId: string,
+  groupId: string,
+  token?: string,
+): Promise<void> {
+  return apiFetch<void>(
+    `/v1/workspaces/${workspaceId}/inbox/groups/${encodeURIComponent(groupId)}`,
+    { method: "DELETE", token },
+  );
+}
+
+export function addInboxGroupMember(
+  workspaceId: string,
+  groupId: string,
+  input: { user_id: string; on_call?: boolean },
+  token?: string,
+): Promise<ApiInboxGroupMember> {
+  return apiFetch<ApiInboxGroupMember>(
+    `/v1/workspaces/${workspaceId}/inbox/groups/${encodeURIComponent(groupId)}/members`,
+    { method: "POST", body: input, token },
+  );
+}
+
+export function removeInboxGroupMember(
+  workspaceId: string,
+  groupId: string,
+  userId: string,
+  token?: string,
+): Promise<void> {
+  return apiFetch<void>(
+    `/v1/workspaces/${workspaceId}/inbox/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(userId)}`,
+    { method: "DELETE", token },
+  );
+}
+
 // --- Audit log -------------------------------------------------------------
 
 export interface AuditLogFilters {
