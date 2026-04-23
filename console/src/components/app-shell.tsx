@@ -149,10 +149,38 @@ function DotIcon() {
   );
 }
 
-function isActive(pathname: string | null, href: string): boolean {
+function normalizePathname(p: string): string {
+  if (p === "/") return "/";
+  return p.endsWith("/") ? p.slice(0, -1) : p;
+}
+
+/**
+ * Marks a nav link active when the URL matches that link or is nested
+ * under it — but if several links match (e.g. repo ``/r/o/r`` and
+ * ``/r/o/r/requests``), only the **longest** href wins so the repo "Home"
+ * row does not stay highlighted on every subpage.
+ */
+function isNavItemActive(
+  pathname: string | null,
+  href: string,
+  allNavHrefs: readonly string[],
+): boolean {
   if (!pathname) return false;
-  if (href === "/") return pathname === "/";
-  return pathname === href || pathname.startsWith(href + "/");
+  const pn = normalizePathname(pathname);
+  const target = normalizePathname(href);
+
+  if (target === "/") return pn === "/";
+
+  const matches = allNavHrefs.filter((h) => {
+    const candidate = normalizePathname(h);
+    if (candidate === "/") return pn === "/";
+    return pn === candidate || pn.startsWith(`${candidate}/`);
+  });
+  if (matches.length === 0) return false;
+  const longest = matches.reduce((a, b) =>
+    normalizePathname(a).length >= normalizePathname(b).length ? a : b,
+  );
+  return normalizePathname(longest) === target;
 }
 
 export type AppShellWorkspace = {
@@ -223,6 +251,7 @@ export function AppShell({
     initials: currentUser.avatarInitials,
   };
   const NAV = navFor(pathname);
+  const allNavHrefs = NAV.flatMap((g) => g.items.map((i) => i.href));
   const repoSlug = parseRepoSlug(pathname);
   // Repo-mode header chip: show the repo the URL resolves to. In
   // workspace mode there is no "current repo" concept — the sidebar
@@ -287,7 +316,7 @@ export function AppShell({
                 </div>
                 <ul className="space-y-0.5">
                   {group.items.map((item) => {
-                    const active = isActive(pathname, item.href);
+                    const active = isNavItemActive(pathname, item.href, allNavHrefs);
                     return (
                       <li key={item.href}>
                         <Link
