@@ -13,6 +13,7 @@ import {
   getMe,
   isApiConfigured,
   listActivatedRepos,
+  listChatThreads,
   listWorkspaces,
 } from "@/lib/api/client";
 import { getSessionToken } from "@/lib/api/session";
@@ -103,6 +104,23 @@ export default async function ChatPage({
   }
   if (!thread) return renderUnavailable(new Error("empty chat response"));
 
+  // Cheap probe — Wave E3 uses this to decide whether the empty
+  // chat surface should advertise the archived-thread link. We
+  // ask for a single row and treat any failure as "no archived
+  // chats" so the link silently disappears instead of bricking
+  // the page.
+  let hasArchivedChats = false;
+  try {
+    const archivedSample = await listChatThreads(
+      workspace.id,
+      { status: "archived", limit: 1 },
+      token,
+    );
+    hasArchivedChats = archivedSample.length > 0;
+  } catch {
+    hasArchivedChats = false;
+  }
+
   const scopePill = (
     <ScopePill
       workspaceName={workspace.name}
@@ -153,6 +171,7 @@ export default async function ChatPage({
       <div className="mx-auto w-full max-w-3xl">
         <SingleWindowChat
           workspaceId={workspace.id}
+          hasArchivedChats={hasArchivedChats}
           thread={{
             id: thread.id,
             title: thread.title,
