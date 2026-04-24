@@ -23,6 +23,8 @@
  * route.
  */
 
+import Link from "next/link";
+
 import { AppShell } from "@/components/app-shell";
 import { InboxFiltersControlled } from "@/components/inbox/inbox-filters-controlled";
 import { InboxItemRow } from "@/components/inbox/inbox-item-row";
@@ -423,12 +425,12 @@ function CountsStats({
             {activeFilterCount.toString()}
           </div>
           {activeFilterCount > 0 && (
-            <a
+            <Link
               href="/inbox"
               className="text-[11px] font-semibold text-aqua/80 hover:text-aqua"
             >
               clear all →
-            </a>
+            </Link>
           )}
         </div>
         <div className="mt-1 text-[10px] text-white/45">
@@ -462,12 +464,12 @@ function ItemsTable({
             title="No items match these filters"
             body="Try widening the ownership tab to All, clearing the type chips, or dropping the repo/play scope."
             action={
-              <a
+              <Link
                 href="/inbox"
                 className="inline-flex items-center gap-1 rounded-full border border-aqua/40 bg-aqua/10 px-3 py-1.5 text-xs font-semibold text-aqua hover:bg-aqua/20"
               >
                 Clear all filters
-              </a>
+              </Link>
             }
           />
         </div>
