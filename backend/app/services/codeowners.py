@@ -266,6 +266,7 @@ async def fetch_codeowners(
     workspace_id: uuid.UUID,
     repo_id: uuid.UUID,
     client: httpx.AsyncClient | None = None,
+    branch: str | None = None,
 ) -> tuple[str | None, str | None, str | None]:
     """Fetch the repo's CODEOWNERS file from GitHub.
 
@@ -276,6 +277,12 @@ async def fetch_codeowners(
     that is null) so the caller can quote the branch in the wizard
     UI even on a miss.
 
+    ``branch`` (P5-06): when set, probe that ref before falling
+    through to the default branch — the wizard reads the seed PR's
+    branch first since the bundle PR may itself create or edit
+    ``CODEOWNERS``. ``None`` preserves the pre-P5-06 behaviour
+    (default branch only).
+
     Raises :class:`httpx.HTTPStatusError` if GitHub returns
     401/403 or any 5xx — the caller (wizard service) decides whether
     that's a "re-auth the App" prompt or a hard 502.
@@ -284,7 +291,14 @@ async def fetch_codeowners(
     repo, install = await _load_repo_and_install(
         session, workspace_id=workspace_id, repo_id=repo_id
     )
-    branch = repo.default_branch or "main"
+    default_branch = repo.default_branch or "main"
+    # Probe the explicit ``branch`` first (typically the seed PR's
+    # branch) so the wizard sees CODEOWNERS files that the seed PR
+    # itself just authored. The default branch is the catch-all.
+    branches_to_try: list[str] = []
+    if branch and branch != default_branch:
+        branches_to_try.append(branch)
+    branches_to_try.append(default_branch)
 
     settings = get_settings()
     token = await fetch_installation_token(
@@ -301,51 +315,55 @@ async def fetch_codeowners(
     owns_client = client is None
     http = client or httpx.AsyncClient(timeout=httpx.Timeout(15.0))
     try:
-        for path in _CODEOWNERS_PATHS:
-            response = await http.get(
-                f"{GITHUB_API_BASE}/repos/{owner}/{name}/contents/{path}",
-                headers=headers,
-                params={"ref": branch},
-            )
-            if response.status_code == 404:
-                continue
-            if response.status_code >= 400:
-                raise httpx.HTTPStatusError(
-                    f"GitHub CODEOWNERS fetch failed: "
-                    f"{response.status_code} for {path}",
-                    request=response.request,
-                    response=response,
+        for ref in branches_to_try:
+            for path in _CODEOWNERS_PATHS:
+                response = await http.get(
+                    f"{GITHUB_API_BASE}/repos/{owner}/{name}/contents/{path}",
+                    headers=headers,
+                    params={"ref": ref},
                 )
+                if response.status_code == 404:
+                    continue
+                if response.status_code >= 400:
+                    raise httpx.HTTPStatusError(
+                        f"GitHub CODEOWNERS fetch failed: "
+                        f"{response.status_code} for {path}",
+                        request=response.request,
+                        response=response,
+                    )
 
-            payload = response.json()
-            # Defensive: ``contents`` returns a list when the path
-            # is a directory (e.g. someone made ``CODEOWNERS`` a
-            # folder). Treat that the same as a miss.
-            if isinstance(payload, list):
-                continue
+                payload = response.json()
+                # Defensive: ``contents`` returns a list when the
+                # path is a directory (e.g. someone made
+                # ``CODEOWNERS`` a folder). Treat that the same as
+                # a miss.
+                if isinstance(payload, list):
+                    continue
 
-            encoding = str(payload.get("encoding") or "base64")
-            raw_content = str(payload.get("content") or "")
-            sha = payload.get("sha")
-            try:
-                if encoding == "base64":
-                    decoded = base64.b64decode(
-                        raw_content.replace("\n", "")
-                    ).decode("utf-8")
-                else:
-                    decoded = raw_content
-            except (UnicodeDecodeError, ValueError):
-                logger.warning(
-                    "codeowners: %s/%s:%s decoded to non-utf-8; treating as miss",
-                    owner,
-                    name,
-                    path,
-                )
-                continue
+                encoding = str(payload.get("encoding") or "base64")
+                raw_content = str(payload.get("content") or "")
+                sha = payload.get("sha")
+                try:
+                    if encoding == "base64":
+                        decoded = base64.b64decode(
+                            raw_content.replace("\n", "")
+                        ).decode("utf-8")
+                    else:
+                        decoded = raw_content
+                except (UnicodeDecodeError, ValueError):
+                    logger.warning(
+                        "codeowners: %s/%s:%s decoded to non-utf-8; treating as miss",
+                        owner,
+                        name,
+                        path,
+                    )
+                    continue
 
-            return decoded, (str(sha) if sha is not None else None), branch
+                return decoded, (str(sha) if sha is not None else None), ref
 
-        return None, None, branch
+        # No file found on any candidate branch; quote the default
+        # branch so the wizard UI has something stable to show.
+        return None, None, default_branch
     finally:
         if owns_client:
             await http.aclose()
@@ -362,6 +380,7 @@ async def resolve_codeowners(
     workspace_id: uuid.UUID,
     repo_id: uuid.UUID,
     client: httpx.AsyncClient | None = None,
+    branch: str | None = None,
 ) -> CodeownersResolution:
     """Fetch + parse + resolve CODEOWNERS for one repo.
 
@@ -374,11 +393,12 @@ async def resolve_codeowners(
     round-trips on a cold cache.
     """
 
-    text, sha, branch = await fetch_codeowners(
+    text, sha, branch_used = await fetch_codeowners(
         session=session,
         workspace_id=workspace_id,
         repo_id=repo_id,
         client=client,
+        branch=branch,
     )
 
     if text is None:
@@ -506,7 +526,7 @@ async def resolve_codeowners(
         handles_by_path[rule.path_pattern] = tuple(resolved)
 
     fetched_from: Literal["main", "default_branch"] = (
-        "main" if branch == "main" else "default_branch"
+        "main" if branch_used == "main" else "default_branch"
     )
 
     return CodeownersResolution(
