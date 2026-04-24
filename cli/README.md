@@ -1,8 +1,31 @@
 # @elmundi/ship-cli
 
-**Ship** in your repository: agents get a standing policy to consume Ship **artifacts** (patterns, tools, workflows, collections, docs) via the **`shipctl`** CLI and the snippets `shipctl init` writes.
+`shipctl` is the command-line interface to **Ship**. Three jobs:
+
+1. **Bootstrap a repo** so its agents (Cursor, Codex, Claude, Aider, Cline,
+   Continue, Windsurf, Zed, Gemini, OpenCode, Copilot, …) can consume Ship
+   artifacts the same way every other client does.
+2. **Sync the catalog** of `pattern` / `tool` / `collection` artifacts into
+   `.ship/cache/` and pin versions for reproducible runs.
+3. **Run lanes** (one-shot dispatch + GitHub Actions wrappers) and
+   **report Runs** so the operator console can render outcomes and route any
+   escalations into the Inbox.
 
 Published as **`@elmundi/ship-cli`** under the [elmundi](https://www.npmjs.com/org/elmundi) org; the binary name is **`shipctl`**.
+
+> **Vocabulary.** The CLI speaks the protocol layer, the operator console
+> speaks the product layer. Both are correct; they refer to the same things.
+>
+> | CLI / YAML / API (literal) | Operator console (prose) |
+> |----------------------------|--------------------------|
+> | `lanes:` entries in `.ship/config.yml`, `--lane <id>` | **Automations** |
+> | `pattern:` artifacts (RFC-0001) | **Plays** |
+> | `pipeline_runs` rows + `shipctl callback` payloads | **Runs** |
+> | clarifications / improvements / approvals queue | **Inbox** items |
+>
+> The CLI keeps `lanes:` / `pattern:` / `--lane` literal forever; we are
+> never going to break the YAML and flag surface. Help text and prose
+> reach for the operator nouns when describing what users see.
 
 ## Requirements
 
@@ -78,7 +101,7 @@ Interactive run prints the plan and asks **Apply these changes? [y/N]**:
 npx @elmundi/ship-cli init
 ```
 
-After you confirm **`y`**, it writes/updates the files above. Injected content tells agents to **resolve Ship artifacts before use** via the CLI: **search → fetch → record `kind:id@version`** workflow, **`shipctl docs fetch`** for documentation paths, **`shipctl pattern|tool|workflow|collection`** for catalog bodies, and **`shipctl docs feedback`** for safe retro notes.
+After you confirm **`y`**, it writes/updates the files above. Injected content tells agents to **resolve Ship artifacts before use** via the CLI: **search → fetch → record `kind:id@version`** workflow, **`shipctl docs fetch`** for documentation paths, **`shipctl pattern|tool|collection`** for catalog bodies, and **`shipctl docs feedback`** for safe retro notes.
 
 ### 5. Non-interactive (CI or scripts)
 
@@ -198,16 +221,30 @@ Next:
 
 ## Commands (quick reference)
 
-| Command | Role |
-|--------|------|
-| **`shipctl init`** | Inject agent-facing rules / sections with your **`SHIP_API_BASE`** (or **`--base-url`**). |
-| **`shipctl search …`** | Vector search over methodology corpus (`POST /search`). |
-| **`shipctl docs fetch …`**, **`shipctl docs feedback …`** | Documentation file fetch and retro feedback (`POST /fetch` with `path`, `POST /feedback`). |
-| **`shipctl pattern\|tool\|workflow\|collection`** **`list` \| `show` \| `fetch` \| `search`** | Artifact bodies; hosted mode uses the same API (including **`fetch`** via `POST /fetch` with `kind` + `id` + optional `version`). Plural aliases (`patterns`, `tools`, …) work. |
+| Command | Role | Manual |
+|---------|------|--------|
+| **`shipctl init`** | Bootstrap an existing repo: agent rules, `.ship/config.yml`, optional CI scaffolding. | `documentation/discovery.md` |
+| **`shipctl new`** | Greenfield: `git init` + minimal README + `init`. | this README, `New & Verify` |
+| **`shipctl doctor`** | Inspect repo, propose stack, optionally write `.ship/inventory.json`. | this README, `Doctor` |
+| **`shipctl config`** | Safe edits to `.ship/config.yml` (`init` / `get` / `set` / `validate` / `show` / `path`). | `documentation/configuration.md` |
+| **`shipctl search`** | Vector search over docs + prompts (`POST /search`). | `documentation/discovery.md` |
+| **`shipctl docs fetch`**, **`shipctl docs feedback`** | Documentation file fetch and retro feedback. | `documentation/discovery.md` |
+| **`shipctl pattern\|tool\|collection`** **`list \| show \| fetch \| search`** | Versioned artifact bodies; plural aliases (`patterns`, `tools`, `collections`) work. | `documentation/authoring.md` |
+| **`shipctl sync`** | Pull artifacts into `.ship/cache/`; with `--lock` writes `.ship/shipctl.lock.json` covering every Play the declared lanes depend on. | this README, `Config & Sync` |
+| **`shipctl run`** | One-shot dispatch entry point. `kind: once` runs locally; other lane kinds are queued for the workspace runner. Reports its terminal status via the callback URL Ship injected. | `documentation/automations.md`, this README |
+| **`shipctl lanes`** | Generate / inspect / delete the `.github/workflows/ship-<lane>.yml` thin wrappers (`install` / `list` / `remove`). | `documentation/automations.md`, this README |
+| **`shipctl kickoff`** | Print a Play's pattern body for piping into the customer's agent in CI. | `documentation/automations.md` |
+| **`shipctl callback`** | Pattern-side: report a Run's terminal status + RunSummary outcome so Ship can render the row and route escalations into the Inbox. | this README |
+| **`shipctl knowledge init`** | Open a PR that seeds `.ship/knowledge/*.md` starter buckets. | `documentation/knowledge-buckets.md` |
+| **`shipctl telemetry`** | Opt-in anonymous usage events (default OFF). | this README, `Telemetry & Feedback` |
+| **`shipctl feedback`** | Local markdown drafts → POST `/feedback` → GitHub issue. | this README |
+| **`shipctl verify`** | Post-adoption liveness checks (local + config + network). | this README, `New & Verify` |
+| **`shipctl migrate`** | Upgrade `.ship/config.yml` from v1 to v2 (lanes-as-config). | `documentation/configuration.md` |
+| **`shipctl help`** | Top-level command list with the same vocabulary callout. | — |
 
 **Maintainers / full Ship checkout:** if the current directory (or **`SHIP_REPO`**) is inside the Ship monorepo, **`list` / `show` / `fetch`** for catalogs can read manifests from **disk** instead of HTTP. **`shipctl search`** always uses HTTP.
 
-Run **`shipctl help`** for full usage.
+Run **`shipctl help`** for the operator-first overview with the same vocabulary callout printed at the top.
 
 ## Doctor
 
@@ -264,16 +301,20 @@ repo git history — `shipctl sync` caches them in `.ship/cache/`, which is
 
 ```
 .ship/
-├── config.yml                 # RFC-0002 schema; committed
+├── config.yml                 # RFC-0002 schema; committed. `lanes:` entries
+│                              # are what the operator console renders as
+│                              # Automations.
 ├── state.json                 # last_sync_at, last_manifest_hash; gitignored
+├── shipctl.lock.json          # set by `shipctl sync --lock`; pins every
+│                              # pattern the declared lanes depend on
 ├── cache/                     # per-repo artifact cache (gitignored)
 │   ├── pattern/<id>@<v>/
 │   │   ├── ARTIFACT.md        # full body (frontmatter + content), per RFC-0005
 │   │   └── .meta.json         # source, sha256, fetched_at, etc.
 │   ├── tool/<id>@<v>/…
-│   ├── workflow/<id>@<v>/…
 │   ├── collection/<id>@<v>/…
 │   └── doc/…
+├── knowledge/                 # operator-edited markdown buckets, committed
 ├── telemetry-outbox.jsonl     # buffered telemetry events (gitignored)
 └── feedback-drafts/           # feedback draft markdowns (gitignored)
 ```
@@ -314,6 +355,7 @@ shipctl sync --dry-run               # --check-only + planned HTTP calls
 shipctl sync --only pattern:role-developer [--only tool:gh-actions]
 shipctl sync --channel edge
 shipctl sync --force-unpin           # temporarily ignore version pins
+shipctl sync --lock                  # write .ship/shipctl.lock.json after sync
 ```
 
 Summary format:
@@ -329,10 +371,188 @@ failed:      0
 
 Pins are honoured: an entry whose manifest version does not satisfy the pin is
 reported as `skipped_pin` unless `--force-unpin` is set. After a successful
-sync, `.ship/state.json` records `last_sync_at` and `last_manifest_hash`.
+sync, `.ship/state.json` records `last_sync_at` and `last_manifest_hash`. With
+`--lock`, `shipctl sync` also writes `.ship/shipctl.lock.json` covering every
+Play that the declared lanes depend on, so subsequent `shipctl run` invocations
+can refuse to drift off the pinned set.
 
 > Methodology docs never live in your repo. `shipctl sync` caches them in
 > `.ship/cache/`, sealed by `content_sha256` from the Ship manifest.
+
+## Run
+
+`shipctl run` is the **one-shot dispatch entry point** for an Automation
+(YAML key: `lanes:`). What it does depends on the lane's `kind`:
+
+| `kind:` value | Behaviour of `shipctl run` |
+|---------------|----------------------------|
+| `once` | Executes the lane fully on the local machine (the pattern body is fed to the configured agent; the result is reported back via `shipctl callback`). |
+| `lane` / `event` / `schedule` | Refuses to execute locally; the workspace's GitHub Actions runner picks the lane up via `.github/workflows/run-agent.yml`. The CLI exits with a clear message naming the lane id and its kind. |
+
+```bash
+# preview which patterns + parameters the lane would dispatch with
+shipctl run --lane pr-self-review --dry-run
+
+# fanout: the same pattern over every repo in the workspace
+shipctl run --lane fleet-mobile-knowledge-refresh \
+  --pattern fleet-knowledge-pack \
+  --fanout matrix \
+  --trigger event \
+  --json
+
+# CI usage: shipctl injects --ship-run-id / --ship-callback-url / --ship-run-token
+# automatically; you only set them by hand when running outside the workspace runner
+shipctl run --lane release-cut \
+  --ship-run-id "$SHIP_RUN_ID" \
+  --ship-callback-url "$SHIP_CALLBACK_URL" \
+  --ship-run-token "$SHIP_RUN_TOKEN"
+```
+
+Important flags:
+
+- `--pattern <id>` — override the lane's default pattern (a composite Play may
+  declare several; this lets you target one specifically).
+- `--fanout matrix|sequential|concurrent` — only meaningful for fleet-scope
+  lanes that target multiple repos.
+- `--trigger event|schedule|manual|once` — the trigger the lane was wired for;
+  used to choose the payload shape.
+- `--offline` — skip every HTTP probe (resolves patterns from `.ship/cache/`
+  only); useful for hermetic CI.
+- `--dry-run` — print the dispatch plan and exit 0; no agent invocation.
+
+A full Run lifecycle in production looks like: console (or schedule) creates a
+`pipeline_run` row → workspace runner is dispatched → runner calls
+`shipctl run --lane <id>` for `kind: once` lanes (or invokes the agent
+directly for `kind: lane`) → the pattern calls `shipctl callback` with the
+RunSummary → console renders the outcome row in `/runs` and any escalations
+land in `/inbox`.
+
+## Lanes
+
+`shipctl lanes` manages the **thin GitHub Actions wrappers** that delegate to
+the reusable `run-agent.yml` workflow. Each lane in `.ship/config.yml`
+generates one `.github/workflows/ship-<lane>.yml` file. The file itself is a
+~12-line yaml that does nothing more than `uses: ./.github/workflows/run-agent.yml`
+with the right `lane:` input — all the logic lives in the reusable workflow,
+so wrappers can be regenerated without touching execution semantics.
+
+```bash
+# write workflow files for every lane in config.yml
+shipctl lanes install --dry-run
+shipctl lanes install --yes
+
+# only one lane (or a few)
+shipctl lanes install --only pr-self-review,release-cut
+
+# wire to a specific shipctl version pin
+shipctl lanes install --shipctl-version 0.11.2 \
+  --owner elmundi --repo ship --ref v0.11.2
+
+# inspect what's on disk vs config.yml
+shipctl lanes list --json
+
+# remove generated wrappers (does NOT touch lanes: config)
+shipctl lanes remove --dry-run
+shipctl lanes remove --only deprecated-lane --yes
+```
+
+Notes:
+
+- `lanes install` writes files **only** for lanes with a configured trigger
+  (`on.push`, `on.schedule`, `on.workflow_dispatch`). `kind: once` lanes
+  intended to run only via `shipctl run` don't get a wrapper.
+- The same wrapper covers a fleet-scope lane (one workflow file in your
+  pilot repo, fanout happens server-side via the matrix Ship dispatches).
+- Removing a wrapper does **not** remove the lane from `.ship/config.yml`;
+  to fully retire an Automation, drop the `lanes.<id>` block from the YAML
+  and re-run `shipctl lanes install` so the file is reconciled.
+
+## Callback
+
+`shipctl callback` is what a Play's pattern calls to **close the loop on a
+Run**. It POSTs a structured payload to the URL Ship injected into the
+runner (`SHIP_CALLBACK_URL` env or `--callback-url`) so the operator console
+can render an outcome-first row in `/runs` and route any escalations into
+`/inbox`.
+
+The flag surface is **protocol-stable** (the workspace API depends on it);
+the help is grouped by intent.
+
+### Identity (one of these is required)
+
+```
+--run-id <uuid>          # falls back to SHIP_RUN_ID
+--callback-url <url>     # falls back to SHIP_CALLBACK_URL
+SHIP_RUN_TOKEN=<jwt>     # bearer for the callback URL (CI sets this)
+SHIP_API_BASE=<url>      # base for {api}/v1/runs/<id>/callback when only --run-id is set
+```
+
+### Status & summary
+
+```
+--status ok|fail|cancelled       # required terminal state
+--summary "Free text"            # short human readout (kept in addition to outcome)
+--metric key=value               # repeatable; persisted as-is
+```
+
+### RunSummary outcome (Phase 3)
+
+These map 1:1 to the `outcome:` JSONB column on `pipeline_runs` and to what
+the console renders:
+
+```
+--outcome-text "Reviewed PR · 3 suggestions · 1 fix applied"
+--findings-count 3
+--severity high=1 --severity medium=2          # repeatable; map of sev → count
+--artifact pr:"Auto-fix: typo":"https://...":  # repeatable; type:title[:ref]
+--artifact comment:"Self-review summary":"https://github.com/.../pull/42#…"
+--escalation clarification:"agent_low_confidence"   # repeatable; type:reason
+--requires-approval                                  # toggle the approval gate
+--approval-payload '{"...": "..."}'                  # JSON forwarded to the Inbox item
+```
+
+You can also pass the full RunSummary as JSON via:
+
+- `SHIP_RUN_OUTCOME=$JSON_STRING`
+- `SHIP_RUN_OUTCOME_FILE=/path/to/outcome.json`
+
+Flags merge on top of the env / file payload (CLI wins).
+
+### Example (canonical pattern recipe)
+
+```bash
+shipctl callback --status ok \
+  --outcome-text "Reviewed PR · 3 suggestions · 1 fix applied" \
+  --findings-count 3 \
+  --severity high=1 --severity medium=2 \
+  --artifact comment:"PR self-review summary":"https://github.com/elmundi/ship/pull/42#issuecomment-…" \
+  --artifact pr:"Auto-fix: typo in README":"https://github.com/elmundi/ship/pull/43"
+```
+
+The same `## Reporting` block lives at the bottom of every top-Play pattern
+(see `artifacts/patterns/flow-pr-self-review/ARTIFACT.md` for the canonical
+example). When you author a new Play, copy that block as the contract you
+expect runners to honour.
+
+## Knowledge
+
+`shipctl knowledge init` opens a PR in the target repo that seeds the
+`.ship/knowledge/` starter buckets (e.g. `code-style.md`, `ui-runbook.md`).
+The PR is intentionally minimal — operators are expected to fill the buckets
+in over time.
+
+```bash
+# requires SHIP_API_TOKEN; targets the workspace's wired GitHub installation
+shipctl knowledge init \
+  --workspace 11111111-1111-1111-1111-111111111111 \
+  --repo elmundi/ship-pilot \
+  --only code-style,ui-runbook \
+  --json
+```
+
+Behind the scenes, this hits the workspace API which uses the GitHub App
+installation to open the PR. The buckets the Plays read at runtime live
+under the same `.ship/knowledge/` tree the PR seeds.
 
 ## Telemetry & Feedback
 
@@ -437,9 +657,9 @@ Post-adoption liveness check. A collection of independent checks under
   on-disk signals.
 - **network** (skip with `--no-network`) — `/health` (or `/patterns` as a
   fallback) reachable, local cache matches the channel catalog aggregated
-  across `/patterns`, `/tools`, `/workflows`, `/collections`, Linear labels
-  exist (needs `LINEAR_API_KEY`), every `${{ secrets.X }}` reference in
-  gh-actions workflows is declared in `.env.example`.
+  across `/patterns`, `/tools`, `/collections`, Linear labels exist (needs
+  `LINEAR_API_KEY`), every `${{ secrets.X }}` reference in gh-actions
+  workflows is declared in `.env.example`.
 
 Exit `0` when no check returned `fail`; warnings do not fail.
 
@@ -482,3 +702,16 @@ git push --follow-tags                 # publish workflow picks up v0.11.0
 Repository secret **`NPM_TOKEN`** is required. Publish from the monorepo
 root: **`npm publish -w @elmundi/ship-cli`** — not `npm publish --prefix cli`
 (the root package is private).
+
+## Reference
+
+Protocol-stable surfaces:
+
+- **Artifacts protocol** (`POST /search`, `POST /fetch`) — RFC-0001.
+- **Stack block + presets + adapters** — RFCs 0002 / 0004 / 0006.
+- **Telemetry** — RFC-0003.
+- **Operator IA** (Plays / Automations / Runs / Inbox) — RFC-0010.
+- **HTTP schemas live next to the source**: `artifacts/tools/methodology-api/ARTIFACT.md`.
+
+Every consumed artifact should be recorded in the PR or commit log as
+`<kind>:<id>@<version>` so reviewers can replay what the agent saw.
