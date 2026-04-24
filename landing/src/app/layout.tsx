@@ -22,11 +22,11 @@ const sans = DM_Sans({
 export const metadata: Metadata = {
   title: "Ship — methodology your agent can run",
   description:
-    "Apache-2.0 methodology kit: one site for onboarding, evidence-led use cases, and catalogs that stay aligned with how you ship.",
+    "Ship is a methodology kit for shipping safer, faster: Plays you assign as Automations, Runs you watch, an Inbox that catches what needs you. Apache-2.0; one CLI; one config.",
   metadataBase: resolveMetadataBase(),
   openGraph: {
     title: "Ship",
-    description: "Sell the operating model — not another dashboard tax.",
+    description: "Plays, Automations, Runs, Inbox — the operator loop your agent can run.",
     type: "website",
   },
 };
