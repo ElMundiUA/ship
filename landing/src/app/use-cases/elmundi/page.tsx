@@ -14,7 +14,7 @@ import {
 export const metadata: Metadata = {
   title: "Customer story — ElMundi (reference deployment) — Ship",
   description:
-    "How ElMundi runs an autonomous SDLC on a public monorepo: Linear as the spine, GitHub Actions as the nervous system, Cursor Cloud Agent for execution, Playwright for proof — with audit trails for security and procurement.",
+    "How ElMundi runs Ship on itself: Linear as the spine, GitHub Actions as the nervous system, Cursor Cloud Agent for execution, Playwright for proof — Plays they ship, Runs they watch, and one Inbox that catches the rest.",
 };
 
 const EVIDENCE = [
@@ -45,8 +45,8 @@ export default function ElmundiUseCasePage() {
       <main>
         <UseCaseHero
           eyebrow="Customer story · E-commerce · Reference deployment"
-          title="ElMundi cut delivery-lane drift to zero by making the SDLC a contract, not a wiki"
-          subtitle="A small e-commerce team replaced ad-hoc agent prompting with a scheduled, audit-friendly delivery loop — every ticket walks Linear → branch → PR → Playwright → release behind named workflows. The story is public so adopters can copy the wiring instead of reverse-engineering it."
+          title="From scattered Slack pings to one Inbox: how ElMundi runs Ship on itself"
+          subtitle="A small e-commerce team replaced ad-hoc agent prompting with a scheduled, audit-friendly delivery loop — every ticket walks Linear → branch → PR → Playwright → release behind named Automations, with escalations landing in a single Inbox. The story is public so adopters can copy the wiring instead of reverse-engineering it."
           executive="ElMundi is the public reference deployment for Ship. Engineering wanted agentic throughput; the founders wanted procurement-grade evidence; nobody wanted a second control plane to babysit. The team shipped both by making the monorepo itself the system of record — and the result is an SDLC where 'who decided this, when, and on which branch' is a click in tools the team already paid for."
         />
 

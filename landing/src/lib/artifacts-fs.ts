@@ -34,7 +34,7 @@ export interface ArtifactCatalog<E extends ArtifactEntry = ArtifactEntry> {
 
 const KIND_DESCRIPTIONS: Record<string, string> = {
   patterns:
-    "Reviewable markdown prompts agents reach for during scheduled lanes, onboarding, and the cloud-agent grid.",
+    "Reviewable markdown procedures the operator console renders as Plays — scheduled Automations, onboarding, and the cloud-agent grid.",
   tools:
     "Vendor-neutral integration descriptors for trackers, CI, e2e, and platform surfaces Ship snaps to.",
   collections:

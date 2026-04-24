@@ -9,7 +9,7 @@ import { loadCollectionsManifest } from "@/lib/collections";
 export const metadata: Metadata = {
   title: "Collections — Ship",
   description:
-    "Ready bundles: each collection links workflow intents, tool surfaces, and org patterns for web apps, APIs, or adoption starters.",
+    "Collections — curated bundles of patterns (Plays), tools, and rules for common product shapes (web app, API backend, mobile app, monorepo).",
 };
 
 export default function CollectionsPage() {

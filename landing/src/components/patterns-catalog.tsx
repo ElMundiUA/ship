@@ -9,13 +9,13 @@ const TABS: { id: "all" | PatternGroup; label: string }[] = [
   { id: "all", label: "All" },
   { id: "onboarding", label: "Onboarding" },
   { id: "cloud-agent", label: "Cloud agent" },
-  { id: "lanes", label: "Lane prompts" },
+  { id: "lanes", label: "Automation patterns" },
 ];
 
 const GROUP_LABEL: Record<string, string> = {
   onboarding: "Onboarding",
   "cloud-agent": "Cloud agent",
-  lanes: "Lane prompts",
+  lanes: "Automation patterns",
 };
 
 export function PatternsCatalog({ patterns }: { patterns: PatternEntry[] }) {
