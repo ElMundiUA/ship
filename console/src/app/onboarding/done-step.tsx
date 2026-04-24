@@ -73,7 +73,7 @@ export async function DoneStep({
   const dashboardHref = wsId ? `/?ws=${encodeURIComponent(wsId)}` : "/";
 
   return (
-    <section data-testid="onboarding-done">
+    <section data-testid="onboarding-step-done">
       <p className="font-mono text-[11px] uppercase tracking-[0.3em] text-aqua/85">
         Done
       </p>

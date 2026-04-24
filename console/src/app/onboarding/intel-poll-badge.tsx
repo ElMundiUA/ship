@@ -172,7 +172,7 @@ export function IntelPollBadge({
 
   if (state.kind === "harvesting") {
     return (
-      <div className="rounded-xl border border-aqua/30 bg-aqua/[0.06] p-3">
+      <div data-state="harvesting" className="rounded-xl border border-aqua/30 bg-aqua/[0.06] p-3">
         <div className="flex items-center gap-2">
           <span className="inline-flex h-2 w-2 animate-pulse rounded-full bg-aqua" />
           <span className="text-[11px] font-bold uppercase tracking-widest text-aqua">
@@ -193,7 +193,7 @@ export function IntelPollBadge({
 
   if (state.kind === "timeout") {
     return (
-      <div className="rounded-xl border border-sun/40 bg-sun/[0.08] p-3">
+      <div data-state="timeout" className="rounded-xl border border-sun/40 bg-sun/[0.08] p-3">
         <div className="flex items-center gap-2">
           <span className="inline-flex h-2 w-2 rounded-full bg-sun" />
           <span className="text-[11px] font-bold uppercase tracking-widest text-sun">
@@ -218,7 +218,7 @@ export function IntelPollBadge({
 
   if (state.kind === "failed") {
     return (
-      <div className="rounded-xl border border-coral/40 bg-coral/10 p-3">
+      <div data-state="failed" className="rounded-xl border border-coral/40 bg-coral/10 p-3">
         <div className="flex items-center gap-2">
           <span className="inline-flex h-2 w-2 rounded-full bg-coral" />
           <span className="text-[11px] font-bold uppercase tracking-widest text-coral">
@@ -256,7 +256,7 @@ function IntelDonePreview({ intel }: { intel: ApiRepoIntel }) {
     typeof structure?.file_count === "number" ? structure.file_count : null;
 
   return (
-    <div className="rounded-xl border border-emerald-400/30 bg-emerald-500/[0.06] p-3">
+    <div data-state="done" className="rounded-xl border border-emerald-400/30 bg-emerald-500/[0.06] p-3">
       <div className="flex items-center gap-2">
         <span className="inline-flex h-2 w-2 rounded-full bg-emerald-300" />
         <span className="text-[11px] font-bold uppercase tracking-widest text-emerald-300">
