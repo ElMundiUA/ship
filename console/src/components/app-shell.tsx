@@ -37,6 +37,11 @@ type NavGroup = { section: string; items: NavItem[] };
 // development.
 const SHOW_STUBS = process.env.NEXT_PUBLIC_SHIP_SHOW_STUBS === "1";
 
+/** When set, sidebar shows a link (e.g. GitHub issues, Linear askevery). */
+const SHIP_FEEDBACK_URL = process.env.NEXT_PUBLIC_SHIP_FEEDBACK_URL?.trim();
+const SHIP_FEEDBACK_LABEL =
+  process.env.NEXT_PUBLIC_SHIP_FEEDBACK_LABEL?.trim() || "Ship feedback";
+
 /**
  * Phase-1 two-mode shell: the sidebar flips between a **workspace**
  * nav (``/`` + ``/fleet/*`` + workspace-wide configure) and a
@@ -324,6 +329,25 @@ export function AppShell({
               </div>
             ))}
           </nav>
+
+          {SHIP_FEEDBACK_URL ? (
+            <div className="border-t border-white/10 px-3 py-2">
+              <a
+                href={SHIP_FEEDBACK_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block rounded-md px-2 py-1.5 text-[11px] font-semibold text-aqua/90 transition hover:bg-white/[0.04] hover:text-aqua"
+              >
+                {SHIP_FEEDBACK_LABEL}
+                <span className="ml-1 text-white/45" aria-hidden>
+                  ↗
+                </span>
+              </a>
+              <p className="mt-0.5 px-2 text-[10px] leading-snug text-white/35">
+                Bugs and product ideas for Ship itself.
+              </p>
+            </div>
+          ) : null}
 
           <div className="border-t border-white/10 p-3">
             <div className="flex items-center gap-2 rounded-md px-2 py-1.5">

@@ -210,6 +210,28 @@ export async function ConfirmStep({
               so day-zero agent runs already know your repo.
             </span>
           </li>
+          <li className="flex gap-2">
+            <span className="mt-[2px] grid h-4 w-4 shrink-0 place-items-center rounded-full bg-aqua/20 text-[10px] text-aqua">
+              5
+            </span>
+            <span>
+              <strong className="text-white">GitHub Actions secrets</strong>{" "}
+              for Ship — when you click{" "}
+              <em>Open seed PR</em>, the backend writes{" "}
+              <code className="rounded bg-white/5 px-1 text-aqua">
+                SHIP_RUN_TOKEN
+              </code>
+              ,{" "}
+              <code className="rounded bg-white/5 px-1 text-aqua">
+                SHIP_API_BASE
+              </code>
+              , and (on first mint){" "}
+              <code className="rounded bg-white/5 px-1 text-aqua">
+                SHIP_API_TOKEN
+              </code>{" "}
+              so CI can reach your Ship deployment without manual copy-paste.
+            </span>
+          </li>
         </ul>
       </div>
 

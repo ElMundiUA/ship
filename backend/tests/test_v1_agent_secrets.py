@@ -3,8 +3,10 @@
 Covers:
 
 - ``GET .../agent-secrets`` returns the catalog with ``present``
-  flags derived from GitHub's secret-names list. ``required=False``
-  entries (copilot) come back ``present=True`` without a round-trip
+  flags derived from GitHub's secret-names list. LLM vendor rows
+  (Anthropic / Cursor / OpenAI) are ``required=False`` (pick one);
+  ``required=False`` copilot comes back ``present=True`` without a
+  round-trip
   to GitHub.
 - ``GET .../agent-secrets?slugs=...`` filters to just the picks.
 - ``POST .../agent-secrets`` encrypts and pushes each plaintext via
@@ -89,9 +91,9 @@ async def test_check_returns_full_catalog_with_github_state(
     by_slug = {row["slug"]: row for row in body["agents"]}
     assert by_slug["claude-md"]["present"] is True
     assert by_slug["claude-md"]["secret_name"] == "ANTHROPIC_API_KEY"
-    assert by_slug["claude-md"]["required"] is True
+    assert by_slug["claude-md"]["required"] is False
 
-    # Not set on GitHub → present=False, wizard should prompt.
+    # Not set on GitHub → present=False; vendor keys are optional (pick one).
     assert by_slug["cursor-cloud"]["present"] is False
     assert by_slug["codex"]["present"] is False
 

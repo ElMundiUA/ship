@@ -152,20 +152,12 @@ export default async function KnowledgeBucketDetailPage({
 function LiveView({ data }: { data: LiveData }) {
   const { workspace: ws, legacy, bucket, articles, runs, title } = data;
 
-  // Upload is meaningful for any bucket the Distiller can accept.
-  // ``repo_files`` buckets get their content from git, not uploads —
-  // hide the card there to avoid confusing the user. ``agent_memory``
-  // buckets are packed by Navigator; uploading into them works but is
-  // unusual, so we still hide the card unless the backend explicitly
-  // labelled the row as ``external_static`` / ``audio_transcript``.
-  const uploadCompatibleSources = new Set([
-    "external_static",
-    "audio_transcript",
-  ]);
-  const canUpload =
-    bucket !== null &&
-    (bucket.source_kind == null ||
-      uploadCompatibleSources.has(bucket.source_kind));
+  // Upload is meaningful for any bucket except ``repo_files`` — those
+  // mirror ``.ship/knowledge`` from git and should stay authoritative
+  // in the repo. All other source kinds accept UTF-8 uploads through
+  // the same Distiller path (including ``agent_memory``, connectors,
+  // ``promoted``, etc.).
+  const canUpload = bucket !== null && bucket.source_kind !== "repo_files";
 
   // Connector card only for connector_proxy buckets; it renders the
   // stored integration handle + "Sync now" button.

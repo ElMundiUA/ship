@@ -81,6 +81,9 @@ on:
       SHIP_API_TOKEN:
         description: "Methodology API token (optional; required for private patterns / callbacks)."
         required: false
+      SHIP_API_BASE:
+        description: "Ship API origin for shipctl (e.g. https://api.example.com). Wizard seeds this from SHIP_PUBLIC_URL."
+        required: false
       SHIP_RUN_TOKEN:
         description: "Short-lived bearer token Ship issued when dispatching this run."
         required: false
@@ -217,6 +220,7 @@ jobs:
         id: run
         env:
           SHIP_API_TOKEN: ${{ secrets.SHIP_API_TOKEN }}
+          SHIP_API_BASE: ${{ secrets.SHIP_API_BASE }}
           SHIP_RUN_TOKEN: ${{ secrets.SHIP_RUN_TOKEN }}
           SHIP_RUN_ID: ${{ inputs.ship_run_id }}
           # Per-matrix-entry we suppress the callback: the aggregate

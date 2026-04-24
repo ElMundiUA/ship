@@ -23,13 +23,13 @@ The Wizard v2 step "pick AI agents" needs three things:
    semantics), not in ``integrations.secret_ciphertext``, not in
    any logs.
 
-The catalog is intentionally small: every mapping here says
-"this agent will refuse to start without this secret, so the
-wizard must collect it". Agents that can work off local auth
-(``copilot`` piggy-backs on the GitHub token already present in
-Actions; ``cursor`` for some tiers uses an already-provisioned
-Cursor token) are listed with ``required_secret=None`` so the
-wizard can show "ready" without prompting.
+The catalog is intentionally small. **LLM vendor keys** (Anthropic /
+Cursor / OpenAI) are optional in the wizard gate: the operator only
+needs **one** of them for whichever agent they run (or none when using
+GitHub Copilot, which uses ``GITHUB_TOKEN``). ``resolve_agent_secret_status``
+marks those rows ``required=False`` so the seed PR is not blocked while
+still surfacing GitHub ``present`` state. **Copilot** stays
+``required_secret=None`` — always "ready" without prompting.
 """
 
 from __future__ import annotations
@@ -122,6 +122,12 @@ _CATALOG_BY_SLUG: dict[str, AgentSecretSpec] = {
     spec.slug: spec for spec in AGENT_SECRET_CATALOG
 }
 
+# Slugs whose GitHub secrets are mutually substitutable for the wizard:
+# pick **one** vendor key for the agent you use (or skip all if Copilot).
+_LLM_VENDOR_SLUGS: frozenset[str] = frozenset(
+    {"claude-md", "cursor-cloud", "codex"}
+)
+
 
 def lookup_agent(slug: str) -> AgentSecretSpec | None:
     """Return the catalog entry for ``slug`` or ``None`` if unknown."""
@@ -194,7 +200,10 @@ async def resolve_agent_secret_status(
         AgentSecretStatus(
             slug=spec.slug,
             label=spec.label,
-            required=spec.secret_name is not None,
+            required=(
+                spec.secret_name is not None
+                and spec.slug not in _LLM_VENDOR_SLUGS
+            ),
             secret_name=spec.secret_name,
             present=(
                 spec.secret_name is None

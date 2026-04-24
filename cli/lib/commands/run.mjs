@@ -767,6 +767,15 @@ function fetchFromLockfile({ patternId, root, strict }) {
 
 function resolveMethodologyBase(ctx, config) {
   const fromFlag = ctx.baseUrl;
+  const fromEnv =
+    typeof process.env.SHIP_API_BASE === "string" && process.env.SHIP_API_BASE.trim()
+      ? process.env.SHIP_API_BASE.trim().replace(/\/$/, "")
+      : null;
+  /* Wizard-seeded Actions secret: exact Ship API origin (``POST /fetch`` lives
+   * at the root next to ``/v1``). Do not append ``/api/methodology`` here. */
+  if (fromEnv) {
+    return fromEnv;
+  }
   const raw = config?.api?.base_url;
   if (typeof raw === "string" && raw.trim()) {
     const u = raw.replace(/\/$/, "");
