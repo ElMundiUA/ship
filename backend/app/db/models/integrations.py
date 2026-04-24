@@ -177,13 +177,17 @@ class WorkspaceRepo(Base):
     html_url: Mapped[str] = mapped_column(String(1024), nullable=False)
     description: Mapped[str | None] = mapped_column(String(1024), nullable=True)
 
-    # Phase-2 catalog integration: ties this repo to one of the
-    # collections in ``artifacts/collections/preset-*`` (``web-app``,
-    # ``api-backend``, ``mobile-app``, ``cli``, ``monorepo``,
-    # ``adoption-minimum``). The wizard collects it once, default
-    # pipelines use it to decide which lanes ship enabled vs. disabled.
-    # Nullable because legacy rows predate the column — treat ``NULL``
-    # the same as ``adoption-minimum`` (minimum surface area).
+    # Phase-2 catalog integration. Pre-P5-01 this column held one of
+    # 14 preset ids ("web-app", "api-backend", "mobile-app", "cli",
+    # "monorepo", "adoption-minimum", …) chosen in the wizard. Post
+    # P5-01 the catalog collapsed to a single canonical ``"default"``
+    # preset; new writes always store ``"default"`` (or ``NULL`` when
+    # the binding is cleared) and reads collapse legacy values via
+    # :func:`backend.app.services.lane_recipes.normalize_preset` so
+    # downstream lane resolution stays consistent. NO data migration
+    # was run — historical rows keep their legacy strings until a
+    # future cleanup ticket retires ``LEGACY_PRESETS``. Treat ``NULL``
+    # as "no explicit preset; use the default-shaped seed".
     preset: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     activated_at: Mapped[datetime | None] = mapped_column(

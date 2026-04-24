@@ -100,8 +100,11 @@ def compose_seed_files(
 
     Arguments mirror the wizard's step-5 save payload:
 
-    * ``presets`` — non-empty preset id list, already validated against
-      :data:`catalog_service.KNOWN_PRESETS` at the HTTP layer.
+    * ``presets`` — non-empty preset id list, already normalized via
+      :func:`backend.app.services.lane_recipes.normalize_preset` at
+      the HTTP layer (legacy ids and ``None`` collapse to
+      ``"default"``; everything else passes through unchanged for
+      forward-compat).
     * ``knowledge_slugs`` — subset of :data:`catalog_service.KNOWLEDGE_STARTERS`
       to seed. ``None`` means "seed everything" (matches the
       existing ``knowledge_seed`` endpoint default). An empty list

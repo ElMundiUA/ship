@@ -89,36 +89,42 @@ async def test_install_bundle_opens_single_pr_for_persisted_preset(
     body = response.json()
     assert body["pr_number"] == 99
     assert body["pr_url"].endswith("/pull/99")
-    assert body["presets"] == ["web-app"]
+    # Post-P5-01 the persisted legacy preset (``"web-app"``) collapses
+    # to ``"default"`` before bundle composition; that's what surfaces
+    # in the response + the PR branch label.
+    assert body["presets"] == ["default"]
 
-    # web-app enables pr_review/daily_standup/tech_debt/self_heal/code_map;
-    # every enabled kind with a catalog YAML lands in the bundle (code_map
-    # is still YAML-less), plus the .ship/config.yml stub.
+    # ``"default"`` enables pr_review/daily_standup/tech_debt/code_map;
+    # every enabled lane with a catalog YAML lands in the bundle
+    # (code_map stays YAML-less), plus the .ship/config.yml stub.
     assert ".ship/config.yml" in body["files"]
     assert any(
         f.startswith(".github/workflows/") for f in body["files"]
     )
-    assert captured["branch_label"] == "web-app"
+    assert captured["branch_label"] == "default"
     assert captured["return_url"] is not None
 
 
 @pytest.mark.asyncio
-async def test_install_bundle_combines_multiple_presets(
+async def test_install_bundle_collapses_multiple_legacy_presets_to_default(
     monkeypatch, v1_client, db_session, seed_workspace_with_repo
 ) -> None:
-    """Two presets → one PR, de-duplicated paths."""
+    """Multiple legacy presets all normalize to ``"default"`` and dedupe
+    to a single entry — post-P5-01 the only meaningful preset is
+    ``"default"`` so a multi-preset install bundle becomes a single
+    canonical bundle."""
     from backend.app.integrations.github.workflows import StarterWorkflowPR
 
     raw, workspace, _install, repo = seed_workspace_with_repo
 
     async def _commit(repo, install, *, files, **_):
         paths = [p for p, _ in files]
-        # No duplicates — web-app and api-backend share pr-and-ci-gate.
+        # Path uniqueness is the core invariant the tree builder relies on.
         assert len(paths) == len(set(paths))
         return StarterWorkflowPR(
             pr_url="https://github.com/acme/bundle-target/pull/100",
             pr_number=100,
-            branch="ship/bundle-web-app-api-backend-124",
+            branch="ship/bundle-default-124",
         )
 
     monkeypatch.setattr(
@@ -132,20 +138,40 @@ async def test_install_bundle_combines_multiple_presets(
     )
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["presets"] == ["web-app", "api-backend"]
+    # Both legacy ids collapse + dedupe → exactly one entry.
+    assert body["presets"] == ["default"]
 
 
 @pytest.mark.asyncio
-async def test_install_bundle_rejects_unknown_preset(
-    v1_client, seed_workspace_with_repo
+async def test_install_bundle_accepts_legacy_preset_no_422(
+    monkeypatch, v1_client, seed_workspace_with_repo
 ) -> None:
+    """The pre-P5-01 422-on-unknown gate is gone: legacy preset
+    strings (and any catalog-authored future ids) are accepted at the
+    boundary. Legacy ids normalize to ``"default"``, which yields the
+    canonical bundle."""
+    from backend.app.integrations.github.workflows import StarterWorkflowPR
+
     raw, workspace, _install, repo = seed_workspace_with_repo
+
+    async def _commit(repo, install, *, files, **_):
+        return StarterWorkflowPR(
+            pr_url="https://github.com/acme/bundle-target/pull/101",
+            pr_number=101,
+            branch="ship/bundle-default-125",
+        )
+
+    monkeypatch.setattr(
+        "backend.app.integrations.github.workflows.commit_bundle_pr", _commit
+    )
+
     response = await v1_client.post(
         f"/v1/workspaces/{workspace.id}/repos/{repo.id}/install_bundle",
         headers={"Authorization": f"Bearer {raw}"},
-        json={"presets": ["doesnt-exist"]},
+        json={"presets": ["mobile-app-deep"]},
     )
-    assert response.status_code == 422, response.text
+    assert response.status_code == 200, response.text
+    assert response.json()["presets"] == ["default"]
 
 
 @pytest.mark.asyncio

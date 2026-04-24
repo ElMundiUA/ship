@@ -127,7 +127,10 @@ async def test_wizard_seed_first_run_mints_token_and_opens_pr(
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["pr_number"] == 7
-    assert body["presets"] == ["web-app"]
+    # P5-01 collapse: the legacy ``"web-app"`` id sent by the caller
+    # normalizes to ``"default"`` before bundle composition + audit
+    # logging.
+    assert body["presets"] == ["default"]
     assert body["tracker_kind"] == "linear"
     assert body["run_token_rotated"] is True
     assert body["run_token_prefix"]
@@ -162,7 +165,9 @@ async def test_wizard_seed_first_run_mints_token_and_opens_pr(
     ).scalars().all()
     assert len(audits) == 1
     payload = audits[0].payload
-    assert payload["presets"] == ["web-app"]
+    # Audit telemetry stops fragmenting on legacy ids — every row
+    # records the normalized ``"default"`` value (P5-01).
+    assert payload["presets"] == ["default"]
     assert payload["tracker_kind"] == "linear"
     assert payload["run_token_rotated"] is True
     # Plaintext MUST NOT leak anywhere.
@@ -327,18 +332,25 @@ async def test_wizard_seed_falls_back_to_workspace_default(
 
 
 @pytest.mark.asyncio
-async def test_wizard_seed_rejects_unknown_preset(
+async def test_wizard_seed_accepts_legacy_preset_no_422(
     monkeypatch, v1_client, db_session, seeded_wizard_repo
 ) -> None:
+    """Post-P5-01 the validate-against-``KNOWN_PRESETS`` 422 gate is
+    gone. Legacy preset strings (every entry in ``LEGACY_PRESETS``)
+    pass through and collapse to ``"default"`` via
+    :func:`backend.app.services.lane_recipes.normalize_preset` before
+    bundle composition. The wizard-side 422 case is now genuinely
+    just "bad payload shape", not "unknown preset enum value"."""
     raw, workspace, _install, repo = seeded_wizard_repo
     _patch_github(monkeypatch)
 
     resp = await v1_client.post(
         f"/v1/workspaces/{workspace.id}/repos/{repo.id}/wizard_seed",
-        json={"presets": ["not-a-preset"], "knowledge_slugs": []},
+        json={"presets": ["adoption-minimum"], "knowledge_slugs": []},
         headers={"Authorization": f"Bearer {raw}"},
     )
-    assert resp.status_code == 422
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["presets"] == ["default"]
 
 
 @pytest.mark.asyncio
