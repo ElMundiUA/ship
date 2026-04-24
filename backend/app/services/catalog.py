@@ -35,7 +35,8 @@ twice per request.
 from __future__ import annotations
 
 from pathlib import Path
-from collections.abc import Mapping
+from collections import OrderedDict
+from collections.abc import Iterable, Mapping
 from typing import Any, Final
 
 import yaml
@@ -611,6 +612,98 @@ def read_starter_yaml(workflow_id: str) -> str | None:
     from backend.app.services import starter_workflows
 
     return starter_workflows.read_yaml(workflow_id)
+
+
+def starter_workflow_for_pattern(pattern_key: str) -> str | None:
+    """Return the starter workflow id a pattern would install when wired as a lane.
+
+    Wraps :func:`resolve_lane_workflow` with the pattern lookup so
+    callers (P5-05 ``compose_seed_files`` / ``synthetic_lane_sync``)
+    don't have to walk the catalog themselves. Returns ``None`` when:
+
+    - the pattern id isn't known to the catalog (typo / yanked
+      pattern),
+    - the pattern doesn't declare ``modes: [lane, ...]`` (i.e. it's
+      request-only, like ``onboard-seed-knowledge``),
+    - or :func:`resolve_lane_workflow` itself returned ``None``.
+
+    Pure: no I/O, no DB; cached by :func:`list_patterns`.
+    """
+    for entry in list_patterns():
+        if entry.id == pattern_key:
+            return resolve_lane_workflow(entry)
+    return None
+
+
+def bundle_lane_entries(
+    bundle: "Iterable[str]",
+) -> "OrderedDict[str, dict[str, object]]":
+    """Project a flat ``bundle`` of pattern keys into the lanes mapping.
+
+    The result is the exact shape :func:`emit_config_yaml` accepts as
+    its ``lanes`` argument — one entry per pattern in ``bundle`` that
+    declares ``lane`` mode AND a parseable ``default_trigger``.
+    Patterns without a lane mode (request-only templates like
+    ``onboard-seed-knowledge``) are silently skipped — they still
+    belong in the bundle for accounting (the wizard records them in
+    its v2 marker) but they don't need a lane row.
+
+    Lane id derivation:
+
+    1. ``spec.lane_id`` (when set) — preserves the recipe's symbolic
+       slug (``pr_review``, ``self_heal``).
+    2. Pattern id (with dots collapsed to underscores) — falls back
+       to a slug that matches the pattern key, so a freshly-authored
+       pattern produces a usable lane row without a code change.
+
+    Output ordering follows the input bundle (``OrderedDict``) so the
+    emitted YAML mirrors the bundle's recommended display order.
+    """
+    from collections import OrderedDict
+
+    from backend.app.services.lane_recipes import _flatten_default_trigger
+
+    by_id = {entry.id: entry for entry in list_patterns()}
+    lanes: "OrderedDict[str, dict[str, object]]" = OrderedDict()
+    for pattern_key in bundle:
+        entry = by_id.get(pattern_key)
+        if entry is None:
+            continue
+        if "lane" not in entry.modes and entry.category is not None:
+            continue
+        trigger = _flatten_default_trigger(entry.default_trigger)
+        if trigger is None:
+            continue
+        lane_id = entry.lane_id or pattern_key.replace(".", "_")
+        # Stable lane row: the pattern slug doubles as a key into
+        # the catalog so ``Lane.pattern`` joins remain free.
+        lane_entry: dict[str, object] = dict(trigger)
+        lane_entry.setdefault("pattern", entry.id)
+        lanes[lane_id] = lane_entry
+    return lanes
+
+
+def emit_config_yaml_for_bundle(
+    bundle: "Iterable[str]",
+    *,
+    repo_full_name: str | None = None,
+    preset_id: str | None = "default",
+) -> str:
+    """Render ``.ship/config.yml`` directly from a bundle of pattern keys.
+
+    Wave-8 wizard path: the canonical bundle (``DEFAULT_BUNDLE``) is
+    the only input — no per-preset branching. Internally calls
+    :func:`bundle_lane_entries` to derive the ``lanes:`` mapping
+    and :func:`emit_config_yaml` to serialise (so the YAML preamble,
+    quoting, and key ordering stay byte-identical to the editor
+    path that powers ``POST .../config/propose``).
+    """
+    lanes = bundle_lane_entries(bundle)
+    return emit_config_yaml(
+        preset_id=preset_id,
+        repo_full_name=repo_full_name,
+        lanes=lanes,
+    )
 
 
 def emit_config_yaml(
