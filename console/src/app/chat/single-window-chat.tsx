@@ -50,6 +50,7 @@ import {
   useState,
   type FormEvent,
   type KeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
 } from "react";
 
 import { ChatMarkdown, ChoiceProvider } from "./chat-markdown";
@@ -349,10 +350,17 @@ export function SingleWindowChat({
   const abortRef = useRef<AbortController | null>(null);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const lastUserAnchorRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const chatRootRef = useRef<HTMLDivElement | null>(null);
   // Last prompt body the user submitted, captured at the start of
   // every ``send``. The error-card "Retry" button replays it so a
   // failed stream isn't lost — the user doesn't have to retype.
   const lastUserPromptRef = useRef<string | null>(null);
+
+  // Distance between the scroller's bottom and the visible viewport
+  // edge. Drives the "Jump to latest" pill — we treat anything > 120
+  // as "user has scrolled away on purpose" and surface the affordance.
+  const [scrollGap, setScrollGap] = useState(0);
 
   // Word-by-word reveal tick. Only the currently-streaming text
   // segment advances — everything else sits at full length. We
@@ -393,6 +401,39 @@ export function SingleWindowChat({
     };
   }, []);
 
+  // Track how far the scroller is from the bottom so the
+  // "Jump to latest" pill can fade in once the user has scrolled
+  // back through history. rAF-throttled so a fast trackpad
+  // scroll doesn't drown React in re-renders.
+  useEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    let raf = 0;
+    const update = () => {
+      raf = 0;
+      setScrollGap(el.scrollHeight - el.clientHeight - el.scrollTop);
+    };
+    const onScroll = () => {
+      if (raf !== 0) return;
+      raf = requestAnimationFrame(update);
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    update();
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      if (raf !== 0) cancelAnimationFrame(raf);
+    };
+  }, []);
+
+  // Re-evaluate the scroll gap whenever content height could
+  // change (new segments, runway grows/shrinks). Keeps the
+  // "Jump to latest" pill in sync without needing a ResizeObserver.
+  useEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    setScrollGap(el.scrollHeight - el.clientHeight - el.scrollTop);
+  }, [segments, bottomSpacerPx]);
+
   // Spacer-shrink scroll compensation. Runs synchronously after
   // React commits a ``bottomSpacerPx`` change but before the
   // browser paints, so we can re-anchor the scroller to its
@@ -415,6 +456,23 @@ export function SingleWindowChat({
     // hiding the gap.
     el.scrollTop = comp.scrollTop;
   }, [bottomSpacerPx]);
+
+  // Snap the bottom runway closed while preserving the visible
+  // anchor. Captures ``scrollTop`` synchronously so the layout-
+  // effect compensation can re-pin after React mutates the DOM.
+  // Called from ``end``/``error`` SSE handlers and the manual
+  // stop-streaming button; all three exit paths need the same
+  // dance, so factoring keeps them in sync.
+  const releaseSpacer = useCallback(() => {
+    const scroller = scrollerRef.current;
+    if (scroller) {
+      spacerCompensationRef.current = {
+        scrollTop: scroller.scrollTop,
+        scrollHeight: scroller.scrollHeight,
+      };
+    }
+    setBottomSpacerPx(0);
+  }, []);
 
   const handleEvent = useCallback((evt: StreamEvent) => {
     switch (evt.type) {
@@ -594,22 +652,13 @@ export function SingleWindowChat({
         setAwaitingFirstDelta(false);
         // Release the runway spacer now that the turn is over so
         // we don't leave an empty tail hanging under the reply
-        // until the next ``send``. We capture the scroller's
-        // current ``scrollTop`` here, *before* the spacer state
-        // change is committed, so the companion ``useLayoutEffect``
-        // can snap the scroll position back after React mutates
-        // the DOM. Without that compensation the browser would
+        // until the next ``send``. ``releaseSpacer`` captures the
+        // scroller's ``scrollTop`` synchronously so the layout
+        // effect can snap the visible anchor back after React
+        // shrinks the spacer — without that, the browser would
         // clamp ``scrollTop`` against the now-shorter content and
-        // the pinned user prompt would visibly jump down inside
-        // the viewport.
-        const scroller = scrollerRef.current;
-        if (scroller) {
-          spacerCompensationRef.current = {
-            scrollTop: scroller.scrollTop,
-            scrollHeight: scroller.scrollHeight,
-          };
-        }
-        setBottomSpacerPx(0);
+        // the pinned user prompt would visibly jump down.
+        releaseSpacer();
         setSegments((prev) => {
           const idx = findLastIndex(
             prev,
@@ -631,18 +680,11 @@ export function SingleWindowChat({
         // scrollTop-preservation dance. Leaving it pinned here
         // would strand an empty runway below the error message
         // until the user sends another turn.
-        const scroller = scrollerRef.current;
-        if (scroller) {
-          spacerCompensationRef.current = {
-            scrollTop: scroller.scrollTop,
-            scrollHeight: scroller.scrollHeight,
-          };
-        }
-        setBottomSpacerPx(0);
+        releaseSpacer();
         return;
       }
     }
-  }, []);
+  }, [releaseSpacer]);
 
   const send = useCallback(
     async (message: string, opts: { forceNewThread?: boolean } = {}) => {
@@ -742,6 +784,80 @@ export function SingleWindowChat({
       void send(draft);
     }
   };
+
+  // Cancel the in-flight stream. ``consumeSSE`` will throw
+  // ``AbortError``; ``send``'s catch silently swallows that and the
+  // ``finally`` clause clears the streaming flags. We also clear
+  // them eagerly here so the UI flips back to the send button
+  // without waiting for the fetch to unwind, and release the
+  // runway spacer with the same scrollTop-preservation dance the
+  // ``end`` / ``error`` handlers use.
+  const stopStreaming = useCallback(() => {
+    if (!abortRef.current) return;
+    abortRef.current.abort();
+    setStreaming(false);
+    setAwaitingFirstDelta(false);
+    releaseSpacer();
+  }, [releaseSpacer]);
+
+  // "Give me a different answer" — drops the last user turn and
+  // everything after it locally, then re-issues ``send`` which will
+  // push a fresh optimistic user segment + new assistant. Without
+  // dropping the kept user segment too we'd render two identical
+  // "You" rows back-to-back during the live regenerate.
+  //
+  // Trade-off: the previous user + assistant rows stay persisted on
+  // the backend, so a reload shows both the original turn and the
+  // regenerate turn (in arrival order). No regenerate API exists
+  // on the backend; treating the live view as authoritative and
+  // letting the durable history record both attempts is the
+  // cheapest honest behavior.
+  const handleRegenerate = useCallback(() => {
+    const prompt = lastUserPromptRef.current;
+    if (!prompt || streaming) return;
+    setSegments((prev) => {
+      const idx = findLastIndex(prev, (s) => s.kind === "user");
+      if (idx < 0) return prev;
+      return prev.slice(0, idx);
+    });
+    void send(prompt);
+  }, [send, streaming]);
+
+  // Keyboard shortcuts (window-scoped):
+  //   • Esc       → abort streaming, or clear draft when idle
+  //   • ⌘/Ctrl+K  → focus the composer
+  //
+  // We let the event pass through when focus is on something
+  // outside the chat surface (e.g. a sidebar input) — checked by
+  // testing whether ``document.activeElement`` is the body or
+  // lives inside the chat root.
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      const target = document.activeElement;
+      const inChat =
+        !target ||
+        target === document.body ||
+        (chatRootRef.current?.contains(target) ?? false);
+      if (!inChat) return;
+      if (e.key === "Escape") {
+        if (streaming) {
+          e.preventDefault();
+          stopStreaming();
+        } else if (draft.length > 0) {
+          e.preventDefault();
+          setDraft("");
+        }
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K")) {
+        if (streaming) return;
+        e.preventDefault();
+        textareaRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [streaming, draft, stopStreaming]);
 
   const resetConversation = useCallback(
     async (opts: { bucketName?: string } = {}) => {
@@ -861,6 +977,23 @@ export function SingleWindowChat({
     return null;
   }, [streaming, hasStreamingAssistant, currentTurnLastTool, awaitingFirstDelta]);
 
+  // Regenerate is offered only when the previous turn settled
+  // cleanly — i.e. we're idle, the last segment is a finalized
+  // assistant_text, and we still remember the prompt that produced
+  // it. (``ChatErrorCard``'s Retry button covers the failure case.)
+  const canRegenerate = useMemo(() => {
+    if (streaming) return false;
+    if (!lastUserPromptRef.current) return false;
+    const last = segments[segments.length - 1];
+    return !!last && last.kind === "assistant_text" && !last.streaming;
+  }, [segments, streaming]);
+
+  // Show the "Jump to latest" pill once the user has scrolled
+  // > 120px away from the bottom and the thread has *something*
+  // worth jumping to. Empty thread = no point.
+  const showJumpButton =
+    scrollGap > 120 && (streaming || segments.length > 0);
+
   // Map each assistant_text segment to how many characters we
   // should render right now. Non-streaming segments (historical +
   // finalized past turns) always show their full body; only the
@@ -880,7 +1013,10 @@ export function SingleWindowChat({
   }, [segments, revealed]);
 
   return (
-    <div className="flex h-[calc(100vh-12rem)] min-h-[34rem] flex-col">
+    <div
+      ref={chatRootRef}
+      className="flex h-[calc(100vh-12rem)] min-h-[34rem] flex-col"
+    >
       <div className="flex items-center gap-3 pb-2">
         <h2 className="text-sm font-semibold text-white/90">{current.title}</h2>
         <span className="text-[11px] text-white/35">
@@ -909,64 +1045,95 @@ export function SingleWindowChat({
         />
       ) : null}
 
-      <div ref={scrollerRef} className="flex-1 overflow-y-auto py-4">
-        <ChoiceProvider onChoose={(label) => void send(label)}>
-          {segments.length === 0 ? (
-            <EmptyHint hasArchivedChats={hasArchivedChats} />
-          ) : (
-            <div className="space-y-6">
-              {/* Single ordered timeline. user / assistant_text /
-                  tool segments render in arrival order — when a
-                  ``tool_call`` interleaves between deltas, the
-                  next prose segment naturally lands *below* the
-                  tool card, eliminating the dual-array clumping
-                  that pre-Wave-B pinned all tools at the bottom. */}
-              {segments.map((seg, i) => {
-                if (seg.kind === "user") {
-                  return (
-                    <UserRow
-                      key={seg.id}
-                      segment={seg}
-                      anchorRef={
-                        i === lastUserIndex ? lastUserAnchorRef : null
-                      }
-                    />
-                  );
-                }
-                if (seg.kind === "assistant_text") {
-                  return (
-                    <AssistantTextRow
-                      key={seg.id}
-                      segment={seg}
-                      revealLen={revealMap.get(seg.id) ?? seg.body.length}
-                    />
-                  );
-                }
-                return <ToolSegmentRow key={seg.id} segment={seg} />;
-              })}
-              {/* Single-line turn status at the end of the turn
-                  (below the streamed prose if there is any, below
-                  the user prompt if not). Replaces itself as state
-                  changes — never stacks. The slot is a fixed-height
-                  reservation while a turn is in flight so flips
-                  between Thinking → Calling X → (gone) don't jiggle
-                  the conversation vertically; outside of streaming
-                  it collapses to nothing. */}
-              <TurnStatusSlot status={turnStatus} streaming={streaming} />
-              {/* Empty runway so the scroller can keep the fresh
-                  user message pinned near the top of the viewport
-                  while the reply streams in below. Shrinks back
-                  to zero as soon as the turn ends. */}
-              {bottomSpacerPx > 0 ? (
-                <div
-                  aria-hidden
-                  style={{ height: bottomSpacerPx }}
-                  className="pointer-events-none"
-                />
-              ) : null}
-            </div>
-          )}
-        </ChoiceProvider>
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        <div ref={scrollerRef} className="flex-1 overflow-y-auto py-4">
+          <ChoiceProvider onChoose={(label) => void send(label)}>
+            {segments.length === 0 ? (
+              <EmptyHint hasArchivedChats={hasArchivedChats} />
+            ) : (
+              <div className="space-y-6">
+                {/* Single ordered timeline. user / assistant_text /
+                    tool segments render in arrival order — when a
+                    ``tool_call`` interleaves between deltas, the
+                    next prose segment naturally lands *below* the
+                    tool card, eliminating the dual-array clumping
+                    that pre-Wave-B pinned all tools at the bottom. */}
+                {segments.map((seg, i) => {
+                  if (seg.kind === "user") {
+                    return (
+                      <UserRow
+                        key={seg.id}
+                        segment={seg}
+                        anchorRef={
+                          i === lastUserIndex ? lastUserAnchorRef : null
+                        }
+                      />
+                    );
+                  }
+                  if (seg.kind === "assistant_text") {
+                    return (
+                      <AssistantTextRow
+                        key={seg.id}
+                        segment={seg}
+                        revealLen={revealMap.get(seg.id) ?? seg.body.length}
+                      />
+                    );
+                  }
+                  return <ToolSegmentRow key={seg.id} segment={seg} />;
+                })}
+                {canRegenerate ? (
+                  <div className="-mt-2">
+                    <button
+                      type="button"
+                      onClick={handleRegenerate}
+                      className="text-[11px] text-white/40 transition hover:text-white/80"
+                    >
+                      Regenerate ↻
+                    </button>
+                  </div>
+                ) : null}
+                {/* Single-line turn status at the end of the turn
+                    (below the streamed prose if there is any, below
+                    the user prompt if not). Replaces itself as state
+                    changes — never stacks. The slot is a fixed-height
+                    reservation while a turn is in flight so flips
+                    between Thinking → Calling X → (gone) don't jiggle
+                    the conversation vertically; outside of streaming
+                    it collapses to nothing. */}
+                <TurnStatusSlot status={turnStatus} streaming={streaming} />
+                {/* Empty runway so the scroller can keep the fresh
+                    user message pinned near the top of the viewport
+                    while the reply streams in below. Shrinks back
+                    to zero as soon as the turn ends. */}
+                {bottomSpacerPx > 0 ? (
+                  <div
+                    aria-hidden
+                    style={{ height: bottomSpacerPx }}
+                    className="pointer-events-none"
+                  />
+                ) : null}
+              </div>
+            )}
+          </ChoiceProvider>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            const el = scrollerRef.current;
+            if (!el) return;
+            el.scrollTo({
+              top: el.scrollHeight - el.clientHeight,
+              behavior: "smooth",
+            });
+          }}
+          aria-hidden={!showJumpButton}
+          tabIndex={showJumpButton ? 0 : -1}
+          className={`pointer-events-auto absolute bottom-4 right-4 rounded-full border border-white/15 bg-black/55 px-3 py-1.5 text-[11px] font-semibold text-white/80 backdrop-blur-md transition-opacity duration-150 hover:border-aqua/40 hover:text-white ${
+            showJumpButton ? "opacity-100" : "pointer-events-none opacity-0"
+          }`}
+        >
+          Jump to latest ↓
+        </button>
       </div>
 
       {errorText ? (
@@ -984,24 +1151,43 @@ export function SingleWindowChat({
 
       <form
         onSubmit={onSubmit}
-        className="flex items-end gap-2 border-t border-white/5 pt-3"
+        className="flex flex-col gap-1 border-t border-white/5 pt-3"
       >
-        <textarea
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={onKeyDown}
-          placeholder="Ask the agent. Enter to send, Shift-Enter for newline."
-          rows={2}
-          disabled={streaming}
-          className="min-h-[48px] flex-1 resize-none bg-transparent px-1 py-2 text-sm text-white placeholder-white/25 focus:outline-none disabled:opacity-50"
-        />
-        <button
-          type="submit"
-          disabled={streaming || draft.trim().length === 0}
-          className="text-sm font-semibold text-aqua transition hover:text-aqua/80 disabled:cursor-not-allowed disabled:text-white/25"
-        >
-          {streaming ? "…" : "send ↵"}
-        </button>
+        <div className="flex items-end gap-2">
+          <textarea
+            ref={textareaRef}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder="Ask the agent. Enter to send, Shift-Enter for newline."
+            rows={2}
+            disabled={streaming}
+            className="min-h-[48px] flex-1 resize-none bg-transparent px-1 py-2 text-sm text-white placeholder-white/25 focus:outline-none disabled:opacity-50"
+          />
+          {streaming ? (
+            <button
+              type="button"
+              onClick={stopStreaming}
+              aria-label="Stop streaming"
+              className="text-sm font-semibold text-rose-300 transition hover:text-rose-200"
+            >
+              stop ✕
+            </button>
+          ) : (
+            <button
+              type="submit"
+              disabled={draft.trim().length === 0}
+              className="text-sm font-semibold text-aqua transition hover:text-aqua/80 disabled:cursor-not-allowed disabled:text-white/25"
+            >
+              send ↵
+            </button>
+          )}
+        </div>
+        {!streaming && draft.length === 0 ? (
+          <span className="text-[10px] text-white/30">
+            Enter to send · Shift+Enter newline · ⌘K to focus · Esc to cancel
+          </span>
+        ) : null}
       </form>
     </div>
   );
@@ -1062,12 +1248,63 @@ function AssistantTextRow({
     Math.max(0, Math.min(revealLen, segment.body.length)),
   );
   return (
-    <div className="text-[14px] leading-relaxed">
+    <div className="group relative text-[14px] leading-relaxed">
       <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-lilac/80">
         Ship
       </div>
       <ChatMarkdown text={displayBody} animate={segment.animate} />
+      {segment.streaming ? null : (
+        <CopyMessageButton text={segment.body} />
+      )}
     </div>
+  );
+}
+
+/**
+ * Inline "Copy" affordance attached to a finalized assistant
+ * segment. Faint by default, opaque on row hover (driven by the
+ * Tailwind ``group``/``group-hover`` pair on the parent row).
+ * Clipboard failures (denied permission, insecure context) flash
+ * a brief "Copy failed" so the user knows nothing happened.
+ */
+function CopyMessageButton({ text }: { text: string }) {
+  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+  const timerRef = useRef<number | null>(null);
+  useEffect(() => {
+    return () => {
+      if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    };
+  }, []);
+  const onClick = async (e: ReactMouseEvent<HTMLButtonElement>) => {
+    e.stopPropagation();
+    try {
+      if (typeof navigator === "undefined" || !navigator.clipboard) {
+        throw new Error("clipboard unavailable");
+      }
+      await navigator.clipboard.writeText(text);
+      setState("copied");
+    } catch {
+      setState("failed");
+    }
+    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    timerRef.current = window.setTimeout(() => setState("idle"), 1500);
+  };
+  const label =
+    state === "copied"
+      ? "Copied ✓"
+      : state === "failed"
+        ? "Copy failed"
+        : "Copy";
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label="Copy reply"
+      className="absolute right-0 top-0 inline-flex items-center gap-1 rounded border border-white/5 bg-transparent px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/35 opacity-0 transition hover:border-white/15 hover:bg-white/[0.04] hover:text-white/85 group-hover:opacity-100 focus:opacity-100"
+    >
+      <span aria-hidden>📋</span>
+      <span>{label}</span>
+    </button>
   );
 }
 

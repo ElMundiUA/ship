@@ -25,7 +25,15 @@
  * until the turn completes.
  */
 
-import { createContext, useContext, useMemo, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import type { Components } from "react-markdown";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -379,10 +387,19 @@ function buildComponents(animate: boolean): Components {
       if (isDirectivePre(children)) {
         return <>{children}</>;
       }
+      // Wrap in a relative group so the copy affordance can fade in
+      // on hover. The inner <pre> stays the same React element type
+      // across renders so word-span reconciliation isn't disturbed.
+      const codeText = getCodeText(children);
       return (
-        <pre className="mb-3 overflow-x-auto rounded-md bg-black/45 p-3 text-[13px] text-white/88 last:mb-0">
-          {children}
-        </pre>
+        <div className="group relative">
+          <pre className="mb-3 overflow-x-auto rounded-md bg-black/45 p-3 text-[13px] text-white/88 last:mb-0">
+            {children}
+          </pre>
+          {codeText.length > 0 ? (
+            <CopyCodeButton text={codeText} />
+          ) : null}
+        </div>
       );
     },
     table: ({ children }) => (
@@ -406,6 +423,78 @@ function buildComponents(animate: boolean): Components {
       </td>
     ),
   };
+}
+
+/**
+ * Recursively walk a react-markdown <pre>'s children to recover
+ * the raw source of the embedded <code> block. react-markdown
+ * hands us a single <code> element whose own children are either
+ * the literal source string or — when our word-span animation is
+ * active — a tree of nested span fragments. We flatten them back
+ * to text so the copy affordance hands the user the original code,
+ * not the rendered DOM.
+ */
+function getCodeText(children: ReactNode): string {
+  let out = "";
+  const visit = (node: ReactNode): void => {
+    if (node === null || node === undefined || typeof node === "boolean") return;
+    if (typeof node === "string") {
+      out += node;
+      return;
+    }
+    if (typeof node === "number") {
+      out += String(node);
+      return;
+    }
+    if (Array.isArray(node)) {
+      for (const child of node) visit(child);
+      return;
+    }
+    if (typeof node === "object" && "props" in node) {
+      const props = (node as { props?: { children?: ReactNode } }).props;
+      if (props && "children" in props) {
+        visit(props.children);
+      }
+    }
+  };
+  visit(children);
+  return out;
+}
+
+function CopyCodeButton({ text }: { text: string }) {
+  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+  const timerRef = useRef<number | null>(null);
+  useEffect(() => {
+    return () => {
+      if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    };
+  }, []);
+  const onClick = async (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.stopPropagation();
+    try {
+      if (typeof navigator === "undefined" || !navigator.clipboard) {
+        throw new Error("clipboard unavailable");
+      }
+      await navigator.clipboard.writeText(text);
+      setState("copied");
+    } catch {
+      setState("failed");
+    }
+    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    timerRef.current = window.setTimeout(() => setState("idle"), 1500);
+  };
+  const label =
+    state === "copied" ? "Copied ✓" : state === "failed" ? "Copy failed" : "Copy";
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label="Copy code"
+      className="absolute right-2 top-2 rounded border border-white/10 bg-black/40 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/55 opacity-0 transition hover:border-aqua/40 hover:text-white group-hover:opacity-100 focus:opacity-100"
+    >
+      {label}
+    </button>
+  );
 }
 
 function isDirectivePre(children: ReactNode): boolean {
