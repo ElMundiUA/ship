@@ -7,9 +7,9 @@ import { repoUrl, shipApiBase } from "@/lib/config";
 import { loadPatternsManifest } from "@/lib/patterns";
 
 export const metadata: Metadata = {
-  title: "Org patterns — Ship",
+  title: "Patterns — the source of Plays — Ship",
   description:
-    "Reviewable markdown prompts for agents: onboarding, scheduled cloud roles, and lane playbooks — discover bodies with the Ship CLI (pattern list/show/fetch).",
+    "Patterns are the source of Plays — versioned operational procedures the operator console renders as Plays you assign as Automations. Browse the catalog or fetch any body with the Ship CLI (pattern list/show/fetch).",
 };
 
 export default function PatternsPage() {
@@ -23,18 +23,22 @@ export default function PatternsPage() {
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_90%_60%_at_50%_-10%,rgba(179,136,255,0.35),transparent_55%)]" />
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_50%_40%_at_100%_20%,rgba(255,213,74,0.12),transparent_50%)]" />
           <div className="relative mx-auto max-w-4xl px-4 text-center sm:px-6">
-            <p className="text-sm font-bold uppercase tracking-widest text-lilac">Org patterns</p>
+            <p className="text-sm font-bold uppercase tracking-widest text-lilac">Catalog · the source of Plays</p>
             <h1 className="font-display mt-4 text-4xl font-bold leading-tight text-white sm:text-5xl">
-              Small instructions that scale with the org
+              Patterns are the source of Plays
             </h1>
             <p className="mx-auto mt-6 max-w-2xl text-lg text-white/70">
-              Patterns are not vendor &ldquo;skills&rdquo;. They are <strong className="text-white">versioned markdown</strong> in
-              this repo — onboarding playbooks, scheduled cloud roles, and lane playbooks (seeded from the reference
-              org stack). Agents adapt the text to Cursor, Cloud Code, or whatever runtime you run.
+              A <strong className="text-white">pattern</strong> is a versioned, reviewable markdown procedure (RFC-0001) — PR
+              self-review, release cut, knowledge refresh, dependency upgrade. The operator console renders each one as
+              a <strong className="text-white">Play</strong> your team picks from a menu and assigns as an{" "}
+              <strong className="text-white">Automation</strong>. New to the four-noun model?{" "}
+              <Link href="/docs/concepts" className="font-semibold text-aqua underline-offset-2 hover:underline">
+                Read the operator primer →
+              </Link>
             </p>
             <div className="mt-10 flex flex-wrap justify-center gap-3">
               <a href="#catalog" className="btn-primary inline-flex">
-                Browse patterns
+                Browse the catalog
               </a>
               <a href="#how" className="btn-secondary inline-flex">
                 How to use
@@ -51,10 +55,12 @@ export default function PatternsPage() {
             <div className="grid gap-8 lg:grid-cols-3">
               <div className="glass-panel p-6 sm:p-8">
                 <p className="text-xs font-bold uppercase tracking-widest text-aqua">Why</p>
-                <h2 className="font-display mt-2 text-xl font-bold text-white">Distributed improvements</h2>
+                <h2 className="font-display mt-2 text-xl font-bold text-white">Improvements land in your Inbox</h2>
                 <p className="mt-3 text-sm leading-relaxed text-white/65">
-                  One manifest points at files under <code className="text-aqua/90">prompts/</code>. Merge review is your
-                  moderation gate: proposals land as normal PRs, then every project that pins this repo sees the update.
+                  When an agent flags a tweak during a Run — a missing edge case, a tighter rule, a clearer prompt — it opens
+                  an <strong className="text-white/85">improvement</strong> Inbox item routed to the right owner. Accept it
+                  and the change lands as a normal PR against this repo; once merged, every project that pins the catalog
+                  picks it up on the next <code className="text-aqua/90">shipctl sync</code>.
                 </p>
               </div>
               <div className="glass-panel p-6 sm:p-8">

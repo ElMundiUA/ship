@@ -27,9 +27,9 @@ type Tile = {
 const TILES: Tile[] = [
   {
     href: "/patterns",
-    kicker: "Org playbooks",
+    kicker: "Plays catalog",
     title: "Patterns",
-    body: "Versioned markdown prompts for agents — onboarding, lane playbooks, scheduled cloud roles. The methodology vocabulary, written once, reused per agent runtime.",
+    body: "Versioned markdown procedures — PR self-review, release cuts, knowledge refreshes, scheduled cloud roles. The operator console renders each one as a Play your team picks from a menu and assigns as an Automation.",
     accentText: "text-aqua",
     accentBorderHover: "hover:border-aqua/40",
     accentDot: "bg-aqua",

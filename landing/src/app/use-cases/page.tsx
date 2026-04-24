@@ -6,7 +6,7 @@ import { SiteHeader } from "@/components/site-header";
 export const metadata: Metadata = {
   title: "Customer stories — Ship",
   description:
-    "Enterprise teams use Ship to roll out agentic SDLC without trading governance for speed. Read how reference deployments wired Linear, GitHub Actions, and AI agents into a single, auditable delivery loop.",
+    "Enterprise teams use Ship to roll out agentic SDLC without trading governance for speed. Read how reference deployments turned scattered prompts and Slack pings into Plays they ship, Runs they watch, and an Inbox that catches the rest.",
 };
 
 type Story = {
@@ -24,11 +24,11 @@ const STORIES: Story[] = [
     slug: "elmundi",
     industry: "E-commerce · D2C platform",
     org: "ElMundi",
-    headline: "Cut delivery-lane drift to zero by making the SDLC a contract, not a wiki",
+    headline: "From scattered Slack pings to one Inbox: how ElMundi runs Ship on itself",
     outcome:
-      "Replaced ad-hoc agent prompting with a scheduled, audit-friendly delivery loop on a public monorepo — every ticket walks Linear → branch → PR → Playwright → release behind named workflows.",
+      "Replaced ad-hoc agent prompting with a scheduled, audit-friendly delivery loop on a public monorepo — every ticket walks Linear → branch → PR → Playwright → release behind named Automations, with escalations landing in a single Inbox.",
     bullets: [
-      "Operators launch the day with one workflow, not six tabs",
+      "Operators launch the day with one Automation, not six tabs",
       "Every agent action is reviewable in GitHub Actions and Linear history",
       "Onboarding a new contributor is a single page of the docs, not a tribal call",
     ],
@@ -63,9 +63,17 @@ export default function UseCasesIndexPage() {
               Predictable agent-driven delivery, with the audit trail your CISO already asked for
             </h1>
             <p className="mx-auto mt-6 max-w-2xl text-lg text-white/70">
-              Operators get a single button to start the day. Engineering gets diffable plays instead of prompt folklore.
-              Security and procurement read the same artifacts the team runs. Below: how reference deployments wired Ship
-              into their SDLC — and what that bought them.
+              The reference deployments below all run on the same four operator nouns: <strong className="text-white">Plays</strong>{" "}
+              they ship, <strong className="text-white">Automations</strong> they assign, <strong className="text-white">Runs</strong>{" "}
+              they watch, and the <strong className="text-white">Inbox</strong> that catches the rest. Security and procurement read
+              the same artifacts the team runs.
+            </p>
+            <p className="mx-auto mt-4 max-w-2xl text-sm text-white/55">
+              If these nouns are new to you, the four-noun primer is here →{" "}
+              <Link href="/docs/concepts" className="font-semibold text-aqua underline-offset-2 hover:underline">
+                /docs/concepts
+              </Link>
+              .
             </p>
             <div className="mt-10 flex flex-wrap justify-center gap-3">
               <Link href="/getting-started" className="btn-primary inline-flex">
@@ -184,7 +192,7 @@ const WHY: { kicker: string; title: string; body: string }[] = [
   {
     kicker: "Throughput",
     title: "More tickets per engineer-hour, with the same review bar",
-    body: "Agents take the boring half of every ticket — branch, scaffold, write the failing test, draft the PR — so engineers spend their time on judgement, not setup. The Ship loop holds the delivery lane to the same code-review and QA standard whether a human or an agent did the typing.",
+    body: "Agents take the boring half of every ticket — branch, scaffold, write the failing test, draft the PR — so engineers spend their time on judgement, not setup. Every Run holds to the same code-review and QA standard whether a human or an agent did the typing.",
   },
   {
     kicker: "Governance",
