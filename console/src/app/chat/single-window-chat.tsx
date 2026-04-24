@@ -32,6 +32,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -43,6 +44,7 @@ import { ChatMarkdown, ChoiceProvider } from "./chat-markdown";
 import {
   JsonFallback,
   TOOL_RENDERERS,
+  friendlyToolVerb,
   renderToolResult,
 } from "./tool-renderers";
 
@@ -76,16 +78,38 @@ type ToolCallRow = {
   result?: { ok: boolean; result?: unknown; error?: string };
 };
 
+/**
+ * Frontend-side topic-shift snapshot.
+ *
+ * Backend emits ``{ type: "topic_shift", decision: { shifted, reason,
+ * new_title } }`` (see ``backend/app/api/v1/routes/chat.py``). We
+ * keep the frontend shape flat for ergonomics — :func:`handleEvent`
+ * unwraps ``decision`` into this struct. ``new_title`` is treated
+ * as the suggested bucket name for the "pack & start fresh" CTA.
+ *
+ * No ``confidence`` field — backend doesn't ship one and the UI
+ * never used it as a discriminator anyway.
+ */
 type TopicShift = {
-  suggested_bucket_name: string | null;
-  confidence: number;
   reason: string | null;
+  new_title: string | null;
+};
+
+/**
+ * Raw decision payload as it arrives over SSE. ``shifted`` is
+ * filtered server-side (we only get a ``topic_shift`` event when
+ * it's true) but we re-check defensively in case of contract drift.
+ */
+type TopicShiftDecision = {
+  shifted?: boolean;
+  reason?: string | null;
+  new_title?: string | null;
 };
 
 type StreamEvent =
   | { type: "thread"; thread: Thread }
   | { type: "user_message"; message: Message }
-  | { type: "topic_shift"; shift: TopicShift }
+  | { type: "topic_shift"; decision?: TopicShiftDecision; shift?: unknown }
   | { type: "delta"; text: string }
   | {
       type: "tool_call";
@@ -157,6 +181,16 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
   // keeps the user prompt pinned at the top while the reply grows
   // in beneath it.
   const [bottomSpacerPx, setBottomSpacerPx] = useState(0);
+  // Snapshot of the scroller's ``scrollTop`` and ``scrollHeight``
+  // captured *before* the spacer changes. The companion
+  // ``useLayoutEffect`` below uses it to restore the visible
+  // anchor so collapsing the spacer at end-of-stream doesn't yank
+  // the page upward under the reader's eyes. Reset to ``null``
+  // when no compensation is pending.
+  const spacerCompensationRef = useRef<{
+    scrollTop: number;
+    scrollHeight: number;
+  } | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
@@ -197,6 +231,29 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
     };
   }, []);
 
+  // Spacer-shrink scroll compensation. Runs synchronously after
+  // React commits a ``bottomSpacerPx`` change but before the
+  // browser paints, so we can re-anchor the scroller to its
+  // pre-shrink ``scrollTop`` and avoid the visible jump that
+  // would otherwise happen when the runway disappears beneath
+  // the pinned user message. ``spacerCompensationRef`` is
+  // populated only by code paths that *want* the snap-back
+  // (``end`` / ``error``) — growing the spacer on submit leaves
+  // the ref empty and this is a no-op.
+  useLayoutEffect(() => {
+    const comp = spacerCompensationRef.current;
+    if (!comp) return;
+    spacerCompensationRef.current = null;
+    const el = scrollerRef.current;
+    if (!el) return;
+    // If the new content is still tall enough to honour the old
+    // ``scrollTop``, this restores the exact pre-shrink anchor.
+    // If not, the browser will re-clamp to the new max — same
+    // floor it would have hit anyway, just without our compensation
+    // hiding the gap.
+    el.scrollTop = comp.scrollTop;
+  }, [bottomSpacerPx]);
+
   const handleEvent = useCallback((evt: StreamEvent) => {
     switch (evt.type) {
       case "thread": {
@@ -216,7 +273,31 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
         return;
       }
       case "topic_shift": {
-        setShift(evt.shift);
+        // Backend ships ``{ decision: { shifted, reason, new_title } }``;
+        // we flatten into our ``TopicShift`` shape. If a future
+        // backend version starts emitting a different envelope we
+        // warn once so contract drift surfaces in the console
+        // before the banner silently disappears in production.
+        const decision = evt.decision;
+        if (
+          decision &&
+          typeof decision === "object" &&
+          ("reason" in decision || "new_title" in decision)
+        ) {
+          setShift({
+            reason:
+              typeof decision.reason === "string" ? decision.reason : null,
+            new_title:
+              typeof decision.new_title === "string"
+                ? decision.new_title
+                : null,
+          });
+        } else {
+          warnOnce(
+            "topic_shift event missing `decision` payload",
+            evt as unknown,
+          );
+        }
         return;
       }
       case "delta": {
@@ -291,14 +372,24 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
       case "end": {
         setStreaming(false);
         setAwaitingFirstDelta(false);
-        // Finalize: drop the streaming flag on whichever assistant
-        // row was live, so new tool calls in a *future* turn don't
-        // re-target the same row. We intentionally do NOT touch
-        // ``bottomSpacerPx`` here — collapsing it at ``end`` would
-        // yank the scroller's runway out from under the reader
-        // and the pinned user prompt would snap back down to the
-        // bottom of the viewport. The spacer is only reset on the
-        // next ``send`` / ``resetConversation``.
+        // Release the runway spacer now that the turn is over so
+        // we don't leave an empty tail hanging under the reply
+        // until the next ``send``. We capture the scroller's
+        // current ``scrollTop`` here, *before* the spacer state
+        // change is committed, so the companion ``useLayoutEffect``
+        // can snap the scroll position back after React mutates
+        // the DOM. Without that compensation the browser would
+        // clamp ``scrollTop`` against the now-shorter content and
+        // the pinned user prompt would visibly jump down inside
+        // the viewport.
+        const scroller = scrollerRef.current;
+        if (scroller) {
+          spacerCompensationRef.current = {
+            scrollTop: scroller.scrollTop,
+            scrollHeight: scroller.scrollHeight,
+          };
+        }
+        setBottomSpacerPx(0);
         setMessages((prev) => {
           const idx = findLastIndex(
             prev,
@@ -315,8 +406,18 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
         setErrorText(evt.detail ?? evt.error ?? "Agent error");
         setStreaming(false);
         setAwaitingFirstDelta(false);
-        // Same rationale as ``end`` — don't yank the spacer out
-        // from under the user when the turn errors.
+        // Symmetric with ``end``: free the spacer with the same
+        // scrollTop-preservation dance. Leaving it pinned here
+        // would strand an empty runway below the error message
+        // until the user sends another turn.
+        const scroller = scrollerRef.current;
+        if (scroller) {
+          spacerCompensationRef.current = {
+            scrollTop: scroller.scrollTop,
+            scrollHeight: scroller.scrollHeight,
+          };
+        }
+        setBottomSpacerPx(0);
         return;
       }
     }
@@ -500,13 +601,17 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
     if (latest && !latest.result) {
       return {
         tone: "shimmer",
-        text: `Calling ${prettyToolName(latest.name)}…`,
+        text: friendlyToolVerb(latest.name),
       };
     }
     if (latest && latest.result && !latest.result.ok) {
+      // Keep the error wording in the same gentle register as the
+      // friendly verbs above — short reason inline, the tool card
+      // below carries the real diagnostic in a <details>.
+      const reason = latest.result.error ?? "something went wrong";
       return {
         tone: "error",
-        text: `${prettyToolName(latest.name)} — ${latest.result.error ?? "failed"}`,
+        text: `Hit a snag — ${reason}`,
       };
     }
     // No running / errored tool at the head of the queue. Only
@@ -556,35 +661,15 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
       </div>
 
       {shift ? (
-        <div className="flex items-start gap-3 py-2 text-[12px] text-amber-200/90">
-          <span className="mt-0.5 h-1 w-1 shrink-0 rounded-full bg-amber-300" />
-          <div className="flex-1">
-            <strong className="font-semibold">Topic shift.</strong>{" "}
-            {shift.reason ?? "Looks like you moved on."} Pack this thread into{" "}
-            <code className="text-amber-100">
-              {shift.suggested_bucket_name ?? "a new bucket"}
-            </code>
-            ?
-            <button
-              type="button"
-              onClick={() =>
-                resetConversation({
-                  bucketName: shift.suggested_bucket_name ?? undefined,
-                })
-              }
-              className="ml-2 font-semibold text-amber-100 underline-offset-2 hover:underline"
-            >
-              pack & start fresh
-            </button>
-            <button
-              type="button"
-              onClick={() => setShift(null)}
-              className="ml-2 text-white/40 hover:text-white/80"
-            >
-              dismiss
-            </button>
-          </div>
-        </div>
+        <TopicShiftBanner
+          shift={shift}
+          onPack={() =>
+            resetConversation({
+              bucketName: shift.new_title ?? undefined,
+            })
+          }
+          onDismiss={() => setShift(null)}
+        />
       ) : null}
 
       <div ref={scrollerRef} className="flex-1 overflow-y-auto py-4">
@@ -777,8 +862,59 @@ function TurnStatusLine({
   return <div className={cls}>{text}</div>;
 }
 
-function prettyToolName(name: string): string {
-  return name.replace(/_/g, " ");
+/**
+ * Banner shown above the chat thread when the backend's topic
+ * classifier flags that the user has moved on. The shape comes
+ * straight from ``TopicShift`` (see top-of-file note) — backend
+ * sends ``decision.new_title`` which we treat here as the
+ * suggested bucket name for the "pack & start fresh" CTA.
+ */
+function TopicShiftBanner({
+  shift,
+  onPack,
+  onDismiss,
+}: {
+  shift: TopicShift;
+  onPack: () => void;
+  onDismiss: () => void;
+}) {
+  const bucketName = shift.new_title;
+  return (
+    <div className="flex items-start gap-3 py-2 text-[12px] text-amber-200/90">
+      <span className="mt-0.5 h-1 w-1 shrink-0 rounded-full bg-amber-300" />
+      <div className="flex-1">
+        <strong className="font-semibold">Topic shift.</strong>{" "}
+        {shift.reason ?? "Looks like you moved on."} Pack this thread into{" "}
+        <code className="text-amber-100">{bucketName ?? "a new bucket"}</code>?
+        <button
+          type="button"
+          onClick={onPack}
+          className="ml-2 font-semibold text-amber-100 underline-offset-2 hover:underline"
+        >
+          pack & start fresh
+        </button>
+        <button
+          type="button"
+          onClick={onDismiss}
+          className="ml-2 text-white/40 hover:text-white/80"
+        >
+          dismiss
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * One-shot ``console.warn`` keyed by message string so contract-
+ * drift warnings (e.g. SSE event missing an expected field) don't
+ * spam the devtools when the same bad payload arrives repeatedly.
+ */
+const _warnedKeys = new Set<string>();
+function warnOnce(message: string, payload?: unknown): void {
+  if (_warnedKeys.has(message)) return;
+  _warnedKeys.add(message);
+  console.warn(`[chat] ${message}`, payload);
 }
 
 function normalizeToolResult(evt: {
