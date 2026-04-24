@@ -3,6 +3,30 @@
 A short log of structural changes to the Manual itself — not to the
 product. For product changes, see the [/blog](/blog).
 
+## Phase 9 — Landing page (April 2026)
+
+* **Home page** rewritten around the operator loop: hero names Plays /
+  Automations / Runs / Inbox; how-it-works extended from 3 (init / sync
+  / verify) to 5 steps (Bootstrap → Pick Plays → Assign as Automations →
+  Watch Runs → Triage Inbox); new flagship **Operator loop** section
+  with a Vocabulary card mapping protocol-stable terms (`lanes:`,
+  `pattern:`, `pipeline_runs`) to operator-console nouns.
+* **Catalog pages** — patterns / kit / collections / use-cases prose
+  aligned with the new vocabulary; "Lane prompts" tab in the patterns
+  catalog renamed to "Automation patterns" (display label only — the
+  underlying group key stays `lanes` for protocol compat).
+* **Footer + backend strip** — removed every "tools, workflows, and
+  collections" parallel listing (workflow artifact kind retired in
+  Phase 6).
+* **Hero version badge** — now sourced from `landing/package.json`
+  instead of the literal `v0.7.0` it had been carrying.
+* **SEO hygiene** — added `app/sitemap.ts` (enumerates static routes +
+  blog + docs + patterns + tools + collections) and `app/robots.ts`
+  (allow-all, points at the sitemap). Global `metadata.description`
+  refreshed to mention the operator loop.
+* **Asset cleanup** — removed orphaned `public/landing/hero-methodology-kit.png`
+  (no remaining references in `landing/src/`).
+
 ## Phase 8 — CLI audit & docs (April 2026)
 
 * **`shipctl help`** rewritten operator-first: vocabulary callout up front,
