@@ -123,8 +123,12 @@ sources.
   upload surface (Phase 7a), connector-proxy create/sync surface
   (Phase 7b), Distiller run history.
 - **Scope pill propagation** (Phase 4b) — the current scope travels to
-  Catalog, Clarifications, Improvements, and the Navigator so every
-  surface agrees on "what the user is currently inside".
+  every operator surface that needs it: [Plays](./concepts.md#plays),
+  [Automations](./automations.md), [Runs](./concepts.md#runs), the
+  [Inbox](./concepts.md#inbox), and the [Navigator](./concepts.md#navigator).
+  Each surface accepts `?repo=<id>` and renders a filtered view; the
+  scope pill is what keeps them all agreeing on "what the user is
+  currently inside".
 
 ## Per-user memory
 
@@ -139,24 +143,61 @@ semantics.
 
 ## Pattern ↔ bucket wiring
 
-Two entry points for a pattern to consult a bucket:
+Two entry points for a pattern (or the [Navigator](./concepts.md#navigator))
+to consult a bucket:
 
 - **Declarative.** `spec.knowledge_topics: [...]` in the pattern's
   frontmatter. Normative declaration in
-  [RFC-0008](/docs/protocol/rfc-0008-catalog-reform#metadata-schema).
+  [RFC-0008](./protocol/rfc-0008-catalog-reform.md#metadata-schema).
   At render time the resolver walks the scope ladder and returns the
   most-specific article per topic.
 - **Imperative.** Agent tools exposed by
   `backend/app/services/agent/tools.py`:
   - `list_buckets` — enumerate buckets visible to the current scope.
-  - `search_buckets` — vector search over `bucket_articles` (Phase 5d
-    reads from the articles table; previously read from
-    `bucket_summaries`).
+  - `search_buckets` / `knowledge_search_v2` — vector search over
+    `bucket_articles` (Phase 5d reads from the articles table;
+    previously read from `bucket_summaries`).
   - `get_knowledge_bucket` — fetch one bucket by slug with its
     articles.
 
 The agent picks whichever entry point matches its context; the
-resolver + privacy guards are the same for both.
+resolver + privacy guards are the same for both. As of Phase 6 the
+Navigator has tools spanning the full
+[Inbox](./concepts.md#inbox) / [Plays](./concepts.md#plays) /
+[Automations](./automations.md) / [Runs](./concepts.md#runs) surface
+in addition to knowledge — so it can answer "what's broken?",
+"what should we run that we aren't?", and "which Play handles
+this?" without making the operator hunt across pages. Full tool
+inventory and the auth / audit story lives in
+[navigator-tools](./internal/navigator-tools.md) (internal).
+
+## Buckets vs the Inbox
+
+Buckets are the **content** layer Plays reach for at render time.
+The [Inbox](./concepts.md#inbox) is the **action** layer where Plays
+escalate to a human. They never overlap: a bucket article is
+read-mostly reference material; an Inbox item demands a typed
+disposition. The five Inbox item types — `clarification`,
+`improvement`, `failure`, `approval`, `exception` — are the only
+things that land on the operator's attention surface, and they're
+created by Runs (or by Plays mid-execution), not by anything in
+this bucket pipeline. See
+[RFC-0010 § Inbox model](./protocol/rfc-0010-plays-and-inbox.md#inbox-model)
+for the full lifecycle.
+
+Two practical implications:
+
+- If a Play repeatedly needs the same context to answer a
+  clarification, the right fix is usually to land that context as a
+  bucket article (so the next Run resolves it without escalating)
+  rather than to keep dispositioning the same `clarification` items
+  in the Inbox. The Distiller's `improvement` proposals will often
+  surface this pattern automatically.
+- The legacy `/clarifications` and `/improvements` routes
+  (mentioned in older docs and in some `bucket_articles`
+  provenance) now 301-redirect to `/inbox?type=clarification` and
+  `/inbox?type=improvement` respectively; the bucket pipeline
+  itself is unchanged.
 
 ## Harvesting, staging, drift
 

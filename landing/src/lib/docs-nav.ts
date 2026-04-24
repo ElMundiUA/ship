@@ -39,17 +39,27 @@ export const DOCS_NAV: DocsNavGroup[] = [
       {
         href: "/docs/concepts",
         label: "Concepts",
-        blurb: "Vocabulary: artifact, kind, channel, pin, install_target, adapter, preset, marker.",
+        blurb: "Vocabulary: Plays, Automations, Runs, Inbox — and the internal config terms they map onto.",
+      },
+      {
+        href: "/docs/automations",
+        label: "Automations",
+        blurb: "Plays running on a cadence: the Console /automations page, Coverage tab, and the lanes: config that backs them.",
+      },
+      {
+        href: "/docs/concepts#plays",
+        label: "Plays",
+        blurb: "The catalog of operational procedures operators pick from. Currently covered as a section of Concepts.",
+      },
+      {
+        href: "/docs/concepts#inbox",
+        label: "Inbox",
+        blurb: "The single attention surface for clarifications, improvements, failures, approvals, and exceptions.",
       },
       {
         href: "/docs/configuration",
         label: "Configuration",
         blurb: "Every field of .ship/config.yml plus the on-disk layout under .ship/.",
-      },
-      {
-        href: "/docs/lanes",
-        label: "Lanes",
-        blurb: "The lanes: block, shipctl run + lanes install, and the Console /lanes page.",
       },
       {
         href: "/docs/knowledge-buckets",

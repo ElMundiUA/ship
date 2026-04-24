@@ -1,6 +1,10 @@
 # Configuration
 
-This page is the field reference for `.ship/config.yml` and a directory listing for everything `shipctl` writes under `.ship/`. It tells you **what each field is** and **what it controls**; for command flags see [/cli](/cli), for "how do I…" recipes see [Operating](/docs/operating), and for the vocabulary every field name assumes (artifact, kind, channel, pin, install_target, lane, …) read [Concepts](/docs/concepts) first. The normative spec is [RFC-0002](/docs/protocol/rfc-0002-shipctl-config) and [RFC-0007](/docs/protocol/rfc-0007-lanes-and-run-agent) — the latter introduced schema v2 and the `lanes:` block. When this page and `cli/lib/config/schema.mjs` disagree, the CLI wins.
+This page is the field reference for `.ship/config.yml` and a directory listing for everything `shipctl` writes under `.ship/`. It tells you **what each field is** and **what it controls**; for command flags see [/cli](/cli), for "how do I…" recipes see [Operating](./operating.md), and for the operator vocabulary every field name assumes (Plays, Automations, Runs, Inbox; artifact, kind, channel, pin, install_target, …) read [Concepts](./concepts.md) first.
+
+> **Vocabulary box.** `.ship/config.yml` is the **protocol layer** — the source of truth your repo commits and `shipctl` reads. The **operator layer** lives in the console: in the console, `lanes:` entries appear as **[Automations](./automations.md)**; the `pattern:` (or `patterns:`) they reference is the **[Play](./concepts.md#plays)**; each execution lands as a **[Run](./concepts.md#runs)**. Things that need a human go to the **[Inbox](./concepts.md#inbox)**. None of those operator names appear in YAML — only in the UI. The schema below uses the protocol terms (`lane`, `pattern`, `pipeline`) verbatim; the prose alongside uses the operator terms when describing what the user sees. Full mapping: [RFC-0010](./protocol/rfc-0010-plays-and-inbox.md).
+
+The normative spec is [RFC-0002](./protocol/rfc-0002-shipctl-config.md) and [RFC-0007](./protocol/rfc-0007-lanes-and-run-agent.md) — the latter introduced schema v2 and the `lanes:` block. The operator IA on top of these is [RFC-0010](./protocol/rfc-0010-plays-and-inbox.md). When this page and `cli/lib/config/schema.mjs` disagree, the CLI wins.
 
 ## On-disk layout (`.ship/`)
 
@@ -42,8 +46,8 @@ Top-level keys recognised in v2 (from `KNOWN_TOP_LEVEL_V2` in `cli/lib/config/sc
 | `shipctl_min` | Minimum `shipctl` semver that understands this file. |
 | `api` | Where the methodology API lives, which channel to pull from, freshness window, offline behaviour. |
 | `stack` | The four-axis description of the repo: tracker, CI, agents, language, preset. |
-| `agent` | (v2) Per-lane agent-runtime provider overrides. |
-| `lanes` | (v2) Map of lane-id → lane definition. The source of truth for `shipctl run` and `shipctl lanes install`. |
+| `agent` | (v2) Per-Automation agent-runtime provider overrides (keyed by lane id). |
+| `lanes` | (v2) Map of lane-id → lane definition. The source of truth for `shipctl run` and `shipctl lanes install`, and what the console renders as **[Automations](./automations.md)**. |
 | `artifacts` | Version pins per artifact, plus the `auto_update` switch. |
 | `cache` | Whether `.ship/cache/` is committed. |
 | `telemetry` | Anonymous-usage opt-in, anonymous id, scope toggles. |
@@ -102,12 +106,12 @@ stack:
 
 ### `agent` (v2)
 
-Selects which agent runtime executes a lane. `shipctl run` reads this and emits the provider slug on stderr so the reusable workflow can dispatch to the right runtime (Claude Code, Cursor Cloud, Codex, …).
+Selects which agent runtime executes an Automation. `shipctl run` reads this and emits the provider slug on stderr so the reusable workflow can dispatch to the right runtime (Claude Code, Cursor Cloud, Codex, …).
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `agent.default.provider` | string (≤64 chars) | `null` | Fallback provider for every lane that does not declare an override. Values are agent slugs like `claude-code`, `cursor-cloud`, `codex`. `null` means "let the workflow choose its default". |
-| `agent.overrides.<laneId>.provider` | string (≤64 chars) | unset | Per-lane override. Keys are lane ids and must match `/^[a-z0-9][a-z0-9_-]{0,63}$/`. |
+| `agent.default.provider` | string (≤64 chars) | `null` | Fallback provider for every Automation that does not declare an override. Values are agent slugs like `claude-code`, `cursor-cloud`, `codex`. `null` means "let the workflow choose its default". |
+| `agent.overrides.<laneId>.provider` | string (≤64 chars) | unset | Per-Automation override. Keys are lane ids and must match `/^[a-z0-9][a-z0-9_-]{0,63}$/`. |
 
 ```yaml
 agent:
@@ -120,7 +124,7 @@ agent:
 
 ### `lanes` (v2) {#lanes}
 
-A **lane** is a triggered execution unit declared under `lanes:`. Each lane is one call to `shipctl run`. The `lanes:` map is the source of truth for `shipctl lanes install` (it materialises one `.github/workflows/ship-<lane>.yml` per entry) and for the Console's `/lanes` page. The operator-first reference — triggers table, cookbook, the Console UI — lives in [Lanes](/docs/lanes). This section is the pure field spec.
+Each entry under `lanes:` is one **Automation** in the console — a triggered execution unit binding a [Play](./concepts.md#plays) (the `pattern:` / `patterns:` reference) to a cadence. Each entry is also one call to `shipctl run`. The `lanes:` map is the source of truth for `shipctl lanes install` (it materialises one `.github/workflows/ship-<lane>.yml` per entry) and for the Console's [`/automations`](./automations.md) page. The operator-first reference — triggers table, cookbook, the Console UI, the Coverage tab — lives in [Automations](./automations.md). This section is the pure field spec.
 
 Lane ids match `/^[a-z0-9][a-z0-9_-]{0,63}$/`; ids starting with `ship_` are reserved for future built-ins. Anything that fails the regex is a hard error.
 
@@ -191,7 +195,7 @@ lanes:
       reset_on: version-change
 ```
 
-Any extra keys inside a lane are preserved on write (forward-compat) but surface a warning; validator-rejected shapes are a hard error (exit `10`). For every other operator concern — triggers table, Console UI, migration cookbook — start at [Lanes](/docs/lanes).
+Any extra keys inside a lane are preserved on write (forward-compat) but surface a warning; validator-rejected shapes are a hard error (exit `10`). For every other operator concern — triggers table, Console UI, Coverage, migration cookbook — start at [Automations](./automations.md).
 
 ### `artifacts`
 
@@ -373,4 +377,4 @@ This sets `artifacts.pins["pattern/role-developer"] = "1.4.2"`. Values are parse
 
 ## Where to next
 
-For "how do I change channel / pin / unpin / opt-in to telemetry / clear the outbox / upgrade a v1 config", see [Operating](/docs/operating). For the operator-first reference for the `lanes:` block — triggers, cookbook, Console UI — see [Lanes](/docs/lanes). For the new per-user memory buckets and the scope ladder that powers them, see [Knowledge Buckets](/docs/knowledge-buckets). For the CLI flag forms behind every command in this page, see [/cli](/cli). For the normative schema and the migration policy, see [RFC-0002](/docs/protocol/rfc-0002-shipctl-config) and [RFC-0007](/docs/protocol/rfc-0007-lanes-and-run-agent); the cache layout that backs `.ship/cache/<kind>/…` is specified in [RFC-0005](/docs/protocol/rfc-0005-artifact-folder-spec-v2).
+For "how do I change channel / pin / unpin / opt-in to telemetry / clear the outbox / upgrade a v1 config", see [Operating](./operating.md). For the operator-first reference for the `lanes:` block — Automations, triggers, Coverage, the Console UI, cookbook — see [Automations](./automations.md). For the operator vocabulary on top of this schema (Plays, Automations, Runs, Inbox), see [Concepts](./concepts.md). For the per-user memory buckets and the scope ladder that powers them, see [Knowledge buckets](./knowledge-buckets.md). For the CLI flag forms behind every command in this page, see [/cli](/cli). For the normative schema and the migration policy, see [RFC-0002](./protocol/rfc-0002-shipctl-config.md) and [RFC-0007](./protocol/rfc-0007-lanes-and-run-agent.md); the operator IA on top is [RFC-0010](./protocol/rfc-0010-plays-and-inbox.md); the cache layout that backs `.ship/cache/<kind>/…` is specified in [RFC-0005](./protocol/rfc-0005-artifact-folder-spec-v2.md).

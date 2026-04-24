@@ -709,11 +709,58 @@ scope**; revisit if/when an external agent needs it.
 
 ---
 
-### Phase 7 — Documentation rewrite (target: 1 week, not yet planned in detail)
+### Phase 7 — Documentation rewrite (target: 3-5 days)
 
-Update `/documentation/` site + internal book to the new IA
-(Plays / Automations / Runs / Inbox), retire Lanes / Pipelines /
-Patterns from user-facing docs, refresh tutorials and screenshots.
+Move the **operator-facing** Manual to **Plays / Automations / Runs /
+Inbox**. Keep the protocol corpus (RFCs, `lanes:` config schema)
+authoritative — those terms remain inside `.ship/config.yml` and
+`shipctl`; what changes is the **vocabulary the operator sees** in
+the Manual + the **landing sidebar**. Catalog `ARTIFACT.md` bodies
+are deferred to a separate batched epic (122 files, not blocking).
+
+#### Wave A — High-impact operator pages
+
+- [ ] **P7-01 [DOC]** `landing/src/lib/docs-nav.ts` — replace "Lanes" sidebar entry with **Automations**; add **Plays**, **Inbox**, **Runs** entries; preserve existing slugs as 301-friendly aliases where possible
+- [ ] **P7-02 [DOC]** `documentation/index.md` — refresh Manual home: new vocabulary box (RFC-0010 reference), replace `/lanes` mentions with **Automations** / **Plays**, add **Inbox** + **Navigator** prominence
+- [ ] **P7-03 [DOC]** `documentation/concepts.md` (20K) — flagship vocabulary page: introduce Plays / Automations / Runs / Inbox as primary nouns; demote Lanes / Pipelines / Requests to "internal config terms" boxes; add §Glossary mirroring RFC-0010
+- [ ] **P7-04 [DOC]** Rename + rewrite `documentation/lanes.md` → `documentation/automations.md` (largest debt, 106 "lane" hits): operator mirror of `/automations` console page; explain Coverage tab; reference `lanes:` config as the underlying mechanism; keep `lanes.md` as a redirect stub `> Renamed to [Automations](./automations.md)`
+- [ ] **P7-05 [DOC]** `documentation/knowledge-buckets.md` — replace "Catalog, Clarifications, Improvements" enumeration with **Inbox types**; align Navigator section with the new tools (link to internal `navigator-tools.md`)
+- [ ] **P7-06 [DOC]** `documentation/configuration.md` — keep `lanes:` schema (still authoritative inside `.ship/config.yml`) but add a **glossary header**: "in the console, `lanes:` entries appear as **Automations**, the `pattern:` they reference is the **Play**"; rewrite intro paragraphs
+
+#### Wave B — Secondary surfaces
+
+- [ ] **P7-07 [DOC]** `documentation/operating.md` — day-2 surface: Inbox-first runbook for "what's broken / what needs my attention", coverage-driven adoption section
+- [ ] **P7-08 [DOC]** `documentation/troubleshooting.md` — update routing diagrams + URL references; add Inbox routing troubleshooting section
+- [ ] **P7-09 [DOC]** `documentation/discovery.md` — refresh "first day" narrative: open Inbox first, then Plays catalog
+- [ ] **P7-10 [DOC]** `documentation/authoring.md` — keep pattern-author terminology (the contributor still authors **patterns** in the catalog), but add a "Author's view vs Operator's view" callout box — "what you author as a `pattern` appears to operators as a **Play**"
+- [ ] **P7-11 [DOC]** `documentation/authoring/pattern-vs-knowledge.md` — small refresh, mostly cross-link updates
+- [ ] **P7-12 [DOC]** `documentation/agent-matrix.md` — refresh agent role descriptions to use Inbox vocabulary
+- [ ] **P7-13 [DOC]** `documentation/protocol/index.md` — promote RFC-0010 to "Accepted" if status is right; ensure the new IA is the documented end state
+
+#### Wave C — Validation + cleanup
+
+- [ ] **P7-14 [DOC]** `landing` build green, no broken intra-doc links (`grep -r "(./lanes)" documentation/`)
+- [ ] **P7-15 [DOC]** Add a `documentation/CHANGELOG.md` (or single section in `index.md`) noting "Sept 2026 — IA refresh: Lanes/Pipelines/Patterns are now Automations/Runs/Plays in the operator surface"
+
+#### Out of scope for Phase 7
+
+- **122 catalog `ARTIFACT.md` bodies** — deferred to a separate batched pass (templated find-replace + per-pattern review). Not a blocker for the Manual to read correctly.
+- **Landing pages** (`/`, `/use-cases/*`, `/getting-started`) — Phase 9.
+- **The internal "book"** (`landing/content/book.md`) — not committed to repo currently; punt to Phase 9 or whenever it's restored.
+- **CLI docs** (`cli/README.md`) — Phase 8.
+
+#### Parallelization plan
+
+- Wave A — one sub-agent (5 markdown files + 1 TS file; needs coherent voice across all)
+- Wave B — one sub-agent (5 secondary pages; lower stakes)
+- Wave C — me, with a build + grep sweep
+
+**DoD:** Manual reads coherent in new IA on first encounter. `lanes.md`
+redirects to `automations.md`. Sidebar shows new IA. Internal `lanes:`
+config term remains correct in `configuration.md` with operator
+mapping callout. Build is green.
+
+---
 
 ### Phase 8 — CLI audit & docs (target: 3 days, not yet planned in detail)
 
