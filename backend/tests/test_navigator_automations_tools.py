@@ -3,8 +3,10 @@
 - ``automations_list`` — scope=all merges Pipelines + Lanes +
   FleetLanes; scope=fleet excludes per-repo rows; ``enabled_only``
   drops disabled rows.
-- ``play_run_now`` — happy path queues a ``PipelineRun``
-  (status='queued'); plays without a Pipeline → ``no_automation``;
+- ``play_run_now`` — happy path dispatches the lane via the shared
+  helper so the run lands ``status='running'`` (mirrors the HTTP
+  "Run now" route); plays without a Pipeline → ``no_automation``;
+  missing GitHub install → structured ``github_app_missing`` error;
   admin-gated.
 - ``play_automate`` — creates ``Lane(origin='manual')`` for
   scope=repo and a FleetLane for scope=fleet; collisions return
@@ -27,12 +29,12 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-def _toolbox(session, *, workspace_id, user_id):
+def _toolbox(session, *, workspace_id, user_id, settings=None):
     from backend.app.services.agent.tools import ToolBox
 
     return ToolBox(
         session,
-        settings=None,  # type: ignore[arg-type]
+        settings=settings,  # type: ignore[arg-type]
         workspace_id=workspace_id,
         user_id=user_id,
     )
@@ -76,6 +78,47 @@ async def _seed_repo(db_session, workspace, *, external_id: int, full_name: str)
     db_session.add(repo)
     await db_session.flush()
     return repo
+
+
+async def _seed_repo_with_install(
+    db_session, workspace, *, external_id: int, full_name: str, install_external_id: int
+):
+    """Seed an activated repo *plus* a backing GitHub App install row.
+
+    Mirrors the ``seed_repo_and_install`` fixture in
+    ``test_v1_pipelines.py`` so dispatch-driven tests in this module
+    don't need to mint that scaffolding by hand.
+    """
+    from backend.app.db.models.integrations import (
+        GitHubInstallation,
+        WorkspaceRepo,
+    )
+
+    install = GitHubInstallation(
+        workspace_id=workspace.id,
+        installation_id=install_external_id,
+        account_login="acme",
+        account_type="Organization",
+        repository_selection="selected",
+        installed_at=datetime.now(timezone.utc),
+    )
+    db_session.add(install)
+    await db_session.flush()
+
+    repo = WorkspaceRepo(
+        workspace_id=workspace.id,
+        installation_id=install.id,
+        provider="github",
+        external_id=external_id,
+        full_name=full_name,
+        default_branch="main",
+        private=False,
+        html_url=f"https://github.com/{full_name}",
+        activated_at=datetime.now(timezone.utc),
+    )
+    db_session.add(repo)
+    await db_session.flush()
+    return install, repo
 
 
 async def _seed_pipeline(
@@ -269,36 +312,68 @@ async def test_automations_list_invalid_scope(
 
 
 @pytest.mark.asyncio
-async def test_play_run_now_queues_pipeline_run(
-    db_session, seed_workspace
+async def test_play_run_now_dispatches_to_github(
+    db_session, seed_workspace, monkeypatch
 ) -> None:
-    """Happy path: existing Pipeline → ``PipelineRun(status='queued')``."""
+    """Happy path: navigator-triggered run dispatches to GitHub Actions.
+
+    Previously this tool only inserted a ``status='queued'`` row and
+    handed off to a never-existed scheduler, so navigator-driven runs
+    sat forever. The fix routes through the same ``dispatch_workflow``
+    path the HTTP "Run now" endpoint uses, so the run lands ``running``
+    in one shot. We monkeypatch the GitHub probe / dispatch the same
+    way ``test_v1_pipelines.py`` does.
+    """
     from sqlalchemy import select
 
+    from backend.app.api.v1.routes import pipelines as pipelines_route
+    from backend.app.core.config import get_settings
     from backend.app.db.models.pipelines import PipelineRun
 
     user, _, ws = seed_workspace
-    repo = await _seed_repo(
-        db_session, ws, external_id=310_001, full_name="acme/run-now"
+    install, repo = await _seed_repo_with_install(
+        db_session,
+        ws,
+        external_id=310_001,
+        full_name="acme/run-now",
+        install_external_id=999_201,
     )
     pipeline = await _seed_pipeline(
         db_session,
         workspace_id=ws.id,
         repo_id=repo.id,
-        lane_id="flow-pr-self-review",
+        lane_id="pr_review",
     )
 
-    box = _toolbox(db_session, workspace_id=ws.id, user_id=user.id)
+    captured: dict[str, object] = {}
+
+    async def _probe(repo_arg, install_arg, *, settings, **_):
+        return frozenset({"pr-and-ci-gate.yml"})
+
+    async def _dispatch(repo_arg, install_arg, workflow_file, *, inputs, settings, **_):
+        captured["workflow_file"] = workflow_file
+        captured["inputs"] = dict(inputs)
+        captured["repo_full_name"] = repo_arg.full_name
+
+    monkeypatch.setattr(pipelines_route, "list_repo_workflows", _probe)
+    monkeypatch.setattr(pipelines_route, "dispatch_workflow", _dispatch)
+
+    box = _toolbox(
+        db_session,
+        workspace_id=ws.id,
+        user_id=user.id,
+        settings=get_settings(),
+    )
     out = json.loads(
         await box.invoke(
             "play_run_now",
             {
-                "play_key": "flow-pr-self-review",
+                "play_key": "pr_review",
                 "repo_id": str(repo.id),
             },
         )
     )
-    assert out["status"] == "queued"
+    assert out["status"] == "running", out
     assert out["pipeline_id"] == str(pipeline.id)
 
     run = (
@@ -306,9 +381,131 @@ async def test_play_run_now_queues_pipeline_run(
             select(PipelineRun).where(PipelineRun.id == uuid.UUID(out["run_id"]))
         )
     ).scalar_one()
-    assert run.status == "queued"
+    assert run.status == "running"
     assert run.trigger == "manual"
     assert run.payload.get("source") == "navigator"
+    assert run.run_token_hash and len(run.run_token_hash) == 64
+
+    assert captured["workflow_file"] == "pr-and-ci-gate.yml"
+    assert captured["repo_full_name"] == "acme/run-now"
+    inputs = captured["inputs"]
+    assert isinstance(inputs, dict)
+    assert inputs["ship_run_id"] == out["run_id"]
+    assert inputs["ship_callback_url"].endswith(
+        f"/v1/pipelines/runs/{out['run_id']}/result"
+    )
+    assert isinstance(inputs["ship_run_token"], str)
+    assert len(inputs["ship_run_token"]) > 20
+
+
+@pytest.mark.asyncio
+async def test_play_run_now_returns_error_when_app_install_missing(
+    db_session, seed_workspace
+) -> None:
+    """Repo without a GitHub App install → structured ``github_app_missing``.
+
+    Locks the new behaviour: instead of quietly inserting a queued row
+    that nothing would ever dispatch, the tool now surfaces the same
+    precondition codes the HTTP route raises so the LLM can suggest
+    "reinstall the App".
+    """
+    from sqlalchemy import select
+
+    from backend.app.core.config import get_settings
+    from backend.app.db.models.pipelines import PipelineRun
+
+    user, _, ws = seed_workspace
+    repo = await _seed_repo(
+        db_session,
+        ws,
+        external_id=310_004,
+        full_name="acme/run-now-no-install",
+    )
+    await _seed_pipeline(
+        db_session,
+        workspace_id=ws.id,
+        repo_id=repo.id,
+        lane_id="pr_review",
+    )
+
+    box = _toolbox(
+        db_session,
+        workspace_id=ws.id,
+        user_id=user.id,
+        settings=get_settings(),
+    )
+    out = json.loads(
+        await box.invoke(
+            "play_run_now",
+            {
+                "play_key": "pr_review",
+                "repo_id": str(repo.id),
+            },
+        )
+    )
+    assert out["error"] == "github_app_missing", out
+    assert "message" in out
+
+    runs = (
+        await db_session.execute(
+            select(PipelineRun).where(PipelineRun.workspace_id == ws.id)
+        )
+    ).scalars().all()
+    assert runs == []
+
+
+@pytest.mark.asyncio
+async def test_play_run_now_returns_error_when_workflow_not_installed(
+    db_session, seed_workspace, monkeypatch
+) -> None:
+    """Workflow YAML not on default branch → ``workflow_not_installed`` error.
+
+    The error payload carries enough metadata (``workflow_file``,
+    ``repo_full_name``, ``install_endpoint``) for the chat surface to
+    render an actionable "Open install PR" CTA.
+    """
+    from backend.app.api.v1.routes import pipelines as pipelines_route
+    from backend.app.core.config import get_settings
+
+    user, _, ws = seed_workspace
+    install, repo = await _seed_repo_with_install(
+        db_session,
+        ws,
+        external_id=310_005,
+        full_name="acme/run-now-needs-install",
+        install_external_id=999_202,
+    )
+    await _seed_pipeline(
+        db_session,
+        workspace_id=ws.id,
+        repo_id=repo.id,
+        lane_id="pr_review",
+    )
+
+    async def _probe(repo_arg, install_arg, *, settings, **_):
+        return frozenset()  # nothing installed yet
+
+    monkeypatch.setattr(pipelines_route, "list_repo_workflows", _probe)
+
+    box = _toolbox(
+        db_session,
+        workspace_id=ws.id,
+        user_id=user.id,
+        settings=get_settings(),
+    )
+    out = json.loads(
+        await box.invoke(
+            "play_run_now",
+            {
+                "play_key": "pr_review",
+                "repo_id": str(repo.id),
+            },
+        )
+    )
+    assert out["error"] == "workflow_not_installed", out
+    assert out["workflow_file"] == "pr-and-ci-gate.yml"
+    assert out["repo_full_name"] == "acme/run-now-needs-install"
+    assert out["install_endpoint"].endswith("/install")
 
 
 @pytest.mark.asyncio

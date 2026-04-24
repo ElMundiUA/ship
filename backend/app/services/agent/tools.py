@@ -6582,32 +6582,62 @@ class ToolBox:
                 ),
             })
 
-        # The HTTP route consults starter-workflow availability +
-        # GitHub installation state before it can dispatch a workflow_dispatch.
-        # The Navigator can't safely cross those boundaries from a chat
-        # turn (no Settings.github_app, possibly no install), so we
-        # take the lighter-weight route: queue a ``PipelineRun`` row
-        # with trigger='manual' / status='queued' and leave the
-        # actual dispatch to whichever scheduler is wired up. This
-        # mirrors how the wizard's seed flow stages runs.
-        from datetime import timezone as _tz
+        # Reuse the same dispatch path the HTTP "Run now" route walks
+        # so a Navigator-initiated run actually lands a
+        # ``workflow_dispatch`` on GitHub Actions. Earlier this tool
+        # only inserted a ``status='queued'`` row and left dispatch to
+        # "whichever scheduler is wired up" — but no such scheduler
+        # ever existed, so navigator-queued runs sat forever. Calling
+        # the shared helper means the run goes ``queued -> running``
+        # in one shot (or surfaces the same precondition / upstream
+        # codes the dashboard already knows how to render).
+        from fastapi import HTTPException
 
-        now = datetime.now(_tz.utc)
+        from backend.app.api.v1.routes.pipelines import dispatch_pipeline_run
+
         run_payload: dict[str, Any] = {"source": "navigator"}
         if idempotency_key:
             run_payload["idempotency_key"] = idempotency_key
 
-        run = PipelineRun(
-            pipeline_id=pipeline.id,
-            workspace_id=self._workspace_id,
-            trigger="manual",
-            status="queued",
-            started_at=now,
-            summary=f"Navigator queued {pipeline.name or play_key}",
-            payload=run_payload,
-        )
-        self._session.add(run)
-        await self._session.flush()
+        audit_extra: dict[str, Any] = {"source": "navigator"}
+        if idempotency_key:
+            audit_extra["idempotency_key"] = idempotency_key
+
+        try:
+            run = await dispatch_pipeline_run(
+                self._session,
+                self._settings,
+                pipeline,
+                trigger="manual",
+                summary=f"Navigator queued {pipeline.name or play_key}",
+                payload=run_payload,
+                actor_user_id=self._user_id,
+                explicit_repo_id=repo_id,
+                audit_extra=audit_extra,
+            )
+        except HTTPException as exc:
+            # Translate FastAPI's structured precondition / upstream
+            # errors into the JSON shape Navigator tools use so the
+            # LLM can render a useful next-step (Install workflow,
+            # Reinstall App, …) instead of a 5xx-shaped surprise.
+            detail = exc.detail if isinstance(exc.detail, dict) else {
+                "message": str(exc.detail)
+            }
+            error_code = detail.get("code") or "dispatch_failed"
+            response = {
+                "error": error_code,
+                "message": detail.get("message") or str(exc.detail),
+            }
+            for k in (
+                "workflow_file",
+                "repo_full_name",
+                "install_endpoint",
+                "upstream_status",
+                "run_id",
+            ):
+                if k in detail:
+                    response[k] = detail[k]
+            return _json_result(response)
 
         await self._audit_navigator_tool(
             tool_name="play_run_now",
@@ -6625,7 +6655,7 @@ class ToolBox:
             {
                 "run_id": str(run.id),
                 "pipeline_id": str(pipeline.id),
-                "status": "queued",
+                "status": run.status,
                 "play_key": play_key,
                 "repo_id": str(repo_id),
             }
