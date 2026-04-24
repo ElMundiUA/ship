@@ -5,6 +5,7 @@ import { ExamplesSection } from "@/components/examples-section";
 import { HeroSection } from "@/components/hero-section";
 import { HowItWorksSection } from "@/components/how-it-works-section";
 import { KitSurfaceSection } from "@/components/kit-surface-section";
+import { OperatorLoopSection } from "@/components/operator-loop-section";
 import { PatternsSection } from "@/components/patterns-section";
 import { PillarsSection } from "@/components/pillars-section";
 import { SiteFooter } from "@/components/site-footer";
@@ -17,6 +18,7 @@ export default function Home() {
       <main>
         <HeroSection />
         <HowItWorksSection />
+        <OperatorLoopSection />
         <CommandBuilderSection />
         <PillarsSection />
         <KitSurfaceSection />

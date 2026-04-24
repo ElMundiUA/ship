@@ -820,10 +820,66 @@ is operator-prose only ("`lanes:` entries appear as Automations").
 
 ---
 
-### Phase 9 — Landing page (target: 3 days, not yet planned in detail)
+### Phase 9 — Landing page (target: 2 days)
 
-Refresh `landing/` to reflect Plays / Inbox / Automations model;
-new screenshots, value props, demo videos.
+Refresh the public landing site to communicate the **Plays / Automations
+/ Runs / Inbox** operator model that shipped through Phases 1-8, retire
+the few remaining references to the obsolete `workflow` artifact kind
+(removed in Phase 6), and unstale the `v0.7.0` hero badge. **Do NOT
+rewrite the blog or the book** — those are historical record (the blog
+posts that needed editorial notes already got them in Phase 8). **Do
+NOT reshoot screenshots** — defer asset refresh to a separate follow-up
+unless something is materially wrong on disk; the operator console
+itself is still evolving. **Do NOT break protocol-stable terms in CLI
+copy** (`lanes:` / `--lane` / `pattern:` / `shipctl pattern` stay
+literal).
+
+#### Wave A — Home page narrative
+
+- [ ] **P9-01 [FE]** `landing/src/components/hero-section.tsx` — drop the literal `v0.7.0` badge in favour of pulling from `package.json` at build time (or hardcode current `0.11.2`); rewrite the eyebrow + lede to mention the operator loop ("Plays you assign as Automations, Runs you watch, an Inbox that catches what needs you")
+- [ ] **P9-02 [FE]** `landing/src/components/how-it-works-section.tsx` — extend beyond init/sync/verify to a 5-step operator loop: **Bootstrap** (`shipctl init`) → **Pick Plays** → **Assign as Automations** → **Watch Runs** → **Triage Inbox**. Each step gets a 2-3 line blurb + matching `shipctl` / console deeplink
+- [ ] **P9-03 [FE]** New `landing/src/components/operator-loop-section.tsx` — single section that explains the four nouns the same way `documentation/concepts.md` does, with a tiny "Vocabulary at a glance" card. Composed into `app/page.tsx`. Marketing-grade tone (not docs)
+- [ ] **P9-04 [FE]** `landing/src/components/patterns-section.tsx` — strip "tools, workflows, and collections" framing (workflows kind retired Phase 6). Replace with "patterns / tools / collections" and frame patterns as **the source of Plays**
+- [ ] **P9-05 [FE]** `landing/src/components/kit-surface-section.tsx` — replace "lane playbooks" tile copy with "Automations" prose; mention the new operator surfaces
+- [ ] **P9-06 [FE]** `landing/src/components/backend-strip.tsx` — drop "tools, workflows, and collections"; clarify that `improvement notes` is what feeds the Inbox
+- [ ] **P9-07 [FE]** `landing/src/components/site-footer.tsx` — remove "workflows" from the kit blurb; cross-link `/docs/concepts` for vocabulary
+- [ ] **P9-08 [FE]** `landing/src/app/page.tsx` — wire the new `OperatorLoopSection` between `HowItWorksSection` and `CommandBuilderSection`
+
+#### Wave B — Catalog + use-cases vocabulary
+
+- [ ] **P9-09 [FE]** `landing/src/app/patterns/page.tsx` — rewrite metadata + body away from "lane playbooks"; frame patterns as "the source of Plays in your operator console"
+- [ ] **P9-10 [FE]** `landing/src/components/patterns-catalog.tsx` — rename the **"Lane prompts"** tab to **"Automation patterns"** (display label only — the underlying group id `lanes` stays for protocol compat)
+- [ ] **P9-11 [FE]** `landing/src/lib/patterns.ts` + `landing/src/lib/artifacts-fs.ts` — keep the `PatternGroup` type literal `"lanes"` (it maps to YAML `lanes:`); only refresh prose in summary strings
+- [ ] **P9-12 [FE]** `landing/src/app/collections/page.tsx` — replace "workflow intents" in metadata description (workflow kind is gone)
+- [ ] **P9-13 [FE]** `landing/src/app/kit/page.tsx` — same "lane playbooks" → Automations sweep, plus tile cross-links if any
+- [ ] **P9-14 [FE]** `landing/src/app/use-cases/page.tsx` — rewrite hero "delivery-lane drift" + "named workflows" framing; lead with "Plays they ship, Runs they watch, the Inbox that catches the rest"
+- [ ] **P9-15 [FE]** `landing/src/app/use-cases/elmundi/page.tsx` — title + intro updated to match the new framing; **keep** GitHub Actions "workflows" references intact (those mean GHA, not the retired artifact kind)
+- [ ] **P9-16 [FE]** `landing/src/app/use-cases/ship/page.tsx` — light vocabulary sweep; "workflow names in CI" can stay (means GHA file names)
+
+#### Wave C — Hygiene + SEO + CHANGELOG
+
+- [ ] **P9-17 [FE]** Add `landing/src/app/sitemap.ts` — generate sitemap from the static route list + dynamic blog/docs/pattern/tool/collection slugs
+- [ ] **P9-18 [FE]** Add `landing/src/app/robots.ts` — allow all, point at sitemap
+- [ ] **P9-19 [FE]** `landing/src/app/layout.tsx` — refresh global `metadata.description` to mention the operator nouns; add `openGraph.images` only if a non-stale image exists in `public/`, otherwise leave as-is
+- [ ] **P9-20 [FE]** `landing/src/lib/docs-nav.ts` — final marketing-vs-docs voice consistency pass
+- [ ] **P9-21 [FE]** Asset orphan check — confirm `public/landing/hero-methodology-kit.png` is referenced (the report flagged it as possibly orphaned); if truly orphaned, remove
+- [ ] **P9-22 [DOC]** `documentation/CHANGELOG.md` — append "Phase 9 — Landing page" section (Operator loop section, hero unstaling, vocabulary alignment, sitemap/robots)
+
+#### Out of scope for Phase 9
+
+- **Blog rewrite.** Phase 8 added editorial notes where the prose was actively misleading. The rest is Ship Log / build-in-public — historical.
+- **Book rewrite.** `landing/content/book.md` is not currently in the workspace; `/book` shows a fallback. Reconciling `sync-book.mjs` vs `build-book-pdf.mjs` is a separate follow-up.
+- **Screenshot refresh.** The console is still evolving; reshoot when it stabilizes for a release. Old PNGs are stale-ish but not actively wrong.
+- **Pricing / testimonials / new pages.** No new routes — refresh only.
+- **Renaming protocol-stable terms** anywhere — `lanes:` / `--lane` / `pattern:` / `shipctl pattern` stay literal in code, YAML, CLI flags.
+
+#### Parallelization plan
+
+- **Wave A** — me (single coherent voice for the home rewrite; new `OperatorLoopSection` component depends on the rest)
+- **Wave B** — one sub-agent (catalog + use-case vocabulary sweep, mostly mechanical)
+- **Wave C** — one sub-agent (sitemap/robots/SEO/CHANGELOG)
+
+**DoD:** Home page mentions Plays / Automations / Runs / Inbox by name and links to `/docs/concepts`. Hero version badge is current. Every "tools, workflows, and collections" parallel-listing is gone. Patterns catalog tab is "Automation patterns". Use-cases pages lead with the new framing. Sitemap + robots ship. Landing build clean.
 
 ### Phase 10 — External channels (parked, OUT of current scope)
 

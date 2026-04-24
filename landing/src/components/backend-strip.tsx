@@ -11,7 +11,7 @@ const capabilities = [
   },
   {
     title: "File structured improvement notes",
-    body: "Turn retro-style input into a tracked follow-up your engineering org already knows how to triage — with guardrails so sensitive fragments do not leak.",
+    body: "Turn retro-style input into a tracked Inbox item your engineering org already knows how to triage — with guardrails so sensitive fragments do not leak.",
   },
 ];
 
@@ -28,8 +28,8 @@ export function BackendStrip() {
               the same documentation humans read — plus list pattern metadata — without scraping HTML.
             </p>
             <p className="mt-4 text-sm text-white/50">
-              Catalogs for tools, workflows, and collections stay in-repo; operators usually manage those through the Ship
-              CLI without running the service.
+              Catalogs for patterns (Plays), tools, and collections stay in-repo; operators usually manage those through
+              the Ship CLI and the operator console without running the service.
             </p>
             <Link href="/docs/tools/backend-api" className="btn-secondary mt-8 inline-flex">
               Technical reference
