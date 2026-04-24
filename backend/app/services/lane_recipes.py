@@ -41,29 +41,153 @@ from backend.app.db.models.pipelines import Pipeline
 
 
 # ---------------------------------------------------------------------------
-# Known presets — the validation whitelist the wizard + repos route share.
-# Kept here (not in catalog) because presets live as
-# ``artifacts/collections/preset-*/ARTIFACT.md`` but we need a fast, typed
-# tuple for Pydantic ``Literal`` / FastAPI 422 shaping without triggering a
-# catalog scan on every request.
+# Default bundle — the canonical Plays installed in every new repo's
+# ``.ship/config.yml`` once the Wave-8 wizard collapses the 14-preset menu
+# (RFC-0010 / inbox redesign). Sibling A's preset-collapse work imports
+# this tuple to rewrite ``lane_recipes`` against a single bundle instead
+# of the per-preset matrix below. Order is the recommended display order
+# in the "Confirm bootstrap" UI: PR-attached first (immediate value),
+# then scheduled scanners (proves the loop), then release-time + the
+# one-shot knowledge seed.
 # ---------------------------------------------------------------------------
 
-KNOWN_PRESETS: Final[tuple[str, ...]] = (
-    "web-app",
-    "api-backend",
-    "mobile-app",
-    "mobile-app-deep",
-    "ml-project",
-    "platform",
-    "regulated",
-    "desktop-app",
-    "firmware",
-    "game",
-    "cli",
-    "monorepo",
-    "marketing",
-    "adoption-minimum",
+DEFAULT_BUNDLE: tuple[str, ...] = (
+    # PR-attached, every PR — the first signal a new repo gets.
+    "flow-pr-self-review",
+    # Daily security advisory sweep across npm/pip/cargo/etc.
+    "scan-security-deps",
+    # PR-attached license check on dependency-manifest changes.
+    "scan-license-deps",
+    # Weekly docs-vs-code drift sweep so docs stay shippable.
+    "scan-docs-freshness",
+    # Weekly tree sweep for hotspots / TODO clusters / duplication.
+    "scan-tech-debt",
+    # On-tag changelog drafter — proves value at the next release.
+    "flow-release-notes",
+    # One-shot seed for ``.ship/knowledge/*`` so day-zero agent runs
+    # have a non-empty knowledge bucket.
+    "onboard-seed-knowledge",
 )
+"""Canonical set of Plays installed in every new repo's ``.ship/config.yml``.
+
+Replaces the 14-preset menu introduced in P1; chosen to give every new
+repo immediate signal on first PR, prove the scheduled-scan loop works
+without manual configuration, and seed the per-repo knowledge bucket.
+
+See ``documentation/internal/inbox-redesign-planning.md`` §2 for the
+selection criteria.
+"""
+
+
+DEFAULT_BUNDLE_REASONS: dict[str, str] = {
+    "flow-pr-self-review": (
+        "Reviews every pull request for issues, regressions, and obvious "
+        "bugs before a human takes a look."
+    ),
+    "scan-security-deps": (
+        "Daily sweep of dependency advisories (npm / pip / cargo / etc.) "
+        "so a new CVE doesn't sit unnoticed."
+    ),
+    "scan-license-deps": (
+        "Flags incompatible dependency licenses on every PR that touches "
+        "a manifest, before the bad license lands."
+    ),
+    "scan-docs-freshness": (
+        "Weekly check that documentation still matches the code, so docs "
+        "drift surfaces before the next onboarding."
+    ),
+    "scan-tech-debt": (
+        "Weekly sweep for complexity hotspots, duplication, and TODO "
+        "clusters — files the top findings as tickets."
+    ),
+    "flow-release-notes": (
+        "Drafts a changelog from merged PRs and closed tickets when a "
+        "release tag is pushed."
+    ),
+    "onboard-seed-knowledge": (
+        "One-time setup that seeds the repo's knowledge folder so agents "
+        "have something to read on day one."
+    ),
+}
+"""Short, human-readable reason for including each :data:`DEFAULT_BUNDLE` entry.
+
+Surfaced in the wizard's "Confirm bootstrap" step (Wave 8c) so the
+user understands *why* each Play landed in their config. Each reason
+is ≤120 characters and avoids internal vocabulary (``profile``,
+``lane``, ``pattern_id``) so it reads as plain English to a first-time
+operator.
+"""
+
+
+# ---------------------------------------------------------------------------
+# Preset catalog (P5-01 collapse).
+#
+# Pre-Wave 8a the catalog enumerated 14 presets ("web-app", "api-backend",
+# "mobile-app", …). The Plays/Inbox redesign removes the user-facing
+# preset choice entirely — every repo now lands on the single canonical
+# ``"default"`` preset which seeds the canonical Plays bundle.
+#
+# We keep the legacy ids accepted at API boundaries (``LEGACY_PRESETS``)
+# so existing rows in ``WorkspaceRepo.preset`` and any in-flight wizard
+# tabs don't break; ``normalize_preset`` is the single funnel that maps
+# both legacy ids and ``None`` to ``"default"``. Once Wave 8c rips the
+# preset picker out of the FE *and* we're confident no DB rows still
+# reference legacy strings, the ``LEGACY_PRESETS`` set can be dropped
+# in a follow-up cleanup ticket.
+# ---------------------------------------------------------------------------
+
+KNOWN_PRESETS: Final[tuple[str, ...]] = ("default",)
+
+# Legacy preset ids accepted at API boundaries; all normalize to
+# ``"default"``. Do NOT remove without first confirming no
+# ``WorkspaceRepo.preset`` row still references one of these strings AND
+# no FE codepath sends them.
+LEGACY_PRESETS: Final[frozenset[str]] = frozenset(
+    {
+        "web-app",
+        "api-backend",
+        "mobile-app",
+        "mobile-app-deep",
+        "ml-project",
+        "platform",
+        "regulated",
+        "desktop-app",
+        "firmware",
+        "game",
+        "cli",
+        "monorepo",
+        "marketing",
+        "adoption-minimum",
+    }
+)
+
+
+def normalize_preset(preset: str | None) -> str:
+    """Canonicalize any preset string.
+
+    ``None`` and any of the historical 14 preset ids in
+    :data:`LEGACY_PRESETS` collapse to ``"default"``. Any other string
+    passes through unchanged so a future custom preset can be added at
+    the catalog layer without a code change here.
+
+    Pure: no I/O, no module-level mutation, idempotent
+    (``normalize_preset(normalize_preset(x)) == normalize_preset(x)``).
+    """
+    if preset is None or preset in LEGACY_PRESETS:
+        return "default"
+    return preset
+
+
+# Compatibility map: preset id → ordered tuple of pattern ids that
+# the preset enables. Post-P5-01 there is exactly one entry pointing
+# at sibling D's canonical :data:`DEFAULT_BUNDLE` above. The wider
+# Plays installer reads this map. Existing lane-seeding code paths use
+# :func:`list_lane_recipes` / :func:`resolve_enabled_lane_ids`
+# instead — see those for the pattern-catalog-derived enablement
+# logic.
+lane_recipes: Final[dict[str, tuple[str, ...]]] = {
+    "default": DEFAULT_BUNDLE,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +236,9 @@ _EXTRA_RECIPES: Final[tuple[LaneRecipe, ...]] = (
         patterns=(),
         fanout="matrix",
         default_enabled=True,
+        # P5-01 collapse: only the canonical ``"default"`` preset
+        # remains. Per-recipe gating is preserved as a hook for any
+        # future custom presets a tenant adds via the catalog.
         preset_enabled=frozenset(KNOWN_PRESETS),
     ),
     LaneRecipe(
@@ -130,21 +257,10 @@ _EXTRA_RECIPES: Final[tuple[LaneRecipe, ...]] = (
         patterns=(),
         fanout="matrix",
         default_enabled=True,
-        preset_enabled=frozenset(
-            {
-                "web-app",
-                "api-backend",
-                "mobile-app",
-                "mobile-app-deep",
-                "ml-project",
-                "platform",
-                "desktop-app",
-                "firmware",
-                "game",
-                "cli",
-                "monorepo",
-            }
-        ),
+        # P5-01 collapse: legacy per-preset gating removed. The single
+        # ``"default"`` preset enables tech_debt the same way it did
+        # for every flagged legacy preset.
+        preset_enabled=frozenset(KNOWN_PRESETS),
     ),
 )
 
@@ -313,14 +429,24 @@ def get_lane_recipe(lane_id: str) -> LaneRecipe | None:
 def resolve_enabled_lane_ids(preset: str | None) -> frozenset[str]:
     """Return the set of lane ids a preset enables by default.
 
-    ``None`` / unknown preset → falls back to every recipe whose
-    ``default_enabled`` is truthy (same contract the pre-RFC
-    ``resolve_enabled_kinds`` exposed).
+    Post-P5-01 the meaningful preset surface is a single ``"default"``
+    (legacy ids and ``None`` collapse via :func:`normalize_preset`);
+    that case returns every recipe whose ``default_enabled`` is
+    truthy — same contract the pre-collapse "unknown preset" fallback
+    exposed.
+
+    Forward-compat: a future custom preset id (one not in the legacy
+    set and not ``"default"``) still falls through to per-recipe
+    ``preset_enabled`` gating, so a catalog-authored preset can opt
+    into specific lanes without a code change here.
     """
+    normalized = normalize_preset(preset)
     recipes = list_lane_recipes()
-    if preset is None or preset not in KNOWN_PRESETS:
+    if normalized == "default":
         return frozenset(r.lane_id for r in recipes if r.default_enabled)
-    return frozenset(r.lane_id for r in recipes if preset in r.preset_enabled)
+    return frozenset(
+        r.lane_id for r in recipes if normalized in r.preset_enabled
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -388,10 +514,15 @@ async def seed_default_pipelines(
 
 
 __all__ = [
+    "DEFAULT_BUNDLE",
+    "DEFAULT_BUNDLE_REASONS",
     "KNOWN_PRESETS",
+    "LEGACY_PRESETS",
     "LaneRecipe",
     "get_lane_recipe",
+    "lane_recipes",
     "list_lane_recipes",
+    "normalize_preset",
     "resolve_enabled_lane_ids",
     "seed_default_pipelines",
 ]
