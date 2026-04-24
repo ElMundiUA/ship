@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-07T20:41:22+03:00"
-content_sha256: 3cd78bc2ff2c9d080d54c86ec08fdf1b9e36309e01856353f7ca3ed3dbaa053b
+content_sha256: 4e1a8a7057f8b4f7e5ed2d84cde5a0561bbf2a28d49b71722525c9f55026ab07
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,8 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Structured follow-ups when requirements are incomplete. Use when an agent picks a cloud-agent slot in a Ship lane, when wiring this prompt into a scheduled workflow, or when the catalog tags (clarification, requirements) match the current task.
+category: incident_response
+critical: false
 spec:
   install_target: prompts/role/clarification.md
   category: role

@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-23T00:00:00+00:00"
-content_sha256: d0fb60dfe821d4a28f36e5eb87af9fc5672d6b2029de00c128a533d0fbdd4330
+content_sha256: 1636296aa973c90f97c5d95257ad2015b0841d83ff82958e67b85d456f79399b
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,9 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Diffs the Bill-of-Materials on every hardware revision bump and surfaces cost deltas, lifecycle risk (EOL / NRND / last-time-buy), and single-source exposure. Keeps the supply-chain story visible at PR time instead of weeks later on the procurement sheet.
+category: health_checks
+subcategory: other
+critical: false
 spec:
   install_target: prompts/scan/bom-delta.md
   category: scan

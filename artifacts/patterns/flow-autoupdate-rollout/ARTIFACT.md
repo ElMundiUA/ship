@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-23T00:00:00+00:00"
-content_sha256: 9ddae29f51262b8facd514030981fd2f229330ec1d3979904ae9a054cd70140b
+content_sha256: 3c1d76de937e7a7482651440227da2ee91bbd75b8f867903fd06acee31c351e8
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,8 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Stages an auto-update tag to the canary channel, soaks it while watching crash / error telemetry, and promotes to stable with a written rollback plan. Supports electron-updater, Squirrel, Sparkle, tauri-updater and custom update servers.
+category: release_ops
+critical: false
 spec:
   install_target: prompts/flow/autoupdate-rollout.md
   category: flow

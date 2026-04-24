@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-23T00:00:00+00:00"
-content_sha256: e865070d881c86840b121a05f12d326fb4c5bd3630bcef06692aacbeb8240d0f
+content_sha256: 04e3052bfb59c532e557fea7d3724ed6cbc279a4a965cf099c2d6dfeae9105ba
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,8 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Reviews PRs touching native-integration surfaces of a desktop app — IPC channels, file-system bridges, menu bar / dock, system tray, auto-launch, OS permissions. Flags platform pitfalls, privilege widenings, and missing capability declarations before they reach users.
+category: reviewers
+critical: false
 spec:
   install_target: prompts/role/desktop-reviewer.md
   category: role

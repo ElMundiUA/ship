@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: eca7116e9a2a9bceeffd8664f82a82a67325805144032567285ab83bf1ac61fc
+content_sha256: 66af3c00d2adb2463d0a66ba535764dddd99d098f0468fbdccda626015e9ca44
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,9 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Runs axe-core or Lighthouse-a11y against configured URLs or preview deployments and blocks the PR on new WCAG AA violations. Keeps accessibility regressions from shipping silently.
+category: health_checks
+subcategory: other
+critical: false
 spec:
   install_target: prompts/scan/a11y.md
   category: scan

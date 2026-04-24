@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-23T00:00:00+00:00"
-content_sha256: 7178a86e17297d5d424b471611dbafad5accfb0f14c8c169e486783db275f812
+content_sha256: 725752e260a989c03d296eb3f6f3b947448ce451c18f8b1da11091eb0bb5ab07
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,8 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Weekly sweep over the live-ops calendar that cross-checks upcoming events against branch readiness, localization coverage, rating approvals, and store-review windows. Flags any event drifting toward the ship date without its prerequisites in place.
+category: release_ops
+critical: false
 spec:
   install_target: prompts/flow/live-ops-calendar.md
   category: flow

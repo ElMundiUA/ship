@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-07T20:41:22+03:00"
-content_sha256: fccfedab483cf4ba8d8d75f5af96a518e5af4747b720b7275da5f0cd959ab8bb
+content_sha256: 231db12a2cd0c0c4e28acf7b60af17ec4388d3ddfde7bdf9454984137aacd0d3
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,8 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   When preview is flaky or red: narrow signal vs product defect vs infra. Use when an agent picks a lanes slot in a Ship lane, when wiring this prompt into a scheduled workflow, or when the catalog tags (preview, triage) match the current task.
+category: code_review
+critical: false
 spec:
   install_target: prompts/flow/preview-failure-recovery.md
   category: flow

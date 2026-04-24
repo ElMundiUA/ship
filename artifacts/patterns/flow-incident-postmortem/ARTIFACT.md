@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: d2b568fe349554304ce74a940bce6f43a942230c195451a8999860396402d032
+content_sha256: 198174c5392686a153ca3edb08ada3d4018561f3fd4af77a9c25b016f4376521
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,8 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Reads the incident tracker issue, reconstructs the timeline from PRs / comments / CI runs and drafts a root-cause analysis with action items. Request-only — fired after an incident is resolved.
+category: incident_response
+critical: true
 spec:
   install_target: prompts/flow/incident-postmortem.md
   category: flow

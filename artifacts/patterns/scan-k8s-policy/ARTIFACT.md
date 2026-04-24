@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-23T00:00:00+00:00"
-content_sha256: 365bedd228aa001e07e849980d721fa100247f74bd57695c89e85630407d8a8c
+content_sha256: 7e6d0e70ee74aeb08c2a0390a6c9b95136cc2a2cd89ad2e96efbc5a42a273ee2
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,9 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Runs Kyverno / OPA / Conftest policy packs against every PR that touches a Kubernetes manifest and blocks merges on new policy violations. Keeps cluster guardrails from drifting PR by PR.
+category: health_checks
+subcategory: security
+critical: false
 spec:
   install_target: prompts/scan/k8s-policy.md
   category: scan

@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: 375d03f2c14f0f57e991786b25c8423ef637b9040d6b3985e224a8aea726436d
+content_sha256: 2e9a94bf889913e217d057fa0ca93be2bd7c7852cd3c661ff378a2b47a443af4
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,8 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Reads the coverage artefact produced by CI, computes patch coverage on changed lines and gates the PR when it drops below the baseline.
+category: code_review
+critical: false
 spec:
   install_target: prompts/scan/test-coverage.md
   category: scan

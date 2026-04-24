@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-23T00:00:00+00:00"
-content_sha256: fe1edc419ff52ea21f8292648d31c89b20efebb26552a2fe19ac7d2d86910802
+content_sha256: 2f0053280b236c3e4b65962bf321b12c87825ae1f63c32472359e2cbe6dda67d
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,8 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Posts a blast-radius comment on every PR — services touched, % of fleet traffic affected, suggested rollback path. Turns "what does this change touch?" into a one-click answer for reviewers and on-call.
+category: code_review
+critical: false
 spec:
   install_target: prompts/flow/blast-radius.md
   category: flow

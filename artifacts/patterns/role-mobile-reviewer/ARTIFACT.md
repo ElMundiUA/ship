@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: 5ccebde9ad888a5de9eb0db27dd9b8bcaf580d46b97af079e2622f1c2e2931b9
+content_sha256: 173d29fed904c3cba5de5643e9cd3da32be600e4d7232877481c63a3ef0d5da0
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,8 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Reviews PRs touching native mobile code (Swift / Obj-C, Kotlin / Java) for platform pitfalls — lifecycle, main-thread violations, memory leaks, battery impact.
+category: reviewers
+critical: false
 spec:
   install_target: prompts/role/mobile-reviewer.md
   category: role

@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: 1c0e95bebda76872c703e14b7b389b3a28374b33844fd612c677ed3a595b53b3
+content_sha256: bdc40ff0a5312ce8e9c61aeb2b73bb6e5a8503d97d3b3a765734252301648e1b
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,8 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Reviews PRs touching training / inference / data pipelines for ML-specific pitfalls — leakage, evaluation drift, non-determinism, silent preprocessing changes.
+category: reviewers
+critical: false
 spec:
   install_target: prompts/role/ml-reviewer.md
   category: role

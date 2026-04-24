@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-07T20:41:22+03:00"
-content_sha256: 7b8c9a35ab095a99900bae60b7e183dd74f2cded557a3774a1cbc080521c6894
+content_sha256: 3df0ce97e8c0bba04a836f8f818c2b17d2a1b531fcaf7f46f72a9d1d885967f3
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,8 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Verify preview is live and key flows work after deploy. Use when an agent picks a lanes slot in a Ship lane, when wiring this prompt into a scheduled workflow, or when the catalog tags (preview, smoke) match the current task.
+category: code_review
+critical: false
 spec:
   install_target: prompts/flow/preview-validation.md
   category: flow

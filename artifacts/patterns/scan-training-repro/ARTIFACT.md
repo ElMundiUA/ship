@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: d5cff0aef8bc1d26e3b32b4833cfce3b467b1d18c4995b1904a3e006218e53b1
+content_sha256: 2eb475260f8cce883f97c03f105cd3cf86a41d2396202d9f3887270927fdd097
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,9 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Re-runs the smallest canonical training configuration on every PR touching training code and asserts the resulting metric lands inside a tight seed-stable band. Catches subtle determinism breakage.
+category: health_checks
+subcategory: ml_quality
+critical: false
 spec:
   install_target: prompts/scan/training-repro.md
   category: scan

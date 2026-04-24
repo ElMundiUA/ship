@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: 74b1789184dc870ffd3ede77b74f51f315a4549df3b96ed2a1f3dc6e15d8e5cc
+content_sha256: 053c484f04812887070ddc75ac7da9283f4609b7a87caddac3a05f0f14409e47
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,8 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Reads the backlog plus recent team velocity and proposes sprint content that fits the available capacity. Request-only — fire it at the start of a planning call for a first-draft sprint candidate.
+category: planning_process
+critical: false
 spec:
   install_target: prompts/flow/sprint-plan.md
   category: flow

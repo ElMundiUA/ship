@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: 6256611c555fb7ba9b189abb17af4cfd8f18d7223d3b660af77cd7f0f0401d64
+content_sha256: 6b3297911ad2946580d0347afa09ed371d5ff3f9fca490a5f82e6947f4a62930
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,8 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Triages freshly opened tickets. Sizes, assigns a priority label and routes to the right role (ready:ba / ready:developer / needs-clarification) so the backlog never sits untriaged.
+category: planning_process
+critical: false
 spec:
   install_target: prompts/role/product-manager.md
   category: role

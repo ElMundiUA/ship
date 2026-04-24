@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: ef3cc86b7956bbb98f1ee6c14f4f8c2d44e2ffdcbb9fc2f438cc445caf475d7c
+content_sha256: feb6bb42825ea28d89f839e4941c8e5e9155a5eef14b0936059f718d05a019b3
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,8 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Bumps one dependency at a time, runs the project's test command in-branch, and opens a PR with evidence. Cron-triggered weekly sweep; can also be run one-shot for a specific package.
+category: release_ops
+critical: false
 spec:
   install_target: prompts/flow/dependency-update.md
   category: flow

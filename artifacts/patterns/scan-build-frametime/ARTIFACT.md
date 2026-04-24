@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-23T00:00:00+00:00"
-content_sha256: ad9ad01b5e054d5de6c043c0bfb5109542a19092646c21fab22562bdeb843410
+content_sha256: d9620bb9573031bd18f393b55122bac15ad984755b5d64bc20f0067b3cbef55d
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,9 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Runs a headless benchmark scene nightly and compares frametime (p99 / p95) plus peak memory against a rolling baseline. Files a tracker ticket the moment the trunk build drifts out of frame budget.
+category: health_checks
+subcategory: performance
+critical: false
 spec:
   install_target: prompts/scan/build-frametime.md
   category: scan

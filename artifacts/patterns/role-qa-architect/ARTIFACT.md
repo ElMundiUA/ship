@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-07T20:41:22+03:00"
-content_sha256: 307305b5e9fcb3beb8f548730d63f2c4488a8925b0feb7326188bc8a52df496e
+content_sha256: ee57852b73a1e657da7e768df08c71f5040b7670d336390c857dc1d1585d62b3
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,8 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Test strategy and automation hooks for delivery quality. Use when an agent picks a cloud-agent slot in a Ship lane, when wiring this prompt into a scheduled workflow, or when the catalog tags (test-strategy, automation) match the current task.
+category: reviewers
+critical: false
 spec:
   install_target: prompts/role/qa-architect.md
   category: role

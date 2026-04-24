@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: 7a91c7afa9cef4e15dae828cdac2583f15f8f2ce5219c86db3755daf28690b17
+content_sha256: 15b95d427a2f3fc926963d148b151529c75a0e4ab5a7bd3de1490778cab3bc5e
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,9 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Detects strings missing a translation across configured locales. Files one consolidated tracker ticket per locale so i18n debt surfaces instead of compounding one PR at a time.
+category: health_checks
+subcategory: compliance
+critical: false
 spec:
   install_target: prompts/scan/localization-gap.md
   category: scan

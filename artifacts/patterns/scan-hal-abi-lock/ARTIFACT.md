@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-23T00:00:00+00:00"
-content_sha256: 60e6dc2fbc4325f66ca5c36ed069232baa4d09151f657a971bcee95577077b5e
+content_sha256: 5d0f2c4a26ac1b464aff8f177a7676b7bff649bf12129c84a317576ad6afcf98
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,9 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Locks the hardware-abstraction-layer surface — pin maps, peripheral register offsets, linker regions, SVD-declared peripherals — against a signed manifest and blocks PRs that silently break it. Stops downstream board-support packages from forking over a renamed register.
+category: health_checks
+subcategory: compliance
+critical: false
 spec:
   install_target: prompts/scan/hal-abi-lock.md
   category: scan

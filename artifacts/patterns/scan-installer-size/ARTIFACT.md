@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-23T00:00:00+00:00"
-content_sha256: b5390837a77da0eea07dae96cef3ab57378759a677e56fd6a7c2928bf5de6201
+content_sha256: 27b87a8623aade111636339d1381a97c74644ae0d3e55bcbce86c408db987ff9
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,9 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Tracks per-platform installer size (dmg / msi / deb / AppImage) on every PR that touches packaging or dist assets, and blocks merge when the installer grows past the configured budget — desktop download pages erode fast when nobody is watching the size curve.
+category: health_checks
+subcategory: performance
+critical: false
 spec:
   install_target: prompts/scan/installer-size.md
   category: scan

@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-23T00:00:00+00:00"
-content_sha256: afb0f0db223203b6933e8704954eaa214a94e93ef28d9ae35482e40528c113ec
+content_sha256: 569d9f9da209a7c1ff30b09780f89adca75c1cd5917616aad40e49f4ea2b8297
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,8 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Reviews tuning / balance PRs against the design-intent baseline. Diffs weapon, economy, and progression data-tables line-by-line, surfaces power-creep and economy holes, and demands evidence for any outlier change.
+category: reviewers
+critical: false
 spec:
   install_target: prompts/role/game-balance-reviewer.md
   category: role

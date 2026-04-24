@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-23T00:00:00+00:00"
-content_sha256: 74d73b625cb74329293d900172457537dc44454bd72bd8234aca6e9fe3dc8b81
+content_sha256: 9d6fd28075e2ee71e4508df8a384ecc0b9f07e1d16383ec1ae393cfd4db8be4c
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,9 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Estimates the cost impact of a PR via Infracost or a cloud-pricing API and warns / blocks when the monthly delta exceeds the configured thresholds. Keeps IaC diffs from silently scaling the bill.
+category: health_checks
+subcategory: cost
+critical: false
 spec:
   install_target: prompts/scan/cost-delta.md
   category: scan

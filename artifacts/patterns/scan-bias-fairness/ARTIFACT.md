@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: f2b4f8e7bc434fa8d37c79f4388fbcbc7314e53a451dc559ca9bfc9058415904
+content_sha256: a82f9d6a6dc009fc6db3513f4dfc223c1c80c02e751028eeb2cb927a547fdc12
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,9 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Computes group-level fairness metrics (demographic parity, equalized odds, disparate impact) on every model PR. Files a ticket when a protected slice regresses or breaches an absolute threshold.
+category: health_checks
+subcategory: ml_quality
+critical: false
 spec:
   install_target: prompts/scan/bias-fairness.md
   category: scan

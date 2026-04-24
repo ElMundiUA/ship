@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-23T00:00:00+00:00"
-content_sha256: 0595d7d09bb14bc21271e3d923ff6d55b4a873a874d0b36f79245e7b59fad5aa
+content_sha256: 04ff16fe0732b0f3a22ad526d75506605e954569470a509c70f11b75870d6d3d
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,9 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Tracks flash and RAM footprint per MCU target (ESP32 / STM32 / nRF52 / RP2040 / …) on every firmware-touching PR. Blocks merges that push a board past its declared budget so regressions never ship silently into a bricking OTA.
+category: health_checks
+subcategory: performance
+critical: false
 spec:
   install_target: prompts/scan/firmware-size.md
   category: scan

@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-23T00:00:00+00:00"
-content_sha256: 6b8af2921e8e059d5bd180dc150b98d54d563cbef9e86c8de99ce5504bc40a7a
+content_sha256: b8b77a09cb1b441163a43881489630aab9c2e3176c2ed0ec3540ec8d8b547f9f
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,9 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Enforces per-scene texture, mesh, audio, and shader budgets against a per-platform-tier profile and blocks PRs that regress the asset envelope. Stops silent DLC-sized bloat from sneaking past review.
+category: health_checks
+subcategory: performance
+critical: false
 spec:
   install_target: prompts/scan/asset-budget.md
   category: scan

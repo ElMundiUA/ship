@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-23T00:00:00+00:00"
-content_sha256: b1e3e28f076976e9142e4a7e2edb597b4731b19c06d7a3fbd54a2104ff61c0d5
+content_sha256: 61e769132e2a1858b3359eb10a8799d90508c5ce684d03a0a49619dc865d6540
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,8 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   One-shot flow that drafts a handoff note at shift change — open incidents, flaky tests, pending rollouts, active feature toggles, SLO burn status. Request-only, dispatched by the shift leaving the rotation.
+category: incident_response
+critical: false
 spec:
   install_target: prompts/flow/oncall-handoff.md
   category: flow

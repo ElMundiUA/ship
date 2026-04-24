@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-23T00:00:00+00:00"
-content_sha256: c347584c44957a3b6b5a6364c1adc89bf6e6664b7213e44ab751b800ffddc063
+content_sha256: 4e27769e2ebbb26af3342ec5a299e03580960df699ea8d63c5bacfb16f8f01df
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,9 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Weekly check that every data-processing purpose in the workspace's data map is covered by a live consent flow — and that no event type is being collected without a matching purpose. Catches a common failure mode where product adds telemetry faster than privacy adds consent.
+category: health_checks
+subcategory: compliance
+critical: false
 spec:
   install_target: prompts/scan/consent-drift.md
   category: scan

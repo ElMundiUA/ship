@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: 36937cfa2dcc0525b9da03e82a7b06600b65ff3f2323c32425ba237b55c599ef
+content_sha256: d336580e13e65f4cd1f6e2cda3c76efec329ff8883c1cafc699c233f0c4bec8d
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,8 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Reviews UI and design-touching PRs against the design system: token usage, component contracts, responsive breakpoints and copy conventions.
+category: reviewers
+critical: false
 spec:
   install_target: prompts/role/designer.md
   category: role

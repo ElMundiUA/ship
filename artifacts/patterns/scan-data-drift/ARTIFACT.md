@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: 5ee89791b5608ef4940c5b42df98b8e4c7e106ca8dfc2751c7165f9b197e2b6a
+content_sha256: 1237b2a4f064527eaeba2a56bacb991b759d67e0ff8be26e187bcec558391048
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,9 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Monitors feature distributions against a rolling reference window and files a tracker ticket when PSI / KS tests breach thresholds. Catches training-serving skew and upstream pipeline changes.
+category: health_checks
+subcategory: ml_quality
+critical: false
 spec:
   install_target: prompts/scan/data-drift.md
   category: scan

@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: 4945141e430c44ae7bfa3fbe68c7065d44e009e4f52d353a28ecfdddd369fb07
+content_sha256: 363f108603bbe3769694eb575e90d310880dd1c7873ba72631155b8ed0f897d5
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,9 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Lighthouse and Core Web Vitals sweep per route. Enforces LCP / CLS / INP budgets and regresses on PRs that push them over.
+category: health_checks
+subcategory: performance
+critical: false
 spec:
   install_target: prompts/scan/performance-budget.md
   category: scan

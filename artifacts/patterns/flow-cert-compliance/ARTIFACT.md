@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-23T00:00:00+00:00"
-content_sha256: cb0414adc8c786056dec6178b8146a69e3106a72e2e052f23d6e05b964c9c074
+content_sha256: 5d3ebbc9d03b0b6bc24a4da48000296d4fe87c50f43bf43b3c6567d4248e76b9
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,8 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Quarterly refresh of the hardware certification bundle — CE, FCC, UL, PTCRB — pulling test reports, DoC documents, labelling evidence, and RF-exposure data into one reviewable PR so each audit window has a consistent snapshot instead of a scavenger hunt.
+category: release_ops
+critical: true
 spec:
   install_target: prompts/flow/cert-compliance.md
   category: flow

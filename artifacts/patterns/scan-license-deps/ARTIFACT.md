@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: 7956cbb322ccc1bc539110047d6b379bf1f96f6c62c4538064e9f9bea9f5b086
+content_sha256: 6d202034a0069f515fa0c2e03215a14c2c2b6aae45e6a096f3faea3f1f25958a
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,9 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Walks dependency manifests and flags incompatible licenses on every PR. Blocks GPL in MIT projects and copyleft in proprietary codebases without an explicit allowlist override.
+category: health_checks
+subcategory: security
+critical: true
 spec:
   install_target: prompts/scan/license-deps.md
   category: scan

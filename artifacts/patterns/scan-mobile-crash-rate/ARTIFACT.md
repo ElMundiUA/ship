@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: 47af46c15aa5618e32b916992764df8b17ca4c69cbe5d2e4e6e25b567cd5ad5f
+content_sha256: 5deca9ccba17558941586cdfb7a300551db7d01a99d4a90cec2353ab0914cb5f
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,9 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Polls Crashlytics or Sentry every two hours and files a tracker ticket when the crash-free-users rate regresses vs the previous release by more than the configured threshold.
+category: health_checks
+subcategory: performance
+critical: false
 spec:
   install_target: prompts/scan/mobile-crash-rate.md
   category: scan

@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.12.0
 updated_at: "2026-04-21T14:00:00+00:00"
-content_sha256: c50067a3d5e7e2e6983a3ca4f93d6f9b2618e7ad895ad7d996ca32e55e8b79e9
+content_sha256: bd3d8fd2389e9477c5a366e8c99c2895c017da1f78de144e91f277a90167eeaf
 deprecated: false
 replaced_by: null
 yanked: false
@@ -21,6 +21,8 @@ description: >-
   Wired as a `kind=once` lane in `.ship/config.yml` (RFC-0007); the
   agent runs once, writes the files, opens a PR, and `shipctl run`
   records the idempotency marker so subsequent invocations no-op.
+category: knowledge_docs
+critical: false
 spec:
   install_target: prompts/onboard/seed-knowledge.md
   category: onboard

@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-07T20:41:22+03:00"
-content_sha256: 28640fde8fc7624c4b59b1e897e1f79ff5be45a87bb59335dffb42581dfecc79
+content_sha256: 72b435b7bfc4ed650ccab102ea2779c718af880d08d9d1d8fa1143aadf927b17
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,8 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Role prompt for intake lane on the SDLC grid. Use when an agent picks a cloud-agent slot in a Ship lane, when wiring this prompt into a scheduled workflow, or when the catalog tags (intake, triage) match the current task.
+category: planning_process
+critical: false
 spec:
   install_target: prompts/role/intake.md
   category: role
