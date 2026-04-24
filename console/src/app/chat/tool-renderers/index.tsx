@@ -193,6 +193,11 @@ function TypeChip({ type }: { type: string }) {
  * error codes get a coral border. Mirrors the warning-strip style
  * already used in the inbox routing page so design review only has
  * one tone family to audit.
+ *
+ * The visible summary always stays compact (dot · tool · short
+ * error). Long error blobs, multi-line stacks, or anything bigger
+ * than ~200 chars get tucked behind a ``<details>`` so the chat
+ * doesn't get bricked by a tool dumping a JSON payload at us.
  */
 export function ErrorCard({
   error,
@@ -213,9 +218,24 @@ export function ErrorCard({
     : isPrecondition
       ? "border-amber-400/40 bg-amber-400/[0.06] text-amber-200/95"
       : "border-coral/40 bg-coral/[0.06] text-coral/95";
+  const dotCls = isForbidden
+    ? "bg-sun"
+    : isPrecondition
+      ? "bg-amber-300"
+      : "bg-coral";
   const headline = isForbidden
     ? "Action requires admin"
     : friendlyErrorHeadline(error);
+  const fullText = (message && message.length > 0 ? message : error) ?? "";
+  const firstLine = fullText.split(/\r?\n/, 1)[0] ?? "";
+  const shortMessage =
+    firstLine.length > 120 ? firstLine.slice(0, 119).trimEnd() + "…" : firstLine;
+  // Stash the raw payload behind <details> when it's long, multi-
+  // line, or differs from what we're showing inline so the user
+  // can still inspect the underlying error if they need to.
+  const isMultiline = /\r?\n/.test(fullText);
+  const needsDetails =
+    fullText.length > 200 || isMultiline || fullText.length > shortMessage.length;
   return (
     <div
       className={cn(
@@ -224,16 +244,35 @@ export function ErrorCard({
       )}
     >
       <div className="flex items-center gap-2">
-        <span aria-hidden className="text-[12px]">⚠</span>
-        <span className="font-semibold">{headline}</span>
+        <span
+          aria-hidden
+          className={cn("h-1.5 w-1.5 shrink-0 rounded-full", dotCls)}
+        />
         {toolName ? (
-          <code className="ml-auto font-mono text-[10px] opacity-60">
-            {toolName}
-          </code>
+          <span className="text-[10px] font-semibold uppercase tracking-[0.18em] opacity-70">
+            {prettyTool(toolName)}
+          </span>
         ) : null}
+        <span className="font-semibold">{headline}</span>
       </div>
-      {message ? (
-        <div className="mt-1 text-[12px] opacity-90">{message}</div>
+      {shortMessage ? (
+        <div className="mt-1 text-[12px] opacity-90">{shortMessage}</div>
+      ) : null}
+      {needsDetails ? (
+        <details className="group mt-2">
+          <summary className="flex cursor-pointer list-none items-center gap-1.5 text-[11px] opacity-70 hover:opacity-100">
+            <span
+              aria-hidden
+              className="inline-block transition-transform group-open:rotate-90"
+            >
+              ▸
+            </span>
+            <span>show full error</span>
+          </summary>
+          <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded-md bg-black/40 p-2.5 text-[11px] leading-relaxed">
+            {fullText}
+          </pre>
+        </details>
       ) : null}
     </div>
   );
@@ -262,9 +301,18 @@ function friendlyErrorHeadline(error: string): string {
 }
 
 /**
- * Generic JSON dump for tools without a dedicated renderer. Looks
- * like a small expandable-ish card so the user has a hint that
- * something happened, with the raw payload shown if it's small.
+ * Generic JSON dump for tools without a dedicated renderer.
+ *
+ * Default-collapsed: the chat stays clean for the 80% of tool
+ * calls that don't need a rich card. The summary line gives a
+ * one-glance outcome blurb derived cheaply from the result shape
+ * (array length, ``ok`` flag, top-level ``count``/``total``, etc.)
+ * and for known tool families we lean on
+ * :func:`businessFriendlyBlurb` for a slightly nicer phrasing.
+ *
+ * Power users click the chevron to see the raw JSON. We still
+ * truncate the dumped body at ~1200 chars so a runaway tool
+ * doesn't tank the scroll.
  */
 export function JsonFallback({
   toolName,
@@ -280,22 +328,132 @@ export function JsonFallback({
     body = String(result);
   }
   if (body.length > 1200) body = body.slice(0, 1200) + "\n…";
+  const blurb = jsonFallbackBlurb(toolName, result);
   return (
     <div className="rounded-2xl border border-white/10 bg-white/[0.02] px-4 py-3">
-      <div className="mb-2 flex items-center gap-2">
-        <span
-          aria-hidden
-          className="h-1.5 w-1.5 rounded-full bg-white/45"
-        />
-        <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/55">
-          {prettyTool(toolName)}
-        </span>
-      </div>
-      <pre className="max-h-72 overflow-auto rounded-md bg-black/40 p-2.5 text-[11px] leading-relaxed text-white/80">
-        {body}
-      </pre>
+      <details className="group">
+        <summary className="flex cursor-pointer list-none items-center gap-2">
+          <span
+            aria-hidden
+            className="h-1.5 w-1.5 shrink-0 rounded-full bg-white/45"
+          />
+          <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/55">
+            {prettyTool(toolName)}
+          </span>
+          <span className="min-w-0 flex-1 truncate text-[12px] text-white/65">
+            {blurb}
+          </span>
+          <span
+            aria-hidden
+            className="inline-block text-[10px] text-white/40 transition-transform group-open:rotate-90"
+          >
+            ▸
+          </span>
+        </summary>
+        <pre className="mt-2 max-h-72 overflow-auto rounded-md bg-black/40 p-2.5 text-[11px] leading-relaxed text-white/80">
+          {body}
+        </pre>
+      </details>
     </div>
   );
+}
+
+/**
+ * One-line outcome blurb shown in the collapsed ``JsonFallback``
+ * summary. Best-effort — we look at common payload shapes (arrays,
+ * ``ok`` flags, ``count``/``total`` keys) and fall back to a
+ * generic "result hidden" message. Domain-specific phrasings live
+ * in :func:`businessFriendlyBlurb` so growing the list later is
+ * a one-place edit.
+ */
+function jsonFallbackBlurb(toolName: string, result: ToolResult): string {
+  const friendly = businessFriendlyBlurb(toolName, result);
+  if (friendly) return friendly;
+  if (Array.isArray(result)) {
+    return `${result.length} ${result.length === 1 ? "result" : "results"}`;
+  }
+  const obj = asObject(result);
+  if (obj) {
+    if (obj.ok === true) return "ok";
+    if (obj.ok === false) return "failed";
+    const total = asNumber(obj.total) ?? asNumber(obj.total_estimate);
+    const count = asNumber(obj.count);
+    if (count != null && total != null && total > count) {
+      return `${count} of ~${total}`;
+    }
+    if (count != null) return `count: ${count}`;
+    if (total != null) return `total: ${total}`;
+    for (const key of ["items", "rows", "results", "runs", "data"]) {
+      const arr = obj[key];
+      if (Array.isArray(arr)) {
+        return `${arr.length} ${arr.length === 1 ? "result" : "results"}`;
+      }
+    }
+  }
+  return "result hidden — click to expand";
+}
+
+/**
+ * Domain-aware blurbs for the collapsed JSON fallback summary.
+ * Returns ``null`` when nothing better than the generic shape
+ * heuristic is possible — :func:`jsonFallbackBlurb` will handle
+ * the fallback. Keep these cheap and defensive: tool payloads
+ * may be partially shaped in production.
+ */
+function businessFriendlyBlurb(
+  toolName: string,
+  result: ToolResult,
+): string | null {
+  const obj = asObject(result);
+  if (!obj) return null;
+  if (toolName === "inbox_counts" || toolName.startsWith("inbox_count")) {
+    const open =
+      asNumber(obj.open) ?? asNumber(obj.new) ?? asNumber(obj.active);
+    const waiting =
+      asNumber(obj.waiting) ?? asNumber(obj.snoozed) ?? asNumber(obj.pending);
+    const parts: string[] = [];
+    if (open != null) parts.push(`open: ${open}`);
+    if (waiting != null) parts.push(`waiting: ${waiting}`);
+    if (parts.length > 0) return parts.join(" · ");
+  }
+  if (toolName.startsWith("plays_") || toolName.startsWith("play_")) {
+    const rows = obj.rows;
+    const plays = obj.plays;
+    if (Array.isArray(rows)) {
+      return `${rows.length} ${rows.length === 1 ? "play" : "plays"}`;
+    }
+    if (Array.isArray(plays)) {
+      return `${plays.length} ${plays.length === 1 ? "play" : "plays"}`;
+    }
+    const title = asString(obj.title);
+    if (title) return title;
+  }
+  if (toolName.startsWith("runs_") || toolName === "run_detail") {
+    const runs = obj.runs;
+    if (Array.isArray(runs)) {
+      return `${runs.length} ${runs.length === 1 ? "run" : "runs"}`;
+    }
+    const status = asString(obj.status);
+    if (status) return `status: ${status}`;
+  }
+  if (toolName.startsWith("automations_") || toolName.startsWith("automation_")) {
+    if (typeof obj.enabled === "boolean") {
+      return obj.enabled ? "enabled" : "disabled";
+    }
+    const items = obj.items ?? obj.pipelines;
+    if (Array.isArray(items)) {
+      return `${items.length} ${items.length === 1 ? "automation" : "automations"}`;
+    }
+  }
+  if (toolName.startsWith("repo_intel_") || toolName.startsWith("repo_")) {
+    const repos = obj.repos ?? obj.items;
+    if (Array.isArray(repos)) {
+      return `${repos.length} ${repos.length === 1 ? "repo" : "repos"}`;
+    }
+    const name = asString(obj.repo_name) ?? asString(obj.name);
+    if (name) return name;
+  }
+  return null;
 }
 
 function prettyTool(name: string): string {
@@ -1206,3 +1364,43 @@ export const TOOL_RENDERERS: Record<string, ToolRenderer> = {
   play_run_now: RenderPlayRunNow,
   automation_toggle: RenderAutomationToggle,
 };
+
+// ---------------------------------------------------------------------------
+// Friendly status-line verbs (A5)
+// ---------------------------------------------------------------------------
+
+/**
+ * Human-readable phrasing for the in-flight status line that
+ * appears beneath the chat while a tool is running. Keyed by raw
+ * backend tool name so the chat client and the renderer registry
+ * stay in sync (no risk of drifting verbs between files).
+ *
+ * Unknown tools fall back to :data:`TOOL_FRIENDLY_VERB_FALLBACK`
+ * via :func:`friendlyToolVerb` so we never show jargon like
+ * "Calling repo_intel_search…" to non-engineers.
+ */
+export const TOOL_FRIENDLY_VERB: Record<string, string> = {
+  inbox_list: "Looking through your inbox…",
+  inbox_get: "Pulling up that item…",
+  inbox_counts: "Counting inbox items…",
+  inbox_dispose: "Resolving the Inbox item…",
+  plays_coverage: "Computing Plays coverage…",
+  plays_get: "Reading the Play…",
+  plays_list: "Listing Plays…",
+  runs_query: "Searching recent Runs…",
+  run_detail: "Loading Run details…",
+  play_run_now: "Starting that Play…",
+  automation_toggle: "Toggling the Automation…",
+  automations_list: "Listing Automations…",
+};
+
+export const TOOL_FRIENDLY_VERB_FALLBACK = "Working on it…";
+
+/**
+ * Resolve the friendly verb for ``toolName``, falling back to a
+ * generic "Working on it…" so non-engineer users never see raw
+ * snake_case tool identifiers in the chat status line.
+ */
+export function friendlyToolVerb(toolName: string): string {
+  return TOOL_FRIENDLY_VERB[toolName] ?? TOOL_FRIENDLY_VERB_FALLBACK;
+}
