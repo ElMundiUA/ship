@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: 9c277099534d9744432e90bbda3d9cde368cc204cc0c7e31c8cc6af2b7c62950
+content_sha256: 9273acefaedee6bd719e3739101098507b6286c2a25faebf604c2bdcb41056c7
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,8 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Diffs the current OpenAPI / GraphQL schema against the previous release and flags breaking changes on every PR that touches schema files. Optional weekly summary for drift the author missed.
+category: code_review
+critical: false
 spec:
   install_target: prompts/scan/api-contract.md
   category: scan

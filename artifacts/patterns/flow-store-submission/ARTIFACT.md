@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: 1376c871ed84716edb9f6216a6e92a68e0a49dd7249f75de6684c379f4f4f912
+content_sha256: 1cbde0ce21eaf0e9b8dfa15bc5b726262a46c95226fbabf17d96e6310942ecbc
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,8 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   One-shot flow that packages a release build, verifies signing / provisioning, drafts submission notes and pushes the binary to store review. Request-only — dispatched on demand from the Requests UI.
+category: release_ops
+critical: false
 spec:
   install_target: prompts/flow/store-submission.md
   category: flow

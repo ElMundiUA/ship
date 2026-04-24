@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-23T00:00:00+00:00"
-content_sha256: 0a4e37d8c67ac2dab961fa58ad22ea1f9e73c2a9f3e5508c966bac4e0c98d5b7
+content_sha256: 03287ae728f0d5dc5845ae7103ffe965678484b6738c69d102dd008c55df1cfe
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,9 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Diffs every Terraform workspace's recorded state against the real cloud estate once a day and files a tracker ticket when out-of-band changes drift resources away from the declared configuration.
+category: health_checks
+subcategory: cost
+critical: false
 spec:
   install_target: prompts/scan/terraform-drift.md
   category: scan

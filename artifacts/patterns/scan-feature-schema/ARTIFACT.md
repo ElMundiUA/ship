@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: 6e1a2f2d07b57ad0280122cff6718f40d7953d0678a54d034ebde2d81f9aee04
+content_sha256: 036ede0993a0ac683981da006380375d98badab74e4a980fed7c164aae883a83
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,9 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Diffs feature-store schema against the repo's declared schema on every PR. Blocks drift between production feature definitions and the model-training contract.
+category: health_checks
+subcategory: ml_quality
+critical: false
 spec:
   install_target: prompts/scan/feature-schema.md
   category: scan

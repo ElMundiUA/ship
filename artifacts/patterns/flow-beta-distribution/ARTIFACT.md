@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: 9fbade82da12263fb9031b91afe96a60285ac017f4fd00e449367ba38898d4e6
+content_sha256: 2390644eb64b7d8a1b43c703b212847837336d49d81ccee7d24dd99b9ad6b6b9
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,8 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Promotes a green build to TestFlight / Firebase App Distribution and notifies the right tester groups. Runs as a lane on release branch pushes or on demand from the Requests UI.
+category: release_ops
+critical: false
 spec:
   install_target: prompts/flow/beta-distribution.md
   category: flow

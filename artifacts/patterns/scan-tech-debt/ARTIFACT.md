@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: 70bf2be725162ffd78c357d27b9fa6aa4da7a85bfe843090d001574650b85c96
+content_sha256: b4910b5f024dce9f80bc6bd9b1ba4871453640c43cc20bb8be7d2f640087200e
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,8 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Weekly sweep for high-complexity files, duplication and TODO/FIXME clusters. Files the top findings as tracker tickets so debt surfaces instead of compounding in the dark.
+category: code_review
+critical: false
 spec:
   install_target: prompts/scan/tech-debt.md
   category: scan

@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-07T20:41:22+03:00"
-content_sha256: 4d98feb3333561b483376595130f3b6921db81a14e63b83b795daae200bb171f
+content_sha256: b12f7941149b818441f23e64374b15ca3cf1c97e737198c99af8aa037f26b024
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,8 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Security lane: findings routed without stealing delivery throughput. Use when an agent picks a cloud-agent slot in a Ship lane, when wiring this prompt into a scheduled workflow, or when the catalog tags (security, findings) match the current task.
+category: reviewers
+critical: false
 spec:
   install_target: prompts/role/security-officer.md
   category: role

@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: 46497bfc404b1cfed2a626d8e3a7842127707a98327443123c277b2460fb47e8
+content_sha256: fcc8a8fe0b9099637aed47fffe32fedce70d26b1490af7ac1ed3916002a0974b
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,8 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Weekly sweep for unused exports, unreachable branches and orphan assets. Files the top N findings as tracker tickets so the codebase doesn't accumulate silent dead weight.
+category: code_review
+critical: false
 spec:
   install_target: prompts/scan/dead-code.md
   category: scan

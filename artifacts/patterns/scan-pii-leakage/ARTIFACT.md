@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-23T00:00:00+00:00"
-content_sha256: 9702b1b7fae92945ef765d90a2306df93f00f6699bba6149fe2dbc5fb60472bb
+content_sha256: cd3edd3627e869ada653137ef930018d434496c68148771a61ac3d9341106c59
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,9 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Sweeps logs, fixtures, test data and commit history for PII patterns (email, phone, SSN, card numbers, addresses). Files a tracker ticket with redaction hints when new exposures land. Keeps regulated data from leaking through observability paths.
+category: health_checks
+subcategory: security
+critical: true
 spec:
   install_target: prompts/scan/pii-leakage.md
   category: scan

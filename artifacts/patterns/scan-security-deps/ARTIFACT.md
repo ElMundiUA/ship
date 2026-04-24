@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: 62c29c463fff45e0d247929f78191044365cd7335b1d490f56edc05c3905ad35
+content_sha256: 2c6957c8bc072106a27cc2dd802ebe9488db7ae6041588934d81065ac50b2bac
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,9 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Daily sweep of dependency advisories via npm audit / pip-audit / cargo audit / snyk. Summarises critical and high findings into one consolidated tracker ticket so a noisy tool doesn't bury a real CVE.
+category: health_checks
+subcategory: security
+critical: true
 spec:
   install_target: prompts/scan/security-deps.md
   category: scan

@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-23T00:00:00+00:00"
-content_sha256: 0cbea9ffe503e885a111e3c79a3e0bfc672f5dae76bcd117f9b8c61767198e66
+content_sha256: eaa1bf86708bb60e9b6ec9a0101ea85ed3d9e7a353b929861df00d13a58cf888
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,9 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Hourly integrity check on the audit log — hash-chain continuity, sequence gaps, checkpoint agreement. Files a high-severity tracker ticket the moment tampering or drop looks plausible.
+category: health_checks
+subcategory: security
+critical: false
 spec:
   install_target: prompts/scan/audit-log-integrity.md
   category: scan

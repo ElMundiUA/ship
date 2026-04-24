@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-19T00:00:00+03:00"
-content_sha256: 6633c685e93c4ee7cd18eaef545796dd5761a57e7f603c049825c10ab8a3ce44
+content_sha256: 7a1912231814658beb37bfed4a1b5f6e4a1570c829886faf6e3d298694022090
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,8 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Daily cross-lane retro that reads the tracker delta and the last 24h of scheduled runs to surface dead loops, regression drifts, vendor outages, and stale replay tickets. Use when an agent picks a lanes slot in a Ship lane, when wiring this prompt into a scheduled workflow, or when the catalog tags (retro, daily, observability) match the current task.
+category: planning_process
+critical: false
 spec:
   install_target: prompts/flow/daily-retro.md
   category: flow

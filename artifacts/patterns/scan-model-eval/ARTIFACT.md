@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: 011d4a56bf71fdfbffa5c9620774eff0a028d15438ca528389c61da29aedba03
+content_sha256: ba45e8bfb7d5da25036565b88a1be69c87338b1618135e3c759e86971b1d7364
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,9 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Runs a golden-dataset evaluation on every model-touching PR and blocks merges that regress accuracy / F1 / ROC-AUC beyond the configured threshold. Keeps model quality from silently drifting.
+category: health_checks
+subcategory: ml_quality
+critical: false
 spec:
   install_target: prompts/scan/model-eval.md
   category: scan

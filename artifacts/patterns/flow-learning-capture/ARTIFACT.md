@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-07T20:41:22+03:00"
-content_sha256: ec025488a41c99af16031df42e5c8aeda1a2db02ab6cfc16a4a198be45bbe03e
+content_sha256: 251f5a7be710fcd3f842b3e539c7a0ba71a0b6cecccb4cb436bbe080c5240c7d
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,8 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Capture what changed in policy or prompts after incidents. Use when an agent picks a lanes slot in a Ship lane, when wiring this prompt into a scheduled workflow, or when the catalog tags (retro, policy) match the current task.
+category: knowledge_docs
+critical: false
 spec:
   install_target: prompts/flow/learning-capture.md
   category: flow

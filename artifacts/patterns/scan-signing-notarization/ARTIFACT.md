@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-23T00:00:00+00:00"
-content_sha256: 6989cf2e4828bb3b1dc8cbde123498aea4281826e707d0ce88452320f7044871
+content_sha256: 84d9ee37a4159e48071096e15ca0f424b93ec610484c3a55983f8ddceb864f3c
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,9 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Verifies that every release-candidate build is properly signed and notarized — macOS notarization ticket stapled and Gatekeeper-accepted, Windows Authenticode signature valid and timestamped — before the release tag can be handed to the auto-update channel.
+category: health_checks
+subcategory: security
+critical: false
 spec:
   install_target: prompts/scan/signing-notarization.md
   category: scan

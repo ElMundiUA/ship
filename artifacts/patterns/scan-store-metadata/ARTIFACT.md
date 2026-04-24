@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: 7f016333d48f066dadae5b1ae3d9facc882fd96afe7702156c319e985083a491
+content_sha256: 1679ed8251725200054a739df8bd4c45c177e7f75de052a12b5bac478fd20763
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,9 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Validates App Store / Play Store listing on every release tag — screenshot dimensions, title / subtitle / description length, keyword limits, age rating. Catches metadata rejections before submission.
+category: health_checks
+subcategory: compliance
+critical: false
 spec:
   install_target: prompts/scan/store-metadata.md
   category: scan

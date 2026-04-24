@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-07T20:41:22+03:00"
-content_sha256: 97500634699597880d1bb6ebc2cacc9846b56223fba31fdeaa00a8eea53338a1
+content_sha256: d22ea10d06b335f2d08077ca410e39905d7cfd8592365e38717e228268806651
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,8 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Specification and handoff quality before implementation picks. Use when an agent picks a cloud-agent slot in a Ship lane, when wiring this prompt into a scheduled workflow, or when the catalog tags (ba, spec) match the current task.
+category: planning_process
+critical: false
 spec:
   install_target: prompts/role/ba.md
   category: role

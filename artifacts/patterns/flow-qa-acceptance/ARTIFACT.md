@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-07T20:41:22+03:00"
-content_sha256: 7b7885c2318d631fa6fcd1add9d64dee354252499e32f82fd7374bb762b340f7
+content_sha256: 198fe63dbf4dabc118dae1b5b5fc7a81fd13c69658269bfe59ee9a0eb0b7d3e7
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,8 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Verify acceptance criteria on In Review issues after preview passed. Use when an agent picks a lanes slot in a Ship lane, when wiring this prompt into a scheduled workflow, or when the catalog tags (acceptance, in-review) match the current task.
+category: code_review
+critical: false
 spec:
   install_target: prompts/flow/qa-acceptance.md
   category: flow

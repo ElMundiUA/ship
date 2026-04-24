@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-12T04:11:35+03:00"
-content_sha256: 887a30f31c2d1dfbcbb67f1b0d87c4cfe7c9007fdda03674e6da8bd28080503e
+content_sha256: f5e5a9891960c36b3827e2ba6aa74e9dbff43c9c658c6da242319ef9affa45d1
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,8 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Primary onboarding playbook before any org-specific addendum. Use when an agent picks a onboarding slot in a Ship lane, when wiring this prompt into a scheduled workflow, or when the catalog tags (onboarding, adoption) match the current task.
+category: uncategorized
+critical: false
 spec:
   install_target: prompts/onboard/adopt.md
   category: onboard

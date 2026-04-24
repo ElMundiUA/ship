@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-23T00:00:00+00:00"
-content_sha256: ee1c46d9a35b898eacd6a6f460ba7af790843eb1d3baa26fe50f6dcb0226c3d0
+content_sha256: 11004c95ab2f906aa1ead4090ba67befd2ff1d7ae48e48cf6a4e9be790bd0faf
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,9 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Surfaces every IAM / role / scope change on every PR touching auth config, annotated with blast-radius and "is this a privilege escalation?" heuristics. Keeps access-control diffs from sliding through review.
+category: health_checks
+subcategory: security
+critical: false
 spec:
   install_target: prompts/scan/iam-policy-diff.md
   category: scan

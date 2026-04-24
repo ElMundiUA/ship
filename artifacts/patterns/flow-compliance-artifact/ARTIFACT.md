@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-23T00:00:00+00:00"
-content_sha256: cf65e41a8124f458f79059231800269c81a288423309237c6eabe855fbe71fdc
+content_sha256: ea507634dcbfbc6d944ccb0d7c7ddcbb6fb29efa1f58556e0f029f0ef60f2c00
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,8 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   One-shot flow that refreshes the audit-evidence bundle for SOC2 / HIPAA / PCI / ISO27001 — policies, access-review logs, change records, training attestations, access-control artefacts — and opens a reviewable PR with the refreshed bundle.
+category: release_ops
+critical: false
 spec:
   install_target: prompts/flow/compliance-artifact.md
   category: flow

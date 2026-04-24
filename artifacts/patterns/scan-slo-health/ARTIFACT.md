@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-23T00:00:00+00:00"
-content_sha256: 5b618f829e6078cb035937544c45c830ad751fb20e92bad28b08c1cbc0ed30db
+content_sha256: cb621b4f8e7cdbad6960045d3a294257597e18314816deffb33667e04f3d999b
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,9 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Polls Prometheus / Datadog every 15 minutes for SLO error-budget burn. Pages on-call via the tracker when burn is sustained above the fast-burn threshold. Keeps error-budget breaches from going unseen between standups.
+category: health_checks
+subcategory: performance
+critical: false
 spec:
   install_target: prompts/scan/slo-health.md
   category: scan

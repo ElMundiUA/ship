@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-23T00:00:00+00:00"
-content_sha256: 14f70f97551dac5e52786e9982c99533c286b84bb0c4aceaa2b9da5e5ba0b0a7
+content_sha256: 1bcafd1bed7462a5cc5bed737de5d562cf83da8891908953eb95d4be4796ea31
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,9 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Nightly sweep of idle / sleep / active current baselines from the bench power-analyzer fixture (or a QEMU / Renode simulation when the bench is offline). Alerts on regression against declared budgets so a one-line driver change doesn't quietly halve battery life.
+category: health_checks
+subcategory: performance
+critical: false
 spec:
   install_target: prompts/scan/power-profile.md
   category: scan

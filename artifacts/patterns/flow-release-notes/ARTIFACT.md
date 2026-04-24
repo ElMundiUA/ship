@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: d6517a83b229237b0def24f74c65353ac9784db85307a455cd506850674286f3
+content_sha256: b3f2515e504f1dc6d8efb7b08281e6d8c363dbf3e9baa42b6781efe71ef67039
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,8 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   On release tag (or workspace request), synthesises a changelog from merged PRs plus closed tracker tickets and opens a PR updating CHANGELOG.md.
+category: release_ops
+critical: true
 spec:
   install_target: prompts/flow/release-notes.md
   category: flow

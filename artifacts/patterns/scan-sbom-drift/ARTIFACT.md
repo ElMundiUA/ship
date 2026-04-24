@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-23T00:00:00+00:00"
-content_sha256: aa4e58c41a79da43ca3fc8010128f7984c58318ab43f5ef205e3c082ed819648
+content_sha256: 4ba263fad948037bb9246b858a549a610b1f624f38b2d9b6f9732d6d877f2093
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,9 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Diffs the release SBOM against the previous release to catch unexpected transitive dependency additions and flags any new components carrying open CVEs. Keeps supply-chain changes visible at release time.
+category: health_checks
+subcategory: other
+critical: false
 spec:
   install_target: prompts/scan/sbom-drift.md
   category: scan

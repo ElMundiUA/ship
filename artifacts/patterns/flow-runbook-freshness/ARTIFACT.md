@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-23T00:00:00+00:00"
-content_sha256: 155d4fcd4d26d97d2eebf01d7991cdc4e4e5517a5b43ad7f571c4f122e0f726d
+content_sha256: 0d26404aa93f57d560c37731dab5109c0da20cbfebd8a5aec5d687cb3aa9f25b
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,9 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Monthly sweep that cross-checks every runbook against the services it describes — executables that no longer exist, flags that have rotted, dashboards that have moved. Files per-runbook tickets with concrete remediation hints.
+category: incident_response
+secondary_categories: [knowledge_docs]
+critical: false
 spec:
   install_target: prompts/flow/runbook-freshness.md
   category: flow

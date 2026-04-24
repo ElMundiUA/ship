@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: 9510429176e32e260e58e2f15690629704fa70471e63b67ec78e34e4b68f7ee2
+content_sha256: 219c99fbd03ae794cf0ccb50bb55148c3de0d20ef60cc06c387ea28a13cfc310
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,9 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Weekly sweep that compares documentation pages against code signatures and recent commits. Files one ticket per stale cluster so docs drift surfaces before the next onboarding.
+category: code_review
+secondary_categories: [knowledge_docs]
+critical: false
 spec:
   install_target: prompts/scan/docs-freshness.md
   category: scan

@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-07T20:41:22+03:00"
-content_sha256: e0d8fa9e8996a9d662e5bdbbd25e36237598661ed25a8d6ab5cc5d6f1e178bed
+content_sha256: e143b63f6c2c714a6dd481878f6e708c1e5dbb810a8960ecb3f752834fc47115
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,8 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Self-review checklist before human review load. Use when an agent picks a lanes slot in a Ship lane, when wiring this prompt into a scheduled workflow, or when the catalog tags (pr, self-review) match the current task.
+category: code_review
+critical: true
 spec:
   install_target: prompts/flow/pr-self-review.md
   category: flow

@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: 562ef3721bdbd5f182ad5347e82e7923dec109d19a79c91fa7db38aab341ce5d
+content_sha256: dbda367e536dbedbc9c34b79a3c41f724c8ee0c917475c2bb481d6f72af9854c
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,8 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Drafts / updates a Google-style model card for every tagged model release. Pulls training data ref, eval metrics, fairness report, intended uses, and known limitations into a single reviewable markdown artefact.
+category: release_ops
+critical: false
 spec:
   install_target: prompts/flow/model-card.md
   category: flow

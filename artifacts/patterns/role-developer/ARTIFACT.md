@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-07T20:41:22+03:00"
-content_sha256: 42047c4307809f5ec81ebdf259f0247eb56403509bab16e87873c6d250a22980
+content_sha256: 635fe4b30f1f93186289c48757489df34626266da5a3f67fa587b609950f87a9
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,8 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Implementation role: branch contract, PR shape, evidence. Use when an agent picks a cloud-agent slot in a Ship lane, when wiring this prompt into a scheduled workflow, or when the catalog tags (implementation, pr) match the current task.
+category: planning_process
+critical: false
 spec:
   install_target: prompts/role/developer.md
   category: role

@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-07T20:41:22+03:00"
-content_sha256: 3284b46f3eebed404b896ee40c63a3b1fbd4e0e5e68c20a7ab5cab42510d14d7
+content_sha256: 4da25ce628150913be0e15eeeff955df6c078ea2422c9ae0db15c9ddc08c54ee
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,8 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Architecture audits and tech-debt lane findings. Use when an agent picks a cloud-agent slot in a Ship lane, when wiring this prompt into a scheduled workflow, or when the catalog tags (architecture, tech-debt) match the current task.
+category: reviewers
+critical: false
 spec:
   install_target: prompts/role/tech-architect.md
   category: role

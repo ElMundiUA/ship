@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: 10a319e8184f09060aa569fd97aa5b2ef8e03dedf2e649ad26dc0e2377b35c61
+content_sha256: 7a23ead1e56dada2e07893904559fdcc58b972573a4a814db5290e5df3c32c6a
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,9 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Cross-checks Info.plist and AndroidManifest.xml permissions against actual usage in the source. Flags unused, undocumented, or stealth-added permissions on every PR.
+category: health_checks
+subcategory: security
+critical: false
 spec:
   install_target: prompts/scan/permissions-audit.md
   category: scan

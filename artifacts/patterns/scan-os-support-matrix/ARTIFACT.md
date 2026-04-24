@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-23T00:00:00+00:00"
-content_sha256: 98a396934f2e88f0526322b645a9d569f3f41908660612f45e7405e5de5315a0
+content_sha256: 2f36e130af1c44e611743939e0981652519b2c69d54ae6d12fd9f30b916fc2e9
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,9 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Cross-checks the declared supported-OS list against the CI matrix every week — flags drift when a version you promise to support stops being tested, or when CI quietly tests on something you never claimed to support.
+category: health_checks
+subcategory: compliance
+critical: false
 spec:
   install_target: prompts/scan/os-support-matrix.md
   category: scan

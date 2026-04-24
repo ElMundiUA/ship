@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-23T00:00:00+00:00"
-content_sha256: f671cf3330fedd1a40da0c726f1517c561523ea1f6e433ca9736e421d43d28ec
+content_sha256: bd8e07b0b365561a6de079e386c54b89de715edaff9afb7e928a60a3a2f91e37
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,8 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Plans a staged OTA rollout per device cohort — canary, soak, staged promotion — with crash-free + telemetry gates at every checkpoint, and a one-command emergency rollback. Triggered on firmware version tags so every release gets a reviewable rollout plan.
+category: release_ops
+critical: false
 spec:
   install_target: prompts/flow/ota-channel.md
   category: flow

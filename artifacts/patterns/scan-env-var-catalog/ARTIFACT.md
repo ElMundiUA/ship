@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: 771d5debe1aee4f2c5f0b3a53285ea58d1c2c2908babe7b9157b86dbf8ef61b9
+content_sha256: d3c95641bb2aa3a2741a8167d482232822dd8be4a223e0156095ea80193ca07b
 deprecated: false
 replaced_by: null
 yanked: false
@@ -16,6 +16,9 @@ authors: [@elmundi/ship-core]
 license: Apache-2.0
 description: >-
   Walks the code for env var references, cross-checks against the documented catalog (.env.example / README), and files a tracker ticket for undocumented or unused vars.
+category: health_checks
+subcategory: cost
+critical: false
 spec:
   install_target: prompts/scan/env-var-catalog.md
   category: scan
