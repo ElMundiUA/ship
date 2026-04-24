@@ -145,7 +145,10 @@ try {
     process.exit(0);
   }
 
-  if (cmd === "lanes") {
+  /* `lanes` is the protocol-stable name; `automations` is the
+   * operator-friendly soft alias. Both dispatch to the same handler
+   * indefinitely — we are not deprecating the original. */
+  if (cmd === "lanes" || cmd === "automations") {
     const { lanesCommand } = await import("../lib/commands/lanes.mjs");
     await lanesCommand(ctx, rest);
     process.exit(0);

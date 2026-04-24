@@ -220,6 +220,13 @@ cd my-product`}
             Day two is five commands you actually run. Each one prints what it would do; none of them mutates remote
             state without consent.
           </p>
+          <p className="mt-4 max-w-3xl rounded-xl border border-aqua/20 bg-aqua/[0.05] px-4 py-3 text-sm leading-relaxed text-white/75">
+            <span className="font-semibold uppercase tracking-[0.16em] text-aqua/85">Day two — operator surfaces.</span>
+            {" "}Once your first sync completes: open the <strong className="text-white">Inbox</strong> for what
+            needs you, browse <strong className="text-white">Plays</strong> for the catalog, see{" "}
+            <strong className="text-white">Coverage</strong> to spot gaps, and check{" "}
+            <strong className="text-white">Runs</strong> for what just happened.
+          </p>
           <ul className="mt-8 space-y-3">
             {DAY_TWO.map((row) => (
               <li

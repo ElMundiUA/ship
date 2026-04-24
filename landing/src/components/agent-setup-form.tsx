@@ -137,8 +137,9 @@ Stack hints from the user:
 
 Rules:
 1. Every artifact you consume MUST be resolved via \`shipctl\` (pattern / tool /
-   workflow / collection show|fetch) and pinned by version. Never vendor the
-   artifact body into this repository.
+   collection show|fetch — patterns are what the operator console renders as
+   Plays) and pinned by version. Never vendor the artifact body into this
+   repository.
 2. Record every consumed artifact in the PR description as one line per entry
    using \`<kind>:<id>@<version>\` (RFC-0001).
 3. \`.ship/config.yml\` is the only source of truth for adapter selection

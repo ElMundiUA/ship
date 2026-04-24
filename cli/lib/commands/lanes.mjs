@@ -51,6 +51,8 @@ function printHelp() {
 lanes declared in .ship/config.yml (each lane shows up as an
 Automation in the operator console; one Run is recorded per dispatch).
 
+Aliases: shipctl automations <subcmd>  (operator-friendly name; both work)
+
 USAGE
   shipctl lanes install [--only <id,id>] [--ref <git-ref>] [--owner <gh-owner>]
                         [--repo <repo>] [--shipctl-version <npm-tag>] [--dry-run]

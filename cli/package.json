@@ -2,7 +2,7 @@
   "name": "@elmundi/ship-cli",
   "version": "0.11.2",
   "type": "module",
-  "description": "Ship CLI — artifacts protocol (patterns/tools/workflows/collections), docs search/fetch/feedback, and agent init",
+  "description": "Ship CLI: bootstrap a repo, sync the Plays catalog, run Automations, report Runs.",
   "license": "Apache-2.0",
   "author": "Denys Kuzin",
   "repository": {

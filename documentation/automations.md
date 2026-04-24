@@ -138,7 +138,7 @@ Rules:
 
 - `pattern: <id>` (scalar) and `patterns: [<id>, …]` (list) are mutually exclusive — declare exactly one.
 - `patterns` must be a non-empty list of existing pattern ids.
-- `shipctl run --lane <id>` currently requires a single-pattern lane; multi-pattern execution (parallel agent fan-out) lands in RFC-0008 C3.2. Until then, a lane with `patterns.length > 1` is rejected by `shipctl run` with a clear error and dispatched by the dashboard through a parametric workflow instead.
+- `shipctl run --lane <id>` dispatches every pattern the lane declares (a composite lane with `patterns: [a, b, c]` will fan out across all three using the lane's `fanout:` setting — `matrix` by default). To target one specific pattern inside a composite lane, pass `--pattern <id>`. See `cli/tests/run.test.mjs` for the full multi-pattern coverage.
 
 ## What `shipctl` does with a lane
 
