@@ -313,6 +313,13 @@ class ChatThread(Base):
     last_user_activity_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Wave C — bookkeeping for the idle-thread sweeper. Populated when
+    # the cron flips ``status`` from ``active`` to ``archived``; kept
+    # NULL on threads the human archived (status set without going
+    # through the sweeper) so the audit trail stays unambiguous.
+    archived_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     created_at: Mapped[datetime] = _ts_created()
     updated_at: Mapped[datetime] = _ts_updated()

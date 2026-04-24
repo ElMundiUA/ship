@@ -119,10 +119,31 @@ class ChatThreadOut(BaseModel):
     topic_summary: str | None
     packed_into_bucket_id: uuid.UUID | None
     last_user_activity_at: datetime | None
+    archived_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
     message_count: int
     messages: list[ChatMessageOut]
+
+
+class ChatThreadSummaryOut(BaseModel):
+    """Trimmed thread row for the archive list view.
+
+    The archive list does not load the full message history — only
+    enough to render a row (title, archived-at, packed-into pointer).
+    The dedicated ``GET /chat/threads/{id}`` route is still the way
+    to fetch a thread's transcript on demand.
+    """
+
+    id: uuid.UUID
+    title: str
+    status: str
+    topic_summary: str | None
+    packed_into_bucket_id: uuid.UUID | None
+    last_user_activity_at: datetime | None
+    archived_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
 
 
 class ChatActiveNewIn(BaseModel):
@@ -308,10 +329,25 @@ def _thread_to_out(
         topic_summary=thread.topic_summary,
         packed_into_bucket_id=thread.packed_into_bucket_id,
         last_user_activity_at=thread.last_user_activity_at,
+        archived_at=thread.archived_at,
         created_at=thread.created_at,
         updated_at=thread.updated_at,
         message_count=len(messages),
         messages=[_msg_to_out(m) for m in messages],
+    )
+
+
+def _thread_to_summary(thread: ChatThread) -> ChatThreadSummaryOut:
+    return ChatThreadSummaryOut(
+        id=thread.id,
+        title=thread.title,
+        status=thread.status,
+        topic_summary=thread.topic_summary,
+        packed_into_bucket_id=thread.packed_into_bucket_id,
+        last_user_activity_at=thread.last_user_activity_at,
+        archived_at=thread.archived_at,
+        created_at=thread.created_at,
+        updated_at=thread.updated_at,
     )
 
 
@@ -452,6 +488,63 @@ async def new_active_thread(
     await session.flush()
     await session.refresh(fresh)
     return _thread_to_out(fresh, [])
+
+
+# ---------------------------------------------------------------------------
+# Archived thread list (Wave C)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/chat/threads", response_model=list[ChatThreadSummaryOut])
+async def list_chat_threads(
+    workspace_id: uuid.UUID,
+    status: str = "archived",  # noqa: A002 — matches the query param name
+    limit: int = 50,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> list[ChatThreadSummaryOut]:
+    """List the caller's chat threads in a given lifecycle bucket.
+
+    The single-window UX deliberately hides the "list of chats"
+    surface during normal use; this endpoint is the escape hatch
+    so the console can render the **Archived** view (Wave C).
+
+    Scope:
+    - Always restricted to threads created by ``auth.user``; we do
+      not surface other members' archived chats from this route.
+    - ``status`` defaults to ``archived`` (the only currently-needed
+      view) but accepts ``active`` / ``resolved`` for symmetry.
+    - ``limit`` capped at 200 to bound query work; the archive view
+      paginates the rest with a follow-up ``before=`` cursor when /
+      if we need it.
+
+    Ordering: archived threads are sorted by ``archived_at DESC``
+    (sweeper-set value) with ``updated_at DESC`` as the fallback
+    for legacy rows where ``archived_at`` is NULL.
+    """
+    if status not in {"active", "resolved", "archived"}:
+        raise HTTPException(
+            status_code=400,
+            detail="status must be one of: active, resolved, archived",
+        )
+    capped = max(1, min(limit, 200))
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
+    rows = (
+        await session.execute(
+            select(ChatThread)
+            .where(
+                ChatThread.workspace_id == workspace_id,
+                ChatThread.created_by_user_id == auth.user.id,
+                ChatThread.status == status,
+            )
+            .order_by(
+                desc(ChatThread.archived_at),
+                desc(ChatThread.updated_at),
+            )
+            .limit(capped)
+        )
+    ).scalars().all()
+    return [_thread_to_summary(r) for r in rows]
 
 
 # ---------------------------------------------------------------------------

@@ -23,6 +23,7 @@ from backend.app.core.config import get_settings
 from backend.app.core.sentry import init_sentry
 from backend.app.db.session import get_sessionmaker
 from backend.app.services.repo_intel import harvest_repo_intel
+from backend.app.workers.archive_chat_threads import archive_idle_chat_threads
 from backend.app.workers.clarifications import cron_sync_tracker_clarifications
 from backend.app.workers.secret_probe import cron_probe_pending_secrets
 
@@ -117,6 +118,12 @@ class WorkerSettings:
             cron_sync_tracker_clarifications,
             minute={0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55},
         ),
+        # Wave C — sweep idle chat threads into the archived view once
+        # an hour. Fires at ``:05`` so we don't pile onto the on-the-
+        # hour cadence the other crons share. Bounded to 500 rows
+        # per tick (see :data:`backend.app.services.agent.chat_threads
+        # .BATCH_LIMIT`); a backlog drains across multiple ticks.
+        cron(archive_idle_chat_threads, minute={5}),
     ]
     keep_result = 60
     job_timeout = 300
