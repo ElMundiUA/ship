@@ -1,32 +1,35 @@
 /**
- * WOW onboarding wizard v2 — 5-step, per-repo GitHub-App driven flow.
+ * WOW onboarding wizard — 5-step, per-repo GitHub-App driven flow.
  *
- * Architecture notes (see RFC-0007 / Wizard v2 plan):
+ * Wave-8c collapses the 14-preset configure step into a single
+ * "Confirm bootstrap" preview that surfaces what the new
+ * ``wizard_seed v2`` actually does (canonical Plays bundle,
+ * CODEOWNERS-derived Inbox routing rules, repo-intel harvest).
  *
- *   1. **github**    — install the Ship GitHub App on the chosen account.
- *   2. **repos**     — pick repos from the live App install list. Activation
- *                      only; preset is chosen per-repo on the next step.
- *   3. **tracker**   — workspace-level Linear / Notion OAuth (or skip).
- *                      These credentials are shared by all repos; each
- *                      repo can still override which tracker kind (and
- *                      team/project) in step 4.
- *   4. **configure** — per-repo loop (new): preset → tracker binding →
- *                      agent GitHub Actions secrets → open seed PR.
- *                      All four sub-steps live in one page so the user
- *                      can see progress per-repo side-by-side.
- *   5. **done**      — summary of seeded PRs + "initial tasks will run
- *                      once merged" banner.
+ * Steps:
  *
- * Pre-wizard: the page redirects unauthenticated visitors straight to
- * `/login?next=/onboarding`. After login we look up (or JIT-create) the
- * user's workspace via `GET /v1/workspaces` and stick its id in the URL
+ *   1. **github**   — install the Ship GitHub App on the chosen account.
+ *   2. **repos**    — pick repos from the live App install list.
+ *   3. **tracker**  — workspace-level Linear / Notion OAuth (or skip).
+ *   4. **confirm**  — per-repo "what will land" preview + one-click
+ *                     "Open seed PR" CTA. Replaces the old
+ *                     ``configure`` step (which carried the 14-preset
+ *                     radio); ``?step=configure`` URLs in the wild
+ *                     303-redirect to ``?step=confirm`` for back-compat.
+ *   5. **done**     — Wave-8c "what just happened" summary owned by
+ *                     P5-09 (codeowners + intel + synthetic lane stats
+ *                     read from sessionStorage handed off by the
+ *                     confirm step).
+ *
+ * Pre-wizard: unauthenticated visitors redirect to
+ * ``/login?next=/onboarding``; after login we look up (or JIT-create)
+ * the workspace via ``GET /v1/workspaces`` and stick its id in the URL
  * so every step has a stable handle.
  *
- * Step transitions for 1-3 are still server-rendered native form POSTs
- * to `/api/onboard/*` route handlers (303-redirect back here). Step 4
- * is a client-driven page that calls JSON route handlers per-repo
- * (no full navigations) — this is the only way to keep secret-input
- * state and per-repo mutation isolated without reloading.
+ * Step transitions for 1-3 are server-rendered native form POSTs to
+ * ``/api/onboard/*`` route handlers (303-redirect back here). The
+ * confirm step is a server-rendered preview with one client-side CTA
+ * per repo that POSTs to ``/api/onboard/wizard-seed``.
  */
 
 import Link from "next/link";
@@ -48,18 +51,19 @@ import {
 } from "@/lib/api/client";
 import { getSessionToken } from "@/lib/api/session";
 
-import { type PresetId } from "./presets";
-import { RepoCard, type RepoCardInitial } from "./repo-card";
+import { ConfirmStep } from "./confirm-step";
+import { DoneStep } from "./done-step";
+import { type RepoCardInitial } from "./repo-card";
 
 export const dynamic = "force-dynamic";
 
-type StepId = "github" | "repos" | "tracker" | "configure" | "done";
+type StepId = "github" | "repos" | "tracker" | "confirm" | "done";
 
 const STEPS: { id: StepId; label: string }[] = [
   { id: "github", label: "Install GitHub App" },
   { id: "repos", label: "Pick repos" },
   { id: "tracker", label: "Workspace tracker" },
-  { id: "configure", label: "Configure repos" },
+  { id: "confirm", label: "Confirm" },
 ];
 
 
@@ -82,11 +86,6 @@ const REPOS_ERRORS: Record<string, string> = {
     "GitHub rejected our installation token. Reinstall the Ship app and try again.",
   empty: "Pick at least one repo, or use Skip to come back later.",
   unknown: "Couldn't save the repo selection. Try again.",
-};
-
-const CONFIGURE_ERRORS: Record<string, string> = {
-  load_failed:
-    "Couldn't load your activated repos. Refresh; if it persists, check the backend is reachable.",
 };
 
 const TRACKER_ERRORS: Record<string, string> = {
@@ -118,8 +117,12 @@ function pick(raw: string | string[] | undefined): string | undefined {
  *
  * We honour explicit pins (``?step=repos``) even when the auto-resume
  * logic would jump further ahead — that way users can click the step
- * labels in ``<Stepper/>`` to go backwards, e.g. to change their
- * preset choice without having to re-activate repos.
+ * labels in ``<Stepper/>`` to go backwards, e.g. to revisit the repo
+ * picker without losing their place.
+ *
+ * Legacy ``configure`` and ``knowledge`` pins are recognised here too
+ * so the back-compat redirect (in :func:`OnboardingPage`) fires
+ * before the auto-resume logic can second-guess them.
  */
 function hasExplicitStep(raw: string | string[] | undefined): boolean {
   const v = Array.isArray(raw) ? raw[0] : raw;
@@ -127,9 +130,11 @@ function hasExplicitStep(raw: string | string[] | undefined): boolean {
     v === "github" ||
     v === "repos" ||
     v === "tracker" ||
+    v === "confirm" ||
+    // Legacy pre-Wave-8c step ids — kept so bookmarks / email links
+    // still hit the new wizard. They funnel to ``confirm`` via the
+    // server-side redirect in :func:`OnboardingPage`.
     v === "configure" ||
-    // ``knowledge`` is legacy (wizard v1) — keep the pin working so
-    // old email links / bookmarks still land somewhere sensible.
     v === "knowledge" ||
     v === "done"
   );
@@ -140,16 +145,27 @@ function pickStep(raw: string | string[] | undefined): StepId {
   if (
     v === "repos" ||
     v === "tracker" ||
-    v === "configure" ||
+    v === "confirm" ||
     v === "done"
   ) {
     return v;
   }
-  // Legacy wizard v1 routed to ``?step=knowledge`` after the tracker
-  // OAuth callback. Funnel those hits into the new configure step so
-  // nobody lands on a blank screen.
-  if (v === "knowledge") return "configure";
+  // Pre-Wave-8c legacy ids: ``configure`` was the per-repo preset
+  // step, ``knowledge`` was the wizard v1 post-tracker landing pad.
+  // Both now mean "go to the new Confirm bootstrap step". The actual
+  // ``redirect()`` to ``?step=confirm`` happens server-side in
+  // :func:`OnboardingPage` so the URL bar reflects the new id.
+  if (v === "configure" || v === "knowledge") return "confirm";
   return "github";
+}
+
+/** Legacy step ids that should 303-redirect to the Wave-8c equivalent. */
+function legacyStepRedirectTarget(
+  raw: string | string[] | undefined,
+): StepId | null {
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  if (v === "configure" || v === "knowledge") return "confirm";
+  return null;
 }
 
 /**
@@ -177,11 +193,12 @@ async function resumeStep(
 ): Promise<StepId> {
   try {
     const activated = await listActivatedRepos(wsId, token);
-    // Activated at least one repo → user is past the linear prefix and
-    // wants to configure them. The configure step is its own landing
-    // pad (per-repo cards), and tracker/step-3 is a sibling they can
-    // click back to from the stepper if they want to re-do OAuth.
-    if (activated.length > 0) return "configure";
+    // Activated at least one repo → user is past the linear prefix
+    // and wants to confirm + bootstrap them. The confirm step is its
+    // own landing pad (per-repo cards), and tracker/step-3 is a
+    // sibling they can click back to from the stepper if they want
+    // to re-do OAuth.
+    if (activated.length > 0) return "confirm";
   } catch {
     /* fall through — treat as unknown */
   }
@@ -201,6 +218,26 @@ export default async function OnboardingPage({
   searchParams: SearchParams;
 }) {
   const params = await searchParams;
+
+  // ── Back-compat redirect for pre-Wave-8c step ids ────────────
+  // Bookmarks / email links pointing at ``?step=configure`` (the old
+  // 14-preset configure step) and ``?step=knowledge`` (wizard v1)
+  // should land on the new Confirm step *with the URL bar reflecting
+  // the new id* — otherwise the stepper highlight + analytics drift
+  // forever. Run this before any other work so we don't pay for
+  // workspace lookups on a request we're about to redirect.
+  const legacyTarget = legacyStepRedirectTarget(params.step);
+  if (legacyTarget) {
+    const search = new URLSearchParams();
+    for (const [k, vRaw] of Object.entries(params)) {
+      if (k === "step") continue;
+      const v = Array.isArray(vRaw) ? vRaw[0] : vRaw;
+      if (typeof v === "string") search.set(k, v);
+    }
+    search.set("step", legacyTarget);
+    redirect(`/onboarding?${search.toString()}`);
+  }
+
   const requestedStep = pickStep(params.step);
   const apiConfigured = isApiConfigured();
   const sessionToken = await getSessionToken();
@@ -268,13 +305,13 @@ export default async function OnboardingPage({
     }
   }
 
-  // Configure step: load every activated repo plus the per-repo
+  // Confirm step: load every activated repo plus the per-repo
   // tracker binding and agent-secret status, so the RepoCard client
   // components render fully populated on first paint. We parallelise
   // the per-repo reads with ``Promise.all`` — they're independent.
-  let configureCards: RepoCardInitial[] | null = null;
-  let configureLoadError: string | null = null;
-  if (step === "configure" && wsId && apiConfigured) {
+  let confirmCards: RepoCardInitial[] | null = null;
+  let confirmLoadError: string | null = null;
+  if (step === "confirm" && wsId && apiConfigured) {
     try {
       const activated = await listActivatedRepos(wsId, sessionToken ?? undefined);
       if (activated.length === 0) {
@@ -284,7 +321,7 @@ export default async function OnboardingPage({
           `/onboarding?step=repos&ws=${encodeURIComponent(wsId)}&error=empty`,
         );
       }
-      configureCards = await Promise.all(
+      confirmCards = await Promise.all(
         activated.map((r) =>
           loadRepoCardInitial(wsId, r, sessionToken ?? undefined),
         ),
@@ -305,8 +342,8 @@ export default async function OnboardingPage({
       if (err instanceof ApiHttpError && err.status === 401) {
         redirect("/login?next=%2Fonboarding");
       }
-      console.error("[onboarding] configure step load failed", err);
-      configureLoadError = "load_failed";
+      console.error("[onboarding] confirm step load failed", err);
+      confirmLoadError = "load_failed";
     }
   }
 
@@ -370,14 +407,20 @@ export default async function OnboardingPage({
             reposJustWired={pick(params.repos) === "wired"}
           />
         )}
-        {step === "configure" && wsId && (
-          <ConfigureReposStep
-            wsId={wsId}
-            cards={configureCards}
-            loadError={configureLoadError}
+        {step === "confirm" && wsId && (
+          <ConfirmStep
+            workspaceId={wsId}
+            cards={confirmCards}
+            loadError={confirmLoadError}
           />
         )}
-        {step === "done" && <DoneStep wsId={wsId ?? null} />}
+        {step === "done" && (
+          <DoneStep
+            wsId={wsId ?? null}
+            repoIdParam={pick(params.repo_id) ?? null}
+            repoIdsParam={pick(params.repo_ids) ?? null}
+          />
+        )}
       </main>
     </div>
   );
@@ -453,7 +496,7 @@ function GitHubStep({
   return (
     <section>
       <p className="font-mono text-[11px] uppercase tracking-[0.3em] text-aqua/85">
-        Step 1 of 3 &middot; Connect your code
+        Step 1 of 4 &middot; Connect your code
       </p>
       <h1 className="mt-2 font-display text-4xl font-bold leading-tight">
         Install Ship on GitHub.
@@ -556,8 +599,9 @@ function ReposStep({
       </h1>
       <p className="mt-3 max-w-2xl text-sm leading-relaxed text-white/70">
         We pulled this list straight from your GitHub App installation. Tick
-        the ones you want Ship to work with. You&apos;ll pick a preset and
-        wire a tracker per-repo on the next-next step — no one-size-fits-all.
+        the ones you want Ship to work with. Every repo gets the same
+        canonical Plays bundle — you&apos;ll review it on the Confirm step
+        before opening the bootstrap PR.
       </p>
 
       {justInstalled && (
@@ -598,19 +642,13 @@ function ReposStep({
         >
           <input type="hidden" name="ws" value={wsId} suppressHydrationWarning />
           {/*
-            Wizard v2 moved preset selection to the per-repo configure
-            step, but the existing ``repos-activate`` handler still accepts
-            it as a bulk default. We pin ``adoption-minimum`` so any repo
-            that gets activated here but never re-visited later still has
-            a sane preset bound — the configure step lets the user change
-            it before opening the seed PR anyway.
+            Wave-8c collapses the 14-preset menu — every repo lands on
+            the canonical ``DEFAULT_BUNDLE``. Backend's
+            :func:`normalize_preset` maps any legacy preset id (and
+            ``None``) to ``"default"``, so we don't need a hidden
+            ``preset`` field here at all anymore. Confirm step is the
+            new landing pad after this form posts.
           */}
-          <input
-            type="hidden"
-            name="preset"
-            value="adoption-minimum"
-            suppressHydrationWarning
-          />
 
           <fieldset className="space-y-2 rounded-2xl border border-white/10 bg-white/[0.025] p-3 max-h-[420px] overflow-y-auto">
             <legend className="px-2 text-[11px] font-bold uppercase tracking-widest text-white/55">
@@ -737,10 +775,11 @@ function TrackerStep({
         Connect your tracker.
       </h1>
       <p className="mt-3 max-w-2xl text-sm leading-relaxed text-white/70">
-        This workspace-level OAuth is reused by <em>every</em> repo — next
-        step lets you pick a tracker kind per repo (Linear, GitHub Issues,
-        Jira) and the team/project it writes to. OAuth tokens are encrypted
-        with the workspace key; the API only ever exposes{" "}
+        This workspace-level OAuth is reused by <em>every</em> repo — the
+        Confirm step lets you override the tracker kind per repo (Linear,
+        GitHub Issues, Jira) and the team/project it writes to. OAuth
+        tokens are encrypted with the workspace key; the API only ever
+        exposes{" "}
         <code className="rounded bg-white/5 px-1 py-[1px] text-aqua">
           has_secret: true
         </code>{" "}
@@ -753,10 +792,9 @@ function TrackerStep({
 
       {reposJustWired && (
         <div className="mt-5 rounded-xl border border-aqua/30 bg-aqua/[0.06] px-4 py-3 text-xs text-white/85">
-          <strong className="text-aqua">Repos wired.</strong> Default pipelines
-          were seeded for the chosen preset — they&apos;ll show up on the
-          dashboard as Recommended actions the moment we move past this
-          step. Flip the rest on any time from the Pipelines page.
+          <strong className="text-aqua">Repos wired.</strong> Each one will
+          install the canonical Plays bundle on the Confirm step — review
+          before opening the bootstrap PR.
         </div>
       )}
       {linearStatus === "connected" && (
@@ -862,152 +900,15 @@ function TrackerStep({
 }
 
 // ---------------------------------------------------------------------------
-// Step 4 — Configure repos (per-repo preset + tracker + secrets + seed PR)
-// ---------------------------------------------------------------------------
-
-function ConfigureReposStep({
-  wsId,
-  cards,
-  loadError,
-}: {
-  wsId: string;
-  cards: RepoCardInitial[] | null;
-  loadError: string | null;
-}) {
-  const message = loadError ? CONFIGURE_ERRORS[loadError] ?? loadError : null;
-  const total = cards?.length ?? 0;
-  const doneHref = `/onboarding?step=done&ws=${encodeURIComponent(wsId)}`;
-  return (
-    <section>
-      <p className="font-mono text-[11px] uppercase tracking-[0.3em] text-aqua/85">
-        Step 4 of 4 &middot; Configure each repo
-      </p>
-      <h1 className="mt-2 font-display text-4xl font-bold leading-tight">
-        One PR per repo, then you&apos;re off.
-      </h1>
-      <p className="mt-3 max-w-2xl text-sm leading-relaxed text-white/70">
-        For each repo: pick a preset, bind a tracker (or inherit the
-        workspace default), paste any agent API keys we need (they go
-        straight to GitHub Actions secrets — never stored on Ship), and
-        open one seed PR. The PR carries the CLI, the GitHub Actions
-        workflows, the scheduled lanes, a base{" "}
-        <code className="rounded bg-white/5 px-1 text-aqua">.ship/config.yml</code>{" "}
-        and the tracker FSM spec. Merge each PR once; the rest runs on
-        its own.
-      </p>
-
-      {message && (
-        <div className="mt-5 rounded-lg border border-coral/40 bg-coral/10 px-3 py-2 text-xs text-coral">
-          {message}
-        </div>
-      )}
-
-      {cards && cards.length > 0 && (
-        <div className="mt-7 space-y-4">
-          {cards.map((c) => (
-            <RepoCard key={c.repo.id} workspaceId={wsId} initial={c} />
-          ))}
-        </div>
-      )}
-
-      {cards && cards.length === 0 && !loadError && (
-        <div className="mt-7 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-xs text-white/70">
-          No activated repos. Step back to <em>Pick repos</em> and activate at
-          least one before seeding.
-        </div>
-      )}
-
-      <div className="mt-8 flex items-center justify-between gap-3 border-t border-white/10 pt-5">
-        <span className="text-[11px] text-white/45">
-          {total > 0
-            ? `${total} repo${total === 1 ? "" : "s"} ready to configure. Seed PRs don't auto-merge — you're in control.`
-            : "Nothing to configure yet."}
-        </span>
-        <div className="flex items-center gap-3">
-          <Link
-            href={`/onboarding?step=repos&ws=${encodeURIComponent(wsId)}`}
-            className="text-xs text-white/55 hover:text-white"
-          >
-            &larr; Back to repo picker
-          </Link>
-          <Link
-            href={doneHref}
-            data-testid="onboarding-configure-continue"
-            className="rounded-full border border-aqua/40 bg-aqua/[0.08] px-4 py-2 text-xs font-bold text-aqua hover:bg-aqua/[0.16]"
-          >
-            I&apos;m done configuring &rarr;
-          </Link>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Done + bootstrap-error fallbacks
 // ---------------------------------------------------------------------------
-
-function DoneStep({ wsId }: { wsId: string | null }) {
-  const configureHref = wsId
-    ? `/onboarding?step=configure&ws=${encodeURIComponent(wsId)}`
-    : "/onboarding";
-  return (
-    <section className="mx-auto max-w-2xl rounded-3xl border border-aqua/30 bg-aqua/[0.04] p-10 text-center">
-      <div className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-aqua/20 text-2xl text-aqua">
-        ✓
-      </div>
-      <h1
-        className="mt-4 font-display text-3xl font-bold"
-        data-testid="onboarding-done-title"
-      >
-        You&apos;re wired in.
-      </h1>
-      <p className="mx-auto mt-2 max-w-lg text-sm text-white/75">
-        Workspace is set up, tracker is connected, and each repo has its own
-        seed PR opened (with the CLI, GitHub Actions, scheduled lanes, base
-        config, knowledge starters and the tracker FSM).
-      </p>
-      <div className="mx-auto mt-5 max-w-lg rounded-xl border border-aqua/30 bg-aqua/[0.06] px-4 py-3 text-left text-xs leading-relaxed text-white/80">
-        <strong className="block text-aqua">What happens next:</strong>
-        <ol className="mt-1 list-decimal space-y-0.5 pl-4">
-          <li>
-            <strong className="text-white">Merge each seed PR.</strong> That
-            installs the workflows and unlocks the scheduled lanes.
-          </li>
-          <li>
-            <strong className="text-white">Initial tasks run.</strong> On
-            merge, Ship&apos;s first sweeps fire (code map, knowledge refresh,
-            standup) and start populating the dashboard.
-          </li>
-          <li>
-            <strong className="text-white">Pick up from the dashboard.</strong>{" "}
-            Review, approve, tweak prompts, and let the lanes do the work.
-          </li>
-        </ol>
-      </div>
-      <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
-        <Link
-          href="/"
-          className="rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-5 py-2.5 text-sm font-bold text-ink shadow-glow transition hover:brightness-110"
-        >
-          Open dashboard &rarr;
-        </Link>
-        <Link
-          href={configureHref}
-          className="rounded-full border border-white/15 bg-white/[0.04] px-5 py-2.5 text-sm font-bold text-white/85 hover:border-aqua/40 hover:text-white"
-        >
-          Back to repo configure
-        </Link>
-        <Link
-          href="/settings"
-          className="rounded-full border border-white/15 bg-white/[0.04] px-5 py-2.5 text-sm font-bold text-white/85 hover:border-aqua/40 hover:text-white"
-        >
-          Mint a CLI token &rarr;
-        </Link>
-      </div>
-    </section>
-  );
-}
+//
+// The "What just happened" done step (P5-09) lives in ``done-step.tsx``
+// and reads the seed result the confirm step stashed under
+// ``sessionStorage["ship.wizard_seed_result.<repo_id>"]`` (with a
+// :func:`getLatestWizardSeed` fallback for tab-reload + cross-device
+// flows). The bootstrap error fallback below is unrelated and stays
+// inline because it has no per-step state.
 
 /**
  * Pull everything a ``RepoCard`` needs to render without another
@@ -1076,16 +977,10 @@ async function loadRepoCardInitial(
     repo: {
       id: repo.id,
       full_name: repo.full_name,
-      preset: (repo.preset as PresetId | null) ?? null,
       default_branch: repo.default_branch,
     },
     tracker,
     agents,
-    // Wizard v2 doesn't yet persist "last seed PR" server-side; the
-    // card starts out in the editable state and switches to the
-    // seeded row after the user clicks the button here. Iter 8 will
-    // surface pending-merge PRs on the dashboard.
-    last_seed: null,
     probe_errors: Object.keys(probe_errors).length > 0 ? probe_errors : undefined,
   };
 }

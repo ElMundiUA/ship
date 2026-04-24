@@ -37,7 +37,11 @@ from backend.app.api.v1.routes.workspaces import (
 from backend.app.db.models.custom_patterns import CustomPattern
 from backend.app.db.session import get_session
 from backend.app.services import catalog as catalog_service
-from backend.app.services.lane_recipes import list_lane_recipes
+from backend.app.services.lane_recipes import (
+    DEFAULT_BUNDLE,
+    DEFAULT_BUNDLE_REASONS,
+    list_lane_recipes,
+)
 
 
 router = APIRouter(prefix="/catalog", tags=["catalog"])
@@ -222,6 +226,50 @@ class LaneCatalogEntryOut(BaseModel):
 
 class LaneCatalogResponse(BaseModel):
     entries: list[LaneCatalogEntryOut]
+
+
+# ---------------------------------------------------------------------------
+# Default bundle preview — drives the Wave-8c "Confirm bootstrap" wizard
+# step. Returns the canonical Plays bundle the wizard installs in every
+# new repo plus a one-line reason for each entry, both sourced from
+# :mod:`backend.app.services.lane_recipes` so the UI never has to mirror
+# the constant.
+# ---------------------------------------------------------------------------
+
+
+class DefaultBundleEntryOut(BaseModel):
+    """One Play in the canonical install bundle."""
+
+    key: str
+    title: str
+    reason: str
+
+
+class DefaultBundleResponse(BaseModel):
+    bundle: list[DefaultBundleEntryOut]
+
+
+@router.get("/default-bundle", response_model=DefaultBundleResponse)
+async def get_default_bundle(
+    _: AuthContext = Depends(get_current_auth),
+) -> DefaultBundleResponse:
+    """Canonical Plays bundle installed in every new repo (Wave-8c).
+
+    Returns one entry per pattern in
+    :data:`backend.app.services.lane_recipes.DEFAULT_BUNDLE`, in the
+    bundle's display order. ``title`` falls back to the pattern key
+    when the catalog row is missing or has no ``name`` set so the UI
+    never has to render an empty cell. ``reason`` is the short blurb
+    from :data:`DEFAULT_BUNDLE_REASONS` (the wizard's source of truth).
+    """
+    by_id = {entry.id: entry for entry in catalog_service.list_patterns()}
+    out: list[DefaultBundleEntryOut] = []
+    for key in DEFAULT_BUNDLE:
+        entry = by_id.get(key)
+        title = (entry.name if entry and entry.name else key) or key
+        reason = DEFAULT_BUNDLE_REASONS.get(key, "")
+        out.append(DefaultBundleEntryOut(key=key, title=title, reason=reason))
+    return DefaultBundleResponse(bundle=out)
 
 
 @router.get("/lanes", response_model=LaneCatalogResponse)

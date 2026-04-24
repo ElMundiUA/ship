@@ -77,12 +77,12 @@ export async function POST(request: Request) {
 }
 
 function forward(origin: string, wsId: string) {
-  // Wizard v2: after the workspace-level tracker OAuth, drop the user
-  // into the per-repo configure step. That's where they pick preset,
-  // bind a tracker per repo, push agent secrets and open a seed PR —
-  // the knowledge-seed PR is rolled into that unified seed now.
+  // Wave-8c: after the workspace-level tracker OAuth, drop the user
+  // into the per-repo Confirm bootstrap step. That's where they
+  // review the canonical Plays bundle, bind a tracker / push agent
+  // secrets per repo and open the unified seed PR.
   const url = new URL("/onboarding", origin);
-  url.searchParams.set("step", "configure");
+  url.searchParams.set("step", "confirm");
   url.searchParams.set("ws", wsId);
   return NextResponse.redirect(url, 303);
 }

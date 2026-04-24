@@ -138,12 +138,12 @@ function forwardDone(origin: string, wsId: string) {
 }
 
 function wizardError(origin: string, wsId: string, code: string) {
-  // Wizard v2 collapsed the knowledge step into the per-repo configure
-  // card (the unified seed PR carries starter markdown). Legacy callers
-  // still reach this route — if they 5xx, send them to the configure
-  // step where they can retry via the per-repo "Open seed PR" button.
+  // Wave-8c collapsed the standalone knowledge step into the unified
+  // wizard_seed PR. Legacy callers still reach this route — if they
+  // 5xx, send them to the new Confirm step where they can retry via
+  // the per-repo "Open seed PR" button.
   const url = new URL("/onboarding", origin);
-  url.searchParams.set("step", "configure");
+  url.searchParams.set("step", "confirm");
   url.searchParams.set("ws", wsId);
   url.searchParams.set("error", code);
   return NextResponse.redirect(url, 303);
