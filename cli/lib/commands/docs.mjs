@@ -9,11 +9,11 @@ export async function docsCommand(ctx, args) {
   const [sub, ...rest] = args;
   if (!sub || sub === "help") {
     console.log(`Usage:
-  ship docs fetch <repo-relative-path>
-  ship docs feedback --title "..." --summary "..." [--recommendation "line"]... [--source-context "..."]
+  shipctl docs fetch <repo-relative-path>
+  shipctl docs feedback --title "..." --summary "..." [--recommendation "line"]... [--source-context "..."]
 
-Vector search:  ship search <query>
-Catalog bodies:  ship pattern|tool|collection fetch <id>
+Vector search:  shipctl search <query>
+Catalog bodies: shipctl pattern|tool|collection fetch <id>
 
 Global flags: --base-url URL  --json`);
     return;

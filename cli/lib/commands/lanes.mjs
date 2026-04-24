@@ -47,7 +47,9 @@ const DEFAULT_REUSABLE_REPO = "ship";
 const DEFAULT_REUSABLE_PATH = ".github/workflows/run-agent.yml";
 
 function printHelp() {
-  console.log(`shipctl lanes — manage GitHub Actions caller workflows.
+  console.log(`shipctl lanes — manage GitHub Actions caller workflows for the
+lanes declared in .ship/config.yml (each lane shows up as an
+Automation in the operator console; one Run is recorded per dispatch).
 
 USAGE
   shipctl lanes install [--only <id,id>] [--ref <git-ref>] [--owner <gh-owner>]

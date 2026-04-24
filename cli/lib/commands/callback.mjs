@@ -98,7 +98,7 @@ function die(code, msg) {
 }
 
 function printCallbackHelp() {
-  console.log(`shipctl callback — report a pipeline run's terminal status to Ship.
+  console.log(`shipctl callback — what a Play's pattern calls when its work is done so Ship can render an outcome-first row in the Run list and route any escalations into the Inbox.
 
 USAGE
   shipctl callback --status <ok|fail|cancelled> [--summary "..."] [--metric k=v]...
@@ -106,23 +106,32 @@ USAGE
                    [--requires-approval] [--approval-payload <@file|JSON>]
                    [--escalation TYPE:REASON]... [--findings-count N]
 
-FLAGS
+Identity
+  --run-id       Pipeline run UUID (usually set by SHIP_RUN_ID env).
+  --callback-url Full callback URL (usually set by SHIP_CALLBACK_URL env).
+  --base-url     Orchestration API base (default: SHIP_API_BASE env). Combined
+                 with --run-id to construct the URL when --callback-url absent.
+  Env:
+    SHIP_RUN_TOKEN     (required) Short-lived bearer Ship issued for this run.
+    SHIP_CALLBACK_URL  (preferred) Full URL of the result endpoint.
+    SHIP_RUN_ID        Fallback input for --run-id.
+    SHIP_API_BASE      Fallback input for --base-url.
+
+Status & summary
   --status       Terminal status. Aliases: ok|success|succeeded, fail|failed,
                  cancelled|canceled. Required.
   --summary      One-line human summary (≤1024 chars). Optional.
   --metric k=v   Structured metric to attach. Repeatable. Values coerced:
                  numbers, booleans (true|false), JSON (prefix { or [), else string.
                  Example: --metric tickets_processed=3 --metric dry_run=true
-  --run-id       Pipeline run UUID (usually set by SHIP_RUN_ID env).
-  --callback-url Full callback URL (usually set by SHIP_CALLBACK_URL env).
-  --base-url     Orchestration API base (default: SHIP_API_BASE env). Combined
-                 with --run-id to construct the URL when --callback-url absent.
   --json         Print the Ship response JSON on success.
-  --help         Show this help.
+  --help, -h     Show this help.
 
-OUTCOME FLAGS (RFC-0010 §RunSummary — emitted as the request body's "outcome" object)
+RunSummary outcome (RFC-0010 §RunSummary — emitted as the request body's "outcome" object)
   --outcome-text "..."     Pattern-authored single-line UI sentence (≤${OUTCOME_TEXT_MAX} chars,
-                           leading/trailing whitespace trimmed). Example:
+                           leading/trailing whitespace trimmed). This is what operators
+                           see in /runs — keep it concrete, no "completed successfully"
+                           filler. Example:
                              "3 issues found · 1 PR opened"
   --findings-count N       Non-negative integer total. If omitted but --severity
                            flags are present, derived from their sum.
@@ -139,31 +148,30 @@ OUTCOME FLAGS (RFC-0010 §RunSummary — emitted as the request body's "outcome"
                            JSON object to attach as outcome.approval_payload. Either
                            inline JSON or "@path/to/file.json" to load from disk.
                            Must parse to an object (not array/scalar).
-  --escalation TYPE:REASON Repeatable. Aggregated into outcome.escalations[].
-                           TYPE must be one of:
+  --escalation TYPE:REASON Repeatable. Aggregated into outcome.escalations[]. Each
+                           escalation lands in the Inbox with that type. TYPE must
+                           be one of:
                              clarification | improvement | failure | approval | exception
-
-ENV
-  SHIP_RUN_TOKEN          (required) Short-lived bearer Ship issued for this run.
-  SHIP_CALLBACK_URL       (preferred) Full URL of the result endpoint.
-  SHIP_RUN_ID             Fallback input for --run-id.
-  SHIP_API_BASE           Fallback input for --base-url.
-  SHIP_RUN_OUTCOME        Inline JSON object — used as the base outcome (CLI flags
-                          merge on top, flag values win on per-field collision).
-  SHIP_RUN_OUTCOME_FILE   Path to a JSON file with the same semantics. Useful when
-                          an agent emits a full RunSummary blob to stdout.
+  Env (alternative to per-field flags):
+    SHIP_RUN_OUTCOME       Inline JSON object — used as the base outcome (CLI flags
+                           merge on top, flag values win on per-field collision).
+    SHIP_RUN_OUTCOME_FILE  Path to a JSON file with the same semantics. Useful when
+                           an agent emits a full RunSummary blob to stdout.
 
 EXAMPLES
-  # Existing — terminal status only:
+  # Terminal status only (legacy contract):
   shipctl callback --status ok --summary "3 PRs scanned"
 
-  # New — pattern-authored outcome:
+  # Canonical pattern-authored outcome (mirrors flow-pr-self-review's "## Reporting"):
   shipctl callback --status ok \\
-    --outcome-text "3 issues found · 1 PR opened" \\
+    --outcome-text "Reviewed PR · 3 suggestions · 1 fix applied" \\
+    --findings-count 3 \\
     --severity high=1 --severity medium=2 \\
-    --artifact pr:"Fix null check":https://github.com/owner/repo/pull/42
+    --artifact comment:"PR self-review summary":"https://github.com/o/r/pull/42#issuecomment-1" \\
+    --artifact pr:"Auto-fix: null guard":"https://github.com/o/r/pull/42/commits/abc" \\
+    --escalation clarification:"Need owner sign-off on test rewrite"
 
-  # New — bulk input from agent stdout:
+  # Bulk input from agent stdout:
   SHIP_RUN_OUTCOME_FILE=./summary.json shipctl callback --status ok
 `);
 }

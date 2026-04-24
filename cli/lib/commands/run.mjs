@@ -47,7 +47,20 @@ const EXIT_IDEMPOTENCY = 4;
 const VALID_TRIGGERS = new Set(["event", "schedule", "manual", "once"]);
 
 function printHelp() {
-  console.log(`shipctl run — execute a Ship lane end-to-end.
+  console.log(`shipctl run — execute a Ship lane (Automation in the operator console).
+
+WHAT THIS COMMAND IS FOR
+  shipctl run is the **one-shot dispatch** entry point. It resolves a
+  lane from .ship/config.yml, fetches its pattern body, checks
+  idempotency, and emits the prompt for an agent to consume. Behaviour
+  by lane kind:
+    - kind: once             — executed fully here, locally.
+    - kind: lane / event /   — recognised but NOT executed locally;
+        schedule               those run via the workspace's GitHub
+                               Actions runner using the reusable
+                               .github/workflows/run-agent.yml. shipctl
+                               run exits 0 with a no-op summary so CI
+                               wrappers can wire them safely.
 
 USAGE
   shipctl run --lane <id> [--pattern <id>] [--fanout <matrix|sequential|concurrent>]
@@ -166,16 +179,18 @@ export async function runCommand(ctx, rest) {
     process.exit(EXIT_OK);
   }
 
-  /* Phase 1: only `once` executes fully today. The other kinds validate
-   * and exit 0 with a clear reason so CI wrappers can safely wire them
-   * now and we flip on behaviour in Phase 3 without re-release. */
+  /* Only `kind: once` lanes execute locally inside shipctl run. The
+   * other kinds (lane / event / schedule) are dispatched by the
+   * workspace's GitHub Actions runner via the reusable run-agent.yml
+   * workflow; here we exit 0 with a clear reason so a CI wrapper that
+   * happens to fire shipctl run for those lanes is a safe no-op. */
   if (lane.kind !== "once") {
     const summary = {
       lane: args.lane,
       kind: lane.kind,
       trigger: effectiveTrigger.trigger,
       status: "noop",
-      reason: `lane.kind=${lane.kind} is recognised but not yet wired in shipctl run (Phase 3).`,
+      reason: `shipctl run only executes 'kind: once' lanes locally. Lane '${args.lane}' is 'kind: ${lane.kind}'; it runs via the workspace's GitHub Actions runner (see .github/workflows/run-agent.yml).`,
     };
     emitSummary(ctx, args, summary);
     process.exit(EXIT_OK);
