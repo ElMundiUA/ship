@@ -9,6 +9,25 @@ front-matter, hashing) and [RFC-0004](/docs/protocol/rfc-0004-adapters)
 (adapter sections); read them before changing schema. Vocabulary like *kind*,
 *pattern*, *preset*, and *channel* is defined in [Concepts](/docs/concepts).
 
+> **Author's view vs Operator's view.** As a catalog contributor you
+> author **patterns**, **tools**, and **collections** — these are the
+> protocol nouns and they stay literal in `ARTIFACT.md`, in
+> `.ship/config.yml`, in `shipctl` output, and on this page. In the
+> operator console your work shows up under different names: a
+> `pattern` becomes a **[Play](/docs/concepts#plays)**, a Play
+> assigned to a scope with a cadence (one row in `lanes:`) becomes
+> an **[Automation](/docs/automations)**, each execution is a
+> **[Run](/docs/concepts#runs)**, and any human intervention the Play
+> requests — a clarification, an improvement, an approval, a repeated
+> failure — lands in the **[Inbox](/docs/concepts#inbox)**. The
+> mapping is fixed: one `pattern` ↔ one Play. When this page talks
+> about "the operator" or "what shows up in the Console", use the
+> operator names; when it talks about `spec:` fields, `lanes:`
+> entries, or `pattern:<id>` references, keep the protocol names.
+> See [Concepts](/docs/concepts) for the full vocabulary and
+> [RFC-0010](/docs/protocol/rfc-0010-plays-and-inbox) for the
+> normative IA.
+
 > **Before you draft a new pattern**, read
 > [Pattern vs knowledge](/docs/authoring/pattern-vs-knowledge) — the editorial
 > rubric that decides whether what you have in mind is a `pattern` or
@@ -143,9 +162,12 @@ the Pipeline flow only. Per
 [RFC-0008](/docs/protocol/rfc-0008-catalog-reform), the Pipeline picks
 the right starter from a pattern's `category` + `default_trigger`;
 override on a per-pattern basis by setting `spec.lane_workflow` in the
-pattern's frontmatter. Customer cadences live as
-[lanes](/docs/concepts#lane) in `.ship/config.yml` (v2); see
-[Lanes](/docs/lanes) for the operator surface.
+pattern's frontmatter. Customer cadences live as rows under `lanes:`
+in `.ship/config.yml` (v2) — operators see each row as an
+**[Automation](/docs/automations)** in the console; see
+[Automations](/docs/automations) for the operator surface and
+[Configuration → `lanes`](/docs/configuration#lanes) for the YAML
+schema.
 
 ### `spec` for `collection`
 
@@ -326,12 +348,18 @@ cadence:
    `artifacts/patterns/<id>/ARTIFACT.md` with the full
    [RFC-0008](/docs/protocol/rfc-0008-catalog-reform) `spec` block
    (`category`, `modes`, `default_trigger`, `inputs` when appropriate).
-2. Reference that pattern from a **lane** in the customer's
-   `.ship/config.yml` (v2); `shipctl lanes install` renders the thin
-   `.github/workflows/ship-<lane>.yml` wrapper.
+   This is the same artifact the operator will see as a **Play** in
+   the catalog.
+2. Reference that pattern from a row in `lanes:` in the customer's
+   `.ship/config.yml` (v2) — that row is an **Automation** in the
+   console; `shipctl lanes install` renders the thin
+   `.github/workflows/ship-<lane>.yml` wrapper. See
+   [Automations](/docs/automations) for the operator surface and
+   [Configuration → `lanes`](/docs/configuration#lanes) for the YAML
+   schema.
 3. If the default starter isn't right, set `spec.lane_workflow` on the
-   pattern or use the console's "Advanced → Override" on the lane
-   itself — no new catalog artifact is needed.
+   pattern or use the console's "Advanced → Override" on the
+   Automation row itself — no new catalog artifact is needed.
 
 ## Authoring a `collection`
 

@@ -9,6 +9,29 @@ Audience: anyone integrating an agent (or a human) with Ship for the first
 time on a given repo. Operators rerunning `shipctl` on a configured repo
 do not need this page — see [Operating](/docs/operating).
 
+> **First hour as an operator.** If you're not standing up a new repo
+> but landing on a workspace that is *already* running Ship, the
+> default loop is shorter and the order is fixed:
+>
+> 1. Open **[Inbox](/docs/concepts#inbox)** at `/inbox` — anything
+>    that needs you (clarifications, approvals, repeated failures,
+>    proposed improvements) is here, routed to one owner per item.
+>    Drain *Mine*; reassign or snooze the rest.
+> 2. Browse **[Plays](/docs/concepts#plays)** at `/plays` — the
+>    catalog of operational procedures organised into seven
+>    categories. **Run now** on a card if you want to see the output
+>    once; **Automate** if you want it on a cadence.
+> 3. Check **Coverage** at `/automations?tab=coverage` — sorted by
+>    uncovered count, with critical Plays badged red. *Apply to all
+>    uncovered* opens one PR per affected repo. See
+>    [Automations](/docs/automations) for the full walkthrough.
+> 4. Drop into **[Runs](/docs/concepts#runs)** at `/runs` to read
+>    outcomes and trace any escalation back to its Inbox item.
+>
+> Use this Discovery contract when you're an *agent* bringing a new
+> repo onto Ship for the first time. Use the four-step loop above
+> when you're an *operator* opening the console on a Monday morning.
+
 ## Phase 0 — machine-readable preamble (required)
 
 Before opening the interview, the agent MUST:
@@ -76,8 +99,9 @@ Before writing any file, the agent MUST follow the **artifact protocol**
 
 After installation the agent records every consumed artifact in the final
 PR description as `<kind>:<id>@<version>`, one per line. The list is paired
-with the v2 lane block that actually runs each pattern (schema v2 is the
-default for new installs; for repos still on v1, run `shipctl migrate`
+with the v2 `lanes:` block that actually runs each pattern — each row is
+an [Automation](/docs/automations) in the operator console (schema v2 is
+the default for new installs; for repos still on v1, run `shipctl migrate`
 before authoring the lane block):
 
 ```

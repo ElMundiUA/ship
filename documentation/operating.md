@@ -1,6 +1,77 @@
 # Operating
 
-Day-2 recipes for an operator running Ship in a real repository. Each scenario sequences across `shipctl` commands; for single-command syntax see [`/cli`](/cli), and for the meaning of every `.ship/config.yml` field see [Configuration](/docs/configuration). When a noun is unfamiliar (artifact, kind, channel, pin, marker), look it up once in [Concepts](/docs/concepts). Failures are not on this page — when something is broken, jump to [Troubleshooting](/docs/troubleshooting).
+Day-2 recipes for an operator running Ship in a real repository. The order on this page mirrors the order an operator actually meets the work: open the **Inbox** to see what needs you today, use **Coverage** to find Plays you should be running but aren't, then drop into the `shipctl` recipes for sync / verify / doctor / telemetry / lanes / bootstrap / secrets when you need them. For single-command syntax see [`/cli`](/cli); for the meaning of every `.ship/config.yml` field see [Configuration](/docs/configuration); when a noun is unfamiliar (Play, Automation, Run, Inbox, artifact, channel, pin, marker), look it up once in [Concepts](/docs/concepts). Failures are not on this page — when something is broken, jump to [Troubleshooting](/docs/troubleshooting).
+
+> **Vocabulary box.** When this page says **Play** it means a row in the catalog at `/plays` (a `pattern:` ref under the hood). **Automation** is a Play assigned to a scope with a cadence — one row in `lanes:` in the affected repo's `.ship/config.yml`. **Run** is a single execution of a Play. **Inbox** is the single attention surface at `/inbox`. **Coverage** is the *"how many of my activated repos have this Play assigned"* view at `/automations?tab=coverage`. The console renames `lane` → `Automation` and `pipeline_run` → `Run` for the operator surface; the YAML and the CLI keep the protocol terms unchanged. See [Concepts](/docs/concepts) for the full vocabulary.
+
+## Inbox first
+
+The default Day-2 mental model is **Inbox-first**. When you sit down to work, open `/inbox` — it tells you what needs your attention today. Everything else (Plays / Automations / Runs / Coverage) is *understanding* surfaces; Inbox is the only *action* surface. If you're trying to decide what to do next and no Inbox row is screaming, the answer is usually "review Coverage and close a gap" — not "find something else to schedule".
+
+### Drain the Inbox in the right order
+
+- **Goal:** turn a fresh-coffee Inbox view into zero-by-noon without missing a high-severity item.
+- **Steps:**
+  1. Open `/inbox?owner=me&status=new` — items routed to you, oldest first. Each row's chip shows the type (`clarification` · `improvement` · `failure` · `approval` · `exception`) and the originating Play.
+  2. Sort *failures* and *approvals* to the top — they're the ones that block someone else's Run or PR. Apply the typed disposition (Approve / Reject / Request changes for `approval`; Retry / Disable automation / Acknowledge for `failure`); reassign anything that isn't yours despite routing.
+  3. Take *clarifications* next — answering one usually unblocks a Run that's already been spent on prep.
+  4. Triage *improvements* in batch at the end. *Accept* enqueues an Automation; *Defer* parks the suggestion for the next planning cycle; *Decline* is a final disposition with a one-line reason.
+- **What to check:** `/inbox?owner=me&status=new` empties out; the *Resolved today* counter on `/inbox` matches the number of dispositions you applied.
+- **Common pitfall:** treating *snooze* as triage. Snooze is a hold; the item auto-returns. If you're using snooze to re-route, use *Reassign* instead so ownership is in the audit trail.
+
+### Reassign instead of dropping
+
+- **Goal:** move an item to the right owner when routing got it wrong, without losing the audit trail.
+- **Steps:**
+  1. Open the item. Hit *Reassign* and pick a user, or pick a [Group](/docs/concepts#routing-handles-groups-and-dispositions) — group reassignment runs the assignment strategy (`round_robin` / `oncall` / `first`) at intake and pins one user.
+  2. Add a one-line reason in the comment box; it lands on the `assigned` event in the timeline.
+  3. If you find yourself reassigning the same `(handle, repo)` pair repeatedly, the routing rule is wrong. Open `Settings → Inbox routing` and fix the rule itself — see [Troubleshooting → Inbox & routing](/docs/troubleshooting#inbox--routing).
+- **What to check:** the item's *Owner* field changes; the timeline shows your *assigned* event with the reason; the next item from the same Play and handle resolves to the new owner without bouncing.
+- **Common pitfall:** reassigning silently to keep your numbers tidy. The next operator on the same item won't know why; always leave the one-line reason.
+
+### Snooze with intent
+
+- **Goal:** hide an item until *something specific* unblocks it, without losing it.
+- **Steps:**
+  1. Hit *Snooze* on a row that genuinely depends on a future condition (a release window, an external answer, a tracker update).
+  2. Pick a duration that matches the unblocker — 4 hours for a same-day question, until-Monday for a release-week pause. The item returns to `new` automatically when `snoozed_until` passes.
+  3. If the unblocker landed early, the item is still snoozed — open `/inbox?status=snoozed` and pull it back.
+- **What to check:** `/inbox?status=snoozed&owner=me` shows the row with its return time; the row reappears at the top of `new` when the time passes.
+- **Common pitfall:** snoozing for a vague *"later"*. Snooze is a deadline you owe yourself; if you can't say what's supposed to change by then, it belongs on a backlog (Decline + open a tracker issue), not in Inbox.
+
+## Coverage-driven adoption
+
+Once Inbox is drained, the next question is always *"what should we be running that we aren't yet?"* — that's the Coverage view's only job.
+
+### Find critical-uncovered Plays
+
+- **Goal:** identify gaps where a critical Play (`scan-security-deps`, `scan-license-deps`, `flow-pr-self-review`, `flow-incident-postmortem`, `flow-release-notes`, `flow-cert-compliance`, `scan-pii-leakage`) isn't assigned everywhere it should be.
+- **Steps:**
+  1. Open `/automations?tab=coverage`. The list is sorted by uncovered count descending; critical Plays at less than full coverage carry a red badge.
+  2. Drill into a red row to see the **covered / uncovered split** — which repos have the Play assigned and which don't, with the reason ("never assigned" / "explicitly disabled" / "unsupported preset").
+  3. Scan for patterns across rows: an entire preset cluster missing the same Play usually means the preset's starter `lanes:` block doesn't include it; raise feedback against the preset.
+- **What to check:** every red row either drops to *0 uncovered* (after fanning out) or carries a justified exception (e.g. *unsupported preset* — see [Authoring → preset](/docs/authoring#authoring-a-preset) to extend the preset).
+- **Common pitfall:** filtering Coverage to *Mine* and concluding gaps don't exist — Coverage is workspace-wide on purpose, because the gaps that matter are *the ones nobody owns yet*.
+
+### Roll an Automation out across uncovered repos
+
+- **Goal:** close a Coverage gap with one wizard pass instead of editing each repo's `.ship/config.yml` by hand.
+- **Steps:**
+  1. From a Coverage drill-down row, hit **Apply to all uncovered**. The Automate wizard opens with the Play, scope (`selected: <uncovered repos>`), and a sensible default cadence pre-filled.
+  2. Review the cadence (event vs schedule) and the per-repo overrides. The wizard opens **one PR per affected repo** appending the new row to that repo's `lanes:` block.
+  3. Track the PRs from the wizard's confirmation page (or `/automations?status=pending`); each Automation appears on the page once its PR merges and the webhook lands.
+- **What to check:** the Coverage row's `N / M` ratio climbs as PRs merge; the [Automations](/docs/automations) Active tab shows the new rows with their next-run-at; `/automations?tab=coverage` re-sorts to surface the next gap.
+- **Common pitfall:** queueing one giant fan-out across dozens of repos before the first PR merges. The PRs land asynchronously; flip the wizard's *Stagger by tier* toggle when the affected set crosses ~20 repos so review load stays manageable.
+
+### Schedule a Coverage review
+
+- **Goal:** keep Coverage from drifting between adoption sweeps.
+- **Steps:**
+  1. Add an Inbox-only "Coverage review" reminder on a cadence that matches your team's planning rhythm (weekly for product engineering, monthly for platform). Today this is a recurring calendar event pointing at `/automations?tab=coverage` — there's no native scheduled-review object yet (slated for v2).
+  2. During the review, scan the red badges first, then the *uncovered count desc* list, then the per-category drill-downs. The output is *one decision per row*: assign now, defer with a tracker link, or accept the gap with a one-line justification on the row.
+  3. Cross-check the result against `/runs?has_escalations=true` — gaps in Coverage often correlate with Inbox items that the missing Play would have prevented.
+- **What to check:** every red row from the previous review either dropped to *0 uncovered* or carries a justification note; the *uncovered count desc* tail stays bounded run-over-run.
+- **Common pitfall:** waiting for Coverage to stabilise before reviewing it. Coverage is a moving target — repos activate, presets change — so the right cadence is *every iteration*, not *when it looks ready*.
 
 ## Sync & cache
 
@@ -183,9 +254,9 @@ Telemetry is opt-in and OFF by default. Nothing leaves the repo until you flip t
 - **What to check:** the dry-run shows `would flush <n> events to <your-host>/telemetry`; a real flush returns success.
 - **Common pitfall:** mixing self-hosted telemetry with the public artifact API — if `api.base_url` is your internal host, `shipctl sync` also goes there. Run a thin proxy that forwards `/patterns`, `/tools`, `/collections`, `/fetch` to `ship.elmundi.com` if you only want to intercept telemetry.
 
-## Lanes
+## Lanes (Automations on disk)
 
-Lanes (RFC-0007) are the v2 way to describe triggered automation: one entry per lane in `.ship/config.yml` under `lanes:`, plus a generated `.github/workflows/ship-<lane>.yml` wrapper per entry. The field-level reference is in [Configuration → `lanes`](/docs/configuration#lanes); this section is the day-2 recipes.
+Each [Automation](/docs/automations) you see in the console is one row under `lanes:` in the affected repo's `.ship/config.yml`, plus a generated `.github/workflows/ship-<lane>.yml` wrapper per entry. The console renames `lane` → `Automation` for the operator surface; the YAML schema is unchanged from [RFC-0007](/docs/protocol/rfc-0007-lanes-and-run-agent). The field-level reference is in [Configuration → `lanes`](/docs/configuration#lanes); the operator surface is in [Automations](/docs/automations); this section is the YAML-first day-2 recipes for when you'd rather edit `.ship/config.yml` than walk the wizard.
 
 ### Install lane wrappers after editing `.ship/config.yml`
 
@@ -345,4 +416,4 @@ Ship treats secrets as the operator's responsibility. The CLI never prompts for 
 
 ## Where to next
 
-When something on this page does not behave as described, jump to [Troubleshooting](/docs/troubleshooting) — that page is organized failure-first and maps each `shipctl` exit code to a recipe. To add a new agent, tracker, or CI to the methodology rather than just consume one, read [Authoring](/docs/authoring) and the relevant RFC under [Protocol](/docs/protocol). For the "why" behind the words on this page, [Concepts](/docs/concepts) is the glossary.
+When something on this page does not behave as described, jump to [Troubleshooting](/docs/troubleshooting) — that page is organized failure-first and maps each `shipctl` exit code to a recipe; the *Inbox & routing* section there covers fallback ownership and stuck reassignments. For the operator surfaces themselves see [Concepts](/docs/concepts) (Plays / Automations / Runs / Inbox), [Automations](/docs/automations) (the Active and Coverage tabs in detail), and [Knowledge buckets](/docs/knowledge-buckets) (what the Navigator and Plays consult). To add a new agent, tracker, or CI to the methodology rather than just consume one, read [Authoring](/docs/authoring) and the relevant RFC under [Protocol](/docs/protocol) — RFC-0010 is the normative spec for the four operator nouns.

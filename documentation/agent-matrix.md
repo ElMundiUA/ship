@@ -4,6 +4,8 @@ Reference table for the 13 agent runtimes Ship supports out of the box. For each
 
 For *how* installation works (commands, flags, ordering), see [/cli](/cli). For *why* this contract looks the way it does, see [Discovery](/docs/discovery) (the agent-side interview) and [Protocol → RFC-0001](/docs/protocol/rfc-0001-artifacts-protocol).
 
+> **Where this fits in the operator picture.** The agents below are the *runtimes* that execute a [Play](/docs/concepts#plays) when an [Automation](/docs/automations) fires (or when an operator hits **Run now**). Each execution lands in [Runs](/docs/concepts#runs); anything that needs human attention — a clarification, an approval, a repeated failure — surfaces in the [Inbox](/docs/concepts#inbox), routed by handle. The agent matrix is the *who runs the prompt*; Plays / Automations / Runs / Inbox are *what the operator sees on top of it*.
+
 ## Canonical sources
 
 | Source | Purpose |
@@ -94,6 +96,7 @@ Treat the launcher as convenience; `shipctl init` is the canonical contract.
 - Resolve artifacts via `shipctl <kind> show <id>` before applying them.
 - Record `<kind>:<id>@<version>` for every consumed artifact in the PR description.
 - Never copy artifact bodies into the repo; reference the id + version.
-- Feedback via `shipctl feedback draft` — opt-in, never auto-submitted.
+- Feedback via `shipctl feedback draft` — opt-in, never auto-submitted. Operator-facing feedback collected during a Run (the *Improvement* disposition on an Inbox item) is a separate path; see [Concepts → Inbox](/docs/concepts#inbox).
+- When a Play needs information from a human mid-run, the agent emits a `clarification` so the operator sees one Inbox item routed to a single owner; do not block the Run waiting for an answer in-channel.
 - Ask discovery questions before making assumptions; never commit secrets.
 - Run `shipctl verify` (`--no-network` is acceptable in CI) before requesting review.
