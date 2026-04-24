@@ -1,0 +1,1360 @@
+"""Per-repo intel harvest service (Wave 8a P5-03).
+
+The onboarding wizard dispatches one harvest per newly activated repo
+so future agent runs can read a structured snapshot of the project
+(languages, frameworks, entry points, commit style, …) without
+re-scanning the tree on every invocation.
+
+Pipeline shape
+--------------
+
+1. **List files.** One ``CodeHostGateway.list_files`` call returns
+   the flat path list at HEAD on the default branch.
+2. **Detect languages.** Pure extension heuristic. No tree-sitter, no
+   ``github-linguist`` — operators get a "good enough" mix that
+   answers "is this mostly Python?" without dragging in C deps.
+3. **Detect frameworks.** Read manifest files (``package.json``,
+   ``requirements.txt``, ``pyproject.toml``, ``Gemfile``,
+   ``go.mod``, ``Cargo.toml``) and look for well-known names.
+4. **Identify entry points.** A small allow-list of paths the agent
+   most often wants to find first (``main.py``, ``src/index.ts*``,
+   App-Router ``page.tsx``, Pages-Router ``_app.tsx``,
+   ``Dockerfile``, GitHub Actions workflows).
+5. **Structure summary.** Top-level dirs (capped 30) + depth p50 /
+   p95 + total file count.
+6. **Commit style.** Sample the last ~200 commits from the default
+   branch via the REST commits API and compute conventional vs.
+   freeform based on subject prefixes.
+7. **Visual tokens.** Best-effort; missing files are not failures.
+   Currently parses ``tailwind.config.*`` / ``tokens.css`` /
+   ``theme.json`` for a primary colour + font family.
+8. **Persist.** Insert a fresh ``repo_intel`` row with
+   ``version = max(prev.version) + 1`` and demote the previous
+   ``is_current`` row to ``FALSE``.
+9. **Project to knowledge bucket.** Write a human-readable
+   ``.ship/knowledge/repo-intel.md`` article into the existing
+   ``knowledge_buckets`` plumbing so agents reading the bucket see a
+   markdown summary, not just the JSONB row.
+
+What this module deliberately does NOT do
+-----------------------------------------
+
+- It does not embed the markdown summary. The KB indexer picks it
+  up on its next run.
+- It does not crawl arbitrary deep heuristics — every step is a
+  cheap, deterministic pass over already-fetched bytes.
+- It does not raise on harvest failures (network, parse). Per-step
+  errors are swallowed into the report; an outer failure is
+  recorded on the row via ``harvest_error`` so retries are honest
+  about prior attempts.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+import logging
+import re
+import time
+import uuid
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any
+
+import httpx
+from sqlalchemy import and_, func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from backend.app.core.config import Settings, get_settings
+from backend.app.db.models.agent_memory import (
+    BucketArticle,
+    BucketArticleStatus,
+    BucketScope,
+    BucketSource,
+    KnowledgeBucket,
+)
+from backend.app.db.models.integrations import GitHubInstallation, WorkspaceRepo
+from backend.app.db.models.repo_intel import RepoIntel, RepoIntelTriggeredBy
+from backend.app.integrations.gateway.code_host import (
+    BlobContent,
+    CodeHostGateway,
+    RepoRef,
+)
+from backend.app.integrations.github.code_host_adapter import GitHubCodeHost
+
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Public surface
+# ---------------------------------------------------------------------------
+
+
+# Caller-injectable hook so tests can stub the GitHub commits API
+# without monkey-patching httpx. Each item is a dict with at least
+# ``{"sha": str, "message": str}``; extra keys are ignored.
+CommitFetcher = Callable[
+    [RepoRef, str | None, int],
+    Awaitable[list[dict[str, Any]]],
+]
+
+
+@dataclass(frozen=True, slots=True)
+class HarvestReport:
+    """Caller-visible summary of one ``harvest_repo_intel`` invocation.
+
+    All counts are best-effort. ``files_examined`` reflects the size
+    of the tree we actually walked (post-cap), not the number of
+    files in the repo.
+    """
+
+    intel_id: uuid.UUID
+    version: int
+    duration_ms: int
+    files_examined: int
+    languages_detected: int
+    knowledge_articles_written: int
+
+
+# ---------------------------------------------------------------------------
+# Tunables
+# ---------------------------------------------------------------------------
+
+
+# Defensive caps so a runaway monorepo can't wedge the harvest. The
+# numbers are calibrated to be comfortably above a typical repo
+# (Linux kernel-shaped repos are explicitly out of scope for the
+# wizard) without letting one tenant burn the worker's wall-clock.
+_MAX_FILES: int = 5_000
+_MAX_BLOB_BYTES: int = 256 * 1024
+_TOP_LEVEL_DIRS_CAP: int = 30
+_COMMIT_SAMPLE_SIZE: int = 200
+
+# Conventional-commit detection: if more than this fraction of sampled
+# subjects match ``<type>(<scope>)?(!)?: ``, declare the repo
+# conventional. Tuned to match real-world repos that have a small
+# legacy tail of pre-convention commits.
+_CONVENTIONAL_THRESHOLD: float = 0.5
+
+# Bucket / article slugs the project surfaces under.
+_INTEL_BUCKET_SLUG: str = "repo-intel"
+_INTEL_ARTICLE_PATH: str = ".ship/knowledge/repo-intel.md"
+_ARTICLE_SLUG_MAIN: str = "main"
+
+
+# ---------------------------------------------------------------------------
+# Static lookup tables
+# ---------------------------------------------------------------------------
+
+
+# Extension → canonical language. Only "code" extensions are weighted
+# in the language ratio so configuration files (yaml, json) and
+# documentation (md) don't dominate small projects. Add
+# advisedly — every key here ships with downstream consumers.
+_LANG_BY_EXT: dict[str, str] = {
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".js": "javascript",
+    ".jsx": "javascript",
+    ".mjs": "javascript",
+    ".cjs": "javascript",
+    ".py": "python",
+    ".pyi": "python",
+    ".go": "go",
+    ".rs": "rust",
+    ".rb": "ruby",
+    ".java": "java",
+    ".kt": "kotlin",
+    ".kts": "kotlin",
+    ".swift": "swift",
+    ".cs": "csharp",
+    ".cpp": "cpp",
+    ".cc": "cpp",
+    ".cxx": "cpp",
+    ".hpp": "cpp",
+    ".hxx": "cpp",
+    ".c": "c",
+    ".h": "c",
+    ".scala": "scala",
+    ".php": "php",
+    ".sh": "shell",
+    ".bash": "shell",
+    ".zsh": "shell",
+    ".lua": "lua",
+    ".dart": "dart",
+}
+
+
+# Manifest file → ``(canonical-framework, package-manager)``.
+# Multiple manifests can contribute to the same project (e.g. a
+# Python+JS monorepo), so we union per-source results.
+_PYTHON_FRAMEWORKS: dict[str, str] = {
+    "fastapi": "fastapi",
+    "django": "django",
+    "flask": "flask",
+    "starlette": "starlette",
+    "tornado": "tornado",
+    "pyramid": "pyramid",
+    "sanic": "sanic",
+    "litestar": "litestar",
+}
+
+_JS_FRAMEWORKS: dict[str, str] = {
+    "next": "next.js",
+    "react": "react",
+    "vue": "vue",
+    "nuxt": "nuxt",
+    "svelte": "svelte",
+    "remix": "remix",
+    "express": "express",
+    "@nestjs/core": "nestjs",
+    "vite": "vite",
+    "tailwindcss": "tailwindcss",
+    "astro": "astro",
+}
+
+_RUBY_FRAMEWORKS: dict[str, str] = {
+    "rails": "rails",
+    "sinatra": "sinatra",
+}
+
+_GO_FRAMEWORKS: dict[str, str] = {
+    "github.com/gin-gonic/gin": "gin",
+    "github.com/labstack/echo": "echo",
+    "github.com/gofiber/fiber": "fiber",
+    "github.com/go-chi/chi": "chi",
+}
+
+_RUST_FRAMEWORKS: dict[str, str] = {
+    "actix-web": "actix-web",
+    "rocket": "rocket",
+    "axum": "axum",
+    "warp": "warp",
+}
+
+_CONVENTIONAL_TYPES: tuple[str, ...] = (
+    "feat",
+    "fix",
+    "chore",
+    "docs",
+    "refactor",
+    "test",
+    "ci",
+    "perf",
+    "build",
+    "style",
+    "revert",
+)
+_CONVENTIONAL_RE = re.compile(
+    r"^(?P<type>[a-z]+)(?:\([^)]+\))?(?:!)?:\s+\S",
+)
+
+
+# ---------------------------------------------------------------------------
+# harvest_repo_intel — top-level orchestration
+# ---------------------------------------------------------------------------
+
+
+async def harvest_repo_intel(
+    *,
+    session: AsyncSession,
+    workspace_id: uuid.UUID,
+    repo_id: uuid.UUID,
+    triggered_by: str = RepoIntelTriggeredBy.WIZARD,
+    settings: Settings | None = None,
+    gateway: CodeHostGateway | None = None,
+    commit_fetcher: CommitFetcher | None = None,
+    http_client: httpx.AsyncClient | None = None,
+) -> HarvestReport:
+    """Run a full intel harvest synchronously and persist the result.
+
+    Looks up the repo + installation, runs the harvest pipeline, marks
+    any prior ``is_current=TRUE`` row as superseded, inserts the fresh
+    row, and writes the markdown projection into the
+    ``knowledge_buckets`` system.
+
+    Per-step errors are swallowed into the report. An outer failure
+    (network, auth) is logged on the row in ``harvest_error`` so a
+    later observer can tell "the heuristic produced empty data" apart
+    from "we never got off the ground".
+    """
+    started_at = time.monotonic()
+
+    repo = await session.get(WorkspaceRepo, repo_id)
+    if repo is None or repo.workspace_id != workspace_id:
+        raise ValueError(
+            f"WorkspaceRepo {repo_id} not found for workspace {workspace_id}"
+        )
+
+    s = settings or get_settings()
+    install = await _load_install(session, repo)
+    gw = gateway or (
+        GitHubCodeHost(install.installation_id, settings=s, client=http_client)
+        if install is not None
+        else None
+    )
+    if gw is None:
+        raise ValueError(
+            f"WorkspaceRepo {repo_id} has no installation; cannot harvest"
+        )
+    fetch_commits = commit_fetcher or _default_commit_fetcher(
+        install=install,
+        settings=s,
+        client=http_client,
+    )
+
+    owner, name = _owner_repo(repo)
+    ref = RepoRef(kind="github", owner=owner, repo=name)
+
+    languages: dict[str, float] = {}
+    frameworks: list[str] = []
+    package_managers: list[str] = []
+    entry_points: list[dict[str, Any]] = []
+    structure: dict[str, Any] = {}
+    commit_style: dict[str, Any] = {}
+    visual_tokens: dict[str, Any] = {}
+    files_examined: int = 0
+    error_text: str | None = None
+
+    try:
+        all_paths = await gw.list_files(
+            ref, ref_sha=repo.default_branch or None
+        )
+        if len(all_paths) > _MAX_FILES:
+            logger.warning(
+                "repo %s has %d paths, intel harvest capped at %d",
+                repo.full_name,
+                len(all_paths),
+                _MAX_FILES,
+            )
+            all_paths = all_paths[:_MAX_FILES]
+        files_examined = len(all_paths)
+
+        languages = _detect_languages(all_paths)
+        package_managers = _detect_package_managers(all_paths)
+        entry_points = _detect_entry_points(all_paths)
+        structure = _summarise_structure(all_paths)
+
+        frameworks = await _detect_frameworks(
+            gw, ref=ref, repo=repo, paths=all_paths
+        )
+        commit_style = await _detect_commit_style(
+            ref=ref, branch=repo.default_branch or None, fetcher=fetch_commits
+        )
+        visual_tokens = await _detect_visual_tokens(
+            gw, ref=ref, repo=repo, paths=all_paths
+        )
+    except Exception as exc:  # noqa: BLE001 — recorded, not raised
+        logger.exception(
+            "repo_intel harvest failed for repo=%s", repo_id
+        )
+        error_text = f"{type(exc).__name__}: {exc}"
+
+    duration_ms = int((time.monotonic() - started_at) * 1000)
+
+    next_version = await _next_version(session, repo_id=repo_id)
+    await _demote_current(session, repo_id=repo_id)
+
+    row = RepoIntel(
+        id=uuid.uuid4(),
+        workspace_id=workspace_id,
+        repo_id=repo_id,
+        version=next_version,
+        is_current=True,
+        languages=languages,
+        frameworks=frameworks,
+        package_managers=package_managers,
+        entry_points=entry_points,
+        structure=structure,
+        commit_style=commit_style,
+        visual_tokens=visual_tokens,
+        harvested_by=triggered_by,
+        harvest_duration_ms=duration_ms,
+        harvest_error=error_text,
+    )
+    session.add(row)
+    await session.flush()
+
+    articles_written = 0
+    if error_text is None:
+        articles_written = await _write_intel_markdown(
+            session,
+            repo=repo,
+            intel=row,
+        )
+
+    await session.flush()
+
+    return HarvestReport(
+        intel_id=row.id,
+        version=next_version,
+        duration_ms=duration_ms,
+        files_examined=files_examined,
+        languages_detected=len(languages),
+        knowledge_articles_written=articles_written,
+    )
+
+
+async def get_current_intel(
+    session: AsyncSession, repo_id: uuid.UUID
+) -> RepoIntel | None:
+    """Return the live :class:`RepoIntel` row for ``repo_id`` or ``None``.
+
+    "Live" means ``is_current=TRUE``. Callers that need history can
+    query the table directly with an ``ORDER BY version DESC`` —
+    intentionally not exposed here so the resolver path stays the
+    obvious "latest snapshot" one-liner.
+    """
+    return (
+        await session.execute(
+            select(RepoIntel).where(
+                RepoIntel.repo_id == repo_id,
+                RepoIntel.is_current.is_(True),
+            )
+        )
+    ).scalars().first()
+
+
+async def enqueue_harvest(
+    redis_pool: Any,
+    workspace_id: uuid.UUID,
+    repo_id: uuid.UUID,
+    triggered_by: str = RepoIntelTriggeredBy.WIZARD,
+) -> None:
+    """Schedule a harvest, falling back to inline execution in dev.
+
+    When ``redis_pool`` is non-None we hand the job off to arq via
+    ``enqueue_job("harvest_repo_intel_job", ...)``. The worker picks
+    it up out-of-process so the request that triggered it returns
+    promptly.
+
+    When ``redis_pool`` is ``None`` (no worker configured in this
+    deploy — typical of local dev where the operator skipped the
+    ``--profile worker`` opt-in) we instead run the harvest INLINE
+    via ``asyncio.create_task``. The task opens its own session
+    against the configured engine and commits when done; the caller
+    does not block on it. Errors land in the worker logger same as
+    the queued path.
+    """
+    job_id = f"harvest:{repo_id}:{int(time.time())}"
+
+    if redis_pool is not None:
+        await redis_pool.enqueue_job(
+            "harvest_repo_intel_job",
+            str(workspace_id),
+            str(repo_id),
+            triggered_by,
+            _job_id=job_id,
+        )
+        return
+
+    # Inline fallback. We deliberately don't await — the caller (a
+    # request handler) shouldn't block on a multi-second harvest.
+    asyncio.create_task(
+        _inline_harvest(workspace_id, repo_id, triggered_by),
+        name=job_id,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Persistence helpers
+# ---------------------------------------------------------------------------
+
+
+async def _next_version(
+    session: AsyncSession, *, repo_id: uuid.UUID
+) -> int:
+    max_prev = (
+        await session.execute(
+            select(func.max(RepoIntel.version)).where(
+                RepoIntel.repo_id == repo_id
+            )
+        )
+    ).scalar()
+    return (int(max_prev) if max_prev is not None else 0) + 1
+
+
+async def _demote_current(
+    session: AsyncSession, *, repo_id: uuid.UUID
+) -> None:
+    """Flip the existing live row (if any) to ``is_current=FALSE``.
+
+    Done as a single ``UPDATE`` rather than load-then-mutate so the
+    partial unique index ``idx_repo_intel_repo_current`` never sees a
+    transient two-current-rows state inside the same flush.
+    """
+    await session.execute(
+        update(RepoIntel)
+        .where(
+            and_(
+                RepoIntel.repo_id == repo_id,
+                RepoIntel.is_current.is_(True),
+            )
+        )
+        .values(is_current=False)
+    )
+
+
+async def _load_install(
+    session: AsyncSession, repo: WorkspaceRepo
+) -> GitHubInstallation | None:
+    if repo.installation_id is None:
+        return None
+    return await session.get(GitHubInstallation, repo.installation_id)
+
+
+def _owner_repo(repo: WorkspaceRepo) -> tuple[str, str]:
+    owner, _, name = (repo.full_name or "").partition("/")
+    if not owner or not name:
+        raise ValueError(
+            f"WorkspaceRepo.full_name {repo.full_name!r} is not owner/repo"
+        )
+    return owner, name
+
+
+# ---------------------------------------------------------------------------
+# Step 2 — language detection
+# ---------------------------------------------------------------------------
+
+
+def _detect_languages(paths: list[str]) -> dict[str, float]:
+    """Return ``{language: ratio}`` summed to ~1.0 across code files.
+
+    Pure extension heuristic — see the module docstring for why we're
+    not pulling in ``github-linguist``. Files with extensions outside
+    :data:`_LANG_BY_EXT` are ignored. If no code files are found we
+    return an empty dict rather than zero-everywhere.
+    """
+    counts: dict[str, int] = {}
+    for path in paths:
+        ext = _ext(path)
+        lang = _LANG_BY_EXT.get(ext)
+        if lang is None:
+            continue
+        counts[lang] = counts.get(lang, 0) + 1
+    total = sum(counts.values())
+    if total == 0:
+        return {}
+    return {
+        lang: round(count / total, 4)
+        for lang, count in sorted(
+            counts.items(), key=lambda kv: kv[1], reverse=True
+        )
+    }
+
+
+def _ext(path: str) -> str:
+    base = path.rsplit("/", 1)[-1]
+    if "." not in base:
+        return ""
+    return "." + base.rsplit(".", 1)[-1].lower()
+
+
+# ---------------------------------------------------------------------------
+# Step 3 — framework detection
+# ---------------------------------------------------------------------------
+
+
+async def _detect_frameworks(
+    gw: CodeHostGateway,
+    *,
+    ref: RepoRef,
+    repo: WorkspaceRepo,
+    paths: list[str],
+) -> list[str]:
+    """Read manifest files and return the canonical framework names found.
+
+    Each manifest is best-effort: a parse failure on one manifest
+    doesn't kill the others. Duplicate framework names are
+    de-duplicated; the order reflects discovery order so the caller
+    can show "primary first" without a separate ranking pass.
+    """
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def _add(name: str) -> None:
+        if name in seen:
+            return
+        seen.add(name)
+        found.append(name)
+
+    paths_set = set(paths)
+
+    # JavaScript / TypeScript via package.json (root only — nested
+    # workspace package.json parsing is out of scope for the harvest).
+    if "package.json" in paths_set:
+        body = await _read_text(gw, ref=ref, repo=repo, path="package.json")
+        if body is not None:
+            for name in _frameworks_from_package_json(body):
+                _add(name)
+
+    # Python via pyproject.toml + requirements.txt.
+    if "pyproject.toml" in paths_set:
+        body = await _read_text(
+            gw, ref=ref, repo=repo, path="pyproject.toml"
+        )
+        if body is not None:
+            for name in _frameworks_from_pyproject(body):
+                _add(name)
+    if "requirements.txt" in paths_set:
+        body = await _read_text(
+            gw, ref=ref, repo=repo, path="requirements.txt"
+        )
+        if body is not None:
+            for name in _frameworks_from_requirements(body):
+                _add(name)
+
+    # Ruby via Gemfile.
+    if "Gemfile" in paths_set:
+        body = await _read_text(gw, ref=ref, repo=repo, path="Gemfile")
+        if body is not None:
+            for name in _frameworks_from_gemfile(body):
+                _add(name)
+
+    # Go via go.mod.
+    if "go.mod" in paths_set:
+        body = await _read_text(gw, ref=ref, repo=repo, path="go.mod")
+        if body is not None:
+            for name in _frameworks_from_go_mod(body):
+                _add(name)
+
+    # Rust via Cargo.toml.
+    if "Cargo.toml" in paths_set:
+        body = await _read_text(gw, ref=ref, repo=repo, path="Cargo.toml")
+        if body is not None:
+            for name in _frameworks_from_cargo(body):
+                _add(name)
+
+    return found
+
+
+def _frameworks_from_package_json(body: str) -> list[str]:
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(data, dict):
+        return []
+    deps: dict[str, Any] = {}
+    for key in ("dependencies", "devDependencies", "peerDependencies"):
+        section = data.get(key)
+        if isinstance(section, dict):
+            deps.update(section)
+    out: list[str] = []
+    for dep_name in deps:
+        canonical = _JS_FRAMEWORKS.get(dep_name)
+        if canonical is not None:
+            out.append(canonical)
+    return out
+
+
+def _frameworks_from_pyproject(body: str) -> list[str]:
+    """Match Python framework names against ``[project] dependencies``.
+
+    We scan the raw text rather than parsing TOML to avoid pulling in
+    ``tomllib`` import-time edge cases on older interpreters and to
+    stay forgiving of malformed manifests. The match is "framework
+    name appears as a token" — false positives are acceptable; this
+    drives the agent's framing, not auth.
+    """
+    return _scan_for_known(body, _PYTHON_FRAMEWORKS)
+
+
+def _frameworks_from_requirements(body: str) -> list[str]:
+    out: list[str] = []
+    for raw in body.splitlines():
+        line = raw.strip().split("#", 1)[0].strip()
+        if not line:
+            continue
+        # Strip extras / version specifiers ("fastapi[all]>=0.110").
+        token = re.split(r"[\s\[<>=!~;]", line, maxsplit=1)[0].lower()
+        canonical = _PYTHON_FRAMEWORKS.get(token)
+        if canonical is not None and canonical not in out:
+            out.append(canonical)
+    return out
+
+
+def _frameworks_from_gemfile(body: str) -> list[str]:
+    return _scan_for_known(body, _RUBY_FRAMEWORKS)
+
+
+def _frameworks_from_go_mod(body: str) -> list[str]:
+    return _scan_for_known(body, _GO_FRAMEWORKS)
+
+
+def _frameworks_from_cargo(body: str) -> list[str]:
+    return _scan_for_known(body, _RUST_FRAMEWORKS)
+
+
+def _scan_for_known(body: str, table: dict[str, str]) -> list[str]:
+    """Return canonical names from ``table`` whose key appears in ``body``.
+
+    Match is substring-based against a lowercased copy. Order
+    follows ``table.values()`` for determinism, with duplicates
+    suppressed.
+    """
+    needle = body.lower()
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw, canonical in table.items():
+        if raw.lower() in needle and canonical not in seen:
+            seen.add(canonical)
+            out.append(canonical)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Step 4 — entry-point detection
+# ---------------------------------------------------------------------------
+
+
+def _detect_entry_points(paths: list[str]) -> list[dict[str, Any]]:
+    """Return a small ordered list of "what would I open first" paths.
+
+    Order matters: agents rendering this list want the most diagnostic
+    entry first. App-Router pages beat Pages-Router fallbacks, server
+    entrypoints beat infra, infra beats CI definitions.
+    """
+    paths_set = set(paths)
+    out: list[dict[str, Any]] = []
+
+    def _push(path: str, kind: str) -> None:
+        out.append({"path": path, "kind": kind})
+
+    # Frontend entries — App Router wins over Pages Router by design.
+    for candidate in (
+        "app/page.tsx",
+        "app/page.jsx",
+        "src/app/page.tsx",
+        "console/src/app/page.tsx",
+    ):
+        if candidate in paths_set:
+            _push(candidate, "page")
+            break
+    if not any(e["kind"] == "page" for e in out):
+        for candidate in ("pages/_app.tsx", "pages/_app.jsx", "src/pages/_app.tsx"):
+            if candidate in paths_set:
+                _push(candidate, "page")
+                break
+
+    # Library / app entry points (TS/JS, Python).
+    for candidate in (
+        "src/index.tsx",
+        "src/index.ts",
+        "src/index.jsx",
+        "src/index.js",
+        "index.ts",
+        "index.js",
+    ):
+        if candidate in paths_set:
+            _push(candidate, "module")
+            break
+
+    if "main.py" in paths_set:
+        _push("main.py", "module")
+    elif "app.py" in paths_set:
+        _push("app.py", "module")
+
+    if "Dockerfile" in paths_set:
+        _push("Dockerfile", "container")
+
+    workflow_paths = sorted(
+        p for p in paths_set
+        if p.startswith(".github/workflows/") and (
+            p.endswith(".yml") or p.endswith(".yaml")
+        )
+    )
+    for wf in workflow_paths[:5]:
+        _push(wf, "workflow")
+
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Step 5 — structure summary
+# ---------------------------------------------------------------------------
+
+
+def _summarise_structure(paths: list[str]) -> dict[str, Any]:
+    """Return ``{top_level_dirs, depth_p50, depth_p95, file_count}``."""
+    top_level: list[str] = []
+    seen_top: set[str] = set()
+    depths: list[int] = []
+    for path in paths:
+        parts = path.split("/")
+        if len(parts) >= 2 and parts[0] not in seen_top:
+            seen_top.add(parts[0])
+            top_level.append(parts[0])
+        depths.append(max(0, len(parts) - 1))
+
+    top_level.sort()
+    if len(top_level) > _TOP_LEVEL_DIRS_CAP:
+        top_level = top_level[:_TOP_LEVEL_DIRS_CAP]
+
+    return {
+        "top_level_dirs": top_level,
+        "depth_p50": _percentile(depths, 0.5),
+        "depth_p95": _percentile(depths, 0.95),
+        "file_count": len(paths),
+    }
+
+
+def _percentile(values: list[int], q: float) -> int:
+    if not values:
+        return 0
+    ordered = sorted(values)
+    idx = int(round(q * (len(ordered) - 1)))
+    return ordered[max(0, min(idx, len(ordered) - 1))]
+
+
+# ---------------------------------------------------------------------------
+# Step 6 — commit-style detection
+# ---------------------------------------------------------------------------
+
+
+async def _detect_commit_style(
+    *,
+    ref: RepoRef,
+    branch: str | None,
+    fetcher: CommitFetcher,
+) -> dict[str, Any]:
+    """Sample recent commits and decide conventional-vs-freeform."""
+    try:
+        commits = await fetcher(ref, branch, _COMMIT_SAMPLE_SIZE)
+    except Exception as exc:  # noqa: BLE001 — best-effort step
+        logger.warning("commit fetch failed for %s: %s", ref.full_name, exc)
+        return {"convention": "unknown", "samples": 0, "error": str(exc)}
+
+    subjects: list[str] = []
+    for commit in commits:
+        message = commit.get("message") if isinstance(commit, dict) else None
+        if not isinstance(message, str):
+            continue
+        subject = message.splitlines()[0].strip()
+        if subject:
+            subjects.append(subject)
+
+    if not subjects:
+        return {"convention": "unknown", "samples": 0}
+
+    matched_types: dict[str, int] = {}
+    matches = 0
+    for subject in subjects:
+        m = _CONVENTIONAL_RE.match(subject)
+        if m is None:
+            continue
+        prefix = m.group("type").lower()
+        if prefix not in _CONVENTIONAL_TYPES:
+            continue
+        matches += 1
+        matched_types[prefix] = matched_types.get(prefix, 0) + 1
+
+    ratio = matches / len(subjects)
+    convention = (
+        "conventional" if ratio >= _CONVENTIONAL_THRESHOLD else "freeform"
+    )
+    common_types = [
+        t for t, _ in sorted(
+            matched_types.items(), key=lambda kv: kv[1], reverse=True
+        )
+    ][:5]
+    avg_subject_len = round(
+        sum(len(s) for s in subjects) / len(subjects), 1
+    )
+
+    return {
+        "convention": convention,
+        "common_types": common_types,
+        "avg_subject_len": avg_subject_len,
+        "samples": len(subjects),
+        "match_ratio": round(ratio, 3),
+    }
+
+
+def _default_commit_fetcher(
+    *,
+    install: GitHubInstallation | None,
+    settings: Settings,
+    client: httpx.AsyncClient | None,
+) -> CommitFetcher:
+    """Build a ``CommitFetcher`` backed by GitHub's REST commits API.
+
+    The closure captures the installation token machinery so step 6
+    can fan out without juggling adapters. Keeps the public service
+    signature untouched for tests, which inject their own fetcher.
+    """
+    from backend.app.integrations.github.app_auth import (
+        GITHUB_API_BASE,
+        fetch_installation_token,
+    )
+
+    async def _fetch(
+        ref: RepoRef, branch: str | None, count: int
+    ) -> list[dict[str, Any]]:
+        if install is None:
+            return []
+        token = await fetch_installation_token(
+            install.installation_id, settings=settings, client=client
+        )
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        params = {"per_page": min(count, 100)}
+        if branch:
+            params["sha"] = branch
+        owns_client = client is None
+        http = client or httpx.AsyncClient(timeout=httpx.Timeout(10.0))
+        try:
+            response = await http.get(
+                f"{GITHUB_API_BASE}"
+                f"/repos/{ref.owner}/{ref.repo}/commits",
+                headers=headers,
+                params=params,
+            )
+        finally:
+            if owns_client:
+                await http.aclose()
+        response.raise_for_status()
+        out: list[dict[str, Any]] = []
+        for item in response.json() or []:
+            commit = item.get("commit") or {}
+            out.append(
+                {
+                    "sha": item.get("sha"),
+                    "message": commit.get("message"),
+                }
+            )
+        return out
+
+    return _fetch
+
+
+# ---------------------------------------------------------------------------
+# Step 7 — package-manager detection
+# ---------------------------------------------------------------------------
+
+
+def _detect_package_managers(paths: list[str]) -> list[str]:
+    """Infer package managers from manifest + lockfile presence."""
+    out: list[str] = []
+    seen: set[str] = set()
+    paths_set = set(paths)
+
+    def _add(name: str) -> None:
+        if name in seen:
+            return
+        seen.add(name)
+        out.append(name)
+
+    if "package.json" in paths_set:
+        # Lockfile beats default for the JS ecosystem.
+        if "pnpm-lock.yaml" in paths_set:
+            _add("pnpm")
+        elif "yarn.lock" in paths_set:
+            _add("yarn")
+        elif "bun.lockb" in paths_set or "bun.lock" in paths_set:
+            _add("bun")
+        elif "package-lock.json" in paths_set:
+            _add("npm")
+        else:
+            _add("npm")
+
+    if "pyproject.toml" in paths_set:
+        if "uv.lock" in paths_set:
+            _add("uv")
+        elif "poetry.lock" in paths_set:
+            _add("poetry")
+        else:
+            _add("pip")
+    elif "requirements.txt" in paths_set:
+        _add("pip")
+
+    if "Gemfile" in paths_set:
+        _add("bundler")
+    if "go.mod" in paths_set:
+        _add("go-modules")
+    if "Cargo.toml" in paths_set:
+        _add("cargo")
+
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Step 7 (bis) — visual tokens (best-effort; frontend repos)
+# ---------------------------------------------------------------------------
+
+
+_TAILWIND_PRIMARY_RE = re.compile(
+    r"primary\s*[:=]\s*['\"]?(#[0-9a-fA-F]{3,8})['\"]?"
+)
+_TAILWIND_FONT_RE = re.compile(
+    r"fontFamily\s*[:=]\s*\{[^}]*?(?:sans|primary)[\s:]*\[\s*['\"]([^'\"]+)['\"]"
+)
+_CSS_PRIMARY_RE = re.compile(
+    r"--(?:color-)?primary\s*:\s*(#[0-9a-fA-F]{3,8})"
+)
+_CSS_FONT_RE = re.compile(
+    r"--font(?:-family|-primary)?\s*:\s*([^;]+);"
+)
+
+
+async def _detect_visual_tokens(
+    gw: CodeHostGateway,
+    *,
+    ref: RepoRef,
+    repo: WorkspaceRepo,
+    paths: list[str],
+) -> dict[str, Any]:
+    """Best-effort visual-tokens probe. Returns ``{}`` when nothing matches.
+
+    Searches a handful of well-known token sources. Each parse is
+    best-effort — a malformed file does not raise.
+    """
+    paths_set = set(paths)
+    candidates = [
+        "tailwind.config.ts",
+        "tailwind.config.js",
+        "tailwind.config.cjs",
+        "tailwind.config.mjs",
+        "console/tailwind.config.ts",
+        "console/tailwind.config.js",
+    ]
+
+    out: dict[str, Any] = {}
+    for path in candidates:
+        if path not in paths_set:
+            continue
+        body = await _read_text(gw, ref=ref, repo=repo, path=path)
+        if body is None:
+            continue
+        m = _TAILWIND_PRIMARY_RE.search(body)
+        if m and "primary_color" not in out:
+            out["primary_color"] = m.group(1)
+        f = _TAILWIND_FONT_RE.search(body)
+        if f and "font_family" not in out:
+            out["font_family"] = f.group(1)
+        if "primary_color" in out and "font_family" in out:
+            return out
+
+    for path in ("tokens.css", "styles/tokens.css", "src/tokens.css"):
+        if path not in paths_set:
+            continue
+        body = await _read_text(gw, ref=ref, repo=repo, path=path)
+        if body is None:
+            continue
+        m = _CSS_PRIMARY_RE.search(body)
+        if m and "primary_color" not in out:
+            out["primary_color"] = m.group(1)
+        f = _CSS_FONT_RE.search(body)
+        if f and "font_family" not in out:
+            out["font_family"] = f.group(1).strip().split(",", 1)[0].strip(
+                "\"' "
+            )
+
+    if "theme.json" in paths_set:
+        body = await _read_text(gw, ref=ref, repo=repo, path="theme.json")
+        if body is not None:
+            try:
+                data = json.loads(body)
+                if isinstance(data, dict):
+                    primary = data.get("primary_color") or data.get(
+                        "primaryColor"
+                    )
+                    if isinstance(primary, str) and "primary_color" not in out:
+                        out["primary_color"] = primary
+                    font = data.get("font_family") or data.get("fontFamily")
+                    if isinstance(font, str) and "font_family" not in out:
+                        out["font_family"] = font
+            except json.JSONDecodeError:
+                pass
+
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Step 9 — markdown projection into knowledge_buckets
+# ---------------------------------------------------------------------------
+
+
+async def _write_intel_markdown(
+    session: AsyncSession,
+    *,
+    repo: WorkspaceRepo,
+    intel: RepoIntel,
+) -> int:
+    """Project ``intel`` to a markdown article in the repo's KB bucket.
+
+    Returns the number of articles written (0 or 1). The bucket is
+    auto-created on first call so the wizard does not have to seed
+    it. If the article body is byte-identical to the current
+    published row we no-op and return 0.
+    """
+    bucket = await _get_or_create_intel_bucket(session, repo=repo)
+    body = _render_intel_markdown(intel=intel, repo=repo)
+    content_sha = hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+    current = (
+        await session.execute(
+            select(BucketArticle).where(
+                BucketArticle.bucket_id == bucket.id,
+                BucketArticle.slug == _ARTICLE_SLUG_MAIN,
+                BucketArticle.status == BucketArticleStatus.PUBLISHED,
+            )
+        )
+    ).scalars().first()
+
+    if current is not None and current.content_sha == content_sha:
+        return 0
+
+    if current is not None:
+        current.status = BucketArticleStatus.SUPERSEDED
+        next_version = current.version + 1
+        supersedes_id: uuid.UUID | None = current.id
+    else:
+        supersedes_id = None
+        max_prev = (
+            await session.execute(
+                select(func.max(BucketArticle.version)).where(
+                    BucketArticle.bucket_id == bucket.id,
+                    BucketArticle.slug == _ARTICLE_SLUG_MAIN,
+                )
+            )
+        ).scalar()
+        next_version = (int(max_prev) if max_prev is not None else 0) + 1
+
+    article = BucketArticle(
+        id=uuid.uuid4(),
+        bucket_id=bucket.id,
+        slug=_ARTICLE_SLUG_MAIN,
+        title="Repo intel",
+        body_md=body,
+        content_sha=content_sha,
+        version=next_version,
+        status=BucketArticleStatus.PUBLISHED,
+        supersedes_id=supersedes_id,
+        provenance={
+            "source_kind": BucketSource.REPO_FILES,
+            "harvest": "repo_intel",
+            "intel_id": str(intel.id),
+            "version": next_version,
+            "path": _INTEL_ARTICLE_PATH,
+        },
+    )
+    session.add(article)
+    return 1
+
+
+async def _get_or_create_intel_bucket(
+    session: AsyncSession, *, repo: WorkspaceRepo
+) -> KnowledgeBucket:
+    existing = (
+        await session.execute(
+            select(KnowledgeBucket).where(
+                and_(
+                    KnowledgeBucket.workspace_id == repo.workspace_id,
+                    KnowledgeBucket.repo_id == repo.id,
+                    KnowledgeBucket.scope_kind == BucketScope.REPO,
+                    KnowledgeBucket.source_kind == BucketSource.REPO_FILES,
+                    KnowledgeBucket.slug == _INTEL_BUCKET_SLUG,
+                )
+            )
+        )
+    ).scalars().first()
+    if existing is not None:
+        if existing.archived_at is not None:
+            existing.archived_at = None
+        return existing
+
+    bucket = KnowledgeBucket(
+        id=uuid.uuid4(),
+        workspace_id=repo.workspace_id,
+        repo_id=repo.id,
+        scope_kind=BucketScope.REPO,
+        source_kind=BucketSource.REPO_FILES,
+        slug=_INTEL_BUCKET_SLUG,
+        name="Repo intel",
+        description=(
+            "Auto-harvested snapshot of the repo's languages, "
+            "frameworks, and entry points."
+        ),
+        source_ref={
+            "path": _INTEL_ARTICLE_PATH,
+            "branch": repo.default_branch or "main",
+            "harvest": "repo_intel",
+        },
+    )
+    session.add(bucket)
+    await session.flush()
+    return bucket
+
+
+def _render_intel_markdown(
+    *, intel: RepoIntel, repo: WorkspaceRepo
+) -> str:
+    """Format the intel row as an operator-readable markdown summary."""
+    lines: list[str] = ["# Repo intel", ""]
+    lines.append(f"- **Repo**: `{repo.full_name}`")
+    lines.append(f"- **Branch**: `{repo.default_branch or 'main'}`")
+    lines.append(f"- **Version**: {intel.version}")
+    if intel.harvested_at is not None:
+        lines.append(
+            f"- **Harvested at**: {intel.harvested_at.isoformat()}"
+        )
+    if intel.harvested_by:
+        lines.append(f"- **Triggered by**: `{intel.harvested_by}`")
+    lines.append("")
+
+    if intel.languages:
+        lines.append("## Languages")
+        for lang, ratio in intel.languages.items():
+            try:
+                pct = float(ratio) * 100
+            except (TypeError, ValueError):
+                continue
+            lines.append(f"- `{lang}`: {pct:.1f}%")
+        lines.append("")
+
+    if intel.frameworks:
+        lines.append("## Frameworks")
+        for fw in intel.frameworks:
+            lines.append(f"- {fw}")
+        lines.append("")
+
+    if intel.package_managers:
+        lines.append("## Package managers")
+        for pm in intel.package_managers:
+            lines.append(f"- {pm}")
+        lines.append("")
+
+    if intel.entry_points:
+        lines.append("## Entry points")
+        for ep in intel.entry_points:
+            if isinstance(ep, dict):
+                lines.append(
+                    f"- `{ep.get('path')}` _({ep.get('kind', 'unknown')})_"
+                )
+        lines.append("")
+
+    structure = intel.structure or {}
+    if structure:
+        lines.append("## Structure")
+        top = structure.get("top_level_dirs") or []
+        if top:
+            lines.append(
+                "- Top-level dirs: " + ", ".join(f"`{d}`" for d in top)
+            )
+        if "file_count" in structure:
+            lines.append(f"- File count: {structure['file_count']}")
+        if "depth_p50" in structure:
+            lines.append(
+                f"- Depth (p50/p95): "
+                f"{structure.get('depth_p50')}/{structure.get('depth_p95')}"
+            )
+        lines.append("")
+
+    commit_style = intel.commit_style or {}
+    if commit_style:
+        lines.append("## Commit style")
+        lines.append(
+            f"- Convention: **{commit_style.get('convention', 'unknown')}**"
+        )
+        common = commit_style.get("common_types") or []
+        if common:
+            lines.append(
+                "- Common types: " + ", ".join(f"`{t}`" for t in common)
+            )
+        if "avg_subject_len" in commit_style:
+            lines.append(
+                f"- Average subject length: {commit_style['avg_subject_len']}"
+            )
+        lines.append("")
+
+    if intel.visual_tokens:
+        lines.append("## Visual tokens")
+        for key, value in intel.visual_tokens.items():
+            lines.append(f"- {key}: `{value}`")
+        lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+# ---------------------------------------------------------------------------
+# Inline-fallback helper
+# ---------------------------------------------------------------------------
+
+
+async def _inline_harvest(
+    workspace_id: uuid.UUID,
+    repo_id: uuid.UUID,
+    triggered_by: str,
+) -> None:
+    """Run a harvest in a fresh session for the no-redis fallback path.
+
+    Errors are logged but not re-raised: this runs in an
+    ``asyncio.create_task`` and a stray exception would otherwise
+    surface as an unhandled-task warning at shutdown.
+    """
+    from backend.app.db.session import get_sessionmaker
+
+    sessionmaker = get_sessionmaker()
+    try:
+        async with sessionmaker() as session:
+            await harvest_repo_intel(
+                session=session,
+                workspace_id=workspace_id,
+                repo_id=repo_id,
+                triggered_by=triggered_by,
+            )
+            await session.commit()
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "inline repo_intel harvest failed for repo=%s", repo_id
+        )
+
+
+# ---------------------------------------------------------------------------
+# Shared blob-read helper
+# ---------------------------------------------------------------------------
+
+
+async def _read_text(
+    gw: CodeHostGateway,
+    *,
+    ref: RepoRef,
+    repo: WorkspaceRepo,
+    path: str,
+) -> str | None:
+    """Fetch ``path`` from ``ref`` and return its UTF-8 contents or ``None``.
+
+    Returns ``None`` for missing files, oversized blobs, binaries, or
+    fetch errors — every step that calls this is best-effort and
+    treats missing data as "skip" rather than "fail".
+    """
+    try:
+        blob = await gw.get_blob(
+            ref, path=path, ref_sha=repo.default_branch or None
+        )
+    except FileNotFoundError:
+        return None
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("repo_intel _read_text failed for %s: %s", path, exc)
+        return None
+    if blob.encoding != "utf-8":
+        return None
+    if isinstance(blob, BlobContent) and blob.size > _MAX_BLOB_BYTES:
+        return None
+    return blob.content
+
+
+__all__ = [
+    "CommitFetcher",
+    "HarvestReport",
+    "enqueue_harvest",
+    "get_current_intel",
+    "harvest_repo_intel",
+]

@@ -14,12 +14,15 @@ as ``ship-server``.
 from __future__ import annotations
 
 import logging
+import uuid
 
 from arq import cron
 from arq.connections import RedisSettings
 
 from backend.app.core.config import get_settings
 from backend.app.core.sentry import init_sentry
+from backend.app.db.session import get_sessionmaker
+from backend.app.services.repo_intel import harvest_repo_intel
 from backend.app.workers.clarifications import cron_sync_tracker_clarifications
 from backend.app.workers.secret_probe import cron_probe_pending_secrets
 
@@ -38,6 +41,44 @@ async def heartbeat(ctx: dict) -> None:
     worker is alive in container logs without standing up extra observability.
     """
     log.info("ship-worker heartbeat tick=%s", ctx.get("job_try"))
+
+
+async def harvest_repo_intel_job(
+    ctx: dict,
+    workspace_id: str,
+    repo_id: str,
+    triggered_by: str = "wizard",
+) -> dict:
+    """arq entry point for the per-repo intel harvest (P5-03).
+
+    Opens its own session so the job is independent of any request
+    scope. Returns a small dict with the result so arq's
+    ``keep_result`` window lets operators eyeball what landed without
+    digging through logs.
+    """
+    sessionmaker = get_sessionmaker()
+    async with sessionmaker() as session:
+        report = await harvest_repo_intel(
+            session=session,
+            workspace_id=uuid.UUID(workspace_id),
+            repo_id=uuid.UUID(repo_id),
+            triggered_by=triggered_by,
+        )
+        await session.commit()
+    log.info(
+        "repo_intel harvest done repo=%s version=%d duration_ms=%d",
+        repo_id,
+        report.version,
+        report.duration_ms,
+    )
+    return {
+        "intel_id": str(report.intel_id),
+        "version": report.version,
+        "duration_ms": report.duration_ms,
+        "files_examined": report.files_examined,
+        "languages_detected": report.languages_detected,
+        "knowledge_articles_written": report.knowledge_articles_written,
+    }
 
 
 def _redis_settings() -> RedisSettings:
@@ -59,7 +100,7 @@ class WorkerSettings:
     """arq's discovery point for queue config + scheduled jobs."""
 
     redis_settings = _redis_settings()
-    functions: list = []
+    functions: list = [harvest_repo_intel_job]
     cron_jobs = [
         cron(heartbeat, minute=set(range(0, 60))),
         # Re-probe stale integration rows on the half-minute. The API path

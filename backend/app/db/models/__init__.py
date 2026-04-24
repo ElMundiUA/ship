@@ -38,6 +38,7 @@ from backend.app.db.models.pipelines import (
     WorkflowRun,
 )
 from backend.app.db.models.policies import WorkspacePolicy
+from backend.app.db.models.repo_intel import RepoIntel, RepoIntelTriggeredBy
 from backend.app.db.models.repo_secrets import RepoSecret
 from backend.app.db.models.tenancy import (
     ApiToken,
@@ -86,6 +87,8 @@ __all__ = [
     "PipelineRun",
     "Project",
     "PullRequest",
+    "RepoIntel",
+    "RepoIntelTriggeredBy",
     "RepoSecret",
     "RunEscalation",
     "User",
