@@ -198,6 +198,32 @@ async def sync_lanes_for_repo(
         report.errors.append("`lanes:` is not a mapping")
         lanes_block = {}
 
+    # P5-07 — promote any wizard-seeded synthetic rows whose
+    # (lane_id, kind) still match the merged config IN PLACE before
+    # the diff/update walk. This preserves ``last_run_at`` /
+    # ``last_run_status`` across the synthetic→merged transition (a
+    # ``once`` lane that fired between the seed and the first
+    # scheduled tick keeps its history). Synthetic rows that the
+    # merged config no longer references fall through to the
+    # existing remove pass below.
+    merged_specs: list[tuple[str, str]] = []
+    for lane_id_pre, entry_pre in lanes_block.items():
+        if not isinstance(lane_id_pre, str):
+            continue
+        parsed_pre = _parse_lane_entry(lane_id_pre, entry_pre)
+        if parsed_pre is None:
+            continue
+        merged_specs.append((lane_id_pre, parsed_pre[0]))
+    from backend.app.services.synthetic_lane_sync import (
+        reconcile_synthetic_lanes,
+    )
+
+    await reconcile_synthetic_lanes(
+        session=session,
+        repo_id=repo.id,
+        merged_lane_specs=merged_specs,
+    )
+
     existing_rows = (
         await session.execute(
             select(Lane).where(Lane.repo_id == repo.id)
@@ -274,6 +300,16 @@ async def sync_lanes_for_repo(
             dirty = True
         if row.config_blob != flat:
             row.config_blob = flat
+            dirty = True
+        # Any synthetic row that survived the in-place promote pass
+        # in ``reconcile_synthetic_lanes`` (e.g. operator changed the
+        # lane's kind in the seed PR) is divergent from the
+        # placeholder we wrote at install time but IS present in the
+        # merged config — so the row's provenance is now genuinely
+        # ``'merged'``. Flip it here so a third-party reader can
+        # trust ``origin`` post-merge.
+        if row.origin != "merged":
+            row.origin = "merged"
             dirty = True
 
         row.synced_at = now

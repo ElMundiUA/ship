@@ -32,6 +32,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
+from typing import Final
+
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
@@ -80,8 +82,15 @@ class Lane(Base):
             "kind IN ('once', 'event', 'schedule')",
             name="ck_lanes_kind",
         ),
+        # Mirrors the migration in 0035_lane_origin.py — keep both in
+        # lockstep with :data:`_LANE_ORIGIN_VALUES`.
+        CheckConstraint(
+            "origin IN ('merged', 'wizard_seed_synthetic', 'manual')",
+            name="ck_lanes_origin",
+        ),
         Index("ix_lanes_workspace_id", "workspace_id"),
         Index("ix_lanes_repo_id", "repo_id"),
+        Index("ix_lanes_repo_origin", "repo_id", "origin"),
     )
 
     id: Mapped[uuid.UUID] = _pk()
@@ -114,6 +123,20 @@ class Lane(Base):
     enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("true")
     )
+    # Provenance for the row. ``'merged'`` = derived from a merged
+    # ``.ship/config.yml`` (the historical-only path); the wizard
+    # writes ``'wizard_seed_synthetic'`` BEFORE the seed PR merges so
+    # the Inbox / Coverage / Automations UIs aren't empty on day one
+    # (Wave 8b P5-07). ``'manual'`` is reserved for the future
+    # admin-add flow. The post-merge syncer is allowed to flip
+    # ``'wizard_seed_synthetic'`` → ``'merged'`` in place when the
+    # config still references the same lane (no row replacement
+    # preserves ``last_run_at`` / ``last_run_status``).
+    origin: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        server_default=text("'merged'"),
+    )
     config_blob: Mapped[dict] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
@@ -142,4 +165,20 @@ class Lane(Base):
     repo: Mapped[WorkspaceRepo] = relationship()
 
 
-__all__ = ["Lane"]
+_LANE_ORIGIN_VALUES: Final[tuple[str, ...]] = (
+    # ``.ship/config.yml`` on the default branch declared this lane
+    # (the only path before P5-07 — every existing row carries this
+    # value via the migration's ``server_default``).
+    "merged",
+    # The wizard wrote this lane from :data:`DEFAULT_BUNDLE` BEFORE
+    # the seed PR merged (or even opened). The post-merge syncer is
+    # expected to promote it to ``'merged'`` once the merged config
+    # references the same lane id.
+    "wizard_seed_synthetic",
+    # Operator added the lane by hand via a future admin surface.
+    # Reserved name; no producer in P5-07.
+    "manual",
+)
+
+
+__all__ = ["Lane", "_LANE_ORIGIN_VALUES"]
