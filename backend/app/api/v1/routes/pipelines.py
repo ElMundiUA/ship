@@ -1089,6 +1089,160 @@ async def toggle_pipeline(
     return _row_to_out(row)
 
 
+async def dispatch_pipeline_run(
+    session: AsyncSession,
+    settings: Settings,
+    pipeline: Pipeline,
+    *,
+    trigger: str,
+    summary: str | None = None,
+    payload: dict[str, Any] | None = None,
+    actor_user_id: uuid.UUID | None = None,
+    actor_token_id: uuid.UUID | None = None,
+    explicit_repo_id: uuid.UUID | None = None,
+    audit_extra: dict[str, Any] | None = None,
+) -> PipelineRun:
+    """Mint a :class:`PipelineRun`, dispatch it to GitHub Actions, audit.
+
+    Shared core for both the HTTP "Run now" route and the Navigator
+    ``play_run_now`` chat tool. Centralising it makes "queue a row but
+    forget to dispatch" structurally impossible — both surfaces walk
+    the same precondition-check + dispatch + audit path.
+
+    Failure modes are surfaced as :class:`HTTPException` with the
+    Day-4-Phase-1 ``code`` vocabulary so callers (FastAPI handlers
+    or Navigator tools) can either let them propagate or translate
+    them into their own response shapes:
+
+    - ``412 kind_not_supported_yet`` — lane has no starter workflow.
+    - ``412 pipeline_not_bound`` — no resolvable workspace repo.
+    - ``412 github_app_missing`` — install gone or suspended.
+    - ``412 workflow_not_installed`` — YAML missing on default branch.
+    - ``502 dispatch_failed`` — GitHub itself rejected the dispatch.
+
+    On success the returned :class:`PipelineRun` already has
+    ``status='running'``, ``run_token_hash`` set, and ``last_run_*``
+    on the pipeline updated. The caller still owns the outer
+    transaction (no commit here).
+    """
+    workflow_file = _workflow_file_for_lane_id(pipeline.lane_id)
+    if workflow_file is None or not _supports_run(pipeline.lane_id):
+        raise HTTPException(
+            status_code=status.HTTP_412_PRECONDITION_FAILED,
+            detail={
+                "code": "kind_not_supported_yet",
+                "message": (
+                    f"Pipeline lane {pipeline.lane_id!r} doesn't ship with a "
+                    "catalog workflow yet. Coming with presets."
+                ),
+            },
+        )
+
+    repo, install = await _load_repo_and_install(
+        session, pipeline, explicit_repo_id=explicit_repo_id
+    )
+
+    files = await list_repo_workflows(repo, install, settings=settings)
+    if workflow_file not in files:
+        raise HTTPException(
+            status_code=status.HTTP_412_PRECONDITION_FAILED,
+            detail={
+                "code": "workflow_not_installed",
+                "workflow_file": workflow_file,
+                "repo_full_name": repo.full_name,
+                "install_endpoint": (
+                    f"/v1/workspaces/{pipeline.workspace_id}/pipelines/"
+                    f"{pipeline.id}/install"
+                ),
+                "message": (
+                    f"{repo.full_name!r} doesn't have .github/workflows/"
+                    f"{workflow_file}. Open the install PR first."
+                ),
+            },
+        )
+
+    now = datetime.now(timezone.utc)
+    run = PipelineRun(
+        pipeline_id=pipeline.id,
+        workspace_id=pipeline.workspace_id,
+        trigger=trigger,
+        status="queued",
+        started_at=now,
+        summary=summary or f"Dispatched {pipeline.name} for {repo.full_name}",
+        payload=dict(payload or {}),
+    )
+    session.add(run)
+    # Need ``run.id`` to mint the callback token + URL; flush before
+    # talking to GitHub so the FK exists when the callback lands.
+    await session.flush()
+
+    token = _mint_run_token(run.id, settings)
+    run.run_token_hash = _hash_run_token(token)
+
+    inputs = {
+        "ship_run_id": str(run.id),
+        "ship_callback_url": _callback_url(settings, run.id),
+        "ship_run_token": token,
+    }
+    try:
+        await dispatch_workflow(
+            repo,
+            install,
+            workflow_file,
+            inputs=inputs,
+            settings=settings,
+        )
+    except WorkflowDispatchError as exc:
+        run.status = "failed"
+        run.finished_at = datetime.now(timezone.utc)
+        run.summary = (
+            f"GitHub dispatch failed (HTTP {exc.status_code}): {exc.message[:256]}"
+        )
+        pipeline.last_run_status = "failed"
+        pipeline.last_run_at = run.finished_at
+        await session.flush()
+        # Map upstream-level failures to a 502 so the console can
+        # surface "GitHub said no" without confusing the user with our
+        # 412 precondition vocabulary.
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "code": "dispatch_failed",
+                "upstream_status": exc.status_code,
+                "message": exc.message[:512],
+                "run_id": str(run.id),
+            },
+        ) from exc
+
+    run.status = "running"
+    pipeline.last_run_at = now
+    pipeline.last_run_status = "running"
+    pipeline.updated_at = now
+
+    audit_payload: dict[str, Any] = {
+        "kind": pipeline.lane_id,
+        "trigger": trigger,
+        "run_id": str(run.id),
+        "repo_full_name": repo.full_name,
+        "workflow_file": workflow_file,
+    }
+    if audit_extra:
+        audit_payload.update(audit_extra)
+    session.add(
+        AuditLog(
+            workspace_id=pipeline.workspace_id,
+            actor_user_id=actor_user_id,
+            actor_token_id=actor_token_id,
+            action="pipeline.run",
+            target_kind="pipeline",
+            target_id=str(pipeline.id),
+            payload=audit_payload,
+        )
+    )
+    await session.flush()
+    return run
+
+
 @router.post(
     "/{pipeline_id}/runs",
     response_model=PipelineRunOut,
@@ -1127,121 +1281,21 @@ async def run_pipeline(
             status_code=status.HTTP_409_CONFLICT,
             detail="Pipeline is disabled. Enable it before running.",
         )
-    workflow_file = _workflow_file_for_lane_id(pipeline.lane_id)
-    if workflow_file is None or not _supports_run(pipeline.lane_id):
-        raise HTTPException(
-            status_code=status.HTTP_412_PRECONDITION_FAILED,
-            detail={
-                "code": "kind_not_supported_yet",
-                "message": (
-                    f"Pipeline lane {pipeline.lane_id!r} doesn't ship with a "
-                    "catalog workflow yet. Coming with presets."
-                ),
-            },
-        )
-
-    explicit_repo_id = payload.repo_id if payload else None
-    repo, install = await _load_repo_and_install(
-        session, pipeline, explicit_repo_id=explicit_repo_id
-    )
-
-    files = await list_repo_workflows(repo, install, settings=settings)
-    if workflow_file not in files:
-        raise HTTPException(
-            status_code=status.HTTP_412_PRECONDITION_FAILED,
-            detail={
-                "code": "workflow_not_installed",
-                "workflow_file": workflow_file,
-                "repo_full_name": repo.full_name,
-                "install_endpoint": (
-                    f"/v1/workspaces/{workspace_id}/pipelines/{pipeline_id}/install"
-                ),
-                "message": (
-                    f"{repo.full_name!r} doesn't have .github/workflows/"
-                    f"{workflow_file}. Open the install PR first."
-                ),
-            },
-        )
 
     note = (payload.note if payload else None) or None
-    now = datetime.now(timezone.utc)
-
-    run = PipelineRun(
-        pipeline_id=pipeline.id,
-        workspace_id=workspace_id,
+    explicit_repo_id = payload.repo_id if payload else None
+    run = await dispatch_pipeline_run(
+        session,
+        settings,
+        pipeline,
         trigger="manual",
-        status="queued",
-        started_at=now,
-        summary=note or f"Dispatched {pipeline.name} for {repo.full_name}",
+        summary=note,
         payload={"note": note} if note else {},
+        actor_user_id=auth.user.id,
+        actor_token_id=auth.token.id if auth.token else None,
+        explicit_repo_id=explicit_repo_id,
+        audit_extra={"note": note},
     )
-    session.add(run)
-    # Need ``run.id`` to mint the callback token + URL; flush before
-    # talking to GitHub so the FK exists when the callback lands.
-    await session.flush()
-
-    token = _mint_run_token(run.id, settings)
-    run.run_token_hash = _hash_run_token(token)
-
-    callback_url = _callback_url(settings, run.id)
-    inputs = {
-        "ship_run_id": str(run.id),
-        "ship_callback_url": callback_url,
-        "ship_run_token": token,
-    }
-    try:
-        await dispatch_workflow(
-            repo,
-            install,
-            workflow_file,
-            inputs=inputs,
-            settings=settings,
-        )
-    except WorkflowDispatchError as exc:
-        run.status = "failed"
-        run.finished_at = datetime.now(timezone.utc)
-        run.summary = (
-            f"GitHub dispatch failed (HTTP {exc.status_code}): {exc.message[:256]}"
-        )
-        pipeline.last_run_status = "failed"
-        pipeline.last_run_at = run.finished_at
-        await session.flush()
-        # Map upstream-level failures to a 502 so the console can
-        # surface "GitHub said no" without confusing the user with our
-        # 412 precondition vocabulary.
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail={
-                "code": "dispatch_failed",
-                "upstream_status": exc.status_code,
-                "message": exc.message[:512],
-            },
-        ) from exc
-
-    run.status = "running"
-    pipeline.last_run_at = now
-    pipeline.last_run_status = "running"
-    pipeline.updated_at = now
-
-    session.add(
-        AuditLog(
-            workspace_id=workspace_id,
-            actor_user_id=auth.user.id,
-            actor_token_id=auth.token.id if auth.token else None,
-            action="pipeline.run",
-            target_kind="pipeline",
-            target_id=str(pipeline.id),
-            payload={
-                "kind": pipeline.lane_id,
-                "trigger": "manual",
-                "note": note,
-                "run_id": str(run.id),
-                "repo_full_name": repo.full_name,
-                "workflow_file": workflow_file,
-            },
-        )
-    )
-    await session.flush()
     return _run_to_out(run)
 
 
@@ -1873,6 +1927,7 @@ __all__ = [
     "public_router",
     "auto_dispatch_knowledge_pipelines",
     "auto_dispatch_self_heal",
+    "dispatch_pipeline_run",
     "SelfHealDispatchResult",
     "KNOWLEDGE_PIPELINE_LANE_IDS",
 ]
