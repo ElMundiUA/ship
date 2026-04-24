@@ -1908,6 +1908,296 @@ class ToolBox:
                     "additionalProperties": False,
                 },
             ),
+            # Phase 6 Wave B — mutating tools (admin-gated, audited)
+            ToolSpec(
+                name="inbox_dispose",
+                description=(
+                    "Apply a lifecycle disposition to one inbox item "
+                    "(resolve / dismiss / approve / reject / answer / "
+                    "accept / retry / acknowledge). Admin-only and "
+                    "audited. Set ``dry_run=true`` to preview the "
+                    "transition without writing. Use ``inbox_snooze`` "
+                    "or ``inbox_reassign`` for those specific shapes."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "inbox_item_id": {
+                            "type": "string",
+                            "description": "UUID of the inbox item.",
+                        },
+                        "disposition": {
+                            "type": "string",
+                            "enum": [
+                                "resolve",
+                                "dismiss",
+                                "approve",
+                                "reject",
+                                "answer",
+                                "accept",
+                                "retry",
+                                "acknowledge",
+                            ],
+                        },
+                        "body": {
+                            "type": "string",
+                            "description": (
+                                "Optional comment / answer text "
+                                "(max 4000 chars). Required when "
+                                "disposition='answer'."
+                            ),
+                        },
+                        "dry_run": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": (
+                                "When true, validate + summarise the "
+                                "would-be transition WITHOUT writing."
+                            ),
+                        },
+                    },
+                    "required": ["inbox_item_id", "disposition"],
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="inbox_snooze",
+                description=(
+                    "Silence one inbox item until ``until`` (≤ 30 days "
+                    "out). Admin-only and audited. Item must currently "
+                    "be in status 'new' or 'snoozed'."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "inbox_item_id": {"type": "string"},
+                        "until": {
+                            "type": "string",
+                            "description": (
+                                "ISO-8601 timestamp in the future."
+                            ),
+                        },
+                    },
+                    "required": ["inbox_item_id", "until"],
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="inbox_reassign",
+                description=(
+                    "Hand one inbox item to a different workspace "
+                    "member. Admin-only and audited. The new owner "
+                    "must already be a workspace member."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "inbox_item_id": {"type": "string"},
+                        "assignee_user_id": {
+                            "type": "string",
+                            "description": (
+                                "UUID of the workspace member to "
+                                "reassign to."
+                            ),
+                        },
+                        "reason": {
+                            "type": "string",
+                            "description": (
+                                "Optional rationale (max 500 chars)."
+                            ),
+                        },
+                    },
+                    "required": ["inbox_item_id", "assignee_user_id"],
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="play_run_now",
+                description=(
+                    "Queue a manual run of a Play (lane) for one repo. "
+                    "Admin-only and audited. Returns "
+                    "``error='no_automation'`` if the Play is not yet "
+                    "automated for this repo (call ``play_automate`` "
+                    "first or run via shipctl)."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "play_key": {
+                            "type": "string",
+                            "description": (
+                                "Catalog play / lane id (matches "
+                                "``Pipeline.lane_id``)."
+                            ),
+                        },
+                        "repo_id": {
+                            "type": "string",
+                            "description": "UUID of the activated repo.",
+                        },
+                        "idempotency_key": {
+                            "type": "string",
+                            "description": (
+                                "Optional caller-provided key stored "
+                                "on the queued run for client-side "
+                                "dedup."
+                            ),
+                        },
+                    },
+                    "required": ["play_key", "repo_id"],
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="play_automate",
+                description=(
+                    "Create a Lane (the back-end automation primitive) "
+                    "for a Play. ``scope='repo'`` writes a "
+                    "``lanes`` row scoped to one repo; "
+                    "``scope='fleet'`` writes a workspace-wide "
+                    "``fleet_lanes`` row. Admin-only and audited. "
+                    "Returns ``error='conflict'`` with "
+                    "``existing_lane_id`` if a lane with the same "
+                    "``(play_key, scope, repo_id, cadence)`` is "
+                    "already present."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "play_key": {"type": "string"},
+                        "scope": {
+                            "type": "string",
+                            "enum": ["repo", "fleet"],
+                        },
+                        "repo_id": {
+                            "type": "string",
+                            "description": (
+                                "UUID — required when scope='repo'."
+                            ),
+                        },
+                        "cadence": {
+                            "type": "string",
+                            "description": (
+                                "manual | on_pr | weekly | daily | "
+                                "hourly | <5-field cron>"
+                            ),
+                        },
+                        "name": {
+                            "type": "string",
+                            "description": (
+                                "Optional human-readable label "
+                                "(defaults to the Play title)."
+                            ),
+                        },
+                    },
+                    "required": ["play_key", "scope", "cadence"],
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="automation_toggle",
+                description=(
+                    "Enable or disable one Pipeline. Admin-only and "
+                    "audited. No-op when the requested state matches "
+                    "the current state."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "pipeline_id": {"type": "string"},
+                        "enabled": {"type": "boolean"},
+                    },
+                    "required": ["pipeline_id", "enabled"],
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="intel_harvest_trigger",
+                description=(
+                    "Schedule a fresh ``repo_intel`` harvest for one "
+                    "repo. Admin-only. Rate limit: at most one "
+                    "trigger per repo per workspace per hour "
+                    "(rate-limited denials do NOT audit; successes "
+                    "do)."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "repo_id": {"type": "string"},
+                    },
+                    "required": ["repo_id"],
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="inbox_routing_upsert",
+                description=(
+                    "Insert or update one inbox routing rule. "
+                    "Admin-only and audited. ``name`` is the handle "
+                    "key (^[a-z][a-z0-9_]*$). ``then_assign_to`` is "
+                    "the dispatch target — see "
+                    "``inbox_routing_preview`` for the strategy "
+                    "vocabulary. Pass ``rule_id`` to update an "
+                    "existing row; omit to insert (returns "
+                    "``error='conflict'`` if a row already exists "
+                    "for this handle)."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "rule_id": {
+                            "type": "string",
+                            "description": (
+                                "Optional UUID of an existing rule "
+                                "to update."
+                            ),
+                        },
+                        "name": {
+                            "type": "string",
+                            "maxLength": 64,
+                            "description": (
+                                "Handle key the rule binds (becomes "
+                                "``handle_key``)."
+                            ),
+                        },
+                        "when": {
+                            "type": "object",
+                            "description": (
+                                "Free-form match shape stored under "
+                                "``strategy_config._when`` for "
+                                "forward-compatibility (resolver "
+                                "currently ignores it)."
+                            ),
+                        },
+                        "then_assign_to": {
+                            "type": "object",
+                            "description": (
+                                "{strategy: 'user'|'group'|"
+                                "'round_robin'|'oncall'|'first'|"
+                                "'codeowners'|'workspace_admin'|"
+                                "'workspace_owner'|'requested_by'|"
+                                "'first_admin'|'first_owner', "
+                                "user_id?, group_id?, "
+                                "strategy_config?}"
+                            ),
+                        },
+                        "priority": {
+                            "type": "integer",
+                            "default": 100,
+                            "description": (
+                                "Stored under "
+                                "``strategy_config._priority`` for "
+                                "forward-compatibility."
+                            ),
+                        },
+                        "enabled": {
+                            "type": "boolean",
+                            "default": True,
+                        },
+                    },
+                    "required": ["name", "then_assign_to"],
+                    "additionalProperties": False,
+                },
+            ),
         ]
 
     # ------------------------------------------------------------------
@@ -1983,6 +2273,15 @@ class ToolBox:
             "automations_list": self._tool_automations_list,
             "repo_intel_get": self._tool_repo_intel_get,
             "knowledge_search_v2": self._tool_knowledge_search_v2,
+            # Phase 6 Wave B — mutating tools (admin-gated, audited)
+            "inbox_dispose": self._tool_inbox_dispose,
+            "inbox_snooze": self._tool_inbox_snooze,
+            "inbox_reassign": self._tool_inbox_reassign,
+            "play_run_now": self._tool_play_run_now,
+            "play_automate": self._tool_play_automate,
+            "automation_toggle": self._tool_automation_toggle,
+            "intel_harvest_trigger": self._tool_intel_harvest_trigger,
+            "inbox_routing_upsert": self._tool_inbox_routing_upsert,
         }
 
     # ------------------------------------------------------------------
@@ -5703,6 +6002,1333 @@ class ToolBox:
             )
         ).scalar_one_or_none()
         return row is not None
+
+    # ------------------------------------------------------------------
+    # Phase 6 Wave B — admin gate + audit envelope (cross-cutting)
+    # ------------------------------------------------------------------
+
+    async def _require_admin_or_error(
+        self, *, tool_name: str
+    ) -> dict[str, Any] | None:
+        """Resolve workspace role; return a forbidden-error dict on denial.
+
+        Mutating Wave B tools call this at the very top. Returning a
+        plain dict (to be JSON-encoded by the caller) keeps the
+        contract uniform with the other ``{"error": ...}`` shapes the
+        LLM already understands. The query is the same workspace
+        membership lookup used by ``_require_membership`` in the HTTP
+        surface — no caching: the per-turn ``ToolBox`` is short-lived
+        enough that one extra SELECT per Wave B tool is irrelevant.
+        """
+        member = (
+            await self._session.execute(
+                select(WorkspaceMember).where(
+                    WorkspaceMember.workspace_id == self._workspace_id,
+                    WorkspaceMember.user_id == self._user_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if member is None or member.role not in ("owner", "admin"):
+            return {
+                "error": "forbidden",
+                "message": (
+                    f"navigator tool {tool_name!r} requires workspace "
+                    "admin role"
+                ),
+            }
+        return None
+
+    async def _audit_navigator_tool(
+        self,
+        *,
+        tool_name: str,
+        payload: dict[str, Any],
+        target: dict[str, Any],
+    ) -> None:
+        """Stamp an :class:`AuditLog` row for a successful Wave B mutation.
+
+        ``target`` carries ``{"kind": "...", "id": "..."}`` so the
+        chat-turn audit trail looks identical to the equivalent HTTP
+        route's audit row (``inbox.disposition.<action>`` / etc.) —
+        easier to reason about during a forensic sweep when both
+        surfaces touched the same object.
+
+        ``payload`` is redacted in place: any value whose JSON
+        encoding exceeds 4 KiB is replaced with
+        ``{"_redacted": True, "len": <orig_len>}`` so a chatty body
+        argument can't blow up the audit row size.
+
+        No commit — the chat-turn handler in ``chat.py`` owns the
+        outer transaction. We ``flush`` so an in-turn read-after-write
+        from a follow-up tool call sees the row.
+        """
+        redacted: dict[str, Any] = {"actor_kind": "navigator"}
+        for key, value in (payload or {}).items():
+            try:
+                encoded = json.dumps(value, ensure_ascii=False, default=str)
+            except (TypeError, ValueError):
+                encoded = str(value)
+            if len(encoded) > 4 * 1024:
+                redacted[key] = {"_redacted": True, "len": len(encoded)}
+            else:
+                redacted[key] = value
+
+        target_kind = str(target.get("kind") or "")[:64] or None
+        raw_target_id = target.get("id")
+        target_id: str | None = None
+        if raw_target_id is not None:
+            target_id = str(raw_target_id)[:128]
+
+        self._session.add(
+            AuditLog(
+                workspace_id=self._workspace_id,
+                actor_user_id=self._user_id,
+                actor_token_id=None,
+                action=f"navigator.tool.{tool_name}",
+                target_kind=target_kind,
+                target_id=target_id,
+                payload=redacted,
+            )
+        )
+        await self._session.flush()
+
+    # ------------------------------------------------------------------
+    # Phase 6 Wave B — mutating tools (admin-gated, audited)
+    # ------------------------------------------------------------------
+
+    async def _tool_inbox_dispose(self, args: dict[str, Any]) -> str:
+        # Admin gate first so a non-admin can't even probe whether
+        # an item exists by id-fishing.
+        gate_err = await self._require_admin_or_error(tool_name="inbox_dispose")
+        if gate_err is not None:
+            return _json_result(gate_err)
+
+        try:
+            item_id = _parse_uuid(args, "inbox_item_id")
+        except ToolInvocationError as exc:
+            return _json_result({
+                "error": "validation_failed",
+                "message": str(exc),
+            })
+
+        disposition = args.get("disposition")
+        valid_dispositions = (
+            "resolve",
+            "dismiss",
+            "approve",
+            "reject",
+            "answer",
+            "accept",
+            "retry",
+            "acknowledge",
+        )
+        if (
+            not isinstance(disposition, str)
+            or disposition not in valid_dispositions
+        ):
+            return _json_result({
+                "error": "validation_failed",
+                "message": (
+                    f"disposition must be one of {list(valid_dispositions)}"
+                ),
+            })
+
+        body = args.get("body")
+        if body is not None:
+            if not isinstance(body, str):
+                return _json_result({
+                    "error": "validation_failed",
+                    "message": "body must be a string when provided",
+                })
+            if len(body) > 4000:
+                return _json_result({
+                    "error": "validation_failed",
+                    "message": "body must be ≤ 4000 chars",
+                })
+
+        dry_run = bool(args.get("dry_run", False))
+
+        # Tenancy: the same scoped lookup the HTTP route uses.
+        item = (
+            await self._session.execute(
+                select(InboxItem).where(
+                    InboxItem.id == item_id,
+                    InboxItem.workspace_id == self._workspace_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if item is None:
+            return _json_result({
+                "error": "not_found",
+                "message": (
+                    f"inbox item {item_id} not found in this workspace"
+                ),
+            })
+
+        # State-machine pre-check mirroring _validate_disposition's
+        # OPEN_STATUSES gate. Items that have already been resolved /
+        # dismissed cannot accept a new disposition.
+        from backend.app.api.v1.routes.inbox import (
+            OPEN_STATUSES,
+            _ACTION_RESOLUTION,
+            _RESOLVABLE_FROM_OPEN,
+            _TYPE_GATED_ACTIONS,
+        )
+
+        required_type = _TYPE_GATED_ACTIONS.get(disposition)
+        if required_type is not None and item.type != required_type:
+            return _json_result({
+                "error": "precondition_failed",
+                "message": (
+                    f"disposition {disposition!r} is only valid for items "
+                    f"of type {required_type!r} (this item is type "
+                    f"{item.type!r})"
+                ),
+            })
+        if disposition in _RESOLVABLE_FROM_OPEN:
+            if item.status not in OPEN_STATUSES:
+                return _json_result({
+                    "error": "precondition_failed",
+                    "message": (
+                        f"disposition {disposition!r} requires status in "
+                        f"{list(OPEN_STATUSES)}; item is currently "
+                        f"{item.status!r}"
+                    ),
+                })
+        else:
+            if item.status != "new":
+                return _json_result({
+                    "error": "precondition_failed",
+                    "message": (
+                        f"disposition {disposition!r} requires status='new';"
+                        f" item is currently {item.status!r}"
+                    ),
+                })
+
+        # ``answer`` requires either a body or a payload.answer; the
+        # body field is friendlier for chat callers, so we promote it.
+        payload_dict: dict[str, Any] = {}
+        if body is not None:
+            payload_dict["body"] = body
+            if disposition == "answer":
+                payload_dict["answer"] = body
+        if disposition == "answer" and not payload_dict.get("answer"):
+            return _json_result({
+                "error": "validation_failed",
+                "message": (
+                    "disposition 'answer' requires a non-empty body "
+                    "with the answer text"
+                ),
+            })
+
+        resolution = (
+            payload_dict.get("resolution")
+            if disposition == "resolve" and payload_dict.get("resolution")
+            else _ACTION_RESOLUTION[disposition]
+        )
+
+        new_status = "resolved" if disposition != "dismiss" else "dismissed"
+        side_effect_summary = {
+            "approve": "closes any matching run escalations as 'approved'",
+            "reject": "closes any matching run escalations as 'rejected'",
+            "retry": "records a retry-request event for the underlying run",
+        }.get(disposition, "no extra side-effects")
+
+        if dry_run:
+            return _json_result({
+                "dry_run": True,
+                "would_apply": {
+                    "inbox_item_id": str(item.id),
+                    "current_status": item.status,
+                    "new_status": new_status,
+                    "applied_disposition": disposition,
+                    "resolution": resolution,
+                    "side_effects": side_effect_summary,
+                },
+            })
+
+        from datetime import timezone as _tz
+        from backend.app.services.inbox.side_effects import apply_side_effects
+
+        now = datetime.now(_tz.utc)
+        merged_payload = (item.payload or {}) | dict(payload_dict)
+        item.payload = merged_payload
+        item.status = new_status
+        item.resolution = resolution
+        item.resolved_at = now
+        item.resolved_by_user_id = self._user_id
+
+        self._session.add(
+            InboxItemEvent(
+                item_id=item.id,
+                actor_user_id=self._user_id,
+                actor_kind="agent",
+                action="resolved" if new_status == "resolved" else "dismissed",
+                payload={
+                    "disposition": disposition,
+                    "resolution": resolution,
+                    **{
+                        k: v
+                        for k, v in payload_dict.items()
+                        if k != "resolution"
+                    },
+                },
+            )
+        )
+
+        report = await apply_side_effects(
+            self._session,
+            item=item,
+            action=disposition,
+            payload=payload_dict,
+            actor_user_id=self._user_id,
+        )
+
+        side_effects: list[dict[str, Any]] = []
+        if report.escalations_closed:
+            side_effects.append(
+                {
+                    "kind": "escalations_closed",
+                    "count": len(report.escalations_closed),
+                }
+            )
+        if report.legacy_writebacks:
+            side_effects.append(
+                {
+                    "kind": "legacy_writebacks",
+                    "count": len(report.legacy_writebacks),
+                }
+            )
+        if report.retry_requests_recorded:
+            side_effects.append(
+                {
+                    "kind": "retry_requests_recorded",
+                    "count": len(report.retry_requests_recorded),
+                }
+            )
+        if report.failures:
+            side_effects.append(
+                {"kind": "failures", "count": len(report.failures)}
+            )
+
+        await self._audit_navigator_tool(
+            tool_name="inbox_dispose",
+            payload={
+                "disposition": disposition,
+                "resolution": resolution,
+                "from_status": "new",
+                "body": body,
+            },
+            target={"kind": "inbox_item", "id": str(item.id)},
+        )
+
+        await self._session.flush()
+        return _json_result(
+            {
+                "inbox_item_id": str(item.id),
+                "new_status": new_status,
+                "applied_disposition": disposition,
+                "resolution": resolution,
+                "side_effects": side_effects,
+            }
+        )
+
+    async def _tool_inbox_snooze(self, args: dict[str, Any]) -> str:
+        gate_err = await self._require_admin_or_error(tool_name="inbox_snooze")
+        if gate_err is not None:
+            return _json_result(gate_err)
+
+        try:
+            item_id = _parse_uuid(args, "inbox_item_id")
+            until = _parse_iso_datetime(args.get("until"), "until")
+        except ToolInvocationError as exc:
+            return _json_result({
+                "error": "validation_failed",
+                "message": str(exc),
+            })
+        if until is None:
+            return _json_result({
+                "error": "validation_failed",
+                "message": "until is required (ISO-8601 timestamp)",
+            })
+
+        from datetime import timedelta, timezone as _tz
+        from backend.app.api.v1.routes.inbox import OPEN_STATUSES
+
+        now = datetime.now(_tz.utc)
+        if until <= now:
+            return _json_result({
+                "error": "validation_failed",
+                "message": "until must be in the future",
+            })
+        if until - now > timedelta(days=30):
+            return _json_result({
+                "error": "validation_failed",
+                "message": "snooze cap is 30 days; reassign or dismiss instead",
+            })
+
+        item = (
+            await self._session.execute(
+                select(InboxItem).where(
+                    InboxItem.id == item_id,
+                    InboxItem.workspace_id == self._workspace_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if item is None:
+            return _json_result({
+                "error": "not_found",
+                "message": (
+                    f"inbox item {item_id} not found in this workspace"
+                ),
+            })
+        if item.status not in OPEN_STATUSES:
+            return _json_result({
+                "error": "precondition_failed",
+                "message": (
+                    f"can only snooze items in status {list(OPEN_STATUSES)};"
+                    f" item is currently {item.status!r}"
+                ),
+            })
+
+        item.status = "snoozed"
+        item.snoozed_until = until
+
+        self._session.add(
+            InboxItemEvent(
+                item_id=item.id,
+                actor_user_id=self._user_id,
+                actor_kind="agent",
+                action="snoozed",
+                payload={"snoozed_until": until.isoformat()},
+            )
+        )
+
+        await self._audit_navigator_tool(
+            tool_name="inbox_snooze",
+            payload={"snoozed_until": until.isoformat()},
+            target={"kind": "inbox_item", "id": str(item.id)},
+        )
+
+        await self._session.flush()
+        return _json_result(
+            {
+                "inbox_item_id": str(item.id),
+                "snoozed_until": until.isoformat(),
+            }
+        )
+
+    async def _tool_inbox_reassign(self, args: dict[str, Any]) -> str:
+        gate_err = await self._require_admin_or_error(
+            tool_name="inbox_reassign"
+        )
+        if gate_err is not None:
+            return _json_result(gate_err)
+
+        try:
+            item_id = _parse_uuid(args, "inbox_item_id")
+            assignee_user_id = _parse_uuid(args, "assignee_user_id")
+        except ToolInvocationError as exc:
+            return _json_result({
+                "error": "validation_failed",
+                "message": str(exc),
+            })
+        reason = args.get("reason")
+        if reason is not None:
+            if not isinstance(reason, str):
+                return _json_result({
+                    "error": "validation_failed",
+                    "message": "reason must be a string when provided",
+                })
+            if len(reason) > 500:
+                return _json_result({
+                    "error": "validation_failed",
+                    "message": "reason must be ≤ 500 chars",
+                })
+
+        item = (
+            await self._session.execute(
+                select(InboxItem).where(
+                    InboxItem.id == item_id,
+                    InboxItem.workspace_id == self._workspace_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if item is None:
+            return _json_result({
+                "error": "not_found",
+                "message": (
+                    f"inbox item {item_id} not found in this workspace"
+                ),
+            })
+
+        # Tenancy: target user must be a workspace member.
+        member = (
+            await self._session.execute(
+                select(WorkspaceMember).where(
+                    WorkspaceMember.workspace_id == self._workspace_id,
+                    WorkspaceMember.user_id == assignee_user_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if member is None:
+            return _json_result({
+                "error": "validation_failed",
+                "message": "assignee_user_id is not a workspace member",
+            })
+
+        prior_owner = item.owner_user_id
+        item.owner_user_id = assignee_user_id
+        item.intake_handle = None
+        item.intake_reason = "manual:navigator"
+
+        event_payload: dict[str, Any] = {
+            "old_owner_user_id": (
+                str(prior_owner) if prior_owner is not None else None
+            ),
+            "new_owner_user_id": str(assignee_user_id),
+            "intake_reason": item.intake_reason,
+        }
+        if reason:
+            event_payload["reason"] = reason
+
+        self._session.add(
+            InboxItemEvent(
+                item_id=item.id,
+                actor_user_id=self._user_id,
+                actor_kind="agent",
+                action="reassigned",
+                payload=event_payload,
+            )
+        )
+
+        await self._audit_navigator_tool(
+            tool_name="inbox_reassign",
+            payload=event_payload,
+            target={"kind": "inbox_item", "id": str(item.id)},
+        )
+
+        await self._session.flush()
+        return _json_result(
+            {
+                "inbox_item_id": str(item.id),
+                "prior_owner_id": (
+                    str(prior_owner) if prior_owner is not None else None
+                ),
+                "new_owner_id": str(assignee_user_id),
+            }
+        )
+
+    async def _tool_play_run_now(self, args: dict[str, Any]) -> str:
+        gate_err = await self._require_admin_or_error(
+            tool_name="play_run_now"
+        )
+        if gate_err is not None:
+            return _json_result(gate_err)
+
+        try:
+            play_key = _require_str(args, "play_key")
+            repo_id = _parse_uuid(args, "repo_id")
+        except ToolInvocationError as exc:
+            return _json_result({
+                "error": "validation_failed",
+                "message": str(exc),
+            })
+
+        idempotency_key = args.get("idempotency_key")
+        if idempotency_key is not None and not isinstance(
+            idempotency_key, str
+        ):
+            return _json_result({
+                "error": "validation_failed",
+                "message": "idempotency_key must be a string when provided",
+            })
+
+        if not await self._verify_repo_in_workspace(repo_id):
+            return _json_result({
+                "error": "not_found",
+                "message": (
+                    f"repo {repo_id} is not activated for this workspace"
+                ),
+            })
+
+        # Resolve play_key → Pipeline via lane_id (Wave A established
+        # the same mapping in ``_tool_runs_query``). A play that has
+        # never been automated for this repo has no Pipeline row, so
+        # we surface ``no_automation`` rather than 404 to point the
+        # caller at the right next step.
+        pipeline = (
+            await self._session.execute(
+                select(Pipeline).where(
+                    Pipeline.workspace_id == self._workspace_id,
+                    Pipeline.repo_id == repo_id,
+                    Pipeline.lane_id == play_key,
+                )
+            )
+        ).scalar_one_or_none()
+        if pipeline is None:
+            return _json_result({
+                "error": "no_automation",
+                "message": (
+                    f"Play {play_key!r} is not yet automated for this "
+                    "repo. Use play_automate first or run via shipctl."
+                ),
+            })
+        if not pipeline.enabled:
+            return _json_result({
+                "error": "conflict",
+                "message": (
+                    "pipeline is disabled; toggle it on before running"
+                ),
+            })
+
+        # The HTTP route consults starter-workflow availability +
+        # GitHub installation state before it can dispatch a workflow_dispatch.
+        # The Navigator can't safely cross those boundaries from a chat
+        # turn (no Settings.github_app, possibly no install), so we
+        # take the lighter-weight route: queue a ``PipelineRun`` row
+        # with trigger='manual' / status='queued' and leave the
+        # actual dispatch to whichever scheduler is wired up. This
+        # mirrors how the wizard's seed flow stages runs.
+        from datetime import timezone as _tz
+
+        now = datetime.now(_tz.utc)
+        run_payload: dict[str, Any] = {"source": "navigator"}
+        if idempotency_key:
+            run_payload["idempotency_key"] = idempotency_key
+
+        run = PipelineRun(
+            pipeline_id=pipeline.id,
+            workspace_id=self._workspace_id,
+            trigger="manual",
+            status="queued",
+            started_at=now,
+            summary=f"Navigator queued {pipeline.name or play_key}",
+            payload=run_payload,
+        )
+        self._session.add(run)
+        await self._session.flush()
+
+        await self._audit_navigator_tool(
+            tool_name="play_run_now",
+            payload={
+                "play_key": play_key,
+                "repo_id": str(repo_id),
+                "pipeline_id": str(pipeline.id),
+                "run_id": str(run.id),
+                "idempotency_key": idempotency_key,
+            },
+            target={"kind": "pipeline", "id": str(pipeline.id)},
+        )
+
+        return _json_result(
+            {
+                "run_id": str(run.id),
+                "pipeline_id": str(pipeline.id),
+                "status": "queued",
+                "play_key": play_key,
+                "repo_id": str(repo_id),
+            }
+        )
+
+    async def _tool_play_automate(self, args: dict[str, Any]) -> str:
+        gate_err = await self._require_admin_or_error(
+            tool_name="play_automate"
+        )
+        if gate_err is not None:
+            return _json_result(gate_err)
+
+        try:
+            play_key = _require_str(args, "play_key")
+            cadence = _require_str(args, "cadence")
+        except ToolInvocationError as exc:
+            return _json_result({
+                "error": "validation_failed",
+                "message": str(exc),
+            })
+
+        scope = args.get("scope")
+        if scope not in ("repo", "fleet"):
+            return _json_result({
+                "error": "validation_failed",
+                "message": "scope must be 'repo' or 'fleet'",
+            })
+
+        name = args.get("name")
+        if name is not None and not isinstance(name, str):
+            return _json_result({
+                "error": "validation_failed",
+                "message": "name must be a string when provided",
+            })
+
+        # Resolve the catalog pattern up front so we can stamp a
+        # human title on the row even when the caller didn't pass one.
+        try:
+            patterns = catalog_service.list_patterns()
+        except catalog_service.CatalogError as exc:
+            return _json_result({
+                "error": "internal",
+                "message": f"catalog read failed: {exc}",
+            })
+        pattern = next((p for p in patterns if p.id == play_key), None)
+        if pattern is None:
+            return _json_result({
+                "error": "not_found",
+                "message": f"no catalog pattern with id={play_key!r}",
+            })
+        derived_name = (
+            name
+            or getattr(pattern, "title", None)
+            or play_key
+        )
+
+        # Map the free-form cadence onto Lane.kind (once / event /
+        # schedule). Cadence strings that look like a cron expression
+        # (5 whitespace-separated fields) become schedule + cron.
+        cadence_l = cadence.strip().lower()
+
+        def _classify_cadence(c: str) -> tuple[str, str | None]:
+            if c == "manual":
+                return "once", None
+            if c == "on_pr":
+                return "event", None
+            if c == "weekly":
+                return "schedule", "0 9 * * 1"
+            if c == "daily":
+                return "schedule", "0 9 * * *"
+            if c == "hourly":
+                return "schedule", "0 * * * *"
+            if len(c.split()) == 5:
+                return "schedule", c
+            return "event", None
+
+        kind, cron = _classify_cadence(cadence_l)
+
+        if scope == "repo":
+            try:
+                repo_id = _parse_uuid(args, "repo_id")
+            except ToolInvocationError as exc:
+                return _json_result({
+                    "error": "validation_failed",
+                    "message": str(exc),
+                })
+            if not await self._verify_repo_in_workspace(repo_id):
+                return _json_result({
+                    "error": "not_found",
+                    "message": (
+                        f"repo {repo_id} is not activated for this "
+                        "workspace"
+                    ),
+                })
+
+            # Synthesise a stable lane_id string keyed by the catalog
+            # pattern + cadence so re-invocations with identical args
+            # collide on the unique (repo_id, lane_id) constraint.
+            cadence_slug = "".join(
+                ch if ch.isalnum() else "_" for ch in cadence_l
+            )[:20]
+            slug_base = "".join(
+                ch if (ch.isalnum() or ch == "_") else "_"
+                for ch in play_key.lower()
+            )[:40]
+            lane_key = f"{slug_base}_{cadence_slug}"[:64]
+
+            existing_lane = (
+                await self._session.execute(
+                    select(Lane).where(
+                        Lane.repo_id == repo_id,
+                        Lane.lane_id == lane_key,
+                    )
+                )
+            ).scalar_one_or_none()
+            if existing_lane is not None:
+                return _json_result({
+                    "error": "conflict",
+                    "message": (
+                        "a Lane with this play_key + cadence already "
+                        "exists on the repo"
+                    ),
+                    "existing_lane_id": str(existing_lane.id),
+                })
+
+            row = Lane(
+                workspace_id=self._workspace_id,
+                repo_id=repo_id,
+                lane_id=lane_key,
+                kind=kind,
+                pattern=play_key[:255],
+                cron=cron,
+                idempotency_key=None,
+                enabled=True,
+                origin="manual",
+                config_blob={
+                    "name": derived_name,
+                    "play_key": play_key,
+                    "cadence": cadence,
+                    "source": "navigator",
+                },
+                sync_source="navigator",
+            )
+            self._session.add(row)
+            await self._session.flush()
+
+            await self._audit_navigator_tool(
+                tool_name="play_automate",
+                payload={
+                    "play_key": play_key,
+                    "scope": "repo",
+                    "repo_id": str(repo_id),
+                    "cadence": cadence,
+                    "name": derived_name,
+                    "lane_key": lane_key,
+                    "kind": kind,
+                },
+                target={"kind": "lane", "id": str(row.id)},
+            )
+
+            return _json_result(
+                {
+                    "lane_id": str(row.id),
+                    "lane_key": lane_key,
+                    "play_key": play_key,
+                    "scope": "repo",
+                    "repo_id": str(repo_id),
+                    "cadence": cadence,
+                    "status": "synthetic",
+                }
+            )
+
+        # scope == "fleet" — FleetLane is the workspace-wide primitive.
+        # Synthesise the same kind of stable lane_id used for repo
+        # scope so duplicate invocations collide on the unique
+        # ``(workspace_id, lane_id)`` constraint inside FleetLane.
+        cadence_slug = "".join(
+            ch if ch.isalnum() else "_" for ch in cadence_l
+        )[:20]
+        slug_base = "".join(
+            ch if (ch.isalnum() or ch == "_") else "_"
+            for ch in play_key.lower()
+        )[:40]
+        fleet_lane_key = f"{slug_base}_{cadence_slug}"[:64]
+
+        existing_fleet = (
+            await self._session.execute(
+                select(FleetLane).where(
+                    FleetLane.workspace_id == self._workspace_id,
+                    FleetLane.lane_id == fleet_lane_key,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing_fleet is not None:
+            return _json_result({
+                "error": "conflict",
+                "message": (
+                    "a Fleet lane with this play_key + cadence already "
+                    "exists for the workspace"
+                ),
+                "existing_lane_id": str(existing_fleet.id),
+            })
+
+        fleet_row = FleetLane(
+            workspace_id=self._workspace_id,
+            kind="mirror_lane",
+            name=derived_name,
+            pattern_id=play_key,
+            lane_id=fleet_lane_key,
+            cadence=cadence,
+            agent_slug=None,
+            inputs={"source": "navigator"},
+            enabled=True,
+        )
+        self._session.add(fleet_row)
+        await self._session.flush()
+
+        await self._audit_navigator_tool(
+            tool_name="play_automate",
+            payload={
+                "play_key": play_key,
+                "scope": "fleet",
+                "cadence": cadence,
+                "name": derived_name,
+                "lane_key": fleet_lane_key,
+            },
+            target={"kind": "fleet_lane", "id": str(fleet_row.id)},
+        )
+
+        return _json_result(
+            {
+                "lane_id": str(fleet_row.id),
+                "lane_key": fleet_lane_key,
+                "play_key": play_key,
+                "scope": "fleet",
+                "repo_id": None,
+                "cadence": cadence,
+                "status": "synthetic",
+            }
+        )
+
+    async def _tool_automation_toggle(self, args: dict[str, Any]) -> str:
+        gate_err = await self._require_admin_or_error(
+            tool_name="automation_toggle"
+        )
+        if gate_err is not None:
+            return _json_result(gate_err)
+
+        try:
+            pipeline_id = _parse_uuid(args, "pipeline_id")
+        except ToolInvocationError as exc:
+            return _json_result({
+                "error": "validation_failed",
+                "message": str(exc),
+            })
+        enabled = args.get("enabled")
+        if not isinstance(enabled, bool):
+            return _json_result({
+                "error": "validation_failed",
+                "message": "enabled must be a boolean",
+            })
+
+        pipeline = (
+            await self._session.execute(
+                select(Pipeline).where(
+                    Pipeline.workspace_id == self._workspace_id,
+                    Pipeline.id == pipeline_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if pipeline is None:
+            return _json_result({
+                "error": "not_found",
+                "message": (
+                    f"pipeline {pipeline_id} not found in this workspace"
+                ),
+            })
+
+        prior_enabled = pipeline.enabled
+        if prior_enabled != enabled:
+            from datetime import timezone as _tz
+
+            pipeline.enabled = enabled
+            pipeline.updated_at = datetime.now(_tz.utc)
+            await self._audit_navigator_tool(
+                tool_name="automation_toggle",
+                payload={
+                    "pipeline_id": str(pipeline_id),
+                    "lane_id": pipeline.lane_id,
+                    "enabled": enabled,
+                    "prior_enabled": prior_enabled,
+                },
+                target={"kind": "pipeline", "id": str(pipeline.id)},
+            )
+            await self._session.flush()
+
+        return _json_result(
+            {
+                "pipeline_id": str(pipeline.id),
+                "enabled": enabled,
+                "prior_enabled": prior_enabled,
+            }
+        )
+
+    async def _tool_intel_harvest_trigger(self, args: dict[str, Any]) -> str:
+        gate_err = await self._require_admin_or_error(
+            tool_name="intel_harvest_trigger"
+        )
+        if gate_err is not None:
+            return _json_result(gate_err)
+
+        try:
+            repo_id = _parse_uuid(args, "repo_id")
+        except ToolInvocationError as exc:
+            return _json_result({
+                "error": "validation_failed",
+                "message": str(exc),
+            })
+        if not await self._verify_repo_in_workspace(repo_id):
+            return _json_result({
+                "error": "not_found",
+                "message": (
+                    f"repo {repo_id} is not activated for this workspace"
+                ),
+            })
+
+        # Per-repo per-workspace 1/hour rate limit. We encode it as a
+        # lookup against our own audit rows so the limit survives a
+        # process restart and is observable in the audit timeline
+        # (rate-limit denials themselves do NOT audit, per spec).
+        from datetime import timedelta, timezone as _tz
+
+        now = datetime.now(_tz.utc)
+        cutoff = now - timedelta(hours=1)
+        recent = (
+            await self._session.execute(
+                select(AuditLog)
+                .where(
+                    AuditLog.workspace_id == self._workspace_id,
+                    AuditLog.action
+                    == "navigator.tool.intel_harvest_trigger",
+                    AuditLog.target_id == str(repo_id),
+                    AuditLog.created_at >= cutoff,
+                )
+                .order_by(AuditLog.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if recent is not None:
+            elapsed = now - recent.created_at
+            retry_after = max(
+                1, int(timedelta(hours=1).total_seconds() - elapsed.total_seconds())
+            )
+            return _json_result(
+                {
+                    "error": "rate_limited",
+                    "message": (
+                        "harvest already triggered in the last hour"
+                    ),
+                    "retry_after_seconds": retry_after,
+                }
+            )
+
+        from backend.app.db.models.repo_intel import RepoIntelTriggeredBy
+        from backend.app.services.repo_intel import enqueue_harvest
+
+        # Settings carries the redis pool reference in the production
+        # path; fall back to ``None`` (inline asyncio.create_task) if
+        # the attribute isn't wired up — see ``enqueue_harvest`` for
+        # the documented inline-fallback contract.
+        redis_pool = getattr(self._settings, "redis_pool", None)
+        try:
+            await enqueue_harvest(
+                redis_pool,
+                self._workspace_id,
+                repo_id,
+                triggered_by=RepoIntelTriggeredBy.MANUAL_REFRESH,
+            )
+        except Exception as exc:  # noqa: BLE001 — surface as tool error
+            logger.exception(
+                "intel_harvest_trigger: enqueue failed (repo=%s)", repo_id
+            )
+            return _json_result({
+                "error": "internal",
+                "message": f"enqueue failed: {exc}",
+            })
+
+        await self._audit_navigator_tool(
+            tool_name="intel_harvest_trigger",
+            payload={"repo_id": str(repo_id)},
+            target={"kind": "workspace_repo", "id": str(repo_id)},
+        )
+
+        return _json_result(
+            {
+                "repo_id": str(repo_id),
+                "status": "queued",
+                "triggered_by": "navigator",
+            }
+        )
+
+    async def _tool_inbox_routing_upsert(self, args: dict[str, Any]) -> str:
+        gate_err = await self._require_admin_or_error(
+            tool_name="inbox_routing_upsert"
+        )
+        if gate_err is not None:
+            return _json_result(gate_err)
+
+        # Compromise: the underlying ``inbox_routing_rules`` schema
+        # doesn't have ``name`` / ``when`` / ``priority`` columns —
+        # the table is keyed by ``handle_key`` (one rule per handle
+        # per workspace) and the admin surface in
+        # ``app/api/v1/routes/inbox_routing.py`` exposes only
+        # handle / target_type / target_value / assignment_strategy /
+        # strategy_config / is_enabled. We map the spec's friendlier
+        # vocabulary onto those fields:
+        #
+        #   - ``name`` becomes the ``handle_key`` (must therefore
+        #     match the handle character class ``^[a-z][a-z0-9_]*$``).
+        #   - ``then_assign_to`` is unpacked into target_type +
+        #     target_value via the same packing rules the HTTP route
+        #     uses.
+        #   - ``when`` and ``priority`` are stored under
+        #     ``strategy_config['_when']`` / ``strategy_config['_priority']``
+        #     for forward-compatibility — the resolver currently
+        #     ignores them but the DB round-trips them so a future
+        #     migration can promote them to first-class columns.
+        name = args.get("name")
+        if not isinstance(name, str) or not name:
+            return _json_result({
+                "error": "validation_failed",
+                "message": "name is required",
+            })
+        if len(name) > 64:
+            return _json_result({
+                "error": "validation_failed",
+                "message": (
+                    "name maps to handle_key (max 64 chars)"
+                ),
+            })
+        import re
+
+        if not re.match(r"^[a-z][a-z0-9_]*$", name):
+            return _json_result({
+                "error": "validation_failed",
+                "message": (
+                    "name must match ^[a-z][a-z0-9_]*$ "
+                    "(it maps to the routing-rule handle_key)"
+                ),
+            })
+
+        when = args.get("when")
+        if when is None:
+            when = {}
+        if not isinstance(when, dict):
+            return _json_result({
+                "error": "validation_failed",
+                "message": "when must be an object",
+            })
+
+        then_assign_to = args.get("then_assign_to")
+        if not isinstance(then_assign_to, dict) or not then_assign_to:
+            return _json_result({
+                "error": "validation_failed",
+                "message": "then_assign_to is required (object)",
+            })
+        strategy = then_assign_to.get("strategy")
+        if not isinstance(strategy, str) or not strategy:
+            return _json_result({
+                "error": "validation_failed",
+                "message": (
+                    "then_assign_to.strategy is required (e.g. 'user', "
+                    "'group', 'round_robin', 'oncall', 'first', "
+                    "'codeowners', ...)"
+                ),
+            })
+
+        priority = args.get("priority", 100)
+        if not isinstance(priority, int) or isinstance(priority, bool):
+            return _json_result({
+                "error": "validation_failed",
+                "message": "priority must be an integer",
+            })
+
+        enabled = args.get("enabled", True)
+        if not isinstance(enabled, bool):
+            return _json_result({
+                "error": "validation_failed",
+                "message": "enabled must be a boolean",
+            })
+
+        # Map ``then_assign_to`` onto target_type + target_value +
+        # assignment_strategy. We mirror the strategy taxonomy from
+        # ``services.inbox.routing`` (which documents the built-in
+        # handle resolvers) plus the per-group strategies from the
+        # HTTP routing surface.
+        target_type: str
+        target_value: str
+        assignment_strategy: str | None = None
+
+        builtin_strategies = {
+            "codeowners",
+            "workspace_admin",
+            "workspace_owner",
+            "requested_by",
+            "first_admin",
+            "first_owner",
+        }
+        group_strategies = {"round_robin", "oncall", "first"}
+
+        if strategy == "user":
+            user_id_raw = then_assign_to.get("user_id")
+            if not isinstance(user_id_raw, str) or not user_id_raw:
+                return _json_result({
+                    "error": "validation_failed",
+                    "message": (
+                        "then_assign_to.strategy='user' requires user_id"
+                    ),
+                })
+            try:
+                user_uuid = uuid.UUID(user_id_raw)
+            except ValueError:
+                return _json_result({
+                    "error": "validation_failed",
+                    "message": "user_id is not a UUID",
+                })
+            member = (
+                await self._session.execute(
+                    select(WorkspaceMember).where(
+                        WorkspaceMember.workspace_id == self._workspace_id,
+                        WorkspaceMember.user_id == user_uuid,
+                    )
+                )
+            ).scalar_one_or_none()
+            if member is None:
+                return _json_result({
+                    "error": "validation_failed",
+                    "message": (
+                        "target user_id is not a member of this workspace"
+                    ),
+                })
+            target_type = "user"
+            target_value = str(user_uuid)
+
+        elif strategy == "group" or strategy in group_strategies:
+            group_id_raw = then_assign_to.get("group_id")
+            if not isinstance(group_id_raw, str) or not group_id_raw:
+                return _json_result({
+                    "error": "validation_failed",
+                    "message": (
+                        f"then_assign_to.strategy={strategy!r} requires "
+                        "group_id"
+                    ),
+                })
+            try:
+                group_uuid = uuid.UUID(group_id_raw)
+            except ValueError:
+                return _json_result({
+                    "error": "validation_failed",
+                    "message": "group_id is not a UUID",
+                })
+            group_row = (
+                await self._session.execute(
+                    select(MemberGroup).where(
+                        MemberGroup.id == group_uuid,
+                        MemberGroup.workspace_id == self._workspace_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if group_row is None:
+                return _json_result({
+                    "error": "validation_failed",
+                    "message": (
+                        "target group_id does not exist in this workspace"
+                    ),
+                })
+            target_type = "group"
+            target_value = group_row.key
+            if strategy in group_strategies:
+                assignment_strategy = strategy
+
+        elif strategy in builtin_strategies:
+            target_type = "strategy"
+            target_value = strategy
+
+        else:
+            return _json_result({
+                "error": "validation_failed",
+                "message": (
+                    f"unknown strategy {strategy!r} (allowed: 'user', "
+                    "'group', plus per-group "
+                    f"{sorted(group_strategies)} or built-in "
+                    f"{sorted(builtin_strategies)})"
+                ),
+            })
+
+        strategy_config: dict[str, Any] = {}
+        extra_cfg = then_assign_to.get("strategy_config")
+        if isinstance(extra_cfg, dict):
+            strategy_config.update(extra_cfg)
+        if when:
+            strategy_config["_when"] = when
+        if priority != 100:
+            strategy_config["_priority"] = priority
+
+        rule_id_arg = args.get("rule_id")
+        rule: InboxRoutingRule | None = None
+        if rule_id_arg is not None:
+            if not isinstance(rule_id_arg, str) or not rule_id_arg:
+                return _json_result({
+                    "error": "validation_failed",
+                    "message": "rule_id must be a UUID string when provided",
+                })
+            try:
+                rule_uuid = uuid.UUID(rule_id_arg)
+            except ValueError:
+                return _json_result({
+                    "error": "validation_failed",
+                    "message": "rule_id is not a UUID",
+                })
+            rule = (
+                await self._session.execute(
+                    select(InboxRoutingRule).where(
+                        InboxRoutingRule.id == rule_uuid,
+                        InboxRoutingRule.workspace_id == self._workspace_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if rule is None:
+                return _json_result({
+                    "error": "not_found",
+                    "message": (
+                        f"routing rule {rule_uuid} not found in this "
+                        "workspace"
+                    ),
+                })
+
+        action: str
+        if rule is None:
+            # Conflict-friendly insert — surface the dup as a 409-shaped
+            # error rather than letting an IntegrityError escape.
+            existing = (
+                await self._session.execute(
+                    select(InboxRoutingRule).where(
+                        InboxRoutingRule.workspace_id == self._workspace_id,
+                        InboxRoutingRule.handle_key == name,
+                    )
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                return _json_result({
+                    "error": "conflict",
+                    "message": (
+                        "a routing rule for this handle already exists; "
+                        "pass its rule_id to update it instead"
+                    ),
+                    "existing_rule_id": str(existing.id),
+                })
+            rule = InboxRoutingRule(
+                workspace_id=self._workspace_id,
+                handle_key=name,
+                target_type=target_type,
+                target_value=target_value,
+                assignment_strategy=assignment_strategy,
+                strategy_config=strategy_config,
+                is_enabled=enabled,
+            )
+            self._session.add(rule)
+            await self._session.flush()
+            action = "created"
+        else:
+            rule.target_type = target_type
+            rule.target_value = target_value
+            rule.assignment_strategy = assignment_strategy
+            rule.strategy_config = strategy_config
+            rule.is_enabled = enabled
+            action = "updated"
+            await self._session.flush()
+
+        await self._audit_navigator_tool(
+            tool_name="inbox_routing_upsert",
+            payload={
+                "rule_id": str(rule.id),
+                "action": action,
+                "handle": name,
+                "target_type": target_type,
+                "target_value": target_value,
+                "assignment_strategy": assignment_strategy,
+                "strategy_config": strategy_config,
+                "is_enabled": enabled,
+            },
+            target={"kind": "inbox_routing_rule", "id": str(rule.id)},
+        )
+
+        return _json_result(
+            {
+                "rule_id": str(rule.id),
+                "action": action,
+                "name": name,
+                "priority": priority,
+                "enabled": enabled,
+            }
+        )
 
 
 # ---------------------------------------------------------------------------
