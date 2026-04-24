@@ -8,9 +8,9 @@ import { apiPost } from "../http.mjs";
 export async function searchCommand(ctx, args) {
   if (!args.length || args[0] === "help" || args[0] === "-h" || args[0] === "--help") {
     console.log(`Usage:
-  ship search <query> [--top-k 8]
+  shipctl search <query> [--top-k 8]
 
-POST /search on the methodology API (same SHIP_API_BASE as ship pattern/tool/…).
+POST /search on the methodology API (same SHIP_API_BASE as shipctl pattern/tool/…).
 
 Global flags: --base-url URL  --json`);
     return;

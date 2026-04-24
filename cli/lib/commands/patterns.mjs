@@ -132,15 +132,15 @@ export async function patternCommand(ctx, args) {
   const [sub, ...rest] = args;
   if (!sub || sub === "help") {
     console.log(`Usage:
-  ship pattern list
-  ship pattern show <id>
-  ship pattern fetch <id>
-  ship pattern search <query> [--top-k N]
+  shipctl pattern list
+  shipctl pattern show <id>
+  shipctl pattern fetch <id>
+  shipctl pattern search <query> [--top-k N]
 
 With a local Ship tree (cwd or SHIP_REPO): list/show/fetch scan artifacts/patterns/<id>/ARTIFACT.md on disk.
 Otherwise: methodology API (GET /patterns, POST /fetch for fetch, POST /search for search).
 
-Plural alias: ship patterns …
+Plural alias: shipctl patterns …
 
 Global flags: --base-url URL  --json`);
     return;

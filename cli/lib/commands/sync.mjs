@@ -26,6 +26,52 @@ import {
 } from "../state/lockfile.mjs";
 import { getCliVersion } from "../version.mjs";
 
+function printSyncHelp() {
+  console.log(`shipctl sync — fetch the catalog into .ship/cache (and optionally lock).
+
+WHAT THIS COMMAND DOES
+  Pulls the artifacts your repo declares — pins, the active preset,
+  per-agent rule collections, and any pattern referenced by your lanes
+  (Automations in the operator console) — from the methodology API
+  into .ship/cache/<kind>/<id>@<version>/. Verifies content_sha256,
+  writes meta, optionally produces a lockfile so 'shipctl run --offline'
+  is reproducible.
+
+USAGE
+  shipctl sync [--check-only] [--only <kind:id>]... [--channel <c>]
+               [--force-unpin] [--dry-run] [--lock] [--json] [--cwd <dir>]
+
+FLAGS
+  --check-only         Report what would change; do not write to disk.
+  --only <kind:id>     Restrict to one or more artifacts (repeatable).
+                       Example: --only pattern:role-developer --only collection:preset-web-app
+  --channel <c>        Override config.api.channel for this invocation
+                       (stable|edge).
+  --force-unpin        Ignore artifacts.pins[] and pull the manifest
+                       version. Use when intentionally bumping a pin.
+  --dry-run            Print the resolution plan; do not write or fetch.
+  --lock               After sync, materialise every pattern referenced
+                       by the declared lanes and write
+                       .ship/shipctl.lock.json (used by
+                       'shipctl run --offline').
+  --json               Emit a structured JSON summary on stdout.
+  --cwd <dir>          Repo root. Defaults to the current directory;
+                       searches upward for .ship/.
+  --help, -h           Show this help.
+
+EXAMPLES
+  shipctl sync                          # baseline pull
+  shipctl sync --check-only --json      # CI guard
+  shipctl sync --only pattern:role-developer --only tool:methodology-api
+  shipctl sync --lock                   # produce a reproducible lockfile
+
+EXIT CODE
+  0 when everything resolved.
+  20 when at least one artifact failed to fetch (or --lock left
+     unresolved entries).
+`);
+}
+
 function parseSyncArgs(rest) {
   const out = {
     cwd: process.cwd(),
@@ -36,10 +82,17 @@ function parseSyncArgs(rest) {
     only: [],
     lock: false,
     json: false,
+    help: false,
+    unknown: [],
   };
   const copy = [...rest];
   while (copy.length) {
     const a = copy[0];
+    if (a === "--help" || a === "-h") {
+      out.help = true;
+      copy.shift();
+      continue;
+    }
     if (a === "--check-only") {
       out.checkOnly = true;
       copy.shift();
@@ -95,6 +148,12 @@ function parseSyncArgs(rest) {
       copy.shift();
       continue;
     }
+    /* Previously we silently dropped unrecognised tokens here. That
+     * hid bashisms like a misspelt `--cheek-only`, so we now collect
+     * them and warn from `syncCommand` once parsing is complete.
+     * Stays non-fatal because existing CI scripts may rely on the old
+     * permissive behaviour. */
+    out.unknown.push(a);
     copy.shift();
   }
   return out;
@@ -644,8 +703,17 @@ function cmpSemver(a, b) {
 
 export async function syncCommand(ctx, rest) {
   const args = parseSyncArgs(rest);
+  if (args.help) {
+    printSyncHelp();
+    return;
+  }
   if (ctx?.dryRun) args.dryRun = true;
   if (ctx?.json) args.json = true;
+  for (const tok of args.unknown) {
+    console.warn(
+      `warn: shipctl sync: ignoring unknown argument '${tok}'. Run 'shipctl sync --help'.`,
+    );
+  }
 
   let result;
   try {

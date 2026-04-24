@@ -189,7 +189,8 @@ test("shipctl run kind=event exits 0 with not-yet-wired reason", () => {
   assert.equal(r.status, 0, r.stderr);
   const payload = JSON.parse(r.stdout);
   assert.equal(payload.status, "noop");
-  assert.match(payload.reason, /not yet wired/);
+  assert.match(payload.reason, /run-agent\.yml/);
+  assert.match(payload.reason, /kind: once/);
 });
 
 test("shipctl run rejects mismatched trigger for kind=once", () => {

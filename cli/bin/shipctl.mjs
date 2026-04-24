@@ -85,12 +85,6 @@ try {
     process.exit(0);
   }
 
-  if (cmd === "doctor") {
-    const { doctorCommand } = await import("../lib/commands/doctor.mjs");
-    await doctorCommand(ctx, rest);
-    process.exit(0);
-  }
-
   if (cmd === "verify") {
     const { verifyCommand } = await import("../lib/commands/verify.mjs");
     await verifyCommand(ctx, rest);

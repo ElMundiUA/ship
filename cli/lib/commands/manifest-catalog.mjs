@@ -35,10 +35,10 @@ export async function resourceManifestCommand(resource, ctx, args) {
   if (!sub || sub === "help") {
     const plural = pluralFor(spec.fetchKind);
     console.log(`Usage:
-  ship ${resource} list
-  ship ${resource} show <id>
-  ship ${resource} fetch <id> [--version V] [--print]
-  ship ${resource} search <query> [--top-k N]
+  shipctl ${resource} list
+  shipctl ${resource} show <id>
+  shipctl ${resource} fetch <id> [--version V] [--print]
+  shipctl ${resource} search <query> [--top-k N]
 
 With a local Ship tree (cwd or SHIP_REPO): scans artifacts/${plural}/<id>/ARTIFACT.md on disk.
 Otherwise: methodology API (GET /${spec.apiPath}, POST /fetch for fetch, POST /search for search).
@@ -47,7 +47,7 @@ In a Ship workspace (.ship/config.yml), 'fetch' writes the artifact to
 .ship/cache/<kind>/<id>@<version>/ARTIFACT.md and prints a 'cached:' line. Pass
 --print to also echo the body on stdout.
 
-Plural alias: ship ${spec.apiPath} …
+Plural alias: shipctl ${spec.apiPath} …
 
 Global flags: --base-url URL  --json`);
     return;

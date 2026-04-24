@@ -762,11 +762,63 @@ mapping callout. Build is green.
 
 ---
 
-### Phase 8 — CLI audit & docs (target: 3 days, not yet planned in detail)
+### Phase 8 — CLI audit & docs (target: 2-3 days)
 
-Review `shipctl` commands, retire/rename obsolete ones, update help
-text + README + setup-guide; document the new `shipctl callback`
-outcome flags from P3-03.
+Audit every `shipctl <X>` subcommand against the new IA, fix actual
+bugs uncovered (duplicate dispatch, missing `--help`, stale doc
+claims), rewrite `cli/README.md` to document the Phase-3 `callback`
+outcome flags + Phase-7 IA vocabulary, and refresh the landing
+`/cli` page + setup wizard. **Do NOT rename `lanes:` or `--lane`** —
+those are protocol-stable inside `.ship/config.yml`. Vocabulary lift
+is operator-prose only ("`lanes:` entries appear as Automations").
+
+#### Wave A — Source-side hygiene + help text
+
+- [ ] **P8-01 [CLI]** `cli/bin/shipctl.mjs` — remove duplicate `doctor` dispatch block (lines 71-74 vs 88-92); de-dup test
+- [ ] **P8-02 [CLI]** `cli/lib/commands/sync.mjs` — add `printSyncHelp()` + `--help` handler; document every flag from `parseSyncArgs`; warn on unknown tokens (currently dropped silently)
+- [ ] **P8-03 [CLI]** `cli/lib/commands/help.mjs` — refresh top-level `printHelp()`: add IA vocabulary preamble (Plays/Automations/Runs/Inbox + mapping line), surface `callback` outcome flags briefly, group commands logically (Setup / Catalog / Run / Telemetry / Misc), drop "RFC-0001" framing in favour of operator-first
+- [ ] **P8-04 [CLI]** Sweep `ship <verb>` → `shipctl <verb>` in `cli/lib/commands/{docs,search,patterns,manifest-catalog}.mjs` help strings; covered already by `init-help.test.mjs` for the top-level surface, extend test to spot-check each command
+- [ ] **P8-05 [CLI]** `cli/lib/commands/run.mjs` — clarify in help that `kind: lane` / `event` / `schedule` lanes execute via the workspace runner (`run-agent.yml`), not `shipctl run` directly; the `kind: once` noop message is correct but cryptic
+- [ ] **P8-06 [CLI]** `cli/lib/commands/callback.mjs` — keep flags identical (protocol stable) but rewrite help prose to reference Inbox / Run / RunSummary terminology; add a short example block at the bottom
+- [ ] **P8-07 [CLI/TEST]** Snapshot tests for `shipctl <cmd> --help` for the 8 most-used commands (init / sync / verify / config / lanes / run / callback / doctor) — guards against accidental regressions in help copy
+
+#### Wave B — `cli/README.md` rewrite
+
+- [ ] **P8-08 [DOC]** Add a top-level **Vocabulary** callout (same style as the Manual): `lanes:` ↔ Automations, `pattern:` ↔ Play, `pipeline_runs` ↔ Run, "what needs you" ↔ Inbox
+- [ ] **P8-09 [DOC]** Remove every `workflow` subcommand reference (lines ~81, ~206); the kind was removed in Phase 6
+- [ ] **P8-10 [DOC]** Add a missing **`shipctl run`** section between Sync and Verify: lane dispatch, multi-pattern, `--repo` fanout, callback envs, exit codes
+- [ ] **P8-11 [DOC]** Add a missing **`shipctl lanes`** section: `install`/`list`/`remove`, what it writes to `.github/workflows/`, relationship to console Automations, fleet-vs-repo scope
+- [ ] **P8-12 [DOC]** Add a missing **`shipctl callback`** section: when patterns call it (the `## Reporting` block from P3-07), the **RunSummary outcome flags** (`--outcome-text`, `--findings-count`, `--severity`, `--artifact`, `--escalation`, `--requires-approval`), env-vs-flag merge order, common pattern recipes
+- [ ] **P8-13 [DOC]** Add a short **`shipctl knowledge init`** section (currently only mentioned in passing)
+- [ ] **P8-14 [DOC]** Refresh the Quick reference table at L199 — every command + one-line blurb + which Manual section explains it
+- [ ] **P8-15 [DOC]** Strike the "RFC-0001 artifacts protocol" framing from the intro; replace with operator-first "Ship's CLI does three things: bootstrap a repo, sync the catalog, and run lanes"
+
+#### Wave C — Landing + setup wizard + Manual fixes
+
+- [ ] **P8-16 [FE]** `landing/src/app/cli/page.tsx` — extend the static `COMMANDS` array with `run`, `lanes`, `callback`; refresh the existing 5 blurbs to reflect IA vocabulary
+- [ ] **P8-17 [FE]** `landing/src/app/getting-started/page.tsx` + `landing/src/components/agent-setup-form.tsx` — vocabulary refresh ("after first sync, open the Inbox to see what needs your attention; visit Plays to browse the catalog; Coverage will show gaps"); regenerate any example `shipctl init` with current flag surface
+- [ ] **P8-18 [DOC]** Fix `documentation/automations.md` ~L141 stale claim that `shipctl run` requires single-pattern lane (it's been multi-pattern for a while; `run.test.mjs` proves it)
+- [ ] **P8-19 [DOC]** Sweep `landing/content/blog/*.md` for `shipctl fetch` / `shipctl adopt` references that don't match the binary; either fix or add a "blog post pre-dates the current CLI" note inline
+- [ ] **P8-20 [CLI]** **(soft alias)** Register `shipctl automations` as alias → same dispatch as `shipctl lanes` in `bin/shipctl.mjs`; print a one-line "(alias of `shipctl lanes`; both work)" in its help. No deprecation of the original — both ship indefinitely
+- [ ] **P8-21 [CLI]** `cli/package.json` — refresh `description` field if it still mentions workflows; bump patch version
+- [ ] **P8-22 [DOC]** `documentation/CHANGELOG.md` — add CLI section noting the new `--help` coverage, the `automations` alias, and the `callback` outcome documentation
+
+#### Out of scope for Phase 8
+
+- **Removing** `--lane` flag or `lanes` subcommand (would break shipped workflows; protocol-stable).
+- **Removing** `pattern` as a subcommand (it's the artifact kind from RFC-0001/0008; protocol-stable).
+- **Generating** help text from a schema — current hand-maintained pattern is fine for 20 commands; revisit only if surface grows.
+- **`shipctl bootstrap` stub** — leave for a future cleanup pass.
+
+#### Parallelization plan
+
+- Wave A — one sub-agent (touches many files but all small, single coherent voice for help text)
+- Wave B — me (markdown rewrite, full control of tone)
+- Wave C — one sub-agent (landing FE + manual sweep + alias)
+
+**DoD:** `cli/README.md` documents every command including `callback` outcome flags. `shipctl help` reads operator-first. Landing `/cli` lists at least the 8 most-used commands. The duplicate doctor dispatch is gone. `automations` alias works. No remaining `workflow` subcommand mentions in any doc surface.
+
+---
 
 ### Phase 9 — Landing page (target: 3 days, not yet planned in detail)
 
