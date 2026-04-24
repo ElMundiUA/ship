@@ -1,7 +1,7 @@
 ---
 rfc: 0010
 title: "Plays, Automations, Runs, Inbox — operator IA"
-status: Draft
+status: Accepted
 created: 2026-04-23
 supersedes_in_part: [rfc-0008]
 follows: 0008
@@ -54,11 +54,12 @@ appear in operator-facing copy.
 
 | Phase | Scope | Status |
 |---|---|---|
-| 1 | IA rename + collapse (routes, sidebar, fleet retirement) | planned |
-| 2 | Inbox v1 + routing model + member groups | planned |
-| 3 | Outcome-first Runs (RunSummary contract, escalation linkage) | planned |
-| 4 | Plays polish (categories, Coverage tab, Automate banner) | planned |
-| 5 | External channels (email / Slack / Teams) | out of scope |
+| 1 | IA rename + collapse (routes, sidebar, fleet retirement) | shipped |
+| 2 | Inbox v1 + routing model + member groups | shipped |
+| 3 | Outcome-first Runs (RunSummary contract, escalation linkage) | shipped |
+| 4 | Plays polish (categories, Coverage tab, Automate banner) | shipped |
+| 5 | Navigator tool surface for Inbox / Plays / Automations / Runs | shipped (Phase 6) |
+| 6 | External channels (email / Slack / Teams) | out of scope |
 
 Tactical execution plan (tickets, risks, DoD per phase) lives in
 [`documentation/internal/inbox-redesign-planning.md`](../internal/inbox-redesign-planning.md).

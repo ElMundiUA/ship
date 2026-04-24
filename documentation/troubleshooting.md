@@ -336,7 +336,40 @@ Failure-first lookup. Find the symptom with `Cmd-F` (operator language, not inte
 - **Fix:** install Node 20 LTS or newer (e.g. `nvm install 20 && nvm use 20`).
 - **Verify:** `node --version` is `v20.x` or higher; `shipctl --version` runs without parse errors.
 
-## Lanes
+## Inbox & routing
+
+#### Inbox items keep landing on the workspace owners
+
+- **Symptom:** items consistently arrive in `/inbox?owner=group:workspace-owners` with the diagnostic chip *"couldn't resolve `<handle>`, fell back to workspace owners — fix?"* on the item detail.
+- **Likely cause:** the [Play](/docs/concepts#plays) declares an abstract handle (e.g. `code_owner`, `release_manager`) that the workspace's routing rules don't map to a user, group, or strategy. The mandatory fallback (RFC-0010 §R2) catches the item so it isn't lost; `intake_reason` records *why*.
+- **Fix:**
+  1. Open `Settings → Inbox routing`. Confirm whether the unresolved handle is missing entirely or maps to a strategy that returned no owner (e.g. `codeowners` against a path with no `CODEOWNERS` entry).
+  2. Add the missing rule. Pick one of: `user:<id>`, `group:<slug>` (with an assignment strategy — `round_robin` / `oncall` / `first`), or one of the runtime strategies (`pr_author`, `codeowners`, `requested_by`, `repo_role`, `repo_metadata`).
+  3. Use the Navigator's `inbox_routing_preview` tool (or the *Preview* button in the rule editor) to dry-run the resolver against a synthetic item before saving — it returns the owner that *would* land without writing anything.
+- **Verify:** new items of that type now show a non-fallback owner; the diagnostic chip is gone; `inbox_routing_preview` for the same handle returns the same user as the item's `owner`.
+
+#### `inbox_routing_preview` returns *no owner*
+
+- **Symptom:** the preview tool (or the *Preview* button) reports `owner: null, reason: <strategy returned empty>` for a handle you expect to resolve.
+- **Likely cause:** the strategy ran but found nothing — `codeowners` with no matching `CODEOWNERS` line, `repo_role` with no member in that role, `pr_author` against a synthetic item with no PR context, `requested_by` against a scheduled run with no requester.
+- **Fix:** either fix the underlying signal (add the path to `CODEOWNERS`, fill the repo role on `Settings → Members`) or fall back to a deterministic target — change the rule to `group:<slug>` with `round_robin`, or to a single `user:<id>` for handles that should always page the same person.
+- **Verify:** rerun `inbox_routing_preview` for the same `(handle, repo, type)` triple — the response carries an `owner` and the same target appears on the next live item.
+
+#### Reassigning an Inbox item bounces back to the same owner
+
+- **Symptom:** you reassign an item to user A; the next event timeline entry shows it reassigned again to user B (the original owner) within seconds.
+- **Likely cause:** an Automation (or a Navigator rule) is re-emitting the item from the source row (`clarifications`, `improvements`, `pipeline_runs.outcome`) on every push of new evidence, and routing re-runs at intake. The single-owner discipline (RFC-0010 §I3) holds, but each fresh emission is a *new* `inbox_items` row with its own routing pass.
+- **Fix:** check the Run that produced the item (`/runs/<rid>`) — if the same Play is firing on every commit, throttle the cadence (`event` → `schedule`, or add a `when:` filter), or accept the underlying improvement so it is no longer re-proposed.
+- **Verify:** `/inbox?source=<source_table>:<row_id>` shows one open row again instead of a chain; the *assigned* event timeline stops bouncing.
+
+#### `inbox.profile` change in a pattern doesn't take effect
+
+- **Symptom:** you bumped `spec.inbox.profile` (or added `spec.inbox.overrides`) on a pattern, but new Inbox items still carry the old `(handle, when[])` shape.
+- **Likely cause:** profile resolution happens at intake against the **cached** pattern body. If `shipctl sync` hasn't refreshed the artifact (or the workspace pins an older version under `artifacts.pins`), the old profile is still in flight.
+- **Fix:** `shipctl sync` (or bump the pin), then re-trigger the Play. The next Run's escalations carry the new profile. Use `inbox_routing_preview` to dry-run the new shape against a synthetic item before re-triggering.
+- **Verify:** `shipctl pattern show <id> --json | jq '.spec.inbox'` returns the new block; the next Run page shows escalations with the expected `handle` resolved correctly.
+
+## Lanes (Automations)
 
 #### `shipctl run --lane <id>` exits 2
 
@@ -375,4 +408,4 @@ Failure-first lookup. Find the symptom with `Cmd-F` (operator language, not inte
 
 ## Where to next
 
-If a recipe (not a failure) is what you actually need — pinning, channel switching, telemetry opt-in, bootstrap walkthroughs, lane install/lock/run — read [Operating](/docs/operating). For field-level config detail go to [Configuration](/docs/configuration). The exact command/flag surface is documented in [/cli](/cli), and the normative behaviour behind every error in this page traces back to the [Protocol RFCs](/docs/protocol) — RFC-0001 (artifacts), RFC-0002 (config), RFC-0003 (telemetry & feedback), RFC-0005 (artifact folders), RFC-0007 (lanes).
+If a recipe (not a failure) is what you actually need — pinning, channel switching, telemetry opt-in, bootstrap walkthroughs, Automation install / lock / run — read [Operating](/docs/operating). For the operator surfaces themselves see [Concepts](/docs/concepts) (Plays / Automations / Runs / Inbox), [Automations](/docs/automations) (Coverage tab + assignment wizard), and [Knowledge buckets](/docs/knowledge-buckets). For field-level config detail go to [Configuration](/docs/configuration). The exact command / flag surface is documented in [/cli](/cli), and the normative behaviour behind every error on this page traces back to the [Protocol RFCs](/docs/protocol) — RFC-0001 (artifacts), RFC-0002 (config), RFC-0003 (telemetry & feedback), RFC-0005 (artifact folders), RFC-0007 (lanes), RFC-0010 (Plays / Automations / Runs / Inbox).

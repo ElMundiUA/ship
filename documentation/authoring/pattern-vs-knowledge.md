@@ -71,8 +71,8 @@ to calibrate.
 | Today                                                                    | Verdict                   | Where it should live                                                                                   |
 |--------------------------------------------------------------------------|---------------------------|--------------------------------------------------------------------------------------------------------|
 | `role-developer` — branch contract, PR shape, evidence comment marker    | Pattern                   | Stays as `pattern:role-developer`                                                                      |
-| `flow-daily-retro` — scheduled retrospective producing a tracker comment | Pattern                   | Stays as `pattern:flow-daily-retro`; the scheduled cadence is a **lane** in `.ship/config.yml`         |
-| `scheduled-sdlc-lane` — starter YAML + per-lane wiring                    | Neither — it's plumbing   | No longer a catalog artifact. The starter YAML lives in `backend/app/resources/starter_workflows/`; cadences live as lanes |
+| `flow-daily-retro` — scheduled retrospective producing a tracker comment | Pattern                   | Stays as `pattern:flow-daily-retro`; the scheduled cadence is one row in `lanes:` in `.ship/config.yml` (an [Automation](/docs/automations) in the console) |
+| `scheduled-sdlc-lane` — starter YAML + per-lane wiring                    | Neither — it's plumbing   | No longer a catalog artifact. The starter YAML lives in `backend/app/resources/starter_workflows/`; cadences live as `lanes:` rows (Automations) |
 | `web-design-guidelines` — colour tokens, type scale, motion rules        | **Knowledge bucket**      | `repo`-scoped bucket under `.ship/knowledge/web-design-guidelines.md`; topics `[presentation, web]`    |
 | `pdf-generation-handbook` — print bleed, embedded fonts, paginated TOC   | **Knowledge bucket**      | `project`-scoped bucket (shared across repos), topic `[delivery]`; patterns that touch PDFs reference it via `spec.knowledge_topics` |
 | `brand-book-elmundi` — logo lockups, voice, do/don't pairs               | **Knowledge bucket**      | `workspace`-scoped bucket, topic `[branding]`; uploaded via the Distiller                              |
@@ -203,8 +203,11 @@ existing pattern's `knowledge_topics` to consult it.
   [Knowledge buckets](/docs/knowledge-buckets).
 - The general authoring contract:
   [Authoring artifacts](/docs/authoring).
-- Vocabulary: [Concepts](/docs/concepts).
+- Vocabulary: [Concepts](/docs/concepts) — including how a `pattern`
+  surfaces as a [Play](/docs/concepts#plays) in the console and how
+  cadences become [Automations](/docs/automations).
 - Folder + frontmatter normative shape:
   [RFC-0005](/docs/protocol/rfc-0005-artifact-folder-spec-v2);
   pattern frontmatter metadata shipped in
-  [RFC-0008](/docs/protocol/rfc-0008-catalog-reform).
+  [RFC-0008](/docs/protocol/rfc-0008-catalog-reform); operator IA in
+  [RFC-0010](/docs/protocol/rfc-0010-plays-and-inbox).
