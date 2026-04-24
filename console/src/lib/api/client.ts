@@ -613,6 +613,34 @@ export function getTrackerFsm(
 
 // --- Unified wizard seed PR (Wizard v2 iter 5) -----------------------------
 
+/**
+ * CODEOWNERS → routing summary block on :class:`WizardSeedOut` (P5-06).
+ *
+ * Surfaced in the Wave-8c "what just happened" panel so the operator
+ * can see how many routing rules were pre-seeded from CODEOWNERS and
+ * which owner handles couldn't be matched to a workspace member yet.
+ */
+export interface ApiWizardSeedCodeownersSummary {
+  file_found: boolean;
+  rules_count: number;
+  routing_rules_created: number;
+  unresolved_owners: string[];
+}
+
+/**
+ * Repo-intel harvest dispatch handle (P5-06).
+ *
+ * - ``enqueued=true`` → arq worker is processing the harvest;
+ *   ``job_id`` is the polling handle.
+ * - ``enqueued=false`` → no worker, the wizard ran the harvest
+ *   inline and ``intel_id`` points at the freshly-inserted row.
+ */
+export interface ApiWizardSeedIntelHandle {
+  enqueued: boolean;
+  job_id: string | null;
+  intel_id: string | null;
+}
+
 export interface ApiWizardSeedResult {
   pr_url: string;
   pr_number: number;
@@ -623,6 +651,13 @@ export interface ApiWizardSeedResult {
   tracker_kind: string | null;
   run_token_prefix: string | null;
   run_token_rotated: boolean;
+  // ── P5-06 / P5-07 additions ────────────────────────────────
+  // All three default to ``null`` / ``0`` server-side so older FE
+  // builds that don't read them keep deserialising. The Wave-8c
+  // wizard's done step renders them directly.
+  codeowners: ApiWizardSeedCodeownersSummary | null;
+  intel: ApiWizardSeedIntelHandle | null;
+  synthetic_lanes_created: number;
 }
 
 export function wizardSeed(
@@ -641,6 +676,136 @@ export function wizardSeed(
     `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/wizard_seed`,
     { method: "POST", body, token },
   );
+}
+
+/**
+ * Alias for :type:`ApiWizardSeedResult` — the v2 ``WizardSeedOut``
+ * shape returned by both ``POST .../wizard_seed`` and (P5-09)
+ * ``GET .../wizard_seed/latest``. Kept under both names so call
+ * sites that prefer "Result" (active dispatch) and ones that prefer
+ * "Out" (read-back / sessionStorage cache) read naturally.
+ */
+export type ApiWizardSeedOut = ApiWizardSeedResult;
+
+/**
+ * Fetch the most recent ``WizardSeedOut`` for a repo (P5-09).
+ *
+ * Backs the post-onboarding "What just happened" page when the
+ * sessionStorage cache (``ship.wizard_seed_result.<repo_id>``) is
+ * empty — typically because the operator reloaded the tab or
+ * opened the URL on a different device. Throws an
+ * :class:`ApiHttpError` with ``status === 404`` when the repo has
+ * never been wizard-seeded; the page treats that as the "no
+ * bootstrap yet" empty state, not a generic error.
+ */
+export function getLatestWizardSeed(
+  workspaceId: string,
+  repoId: string,
+  token?: string,
+): Promise<ApiWizardSeedOut> {
+  return apiFetch<ApiWizardSeedOut>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/wizard_seed/latest`,
+    { token },
+  );
+}
+
+// --- Repo intel (P5-09 — read + manual re-harvest) -------------------------
+
+/**
+ * Live ``RepoIntel`` snapshot for ``repo_id`` (P5-09).
+ *
+ * Mirrors :class:`backend.app.api.v1.routes.repos.RepoIntelOut`. Empty
+ * dicts/lists for payload columns mean "harvest succeeded but the
+ * extractor found nothing"; the absence of the row entirely surfaces
+ * as a 404 from :func:`getCurrentRepoIntel`.
+ */
+export interface ApiRepoIntel {
+  intel_id: string;
+  version: number;
+  is_current: boolean;
+  /** ``{"typescript": 0.62, ...}``. Floats sum to roughly 1. */
+  languages: Record<string, number>;
+  /** Lowercased canonical framework names, e.g. ``["next.js", "fastapi"]``. */
+  frameworks: string[];
+  /** Detected from manifest files, e.g. ``["npm", "uv"]``. */
+  package_managers: string[];
+  /** ``[{"path": "console/src/app/page.tsx", "kind": "page"}, …]``. */
+  entry_points: { path?: string; kind?: string; [k: string]: unknown }[];
+  /** ``{"top_level_dirs": [...], "depth_p50": 3, "file_count": 1234}``. */
+  structure: Record<string, unknown>;
+  commit_style: Record<string, unknown>;
+  visual_tokens: Record<string, unknown>;
+  harvested_at: string;
+  harvested_by: string | null;
+  harvest_duration_ms: number | null;
+  harvest_error: string | null;
+}
+
+/**
+ * Fetch the live :class:`RepoIntel` snapshot.
+ *
+ * Throws :class:`ApiHttpError` with ``status === 404`` when no
+ * harvest has landed yet — the polling badge on the post-onboarding
+ * page swallows 404 and keeps polling instead of surfacing it as
+ * an error.
+ */
+export function getCurrentRepoIntel(
+  workspaceId: string,
+  repoId: string,
+  options: { token?: string; signal?: AbortSignal } = {},
+): Promise<ApiRepoIntel> {
+  return apiFetch<ApiRepoIntel>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/intel/current`,
+    { token: options.token, signal: options.signal },
+  );
+}
+
+export interface ApiRepoIntelHarvestHandle {
+  enqueued: boolean;
+  job_id: string | null;
+  intel_id: string | null;
+}
+
+/**
+ * Manually re-trigger the intel harvest (P5-09 retry path).
+ *
+ * Reuses the wizard's own dispatch helper server-side so the
+ * response shape mirrors :type:`ApiWizardSeedIntelHandle` — the FE
+ * doesn't need to branch on whether the deployment runs an arq
+ * worker or executes the harvest inline.
+ */
+export function triggerRepoIntelHarvest(
+  workspaceId: string,
+  repoId: string,
+  token?: string,
+): Promise<ApiRepoIntelHarvestHandle> {
+  return apiFetch<ApiRepoIntelHarvestHandle>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/intel/harvest`,
+    { method: "POST", token },
+  );
+}
+
+/**
+ * Canonical Plays bundle preview — ``GET /v1/catalog/default-bundle``.
+ *
+ * Wave-8c "Confirm bootstrap" wizard step renders this verbatim. The
+ * order of ``bundle`` is the recommended display order on the
+ * backend (PR-attached first, scheduled scanners next, then
+ * release-time + the one-shot knowledge seed) so the FE doesn't
+ * re-sort.
+ */
+export interface ApiDefaultBundleEntry {
+  key: string;
+  title: string;
+  reason: string;
+}
+
+export interface ApiDefaultBundle {
+  bundle: ApiDefaultBundleEntry[];
+}
+
+export function getDefaultBundle(token?: string): Promise<ApiDefaultBundle> {
+  return apiFetch<ApiDefaultBundle>(`/v1/catalog/default-bundle`, { token });
 }
 
 // --- Team invites (B7) ------------------------------------------------------

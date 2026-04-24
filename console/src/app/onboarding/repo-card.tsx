@@ -1,33 +1,38 @@
 "use client";
 
 /**
- * RepoCard — per-repo configuration card for the wizard v2 configure
- * step. Handles:
+ * RepoCard — per-repo bootstrap card for the Wave-8c "Confirm
+ * bootstrap" wizard step.
  *
- *   - Preset picker (radio; persisted via ``PATCH /repos/{id}``).
- *   - Tracker binding (kind select + optional config; persisted via
- *     ``POST /api/onboard/tracker-bind``).
- *   - Agent secrets (catalog check + inline plaintext inputs for
- *     anything missing; pushed via ``POST /api/onboard/agent-secrets``).
- *   - "Open seed PR" button (calls ``POST /api/onboard/wizard-seed``;
- *     disabled until the gate passes).
+ * Wave-8c collapses the 14-preset menu: every repo now lands on the
+ * canonical Plays bundle (``DEFAULT_BUNDLE``) so this card no longer
+ * carries a preset radio. It's purely a status surface plus one CTA:
  *
- * Once a seed PR has been opened the card collapses to a status row
- * carrying the PR link and a ``Reseed`` escape hatch (rotates the
- * run token and opens a fresh PR).
+ *   - Tracker binding (re-uses the pre-Wave-8c chip + form).
+ *   - Agent secrets (re-uses the pre-Wave-8c catalog + paste form).
+ *   - "Open seed PR" CTA — disabled until tracker / required secrets
+ *     are ready, primary once the gate clears. POSTs to
+ *     ``/api/onboard/wizard-seed`` with just ``{workspace_id, repo_id}``;
+ *     the backend uses ``DEFAULT_BUNDLE`` regardless.
+ *
+ * On a successful seed we stash the full :type:`ApiWizardSeedResult`
+ * in ``sessionStorage`` under
+ * ``ship.wizard_seed_result.<repo_id>`` and navigate to
+ * ``/onboarding?step=done&ws=<wsId>&repo_id=<id>``. The done step
+ * (P5-09) reads from sessionStorage and falls back to the latest
+ * wizard_seed audit row if missing (e.g. user reloaded the tab).
  *
  * State model
  * -----------
  *
  * Backend is the source of truth. On mount the card renders the
- * server-provided snapshot and then only mutates through the route
- * handlers. Each mutation returns the fresh row (or an error code)
- * and the card patches its local state from the response. We keep
- * the seed PR result purely in local state — the wizard surfaces it
- * until the user merges the PR, at which point the dashboard banner
- * (iter 8) takes over.
+ * server-provided snapshot; tracker/secret mutations refresh local
+ * state from the API response. The seed CTA is one-shot — once the
+ * PR is open we navigate away rather than rendering a "seeded" row,
+ * because the next step (``done``) owns that summary.
  */
 
+import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 
 import type {
@@ -37,22 +42,14 @@ import type {
   TrackerKind,
 } from "@/lib/api/client";
 
-import { PRESET_META, type PresetId } from "./presets";
-
 export interface RepoCardInitial {
   repo: {
     id: string;
     full_name: string;
-    preset: PresetId | null;
     default_branch: string;
   };
   tracker: ApiTrackerBinding;
   agents: ApiAgentSecretStatus[];
-  /** Pre-populated when the wizard was reloaded after a prior seed. */
-  last_seed?: {
-    pr_url: string;
-    pr_number: number;
-  } | null;
   /**
    * Non-fatal per-probe failures from the server render. Each entry is a
    * short human-readable message. The card stays interactive — missing
@@ -60,7 +57,7 @@ export interface RepoCardInitial {
    * and surfaces these hints so the operator can reason about what's
    * actually wired vs. probed.
    *
-   * Why the fields aren't just absent: users reported the whole step 4
+   * Why the fields aren't just absent: users reported the whole step
    * bombing with "Couldn't load your activated repos" when a single
    * probe 500'd (App missing Secrets permission is the common cause).
    * Carrying a soft error lets us render the rest and point the user
@@ -72,6 +69,11 @@ export interface RepoCardInitial {
   };
 }
 
+/** sessionStorage key used to hand the seed result over to the done step. */
+export function wizardSeedResultStorageKey(repoId: string): string {
+  return `ship.wizard_seed_result.${repoId}`;
+}
+
 export function RepoCard({
   workspaceId,
   initial,
@@ -79,11 +81,9 @@ export function RepoCard({
   workspaceId: string;
   initial: RepoCardInitial;
 }) {
-  // ── Local state ───────────────────────────────────────────────
-  const [preset, setPreset] = useState<PresetId | null>(initial.repo.preset);
-  const [presetSaving, setPresetSaving] = useState(false);
-  const [presetError, setPresetError] = useState<string | null>(null);
+  const router = useRouter();
 
+  // ── Local state ───────────────────────────────────────────────
   const [tracker, setTracker] = useState<ApiTrackerBinding>(initial.tracker);
   const [trackerSaving, setTrackerSaving] = useState(false);
   const [trackerError, setTrackerError] = useState<string | null>(null);
@@ -103,21 +103,6 @@ export function RepoCard({
   const [secretsError, setSecretsError] = useState<string | null>(null);
   const [secretsFailed, setSecretsFailed] = useState<string[]>([]);
 
-  const [seedResult, setSeedResult] = useState<ApiWizardSeedResult | null>(
-    initial.last_seed
-      ? {
-          pr_url: initial.last_seed.pr_url,
-          pr_number: initial.last_seed.pr_number,
-          branch: "",
-          files: [],
-          presets: initial.repo.preset ? [initial.repo.preset] : [],
-          knowledge_slugs: [],
-          tracker_kind: tracker.kind,
-          run_token_prefix: null,
-          run_token_rotated: false,
-        }
-      : null,
-  );
   const [seedSaving, setSeedSaving] = useState(false);
   const [seedError, setSeedError] = useState<string | null>(null);
 
@@ -127,51 +112,19 @@ export function RepoCard({
     [agents],
   );
 
+  // Tracker is considered "ready" if any kind is wired (per-repo or
+  // workspace-default fallback). The wizard never blocks on tracker
+  // because the backend tolerates ``tracker_kind=null`` — the FSM
+  // doc just renders a "not connected yet" header. We surface it as
+  // a hint, not a hard gate.
+  const trackerReady = Boolean(tracker.kind || tracker.workspace_default_kind);
+
   const readyToSeed = Boolean(
-    preset &&
-      missingRequiredSecrets.length === 0 &&
+    missingRequiredSecrets.length === 0 &&
       !seedSaving &&
-      !presetSaving &&
       !secretsSaving &&
       !trackerSaving,
   );
-
-  // Mint-state pill: collapsed card once the PR is open.
-  if (seedResult) {
-    return (
-      <SeededRow
-        workspaceId={workspaceId}
-        repoFullName={initial.repo.full_name}
-        repoId={initial.repo.id}
-        seed={seedResult}
-        onReseed={async () => {
-          setSeedSaving(true);
-          setSeedError(null);
-          const resp = await fetch("/api/onboard/wizard-seed", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-              workspace_id: workspaceId,
-              repo_id: initial.repo.id,
-              presets: preset ? [preset] : undefined,
-              tracker_kind: tracker.kind ?? null,
-              rotate_run_token: true,
-            }),
-          });
-          setSeedSaving(false);
-          if (!resp.ok) {
-            const payload = await resp.json().catch(() => ({}));
-            setSeedError(payload?.error ?? "unknown");
-            return;
-          }
-          const body = (await resp.json()) as { result: ApiWizardSeedResult };
-          setSeedResult(body.result);
-        }}
-        error={seedError}
-        saving={seedSaving}
-      />
-    );
-  }
 
   return (
     <section
@@ -202,81 +155,12 @@ export function RepoCard({
             )}
           </div>
         </div>
-        <PresetBadge preset={preset} />
+        <ReadinessBadge
+          ready={readyToSeed && trackerReady}
+          missingSecrets={missingRequiredSecrets.length}
+          trackerReady={trackerReady}
+        />
       </header>
-
-      {/* ── Preset ────────────────────────────────────────────── */}
-      <fieldset className="mt-5">
-        <legend className="text-[11px] font-bold uppercase tracking-widest text-white/55">
-          Preset
-        </legend>
-        <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
-          {(Object.keys(PRESET_META) as PresetId[]).map((pid) => {
-            const meta = PRESET_META[pid];
-            const checked = preset === pid;
-            return (
-              <label
-                key={pid}
-                className={
-                  "flex cursor-pointer items-start gap-2 rounded-xl border p-3 text-left transition " +
-                  (checked
-                    ? "border-aqua/60 bg-aqua/[0.08]"
-                    : "border-white/5 bg-white/[0.02] hover:border-aqua/30")
-                }
-              >
-                <input
-                  type="radio"
-                  className="mt-1"
-                  name={`preset-${initial.repo.id}`}
-                  checked={checked}
-                  onChange={async () => {
-                    setPreset(pid);
-                    setPresetError(null);
-                    setPresetSaving(true);
-                    try {
-                      const resp = await fetch(
-                        `/api/repos/${encodeURIComponent(initial.repo.id)}/preset`,
-                        {
-                          method: "POST",
-                          headers: { "content-type": "application/json" },
-                          body: JSON.stringify({
-                            workspace_id: workspaceId,
-                            preset: pid,
-                          }),
-                        },
-                      );
-                      if (!resp.ok) {
-                        const payload = await resp.json().catch(() => ({}));
-                        setPresetError(payload?.error ?? "unknown");
-                      }
-                    } catch {
-                      setPresetError("unknown");
-                    } finally {
-                      setPresetSaving(false);
-                    }
-                  }}
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-semibold text-white">{meta.name}</span>
-                    <span className="rounded bg-white/5 px-1.5 py-0.5 font-mono text-[10px] tracking-wide text-white/45">
-                      {pid}
-                    </span>
-                  </div>
-                  <p className="mt-0.5 text-[11px] leading-snug text-white/60">
-                    {meta.blurb}
-                  </p>
-                </div>
-              </label>
-            );
-          })}
-        </div>
-        {presetError && (
-          <p className="mt-2 text-[11px] text-coral">
-            Couldn&apos;t save preset ({presetError}). Try again.
-          </p>
-        )}
-      </fieldset>
 
       {/* ── Tracker binding ────────────────────────────────────── */}
       <fieldset className="mt-5">
@@ -400,7 +284,6 @@ export function RepoCard({
                 );
                 setTrackerSaving(false);
                 if (resp.ok) {
-                  // Clear per-repo row; UI will fall back to workspace default.
                   setTracker({
                     ...tracker,
                     kind: tracker.workspace_default_kind,
@@ -555,7 +438,6 @@ export function RepoCard({
               const body = (await resp.json()) as {
                 result: { pushed: string[]; failed: { slug: string }[] };
               };
-              // Refresh the catalog so present-flags flip live.
               try {
                 const checkResp = await fetch(
                   `/api/onboard/agent-secrets?workspace_id=${encodeURIComponent(
@@ -571,8 +453,6 @@ export function RepoCard({
               } catch {
                 // Non-fatal: stale ``present`` flag, user can re-check.
               }
-              // Clear drafts for the slugs we just pushed successfully,
-              // keep the ones that failed so the user can retry.
               const pushed = new Set(body.result.pushed);
               setSecretDrafts((d) => {
                 const next = { ...d };
@@ -601,13 +481,14 @@ export function RepoCard({
           <div className="min-w-0 text-[11px] leading-snug text-white/55">
             {readyToSeed ? (
               <>
-                Ready to seed. Opens one PR with workflows, config, knowledge
-                starters and the tracker FSM.
+                Ready to bootstrap. Opens one PR with the canonical Plays,
+                ``.ship/config.yml``, knowledge starters and the tracker FSM
+                — and pre-seeds Inbox routing rules from CODEOWNERS.
               </>
             ) : (
               <>
                 <strong className="text-white/80">Not ready.</strong>{" "}
-                {missingBlockers(preset, missingRequiredSecrets)}
+                {missingBlockers(missingRequiredSecrets)}
               </>
             )}
           </div>
@@ -624,12 +505,10 @@ export function RepoCard({
                 body: JSON.stringify({
                   workspace_id: workspaceId,
                   repo_id: initial.repo.id,
-                  presets: preset ? [preset] : undefined,
-                  tracker_kind: tracker.kind ?? null,
                 }),
               });
-              setSeedSaving(false);
               if (!resp.ok) {
+                setSeedSaving(false);
                 const p = await resp.json().catch(() => ({}));
                 setSeedError(p?.error ?? "unknown");
                 return;
@@ -637,7 +516,23 @@ export function RepoCard({
               const body = (await resp.json()) as {
                 result: ApiWizardSeedResult;
               };
-              setSeedResult(body.result);
+              // Hand the result to the done step (P5-09) via
+              // sessionStorage. Key is per-repo so multiple seeds in
+              // one wizard session don't clobber each other; the
+              // done step reads by ``?repo_id=...``.
+              try {
+                const key = wizardSeedResultStorageKey(initial.repo.id);
+                sessionStorage.setItem(key, JSON.stringify(body.result));
+              } catch {
+                // sessionStorage can throw in private mode / when
+                // quota is exhausted. Non-fatal — the done step has
+                // an audit-log fallback.
+              }
+              const url = new URL("/onboarding", window.location.origin);
+              url.searchParams.set("step", "done");
+              url.searchParams.set("ws", workspaceId);
+              url.searchParams.set("repo_id", initial.repo.id);
+              router.push(url.pathname + url.search);
             }}
             className="rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-4 py-2 text-xs font-bold text-ink shadow-glow transition hover:brightness-110 disabled:opacity-40"
           >
@@ -655,73 +550,39 @@ export function RepoCard({
   );
 }
 
-function SeededRow({
-  repoFullName,
-  seed,
-  onReseed,
-  error,
-  saving,
+function ReadinessBadge({
+  ready,
+  missingSecrets,
+  trackerReady,
 }: {
-  workspaceId: string;
-  repoId: string;
-  repoFullName: string;
-  seed: ApiWizardSeedResult;
-  onReseed: () => Promise<void>;
-  error: string | null;
-  saving: boolean;
+  ready: boolean;
+  missingSecrets: number;
+  trackerReady: boolean;
 }) {
-  return (
-    <section
-      className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-aqua/30 bg-aqua/[0.05] p-4"
-      data-testid={`wizard-repo-card-${repoFullName}-seeded`}
-    >
-      <div className="min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="grid h-5 w-5 place-items-center rounded-full bg-aqua/20 text-[10px] text-aqua">
-            ✓
-          </span>
-          <span className="font-semibold text-white">{repoFullName}</span>
-          <span className="rounded bg-aqua/15 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-aqua">
-            seeded
-          </span>
-        </div>
-        <div className="mt-1 text-[11px] text-white/70">
-          PR opened —{" "}
-          <a
-            href={seed.pr_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-aqua underline-offset-2 hover:underline"
-          >
-            #{seed.pr_number}
-          </a>{" "}
-          · merge to activate the lanes.
-        </div>
-        {error && <p className="mt-1 text-[11px] text-coral">{error}</p>}
-      </div>
-      <button
-        type="button"
-        onClick={onReseed}
-        disabled={saving}
-        className="text-[11px] text-white/55 hover:text-white disabled:opacity-40"
-      >
-        {saving ? "Reseeding..." : "Reseed (rotate token)"}
-      </button>
-    </section>
-  );
-}
-
-function PresetBadge({ preset }: { preset: PresetId | null }) {
-  if (!preset) {
+  if (ready) {
+    return (
+      <span className="rounded-full border border-aqua/40 bg-aqua/[0.08] px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest text-aqua">
+        ready
+      </span>
+    );
+  }
+  if (missingSecrets > 0) {
     return (
       <span className="rounded-full border border-coral/40 bg-coral/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest text-coral">
-        no preset
+        {missingSecrets} secret{missingSecrets === 1 ? "" : "s"} missing
+      </span>
+    );
+  }
+  if (!trackerReady) {
+    return (
+      <span className="rounded-full border border-white/15 bg-white/[0.04] px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest text-white/55">
+        no tracker
       </span>
     );
   }
   return (
-    <span className="rounded-full border border-aqua/40 bg-aqua/[0.08] px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest text-aqua">
-      {preset}
+    <span className="rounded-full border border-white/15 bg-white/[0.04] px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest text-white/55">
+      pending
     </span>
   );
 }
@@ -761,8 +622,8 @@ function AgentsProbeError({ message }: { message: string }) {
           installation page
         </a>{" "}
         (or the org-level equivalent), accept the new permissions on the
-        repo, and reload. Meanwhile you can still pick a preset and open
-        the seed PR — agent keys can be added later.
+        repo, and reload. Meanwhile you can still open the seed PR —
+        agent keys can be added later.
       </p>
     );
   }
@@ -791,8 +652,7 @@ function AgentsProbeError({ message }: { message: string }) {
       the Ship GitHub App is missing the{" "}
       <strong>Secrets: read &amp; write</strong> repository permission.
       Grant it on the App&apos;s installation page and reload. You can
-      still pick a preset and open the seed PR — agent keys can be added
-      later.
+      still open the seed PR — agent keys can be added later.
     </p>
   );
 }
@@ -811,16 +671,8 @@ function extractProbeCode(message: string): string | null {
   }
 }
 
-function missingBlockers(
-  preset: PresetId | null,
-  missing: ApiAgentSecretStatus[],
-) {
-  const bits: string[] = [];
-  if (!preset) bits.push("pick a preset");
-  if (missing.length > 0) {
-    const names = missing.map((a) => a.secret_name).filter(Boolean).join(", ");
-    bits.push(`push ${names}`);
-  }
-  if (bits.length === 0) return "Save pending changes.";
-  return `${bits.join(" · ")}.`;
+function missingBlockers(missing: ApiAgentSecretStatus[]) {
+  if (missing.length === 0) return "Save pending changes.";
+  const names = missing.map((a) => a.secret_name).filter(Boolean).join(", ");
+  return `push ${names}.`;
 }
