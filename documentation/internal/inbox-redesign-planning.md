@@ -626,10 +626,110 @@ Sized for 1-2 day PRs each. Suffix: `[BE]` backend · `[FE]` frontend ·
 
 **DoD:** Catalog discoverable via categories. Coverage view drives automation creation. After-run banner converts manual runs into automations.
 
-### Phase 5 — External channels (OUT of scope, parked roadmap)
+### Phase 5 — Onboarding wizard v2 (DONE)
+
+Drop preset radio (`web-app` / `non-web-app` / …); ship a single
+canonical bootstrap PR per repo + dispatch initial knowledge harvest
++ seed Inbox routing from `CODEOWNERS` + create synthetic Lanes
+immediately so the new IA isn't empty after onboarding.
+
+- [x] **P5-01 [BE]** Collapse 14 legacy presets to one canonical `default`; `normalize_preset()` for back-compat
+- [x] **P5-02 [BE]** `app/services/codeowners.py` — fetch / parse / resolve `@handle` → `user_id` against workspace membership
+- [x] **P5-03 [BE]** `repo_intel` table + `harvest_repo_intel()` service + `arq` background job
+- [x] **P5-04 [CAT]** `DEFAULT_BUNDLE` (7 core Plays) + `DEFAULT_BUNDLE_REASONS` for UI explanations
+- [x] **P5-05 [BE]** Rewrite `compose_seed_files()` — no preset branching; emit `.ship/config.yml` + workflows + knowledge starters + `.ship/state/wizard-seed.v2.json` marker
+- [x] **P5-06 [BE]** `wizard_seed` orchestration v2: compose → seed routing from CODEOWNERS → enqueue intel harvest → `synthetic_lane_sync` → `WizardSeedOut` extended
+- [x] **P5-07 [BE]** Synthetic Lane rows on wizard seed (`lanes.origin`); reconciled to `merged` on real PR merge
+- [x] **P5-08 [FE]** Wizard rewrite — drop preset radio · steps `github` → `repos` → `tracker` → `confirm` → `done` · render `DEFAULT_BUNDLE` preview
+- [x] **P5-09 [FE]** Post-bootstrap "What just happened" page — repo result cards · CODEOWNERS preview · intel-poll badge · "What's next" CTA grid
+- [x] **P5-10 [TEST]** e2e wizard happy path covers full new flow with `data-testid` hooks
+
+**DoD reached:** New repos get one PR with full SDLC bundle · CODEOWNERS-driven Inbox routing pre-seeded · intel harvest dispatched · synthetic Lanes visible immediately · "what just happened" page bridges wizard → daily IA.
+
+---
+
+### Phase 6 — Navigator tools (target: 1 week)
+
+Expose every new surface from P1–P5 to the in-product Navigator
+(C12 chat at `/chat`) so the agent can drive Inbox / Plays /
+Automations / Runs / Coverage / Knowledge instead of the user
+hunting through pages. Implementation = extend the existing
+`ToolBox` (`backend/app/services/agent/tools.py`) — no new MCP
+runtime needed.
+
+**Architecture decision:** keep tools in-process inside the chat
+turn (auth, workspace scoping, audit, RBAC re-use the same
+`AsyncSession` and `AuthContext`). MCP-server export is **out of
+scope**; revisit if/when an external agent needs it.
+
+#### Wave A — Read-only surfaces (parallelizable)
+
+- [ ] **P6-01 [BE]** `inbox_list` / `inbox_counts` / `inbox_get` — read tools over `/v1/.../inbox*` (filters: type, status, owner=me|all|user_id, repo_id, play_key, limit)
+- [ ] **P6-02 [BE]** `inbox_routing_list` / `inbox_routing_preview` — list rules + dry-run resolver against a sample item; never mutates
+- [ ] **P6-03 [BE]** `plays_coverage` — wrap `GET /plays/coverage`; supports `category`, `critical_only`, `has_gaps`; returns rows with `repos_uncovered` deeplinks
+- [ ] **P6-04 [BE]** `plays_list` / `plays_get` — catalog enumeration with category + critical filters; richer than existing `list_catalog_artifacts`
+- [ ] **P6-05 [BE]** `runs_query` — outcome-first list; filters by play, repo, status, trigger, `has_escalations`, time window; returns `outcome_text` + `findings_by_severity`
+- [ ] **P6-06 [BE]** `run_detail` — artifacts + findings + escalations as deeplinks to inbox items
+- [ ] **P6-07 [BE]** `automations_list` — pipelines + lanes + fleet-lanes consolidated; `scope=all|fleet|repo`
+- [ ] **P6-08 [BE]** `repo_intel_get` — current `repo_intel` snapshot (languages, frameworks, structure, commit style, visual tokens)
+- [ ] **P6-09 [BE]** `knowledge_search_v2` — extend `search_workspace_kb` semantics with explicit `bucket_slug`, `repo_id`, and `intel_facts: bool` flag that augments hits with `repo_intel` summary
+
+#### Wave B — Mutating surfaces (sequential, audit-heavy)
+
+- [ ] **P6-10 [BE]** `inbox_dispose` — typed disposition (`accept`/`reject`/`snooze`/`reassign`/`comment`); `dry_run: bool` for preview; writes `audit_events`
+- [ ] **P6-11 [BE]** `inbox_snooze` / `inbox_reassign` — explicit single-purpose tools (LLMs pick these over polymorphic dispose for trivial cases)
+- [ ] **P6-12 [BE]** `play_run_now` — manual dispatch on a Play+repo; admin-gated; mirrors `POST /pipelines/{id}/runs`
+- [ ] **P6-13 [BE]** `play_automate` — create automation (Lane) for Play × scope × cadence; admin-gated
+- [ ] **P6-14 [BE]** `automation_toggle` — enable/disable a pipeline; admin-gated; audit
+- [ ] **P6-15 [BE]** `intel_harvest_trigger` — re-run harvest for a repo; admin-gated; rate-limited (1/hr/repo)
+- [ ] **P6-16 [BE]** `inbox_routing_upsert` — create or modify a routing rule; admin-gated; audit
+
+#### Wave C — Prompt + UX glue
+
+- [ ] **P6-17 [PROMPT]** Update `_AGENT_SYSTEM_PROMPT` in `topic.py` with: tool-selection guidance for the new IA · "prefer Inbox dispose over create_ticket when an item exists" · "use plays_coverage to answer 'what's missing?'" · examples
+- [ ] **P6-18 [BE]** Tool-level RBAC: each mutating tool calls a shared `_require_workspace_role(ROLES_ADMIN)`; reads default to `ROLES_READ`
+- [ ] **P6-19 [BE]** Audit envelope: every mutating tool writes `AuditLog(event="navigator.tool.<name>", actor=user_id, payload=arguments_redacted)`
+- [ ] **P6-20 [FE]** Render `inbox_dispose` / `play_run_now` / `automation_toggle` results as **action cards** (not bare JSON) in `single-window-chat.tsx` — a small per-tool registry mapping `tool_name → renderer`
+- [ ] **P6-21 [FE]** "Open in Inbox" / "Open in Runs" deeplink chips on tool result cards (uses `repo` and `id` from tool output)
+- [ ] **P6-22 [BE]** Lower chat RBAC from `ROLES_ADMIN` to `ROLES_MEMBER` for the `/chat/stream` route — Navigator should be available to all workspace members; mutating tools still admin-gated per P6-18 (separate concern)
+
+#### Wave D — Tests + docs
+
+- [ ] **P6-23 [TEST]** Unit tests per new tool (mock LLM, assert tool dispatch, response shape, RBAC denial path) — `backend/tests/test_navigator_*.py` family
+- [ ] **P6-24 [TEST]** Integration test: full chat turn that calls `inbox_list` → `inbox_dispose` and asserts side-effects (`InboxItem.status`, `AuditLog`)
+- [ ] **P6-25 [DOCS]** New page `documentation/internal/navigator-tools.md` — tool inventory by category · auth/RBAC table · "how to add a new tool" recipe
+
+**Parallelization plan:**
+- Wave A (P6-01..09) — 3 sub-agents, each owns 3 read tools; no shared state.
+- Wave B (P6-10..16) — must follow A (touches the same `tools.py`); 2 sub-agents on disjoint tool clusters.
+- Wave C (P6-17..22) — prompt + FE rendering + RBAC; depends on B.
+- Wave D (P6-23..25) — runs after C; can be parallel.
+
+**DoD:** Navigator can list / dispose Inbox items, query coverage gaps, run a Play, automate a Play, and explain repo intel — all from one chat. Member-tier users have access; mutations are admin-gated and audited.
+
+---
+
+### Phase 7 — Documentation rewrite (target: 1 week, not yet planned in detail)
+
+Update `/documentation/` site + internal book to the new IA
+(Plays / Automations / Runs / Inbox), retire Lanes / Pipelines /
+Patterns from user-facing docs, refresh tutorials and screenshots.
+
+### Phase 8 — CLI audit & docs (target: 3 days, not yet planned in detail)
+
+Review `shipctl` commands, retire/rename obsolete ones, update help
+text + README + setup-guide; document the new `shipctl callback`
+outcome flags from P3-03.
+
+### Phase 9 — Landing page (target: 3 days, not yet planned in detail)
+
+Refresh `landing/` to reflect Plays / Inbox / Automations model;
+new screenshots, value props, demo videos.
+
+### Phase 10 — External channels (parked, OUT of current scope)
 
 Email · Slack · Teams · PR comment ingestion. Each = separate
-adapter + auth + threading. Tracked separately.
+adapter + auth + threading. Tracked separately when there's pull.
 
 ---
 
