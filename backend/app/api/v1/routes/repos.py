@@ -1841,6 +1841,251 @@ async def wizard_seed(
 
 
 # ---------------------------------------------------------------------------
+# Wizard seed read-back (P5-09 — post-onboarding "What just happened" page)
+# ---------------------------------------------------------------------------
+#
+# The Wave-8c done step renders ``WizardSeedOut`` data: the merged-or-pending
+# PR, CODEOWNERS-derived routing summary, intel handle, synthetic lane
+# counts. Those fields are returned **once** by ``POST .../wizard_seed`` and
+# then the FE persists them in ``sessionStorage`` so a tab refresh rerenders
+# the page without another POST. The endpoints below are the durable
+# fallback when sessionStorage is empty (the user reloaded the tab after
+# closing it, opened the URL on another device, etc.) — we replay the most
+# recent ``repo.wizard_seed`` audit log row as the same response shape.
+
+
+@router.get(
+    "/{repo_id}/wizard_seed/latest",
+    response_model=WizardSeedOut,
+)
+async def get_latest_wizard_seed(
+    workspace_id: uuid.UUID,
+    repo_id: uuid.UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> WizardSeedOut:
+    """Return the most recent ``WizardSeedOut`` payload for ``repo_id``.
+
+    Sourced from the ``audit_log`` table (action ``repo.wizard_seed``)
+    rather than a dedicated wizard-seed table — the audit log is the
+    canonical record of the operation and already carries every field
+    the FE needs. Returns ``404`` if this repo has never been seeded.
+
+    Read-only; member role suffices (matches every other "what's the
+    current state" GET on this router).
+    """
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
+
+    row = (
+        await session.execute(
+            select(AuditLog)
+            .where(
+                AuditLog.workspace_id == workspace_id,
+                AuditLog.action == "repo.wizard_seed",
+                AuditLog.target_kind == "workspace_repo",
+                AuditLog.target_id == str(repo_id),
+            )
+            .order_by(AuditLog.id.desc())
+            .limit(1)
+        )
+    ).scalars().first()
+
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "no_wizard_seed",
+                "message": (
+                    "This repo has not been bootstrapped with the wizard yet."
+                ),
+            },
+        )
+
+    payload = row.payload or {}
+    codeowners_payload = payload.get("codeowners")
+    codeowners = (
+        WizardSeedCodeownersSummary(**codeowners_payload)
+        if isinstance(codeowners_payload, dict)
+        else None
+    )
+    intel_payload = payload.get("intel")
+    intel = (
+        WizardSeedIntelHandle(**intel_payload)
+        if isinstance(intel_payload, dict)
+        else None
+    )
+
+    return WizardSeedOut(
+        pr_url=payload.get("pr_url") or "",
+        pr_number=int(payload.get("pr_number") or 0),
+        branch=payload.get("branch") or "",
+        files=list(payload.get("files") or []),
+        presets=list(payload.get("presets") or []),
+        knowledge_slugs=list(payload.get("knowledge_slugs") or []),
+        tracker_kind=payload.get("tracker_kind"),
+        run_token_prefix=payload.get("run_token_prefix"),
+        run_token_rotated=bool(payload.get("run_token_rotated") or False),
+        codeowners=codeowners,
+        intel=intel,
+        synthetic_lanes_created=int(payload.get("synthetic_lanes_created") or 0),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Repo-intel read-back + manual harvest (P5-09)
+# ---------------------------------------------------------------------------
+
+
+class RepoIntelOut(BaseModel):
+    """Live ``RepoIntel`` snapshot for the post-onboarding done page.
+
+    Mirrors :class:`backend.app.db.models.repo_intel.RepoIntel` minus
+    workspace/repo plumbing already in the URL. Empty dicts/lists for
+    payload columns mean "harvest succeeded, but the extractor found
+    nothing" — readers must not treat empty as "no row" (the absence
+    case is a 404 from the route).
+    """
+
+    intel_id: uuid.UUID
+    version: int
+    is_current: bool
+    languages: dict[str, Any]
+    frameworks: list[Any]
+    package_managers: list[Any]
+    entry_points: list[Any]
+    structure: dict[str, Any]
+    commit_style: dict[str, Any]
+    visual_tokens: dict[str, Any]
+    harvested_at: datetime
+    harvested_by: str | None
+    harvest_duration_ms: int | None
+    harvest_error: str | None
+
+
+@router.get(
+    "/{repo_id}/intel/current",
+    response_model=RepoIntelOut,
+)
+async def get_current_repo_intel(
+    workspace_id: uuid.UUID,
+    repo_id: uuid.UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> RepoIntelOut:
+    """Return the live :class:`RepoIntel` row for ``repo_id`` or 404.
+
+    "Live" means ``is_current=TRUE`` — the same row the agent runners
+    consume. The post-onboarding page polls this once the wizard
+    handle reports ``intel.intel_id is None`` (harvest still queued)
+    until either a row appears or the FE-side timeout elapses.
+    """
+    from backend.app.db.models.integrations import WorkspaceRepo
+    from backend.app.services.repo_intel import get_current_intel
+
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
+
+    repo_row = (
+        await session.execute(
+            select(WorkspaceRepo).where(
+                WorkspaceRepo.id == repo_id,
+                WorkspaceRepo.workspace_id == workspace_id,
+            )
+        )
+    ).scalars().first()
+    if repo_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Repo not found in this workspace.",
+        )
+
+    row = await get_current_intel(session, repo_id)
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "no_intel",
+                "message": (
+                    "No repo-intel snapshot has been harvested for this "
+                    "repo yet. POST .../intel/harvest to trigger one."
+                ),
+            },
+        )
+    return RepoIntelOut(
+        intel_id=row.id,
+        version=row.version,
+        is_current=row.is_current,
+        languages=dict(row.languages or {}),
+        frameworks=list(row.frameworks or []),
+        package_managers=list(row.package_managers or []),
+        entry_points=list(row.entry_points or []),
+        structure=dict(row.structure or {}),
+        commit_style=dict(row.commit_style or {}),
+        visual_tokens=dict(row.visual_tokens or {}),
+        harvested_at=row.harvested_at,
+        harvested_by=row.harvested_by,
+        harvest_duration_ms=row.harvest_duration_ms,
+        harvest_error=row.harvest_error,
+    )
+
+
+class RepoIntelHarvestOut(BaseModel):
+    """Dispatch handle returned by ``POST .../intel/harvest`` (P5-09)."""
+
+    enqueued: bool
+    job_id: str | None = None
+    intel_id: uuid.UUID | None = None
+
+
+@router.post(
+    "/{repo_id}/intel/harvest",
+    response_model=RepoIntelHarvestOut,
+)
+async def trigger_repo_intel_harvest(
+    workspace_id: uuid.UUID,
+    repo_id: uuid.UUID,
+    request: Request,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> RepoIntelHarvestOut:
+    """Manually re-trigger the intel harvest (P5-09 retry button).
+
+    Reuses :func:`_dispatch_intel_harvest` for parity with the wizard's
+    own enqueue path, so the FE doesn't need to branch on whether the
+    deployment runs an arq worker. Admin-only — re-harvesting touches
+    GitHub APIs and writes a new ``RepoIntel`` row.
+    """
+    from backend.app.db.models.integrations import WorkspaceRepo
+
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+
+    repo_row = (
+        await session.execute(
+            select(WorkspaceRepo).where(
+                WorkspaceRepo.id == repo_id,
+                WorkspaceRepo.workspace_id == workspace_id,
+            )
+        )
+    ).scalars().first()
+    if repo_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Repo not found in this workspace.",
+        )
+
+    handle = await _dispatch_intel_harvest(
+        request=request,
+        session=session,
+        workspace_id=workspace_id,
+        repo_id=repo_row.id,
+    )
+    return RepoIntelHarvestOut(
+        enqueued=handle.enqueued,
+        job_id=handle.job_id,
+        intel_id=handle.intel_id,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Disconnect (B6)
 # ---------------------------------------------------------------------------
 
