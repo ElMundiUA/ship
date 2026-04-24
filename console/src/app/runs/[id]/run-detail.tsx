@@ -27,6 +27,8 @@
 import Link from "next/link";
 
 import { ArtifactCard } from "@/components/runs/artifact-card";
+import type { AutomateBannerData } from "@/components/runs/automate-banner";
+import { AutomateBannerControlled } from "@/components/runs/automate-banner-controlled";
 import { EscalationCard } from "@/components/runs/escalation-card";
 import { Badge, Card, CardHeader } from "@/components/ui";
 import type {
@@ -142,6 +144,13 @@ export type RunDetailViewProps = {
   escalations: ApiRunEscalation[];
   /** When the escalation fetch errored we render a degraded note. */
   escalationsError: boolean;
+  /**
+   * Pre-resolved Automate banner data (RFC-0010 P4-04). Computed
+   * server-side in the page so this view stays presentational. Pass
+   * ``null`` to skip the banner — the controlled wrapper handles
+   * the per-run dismiss state on top of that.
+   */
+  automateBanner?: AutomateBannerData | null;
 };
 
 export function RunDetail({
@@ -150,6 +159,7 @@ export function RunDetail({
   pipeline,
   escalations,
   escalationsError,
+  automateBanner = null,
 }: RunDetailViewProps) {
   const outcome: RunSummary = run.outcome ?? {};
   const playName = pipeline?.name ?? "Pipeline";
@@ -171,6 +181,12 @@ export function RunDetail({
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
         <div className="space-y-4">
+          {automateBanner && (
+            <AutomateBannerControlled
+              runId={run.id}
+              data={automateBanner}
+            />
+          )}
           <HeaderCard
             run={run}
             pipeline={pipeline}
