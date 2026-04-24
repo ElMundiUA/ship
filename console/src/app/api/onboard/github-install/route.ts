@@ -56,6 +56,10 @@ export async function POST(request: Request) {
         );
       if (err.status === 403)
         return wizardError(origin, wsId, "forbidden");
+      // 404 = ``_require_membership`` hides non-workspaces from strangers;
+      // also triggers when ``?ws=`` is stale or the user switched accounts.
+      if (err.status === 404)
+        return wizardError(origin, wsId, "workspace_not_found");
       // 503 = backend says the App is not configured (missing
       // GITHUB_APP_* env vars); surface a dedicated error so ops sees it.
       if (err.status === 503)
