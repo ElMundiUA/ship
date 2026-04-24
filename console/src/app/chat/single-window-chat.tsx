@@ -40,6 +40,7 @@
  * ``tool_result`` / ``assistant_message`` / ``end`` / ``error``).
  */
 
+import Link from "next/link";
 import {
   useCallback,
   useEffect,
@@ -190,6 +191,15 @@ type StreamEvent =
 type InitialState = {
   workspaceId: string;
   thread: Thread & { messages: Message[] };
+  /**
+   * Server-side probe for "does this workspace have at least one
+   * archived chat?". Drives the optional "View archived chats"
+   * link in :func:`EmptyHint`. Computed in ``page.tsx`` because
+   * the API client is server-only — we don't have a client-safe
+   * fetcher for this and it's not worth standing up an API route
+   * for one boolean. False on failure (silent).
+   */
+  hasArchivedChats?: boolean;
 };
 
 function clientId(): string {
@@ -202,9 +212,20 @@ function segId(): string {
 
 /**
  * Lift an array of persisted messages (initial state or post-reset
- * fresh thread) into the segment timeline. Tool messages from
- * history are intentionally skipped — historical tool-call
- * rehydration is Wave D. System messages stay hidden too.
+ * fresh thread) into the segment timeline.
+ *
+ * Wave D: assistant messages with persisted ``meta.tool_invocations``
+ * also emit one ``tool`` segment per invocation, **after** the
+ * corresponding ``assistant_text`` segment. The wire-order
+ * interleaving from Wave B (prose₁ → tool → prose₂) is lost on
+ * reload because we don't persist segment splits — the priority is
+ * just to make the tool cards visible at all so reloading a thread
+ * doesn't silently drop tool history. Persisting segment order is
+ * a backend change and out of scope here.
+ *
+ * Standalone ``tool`` role messages from history are still skipped
+ * — every tool call belongs to an assistant turn whose persisted
+ * meta already lists it. System messages stay hidden too.
  */
 function hydrateSegments(messages: Message[]): Segment[] {
   const out: Segment[] = [];
@@ -227,6 +248,48 @@ function hydrateSegments(messages: Message[]): Segment[] {
         serverMessageId: m.id,
         meta: m.meta,
       });
+      // Rehydrate tool cards from persisted ``meta.tool_invocations``.
+      // Backend (``_run_agent_turn``) writes one entry per tool call
+      // with ``{id, name, arguments, output}`` where ``output`` is a
+      // JSON-encoded string (the same string fed back to the model
+      // as the tool message body). Reuse :func:`normalizeToolResult`
+      // so error detection mirrors the live SSE path exactly.
+      const meta = m.meta;
+      if (meta && typeof meta === "object" && !Array.isArray(meta)) {
+        const raw = (meta as Record<string, unknown>).tool_invocations;
+        if (raw === undefined) {
+          // Most assistant rows pre-Wave-D have no tool history —
+          // absence is normal, not malformed.
+        } else if (!Array.isArray(raw)) {
+          warnOnce(
+            "assistant message meta.tool_invocations malformed",
+            meta,
+          );
+        } else {
+          for (const inv of raw) {
+            if (!inv || typeof inv !== "object") continue;
+            const i = inv as Record<string, unknown>;
+            const invId = typeof i.id === "string" ? i.id : segId();
+            const name = typeof i.name === "string" ? i.name : "tool";
+            const args =
+              i.arguments && typeof i.arguments === "object"
+                ? (i.arguments as Record<string, unknown>)
+                : {};
+            const output = typeof i.output === "string" ? i.output : undefined;
+            const result = normalizeToolResult({ output });
+            out.push({
+              kind: "tool",
+              // Prefix with the assistant message id so tool ids
+              // can't collide across turns (defensive — backend mints
+              // unique tc.ids per turn but cheap insurance).
+              id: `${m.id}:${invId}`,
+              name,
+              args,
+              result,
+            });
+          }
+        }
+      }
     }
   }
   return out;
@@ -239,7 +302,11 @@ function hydrateSegments(messages: Message[]): Segment[] {
 const REVEAL_MIN_DELAY = 18;
 const REVEAL_FAR_DELAY = 35;
 
-export function SingleWindowChat({ workspaceId, thread }: InitialState) {
+export function SingleWindowChat({
+  workspaceId,
+  thread,
+  hasArchivedChats = false,
+}: InitialState) {
   const [current, setCurrent] = useState<Thread>(thread);
   const [segments, setSegments] = useState<Segment[]>(() =>
     hydrateSegments(thread.messages),
@@ -282,6 +349,10 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
   const abortRef = useRef<AbortController | null>(null);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const lastUserAnchorRef = useRef<HTMLDivElement | null>(null);
+  // Last prompt body the user submitted, captured at the start of
+  // every ``send``. The error-card "Retry" button replays it so a
+  // failed stream isn't lost — the user doesn't have to retype.
+  const lastUserPromptRef = useRef<string | null>(null);
 
   // Word-by-word reveal tick. Only the currently-streaming text
   // segment advances — everything else sits at full length. We
@@ -577,6 +648,10 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
     async (message: string, opts: { forceNewThread?: boolean } = {}) => {
       const trimmed = message.trim();
       if (!trimmed || streaming) return;
+      // Stash the prompt before we kick off so an in-flight error
+      // can be retried. We store the *trimmed* body (what the
+      // backend actually saw) so retry sends an identical request.
+      lastUserPromptRef.current = trimmed;
       setErrorText(null);
       setStreaming(true);
       setAwaitingFirstDelta(true);
@@ -837,7 +912,7 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
       <div ref={scrollerRef} className="flex-1 overflow-y-auto py-4">
         <ChoiceProvider onChoose={(label) => void send(label)}>
           {segments.length === 0 ? (
-            <EmptyHint />
+            <EmptyHint hasArchivedChats={hasArchivedChats} />
           ) : (
             <div className="space-y-6">
               {/* Single ordered timeline. user / assistant_text /
@@ -872,8 +947,12 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
               {/* Single-line turn status at the end of the turn
                   (below the streamed prose if there is any, below
                   the user prompt if not). Replaces itself as state
-                  changes — never stacks. */}
-              {turnStatus ? <TurnStatusLine {...turnStatus} /> : null}
+                  changes — never stacks. The slot is a fixed-height
+                  reservation while a turn is in flight so flips
+                  between Thinking → Calling X → (gone) don't jiggle
+                  the conversation vertically; outside of streaming
+                  it collapses to nothing. */}
+              <TurnStatusSlot status={turnStatus} streaming={streaming} />
               {/* Empty runway so the scroller can keep the fresh
                   user message pinned near the top of the viewport
                   while the reply streams in below. Shrinks back
@@ -891,7 +970,16 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
       </div>
 
       {errorText ? (
-        <div className="py-2 text-[12px] text-rose-300">{errorText}</div>
+        <ChatErrorCard
+          error={errorText}
+          onDismiss={() => setErrorText(null)}
+          onRetry={() => {
+            const last = lastUserPromptRef.current;
+            setErrorText(null);
+            void send(last ?? "");
+          }}
+          canRetry={!streaming && (lastUserPromptRef.current?.length ?? 0) > 0}
+        />
       ) : null}
 
       <form
@@ -919,16 +1007,27 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
   );
 }
 
-function EmptyHint() {
+function EmptyHint({ hasArchivedChats }: { hasArchivedChats: boolean }) {
   return (
     <div className="flex h-full items-center justify-center text-center text-[12px] text-white/35">
       <div>
-        <p className="font-semibold text-white/60">Navigator — single window.</p>
+        <p className="font-semibold text-white/60">Ask Ship anything about this workspace.</p>
         <p className="mt-1 max-w-sm">
-          Ask the agent anything about this workspace. It can search the
-          repo knowledge base, read files, create tickets, and file
-          feedback against artifacts.
+          It can pull up Inbox items, walk you through a Play, kick off a
+          Run, or surface what your repos look like under the hood. Try
+          asking <em className="not-italic text-white/55">&ldquo;what&rsquo;s in my inbox?&rdquo;</em>{" "}
+          or <em className="not-italic text-white/55">&ldquo;list active automations&rdquo;</em>.
         </p>
+        {hasArchivedChats ? (
+          <p className="mt-3">
+            <Link
+              href="/chat/archived"
+              className="text-white/45 hover:text-white"
+            >
+              Looking for an older thread? View archived chats →
+            </Link>
+          </p>
+        ) : null}
       </div>
     </div>
   );
@@ -997,18 +1096,122 @@ function ToolSegmentRow({ segment }: { segment: ToolSegment }) {
   return <JsonFallback toolName={segment.name} result={result.result} />;
 }
 
-function TurnStatusLine({
-  tone,
-  text,
+/**
+ * Fixed-height status slot below the timeline.
+ *
+ * Replaces the conditional ``{turnStatus ? <TurnStatusLine /> :
+ * null}`` render path that flickered the layout up/down on every
+ * Thinking → Calling X → Thinking → gone transition. The slot
+ * always reserves ``min-h-[20px]`` while a turn is streaming, so
+ * the conversation stays vertically stable while the status text
+ * fades in/out via the Tailwind opacity transition.
+ *
+ * Outside of streaming we render nothing — we don't want a
+ * permanent blank gap below historical turns.
+ */
+function TurnStatusSlot({
+  status,
+  streaming,
 }: {
-  tone: "shimmer" | "error";
-  text: string;
+  status: { tone: "shimmer" | "error"; text: string } | null;
+  streaming: boolean;
 }) {
+  if (!streaming) return null;
+  if (!status) {
+    return <div aria-hidden className="min-h-[20px]" />;
+  }
   const cls =
-    tone === "shimmer"
+    status.tone === "shimmer"
       ? "chat-shimmer text-[13px]"
       : "text-[13px] text-rose-300/80";
-  return <div className={cls}>{text}</div>;
+  return (
+    <div
+      className={`min-h-[20px] opacity-100 transition-opacity duration-150 ${cls}`}
+    >
+      {status.text}
+    </div>
+  );
+}
+
+/**
+ * Inline error card for stream/transport failures, replacing the
+ * old muted-rose single-line ``errorText`` strip.
+ *
+ * Mirrors the ``<details>`` collapse pattern from
+ * :class:`tool-renderers/index.tsx::ErrorCard` so the chat UX
+ * stays consistent (rose dot · headline · collapsed detail), but
+ * deliberately doesn't extend that component — that one is
+ * tool-scoped and we don't want to twist its API for a non-tool
+ * use case. The card lives just above the composer; the composer
+ * stays enabled so the user can retry, dismiss, or just type
+ * something new without first having to clear the error.
+ */
+function ChatErrorCard({
+  error,
+  onDismiss,
+  onRetry,
+  canRetry,
+}: {
+  error: string;
+  onDismiss: () => void;
+  onRetry: () => void;
+  canRetry: boolean;
+}) {
+  // The headline is intentionally generic — the underlying message
+  // (HTTP status, exception text, etc.) lives in the <details>
+  // payload below and is rarely useful on its own.
+  const headline = "Stream failed";
+  const isMultiline = /\r?\n/.test(error);
+  const firstLine = error.split(/\r?\n/, 1)[0] ?? error;
+  const shortMessage =
+    firstLine.length > 120 ? firstLine.slice(0, 119).trimEnd() + "…" : firstLine;
+  const needsDetails =
+    error.length > 200 || isMultiline || error.length > shortMessage.length;
+  return (
+    <div className="my-2 rounded-2xl border border-rose-400/30 bg-rose-500/[0.06] px-4 py-3 text-[12px] text-rose-100/95">
+      <div className="flex items-center gap-2">
+        <span
+          aria-hidden
+          className="h-1.5 w-1.5 shrink-0 rounded-full bg-rose-300"
+        />
+        <span className="font-semibold">{headline}</span>
+        <span className="min-w-0 flex-1 truncate text-rose-200/80">
+          {shortMessage}
+        </span>
+        <button
+          type="button"
+          onClick={onRetry}
+          disabled={!canRetry}
+          className="text-[11px] font-semibold text-rose-100 hover:text-white disabled:cursor-not-allowed disabled:text-rose-200/40"
+        >
+          Retry
+        </button>
+        <button
+          type="button"
+          onClick={onDismiss}
+          className="text-[11px] text-rose-200/70 hover:text-white"
+        >
+          Dismiss
+        </button>
+      </div>
+      {needsDetails ? (
+        <details className="group mt-2">
+          <summary className="flex cursor-pointer list-none items-center gap-1.5 text-[11px] opacity-70 hover:opacity-100">
+            <span
+              aria-hidden
+              className="inline-block transition-transform group-open:rotate-90"
+            >
+              ▸
+            </span>
+            <span>show details</span>
+          </summary>
+          <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded-md bg-black/40 p-2.5 text-[11px] leading-relaxed">
+            {error}
+          </pre>
+        </details>
+      ) : null}
+    </div>
+  );
 }
 
 /**
