@@ -17,6 +17,7 @@ The Manual is the operator's reference for Ship: how the framework works on disk
 - **[Protocol](./protocol/index.md)** — the RFCs. Normative spec for the artifacts protocol, config schema, telemetry, adapters, folder layout, lanes, the catalog reform, and the operator IA.
 - **[Troubleshooting](./troubleshooting.md)** — common errors and what to do about them.
 - **[Legal](./legal.md)** — license and versioning policy.
+- **[Changelog](./CHANGELOG.md)** — structural changes to the Manual itself (last update: April 2026 — IA refresh).
 
 ## What you will *not* find here
 
