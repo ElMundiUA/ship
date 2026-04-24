@@ -1631,6 +1631,40 @@ export interface ApiCatalogPattern {
   // "workspace" for entries authored at runtime via the AI author
   // modal. Defaults to "builtin" when the backend predates the field.
   source?: "builtin" | "workspace";
+  // ---------------------------------------------------------------
+  // RFC-0010 / Wave 7 Phase 4 — pattern frontmatter additions.
+  //
+  // Sibling subagent B (P4-06 / P4-07) is adding these fields to
+  // every user-facing pattern's ARTIFACT.md frontmatter, and the
+  // backend catalog loader will surface them through CatalogEntryOut
+  // once both PRs land. Until then they're optional on the wire so
+  // the FE renders gracefully against the older backend payload.
+  //
+  // - ``subcategory`` is currently only meaningful for the
+  //   ``health_checks`` category (Security · Performance · …).
+  // - ``secondary_categories`` lets a play appear under more than
+  //   one sidebar facet (e.g. ``scan-docs-freshness`` lives under
+  //   both Code review and Knowledge & Docs).
+  // - ``critical`` flags the small set of plays the Coverage view
+  //   surfaces with a red badge when not 100% covered.
+  // - ``outputs`` mirrors the pattern's declared deliverables
+  //   (``[{type, title, ref?}]``) — used by the detail drawer's
+  //   "What it produces" section. Same shape as
+  //   {@link RunSummaryArtifact} but on the catalog side, so we
+  //   reuse the type alias.
+  // - ``inbox_profile`` is the routing profile name (e.g.
+  //   ``flow_pr``) the drawer's "Inbox routing" section displays.
+  // - ``lane_id`` is the recurring-side anchor used to match a
+  //   play to its ``pipeline_runs`` rows for the "Last run" strip
+  //   (P4-03). When absent the FE falls back to ``id`` (the
+  //   pattern id), which is what every existing pipeline.kind
+  //   already records anyway.
+  subcategory?: string;
+  secondary_categories?: string[];
+  critical?: boolean;
+  outputs?: RunSummaryArtifact[];
+  inbox_profile?: string;
+  lane_id?: string;
 }
 
 export function listCatalogPatterns(
@@ -1884,6 +1918,75 @@ export function syncRepoLanes(
   );
 }
 
+// ---------------------------------------------------------------------
+// Plays coverage (RFC-0010 Phase 4 P4-05)
+// ---------------------------------------------------------------------
+
+/**
+ * One row in the `/automations?tab=coverage` list.
+ *
+ * Mirrors `PlayCoverageRow` from sibling subagent A's
+ * `GET /v1/workspaces/{ws}/plays/coverage` endpoint. Each row is
+ * one Play across the workspace's activated repos:
+ *
+ * - ``play_key`` matches the catalog pattern id (e.g. ``flow-pr-self-review``)
+ * - ``coverage_pct`` is the float ratio ``assignments_count / activated_repos_total``,
+ *   already clamped 0.0–1.0 by the backend
+ * - ``critical: true`` mirrors the pattern frontmatter flag (sibling B);
+ *   the FE renders the red badge only when ``critical && coverage_pct < 1.0``
+ * - ``repos_covered`` / ``repos_uncovered`` are ApiActivatedRepo UUIDs;
+ *   join to the activated-repos lookup on the page to get owner/repo slugs
+ */
+export interface ApiPlayCoverageRow {
+  play_key: string;
+  play_name: string;
+  category: string;
+  critical: boolean;
+  activated_repos_total: number;
+  assignments_count: number;
+  /** 0.0–1.0 (backend pre-clamps). */
+  coverage_pct: number;
+  repos_covered: string[];
+  repos_uncovered: string[];
+}
+
+export interface ApiPlayCoverageOut {
+  activated_repos_total: number;
+  rows: ApiPlayCoverageRow[];
+}
+
+export interface ListPlaysCoverageOpts {
+  /** Catalog category key (``code_review`` / ``health_checks`` / …). */
+  category?: string | null;
+  /** Restrict to plays marked ``critical: true`` in frontmatter. */
+  criticalOnly?: boolean;
+  /** Hide rows already at 100% coverage. */
+  hasGaps?: boolean;
+  token?: string;
+}
+
+/**
+ * Fetch Coverage rows for the workspace.
+ *
+ * The backend pre-sorts: critical-with-gaps first (lowest coverage
+ * first), then non-critical-with-gaps, then fully covered. Filters
+ * are pushed down to the server; the FE just renders.
+ */
+export function listPlaysCoverage(
+  workspaceId: string,
+  opts: ListPlaysCoverageOpts = {},
+): Promise<ApiPlayCoverageOut> {
+  const params = new URLSearchParams();
+  if (opts.category) params.set("category", opts.category);
+  if (opts.criticalOnly) params.set("critical_only", "true");
+  if (opts.hasGaps) params.set("has_gaps", "true");
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return apiFetch<ApiPlayCoverageOut>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/plays/coverage${suffix}`,
+    { token: opts.token },
+  );
+}
+
 export function installPipelineWorkflow(
   workspaceId: string,
   pipelineId: string,
@@ -1912,6 +2015,81 @@ export function listPipelineRuns(
     `/v1/workspaces/${encodeURIComponent(workspaceId)}/pipelines/${encodeURIComponent(pipelineId)}/runs${qs}`,
     { token },
   );
+}
+
+/**
+ * Latest pipeline run per "play key" (RFC-0010 / Wave 7 Phase 4 P4-03).
+ *
+ * Drives the "Last run for this play in this workspace" mini-strip
+ * each ``PlayCard`` shows below its CTAs. The strip is keyed off the
+ * pattern id (which mirrors ``pipeline.kind`` for every play we
+ * register) so we can look it up in O(1) at render time.
+ *
+ * **N+1 mitigation strategy.** The backend has no batched
+ * "latest-run-per-pipeline" endpoint yet. Two viable shapes:
+ *
+ *   1. ``getDashboard`` returns ``pipeline_runs`` for the workspace
+ *      but only inside a 24-hour window; that loses every play
+ *      whose last run was older than a day, which is the common
+ *      case for scheduled scanners.
+ *   2. Fan-out across pipelines via ``listPipelineRuns(.., 1)``.
+ *      Bounded by the number of pipelines registered in the
+ *      workspace — small for the pilot tenant and parallelisable
+ *      via ``Promise.all``.
+ *
+ * We pick (2) because correctness > round-trip count for a UX
+ * surface where "last run never" is a meaningful state (it's how an
+ * operator notices a play hasn't been wired yet). Once the BE adds
+ * ``GET /v1/workspaces/{ws}/runs/latest-by-play`` (TODO P4-?: see
+ * planning doc) we can replace this loop with a single fetch.
+ */
+export type LatestRunForPlay = {
+  /** Pipeline kind (matches the catalog pattern id). */
+  playKey: string;
+  /** The most-recent run row for that play in the workspace. */
+  run: ApiPipelineRun;
+  /** Parent pipeline id — needed to drill into the legacy run-detail URL. */
+  pipelineId: string;
+};
+
+export async function listLatestRunsByPlay(
+  workspaceId: string,
+  token?: string,
+): Promise<Map<string, LatestRunForPlay>> {
+  let pipelines: ApiPipeline[];
+  try {
+    pipelines = await listPipelines(workspaceId, token);
+  } catch {
+    return new Map();
+  }
+  const recents = await Promise.all(
+    pipelines.map(async (p) => {
+      try {
+        const runs = await listPipelineRuns(workspaceId, p.id, 1, token);
+        return runs[0] ?? null;
+      } catch {
+        return null;
+      }
+    }),
+  );
+  const out = new Map<string, LatestRunForPlay>();
+  pipelines.forEach((p, i) => {
+    const run = recents[i];
+    if (!run) return;
+    const key = p.kind;
+    const existing = out.get(key);
+    const candidateTs = new Date(
+      run.started_at ?? run.created_at,
+    ).getTime();
+    if (existing) {
+      const existingTs = new Date(
+        existing.run.started_at ?? existing.run.created_at,
+      ).getTime();
+      if (candidateTs <= existingTs) return;
+    }
+    out.set(key, { playKey: key, run, pipelineId: p.id });
+  });
+  return out;
 }
 
 /** GET `/v1/workspaces/{ws}/pipelines/{id}/runs/{runId}` — single run for the detail page. */

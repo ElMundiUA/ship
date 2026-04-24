@@ -2,57 +2,86 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { AppShell } from "@/components/app-shell";
+import {
+  CategorySidebar,
+  PLAY_CATEGORIES,
+  buildHref,
+  countPlays,
+} from "@/components/plays/category-sidebar";
+import { PlayDetailDrawer } from "@/components/plays/play-detail-drawer";
+import { PlayDetailDrawerShell } from "@/components/plays/play-detail-drawer-shell";
 import { Card, CardHeader } from "@/components/ui";
 import {
   type ApiActivatedRepo,
   type ApiCatalogPattern,
   type ApiLaneCatalogEntry,
+  type LatestRunForPlay,
   ApiHttpError,
   ApiUnavailableError,
   isApiConfigured,
   listActivatedRepos,
   listCatalogPatterns,
   listLaneCatalog,
+  listLatestRunsByPlay,
   listWorkspaces,
 } from "@/lib/api/client";
 import { getSessionToken } from "@/lib/api/session";
 
-import { PlaysGrid } from "./plays-grid";
+import { PlaysGrid, type UnifiedPlay } from "./plays-grid";
 
 /**
- * ``/plays`` — unified catalog (RFC-0010 / P1-02).
+ * ``/plays`` — unified catalog (RFC-0010 / Wave 7 Phase 4).
  *
- * Merges the recurring side from ``listLaneCatalog`` (the recipes
- * that used to live on ``/lanes?tab=library``) with the one-shot
- * side from ``listCatalogPatterns({ mode: "request" })`` (the grid
- * that used to live on ``/requests``). Renders both flavours as
- * one ``PlayCard`` grid with a category sidebar.
+ * Server component. Owns:
  *
- * Categories are placeholders for this PR (every card lands in
- * "All"; clicking another category shows a "no patterns" state).
- * Real category mapping from frontmatter is tracked under P4-06.
+ *   1. Auth + workspace bootstrap.
+ *   2. Three parallel fetches (``Promise.all``) — activated repos,
+ *      lane catalog, request-mode catalog patterns, latest-run-per-
+ *      play map. The latest-run map drives the per-card "Last run"
+ *      mini-strip (P4-03); we batch the workspace's pipelines into
+ *      one fan-out so the strip doesn't N+1 the backend.
+ *   3. URL state parsing (``?category=`` · ``?subcategory=`` ·
+ *      ``?critical=`` · ``?play=``) and the corresponding filter
+ *      pass against the merged play list.
+ *   4. Sidebar + grid + (optional) drawer rendering.
+ *
+ * Categories per ``inbox-redesign-planning.md`` §2 — see
+ * :func:`categoryOf` for the wire-shape projection.
+ *
+ * Drawer mechanics (P4-02): we picked ``?play=<id>`` over a
+ * URL hash because (a) the page is a server component and reads
+ * search params at request time — hashes never reach the server, and
+ * (b) sharing a deep-link to a play needs server-side resolution
+ * (404 if the id doesn't exist). The hash approach forces all the
+ * resolution into client JS which defeats the point of the
+ * ``view-source-friendly`` server render.
  */
 
 export const dynamic = "force-dynamic";
 
 type SearchParamsBag = Record<string, string | string[] | undefined>;
 
-const PLAY_CATEGORIES: { id: string; label: string }[] = [
-  { id: "all", label: "All" },
-  { id: "code_review", label: "Code review" },
-  { id: "health_checks", label: "Health checks" },
-  { id: "release_ops", label: "Release ops" },
-  { id: "incident_response", label: "Incident response" },
-  { id: "knowledge_docs", label: "Knowledge & Docs" },
-  { id: "planning_process", label: "Planning & Process" },
-  { id: "reviewers", label: "Reviewers" },
-];
+function pickString(
+  bag: SearchParamsBag,
+  key: string,
+): string | null {
+  const raw = bag[key];
+  if (typeof raw === "string" && raw.length > 0) return raw;
+  if (Array.isArray(raw) && raw.length > 0 && typeof raw[0] === "string") {
+    return raw[0];
+  }
+  return null;
+}
 
-function pickCategory(params: SearchParamsBag): string {
-  const raw = typeof params.category === "string" ? params.category : null;
-  if (!raw) return "all";
-  if (PLAY_CATEGORIES.some((c) => c.id === raw)) return raw;
-  return "all";
+function isKnownCategory(id: string): boolean {
+  if (id === "all" || id === "uncategorized") return true;
+  return PLAY_CATEGORIES.some((c) => c.id === id);
+}
+
+function isKnownSubcategory(category: string, sub: string): boolean {
+  const cat = PLAY_CATEGORIES.find((c) => c.id === category);
+  if (!cat || !cat.subcategories) return false;
+  return cat.subcategories.some((s) => s.id === sub);
 }
 
 export default async function PlaysPage({
@@ -61,7 +90,15 @@ export default async function PlaysPage({
   searchParams?: Promise<SearchParamsBag>;
 }) {
   const params = (await searchParams) ?? {};
-  const category = pickCategory(params);
+  const rawCategory = pickString(params, "category") ?? "all";
+  const selectedCategory = isKnownCategory(rawCategory) ? rawCategory : "all";
+  const rawSub = pickString(params, "subcategory");
+  const selectedSubcategory =
+    rawSub && selectedCategory && isKnownSubcategory(selectedCategory, rawSub)
+      ? rawSub
+      : null;
+  const criticalOnly = pickString(params, "critical") === "true";
+  const playParam = pickString(params, "play");
 
   if (!isApiConfigured()) {
     return (
@@ -94,14 +131,21 @@ export default async function PlaysPage({
   let repos: ApiActivatedRepo[] = [];
   let lanes: ApiLaneCatalogEntry[] = [];
   let requestPatterns: ApiCatalogPattern[] = [];
+  let lastRunByPlay = new Map<string, LatestRunForPlay>();
   try {
-    [repos, lanes, requestPatterns] = await Promise.all([
+    [repos, lanes, requestPatterns, lastRunByPlay] = await Promise.all([
       listActivatedRepos(workspace.id, token).catch(
         () => [] as ApiActivatedRepo[],
       ),
       listLaneCatalog(token).catch(() => [] as ApiLaneCatalogEntry[]),
       listCatalogPatterns({ mode: "request", token }).catch(
         () => [] as ApiCatalogPattern[],
+      ),
+      // P4-03 — batched per-workspace fan-out. See
+      // ``listLatestRunsByPlay`` for the N+1 mitigation rationale and
+      // the BE follow-up TODO.
+      listLatestRunsByPlay(workspace.id, token).catch(
+        () => new Map<string, LatestRunForPlay>(),
       ),
     ]);
   } catch (err) {
@@ -114,6 +158,33 @@ export default async function PlaysPage({
   const sortedRepos = [...repos].sort((a, b) =>
     a.full_name.localeCompare(b.full_name),
   );
+
+  const allPlays = mergePlays(lanes, requestPatterns);
+  const candidates = criticalOnly
+    ? allPlays.filter((p) => p.kind === "request" && p.pattern.critical === true)
+    : allPlays;
+  const counts = countPlays(candidates, {
+    categoryOf,
+    secondaryCategoriesOf,
+    subcategoryOf,
+  });
+  const visiblePlays = candidates.filter((play) =>
+    matchesCategoryFilter(play, selectedCategory, selectedSubcategory),
+  );
+
+  // Resolve the deep-linked play (P4-02) against the FULL catalog so
+  // operators can land on a play even if the current category /
+  // critical-only filter would have hidden it. Render the drawer
+  // alongside the grid; the grid stays mounted (visually muted by
+  // the backdrop) so closing the drawer feels instant.
+  const playForDrawer = playParam
+    ? findPlayById(allPlays, playParam)
+    : null;
+  const closeHref = buildHref({
+    category: selectedCategory,
+    subcategory: selectedSubcategory ?? undefined,
+    criticalOnly,
+  });
 
   return (
     <AppShell
@@ -143,60 +214,155 @@ export default async function PlaysPage({
         <span className="font-semibold text-white/80">Run now</span> to
         dispatch a one-shot against the active repo, or{" "}
         <span className="font-semibold text-white/80">Automate</span>{" "}
-        to schedule it on a cadence.
+        to schedule it on a cadence. Click any card to open its
+        details.
       </p>
 
       <div className="flex flex-col gap-6 lg:flex-row">
-        <CategorySidebar selected={category} />
+        <CategorySidebar
+          selectedCategory={selectedCategory}
+          selectedSubcategory={selectedSubcategory}
+          criticalOnly={criticalOnly}
+          counts={counts}
+        />
 
         <div className="min-w-0 flex-1">
           <PlaysGrid
             workspaceId={workspace.id}
             repos={sortedRepos}
-            lanes={lanes}
-            requestPatterns={requestPatterns}
-            selectedCategory={category}
+            visiblePlays={visiblePlays}
+            lastRunByPlay={lastRunByPlay}
+            selectedCategory={selectedCategory}
+            selectedSubcategory={selectedSubcategory}
+            criticalOnly={criticalOnly}
           />
         </div>
       </div>
+
+      {playForDrawer && (
+        <PlayDetailDrawerShell closeHref={closeHref}>
+          <PlayDetailDrawer
+            play={
+              playForDrawer.kind === "request"
+                ? {
+                    kind: "request",
+                    id: playForDrawer.id,
+                    pattern: playForDrawer.pattern,
+                  }
+                : {
+                    kind: "lane",
+                    id: playForDrawer.id,
+                    entry: playForDrawer.entry,
+                  }
+            }
+          />
+        </PlayDetailDrawerShell>
+      )}
     </AppShell>
   );
 }
 
-/**
- * Static category list. P4-01 will add active-state highlighting
- * and the actual frontmatter-driven filter; for now every category
- * but "All" intentionally returns an empty grid (acceptable
- * placeholder per ticket spec).
- */
-function CategorySidebar({ selected: _selected }: { selected: string }) {
-  return (
-    <aside className="lg:w-[200px] lg:shrink-0">
-      <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.18em] text-white/35">
-        Categories
-      </div>
-      <ul className="space-y-0.5 text-xs">
-        {PLAY_CATEGORIES.map((cat) => (
-          <li key={cat.id}>
-            <Link
-              href={
-                cat.id === "all"
-                  ? "/plays"
-                  : `/plays?category=${encodeURIComponent(cat.id)}`
-              }
-              className="block rounded-md px-2.5 py-1.5 text-white/70 hover:bg-white/[0.04] hover:text-white"
-            >
-              {cat.label}
-            </Link>
-          </li>
-        ))}
-      </ul>
-      <p className="mt-3 px-2.5 text-[10px] text-white/35">
-        Real category mapping ships in P4-06. For now everything
-        lives under &ldquo;All&rdquo;.
-      </p>
-    </aside>
-  );
+// -- shape helpers (server-only) ---------------------------------------------
+
+function mergePlays(
+  lanes: ApiLaneCatalogEntry[],
+  requestPatterns: ApiCatalogPattern[],
+): UnifiedPlay[] {
+  // Index request patterns by id so we can dedupe lane recipes that
+  // also expose a request mode (avoids the same Play showing twice).
+  // The request-flavoured row wins because it carries dispatch
+  // metadata + inputs.
+  const requestById = new Map<string, ApiCatalogPattern>();
+  for (const p of requestPatterns) {
+    requestById.set(p.id, p);
+  }
+
+  const out: UnifiedPlay[] = [];
+  for (const p of requestPatterns) {
+    out.push({
+      kind: "request",
+      id: p.id,
+      title: p.name ?? p.id,
+      description: p.description || p.id,
+      tags: [p.category, ...p.tags.slice(0, 2)].filter(
+        (v): v is string => !!v,
+      ),
+      pattern: p,
+    });
+  }
+  for (const entry of lanes) {
+    const patternId = entry.pattern ?? entry.kind;
+    if (requestById.has(patternId)) continue;
+    out.push({
+      kind: "lane",
+      id: patternId,
+      title: entry.title,
+      description: entry.summary,
+      tags: [
+        entry.event ? `event:${entry.event}` : null,
+        entry.schedule ? "scheduled" : null,
+      ].filter((v): v is string => !!v),
+      entry,
+    });
+  }
+  out.sort((a, b) => a.title.localeCompare(b.title));
+  return out;
+}
+
+function findPlayById(plays: UnifiedPlay[], id: string): UnifiedPlay | null {
+  return plays.find((p) => p.id === id) ?? null;
+}
+
+function categoryOf(play: UnifiedPlay): string | null {
+  if (play.kind === "request") {
+    return play.pattern.category ?? null;
+  }
+  // Lane catalog entries don't carry a ``category`` field on the wire
+  // yet — sibling B's PR adds it. Until then we pass them through as
+  // uncategorised (the sidebar's "Uncategorized" footer link surfaces
+  // the count when N > 0).
+  return null;
+}
+
+function secondaryCategoriesOf(play: UnifiedPlay): string[] {
+  if (play.kind === "request") {
+    return play.pattern.secondary_categories ?? [];
+  }
+  return [];
+}
+
+function subcategoryOf(play: UnifiedPlay): string | null {
+  if (play.kind === "request") {
+    return play.pattern.subcategory ?? null;
+  }
+  return null;
+}
+
+function matchesCategoryFilter(
+  play: UnifiedPlay,
+  category: string,
+  subcategory: string | null,
+): boolean {
+  const primary = categoryOf(play);
+  const secondaries = secondaryCategoriesOf(play);
+  const sub = subcategoryOf(play);
+
+  if (category === "all") {
+    // "All" excludes uncategorised plays per the gotcha note in the
+    // ticket — the goal is "everything categorised". Items still
+    // surface via the explicit Uncategorized footer link.
+    return !!primary;
+  }
+  if (category === "uncategorized") {
+    return !primary;
+  }
+  const inPrimary = primary === category;
+  const inSecondary = secondaries.includes(category);
+  if (!inPrimary && !inSecondary) return false;
+  if (subcategory && category === "health_checks") {
+    if (sub !== subcategory) return false;
+  }
+  return true;
 }
 
 function renderUnavailable(err: unknown) {

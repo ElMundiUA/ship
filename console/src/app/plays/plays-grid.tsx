@@ -1,36 +1,47 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 
 import {
   PlayCard,
   resolvePlayMode,
   type CardState,
+  type PlayCardLastRun,
 } from "@/components/play-card";
+import { buildHref } from "@/components/plays/category-sidebar";
 import { Card, CardHeader } from "@/components/ui";
 import type {
   ApiActivatedRepo,
   ApiCatalogPattern,
   ApiLaneCatalogEntry,
+  LatestRunForPlay,
 } from "@/lib/api/client";
 
 /**
  * Client-side grid for the unified ``/plays`` catalog.
  *
- * Merges two upstream shapes into one ``PlayCard`` list:
+ * The page (a server component) is responsible for parsing the URL
+ * filter state, fetching the catalog + the latest-run-per-play map,
+ * and computing the visible play list. The grid is purely
+ * presentational — it renders the cards, owns the inline-dispatch
+ * state machine, and forwards card-body clicks to the URL via
+ * ``router.push`` so the Play detail drawer (P4-02) opens
+ * deep-linkably.
  *
- * - ``ApiCatalogPattern`` (request-mode) — fully dispatch-capable;
+ * Two upstream shapes converge into one card list:
+ *
+ * - ``ApiCatalogPattern`` (request-mode) — full dispatch capability;
  *   the card shows both **Run now** + **Automate** CTAs.
  * - ``ApiLaneCatalogEntry`` (lane recipes) — one-shot dispatch
- *   doesn't apply, so we show only the **Automate** CTA per the
- *   ticket spec.
+ *   doesn't apply, so we show only the **Automate** CTA.
  *
  * Dispatch reuses ``POST /api/requests`` (same proxy
  * ``RequestsCatalog`` already calls) so the backend contract
  * doesn't move.
  */
 
-type UnifiedPlay =
+export type UnifiedPlay =
   | {
       kind: "request";
       id: string;
@@ -51,29 +62,34 @@ type UnifiedPlay =
 export function PlaysGrid({
   workspaceId,
   repos,
-  lanes,
-  requestPatterns,
+  visiblePlays,
+  lastRunByPlay,
   selectedCategory,
+  selectedSubcategory,
+  criticalOnly,
 }: {
   workspaceId: string;
   repos: ApiActivatedRepo[];
-  lanes: ApiLaneCatalogEntry[];
-  requestPatterns: ApiCatalogPattern[];
+  visiblePlays: UnifiedPlay[];
+  lastRunByPlay: Map<string, LatestRunForPlay>;
   selectedCategory: string;
+  selectedSubcategory: string | null;
+  criticalOnly: boolean;
 }) {
+  const router = useRouter();
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [cardState, setCardState] = useState<CardState>({ mode: "idle" });
   const [repoId, setRepoId] = useState<string>(repos[0]?.id ?? "");
 
-  const plays = useMemo(() => mergePlays(lanes, requestPatterns), [
-    lanes,
-    requestPatterns,
-  ]);
-
-  // Placeholder category filter — every Play lands in "All". Any
-  // other category returns an empty array (acceptable per ticket;
-  // P4-06 wires the real frontmatter-driven mapping).
-  const visible = selectedCategory === "all" ? plays : [];
+  const criticalToggleHref = useMemo(
+    () =>
+      buildHref({
+        category: selectedCategory,
+        subcategory: selectedSubcategory ?? undefined,
+        criticalOnly: !criticalOnly,
+      }),
+    [selectedCategory, selectedSubcategory, criticalOnly],
+  );
 
   if (repos.length === 0) {
     return (
@@ -93,7 +109,7 @@ export function PlaysGrid({
           title="Active repo"
           subtitle="Run now dispatches against this repo's default branch; Automate opens a PR there."
         />
-        <div className="mt-3">
+        <div className="mt-3 flex flex-wrap items-center gap-3">
           <select
             value={repoId}
             onChange={(e) => setRepoId(e.target.value)}
@@ -105,32 +121,61 @@ export function PlaysGrid({
               </option>
             ))}
           </select>
+          <a
+            href={criticalToggleHref}
+            aria-pressed={criticalOnly}
+            className={
+              "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[11px] font-semibold transition " +
+              (criticalOnly
+                ? "border-coral/60 bg-coral/[0.10] text-coral hover:bg-coral/[0.15]"
+                : "border-white/15 bg-white/[0.04] text-white/70 hover:border-white/30 hover:text-white")
+            }
+            title={
+              criticalOnly
+                ? "Showing critical plays only — click to clear."
+                : "Filter to plays marked `critical: true` in their frontmatter."
+            }
+          >
+            <span
+              aria-hidden
+              className={
+                "inline-block h-1.5 w-1.5 rounded-full " +
+                (criticalOnly ? "bg-coral" : "bg-white/30")
+              }
+            />
+            Critical only
+          </a>
         </div>
       </Card>
 
-      {visible.length === 0 ? (
-        <Card>
-          <CardHeader
-            title={
-              selectedCategory === "all"
-                ? "Catalog is empty"
-                : "No plays in this category yet"
-            }
-            subtitle={
-              selectedCategory === "all"
-                ? "No plays are exposed by the backend right now. Run `shipctl sync` or check your catalog."
-                : "Real category mapping ships in P4-06 — until then every play is grouped under \u201cAll\u201d. Switch back to All to see the full catalog."
-            }
-          />
-        </Card>
+      {visiblePlays.length === 0 ? (
+        <EmptyCategoryState
+          selectedCategory={selectedCategory}
+          criticalOnly={criticalOnly}
+        />
       ) : (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {visible.map((play) => {
+          {visiblePlays.map((play) => {
             const expanded = openKey === play.id;
             const state = expanded ? cardState : { mode: "idle" as const };
             const onToggle = () => {
               setOpenKey(expanded ? null : play.id);
               setCardState({ mode: "idle" });
+            };
+            const hit = lastRunByPlay.get(play.id);
+            const lastRun: PlayCardLastRun | null = hit
+              ? { run: hit.run, pipelineId: hit.pipelineId }
+              : null;
+            const onCardClick = () => {
+              router.push(
+                buildHref({
+                  category: selectedCategory,
+                  subcategory: selectedSubcategory ?? undefined,
+                  criticalOnly,
+                  play: play.id,
+                }),
+                { scroll: false },
+              );
             };
 
             if (play.kind === "request") {
@@ -147,6 +192,8 @@ export function PlaysGrid({
                   expanded={expanded}
                   state={state}
                   onToggle={onToggle}
+                  onCardClick={onCardClick}
+                  lastRun={lastRun}
                   onSubmit={async (inputs) => {
                     setCardState({ mode: "saving" });
                     try {
@@ -186,9 +233,6 @@ export function PlaysGrid({
               );
             }
 
-            // Lane-only play: no Run now, only Automate. ``pattern``
-            // is intentionally omitted so PlayCard hides the form +
-            // dispatch button.
             return (
               <PlayCard
                 key={play.id}
@@ -204,6 +248,8 @@ export function PlaysGrid({
                 expanded={false}
                 state={{ mode: "idle" }}
                 onToggle={() => undefined}
+                onCardClick={onCardClick}
+                lastRun={lastRun}
               />
             );
           })}
@@ -213,50 +259,57 @@ export function PlaysGrid({
   );
 }
 
-function mergePlays(
-  lanes: ApiLaneCatalogEntry[],
-  requestPatterns: ApiCatalogPattern[],
-): UnifiedPlay[] {
-  // Index request patterns by id so we can dedupe lane recipes that
-  // also expose a request mode (avoids the same Play showing twice).
-  // The request-flavoured row wins because it carries dispatch
-  // metadata + inputs.
-  const requestById = new Map<string, ApiCatalogPattern>();
-  for (const p of requestPatterns) {
-    requestById.set(p.id, p);
+function EmptyCategoryState({
+  selectedCategory,
+  criticalOnly,
+}: {
+  selectedCategory: string;
+  criticalOnly: boolean;
+}) {
+  if (selectedCategory === "all" && !criticalOnly) {
+    return (
+      <Card>
+        <CardHeader
+          title="Catalog is empty"
+          subtitle="No plays are exposed by the backend right now. Run `shipctl sync` or check your catalog."
+        />
+      </Card>
+    );
   }
-
-  const out: UnifiedPlay[] = [];
-  for (const p of requestPatterns) {
-    out.push({
-      kind: "request",
-      id: p.id,
-      title: p.name ?? p.id,
-      description: p.description || p.id,
-      tags: [p.category, ...p.tags.slice(0, 2)].filter(
-        (v): v is string => !!v,
-      ),
-      pattern: p,
-    });
-  }
-  for (const entry of lanes) {
-    // Lane catalog entries identify their pattern via ``pattern``
-    // (the canonical id) or fall back to ``kind``. If we already
-    // emitted the request-mode flavour, skip the lane-only echo.
-    const patternId = entry.pattern ?? entry.kind;
-    if (requestById.has(patternId)) continue;
-    out.push({
-      kind: "lane",
-      id: patternId,
-      title: entry.title,
-      description: entry.summary,
-      tags: [
-        entry.event ? `event:${entry.event}` : null,
-        entry.schedule ? "scheduled" : null,
-      ].filter((v): v is string => !!v),
-      entry,
-    });
-  }
-  out.sort((a, b) => a.title.localeCompare(b.title));
-  return out;
+  const allHref = buildHref({ category: "all" });
+  const codeReviewHref = buildHref({ category: "code_review" });
+  const criticalHref = buildHref({
+    category: selectedCategory,
+    criticalOnly: false,
+  });
+  return (
+    <Card>
+      <CardHeader
+        title="No plays in this category"
+        subtitle="Try widening the filter — the catalog likely has plays under a sibling category."
+      />
+      <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+        <a
+          href={allHref}
+          className="rounded-full border border-aqua/40 bg-aqua/10 px-3 py-1 font-semibold text-aqua hover:bg-aqua/20"
+        >
+          All plays
+        </a>
+        <a
+          href={codeReviewHref}
+          className="rounded-full border border-white/15 bg-white/[0.04] px-3 py-1 font-semibold text-white/80 hover:border-white/30 hover:text-white"
+        >
+          Code review
+        </a>
+        {criticalOnly && (
+          <a
+            href={criticalHref}
+            className="rounded-full border border-coral/40 bg-coral/[0.08] px-3 py-1 font-semibold text-coral hover:bg-coral/[0.15]"
+          >
+            Clear &ldquo;Critical only&rdquo;
+          </a>
+        )}
+      </div>
+    </Card>
+  );
 }
