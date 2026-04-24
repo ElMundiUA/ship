@@ -9,9 +9,9 @@ const tiles = [
   },
   {
     href: "/patterns",
-    kicker: "Org playbooks",
+    kicker: "Source of Plays",
     title: "Patterns",
-    body: "Versioned markdown prompts for agents — onboarding, lane playbooks, scheduled roles — so teams and automation share the same vocabulary.",
+    body: "Versioned Markdown procedures — PR self-review, release cuts, knowledge refreshes — that the operator console renders as Plays you assign as Automations.",
   },
   {
     href: "/collections",
@@ -63,15 +63,14 @@ export function KitSurfaceSection() {
             <p className="mt-4 text-xs text-white/45">Shipped with the repo; documented under Getting started.</p>
           </div>
           <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-6 sm:p-8">
-            <p className="text-xs font-bold uppercase tracking-widest text-white/40">Roadmap</p>
-            <h3 className="font-display mt-2 text-xl font-bold text-white">Desktop app for the business</h3>
+            <p className="text-xs font-bold uppercase tracking-widest text-white/40">Operator console</p>
+            <h3 className="font-display mt-2 text-xl font-bold text-white">Inbox · Plays · Automations · Runs</h3>
             <p className="mt-3 text-sm leading-relaxed text-white/65">
-              A focused desktop shell for program leads and sponsors — same playbooks and evidence trails, less context
-              switching for people who will never live in a repo checkout.
+              Four product nouns mirror the four protocol surfaces. The Navigator agent — same chat window — has tools
+              for every one: triage the Inbox, run a Play, toggle an Automation, query Runs. Members can ask, admins
+              can mutate.
             </p>
-            <p className="mt-4 inline-flex rounded-full border border-white/15 bg-black/30 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-white/50">
-              Coming soon
-            </p>
+            <p className="mt-4 text-xs text-white/45">Shipped today; documented under <a className="text-aqua hover:text-white" href="/docs/concepts">Concepts</a>.</p>
           </div>
         </div>
       </div>

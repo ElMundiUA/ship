@@ -9,28 +9,29 @@ export function PatternsSection() {
             <div className="absolute inset-0 bg-gradient-to-br from-aqua/10 via-transparent to-lilac/10" />
             <p className="relative text-xs font-bold uppercase tracking-widest text-white/40">Library</p>
             <p className="relative mt-4 font-display text-2xl font-semibold leading-snug text-white sm:text-3xl">
-              Patterns sit beside tools, workflows, and collections
+              Patterns are the source of Plays
             </p>
             <ul className="relative mt-6 space-y-3 text-sm leading-relaxed text-white/65">
               <li className="flex gap-2">
                 <span className="text-aqua">✦</span>
                 <span>
-                  <strong className="text-white/85">Patterns</strong> — short, reviewable plays for onboarding, cloud roles,
-                  and SDLC lanes.
+                  <strong className="text-white/85">Patterns</strong> — short, reviewable Markdown bodies for PR self-review,
+                  release cuts, knowledge refreshes, dependency upgrades. The operator console renders each one as a{" "}
+                  <strong className="text-white/85">Play</strong>.
                 </span>
               </li>
               <li className="flex gap-2">
                 <span className="text-aqua">✦</span>
                 <span>
-                  <strong className="text-white/85">Tools &amp; workflows</strong> — who integrates where, and how work is
-                  supposed to move — in the same catalog the site lists.
+                  <strong className="text-white/85">Tools</strong> — who integrates where, listed once so security and
+                  platform teams can review without chasing wikis.
                 </span>
               </li>
               <li className="flex gap-2">
                 <span className="text-aqua">✦</span>
                 <span>
-                  <strong className="text-white/85">Collections</strong> — bundles for common product shapes so a new team
-                  inherits opinion without inheriting mystery.
+                  <strong className="text-white/85">Collections</strong> — bundles for common product shapes (web app, API
+                  backend, mobile app, monorepo) so a new team inherits opinion without inheriting mystery.
                 </span>
               </li>
             </ul>

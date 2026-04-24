@@ -18,8 +18,9 @@ export function SiteFooter() {
               The framework, the delivery verb, the thing in production — same word, three beats.
             </p>
             <p className="mt-5 max-w-md text-base leading-relaxed text-white/60">
-              Apache-2.0 methodology kit: one site where buyers and engineers read the same story — docs, patterns,
-              workflows, integrations, and use cases you can audit.
+              Apache-2.0 methodology kit: one site where buyers and engineers read the same story — docs, Plays,
+              integrations, and use cases you can audit. The operator loop (Plays · Automations · Runs · Inbox) is
+              documented under <Link className="text-aqua hover:text-white" href="/docs/concepts">Concepts</Link>.
             </p>
             <AdoptionWizardButton className="mt-6 text-left text-sm font-semibold text-aqua underline-offset-4 hover:underline">
               Open adoption wizard
@@ -46,10 +47,10 @@ export function SiteFooter() {
               <p className="text-xs font-bold uppercase tracking-[0.18em] text-white/40">Kit</p>
               <nav className="flex flex-col gap-3 text-base">
                 <Link className="text-white/70 transition hover:text-aqua" href="/kit">
-                  All four kinds
+                  All catalog kinds
                 </Link>
                 <Link className="text-white/70 transition hover:text-aqua" href="/patterns">
-                  Patterns
+                  Patterns (Plays)
                 </Link>
                 <Link className="text-white/70 transition hover:text-aqua" href="/collections">
                   Collections

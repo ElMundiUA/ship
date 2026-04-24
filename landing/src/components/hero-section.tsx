@@ -1,9 +1,12 @@
 import Link from "next/link";
 import { AdoptionWizardButton } from "@/components/adoption-wizard";
+import pkg from "../../package.json";
 
 const HERO_SNIPPET = `npx @elmundi/ship-cli new pharma-pilot \\
   --preset mobile-app --tracker linear --ci gh-actions \\
   --agents cursor,claude-md,codex --yes`;
+
+const KIT_VERSION = `v${pkg.version}`;
 
 export function HeroSection() {
   return (
@@ -17,9 +20,9 @@ export function HeroSection() {
       />
       <div className="relative mx-auto max-w-6xl px-4 sm:px-6">
         <p className="mb-3 inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/[0.06] px-4 py-1.5 text-xs font-semibold uppercase tracking-widest text-aqua">
-          <span>Methodology kit · v0.7.0</span>
+          <span>Methodology kit · {KIT_VERSION}</span>
           <span aria-hidden className="text-white/30">·</span>
-          <span className="text-white/75">shipctl</span>
+          <span className="text-white/75">shipctl + console</span>
         </p>
         <h1 className="font-display max-w-5xl text-[2.125rem] font-bold leading-[1.08] tracking-normal text-white sm:text-5xl sm:leading-[1.06] md:text-6xl md:leading-[1.05] lg:text-[3.45rem] lg:leading-[1.03]">
           Ship the{" "}
@@ -29,7 +32,7 @@ export function HeroSection() {
           , not another toolchain tax.
         </h1>
         <p className="mt-6 max-w-2xl text-lg leading-relaxed text-white/70 sm:text-xl md:text-[1.35rem] md:leading-relaxed">
-          One CLI — <code className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-[0.9em] text-aqua">shipctl</code> — and one config — <code className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-[0.9em] text-aqua">.ship/config.yml</code>. Pick one of three adoption paths, run a single command, and your agents start consuming the same versioned artifacts this site publishes.
+          One CLI — <code className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-[0.9em] text-aqua">shipctl</code> — one config — <code className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-[0.9em] text-aqua">.ship/config.yml</code> — and an operator console with four nouns: <strong className="text-white/90">Plays</strong> you assign as <strong className="text-white/90">Automations</strong>, <strong className="text-white/90">Runs</strong> you watch, and an <strong className="text-white/90">Inbox</strong> that catches what needs you. The same versioned artifacts power your agents, your CI, and the console.
         </p>
 
         <figure className="mt-10 max-w-4xl" aria-label="Example shipctl command">
