@@ -1,10 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useState, type ReactNode } from "react";
+import { useState, type MouseEvent, type ReactNode } from "react";
 
-import { Badge } from "@/components/ui";
-import type { ApiCatalogPattern, ApiPatternInput } from "@/lib/api/client";
+import { Badge, type BadgeTone } from "@/components/ui";
+import type {
+  ApiCatalogPattern,
+  ApiPatternInput,
+  ApiPipelineRun,
+} from "@/lib/api/client";
 
 /**
  * Shared "Play" card component (RFC-0010 §2 / P1-10 + P1-11).
@@ -126,6 +130,21 @@ export function formatPlaySubtitle(
   return `Includes ${n} ${n === 1 ? "review" : "reviews"} · runs in ${mode}`;
 }
 
+/**
+ * Per P4-03 — the latest run of this play in the current workspace.
+ *
+ * Rendered as a one-line strip below the CTAs. ``pipelineId`` lets
+ * the strip link into the legacy run-detail URL (the new
+ * ``/runs/<id>`` route resolves the parent pipeline server-side, so
+ * we keep the id around for forward-compat too). When this prop is
+ * absent the card renders the "never run in this workspace"
+ * variant.
+ */
+export type PlayCardLastRun = {
+  run: ApiPipelineRun;
+  pipelineId: string;
+};
+
 export function PlayCard({
   id,
   title,
@@ -138,7 +157,9 @@ export function PlayCard({
   state,
   onToggle,
   onSubmit,
+  onCardClick,
   ctaLayout,
+  lastRun,
 }: {
   /** Pattern id used as ``?play=<id>`` on the Automate link. */
   id: string;
@@ -158,12 +179,39 @@ export function PlayCard({
   onToggle: () => void;
   /** Required when ``pattern`` is provided and the user can dispatch. */
   onSubmit?: (inputs: Record<string, string>) => void;
+  /**
+   * P4-02 — clicking the card body (outside any button/link) opens
+   * the Play detail drawer. Optional so callers that don't want
+   * drawer behaviour (e.g. ``/requests``) keep the legacy passive
+   * card.
+   */
+  onCardClick?: () => void;
   ctaLayout: PlayCardCtaLayout;
+  /** P4-03 — most-recent run in the current workspace. */
+  lastRun?: PlayCardLastRun | null;
 }) {
   const subtitle = formatPlaySubtitle(reviewsCount, mode);
   const automateHref = `/automations/new?play=${encodeURIComponent(id)}`;
   const canDispatch =
     ctaLayout.showRunNow && !!pattern && typeof onSubmit === "function";
+  const isCritical = pattern?.critical === true;
+
+  // Outer click → drawer. Buttons/links inside ``stopPropagation`` so
+  // the existing CTA contract (P1-11) is preserved. We use
+  // ``onClick`` on the outer ``<div>`` rather than wrapping the body
+  // in a button because the card already nests interactive elements
+  // (Run-now toggle, Automate link) and nesting a button inside a
+  // button is invalid HTML.
+  const handleBodyClick = (e: MouseEvent<HTMLDivElement>) => {
+    if (!onCardClick) return;
+    // Bail out if the click landed on something interactive — the
+    // browser will already have run the link/button handler. We can
+    // tell by walking up from the event target until we either
+    // bubble past the card or find an interactive ancestor.
+    const node = e.target as HTMLElement | null;
+    if (node && node.closest("[data-card-stop]")) return;
+    onCardClick();
+  };
 
   return (
     <div
@@ -171,12 +219,37 @@ export function PlayCard({
         "rounded-lg border bg-white/[0.02] p-3 transition " +
         (expanded
           ? "border-aqua/40 bg-aqua/[0.04]"
-          : "border-white/10 hover:border-white/25")
+          : "border-white/10 hover:border-white/25") +
+        (onCardClick ? " cursor-pointer" : "")
       }
+      onClick={handleBodyClick}
+      role={onCardClick ? "button" : undefined}
+      tabIndex={onCardClick ? 0 : undefined}
+      onKeyDown={(e) => {
+        if (!onCardClick) return;
+        if (e.key === "Enter" || e.key === " ") {
+          // Don't hijack Enter when focus is inside a form field.
+          const target = e.target as HTMLElement | null;
+          if (target && target.closest("[data-card-stop]")) return;
+          e.preventDefault();
+          onCardClick();
+        }
+      }}
     >
       <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="truncate text-sm font-semibold text-white">{title}</p>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            <p className="min-w-0 flex-1 truncate text-sm font-semibold text-white">
+              {title}
+            </p>
+            {isCritical && (
+              <span data-card-stop>
+                <Badge tone="err" dot>
+                  Critical
+                </Badge>
+              </span>
+            )}
+          </div>
           <p className="mt-0.5 text-[11px] text-white/55">{subtitle}</p>
           {description ? (
             <p className="mt-1.5 line-clamp-2 text-[11px] text-white/45">
@@ -204,7 +277,11 @@ export function PlayCard({
         {canDispatch ? (
           <button
             type="button"
-            onClick={onToggle}
+            data-card-stop
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggle();
+            }}
             className={
               "shrink-0 rounded-full border px-3.5 py-1 text-[11px] font-bold transition " +
               (expanded
@@ -218,6 +295,8 @@ export function PlayCard({
         {ctaLayout.showAutomate ? (
           <Link
             href={automateHref}
+            data-card-stop
+            onClick={(e) => e.stopPropagation()}
             title="Schedule this play to run on a cadence."
             className={
               "shrink-0 rounded-full border px-3.5 py-1 text-[11px] font-bold transition " +
@@ -231,10 +310,114 @@ export function PlayCard({
         ) : null}
       </div>
 
+      <LastRunStrip lastRun={lastRun} />
+
       {expanded && pattern && onSubmit ? (
-        <PlayCardForm pattern={pattern} state={state} onSubmit={onSubmit} />
+        <div data-card-stop onClick={(e) => e.stopPropagation()}>
+          <PlayCardForm pattern={pattern} state={state} onSubmit={onSubmit} />
+        </div>
       ) : null}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// P4-03 — Last run mini-strip
+// ---------------------------------------------------------------------------
+
+const LAST_RUN_TONE: Record<string, BadgeTone> = {
+  succeeded: "ok",
+  failed: "err",
+  running: "info",
+  cancelled: "neutral",
+};
+
+const LAST_RUN_BG: Record<string, string> = {
+  succeeded: "border-emerald-500/30 bg-emerald-500/[0.06] hover:bg-emerald-500/[0.10]",
+  failed: "border-coral/40 bg-coral/[0.06] hover:bg-coral/[0.10]",
+  running: "border-sky-500/40 bg-sky-500/[0.06] hover:bg-sky-500/[0.10]",
+  cancelled: "border-white/15 bg-white/[0.04] hover:bg-white/[0.07]",
+};
+
+const LAST_RUN_GLYPH: Record<string, string> = {
+  succeeded: "✓",
+  failed: "✗",
+  running: "◐",
+  cancelled: "○",
+};
+
+function statusLabel(status: string): string {
+  return status.charAt(0).toUpperCase() + status.slice(1);
+}
+
+function truncateOutcome(s: string, max: number): string {
+  if (s.length <= max) return s;
+  return `${s.slice(0, max - 1).trimEnd()}…`;
+}
+
+function formatRelative(iso: string | null): string {
+  if (!iso) return "";
+  const ts = new Date(iso).getTime();
+  if (!Number.isFinite(ts)) return iso;
+  const sec = Math.max(1, Math.round((Date.now() - ts) / 1000));
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const days = Math.round(hr / 24);
+  return `${days}d ago`;
+}
+
+function LastRunStrip({ lastRun }: { lastRun?: PlayCardLastRun | null }) {
+  if (!lastRun) {
+    return (
+      <div className="mt-3 flex items-center gap-2 rounded-md border border-dashed border-white/10 bg-white/[0.02] px-2.5 py-1.5 text-[11px] text-white/45">
+        <span aria-hidden className="text-white/35">·</span>
+        <span>
+          Never run in this workspace ·{" "}
+          <span className="text-white/65">click Run now to start</span>
+        </span>
+      </div>
+    );
+  }
+  const { run } = lastRun;
+  const tone = LAST_RUN_BG[run.status] ?? LAST_RUN_BG.cancelled;
+  const badgeTone = LAST_RUN_TONE[run.status] ?? "neutral";
+  const glyph = LAST_RUN_GLYPH[run.status] ?? "·";
+  const when = formatRelative(run.started_at ?? run.created_at);
+  const outcomeText =
+    run.outcome?.outcome_text?.trim() || run.summary?.trim() || "";
+  const truncated = outcomeText ? truncateOutcome(outcomeText, 80) : "";
+  return (
+    <Link
+      href={`/runs/${run.id}`}
+      data-card-stop
+      onClick={(e) => e.stopPropagation()}
+      title={outcomeText || `${statusLabel(run.status)} ${when}`.trim()}
+      className={
+        "mt-3 flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-[11px] text-white/80 transition " +
+        tone
+      }
+    >
+      <span className="shrink-0 text-white/65">Last run:</span>
+      <span className="shrink-0 text-white/55">{when}</span>
+      <span aria-hidden className="text-white/30">·</span>
+      <Badge tone={badgeTone} className="shrink-0">
+        <span aria-hidden className="mr-0.5">
+          {glyph}
+        </span>
+        {statusLabel(run.status)}
+      </Badge>
+      {truncated && (
+        <>
+          <span aria-hidden className="text-white/30">·</span>
+          <span className="min-w-0 flex-1 truncate text-white/70">
+            {truncated}
+          </span>
+        </>
+      )}
+    </Link>
   );
 }
 
