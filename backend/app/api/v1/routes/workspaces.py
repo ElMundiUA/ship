@@ -35,6 +35,11 @@ from backend.app.db.session import get_session
 # Standard role tiers used across workspace-scoped routes.
 ROLES_ADMIN = ("owner", "admin")
 ROLES_MAINTAIN = ("owner", "admin", "maintainer")
+# "Member-and-up" — excludes viewer. Used by interactive surfaces (e.g.
+# Navigator chat) where read-only viewers shouldn't be able to drive
+# the agent, but every contributing member should. Mutating tools
+# inside those surfaces still self-gate to admin via their own checks.
+ROLES_MEMBER = ("owner", "admin", "maintainer", "member")
 ROLES_READ = ("owner", "admin", "maintainer", "member", "viewer")
 VALID_CATALOG_KEYS = frozenset({"global", "workspace", "project"})
 

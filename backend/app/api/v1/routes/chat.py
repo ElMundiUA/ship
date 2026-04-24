@@ -56,6 +56,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.api.v1.deps import AuthContext, get_current_auth
 from backend.app.api.v1.routes.workspaces import (
     ROLES_ADMIN,
+    ROLES_MEMBER,
     ROLES_READ,
     _require_membership,
 )
@@ -491,7 +492,10 @@ async def chat_stream(
     - ``{"type": "error", "error": "..."}`` — fatal error during
       the turn; UI surfaces it and unlocks the composer.
     """
-    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+    # P6-22 — chat opened to members; admin only required for mutating
+    # tools inside the turn (those self-gate via ``_require_admin_or_error``
+    # in :mod:`backend.app.services.agent.tools`).
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_MEMBER)
     thread = await _find_or_create_active_thread(
         session, workspace_id=workspace_id, user_id=auth.user.id
     )

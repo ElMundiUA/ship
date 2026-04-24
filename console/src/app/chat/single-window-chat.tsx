@@ -40,6 +40,11 @@ import {
 } from "react";
 
 import { ChatMarkdown, ChoiceProvider } from "./chat-markdown";
+import {
+  JsonFallback,
+  TOOL_RENDERERS,
+  renderToolResult,
+} from "./tool-renderers";
 
 type Role = "user" | "assistant" | "system" | "tool";
 
@@ -601,6 +606,17 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
                   />
                 );
               })}
+              {/* Tool result cards. Each resolved tool call from
+                  the in-flight turn renders here. Tools with a
+                  dedicated renderer in ``TOOL_RENDERERS`` get a
+                  rich action card with deeplink chips; the rest
+                  fall back to a JSON dump so unknown tools stay
+                  visible (just less polished). The shimmer
+                  ``Calling …`` line below covers tools still in
+                  flight. */}
+              {tools.length > 0 ? (
+                <ToolResultsList tools={tools} />
+              ) : null}
               {/* Single-line turn status at the end of the turn
                   (below the streamed prose if there is any, below
                   the user prompt if not). Replaces itself as state
@@ -700,6 +716,51 @@ function MessageRow({
       <ChatMarkdown text={displayBody} animate={animate} />
     </div>
   );
+}
+
+/**
+ * Renders the resolved tool calls from the current turn as a stack
+ * of action cards. We consult ``TOOL_RENDERERS[toolName]`` first; if
+ * no renderer is registered (or the renderer throws) we fall back to
+ * a raw JSON dump so the user still sees something. In-flight tools
+ * (no ``result`` yet) are skipped — the shimmer status line below
+ * the message thread covers their progress.
+ *
+ * Errored tools (``ok === false``) get the uniform :class:`ErrorCard`
+ * via :func:`renderToolResult`.
+ */
+function ToolResultsList({ tools }: { tools: ToolCallRow[] }) {
+  const completed = tools.filter((t) => t.result !== undefined);
+  if (completed.length === 0) return null;
+  return (
+    <div className="space-y-3">
+      {completed.map((tool) => (
+        <ToolResultCard key={tool.id} tool={tool} />
+      ))}
+    </div>
+  );
+}
+
+function ToolResultCard({ tool }: { tool: ToolCallRow }) {
+  const result = tool.result;
+  if (!result) return null;
+  if (!result.ok) {
+    // Errored result: ``normalizeToolResult`` collapsed any
+    // ``{error: ...}`` payload into ``result.error``. Reuse the
+    // standard renderer entry-point so admin-gated forbidden
+    // errors get the amber treatment uniformly.
+    return renderToolResult(tool.name, {
+      error: result.error ?? "failed",
+    }) as React.ReactNode;
+  }
+  // ``normalizeToolResult`` already JSON-parsed the tool output for
+  // us. Hand the parsed body straight to the registry — if no
+  // renderer matches OR rendering blows up, ``renderToolResult``
+  // returns the JSON fallback so unknown tools stay readable.
+  if (TOOL_RENDERERS[tool.name]) {
+    return renderToolResult(tool.name, result.result) as React.ReactNode;
+  }
+  return <JsonFallback toolName={tool.name} result={result.result} />;
 }
 
 function TurnStatusLine({
