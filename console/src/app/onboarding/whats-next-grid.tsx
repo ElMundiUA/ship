@@ -62,7 +62,7 @@ export function WhatsNextGrid({
   ];
 
   return (
-    <section className="mt-8">
+    <section data-testid="onboarding-done-whats-next" className="mt-8">
       <h2 className="font-display text-lg font-bold text-white">
         What&apos;s next
       </h2>
@@ -71,6 +71,7 @@ export function WhatsNextGrid({
           <Link
             key={tile.title}
             href={tile.href}
+            data-testid="onboarding-done-whats-next-tile"
             className="group rounded-2xl border border-white/10 bg-white/[0.03] p-4 backdrop-blur-xl transition hover:border-aqua/40 hover:bg-aqua/[0.04]"
           >
             <h3 className="font-display text-base font-bold text-white group-hover:text-aqua">

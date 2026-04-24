@@ -74,7 +74,7 @@ export async function ConfirmStep({
   }
 
   return (
-    <section>
+    <section data-testid="onboarding-step-confirm">
       <p className="font-mono text-[11px] uppercase tracking-[0.3em] text-aqua/85">
         Step 4 of 4 &middot; Confirm bootstrap
       </p>
@@ -119,6 +119,7 @@ export async function ConfirmStep({
             {bundle.map((entry) => (
               <li
                 key={entry.key}
+                data-testid="onboarding-confirm-bundle-item"
                 className="rounded-xl border border-white/5 bg-white/[0.02] p-3"
               >
                 <div className="flex flex-wrap items-center gap-2">

@@ -36,7 +36,9 @@ export function RepoResultCard({
 
   return (
     <article
-      data-testid="onboarding-done-card"
+      data-testid="onboarding-done-repo-card"
+      data-repo-id={repo?.id ?? ""}
+      data-repo-full-name={fullName ?? ""}
       className="rounded-2xl border border-white/10 bg-white/[0.04] p-5 backdrop-blur-xl shadow-card"
     >
       <header className="flex flex-wrap items-center justify-between gap-3">
@@ -84,12 +86,17 @@ export function RepoResultCard({
 function Section({
   label,
   children,
+  testId,
 }: {
   label: string;
   children: React.ReactNode;
+  testId?: string;
 }) {
   return (
-    <div className="rounded-xl border border-white/5 bg-white/[0.025] p-3">
+    <div
+      data-testid={testId}
+      className="rounded-xl border border-white/5 bg-white/[0.025] p-3"
+    >
       <div className="text-[10px] font-bold uppercase tracking-widest text-white/45">
         {label}
       </div>
@@ -106,6 +113,7 @@ function PullRequestRow({ result }: { result: ApiWizardSeedOut }) {
           href={result.pr_url}
           target="_blank"
           rel="noreferrer"
+          data-testid="onboarding-done-pr-link"
           className="inline-flex items-center gap-1.5 rounded-full border border-aqua/40 bg-aqua/[0.08] px-3 py-1 text-[11px] font-bold text-aqua hover:bg-aqua/[0.16]"
         >
           → #{result.pr_number} Ship: bootstrap (open in GitHub)
@@ -139,7 +147,7 @@ function CodeownersRow({
   // not a Ship error.
   if (summary == null || !summary.file_found) {
     return (
-      <Section label="Routing rules">
+      <Section label="Routing rules" testId="onboarding-done-codeowners">
         <div className="flex flex-wrap items-center gap-2">
           <span className="rounded-full border border-white/15 bg-white/[0.04] px-2 py-0.5 text-[10px] uppercase tracking-widest text-white/65">
             no CODEOWNERS yet
@@ -165,7 +173,7 @@ function CodeownersRow({
   const unresolved = summary.unresolved_owners ?? [];
 
   return (
-    <Section label="Routing rules">
+    <Section label="Routing rules" testId="onboarding-done-codeowners">
       <div className="flex flex-wrap items-center gap-2">
         <span className="rounded-full border border-emerald-400/30 bg-emerald-500/[0.08] px-2 py-0.5 text-[10px] uppercase tracking-widest text-emerald-300">
           {created} created
@@ -239,7 +247,7 @@ function IntelRow({
   handle: ApiWizardSeedOut["intel"];
 }) {
   return (
-    <Section label="Repo intel">
+    <Section label="Repo intel" testId="onboarding-done-intel-badge">
       {repoId == null ? (
         <p className="text-[11px] text-white/55">
           We&apos;ll harvest a repo-intel snapshot once the repo

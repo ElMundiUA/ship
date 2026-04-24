@@ -129,7 +129,9 @@ export function RepoCard({
   return (
     <section
       className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 shadow-card"
-      data-testid={`wizard-repo-card-${initial.repo.full_name}`}
+      data-testid="onboarding-confirm-repo-card"
+      data-repo-id={initial.repo.id}
+      data-repo-full-name={initial.repo.full_name}
     >
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
@@ -494,7 +496,9 @@ export function RepoCard({
           </div>
           <button
             type="button"
-            data-testid={`wizard-seed-${initial.repo.full_name}`}
+            data-testid="onboarding-confirm-open-seed-pr"
+            data-repo-id={initial.repo.id}
+            data-repo-full-name={initial.repo.full_name}
             disabled={!readyToSeed}
             onClick={async () => {
               setSeedSaving(true);
