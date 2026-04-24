@@ -1,0 +1,38 @@
+# Ship CODEOWNERS — seeded from git history on 2026-04-24.
+#
+# Convention: GitHub matches the LAST rule that applies, so order matters.
+# Most-specific paths last.
+#
+# Active members (>=3 commits in the last 12 months) are routed automatically.
+# Inactive contributors are listed at the bottom for historical context.
+
+# Default owner — applies when no other rule matches
+*                           @denyskuzin
+
+# Backend
+/backend/                   @denyskuzin
+
+# Frontend (console)
+/console/                   @denyskuzin
+
+# CLI
+/cli/                       @denyskuzin
+
+# Landing
+/landing/                   @denyskuzin
+
+# Catalog patterns
+/artifacts/                 @denyskuzin
+
+# Documentation & RFCs
+/documentation/             @denyskuzin
+
+# Build / scripts / infra
+/scripts/                   @denyskuzin
+/.github/                   @denyskuzin
+
+# E2E
+/e2e/                       @denyskuzin
+
+# ─── Inactive contributors (no rules; listed for context) ───
+# - katsiaryna_laurynovich <katsiaryna_laurynovich@epam.com>  (handle: @KatsiarynaLaurynovich, 1 commit in last 12 months)
