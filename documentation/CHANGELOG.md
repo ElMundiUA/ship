@@ -3,6 +3,26 @@
 A short log of structural changes to the Manual itself — not to the
 product. For product changes, see the [/blog](/blog).
 
+## Phase 8 — CLI audit & docs (April 2026)
+
+* **`shipctl help`** rewritten operator-first: vocabulary callout up front,
+  commands grouped under Setup / Catalog / Run / Knowledge / Telemetry & feedback / Misc.
+* **`cli/README.md`** rewritten to document every subcommand including the
+  Phase-3 `shipctl callback` outcome flags (`--outcome-text`, `--findings-count`,
+  `--severity`, `--artifact`, `--escalation`, `--requires-approval`) and the
+  full Run lifecycle.
+* **`shipctl sync --help`** added (was previously undocumented).
+* **`shipctl run`** error message clarified: now names `run-agent.yml` and the
+  lane kind instead of "(Phase 3)".
+* **`shipctl lanes`** gets an operator-friendly alias: **`shipctl automations`**
+  (both work indefinitely; YAML / `--lane` stay protocol-stable).
+* Landing **`/cli`** page extended with `run` / `lanes` / `callback` /
+  `knowledge init`. Setup wizard prose aligned with the new IA vocabulary.
+* Removed all references to the obsolete `shipctl workflow` subcommand
+  (kind was retired in Phase 6).
+* Test surface: snapshot tests for the top 8 commands' `--help` guard
+  against future regressions in help copy.
+
 ## 2026-04 — IA refresh: Plays / Automations / Runs / Inbox
 
 The operator-facing Manual moved to the new information architecture

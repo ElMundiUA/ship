@@ -9,6 +9,14 @@ author: Denys Kuzin
 tags: [protocol, cli, autopsy, build-in-public]
 ---
 
+> **Editorial note (2026-04 IA refresh).** This post predates a couple of
+> later CLI changes: there is no top-level `shipctl fetch` (use
+> `shipctl docs fetch`, `shipctl pattern fetch`, `shipctl tool fetch`, or
+> `shipctl collection fetch`), and the `workflow` artifact kind was retired
+> in Phase 6 (replaced by `lanes:` in `.ship/config.yml` — see RFC-0007).
+> For the current surface see [`cli/README.md`](https://github.com/ElMundiUA/ship/blob/main/cli/README.md).
+> The narrative is preserved as a historical artefact.
+
 Between Apr 7 and Apr 19 there is an eleven-day stretch of the Ship graph that looks like silence.
 
 It isn't. It is the part of the project where we wrote the contract before we wrote the software meant to speak it. One commit on a Sunday did most of the work, and by the time the cloud console showed up a week after that, the protocol it spoke was already running through `shipctl verify --no-network` against a real pilot. This is the autopsy of that stretch.

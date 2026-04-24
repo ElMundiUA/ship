@@ -9,6 +9,12 @@ author: Denys Kuzin
 tags: [build-in-public, autopsy, commits]
 ---
 
+> **Editorial note (2026-04 IA refresh).** This post predates the current
+> CLI naming. `shipctl adopt` is not a real command; the equivalent today
+> is `shipctl init` (or `shipctl new` for a greenfield repo). For the
+> current command surface see [`cli/README.md`](https://github.com/ElMundiUA/ship/blob/main/cli/README.md).
+> The narrative is preserved as a historical artefact.
+
 Sixteen days. 189 commits. One repo.
 
 That is the entire history of Ship as of this morning. We are publishing this on the sixteenth day because we promised ourselves we would, and because the log is finally interesting enough to read out loud.

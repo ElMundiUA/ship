@@ -11,7 +11,7 @@ import { repoRoot } from "@/lib/repo-path";
 export const metadata: Metadata = {
   title: "shipctl CLI — Ship",
   description:
-    "shipctl is the single Ship CLI: init, doctor, sync, verify, and the artifact reads (pattern/tool/workflow/collection/docs). One binary, one config (.ship/config.yml), zero vendor lock-in.",
+    "shipctl is Ship's CLI: bootstrap a repo, sync the Plays catalog, run Automations, and report Runs. One binary, one config (.ship/config.yml), zero vendor lock-in.",
 };
 
 function readCliReadme(): string {
@@ -30,17 +30,17 @@ const COMMANDS: { cmd: string; blurb: string }[] = [
   {
     cmd: "shipctl init",
     blurb:
-      "Inject the artifacts protocol into the agent files you already have (Cursor rules, AGENTS.md, CLAUDE.md, …). Detects what is on disk; --dry-run shows the plan.",
+      "Bootstrap an existing repo: write agent rules into the agent files you already have (Cursor, AGENTS.md, CLAUDE.md, …) and seed the Plays catalog into .ship/cache/. Detects what is on disk; --dry-run shows the plan.",
   },
   {
     cmd: "shipctl doctor",
     blurb:
-      "Inspect the repo via the adapter registry. Proposes tracker / CI / language / agent / preset values; --write-inventory persists the findings.",
+      "Inspect the repo via the adapter registry. Proposes tracker / CI / language / agent values; --write-inventory persists the findings for a later --bootstrap.",
   },
   {
     cmd: "shipctl sync",
     blurb:
-      "Fetch the artifacts your config asks for (collections, presets, agent rules) into .ship/cache/. Honours artifacts.pins and api.channel.",
+      "Fetch the artifacts your config asks for (collections, agent rules, Plays) into .ship/cache/. With --lock writes .ship/shipctl.lock.json that pins every Play the declared lanes depend on.",
   },
   {
     cmd: "shipctl verify",
@@ -51,6 +51,26 @@ const COMMANDS: { cmd: string; blurb: string }[] = [
     cmd: "shipctl new",
     blurb:
       "Greenfield path: git init, minimal README, .ship/config.yml from your stack flags, then init --copy-rules in one shot.",
+  },
+  {
+    cmd: "shipctl run",
+    blurb:
+      "One-shot dispatch for an Automation. kind: once lanes execute locally; other lane kinds are queued for the workspace runner via .github/workflows/run-agent.yml.",
+  },
+  {
+    cmd: "shipctl lanes",
+    blurb:
+      "Generate / inspect / delete the .github/workflows/ship-<lane>.yml thin wrappers around each Automation (install / list / remove). Also available as shipctl automations.",
+  },
+  {
+    cmd: "shipctl callback",
+    blurb:
+      "Pattern-side: report a Run's terminal status + RunSummary so Ship can render the row in /runs and route any escalations into /inbox.",
+  },
+  {
+    cmd: "shipctl knowledge init",
+    blurb:
+      "Open a PR that seeds the .ship/knowledge/ starter buckets (code-style, ui-runbook, …) for operators to fill in over time.",
   },
 ];
 
@@ -129,10 +149,19 @@ export default function CliPage() {
           <div className="mx-auto max-w-4xl px-4 sm:px-6">
             <h2 className="font-display text-2xl font-bold text-white sm:text-3xl">Quick commands</h2>
             <p className="mt-3 max-w-2xl text-base text-white/65 sm:text-lg">
-              The five commands you actually run day-to-day. Every command supports{" "}
-              <code className="rounded bg-white/10 px-1 font-mono text-aqua/90">--json</code>,{" "}
+              The verbs you actually run day-to-day, grouped roughly Setup → Catalog → Run → Knowledge. Every command
+              supports <code className="rounded bg-white/10 px-1 font-mono text-aqua/90">--json</code>,{" "}
               <code className="rounded bg-white/10 px-1 font-mono text-aqua/90">--cwd</code>, and{" "}
               <code className="rounded bg-white/10 px-1 font-mono text-aqua/90">--dry-run</code> where it makes sense.
+              The full surface (every flag, every check) lives below or via{" "}
+              <code className="rounded bg-white/10 px-1 font-mono text-aqua/90">shipctl help</code>.
+            </p>
+            <p className="mt-3 text-xs uppercase tracking-[0.18em] text-white/45">
+              Vocabulary · <code className="font-mono text-aqua/80">lanes:</code> in YAML and{" "}
+              <code className="font-mono text-aqua/80">--lane</code> on the CLI stay literal forever; the operator
+              console renders the same things as <span className="text-white/70">Automations</span> /{" "}
+              <span className="text-white/70">Plays</span> / <span className="text-white/70">Runs</span> /{" "}
+              <span className="text-white/70">Inbox</span>.
             </p>
             <ul className="mt-8 space-y-3">
               {COMMANDS.map((row) => (
@@ -147,10 +176,6 @@ export default function CliPage() {
                 </li>
               ))}
             </ul>
-            <p className="mt-6 text-sm text-white/55">
-              The full surface — every flag, every check, every artifact verb — is below or via{" "}
-              <code className="rounded bg-white/10 px-1 font-mono text-aqua/90">shipctl help</code>.
-            </p>
           </div>
         </section>
 
