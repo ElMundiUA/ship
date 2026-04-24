@@ -818,7 +818,21 @@ async def _run_agent_turn(
                         turn_text_parts.append(event.text)
                         yield _sse({"type": "delta", "text": event.text})
                     elif isinstance(event, ToolCall):
+                        # Wave B2: emit ``tool_call`` immediately so the UI
+                        # can interleave the tool card between deltas in
+                        # arrival order. The post-stream loop still drives
+                        # tool execution + ``tool_result`` emission, but no
+                        # longer re-emits the ``tool_call`` frame (which
+                        # would duplicate it on the wire).
                         turn_tool_calls.append(event)
+                        yield _sse(
+                            {
+                                "type": "tool_call",
+                                "id": event.id,
+                                "name": event.name,
+                                "arguments": event.arguments,
+                            }
+                        )
                     elif isinstance(event, ToolResult):
                         pass
                     elif isinstance(event, End):
@@ -877,14 +891,9 @@ async def _run_agent_turn(
             )
         )
         for tc in turn_tool_calls:
-            yield _sse(
-                {
-                    "type": "tool_call",
-                    "id": tc.id,
-                    "name": tc.name,
-                    "arguments": tc.arguments,
-                }
-            )
+            # ``tool_call`` was already yielded inline above (Wave B2);
+            # this loop only drives execution + ``tool_result`` so the
+            # wire order matches the model's true emission order.
             try:
                 output = await toolbox.invoke(tc.name, tc.arguments)
             except ToolInvocationError as exc:

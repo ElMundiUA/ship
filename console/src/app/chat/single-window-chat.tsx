@@ -15,14 +15,25 @@
  *   committed word fades in via the ``.chat-word`` CSS animation.
  *   Markdown is applied from the first delta — the user never sees
  *   a "plain text → formatted text" flip.
- * - **Stateful animation.** Only messages born in this session
- *   animate. Historical messages loaded from the server render
+ * - **Stateful animation.** Only segments born in this session
+ *   animate. Historical segments hydrated from the server render
  *   statically, so reloading the page doesn't replay the last
  *   reply's reveal.
  * - **Thinking / tool cards.** Between the user's submit and the
  *   first delta, an animated "Thinking…" card holds the space so
  *   the page doesn't feel frozen. Tool calls render as styled
  *   pill-cards with a running shimmer while they're in flight.
+ *
+ * Wave B model:
+ *   The transcript is a single ordered ``segments: Segment[]``
+ *   array. Each ``user_message`` / ``delta`` / ``tool_call`` event
+ *   appends a fresh segment in arrival order — when a ``tool_call``
+ *   interrupts a streaming text segment, the *next* delta opens a
+ *   new ``assistant_text`` segment so the rendered timeline reads
+ *   prose₁ → tool₁ → prose₂ instead of all-prose-then-all-tools.
+ *   This eliminates the "сверху-снизу-сверху" jumble that the
+ *   previous dual-array (``messages[]`` + ``tools[]``) layout
+ *   produced.
  *
  * The backend event protocol is unchanged (``thread`` /
  * ``user_message`` / ``topic_shift`` / ``delta`` / ``tool_call`` /
@@ -50,14 +61,19 @@ import {
 
 type Role = "user" | "assistant" | "system" | "tool";
 
+/**
+ * SSE event payload shape — kept as a wire-format alias even though
+ * component state no longer stores ``Message`` rows directly. The
+ * backend ``user_message`` / ``assistant_message`` frames carry this
+ * shape, and :func:`hydrateSegments` lifts initial-state messages
+ * into the segment timeline.
+ */
 type Message = {
   id: string;
   role: Role;
   body: string;
   meta?: Record<string, unknown>;
   createdAt?: string;
-  /** Client-side accumulator flag — set while the assistant is streaming its reply. */
-  streaming?: boolean;
 };
 
 type Thread = {
@@ -70,13 +86,53 @@ type Thread = {
   updated_at: string;
 };
 
-type ToolCallRow = {
+/**
+ * Single ordered timeline element. All three kinds are flat
+ * peers — there is no "turn" wrapper. Render order = arrival
+ * order; segment ids are stable for the lifetime of the segment
+ * (we never reuse an id across kinds).
+ *
+ * - ``user``: a user prompt. Optimistic ids start with ``c_``;
+ *   the persisted id (UUID from the backend) replaces the
+ *   optimistic one when the ``user_message`` SSE frame lands.
+ * - ``assistant_text``: a single contiguous run of model prose.
+ *   A turn may produce **multiple** ``assistant_text`` segments
+ *   when tool calls interleave between deltas — each interruption
+ *   closes the current segment (``streaming: false``) so the next
+ *   delta opens a fresh one. ``animate`` is true only when the
+ *   segment is born live this session; hydrated history renders
+ *   statically. ``serverMessageId`` is stamped by
+ *   ``assistant_message`` (backend's persisted row id) for the
+ *   *last* text segment of the turn.
+ * - ``tool``: one tool call + (eventual) result. ``id`` matches
+ *   the backend tool-call id so the ``tool_result`` frame can
+ *   look it up. The card renders nothing visible until ``result``
+ *   is populated — the in-flight status line does the talking.
+ */
+type UserSegment = {
+  kind: "user";
+  id: string;
+  body: string;
+  createdAt?: string;
+  meta?: Record<string, unknown>;
+};
+type AssistantTextSegment = {
+  kind: "assistant_text";
+  id: string;
+  body: string;
+  streaming: boolean;
+  animate: boolean;
+  serverMessageId?: string;
+  meta?: Record<string, unknown>;
+};
+type ToolSegment = {
+  kind: "tool";
   id: string;
   name: string;
   args: Record<string, unknown>;
-  /** Populated when the matching ``tool_result`` event arrives. */
   result?: { ok: boolean; result?: unknown; error?: string };
 };
+type Segment = UserSegment | AssistantTextSegment | ToolSegment;
 
 /**
  * Frontend-side topic-shift snapshot.
@@ -140,6 +196,42 @@ function clientId(): string {
   return "c_" + Math.random().toString(36).slice(2, 10);
 }
 
+function segId(): string {
+  return "seg_" + Math.random().toString(36).slice(2, 10);
+}
+
+/**
+ * Lift an array of persisted messages (initial state or post-reset
+ * fresh thread) into the segment timeline. Tool messages from
+ * history are intentionally skipped — historical tool-call
+ * rehydration is Wave D. System messages stay hidden too.
+ */
+function hydrateSegments(messages: Message[]): Segment[] {
+  const out: Segment[] = [];
+  for (const m of messages) {
+    if (m.role === "user") {
+      out.push({
+        kind: "user",
+        id: m.id,
+        body: m.body,
+        createdAt: m.createdAt,
+        meta: m.meta,
+      });
+    } else if (m.role === "assistant") {
+      out.push({
+        kind: "assistant_text",
+        id: m.id,
+        body: m.body,
+        streaming: false,
+        animate: false,
+        serverMessageId: m.id,
+        meta: m.meta,
+      });
+    }
+  }
+  return out;
+}
+
 // Reveal cadence for the word-by-word fade. We commit at most one
 // word per tick, so the text feels "typed" rather than "pasted".
 // Cadence is adaptive — if the buffer grows faster than we reveal,
@@ -149,8 +241,9 @@ const REVEAL_FAR_DELAY = 35;
 
 export function SingleWindowChat({ workspaceId, thread }: InitialState) {
   const [current, setCurrent] = useState<Thread>(thread);
-  const [messages, setMessages] = useState<Message[]>(thread.messages);
-  const [tools, setTools] = useState<ToolCallRow[]>([]);
+  const [segments, setSegments] = useState<Segment[]>(() =>
+    hydrateSegments(thread.messages),
+  );
   const [shift, setShift] = useState<TopicShift | null>(null);
   const [streaming, setStreaming] = useState(false);
   // Distinguish "user submitted, nothing back yet" from "agent
@@ -159,20 +252,14 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
   const [draft, setDraft] = useState("");
   const [errorText, setErrorText] = useState<string | null>(null);
 
-  // Per-assistant-message reveal progress (prefix length). Only
-  // the currently-streaming message advances over time; finalized
-  // messages sit at ``body.length`` and never re-animate. Held in
-  // React state so the reveal tick triggers re-renders.
+  // Per-assistant-text-segment reveal progress (prefix length).
+  // Only the currently-streaming segment advances over time;
+  // finalized segments sit at ``body.length`` and never re-animate.
+  // Held in React state so the reveal tick triggers re-renders.
   const [revealed, setRevealed] = useState<Record<string, number>>({});
   const streamingIdRef = useRef<string | null>(null);
 
-  // Messages created during this mount get their ids added here so
-  // ``MessageRow`` knows to animate them. Historical messages from
-  // the initial server payload are *not* in this set, so a page
-  // reload doesn't replay the last reply's fade-in.
-  const animatedIdsRef = useRef<Set<string>>(new Set());
-
-  // Reserved empty space below the last message while a reply is
+  // Reserved empty space below the last segment while a reply is
   // in flight. Without it the scroller has no room to scroll the
   // fresh user message to the top of the viewport — ``scrollTo``
   // silently no-ops because ``scrollHeight === clientHeight``. We
@@ -196,24 +283,28 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const lastUserAnchorRef = useRef<HTMLDivElement | null>(null);
 
-  // Word-by-word reveal tick. Only the currently-streaming message
-  // advances — everything else sits at full length. We step one
-  // word per tick so bursts of delta chars don't dump all at once.
+  // Word-by-word reveal tick. Only the currently-streaming text
+  // segment advances — everything else sits at full length. We
+  // step one word per tick so bursts of delta chars don't dump
+  // all at once.
   useEffect(() => {
     const id = streamingIdRef.current;
     if (!id) return;
-    const streamingMsg = messages.find((m) => m.id === id);
-    if (!streamingMsg) return;
+    const seg = segments.find(
+      (s): s is AssistantTextSegment =>
+        s.kind === "assistant_text" && s.id === id,
+    );
+    if (!seg) return;
     const cur = revealed[id] ?? 0;
-    if (cur >= streamingMsg.body.length) return;
-    const idx = findNextWordBoundary(streamingMsg.body, cur);
-    const nextLen = idx < 0 ? streamingMsg.body.length : idx;
-    const remaining = streamingMsg.body.length - cur;
-    // When the backend has already emitted the full body (end
-    // event fired, ``streaming`` flag cleared) we fast-forward so
-    // the UI doesn't trail behind for several seconds after the
-    // model stopped talking.
-    const streamDone = !streamingMsg.streaming;
+    if (cur >= seg.body.length) return;
+    const idx = findNextWordBoundary(seg.body, cur);
+    const nextLen = idx < 0 ? seg.body.length : idx;
+    const remaining = seg.body.length - cur;
+    // When the backend has already emitted the full body (the
+    // segment was closed by a ``tool_call`` interruption or
+    // ``end``) we fast-forward so the UI doesn't trail behind for
+    // several seconds after the model stopped talking.
+    const streamDone = !seg.streaming;
     const delay = streamDone
       ? 6
       : remaining > 300
@@ -223,7 +314,7 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
       setRevealed((prev) => ({ ...prev, [id]: nextLen }));
     }, delay);
     return () => window.clearTimeout(h);
-  }, [messages, revealed]);
+  }, [segments, revealed]);
 
   useEffect(() => {
     return () => {
@@ -261,11 +352,20 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
         return;
       }
       case "user_message": {
-        setMessages((prev) => {
+        setSegments((prev) => {
+          // Drop any optimistic user segment (id starts ``c_``)
+          // and append the persisted one in its place.
           const trimmed = prev.filter(
-            (m) => !(m.role === "user" && m.id.startsWith("c_")),
+            (s) => !(s.kind === "user" && s.id.startsWith("c_")),
           );
-          return [...trimmed, evt.message];
+          const incoming: UserSegment = {
+            kind: "user",
+            id: evt.message.id,
+            body: evt.message.body,
+            createdAt: evt.message.createdAt,
+            meta: evt.message.meta,
+          };
+          return [...trimmed, incoming];
         });
         // Fresh turn — any in-flight assistant reveal is done; the
         // streaming slot is free until the first delta lands.
@@ -302,24 +402,32 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
       }
       case "delta": {
         setAwaitingFirstDelta(false);
-        setMessages((prev) => {
+        setSegments((prev) => {
           const last = prev[prev.length - 1];
-          if (last && last.role === "assistant" && last.streaming) {
+          if (
+            last &&
+            last.kind === "assistant_text" &&
+            last.streaming
+          ) {
             const next = prev.slice(0, -1);
             next.push({ ...last, body: last.body + evt.text });
             return next;
           }
-          const fresh: Message = {
-            id: clientId(),
-            role: "assistant",
+          // No open text segment — either this is the turn's first
+          // prose, or a ``tool_call`` interruption closed the
+          // previous one. Either way, open a new segment so the
+          // tool card stays visually between the two prose blocks.
+          const fresh: AssistantTextSegment = {
+            kind: "assistant_text",
+            id: segId(),
             body: evt.text,
             streaming: true,
+            animate: true,
           };
           streamingIdRef.current = fresh.id;
-          animatedIdsRef.current.add(fresh.id);
           // Seed the reveal at 0 so the first word fades in
           // rather than popping in wholesale.
-          setRevealed((prev) => ({ ...prev, [fresh.id]: 0 }));
+          setRevealed((r) => ({ ...r, [fresh.id]: 0 }));
           return [...prev, fresh];
         });
         return;
@@ -327,43 +435,84 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
       case "tool_call": {
         const args =
           evt.args ?? evt.arguments ?? ({} as Record<string, unknown>);
-        setTools((prev) => [
-          ...prev,
-          { id: evt.id, name: evt.name, args },
-        ]);
+        setSegments((prev) => {
+          const next = prev.slice();
+          // Side effect: close out any open assistant_text segment
+          // so the *next* delta opens a fresh one *after* the tool
+          // card. This is what makes prose₁ → tool → prose₂ render
+          // in source order instead of being clumped.
+          const lastIdx = next.length - 1;
+          const last = next[lastIdx];
+          if (
+            last &&
+            last.kind === "assistant_text" &&
+            last.streaming
+          ) {
+            next[lastIdx] = { ...last, streaming: false };
+            // The previous segment is now finalized; the next
+            // delta should open a brand-new segment, so clear the
+            // ref so the ``delta`` branch's "find open" check
+            // misses and forces an append.
+            if (streamingIdRef.current === last.id) {
+              streamingIdRef.current = null;
+            }
+          }
+          next.push({
+            kind: "tool",
+            id: evt.id,
+            name: evt.name,
+            args,
+          });
+          return next;
+        });
         return;
       }
       case "tool_result": {
         const normalized = normalizeToolResult(evt);
-        setTools((prev) =>
-          prev.map((t) =>
-            t.id === evt.id ? { ...t, result: normalized } : t,
+        setSegments((prev) =>
+          prev.map((s) =>
+            s.kind === "tool" && s.id === evt.id
+              ? { ...s, result: normalized }
+              : s,
           ),
         );
         return;
       }
       case "assistant_message": {
-        setMessages((prev) => {
+        setSegments((prev) => {
+          // Stamp ``serverMessageId`` on the *last* text segment
+          // that hasn't been finalized yet. Don't rewrite ``body``
+          // — the concatenation of all this turn's
+          // ``assistant_text`` segments IS the persisted message,
+          // and rewriting would clobber the segment splits we
+          // need to keep the prose/tool/prose layout intact.
           const idx = findLastIndex(
             prev,
-            (m) => m.role === "assistant" && !!m.streaming,
+            (s) => s.kind === "assistant_text" && !s.serverMessageId,
           );
           if (idx < 0) {
-            // Server-only finalize (no streaming placeholder) —
-            // still mark as animated since this is a fresh turn.
-            animatedIdsRef.current.add(evt.message.id);
-            return [...prev, { ...evt.message, streaming: true }];
+            // Pure-tool turn (no prose at all) — append a synthetic
+            // finalized text segment from the persisted body so
+            // the row still appears in the timeline.
+            return [
+              ...prev,
+              {
+                kind: "assistant_text",
+                id: evt.message.id,
+                body: evt.message.body,
+                streaming: false,
+                animate: true,
+                serverMessageId: evt.message.id,
+                meta: evt.message.meta,
+              },
+            ];
           }
           const next = prev.slice();
-          const existing = next[idx];
-          // Keep the client id stable across finalization so the
-          // React key doesn't change — if we swapped to the server
-          // id here, the whole row would re-mount and the reveal
-          // animation would re-play from scratch.
+          const seg = next[idx] as AssistantTextSegment;
           next[idx] = {
-            ...existing,
-            body: evt.message.body,
-            meta: { ...(evt.message.meta ?? {}), server_id: evt.message.id },
+            ...seg,
+            serverMessageId: evt.message.id,
+            meta: { ...(seg.meta ?? {}), ...(evt.message.meta ?? {}) },
           };
           return next;
         });
@@ -390,14 +539,15 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
           };
         }
         setBottomSpacerPx(0);
-        setMessages((prev) => {
+        setSegments((prev) => {
           const idx = findLastIndex(
             prev,
-            (m) => m.role === "assistant" && !!m.streaming,
+            (s) => s.kind === "assistant_text" && s.streaming,
           );
           if (idx < 0) return prev;
           const next = prev.slice();
-          next[idx] = { ...next[idx], streaming: false };
+          const seg = next[idx] as AssistantTextSegment;
+          next[idx] = { ...seg, streaming: false };
           return next;
         });
         return;
@@ -430,16 +580,14 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
       setErrorText(null);
       setStreaming(true);
       setAwaitingFirstDelta(true);
-      setTools([]);
 
       const optimisticId = clientId();
-      const optimistic: Message = {
+      const optimistic: UserSegment = {
+        kind: "user",
         id: optimisticId,
-        role: "user",
         body: trimmed,
-        streaming: false,
       };
-      setMessages((prev) => [...prev, optimistic]);
+      setSegments((prev) => [...prev, optimistic]);
       setDraft("");
       streamingIdRef.current = null;
 
@@ -543,31 +691,44 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
       }
       const fresh = (await res.json()) as Thread & { messages: Message[] };
       setCurrent(fresh);
-      setMessages(fresh.messages ?? []);
-      setTools([]);
+      setSegments(hydrateSegments(fresh.messages ?? []));
       setShift(null);
       streamingIdRef.current = null;
       setRevealed({});
-      animatedIdsRef.current = new Set();
       setBottomSpacerPx(0);
     },
     [streaming, workspaceId],
   );
 
-  const visibleMessages = useMemo(
-    () => messages.filter((m) => m.role !== "system"),
-    [messages],
-  );
   const lastUserIndex = useMemo(() => {
-    for (let i = visibleMessages.length - 1; i >= 0; i--) {
-      if (visibleMessages[i].role === "user") return i;
+    for (let i = segments.length - 1; i >= 0; i--) {
+      if (segments[i].kind === "user") return i;
     }
     return -1;
-  }, [visibleMessages]);
-  const hasStreamingAssistant = useMemo(
-    () => visibleMessages.some((m) => m.role === "assistant" && !!m.streaming),
-    [visibleMessages],
+  }, [segments]);
+  const userSegmentCount = useMemo(
+    () => segments.reduce((n, s) => (s.kind === "user" ? n + 1 : n), 0),
+    [segments],
   );
+  const hasStreamingAssistant = useMemo(
+    () =>
+      segments.some(
+        (s) => s.kind === "assistant_text" && s.streaming,
+      ),
+    [segments],
+  );
+  // Latest tool segment within the current turn (= after the last
+  // user prompt). Pre-Wave-B this was driven by a separate
+  // ``tools[]`` array that we cleared on each ``send``; now we
+  // derive it positionally so historical tools from earlier turns
+  // never leak into the live status line.
+  const currentTurnLastTool = useMemo<ToolSegment | null>(() => {
+    for (let i = segments.length - 1; i > lastUserIndex; i--) {
+      const s = segments[i];
+      if (s.kind === "tool") return s;
+    }
+    return null;
+  }, [segments, lastUserIndex]);
   // Single-line status that sits at the *end* of the turn (below
   // whatever the agent has streamed so far, or below the user
   // prompt if the agent hasn't started talking yet). It replaces
@@ -597,7 +758,7 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
     text: string;
   } | null => {
     if (!streaming) return null;
-    const latest = tools.length > 0 ? tools[tools.length - 1] : null;
+    const latest = currentTurnLastTool;
     if (latest && !latest.result) {
       return {
         tone: "shimmer",
@@ -623,24 +784,25 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
       return { tone: "shimmer", text: "Thinking…" };
     }
     return null;
-  }, [streaming, hasStreamingAssistant, tools, awaitingFirstDelta]);
+  }, [streaming, hasStreamingAssistant, currentTurnLastTool, awaitingFirstDelta]);
 
-  // Map each visible message to how many characters we should
-  // render right now. Non-streaming rows (historical + finalized
-  // past turns) always show their full body; only the currently
-  // active assistant slot is clamped by the reveal tick.
+  // Map each assistant_text segment to how many characters we
+  // should render right now. Non-streaming segments (historical +
+  // finalized past turns) always show their full body; only the
+  // currently active assistant slot is clamped by the reveal tick.
   const revealMap = useMemo(() => {
     const map = new Map<string, number>();
-    for (const m of visibleMessages) {
-      if (m.id === streamingIdRef.current) {
-        const cur = revealed[m.id] ?? 0;
-        map.set(m.id, Math.min(cur, m.body.length));
+    for (const s of segments) {
+      if (s.kind !== "assistant_text") continue;
+      if (s.id === streamingIdRef.current) {
+        const cur = revealed[s.id] ?? 0;
+        map.set(s.id, Math.min(cur, s.body.length));
       } else {
-        map.set(m.id, m.body.length);
+        map.set(s.id, s.body.length);
       }
     }
     return map;
-  }, [visibleMessages, revealed]);
+  }, [segments, revealed]);
 
   return (
     <div className="flex h-[calc(100vh-12rem)] min-h-[34rem] flex-col">
@@ -648,7 +810,7 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
         <h2 className="text-sm font-semibold text-white/90">{current.title}</h2>
         <span className="text-[11px] text-white/35">
           {current.status === "active" ? "live" : "archived"} ·{" "}
-          {visibleMessages.length} msg
+          {userSegmentCount} msg
         </span>
         <button
           type="button"
@@ -674,34 +836,39 @@ export function SingleWindowChat({ workspaceId, thread }: InitialState) {
 
       <div ref={scrollerRef} className="flex-1 overflow-y-auto py-4">
         <ChoiceProvider onChoose={(label) => void send(label)}>
-          {visibleMessages.length === 0 ? (
+          {segments.length === 0 ? (
             <EmptyHint />
           ) : (
             <div className="space-y-6">
-              {visibleMessages.map((m, i) => {
-                const isLastUser =
-                  i === lastUserIndex && m.role === "user";
-                return (
-                  <MessageRow
-                    key={m.id}
-                    message={m}
-                    animate={animatedIdsRef.current.has(m.id)}
-                    revealLen={revealMap.get(m.id) ?? m.body.length}
-                    anchorRef={isLastUser ? lastUserAnchorRef : null}
-                  />
-                );
+              {/* Single ordered timeline. user / assistant_text /
+                  tool segments render in arrival order — when a
+                  ``tool_call`` interleaves between deltas, the
+                  next prose segment naturally lands *below* the
+                  tool card, eliminating the dual-array clumping
+                  that pre-Wave-B pinned all tools at the bottom. */}
+              {segments.map((seg, i) => {
+                if (seg.kind === "user") {
+                  return (
+                    <UserRow
+                      key={seg.id}
+                      segment={seg}
+                      anchorRef={
+                        i === lastUserIndex ? lastUserAnchorRef : null
+                      }
+                    />
+                  );
+                }
+                if (seg.kind === "assistant_text") {
+                  return (
+                    <AssistantTextRow
+                      key={seg.id}
+                      segment={seg}
+                      revealLen={revealMap.get(seg.id) ?? seg.body.length}
+                    />
+                  );
+                }
+                return <ToolSegmentRow key={seg.id} segment={seg} />;
               })}
-              {/* Tool result cards. Each resolved tool call from
-                  the in-flight turn renders here. Tools with a
-                  dedicated renderer in ``TOOL_RENDERERS`` get a
-                  rich action card with deeplink chips; the rest
-                  fall back to a JSON dump so unknown tools stay
-                  visible (just less polished). The shimmer
-                  ``Calling …`` line below covers tools still in
-                  flight. */}
-              {tools.length > 0 ? (
-                <ToolResultsList tools={tools} />
-              ) : null}
               {/* Single-line turn status at the end of the turn
                   (below the streamed prose if there is any, below
                   the user prompt if not). Replaces itself as state
@@ -767,85 +934,67 @@ function EmptyHint() {
   );
 }
 
-function MessageRow({
-  message,
-  animate,
-  revealLen,
+function UserRow({
+  segment,
   anchorRef,
 }: {
-  message: Message;
-  animate: boolean;
-  revealLen: number;
+  segment: UserSegment;
   anchorRef: React.RefObject<HTMLDivElement | null> | null;
 }) {
-  const isUser = message.role === "user";
-  const label = isUser
-    ? "You"
-    : message.role === "assistant"
-      ? "Ship"
-      : message.role;
-  const labelTint = isUser ? "text-aqua/80" : "text-lilac/80";
-
-  const displayBody =
-    message.role === "assistant"
-      ? message.body.slice(0, Math.max(0, Math.min(revealLen, message.body.length)))
-      : message.body;
-
   return (
     <div ref={anchorRef ?? undefined} className="text-[14px] leading-relaxed">
-      <div
-        className={`mb-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${labelTint}`}
-      >
-        {label}
+      <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-aqua/80">
+        You
       </div>
-      <ChatMarkdown text={displayBody} animate={animate} />
+      <ChatMarkdown text={segment.body} animate={false} />
+    </div>
+  );
+}
+
+function AssistantTextRow({
+  segment,
+  revealLen,
+}: {
+  segment: AssistantTextSegment;
+  revealLen: number;
+}) {
+  const displayBody = segment.body.slice(
+    0,
+    Math.max(0, Math.min(revealLen, segment.body.length)),
+  );
+  return (
+    <div className="text-[14px] leading-relaxed">
+      <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-lilac/80">
+        Ship
+      </div>
+      <ChatMarkdown text={displayBody} animate={segment.animate} />
     </div>
   );
 }
 
 /**
- * Renders the resolved tool calls from the current turn as a stack
- * of action cards. We consult ``TOOL_RENDERERS[toolName]`` first; if
- * no renderer is registered (or the renderer throws) we fall back to
- * a raw JSON dump so the user still sees something. In-flight tools
- * (no ``result`` yet) are skipped — the shimmer status line below
- * the message thread covers their progress.
+ * Per-segment tool renderer.
  *
- * Errored tools (``ok === false``) get the uniform :class:`ErrorCard`
- * via :func:`renderToolResult`.
+ * In-flight tools (no ``result`` yet) render nothing — the
+ * single-line ``TurnStatusLine`` below the timeline is the
+ * progress signal. Once the result lands we route through
+ * :func:`renderToolResult` for tools that have a registered rich
+ * renderer, falling back to :class:`JsonFallback` so unknown
+ * tools stay readable. Errored results (``ok === false``) get the
+ * uniform ErrorCard treatment via :func:`renderToolResult`.
  */
-function ToolResultsList({ tools }: { tools: ToolCallRow[] }) {
-  const completed = tools.filter((t) => t.result !== undefined);
-  if (completed.length === 0) return null;
-  return (
-    <div className="space-y-3">
-      {completed.map((tool) => (
-        <ToolResultCard key={tool.id} tool={tool} />
-      ))}
-    </div>
-  );
-}
-
-function ToolResultCard({ tool }: { tool: ToolCallRow }) {
-  const result = tool.result;
+function ToolSegmentRow({ segment }: { segment: ToolSegment }) {
+  const result = segment.result;
   if (!result) return null;
   if (!result.ok) {
-    // Errored result: ``normalizeToolResult`` collapsed any
-    // ``{error: ...}`` payload into ``result.error``. Reuse the
-    // standard renderer entry-point so admin-gated forbidden
-    // errors get the amber treatment uniformly.
-    return renderToolResult(tool.name, {
+    return renderToolResult(segment.name, {
       error: result.error ?? "failed",
     }) as React.ReactNode;
   }
-  // ``normalizeToolResult`` already JSON-parsed the tool output for
-  // us. Hand the parsed body straight to the registry — if no
-  // renderer matches OR rendering blows up, ``renderToolResult``
-  // returns the JSON fallback so unknown tools stay readable.
-  if (TOOL_RENDERERS[tool.name]) {
-    return renderToolResult(tool.name, result.result) as React.ReactNode;
+  if (TOOL_RENDERERS[segment.name]) {
+    return renderToolResult(segment.name, result.result) as React.ReactNode;
   }
-  return <JsonFallback toolName={tool.name} result={result.result} />;
+  return <JsonFallback toolName={segment.name} result={result.result} />;
 }
 
 function TurnStatusLine({
