@@ -136,7 +136,7 @@ def test_parse_real_ship_file() -> None:
 def _stub_fetch(monkeypatch, *, text: str | None, sha: str | None, branch: str):
     """Replace :func:`fetch_codeowners` so resolve tests skip the HTTP path."""
 
-    async def _fake_fetch(*, session, workspace_id, repo_id, client=None):
+    async def _fake_fetch(*, session, workspace_id, repo_id, client=None, **_kwargs):
         return text, sha, branch
 
     monkeypatch.setattr(codeowners_module, "fetch_codeowners", _fake_fetch)

@@ -21,13 +21,14 @@ Two surfaces:
 
 from __future__ import annotations
 
+import logging
 import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -57,6 +58,8 @@ router = APIRouter(
     prefix="/workspaces/{workspace_id}/repos",
     tags=["repos"],
 )
+
+logger = logging.getLogger(__name__)
 
 
 # Day-2 cap; the picker UI starts to suffer past a few hundred repos
@@ -1269,12 +1272,19 @@ async def update_repo(
 class WizardSeedIn(BaseModel):
     """Body for ``POST /workspaces/{ws}/repos/{repo_id}/wizard_seed``."""
 
+    # P5-06 deprecation: every wizard run now seeds the canonical
+    # :data:`backend.app.services.lane_recipes.DEFAULT_BUNDLE`
+    # regardless of what the caller passes. Field is retained so
+    # legacy clients (CLI versions in flight, tests not yet rebased,
+    # the FE during the Wave-8c cut-over) don't 422 the moment they
+    # POST a body. Drop once Wave 8c lands and the FE stops sending
+    # it.
     presets: list[str] | None = Field(
         default=None,
         description=(
-            "Preset ids to bundle. Defaults to the repo's persisted "
-            "preset; pass multiple to combine (same semantics as "
-            "install_bundle)."
+            "DEPRECATED (P5-06). Ignored — the wizard always seeds "
+            "DEFAULT_BUNDLE now. Field retained for legacy CLI / "
+            "FE clients during the Wave-8c cut-over."
         ),
     )
     knowledge_slugs: list[str] | None = Field(
@@ -1305,7 +1315,48 @@ class WizardSeedIn(BaseModel):
     rotate_run_token: bool = False
 
 
+class WizardSeedCodeownersSummary(BaseModel):
+    """CODEOWNERS → routing summary block of :class:`WizardSeedOut`.
+
+    Wave-8c FE renders this directly: the post-wizard "what we wired"
+    panel reads ``rules_count`` ("we found N CODEOWNERS rules") and
+    ``unresolved_owners`` ("but couldn't match these usernames to a
+    workspace member yet").
+    """
+
+    file_found: bool
+    rules_count: int
+    routing_rules_created: int
+    unresolved_owners: list[str]
+
+
+class WizardSeedIntelHandle(BaseModel):
+    """Repo-intel harvest dispatch handle on :class:`WizardSeedOut`.
+
+    Two modes:
+
+    - Inline (``enqueued=False``): no redis worker configured (dev),
+      the wizard ran the harvest synchronously and ``intel_id`` is
+      the freshly-inserted :class:`RepoIntel.id`.
+    - Queued (``enqueued=True``): arq worker handles the job;
+      ``job_id`` is the arq id the FE polls. ``intel_id`` is ``None``
+      until the worker writes the row.
+    """
+
+    enqueued: bool
+    job_id: str | None = None
+    intel_id: uuid.UUID | None = None
+
+
 class WizardSeedOut(BaseModel):
+    """Response shape for ``POST .../wizard_seed`` (extended in P5-06).
+
+    Fields added in P5-06 (``codeowners``, ``intel``,
+    ``synthetic_lanes_created``) are all defaulted so legacy FE
+    builds that ignore them keep deserialising. Wave-8c FE binds
+    against them once the new Inbox / Coverage panels ship.
+    """
+
     pr_url: str
     pr_number: int
     branch: str
@@ -1315,46 +1366,168 @@ class WizardSeedOut(BaseModel):
     tracker_kind: str | None = None
     run_token_prefix: str | None = None
     run_token_rotated: bool = False
+    # ── P5-06 additions ──────────────────────────────────────────
+    codeowners: WizardSeedCodeownersSummary | None = None
+    intel: WizardSeedIntelHandle | None = None
+    # ── P5-07 addition ───────────────────────────────────────────
+    synthetic_lanes_created: int = 0
+
+
+async def _dispatch_intel_harvest(
+    *,
+    request: Request | None,
+    session: AsyncSession,
+    workspace_id: uuid.UUID,
+    repo_id: uuid.UUID,
+) -> WizardSeedIntelHandle:
+    """Dispatch a one-shot repo-intel harvest for the wizard (P5-06).
+
+    Two paths share one return shape so the FE doesn't branch on
+    deployment topology:
+
+    - ``request.app.state.redis_pool`` is set → enqueue an arq job
+      and return ``enqueued=True`` with the ``job_id`` the FE polls.
+    - Otherwise (typical local-dev: no ``--profile worker``) → run
+      the harvest synchronously via :func:`harvest_repo_intel` and
+      return ``enqueued=False`` with the freshly-inserted
+      ``intel_id``. Failures degrade to ``intel_id=None`` so the
+      wizard PR still ships even if the harvest itself blew up
+      (a missing intel doc isn't worth aborting a successful seed).
+
+    The ``triggered_by`` is always
+    :data:`RepoIntelTriggeredBy.WIZARD` so the audit table can
+    distinguish wizard-driven harvests from CLI / cron / manual
+    re-triggers down the line.
+    """
+    import time as _time
+
+    from backend.app.services.repo_intel import (
+        RepoIntelTriggeredBy,
+        harvest_repo_intel,
+    )
+
+    redis_pool = None
+    if request is not None:
+        redis_pool = getattr(request.app.state, "redis_pool", None)
+
+    if redis_pool is not None:
+        # Job id mirrors :func:`enqueue_harvest`'s scheme so the
+        # worker logs are greppable across both call sites.
+        job_id = f"harvest:{repo_id}:{int(_time.time())}"
+        try:
+            await redis_pool.enqueue_job(
+                "harvest_repo_intel_job",
+                str(workspace_id),
+                str(repo_id),
+                RepoIntelTriggeredBy.WIZARD,
+                _job_id=job_id,
+            )
+        except Exception:  # pragma: no cover — logged + degraded
+            logger.exception(
+                "wizard_seed: redis enqueue_job failed; harvest "
+                "skipped",
+                extra={
+                    "workspace_id": str(workspace_id),
+                    "repo_id": str(repo_id),
+                },
+            )
+            return WizardSeedIntelHandle(
+                enqueued=False, job_id=None, intel_id=None
+            )
+        return WizardSeedIntelHandle(
+            enqueued=True, job_id=job_id, intel_id=None
+        )
+
+    # Inline path. We deliberately ``await`` rather than
+    # ``asyncio.create_task`` (which is ``enqueue_harvest``'s dev
+    # behaviour) so the response carries a real ``intel_id`` —
+    # the wizard's "View intel" CTA needs something to link to and
+    # the FE has no other handle to poll for the inline result.
+    try:
+        report = await harvest_repo_intel(
+            session=session,
+            workspace_id=workspace_id,
+            repo_id=repo_id,
+            triggered_by=RepoIntelTriggeredBy.WIZARD,
+        )
+    except Exception:  # pragma: no cover — logged + degraded
+        logger.exception(
+            "wizard_seed: inline harvest_repo_intel failed",
+            extra={
+                "workspace_id": str(workspace_id),
+                "repo_id": str(repo_id),
+            },
+        )
+        return WizardSeedIntelHandle(
+            enqueued=False, job_id=None, intel_id=None
+        )
+    return WizardSeedIntelHandle(
+        enqueued=False, job_id=None, intel_id=report.intel_id
+    )
 
 
 @router.post("/{repo_id}/wizard_seed", response_model=WizardSeedOut)
 async def wizard_seed(
     workspace_id: uuid.UUID,
     repo_id: uuid.UUID,
+    request: Request,
     payload: WizardSeedIn | None = None,
     auth: AuthContext = Depends(get_current_auth),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> WizardSeedOut:
-    """Open the single wizard seed PR for a repo.
+    """Open the single wizard seed PR for a repo (P5-06 orchestration v2).
 
     Admin-only. The flow is:
 
-    1. Resolve the preset list (explicit or repo-persisted). Each id
-       is normalized via
-       :func:`backend.app.services.lane_recipes.normalize_preset`
-       (legacy → ``"default"``); any other string passes through
-       unchanged for forward-compat with catalog-authored future
-       presets.
-    2. Resolve the tracker kind (body override, else the per-repo
+    1. Resolve the tracker kind (body override, else the per-repo
        binding, else the workspace default).
-    3. Mint a fresh ``SHIP_RUN_TOKEN`` if one doesn't exist or if the
+    2. Mint a fresh ``SHIP_RUN_TOKEN`` if one doesn't exist or if the
        caller asked to rotate. Plaintext is PUT to GitHub Actions
        *before* the PR opens so the workflows installed by the PR can
        authenticate on their first tick. On any failure here the PR is
        never opened — a PR without the secret would silently break
        every schedule-triggered lane it installs.
-    4. Compose the file list via ``services.seed_bundle.compose_seed_files``.
-    5. Open one PR via ``commit_bundle_pr``.
-    6. Audit-log the wizard seed with every file path (no plaintext).
+    3. Compose the file list via
+       :func:`backend.app.services.seed_bundle.compose_seed_files`
+       against the canonical
+       :data:`backend.app.services.lane_recipes.DEFAULT_BUNDLE`. The
+       legacy ``payload.presets`` field is silently ignored (P5-06
+       deprecation — see :class:`WizardSeedIn`).
+    4. Open one PR via ``commit_bundle_pr``.
+    5. Synthetic-lane sync (P5-07): write Lane rows for every
+       bundle pattern stamped ``origin='wizard_seed_synthetic'`` so
+       the new Inbox / Coverage / Automations surfaces light up
+       immediately instead of staying empty until the operator
+       merges. Reconciliation back to ``origin='merged'`` happens in
+       :func:`backend.app.services.lanes_sync.sync_lanes_for_repo`
+       on the post-merge webhook.
+    6. CODEOWNERS → routing pre-seed (P5-06): aggregate resolved
+       owners from the seed PR's branch (falling back to the default
+       branch if the file already exists upstream) into one
+       ``code_owner`` :class:`InboxRoutingRule` so the resolver has
+       something to bind to before the PR even merges.
+    7. Repo-intel harvest dispatch (P5-06): enqueue a one-time scan
+       of the repo so the knowledge bucket gets a real
+       ``repo-intel.md`` written by a worker. In dev (no redis) the
+       scan runs inline and the response carries the resulting
+       ``intel_id``; in prod the response carries the arq ``job_id``
+       for the FE to poll.
+    8. Audit-log the wizard seed with every file path (no
+       plaintext) plus counts for steps 5–7.
     """
 
     from backend.app.integrations.github.workflows import (
         WorkflowDispatchError,
         commit_bundle_pr,
     )
+    from backend.app.services.lane_recipes import DEFAULT_BUNDLE
     from backend.app.services.repo_tokens import mint_repo_callback_token
     from backend.app.services.seed_bundle import compose_seed_files
+    from backend.app.services.synthetic_lane_sync import synthetic_lane_sync
+    from backend.app.services.wizard_seed_routing import (
+        seed_routing_from_codeowners,
+    )
 
     await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
 
@@ -1393,36 +1566,11 @@ async def wizard_seed(
 
     payload = payload or WizardSeedIn()
 
-    # ── Resolve presets (wizard override → repo persisted) ────────
-    # Each id passes through :func:`normalize_preset` so legacy
-    # strings (and any pre-P5-01 values still on the repo row)
-    # collapse to ``"default"`` before bundle composition. After
-    # dedupe the cleaned list is almost always exactly ``["default"]``.
-    requested = payload.presets if payload.presets else None
-    if requested is None:
-        requested = [repo_row.preset] if repo_row.preset else []
-    cleaned: list[str] = []
-    seen: set[str] = set()
-    for pid in requested:
-        pid = (pid or "").strip()
-        if not pid:
-            continue
-        normalized = normalize_preset(pid)
-        if normalized in seen:
-            continue
-        cleaned.append(normalized)
-        seen.add(normalized)
-    if not cleaned:
-        raise HTTPException(
-            status_code=status.HTTP_412_PRECONDITION_FAILED,
-            detail={
-                "code": "preset_required",
-                "message": (
-                    "Pass at least one preset or set it on the repo before "
-                    "opening the wizard seed PR."
-                ),
-            },
-        )
+    # ── Presets (deprecated; ignored post-P5-06) ──────────────────
+    # Every wizard call now seeds the canonical DEFAULT_BUNDLE; the
+    # ``presets=["default"]`` echo on the response is purely for
+    # legacy FE compatibility (see :class:`WizardSeedOut`).
+    cleaned: list[str] = ["default"]
 
     # ── Resolve tracker kind for the FSM doc ──────────────────────
     # Preference order: explicit body → per-repo binding → workspace
@@ -1497,22 +1645,31 @@ async def wizard_seed(
             ) from exc
 
     # ── Compose the file bundle (pure) ────────────────────────────
+    # Always DEFAULT_BUNDLE post-P5-06 — see WizardSeedIn.presets
+    # deprecation. The bundle / knowledge counts still flow through
+    # the audit log so we can tell apart "old tiny seed" from
+    # "P5-06 full seed" on a wizard-replay.
     bundle = compose_seed_files(
-        presets=cleaned,
+        bundle=DEFAULT_BUNDLE,
         knowledge_slugs=payload.knowledge_slugs,
         tracker_kind=tracker_kind,
         workspace_default_tracker_kind=workspace_default_kind,
         include_fsm=payload.include_fsm,
+        repo_intel_placeholder=True,
         repo_full_name=repo_row.full_name,
     )
 
     if not bundle.files:
+        # Defensive: DEFAULT_BUNDLE is non-empty by construction so
+        # this path is unreachable in production. Kept so a future
+        # refactor that drops the bundle constant can't open an
+        # empty PR.
         raise HTTPException(
             status_code=status.HTTP_412_PRECONDITION_FAILED,
             detail={
                 "code": "empty_bundle",
                 "message": (
-                    f"Preset(s) {cleaned!r} + selected options resolved to "
+                    "DEFAULT_BUNDLE + selected options resolved to "
                     "zero installable files."
                 ),
             },
@@ -1530,7 +1687,8 @@ async def wizard_seed(
     )
     body_header = (
         "This PR wires Ship into this repo in a single merge.\n\n"
-        f"**Presets**: {', '.join('`' + p + '`' for p in cleaned)}\n"
+        f"**Bundle**: `{bundle.bundle_hash}` "
+        f"({len(bundle.bundle)} Plays)\n"
         f"{tracker_line}\n"
         f"**Knowledge**: {', '.join('`' + s + '`' for s in bundle.knowledge_slugs) or '_none_'}\n\n"
         "Merge once. Ship's first scheduled lanes will start running "
@@ -1541,8 +1699,8 @@ async def wizard_seed(
             repo_row,
             install_row,
             files=bundle.files,
-            title=f"Ship: wizard seed ({', '.join(cleaned)})",
-            branch_label=f"wizard-{'-'.join(cleaned)}",
+            title="Ship: wizard seed",
+            branch_label="wizard-default",
             pr_body_header=body_header,
             settings=settings,
             return_url=return_url,
@@ -1556,6 +1714,69 @@ async def wizard_seed(
                 "message": exc.message[:512],
             },
         ) from exc
+
+    # ── Synthetic Lane sync (P5-07) ───────────────────────────────
+    # Materialise Lane rows for every bundle pattern stamped
+    # ``origin='wizard_seed_synthetic'`` so the new Inbox / Coverage
+    # / Automations surfaces light up immediately. Reconciliation
+    # back to ``'merged'`` happens in ``sync_lanes_for_repo`` on the
+    # post-merge webhook (see :mod:`backend.app.services.synthetic_lane_sync`).
+    try:
+        synthetic_lanes_created = await synthetic_lane_sync(
+            session=session,
+            workspace_id=workspace_id,
+            repo_id=repo_row.id,
+            bundle=DEFAULT_BUNDLE,
+        )
+    except Exception:  # pragma: no cover — logged + degraded, PR is in
+        logger.exception(
+            "wizard_seed: synthetic_lane_sync failed; PR opened but "
+            "Lane rows were not pre-seeded",
+            extra={
+                "workspace_id": str(workspace_id),
+                "repo_id": str(repo_row.id),
+                "pr_number": result.pr_number,
+            },
+        )
+        synthetic_lanes_created = 0
+
+    # ── CODEOWNERS → routing pre-seed (P5-06) ─────────────────────
+    # Try the seed PR's branch first — when Ship's seed PR creates
+    # the CODEOWNERS file, ``default_branch`` won't have it yet.
+    # ``seed_routing_from_codeowners`` falls back to default branch
+    # internally if the PR-branch fetch returns 404.
+    codeowners_summary: WizardSeedCodeownersSummary | None = None
+    try:
+        routing_summary = await seed_routing_from_codeowners(
+            session=session,
+            workspace_id=workspace_id,
+            repo_id=repo_row.id,
+            pr_branch=result.branch,
+        )
+        codeowners_summary = WizardSeedCodeownersSummary(
+            file_found=routing_summary.file_found,
+            rules_count=routing_summary.rules_count,
+            routing_rules_created=routing_summary.routing_rules_created,
+            unresolved_owners=list(routing_summary.unresolved_owners),
+        )
+    except Exception:  # pragma: no cover — logged + degraded, PR is in
+        logger.exception(
+            "wizard_seed: seed_routing_from_codeowners failed; PR "
+            "opened but no routing rules were pre-seeded",
+            extra={
+                "workspace_id": str(workspace_id),
+                "repo_id": str(repo_row.id),
+                "pr_number": result.pr_number,
+            },
+        )
+
+    # ── Repo-intel harvest dispatch (P5-06) ───────────────────────
+    intel_handle = await _dispatch_intel_harvest(
+        request=request,
+        session=session,
+        workspace_id=workspace_id,
+        repo_id=repo_row.id,
+    )
 
     # Stamp the bundle version so the dashboard can tell "up to date"
     # from "upgrade available" next render.
@@ -1586,6 +1807,18 @@ async def wizard_seed(
                 # run_token_prefix only; plaintext never persisted.
                 "run_token_prefix": repo_row.run_token_prefix,
                 "bundle_version": _BUNDLE_VERSION,
+                "bundle_hash": bundle.bundle_hash,
+                "synthetic_lanes_created": synthetic_lanes_created,
+                "codeowners": (
+                    codeowners_summary.model_dump()
+                    if codeowners_summary is not None
+                    else None
+                ),
+                "intel": (
+                    intel_handle.model_dump(mode="json")
+                    if intel_handle is not None
+                    else None
+                ),
             },
         )
     )
@@ -1601,6 +1834,9 @@ async def wizard_seed(
         tracker_kind=tracker_kind,
         run_token_prefix=repo_row.run_token_prefix,
         run_token_rotated=rotated,
+        codeowners=codeowners_summary,
+        intel=intel_handle,
+        synthetic_lanes_created=synthetic_lanes_created,
     )
 
 
