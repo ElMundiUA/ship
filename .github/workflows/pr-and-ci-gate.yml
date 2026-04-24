@@ -74,10 +74,10 @@ jobs:
             --summary "$GATE_SUMMARY" \
             --metric "gh_workflow_run_id=$GH_RUN_ID" \
             --metric "gh_html_url=$GH_RUN_URL"
-          # RFC-0010 (P3-03): when this gate evolves to surface findings,
-          # opt into the new RunSummary contract so /runs renders an
-          # outcome sentence instead of a status word, and so any PRs we
-          # open or risks we flag flow into the Inbox automatically.
+          # RFC-0010 (P3-03): once your gate produces findings or opens
+          # PRs, opt into the structured RunSummary contract so the
+          # /runs surface renders an outcome sentence and any approvals
+          # / escalations land in the Inbox automatically.
           # Available flags (see `shipctl callback --help`):
           #   --outcome-text "<single-line UI sentence>"
           #   --severity low|medium|high|critical=N    (repeatable)
@@ -86,8 +86,8 @@ jobs:
           #   --requires-approval --approval-payload '{...}'|@file.json
           # Bulk path: SHIP_RUN_OUTCOME_FILE=./summary.json shipctl callback --status ok
           #
-          # Example (commented out — there's nothing to summarise for a
-          # bare PR-gate scan; uncomment + adapt once the gate produces
+          # Example (commented out — nothing to summarise for a bare
+          # PR-gate scan; uncomment + adapt once the gate produces
           # findings):
           #
           # shipctl callback --status "$CB" \
