@@ -24,13 +24,21 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { AppShell } from "@/components/app-shell";
+import {
+  resolveAutomateBannerData,
+  type AutomateBannerData,
+} from "@/components/runs/automate-banner";
 import { Card, CardHeader } from "@/components/ui";
 import {
+  type ApiCatalogPattern,
+  type ApiLane,
   type ApiRunEscalation,
   ApiHttpError,
   ApiUnavailableError,
   getRunDetail,
   isApiConfigured,
+  listCatalogPatterns,
+  listLanes,
   listRunEscalations,
   listWorkspaces,
 } from "@/lib/api/client";
@@ -141,6 +149,17 @@ export default async function RunDetailPage({
     escalationsError = true;
   }
 
+  // RFC-0010 P4-04: resolve the "Automate this run" banner. Both
+  // fetches are best-effort — if the catalog or lanes endpoint
+  // hiccups we just skip the banner (fail-closed per the ticket's
+  // edge-case list).
+  const automateBanner = await resolveAutomateBannerForRun({
+    workspaceId: workspace.id,
+    token,
+    run: detail.run,
+    pipeline: detail.pipeline,
+  });
+
   return (
     <AppShell
       title="Run"
@@ -166,9 +185,60 @@ export default async function RunDetailPage({
         pipeline={detail.pipeline}
         escalations={escalations}
         escalationsError={escalationsError}
+        automateBanner={automateBanner}
       />
     </AppShell>
   );
+}
+
+/**
+ * Best-effort fetch of the catalog + lane projection needed to
+ * render the P4-04 banner. Returns ``null`` whenever any input is
+ * missing or the underlying calls error — the resolver itself has
+ * the same fail-closed contract, but we short-circuit early when
+ * we can to avoid wasted requests (e.g. failed/manual=false runs
+ * never need the lane fetch).
+ *
+ * The lane fetch is scoped to the run's repo when known — that
+ * keeps the response small and uses the indexed ``repo_id`` filter
+ * instead of paginating the full workspace lane list.
+ */
+async function resolveAutomateBannerForRun({
+  workspaceId,
+  token,
+  run,
+  pipeline,
+}: {
+  workspaceId: string;
+  token: string;
+  run: Parameters<typeof resolveAutomateBannerData>[0]["run"];
+  pipeline: Parameters<typeof resolveAutomateBannerData>[0]["pipeline"];
+}): Promise<AutomateBannerData | null> {
+  // Cheap pre-checks: skip the network fan-out entirely when the
+  // resolver couldn't possibly say "yes" anyway.
+  if (run.status !== "succeeded") return null;
+  if (run.trigger !== "manual") return null;
+  const repoId = pipeline?.repo_id ?? null;
+  if (!repoId) return null;
+
+  const [patternsResult, lanesResult] = await Promise.allSettled([
+    listCatalogPatterns({ workspaceId, token }),
+    listLanes(workspaceId, { repoId, token }),
+  ]);
+
+  const patterns: ApiCatalogPattern[] =
+    patternsResult.status === "fulfilled" ? patternsResult.value : [];
+  const lanes: ApiLane[] =
+    lanesResult.status === "fulfilled" ? lanesResult.value : [];
+
+  // Catalog failure → no banner. Lane failure leaves ``lanes = []``,
+  // so the resolver can still emit the wizard variant — we only lose
+  // the "already automated" downgrade. That's the lesser evil: the
+  // banner is more useful than nothing, and the wizard CTA's worst
+  // case is a duplicate-prevention check inside the (future) wizard.
+  if (patternsResult.status === "rejected") return null;
+
+  return resolveAutomateBannerData({ run, pipeline, patterns, lanes });
 }
 
 function renderError(
