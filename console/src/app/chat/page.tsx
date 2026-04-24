@@ -134,12 +134,20 @@ export default async function ChatPage({
       }}
       scopePill={scopePill}
       actions={
-        <Link
-          href="/"
-          className="text-xs font-semibold text-white/65 hover:text-white"
-        >
-          ← Dashboard
-        </Link>
+        <div className="flex items-center gap-4">
+          <Link
+            href="/chat/archived"
+            className="text-xs font-semibold text-white/55 hover:text-white"
+          >
+            Archived chats
+          </Link>
+          <Link
+            href="/"
+            className="text-xs font-semibold text-white/65 hover:text-white"
+          >
+            ← Dashboard
+          </Link>
+        </div>
       }
     >
       <div className="mx-auto w-full max-w-3xl">

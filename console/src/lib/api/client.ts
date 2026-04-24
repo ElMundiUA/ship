@@ -1079,10 +1079,43 @@ export interface ApiChatThread {
   topic_summary: string | null;
   packed_into_bucket_id: string | null;
   last_user_activity_at: string | null;
+  archived_at?: string | null;
   created_at: string;
   updated_at: string;
   message_count: number;
   messages: ApiChatMessage[];
+}
+
+// Trimmed shape returned by ``GET /v1/workspaces/{ws}/chat/threads``;
+// the route omits the message transcript so the archive list page
+// can render dozens of rows without a per-thread fan-out. Use
+// :func:`getActiveChatThread` / a future detail route for the
+// full message body.
+export interface ApiChatThreadSummary {
+  id: string;
+  title: string;
+  status: "active" | "resolved" | "archived";
+  topic_summary: string | null;
+  packed_into_bucket_id: string | null;
+  last_user_activity_at: string | null;
+  archived_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export function listChatThreads(
+  workspaceId: string,
+  params: { status?: "active" | "resolved" | "archived"; limit?: number } = {},
+  token?: string,
+): Promise<ApiChatThreadSummary[]> {
+  const search = new URLSearchParams();
+  if (params.status) search.set("status", params.status);
+  if (params.limit != null) search.set("limit", String(params.limit));
+  const qs = search.toString();
+  const path = `/v1/workspaces/${encodeURIComponent(workspaceId)}/chat/threads${
+    qs ? `?${qs}` : ""
+  }`;
+  return apiFetch<ApiChatThreadSummary[]>(path, { token });
 }
 
 export function getActiveChatThread(
