@@ -45,6 +45,7 @@ from backend.app.api.v1.routes import (
     notifications,
     notion_oauth,
     pipelines,
+    plays,
     policies,
     repo_home,
     repo_secrets,
@@ -160,6 +161,13 @@ api_router.include_router(repo_secrets.router)
 # Phase 7). List + per-repo sync trigger. Webhook-driven re-syncs on
 # pushes to ``.ship/config.yml`` live in ``routes.github_app``.
 api_router.include_router(lanes.router)
+# Plays coverage (RFC-0010 P4-00) — workspace aggregation surface
+# powering the Console's Coverage tab. One row per Play (= pattern
+# id) with activated_repos_total / assignments_count / coverage_pct
+# and a covered/uncovered repo split. Read-only, member RBAC.
+# Mounted next to lanes because both surfaces project Lane rows; this
+# one collapses by pattern, lanes.router lists them verbatim.
+api_router.include_router(plays.router)
 # Ad-hoc agent runs ("Requests", RFC-0007 Phase 3). Workspace-scoped
 # list + per-repo dispatch endpoint. Dispatches ``adhoc-agent-run.yml``
 # that's seeded into every activated repo by the wizard bundle.
