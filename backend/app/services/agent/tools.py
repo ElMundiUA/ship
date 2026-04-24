@@ -78,6 +78,38 @@ Tool inventory (C12 Phase 2.2):
 - :meth:`list_artifact_feedback` — catalog feedback rows filed from
   the console.
 
+Phase 6 additions (Wave A — IA tools surfacing the Inbox / Plays /
+Runs / Coverage / Knowledge-bucket reorganisation):
+
+- :meth:`inbox_list` — paginated unified Inbox list (clarifications,
+  improvements, failures, approvals, exceptions) with type / status
+  / owner / repo / play_key filters and an opaque cursor.
+- :meth:`inbox_counts` — sidebar count aggregates by status + type
+  for the workspace, scoped to ``me`` or ``all``.
+- :meth:`inbox_get` — full detail for one inbox item including its
+  event timeline.
+- :meth:`inbox_routing_list` — workspace's inbox routing rules plus
+  the configuration-health ``handles`` summary.
+- :meth:`inbox_routing_preview` — side-effect-free dry run of the
+  resolver against a sample item.
+- :meth:`plays_coverage` — per-Play coverage rollup (covered vs
+  uncovered repos, coverage %, sample uncovered ids).
+- :meth:`plays_list` — Plays catalog list (richer than
+  :meth:`list_catalog_artifacts` — exposes category, critical,
+  default inbox profile).
+- :meth:`plays_get` — single Play detail (frontmatter + body).
+- :meth:`runs_query` — outcome-first pipeline-run list with play /
+  repo / status / trigger / escalations / since filters.
+- :meth:`run_detail` — full run payload (RunSummary outcome,
+  artifacts, findings, escalations).
+- :meth:`automations_list` — combined view of pipelines, lanes,
+  and fleet_lanes for the workspace.
+- :meth:`repo_intel_get` — current ``repo_intel`` snapshot for one
+  repo (languages, frameworks, structure, …).
+- :meth:`knowledge_search_v2` — extended workspace knowledge search
+  with explicit repo / bucket filters and an optional ``intel_facts``
+  flag that prepends a synthesised ``repo_intel`` summary hit.
+
 The JSON schemas live next to each method (single source of truth,
 no drift). Vendors that can't consume a method share the same
 schema; the dispatch layer (:meth:`ToolBox.invoke`) lives here.
@@ -85,13 +117,17 @@ schema; the dispatch layer (:meth:`ToolBox.invoke`) lives here.
 
 from __future__ import annotations
 
+import base64
+import binascii
+import json
 import logging
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Awaitable, Callable
 
 from fastapi import HTTPException
-from sqlalchemy import desc, func, or_, select
+from sqlalchemy import desc, func, or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -108,10 +144,19 @@ from backend.app.db.models.agent_surface import (
     Clarification,
     Improvement,
 )
+from backend.app.db.models.fleet_lanes import FleetLane
+from backend.app.db.models.inbox import (
+    InboxItem,
+    InboxItemEvent,
+    InboxRoutingRule,
+    MemberGroup,
+    RunEscalation,
+)
 from backend.app.db.models.integrations import (
     GitHubInstallation,
     WorkspaceRepo,
 )
+from backend.app.db.models.lanes import Lane
 from backend.app.db.models.pipelines import (
     Pipeline,
     PipelineRun,
@@ -195,6 +240,26 @@ _KB_GLOB_PREFETCH_CAP = 80
 # snippet per hit adds up fast — 25 keeps the worst case bounded at
 # ~10 kB of tool output.
 _MAX_WORKSPACE_KB_RESULTS = 25
+
+# Phase 6 — caps for the new IA tools. Sized to keep the worst-case
+# tool-output payload bounded (each list tool tops out around 25–100
+# rows, projected to ~100 chars of JSON each).
+_MAX_INBOX_LIST = 100
+_DEFAULT_INBOX_LIST = 25
+_MAX_RUNS_LIST = 100
+_DEFAULT_RUNS_LIST = 25
+_MAX_PLAYS_LIST = 200
+_DEFAULT_PLAYS_LIST = 50
+_MAX_AUTOMATIONS_LIST = 200
+_DEFAULT_AUTOMATIONS_LIST = 50
+_MAX_PLAYS_COVERAGE_ROWS = 100
+_DEFAULT_PLAYS_COVERAGE_ROWS = 25
+_MAX_KNOWLEDGE_V2_RESULTS = 20
+_DEFAULT_KNOWLEDGE_V2_RESULTS = 5
+_MAX_INBOX_EVENTS_RETURNED = 50
+_INBOX_TITLE_TRUNC = 200
+_RUN_OUTCOME_TEXT_TRUNC = 500
+_INBOX_SAMPLE_UNCOVERED = 5
 
 
 @dataclass(slots=True)
@@ -1323,6 +1388,526 @@ class ToolBox:
                     "additionalProperties": False,
                 },
             ),
+            # ----------------------------------------------------------------
+            # Phase 6 — new IA tools (Inbox, Plays, Runs, Coverage, Intel)
+            # ----------------------------------------------------------------
+            ToolSpec(
+                name="inbox_list",
+                description=(
+                    "Paginated unified Inbox list (clarifications, "
+                    "improvements, failures, approvals, exceptions). "
+                    "Prefer this over ``list_clarifications`` / "
+                    "``list_improvements`` when the user asks 'what's in "
+                    "my inbox?' or wants to filter by owner / status / "
+                    "type / repo / play. Owner defaults to ``me`` so the "
+                    "first call answers 'what's on my plate?'."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "type": {
+                            "type": "string",
+                            "enum": [
+                                "clarification",
+                                "improvement",
+                                "failure",
+                                "approval",
+                                "exception",
+                            ],
+                            "description": (
+                                "Restrict to one inbox-item type."
+                            ),
+                        },
+                        "status": {
+                            "type": "string",
+                            "enum": [
+                                "new",
+                                "snoozed",
+                                "resolved",
+                                "dismissed",
+                                "open",
+                                "all",
+                            ],
+                            "description": (
+                                "Filter by lifecycle status. ``open`` "
+                                "matches both ``new`` and ``snoozed``; "
+                                "``all`` removes the default open-only "
+                                "scope."
+                            ),
+                        },
+                        "owner": {
+                            "type": "string",
+                            "description": (
+                                "``me`` (default), ``all``, "
+                                "``unassigned``, or a user UUID."
+                            ),
+                        },
+                        "repo_id": {
+                            "type": "string",
+                            "description": "Optional activated-repo UUID.",
+                        },
+                        "play_key": {
+                            "type": "string",
+                            "description": (
+                                "Optional Play key (pattern id) to "
+                                "filter on."
+                            ),
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": _MAX_INBOX_LIST,
+                            "default": _DEFAULT_INBOX_LIST,
+                        },
+                        "cursor": {
+                            "type": "string",
+                            "description": (
+                                "Opaque pagination cursor returned as "
+                                "``next_cursor`` from a prior call."
+                            ),
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="inbox_counts",
+                description=(
+                    "Aggregate inbox counts grouped by status and type. "
+                    "Use to render badges or to decide whether to call "
+                    "``inbox_list`` at all (skip when ``total == 0``)."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "owner": {
+                            "type": "string",
+                            "description": (
+                                "``me`` (default) or ``all``."
+                            ),
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="inbox_get",
+                description=(
+                    "Full detail of one inbox item including its event "
+                    "timeline. Call after ``inbox_list`` when the user "
+                    "drills into a specific row."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "inbox_item_id": {
+                            "type": "string",
+                            "description": "Inbox item UUID.",
+                        },
+                    },
+                    "required": ["inbox_item_id"],
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="inbox_routing_list",
+                description=(
+                    "Workspace inbox routing rules and the configuration-"
+                    "health summary (bound / used / orphaned / unbound "
+                    "handles). Use to answer 'who picks up X?' or to "
+                    "diagnose an inbox item that landed on the wrong "
+                    "owner."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="inbox_routing_preview",
+                description=(
+                    "Side-effect-free dry run of the inbox routing "
+                    "resolver against a sample item. Tells you who an "
+                    "item with the given ``item_type`` / ``repo_id`` / "
+                    "``play_key`` would be assigned to *today* without "
+                    "creating anything. Round-robin pointers are NOT "
+                    "advanced."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "item_type": {
+                            "type": "string",
+                            "enum": [
+                                "clarification",
+                                "improvement",
+                                "failure",
+                                "approval",
+                                "exception",
+                            ],
+                            "description": (
+                                "Inbox type the hypothetical item would "
+                                "carry — used to pick the play's emit "
+                                "rule when ``play_key`` is set."
+                            ),
+                        },
+                        "handle": {
+                            "type": "string",
+                            "description": (
+                                "Optional symbolic handle to resolve "
+                                "(e.g. ``security_officer``). If set, "
+                                "wins over the play-derived handle."
+                            ),
+                        },
+                        "repo_id": {
+                            "type": "string",
+                            "description": "Optional activated-repo UUID.",
+                        },
+                        "play_key": {
+                            "type": "string",
+                            "description": (
+                                "Optional Play key whose ``inbox.profile`` "
+                                "supplies the handle when ``handle`` is "
+                                "omitted."
+                            ),
+                        },
+                        "payload": {
+                            "type": "object",
+                            "description": (
+                                "Sample ``source_row`` payload used by "
+                                "built-in handles (``requested_by`` "
+                                "etc.). Forwarded verbatim to the "
+                                "resolver."
+                            ),
+                            "additionalProperties": True,
+                        },
+                    },
+                    "required": ["item_type"],
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="plays_coverage",
+                description=(
+                    "Per-Play coverage rollup for the workspace: "
+                    "covered vs uncovered repos, coverage percentage, "
+                    "sample uncovered repo ids. Use to answer "
+                    "'where is play X missing?' or 'what critical "
+                    "plays are unconfigured?'."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "category": {
+                            "type": "string",
+                            "description": (
+                                "Optional ``spec.category`` filter "
+                                "(e.g. ``scan``, ``flow``)."
+                            ),
+                        },
+                        "critical_only": {
+                            "type": "boolean",
+                            "default": False,
+                        },
+                        "has_gaps": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": (
+                                "Only return rows with "
+                                "``coverage_pct < 1.0``."
+                            ),
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": _MAX_PLAYS_COVERAGE_ROWS,
+                            "default": _DEFAULT_PLAYS_COVERAGE_ROWS,
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="plays_list",
+                description=(
+                    "Enumerate Plays (catalog patterns) with category / "
+                    "critical filters. Richer than "
+                    "``list_catalog_artifacts`` — surfaces "
+                    "``category``, ``secondary_categories``, "
+                    "``critical``, ``default_inbox_profile``. Use this "
+                    "when the user asks 'what Plays exist for X?'."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "category": {
+                            "type": "string",
+                            "description": (
+                                "Filter by ``spec.category``."
+                            ),
+                        },
+                        "critical_only": {
+                            "type": "boolean",
+                            "default": False,
+                        },
+                        "q": {
+                            "type": "string",
+                            "description": (
+                                "Substring matched (case-insensitive) "
+                                "against play title and key."
+                            ),
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": _MAX_PLAYS_LIST,
+                            "default": _DEFAULT_PLAYS_LIST,
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="plays_get",
+                description=(
+                    "Single Play (catalog pattern) detail including "
+                    "frontmatter (category / critical / inbox profile / "
+                    "includes) and the full ARTIFACT.md body. Call "
+                    "after ``plays_list`` for the playbook text."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "play_key": {
+                            "type": "string",
+                            "description": (
+                                "Play key (pattern id), e.g. "
+                                "``flow-pr-self-review``."
+                            ),
+                        },
+                    },
+                    "required": ["play_key"],
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="runs_query",
+                description=(
+                    "Outcome-first list of pipeline runs across the "
+                    "workspace. Filters by ``play_key`` (matches both "
+                    "``Pipeline.lane_id`` and the catalog pattern id), "
+                    "repo, status (``ok`` / ``fail`` / ``error`` / "
+                    "concrete pipeline statuses), trigger, "
+                    "``has_escalations``, and a ``since`` ISO "
+                    "timestamp. Prefer this over "
+                    "``list_pipeline_runs`` when the user asks 'what "
+                    "ran?' in outcome / business terms."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "play_key": {
+                            "type": "string",
+                            "description": (
+                                "Filter by Play key — matches the "
+                                "pipeline's ``lane_id`` or the lane-"
+                                "linked pattern id."
+                            ),
+                        },
+                        "repo_id": {
+                            "type": "string",
+                            "description": "Optional activated-repo UUID.",
+                        },
+                        "status": {
+                            "type": "string",
+                            "description": (
+                                "Status filter. Accepts the canonical "
+                                "Ship statuses (``running``, "
+                                "``succeeded``, ``failed``, "
+                                "``cancelled``) plus the friendlier "
+                                "synonyms ``ok`` (= ``succeeded``), "
+                                "``fail`` (= ``failed``), and "
+                                "``error`` (= ``failed`` + "
+                                "``cancelled``)."
+                            ),
+                        },
+                        "trigger": {
+                            "type": "string",
+                            "description": (
+                                "Trigger filter. ``manual`` / "
+                                "``scheduled`` / ``event`` aliases are "
+                                "mapped to the underlying Ship "
+                                "trigger names (``manual``, ``cron``, "
+                                "``webhook``)."
+                            ),
+                        },
+                        "has_escalations": {
+                            "type": "boolean",
+                            "description": (
+                                "Only include runs with at least one "
+                                "``run_escalations`` row."
+                            ),
+                        },
+                        "since": {
+                            "type": "string",
+                            "description": (
+                                "ISO-8601 lower bound on "
+                                "``started_at`` (or ``created_at`` "
+                                "when started is null)."
+                            ),
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": _MAX_RUNS_LIST,
+                            "default": _DEFAULT_RUNS_LIST,
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="run_detail",
+                description=(
+                    "Full detail of one pipeline run: RunSummary "
+                    "outcome JSON (artifacts, findings, headline, "
+                    "approval), plus any inbox escalations linked via "
+                    "``run_escalations``. Use after ``runs_query`` "
+                    "when the user asks why or how a specific run "
+                    "ended."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "run_id": {
+                            "type": "string",
+                            "description": "Pipeline run UUID.",
+                        },
+                    },
+                    "required": ["run_id"],
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="automations_list",
+                description=(
+                    "Single combined surface listing the workspace's "
+                    "pipelines, lanes (from ``.ship/config.yml``), and "
+                    "fleet_lanes (workspace-level mirror rules). Use "
+                    "for 'what automations are configured?' before "
+                    "drilling into ``runs_query``. Each row carries "
+                    "``kind=pipeline|lane|fleet_lane`` so the LLM can "
+                    "differentiate."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "scope": {
+                            "type": "string",
+                            "enum": ["all", "fleet", "repo"],
+                            "default": "all",
+                            "description": (
+                                "``fleet`` returns only ``fleet_lane`` "
+                                "rows; ``repo`` returns the per-repo "
+                                "``pipeline`` and ``lane`` rows; "
+                                "``all`` returns both."
+                            ),
+                        },
+                        "repo_id": {
+                            "type": "string",
+                            "description": "Optional activated-repo UUID.",
+                        },
+                        "enabled_only": {
+                            "type": "boolean",
+                            "default": False,
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": _MAX_AUTOMATIONS_LIST,
+                            "default": _DEFAULT_AUTOMATIONS_LIST,
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="repo_intel_get",
+                description=(
+                    "Return the current ``repo_intel`` snapshot for "
+                    "one activated repo (languages, frameworks, "
+                    "entry points, structure, commit style, visual "
+                    "tokens). Returns ``{error: 'not_harvested_yet'}`` "
+                    "when the repo has never been harvested. Use to "
+                    "ground answers about 'what is this repo built "
+                    "with?'."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "repo_id": {
+                            "type": "string",
+                            "description": "Activated-repo UUID.",
+                        },
+                    },
+                    "required": ["repo_id"],
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="knowledge_search_v2",
+                description=(
+                    "Workspace knowledge search with explicit filters "
+                    "(``repo_id``, ``bucket_slug``) and an optional "
+                    "``intel_facts`` flag that prepends a synthetic "
+                    "``repo_intel`` summary hit to the results. Use "
+                    "this over ``search_workspace_kb`` when you need "
+                    "filtered results or want intel context inline."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Natural-language query.",
+                        },
+                        "repo_id": {
+                            "type": "string",
+                            "description": (
+                                "Restrict (and prioritise) hits to "
+                                "this activated repo."
+                            ),
+                        },
+                        "bucket_slug": {
+                            "type": "string",
+                            "description": (
+                                "Restrict to articles from one "
+                                "knowledge bucket (slug)."
+                            ),
+                        },
+                        "intel_facts": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": (
+                                "When true, prepend a synthetic "
+                                "``repo_intel`` summary hit (built "
+                                "from languages + frameworks + entry "
+                                "points + structure) for the active "
+                                "or supplied ``repo_id``."
+                            ),
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": _MAX_KNOWLEDGE_V2_RESULTS,
+                            "default": _DEFAULT_KNOWLEDGE_V2_RESULTS,
+                        },
+                    },
+                    "required": ["query"],
+                    "additionalProperties": False,
+                },
+            ),
         ]
 
     # ------------------------------------------------------------------
@@ -1384,6 +1969,20 @@ class ToolBox:
             "get_knowledge_bucket": self._tool_get_knowledge_bucket,
             "list_artifact_feedback": self._tool_list_artifact_feedback,
             "send_email_to_self": self._tool_send_email_to_self,
+            # Phase 6 — new IA tools (Inbox, Plays, Runs, Coverage, Intel)
+            "inbox_list": self._tool_inbox_list,
+            "inbox_counts": self._tool_inbox_counts,
+            "inbox_get": self._tool_inbox_get,
+            "inbox_routing_list": self._tool_inbox_routing_list,
+            "inbox_routing_preview": self._tool_inbox_routing_preview,
+            "plays_coverage": self._tool_plays_coverage,
+            "plays_list": self._tool_plays_list,
+            "plays_get": self._tool_plays_get,
+            "runs_query": self._tool_runs_query,
+            "run_detail": self._tool_run_detail,
+            "automations_list": self._tool_automations_list,
+            "repo_intel_get": self._tool_repo_intel_get,
+            "knowledge_search_v2": self._tool_knowledge_search_v2,
         }
 
     # ------------------------------------------------------------------
@@ -3296,6 +3895,1815 @@ class ToolBox:
             )
         return install.installation_id
 
+    # ----------------------------------------------------------------
+    # Phase 6 — new IA tools (Inbox, Plays, Runs, Coverage, Intel)
+    # ----------------------------------------------------------------
+    #
+    # The block below adds nine read-only tools that surface the new
+    # IA built in Phases 1–5. Every method follows the same shape:
+    #
+    # * args parsed/validated up-front via the ``_require_*`` /
+    #   ``_parse_*`` / ``_clamp_int`` helpers; on bad input we return a
+    #   structured ``{"error": ..., "message": ...}`` dict (the chat
+    #   loop renders this as the tool result, the LLM sees the failure
+    #   inline and can recover without dropping the turn).
+    # * tenancy: every SELECT filters on ``self._workspace_id``; any
+    #   ``repo_id`` argument is verified against ``workspace_repos``
+    #   before the tool's main work runs.
+    # * caps: every list-style tool clamps its ``limit`` against the
+    #   per-tool ``_MAX_*`` constants defined at the top of this
+    #   module.
+    # * read-only: no ``commit()``. The one exception is
+    #   ``inbox_routing_preview``, which wraps its call in a
+    #   ``SAVEPOINT`` and rolls back unconditionally so the resolver's
+    #   round-robin pointer never moves.
+
+    async def _tool_inbox_list(self, args: dict[str, Any]) -> str:
+        from backend.app.services.inbox.profiles import INBOX_TYPES
+
+        limit = _clamp_int(
+            args.get("limit"),
+            default=_DEFAULT_INBOX_LIST,
+            low=1,
+            high=_MAX_INBOX_LIST,
+        )
+        type_arg = args.get("type")
+        type_filter: str | None = None
+        if type_arg is not None:
+            if not isinstance(type_arg, str) or type_arg not in INBOX_TYPES:
+                return _json_result({
+                    "error": "invalid_type",
+                    "message": (
+                        f"unknown inbox type {type_arg!r}; expected one "
+                        f"of {sorted(INBOX_TYPES)}"
+                    ),
+                })
+            type_filter = type_arg
+
+        status_arg = args.get("status")
+        status_in: list[str] | None
+        if status_arg is None or status_arg == "open":
+            status_in = ["new", "snoozed"]
+        elif status_arg == "all":
+            status_in = None
+        elif isinstance(status_arg, str) and status_arg in {
+            "new",
+            "snoozed",
+            "resolved",
+            "dismissed",
+        }:
+            status_in = [status_arg]
+        else:
+            return _json_result({
+                "error": "invalid_status",
+                "message": (
+                    f"unknown status {status_arg!r}; expected one of "
+                    "new/snoozed/resolved/dismissed/open/all"
+                ),
+            })
+
+        owner_arg = args.get("owner", "me")
+        owner_filter: str | uuid.UUID
+        if owner_arg in (None, "me"):
+            owner_filter = self._user_id
+        elif owner_arg == "all":
+            owner_filter = "all"
+        elif owner_arg == "unassigned":
+            owner_filter = "unassigned"
+        else:
+            try:
+                owner_filter = uuid.UUID(str(owner_arg))
+            except (TypeError, ValueError):
+                return _json_result({
+                    "error": "invalid_owner",
+                    "message": (
+                        f"owner must be 'me'/'all'/'unassigned' or a "
+                        f"user UUID (got {owner_arg!r})"
+                    ),
+                })
+
+        repo_id_arg = args.get("repo_id")
+        repo_id: uuid.UUID | None = None
+        if repo_id_arg is not None:
+            try:
+                repo_id = uuid.UUID(str(repo_id_arg))
+            except (TypeError, ValueError):
+                return _json_result({
+                    "error": "invalid_repo_id",
+                    "message": f"repo_id is not a UUID: {repo_id_arg!r}",
+                })
+            if not await self._verify_repo_in_workspace(repo_id):
+                return _json_result({
+                    "error": "repo_not_in_workspace",
+                    "message": (
+                        f"repo {repo_id} is not activated for this "
+                        "workspace"
+                    ),
+                })
+
+        play_key = args.get("play_key")
+        if play_key is not None and not isinstance(play_key, str):
+            return _json_result({
+                "error": "invalid_play_key",
+                "message": "play_key must be a string when provided",
+            })
+
+        cursor = args.get("cursor")
+        cursor_ts: datetime | None = None
+        cursor_id: uuid.UUID | None = None
+        if cursor is not None:
+            decoded = _decode_inbox_cursor(cursor)
+            if decoded is None:
+                return _json_result({
+                    "error": "invalid_cursor",
+                    "message": (
+                        "cursor failed to decode; pass the value "
+                        "returned as ``next_cursor`` from the prior "
+                        "page"
+                    ),
+                })
+            cursor_ts, cursor_id = decoded
+
+        from backend.app.db.models.tenancy import User
+
+        stmt = (
+            select(InboxItem, User)
+            .outerjoin(User, User.id == InboxItem.owner_user_id)
+            .where(InboxItem.workspace_id == self._workspace_id)
+        )
+        if isinstance(owner_filter, uuid.UUID):
+            stmt = stmt.where(InboxItem.owner_user_id == owner_filter)
+        elif owner_filter == "unassigned":
+            stmt = stmt.where(InboxItem.owner_user_id.is_(None))
+        # "all" — no owner filter.
+        if type_filter is not None:
+            stmt = stmt.where(InboxItem.type == type_filter)
+        if status_in is not None:
+            stmt = stmt.where(InboxItem.status.in_(status_in))
+        if repo_id is not None:
+            stmt = stmt.where(InboxItem.repo_id == repo_id)
+        if play_key is not None:
+            stmt = stmt.where(InboxItem.play_key == play_key)
+        if cursor_ts is not None and cursor_id is not None:
+            stmt = stmt.where(
+                tuple_(InboxItem.created_at, InboxItem.id)
+                < tuple_(cursor_ts, cursor_id)
+            )
+        stmt = stmt.order_by(
+            InboxItem.created_at.desc(), InboxItem.id.desc()
+        ).limit(limit + 1)
+
+        rows = (await self._session.execute(stmt)).all()
+        has_more = len(rows) > limit
+        page_rows = rows[:limit]
+
+        repo_id_set = {item.repo_id for item, _ in page_rows if item.repo_id is not None}
+        repo_name_map: dict[uuid.UUID, str] = {}
+        if repo_id_set:
+            repo_rows = (
+                await self._session.execute(
+                    select(WorkspaceRepo.id, WorkspaceRepo.full_name).where(
+                        WorkspaceRepo.id.in_(repo_id_set)
+                    )
+                )
+            ).all()
+            repo_name_map = {rid: name for rid, name in repo_rows}
+
+        items: list[dict[str, Any]] = []
+        for item, owner in page_rows:
+            items.append(
+                {
+                    "id": str(item.id),
+                    "type": item.type,
+                    "status": item.status,
+                    "title": _truncate(item.title or "", _INBOX_TITLE_TRUNC),
+                    "owner_user_id": (
+                        str(item.owner_user_id)
+                        if item.owner_user_id is not None
+                        else None
+                    ),
+                    "owner_display": (
+                        owner.display_name or owner.email
+                        if owner is not None
+                        else None
+                    ),
+                    "repo_id": (
+                        str(item.repo_id) if item.repo_id is not None else None
+                    ),
+                    "repo_name": (
+                        repo_name_map.get(item.repo_id)
+                        if item.repo_id is not None
+                        else None
+                    ),
+                    "play_key": item.play_key,
+                    "intake_handle": item.intake_handle,
+                    "intake_reason": item.intake_reason,
+                    "created_at": (
+                        item.created_at.isoformat()
+                        if item.created_at
+                        else None
+                    ),
+                    "snoozed_until": (
+                        item.snoozed_until.isoformat()
+                        if item.snoozed_until
+                        else None
+                    ),
+                    "due_at": (
+                        item.due_at.isoformat() if item.due_at else None
+                    ),
+                    "resolved_at": (
+                        item.resolved_at.isoformat()
+                        if item.resolved_at
+                        else None
+                    ),
+                    "resolution": item.resolution,
+                }
+            )
+
+        next_cursor = (
+            _encode_inbox_cursor(
+                page_rows[-1][0].created_at, page_rows[-1][0].id
+            )
+            if has_more and page_rows
+            else None
+        )
+
+        # ``total_estimate`` is the same predicate count as the page
+        # query (sans cursor + limit). At workspace scale the inbox
+        # tops out in the low thousands so a fresh COUNT(*) here is
+        # cheap and lets the LLM tell the user how much it is paging
+        # through.
+        count_stmt = select(func.count(InboxItem.id)).where(
+            InboxItem.workspace_id == self._workspace_id
+        )
+        if isinstance(owner_filter, uuid.UUID):
+            count_stmt = count_stmt.where(
+                InboxItem.owner_user_id == owner_filter
+            )
+        elif owner_filter == "unassigned":
+            count_stmt = count_stmt.where(InboxItem.owner_user_id.is_(None))
+        if type_filter is not None:
+            count_stmt = count_stmt.where(InboxItem.type == type_filter)
+        if status_in is not None:
+            count_stmt = count_stmt.where(InboxItem.status.in_(status_in))
+        if repo_id is not None:
+            count_stmt = count_stmt.where(InboxItem.repo_id == repo_id)
+        if play_key is not None:
+            count_stmt = count_stmt.where(InboxItem.play_key == play_key)
+        total_estimate = int(
+            (await self._session.execute(count_stmt)).scalar_one()
+        )
+
+        return _json_result(
+            {
+                "items": items,
+                "next_cursor": next_cursor,
+                "total_estimate": total_estimate,
+            }
+        )
+
+    async def _tool_inbox_counts(self, args: dict[str, Any]) -> str:
+        owner_arg = args.get("owner", "me")
+        if owner_arg not in (None, "me", "all"):
+            return _json_result({
+                "error": "invalid_owner",
+                "message": (
+                    "owner must be 'me' or 'all' for inbox_counts (got "
+                    f"{owner_arg!r})"
+                ),
+            })
+        scope_mine = owner_arg in (None, "me")
+
+        from backend.app.services.inbox.profiles import INBOX_TYPES
+
+        statuses = ("new", "snoozed", "resolved", "dismissed")
+
+        base_filter = [InboxItem.workspace_id == self._workspace_id]
+        if scope_mine:
+            base_filter.append(InboxItem.owner_user_id == self._user_id)
+
+        by_status_stmt = (
+            select(InboxItem.status, func.count(InboxItem.id))
+            .where(*base_filter)
+            .group_by(InboxItem.status)
+        )
+        by_status: dict[str, int] = {s: 0 for s in statuses}
+        for status_value, count in (
+            await self._session.execute(by_status_stmt)
+        ).all():
+            if status_value in by_status:
+                by_status[status_value] = int(count)
+        by_status["open"] = by_status["new"] + by_status["snoozed"]
+
+        by_type_stmt = (
+            select(InboxItem.type, func.count(InboxItem.id))
+            .where(*base_filter, InboxItem.status.in_(("new", "snoozed")))
+            .group_by(InboxItem.type)
+        )
+        by_type: dict[str, int] = {t: 0 for t in INBOX_TYPES}
+        for type_value, count in (
+            await self._session.execute(by_type_stmt)
+        ).all():
+            if type_value in by_type:
+                by_type[type_value] = int(count)
+
+        total = int(
+            (
+                await self._session.execute(
+                    select(func.count(InboxItem.id)).where(*base_filter)
+                )
+            ).scalar_one()
+        )
+
+        return _json_result(
+            {
+                "owner": "me" if scope_mine else "all",
+                "by_status": by_status,
+                "by_type": by_type,
+                "total": total,
+            }
+        )
+
+    async def _tool_inbox_get(self, args: dict[str, Any]) -> str:
+        try:
+            item_id = _parse_uuid(args, "inbox_item_id")
+        except ToolInvocationError as exc:
+            return _json_result({
+                "error": "invalid_inbox_item_id",
+                "message": str(exc),
+            })
+        item = (
+            await self._session.execute(
+                select(InboxItem).where(
+                    InboxItem.id == item_id,
+                    InboxItem.workspace_id == self._workspace_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if item is None:
+            return _json_result({
+                "error": "not_found",
+                "message": (
+                    f"inbox item {item_id} not found in this workspace"
+                ),
+            })
+
+        from backend.app.db.models.tenancy import User
+
+        owner = (
+            await self._session.get(User, item.owner_user_id)
+            if item.owner_user_id is not None
+            else None
+        )
+        repo_name: str | None = None
+        if item.repo_id is not None:
+            repo_row = await self._session.get(WorkspaceRepo, item.repo_id)
+            repo_name = repo_row.full_name if repo_row is not None else None
+
+        events_stmt = (
+            select(InboxItemEvent)
+            .where(InboxItemEvent.item_id == item.id)
+            .order_by(
+                InboxItemEvent.created_at.asc(),
+                InboxItemEvent.id.asc(),
+            )
+            .limit(_MAX_INBOX_EVENTS_RETURNED)
+        )
+        event_rows = (
+            (await self._session.execute(events_stmt)).scalars().all()
+        )
+
+        events: list[dict[str, Any]] = []
+        for ev in event_rows:
+            events.append(
+                {
+                    "id": str(ev.id),
+                    "actor_kind": ev.actor_kind,
+                    "actor_user_id": (
+                        str(ev.actor_user_id)
+                        if ev.actor_user_id is not None
+                        else None
+                    ),
+                    "action": ev.action,
+                    "payload": ev.payload or {},
+                    "created_at": (
+                        ev.created_at.isoformat()
+                        if ev.created_at
+                        else None
+                    ),
+                }
+            )
+
+        return _json_result(
+            {
+                "id": str(item.id),
+                "type": item.type,
+                "status": item.status,
+                "title": item.title,
+                "summary": item.summary,
+                "payload": item.payload or {},
+                "owner_user_id": (
+                    str(item.owner_user_id)
+                    if item.owner_user_id is not None
+                    else None
+                ),
+                "owner_display": (
+                    owner.display_name or owner.email
+                    if owner is not None
+                    else None
+                ),
+                "repo_id": (
+                    str(item.repo_id) if item.repo_id is not None else None
+                ),
+                "repo_name": repo_name,
+                "play_key": item.play_key,
+                "run_id": (
+                    str(item.run_id) if item.run_id is not None else None
+                ),
+                "intake_handle": item.intake_handle,
+                "intake_reason": item.intake_reason,
+                "source_table": item.source_table,
+                "source_id": (
+                    str(item.source_id)
+                    if item.source_id is not None
+                    else None
+                ),
+                "created_at": (
+                    item.created_at.isoformat()
+                    if item.created_at
+                    else None
+                ),
+                "due_at": (
+                    item.due_at.isoformat() if item.due_at else None
+                ),
+                "snoozed_until": (
+                    item.snoozed_until.isoformat()
+                    if item.snoozed_until
+                    else None
+                ),
+                "resolved_at": (
+                    item.resolved_at.isoformat()
+                    if item.resolved_at
+                    else None
+                ),
+                "resolution": item.resolution,
+                "events": events,
+            }
+        )
+
+    async def _tool_inbox_routing_list(self, args: dict[str, Any]) -> str:
+        rules_rows = (
+            (
+                await self._session.execute(
+                    select(InboxRoutingRule)
+                    .where(
+                        InboxRoutingRule.workspace_id == self._workspace_id
+                    )
+                    .order_by(
+                        InboxRoutingRule.handle_key.asc(),
+                        InboxRoutingRule.created_at.asc(),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+        group_rows = (
+            await self._session.execute(
+                select(MemberGroup.key, MemberGroup.id, MemberGroup.display_name)
+                .where(MemberGroup.workspace_id == self._workspace_id)
+            )
+        ).all()
+        group_key_to_id = {key: gid for key, gid, _ in group_rows}
+        group_key_to_display = {key: display for key, _, display in group_rows}
+
+        from backend.app.db.models.tenancy import User
+
+        user_ids: set[uuid.UUID] = set()
+        for r in rules_rows:
+            if r.target_type == "user":
+                try:
+                    user_ids.add(uuid.UUID(str(r.target_value)))
+                except (TypeError, ValueError):
+                    continue
+        user_emails: dict[uuid.UUID, str] = {}
+        if user_ids:
+            user_rows = (
+                await self._session.execute(
+                    select(User.id, User.email).where(User.id.in_(user_ids))
+                )
+            ).all()
+            user_emails = {uid: email for uid, email in user_rows}
+
+        rules_out: list[dict[str, Any]] = []
+        for r in rules_rows:
+            target_user_id: str | None = None
+            target_user_email: str | None = None
+            target_group_id: str | None = None
+            target_group_key: str | None = None
+            target_group_name: str | None = None
+            target_strategy: str | None = None
+            assigned_label: str
+            if r.target_type == "user":
+                try:
+                    uid = uuid.UUID(str(r.target_value))
+                    target_user_id = str(uid)
+                    target_user_email = user_emails.get(uid)
+                    assigned_label = (
+                        f"user:{target_user_email or target_user_id}"
+                    )
+                except (TypeError, ValueError):
+                    assigned_label = f"user:{r.target_value!r}"
+            elif r.target_type == "group":
+                gid = group_key_to_id.get(r.target_value)
+                target_group_id = str(gid) if gid is not None else None
+                target_group_key = r.target_value
+                target_group_name = group_key_to_display.get(r.target_value)
+                strat = r.assignment_strategy or "first"
+                assigned_label = (
+                    f"group:{target_group_key}:{strat}"
+                )
+            elif r.target_type == "strategy":
+                target_strategy = r.target_value
+                assigned_label = f"strategy:{r.target_value}"
+            else:
+                assigned_label = f"unknown:{r.target_value!r}"
+
+            rules_out.append(
+                {
+                    "id": str(r.id),
+                    "name": r.handle_key,
+                    "handle": r.handle_key,
+                    "when": {"handle": r.handle_key},
+                    "then_assign_to": assigned_label,
+                    "target_type": r.target_type,
+                    "target_user_id": target_user_id,
+                    "target_user_email": target_user_email,
+                    "target_group_id": target_group_id,
+                    "target_group_key": target_group_key,
+                    "target_group_name": target_group_name,
+                    "target_strategy": target_strategy,
+                    "assignment_strategy": r.assignment_strategy,
+                    "strategy_config": r.strategy_config or {},
+                    "priority": 0,
+                    "enabled": bool(r.is_enabled),
+                    "is_enabled": bool(r.is_enabled),
+                    "created_at": (
+                        r.created_at.isoformat()
+                        if r.created_at
+                        else None
+                    ),
+                    "updated_at": (
+                        r.updated_at.isoformat()
+                        if r.updated_at
+                        else None
+                    ),
+                }
+            )
+
+        # Build the same handles summary the HTTP route returns: bound
+        # / used / orphaned / unbound. Walking the catalog here keeps
+        # the tool self-contained (no shared service for the catalog
+        # walk; route-side helpers live in the route module).
+        from backend.app.services.inbox.profiles import (
+            INBOX_TYPES as _CATALOG_INBOX_TYPES,
+            ProfileCatalogError,
+            load_profile_catalog,
+        )
+
+        bound = {r.handle_key for r in rules_rows if r.handle_key}
+        used: set[str] = set()
+        try:
+            catalog = load_profile_catalog()
+        except ProfileCatalogError as exc:
+            logger.warning(
+                "inbox_routing_list: profile catalog unreadable (%s); "
+                "handles summary will report no used handles",
+                exc,
+            )
+            catalog = {}
+        for profile_name, body in catalog.items():
+            if profile_name == "silent" or not isinstance(body, dict):
+                continue
+            for key, rule in body.items():
+                if key == "inherits" or key not in _CATALOG_INBOX_TYPES:
+                    continue
+                if not isinstance(rule, dict):
+                    continue
+                if not rule.get("enabled"):
+                    continue
+                handle = rule.get("handle")
+                if isinstance(handle, str) and handle:
+                    used.add(handle)
+
+        return _json_result(
+            {
+                "rules": rules_out,
+                "handles": {
+                    "bound": sorted(bound),
+                    "used": sorted(used),
+                    "orphaned": sorted(bound - used),
+                    "unbound": sorted(used - bound),
+                },
+            }
+        )
+
+    async def _tool_inbox_routing_preview(
+        self, args: dict[str, Any]
+    ) -> str:
+        from backend.app.services import catalog as catalog_service
+        from backend.app.services.inbox.profiles import (
+            INBOX_TYPES,
+            ProfileCatalogError,
+            resolve_for_pattern,
+        )
+        from backend.app.services.inbox.routing import (
+            RoutingContext,
+            RoutingError,
+            resolve_handle,
+        )
+
+        item_type = args.get("item_type")
+        if not isinstance(item_type, str) or item_type not in INBOX_TYPES:
+            return _json_result({
+                "error": "invalid_item_type",
+                "message": (
+                    f"item_type must be one of {sorted(INBOX_TYPES)} "
+                    f"(got {item_type!r})"
+                ),
+            })
+
+        repo_id_arg = args.get("repo_id")
+        repo_id: uuid.UUID | None = None
+        if repo_id_arg is not None:
+            try:
+                repo_id = uuid.UUID(str(repo_id_arg))
+            except (TypeError, ValueError):
+                return _json_result({
+                    "error": "invalid_repo_id",
+                    "message": f"repo_id is not a UUID: {repo_id_arg!r}",
+                })
+            if not await self._verify_repo_in_workspace(repo_id):
+                return _json_result({
+                    "error": "repo_not_in_workspace",
+                    "message": (
+                        f"repo {repo_id} is not activated for this "
+                        "workspace"
+                    ),
+                })
+
+        play_key = args.get("play_key")
+        if play_key is not None and not isinstance(play_key, str):
+            return _json_result({
+                "error": "invalid_play_key",
+                "message": "play_key must be a string when provided",
+            })
+
+        payload = args.get("payload") or {}
+        if not isinstance(payload, dict):
+            return _json_result({
+                "error": "invalid_payload",
+                "message": "payload must be an object when provided",
+            })
+
+        attempted: list[dict[str, Any]] = []
+
+        explicit_handle = args.get("handle")
+        if explicit_handle is not None and not isinstance(
+            explicit_handle, str
+        ):
+            return _json_result({
+                "error": "invalid_handle",
+                "message": "handle must be a string when provided",
+            })
+
+        chosen_handle: str | None = None
+        if isinstance(explicit_handle, str) and explicit_handle.strip():
+            chosen_handle = explicit_handle.strip()
+            attempted.append(
+                {"source": "argument", "handle": chosen_handle}
+            )
+        elif isinstance(play_key, str) and play_key.strip():
+            try:
+                patterns = catalog_service.list_patterns()
+            except catalog_service.CatalogError as exc:
+                return _json_result({
+                    "error": "catalog_unreadable",
+                    "message": str(exc),
+                })
+            entry = next(
+                (p for p in patterns if p.id == play_key), None
+            )
+            if entry is None:
+                return _json_result({
+                    "error": "play_not_found",
+                    "message": (
+                        f"no catalog pattern with id={play_key!r}"
+                    ),
+                })
+            try:
+                resolved_profile = resolve_for_pattern(
+                    {"id": entry.id, "spec": entry.spec},
+                )
+            except ProfileCatalogError as exc:
+                return _json_result({
+                    "error": "profile_unreadable",
+                    "message": str(exc),
+                })
+            rule = resolved_profile.rules.get(item_type)
+            if rule is None or not rule.enabled or not rule.handle:
+                return _json_result({
+                    "error": "no_handle_for_type",
+                    "message": (
+                        f"play {play_key!r} does not emit "
+                        f"{item_type!r} items (profile "
+                        f"{resolved_profile.profile_name!r})"
+                    ),
+                })
+            chosen_handle = rule.handle
+            attempted.append(
+                {
+                    "source": "play_profile",
+                    "play_key": play_key,
+                    "profile": resolved_profile.profile_name,
+                    "handle": chosen_handle,
+                }
+            )
+        else:
+            return _json_result({
+                "error": "missing_handle_source",
+                "message": (
+                    "supply either ``handle`` or ``play_key`` so the "
+                    "preview knows which symbolic handle to resolve"
+                ),
+            })
+
+        ctx = RoutingContext(
+            workspace_id=self._workspace_id,
+            repo_id=repo_id,
+            run_id=None,
+            source_row=payload,
+        )
+
+        # The resolver may UPSERT ``group_assignment_state`` on the
+        # round_robin path. Wrap the call in a SAVEPOINT so the
+        # preview never advances rotation pointers — admins lose
+        # trust in the button the moment it nudges future
+        # assignments.
+        sp = await self._session.begin_nested()
+        try:
+            try:
+                resolved = await resolve_handle(
+                    self._session, chosen_handle, ctx
+                )
+            except RoutingError as exc:
+                return _json_result({
+                    "error": "routing_error",
+                    "message": str(exc),
+                })
+        finally:
+            await sp.rollback()
+
+        from backend.app.db.models.tenancy import User
+
+        resolved_email: str | None = None
+        resolved_display: str | None = None
+        if resolved.user_id is not None:
+            user_row = await self._session.get(User, resolved.user_id)
+            if user_row is not None:
+                resolved_email = user_row.email
+                resolved_display = (
+                    user_row.display_name or user_row.email
+                )
+
+        # ``intake_reason='unresolved'`` means we walked the rule + the
+        # built-in chain and nobody owned the work — surface as
+        # ``fallback_used=True`` so the LLM can flag the gap.
+        fallback_used = (
+            resolved.intake_reason.startswith("fallback:")
+            or resolved.intake_reason == "unresolved"
+        )
+
+        # Look up the matched rule (if any) so the result tells the
+        # operator which row fired. ``intake_handle`` may have been
+        # rewritten by the fallback chain, so we look up by the
+        # ORIGINAL ``chosen_handle`` first and then by the resolved
+        # one if the fallback path did fire.
+        rule_lookup_handle = (
+            resolved.intake_handle
+            if resolved.intake_reason.startswith("rule:")
+            or resolved.intake_reason.startswith("group:")
+            else chosen_handle
+        )
+        matched_rule = (
+            await self._session.execute(
+                select(InboxRoutingRule).where(
+                    InboxRoutingRule.workspace_id == self._workspace_id,
+                    InboxRoutingRule.handle_key == rule_lookup_handle,
+                    InboxRoutingRule.is_enabled.is_(True),
+                )
+            )
+        ).scalar_one_or_none()
+
+        return _json_result(
+            {
+                "handle": chosen_handle,
+                "matched_rule_id": (
+                    str(matched_rule.id) if matched_rule else None
+                ),
+                "matched_rule_name": (
+                    matched_rule.handle_key if matched_rule else None
+                ),
+                "resolved_owner": {
+                    "user_id": (
+                        str(resolved.user_id)
+                        if resolved.user_id is not None
+                        else None
+                    ),
+                    "email": resolved_email,
+                    "display": resolved_display,
+                    "group_id": (
+                        str(resolved.group_id)
+                        if resolved.group_id is not None
+                        else None
+                    ),
+                    "fallback_used": fallback_used,
+                },
+                "intake_handle": resolved.intake_handle,
+                "intake_reason": resolved.intake_reason,
+                "attempted_strategies": attempted,
+            }
+        )
+
+    async def _tool_plays_coverage(self, args: dict[str, Any]) -> str:
+        from backend.app.services import catalog as catalog_service
+
+        category = args.get("category")
+        if category is not None and not isinstance(category, str):
+            return _json_result({
+                "error": "invalid_category",
+                "message": "category must be a string when provided",
+            })
+        critical_only = bool(args.get("critical_only", False))
+        has_gaps = bool(args.get("has_gaps", False))
+        limit = _clamp_int(
+            args.get("limit"),
+            default=_DEFAULT_PLAYS_COVERAGE_ROWS,
+            low=1,
+            high=_MAX_PLAYS_COVERAGE_ROWS,
+        )
+
+        repo_rows = (
+            (
+                await self._session.execute(
+                    select(WorkspaceRepo)
+                    .where(WorkspaceRepo.workspace_id == self._workspace_id)
+                    .order_by(WorkspaceRepo.full_name.asc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+        repo_id_set: set[uuid.UUID] = {r.id for r in repo_rows}
+        activated_total = len(repo_id_set)
+
+        lanes_by_pattern: dict[str, set[uuid.UUID]] = {}
+        if repo_id_set:
+            lane_rows = (
+                (
+                    await self._session.execute(
+                        select(Lane).where(
+                            Lane.workspace_id == self._workspace_id
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            for lane in lane_rows:
+                if lane.repo_id not in repo_id_set:
+                    continue
+                pattern_keys: set[str] = set()
+                if lane.pattern:
+                    pattern_keys.add(lane.pattern)
+                blob = lane.config_blob or {}
+                blob_patterns = (
+                    blob.get("patterns") if isinstance(blob, dict) else None
+                )
+                if isinstance(blob_patterns, list):
+                    for entry in blob_patterns:
+                        if isinstance(entry, str) and entry:
+                            pattern_keys.add(entry)
+                for key in pattern_keys:
+                    lanes_by_pattern.setdefault(key, set()).add(lane.repo_id)
+
+        try:
+            patterns = catalog_service.list_patterns()
+        except catalog_service.CatalogError as exc:
+            return _json_result({
+                "error": "catalog_unreadable",
+                "message": str(exc),
+            })
+
+        rows: list[dict[str, Any]] = []
+        for entry in patterns:
+            inbox_cfg = (
+                entry.spec.get("inbox") if isinstance(entry.spec, dict) else None
+            )
+            if isinstance(inbox_cfg, dict):
+                profile = inbox_cfg.get("profile")
+                if isinstance(profile, str) and profile == "silent":
+                    continue
+
+            row_category = entry.category or "uncategorized"
+            row_critical = bool(
+                entry.spec.get("critical")
+                if isinstance(entry.spec, dict)
+                else False
+            )
+            covered = lanes_by_pattern.get(entry.id, set()) & repo_id_set
+            uncovered = repo_id_set - covered
+            coverage_pct = (
+                len(covered) / activated_total if activated_total else 0.0
+            )
+            rows.append(
+                {
+                    "play_key": entry.id,
+                    "play_title": entry.name or entry.id,
+                    "category": row_category,
+                    "critical": row_critical,
+                    "repos_covered_count": len(covered),
+                    "repos_uncovered_count": len(uncovered),
+                    "coverage_pct": coverage_pct,
+                    "sample_uncovered_repo_ids": [
+                        str(rid)
+                        for rid in list(uncovered)[:_INBOX_SAMPLE_UNCOVERED]
+                    ],
+                }
+            )
+
+        # Sort: critical-with-gaps first, then non-critical-with-gaps,
+        # then fully-covered alphabetical.
+        def _sort_key(r: dict[str, Any]) -> tuple[int, float, str]:
+            has_gaps_local = r["coverage_pct"] < 1.0
+            if has_gaps_local and r["critical"]:
+                bucket = 0
+            elif has_gaps_local:
+                bucket = 1
+            else:
+                bucket = 2
+            return (bucket, r["coverage_pct"], r["play_title"].lower())
+
+        rows.sort(key=_sort_key)
+
+        if isinstance(category, str):
+            rows = [r for r in rows if r["category"] == category]
+        if critical_only:
+            rows = [r for r in rows if r["critical"]]
+        if has_gaps:
+            rows = [r for r in rows if r["coverage_pct"] < 1.0]
+
+        truncated = len(rows) > limit
+        rows = rows[:limit]
+        return _json_result(
+            {
+                "rows": rows,
+                "activated_repos_total": activated_total,
+                "truncated": truncated,
+            }
+        )
+
+    async def _tool_plays_list(self, args: dict[str, Any]) -> str:
+        from backend.app.services import catalog as catalog_service
+
+        category = args.get("category")
+        if category is not None and not isinstance(category, str):
+            return _json_result({
+                "error": "invalid_category",
+                "message": "category must be a string when provided",
+            })
+        critical_only = bool(args.get("critical_only", False))
+        q = args.get("q")
+        if q is not None and not isinstance(q, str):
+            return _json_result({
+                "error": "invalid_q",
+                "message": "q must be a string when provided",
+            })
+        q_norm = q.lower().strip() if isinstance(q, str) else None
+        limit = _clamp_int(
+            args.get("limit"),
+            default=_DEFAULT_PLAYS_LIST,
+            low=1,
+            high=_MAX_PLAYS_LIST,
+        )
+
+        try:
+            patterns = catalog_service.list_patterns()
+        except catalog_service.CatalogError as exc:
+            return _json_result({
+                "error": "catalog_unreadable",
+                "message": str(exc),
+            })
+
+        items: list[dict[str, Any]] = []
+        for entry in patterns:
+            spec = entry.spec if isinstance(entry.spec, dict) else {}
+            inbox_cfg = spec.get("inbox") if isinstance(spec, dict) else None
+            inbox_profile: str | None = None
+            if isinstance(inbox_cfg, dict):
+                profile = inbox_cfg.get("profile")
+                if isinstance(profile, str):
+                    inbox_profile = profile
+            secondary_raw = entry.raw.get("secondary_categories") or []
+            secondary: list[str] = []
+            if isinstance(secondary_raw, list):
+                secondary = [
+                    str(s) for s in secondary_raw if isinstance(s, str)
+                ]
+            row = {
+                "play_key": entry.id,
+                "title": entry.name or entry.id,
+                "category": entry.category or "uncategorized",
+                "secondary_categories": secondary,
+                "critical": bool(spec.get("critical")) if spec else False,
+                "summary": entry.description or None,
+                "default_inbox_profile": inbox_profile,
+            }
+
+            if isinstance(category, str) and row["category"] != category:
+                continue
+            if critical_only and not row["critical"]:
+                continue
+            if q_norm:
+                title_blob = (row["title"] or "").lower()
+                key_blob = (row["play_key"] or "").lower()
+                if q_norm not in title_blob and q_norm not in key_blob:
+                    continue
+            items.append(row)
+
+        items.sort(key=lambda r: (r["category"], r["play_key"]))
+        truncated = len(items) > limit
+        items = items[:limit]
+        return _json_result(
+            {"items": items, "truncated": truncated}
+        )
+
+    async def _tool_plays_get(self, args: dict[str, Any]) -> str:
+        from backend.app.services import catalog as catalog_service
+
+        play_key = args.get("play_key")
+        if not isinstance(play_key, str) or not play_key.strip():
+            return _json_result({
+                "error": "invalid_play_key",
+                "message": "play_key is required",
+            })
+
+        try:
+            patterns = catalog_service.list_patterns()
+        except catalog_service.CatalogError as exc:
+            return _json_result({
+                "error": "catalog_unreadable",
+                "message": str(exc),
+            })
+        entry = next((p for p in patterns if p.id == play_key), None)
+        if entry is None:
+            return _json_result({
+                "error": "not_found",
+                "message": f"no catalog pattern with id={play_key!r}",
+            })
+
+        spec = entry.spec if isinstance(entry.spec, dict) else {}
+        inbox_cfg = spec.get("inbox") if isinstance(spec, dict) else None
+        inbox_profile: str | None = None
+        if isinstance(inbox_cfg, dict):
+            profile = inbox_cfg.get("profile")
+            if isinstance(profile, str):
+                inbox_profile = profile
+        secondary_raw = entry.raw.get("secondary_categories") or []
+        secondary: list[str] = []
+        if isinstance(secondary_raw, list):
+            secondary = [
+                str(s) for s in secondary_raw if isinstance(s, str)
+            ]
+        modes_raw = spec.get("modes") if isinstance(spec, dict) else None
+        modes: list[str] = []
+        if isinstance(modes_raw, list):
+            modes = [str(m) for m in modes_raw if isinstance(m, str)]
+        body = entry.body or ""
+        body_truncated = len(body) > _MAX_ARTIFACT_BODY_CHARS
+        if body_truncated:
+            body = body[:_MAX_ARTIFACT_BODY_CHARS]
+
+        return _json_result(
+            {
+                "play_key": entry.id,
+                "title": entry.name or entry.id,
+                "category": entry.category or "uncategorized",
+                "secondary_categories": secondary,
+                "critical": bool(spec.get("critical")) if spec else False,
+                "summary": entry.description or None,
+                "body": body,
+                "body_truncated": body_truncated,
+                "includes": list(entry.include),
+                "default_execution_mode": modes[0] if modes else None,
+                "modes": modes,
+                "default_inbox_profile": inbox_profile,
+                "default_trigger": entry.default_trigger,
+                "lane_id": entry.lane_id,
+                "lane_name": entry.lane_name,
+            }
+        )
+
+    async def _tool_runs_query(self, args: dict[str, Any]) -> str:
+        play_key = args.get("play_key")
+        if play_key is not None and not isinstance(play_key, str):
+            return _json_result({
+                "error": "invalid_play_key",
+                "message": "play_key must be a string when provided",
+            })
+
+        repo_id_arg = args.get("repo_id")
+        repo_id: uuid.UUID | None = None
+        if repo_id_arg is not None:
+            try:
+                repo_id = uuid.UUID(str(repo_id_arg))
+            except (TypeError, ValueError):
+                return _json_result({
+                    "error": "invalid_repo_id",
+                    "message": f"repo_id is not a UUID: {repo_id_arg!r}",
+                })
+            if not await self._verify_repo_in_workspace(repo_id):
+                return _json_result({
+                    "error": "repo_not_in_workspace",
+                    "message": (
+                        f"repo {repo_id} is not activated for this "
+                        "workspace"
+                    ),
+                })
+
+        status_arg = args.get("status")
+        status_in: list[str] | None = None
+        if status_arg is not None:
+            if not isinstance(status_arg, str):
+                return _json_result({
+                    "error": "invalid_status",
+                    "message": "status must be a string when provided",
+                })
+            alias = {
+                "ok": ["succeeded"],
+                "fail": ["failed"],
+                "error": ["failed", "cancelled"],
+            }.get(status_arg)
+            status_in = alias if alias is not None else [status_arg]
+
+        trigger_arg = args.get("trigger")
+        trigger_in: list[str] | None = None
+        if trigger_arg is not None:
+            if not isinstance(trigger_arg, str):
+                return _json_result({
+                    "error": "invalid_trigger",
+                    "message": "trigger must be a string when provided",
+                })
+            alias = {
+                "scheduled": ["cron", "schedule"],
+                "event": ["webhook", "event"],
+            }.get(trigger_arg)
+            trigger_in = alias if alias is not None else [trigger_arg]
+
+        has_escalations = args.get("has_escalations")
+        if has_escalations is not None and not isinstance(
+            has_escalations, bool
+        ):
+            return _json_result({
+                "error": "invalid_has_escalations",
+                "message": "has_escalations must be a boolean",
+            })
+
+        since_arg = args.get("since")
+        since_dt = None
+        if since_arg is not None:
+            try:
+                since_dt = _parse_iso_datetime(since_arg, "since")
+            except ToolInvocationError as exc:
+                return _json_result({
+                    "error": "invalid_since",
+                    "message": str(exc),
+                })
+
+        limit = _clamp_int(
+            args.get("limit"),
+            default=_DEFAULT_RUNS_LIST,
+            low=1,
+            high=_MAX_RUNS_LIST,
+        )
+
+        # Pull pipeline metadata in the same query so we can carry
+        # ``play_key`` (== Pipeline.lane_id) and ``repo_id`` without an
+        # N+1 follow-up. The ``play_key`` filter is applied
+        # post-query because Pipeline.lane_id is the "user-facing"
+        # play key and it's cheap (limit-bounded).
+        stmt = (
+            select(PipelineRun, Pipeline)
+            .join(Pipeline, Pipeline.id == PipelineRun.pipeline_id)
+            .where(PipelineRun.workspace_id == self._workspace_id)
+        )
+        if status_in is not None:
+            stmt = stmt.where(PipelineRun.status.in_(status_in))
+        if trigger_in is not None:
+            stmt = stmt.where(PipelineRun.trigger.in_(trigger_in))
+        if repo_id is not None:
+            stmt = stmt.where(Pipeline.repo_id == repo_id)
+        if play_key is not None:
+            stmt = stmt.where(Pipeline.lane_id == play_key)
+        if since_dt is not None:
+            stmt = stmt.where(
+                func.coalesce(
+                    PipelineRun.started_at, PipelineRun.created_at
+                )
+                >= since_dt
+            )
+        stmt = stmt.order_by(
+            desc(
+                func.coalesce(
+                    PipelineRun.started_at, PipelineRun.created_at
+                )
+            )
+        ).limit(limit * 4 if has_escalations else limit)
+
+        rows = (await self._session.execute(stmt)).all()
+
+        run_ids = [run.id for run, _ in rows]
+        escalation_count_map: dict[uuid.UUID, int] = {}
+        if run_ids:
+            esc_rows = (
+                await self._session.execute(
+                    select(
+                        RunEscalation.run_id, func.count(RunEscalation.id)
+                    )
+                    .where(RunEscalation.run_id.in_(run_ids))
+                    .group_by(RunEscalation.run_id)
+                )
+            ).all()
+            escalation_count_map = {rid: int(c) for rid, c in esc_rows}
+
+        repo_id_set = {p.repo_id for _, p in rows if p.repo_id is not None}
+        repo_name_map: dict[uuid.UUID, str] = {}
+        if repo_id_set:
+            repo_rows = (
+                await self._session.execute(
+                    select(WorkspaceRepo.id, WorkspaceRepo.full_name).where(
+                        WorkspaceRepo.id.in_(repo_id_set)
+                    )
+                )
+            ).all()
+            repo_name_map = {rid: name for rid, name in repo_rows}
+
+        runs_out: list[dict[str, Any]] = []
+        for run, pipeline in rows:
+            esc_count = escalation_count_map.get(run.id, 0)
+            if has_escalations and esc_count == 0:
+                continue
+            outcome = run.outcome or {}
+            findings_by_sev = (
+                outcome.get("findings_by_severity")
+                if isinstance(outcome, dict)
+                else None
+            )
+            sev_block: dict[str, int] = {
+                "low": 0,
+                "medium": 0,
+                "high": 0,
+                "critical": 0,
+            }
+            if isinstance(findings_by_sev, dict):
+                for k in sev_block:
+                    raw = findings_by_sev.get(k)
+                    if isinstance(raw, int):
+                        sev_block[k] = raw
+            artifacts = (
+                outcome.get("artifacts") if isinstance(outcome, dict) else None
+            )
+            artifacts_count = (
+                len(artifacts) if isinstance(artifacts, list) else 0
+            )
+            findings_count_raw = (
+                outcome.get("findings_count")
+                if isinstance(outcome, dict)
+                else None
+            )
+            runs_out.append(
+                {
+                    "id": str(run.id),
+                    "pipeline_id": str(run.pipeline_id),
+                    "play_key": pipeline.lane_id if pipeline else None,
+                    "repo_id": (
+                        str(pipeline.repo_id)
+                        if pipeline and pipeline.repo_id is not None
+                        else None
+                    ),
+                    "repo_name": (
+                        repo_name_map.get(pipeline.repo_id)
+                        if pipeline and pipeline.repo_id is not None
+                        else None
+                    ),
+                    "status": run.status,
+                    "trigger": run.trigger,
+                    "started_at": (
+                        run.started_at.isoformat()
+                        if run.started_at
+                        else None
+                    ),
+                    "finished_at": (
+                        run.finished_at.isoformat()
+                        if run.finished_at
+                        else None
+                    ),
+                    "outcome_text": _truncate(
+                        (
+                            outcome.get("outcome_text")
+                            if isinstance(outcome, dict)
+                            else None
+                        )
+                        or "",
+                        _RUN_OUTCOME_TEXT_TRUNC,
+                    )
+                    or None,
+                    "headline": (
+                        outcome.get("headline")
+                        if isinstance(outcome, dict)
+                        else None
+                    ),
+                    "findings_count": (
+                        int(findings_count_raw)
+                        if isinstance(findings_count_raw, int)
+                        else None
+                    ),
+                    "findings_by_severity": sev_block,
+                    "escalations_count": esc_count,
+                    "artifacts_count": artifacts_count,
+                }
+            )
+            if len(runs_out) >= limit:
+                break
+
+        return _json_result({"runs": runs_out})
+
+    async def _tool_run_detail(self, args: dict[str, Any]) -> str:
+        try:
+            run_id = _parse_uuid(args, "run_id")
+        except ToolInvocationError as exc:
+            return _json_result({
+                "error": "invalid_run_id",
+                "message": str(exc),
+            })
+        run = (
+            await self._session.execute(
+                select(PipelineRun).where(
+                    PipelineRun.id == run_id,
+                    PipelineRun.workspace_id == self._workspace_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if run is None:
+            return _json_result({
+                "error": "not_found",
+                "message": f"run {run_id} not found in this workspace",
+            })
+        pipeline = await self._session.get(Pipeline, run.pipeline_id)
+        repo_name: str | None = None
+        repo_id: uuid.UUID | None = pipeline.repo_id if pipeline else None
+        if repo_id is not None:
+            repo_row = await self._session.get(WorkspaceRepo, repo_id)
+            repo_name = repo_row.full_name if repo_row is not None else None
+
+        outcome = run.outcome or {}
+        artifacts: list[dict[str, Any]] = []
+        findings: list[dict[str, Any]] = []
+        if isinstance(outcome, dict):
+            raw_artifacts = outcome.get("artifacts")
+            if isinstance(raw_artifacts, list):
+                for a in raw_artifacts:
+                    if isinstance(a, dict):
+                        artifacts.append(dict(a))
+            raw_findings = outcome.get("findings")
+            if isinstance(raw_findings, list):
+                for f in raw_findings:
+                    if isinstance(f, dict):
+                        findings.append(dict(f))
+
+        esc_rows = (
+            (
+                await self._session.execute(
+                    select(RunEscalation, InboxItem)
+                    .outerjoin(
+                        InboxItem, InboxItem.id == RunEscalation.inbox_item_id
+                    )
+                    .where(RunEscalation.run_id == run.id)
+                )
+            )
+            .all()
+        )
+        escalations: list[dict[str, Any]] = []
+        for esc, item in esc_rows:
+            escalations.append(
+                {
+                    "inbox_item_id": str(esc.inbox_item_id),
+                    "escalation_reason": esc.escalation_reason,
+                    "item_title": item.title if item is not None else None,
+                    "item_status": item.status if item is not None else None,
+                    "item_type": item.type if item is not None else None,
+                }
+            )
+
+        return _json_result(
+            {
+                "id": str(run.id),
+                "pipeline_id": str(run.pipeline_id),
+                "play_key": pipeline.lane_id if pipeline else None,
+                "repo_id": str(repo_id) if repo_id is not None else None,
+                "repo_name": repo_name,
+                "status": run.status,
+                "trigger": run.trigger,
+                "started_at": (
+                    run.started_at.isoformat() if run.started_at else None
+                ),
+                "finished_at": (
+                    run.finished_at.isoformat() if run.finished_at else None
+                ),
+                "summary": run.summary,
+                "outcome": outcome if isinstance(outcome, dict) else {},
+                "artifacts": artifacts,
+                "findings": findings,
+                "escalations": escalations,
+            }
+        )
+
+    async def _tool_automations_list(self, args: dict[str, Any]) -> str:
+        scope = args.get("scope", "all")
+        if scope not in (None, "all", "fleet", "repo"):
+            return _json_result({
+                "error": "invalid_scope",
+                "message": (
+                    f"scope must be 'all'/'fleet'/'repo' (got {scope!r})"
+                ),
+            })
+        if scope is None:
+            scope = "all"
+
+        repo_id_arg = args.get("repo_id")
+        repo_id: uuid.UUID | None = None
+        if repo_id_arg is not None:
+            try:
+                repo_id = uuid.UUID(str(repo_id_arg))
+            except (TypeError, ValueError):
+                return _json_result({
+                    "error": "invalid_repo_id",
+                    "message": f"repo_id is not a UUID: {repo_id_arg!r}",
+                })
+            if not await self._verify_repo_in_workspace(repo_id):
+                return _json_result({
+                    "error": "repo_not_in_workspace",
+                    "message": (
+                        f"repo {repo_id} is not activated for this "
+                        "workspace"
+                    ),
+                })
+
+        enabled_only = bool(args.get("enabled_only", False))
+        limit = _clamp_int(
+            args.get("limit"),
+            default=_DEFAULT_AUTOMATIONS_LIST,
+            low=1,
+            high=_MAX_AUTOMATIONS_LIST,
+        )
+
+        repo_name_map: dict[uuid.UUID, str] = {}
+        if scope in ("all", "repo"):
+            repo_rows = (
+                await self._session.execute(
+                    select(WorkspaceRepo.id, WorkspaceRepo.full_name).where(
+                        WorkspaceRepo.workspace_id == self._workspace_id
+                    )
+                )
+            ).all()
+            repo_name_map = {rid: name for rid, name in repo_rows}
+
+        items: list[dict[str, Any]] = []
+
+        if scope in ("all", "repo"):
+            pipeline_stmt = select(Pipeline).where(
+                Pipeline.workspace_id == self._workspace_id
+            )
+            if repo_id is not None:
+                pipeline_stmt = pipeline_stmt.where(
+                    Pipeline.repo_id == repo_id
+                )
+            if enabled_only:
+                pipeline_stmt = pipeline_stmt.where(Pipeline.enabled.is_(True))
+            pipeline_rows = (
+                (await self._session.execute(pipeline_stmt))
+                .scalars()
+                .all()
+            )
+            for p in pipeline_rows:
+                items.append(
+                    {
+                        "kind": "pipeline",
+                        "id": str(p.id),
+                        "name": p.name,
+                        "play_key": p.lane_id,
+                        "scope": "repo",
+                        "repo_id": (
+                            str(p.repo_id)
+                            if p.repo_id is not None
+                            else None
+                        ),
+                        "repo_name": (
+                            repo_name_map.get(p.repo_id)
+                            if p.repo_id is not None
+                            else None
+                        ),
+                        "enabled": bool(p.enabled),
+                        "last_run_id": None,
+                        "last_run_status": p.last_run_status,
+                        "last_run_at": (
+                            p.last_run_at.isoformat()
+                            if p.last_run_at
+                            else None
+                        ),
+                    }
+                )
+
+            lane_stmt = select(Lane).where(
+                Lane.workspace_id == self._workspace_id
+            )
+            if repo_id is not None:
+                lane_stmt = lane_stmt.where(Lane.repo_id == repo_id)
+            if enabled_only:
+                lane_stmt = lane_stmt.where(Lane.enabled.is_(True))
+            lane_rows = (
+                (await self._session.execute(lane_stmt)).scalars().all()
+            )
+            for ln in lane_rows:
+                items.append(
+                    {
+                        "kind": "lane",
+                        "id": str(ln.id),
+                        "name": ln.lane_id,
+                        "play_key": ln.pattern,
+                        "scope": "repo",
+                        "repo_id": (
+                            str(ln.repo_id)
+                            if ln.repo_id is not None
+                            else None
+                        ),
+                        "repo_name": (
+                            repo_name_map.get(ln.repo_id)
+                            if ln.repo_id is not None
+                            else None
+                        ),
+                        "enabled": bool(ln.enabled),
+                        "last_run_id": None,
+                        "last_run_status": ln.last_run_status,
+                        "last_run_at": (
+                            ln.last_run_at.isoformat()
+                            if ln.last_run_at
+                            else None
+                        ),
+                    }
+                )
+
+        if scope in ("all", "fleet"):
+            fleet_stmt = select(FleetLane).where(
+                FleetLane.workspace_id == self._workspace_id
+            )
+            if enabled_only:
+                fleet_stmt = fleet_stmt.where(FleetLane.enabled.is_(True))
+            fleet_rows = (
+                (await self._session.execute(fleet_stmt)).scalars().all()
+            )
+            for fl in fleet_rows:
+                items.append(
+                    {
+                        "kind": "fleet_lane",
+                        "id": str(fl.id),
+                        "name": fl.name,
+                        "play_key": fl.pattern_id,
+                        "scope": "fleet",
+                        "repo_id": None,
+                        "repo_name": None,
+                        "enabled": bool(fl.enabled),
+                        "cadence": fl.cadence,
+                        "last_run_id": None,
+                        "last_run_status": None,
+                        "last_run_at": None,
+                    }
+                )
+
+        truncated = len(items) > limit
+        items = items[:limit]
+        return _json_result(
+            {
+                "items": items,
+                "truncated": truncated,
+                "scope": scope,
+            }
+        )
+
+    async def _tool_repo_intel_get(self, args: dict[str, Any]) -> str:
+        try:
+            repo_id = _parse_uuid(args, "repo_id")
+        except ToolInvocationError as exc:
+            return _json_result({
+                "error": "invalid_repo_id",
+                "message": str(exc),
+            })
+        if not await self._verify_repo_in_workspace(repo_id):
+            return _json_result({
+                "error": "repo_not_in_workspace",
+                "message": (
+                    f"repo {repo_id} is not activated for this workspace"
+                ),
+            })
+
+        from backend.app.services.repo_intel import get_current_intel
+
+        intel = await get_current_intel(self._session, repo_id)
+        if intel is None:
+            return _json_result(
+                {
+                    "error": "not_harvested_yet",
+                    "message": (
+                        f"repo {repo_id} has no current repo_intel "
+                        "snapshot yet"
+                    ),
+                    "repo_id": str(repo_id),
+                }
+            )
+        return _json_result(
+            {
+                "repo_id": str(intel.repo_id),
+                "version": intel.version,
+                "harvested_at": (
+                    intel.harvested_at.isoformat()
+                    if intel.harvested_at
+                    else None
+                ),
+                "harvest_error": intel.harvest_error,
+                "languages": intel.languages or {},
+                "frameworks": list(intel.frameworks or []),
+                "package_managers": list(intel.package_managers or []),
+                "entry_points": list(intel.entry_points or []),
+                "structure": intel.structure or {},
+                "commit_style": intel.commit_style or {},
+                "visual_tokens": intel.visual_tokens or {},
+            }
+        )
+
+    async def _tool_knowledge_search_v2(
+        self, args: dict[str, Any]
+    ) -> str:
+        from backend.app.services.knowledge_search import (
+            EmbeddingsUnavailable,
+            search_workspace_knowledge,
+        )
+
+        try:
+            query = _require_str(args, "query")
+        except ToolInvocationError as exc:
+            return _json_result({
+                "error": "invalid_query",
+                "message": str(exc),
+            })
+
+        limit = _clamp_int(
+            args.get("limit"),
+            default=_DEFAULT_KNOWLEDGE_V2_RESULTS,
+            low=1,
+            high=_MAX_KNOWLEDGE_V2_RESULTS,
+        )
+
+        repo_id_arg = args.get("repo_id")
+        repo_id: uuid.UUID | None = None
+        if repo_id_arg is not None:
+            try:
+                repo_id = uuid.UUID(str(repo_id_arg))
+            except (TypeError, ValueError):
+                return _json_result({
+                    "error": "invalid_repo_id",
+                    "message": f"repo_id is not a UUID: {repo_id_arg!r}",
+                })
+            if not await self._verify_repo_in_workspace(repo_id):
+                return _json_result({
+                    "error": "repo_not_in_workspace",
+                    "message": (
+                        f"repo {repo_id} is not activated for this "
+                        "workspace"
+                    ),
+                })
+        elif self._active_repo_id is not None:
+            repo_id = self._active_repo_id
+
+        bucket_slug = args.get("bucket_slug")
+        if bucket_slug is not None and not isinstance(bucket_slug, str):
+            return _json_result({
+                "error": "invalid_bucket_slug",
+                "message": "bucket_slug must be a string when provided",
+            })
+
+        intel_facts = bool(args.get("intel_facts", False))
+
+        # Over-fetch when a bucket filter is requested so the
+        # post-filter still has a chance of returning ``limit`` rows.
+        fetch_limit = limit * 4 if isinstance(bucket_slug, str) else limit
+
+        try:
+            hits = await search_workspace_knowledge(
+                self._session,
+                workspace_id=self._workspace_id,
+                query=query,
+                repo_id=repo_id,
+                limit=fetch_limit,
+                settings=self._settings,
+            )
+        except EmbeddingsUnavailable as exc:
+            return _json_result(
+                {
+                    "error": "embeddings_unavailable",
+                    "message": str(exc),
+                }
+            )
+
+        results: list[dict[str, Any]] = []
+        for hit in hits:
+            if isinstance(bucket_slug, str) and hit.bucket_slug != bucket_slug:
+                continue
+            results.append(
+                {
+                    "source": hit.source,
+                    "repo_id": (
+                        str(hit.repo_id) if hit.repo_id is not None else None
+                    ),
+                    "bucket_slug": hit.bucket_slug,
+                    "source_path": hit.title,
+                    "snippet": _truncate(hit.snippet or "", 400),
+                    "score": hit.score,
+                    "rank_bucket": hit.rank_bucket,
+                }
+            )
+            if len(results) >= limit:
+                break
+
+        if intel_facts and repo_id is not None:
+            from backend.app.services.repo_intel import get_current_intel
+
+            intel = await get_current_intel(self._session, repo_id)
+            if intel is not None:
+                snippet = _intel_summary_snippet(intel)
+                results.insert(
+                    0,
+                    {
+                        "source": "repo_intel",
+                        "repo_id": str(intel.repo_id),
+                        "bucket_slug": None,
+                        "source_path": None,
+                        "snippet": _truncate(snippet, 400),
+                        "score": 1.0,
+                        "rank_bucket": "intel",
+                    },
+                )
+                if len(results) > limit:
+                    results = results[:limit]
+
+        return _json_result(
+            {
+                "query": query,
+                "results": results,
+            }
+        )
+
+    async def _verify_repo_in_workspace(self, repo_id: uuid.UUID) -> bool:
+        """Return True iff ``repo_id`` belongs to the active workspace.
+
+        Helper shared by the Phase-6 tools that take a ``repo_id``
+        argument (inbox / runs / repo_intel / knowledge). We check
+        existence with ``LIMIT 1`` rather than fetching the full row
+        because the caller usually projects ``WorkspaceRepo.full_name``
+        in a separate batched query.
+        """
+        row = (
+            await self._session.execute(
+                select(WorkspaceRepo.id)
+                .where(
+                    WorkspaceRepo.id == repo_id,
+                    WorkspaceRepo.workspace_id == self._workspace_id,
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        return row is not None
+
 
 # ---------------------------------------------------------------------------
 # Tiny value helpers — kept private to make the tool methods skimmable
@@ -3418,6 +5826,116 @@ def _duration_seconds(start_iso: Any, end_iso: Any) -> int | None:
         return None
     delta = end - start
     return int(delta.total_seconds())
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 helpers — inbox cursor + repo_intel summary projection
+# ---------------------------------------------------------------------------
+
+
+def _encode_inbox_cursor(created_at: datetime, item_id: uuid.UUID) -> str:
+    """Pack the keyset tuple ``(created_at, id)`` as a URL-safe blob.
+
+    Mirrors the encoding used by ``GET /v1/workspaces/{ws}/inbox`` so
+    cursors handed back by the tool can be round-tripped through the
+    HTTP surface and vice-versa.
+    """
+    raw = json.dumps([created_at.isoformat(), str(item_id)])
+    return base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii")
+
+
+def _decode_inbox_cursor(
+    cursor: Any,
+) -> tuple[datetime, uuid.UUID] | None:
+    """Inverse of :func:`_encode_inbox_cursor`. Returns None on failure.
+
+    Returning ``None`` (instead of raising) lets the tool surface
+    ``{"error": "invalid_cursor"}`` without forcing the LLM to handle
+    a tool-call failure.
+    """
+    if not isinstance(cursor, str) or not cursor:
+        return None
+    try:
+        raw = base64.urlsafe_b64decode(cursor.encode("ascii")).decode("utf-8")
+        ts_str, id_str = json.loads(raw)
+        ts = datetime.fromisoformat(ts_str)
+        item_id = uuid.UUID(id_str)
+    except (ValueError, binascii.Error, json.JSONDecodeError, TypeError):
+        return None
+    return ts, item_id
+
+
+def _intel_summary_snippet(intel: Any) -> str:
+    """Build a one-paragraph synopsis of a :class:`RepoIntel` row.
+
+    Used by :meth:`ToolBox._tool_knowledge_search_v2` when
+    ``intel_facts=True`` to inject a synthetic "intel summary" hit at
+    the top of the results list. The exact phrasing is intentionally
+    plain English — the LLM treats it as a summary it can quote
+    verbatim, not as a structured payload.
+    """
+    parts: list[str] = []
+    languages = intel.languages or {}
+    if isinstance(languages, dict) and languages:
+        top = sorted(
+            (
+                (k, float(v))
+                for k, v in languages.items()
+                if isinstance(k, str) and isinstance(v, (int, float))
+            ),
+            key=lambda kv: kv[1],
+            reverse=True,
+        )[:3]
+        if top:
+            parts.append(
+                "Primary languages: "
+                + ", ".join(
+                    f"{name} ({round(share * 100)}%)" for name, share in top
+                )
+                + "."
+            )
+    frameworks = intel.frameworks or []
+    if isinstance(frameworks, list) and frameworks:
+        readable = [str(f) for f in frameworks if isinstance(f, str)][:6]
+        if readable:
+            parts.append("Frameworks: " + ", ".join(readable) + ".")
+    entry_points = intel.entry_points or []
+    if isinstance(entry_points, list) and entry_points:
+        paths: list[str] = []
+        for ep in entry_points[:5]:
+            if isinstance(ep, dict):
+                path = ep.get("path")
+                if isinstance(path, str):
+                    paths.append(path)
+            elif isinstance(ep, str):
+                paths.append(ep)
+        if paths:
+            parts.append("Entry points: " + ", ".join(paths) + ".")
+    structure = intel.structure or {}
+    if isinstance(structure, dict):
+        top_dirs = structure.get("top_level_dirs")
+        file_count = structure.get("file_count")
+        if isinstance(top_dirs, list) and top_dirs:
+            readable_dirs = [
+                str(d) for d in top_dirs[:6] if isinstance(d, str)
+            ]
+            if readable_dirs:
+                parts.append(
+                    "Top-level dirs: " + ", ".join(readable_dirs) + "."
+                )
+        if isinstance(file_count, int):
+            parts.append(f"File count: ~{file_count}.")
+    if intel.harvested_at is not None:
+        parts.append(
+            f"Harvested at {intel.harvested_at.isoformat()} "
+            f"(version {intel.version})."
+        )
+    if not parts:
+        return (
+            f"repo_intel snapshot v{intel.version} has no harvested "
+            "facts yet."
+        )
+    return " ".join(parts)
 
 
 __all__ = ["ToolBox", "ToolInvocationError"]
