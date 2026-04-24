@@ -39,6 +39,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import secrets as stdlib_secrets
+import uuid
 from datetime import datetime, timezone
 
 import httpx
@@ -46,8 +47,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.config import Settings
-from backend.app.db.models import GitHubInstallation, WorkspaceRepo
+from backend.app.db.models import ApiToken, AuditLog, GitHubInstallation, WorkspaceRepo
 from backend.app.integrations.github.actions_secrets import put_repo_secret
+from backend.app.security.tokens import PAT_PREFIX, generate_pat, hash_pat
 
 
 # Name of the GitHub Actions secret. Hard-coded because ``run-agent.yml``
@@ -55,6 +57,10 @@ from backend.app.integrations.github.actions_secrets import put_repo_secret
 # changing it would require a coordinated migration of existing
 # installations.
 SHIP_RUN_TOKEN_SECRET_NAME = "SHIP_RUN_TOKEN"
+# ``run-agent.yml`` + shipctl read these so CI can call the Ship API
+# without the operator hand-pasting them in the wizard.
+SHIP_API_TOKEN_SECRET_NAME = "SHIP_API_TOKEN"
+SHIP_API_BASE_SECRET_NAME = "SHIP_API_BASE"
 
 # 32 random bytes → 43 base64url chars. Long enough that brute-forcing
 # the hash column is infeasible, short enough to fit comfortably in
@@ -193,9 +199,87 @@ async def verify_repo_callback_token(
     return None
 
 
+async def push_ship_methodology_github_secrets(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    acting_user_id: uuid.UUID,
+    repo: WorkspaceRepo,
+    install: GitHubInstallation,
+    settings: Settings,
+    mint_new_api_pat: bool,
+    client: httpx.AsyncClient | None = None,
+) -> None:
+    """Push ``SHIP_API_BASE`` (+ optional ``SHIP_API_TOKEN``) to GitHub Actions.
+
+    ``SHIP_API_BASE`` is the public Ship API origin (``SHIP_PUBLIC_URL``)
+    so ``shipctl run`` can ``POST /fetch`` from Actions when the repo
+    config has no ``api.base_url``.
+
+    When ``mint_new_api_pat`` is true (same cadence as (re)minting
+    ``SHIP_RUN_TOKEN``), mint a workspace-scoped PAT for the acting
+    user, persist only its hash, and push the plaintext once to GitHub
+    as ``SHIP_API_TOKEN``.
+    """
+
+    base = settings.public_url.rstrip("/")
+    await put_repo_secret(
+        repo,
+        install,
+        name=SHIP_API_BASE_SECRET_NAME,
+        plaintext=base,
+        settings=settings,
+        client=client,
+    )
+
+    if not mint_new_api_pat:
+        return
+
+    raw_pat = generate_pat()
+    token_row = ApiToken(
+        user_id=acting_user_id,
+        workspace_id=workspace_id,
+        name=f"Wizard CI — {repo.full_name}"[:120],
+        hashed_secret=hash_pat(raw_pat),
+        prefix=PAT_PREFIX,
+        scopes=[],
+        expires_at=None,
+    )
+    session.add(token_row)
+    await session.flush()
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=acting_user_id,
+            actor_token_id=None,
+            action="auth.token.mint",
+            target_kind="api_token",
+            target_id=str(token_row.id),
+            payload={
+                "name": token_row.name,
+                "scopes": token_row.scopes,
+                "source": "wizard_seed_ci",
+            },
+        )
+    )
+    await session.flush()
+
+    await put_repo_secret(
+        repo,
+        install,
+        name=SHIP_API_TOKEN_SECRET_NAME,
+        plaintext=raw_pat,
+        settings=settings,
+        client=client,
+    )
+
+
 __all__ = [
+    "SHIP_API_BASE_SECRET_NAME",
+    "SHIP_API_TOKEN_SECRET_NAME",
     "SHIP_RUN_TOKEN_SECRET_NAME",
     "hash_token",
     "mint_repo_callback_token",
+    "push_ship_methodology_github_secrets",
     "verify_repo_callback_token",
 ]

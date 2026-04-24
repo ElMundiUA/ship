@@ -1488,6 +1488,10 @@ async def wizard_seed(
        authenticate on their first tick. On any failure here the PR is
        never opened — a PR without the secret would silently break
        every schedule-triggered lane it installs.
+    2b. Push ``SHIP_API_BASE`` (``SHIP_PUBLIC_URL``) on every seed, and
+       mint a workspace-scoped PAT as ``SHIP_API_TOKEN`` whenever step 2
+       mints a new run token, so ``shipctl run`` in Actions can reach the
+       Ship API without the operator pasting those secrets manually.
     3. Compose the file list via
        :func:`backend.app.services.seed_bundle.compose_seed_files`
        against the canonical
@@ -1522,7 +1526,10 @@ async def wizard_seed(
         commit_bundle_pr,
     )
     from backend.app.services.lane_recipes import DEFAULT_BUNDLE
-    from backend.app.services.repo_tokens import mint_repo_callback_token
+    from backend.app.services.repo_tokens import (
+        mint_repo_callback_token,
+        push_ship_methodology_github_secrets,
+    )
     from backend.app.services.seed_bundle import compose_seed_files
     from backend.app.services.synthetic_lane_sync import synthetic_lane_sync
     from backend.app.services.wizard_seed_routing import (
@@ -1643,6 +1650,29 @@ async def wizard_seed(
                     ),
                 },
             ) from exc
+
+    # ── Ship API origin + PAT for Actions / shipctl ───────────────
+    try:
+        await push_ship_methodology_github_secrets(
+            session,
+            workspace_id=workspace_id,
+            acting_user_id=auth.user.id,
+            repo=repo_row,
+            install=install_row,
+            settings=settings,
+            mint_new_api_pat=should_mint,
+        )
+    except Exception as exc:  # pragma: no cover — surfaced as 502
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "code": "ship_ci_secret_push_failed",
+                "message": (
+                    "Couldn't push Ship CI secrets (SHIP_API_BASE / "
+                    "SHIP_API_TOKEN) to GitHub Actions. The seed PR was not opened."
+                ),
+            },
+        ) from exc
 
     # ── Compose the file bundle (pure) ────────────────────────────
     # Always DEFAULT_BUNDLE post-P5-06 — see WizardSeedIn.presets

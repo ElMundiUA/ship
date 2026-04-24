@@ -60,7 +60,7 @@ export function UploadCard({
     <Card data-testid="bucket-upload-card">
       <CardHeader
         title="Upload article"
-        subtitle={`Text or markdown file — routed through the Distiller into "${bucketName}"`}
+        subtitle={`UTF-8 text or markup — routed through the Distiller into "${bucketName}"`}
       />
       <form ref={formRef} onSubmit={onSubmit} className="space-y-3">
         <label
@@ -71,13 +71,13 @@ export function UploadCard({
             {filename ?? "Click to choose a file"}
           </div>
           <div className="mt-1 text-[10px] uppercase tracking-widest text-white/40">
-            .md / .markdown / .txt · max 1 MB · utf-8
+            md, json, csv, html, ts, yaml, … · max 1 MB · utf-8
           </div>
           <input
             id="bucket-upload-file"
             name="file"
             type="file"
-            accept=".md,.markdown,.txt,text/plain,text/markdown"
+            accept=".md,.markdown,.txt,.json,.csv,.html,.htm,.xml,.css,.js,.mjs,.cjs,.ts,.tsx,.jsx,.yaml,.yml,.toml,.ini,.cfg,.log,text/plain,text/markdown,text/html,text/csv,application/json"
             className="sr-only"
             data-testid="bucket-upload-input"
             onChange={(event) => {

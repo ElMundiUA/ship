@@ -317,8 +317,16 @@ export function RepoCard({
           Agents
         </legend>
         <p className="mt-1 text-[11px] text-white/55">
-          Ship reads these from the repo&apos;s GitHub Actions secrets. Keys
-          you paste here go straight to GitHub and are never stored on Ship.
+          Pick <strong className="text-white/80">one</strong> coding-agent key
+          — Claude Code (Anthropic), Cursor Cloud, OpenAI Codex,{" "}
+          <em>or</em> use GitHub Copilot (no extra secret; it uses the
+          runner&apos;s <code className="text-white/60">GITHUB_TOKEN</code>
+          ). When you open the seed PR, Ship also writes{" "}
+          <code className="text-white/60">SHIP_API_BASE</code> and{" "}
+          <code className="text-white/60">SHIP_API_TOKEN</code> to GitHub
+          Actions for <code className="text-white/60">shipctl run</code>.
+          Anything you paste below goes straight to GitHub and is never stored
+          on Ship.
         </p>
         {initial.probe_errors?.agents && (
           <AgentsProbeError message={initial.probe_errors.agents} />
@@ -344,6 +352,16 @@ export function RepoCard({
                         ) : (
                           <span className="rounded bg-coral/15 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-coral">
                             missing
+                          </span>
+                        )
+                      ) : a.secret_name ? (
+                        a.present ? (
+                          <span className="rounded bg-aqua/15 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-aqua">
+                            present
+                          </span>
+                        ) : (
+                          <span className="rounded bg-amber-500/15 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-amber-200">
+                            optional
                           </span>
                         )
                       ) : (
@@ -379,7 +397,7 @@ export function RepoCard({
                     </a>
                   )}
                 </div>
-                {a.required && !a.present && (
+                {a.secret_name && !a.present && (
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     <input
                       type="password"

@@ -129,6 +129,24 @@ async def test_upload_rejects_oversize_file(
 
 
 @pytest.mark.asyncio
+async def test_upload_accepts_json_with_application_json(
+    v1_client, seed_workspace, upload_bucket
+) -> None:
+    _, raw, workspace = seed_workspace
+    _, bucket = upload_bucket
+
+    body = b'{"title": "API", "note": "hello"}'
+    resp = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/buckets/{bucket.slug}/upload",
+        headers=_auth(raw),
+        files={"file": ("spec.json", io.BytesIO(body), "application/json")},
+        data={"classifier": "stub"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["decision"] == "new"
+
+
+@pytest.mark.asyncio
 async def test_upload_rejects_unsupported_content_type(
     v1_client, seed_workspace, upload_bucket
 ) -> None:

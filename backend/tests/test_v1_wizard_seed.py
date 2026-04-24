@@ -74,8 +74,11 @@ def _patch_github(monkeypatch):
     async def _fake_put_secret(
         repo, install, *, name, plaintext, settings, client=None, public_key=None
     ):
-        # Plaintext is exactly ``SHIP_RUN_TOKEN_SECRET_NAME`` we passed.
-        assert name == tokens_svc.SHIP_RUN_TOKEN_SECRET_NAME
+        assert name in {
+            tokens_svc.SHIP_RUN_TOKEN_SECRET_NAME,
+            tokens_svc.SHIP_API_BASE_SECRET_NAME,
+            tokens_svc.SHIP_API_TOKEN_SECRET_NAME,
+        }
         assert isinstance(plaintext, str) and plaintext
         return "keyid-stub"
 

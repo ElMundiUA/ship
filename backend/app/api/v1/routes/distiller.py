@@ -83,13 +83,47 @@ _MAX_UPLOAD_BYTES = 1_000_000
 
 # Content types we accept for text uploads. Extension fallback covers
 # editors that send ``application/octet-stream`` for ``.md``.
+# Everything is decoded as UTF-8 text and distilled as markdown-ish
+# body input — binary formats (pdf, images) stay rejected.
 _ALLOWED_CONTENT_TYPES: set[str] = {
     "text/plain",
     "text/markdown",
     "text/x-markdown",
+    "text/html",
+    "text/css",
+    "text/javascript",
+    "text/xml",
+    "text/csv",
+    "text/yaml",
+    "application/json",
+    "application/javascript",
+    "application/xml",
+    "application/x-yaml",
     "application/octet-stream",
 }
-_ALLOWED_EXTENSIONS: set[str] = {".md", ".markdown", ".txt"}
+_ALLOWED_EXTENSIONS: set[str] = {
+    ".md",
+    ".markdown",
+    ".txt",
+    ".json",
+    ".csv",
+    ".html",
+    ".htm",
+    ".xml",
+    ".css",
+    ".js",
+    ".mjs",
+    ".cjs",
+    ".ts",
+    ".tsx",
+    ".jsx",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".ini",
+    ".cfg",
+    ".log",
+}
 
 
 logger = logging.getLogger(__name__)
@@ -353,8 +387,9 @@ async def upload_to_bucket(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                f"unsupported content type {content_type!r} "
-                f"(allowed: text/plain, text/markdown)"
+                "unsupported content type "
+                f"{content_type!r} — upload plain-text UTF-8 files "
+                "(markdown, json, csv, html, source, …)"
             ),
         )
 

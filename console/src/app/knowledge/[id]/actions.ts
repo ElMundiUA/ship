@@ -28,8 +28,44 @@ import { getSessionToken } from "@/lib/api/session";
 // a megabyte of bytes through the action boundary.
 const MAX_UPLOAD_BYTES = 1_000_000;
 
-const ALLOWED_EXTS = new Set([".md", ".markdown", ".txt"]);
-const ALLOWED_MIME_PREFIXES = ["text/plain", "text/markdown", "text/x-markdown"];
+const ALLOWED_EXTS = new Set([
+  ".md",
+  ".markdown",
+  ".txt",
+  ".json",
+  ".csv",
+  ".html",
+  ".htm",
+  ".xml",
+  ".css",
+  ".js",
+  ".mjs",
+  ".cjs",
+  ".ts",
+  ".tsx",
+  ".jsx",
+  ".yaml",
+  ".yml",
+  ".toml",
+  ".ini",
+  ".cfg",
+  ".log",
+]);
+const ALLOWED_MIME_PREFIXES = [
+  "text/plain",
+  "text/markdown",
+  "text/x-markdown",
+  "text/html",
+  "text/css",
+  "text/javascript",
+  "text/xml",
+  "text/csv",
+  "text/yaml",
+  "application/json",
+  "application/javascript",
+  "application/xml",
+  "application/x-yaml",
+];
 
 export type UploadActionResult =
   | {
@@ -64,7 +100,7 @@ function validateClientSide(file: File): string | null {
     file.type === "" ||
     ALLOWED_MIME_PREFIXES.some((prefix) => file.type.startsWith(prefix));
   if (!mimeOk && !ALLOWED_EXTS.has(ext)) {
-    return `Unsupported file type ${file.type || ext || "(unknown)"}. Use .md, .markdown, or .txt.`;
+    return `Unsupported file type ${file.type || ext || "(unknown)"}. Use UTF-8 text or markup (md, json, csv, html, ts, yaml, …).`;
   }
   return null;
 }

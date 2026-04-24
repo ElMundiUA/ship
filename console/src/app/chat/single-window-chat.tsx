@@ -434,6 +434,26 @@ export function SingleWindowChat({
     setScrollGap(el.scrollHeight - el.clientHeight - el.scrollTop);
   }, [segments, bottomSpacerPx]);
 
+  // Opening Navigator (or navigating back to /chat) remounts this
+  // client; the scroll container defaults to the top while hydrated
+  // history renders from the first message. Snap to the bottom once
+  // so the latest turn is in view — same idea as chat apps on reopen.
+  useLayoutEffect(() => {
+    const el = scrollerRef.current;
+    if (!el || thread.messages.length === 0) return;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const s = scrollerRef.current;
+        if (!s) return;
+        s.scrollTop = s.scrollHeight - s.clientHeight;
+        setScrollGap(s.scrollHeight - s.clientHeight - s.scrollTop);
+      });
+    });
+    // Intentionally mount-only: in-session scroll discipline is handled
+    // by submit / stream / ``Jump to latest`` — we must not fight that.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Spacer-shrink scroll compensation. Runs synchronously after
   // React commits a ``bottomSpacerPx`` change but before the
   // browser paints, so we can re-anchor the scroller to its
