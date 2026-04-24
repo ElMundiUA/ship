@@ -19,6 +19,8 @@ import {
 } from "@/lib/api/client";
 import { getSessionToken } from "@/lib/api/session";
 
+import { CoverageView } from "../automations/coverage-view";
+
 import { ActiveCalendar } from "./active-calendar";
 import { LibraryCatalog } from "./library-catalog";
 
@@ -36,7 +38,7 @@ import { LibraryCatalog } from "./library-catalog";
  */
 
 type SearchParamsBag = Record<string, string | string[] | undefined>;
-type TabId = "active" | "library";
+type TabId = "active" | "library" | "coverage";
 
 const TAB_META: { id: TabId; label: string; hint: string }[] = [
   {
@@ -49,12 +51,33 @@ const TAB_META: { id: TabId; label: string; hint: string }[] = [
     label: "Library",
     hint: "Catalog of lane recipes you can add to a repo's .ship/config.yml.",
   },
+  {
+    id: "coverage",
+    label: "Coverage",
+    hint: "Which Plays are configured on which repos. Critical gaps highlighted.",
+  },
 ];
 
 function pickTab(params: SearchParamsBag): TabId {
   const raw = typeof params.tab === "string" ? params.tab : null;
   if (raw === "library") return "library";
+  if (raw === "coverage") return "coverage";
   return "active";
+}
+
+function pickCoverageFilters(params: SearchParamsBag): {
+  category: string | null;
+  criticalOnly: boolean;
+  hasGaps: boolean;
+} {
+  const cat = typeof params.category === "string" ? params.category : null;
+  const criticalOnly =
+    typeof params.critical_only === "string" &&
+    params.critical_only.toLowerCase() === "true";
+  const hasGaps =
+    typeof params.has_gaps === "string" &&
+    params.has_gaps.toLowerCase() === "true";
+  return { category: cat, criticalOnly, hasGaps };
 }
 
 export async function LanesView({
@@ -112,19 +135,36 @@ export async function LanesView({
   let lanes: ApiLane[] = [];
   let repos: ApiActivatedRepo[] = [];
   let catalog: ApiLaneCatalogEntry[] = [];
-  try {
-    [lanes, repos, catalog] = await Promise.all([
-      listLanes(workspace.id, { token }),
-      listActivatedRepos(workspace.id, token).catch(
-        () => [] as ApiActivatedRepo[],
-      ),
-      listLaneCatalog(token).catch(() => [] as ApiLaneCatalogEntry[]),
-    ]);
-  } catch (err) {
-    if (err instanceof ApiHttpError && err.status === 401) {
-      redirect(`/login?next=${loginNext}`);
+  // Coverage tab only needs activated repos (for the UUID → slug
+  // lookup) — skip the lane + lane-catalog fetches to keep its load
+  // path lean. The CoverageView fetches its own data via
+  // ``listPlaysCoverage``.
+  if (tab === "coverage") {
+    try {
+      repos = await listActivatedRepos(workspace.id, token);
+    } catch (err) {
+      if (err instanceof ApiHttpError && err.status === 401) {
+        redirect(`/login?next=${loginNext}`);
+      }
+      // Coverage degrades gracefully when repos can't load — the
+      // tab will fall through to its own MockView.
+      repos = [];
     }
-    return renderUnavailable(err, { title, kicker });
+  } else {
+    try {
+      [lanes, repos, catalog] = await Promise.all([
+        listLanes(workspace.id, { token }),
+        listActivatedRepos(workspace.id, token).catch(
+          () => [] as ApiActivatedRepo[],
+        ),
+        listLaneCatalog(token).catch(() => [] as ApiLaneCatalogEntry[]),
+      ]);
+    } catch (err) {
+      if (err instanceof ApiHttpError && err.status === 401) {
+        redirect(`/login?next=${loginNext}`);
+      }
+      return renderUnavailable(err, { title, kicker });
+    }
   }
 
   const sortedRepos = [...repos].sort((a, b) =>
@@ -213,6 +253,16 @@ export async function LanesView({
           configError={libraryConfigError}
           initialOpenKind={initialOpenKind}
           basePath={basePath}
+        />
+      ) : null}
+
+      {tab === "coverage" ? (
+        <CoverageView
+          workspaceId={workspace.id}
+          repos={sortedRepos}
+          basePath={basePath}
+          filters={pickCoverageFilters(params)}
+          token={token}
         />
       ) : null}
     </AppShell>
