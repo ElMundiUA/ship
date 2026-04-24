@@ -70,7 +70,13 @@ export function KitSurfaceSection() {
               for every one: triage the Inbox, run a Play, toggle an Automation, query Runs. Members can ask, admins
               can mutate.
             </p>
-            <p className="mt-4 text-xs text-white/45">Shipped today; documented under <a className="text-aqua hover:text-white" href="/docs/concepts">Concepts</a>.</p>
+            <p className="mt-4 text-xs text-white/45">
+              Shipped today; documented under{" "}
+              <Link className="text-aqua hover:text-white" href="/docs/concepts">
+                Concepts
+              </Link>
+              .
+            </p>
           </div>
         </div>
       </div>
