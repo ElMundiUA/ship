@@ -228,16 +228,19 @@ async def test_activate_replaces_set_and_audit_logs(
 
 
 @pytest.mark.asyncio
-async def test_activate_with_preset_persists_and_shapes_default_pipelines(
+async def test_activate_with_legacy_preset_collapses_to_default(
     v1_client,
     db_session,
     seed_workspace,
     github_app_env,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Phase-2 preset flows end-to-end: persisted on the repo row,
-    recorded on the audit log, and only the preset's lanes arrive
-    enabled on the default pipeline set."""
+    """Post-P5-01 the preset catalog collapsed to a single
+    canonical ``"default"``. Legacy ids (``monorepo`` here, but the
+    same applies to every entry in ``LEGACY_PRESETS``) stay accepted
+    at the API boundary for backwards compat but normalize to
+    ``"default"`` before persistence and audit logging — that's the
+    whole point of the collapse."""
     from backend.app.api.v1.routes import repos as repos_module
     from backend.app.db.models.integrations import WorkspaceRepo
     from backend.app.db.models.pipelines import Pipeline
@@ -262,14 +265,16 @@ async def test_activate_with_preset_persists_and_shapes_default_pipelines(
         json={"external_ids": [1001], "preset": "monorepo"},
     )
     assert response.status_code == 200, response.text
-    assert response.json()[0]["preset"] == "monorepo"
+    # Returned row reflects the NORMALIZED value, not the legacy id
+    # the caller sent.
+    assert response.json()[0]["preset"] == "default"
 
     rows = (
         await db_session.execute(
             select(WorkspaceRepo).where(WorkspaceRepo.workspace_id == workspace_id)
         )
     ).scalars().all()
-    assert rows[0].preset == "monorepo"
+    assert rows[0].preset == "default"
 
     pipelines = (
         await db_session.execute(
@@ -277,10 +282,12 @@ async def test_activate_with_preset_persists_and_shapes_default_pipelines(
         )
     ).scalars().all()
     by_kind = {p.lane_id: p for p in pipelines}
-    # ``monorepo`` is the only preset that opts into self_heal by default.
-    assert by_kind["self_heal"].enabled is True
+    # Default-enabled lanes land enabled; ``self_heal`` is opt-in and
+    # does NOT auto-enable under the canonical preset (the legacy
+    # ``monorepo``-special behaviour is gone post-collapse).
     assert by_kind["pr_review"].enabled is True
     assert by_kind["daily_standup"].enabled is True
+    assert by_kind["self_heal"].enabled is False
 
     audits = (
         await db_session.execute(
@@ -290,18 +297,22 @@ async def test_activate_with_preset_persists_and_shapes_default_pipelines(
             )
         )
     ).scalars().all()
-    assert audits[0].payload["preset"] == "monorepo"
+    # Audit telemetry stops fragmenting on legacy ids — every row
+    # records ``"default"`` regardless of what the caller sent.
+    assert audits[0].payload["preset"] == "default"
 
 
 @pytest.mark.asyncio
-async def test_activate_rejects_unknown_preset(
+async def test_activate_accepts_default_preset_directly(
     v1_client,
     db_session,
     seed_workspace,
     github_app_env,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """The single canonical ``"default"`` preset is accepted as-is."""
     from backend.app.api.v1.routes import repos as repos_module
+    from backend.app.db.models.integrations import WorkspaceRepo
 
     _, raw, workspace = seed_workspace
     await _seed_installation(db_session, workspace.id)
@@ -318,10 +329,17 @@ async def test_activate_rejects_unknown_preset(
     response = await v1_client.post(
         f"/v1/workspaces/{workspace.id}/repos/activate",
         headers={"Authorization": f"Bearer {raw}"},
-        json={"external_ids": [1001], "preset": "not-a-real-preset"},
+        json={"external_ids": [1001], "preset": "default"},
     )
-    assert response.status_code == 422, response.text
-    assert "not-a-real-preset" in response.json()["detail"]
+    assert response.status_code == 200, response.text
+    assert response.json()[0]["preset"] == "default"
+
+    rows = (
+        await db_session.execute(
+            select(WorkspaceRepo).where(WorkspaceRepo.workspace_id == workspace.id)
+        )
+    ).scalars().all()
+    assert rows[0].preset == "default"
 
 
 @pytest.mark.asyncio

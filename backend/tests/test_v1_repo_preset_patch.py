@@ -2,7 +2,10 @@
 
 Covers the three interesting cases: happy path (preset changes,
 seed adds missing lanes), reshape path (bound lanes get re-flagged
-to match the new preset), and the reject path (unknown preset).
+to match the new preset), and the legacy-id-collapse path (P5-01:
+``KNOWN_PRESETS`` shrank to ``("default",)`` so the old
+"unknown preset → 422" gate is now "legacy id → normalize to
+default").
 """
 
 from __future__ import annotations
@@ -92,7 +95,9 @@ async def test_patch_preset_updates_and_adds_missing_lanes(
         json={"preset": "web-app"},
     )
     assert response.status_code == 200, response.text
-    assert response.json()["preset"] == "web-app"
+    # Post-P5-01 ``"web-app"`` collapses to ``"default"`` before
+    # being persisted on the repo row.
+    assert response.json()["preset"] == "default"
 
     db_session.expire_all()
     kinds = {
@@ -103,8 +108,10 @@ async def test_patch_preset_updates_and_adds_missing_lanes(
             )
         ).scalars()
     }
-    # web-app preset adds daily_standup + tech_debt on top of the
-    # adoption-minimum seeded pair (pr_review, code_map).
+    # The canonical ``"default"`` preset enables every default-enabled
+    # recipe (pr_review, daily_standup, code_map, tech_debt) — the
+    # additive seed materializes any rows missing from the prior
+    # adoption-minimum-seeded pair.
     assert {"pr_review", "code_map", "daily_standup", "tech_debt"}.issubset(kinds)
 
 
@@ -151,14 +158,19 @@ async def test_patch_preset_reshape_flips_enabled_flags(
 
 
 @pytest.mark.asyncio
-async def test_patch_preset_rejects_unknown(
+async def test_patch_preset_accepts_legacy_collapses_to_default(
     v1_client, seed_preset_workspace
 ) -> None:
+    """Post-P5-01 the PATCH endpoint stops 422-ing on unknown preset
+    ids. Legacy ids (``"adoption-minimum"`` here, but every entry in
+    ``LEGACY_PRESETS``) pass through and collapse to ``"default"``
+    before being persisted."""
     raw, workspace, repo = seed_preset_workspace
 
     response = await v1_client.patch(
         f"/v1/workspaces/{workspace.id}/repos/{repo.id}",
         headers={"Authorization": f"Bearer {raw}"},
-        json={"preset": "not-a-real-preset"},
+        json={"preset": "monorepo"},
     )
-    assert response.status_code == 422
+    assert response.status_code == 200, response.text
+    assert response.json()["preset"] == "default"

@@ -47,7 +47,7 @@ from backend.app.integrations.gateway.code_host import RepoRef, RepoSummary
 from backend.app.integrations.github.code_host_adapter import GitHubCodeHost
 from backend.app.services.agent.kb_indexer import reindex_repo_kb
 from backend.app.services.lane_recipes import (
-    KNOWN_PRESETS,
+    normalize_preset,
     seed_default_pipelines,
 )
 from backend.app.services.seed_bundle import BUNDLE_VERSION as _BUNDLE_VERSION
@@ -118,13 +118,16 @@ class RepoActivateIn(BaseModel):
     preset: str | None = Field(
         default=None,
         description=(
-            "Catalog preset id to attach to the activated repo(s). One of "
-            "``web-app`` / ``api-backend`` / ``mobile-app`` / ``cli`` / "
-            "``monorepo`` / ``adoption-minimum``. ``None`` keeps any "
-            "existing preset and falls back to ``adoption-minimum``-shaped "
-            "defaults for new rows. Setting a preset on a subsequent "
-            "activation call updates the stored value but never re-seeds "
-            "lanes a tenant already customised."
+            "Catalog preset id to attach to the activated repo(s). "
+            "Post-P5-01 the meaningful surface is the single canonical "
+            "``\"default\"`` preset. The 14 historical preset ids "
+            "(``web-app`` / ``api-backend`` / …) remain accepted at "
+            "this API boundary for backwards compatibility but are "
+            "normalized to ``\"default\"`` via "
+            ":func:`backend.app.services.lane_recipes.normalize_preset` "
+            "before being persisted to ``WorkspaceRepo.preset``. ``None`` "
+            "keeps any existing preset and otherwise resolves to "
+            "``\"default\"``."
         ),
     )
 
@@ -288,15 +291,13 @@ async def activate_repos(
 
     desired_ids: set[int] = {int(x) for x in payload.external_ids}
 
-    preset = payload.preset
-    if preset is not None and preset not in KNOWN_PRESETS:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=(
-                f"Unknown preset {preset!r}. Expected one of: "
-                f"{sorted(KNOWN_PRESETS)}"
-            ),
-        )
+    # P5-01 collapse: legacy preset ids ("web-app", …) and ``None``
+    # collapse to ``"default"``; any other string passes through
+    # unchanged to keep the door open for catalog-authored future
+    # presets. Persistence + audit log get the normalized value.
+    preset = (
+        normalize_preset(payload.preset) if payload.preset is not None else None
+    )
 
     # Fetch the live picker view once so we can validate ids and grab
     # the metadata we'll persist. We *trust* the GitHub installation
@@ -412,12 +413,14 @@ async def activate_repos(
     # Prefer the preset requested on this call; otherwise adopt the
     # preset stored on the "default" repo the pipelines will bind to
     # so a reseed call without an explicit preset still respects the
-    # original pick.
+    # original pick. Normalize either source so audit telemetry stops
+    # fragmenting on legacy ids (P5-01: stale rows may still hold
+    # ``"web-app"`` etc., which we collapse to ``"default"``).
     seed_preset = preset
     if seed_preset is None and default_repo_id is not None:
         default_row = await session.get(WorkspaceRepo, default_repo_id)
-        if default_row is not None:
-            seed_preset = default_row.preset
+        if default_row is not None and default_row.preset is not None:
+            seed_preset = normalize_preset(default_row.preset)
 
     seeded_pipelines = await seed_default_pipelines(
         session,
@@ -801,28 +804,24 @@ async def install_bundle(
         )
 
     # Resolve the effective preset list. Prefer the caller's explicit
-    # list, else fall back to the repo's persisted preset. Validate
-    # every id against ``KNOWN_PRESETS`` so a stale UI can't sneak
-    # unknown values into the YAML resolver.
+    # list, else fall back to the repo's persisted preset. Each id is
+    # passed through :func:`normalize_preset` so legacy ids (and any
+    # stale value persisted before P5-01) collapse to ``"default"``
+    # before bundle composition; an empty/whitespace id is dropped.
     requested = payload.presets if payload and payload.presets else None
     if requested is None:
         requested = [repo_row.preset] if repo_row.preset else []
     cleaned: list[str] = []
     seen: set[str] = set()
     for pid in requested:
-        pid = pid.strip()
-        if not pid or pid in seen:
+        pid = (pid or "").strip()
+        if not pid:
             continue
-        if pid not in KNOWN_PRESETS:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=(
-                    f"Unknown preset {pid!r}. Expected one of: "
-                    f"{sorted(KNOWN_PRESETS)}"
-                ),
-            )
-        cleaned.append(pid)
-        seen.add(pid)
+        normalized = normalize_preset(pid)
+        if normalized in seen:
+            continue
+        cleaned.append(normalized)
+        seen.add(normalized)
     if not cleaned:
         raise HTTPException(
             status_code=status.HTTP_412_PRECONDITION_FAILED,
@@ -1150,9 +1149,12 @@ async def update_repo(
 ) -> ActivatedRepoOut:
     """Mutate the preset bound to ``repo`` (and optionally reshape lanes).
 
-    Admin-only. The ``preset`` must be one of ``KNOWN_PRESETS`` (or
-    ``None`` to clear the binding and fall back to the Day-3 default
-    shape on future seeds).
+    Admin-only. Post-P5-01 the meaningful preset is the single
+    ``"default"`` value; legacy preset ids passed by older Console
+    builds collapse to ``"default"`` via
+    :func:`backend.app.services.lane_recipes.normalize_preset` before
+    being persisted. ``None`` clears the binding and falls back to
+    the canonical default shape on future seeds.
 
     Behavioural notes:
 
@@ -1191,15 +1193,14 @@ async def update_repo(
             detail="Repo not found in this workspace.",
         )
 
-    new_preset = payload.preset
-    if new_preset is not None and new_preset not in KNOWN_PRESETS:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=(
-                f"Unknown preset '{new_preset}'. Expected one of:"
-                f" {', '.join(KNOWN_PRESETS)}."
-            ),
-        )
+    # P5-01 collapse: normalize legacy ids to ``"default"`` before
+    # persisting so the row joins the post-collapse vocabulary.
+    # ``None`` keeps its semantic of "clear the binding".
+    new_preset = (
+        normalize_preset(payload.preset)
+        if payload.preset is not None
+        else None
+    )
 
     old_preset = repo_row.preset
     repo_row.preset = new_preset
@@ -1329,9 +1330,12 @@ async def wizard_seed(
 
     Admin-only. The flow is:
 
-    1. Resolve the preset list (explicit or repo-persisted) and reject
-       unknown ids with 422 so a stale wizard tab can't smuggle values
-       past ``KNOWN_PRESETS``.
+    1. Resolve the preset list (explicit or repo-persisted). Each id
+       is normalized via
+       :func:`backend.app.services.lane_recipes.normalize_preset`
+       (legacy → ``"default"``); any other string passes through
+       unchanged for forward-compat with catalog-authored future
+       presets.
     2. Resolve the tracker kind (body override, else the per-repo
        binding, else the workspace default).
     3. Mint a fresh ``SHIP_RUN_TOKEN`` if one doesn't exist or if the
@@ -1390,6 +1394,10 @@ async def wizard_seed(
     payload = payload or WizardSeedIn()
 
     # ── Resolve presets (wizard override → repo persisted) ────────
+    # Each id passes through :func:`normalize_preset` so legacy
+    # strings (and any pre-P5-01 values still on the repo row)
+    # collapse to ``"default"`` before bundle composition. After
+    # dedupe the cleaned list is almost always exactly ``["default"]``.
     requested = payload.presets if payload.presets else None
     if requested is None:
         requested = [repo_row.preset] if repo_row.preset else []
@@ -1397,18 +1405,13 @@ async def wizard_seed(
     seen: set[str] = set()
     for pid in requested:
         pid = (pid or "").strip()
-        if not pid or pid in seen:
+        if not pid:
             continue
-        if pid not in KNOWN_PRESETS:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=(
-                    f"Unknown preset {pid!r}. Expected one of: "
-                    f"{sorted(KNOWN_PRESETS)}"
-                ),
-            )
-        cleaned.append(pid)
-        seen.add(pid)
+        normalized = normalize_preset(pid)
+        if normalized in seen:
+            continue
+        cleaned.append(normalized)
+        seen.add(normalized)
     if not cleaned:
         raise HTTPException(
             status_code=status.HTTP_412_PRECONDITION_FAILED,
