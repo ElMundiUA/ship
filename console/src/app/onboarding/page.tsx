@@ -69,6 +69,8 @@ const STEPS: { id: StepId; label: string }[] = [
 
 const GITHUB_ERRORS: Record<string, string> = {
   api_unavailable: "Backend not reachable.",
+  workspace_not_found:
+    "This workspace link is invalid or you no longer have access. Open the wizard from the dashboard so the URL picks up the right workspace.",
   forbidden: "You need admin role on this workspace to install the GitHub App.",
   app_not_configured:
     "GitHub App env vars are missing on the backend (GITHUB_APP_ID / GITHUB_APP_PRIVATE_KEY / GITHUB_APP_WEBHOOK_SECRET). Ask ops to wire them up and try again.",
