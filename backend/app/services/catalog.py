@@ -739,14 +739,32 @@ def emit_config_yaml(
     if preset_id:
         lines.append(f"preset: {preset_id}")
     lines.append("version: 2")
+    lines.append("shipctl_min: 0.12.0")
     if repo_full_name:
         lines.append(f"repo: {repo_full_name}")
+    lines.extend(
+        [
+            "api:",
+            '  base_url: "https://ship.elmundi.com"',
+            "  channel: stable",
+            "  ttl_hours: 24",
+            "  offline_ok: true",
+            "stack:",
+            "  tracker: none",
+            "  ci: gh-actions",
+            "  agents: []",
+            "  language: multi",
+            "agent:",
+            "  default: {}",
+            "  overrides: {}",
+        ]
+    )
 
     if lanes:
         lines.append("lanes:")
         for lane_id, trigger in lanes.items():
             lines.append(f"  {lane_id}:")
-            for key, value in trigger.items():
+            for key, value in _normalise_lane_for_config(trigger).items():
                 # ``patterns: [ids]`` is the only list-typed key we
                 # currently emit (RFC-0008 C3.1 multi-pattern lanes).
                 # Render it in flow-style so the line stays compact
@@ -759,6 +777,53 @@ def emit_config_yaml(
                     lines.append(f"    {key}: {_render_yaml_scalar(value)}")
 
     return "\n".join(lines) + "\n"
+
+
+def _normalise_lane_for_config(trigger: "Mapping[str, object]") -> dict[str, object]:
+    """Render legacy flat lane triggers as current CLI schema v2 lanes."""
+    out: dict[str, object] = {}
+    if isinstance(trigger.get("kind"), str):
+        kind = str(trigger["kind"])
+    elif "once" in trigger:
+        kind = "once"
+    elif "event" in trigger:
+        kind = "event"
+    elif "schedule" in trigger:
+        kind = "schedule"
+    else:
+        kind = ""
+
+    if kind:
+        out["kind"] = kind
+    if kind == "event":
+        event = trigger.get("on", trigger.get("event"))
+        if event is not None:
+            out["on"] = event
+    elif kind == "schedule":
+        cron = trigger.get("cron", trigger.get("schedule"))
+        if cron is not None:
+            out["cron"] = cron
+    elif kind == "once":
+        once = trigger.get("once")
+        if once is not None:
+            out["once"] = once
+
+    for key in ("pattern", "patterns", "pattern_version", "fanout", "permissions", "runner", "timeout_minutes", "concurrency"):
+        if key in trigger:
+            out[key] = trigger[key]
+
+    if kind == "once":
+        idem = trigger.get("idempotency")
+        idem_key = trigger.get("idempotency_key")
+        if isinstance(idem, dict):
+            out["idempotency"] = idem
+        elif isinstance(idem_key, str) and idem_key:
+            out["idempotency"] = {
+                "key": idem_key,
+                "store": "file",
+                "reset_on": "version-change",
+            }
+    return out
 
 
 def _render_yaml_scalar(value: object) -> str:

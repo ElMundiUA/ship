@@ -103,6 +103,8 @@ async def test_install_bundle_opens_single_pr_for_persisted_preset(
     )
     assert captured["branch_label"] == "default"
     assert captured["return_url"] is not None
+    await db_session.refresh(repo)
+    assert repo.installed_bundle_version is None
 
 
 @pytest.mark.asyncio

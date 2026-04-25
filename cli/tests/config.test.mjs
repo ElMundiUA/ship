@@ -179,6 +179,47 @@ test("v2 config with a full lanes map validates cleanly", () => {
   assert.equal(res.ok, true, JSON.stringify(res.errors || []));
 });
 
+test("v4 wizard seed lane shape validates cleanly", () => {
+  const cfg = YAML.parse(`
+preset: default
+version: 2
+shipctl_min: 0.12.0
+repo: acme/widgets
+api:
+  base_url: "https://ship.elmundi.com"
+  channel: stable
+  ttl_hours: 24
+  offline_ok: true
+stack:
+  tracker: none
+  ci: gh-actions
+  agents: []
+  language: multi
+agent:
+  default: {}
+  overrides: {}
+lanes:
+  pr_review:
+    kind: event
+    on: pull_request
+    pattern: "**"
+  scan-security-deps:
+    kind: schedule
+    cron: "0 7 * * *"
+    pattern: scan-security-deps
+  daily_standup:
+    kind: schedule
+    cron: "0 9 * * 1-5"
+    pattern: flow-daily-retro
+  self_heal:
+    kind: schedule
+    cron: "0 4 * * *"
+    pattern: op-workflow-self-heal
+`);
+  const res = validateConfig(cfg);
+  assert.equal(res.ok, true, JSON.stringify(res.errors || []));
+});
+
 test("v2 rejects unknown lane kind", () => {
   const cfg = DEFAULT_CONFIG();
   cfg.lanes = { bad: { kind: "interval", pattern: "x" } };

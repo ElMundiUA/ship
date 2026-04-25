@@ -7,6 +7,8 @@ logic inline. Two public entry points:
 - :func:`record_pr_merged_notification` — A4's "PR merged" banner.
 - :func:`record_self_heal_notification` — A5's "we dispatched
   self-heal / we wanted to but couldn't" banner.
+- :func:`record_workflow_failure_notification` — durable human-visible
+  surface for non-Ship GitHub workflow failures.
 
 Both are *best-effort*: if the same dedupe key already exists (e.g.
 GitHub replayed the webhook after a transient timeout) the helper
@@ -175,7 +177,41 @@ async def record_self_heal_notification(
     )
 
 
+async def record_workflow_failure_notification(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    failed_run_external_id: int,
+    repo_full_name: str,
+    failed_workflow_name: str,
+    failed_run_url: str | None,
+    conclusion: str | None,
+) -> WorkspaceNotification | None:
+    """Mint a dashboard banner for a failed non-Ship GitHub workflow."""
+    title = f"Workflow failed in {repo_full_name}"
+    body = (
+        f"{failed_workflow_name} ended with {conclusion or 'failure'}. "
+        "Ship recorded it for retro and will run self-heal if that lane is enabled."
+    )
+    return await _upsert_notification(
+        session,
+        workspace_id=workspace_id,
+        kind="workflow_failure",
+        title=title,
+        body=body,
+        href=failed_run_url,
+        payload={
+            "failed_run_external_id": failed_run_external_id,
+            "failed_workflow_name": failed_workflow_name,
+            "repo_full_name": repo_full_name,
+            "conclusion": conclusion,
+        },
+        dedupe_key=f"workflow_failure:{failed_run_external_id}",
+    )
+
+
 __all__ = [
     "record_pr_merged_notification",
     "record_self_heal_notification",
+    "record_workflow_failure_notification",
 ]

@@ -15,11 +15,16 @@ on:
       ship_run_token:
         description: "Short-lived bearer token Ship issued for this run"
         required: true
+      ship_failed_run_id:
+        description: "GitHub Actions run id that triggered self-heal"
+        required: false
+        default: ""
   schedule:
     - cron: "0 4 * * *"
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   self_heal:
@@ -39,12 +44,38 @@ jobs:
 
       - name: Collect diagnostics
         id: diag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHIP_FAILED_RUN_ID: ${{ inputs.ship_failed_run_id }}
         run: |
           set -euo pipefail
-          WF_COUNT=$(find .github/workflows -type f -name '*.yml' 2>/dev/null | wc -l | tr -d ' ')
+          WF_COUNT=$(python - <<'PY'
+          from pathlib import Path
+          root = Path(".github/workflows")
+          print(sum(1 for _ in root.glob("*.yml")) + sum(1 for _ in root.glob("*.yaml")) if root.exists() else 0)
+          PY
+          )
+          diagnosis="Self-heal diagnostics ran (${WF_COUNT} workflow(s) inspected)"
+          missing_secret=""
+
+          if [ -n "$SHIP_FAILED_RUN_ID" ]; then
+            gh run view "$SHIP_FAILED_RUN_ID" --log > /tmp/ship-failed-run.log 2> /tmp/ship-failed-run.err || true
+            if grep -q "E2E_CONSOLE_BASE_URL" /tmp/ship-failed-run.log 2>/dev/null; then
+              missing_secret="E2E_CONSOLE_BASE_URL"
+              diagnosis="Missing GitHub Actions secret E2E_CONSOLE_BASE_URL for failed run ${SHIP_FAILED_RUN_ID}"
+            elif grep -qi "Add repository secret" /tmp/ship-failed-run.log 2>/dev/null; then
+              diagnosis="Failed run ${SHIP_FAILED_RUN_ID} requested a repository secret; inspect logs for the exact name"
+            elif [ -s /tmp/ship-failed-run.err ]; then
+              diagnosis="Self-heal could not read failed run ${SHIP_FAILED_RUN_ID} logs: $(tr '\n' ' ' < /tmp/ship-failed-run.err | cut -c1-240)"
+            else
+              diagnosis="Self-heal inspected failed run ${SHIP_FAILED_RUN_ID}; no known missing-secret signature found"
+            fi
+          fi
+
           echo "status=succeeded" >> "$GITHUB_OUTPUT"
-          echo "summary=Self-heal diagnostics ran (${WF_COUNT} workflow(s) inspected)" >> "$GITHUB_OUTPUT"
+          echo "summary=$diagnosis" >> "$GITHUB_OUTPUT"
           echo "workflows=$WF_COUNT" >> "$GITHUB_OUTPUT"
+          echo "missing_secret=$missing_secret" >> "$GITHUB_OUTPUT"
 
       - name: Report back to Ship
         if: always() && inputs.ship_callback_url != ''
@@ -57,6 +88,7 @@ jobs:
           GH_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           GH_RUN_ID: ${{ github.run_id }}
           WORKFLOW_COUNT: ${{ steps.diag.outputs.workflows || 0 }}
+          MISSING_SECRET: ${{ steps.diag.outputs.missing_secret || '' }}
         run: |
           set -euo pipefail
           CB=failed
@@ -65,4 +97,5 @@ jobs:
             --summary "$GATE_SUMMARY" \
             --metric "gh_workflow_run_id=$GH_RUN_ID" \
             --metric "gh_html_url=$GH_RUN_URL" \
-            --metric "workflows_scanned=$WORKFLOW_COUNT"
+            --metric "workflows_scanned=$WORKFLOW_COUNT" \
+            --metric "missing_secret=$MISSING_SECRET"

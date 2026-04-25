@@ -1,11 +1,10 @@
 /**
- * Dashboard form handler — "Install everything" multi-preset bundle PR.
+ * Dashboard form handler — open the current wizard seed PR.
  *
- * Single entry point for the WOW onboarding promise: click once, get
- * one PR in the customer repo that adds every workflow the preset(s)
- * asked for plus ``.ship/config.yml``. On merge the knowledge-lane
- * auto-dispatch (see ``auto_dispatch_knowledge_pipelines`` on the
- * backend) hydrates the dashboard before the user's second visit.
+ * This route keeps the old form action stable, but intentionally calls
+ * ``wizard_seed`` rather than legacy ``install_bundle``. Bundle drift
+ * means "re-run the current seed composer", not "re-open the old
+ * workflow-only PR".
  */
 
 import { NextResponse } from "next/server";
@@ -13,23 +12,17 @@ import { NextResponse } from "next/server";
 import {
   ApiHttpError,
   ApiUnavailableError,
-  installBundle,
   isApiConfigured,
+  wizardSeed,
 } from "@/lib/api/client";
 import { resolveOrigin } from "@/lib/api/origin";
+import { getSessionToken } from "@/lib/api/session";
 
 export async function POST(request: Request) {
   const origin = resolveOrigin(request);
   const form = await request.formData();
   const wsId = (form.get("ws") ?? "").toString();
   const repoId = (form.get("repo_id") ?? "").toString();
-  // Optional comma/space-separated override. If empty we let the
-  // backend fall back to the repo's persisted preset.
-  const rawPresets = (form.get("presets") ?? "").toString();
-  const presets = rawPresets
-    .split(/[,\s]+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
 
   if (!wsId || !repoId) {
     return NextResponse.redirect(new URL("/", origin), 303);
@@ -39,9 +32,8 @@ export async function POST(request: Request) {
   }
 
   try {
-    const result = await installBundle(wsId, repoId, {
-      presets: presets.length > 0 ? presets : undefined,
-    });
+    const token = (await getSessionToken()) ?? undefined;
+    const result = await wizardSeed(wsId, repoId, {}, token);
     if (result.pr_url) {
       return NextResponse.redirect(result.pr_url, 303);
     }

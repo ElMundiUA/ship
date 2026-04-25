@@ -781,6 +781,32 @@ async def _apply_workflow_run_event(
 
     logger.debug("workflow_run cached action=%s run_id=%s", action, external_id)
 
+    if (
+        not is_ship_workflow
+        and run.get("status") == "completed"
+        and run.get("conclusion") in {"failure", "timed_out", "action_required"}
+    ):
+        from backend.app.services.notifications import (
+            record_workflow_failure_notification,
+        )
+
+        try:
+            await record_workflow_failure_notification(
+                session,
+                workspace_id=repo_row.workspace_id,
+                failed_run_external_id=int(external_id),
+                repo_full_name=repo_row.full_name,
+                failed_workflow_name=name,
+                failed_run_url=html_url or None,
+                conclusion=run.get("conclusion"),
+            )
+        except Exception as exc:  # pragma: no cover - log & move on
+            logger.warning(
+                "workflow_failure notification write failed repo=%s: %s",
+                repo_row.full_name,
+                exc,
+            )
+
     # A5 "Self-heal auto-trigger": when a non-Ship workflow completes
     # with conclusion=failure, dispatch the self-heal lane (if the
     # pipeline is enabled & the YAML is installed) and post a banner
