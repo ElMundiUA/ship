@@ -1663,6 +1663,82 @@ export interface ApiDashboard {
   notifications: ApiWorkspaceNotification[];
 }
 
+export type ApiOpsStatus = "ok" | "degraded" | "critical";
+export type ApiOpsImpact = "high" | "medium" | "low";
+
+export interface ApiOpsSystemStatus {
+  overall_status: ApiOpsStatus;
+  failing_pipelines_count: number;
+  stuck_prs_count: number;
+  broken_automations_count: number;
+  last_deploy: { time: string | null; status: string | null } | null;
+}
+
+export interface ApiOpsBlocker {
+  type: "pipeline" | "pr" | "automation" | "external";
+  title: string;
+  repo: string | null;
+  scope: string | null;
+  age_seconds: number;
+  impact: ApiOpsImpact;
+  href: string | null;
+}
+
+export interface ApiOpsWorkItem {
+  name: string;
+  status: "in_progress" | "review" | "blocked";
+  repo: string | null;
+  scope: string | null;
+  updated_at: string;
+  blocker_ref: string | null;
+  href: string | null;
+}
+
+export interface ApiOpsShippedItem {
+  name: string;
+  type: "feature" | "fix" | "rollback";
+  repo: string | null;
+  href: string | null;
+}
+
+export interface ApiOpsShipped {
+  features_shipped_count: number;
+  fixes_count: number;
+  rollbacks_count: number;
+  items: ApiOpsShippedItem[];
+}
+
+export interface ApiOpsBottleneck {
+  metric: string;
+  current_value: string;
+  delta: string | null;
+  severity: ApiOpsImpact;
+}
+
+export interface ApiOpsAutomationHealth {
+  automation_coverage: number | null;
+  success_rate: number | null;
+  manual_interventions_count: number;
+  failures_count: number;
+}
+
+export interface ApiOpsSuggestedAction {
+  action: string;
+  reason: string;
+  priority: ApiOpsImpact;
+  href: string | null;
+}
+
+export interface ApiOpsDashboard {
+  system_status: ApiOpsSystemStatus;
+  blockers: ApiOpsBlocker[];
+  work_in_progress: ApiOpsWorkItem[];
+  shipped: ApiOpsShipped;
+  bottlenecks: ApiOpsBottleneck[];
+  automation_health: ApiOpsAutomationHealth;
+  suggested_actions: ApiOpsSuggestedAction[];
+}
+
 export function listPipelines(
   workspaceId: string,
   token?: string,
@@ -2487,6 +2563,16 @@ export function getDashboard(
 ): Promise<ApiDashboard> {
   return apiFetch<ApiDashboard>(
     `/v1/workspaces/${encodeURIComponent(workspaceId)}/dashboard`,
+    { token },
+  );
+}
+
+export function getOpsDashboard(
+  workspaceId: string,
+  token?: string,
+): Promise<ApiOpsDashboard> {
+  return apiFetch<ApiOpsDashboard>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/dashboard/ops`,
     { token },
   );
 }
