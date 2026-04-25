@@ -261,6 +261,7 @@ class ArtifactRepoOut(BaseModel):
 INTEGRATION_KINDS: tuple[str, ...] = (
     "linear",
     "jira",
+    "confluence",
     "notion",
     "github",
     "gitlab",
