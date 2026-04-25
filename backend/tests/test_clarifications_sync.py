@@ -215,6 +215,60 @@ async def tracker_workspace(db_session, seed_workspace):
 
 
 @pytest.mark.asyncio
+async def test_resolve_tracker_bindings_uses_native_linear_token(
+    db_session,
+    seed_workspace,
+) -> None:
+    from backend.app.core.config import get_settings
+    from backend.app.db.models.integrations import (
+        NativeIntegrationAuthMode,
+        NativeIntegrationCredential,
+        NativeIntegrationInstallation,
+        NativeIntegrationProvider,
+        NativeIntegrationStatus,
+    )
+    from backend.app.integrations.linear.tracker_adapter import LinearTracker
+    from backend.app.security.encryption import encrypt
+
+    _, _, workspace = seed_workspace
+    install = NativeIntegrationInstallation(
+        workspace_id=workspace.id,
+        provider=NativeIntegrationProvider.LINEAR,
+        auth_mode=NativeIntegrationAuthMode.OAUTH,
+        external_account_id="default",
+        external_account_name="Linear workspace",
+        external_account_url="https://linear.app",
+        capabilities=["tracker"],
+        scopes=["read", "write"],
+        config={"scope": "read,write", "token_type": "Bearer"},
+        status=NativeIntegrationStatus.READY,
+    )
+    db_session.add(install)
+    await db_session.flush()
+    db_session.add(
+        NativeIntegrationCredential(
+            installation_id=install.id,
+            kind="access_token",
+            secret_ciphertext=encrypt("native_linear_token"),
+            secret_fingerprint="test",
+            scopes=["read", "write"],
+        )
+    )
+    await db_session.flush()
+
+    bindings = await clarifications_sync.resolve_tracker_bindings(
+        db_session,
+        settings=get_settings(),
+        workspace_id=workspace.id,
+    )
+
+    assert len(bindings) == 1
+    assert bindings[0].provider == "linear"
+    assert isinstance(bindings[0].gateway, LinearTracker)
+    assert bindings[0].gateway._token == "native_linear_token"
+
+
+@pytest.mark.asyncio
 async def test_sync_ingests_labelled_issue_with_question(
     db_session, tracker_workspace, monkeypatch
 ) -> None:

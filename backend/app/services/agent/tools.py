@@ -156,6 +156,7 @@ from backend.app.db.models.integrations import (
     NativeIntegrationCredential,
     NativeIntegrationInstallation,
     NativeIntegrationProvider,
+    NativeIntegrationStatus,
     WorkspaceRepo,
 )
 from backend.app.db.models.lanes import Lane
@@ -4077,6 +4078,34 @@ class ToolBox:
             if row.kind in {"linear", "notion", "jira"} and row.secret_ciphertext:
                 candidates[row.kind] = row
 
+        native_linear = (
+            await self._session.execute(
+                select(NativeIntegrationInstallation)
+                .where(
+                    NativeIntegrationInstallation.workspace_id == self._workspace_id,
+                    NativeIntegrationInstallation.provider
+                    == NativeIntegrationProvider.LINEAR,
+                    NativeIntegrationInstallation.status
+                    == NativeIntegrationStatus.READY,
+                    NativeIntegrationInstallation.disabled_at.is_(None),
+                )
+                .order_by(NativeIntegrationInstallation.updated_at.desc())
+                .limit(1)
+            )
+        ).scalars().first()
+        native_linear_credential: NativeIntegrationCredential | None = None
+        if native_linear is not None:
+            native_linear_credential = (
+                await self._session.execute(
+                    select(NativeIntegrationCredential).where(
+                        NativeIntegrationCredential.installation_id
+                        == native_linear.id,
+                        NativeIntegrationCredential.kind == "access_token",
+                        NativeIntegrationCredential.revoked_at.is_(None),
+                    )
+                )
+            ).scalar_one_or_none()
+
         native_atlassian = (
             await self._session.execute(
                 select(NativeIntegrationInstallation).where(
@@ -4113,6 +4142,8 @@ class ToolBox:
         ).scalar_one_or_none() is not None
 
         available = set(candidates)
+        if native_linear_credential is not None:
+            available.add("linear")
         if native_atlassian_credential is not None:
             available.add("jira")
         if has_github_install:
@@ -4132,6 +4163,14 @@ class ToolBox:
             )
 
         if chosen in {"linear", "notion", "jira"}:
+            if chosen == "linear" and native_linear_credential is not None:
+                try:
+                    token = decrypt(native_linear_credential.secret_ciphertext)
+                except Exception as exc:  # noqa: BLE001
+                    raise ToolInvocationError(
+                        "Linear token is unreadable; reconnect Linear."
+                    ) from exc
+                return LinearTracker(token)
             if chosen == "jira" and native_atlassian_credential is not None:
                 try:
                     token = decrypt(native_atlassian_credential.secret_ciphertext)
