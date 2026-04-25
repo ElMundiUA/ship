@@ -33,6 +33,7 @@ export function StateEditor({
   onTransitionsChange,
   onAddState,
   onDeleteState,
+  embedded = false,
 }: {
   repoId?: string;
   state?: ApiProcessState;
@@ -45,8 +46,17 @@ export function StateEditor({
   onTransitionsChange: (transitions: ApiProcessTransition[]) => void;
   onAddState: () => void;
   onDeleteState: (stateId: string) => void;
+  embedded?: boolean;
 }) {
   if (!state) {
+    if (embedded) {
+      return (
+        <aside className="border-t border-white/10 p-4 xl:border-l xl:border-t-0">
+          <CardHeader title="State details" subtitle="No state selected." />
+        </aside>
+      );
+    }
+
     return (
       <Card>
         <CardHeader title="State details" subtitle="No state selected." />
@@ -91,33 +101,32 @@ export function StateEditor({
     patchState({ [kind]: expression ? [{ expression }] : [] });
   }
 
-  return (
-    <aside className="min-h-0 xl:sticky xl:top-28 xl:max-h-[calc(100vh-8rem)] xl:overflow-y-auto">
-      <Card className="space-y-4">
-        <div className="flex items-start justify-between gap-3">
-          <CardHeader
-            title="State settings"
-            subtitle="Edit the selected step in product language."
-          />
-          <button
-            type="button"
-            onClick={onAddState}
-            className="rounded-full border border-aqua/25 bg-aqua/10 px-3 py-1 text-xs font-semibold text-aqua hover:bg-aqua/15"
-          >
-            Add state
-          </button>
+  const editorContent = (
+    <div className="space-y-4">
+      <div className="flex items-start justify-between gap-3">
+        <CardHeader
+          title="State settings"
+          subtitle="Edit the selected step in product language."
+        />
+        <button
+          type="button"
+          onClick={onAddState}
+          className="rounded-full border border-aqua/25 bg-aqua/10 px-3 py-1 text-xs font-semibold text-aqua hover:bg-aqua/15"
+        >
+          Add state
+        </button>
+      </div>
+      {config?.parse_error && (
+        <div className="rounded-xl border border-coral/25 bg-coral/[0.05] px-3 py-2 text-xs text-coral/90">
+          Config YAML parse error: {config.parse_error}
         </div>
-        {config?.parse_error && (
-          <div className="rounded-xl border border-coral/25 bg-coral/[0.05] px-3 py-2 text-xs text-coral/90">
-            Config YAML parse error: {config.parse_error}
-          </div>
-        )}
-        {!repoId && (
-          <div className="rounded-xl border border-amber-300/25 bg-amber-300/[0.06] px-3 py-2 text-xs text-amber-100/90">
-            Select a repository before saving process changes.
-          </div>
-        )}
-        <div className="space-y-4">
+      )}
+      {!repoId && (
+        <div className="rounded-xl border border-amber-300/25 bg-amber-300/[0.06] px-3 py-2 text-xs text-amber-100/90">
+          Select a repository before saving process changes.
+        </div>
+      )}
+      <div className="space-y-4">
           <EditorField
             label="Step name"
             value={selectedState.name}
@@ -250,8 +259,21 @@ export function StateEditor({
               </pre>
             </details>
           )}
-        </div>
-      </Card>
+      </div>
+    </div>
+  );
+
+  if (embedded) {
+    return (
+      <aside className="min-h-0 border-t border-white/10 p-4 xl:max-h-[calc(100vh-14rem)] xl:overflow-y-auto xl:border-l xl:border-t-0">
+        {editorContent}
+      </aside>
+    );
+  }
+
+  return (
+    <aside className="min-h-0 xl:sticky xl:top-28 xl:max-h-[calc(100vh-8rem)] xl:overflow-y-auto">
+      <Card>{editorContent}</Card>
     </aside>
   );
 }
