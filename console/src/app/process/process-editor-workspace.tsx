@@ -4,13 +4,14 @@ import { useEffect, useMemo, useState } from "react";
 
 import type {
   ApiProcess,
+  ApiProcessSpecialist,
   ApiProcessState,
   ApiRepoConfig,
 } from "@/lib/api/client";
 import { ProcessCanvasEditor, type Position } from "./process-canvas-editor";
 import { processConfigFromApiProcess } from "./process-config";
 import { ProcessConfigProposalFields } from "./process-config-proposal-fields";
-import { StateEditor } from "./state-editor";
+import { StateEditor, type SpecialistOption } from "./state-editor";
 
 export function ProcessEditorWorkspace({
   workspaceId,
@@ -58,6 +59,10 @@ export function ProcessEditorWorkspace({
     JSON.stringify(processConfig) !== JSON.stringify(initialProcessConfig);
   const selectedState =
     states.find((state) => state.id === activeStateId) ?? states[0];
+  const specialistOptions = useMemo(
+    () => buildSpecialistOptions(process.specialists, states),
+    [process.specialists, states],
+  );
 
   function updateState(nextState: ApiProcessState) {
     setStates((current) =>
@@ -90,11 +95,16 @@ export function ProcessEditorWorkspace({
       0,
     );
     const anchor = selectedState ?? states[states.length - 1];
+    const defaultSpecialist = specialistOptions[0] ?? {
+      id: "owner",
+      name: "Owner",
+      role: "Responsible owner for this state.",
+    };
     const nextState: ApiProcessState = {
       id: nextId,
       name: "New State",
-      specialist_id: "owner",
-      specialist_name: "Owner",
+      specialist_id: defaultSpecialist.id,
+      specialist_name: defaultSpecialist.name,
       instructions: "Describe what should happen in this step.",
       layout: {
         x: (anchor?.layout?.x ?? 72) + 266,
@@ -183,6 +193,7 @@ export function ProcessEditorWorkspace({
         repoId={repoId}
         state={selectedState}
         states={states}
+        specialistOptions={specialistOptions}
         transitions={transitions}
         config={config}
         onStateChange={updateState}
@@ -192,6 +203,37 @@ export function ProcessEditorWorkspace({
       />
     </section>
   );
+}
+
+function buildSpecialistOptions(
+  processSpecialists: ApiProcessSpecialist[],
+  states: ApiProcessState[],
+): SpecialistOption[] {
+  const options = new Map<string, SpecialistOption>();
+  for (const specialist of processSpecialists) {
+    options.set(specialist.id, {
+      id: specialist.id,
+      name: specialist.name,
+      role: specialist.role,
+    });
+  }
+  for (const state of states) {
+    if (!options.has(state.specialist_id)) {
+      options.set(state.specialist_id, {
+        id: state.specialist_id,
+        name: state.specialist_name,
+        role: "Custom role from this process config.",
+      });
+    }
+  }
+  if (options.size === 0) {
+    options.set("owner", {
+      id: "owner",
+      name: "Owner",
+      role: "Responsible owner for this state.",
+    });
+  }
+  return Array.from(options.values());
 }
 
 function uniqueStateId(baseId: string, states: ApiProcessState[]) {
