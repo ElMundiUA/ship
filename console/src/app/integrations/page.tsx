@@ -193,11 +193,14 @@ export default async function IntegrationsPage() {
   }
 
   const { workspace, rows, nativeRows } = data;
-  const connectedIds = new Set(rows.map((r) => r.kind));
-  const available = CATALOG.filter((c) => !connectedIds.has(c.id));
   const connectedNativeProviders = new Set(
     nativeRows.filter((r) => !r.disabled_at).map((r) => r.provider),
   );
+  const visibleRows = rows.filter(
+    (r) => !isShadowedByNativeProvider(r.kind, connectedNativeProviders),
+  );
+  const connectedIds = new Set(visibleRows.map((r) => r.kind));
+  const available = CATALOG.filter((c) => !connectedIds.has(c.id));
   const nativeAvailable = NATIVE_CATALOG.filter(
     (c) => !connectedNativeProviders.has(c.id),
   );
@@ -215,13 +218,13 @@ export default async function IntegrationsPage() {
           title="Connected"
           subtitle="Configured for this workspace · secrets are encrypted at rest"
         />
-        {rows.length === 0 ? (
+        {visibleRows.length === 0 ? (
           <p className="text-sm text-white/55">
             Nothing connected yet. Pick one below to drop in your first secret.
           </p>
         ) : (
           <ul className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {rows.map((i) => {
+            {visibleRows.map((i) => {
               const meta = CATALOG_BY_ID[i.kind];
               return (
                 <li
@@ -331,7 +334,11 @@ export default async function IntegrationsPage() {
                     {i.capabilities.join(" · ") || "no capabilities"}
                   </div>
                   {!i.disabled_at && (
-                    <div className="mt-2">
+                    <div className="mt-2 flex flex-wrap items-center gap-3">
+                      <NativeProbeForm
+                        workspaceId={workspace.id}
+                        installationId={i.id}
+                      />
                       <NativeDisconnectForm
                         workspaceId={workspace.id}
                         installationId={i.id}
@@ -400,6 +407,13 @@ function nativeName(provider: string): string {
   if (provider === "azure_devops") return "Azure DevOps";
   if (provider === "gitlab") return "GitLab";
   return provider;
+}
+
+function isShadowedByNativeProvider(kind: string, nativeProviders: Set<string>): boolean {
+  if (kind === "notion" && nativeProviders.has("notion")) return true;
+  if (kind === "linear" && nativeProviders.has("linear")) return true;
+  if (kind === "confluence" && nativeProviders.has("atlassian")) return true;
+  return false;
 }
 
 function AtlassianNativeForm({ workspaceId }: { workspaceId: string }) {
@@ -627,6 +641,33 @@ function NativeDisconnectForm({
         className="text-[10px] font-semibold text-coral/80 hover:text-coral"
       >
         Disconnect
+      </button>
+    </form>
+  );
+}
+
+function NativeProbeForm({
+  workspaceId,
+  installationId,
+}: {
+  workspaceId: string;
+  installationId: string;
+}) {
+  return (
+    <form action="/api/integrations/native-probe" method="POST" className="contents">
+      <input type="hidden" name="ws" value={workspaceId} suppressHydrationWarning />
+      <input
+        type="hidden"
+        name="installation_id"
+        value={installationId}
+        suppressHydrationWarning
+      />
+      <button
+        type="submit"
+        className="text-[10px] font-semibold text-aqua/80 hover:text-aqua"
+        title="Re-run the native provider health probe"
+      >
+        Probe now
       </button>
     </form>
   );

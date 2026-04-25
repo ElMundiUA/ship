@@ -26,7 +26,7 @@ from backend.app.db.models.integrations import (
 )
 from backend.app.db.models.tenancy import Integration
 from backend.app.db.session import get_session
-from backend.app.security.encryption import encrypt
+from backend.app.security.encryption import decrypt, encrypt
 
 
 router = APIRouter(
@@ -184,6 +184,78 @@ async def _probe_gitlab_pat(
     return False, f"GitLab probe returned HTTP {response.status_code}."
 
 
+async def _probe_atlassian_api_token(
+    *,
+    site_url: str,
+    email: str,
+    api_token: str,
+) -> tuple[bool, str | None]:
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+            response = await client.get(
+                f"{site_url.rstrip('/')}/rest/api/3/myself",
+                auth=(email, api_token),
+                headers={"Accept": "application/json"},
+            )
+    except httpx.HTTPError as exc:
+        return False, f"Atlassian probe failed: {exc.__class__.__name__}"
+
+    if response.status_code < 400:
+        return True, None
+    if response.status_code in {401, 403}:
+        return False, "Atlassian rejected the API token or account email."
+    return False, f"Atlassian probe returned HTTP {response.status_code}."
+
+
+async def _probe_linear_access_token(access_token: str) -> tuple[bool, str | None]:
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+            response = await client.post(
+                "https://api.linear.app/graphql",
+                json={"query": "query ShipProbe { viewer { id } }"},
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                },
+            )
+    except httpx.HTTPError as exc:
+        return False, f"Linear probe failed: {exc.__class__.__name__}"
+
+    if response.status_code in {401, 403}:
+        return False, "Linear rejected the OAuth access token."
+    if response.status_code >= 400:
+        return False, f"Linear probe returned HTTP {response.status_code}."
+    try:
+        body = response.json()
+    except ValueError:
+        return False, "Linear probe returned invalid JSON."
+    if body.get("errors"):
+        return False, "Linear probe returned a GraphQL error."
+    return True, None
+
+
+async def _probe_notion_access_token(access_token: str) -> tuple[bool, str | None]:
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+            response = await client.get(
+                "https://api.notion.com/v1/users/me",
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Accept": "application/json",
+                    "Notion-Version": "2022-06-28",
+                },
+            )
+    except httpx.HTTPError as exc:
+        return False, f"Notion probe failed: {exc.__class__.__name__}"
+
+    if response.status_code < 400:
+        return True, None
+    if response.status_code in {401, 403}:
+        return False, "Notion rejected the OAuth access token."
+    return False, f"Notion probe returned HTTP {response.status_code}."
+
+
 def _normalise_atlassian_site(value: str) -> tuple[str, str]:
     raw = value.strip().strip("/")
     if not raw:
@@ -215,6 +287,7 @@ async def _row_to_out(
         await session.execute(
             select(NativeIntegrationCredential.id)
             .where(NativeIntegrationCredential.installation_id == row.id)
+            .where(NativeIntegrationCredential.revoked_at.is_(None))
             .limit(1)
         )
     ).scalar_one_or_none()
@@ -258,6 +331,145 @@ async def list_native_integrations(
         )
     ).scalars().all()
     return [await _row_to_out(session, row) for row in rows]
+
+
+@router.post(
+    "/{installation_id}/probe",
+    response_model=NativeIntegrationInstallationOut,
+    status_code=status.HTTP_200_OK,
+)
+async def probe_native_integration(
+    workspace_id: uuid.UUID,
+    installation_id: uuid.UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> NativeIntegrationInstallationOut:
+    """Refresh a native provider install's health status."""
+
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+    row = (
+        await session.execute(
+            select(NativeIntegrationInstallation).where(
+                NativeIntegrationInstallation.id == installation_id,
+                NativeIntegrationInstallation.workspace_id == workspace_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="native integration not found")
+    if row.disabled_at is not None:
+        raise HTTPException(status_code=409, detail="native integration is disabled")
+
+    credential_kind = _probe_credential_kind(row.provider)
+    if credential_kind is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"native probe is not supported for provider {row.provider!r}",
+        )
+
+    now = datetime.now(timezone.utc)
+    credential = (
+        await session.execute(
+            select(NativeIntegrationCredential).where(
+                NativeIntegrationCredential.installation_id == row.id,
+                NativeIntegrationCredential.kind == credential_kind,
+                NativeIntegrationCredential.revoked_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if credential is None:
+        probe_ok = False
+        probe_error = "Native integration has no active credential."
+    else:
+        try:
+            secret = decrypt(credential.secret_ciphertext)
+        except Exception:  # noqa: BLE001
+            probe_ok = False
+            probe_error = "Native integration credential is unreadable."
+        else:
+            probe_ok, probe_error = await _probe_native_provider(row, secret)
+
+    row.status = (
+        NativeIntegrationStatus.READY if probe_ok else NativeIntegrationStatus.ERROR
+    )
+    row.last_health_at = now
+    row.last_health_error = probe_error
+    row.updated_at = now
+    session.add(
+        NativeIntegrationAuditEvent(
+            workspace_id=workspace_id,
+            installation_id=row.id,
+            actor_user_id=auth.user.id,
+            provider=row.provider,
+            action="native_integration.probe",
+            target_kind="installation",
+            target_id=str(row.id),
+            payload={
+                "external_account_id": row.external_account_id,
+                "ok": probe_ok,
+                "error": probe_error,
+            },
+        )
+    )
+    await session.flush()
+    await session.refresh(row)
+    return await _row_to_out(session, row)
+
+
+def _probe_credential_kind(provider: str) -> str | None:
+    if provider in {
+        NativeIntegrationProvider.AZURE_DEVOPS,
+        NativeIntegrationProvider.GITLAB,
+    }:
+        return "pat"
+    if provider == NativeIntegrationProvider.ATLASSIAN:
+        return "api_token"
+    if provider in {
+        NativeIntegrationProvider.LINEAR,
+        NativeIntegrationProvider.NOTION,
+    }:
+        return "access_token"
+    return None
+
+
+async def _probe_native_provider(
+    row: NativeIntegrationInstallation,
+    secret: str,
+) -> tuple[bool, str | None]:
+    config = row.config or {}
+    if row.provider == NativeIntegrationProvider.AZURE_DEVOPS:
+        organization = str(config.get("organization") or row.external_account_id)
+        project = config.get("project")
+        return await _probe_azure_devops_pat(
+            organization=organization,
+            pat=secret,
+            project=str(project).strip() if project else None,
+        )
+    if row.provider == NativeIntegrationProvider.GITLAB:
+        base_url = str(config.get("base_url") or row.external_account_url or "").strip()
+        group = config.get("group")
+        if not base_url:
+            return False, "GitLab integration is missing base_url config."
+        return await _probe_gitlab_pat(
+            base_url=base_url.rstrip("/"),
+            pat=secret,
+            group=str(group).strip() if group else None,
+        )
+    if row.provider == NativeIntegrationProvider.ATLASSIAN:
+        site_url = str(config.get("site_url") or row.external_account_url or "").strip()
+        email = str(config.get("email") or "").strip()
+        if not site_url or not email:
+            return False, "Atlassian integration is missing site_url/email config."
+        return await _probe_atlassian_api_token(
+            site_url=site_url,
+            email=email,
+            api_token=secret,
+        )
+    if row.provider == NativeIntegrationProvider.LINEAR:
+        return await _probe_linear_access_token(secret)
+    if row.provider == NativeIntegrationProvider.NOTION:
+        return await _probe_notion_access_token(secret)
+    return False, f"Native probe is not supported for provider {row.provider!r}."
 
 
 @router.delete(

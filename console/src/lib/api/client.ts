@@ -2924,6 +2924,17 @@ export function deleteNativeIntegration(
   );
 }
 
+export function probeNativeIntegration(
+  workspaceId: string,
+  installationId: string,
+  token?: string,
+): Promise<ApiNativeIntegration> {
+  return apiFetch<ApiNativeIntegration>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/native-integrations/${encodeURIComponent(installationId)}/probe`,
+    { method: "POST", token },
+  );
+}
+
 export function connectAtlassianApiToken(
   workspaceId: string,
   input: {
