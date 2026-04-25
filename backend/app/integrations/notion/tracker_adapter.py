@@ -14,6 +14,7 @@ access token (the route layer fetches + decrypts the
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -23,6 +24,12 @@ from backend.app.integrations.gateway.tracker import CreatedTicket, TicketRef
 
 NOTION_API_ROOT = "https://api.notion.com/v1"
 NOTION_VERSION = "2025-09-03"
+
+
+@dataclass(frozen=True, slots=True)
+class _ResolvedDataSource:
+    id: str
+    title_property: str
 
 
 class NotionTracker:
@@ -203,13 +210,15 @@ class NotionTracker:
         markdown directly; a fuller markdown → Notion blocks
         translation is a Phase-3 polish item.
         """
-        database_id = await self._resolve_database_id(project_hint)
-        title_prop_name = await self._resolve_title_property(database_id)
+        data_source = await self._resolve_data_source(project_hint)
 
         create_payload: dict[str, Any] = {
-            "parent": {"database_id": database_id},
+            "parent": {
+                "type": "data_source_id",
+                "data_source_id": data_source.id,
+            },
             "properties": {
-                title_prop_name: {
+                data_source.title_property: {
                     "title": [{"type": "text", "text": {"content": title}}],
                 }
             },
@@ -232,7 +241,7 @@ class NotionTracker:
         if not page_id:
             raise ValueError("Notion refused page creation (no id returned).")
         return CreatedTicket(
-            ref=TicketRef(kind="notion", workspace_hint=database_id, id=page_id),
+            ref=TicketRef(kind="notion", workspace_hint=data_source.id, id=page_id),
             url=str(created.get("url") or ""),
             display_id=page_id,
         )
@@ -240,40 +249,80 @@ class NotionTracker:
     async def _resolve_database_id(self, hint: str | None) -> str:
         if hint:
             return hint
-        # Search for visible databases; the user shares specific
-        # databases with the integration at install time.
+        # Search for visible data sources; the user shares specific
+        # databases/data sources with the integration at install time.
         body = await self._request(
             "POST",
             "/search",
             json={
-                "filter": {"property": "object", "value": "database"},
+                "filter": {"property": "object", "value": "data_source"},
                 "page_size": 2,
             },
         )
         results = body.get("results", []) or []
         if not results:
             raise ValueError(
-                "No Notion databases are shared with the Ship integration. "
-                "Share a database under the tracker connection first."
+                "No Notion data sources are shared with the Ship integration. "
+                "Share a database/data source under the tracker connection first."
             )
         if len(results) > 1:
             raise ValueError(
-                "Multiple Notion databases are visible; pass "
-                "project_hint=<database-id> to pick one."
+                "Multiple Notion data sources are visible; pass "
+                "project_hint=<data-source-id> to pick one."
             )
         return str(results[0]["id"])
 
-    async def _resolve_title_property(self, database_id: str) -> str:
-        """Notion databases always have exactly one ``title`` property."""
-        db = await self._request("GET", f"/databases/{database_id}")
-        props = db.get("properties") or {}
-        for name, prop in props.items():
-            if prop.get("type") == "title":
-                return str(name)
-        # Should never happen for a well-formed database.
-        raise ValueError(
-            f"Notion database {database_id} has no title property."
+    async def _resolve_data_source(self, hint: str | None) -> _ResolvedDataSource:
+        """Resolve either a Notion data source id or database container id.
+
+        Notion API version ``2025-09-03`` split databases into a container
+        (``/databases/{id}``) plus one or more data sources that own the
+        actual schema. User-facing URLs still often expose the database id, so
+        accept both shapes here.
+        """
+        target_id = await self._resolve_database_id(hint)
+        try:
+            return await self._data_source_from_id(target_id)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 404:
+                raise
+
+        db = await self._request("GET", f"/databases/{target_id}")
+        data_sources = db.get("data_sources") or []
+        if not data_sources:
+            raise ValueError(
+                f"Notion database {target_id} has no data sources shared with Ship."
+            )
+        if len(data_sources) > 1:
+            raise ValueError(
+                "Multiple Notion data sources are visible for this database; pass "
+                "project_hint=<data-source-id> to pick one."
+            )
+        data_source_id = str(data_sources[0].get("id") or "")
+        if not data_source_id:
+            raise ValueError(
+                f"Notion database {target_id} returned a data source without an id."
+            )
+        return await self._data_source_from_id(data_source_id)
+
+    async def _data_source_from_id(self, data_source_id: str) -> _ResolvedDataSource:
+        data_source = await self._request("GET", f"/data_sources/{data_source_id}")
+        title_prop_name = _resolve_title_property_name(
+            data_source.get("properties") or {}, data_source_id
         )
+        return _ResolvedDataSource(id=data_source_id, title_property=title_prop_name)
+
+
+def _resolve_title_property_name(props: dict[str, Any], target_id: str) -> str:
+    """Notion data sources always have exactly one ``title`` property."""
+    for name, prop in props.items():
+        if prop.get("type") == "title":
+            return str(name)
+    # Should never happen for a well-formed data source, but the error should
+    # point at schema sharing rather than tell users to rename columns.
+    raise ValueError(
+        f"Notion data source {target_id} has no title property visible to Ship."
+    )
 
 
 def _extract_title(page: dict[str, Any]) -> str | None:
