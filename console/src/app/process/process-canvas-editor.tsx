@@ -43,6 +43,7 @@ export function ProcessCanvasEditor({
   const arrowMarkerId = `process-arrow-${useId().replaceAll(":", "")}`;
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
+  const positionsRef = useRef<Record<string, Position>>({});
   const suppressClickRef = useRef(false);
   const initialPositions = useMemo(
     () =>
@@ -59,6 +60,7 @@ export function ProcessCanvasEditor({
   );
 
   useEffect(() => {
+    positionsRef.current = initialPositions;
     setPositions(initialPositions);
   }, [initialPositions]);
 
@@ -74,10 +76,10 @@ export function ProcessCanvasEditor({
     drag.moved = true;
     setPositions((current) => {
       const updated = { ...current, [drag.id]: next };
-      onPositionsChange(updated);
+      positionsRef.current = updated;
       return updated;
     });
-  }, [onPositionsChange]);
+  }, []);
 
   const moveDraggedNode = useCallback((event: PointerEvent) => {
     const drag = dragRef.current;
@@ -105,7 +107,8 @@ export function ProcessCanvasEditor({
     removeDragListeners();
     window.removeEventListener("pointerup", stopDragging);
     window.removeEventListener("pointercancel", stopDragging);
-  }, [removeDragListeners]);
+    if (drag.moved) onPositionsChange(positionsRef.current);
+  }, [onPositionsChange, removeDragListeners]);
 
   const stopDraggingWithMouse = useCallback(() => {
     const drag = dragRef.current;
@@ -114,7 +117,8 @@ export function ProcessCanvasEditor({
     dragRef.current = null;
     removeDragListeners();
     window.removeEventListener("mouseup", stopDraggingWithMouse);
-  }, [removeDragListeners]);
+    if (drag.moved) onPositionsChange(positionsRef.current);
+  }, [onPositionsChange, removeDragListeners]);
 
   useEffect(() => {
     return () => {
