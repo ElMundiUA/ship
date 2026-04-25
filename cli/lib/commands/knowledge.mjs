@@ -1,25 +1,18 @@
 /**
  * `shipctl knowledge` — manage workspace knowledge buckets.
  *
- * Today this is a thin wrapper around the backend's
- * ``POST /v1/workspaces/{ws}/repos/{repo}/knowledge_seed`` endpoint —
- * the same one the onboarding wizard's step 4 hits. It opens a single
- * PR in the tenant repo that drops starter markdown under
- * ``.ship/knowledge/``:
- *
- *   - ``code-style.md`` — languages, naming, imports, tests, review checklist
- *   - ``ui-runbook.md`` — design-system usage, states, perf budgets
- *
- * The CLI exists so CI pipelines (and re-adoption flows where the UI
- * wizard isn't the natural entry point) can wire the buckets without a
- * browser round-trip.
+ * The canonical knowledge surface is now Ship-owned:
+ * ``knowledge_buckets`` contain ``bucket_articles`` and
+ * ``knowledge_sources`` records where each article came from. The
+ * historical ``init`` command remains as a compatibility wrapper for
+ * starter PRs, while ``bootstrap`` is the GitHub Actions entry point
+ * that opens the generated knowledge PR after wizard seed merge.
  *
  * Usage:
  *
- *   shipctl knowledge init [--workspace <id>] [--repo <id>]
- *                          [--only code-style,ui-runbook]
- *                          [--base-url https://api.ship.example.com]
- *                          [--json]
+ *   shipctl knowledge fetch repository-context --workspace <id>
+ *   shipctl knowledge bootstrap --workspace <id> --repo <id|owner/name>
+ *   shipctl knowledge refresh-intel --workspace <id> --repo <id|owner/name>
  *
  * Auth: bearer token from ``SHIP_API_TOKEN`` (the same env var the
  * console docs describe for CLI sessions minted under Settings →
@@ -70,6 +63,18 @@ export async function knowledgeCommand(ctx, rest) {
     await knowledgeInitCommand(ctx, args);
     return;
   }
+  if (sub === "fetch") {
+    await knowledgeFetchCommand(ctx, args);
+    return;
+  }
+  if (sub === "bootstrap") {
+    await knowledgeBootstrapCommand(ctx, args);
+    return;
+  }
+  if (sub === "refresh-intel" || sub === "refresh-context") {
+    await knowledgeRefreshIntelCommand(ctx, args);
+    return;
+  }
   console.error(
     `Unknown 'shipctl knowledge' subcommand: ${sub}\nRun: shipctl knowledge --help`,
   );
@@ -82,6 +87,11 @@ function printKnowledgeHelp() {
 SUBCOMMANDS
   shipctl knowledge init [--workspace <id>] [--repo <id|owner/name>]
                          [--only <csv>] [--json]
+  shipctl knowledge fetch <bucket-slug> [--workspace <id>] [--json]
+  shipctl knowledge bootstrap [--workspace <id>] [--repo <id|owner/name>]
+                             [--json]
+  shipctl knowledge refresh-intel [--workspace <id>] [--repo <id|owner/name>]
+                                 [--json]
 
 INIT FLAGS
   --workspace <id>   Workspace UUID. Defaults to the only workspace
@@ -154,9 +164,116 @@ async function knowledgeInitCommand(ctx, args) {
   }
   const files = Array.isArray(result.files) ? result.files : [];
   console.log(
-    `Seeded knowledge buckets for workspace ${workspaceId} / repo ${repoId}:\n` +
+    `Seeded compatibility knowledge files for workspace ${workspaceId} / repo ${repoId}:\n` +
       `  PR #${result.pr_number}: ${result.pr_url}\n` +
       `  Branch: ${result.branch}\n` +
+      `  Files: ${files.join(", ") || "(none)"}\n` +
+      `\nShip-owned repository context is refreshed separately with:\n` +
+      `  shipctl knowledge refresh-intel --workspace ${workspaceId} --repo ${repoId}`,
+  );
+}
+
+async function knowledgeFetchCommand(ctx, args) {
+  const opts = parseFetchArgs(args);
+  const baseUrl = resolveBaseUrl(opts.baseUrl || ctx.baseUrl);
+  const token = requireToken();
+  let workspaceId = opts.workspace;
+  if (!workspaceId) {
+    workspaceId = await resolveSoleWorkspace(baseUrl, token);
+  }
+
+  const [bucket, articles, sources] = await Promise.all([
+    apiGetJson(
+      baseUrl,
+      `/v1/workspaces/${encodeURIComponent(workspaceId)}/buckets/${encodeURIComponent(opts.slug)}`,
+      token,
+    ),
+    apiGetJson(
+      baseUrl,
+      `/v1/workspaces/${encodeURIComponent(workspaceId)}/buckets/${encodeURIComponent(opts.slug)}/articles`,
+      token,
+    ),
+    apiGetJson(
+      baseUrl,
+      `/v1/workspaces/${encodeURIComponent(workspaceId)}/buckets/${encodeURIComponent(opts.slug)}/sources`,
+      token,
+    ),
+  ]);
+
+  const result = { bucket, articles, sources };
+  if (ctx.json || opts.json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  console.log(`${bucket.name} (${bucket.slug})`);
+  console.log(`  scope: ${bucket.scope_kind}  source: ${bucket.source_kind}`);
+  console.log(`  articles: ${Array.isArray(articles) ? articles.length : 0}`);
+  console.log(`  sources: ${Array.isArray(sources) ? sources.length : 0}`);
+  for (const article of Array.isArray(articles) ? articles : []) {
+    console.log(`\n## ${article.title} (${article.slug})`);
+    console.log(String(article.body_md || "").trim());
+  }
+}
+
+async function knowledgeRefreshIntelCommand(ctx, args) {
+  const opts = parseRefreshArgs(args);
+  const baseUrl = resolveBaseUrl(opts.baseUrl || ctx.baseUrl);
+  const token = requireToken();
+  let workspaceId = opts.workspace;
+  if (!workspaceId) {
+    workspaceId = await resolveSoleWorkspace(baseUrl, token);
+  }
+  const repoId = await resolveRepoId(baseUrl, token, workspaceId, opts.repo);
+  const result = await apiPostJson(
+    baseUrl,
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/intel/harvest`,
+    {},
+    token,
+  );
+  if (ctx.json || opts.json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  const where = result.enqueued
+    ? `queued as job ${result.job_id || "(unknown)"}`
+    : `completed inline, intel_id=${result.intel_id || "(none)"}`;
+  console.log(
+    `Repository context refresh for workspace ${workspaceId} / repo ${repoId}: ${where}\n` +
+      `Fetch it with: shipctl knowledge fetch repository-context --workspace ${workspaceId}`,
+  );
+}
+
+async function knowledgeBootstrapCommand(ctx, args) {
+  const opts = parseBootstrapArgs(args);
+  const baseUrl = resolveBaseUrl(opts.baseUrl || ctx.baseUrl);
+  const token = requireToken();
+  let workspaceId = opts.workspace;
+  if (!workspaceId) {
+    workspaceId = await resolveSoleWorkspace(baseUrl, token);
+  }
+  const repoId = await resolveRepoId(baseUrl, token, workspaceId, opts.repo);
+  const result = await apiPostJson(
+    baseUrl,
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/knowledge/bootstrap`,
+    {},
+    token,
+  );
+  if (ctx.json || opts.json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  const files = Array.isArray(result.files) ? result.files : [];
+  if (result.status === "already_done") {
+    console.log(
+      `Knowledge bootstrap already completed for workspace ${workspaceId} / repo ${repoId}:\n` +
+        `  PR #${result.pr_number || "?"}: ${result.pr_url || "(unknown)"}`,
+    );
+    return;
+  }
+  console.log(
+    `Knowledge bootstrap opened PR #${result.pr_number} for workspace ${workspaceId} / repo ${repoId}:\n` +
+      `  ${result.pr_url}\n` +
       `  Files: ${files.join(", ") || "(none)"}`,
   );
 }
@@ -222,6 +339,83 @@ function parseInitArgs(args) {
       .filter(Boolean);
   }
   return out;
+}
+
+function parseFetchArgs(args) {
+  const out = parseCommonArgs(args, { slug: null });
+  if (!out.slug) {
+    console.error("Usage: shipctl knowledge fetch <bucket-slug> [--workspace <id>] [--json]");
+    process.exit(1);
+  }
+  return out;
+}
+
+function parseRefreshArgs(args) {
+  return parseCommonArgs(args, { repo: null });
+}
+
+function parseBootstrapArgs(args) {
+  return parseCommonArgs(args, { repo: null });
+}
+
+function parseCommonArgs(args, extra) {
+  const out = {
+    workspace: null,
+    baseUrl: null,
+    json: false,
+    ...extra,
+  };
+  const copy = [...args];
+  const consume = (flag, key) => {
+    if (copy[0] === flag && copy[1] !== undefined) {
+      copy.shift();
+      out[key] = String(copy.shift());
+      return true;
+    }
+    const p = `${flag}=`;
+    if (copy[0] && copy[0].startsWith(p)) {
+      out[key] = copy[0].slice(p.length);
+      copy.shift();
+      return true;
+    }
+    return false;
+  };
+  while (copy.length) {
+    if (
+      consume("--workspace", "workspace") ||
+      consume("--repo", "repo") ||
+      consume("--base-url", "baseUrl")
+    ) {
+      continue;
+    }
+    if (copy[0] === "--json") {
+      out.json = true;
+      copy.shift();
+      continue;
+    }
+    if (!String(copy[0]).startsWith("-") && "slug" in out && out.slug === null) {
+      out.slug = String(copy.shift());
+      continue;
+    }
+    if (copy[0] === "--help" || copy[0] === "-h") {
+      printKnowledgeHelp();
+      process.exit(0);
+    }
+    console.error(`Unknown flag: ${copy[0]}`);
+    process.exit(1);
+  }
+  return out;
+}
+
+function requireToken() {
+  const token = process.env.SHIP_API_TOKEN || "";
+  if (!token) {
+    console.error(
+      "SHIP_API_TOKEN is required. Mint one at /settings in the Ship console.",
+    );
+    process.exit(1);
+  }
+  return token;
 }
 
 /**

@@ -180,11 +180,11 @@ export function IntelPollBadge({
           </span>
         </div>
         <p className="mt-1.5 text-[11px] leading-relaxed text-white/60">
-          We&apos;re scanning the repo to write{" "}
+          We&apos;re scanning the repo to update the{" "}
           <code className="rounded bg-white/5 px-1 text-aqua">
-            .ship/knowledge/repo-intel.md
+            repository-context
           </code>
-          . Once it lands, agents stop re-scanning the repo on every
+          {" "}bucket. Once it lands, agents stop re-scanning the repo on every
           run and read the snapshot instead. Usually under 2 minutes.
         </p>
       </div>

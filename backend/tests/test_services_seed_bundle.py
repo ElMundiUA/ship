@@ -68,7 +68,8 @@ def test_compose_default_bundle_emits_config_yml() -> None:
     # Every pattern in the bundle that contributes a lane should
     # surface as a ``lanes.*`` mapping key — sanity-check the
     # round-trip from bundle → catalog → YAML.
-    assert "flow-pr-self-review" in bundle.bundle
+    assert "role-intake" in bundle.bundle
+    assert "task_intake:" in config_body
 
 
 def test_compose_default_bundle_emits_dedup_workflows() -> None:
@@ -96,12 +97,11 @@ def test_compose_default_bundle_emits_dedup_workflows() -> None:
     # depends on the catalog pattern → starter mapping but the
     # default bundle is non-trivial.
     assert workflow_paths
+    assert ".github/workflows/ship-trigger-schedule.yml" in workflow_paths
 
 
-def test_compose_emits_repo_intel_placeholder_when_gated_true() -> None:
-    """Default ``repo_intel_placeholder=True`` drops the
-    ``.ship/knowledge/repo-intel.md`` "Harvesting…" stub so day-zero
-    agent runs see a non-empty knowledge bucket."""
+def test_compose_omits_generated_knowledge_by_default() -> None:
+    """PR 1 installs infra only; generated knowledge lands in PR 2."""
 
     from backend.app.services.seed_bundle import (
         REPO_INTEL_PLACEHOLDER_PATH,
@@ -116,15 +116,26 @@ def test_compose_emits_repo_intel_placeholder_when_gated_true() -> None:
     )
 
     paths = [p for p, _ in bundle.files]
-    assert REPO_INTEL_PLACEHOLDER_PATH in paths
+    assert REPO_INTEL_PLACEHOLDER_PATH not in paths
+    assert not any(p.startswith(".ship/knowledge/") for p in paths)
+    assert ".github/workflows/ship-bootstrap.yml" in paths
+    assert ".github/workflows/ship-trigger-schedule.yml" in paths
 
-    body = next(c for p, c in bundle.files if p == REPO_INTEL_PLACEHOLDER_PATH)
-    # Body advertises that the harvester will overwrite it — without
-    # this hint operators tend to hand-edit the placeholder.
-    assert "Harvesting" in body or "harvesting" in body
-    # Stamps the trigger time so post-hoc debugging of "intel never
-    # arrived" can pin the wizard run that emitted the stub.
-    assert "2026-04-24" in body
+
+def test_compose_emits_repo_intel_placeholder_when_explicit() -> None:
+    from backend.app.services.seed_bundle import (
+        REPO_INTEL_PLACEHOLDER_PATH,
+        compose_seed_files,
+    )
+
+    bundle = compose_seed_files(
+        knowledge_slugs=[],
+        tracker_kind=None,
+        repo_intel_placeholder=True,
+        seeded_at=_seeded_at(),
+    )
+
+    assert REPO_INTEL_PLACEHOLDER_PATH in [p for p, _ in bundle.files]
 
 
 def test_compose_skips_repo_intel_placeholder_when_gated_false() -> None:

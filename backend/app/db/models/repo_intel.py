@@ -68,8 +68,9 @@ class RepoIntelTriggeredBy:
     WIZARD = "wizard"
     MANUAL_REFRESH = "manual_refresh"
     SCHEDULED = "scheduled"
+    BOOTSTRAP = "bootstrap"
 
-    ALL: tuple[str, ...] = (WIZARD, MANUAL_REFRESH, SCHEDULED)
+    ALL: tuple[str, ...] = (WIZARD, MANUAL_REFRESH, SCHEDULED, BOOTSTRAP)
 
 
 class RepoIntel(Base):

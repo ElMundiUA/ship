@@ -552,7 +552,7 @@ async def test_writes_repo_intel_md_to_knowledge_bucket(
         gateway=gw,
         commit_fetcher=_no_commits,
     )
-    assert report.knowledge_articles_written == 1
+    assert report.knowledge_articles_written == 6
 
     bucket = (
         await db_session.execute(
@@ -560,28 +560,35 @@ async def test_writes_repo_intel_md_to_knowledge_bucket(
                 KnowledgeBucket.workspace_id == workspace.id,
                 KnowledgeBucket.repo_id == repo.id,
                 KnowledgeBucket.scope_kind == BucketScope.REPO,
-                KnowledgeBucket.source_kind == BucketSource.REPO_FILES,
-                KnowledgeBucket.slug == "repo-intel",
+                KnowledgeBucket.source_kind == BucketSource.REPO_CONTEXT,
+                KnowledgeBucket.slug == "repository-context",
             )
         )
     ).scalars().first()
     assert bucket is not None
     assert bucket.source_ref is not None
-    assert bucket.source_ref["path"] == ".ship/knowledge/repo-intel.md"
+    assert bucket.source_ref["harvest"] == "repo_context"
 
-    article = (
+    articles = (
         await db_session.execute(
             select(BucketArticle).where(
                 BucketArticle.bucket_id == bucket.id,
                 BucketArticle.status == BucketArticleStatus.PUBLISHED,
             )
         )
-    ).scalars().first()
-    assert article is not None
-    assert article.slug == "main"
-    assert "# Repo intel" in article.body_md
-    assert "next.js" in article.body_md
-    assert article.provenance.get("harvest") == "repo_intel"
+    ).scalars().all()
+    assert {article.slug for article in articles} == {
+        "architecture",
+        "dev-environment",
+        "overview",
+        "rules",
+        "visual-style",
+        "workflow",
+    }
+    overview = next(article for article in articles if article.slug == "overview")
+    assert "# Repository overview" in overview.body_md
+    assert "next.js" in overview.body_md
+    assert overview.provenance.get("source") == "repo_context"
 
 
 # ---------------------------------------------------------------------------

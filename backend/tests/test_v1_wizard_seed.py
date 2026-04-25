@@ -434,13 +434,11 @@ async def test_wizard_seed_uses_default_bundle_regardless_of_payload_presets(
 
     The composed file list MUST reflect the canonical
     ``DEFAULT_BUNDLE`` shape (config + at least one workflow + ad-hoc
-    runner + repo-intel placeholder + v2 marker) regardless of what
+    runner + bootstrap workflow + v2 marker) regardless of what
     the legacy FE/CLI sends in the body.
     """
     raw, workspace, _install, repo = seeded_wizard_repo
     captured = _patch_github(monkeypatch)
-    _patch_codeowners_missing(monkeypatch)
-    _patch_intel_inline_skip(monkeypatch)
 
     resp = await v1_client.post(
         f"/v1/workspaces/{workspace.id}/repos/{repo.id}/wizard_seed",
@@ -457,60 +455,23 @@ async def test_wizard_seed_uses_default_bundle_regardless_of_payload_presets(
     files = captured["files"]
     assert ".ship/config.yml" in files
     assert ".ship/state/wizard-seed.v2.json" in files
-    assert ".ship/knowledge/repo-intel.md" in files
+    assert ".ship/knowledge/repo-intel.md" not in files
+    assert not any(p.startswith(".ship/knowledge/") for p in files)
     assert any(p.endswith("/adhoc-agent-run.yml") for p in files)
+    assert ".github/workflows/ship-bootstrap.yml" in files
+    assert ".github/workflows/ship-trigger-schedule.yml" in files
+    assert ".github/workflows/scheduled-sdlc-lane.yml" not in files
+    assert ".github/workflows/parallel-audit-lanes.yml" not in files
 
 
 @pytest.mark.asyncio
-async def test_wizard_seed_creates_routing_rules_from_codeowners(
+async def test_wizard_seed_does_not_seed_codeowners_routing_pre_merge(
     monkeypatch, v1_client, db_session, seeded_wizard_repo
 ) -> None:
-    """One resolvable CODEOWNERS owner → one ``code_owner`` routing
-    rule with ``target_type='user'`` and the user's id."""
     from backend.app.db.models.inbox import InboxRoutingRule
-    from backend.app.services import codeowners as codeowners_module
-    from backend.app.services import wizard_seed_routing
-    from backend.app.services.codeowners import (
-        CodeownersResolution,
-        CodeownersRule,
-        ResolvedOwner,
-    )
 
     raw, workspace, _install, repo = seeded_wizard_repo
     _patch_github(monkeypatch)
-    _patch_intel_inline_skip(monkeypatch)
-
-    # Resolve to the workspace owner so the routing rule has a real
-    # user_id to bind to (the one ``seed_workspace`` creates).
-    from backend.app.db.models.tenancy import WorkspaceMember
-
-    owner_member = (
-        await db_session.execute(
-            select(WorkspaceMember).where(
-                WorkspaceMember.workspace_id == workspace.id,
-                WorkspaceMember.role == "owner",
-            )
-        )
-    ).scalar_one()
-    owner_uid = owner_member.user_id
-
-    rule = CodeownersRule(path_pattern="*", owners=("@owner",))
-    owner = ResolvedOwner(
-        raw="@owner", kind="user", user_id=owner_uid, label="Owner"
-    )
-    resolution = CodeownersResolution(
-        rules=(rule,),
-        handles_by_path={"*": (owner,)},
-        unresolved=(),
-        fetched_from="default_branch",
-        sha="cafebabe",
-    )
-
-    async def _resolve(**_kwargs):
-        return resolution
-
-    monkeypatch.setattr(codeowners_module, "resolve_codeowners", _resolve)
-    monkeypatch.setattr(wizard_seed_routing, "resolve_codeowners", _resolve)
 
     resp = await v1_client.post(
         f"/v1/workspaces/{workspace.id}/repos/{repo.id}/wizard_seed",
@@ -519,74 +480,7 @@ async def test_wizard_seed_creates_routing_rules_from_codeowners(
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["codeowners"]["file_found"] is True
-    assert body["codeowners"]["routing_rules_created"] == 1
-    assert body["codeowners"]["unresolved_owners"] == []
-
-    rows = (
-        await db_session.execute(
-            select(InboxRoutingRule).where(
-                InboxRoutingRule.workspace_id == workspace.id,
-                InboxRoutingRule.handle_key == "code_owner",
-            )
-        )
-    ).scalars().all()
-    assert len(rows) == 1
-    row = rows[0]
-    assert row.target_type == "user"
-    assert row.target_value == str(owner_uid)
-    assert row.is_enabled is True
-
-
-@pytest.mark.asyncio
-async def test_wizard_seed_skips_team_only_owners_in_routing(
-    monkeypatch, v1_client, db_session, seeded_wizard_repo
-) -> None:
-    """Team-only / unresolvable CODEOWNERS lines yield zero rules but
-    DO surface in ``unresolved_owners`` so the FE can nudge the admin
-    to invite the missing teammate."""
-    from backend.app.db.models.inbox import InboxRoutingRule
-    from backend.app.services import codeowners as codeowners_module
-    from backend.app.services import wizard_seed_routing
-    from backend.app.services.codeowners import (
-        CodeownersResolution,
-        CodeownersRule,
-        ResolvedOwner,
-    )
-
-    raw, workspace, _install, repo = seeded_wizard_repo
-    _patch_github(monkeypatch)
-    _patch_intel_inline_skip(monkeypatch)
-
-    rule = CodeownersRule(path_pattern="*", owners=("@acme/devs",))
-    team_owner = ResolvedOwner(
-        raw="@acme/devs", kind="team", user_id=None, label="@acme/devs"
-    )
-    resolution = CodeownersResolution(
-        rules=(rule,),
-        handles_by_path={"*": (team_owner,)},
-        unresolved=("@acme/devs",),
-        fetched_from="default_branch",
-        sha="bee",
-    )
-
-    async def _resolve(**_kwargs):
-        return resolution
-
-    monkeypatch.setattr(codeowners_module, "resolve_codeowners", _resolve)
-    monkeypatch.setattr(wizard_seed_routing, "resolve_codeowners", _resolve)
-
-    resp = await v1_client.post(
-        f"/v1/workspaces/{workspace.id}/repos/{repo.id}/wizard_seed",
-        json={"knowledge_slugs": []},
-        headers={"Authorization": f"Bearer {raw}"},
-    )
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["codeowners"]["file_found"] is True
-    assert body["codeowners"]["rules_count"] == 0
-    assert body["codeowners"]["routing_rules_created"] == 0
-    assert "@acme/devs" in body["codeowners"]["unresolved_owners"]
+    assert body["codeowners"] is None
 
     rows = (
         await db_session.execute(
@@ -600,113 +494,18 @@ async def test_wizard_seed_skips_team_only_owners_in_routing(
 
 
 @pytest.mark.asyncio
-async def test_wizard_seed_idempotent_routing(
+async def test_wizard_seed_does_not_dispatch_intel_harvest(
     monkeypatch, v1_client, db_session, seeded_wizard_repo
 ) -> None:
-    """A second wizard call MUST NOT create duplicate routing rules.
-
-    We assert on both the response counter and the row count — the
-    counter alone could mask a duplicate-row bug if the unique
-    constraint silently swallowed the second insert."""
-    from backend.app.db.models.inbox import InboxRoutingRule
-    from backend.app.db.models.tenancy import WorkspaceMember
-    from backend.app.services import codeowners as codeowners_module
-    from backend.app.services import wizard_seed_routing
-    from backend.app.services.codeowners import (
-        CodeownersResolution,
-        CodeownersRule,
-        ResolvedOwner,
-    )
-
-    raw, workspace, _install, repo = seeded_wizard_repo
-    _patch_github(monkeypatch)
-    _patch_intel_inline_skip(monkeypatch)
-
-    owner_member = (
-        await db_session.execute(
-            select(WorkspaceMember).where(
-                WorkspaceMember.workspace_id == workspace.id,
-                WorkspaceMember.role == "owner",
-            )
-        )
-    ).scalar_one()
-    owner_uid = owner_member.user_id
-
-    rule = CodeownersRule(path_pattern="*", owners=("@owner",))
-    owner = ResolvedOwner(
-        raw="@owner", kind="user", user_id=owner_uid, label="Owner"
-    )
-    resolution = CodeownersResolution(
-        rules=(rule,),
-        handles_by_path={"*": (owner,)},
-        unresolved=(),
-        fetched_from="default_branch",
-        sha="dup",
-    )
-
-    async def _resolve(**_kwargs):
-        return resolution
-
-    monkeypatch.setattr(codeowners_module, "resolve_codeowners", _resolve)
-    monkeypatch.setattr(wizard_seed_routing, "resolve_codeowners", _resolve)
-
-    first = await v1_client.post(
-        f"/v1/workspaces/{workspace.id}/repos/{repo.id}/wizard_seed",
-        json={"knowledge_slugs": []},
-        headers={"Authorization": f"Bearer {raw}"},
-    )
-    assert first.status_code == 200, first.text
-    assert first.json()["codeowners"]["routing_rules_created"] == 1
-
-    second = await v1_client.post(
-        f"/v1/workspaces/{workspace.id}/repos/{repo.id}/wizard_seed",
-        json={"knowledge_slugs": []},
-        headers={"Authorization": f"Bearer {raw}"},
-    )
-    assert second.status_code == 200, second.text
-    # Idempotent — found the file again, but didn't write a new row.
-    assert second.json()["codeowners"]["routing_rules_created"] == 0
-    assert second.json()["codeowners"]["file_found"] is True
-
-    rows = (
-        await db_session.execute(
-            select(InboxRoutingRule).where(
-                InboxRoutingRule.workspace_id == workspace.id,
-                InboxRoutingRule.handle_key == "code_owner",
-            )
-        )
-    ).scalars().all()
-    assert len(rows) == 1
-
-
-@pytest.mark.asyncio
-async def test_wizard_seed_dispatches_intel_harvest_inline_in_dev(
-    monkeypatch, v1_client, db_session, seeded_wizard_repo
-) -> None:
-    """No redis pool on ``app.state`` → harvest runs inline and the
-    response carries ``enqueued=False`` + a real ``intel_id``."""
-    import uuid as _uuid
-
     from backend.app.services import repo_intel as repo_intel_module
-    from backend.app.services.repo_intel import HarvestReport
 
     raw, workspace, _install, repo = seeded_wizard_repo
     _patch_github(monkeypatch)
-    _patch_codeowners_missing(monkeypatch)
-
-    fake_intel_id = _uuid.uuid4()
-    calls: dict[str, int] = {"count": 0}
+    calls = {"count": 0}
 
     async def _harvest(**_kwargs):
         calls["count"] += 1
-        return HarvestReport(
-            intel_id=fake_intel_id,
-            version=1,
-            duration_ms=12,
-            files_examined=42,
-            languages_detected=2,
-            knowledge_articles_written=1,
-        )
+        raise AssertionError("wizard_seed must not run repo intel harvest")
 
     monkeypatch.setattr(repo_intel_module, "harvest_repo_intel", _harvest)
 
@@ -716,74 +515,18 @@ async def test_wizard_seed_dispatches_intel_harvest_inline_in_dev(
         headers={"Authorization": f"Bearer {raw}"},
     )
     assert resp.status_code == 200, resp.text
-    intel = resp.json()["intel"]
-    assert intel is not None
-    assert intel["enqueued"] is False
-    assert intel["job_id"] is None
-    assert intel["intel_id"] == str(fake_intel_id)
-    assert calls["count"] == 1
+    assert resp.json()["intel"] is None
+    assert calls["count"] == 0
 
 
 @pytest.mark.asyncio
-async def test_wizard_seed_dispatches_intel_harvest_to_redis_in_prod(
+async def test_wizard_seed_does_not_create_synthetic_lanes_immediately(
     monkeypatch, v1_client, db_session, seeded_wizard_repo
 ) -> None:
-    """A redis pool on ``app.state`` → enqueue path: ``enqueued=True``,
-    ``job_id`` populated, ``intel_id`` ``None`` (the worker hasn't
-    written the row yet)."""
-    raw, workspace, _install, repo = seeded_wizard_repo
-    _patch_github(monkeypatch)
-    _patch_codeowners_missing(monkeypatch)
-
-    enqueued: dict[str, object] = {}
-
-    class _FakePool:
-        async def enqueue_job(self, *args, **kwargs):
-            enqueued["args"] = args
-            enqueued["kwargs"] = kwargs
-
-    # The route reads ``request.app.state.redis_pool``; v1_client
-    # binds against the FastAPI app fixture so we set the attribute
-    # there.
-    from backend.app.main import app as _app
-
-    _app.state.redis_pool = _FakePool()
-    try:
-        resp = await v1_client.post(
-            f"/v1/workspaces/{workspace.id}/repos/{repo.id}/wizard_seed",
-            json={"knowledge_slugs": []},
-            headers={"Authorization": f"Bearer {raw}"},
-        )
-        assert resp.status_code == 200, resp.text
-        intel = resp.json()["intel"]
-        assert intel is not None
-        assert intel["enqueued"] is True
-        assert isinstance(intel["job_id"], str) and intel["job_id"]
-        assert intel["intel_id"] is None
-        # Sanity: the queue actually saw the call.
-        assert enqueued["args"][0] == "harvest_repo_intel_job"
-        assert enqueued["args"][1] == str(workspace.id)
-        assert enqueued["args"][2] == str(repo.id)
-    finally:
-        # Tests share the FastAPI app instance; leaking app state
-        # into the next test would make the inline-mode test above
-        # flake. Reset deterministically.
-        if hasattr(_app.state, "redis_pool"):
-            del _app.state.redis_pool
-
-
-@pytest.mark.asyncio
-async def test_wizard_seed_creates_synthetic_lanes_immediately(
-    monkeypatch, v1_client, db_session, seeded_wizard_repo
-) -> None:
-    """P5-07: Lane rows are written BEFORE the seed PR merges so the
-    new Inbox / Coverage / Automations surfaces light up immediately."""
     from backend.app.db.models.lanes import Lane
 
     raw, workspace, _install, repo = seeded_wizard_repo
     _patch_github(monkeypatch)
-    _patch_codeowners_missing(monkeypatch)
-    _patch_intel_inline_skip(monkeypatch)
 
     resp = await v1_client.post(
         f"/v1/workspaces/{workspace.id}/repos/{repo.id}/wizard_seed",
@@ -792,52 +535,180 @@ async def test_wizard_seed_creates_synthetic_lanes_immediately(
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["synthetic_lanes_created"] >= 1
+    assert body["synthetic_lanes_created"] == 0
 
     rows = (
         await db_session.execute(
             select(Lane).where(Lane.repo_id == repo.id)
         )
     ).scalars().all()
-    assert len(rows) == body["synthetic_lanes_created"]
-    # Every fresh row carries the synthetic origin so the post-merge
-    # syncer can promote them in place (P5-07).
-    assert all(r.origin == "wizard_seed_synthetic" for r in rows)
+    assert rows == []
 
 
 @pytest.mark.asyncio
-async def test_wizard_seed_codeowners_404_yields_summary_with_file_found_false(
-    monkeypatch, v1_client, db_session, seeded_wizard_repo
+async def test_knowledge_bootstrap_opens_generated_docs_pr(
+    monkeypatch, v1_client, seeded_wizard_repo
 ) -> None:
-    """Repo without a CODEOWNERS file → routing summary still returned
-    with ``file_found=False`` so the FE can render "no CODEOWNERS yet,
-    add one to enable code_owner routing"."""
-    from backend.app.db.models.inbox import InboxRoutingRule
+    from types import SimpleNamespace
+    import uuid as _uuid
+
+    from backend.app.services import generated_knowledge as generated_module
+    from backend.app.services import repo_intel as repo_intel_module
+    from backend.app.services.repo_intel import HarvestReport
+
+    raw, workspace, _install, repo = seeded_wizard_repo
+    captured = _patch_github(monkeypatch)
+
+    async def _harvest(**kwargs):
+        assert kwargs["triggered_by"] == "bootstrap"
+        return HarvestReport(
+            intel_id=_uuid.uuid4(),
+            version=3,
+            duration_ms=1,
+            files_examined=12,
+            languages_detected=2,
+            knowledge_articles_written=6,
+        )
+
+    async def _current(_session, _repo_id):
+        return SimpleNamespace(version=3)
+
+    def _files(*, repo, intel):
+        assert repo.id == seeded_wizard_repo[3].id
+        assert intel.version == 3
+        return [
+            (".ship/knowledge/code-style.md", "# Code Style\n"),
+            (".ship/knowledge/dev-environment.md", "# Dev Environment\n"),
+        ]
+
+    monkeypatch.setattr(repo_intel_module, "harvest_repo_intel", _harvest)
+    monkeypatch.setattr(repo_intel_module, "get_current_intel", _current)
+    monkeypatch.setattr(generated_module, "render_generated_knowledge_files", _files)
+
+    resp = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/repos/{repo.id}/knowledge/bootstrap",
+        json={},
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "knowledge_pr_opened"
+    assert body["pr_number"] == 7
+    assert body["files"] == [
+        ".ship/knowledge/code-style.md",
+        ".ship/knowledge/dev-environment.md",
+    ]
+    assert captured["title"] == "Ship: generated repository knowledge"
+
+
+@pytest.mark.asyncio
+async def test_knowledge_bootstrap_is_idempotent(
+    monkeypatch, v1_client, seeded_wizard_repo
+) -> None:
+    from types import SimpleNamespace
+    import uuid as _uuid
+
+    from backend.app.services import generated_knowledge as generated_module
+    from backend.app.services import repo_intel as repo_intel_module
+    from backend.app.services.repo_intel import HarvestReport
 
     raw, workspace, _install, repo = seeded_wizard_repo
     _patch_github(monkeypatch)
-    _patch_codeowners_missing(monkeypatch)
-    _patch_intel_inline_skip(monkeypatch)
+    calls = {"harvest": 0}
 
-    resp = await v1_client.post(
-        f"/v1/workspaces/{workspace.id}/repos/{repo.id}/wizard_seed",
-        json={"knowledge_slugs": []},
+    async def _harvest(**_kwargs):
+        calls["harvest"] += 1
+        return HarvestReport(
+            intel_id=_uuid.uuid4(),
+            version=1,
+            duration_ms=1,
+            files_examined=1,
+            languages_detected=1,
+            knowledge_articles_written=6,
+        )
+
+    async def _current(_session, _repo_id):
+        return SimpleNamespace(version=1)
+
+    monkeypatch.setattr(repo_intel_module, "harvest_repo_intel", _harvest)
+    monkeypatch.setattr(repo_intel_module, "get_current_intel", _current)
+    monkeypatch.setattr(
+        generated_module,
+        "render_generated_knowledge_files",
+        lambda **_kwargs: [(".ship/knowledge/code-style.md", "# Code Style\n")],
+    )
+
+    first = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/repos/{repo.id}/knowledge/bootstrap",
+        json={},
         headers={"Authorization": f"Bearer {raw}"},
     )
+    assert first.status_code == 200, first.text
+
+    second = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/repos/{repo.id}/knowledge/bootstrap",
+        json={},
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["status"] == "already_done"
+    assert calls["harvest"] == 1
+
+
+@pytest.mark.asyncio
+async def test_repo_trigger_routes_due_schedule_lanes(
+    v1_client, seeded_wizard_repo
+) -> None:
+    raw, workspace, _install, repo = seeded_wizard_repo
+
+    resp = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/repos/{repo.id}/trigger",
+        json={
+            "event": "schedule",
+            "config": {
+                "lanes": {
+                    "task_intake": {
+                        "kind": "schedule",
+                        "cron": "* * * * *",
+                        "pattern": "role-intake",
+                    },
+                    "manual_only": {
+                        "kind": "event",
+                        "on": "pull_request",
+                        "pattern": "flow-pr-self-review",
+                    },
+                }
+            },
+        },
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["codeowners"] is not None
-    assert body["codeowners"]["file_found"] is False
-    assert body["codeowners"]["routing_rules_created"] == 0
+    assert body["status"] == "due"
+    assert [lane["lane_id"] for lane in body["due_lanes"]] == ["task_intake"]
+    assert body["due_lanes"][0]["pattern"] == "role-intake"
 
-    rows = (
-        await db_session.execute(
-            select(InboxRoutingRule).where(
-                InboxRoutingRule.workspace_id == workspace.id,
-            )
-        )
-    ).scalars().all()
-    assert rows == []
+    second = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/repos/{repo.id}/trigger",
+        json={
+            "event": "schedule",
+            "config": {
+                "lanes": {
+                    "task_intake": {
+                        "kind": "schedule",
+                        "cron": "* * * * *",
+                        "pattern": "role-intake",
+                    }
+                }
+            },
+        },
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["status"] == "noop"
+    assert second.json()["skipped_lanes"][0]["reason"] == "already_dispatched"
 
 
 @pytest.mark.asyncio

@@ -1208,6 +1208,17 @@ export function getBucket(
   );
 }
 
+export function listBucketSources(
+  workspaceId: string,
+  slug: string,
+  token?: string,
+): Promise<import("./types").ApiKnowledgeSource[]> {
+  return apiFetch<import("./types").ApiKnowledgeSource[]>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/buckets/${encodeURIComponent(slug)}/sources`,
+    { token },
+  );
+}
+
 export interface CreateBucketInput {
   slug?: string | null;
   name: string;
@@ -2725,7 +2736,12 @@ export type ApiKnowledgeCanonicalResponse = {
 
 export function searchKnowledge(
   workspaceId: string,
-  payload: { query: string; repoId?: string | null; limit?: number },
+  payload: {
+    query: string;
+    repoId?: string | null;
+    bucketSlug?: string | null;
+    limit?: number;
+  },
   token?: string,
 ): Promise<ApiKnowledgeSearchResponse> {
   return apiFetch<ApiKnowledgeSearchResponse>(
@@ -2735,6 +2751,7 @@ export function searchKnowledge(
       body: {
         query: payload.query,
         repo_id: payload.repoId ?? null,
+        bucket_slug: payload.bucketSlug ?? null,
         limit: payload.limit ?? 20,
       },
       token,

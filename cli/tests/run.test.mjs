@@ -168,7 +168,7 @@ test("shipctl run kind=once writes marker and subsequent run is a no-op", () => 
   assert.equal(second_payload.reason, "already-done");
 });
 
-test("shipctl run kind=event exits 0 with not-yet-wired reason", () => {
+test("shipctl run kind=event executes when trigger matches", () => {
   const dir = mktmp();
   writeConfig(
     dir,
@@ -188,9 +188,9 @@ test("shipctl run kind=event exits 0 with not-yet-wired reason", () => {
   );
   assert.equal(r.status, 0, r.stderr);
   const payload = JSON.parse(r.stdout);
-  assert.equal(payload.status, "noop");
-  assert.match(payload.reason, /run-agent\.yml/);
-  assert.match(payload.reason, /kind: once/);
+  assert.equal(payload.status, "completed");
+  assert.equal(payload.kind, "event");
+  assert.equal(payload.pattern.id, "flow-pr-self-review");
 });
 
 test("shipctl run rejects mismatched trigger for kind=once", () => {

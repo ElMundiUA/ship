@@ -4,6 +4,7 @@ so Alembic ``--autogenerate`` and `Base.metadata.create_all` see them all.
 
 from backend.app.db.models.agent_memory import (
     ArtifactFeedback,
+    KnowledgeSource,
     BucketSummary,
     KbChunk,
     KnowledgeBucket,
@@ -77,6 +78,7 @@ __all__ = [
     "Integration",
     "KbChunk",
     "KnowledgeBucket",
+    "KnowledgeSource",
     "KnowledgePromotionCandidate",
     "Lane",
     "MemberGroup",

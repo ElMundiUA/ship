@@ -60,8 +60,9 @@ from backend.app.api.v1.routes.workspaces import (
     _require_membership,
 )
 from backend.app.db.models.agent_memory import (
+    BucketArticle,
+    BucketArticleStatus,
     BucketScope,
-    BucketSummary,
     KnowledgeBucket,
 )
 from backend.app.db.models.integrations import WorkspaceRepo
@@ -261,14 +262,16 @@ async def resolve_buckets(
 
     rows = list((await session.execute(stmt)).scalars().all())
 
-    # ---- Summary counts in one query ----
+    # ---- Published article counts in one query ----
     summary_counts: dict[uuid.UUID, int] = {}
     if rows:
         bucket_ids = [b.id for b in rows]
         summary_rows = (
             await session.execute(
-                select(BucketSummary.bucket_id).where(
-                    BucketSummary.bucket_id.in_(bucket_ids)
+                select(BucketArticle.bucket_id).where(
+                    BucketArticle.bucket_id.in_(bucket_ids),
+                    BucketArticle.status == BucketArticleStatus.PUBLISHED,
+                    BucketArticle.archived_at.is_(None),
                 )
             )
         ).scalars().all()

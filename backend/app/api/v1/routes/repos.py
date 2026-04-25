@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -1256,8 +1256,8 @@ async def update_repo(
 # Wizard v2 unified seed PR (iter 5)
 #
 # Single-shot replacement for ``install_bundle`` + ``knowledge_seed``:
-# one PR carrying the preset workflows, ``.ship/config.yml``, optional
-# knowledge starters, and the tracker FSM doc. Also mints the long-
+# one PR carrying the preset workflows, ``.ship/config.yml``, bootstrap
+# workflow, and the tracker FSM doc. Also mints the long-
 # lived ``SHIP_RUN_TOKEN`` Actions secret *before* opening the PR so
 # the lanes the PR installs can authenticate the moment the merge
 # fires their first schedule tick. Plaintext never touches the DB —
@@ -1286,8 +1286,8 @@ class WizardSeedIn(BaseModel):
     knowledge_slugs: list[str] | None = Field(
         default=None,
         description=(
-            "Knowledge starter slugs to seed. ``null`` seeds every "
-            "catalog entry; ``[]`` skips knowledge seeding."
+            "Deprecated compatibility field. Wizard seed ignores it; "
+            "knowledge is generated post-merge by the bootstrap workflow."
         ),
     )
     # The tracker kind to render into the FSM doc. Normally derived
@@ -1327,7 +1327,10 @@ class WizardSeedCodeownersSummary(BaseModel):
 
 
 class WizardSeedIntelHandle(BaseModel):
-    """Repo-intel harvest dispatch handle on :class:`WizardSeedOut`.
+    """Legacy repo-intel harvest handle on :class:`WizardSeedOut`.
+
+    Retained for old clients and the manual refresh endpoint. The wizard seed
+    path now returns ``None`` because post-merge bootstrap owns repo analysis.
 
     Two modes:
 
@@ -1367,6 +1370,42 @@ class WizardSeedOut(BaseModel):
     intel: WizardSeedIntelHandle | None = None
     # ── P5-07 addition ───────────────────────────────────────────
     synthetic_lanes_created: int = 0
+
+
+class KnowledgeBootstrapIn(BaseModel):
+    force: bool = False
+
+
+class KnowledgeBootstrapOut(BaseModel):
+    status: str
+    pr_url: str | None = None
+    pr_number: int | None = None
+    branch: str | None = None
+    files: list[str] = Field(default_factory=list)
+    intel_version: int | None = None
+    articles_written: int = 0
+
+
+class RepoTriggerIn(BaseModel):
+    event: str = Field(pattern="^(schedule|manual|pull_request|push)$")
+    config: dict[str, Any] = Field(default_factory=dict)
+    github: dict[str, Any] = Field(default_factory=dict)
+    tick_window_minutes: int = Field(default=20, ge=1, le=180)
+
+
+class RepoTriggerLaneOut(BaseModel):
+    lane_id: str
+    kind: str
+    pattern: str | None = None
+    reason: str
+    window_key: str
+
+
+class RepoTriggerOut(BaseModel):
+    event: str
+    status: str
+    due_lanes: list[RepoTriggerLaneOut] = Field(default_factory=list)
+    skipped_lanes: list[dict[str, Any]] = Field(default_factory=list)
 
 
 async def _dispatch_intel_harvest(
@@ -1495,26 +1534,9 @@ async def wizard_seed(
        legacy ``payload.presets`` field is silently ignored (P5-06
        deprecation — see :class:`WizardSeedIn`).
     4. Open one PR via ``commit_bundle_pr``.
-    5. Synthetic-lane sync (P5-07): write Lane rows for every
-       bundle pattern stamped ``origin='wizard_seed_synthetic'`` so
-       the new Inbox / Coverage / Automations surfaces light up
-       immediately instead of staying empty until the operator
-       merges. Reconciliation back to ``origin='merged'`` happens in
-       :func:`backend.app.services.lanes_sync.sync_lanes_for_repo`
-       on the post-merge webhook.
-    6. CODEOWNERS → routing pre-seed (P5-06): aggregate resolved
-       owners from the seed PR's branch (falling back to the default
-       branch if the file already exists upstream) into one
-       ``code_owner`` :class:`InboxRoutingRule` so the resolver has
-       something to bind to before the PR even merges.
-    7. Repo-intel harvest dispatch (P5-06): enqueue a one-time scan
-       of the repo so the knowledge bucket gets a real
-       ``repo-intel.md`` written by a worker. In dev (no redis) the
-       scan runs inline and the response carries the resulting
-       ``intel_id``; in prod the response carries the arq ``job_id``
-       for the FE to poll.
-    8. Audit-log the wizard seed with every file path (no
-       plaintext) plus counts for steps 5–7.
+    5. Audit-log the wizard seed with every file path (no plaintext).
+       Repo analysis, routing reconciliation, and generated knowledge
+       happen from the merged default branch through post-merge bootstrap.
     """
 
     from backend.app.integrations.github.workflows import (
@@ -1527,10 +1549,6 @@ async def wizard_seed(
         push_ship_methodology_github_secrets,
     )
     from backend.app.services.seed_bundle import compose_seed_files
-    from backend.app.services.synthetic_lane_sync import synthetic_lane_sync
-    from backend.app.services.wizard_seed_routing import (
-        seed_routing_from_codeowners,
-    )
 
     await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
 
@@ -1677,11 +1695,11 @@ async def wizard_seed(
     # "P5-06 full seed" on a wizard-replay.
     bundle = compose_seed_files(
         bundle=DEFAULT_BUNDLE,
-        knowledge_slugs=payload.knowledge_slugs,
+        knowledge_slugs=[],
         tracker_kind=tracker_kind,
         workspace_default_tracker_kind=workspace_default_kind,
         include_fsm=payload.include_fsm,
-        repo_intel_placeholder=True,
+        repo_intel_placeholder=False,
         repo_full_name=repo_row.full_name,
     )
 
@@ -1716,9 +1734,9 @@ async def wizard_seed(
         f"**Bundle**: `{bundle.bundle_hash}` "
         f"({len(bundle.bundle)} Plays)\n"
         f"{tracker_line}\n"
-        f"**Knowledge**: {', '.join('`' + s + '`' for s in bundle.knowledge_slugs) or '_none_'}\n\n"
-        "Merge once. Ship's first scheduled lanes will start running "
-        "against this repo as soon as GitHub picks the new workflows up."
+        "**Knowledge**: generated post-merge by `.github/workflows/ship-bootstrap.yml`\n\n"
+        "Merge once. Ship's bootstrap workflow will analyze the merged repo "
+        "and open a second PR with generated `.ship/knowledge/*.md` docs."
     )
     try:
         result = await commit_bundle_pr(
@@ -1741,68 +1759,10 @@ async def wizard_seed(
             },
         ) from exc
 
-    # ── Synthetic Lane sync (P5-07) ───────────────────────────────
-    # Materialise Lane rows for every bundle pattern stamped
-    # ``origin='wizard_seed_synthetic'`` so the new Inbox / Coverage
-    # / Automations surfaces light up immediately. Reconciliation
-    # back to ``'merged'`` happens in ``sync_lanes_for_repo`` on the
-    # post-merge webhook (see :mod:`backend.app.services.synthetic_lane_sync`).
-    try:
-        synthetic_lanes_created = await synthetic_lane_sync(
-            session=session,
-            workspace_id=workspace_id,
-            repo_id=repo_row.id,
-            bundle=DEFAULT_BUNDLE,
-        )
-    except Exception:  # pragma: no cover — logged + degraded, PR is in
-        logger.exception(
-            "wizard_seed: synthetic_lane_sync failed; PR opened but "
-            "Lane rows were not pre-seeded",
-            extra={
-                "workspace_id": str(workspace_id),
-                "repo_id": str(repo_row.id),
-                "pr_number": result.pr_number,
-            },
-        )
-        synthetic_lanes_created = 0
-
-    # ── CODEOWNERS → routing pre-seed (P5-06) ─────────────────────
-    # Try the seed PR's branch first — when Ship's seed PR creates
-    # the CODEOWNERS file, ``default_branch`` won't have it yet.
-    # ``seed_routing_from_codeowners`` falls back to default branch
-    # internally if the PR-branch fetch returns 404.
+    # Post-merge bootstrap/config sync owns all repo-analysis side effects.
     codeowners_summary: WizardSeedCodeownersSummary | None = None
-    try:
-        routing_summary = await seed_routing_from_codeowners(
-            session=session,
-            workspace_id=workspace_id,
-            repo_id=repo_row.id,
-            pr_branch=result.branch,
-        )
-        codeowners_summary = WizardSeedCodeownersSummary(
-            file_found=routing_summary.file_found,
-            rules_count=routing_summary.rules_count,
-            routing_rules_created=routing_summary.routing_rules_created,
-            unresolved_owners=list(routing_summary.unresolved_owners),
-        )
-    except Exception:  # pragma: no cover — logged + degraded, PR is in
-        logger.exception(
-            "wizard_seed: seed_routing_from_codeowners failed; PR "
-            "opened but no routing rules were pre-seeded",
-            extra={
-                "workspace_id": str(workspace_id),
-                "repo_id": str(repo_row.id),
-                "pr_number": result.pr_number,
-            },
-        )
-
-    # ── Repo-intel harvest dispatch (P5-06) ───────────────────────
-    intel_handle = await _dispatch_intel_harvest(
-        request=request,
-        session=session,
-        workspace_id=workspace_id,
-        repo_id=repo_row.id,
-    )
+    synthetic_lanes_created = 0
+    intel_handle = None
 
     # Stamp the bundle version so the dashboard can tell "up to date"
     # from "upgrade available" next render.
@@ -1863,6 +1823,395 @@ async def wizard_seed(
         codeowners=codeowners_summary,
         intel=intel_handle,
         synthetic_lanes_created=synthetic_lanes_created,
+    )
+
+
+@router.post(
+    "/{repo_id}/knowledge/bootstrap",
+    response_model=KnowledgeBootstrapOut,
+)
+async def bootstrap_repo_knowledge(
+    workspace_id: uuid.UUID,
+    repo_id: uuid.UUID,
+    payload: KnowledgeBootstrapIn | None = None,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> KnowledgeBootstrapOut:
+    """Analyze the merged repo and open PR 2 with generated knowledge docs."""
+
+    from backend.app.db.models.repo_intel import RepoIntelTriggeredBy
+    from backend.app.integrations.github.workflows import (
+        WorkflowDispatchError,
+        commit_bundle_pr,
+    )
+    from backend.app.services.generated_knowledge import (
+        render_generated_knowledge_files,
+    )
+    from backend.app.services.repo_intel import (
+        get_current_intel,
+        harvest_repo_intel,
+    )
+
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+    payload = payload or KnowledgeBootstrapIn()
+
+    repo_row = (
+        await session.execute(
+            select(WorkspaceRepo).where(
+                WorkspaceRepo.id == repo_id,
+                WorkspaceRepo.workspace_id == workspace_id,
+            )
+        )
+    ).scalars().first()
+    if repo_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Repo not found in this workspace.",
+        )
+
+    if not payload.force:
+        previous = (
+            await session.execute(
+                select(AuditLog)
+                .where(
+                    AuditLog.workspace_id == workspace_id,
+                    AuditLog.action == "repo.knowledge_bootstrap",
+                    AuditLog.target_kind == "workspace_repo",
+                    AuditLog.target_id == str(repo_row.id),
+                )
+                .order_by(AuditLog.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if previous is not None:
+            prev_payload = previous.payload or {}
+            if prev_payload.get("status") == "knowledge_pr_opened":
+                return KnowledgeBootstrapOut(
+                    status="already_done",
+                    pr_url=prev_payload.get("pr_url"),
+                    pr_number=prev_payload.get("pr_number"),
+                    branch=prev_payload.get("branch"),
+                    files=list(prev_payload.get("files") or []),
+                    intel_version=prev_payload.get("intel_version"),
+                    articles_written=int(prev_payload.get("articles_written") or 0),
+                )
+
+    install_row = (
+        await session.execute(
+            select(GitHubInstallation).where(
+                GitHubInstallation.id == repo_row.installation_id
+            )
+        )
+    ).scalars().first()
+    if install_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_412_PRECONDITION_FAILED,
+            detail={
+                "code": "github_app_missing",
+                "message": "Ship's GitHub App is not installed for this repo.",
+            },
+        )
+
+    report = await harvest_repo_intel(
+        session=session,
+        workspace_id=workspace_id,
+        repo_id=repo_row.id,
+        triggered_by=RepoIntelTriggeredBy.BOOTSTRAP,
+        settings=settings,
+    )
+    intel = await get_current_intel(session, repo_row.id)
+    if intel is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "code": "repo_intel_missing",
+                "message": "Bootstrap analyzed the repo but did not produce repo intel.",
+            },
+        )
+
+    files = render_generated_knowledge_files(repo=repo_row, intel=intel)
+    body_header = (
+        "This PR adds Ship-generated repository knowledge files.\n\n"
+        f"Generated from repo intel version `{intel.version}` after the wizard "
+        "seed PR was merged. Review these docs, edit anything too generic, "
+        "then merge to index them into Ship knowledge search."
+    )
+    try:
+        pr = await commit_bundle_pr(
+            repo_row,
+            install_row,
+            files=files,
+            title="Ship: generated repository knowledge",
+            branch_label="knowledge-bootstrap",
+            pr_body_header=body_header,
+            settings=settings,
+        )
+    except WorkflowDispatchError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "code": "knowledge_bootstrap_failed",
+                "upstream_status": exc.status_code,
+                "message": exc.message[:512],
+            },
+        ) from exc
+
+    result_payload = {
+        "status": "knowledge_pr_opened",
+        "pr_url": pr.pr_url,
+        "pr_number": pr.pr_number,
+        "branch": pr.branch,
+        "files": [path for path, _ in files],
+        "intel_version": intel.version,
+        "articles_written": report.knowledge_articles_written,
+    }
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=auth.user.id,
+            actor_token_id=auth.token.id if auth.token else None,
+            action="repo.knowledge_bootstrap",
+            target_kind="workspace_repo",
+            target_id=str(repo_row.id),
+            payload=result_payload,
+        )
+    )
+    await session.flush()
+
+    return KnowledgeBootstrapOut(**result_payload)
+
+
+@router.post("/{repo_id}/trigger", response_model=RepoTriggerOut)
+async def trigger_repo_lanes(
+    workspace_id: uuid.UUID,
+    repo_id: uuid.UUID,
+    payload: RepoTriggerIn,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> RepoTriggerOut:
+    """Ship-side scheduler/router for thin GitHub trigger adapters."""
+
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+    repo_row = (
+        await session.execute(
+            select(WorkspaceRepo).where(
+                WorkspaceRepo.id == repo_id,
+                WorkspaceRepo.workspace_id == workspace_id,
+            )
+        )
+    ).scalars().first()
+    if repo_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Repo not found in this workspace.",
+        )
+
+    now = datetime.now(timezone.utc)
+    lanes = payload.config.get("lanes")
+    if not isinstance(lanes, dict):
+        return RepoTriggerOut(
+            event=payload.event,
+            status="noop",
+            skipped_lanes=[{"reason": "config_has_no_lanes"}],
+        )
+
+    due: list[RepoTriggerLaneOut] = []
+    skipped: list[dict[str, Any]] = []
+    for lane_id, lane in lanes.items():
+        if not isinstance(lane_id, str) or not isinstance(lane, dict):
+            skipped.append({"lane_id": str(lane_id), "reason": "invalid_lane"})
+            continue
+        kind = str(lane.get("kind") or "")
+        if not _lane_accepts_event(lane, payload.event):
+            skipped.append({"lane_id": lane_id, "kind": kind, "reason": "trigger_mismatch"})
+            continue
+        window_key = _trigger_window_key(
+            event=payload.event,
+            lane_id=lane_id,
+            lane=lane,
+            now=now,
+            window_minutes=payload.tick_window_minutes,
+        )
+        if window_key is None:
+            skipped.append({"lane_id": lane_id, "kind": kind, "reason": "not_due"})
+            continue
+        if await _trigger_window_seen(
+            session,
+            workspace_id=workspace_id,
+            repo_id=repo_row.id,
+            lane_id=lane_id,
+            window_key=window_key,
+        ):
+            skipped.append({"lane_id": lane_id, "kind": kind, "reason": "already_dispatched"})
+            continue
+        pattern = _lane_primary_pattern(lane)
+        due.append(
+            RepoTriggerLaneOut(
+                lane_id=lane_id,
+                kind=kind,
+                pattern=pattern,
+                reason="due",
+                window_key=window_key,
+            )
+        )
+
+    for lane in due:
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=auth.user.id,
+                actor_token_id=auth.token.id if auth.token else None,
+                action="repo.trigger_lane",
+                target_kind="workspace_repo",
+                target_id=str(repo_row.id),
+                payload={
+                    "event": payload.event,
+                    "lane_id": lane.lane_id,
+                    "kind": lane.kind,
+                    "pattern": lane.pattern,
+                    "window_key": lane.window_key,
+                    "github": payload.github,
+                    "status": "due",
+                },
+            )
+        )
+    await session.flush()
+
+    return RepoTriggerOut(
+        event=payload.event,
+        status="due" if due else "noop",
+        due_lanes=due,
+        skipped_lanes=skipped,
+    )
+
+
+def _lane_accepts_event(lane: dict[str, Any], event: str) -> bool:
+    kind = str(lane.get("kind") or "")
+    if event == "schedule":
+        return kind == "schedule"
+    if event == "manual":
+        return kind in {"schedule", "event", "once"}
+    if kind != "event":
+        return False
+    configured = str(lane.get("on") or "")
+    return event in {part.strip() for part in configured.split(",") if part.strip()}
+
+
+def _trigger_window_key(
+    *,
+    event: str,
+    lane_id: str,
+    lane: dict[str, Any],
+    now: datetime,
+    window_minutes: int,
+) -> str | None:
+    if event == "manual":
+        return f"manual:{lane_id}:{now.isoformat(timespec='seconds')}"
+    if event != "schedule":
+        return f"{event}:{lane_id}:{now.strftime('%Y%m%dT%H%M')}"
+    cron = lane.get("cron")
+    if not isinstance(cron, str) or not cron.strip():
+        return None
+    matched = _latest_cron_match(cron, now=now, window_minutes=window_minutes)
+    if matched is None:
+        return None
+    return f"schedule:{lane_id}:{matched.strftime('%Y%m%dT%H%M')}"
+
+
+def _latest_cron_match(
+    cron: str, *, now: datetime, window_minutes: int
+) -> datetime | None:
+    fields = cron.split()
+    if len(fields) != 5:
+        return None
+    minute_s, hour_s, dom_s, month_s, dow_s = fields
+    cursor = now.replace(second=0, microsecond=0)
+    for offset in range(0, window_minutes + 1):
+        candidate = cursor - timedelta(minutes=offset)
+        if (
+            _cron_field_matches(minute_s, candidate.minute, 0, 59)
+            and _cron_field_matches(hour_s, candidate.hour, 0, 23)
+            and _cron_field_matches(dom_s, candidate.day, 1, 31)
+            and _cron_field_matches(month_s, candidate.month, 1, 12)
+            and _cron_field_matches(dow_s, (candidate.weekday() + 1) % 7, 0, 6)
+        ):
+            return candidate
+    return None
+
+
+def _cron_field_matches(expr: str, value: int, minimum: int, maximum: int) -> bool:
+    for part in expr.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if part == "*":
+            return True
+        step = 1
+        base = part
+        if "/" in part:
+            base, raw_step = part.split("/", 1)
+            try:
+                step = int(raw_step)
+            except ValueError:
+                continue
+            if step <= 0:
+                continue
+        if base == "*":
+            start, end = minimum, maximum
+        elif "-" in base:
+            raw_start, raw_end = base.split("-", 1)
+            try:
+                start, end = int(raw_start), int(raw_end)
+            except ValueError:
+                continue
+        else:
+            try:
+                start = end = int(base)
+            except ValueError:
+                continue
+        if start <= value <= end and ((value - start) % step == 0):
+            return True
+    return False
+
+
+def _lane_primary_pattern(lane: dict[str, Any]) -> str | None:
+    pattern = lane.get("pattern")
+    if isinstance(pattern, str) and pattern:
+        return pattern
+    patterns = lane.get("patterns")
+    if isinstance(patterns, list):
+        for item in patterns:
+            if isinstance(item, str) and item:
+                return item
+    return None
+
+
+async def _trigger_window_seen(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    repo_id: uuid.UUID,
+    lane_id: str,
+    window_key: str,
+) -> bool:
+    rows = (
+        await session.execute(
+            select(AuditLog)
+            .where(
+                AuditLog.workspace_id == workspace_id,
+                AuditLog.action == "repo.trigger_lane",
+                AuditLog.target_kind == "workspace_repo",
+                AuditLog.target_id == str(repo_id),
+            )
+            .order_by(AuditLog.created_at.desc())
+            .limit(500)
+        )
+    ).scalars().all()
+    return any(
+        (row.payload or {}).get("lane_id") == lane_id
+        and (row.payload or {}).get("window_key") == window_key
+        for row in rows
     )
 
 

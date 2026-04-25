@@ -11,11 +11,8 @@ operator reviews + merges exactly **one** PR to get Ship wired:
 * ``.github/workflows/<starter>.yml`` — one per pattern's required
   starter workflow (deduped if multiple Plays share a starter, e.g.
   the ``pr-and-ci-gate`` starter underpinning every PR-attached lane).
-* ``.ship/knowledge/<slug>.md`` — one per starter knowledge slug
-  (currently :data:`KNOWLEDGE_STARTERS`).
-* ``.ship/knowledge/repo-intel.md`` — placeholder ("Harvesting…",
-  real content lands when the harvest job completes); gated by
-  ``repo_intel_placeholder``.
+* ``.github/workflows/ship-bootstrap.yml`` — post-merge one-shot
+  bootstrap that opens the generated knowledge PR from the merged repo.
 * ``.ship/state/wizard-seed.v2.json`` — idempotency marker that
   records the bundle hash + knowledge versions so the wizard can
   detect drift on re-run without re-walking the catalog.
@@ -27,18 +24,17 @@ operator reviews + merges exactly **one** PR to get Ship wired:
 
 The composer is pure: it takes plain inputs (bundle, knowledge slugs,
 tracker kind) and returns ``(path, content)`` tuples. The route layer
-in :mod:`backend.app.api.v1.routes.repos` wraps this with the side-
-effecting bits (GitHub PR, ``SHIP_RUN_TOKEN`` mint, audit logs,
-synthetic-lane sync, codeowners→routing, intel harvest dispatch) so
-tests can exercise composition without touching the network.
+in :mod:`backend.app.api.v1.routes.repos` wraps this with GitHub PR,
+``SHIP_RUN_TOKEN`` mint, CI secrets, and audit logs. Repo analysis and
+generated knowledge happen after merge through ``ship-bootstrap.yml``.
 
 Invariants the caller relies on:
 
 - Paths come back unique. Two patterns that share a starter workflow
   emit it once.
 - File list is stable-ordered: workflows first, then ``.ship/config.yml``,
-  knowledge, the v2 marker, the FSM. Keeps PR review diffs readable
-  across re-runs.
+  compatibility knowledge if explicitly requested, the v2 marker, the FSM.
+  Keeps PR review diffs readable across re-runs.
 - :func:`compose_seed_files` is idempotent: same ``(bundle,
   knowledge_slugs, tracker_kind)`` → byte-identical output (modulo
   the ISO timestamp embedded in the v2 marker / repo-intel placeholder
@@ -56,6 +52,7 @@ from datetime import datetime, timezone
 from backend.app.services import catalog as catalog_service
 from backend.app.services.catalog import KNOWLEDGE_STARTERS
 from backend.app.services.lane_recipes import DEFAULT_BUNDLE
+from backend.app.services.lane_recipes import default_seed_lanes
 from backend.app.services.tracker_fsm import (
     FSM_INSTALL_PATH,
     render_tracker_fsm,
@@ -71,7 +68,7 @@ from backend.app.services.tracker_fsm import (
 #   version drops the ``@latest`` resilience net, etc.)
 # - ``.ship/config.yml`` schema or canonical bundle composition
 # - ``.ship/tracker-fsm.md`` material
-# - knowledge starter content in ``catalog.knowledge_starter_files``
+# - bootstrap workflow or compatibility knowledge starter content
 # - the ``.ship/state/wizard-seed.v2.json`` marker shape
 #
 # Do NOT bump for additive changes that only affect freshly-seeded
@@ -83,14 +80,14 @@ from backend.app.services.tracker_fsm import (
 # ``3`` → Phase 3 "Requests" — bundle now ships ``adhoc-agent-run.yml``
 # ``4`` → P5-05 collapse: bundle-based composer, repo-intel placeholder,
 #         ``.ship/state/wizard-seed.v2.json`` idempotency marker.
-BUNDLE_VERSION: int = 4
+# ``5`` → post-merge knowledge bootstrap workflow; PR 1 is infra-only.
+BUNDLE_VERSION: int = 5
 
 
-# Default knowledge starters seeded into ``.ship/knowledge/`` when the
-# caller doesn't override. Mirrors :data:`catalog_service.KNOWLEDGE_STARTERS`
-# verbatim — re-exported here so callers don't have to import the
-# catalog module just to take the default.
-DEFAULT_KNOWLEDGE: tuple[str, ...] = tuple(KNOWLEDGE_STARTERS)
+# Default knowledge starters for PR 1. Empty by design: generated knowledge is
+# analyzed post-merge and proposed in a second PR. Historical callers can still
+# pass explicit slugs for compatibility.
+DEFAULT_KNOWLEDGE: tuple[str, ...] = ()
 
 
 # Path constants. Pulled out so tests + downstream consumers
@@ -171,7 +168,7 @@ def compose_seed_files(
     tracker_kind: str | None = None,
     workspace_default_tracker_kind: str | None = None,
     include_fsm: bool = True,
-    repo_intel_placeholder: bool = True,
+    repo_intel_placeholder: bool = False,
     repo_full_name: str | None = None,
     seeded_at: datetime | None = None,
     ship_version: str | None = None,
@@ -186,11 +183,10 @@ def compose_seed_files(
       :data:`~backend.app.services.lane_recipes.DEFAULT_BUNDLE`. The
       route always passes ``DEFAULT_BUNDLE`` post-P5-05 collapse;
       tests inject smaller bundles to exercise edge cases.
-    * ``knowledge_slugs`` — subset of
-      :data:`catalog_service.KNOWLEDGE_STARTERS`. ``None`` means
-      "seed everything" (matches the existing ``knowledge_seed``
-      endpoint default). An empty list means "skip knowledge files
-      entirely".
+    * ``knowledge_slugs`` — compatibility-only subset of
+      :data:`catalog_service.KNOWLEDGE_STARTERS`. The wizard passes an
+      empty list because analyzed knowledge is generated post-merge by
+      ``ship-bootstrap.yml`` and opened as a separate PR.
     * ``tracker_kind`` — ``linear`` / ``github`` / ``jira`` / ``None``.
       Drives the FSM markdown header + the v2 marker; no inline
       secrets.
@@ -198,10 +194,9 @@ def compose_seed_files(
       when the repo overrides the workspace default.
     * ``include_fsm`` — on by default. Set ``False`` to skip the
       FSM file entirely (internal-only; the wizard always seeds it).
-    * ``repo_intel_placeholder`` — on by default. Drops a
-      ``.ship/knowledge/repo-intel.md`` "Harvesting…" stub so the
-      knowledge bucket is non-empty even before the harvest job
-      writes the final summary.
+    * ``repo_intel_placeholder`` — off by default. Historical callers can
+      still opt in, but the wizard no longer drops a misleading intel stub
+      into PR 1.
     * ``repo_full_name`` — ``owner/name``; echoed into
       ``.ship/config.yml`` and the FSM header. Optional.
     * ``seeded_at`` — pinned timestamp for tests / re-runs. Defaults
@@ -261,29 +256,21 @@ def compose_seed_files(
     # contribute a lane (request-only templates, missing trigger)
     # silently fall out of the lanes mapping; they still belong in
     # the bundle accounting (v2 marker) so the wizard can show them.
-    config_yaml = catalog_service.emit_config_yaml_for_bundle(
-        bundle, repo_full_name=repo_full_name
+    config_yaml = catalog_service.emit_config_yaml(
+        preset_id="default",
+        repo_full_name=repo_full_name,
+        lanes=default_seed_lanes(),
     )
     _add(CONFIG_PATH, config_yaml)
 
-    # ── Starter workflows (deduped) ──────────────────────────────
-    # One workflow per pattern's lane starter; multiple patterns
-    # sharing a starter (the canonical case for the scan-* family
-    # all wired through ``parallel-audit-lanes``) collapse to one
-    # YAML on disk.
-    seen_workflow_ids: set[str] = set()
-    for pattern_key in bundle:
-        workflow_id = catalog_service.starter_workflow_for_pattern(pattern_key)
-        if workflow_id is None or workflow_id in seen_workflow_ids:
-            continue
-        entry = starter_workflows.get(workflow_id)
-        if entry is None:
-            continue
-        body = entry.read_yaml()
-        if not body:
-            continue
-        seen_workflow_ids.add(workflow_id)
-        _add(entry.install_target, body)
+    # ── Trigger adapters ─────────────────────────────────────────
+    # v5 makes GitHub Actions a thin event source. The workflow ticks Ship;
+    # Ship reads .ship/config.yml and decides which lanes are due.
+    trigger_entry = starter_workflows.get("ship-trigger-schedule")
+    if trigger_entry is not None:
+        trigger_body = trigger_entry.read_yaml()
+        if trigger_body:
+            _add(trigger_entry.install_target, trigger_body)
 
     # ── Phase-3 ad-hoc agent dispatcher ──────────────────────────
     # Always installed regardless of bundle contents so the
@@ -294,6 +281,12 @@ def compose_seed_files(
         adhoc_body = adhoc_entry.read_yaml()
         if adhoc_body:
             _add(adhoc_entry.install_target, adhoc_body)
+
+    bootstrap_entry = starter_workflows.get("ship-bootstrap")
+    if bootstrap_entry is not None:
+        bootstrap_body = bootstrap_entry.read_yaml()
+        if bootstrap_body:
+            _add(bootstrap_entry.install_target, bootstrap_body)
 
     # ── Knowledge starters ───────────────────────────────────────
     for path, content in knowledge_files:

@@ -193,7 +193,33 @@ export type ApiBucketSource =
   | "repo_files"
   | "external_static"
   | "connector_proxy"
-  | "audio_transcript";
+  | "audio_transcript"
+  | "promoted"
+  | "repo_context";
+
+export type ApiKnowledgeSourceKind =
+  | "repo_context"
+  | "connector"
+  | "git_docs"
+  | "static_upload"
+  | "agent_memory"
+  | "repo_files"
+  | "audio_transcript"
+  | "promoted";
+
+export type ApiKnowledgeSource = {
+  id: string;
+  bucket_id: string;
+  kind: ApiKnowledgeSourceKind | string;
+  config: Record<string, unknown>;
+  status: "ready" | "syncing" | "error" | "disabled" | string;
+  cursor: Record<string, unknown> | null;
+  content_fingerprint: string | null;
+  last_synced_at: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+};
 
 export type ApiResolvedBucket = {
   id: string;

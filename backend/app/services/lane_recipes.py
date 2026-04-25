@@ -52,25 +52,16 @@ from backend.app.db.models.pipelines import Pipeline
 # ---------------------------------------------------------------------------
 
 DEFAULT_BUNDLE: tuple[str, ...] = (
-    # PR-attached, every PR — the first signal a new repo gets.
-    "flow-pr-self-review",
-    # Daily security advisory sweep across npm/pip/cargo/etc.
-    "scan-security-deps",
-    # PR-attached license check on dependency-manifest changes.
-    "scan-license-deps",
-    # Weekday retro over recent workflow failures and lane health.
+    "role-qa-architect",
+    "role-tech-architect",
+    "role-security-officer",
     "flow-daily-retro",
-    # Weekly docs-vs-code drift sweep so docs stay shippable.
-    "scan-docs-freshness",
-    # Weekly tree sweep for hotspots / TODO clusters / duplication.
-    "scan-tech-debt",
-    # Auto-diagnose failed non-Ship workflows when GitHub reports a failure.
+    "flow-learning-capture",
+    "role-intake",
+    "role-ba",
+    "role-developer",
+    "flow-qa-acceptance",
     "op-workflow-self-heal",
-    # On-tag changelog drafter — proves value at the next release.
-    "flow-release-notes",
-    # One-shot seed for ``.ship/knowledge/*`` so day-zero agent runs
-    # have a non-empty knowledge bucket.
-    "onboard-seed-knowledge",
 )
 """Canonical set of Plays installed in every new repo's ``.ship/config.yml``.
 
@@ -84,34 +75,16 @@ selection criteria.
 
 
 DEFAULT_BUNDLE_REASONS: dict[str, str] = {
-    "flow-pr-self-review": (
-        "Reviews every pull request for issues, regressions, and obvious "
-        "bugs before a human takes a look."
-    ),
-    "scan-security-deps": (
-        "Daily sweep of dependency advisories (npm / pip / cargo / etc.) "
-        "so a new CVE doesn't sit unnoticed."
-    ),
-    "scan-license-deps": (
-        "Flags incompatible dependency licenses on every PR that touches "
-        "a manifest, before the bad license lands."
-    ),
-    "scan-docs-freshness": (
-        "Weekly check that documentation still matches the code, so docs "
-        "drift surfaces before the next onboarding."
-    ),
-    "scan-tech-debt": (
-        "Weekly sweep for complexity hotspots, duplication, and TODO "
-        "clusters — files the top findings as tickets."
-    ),
-    "flow-release-notes": (
-        "Drafts a changelog from merged PRs and closed tickets when a "
-        "release tag is pushed."
-    ),
-    "onboard-seed-knowledge": (
-        "One-time setup that seeds the repo's knowledge folder so agents "
-        "have something to read on day one."
-    ),
+    "role-qa-architect": "Reviews test architecture daily and plans QA coverage for active work.",
+    "role-tech-architect": "Reviews architecture daily and plans implementation for ready work.",
+    "role-security-officer": "Runs daily security review and routes actionable findings.",
+    "flow-daily-retro": "Reports the last 24 hours of repository and delivery activity to Ship.",
+    "flow-learning-capture": "Reviews recent runs and suggests workflow or prompt improvements.",
+    "role-intake": "Checks new work for enough information before BA / architecture planning.",
+    "role-ba": "Writes requirements for tasks that are ready for BA.",
+    "role-developer": "Implements tasks that passed requirements and architecture planning.",
+    "flow-qa-acceptance": "Covers manual QA and acceptance gaps before automation picks them up.",
+    "op-workflow-self-heal": "Checks hourly whether Ship workflows are healthy and reports fixes.",
 }
 """Short, human-readable reason for including each :data:`DEFAULT_BUNDLE` entry.
 
@@ -121,6 +94,88 @@ is ≤120 characters and avoids internal vocabulary (``profile``,
 ``lane``, ``pattern_id``) so it reads as plain English to a first-time
 operator.
 """
+
+
+DEFAULT_SEED_LANES: Final[dict[str, dict[str, object]]] = {
+    # Daily repo-level review lanes.
+    "daily_architecture_tests_review": {
+        "kind": "schedule",
+        "cron": "0 8 * * *",
+        "pattern": "role-qa-architect",
+    },
+    "daily_technical_architecture_review": {
+        "kind": "schedule",
+        "cron": "0 8 * * *",
+        "pattern": "role-tech-architect",
+    },
+    "daily_security_review": {
+        "kind": "schedule",
+        "cron": "0 8 * * *",
+        "pattern": "role-security-officer",
+    },
+    "daily_digest": {
+        "kind": "schedule",
+        "cron": "0 9 * * *",
+        "pattern": "flow-daily-retro",
+    },
+    "daily_retro": {
+        "kind": "schedule",
+        "cron": "0 17 * * *",
+        "pattern": "flow-learning-capture",
+    },
+    # SDLC cadence lanes. GitHub only ticks the clock; Ship decides which
+    # ones have eligible work in the current window.
+    "task_intake": {
+        "kind": "schedule",
+        "cron": "*/15 * * * *",
+        "pattern": "role-intake",
+    },
+    "ba_requirements": {
+        "kind": "schedule",
+        "cron": "*/15 * * * *",
+        "pattern": "role-ba",
+    },
+    "tech_arch_plan": {
+        "kind": "schedule",
+        "cron": "*/15 * * * *",
+        "pattern": "role-tech-architect",
+    },
+    "qa_arch_plan": {
+        "kind": "schedule",
+        "cron": "*/15 * * * *",
+        "pattern": "role-qa-architect",
+    },
+    "dev_implementation": {
+        "kind": "schedule",
+        "cron": "*/15 * * * *",
+        "pattern": "role-developer",
+    },
+    "qa_manual": {
+        "kind": "schedule",
+        "cron": "*/15 * * * *",
+        "pattern": "flow-qa-acceptance",
+    },
+    "qa_automation": {
+        "kind": "schedule",
+        "cron": "*/15 * * * *",
+        "pattern": "role-qa-architect",
+    },
+    # Hourly operational health lane.
+    "self_heal": {
+        "kind": "schedule",
+        "cron": "0 * * * *",
+        "pattern": "op-workflow-self-heal",
+    },
+}
+"""Default v5 lanes written into ``.ship/config.yml`` for new repos.
+
+The GitHub workflow seeded alongside this config is only a timer. These lane
+entries are the source of truth for what Ship should run or skip on each tick.
+"""
+
+
+def default_seed_lanes() -> dict[str, dict[str, object]]:
+    return {lane_id: dict(body) for lane_id, body in DEFAULT_SEED_LANES.items()}
 
 
 # ---------------------------------------------------------------------------

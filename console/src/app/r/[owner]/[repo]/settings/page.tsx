@@ -315,7 +315,7 @@ function BundleCard({
     <Card>
       <CardHeader
         title="Bundle & install PR"
-        subtitle="Current wizard seed: workflows, .ship/config.yml, FSM, knowledge and routing."
+        subtitle="Current wizard seed: workflows, .ship/config.yml, FSM, and post-merge bootstrap."
       />
       <div className="mb-4 flex flex-wrap items-center gap-3 text-xs">
         <Badge tone={tone} dot>
@@ -342,7 +342,7 @@ function BundleCard({
           Open wizard seed PR
         </button>
         <p className="text-[11px] text-white/45">
-          Opens one PR with the current v{current} seed bundle.
+          Opens the infra PR; generated knowledge follows in a second PR after merge.
         </p>
       </form>
     </Card>

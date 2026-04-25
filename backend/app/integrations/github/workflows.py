@@ -500,7 +500,7 @@ async def commit_bundle_pr(
     return_fragment = (
         f"\n\n---\n\n### ← Back to Ship\n\n"
         f"After merging this PR, jump back to the Ship dashboard to "
-        f"watch the knowledge-gathering lanes auto-dispatch:\n\n"
+        f"watch the next bootstrap step:\n\n"
         f"[**Open Ship dashboard →**]({return_url})\n"
         if return_url
         else ""
@@ -518,10 +518,9 @@ async def commit_bundle_pr(
                 f"{pr_body_header}\n\n"
                 "### Files added\n\n"
                 f"{file_list}\n\n"
-                "Once merged, Ship will auto-dispatch the knowledge-gathering "
-                "lanes (tech-debt, code map) so your dashboard lands with data "
-                "instead of empty cards. The manual lanes (PR review, daily "
-                "standup) remain opt-in via **Run now**.\n\n"
+                "Once merged, Ship will continue from the workflows and config "
+                "installed in this PR. Some flows may open a follow-up PR with "
+                "generated repository knowledge before those docs are indexed.\n\n"
                 "Generated automatically by the Ship App. Safe to merge as-is."
                 f"{return_fragment}"
             ),

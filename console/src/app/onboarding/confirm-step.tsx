@@ -7,9 +7,8 @@
  *   1. The canonical Plays bundle (sourced live from
  *      ``GET /v1/catalog/default-bundle`` so this UI stays in lockstep
  *      with ``backend.app.services.lane_recipes.DEFAULT_BUNDLE``).
- *   2. How the bootstrap PR lands (one PR per repo, files included,
- *      Inbox routing rules pre-seeded from CODEOWNERS, repo-intel
- *      harvest dispatched).
+ *   2. How the seed PR lands (infra first, then GitHub Actions opens
+ *      a second generated-knowledge PR after merge).
  *   3. The list of activated repos with their tracker / secret status
  *      and the per-repo "Open seed PR" CTA (rendered by
  *      :class:`RepoCard`).
@@ -172,11 +171,7 @@ export async function ConfirmStep({
               <code className="rounded bg-white/5 px-1 text-aqua">
                 .github/workflows
               </code>{" "}
-              +{" "}
-              <code className="rounded bg-white/5 px-1 text-aqua">
-                .ship/knowledge
-              </code>{" "}
-              files in one commit, ready to merge.
+              files and bootstrap workflow in one commit, ready to merge.
             </span>
           </li>
           <li className="flex gap-2">
@@ -185,14 +180,13 @@ export async function ConfirmStep({
             </span>
             <span>
               <strong className="text-white">
-                Inbox routing rules pre-seeded
+                Post-merge bootstrap workflow
               </strong>{" "}
-              from your{" "}
+              runs from{" "}
               <code className="rounded bg-white/5 px-1 text-aqua">
-                CODEOWNERS
+                .github/workflows/ship-bootstrap.yml
               </code>{" "}
-              file — every owner becomes a routing target so issues land
-              with the right team on day one.
+              after PR 1 lands, using GitHub Actions as the orchestrator.
             </span>
           </li>
           <li className="flex gap-2">
@@ -201,13 +195,13 @@ export async function ConfirmStep({
             </span>
             <span>
               <strong className="text-white">
-                A repository intel harvest runs once
+                A second generated knowledge PR opens
               </strong>{" "}
-              and populates{" "}
+              with reviewable{" "}
               <code className="rounded bg-white/5 px-1 text-aqua">
-                .ship/knowledge/repo-intel.md
+                .ship/knowledge/*.md
               </code>{" "}
-              so day-zero agent runs already know your repo.
+              files based on the merged repository.
             </span>
           </li>
           <li className="flex gap-2">

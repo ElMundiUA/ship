@@ -2,11 +2,10 @@
  * `shipctl run` — single entry-point for executing a Ship lane (RFC-0007).
  *
  * Today's scope (Phase 1):
- *   - `kind=once` lanes run end-to-end: resolve config, fetch pattern,
- *     check idempotency, emit the prompt to stdout, write the marker.
- *   - `kind=event` and `kind=schedule` lanes are recognised but emit a
- *     "not yet wired" exit-0 no-op. Phase 3 wires the reusable workflow
- *     that makes those kinds execute.
+ *   - `kind=once` lanes run with local idempotency markers.
+ *   - `kind=event` and `kind=schedule` lanes execute when Ship's trigger
+ *     router says they are due; router-side audit state prevents duplicate
+ *     runs for the same schedule window.
  *
  * The command intentionally does not fork an agent subprocess. The
  * reusable workflow pipes shipctl's stdout into the customer's agent
@@ -179,25 +178,6 @@ export async function runCommand(ctx, rest) {
     process.exit(EXIT_OK);
   }
 
-  /* Only `kind: once` lanes execute locally inside shipctl run. The
-   * other kinds (lane / event / schedule) are dispatched by the
-   * workspace's GitHub Actions runner via the reusable run-agent.yml
-   * workflow; here we exit 0 with a clear reason so a CI wrapper that
-   * happens to fire shipctl run for those lanes is a safe no-op. */
-  if (lane.kind !== "once") {
-    const summary = {
-      lane: args.lane,
-      kind: lane.kind,
-      trigger: effectiveTrigger.trigger,
-      status: "noop",
-      reason: `shipctl run only executes 'kind: once' lanes locally. Lane '${args.lane}' is 'kind: ${lane.kind}'; it runs via the workspace's GitHub Actions runner (see .github/workflows/run-agent.yml).`,
-    };
-    emitSummary(ctx, args, summary);
-    process.exit(EXIT_OK);
-  }
-
-  /* --- kind=once path ------------------------------------------------ */
-
   // RFC-0008 C3.1/C3.2: resolve the list of patterns that this invocation
   // should execute.
   //
@@ -248,13 +228,15 @@ export async function runCommand(ctx, rest) {
   // once up front; per-pattern decisions are derived from the
   // concatenated pattern SHA set below so a change to any member of
   // the list re-triggers the run (expected behaviour for audit lanes).
-  const idem = lane.idempotency;
+  const idem = lane.kind === "once" ? lane.idempotency : null;
   let marker = null;
-  try {
-    marker = readMarker(cwd, idem.key);
-  } catch (err) {
-    await tryCallback(args, "fail", `idempotency read failed: ${err.message}`);
-    die(EXIT_IDEMPOTENCY, err instanceof Error ? err.message : String(err));
+  if (idem) {
+    try {
+      marker = readMarker(cwd, idem.key);
+    } catch (err) {
+      await tryCallback(args, "fail", `idempotency read failed: ${err.message}`);
+      die(EXIT_IDEMPOTENCY, err instanceof Error ? err.message : String(err));
+    }
   }
 
   // Fetch every pattern body first so we can reject the whole run
@@ -294,7 +276,9 @@ export async function runCommand(ctx, rest) {
   // semantics for a multi-pattern audit lane: if one role's playbook
   // updates, we want the whole lane to re-run.
   const compositeBody = runs.map((r) => `#${r.patternId}\n${r.body}`).join("\n---\n");
-  const decision = decideRun(marker, compositeBody, idem.reset_on || "version-change");
+  const decision = idem
+    ? decideRun(marker, compositeBody, idem.reset_on || "version-change")
+    : { run: true, reason: "trigger-router-due", marker: null };
   if (!decision.run) {
     const summary = {
       lane: args.lane,
@@ -373,17 +357,19 @@ export async function runCommand(ctx, rest) {
     emitPatternBodies(runs, { json: false });
   }
 
-  try {
-    writeMarker(cwd, idem.key, {
-      lane: args.lane,
-      pattern_id: runs[0].patternId,
-      pattern_sha256: sha256(compositeBody),
-      pattern_version: lane.pattern_version || null,
-      patterns: runs.map((r) => ({ id: r.patternId, sha256: r.sha256 })),
-    });
-  } catch (err) {
-    await tryCallback(args, "fail", `idempotency write failed: ${err.message}`);
-    die(EXIT_IDEMPOTENCY, err instanceof Error ? err.message : String(err));
+  if (idem) {
+    try {
+      writeMarker(cwd, idem.key, {
+        lane: args.lane,
+        pattern_id: runs[0].patternId,
+        pattern_sha256: sha256(compositeBody),
+        pattern_version: lane.pattern_version || null,
+        patterns: runs.map((r) => ({ id: r.patternId, sha256: r.sha256 })),
+      });
+    } catch (err) {
+      await tryCallback(args, "fail", `idempotency write failed: ${err.message}`);
+      die(EXIT_IDEMPOTENCY, err instanceof Error ? err.message : String(err));
+    }
   }
 
   const callbackMetrics = runMode === "single"
