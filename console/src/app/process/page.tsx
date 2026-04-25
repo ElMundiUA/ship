@@ -7,8 +7,6 @@ import {
   ApiHttpError,
   ApiUnavailableError,
   type ApiProcess,
-  type ApiProcessAdapterDiagnostic,
-  type ApiProcessHealth,
   type ApiProcessState,
   type ApiProcessTask,
   getProcess,
@@ -31,12 +29,14 @@ export default async function ProcessPage({
   const params = (await searchParams) ?? {};
   const selectedStateId =
     typeof params.state === "string" ? params.state : undefined;
+  const selectedTab = params.tab === "routines" ? "routines" : "process";
 
   if (!isApiConfigured()) {
     return renderProcessPage({
       workspace: { id: "mock", name: "Mock workspace", slug: "mock" },
       process: mockProcess,
       selectedStateId,
+      selectedTab,
       mock: true,
     });
   }
@@ -49,7 +49,7 @@ export default async function ProcessPage({
   if (result === "empty") redirect("/onboarding?step=github");
   if (result === "down") return renderDownState();
 
-  return renderProcessPage({ ...result, selectedStateId });
+  return renderProcessPage({ ...result, selectedStateId, selectedTab });
 }
 
 type LiveProcess = {
@@ -87,11 +87,13 @@ function renderProcessPage({
   workspace,
   process,
   selectedStateId,
+  selectedTab,
   mock = false,
 }: {
   workspace: Pick<ApiWorkspace, "id" | "name" | "slug">;
   process: ApiProcess;
   selectedStateId?: string;
+  selectedTab: "process" | "routines";
   mock?: boolean;
 }) {
   const selectedState =
@@ -106,6 +108,7 @@ function renderProcessPage({
       title="Process"
       kicker={workspace.slug}
       workspace={{ id: workspace.id, name: workspace.name, slug: workspace.slug }}
+      wide
       actions={
         <>
           <Link
@@ -121,43 +124,61 @@ function renderProcessPage({
       }
     >
       {mock && <MockBanner />}
-      <div className="space-y-4">
-        <ProcessHero process={process} />
-        <AdapterDiagnostics diagnostics={process.adapter_diagnostics} />
-        <ProcessCanvas process={process} selectedStateId={selectedState?.id} />
-        <section className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
-          <StateDetails state={selectedState} tasks={selectedTasks} />
+      <div className="space-y-3">
+        <ProcessTabs selected={selectedTab} />
+        {selectedTab === "routines" ? (
           <RoutinesPanel process={process} />
-        </section>
+        ) : (
+          <section className="relative min-h-[680px]">
+            <ProcessCanvas process={process} selectedStateId={selectedState?.id} />
+            <StateDetails state={selectedState} tasks={selectedTasks} />
+          </section>
+        )}
       </div>
     </AppShell>
   );
 }
 
-function ProcessHero({ process }: { process: ApiProcess }) {
+function ProcessTabs({ selected }: { selected: "process" | "routines" }) {
   return (
-    <Card className="relative overflow-hidden">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <Badge tone={healthTone(process.health)} dot>
-            {process.health}
-          </Badge>
-          <h2 className="mt-3 font-display text-3xl font-bold text-white">
-            {process.name}
-          </h2>
-          <p className="mt-2 max-w-3xl text-sm leading-relaxed text-white/60">
-            Read-only FSM projection over the current runtime. States own work,
-            specialists execute it, and execution history stays behind the
-            process abstraction.
-          </p>
-        </div>
-        <div className="grid grid-cols-3 gap-2 text-center">
-          <Metric label="States" value={process.state_count} tone="info" />
-          <Metric label="Tasks" value={process.task_count} tone="neutral" />
-          <Metric label="Blocked" value={process.blocked_count} tone={process.blocked_count > 0 ? "warn" : "ok"} />
-        </div>
+    <div className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/[0.035] p-2">
+      <div className="flex gap-1">
+        <TabLink href="/process" active={selected === "process"}>
+          Process canvas
+        </TabLink>
+        <TabLink href="/process?tab=routines" active={selected === "routines"}>
+          Routines
+        </TabLink>
       </div>
-    </Card>
+      <p className="hidden text-xs text-white/45 md:block">
+        Runtime metrics stay in dashboard/analytics; this page is for editing the
+        flow.
+      </p>
+    </div>
+  );
+}
+
+function TabLink({
+  href,
+  active,
+  children,
+}: {
+  href: string;
+  active: boolean;
+  children: string;
+}) {
+  return (
+    <Link
+      href={href}
+      className={[
+        "rounded-xl px-3 py-1.5 text-xs font-semibold transition",
+        active
+          ? "bg-aqua/15 text-aqua"
+          : "text-white/55 hover:bg-white/[0.05] hover:text-white",
+      ].join(" ")}
+    >
+      {children}
+    </Link>
   );
 }
 
@@ -168,29 +189,81 @@ function ProcessCanvas({
   process: ApiProcess;
   selectedStateId?: string;
 }) {
+  const nodeWidth = 210;
+  const nodeHeight = 108;
+  const gap = 56;
+  const pad = 72;
+  const y = 230;
+  const canvasWidth = Math.max(1120, pad * 2 + process.states.length * nodeWidth + Math.max(0, process.states.length - 1) * gap);
+  const canvasHeight = 620;
+
   return (
-    <Card>
-      <CardHeader
-        title="Development FSM"
-        subtitle="Responsive process map. States wrap so the full flow stays visible."
-      />
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-4">
-        {process.states.map((state, index) => (
-          <StateNode
-            key={state.id}
-            state={state}
-            selected={state.id === selectedStateId}
-            step={index + 1}
-            nextName={process.states[index + 1]?.name}
-          />
-        ))}
+    <Card className="min-h-[680px] overflow-hidden" padded={false}>
+      <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+        <div>
+          <h2 className="font-display text-base font-bold text-white">
+            {process.name}
+          </h2>
+          <p className="mt-0.5 text-xs text-white/45">
+            Canvas view. Select a state to inspect instructions, rules, and
+            tasks in the side panel.
+          </p>
+        </div>
+        <div className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-white/45">
+          {process.states.length} states
+        </div>
       </div>
-      {process.states.length > 4 && (
-        <p className="mt-3 text-xs text-white/45">
-          Large processes wrap into additional rows. Use the state detail panel
-          below to inspect rules and current tasks.
-        </p>
-      )}
+      <div className="h-[620px] overflow-auto bg-[radial-gradient(circle_at_1px_1px,rgba(255,255,255,0.10)_1px,transparent_0)] [background-size:24px_24px]">
+        <div
+          className="relative"
+          style={{ width: canvasWidth, height: canvasHeight }}
+        >
+          <svg
+            aria-hidden
+            className="absolute inset-0 h-full w-full"
+            viewBox={`0 0 ${canvasWidth} ${canvasHeight}`}
+          >
+            {process.states.slice(0, -1).map((state, index) => {
+              const x1 = pad + index * (nodeWidth + gap) + nodeWidth;
+              const x2 = pad + (index + 1) * (nodeWidth + gap);
+              const mid = (x1 + x2) / 2;
+              const cy = y + nodeHeight / 2;
+              return (
+                <path
+                  key={`${state.id}-edge`}
+                  d={`M ${x1} ${cy} C ${mid} ${cy}, ${mid} ${cy}, ${x2} ${cy}`}
+                  fill="none"
+                  stroke="rgba(255,255,255,0.22)"
+                  strokeWidth="2"
+                  markerEnd="url(#arrow)"
+                />
+              );
+            })}
+            <defs>
+              <marker
+                id="arrow"
+                markerHeight="8"
+                markerWidth="8"
+                orient="auto"
+                refX="7"
+                refY="4"
+              >
+                <path d="M 0 0 L 8 4 L 0 8 z" fill="rgba(255,255,255,0.32)" />
+              </marker>
+            </defs>
+          </svg>
+          {process.states.map((state, index) => (
+            <StateNode
+              key={state.id}
+              state={state}
+              selected={state.id === selectedStateId}
+              step={index + 1}
+              x={pad + index * (nodeWidth + gap)}
+              y={y}
+            />
+          ))}
+        </div>
+      </div>
     </Card>
   );
 }
@@ -199,18 +272,21 @@ function StateNode({
   state,
   selected,
   step,
-  nextName,
+  x,
+  y,
 }: {
   state: ApiProcessState;
   selected: boolean;
   step: number;
-  nextName?: string;
+  x: number;
+  y: number;
 }) {
   return (
     <Link
       href={`/process?state=${encodeURIComponent(state.id)}`}
+      style={{ left: x, top: y }}
       className={[
-        "block min-h-[188px] rounded-2xl border p-4 transition",
+        "absolute block h-[108px] w-[210px] rounded-2xl border p-4 transition",
         selected
           ? "border-aqua/60 bg-aqua/[0.08] shadow-glow"
           : "border-white/10 bg-white/[0.035] hover:border-white/25 hover:bg-white/[0.06]",
@@ -228,34 +304,12 @@ function StateNode({
             {state.specialist_name}
           </div>
         </div>
-        <Badge tone={healthTone(state.runtime.health)} dot>
-          {state.runtime.health}
-        </Badge>
-      </div>
-      <div className="mt-4 grid grid-cols-2 gap-2">
-        <Metric label="Tasks" value={state.runtime.task_count} tone="neutral" />
-        <Metric
-          label="Blocked"
-          value={state.runtime.blocked_count}
-          tone={state.runtime.blocked_count > 0 ? "warn" : "ok"}
-        />
-      </div>
-      <div className="mt-3 text-[11px] text-white/45">
-        Last execution:{" "}
-        <span className="text-white/65">
-          {state.runtime.last_execution_time
-            ? formatDate(state.runtime.last_execution_time)
-            : "not tracked"}
+        <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] font-semibold text-white/45">
+          {step}
         </span>
       </div>
-      <div className="mt-3 border-t border-white/10 pt-2 text-[11px] text-white/40">
-        {nextName ? (
-          <>
-            Next: <span className="text-white/65">{nextName}</span>
-          </>
-        ) : (
-          <span>Terminal state</span>
-        )}
+      <div className="mt-3 rounded-xl border border-white/10 bg-black/20 px-3 py-1.5 text-xs text-white/55">
+        Inspect rules
       </div>
     </Link>
   );
@@ -276,12 +330,11 @@ function StateDetails({
     );
   }
   return (
-    <div className="space-y-4">
+    <aside className="mt-3 space-y-3 xl:absolute xl:right-4 xl:top-4 xl:mt-0 xl:w-[360px]">
       <Card>
         <CardHeader
           title={state.name}
           subtitle={`Assigned to ${state.specialist_name}`}
-          action={<Badge tone={healthTone(state.runtime.health)}>{state.runtime.health}</Badge>}
         />
         <div className="space-y-4 text-sm text-white/70">
           <DetailBlock title="Instructions">{state.instructions}</DetailBlock>
@@ -307,8 +360,8 @@ function StateDetails({
       </Card>
       <Card>
         <CardHeader
-          title="Tasks in state"
-          subtitle="Projected from current execution windows and Inbox blockers."
+          title="State tasks"
+          subtitle="Side-panel context for the selected state."
         />
         {tasks.length === 0 ? (
           <p className="text-sm text-white/50">No projected tasks in this state.</p>
@@ -336,7 +389,7 @@ function StateDetails({
           </ul>
         )}
       </Card>
-    </div>
+    </aside>
   );
 }
 
@@ -380,50 +433,6 @@ function RoutinesPanel({ process }: { process: ApiProcess }) {
         </div>
       )}
     </Card>
-  );
-}
-
-function AdapterDiagnostics({
-  diagnostics,
-}: {
-  diagnostics: ApiProcessAdapterDiagnostic[];
-}) {
-  return (
-    <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-      {diagnostics.map((item) => (
-        <Card key={`${item.kind}-${item.name}`} className="p-4">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <div className="text-xs uppercase tracking-wide text-white/40">
-                {item.kind} adapter
-              </div>
-              <div className="mt-1 font-semibold text-white">{item.name}</div>
-            </div>
-            <Badge tone={adapterTone(item.status)}>{item.status}</Badge>
-          </div>
-          <p className="mt-2 text-xs leading-relaxed text-white/55">{item.message}</p>
-        </Card>
-      ))}
-    </div>
-  );
-}
-
-function Metric({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: number;
-  tone: BadgeTone;
-}) {
-  return (
-    <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
-      <div className="text-[10px] uppercase tracking-wide text-white/40">{label}</div>
-      <div className={`mt-1 font-display text-xl font-bold ${metricTone(tone)}`}>
-        {value}
-      </div>
-    </div>
   );
 }
 
@@ -482,31 +491,10 @@ function renderDownState() {
   );
 }
 
-function healthTone(health: ApiProcessHealth): BadgeTone {
-  if (health === "failed") return "err";
-  if (health === "degraded") return "warn";
-  return "ok";
-}
-
 function taskStatusTone(status: ApiProcessTask["status"]): BadgeTone {
   if (status === "blocked") return "err";
   if (status === "done") return "ok";
   return "info";
-}
-
-function adapterTone(status: ApiProcessAdapterDiagnostic["status"]): BadgeTone {
-  if (status === "ok") return "ok";
-  if (status === "degraded") return "warn";
-  if (status === "not_configured") return "neutral";
-  return "info";
-}
-
-function metricTone(tone: BadgeTone): string {
-  if (tone === "ok") return "text-emerald-300";
-  if (tone === "warn") return "text-sun";
-  if (tone === "err") return "text-coral";
-  if (tone === "info") return "text-sky-300";
-  return "text-white";
 }
 
 function formatDate(value: string): string {
@@ -606,7 +594,7 @@ function mockState(
   id: string,
   name: string,
   specialistName: string,
-  health: ApiProcessHealth,
+  health: ApiProcess["health"],
   taskCount: number,
   blockedCount: number,
 ): ApiProcessState {
