@@ -107,6 +107,8 @@ class BucketSource:
       from a dedup cluster of repo-scope articles (RFC-0008 §I / PR-7B).
       Authoritative source is the promotion flow; the operator edits
       the canonical directly inside the bucket from then on.
+    - ``repo_context`` — Ship-owned generated context for an activated
+      repository. The repo is the input, but Ship's DB is canonical.
     """
 
     AGENT_MEMORY = "agent_memory"
@@ -115,6 +117,7 @@ class BucketSource:
     CONNECTOR_PROXY = "connector_proxy"
     AUDIO_TRANSCRIPT = "audio_transcript"
     PROMOTED = "promoted"
+    REPO_CONTEXT = "repo_context"
 
     ALL: tuple[str, ...] = (
         AGENT_MEMORY,
@@ -123,7 +126,48 @@ class BucketSource:
         CONNECTOR_PROXY,
         AUDIO_TRANSCRIPT,
         PROMOTED,
+        REPO_CONTEXT,
     )
+
+
+class KnowledgeSourceKind:
+    """Source adapters that feed a bucket's articles.
+
+    ``KnowledgeBucket.source_kind/source_ref`` remain as compatibility
+    projections, but new sync logic should treat ``knowledge_sources`` as
+    the durable source configuration and lifecycle surface.
+    """
+
+    REPO_CONTEXT = "repo_context"
+    CONNECTOR = "connector"
+    GIT_DOCS = "git_docs"
+    STATIC_UPLOAD = "static_upload"
+    AGENT_MEMORY = "agent_memory"
+    REPO_FILES = "repo_files"
+    AUDIO_TRANSCRIPT = "audio_transcript"
+    PROMOTED = "promoted"
+
+    ALL: tuple[str, ...] = (
+        REPO_CONTEXT,
+        CONNECTOR,
+        GIT_DOCS,
+        STATIC_UPLOAD,
+        AGENT_MEMORY,
+        REPO_FILES,
+        AUDIO_TRANSCRIPT,
+        PROMOTED,
+    )
+
+
+class KnowledgeSourceStatus:
+    """Lifecycle state for a bucket source sync."""
+
+    READY = "ready"
+    SYNCING = "syncing"
+    ERROR = "error"
+    DISABLED = "disabled"
+
+    ALL: tuple[str, ...] = (READY, SYNCING, ERROR, DISABLED)
 
 
 class KnowledgeBucket(Base):
@@ -221,6 +265,64 @@ class KnowledgeBucket(Base):
         DateTime(timezone=True), nullable=True
     )
 
+    created_at: Mapped[datetime] = _ts_created()
+    updated_at: Mapped[datetime] = _ts_updated()
+
+
+class KnowledgeSource(Base):
+    """Durable source configuration for a knowledge bucket.
+
+    A bucket owns articles; sources explain where those articles came
+    from and carry sync state. This lets Ship own generated repo context
+    and uploaded content without forcing every knowledge artifact into the
+    tenant repository.
+    """
+
+    __tablename__ = "knowledge_sources"
+    __table_args__ = (
+        Index("ix_knowledge_sources_workspace_id", "workspace_id"),
+        Index("ix_knowledge_sources_bucket_id", "bucket_id"),
+        Index("ix_knowledge_sources_kind", "workspace_id", "kind"),
+        CheckConstraint(
+            (
+                "kind IN ('repo_context', 'connector', 'git_docs', "
+                "'static_upload', 'agent_memory', 'repo_files', "
+                "'audio_transcript', 'promoted')"
+            ),
+            name="ck_knowledge_sources_kind",
+        ),
+        CheckConstraint(
+            "status IN ('ready', 'syncing', 'error', 'disabled')",
+            name="ck_knowledge_sources_status",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    bucket_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("knowledge_buckets.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    config: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'ready'")
+    )
+    cursor: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    content_fingerprint: Mapped[str | None] = mapped_column(
+        String(128), nullable=True
+    )
+    last_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = _ts_created()
     updated_at: Mapped[datetime] = _ts_updated()
 

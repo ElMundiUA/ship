@@ -501,9 +501,9 @@ export function RepoCard({
           <div className="min-w-0 text-[11px] leading-snug text-white/55">
             {readyToSeed ? (
               <>
-                Ready to bootstrap. Opens one PR with the canonical Plays,
-                ``.ship/config.yml``, knowledge starters and the tracker FSM
-                — and pre-seeds Inbox routing rules from CODEOWNERS.
+                Ready to bootstrap. Opens the infra PR with canonical Plays,
+                <code className="text-white/60">.ship/config.yml</code>, the
+                tracker FSM, and the post-merge knowledge bootstrap workflow.
               </>
             ) : (
               <>

@@ -294,6 +294,7 @@ class KnowledgeSearchIn(BaseModel):
 
     query: str = Field(..., min_length=1, max_length=1000)
     repo_id: uuid.UUID | None = None
+    bucket_slug: str | None = Field(default=None, max_length=120)
     limit: int = Field(default=20, ge=1, le=100)
 
 
@@ -349,6 +350,7 @@ async def search_workspace_knowledge(
             workspace_id=workspace_id,
             query=payload.query,
             repo_id=payload.repo_id,
+            bucket_slug=payload.bucket_slug,
             limit=payload.limit,
             settings=get_settings(),
         )

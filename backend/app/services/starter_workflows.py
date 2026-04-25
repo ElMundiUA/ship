@@ -96,6 +96,14 @@ _STARTERS: Final[dict[str, StarterWorkflow]] = {
             id="adhoc-agent-run",
             install_target=".github/workflows/adhoc-agent-run.yml",
         ),
+        StarterWorkflow(
+            id="ship-bootstrap",
+            install_target=".github/workflows/ship-bootstrap.yml",
+        ),
+        StarterWorkflow(
+            id="ship-trigger-schedule",
+            install_target=".github/workflows/ship-trigger-schedule.yml",
+        ),
     )
 }
 

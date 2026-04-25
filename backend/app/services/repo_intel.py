@@ -74,6 +74,7 @@ from backend.app.db.models.agent_memory import (
     BucketScope,
     BucketSource,
     KnowledgeBucket,
+    KnowledgeSourceKind,
 )
 from backend.app.db.models.integrations import GitHubInstallation, WorkspaceRepo
 from backend.app.db.models.repo_intel import RepoIntel, RepoIntelTriggeredBy
@@ -83,6 +84,11 @@ from backend.app.integrations.gateway.code_host import (
     RepoRef,
 )
 from backend.app.integrations.github.code_host_adapter import GitHubCodeHost
+from backend.app.services.knowledge_sources import (
+    ensure_source_for_bucket,
+    fingerprint_payload,
+    mark_source_synced,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -140,9 +146,9 @@ _COMMIT_SAMPLE_SIZE: int = 200
 _CONVENTIONAL_THRESHOLD: float = 0.5
 
 # Bucket / article slugs the project surfaces under.
-_INTEL_BUCKET_SLUG: str = "repo-intel"
+_INTEL_BUCKET_SLUG: str = "repository-context"
 _INTEL_ARTICLE_PATH: str = ".ship/knowledge/repo-intel.md"
-_ARTICLE_SLUG_MAIN: str = "main"
+_HARVESTER_VERSION: int = 2
 
 
 # ---------------------------------------------------------------------------
@@ -1087,22 +1093,63 @@ async def _write_intel_markdown(
     repo: WorkspaceRepo,
     intel: RepoIntel,
 ) -> int:
-    """Project ``intel`` to a markdown article in the repo's KB bucket.
-
-    Returns the number of articles written (0 or 1). The bucket is
-    auto-created on first call so the wizard does not have to seed
-    it. If the article body is byte-identical to the current
-    published row we no-op and return 0.
-    """
+    """Project ``intel`` to the Ship-owned repository context bucket."""
     bucket = await _get_or_create_intel_bucket(session, repo=repo)
-    body = _render_intel_markdown(intel=intel, repo=repo)
+    source = await ensure_source_for_bucket(
+        session,
+        bucket,
+        kind=KnowledgeSourceKind.REPO_CONTEXT,
+        config={
+            "repo_id": str(repo.id),
+            "repo_full_name": repo.full_name,
+            "branch": repo.default_branch or "main",
+            "harvester": "repo_intel",
+            "harvester_version": _HARVESTER_VERSION,
+        },
+    )
+    articles = _render_repo_context_articles(intel=intel, repo=repo)
+    written = 0
+    for slug, title, body in articles:
+        written += await _upsert_context_article(
+            session,
+            bucket=bucket,
+            slug=slug,
+            title=title,
+            body=body,
+            intel=intel,
+            repo=repo,
+        )
+    mark_source_synced(
+        source,
+        content_fingerprint=fingerprint_payload(
+            {
+                "intel_id": str(intel.id),
+                "version": intel.version,
+                "articles": [(slug, body) for slug, _, body in articles],
+            }
+        ),
+        cursor={"intel_id": str(intel.id), "version": intel.version},
+    )
+    return written
+
+
+async def _upsert_context_article(
+    session: AsyncSession,
+    *,
+    bucket: KnowledgeBucket,
+    slug: str,
+    title: str,
+    body: str,
+    intel: RepoIntel,
+    repo: WorkspaceRepo,
+) -> int:
     content_sha = hashlib.sha256(body.encode("utf-8")).hexdigest()
 
     current = (
         await session.execute(
             select(BucketArticle).where(
                 BucketArticle.bucket_id == bucket.id,
-                BucketArticle.slug == _ARTICLE_SLUG_MAIN,
+                BucketArticle.slug == slug,
                 BucketArticle.status == BucketArticleStatus.PUBLISHED,
             )
         )
@@ -1121,7 +1168,7 @@ async def _write_intel_markdown(
             await session.execute(
                 select(func.max(BucketArticle.version)).where(
                     BucketArticle.bucket_id == bucket.id,
-                    BucketArticle.slug == _ARTICLE_SLUG_MAIN,
+                    BucketArticle.slug == slug,
                 )
             )
         ).scalar()
@@ -1130,19 +1177,23 @@ async def _write_intel_markdown(
     article = BucketArticle(
         id=uuid.uuid4(),
         bucket_id=bucket.id,
-        slug=_ARTICLE_SLUG_MAIN,
-        title="Repo intel",
+        slug=slug,
+        title=title,
         body_md=body,
         content_sha=content_sha,
         version=next_version,
         status=BucketArticleStatus.PUBLISHED,
         supersedes_id=supersedes_id,
         provenance={
-            "source_kind": BucketSource.REPO_FILES,
-            "harvest": "repo_intel",
+            "source_kind": BucketSource.REPO_CONTEXT,
+            "source": KnowledgeSourceKind.REPO_CONTEXT,
             "intel_id": str(intel.id),
-            "version": next_version,
-            "path": _INTEL_ARTICLE_PATH,
+            "intel_version": intel.version,
+            "article_version": next_version,
+            "repo_id": str(repo.id),
+            "repo_full_name": repo.full_name,
+            "branch": repo.default_branch or "main",
+            "harvester_version": _HARVESTER_VERSION,
         },
     )
     session.add(article)
@@ -1159,7 +1210,7 @@ async def _get_or_create_intel_bucket(
                     KnowledgeBucket.workspace_id == repo.workspace_id,
                     KnowledgeBucket.repo_id == repo.id,
                     KnowledgeBucket.scope_kind == BucketScope.REPO,
-                    KnowledgeBucket.source_kind == BucketSource.REPO_FILES,
+                    KnowledgeBucket.source_kind == BucketSource.REPO_CONTEXT,
                     KnowledgeBucket.slug == _INTEL_BUCKET_SLUG,
                 )
             )
@@ -1175,17 +1226,18 @@ async def _get_or_create_intel_bucket(
         workspace_id=repo.workspace_id,
         repo_id=repo.id,
         scope_kind=BucketScope.REPO,
-        source_kind=BucketSource.REPO_FILES,
+        source_kind=BucketSource.REPO_CONTEXT,
         slug=_INTEL_BUCKET_SLUG,
-        name="Repo intel",
+        name="Repository context",
         description=(
-            "Auto-harvested snapshot of the repo's languages, "
-            "frameworks, and entry points."
+            "Ship-generated development context for this repository: "
+            "architecture, commands, workflow, rules, and visual style."
         ),
         source_ref={
-            "path": _INTEL_ARTICLE_PATH,
+            "repo_id": str(repo.id),
             "branch": repo.default_branch or "main",
-            "harvest": "repo_intel",
+            "harvest": "repo_context",
+            "harvester_version": _HARVESTER_VERSION,
         },
     )
     session.add(bucket)
@@ -1193,22 +1245,42 @@ async def _get_or_create_intel_bucket(
     return bucket
 
 
-def _render_intel_markdown(
+def _render_repo_context_articles(
     *, intel: RepoIntel, repo: WorkspaceRepo
-) -> str:
-    """Format the intel row as an operator-readable markdown summary."""
-    lines: list[str] = ["# Repo intel", ""]
-    lines.append(f"- **Repo**: `{repo.full_name}`")
-    lines.append(f"- **Branch**: `{repo.default_branch or 'main'}`")
-    lines.append(f"- **Version**: {intel.version}")
-    if intel.harvested_at is not None:
-        lines.append(
-            f"- **Harvested at**: {intel.harvested_at.isoformat()}"
-        )
-    if intel.harvested_by:
-        lines.append(f"- **Triggered by**: `{intel.harvested_by}`")
-    lines.append("")
+) -> list[tuple[str, str, str]]:
+    """Format repo intel as focused articles inside one base bucket."""
 
+    return [
+        ("overview", "Overview", _render_overview_article(intel=intel, repo=repo)),
+        (
+            "dev-environment",
+            "Development environment",
+            _render_dev_environment_article(intel=intel, repo=repo),
+        ),
+        (
+            "architecture",
+            "Architecture",
+            _render_architecture_article(intel=intel, repo=repo),
+        ),
+        ("workflow", "Workflow", _render_workflow_article(intel=intel, repo=repo)),
+        ("visual-style", "Visual style", _render_visual_style_article(intel=intel, repo=repo)),
+        ("rules", "Rules", _render_rules_article(intel=intel, repo=repo)),
+    ]
+
+
+def _article_header(title: str, *, intel: RepoIntel, repo: WorkspaceRepo) -> list[str]:
+    lines = [f"# {title}", ""]
+    lines.append(f"- Repo: `{repo.full_name}`")
+    lines.append(f"- Branch: `{repo.default_branch or 'main'}`")
+    lines.append(f"- Intel version: {intel.version}")
+    if intel.harvested_at is not None:
+        lines.append(f"- Harvested at: {intel.harvested_at.isoformat()}")
+    lines.append("")
+    return lines
+
+
+def _render_overview_article(*, intel: RepoIntel, repo: WorkspaceRepo) -> str:
+    lines = _article_header("Repository overview", intel=intel, repo=repo)
     if intel.languages:
         lines.append("## Languages")
         for lang, ratio in intel.languages.items():
@@ -1218,68 +1290,96 @@ def _render_intel_markdown(
                 continue
             lines.append(f"- `{lang}`: {pct:.1f}%")
         lines.append("")
-
     if intel.frameworks:
         lines.append("## Frameworks")
         for fw in intel.frameworks:
             lines.append(f"- {fw}")
         lines.append("")
-
     if intel.package_managers:
         lines.append("## Package managers")
         for pm in intel.package_managers:
             lines.append(f"- {pm}")
         lines.append("")
+    return _finish_article(lines)
 
+
+def _render_dev_environment_article(*, intel: RepoIntel, repo: WorkspaceRepo) -> str:
+    lines = _article_header("Development environment", intel=intel, repo=repo)
+    lines.append("Use the detected package managers and entry points as the first hints for setup, build, test, and lint commands.")
+    lines.append("")
+    if intel.package_managers:
+        lines.append("## Package managers")
+        for pm in intel.package_managers:
+            lines.append(f"- {pm}")
+        lines.append("")
     if intel.entry_points:
         lines.append("## Entry points")
         for ep in intel.entry_points:
             if isinstance(ep, dict):
-                lines.append(
-                    f"- `{ep.get('path')}` _({ep.get('kind', 'unknown')})_"
-                )
+                lines.append(f"- `{ep.get('path')}` ({ep.get('kind', 'unknown')})")
         lines.append("")
+    return _finish_article(lines)
 
+
+def _render_architecture_article(*, intel: RepoIntel, repo: WorkspaceRepo) -> str:
+    lines = _article_header("Architecture", intel=intel, repo=repo)
     structure = intel.structure or {}
-    if structure:
-        lines.append("## Structure")
-        top = structure.get("top_level_dirs") or []
-        if top:
-            lines.append(
-                "- Top-level dirs: " + ", ".join(f"`{d}`" for d in top)
-            )
-        if "file_count" in structure:
-            lines.append(f"- File count: {structure['file_count']}")
-        if "depth_p50" in structure:
-            lines.append(
-                f"- Depth (p50/p95): "
-                f"{structure.get('depth_p50')}/{structure.get('depth_p95')}"
-            )
+    top = structure.get("top_level_dirs") or []
+    if top:
+        lines.append("## Top-level directories")
+        for dirname in top:
+            lines.append(f"- `{dirname}`")
         lines.append("")
+    if "file_count" in structure:
+        lines.append(f"- File count: {structure['file_count']}")
+    if "depth_p50" in structure:
+        lines.append(
+            f"- Depth p50/p95: {structure.get('depth_p50')}/{structure.get('depth_p95')}"
+        )
+    return _finish_article(lines)
 
+
+def _render_workflow_article(*, intel: RepoIntel, repo: WorkspaceRepo) -> str:
+    lines = _article_header("Workflow", intel=intel, repo=repo)
     commit_style = intel.commit_style or {}
     if commit_style:
         lines.append("## Commit style")
-        lines.append(
-            f"- Convention: **{commit_style.get('convention', 'unknown')}**"
-        )
+        lines.append(f"- Convention: {commit_style.get('convention', 'unknown')}")
         common = commit_style.get("common_types") or []
         if common:
-            lines.append(
-                "- Common types: " + ", ".join(f"`{t}`" for t in common)
-            )
+            lines.append("- Common types: " + ", ".join(f"`{t}`" for t in common))
         if "avg_subject_len" in commit_style:
-            lines.append(
-                f"- Average subject length: {commit_style['avg_subject_len']}"
-            )
+            lines.append(f"- Average subject length: {commit_style['avg_subject_len']}")
         lines.append("")
+    return _finish_article(lines)
 
+
+def _render_visual_style_article(*, intel: RepoIntel, repo: WorkspaceRepo) -> str:
+    lines = _article_header("Visual style", intel=intel, repo=repo)
     if intel.visual_tokens:
-        lines.append("## Visual tokens")
+        lines.append("## Tokens")
         for key, value in intel.visual_tokens.items():
             lines.append(f"- {key}: `{value}`")
         lines.append("")
+    else:
+        lines.append("No visual token files were detected during the latest harvest.")
+        lines.append("")
+    return _finish_article(lines)
 
+
+def _render_rules_article(*, intel: RepoIntel, repo: WorkspaceRepo) -> str:
+    lines = _article_header("Repository rules", intel=intel, repo=repo)
+    lines.append("Ship seeded configuration and agent rules should be treated as repository-local development context.")
+    lines.append("")
+    lines.append("## Expected locations")
+    lines.append("- `.ship/config.yml` for Ship lanes and automation config.")
+    lines.append("- `.cursor/rules/` or equivalent editor rule files when installed by the operator.")
+    lines.append("- `.github/workflows/` for seeded or repository-native CI workflows.")
+    lines.append("")
+    return _finish_article(lines)
+
+
+def _finish_article(lines: list[str]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 

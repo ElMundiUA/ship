@@ -69,6 +69,7 @@ from backend.app.db.models.agent_memory import (
     BucketSource,
     BucketSummary,
     KnowledgeBucket,
+    KnowledgeSource,
 )
 from backend.app.db.models.agent_surface import (
     ChatMessage as ChatMessageRow,
@@ -77,6 +78,7 @@ from backend.app.db.models.agent_surface import (
 from backend.app.db.session import get_session
 from backend.app.services.bucket_visibility import visible_to_user_clause
 from backend.app.services.distiller_sources import ensure_user_memory_bucket
+from backend.app.services.knowledge_sources import ensure_source_for_bucket
 from backend.app.services.agent.client import (
     AgentClient,
     ChatMessage,
@@ -185,6 +187,20 @@ class BucketOut(BaseModel):
     project_id: uuid.UUID | None = None
     repo_id: uuid.UUID | None = None
     user_id: uuid.UUID | None = None
+
+
+class KnowledgeSourceOut(BaseModel):
+    id: uuid.UUID
+    bucket_id: uuid.UUID
+    kind: str
+    config: dict[str, Any]
+    status: str
+    cursor: dict[str, Any] | None = None
+    content_fingerprint: str | None = None
+    last_synced_at: datetime | None = None
+    last_error: str | None = None
+    created_at: datetime
+    updated_at: datetime
 
 
 class BucketSummaryOut(BaseModel):
@@ -1307,6 +1323,7 @@ async def create_bucket(
     )
     session.add(row)
     await session.flush()
+    await ensure_source_for_bucket(session, row, config=source_ref or {})
     # ``updated_at`` has ``onupdate=now()`` applied server-side, which
     # expires the attribute post-flush; an explicit refresh pulls the
     # freshly generated value without tripping the sync-IO guard.
@@ -1545,6 +1562,29 @@ async def list_bucket_articles(
     ]
 
 
+@router.get(
+    "/buckets/{slug}/sources", response_model=list[KnowledgeSourceOut]
+)
+async def list_bucket_sources(
+    workspace_id: uuid.UUID,
+    slug: str,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> list[KnowledgeSourceOut]:
+    """Return durable source configs and sync state for a bucket."""
+
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
+    bucket = await _load_bucket(session, workspace_id, slug)
+    rows = (
+        await session.execute(
+            select(KnowledgeSource)
+            .where(KnowledgeSource.bucket_id == bucket.id)
+            .order_by(KnowledgeSource.created_at.asc())
+        )
+    ).scalars().all()
+    return [_serialize_source(row) for row in rows]
+
+
 async def _load_bucket(
     session: AsyncSession, workspace_id: uuid.UUID, slug: str
 ) -> KnowledgeBucket:
@@ -1590,6 +1630,22 @@ def _serialize_bucket(row: KnowledgeBucket, *, summary_count: int) -> BucketOut:
         project_id=row.project_id,
         repo_id=row.repo_id,
         user_id=row.user_id,
+    )
+
+
+def _serialize_source(row: KnowledgeSource) -> KnowledgeSourceOut:
+    return KnowledgeSourceOut(
+        id=row.id,
+        bucket_id=row.bucket_id,
+        kind=row.kind,
+        config=row.config,
+        status=row.status,
+        cursor=row.cursor,
+        content_fingerprint=row.content_fingerprint,
+        last_synced_at=row.last_synced_at,
+        last_error=row.last_error,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
     )
 
 

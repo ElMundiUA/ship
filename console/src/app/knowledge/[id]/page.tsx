@@ -21,12 +21,17 @@ import {
   getKnowledgeBucket,
   isApiConfigured,
   listBucketArticles,
+  listBucketSources,
   listDistillerRuns,
   listWorkspaces,
 } from "@/lib/api/client";
 import { ApiHttpError } from "@/lib/api/client";
 import { getSessionToken } from "@/lib/api/session";
-import type { ApiBucketArticle, ApiKnowledgeBucket } from "@/lib/api/types";
+import type {
+  ApiBucketArticle,
+  ApiKnowledgeBucket,
+  ApiKnowledgeSource,
+} from "@/lib/api/types";
 import {
   formatBytes,
   knowledgeBuckets as mockBuckets,
@@ -50,6 +55,8 @@ type LiveData = {
   bucket: ApiBucket | null;
   /** Articles under the unified bucket, if we could load it. */
   articles: ApiBucketArticle[];
+  /** Durable source configs and sync state for the unified bucket. */
+  sources: ApiKnowledgeSource[];
   /** Distiller run history, newest first. */
   runs: ApiDistillerRun[];
   /** The human-usable title — prefers the unified bucket name. */
@@ -85,13 +92,16 @@ async function load(slug: string): Promise<Loaded | "notfound"> {
     // row; an old ``.ship/knowledge`` mirror may not yet have made it
     // into the unified bucket table; either could have zero articles
     // or zero runs. The page only hard-404s when *all three* miss.
-    const [legacy, bucket, articlesRaw, runsRaw] = await Promise.all([
+    const [legacy, bucket, articlesRaw, sourcesRaw, runsRaw] = await Promise.all([
       getKnowledgeBucket(ws.id, slug, token).catch(
         quietly404AsNull<ApiKnowledgeBucket>(),
       ),
       getBucket(ws.id, slug, token).catch(quietly404AsNull<ApiBucket>()),
       listBucketArticles(ws.id, slug, {}, token).catch(
         () => [] as ApiBucketArticle[],
+      ),
+      listBucketSources(ws.id, slug, token).catch(
+        () => [] as ApiKnowledgeSource[],
       ),
       listDistillerRuns(ws.id, slug, { limit: 20, token }).catch(
         () => [] as ApiDistillerRun[],
@@ -111,6 +121,7 @@ async function load(slug: string): Promise<Loaded | "notfound"> {
       legacy,
       bucket,
       articles: articlesRaw,
+      sources: sourcesRaw,
       runs: runsRaw,
       title,
     };
@@ -150,7 +161,7 @@ export default async function KnowledgeBucketDetailPage({
 // ---------------------------------------------------------------------------
 
 function LiveView({ data }: { data: LiveData }) {
-  const { workspace: ws, legacy, bucket, articles, runs, title } = data;
+  const { workspace: ws, legacy, bucket, articles, sources, runs, title } = data;
 
   // Upload is meaningful for any bucket except ``repo_files`` — those
   // mirror ``.ship/knowledge`` from git and should stay authoritative
@@ -261,6 +272,8 @@ function LiveView({ data }: { data: LiveData }) {
               bucketName={bucket.name}
             />
           )}
+
+          {bucket && <SourcesCard sources={sources} />}
 
           <RunsCard runs={runs} />
 
@@ -420,6 +433,48 @@ function provenanceHint(article: ApiBucketArticle): string | null {
     return `packed from thread ${p.thread_id.slice(0, 8)}…`;
   }
   return null;
+}
+
+function SourcesCard({ sources }: { sources: ApiKnowledgeSource[] }) {
+  if (sources.length === 0) {
+    return (
+      <Card data-testid="bucket-sources-empty">
+        <CardHeader title="Sources" subtitle="No source rows recorded yet." />
+      </Card>
+    );
+  }
+
+  return (
+    <Card padded={false} data-testid="bucket-sources">
+      <CardHeader
+        className="px-5 pt-5"
+        title="Sources"
+        subtitle="Durable sync state for this bucket"
+      />
+      <ul className="divide-y divide-white/5">
+        {sources.map((source) => (
+          <li key={source.id} className="px-5 py-3">
+            <div className="flex items-center gap-2">
+              <Badge tone={source.status === "error" ? "err" : "neutral"}>
+                {source.status}
+              </Badge>
+              <span className="font-mono text-[11px] text-aqua/85">
+                {source.kind}
+              </span>
+              <span className="ml-auto text-[10px] text-white/45">
+                {source.last_synced_at
+                  ? `synced ${relativeTime(source.last_synced_at)}`
+                  : "not synced"}
+              </span>
+            </div>
+            {source.last_error && (
+              <p className="mt-2 text-xs text-coral/90">{source.last_error}</p>
+            )}
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
 }
 
 function RunsCard({ runs }: { runs: ApiDistillerRun[] }) {

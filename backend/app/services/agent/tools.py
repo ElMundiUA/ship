@@ -127,7 +127,7 @@ from datetime import datetime
 from typing import Any, Awaitable, Callable
 
 from fastapi import HTTPException
-from sqlalchemy import desc, func, or_, select, tuple_
+from sqlalchemy import desc, func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -137,7 +137,6 @@ from backend.app.db.models.agent_memory import (
     BucketArticle,
     BucketArticleStatus,
     BucketSource,
-    KbChunk,
     KnowledgeBucket,
 )
 from backend.app.db.models.agent_surface import (
@@ -317,13 +316,12 @@ class ToolBox:
             ToolSpec(
                 name="search_repo_kb",
                 description=(
-                    "Semantic search over `.ship/knowledge/**/*.md` for the "
-                    "workspace's activated repos. Use for grounded answers "
-                    "about the repo's docs, decisions, runbooks. Returns "
-                    "the top-N matching chunks with path + snippet. "
-                    "Optional ``path_prefix`` / ``path_glob`` narrow results; "
+                    "Semantic search over repository-scoped knowledge bucket "
+                    "articles. Use for grounded answers about repo docs, "
+                    "generated repository context, decisions, and runbooks. "
+                    "Optional ``bucket_slug`` narrows to one bucket; "
                     "``include_full_content`` returns a longer ``content`` "
-                    "field (still capped) for runbook-sized chunks."
+                    "field (still capped)."
                 ),
                 parameters={
                     "type": "object",
@@ -339,18 +337,11 @@ class ToolBox:
                                 "omit to search across all activated repos."
                             ),
                         },
-                        "path_prefix": {
+                        "bucket_slug": {
                             "type": "string",
                             "description": (
-                                "Only chunks whose ``source_path`` is under "
-                                "this prefix (e.g. ``runbooks/``)."
-                            ),
-                        },
-                        "path_glob": {
-                            "type": "string",
-                            "description": (
-                                "fnmatch pattern applied after the vector "
-                                "search (e.g. ``**/*.md``)."
+                                "Optional knowledge bucket slug, e.g. "
+                                "``repository-context``."
                             ),
                         },
                         "include_full_content": {
@@ -376,7 +367,7 @@ class ToolBox:
                 name="get_repo_file",
                 description=(
                     "Fetch the current contents of a specific file in an "
-                    "activated repo. Prefer `search_repo_kb` first; only "
+                    "activated repo. Prefer knowledge search first; only "
                     "call this when you already know the path and need "
                     "verbatim code. Use `start_line`/`end_line` to slice "
                     "long files instead of pulling the whole blob."
@@ -620,14 +611,11 @@ class ToolBox:
             ToolSpec(
                 name="search_workspace_kb",
                 description=(
-                    "Search knowledge across the entire workspace (all "
-                    "repos + workspace-canonical buckets). Use this "
-                    "when ``search_repo_kb`` returns no hits for the "
-                    "current repo, or when the question is "
-                    "platform/organisation-wide rather than "
-                    "repo-specific. Ranks current-repo matches first, "
-                    "then workspace canonical, then other repos as "
-                    "hints."
+                    "Search published knowledge articles across the entire "
+                    "workspace (repo, workspace, and user-visible buckets). "
+                    "Use this for platform/organisation-wide questions. "
+                    "Ranks current-repo matches first, then workspace "
+                    "canonical, then other repos as hints."
                 ),
                 parameters={
                     "type": "object",
@@ -1860,8 +1848,8 @@ class ToolBox:
                 description=(
                     "Workspace knowledge search with explicit filters "
                     "(``repo_id``, ``bucket_slug``) and an optional "
-                    "``intel_facts`` flag that prepends a synthetic "
-                    "``repo_intel`` summary hit to the results. Use "
+                    "``intel_facts`` flag that prepends hits from the "
+                    "``repository-context`` bucket to the results. Use "
                     "this over ``search_workspace_kb`` when you need "
                     "filtered results or want intel context inline."
                 ),
@@ -1890,11 +1878,9 @@ class ToolBox:
                             "type": "boolean",
                             "default": False,
                             "description": (
-                                "When true, prepend a synthetic "
-                                "``repo_intel`` summary hit (built "
-                                "from languages + frameworks + entry "
-                                "points + structure) for the active "
-                                "or supplied ``repo_id``."
+                                "When true, prepend published articles from "
+                                "the ``repository-context`` bucket for the "
+                                "active or supplied ``repo_id``."
                             ),
                         },
                         "limit": {
@@ -2289,13 +2275,15 @@ class ToolBox:
     # ------------------------------------------------------------------
 
     async def _tool_search_repo_kb(self, args: dict[str, Any]) -> str:
-        import fnmatch
-
         query = _require_str(args, "query")
         limit = _clamp_int(args.get("limit"), default=5, low=1, high=_MAX_KB_RESULTS)
         include_full = bool(args.get("include_full_content", False))
-        path_prefix = args.get("path_prefix")
-        path_glob = args.get("path_glob")
+        bucket_slug = args.get("bucket_slug")
+        if bucket_slug is not None and not isinstance(bucket_slug, str):
+            return _json_result({
+                "error": "invalid_bucket_slug",
+                "message": "bucket_slug must be a string when provided",
+            })
         repo_id_raw = args.get("repo_id")
         repo_id: uuid.UUID | None = None
         if repo_id_raw:
@@ -2303,54 +2291,44 @@ class ToolBox:
                 repo_id = uuid.UUID(str(repo_id_raw))
             except ValueError as exc:
                 raise ToolInvocationError(f"invalid repo_id: {repo_id_raw!r}") from exc
+        elif self._active_repo_id is not None:
+            repo_id = self._active_repo_id
 
-        fetch_cap = limit
-        if isinstance(path_glob, str) and path_glob.strip():
-            fetch_cap = min(_KB_GLOB_PREFETCH_CAP, max(limit * 8, limit))
-
-        qvec = await embed_text(query, settings=self._settings)
-        stmt = (
-            select(KbChunk, KbChunk.embedding.cosine_distance(qvec).label("dist"))
-            .where(KbChunk.workspace_id == self._workspace_id)
-            .order_by("dist")
-            .limit(fetch_cap)
+        from backend.app.services.knowledge_search import (
+            EmbeddingsUnavailable,
+            search_workspace_knowledge,
         )
-        if repo_id is not None:
-            stmt = stmt.where(KbChunk.repo_id == repo_id)
-        if isinstance(path_prefix, str) and path_prefix.strip():
-            pref = path_prefix.strip().rstrip("/")
-            stmt = stmt.where(
-                or_(
-                    KbChunk.source_path == pref,
-                    KbChunk.source_path.like(pref + "/%"),
-                )
-            )
 
-        rows = (await self._session.execute(stmt)).all()
-        if isinstance(path_glob, str) and path_glob.strip():
-            pat = path_glob.strip()
-            rows = [
-                pair
-                for pair in rows
-                if fnmatch.fnmatch(pair[0].source_path, pat)
-            ]
-        rows = rows[:limit]
-        if not rows:
-            return _json_result({"results": [], "note": "no knowledge indexed"})
+        try:
+            hits = await search_workspace_knowledge(
+                self._session,
+                workspace_id=self._workspace_id,
+                query=query,
+                repo_id=repo_id,
+                bucket_slug=bucket_slug.strip() if isinstance(bucket_slug, str) and bucket_slug.strip() else None,
+                limit=limit,
+                settings=self._settings,
+            )
+        except EmbeddingsUnavailable as exc:
+            return _json_result(
+                {"error": "embeddings_unavailable", "message": str(exc)}
+            )
+        repo_hits = [hit for hit in hits if repo_id is None or hit.repo_id == repo_id]
+        if not repo_hits:
+            return _json_result({"results": [], "note": "no repository knowledge indexed"})
 
         snippet_cap = _MAX_KB_FULL_CHUNK if include_full else 800
         results = []
-        for chunk, dist in rows:
+        for hit in repo_hits[:limit]:
             entry: dict[str, Any] = {
-                "repo_id": str(chunk.repo_id),
-                "path": chunk.source_path,
-                "chunk_index": chunk.chunk_index,
-                "content_sha": chunk.content_sha,
-                "snippet": _truncate(chunk.content, snippet_cap),
-                "similarity": round(1.0 - float(dist), 4),
+                "repo_id": str(hit.repo_id) if hit.repo_id is not None else None,
+                "bucket_slug": hit.bucket_slug,
+                "title": hit.title,
+                "snippet": _truncate(hit.snippet, snippet_cap),
+                "similarity": hit.score,
             }
             if include_full:
-                entry["content"] = _truncate(chunk.content, _MAX_KB_FULL_CHUNK)
+                entry["content"] = _truncate(hit.snippet, _MAX_KB_FULL_CHUNK)
             results.append(entry)
         return _json_result({"results": results})
 
@@ -5913,17 +5891,18 @@ class ToolBox:
 
         intel_facts = bool(args.get("intel_facts", False))
 
-        # Over-fetch when a bucket filter is requested so the
-        # post-filter still has a chance of returning ``limit`` rows.
-        fetch_limit = limit * 4 if isinstance(bucket_slug, str) else limit
-
         try:
             hits = await search_workspace_knowledge(
                 self._session,
                 workspace_id=self._workspace_id,
                 query=query,
                 repo_id=repo_id,
-                limit=fetch_limit,
+                bucket_slug=(
+                    bucket_slug.strip()
+                    if isinstance(bucket_slug, str) and bucket_slug.strip()
+                    else None
+                ),
+                limit=limit,
                 settings=self._settings,
             )
         except EmbeddingsUnavailable as exc:
@@ -5936,8 +5915,6 @@ class ToolBox:
 
         results: list[dict[str, Any]] = []
         for hit in hits:
-            if isinstance(bucket_slug, str) and hit.bucket_slug != bucket_slug:
-                continue
             results.append(
                 {
                     "source": hit.source,
@@ -5955,25 +5932,33 @@ class ToolBox:
                 break
 
         if intel_facts and repo_id is not None:
-            from backend.app.services.repo_intel import get_current_intel
-
-            intel = await get_current_intel(self._session, repo_id)
-            if intel is not None:
-                snippet = _intel_summary_snippet(intel)
+            try:
+                intel_hits = await search_workspace_knowledge(
+                    self._session,
+                    workspace_id=self._workspace_id,
+                    query=query,
+                    repo_id=repo_id,
+                    bucket_slug="repository-context",
+                    limit=3,
+                    settings=self._settings,
+                )
+            except EmbeddingsUnavailable:
+                intel_hits = []
+            for hit in reversed(intel_hits):
                 results.insert(
                     0,
                     {
-                        "source": "repo_intel",
-                        "repo_id": str(intel.repo_id),
-                        "bucket_slug": None,
-                        "source_path": None,
-                        "snippet": _truncate(snippet, 400),
-                        "score": 1.0,
-                        "rank_bucket": "intel",
+                        "source": hit.source,
+                        "repo_id": str(hit.repo_id) if hit.repo_id is not None else None,
+                        "bucket_slug": hit.bucket_slug,
+                        "source_path": hit.title,
+                        "snippet": _truncate(hit.snippet or "", 400),
+                        "score": hit.score,
+                        "rank_bucket": "repository_context",
                     },
                 )
-                if len(results) > limit:
-                    results = results[:limit]
+            if len(results) > limit:
+                results = results[:limit]
 
         return _json_result(
             {

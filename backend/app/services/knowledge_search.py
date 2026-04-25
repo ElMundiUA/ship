@@ -1,9 +1,8 @@
 """Workspace-wide knowledge vector search (PR-7A extracted in 7C).
 
 PR-7A landed the ``POST /v1/workspaces/{ws}/knowledge/search`` surface
-with all of the heavy lifting (vector union over ``BucketArticle`` +
-``KbChunk``, repo-name batching, three-band re-ranking) baked into
-the HTTP route. PR-7C factors that into this service module so the
+with the heavy lifting baked into the HTTP route. PR-7C factors that
+into this service module so the
 Navigator ``search_workspace_kb`` tool can reuse the same
 implementation without another HTTP round-trip (and its attached
 cookie / CSRF dance).
@@ -39,7 +38,6 @@ from backend.app.db.models.agent_memory import (
     BucketArticle,
     BucketArticleStatus,
     BucketScope,
-    KbChunk,
     KnowledgeBucket,
 )
 from backend.app.db.models.integrations import WorkspaceRepo
@@ -64,9 +62,8 @@ class EmbeddingsUnavailable(RuntimeError):
 class KnowledgeSearchHit(BaseModel):
     """One row of the search response.
 
-    ``source`` distinguishes bucket-article hits (structured
-    knowledge) from kb_chunk hits (raw ``.ship/knowledge`` markdown).
-    ``rank_bucket`` is assigned after the vector union so the
+    ``source`` is kept for wire compatibility and is now always
+    ``bucket_article``. ``rank_bucket`` is assigned after retrieval so the
     Console (and the Navigator tool) can group or style by band
     without re-running the ordering logic.
     """
@@ -123,6 +120,7 @@ async def search_workspace_knowledge(
     workspace_id: uuid.UUID,
     query: str,
     repo_id: uuid.UUID | None = None,
+    bucket_slug: str | None = None,
     limit: int = 20,
     settings: Settings | None = None,
 ) -> list[KnowledgeSearchHit]:
@@ -169,30 +167,17 @@ async def search_workspace_knowledge(
         .order_by("dist")
         .limit(over_fetch)
     )
-
-    chunk_stmt = (
-        select(KbChunk, KbChunk.embedding.cosine_distance(qvec).label("dist"))
-        .where(
-            and_(
-                KbChunk.workspace_id == workspace_id,
-                KbChunk.embedding.is_not(None),
-            )
-        )
-        .order_by("dist")
-        .limit(over_fetch)
-    )
+    if bucket_slug is not None:
+        article_stmt = article_stmt.where(KnowledgeBucket.slug == bucket_slug)
 
     article_rows = (await session.execute(article_stmt)).all()
-    chunk_rows = (await session.execute(chunk_stmt)).all()
 
     # Resolve repo full_names in a single batched query; both article
-    # rows (via bucket.repo_id) and chunk rows reference ``workspace_repos``.
+    # rows reference ``workspace_repos`` through their bucket carrier.
     repo_ids: set[uuid.UUID] = set()
     for _, bucket, _ in article_rows:
         if bucket.repo_id is not None:
             repo_ids.add(bucket.repo_id)
-    for chunk, _ in chunk_rows:
-        repo_ids.add(chunk.repo_id)
 
     repo_full_names: dict[uuid.UUID, str | None] = {}
     if repo_ids:
@@ -227,23 +212,6 @@ async def search_workspace_knowledge(
                 ),
             )
         )
-    for chunk, dist in chunk_rows:
-        raw_hits.append(
-            KnowledgeSearchHit(
-                id=chunk.id,
-                source="kb_chunk",
-                bucket_slug=None,
-                bucket_id=None,
-                repo_id=chunk.repo_id,
-                scope_kind="repo",
-                score=round(1.0 - float(dist), 4),
-                rank_bucket="other_repo",
-                snippet=_first_paragraph(chunk.content),
-                title=chunk.source_path,
-                repo_full_name=repo_full_names.get(chunk.repo_id),
-            )
-        )
-
     repo_match: list[KnowledgeSearchHit] = []
     workspace_hits: list[KnowledgeSearchHit] = []
     rest: list[KnowledgeSearchHit] = []

@@ -69,6 +69,9 @@ COMMANDS
                                          every pattern the declared lanes depend on.
 
   Run
+    shipctl trigger --event schedule --repo <id|owner/name> [--workspace <id>] [--json]
+                                       — ask Ship which configured lanes are
+                                         due for the current GitHub trigger.
     shipctl run --lane <id> [--pattern <id>] [--fanout matrix|sequential|concurrent]
                 [--trigger event|schedule|manual|once]
                 [--dry-run] [--offline] [--json] [--cwd <dir>]
@@ -99,8 +102,17 @@ COMMANDS
 
   Knowledge
     shipctl knowledge init [--workspace <id>] [--repo <id|owner/name>] [--only <csv>] [--json]
-                                       — open a PR that seeds .ship/knowledge/*.md
-                                         starter buckets (code-style, ui-runbook).
+                                       — compatibility: open a PR that seeds
+                                         .ship/knowledge starter docs.
+    shipctl knowledge fetch <bucket-slug> [--workspace <id>] [--json]
+                                       — read Ship-owned bucket articles and
+                                         source sync state.
+    shipctl knowledge bootstrap [--workspace <id>] [--repo <id|owner/name>] [--json]
+                                       — post-merge action entry point: analyze
+                                         repo and open generated knowledge PR.
+    shipctl knowledge refresh-intel [--workspace <id>] [--repo <id|owner/name>] [--json]
+                                       — refresh the generated repository-context
+                                         bucket for an activated repo.
                                          Reads SHIP_API_TOKEN.
 
   Telemetry & feedback

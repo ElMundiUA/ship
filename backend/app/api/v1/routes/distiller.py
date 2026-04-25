@@ -66,12 +66,11 @@ from backend.app.services.distiller_llm import make_llm_classifier
 from backend.app.services.connectors import (
     ConnectorConfigError,
     ConnectorError,
-    ConnectorPage,
-    fetch_connector_pages,
 )
-from backend.app.services.distiller_sources import (
-    ingest_connector_page,
-    ingest_external_static_upload,
+from backend.app.services.knowledge_sync import (
+    KnowledgeSyncUnsupported,
+    ingest_static_upload_source,
+    sync_connector_source,
 )
 
 
@@ -409,7 +408,7 @@ async def upload_to_bucket(
         )
 
     chosen, resolved_mode = _resolve_classifier(classifier)
-    outcome = await ingest_external_static_upload(
+    outcome = await ingest_static_upload_source(
         session,
         workspace_id=workspace_id,
         bucket=bucket,
@@ -499,106 +498,35 @@ async def sync_connector_bucket(
                 "re-create the bucket so the connector handle is recorded"
             ),
         )
-    resource_ref = source_ref.get("resource_ref") or {}
-    if not isinstance(resource_ref, dict):
-        resource_ref = {}
-
-    # Load the integration row so the fetcher can decrypt its
-    # secret. We load it even when we don't have a fetcher wired —
-    # that way a broken integration (deleted row, revoked token) is
-    # a clean 400 before we commit to the ingest path.
-    integration_row = await _load_integration(
-        session,
-        workspace_id=workspace_id,
-        source_ref=source_ref,
-        kind=integration_kind,
-    )
-
     classifier, resolved_mode = _resolve_classifier("stub")
-
-    # ---- Real fetcher path (Phase 7c) -------------------------------
-    pages: list[ConnectorPage] = []
-    if integration_row is not None:
-        try:
-            pages = await fetch_connector_pages(integration_row, resource_ref)
-        except ConnectorConfigError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"connector config error: {exc}",
-            ) from exc
-        except ConnectorError as exc:
-            logger.exception(
-                "connector sync: fetcher failure kind=%s slug=%s",
-                integration_kind,
-                slug,
-            )
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"connector fetch failed: {exc}",
-            ) from exc
-
-    # Single-page semantics for v1 — if a fetcher returned multiple
-    # pages we still only ingest the first and log the rest so the
-    # operator can see what was skipped. Multi-page sync is a
-    # natural Phase 7d extension but would require switching the
-    # response shape, which we keep stable here.
-    if len(pages) > 1:
-        logger.info(
-            "connector sync: fetcher returned %d pages; ingesting first only "
-            "(multi-page support is Phase 7d work)",
-            len(pages),
+    try:
+        outcome = await sync_connector_source(
+            session,
+            workspace_id=workspace_id,
+            bucket=bucket,
+            actor_user_id=auth.user.id,
+            classifier=classifier,
         )
-
-    page_ref: dict[str, Any]
-    body_md: str
-    if pages:
-        first = pages[0]
-        page_ref = {
-            "slug": first.slug,
-            "title": first.title,
-            **dict(first.page_ref),
-            "resource_ref": resource_ref,
-        }
-        body_md = first.body_md
-    else:
-        # ---- Stub fallback (preserved from Phase 7b) ----------------
-        page_ref = {
-            "slug": f"{integration_kind}-index",
-            "title": f"{integration_kind.title()} · {slug}",
-            "resource_ref": resource_ref,
-        }
-        lines = [
-            f"# {integration_kind.title()} · {bucket.name}",
-            "",
-            f"- Source kind: `{bucket.source_kind}`",
-            f"- Integration: `{integration_kind}`",
-        ]
-        if resource_ref:
-            pairs = ", ".join(
-                f"{k}={v!r}" for k, v in sorted(resource_ref.items())
-            )
-            lines.append(f"- Resource: {pairs}")
-        lines.extend(
-            [
-                "",
-                "> Connector fetcher is not wired for this integration or "
-                "resource_ref shape. This is a stand-in body so the Distiller "
-                "loop stays observable. See `backend/docs/"
-                "knowledge-consolidation.md` Phase 7c for wired connectors.",
-            ]
+    except KnowledgeSyncUnsupported as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except ConnectorConfigError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"connector config error: {exc}",
+        ) from exc
+    except ConnectorError as exc:
+        logger.exception(
+            "connector sync: fetcher failure kind=%s slug=%s",
+            integration_kind,
+            slug,
         )
-        body_md = "\n".join(lines).strip()
-
-    outcome = await ingest_connector_page(
-        session,
-        workspace_id=workspace_id,
-        bucket=bucket,
-        actor_user_id=auth.user.id,
-        connector_kind=integration_kind,
-        page_ref=page_ref,
-        body_md=body_md,
-        classifier=classifier,
-    )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"connector fetch failed: {exc}",
+        ) from exc
 
     run = (
         await session.execute(

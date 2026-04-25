@@ -121,6 +121,12 @@ try {
     process.exit(0);
   }
 
+  if (cmd === "trigger") {
+    const { triggerCommand } = await import("../lib/commands/trigger.mjs");
+    await triggerCommand(ctx, rest);
+    process.exit(0);
+  }
+
   if (cmd === "kickoff") {
     const { kickoffCommand } = await import("../lib/commands/kickoff.mjs");
     await kickoffCommand(ctx, rest);

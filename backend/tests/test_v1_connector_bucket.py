@@ -216,7 +216,7 @@ async def connector_bucket(db_session, seeded_integration):
 
 
 @pytest.mark.asyncio
-async def test_sync_creates_article_and_records_run(
+async def test_sync_rejects_unsupported_resource_ref(
     v1_client, seed_workspace, connector_bucket, db_session
 ) -> None:
     _, raw, _ = seed_workspace
@@ -226,40 +226,18 @@ async def test_sync_creates_article_and_records_run(
         f"/v1/workspaces/{workspace.id}/buckets/{bucket.slug}/sync",
         headers=_auth(raw),
     )
-    assert resp.status_code == 200, resp.text
-    payload = resp.json()
-    assert payload["decision"] == "new"
-    assert payload["classifier"] == "stub"
-    assert len(payload["article_ids"]) == 1
-
-    article = (
+    assert resp.status_code == 400, resp.text
+    assert "returned no pages" in resp.text
+    article_count = (
         await db_session.execute(
-            select(BucketArticle).where(
-                BucketArticle.id == uuid.UUID(payload["article_ids"][0])
-            )
+            select(BucketArticle).where(BucketArticle.bucket_id == bucket.id)
         )
-    ).scalars().one()
-    prov = article.provenance or {}
-    assert prov.get("kind") == "connector_proxy"
-    assert prov.get("connector_kind") == "notion"
-    assert prov.get("resource_ref") == {"database_id": "db-42"}
-
-    # And the run row should reference the same bucket + be in ``done``.
-    run = (
-        await db_session.execute(
-            select(DistillerRun).where(
-                DistillerRun.id == uuid.UUID(payload["run"]["id"])
-            )
-        )
-    ).scalars().one()
-    assert run.bucket_id == bucket.id
-    assert run.status == "done"
-    assert run.decision == "new"
-    assert run.source_kind == BucketSource.CONNECTOR_PROXY
+    ).scalars().all()
+    assert article_count == []
 
 
 @pytest.mark.asyncio
-async def test_resync_is_idempotent_skip(
+async def test_repeated_unsupported_sync_stays_rejected(
     v1_client, seed_workspace, connector_bucket
 ) -> None:
     _, raw, _ = seed_workspace
@@ -269,15 +247,13 @@ async def test_resync_is_idempotent_skip(
         f"/v1/workspaces/{workspace.id}/buckets/{bucket.slug}/sync",
         headers=_auth(raw),
     )
-    assert first.status_code == 200
-    assert first.json()["decision"] == "new"
+    assert first.status_code == 400
 
     second = await v1_client.post(
         f"/v1/workspaces/{workspace.id}/buckets/{bucket.slug}/sync",
         headers=_auth(raw),
     )
-    assert second.status_code == 200
-    assert second.json()["decision"] == "skip"
+    assert second.status_code == 400
 
 
 @pytest.mark.asyncio

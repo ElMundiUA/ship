@@ -116,7 +116,7 @@ function PullRequestRow({ result }: { result: ApiWizardSeedOut }) {
           data-testid="onboarding-done-pr-link"
           className="inline-flex items-center gap-1.5 rounded-full border border-aqua/40 bg-aqua/[0.08] px-3 py-1 text-[11px] font-bold text-aqua hover:bg-aqua/[0.16]"
         >
-          → #{result.pr_number} Ship: bootstrap (open in GitHub)
+          → #{result.pr_number} Ship: wizard seed (open in GitHub)
         </a>
         <span className="rounded-full border border-emerald-400/30 bg-emerald-500/[0.08] px-2 py-0.5 text-[10px] uppercase tracking-widest text-emerald-300">
           opened
@@ -155,7 +155,7 @@ function CodeownersRow({
         </div>
         <p className="mt-2 text-[11px] leading-relaxed text-white/65">
           We didn&apos;t find a <code className="text-white/85">CODEOWNERS</code>{" "}
-          file. Add one and re-run bootstrap to seed routing rules so
+          file. Routing can be reconciled after the seed PR is merged so
           clarification requests land on the right reviewers.{" "}
           <Link
             href="/documentation/inbox-routing#codeowners"
@@ -212,13 +212,13 @@ function LanesRow({
   syntheticLanes: number;
 }) {
   return (
-    <Section label="Lanes activated immediately">
+    <Section label="Lanes after merge">
       <div className="flex flex-wrap items-center gap-2">
         <span className="rounded-full border border-aqua/40 bg-aqua/[0.08] px-2 py-0.5 text-[10px] uppercase tracking-widest text-aqua">
           {syntheticLanes} lane{syntheticLanes === 1 ? "" : "s"}
         </span>
         <span className="text-[11px] text-white/55">
-          so /inbox, /automations, and /coverage start populated now
+          materialized from the merged Ship config
         </span>
         {workspaceId && repoId && (
           <Link
@@ -230,8 +230,8 @@ function LanesRow({
         )}
       </div>
       <p className="mt-2 text-[11px] leading-relaxed text-white/55">
-        Synthetic lanes flip to canonical the moment the seed PR
-        merges (the post-merge webhook reconciles them).
+        The seed PR no longer creates preview lanes. Ship reconciles lanes
+        from the merged default branch.
       </p>
     </Section>
   );
@@ -250,8 +250,8 @@ function IntelRow({
     <Section label="Repo intel" testId="onboarding-done-intel-badge">
       {repoId == null ? (
         <p className="text-[11px] text-white/55">
-          We&apos;ll harvest a repo-intel snapshot once the repo
-          metadata loads.
+          The bootstrap workflow will harvest repo intel after the seed PR
+          lands.
         </p>
       ) : (
         <IntelPollBadge
@@ -267,12 +267,12 @@ function IntelRow({
 function FileCountRow({ fileCount }: { fileCount: number }) {
   return (
     <p className="text-[11px] text-white/45">
-      {fileCount} file{fileCount === 1 ? "" : "s"} committed (CLI,
+      {fileCount} file{fileCount === 1 ? "" : "s"} committed (config,
       workflows, scheduled lanes,{" "}
       <code className="rounded bg-white/5 px-1 text-white/65">
         .ship/config.yml
       </code>
-      , knowledge starters).
+      , bootstrap state).
     </p>
   );
 }
