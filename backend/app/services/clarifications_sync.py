@@ -57,6 +57,10 @@ from backend.app.core.config import Settings
 from backend.app.db.models.agent_surface import Clarification
 from backend.app.db.models.integrations import (
     GitHubInstallation,
+    NativeIntegrationCredential,
+    NativeIntegrationInstallation,
+    NativeIntegrationProvider,
+    NativeIntegrationStatus,
     WorkspaceRepo,
 )
 from backend.app.db.models.tenancy import Integration, Workspace
@@ -243,6 +247,50 @@ async def resolve_tracker_bindings(
 
     out: list[TrackerBinding] = []
 
+    native_linear = (
+        await session.execute(
+            select(NativeIntegrationInstallation)
+            .where(
+                NativeIntegrationInstallation.workspace_id == workspace_id,
+                NativeIntegrationInstallation.provider
+                == NativeIntegrationProvider.LINEAR,
+                NativeIntegrationInstallation.status == NativeIntegrationStatus.READY,
+                NativeIntegrationInstallation.disabled_at.is_(None),
+            )
+            .order_by(NativeIntegrationInstallation.updated_at.desc())
+            .limit(1)
+        )
+    ).scalars().first()
+    native_linear_bound = False
+    if native_linear is not None:
+        credential = (
+            await session.execute(
+                select(NativeIntegrationCredential).where(
+                    NativeIntegrationCredential.installation_id == native_linear.id,
+                    NativeIntegrationCredential.kind == "access_token",
+                    NativeIntegrationCredential.revoked_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if credential is not None:
+            try:
+                token = decrypt(credential.secret_ciphertext)
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "native linear token unreadable for workspace=%s: %s",
+                    workspace_id,
+                    exc,
+                )
+            else:
+                native_linear_bound = True
+                out.append(
+                    TrackerBinding(
+                        provider="linear",
+                        gateway=LinearTracker(token),
+                        scope_hint=None,
+                    )
+                )
+
     integrations = (
         await session.execute(
             select(Integration).where(Integration.workspace_id == workspace_id)
@@ -250,6 +298,8 @@ async def resolve_tracker_bindings(
     ).scalars().all()
     for row in integrations:
         if row.kind == "linear" and row.secret_ciphertext:
+            if native_linear_bound:
+                continue
             try:
                 token = decrypt(row.secret_ciphertext)
             except Exception as exc:  # noqa: BLE001
