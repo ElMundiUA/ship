@@ -37,6 +37,20 @@ type Input = {
   resourceRef?: Record<string, unknown>;
 };
 
+export type GuidedImportItem = {
+  title: string;
+  slug?: string;
+  description?: string;
+  integrationId: string;
+  resourceRef: Record<string, unknown>;
+};
+
+export type GuidedImportResult =
+  | { ok: true; created: { slug: string; title: string }[] }
+  | { ok: false; message: string; status?: number };
+
+const GUIDED_IMPORT_MAX_BUCKETS = 20;
+
 async function requireToken(): Promise<string> {
   const token = await getSessionToken();
   if (!token) {
@@ -151,4 +165,72 @@ export async function createBucketAction(
   // we're fine here because the surrounding try is only for the
   // create call, not this redirect.
   redirect(`/knowledge/${encodeURIComponent(slug)}`);
+}
+
+export async function createGuidedImportAction(
+  input: {
+    scope?: ApiBucketScope;
+    items: GuidedImportItem[];
+  },
+): Promise<GuidedImportResult> {
+  if (input.items.length === 0) {
+    return { ok: false, message: "Select at least one page to import." };
+  }
+  if (input.items.length > GUIDED_IMPORT_MAX_BUCKETS) {
+    return {
+      ok: false,
+      message: `Guided import is capped at ${GUIDED_IMPORT_MAX_BUCKETS} buckets. Split this source into smaller valuable groups first.`,
+    };
+  }
+
+  let token: string;
+  let workspaceId: string;
+  try {
+    token = await requireToken();
+    workspaceId = await requireWorkspaceId(token);
+  } catch (err) {
+    return {
+      ok: false,
+      message: err instanceof Error ? err.message : String(err),
+    };
+  }
+
+  const created: { slug: string; title: string }[] = [];
+  for (const item of input.items) {
+    const title = item.title.trim();
+    if (!title) return { ok: false, message: "Every import row needs a title." };
+    if (!item.integrationId) {
+      return { ok: false, message: "Every import row needs an integration." };
+    }
+    try {
+      const bucket = await createConnectorBucket(
+        workspaceId,
+        {
+          name: title,
+          slug: item.slug?.trim() || undefined,
+          description: item.description?.trim() || undefined,
+          integrationId: item.integrationId,
+          resourceRef: item.resourceRef,
+          scopeKind: input.scope ?? "workspace",
+        },
+        { token },
+      );
+      created.push({ slug: bucket.slug, title });
+    } catch (err) {
+      if (err instanceof ApiHttpError) {
+        const detail =
+          typeof err.detail === "string"
+            ? err.detail
+            : err.detail && typeof err.detail === "object"
+              ? JSON.stringify(err.detail)
+              : err.message;
+        return { ok: false, message: detail, status: err.status };
+      }
+      return {
+        ok: false,
+        message: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+  return { ok: true, created };
 }
