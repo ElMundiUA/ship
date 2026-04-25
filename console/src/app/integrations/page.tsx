@@ -195,7 +195,9 @@ export default async function IntegrationsPage() {
   const { workspace, rows, nativeRows } = data;
   const connectedIds = new Set(rows.map((r) => r.kind));
   const available = CATALOG.filter((c) => !connectedIds.has(c.id));
-  const connectedNativeProviders = new Set(nativeRows.map((r) => r.provider));
+  const connectedNativeProviders = new Set(
+    nativeRows.filter((r) => !r.disabled_at).map((r) => r.provider),
+  );
   const nativeAvailable = NATIVE_CATALOG.filter(
     (c) => !connectedNativeProviders.has(c.id),
   );
@@ -319,11 +321,23 @@ export default async function IntegrationsPage() {
                   </div>
                   <div className="mt-0.5 text-[11px] text-white/55">
                     {i.external_account_name ?? i.external_account_id}
-                    {i.has_credential ? " · credential stored" : " · no credential"}
+                    {i.disabled_at
+                      ? " · disabled"
+                      : i.has_credential
+                      ? " · credential stored"
+                      : " · no credential"}
                   </div>
                   <div className="mt-0.5 text-[10px] text-white/40">
                     {i.capabilities.join(" · ") || "no capabilities"}
                   </div>
+                  {!i.disabled_at && (
+                    <div className="mt-2">
+                      <NativeDisconnectForm
+                        workspaceId={workspace.id}
+                        installationId={i.id}
+                      />
+                    </div>
+                  )}
                 </div>
               </li>
             ))}
@@ -589,6 +603,32 @@ function GitLabNativeForm({ workspaceId }: { workspaceId: string }) {
         </div>
       </form>
     </details>
+  );
+}
+
+function NativeDisconnectForm({
+  workspaceId,
+  installationId,
+}: {
+  workspaceId: string;
+  installationId: string;
+}) {
+  return (
+    <form action="/api/integrations/native-delete" method="POST" className="contents">
+      <input type="hidden" name="ws" value={workspaceId} suppressHydrationWarning />
+      <input
+        type="hidden"
+        name="installation_id"
+        value={installationId}
+        suppressHydrationWarning
+      />
+      <button
+        type="submit"
+        className="text-[10px] font-semibold text-coral/80 hover:text-coral"
+      >
+        Disconnect
+      </button>
+    </form>
   );
 }
 

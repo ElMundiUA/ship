@@ -2913,6 +2913,17 @@ export function listNativeIntegrations(
   );
 }
 
+export function deleteNativeIntegration(
+  workspaceId: string,
+  installationId: string,
+  token?: string,
+): Promise<void> {
+  return apiFetch<void>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/native-integrations/${encodeURIComponent(installationId)}`,
+    { method: "DELETE", token },
+  );
+}
+
 export function connectAtlassianApiToken(
   workspaceId: string,
   input: {

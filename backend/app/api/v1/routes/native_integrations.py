@@ -260,6 +260,104 @@ async def list_native_integrations(
     return [await _row_to_out(session, row) for row in rows]
 
 
+@router.delete(
+    "/{installation_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def disable_native_integration(
+    workspace_id: uuid.UUID,
+    installation_id: uuid.UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """Soft-disable a native provider install and revoke stored credentials."""
+
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+    row = (
+        await session.execute(
+            select(NativeIntegrationInstallation).where(
+                NativeIntegrationInstallation.id == installation_id,
+                NativeIntegrationInstallation.workspace_id == workspace_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="native integration not found")
+
+    now = datetime.now(timezone.utc)
+    row.status = NativeIntegrationStatus.DISABLED
+    row.disabled_at = now
+    row.last_health_error = None
+    row.updated_at = now
+
+    credentials = (
+        await session.execute(
+            select(NativeIntegrationCredential).where(
+                NativeIntegrationCredential.installation_id == row.id,
+                NativeIntegrationCredential.revoked_at.is_(None),
+            )
+        )
+    ).scalars().all()
+    for credential in credentials:
+        credential.revoked_at = now
+        credential.updated_at = now
+
+    await _disable_legacy_shadow_rows(session, row, now)
+
+    session.add(
+        NativeIntegrationAuditEvent(
+            workspace_id=workspace_id,
+            installation_id=row.id,
+            actor_user_id=auth.user.id,
+            provider=row.provider,
+            action="native_integration.disable",
+            target_kind="installation",
+            target_id=str(row.id),
+            payload={
+                "external_account_id": row.external_account_id,
+                "credentials_revoked": len(credentials),
+            },
+        )
+    )
+    await session.flush()
+
+
+async def _disable_legacy_shadow_rows(
+    session: AsyncSession,
+    row: NativeIntegrationInstallation,
+    now: datetime,
+) -> None:
+    """Turn off legacy rows maintained for compatibility with old adapters."""
+
+    legacy_kinds: tuple[str, ...]
+    if row.provider == NativeIntegrationProvider.LINEAR:
+        legacy_kinds = ("linear",)
+    elif row.provider == NativeIntegrationProvider.NOTION:
+        legacy_kinds = ("notion",)
+    elif row.provider == NativeIntegrationProvider.ATLASSIAN:
+        legacy_kinds = ("confluence",)
+    else:
+        legacy_kinds = ()
+
+    if not legacy_kinds:
+        return
+    legacy_rows = (
+        await session.execute(
+            select(Integration).where(
+                Integration.workspace_id == row.workspace_id,
+                Integration.kind.in_(legacy_kinds),
+                Integration.repo_id.is_(None),
+            )
+        )
+    ).scalars().all()
+    for legacy in legacy_rows:
+        legacy.status = "disabled"
+        legacy.secret_ciphertext = None
+        legacy.last_health_at = now
+        legacy.last_health_error = None
+        legacy.updated_at = now
+
+
 @router.post(
     "/azure-devops/pat",
     response_model=NativeIntegrationInstallationOut,
