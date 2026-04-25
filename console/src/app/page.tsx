@@ -140,10 +140,10 @@ function renderWorkspaceHome(ctx: LiveContext) {
             Inbox
           </Link>
           <Link
-            href="/runs"
+            href="/process"
             className="text-xs font-semibold text-white/65 hover:text-white"
           >
-            Runs
+            Process
           </Link>
           <ButtonPrimary>
             <Link href="/inbox">Review actions →</Link>
@@ -188,10 +188,10 @@ function renderMock() {
             Inbox
           </Link>
           <Link
-            href="/runs"
+            href="/process"
             className="text-xs font-semibold text-white/65 hover:text-white"
           >
-            Runs
+            Process
           </Link>
           <ButtonPrimary>
             <Link href="/inbox">Review actions →</Link>
