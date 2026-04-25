@@ -9,6 +9,7 @@ plays, automations, and runs as the operator's main model.
 
 from __future__ import annotations
 
+import json
 import uuid
 from collections import defaultdict
 from datetime import datetime
@@ -21,14 +22,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.api.v1.deps import AuthContext, get_current_auth
 from backend.app.api.v1.routes.workspaces import (
+    ROLES_MAINTAIN,
     ROLES_READ,
     _require_membership,
 )
+from backend.app.core.config import Settings, get_settings
+from backend.app.db.models.agent_surface import Clarification
 from backend.app.db.models.inbox import InboxItem
 from backend.app.db.models.integrations import WorkspaceRepo
 from backend.app.db.models.lanes import Lane
 from backend.app.db.models.pipelines import Pipeline, PipelineRun
+from backend.app.db.models.tenancy import AuditLog
 from backend.app.db.session import get_session
+from backend.app.integrations.gateway.tracker import TicketRef
+from backend.app.services.agent.tools import ToolBox, ToolInvocationError
+from backend.app.services.inbox.dual_write import mirror_clarification_create
 
 
 router = APIRouter(
@@ -181,6 +189,46 @@ class ProcessOut(ProcessSummaryOut):
     adapter_diagnostics: list[ProcessAdapterDiagnosticOut] = Field(default_factory=list)
 
 
+class ProcessTicketPickerOut(BaseModel):
+    tracker: str | None = None
+    tickets: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ProcessExitTicketRefIn(BaseModel):
+    kind: Literal["github_issues", "linear", "notion", "jira"]
+    id: str = Field(min_length=1, max_length=255)
+    workspace_hint: str | None = Field(default=None, max_length=255)
+    display_id: str | None = Field(default=None, max_length=255)
+    url: str | None = Field(default=None, max_length=1024)
+
+
+class ProcessExitIntentIn(BaseModel):
+    type: Literal["clarification", "handoff", "complete_with_pr_or_result"]
+    state_id: str = Field(min_length=1, max_length=128)
+    ticket: ProcessExitTicketRefIn | None = None
+    tracker: str | None = Field(default=None, max_length=32)
+    project_hint: str | None = Field(default=None, max_length=255)
+    message: str | None = Field(default=None, max_length=16_000)
+    to_state_id: str | None = Field(default=None, max_length=128)
+    tracker_state: str | None = Field(default=None, max_length=128)
+    pr_url: str | None = Field(default=None, max_length=1024)
+    result_summary: str | None = Field(default=None, max_length=16_000)
+    artifacts: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ProcessExitIntentOut(BaseModel):
+    type: str
+    status: Literal["accepted", "rejected"]
+    process_id: str
+    state_id: str
+    to_state_id: str | None = None
+    audit_action: str
+    clarification_id: uuid.UUID | None = None
+    tracker_action: str | None = None
+    pr_url: str | None = None
+    result_summary: str | None = None
+
+
 @router.get("", response_model=ProcessListOut)
 async def list_processes(
     workspace_id: uuid.UUID,
@@ -232,6 +280,418 @@ async def get_process(
             detail="process not found",
         )
     return await _build_development_process(session, workspace_id, repo_id=repo_id)
+
+
+@router.get("/{process_id}/tickets", response_model=ProcessTicketPickerOut)
+async def list_process_tickets(
+    workspace_id: uuid.UUID,
+    process_id: str,
+    tracker: str | None = Query(default=None),
+    project_hint: str | None = Query(default=None),
+    state: Literal["open", "closed", "all"] | None = Query(default="open"),
+    query: str | None = Query(default=None),
+    assignee_me: bool = Query(default=False),
+    assignee: str | None = Query(default=None),
+    limit: int = Query(default=10, ge=1, le=25),
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> ProcessTicketPickerOut:
+    """Read-only tracker picker for selecting ticket context before agent work."""
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
+    if process_id != PRIMARY_PROCESS_ID:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="process not found",
+        )
+    toolbox = ToolBox(
+        session,
+        settings=settings,
+        workspace_id=workspace_id,
+        user_id=auth.user.id,
+    )
+    try:
+        raw = await toolbox._tool_list_tickets(  # noqa: SLF001 - read-only reuse of the agent gateway
+            {
+                "tracker": tracker,
+                "project_hint": project_hint,
+                "state": state,
+                "query": query,
+                "assignee_me": assignee_me,
+                "assignee": assignee,
+                "limit": limit,
+            }
+        )
+        data = json.loads(raw)
+    except ToolInvocationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "ticket_picker_failed", "message": str(exc)},
+        ) from exc
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={"code": "ticket_picker_bad_response"},
+        ) from exc
+    tickets = list(data.get("tickets") or [])
+    _add_process_audit(
+        session,
+        workspace_id=workspace_id,
+        auth=auth,
+        action="process.ticket_picker.listed",
+        process_id=process_id,
+        payload={
+            "tracker": data.get("tracker") or tracker,
+            "project_hint": project_hint,
+            "state": state,
+            "query": query,
+            "assignee_me": assignee_me,
+            "assignee": assignee,
+            "limit": limit,
+            "ticket_count": len(tickets),
+        },
+    )
+    await session.flush()
+    return ProcessTicketPickerOut(
+        tracker=data.get("tracker"),
+        tickets=tickets,
+    )
+
+
+@router.post("/{process_id}/exits", response_model=ProcessExitIntentOut)
+async def submit_process_exit_intent(
+    workspace_id: uuid.UUID,
+    process_id: str,
+    payload: ProcessExitIntentIn,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> ProcessExitIntentOut:
+    """Ship-owned side effects for specialist exit intents."""
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_MAINTAIN)
+    process = await _require_process(session, workspace_id, process_id)
+    _require_state(process, payload.state_id)
+
+    if payload.type == "clarification":
+        return await _handle_clarification_exit(
+            session=session,
+            settings=settings,
+            workspace_id=workspace_id,
+            process_id=process_id,
+            auth=auth,
+            payload=payload,
+        )
+    if payload.type == "handoff":
+        return await _handle_handoff_exit(
+            session=session,
+            settings=settings,
+            workspace_id=workspace_id,
+            process=process,
+            process_id=process_id,
+            auth=auth,
+            payload=payload,
+        )
+    return await _handle_completion_exit(
+        session=session,
+        workspace_id=workspace_id,
+        process_id=process_id,
+        auth=auth,
+        payload=payload,
+    )
+
+
+async def _require_process(
+    session: AsyncSession, workspace_id: uuid.UUID, process_id: str
+) -> ProcessOut:
+    if process_id != PRIMARY_PROCESS_ID:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="process not found",
+        )
+    return await _build_development_process(session, workspace_id)
+
+
+def _require_state(process: ProcessOut, state_id: str) -> ProcessStateOut:
+    for state in process.states:
+        if state.id == state_id:
+            return state
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail={"code": "unknown_process_state", "state_id": state_id},
+    )
+
+
+def _find_transition(
+    process: ProcessOut, from_state_id: str, to_state_id: str
+) -> ProcessTransitionOut | None:
+    for transition in process.transitions:
+        if (
+            transition.from_state_id == from_state_id
+            and transition.to_state_id == to_state_id
+        ):
+            return transition
+    return None
+
+
+async def _handle_clarification_exit(
+    *,
+    session: AsyncSession,
+    settings: Settings,
+    workspace_id: uuid.UUID,
+    process_id: str,
+    auth: AuthContext,
+    payload: ProcessExitIntentIn,
+) -> ProcessExitIntentOut:
+    message = (payload.message or "").strip()
+    if not message:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "clarification_message_required"},
+        )
+    if payload.ticket is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "ticket_required_for_clarification"},
+        )
+
+    ticket_ref = _to_ticket_ref(payload.ticket)
+    tracker = await _resolve_tracker_for_exit(
+        session=session,
+        settings=settings,
+        workspace_id=workspace_id,
+        user_id=auth.user.id,
+        tracker=payload.tracker or payload.ticket.kind,
+        project_hint=payload.project_hint,
+    )
+    await tracker.comment(ticket_ref, body=_render_clarification_comment(message))
+
+    clarification = Clarification(
+        workspace_id=workspace_id,
+        ticket_ref=payload.ticket.display_id or payload.ticket.id,
+        question=message,
+        status="open",
+        context={
+            "process_id": process_id,
+            "state_id": payload.state_id,
+            "exit_type": payload.type,
+            "ticket": payload.ticket.model_dump(),
+        },
+        source="tracker",
+        tracker_provider=payload.ticket.kind,
+        tracker_issue_key=payload.ticket.display_id or payload.ticket.id,
+        tracker_issue_url=payload.ticket.url,
+    )
+    session.add(clarification)
+    await session.flush()
+    await mirror_clarification_create(
+        session,
+        clarification=clarification,
+        actor_user_id=auth.user.id,
+    )
+
+    _add_process_audit(
+        session,
+        workspace_id=workspace_id,
+        auth=auth,
+        action="process.exit.clarification_posted",
+        process_id=process_id,
+        payload={
+            "state_id": payload.state_id,
+            "ticket": payload.ticket.model_dump(),
+            "clarification_id": str(clarification.id),
+        },
+    )
+    await session.flush()
+    return ProcessExitIntentOut(
+        type=payload.type,
+        status="accepted",
+        process_id=process_id,
+        state_id=payload.state_id,
+        audit_action="process.exit.clarification_posted",
+        clarification_id=clarification.id,
+        tracker_action="comment",
+    )
+
+
+async def _handle_handoff_exit(
+    *,
+    session: AsyncSession,
+    settings: Settings,
+    workspace_id: uuid.UUID,
+    process: ProcessOut,
+    process_id: str,
+    auth: AuthContext,
+    payload: ProcessExitIntentIn,
+) -> ProcessExitIntentOut:
+    to_state_id = (payload.to_state_id or "").strip()
+    if not to_state_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "to_state_id_required"},
+        )
+    _require_state(process, to_state_id)
+    transition = _find_transition(process, payload.state_id, to_state_id)
+    if transition is None:
+        _add_process_audit(
+            session,
+            workspace_id=workspace_id,
+            auth=auth,
+            action="process.exit.handoff_rejected",
+            process_id=process_id,
+            payload={
+                "from_state_id": payload.state_id,
+                "to_state_id": to_state_id,
+                "reason": "transition_not_configured",
+            },
+        )
+        await session.flush()
+        return ProcessExitIntentOut(
+            type=payload.type,
+            status="rejected",
+            process_id=process_id,
+            state_id=payload.state_id,
+            to_state_id=to_state_id,
+            audit_action="process.exit.handoff_rejected",
+        )
+
+    tracker_action: str | None = None
+    if payload.ticket is not None:
+        tracker = await _resolve_tracker_for_exit(
+            session=session,
+            settings=settings,
+            workspace_id=workspace_id,
+            user_id=auth.user.id,
+            tracker=payload.tracker or payload.ticket.kind,
+            project_hint=payload.project_hint,
+        )
+        await tracker.transition(
+            _to_ticket_ref(payload.ticket),
+            to_state=(payload.tracker_state or to_state_id),
+        )
+        tracker_action = "transition"
+
+    _add_process_audit(
+        session,
+        workspace_id=workspace_id,
+        auth=auth,
+        action="process.exit.handoff_completed",
+        process_id=process_id,
+        payload={
+            "from_state_id": payload.state_id,
+            "to_state_id": to_state_id,
+            "transition_id": transition.id,
+            "ticket": payload.ticket.model_dump() if payload.ticket else None,
+            "tracker_state": payload.tracker_state or to_state_id,
+        },
+    )
+    await session.flush()
+    return ProcessExitIntentOut(
+        type=payload.type,
+        status="accepted",
+        process_id=process_id,
+        state_id=payload.state_id,
+        to_state_id=to_state_id,
+        audit_action="process.exit.handoff_completed",
+        tracker_action=tracker_action,
+    )
+
+
+async def _handle_completion_exit(
+    *,
+    session: AsyncSession,
+    workspace_id: uuid.UUID,
+    process_id: str,
+    auth: AuthContext,
+    payload: ProcessExitIntentIn,
+) -> ProcessExitIntentOut:
+    summary = (payload.result_summary or "").strip()
+    pr_url = (payload.pr_url or "").strip() or None
+    if not summary and pr_url is None and not payload.artifacts:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "completion_result_required"},
+        )
+    _add_process_audit(
+        session,
+        workspace_id=workspace_id,
+        auth=auth,
+        action="process.exit.completed",
+        process_id=process_id,
+        payload={
+            "state_id": payload.state_id,
+            "pr_url": pr_url,
+            "result_summary": summary or None,
+            "artifacts": payload.artifacts,
+        },
+    )
+    await session.flush()
+    return ProcessExitIntentOut(
+        type=payload.type,
+        status="accepted",
+        process_id=process_id,
+        state_id=payload.state_id,
+        audit_action="process.exit.completed",
+        pr_url=pr_url,
+        result_summary=summary or None,
+    )
+
+
+async def _resolve_tracker_for_exit(
+    *,
+    session: AsyncSession,
+    settings: Settings,
+    workspace_id: uuid.UUID,
+    user_id: uuid.UUID,
+    tracker: str | None,
+    project_hint: str | None,
+):
+    toolbox = ToolBox(
+        session,
+        settings=settings,
+        workspace_id=workspace_id,
+        user_id=user_id,
+    )
+    try:
+        return await toolbox._resolve_tracker(tracker, project_hint)  # noqa: SLF001 - Ship-owned side effect gateway
+    except ToolInvocationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "tracker_resolution_failed", "message": str(exc)},
+        ) from exc
+
+
+def _to_ticket_ref(ticket: ProcessExitTicketRefIn) -> TicketRef:
+    return TicketRef(
+        kind=ticket.kind,
+        workspace_hint=ticket.workspace_hint,
+        id=ticket.id,
+    )
+
+
+def _render_clarification_comment(message: str) -> str:
+    return f"> **@ship clarification:**\n{message.strip()}\n"
+
+
+def _add_process_audit(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    auth: AuthContext,
+    action: str,
+    process_id: str,
+    payload: dict[str, Any],
+) -> None:
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=auth.user.id,
+            actor_token_id=auth.token.id if auth.token else None,
+            action=action,
+            target_kind="process",
+            target_id=process_id,
+            payload=payload,
+        )
+    )
 
 
 async def _build_development_process(

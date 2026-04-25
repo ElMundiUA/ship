@@ -99,6 +99,17 @@ COMMANDS
                                          RunSummary outcome) back to Ship so it can
                                          render the outcome row and route any
                                          escalations into the Inbox.
+    shipctl process prompt --state <id> [--ticket-json <json>] [--policies-file <path>]
+                           [--cwd <dir>] [--json]
+                                      — assemble a Process/FSM specialist prompt
+                                        bundle with ticket context, allowed
+                                        transitions, policies, and mandatory
+                                        knowledge-first guardrails.
+    shipctl process tickets --workspace <id> [--query <text>] [--tracker <kind>] [--json]
+                                      — read-only tracker picker for selecting
+                                        ticket context before building a process
+                                        prompt. Does not create, comment, or
+                                        transition tickets.
 
   Knowledge
     shipctl knowledge init [--workspace <id>] [--repo <id|owner/name>] [--only <csv>] [--json]

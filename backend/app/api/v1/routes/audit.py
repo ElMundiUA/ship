@@ -75,6 +75,7 @@ _ALLOWED_ACTION_PREFIXES = (
     "improvement.",
     "clarification.",
     "agent.",
+    "process.",
 )
 
 # Target-kind values actually minted by the writer routes. Kept in lock-step
@@ -94,6 +95,7 @@ _ALLOWED_TARGET_KINDS = frozenset(
         "github_installation",
         "improvement",
         "clarification",
+        "process",
     }
 )
 

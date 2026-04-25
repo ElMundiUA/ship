@@ -140,6 +140,12 @@ try {
     process.exit(0);
   }
 
+  if (cmd === "process") {
+    const { processCommand } = await import("../lib/commands/process.mjs");
+    await processCommand(ctx, rest);
+    process.exit(0);
+  }
+
   if (cmd === "migrate") {
     const { migrateCommand } = await import("../lib/commands/migrate.mjs");
     await migrateCommand(ctx, rest);
