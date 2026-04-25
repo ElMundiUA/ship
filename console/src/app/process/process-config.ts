@@ -4,6 +4,10 @@ import type {
   ApiRepoConfig,
 } from "@/lib/api/client";
 
+type ProcessStateWithAgentProfile = ApiProcessState & {
+  specialist_agent_profile?: string | null;
+};
+
 export type ProcessConfigSource =
   | "repo-process"
   | "repo-lanes"
@@ -93,6 +97,7 @@ export function processConfigFromApiProcess(process: ApiProcess): Record<string,
       specialist: {
         id: state.specialist_id,
         name: state.specialist_name,
+        agent_profile: agentProfileFromState(state),
       },
       instructions: state.instructions,
       ...(state.layout ? { layout: state.layout } : {}),
@@ -138,6 +143,11 @@ function stateFromConfig(
       stringValue(specialist?.name) ??
       fallback?.specialist_name ??
       "Owner",
+    specialist_agent_profile:
+      stringValue(specialist?.agent_profile) ??
+      stringValue(row.agent_profile) ??
+      agentProfileFromState(fallback) ??
+      "auto",
     instructions:
       stringValue(row.instructions) ??
       stringValue(row.description) ??
@@ -162,7 +172,7 @@ function stateFromConfig(
       last_execution_time: null,
       health: "ok",
     },
-  };
+  } as ProcessStateWithAgentProfile;
 }
 
 function layoutFromConfig(value: unknown): ApiProcessState["layout"] | null {
@@ -221,6 +231,11 @@ function numberValue(value: unknown): number | null {
 
 function booleanValue(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
+}
+
+function agentProfileFromState(state: ApiProcessState | undefined): string {
+  const extended = state as ProcessStateWithAgentProfile | undefined;
+  return extended?.specialist_agent_profile || "auto";
 }
 
 function titleFromId(value: string): string {

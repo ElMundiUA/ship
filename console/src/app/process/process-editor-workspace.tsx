@@ -157,6 +157,7 @@ export function ProcessEditorWorkspace({
       name: "New State",
       specialist_id: defaultSpecialist.id,
       specialist_name: defaultSpecialist.name,
+      specialist_agent_profile: "auto",
       instructions: "Describe what should happen in this step.",
       layout: {
         x: (anchor?.layout?.x ?? 72) + 266,
@@ -171,7 +172,7 @@ export function ProcessEditorWorkspace({
         last_execution_time: null,
         health: "ok",
       },
-    };
+    } as ApiProcessState;
     setStates((current) => [
       ...current.slice(0, selectedIndex + 1),
       nextState,
@@ -404,12 +405,20 @@ function stateFingerprint(state: ApiProcessState) {
     name: state.name,
     specialist_id: state.specialist_id,
     specialist_name: state.specialist_name,
+    specialist_agent_profile: agentProfileFromState(state),
     instructions: state.instructions,
     layout: state.layout ?? null,
     triggers: state.triggers,
     exit_conditions: state.exit_conditions,
     block_conditions: state.block_conditions,
   });
+}
+
+function agentProfileFromState(state: ApiProcessState) {
+  return (
+    (state as ApiProcessState & { specialist_agent_profile?: string | null })
+      .specialist_agent_profile || "auto"
+  );
 }
 
 function transitionFingerprint(transitions: ApiProcess["transitions"]) {
