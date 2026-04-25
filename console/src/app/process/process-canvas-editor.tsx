@@ -35,7 +35,6 @@ export function ProcessCanvasEditor({
   workspaceId,
   process,
   selectedStateId,
-  editMode,
   repoId,
   config,
   processConfig,
@@ -43,7 +42,6 @@ export function ProcessCanvasEditor({
   workspaceId: string;
   process: ApiProcess;
   selectedStateId?: string;
-  editMode: boolean;
   repoId?: string;
   config: ApiRepoConfig | null;
   processConfig: Record<string, unknown>;
@@ -190,7 +188,6 @@ export function ProcessCanvasEditor({
     event: ReactPointerEvent<HTMLDivElement>,
     stateId: string,
   ) {
-    if (!editMode) return;
     const pos = positions[stateId] ?? initialPositions[stateId];
     if (!pos) return;
     const rect = canvasRef.current?.getBoundingClientRect();
@@ -212,7 +209,7 @@ export function ProcessCanvasEditor({
     event: ReactMouseEvent<HTMLDivElement>,
     stateId: string,
   ) {
-    if (!editMode || dragRef.current) return;
+    if (dragRef.current) return;
     const pos = positions[stateId] ?? initialPositions[stateId];
     if (!pos) return;
     const rect = canvasRef.current?.getBoundingClientRect();
@@ -332,7 +329,6 @@ export function ProcessCanvasEditor({
                 step={index + 1}
                 x={pos.x}
                 y={pos.y}
-                editMode={editMode}
                 onPointerDown={(event) => onPointerDown(event, state.id)}
                 onMouseDown={(event) => onMouseDown(event, state.id)}
                 onClick={() => onNodeClick(state.id)}
@@ -351,7 +347,6 @@ function StateNode({
   step,
   x,
   y,
-  editMode,
   onPointerDown,
   onMouseDown,
   onClick,
@@ -361,7 +356,6 @@ function StateNode({
   step: number;
   x: number;
   y: number;
-  editMode: boolean;
   onPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void;
   onMouseDown: (event: ReactMouseEvent<HTMLDivElement>) => void;
   onClick: () => void;
@@ -383,7 +377,7 @@ function StateNode({
       style={{ left: x, top: y, touchAction: "none", userSelect: "none" }}
       className={[
         "absolute block h-[108px] w-[210px] rounded-2xl border p-4 transition",
-        editMode ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
+        "cursor-grab active:cursor-grabbing",
         selected
           ? "border-aqua/60 bg-aqua/[0.08] shadow-glow"
           : "border-white/10 bg-white/[0.035] hover:border-white/25 hover:bg-white/[0.06]",
