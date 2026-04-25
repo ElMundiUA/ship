@@ -20,7 +20,7 @@ class TicketRef:
     in ``id`` and let the kind drive interpretation.
     """
 
-    kind: Literal["github_issues", "linear", "notion"]
+    kind: Literal["github_issues", "linear", "notion", "jira"]
     workspace_hint: str | None  # org/team/database id, vendor-specific
     id: str
 
