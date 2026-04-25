@@ -410,6 +410,11 @@ function TransitionEditor({
   transitions: ApiProcessTransition[];
   onChange: (transitions: ApiProcessTransition[]) => void;
 }) {
+  const outgoingTransitions = transitions
+    .map((transition, index) => ({ transition, index }))
+    .filter(({ transition }) => transition.from_state_id === selectedStateId);
+  const availableTargets = states.filter((state) => state.id !== selectedStateId);
+
   function patchTransition(
     index: number,
     patch: Partial<ApiProcessTransition>,
@@ -429,7 +434,14 @@ function TransitionEditor({
 
   function addTransition() {
     const firstTarget =
-      states.find((state) => state.id !== selectedStateId)?.id ?? selectedStateId;
+      availableTargets.find(
+        (state) =>
+          !outgoingTransitions.some(
+            ({ transition }) => transition.to_state_id === state.id,
+          ),
+      )?.id ??
+      availableTargets[0]?.id ??
+      selectedStateId;
     const next = {
       id: "",
       from_state_id: selectedStateId,
@@ -444,45 +456,37 @@ function TransitionEditor({
       <div className="flex items-center justify-between gap-3">
         <div>
           <div className="text-[10px] font-bold uppercase tracking-widest text-white/45">
-            Transitions
+            Next steps
           </div>
           <div className="mt-1 text-xs text-white/45">
-            Define how states connect in this process.
+            Choose where this state can move next.
           </div>
         </div>
         <button
           type="button"
           onClick={addTransition}
-          disabled={states.length < 2}
+          disabled={availableTargets.length === 0}
           className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-xs font-semibold text-white/70 hover:border-white/20 disabled:cursor-not-allowed disabled:text-white/30"
         >
           Add
         </button>
       </div>
       <div className="mt-3 space-y-3">
-        {transitions.map((transition, index) => (
+        {outgoingTransitions.map(({ transition, index }) => (
           <div
             key={`${transition.id}-${index}`}
             className="rounded-xl border border-white/10 bg-black/15 p-2"
           >
-            <div className="grid grid-cols-2 gap-2">
-              <TransitionSelect
-                label="From"
-                value={transition.from_state_id}
-                states={states}
-                onChange={(value) =>
-                  patchTransition(index, { from_state_id: value })
-                }
-              />
-              <TransitionSelect
-                label="To"
-                value={transition.to_state_id}
-                states={states}
-                onChange={(value) =>
-                  patchTransition(index, { to_state_id: value })
-                }
-              />
-            </div>
+            <TransitionSelect
+              label="Move to"
+              value={transition.to_state_id}
+              states={availableTargets}
+              onChange={(value) => patchTransition(index, { to_state_id: value })}
+            />
+            <label className="mt-2 block">
+              <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/35">
+                Rule for this path
+              </span>
             <input
               value={transition.conditions[0]?.expression ?? ""}
               onChange={(event) =>
@@ -492,9 +496,10 @@ function TransitionEditor({
                     : [],
                 })
               }
-              placeholder="Condition, e.g. exit_conditions_met == true"
+              placeholder="Optional expression, e.g. exit_conditions_met == true"
               className="mt-2 w-full rounded-lg border border-white/10 bg-white/[0.04] px-2 py-2 text-xs text-white outline-none focus:border-aqua/40"
             />
+            </label>
             <button
               type="button"
               onClick={() =>
@@ -506,9 +511,9 @@ function TransitionEditor({
             </button>
           </div>
         ))}
-        {transitions.length === 0 && (
+        {outgoingTransitions.length === 0 && (
           <div className="rounded-xl border border-white/10 bg-black/15 px-3 py-2 text-xs text-white/45">
-            No transitions yet.
+            No next steps from this state yet.
           </div>
         )}
       </div>
