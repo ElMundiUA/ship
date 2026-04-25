@@ -32,6 +32,7 @@ jobs:
         env:
           SHIP_API_TOKEN: ${{ secrets.SHIP_API_TOKEN }}
           SHIP_WORKSPACE_API_BASE: ${{ secrets.SHIP_API_BASE }}
+          SHIP_API_BASE: ${{ secrets.SHIP_API_BASE }}
           SHIP_REPO: ${{ github.repository }}
           SHIP_EVENT_NAME: ${{ github.event_name }}
           SHIP_REF: ${{ github.ref }}
@@ -47,6 +48,6 @@ jobs:
 
           while IFS= read -r lane; do
             echo "::group::Ship lane ${lane}"
-            shipctl run --lane "$lane" --trigger schedule
+            SHIP_REPO="" shipctl run --lane "$lane" --trigger schedule
             echo "::endgroup::"
           done < /tmp/ship-due-lanes.txt
