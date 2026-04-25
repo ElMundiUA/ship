@@ -8,12 +8,17 @@ import type {
   ApiProcessTransition,
   ApiRepoConfig,
 } from "@/lib/api/client";
+import { AGENT_PROFILE_OPTIONS } from "./agent-profile-catalog";
 
 export type SpecialistOption = {
   id: string;
   name: string;
   role: string;
   source?: "catalog" | "process" | "custom";
+};
+
+type EditableProcessState = ApiProcessState & {
+  specialist_agent_profile?: string | null;
 };
 
 export function StateEditor({
@@ -60,7 +65,7 @@ export function StateEditor({
     "The agent needs a decision, approval, or missing context.",
   );
 
-  function patchState(patch: Partial<ApiProcessState>) {
+  function patchState(patch: Partial<EditableProcessState>) {
     onStateChange({ ...selectedState, ...patch });
   }
 
@@ -137,6 +142,10 @@ export function StateEditor({
             label="Role display name"
             value={selectedState.specialist_name}
             onChange={(value) => patchState({ specialist_name: value })}
+          />
+          <AgentProfileSelector
+            value={agentProfileFromState(selectedState)}
+            onChange={(value) => patchState({ specialist_agent_profile: value })}
           />
           <label className="block">
             <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/45">
@@ -364,6 +373,39 @@ function sourceLabel(source: NonNullable<SpecialistOption["source"]>) {
   if (source === "catalog") return "Base catalog";
   if (source === "process") return "Process";
   return "Custom";
+}
+
+function AgentProfileSelector({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const selectedOption =
+    AGENT_PROFILE_OPTIONS.find((option) => option.id === value) ??
+    AGENT_PROFILE_OPTIONS[0];
+  return (
+    <label className="block">
+      <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/45">
+        Execution backend
+      </span>
+      <select
+        value={selectedOption.id}
+        onChange={(event) => onChange(event.target.value)}
+        className="w-full rounded-xl border border-white/10 bg-ink px-3 py-2 text-sm text-white outline-none focus:border-aqua/40"
+      >
+        {AGENT_PROFILE_OPTIONS.map((option) => (
+          <option key={option.id} value={option.id}>
+            {option.name}
+          </option>
+        ))}
+      </select>
+      <span className="mt-1 block text-xs text-white/40">
+        {selectedOption.description}
+      </span>
+    </label>
+  );
 }
 
 function EditorField({
@@ -599,4 +641,9 @@ function humanCondition(value: string | undefined, fallback: string): string {
     return "The agent needs a decision, approval, or missing context.";
   }
   return value;
+}
+
+function agentProfileFromState(state: ApiProcessState): string {
+  const extended = state as EditableProcessState;
+  return extended.specialist_agent_profile || "auto";
 }
