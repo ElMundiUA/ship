@@ -1,19 +1,28 @@
+"use client";
+
 import { Card, CardHeader } from "@/components/ui";
-import type { ApiProcessState, ApiRepoConfig } from "@/lib/api/client";
-import { ProcessConfigProposalFields } from "./process-config-proposal-fields";
+import type {
+  ApiProcessState,
+  ApiProcessTransition,
+  ApiRepoConfig,
+} from "@/lib/api/client";
 
 export function StateEditor({
-  workspaceId,
   repoId,
   state,
+  states,
+  transitions,
   config,
-  processConfig,
+  onStateChange,
+  onTransitionsChange,
 }: {
-  workspaceId: string;
   repoId?: string;
   state?: ApiProcessState;
+  states: ApiProcessState[];
+  transitions: ApiProcessTransition[];
   config: ApiRepoConfig | null;
-  processConfig: Record<string, unknown>;
+  onStateChange: (state: ApiProcessState) => void;
+  onTransitionsChange: (transitions: ApiProcessTransition[]) => void;
 }) {
   if (!state) {
     return (
@@ -22,8 +31,9 @@ export function StateEditor({
       </Card>
     );
   }
-  const exitExpression = state.exit_conditions[0]?.expression ?? "";
-  const blockExpression = state.block_conditions[0]?.expression ?? "";
+  const selectedState = state;
+  const exitExpression = selectedState.exit_conditions[0]?.expression ?? "";
+  const blockExpression = selectedState.block_conditions[0]?.expression ?? "";
   const exitLabel = humanCondition(
     exitExpression,
     "The owner marks the step complete.",
@@ -32,6 +42,32 @@ export function StateEditor({
     blockExpression,
     "The agent needs a decision, approval, or missing context.",
   );
+
+  function patchState(patch: Partial<ApiProcessState>) {
+    onStateChange({ ...selectedState, ...patch });
+  }
+
+  function patchTrigger(
+    patch: Partial<ApiProcessState["triggers"][number]>,
+  ) {
+    const trigger = selectedState.triggers[0] ?? {
+      type: "manual" as const,
+      interval: null,
+      event: null,
+    };
+    patchState({ triggers: [{ ...trigger, ...patch }] });
+  }
+
+  function patchCondition(
+    kind: "exit_conditions" | "block_conditions",
+    value: string,
+    originalExpression: string,
+    originalLabel: string,
+  ) {
+    const expression =
+      value === originalLabel ? originalExpression : value.trim();
+    patchState({ [kind]: expression ? [{ expression }] : [] });
+  }
 
   return (
     <aside className="min-h-0 xl:sticky xl:top-28 xl:max-h-[calc(100vh-8rem)] xl:overflow-y-auto">
@@ -50,31 +86,26 @@ export function StateEditor({
             Select a repository before saving process changes.
           </div>
         )}
-        <form action="/api/process/config-propose" method="post" className="space-y-4">
-          <ProcessConfigProposalFields
-            workspaceId={workspaceId}
-            repoId={repoId}
-            config={config}
-            processConfig={processConfig}
-            stateId={state.id}
-          />
-          <input type="hidden" name="originalExitCondition" value={exitExpression} />
-          <input type="hidden" name="originalExitConditionLabel" value={exitLabel} />
-          <input type="hidden" name="originalBlockCondition" value={blockExpression} />
-          <input type="hidden" name="originalBlockConditionLabel" value={blockLabel} />
-          <EditorField name="stateName" label="Step name" defaultValue={state.name} />
+        <div className="space-y-4">
           <EditorField
-            name="specialistName"
+            label="Step name"
+            value={selectedState.name}
+            onChange={(value) => patchState({ name: value })}
+          />
+          <EditorField
             label="Owner role"
-            defaultValue={state.specialist_name}
+            value={selectedState.specialist_name}
+            onChange={(value) => patchState({ specialist_name: value })}
           />
           <label className="block">
             <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/45">
               What should happen here
             </span>
             <textarea
-              name="instructions"
-              defaultValue={state.instructions}
+              value={selectedState.instructions}
+              onChange={(event) =>
+                patchState({ instructions: event.target.value })
+              }
               rows={5}
               className="w-full resize-none rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm leading-relaxed text-white outline-none focus:border-aqua/40"
             />
@@ -84,8 +115,13 @@ export function StateEditor({
               Starts when
             </div>
             <select
-              name="triggerType"
-              defaultValue={state.triggers[0]?.type ?? "manual"}
+              value={selectedState.triggers[0]?.type ?? "manual"}
+              onChange={(event) =>
+                patchTrigger({
+                  type: event.target
+                    .value as ApiProcessState["triggers"][number]["type"],
+                })
+              }
               className="mt-2 w-full rounded-lg border border-white/10 bg-ink px-2 py-2 text-sm text-white outline-none focus:border-aqua/40"
             >
               <option value="manual">Someone starts it manually</option>
@@ -93,29 +129,51 @@ export function StateEditor({
               <option value="schedule">It runs on a schedule</option>
             </select>
             <input
-              name="triggerDetail"
-              defaultValue={humanTriggerDetail(state)}
+              value={humanTriggerDetail(selectedState)}
+              onChange={(event) => {
+                const type = selectedState.triggers[0]?.type ?? "manual";
+                patchTrigger(
+                  type === "schedule"
+                    ? { interval: event.target.value, event: null }
+                    : type === "event"
+                      ? { interval: null, event: event.target.value }
+                      : { interval: null, event: null },
+                );
+              }}
               placeholder="Example: every weekday morning, or ticket moved to Ready"
               className="mt-2 w-full rounded-lg border border-white/10 bg-white/[0.04] px-2 py-2 text-xs text-white outline-none focus:border-aqua/40"
             />
           </div>
           <RuleTextArea
-            name="exitCondition"
             label="Ready to move forward when"
             value={exitLabel}
+            onChange={(value) =>
+              patchCondition(
+                "exit_conditions",
+                value,
+                exitExpression,
+                exitLabel,
+              )
+            }
           />
           <RuleTextArea
-            name="blockCondition"
             label="Pause and ask for help when"
             value={blockLabel}
+            onChange={(value) =>
+              patchCondition(
+                "block_conditions",
+                value,
+                blockExpression,
+                blockLabel,
+              )
+            }
           />
-          <button
-            type="submit"
-            disabled={!repoId}
-            className="w-full rounded-full border border-aqua/30 bg-aqua/10 px-3 py-2 text-xs font-bold text-aqua transition hover:bg-aqua/15 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/[0.05] disabled:text-white/35"
-          >
-            Open config PR
-          </button>
+          <TransitionEditor
+            selectedStateId={selectedState.id}
+            states={states}
+            transitions={transitions}
+            onChange={onTransitionsChange}
+          />
           {config?.raw_yaml && (
             <details className="rounded-xl border border-white/10 bg-white/[0.025] p-3">
               <summary className="cursor-pointer text-[10px] font-bold uppercase tracking-widest text-white/45">
@@ -126,20 +184,20 @@ export function StateEditor({
               </pre>
             </details>
           )}
-        </form>
+        </div>
       </Card>
     </aside>
   );
 }
 
 function EditorField({
-  name,
   label,
-  defaultValue,
+  value,
+  onChange,
 }: {
-  name: string;
   label: string;
-  defaultValue: string;
+  value: string;
+  onChange: (value: string) => void;
 }) {
   return (
     <label className="block">
@@ -147,8 +205,8 @@ function EditorField({
         {label}
       </span>
       <input
-        name={name}
-        defaultValue={defaultValue}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
         className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none focus:border-aqua/40"
       />
     </label>
@@ -156,13 +214,13 @@ function EditorField({
 }
 
 function RuleTextArea({
-  name,
   label,
   value,
+  onChange,
 }: {
-  name: string;
   label: string;
   value: string;
+  onChange: (value: string) => void;
 }) {
   return (
     <div className="rounded-xl border border-white/10 bg-white/[0.025] p-3">
@@ -170,13 +228,167 @@ function RuleTextArea({
         {label}
       </div>
       <textarea
-        name={name}
-        defaultValue={value}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
         rows={3}
         className="mt-2 w-full resize-none rounded-lg border border-white/10 bg-white/[0.04] px-2 py-2 text-xs leading-relaxed text-white outline-none focus:border-aqua/40"
       />
     </div>
   );
+}
+
+function TransitionEditor({
+  selectedStateId,
+  states,
+  transitions,
+  onChange,
+}: {
+  selectedStateId: string;
+  states: ApiProcessState[];
+  transitions: ApiProcessTransition[];
+  onChange: (transitions: ApiProcessTransition[]) => void;
+}) {
+  function patchTransition(
+    index: number,
+    patch: Partial<ApiProcessTransition>,
+  ) {
+    onChange(
+      transitions.map((transition, currentIndex) =>
+        currentIndex === index
+          ? {
+              ...transition,
+              ...patch,
+              id: transitionId({ ...transition, ...patch }, currentIndex),
+            }
+          : transition,
+      ),
+    );
+  }
+
+  function addTransition() {
+    const firstTarget =
+      states.find((state) => state.id !== selectedStateId)?.id ?? selectedStateId;
+    const next = {
+      id: "",
+      from_state_id: selectedStateId,
+      to_state_id: firstTarget,
+      conditions: [{ expression: "exit_conditions_met == true" }],
+    };
+    onChange([...transitions, { ...next, id: transitionId(next, transitions.length) }]);
+  }
+
+  return (
+    <div className="rounded-xl border border-white/10 bg-white/[0.025] p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-[10px] font-bold uppercase tracking-widest text-white/45">
+            Transitions
+          </div>
+          <div className="mt-1 text-xs text-white/45">
+            Define how states connect in this process.
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={addTransition}
+          className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-xs font-semibold text-white/70 hover:border-white/20"
+        >
+          Add
+        </button>
+      </div>
+      <div className="mt-3 space-y-3">
+        {transitions.map((transition, index) => (
+          <div
+            key={`${transition.id}-${index}`}
+            className="rounded-xl border border-white/10 bg-black/15 p-2"
+          >
+            <div className="grid grid-cols-2 gap-2">
+              <TransitionSelect
+                label="From"
+                value={transition.from_state_id}
+                states={states}
+                onChange={(value) =>
+                  patchTransition(index, { from_state_id: value })
+                }
+              />
+              <TransitionSelect
+                label="To"
+                value={transition.to_state_id}
+                states={states}
+                onChange={(value) =>
+                  patchTransition(index, { to_state_id: value })
+                }
+              />
+            </div>
+            <input
+              value={transition.conditions[0]?.expression ?? ""}
+              onChange={(event) =>
+                patchTransition(index, {
+                  conditions: event.target.value
+                    ? [{ expression: event.target.value }]
+                    : [],
+                })
+              }
+              placeholder="Condition, e.g. exit_conditions_met == true"
+              className="mt-2 w-full rounded-lg border border-white/10 bg-white/[0.04] px-2 py-2 text-xs text-white outline-none focus:border-aqua/40"
+            />
+            <button
+              type="button"
+              onClick={() =>
+                onChange(transitions.filter((_, currentIndex) => currentIndex !== index))
+              }
+              className="mt-2 text-xs font-semibold text-coral/80 hover:text-coral"
+            >
+              Remove transition
+            </button>
+          </div>
+        ))}
+        {transitions.length === 0 && (
+          <div className="rounded-xl border border-white/10 bg-black/15 px-3 py-2 text-xs text-white/45">
+            No transitions yet.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TransitionSelect({
+  label,
+  value,
+  states,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  states: ApiProcessState[];
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/35">
+        {label}
+      </span>
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="w-full rounded-lg border border-white/10 bg-ink px-2 py-2 text-xs text-white outline-none focus:border-aqua/40"
+      >
+        {states.map((state) => (
+          <option key={state.id} value={state.id}>
+            {state.name}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function transitionId(
+  transition: Pick<ApiProcessTransition, "from_state_id" | "to_state_id">,
+  index: number,
+) {
+  return `${transition.from_state_id}_to_${transition.to_state_id}_${index + 1}`;
 }
 
 function humanTriggerDetail(state: ApiProcessState): string {

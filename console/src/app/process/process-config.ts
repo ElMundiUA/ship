@@ -58,7 +58,9 @@ export function processFromRepoConfig(
             id: fallbackTransition?.id ?? `${from}_to_${to}_${index + 1}`,
             from_state_id: from,
             to_state_id: to,
-            conditions: fallbackTransition?.conditions ?? [],
+            conditions: stringValue(row?.condition)
+              ? [{ expression: stringValue(row?.condition) as string }]
+              : fallbackTransition?.conditions ?? [],
           };
         })
         .filter((transition): transition is ApiProcess["transitions"][number] => transition != null)

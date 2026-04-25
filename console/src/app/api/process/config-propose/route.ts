@@ -58,7 +58,9 @@ export async function POST(request: Request) {
         base_sha: getFormValue(form, "baseSha") || null,
         change_summary: stateId
           ? `Update process state ${stateId}`
-          : "Update process canvas layout",
+          : Object.keys(layout).length > 0
+            ? "Update process canvas layout"
+            : "Update process config",
       },
       token,
     );

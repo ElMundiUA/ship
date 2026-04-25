@@ -5,13 +5,11 @@ import { AppShell } from "@/components/app-shell";
 import { Badge, Card, CardHeader, MockBanner } from "@/components/ui";
 import {
   type ProcessConfigSource,
-  processConfigFromApiProcess,
   processFromRepoConfig,
   selectConfigSource,
 } from "./process-config";
-import { ProcessCanvasEditor } from "./process-canvas-editor";
+import { ProcessEditorWorkspace } from "./process-editor-workspace";
 import { RepoSelector } from "./repo-selector";
-import { StateEditor } from "./state-editor";
 import {
   ApiHttpError,
   ApiUnavailableError,
@@ -153,11 +151,6 @@ function renderProcessPage({
   reason?: string;
   mock?: boolean;
 }) {
-  const selectedState =
-    process.states.find((state) => state.id === selectedStateId) ??
-    process.states[0];
-  const processConfig = processConfigFromApiProcess(process);
-
   return (
     <AppShell
       title="Process"
@@ -183,23 +176,13 @@ function renderProcessPage({
         {selectedTab === "routines" ? (
           <RoutinesPanel process={process} />
         ) : (
-          <section className="grid min-h-[calc(100vh-180px)] grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-            <ProcessCanvasEditor
-              workspaceId={workspace.id}
-              process={process}
-              selectedStateId={selectedState?.id}
-              repoId={selectedRepo?.id}
-              config={config ?? null}
-              processConfig={processConfig}
-            />
-            <StateEditor
-              workspaceId={workspace.id}
-              repoId={selectedRepo?.id}
-              state={selectedState}
-              config={config ?? null}
-              processConfig={processConfig}
-            />
-          </section>
+          <ProcessEditorWorkspace
+            workspaceId={workspace.id}
+            process={process}
+            selectedStateId={selectedStateId}
+            repoId={selectedRepo?.id}
+            config={config ?? null}
+          />
         )}
       </div>
     </AppShell>
