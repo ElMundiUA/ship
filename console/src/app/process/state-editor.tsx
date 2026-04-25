@@ -7,10 +7,17 @@ import type {
   ApiRepoConfig,
 } from "@/lib/api/client";
 
+export type SpecialistOption = {
+  id: string;
+  name: string;
+  role: string;
+};
+
 export function StateEditor({
   repoId,
   state,
   states,
+  specialistOptions,
   transitions,
   config,
   onStateChange,
@@ -21,6 +28,7 @@ export function StateEditor({
   repoId?: string;
   state?: ApiProcessState;
   states: ApiProcessState[];
+  specialistOptions: SpecialistOption[];
   transitions: ApiProcessTransition[];
   config: ApiRepoConfig | null;
   onStateChange: (state: ApiProcessState) => void;
@@ -105,8 +113,18 @@ export function StateEditor({
             value={selectedState.name}
             onChange={(value) => patchState({ name: value })}
           />
+          <RoleSelector
+            value={selectedState.specialist_id}
+            options={specialistOptions}
+            onChange={(specialist) =>
+              patchState({
+                specialist_id: specialist.id,
+                specialist_name: specialist.name,
+              })
+            }
+          />
           <EditorField
-            label="Owner role"
+            label="Role display name"
             value={selectedState.specialist_name}
             onChange={(value) => patchState({ specialist_name: value })}
           />
@@ -216,6 +234,42 @@ export function StateEditor({
         </div>
       </Card>
     </aside>
+  );
+}
+
+function RoleSelector({
+  value,
+  options,
+  onChange,
+}: {
+  value: string;
+  options: SpecialistOption[];
+  onChange: (specialist: SpecialistOption) => void;
+}) {
+  const selectedOption = options.find((option) => option.id === value);
+  return (
+    <label className="block">
+      <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/45">
+        Role template
+      </span>
+      <select
+        value={value}
+        onChange={(event) => {
+          const next = options.find((option) => option.id === event.target.value);
+          if (next) onChange(next);
+        }}
+        className="w-full rounded-xl border border-white/10 bg-ink px-3 py-2 text-sm text-white outline-none focus:border-aqua/40"
+      >
+        {options.map((option) => (
+          <option key={option.id} value={option.id}>
+            {option.name}
+          </option>
+        ))}
+      </select>
+      <span className="mt-1 block text-xs text-white/40">
+        {selectedOption?.role ?? "Choose who owns this state."}
+      </span>
+    </label>
   );
 }
 
