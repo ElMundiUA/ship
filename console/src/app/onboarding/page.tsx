@@ -851,12 +851,22 @@ function TrackerStep({
         ))}
 
       <div className="mt-7 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-        {tiles.map((tile) => (
+        {tiles.map((tile) => {
+          const connected =
+            (tile.id === "linear" && linearStatus === "connected") ||
+            (tile.id === "notion" && notionStatus === "connected") ||
+            (tile.id === "atlassian" && atlassianStatus === "connected");
+          return (
           <form
             key={tile.id}
             action="/api/onboard/tracker-install"
             method="POST"
-            className="flex h-full flex-col rounded-2xl border border-white/10 bg-white/[0.03] p-4 backdrop-blur-xl shadow-card transition hover:border-aqua/40"
+            data-connected={String(connected)}
+            className={`flex h-full flex-col rounded-2xl border p-4 backdrop-blur-xl shadow-card transition ${
+              connected
+                ? "border-aqua/50 bg-aqua/[0.07]"
+                : "border-white/10 bg-white/[0.03] hover:border-aqua/40"
+            }`}
             suppressHydrationWarning
           >
             <input
@@ -875,8 +885,14 @@ function TrackerStep({
               <h3 className="font-display text-lg font-bold text-white">
                 {tile.name}
               </h3>
-              <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] uppercase tracking-widest text-white/55">
-                {tile.tag}
+              <span
+                className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-widest ${
+                  connected
+                    ? "border-aqua/35 bg-aqua/10 text-aqua"
+                    : "border-white/10 bg-white/[0.04] text-white/55"
+                }`}
+              >
+                {connected ? "Connected" : tile.tag}
               </span>
             </div>
             <p className="mt-2 flex-1 text-[12px] leading-relaxed text-white/65">
@@ -902,14 +918,18 @@ function TrackerStep({
             )}
             <button
               type="submit"
-              className="mt-4 rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-4 py-2 text-xs font-bold text-ink shadow-glow transition hover:brightness-110"
+              disabled={connected}
+              className="mt-4 rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-4 py-2 text-xs font-bold text-ink shadow-glow transition hover:brightness-110 disabled:cursor-default disabled:bg-none disabled:bg-aqua/15 disabled:text-aqua disabled:shadow-none"
             >
-              {tile.id === "github"
+              {connected
+                ? "Connected"
+                : tile.id === "github"
                 ? "Use GitHub Issues \u2192"
                 : `Connect ${tile.name} \u2192`}
             </button>
           </form>
-        ))}
+          );
+        })}
       </div>
 
       <form
