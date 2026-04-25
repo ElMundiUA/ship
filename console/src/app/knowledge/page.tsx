@@ -33,6 +33,7 @@ import type {
   ApiUser,
 } from "@/lib/api/types";
 
+import { KnowledgeImportWizard } from "./import-wizard";
 import { NewBucketDialog } from "./new-bucket-dialog";
 import {
   formatBytes,
@@ -192,7 +193,7 @@ export default async function KnowledgeIndexPage({
       </p>
 
       {data.source === "live" && (
-        <div className="mb-6">
+        <div className="mb-6 space-y-4">
           <NewBucketDialog
             integrations={data.integrations}
             defaultScope={
@@ -202,6 +203,10 @@ export default async function KnowledgeIndexPage({
                   ? "user"
                   : "workspace"
             }
+          />
+          <KnowledgeImportWizard
+            integrations={data.integrations}
+            defaultScope="workspace"
           />
         </div>
       )}
