@@ -254,13 +254,17 @@ export default async function IntegrationsPage() {
                       status={i.status}
                     />
                     <div className="mt-2 flex flex-wrap items-center gap-3">
-                      <UpsertForm
-                        workspaceId={workspace.id}
-                        kind={i.kind}
-                        config={i.config}
-                        meta={meta}
-                        compact
-                      />
+                      {i.kind === "notion" ? (
+                        <NotionOAuthForm workspaceId={workspace.id} compact />
+                      ) : (
+                        <UpsertForm
+                          workspaceId={workspace.id}
+                          kind={i.kind}
+                          config={i.config}
+                          meta={meta}
+                          compact
+                        />
+                      )}
                       <ProbeForm workspaceId={workspace.id} kind={i.kind} />
                       <DeleteForm workspaceId={workspace.id} kind={i.kind} />
                     </div>
@@ -355,7 +359,11 @@ export default async function IntegrationsPage() {
                 <Badge tone="neutral">{c.group}</Badge>
               </div>
               <p className="mt-1.5 line-clamp-3 text-[11px] text-white/55">{c.body}</p>
-              <UpsertForm workspaceId={workspace.id} kind={c.id} meta={c} />
+              {c.id === "notion" ? (
+                <NotionOAuthForm workspaceId={workspace.id} />
+              ) : (
+                <UpsertForm workspaceId={workspace.id} kind={c.id} meta={c} />
+              )}
             </div>
           ))}
         </div>
@@ -438,6 +446,36 @@ function AtlassianNativeForm({ workspaceId }: { workspaceId: string }) {
         </div>
       </form>
     </details>
+  );
+}
+
+function NotionOAuthForm({
+  workspaceId,
+  compact,
+}: {
+  workspaceId: string;
+  compact?: boolean;
+}) {
+  return (
+    <form action="/api/integrations/notion" method="POST" className={compact ? "" : "mt-3"}>
+      <input type="hidden" name="ws" value={workspaceId} suppressHydrationWarning />
+      <button
+        type="submit"
+        className={
+          compact
+            ? "cursor-pointer text-[10px] font-semibold text-aqua/85 hover:text-aqua"
+            : "inline-flex cursor-pointer items-center gap-1 rounded-full border border-aqua/40 bg-aqua/10 px-3 py-1 text-[11px] font-bold text-aqua hover:bg-aqua/20"
+        }
+      >
+        {compact ? "Reconnect OAuth" : "Connect with Notion →"}
+      </button>
+      {!compact && (
+        <p className="mt-2 text-[10px] text-white/45">
+          Opens Notion OAuth. Share the pages/databases Ship should index after
+          approval.
+        </p>
+      )}
+    </form>
   );
 }
 
