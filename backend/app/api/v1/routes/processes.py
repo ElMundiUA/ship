@@ -278,7 +278,7 @@ async def _build_development_process(
                     InboxItem.workspace_id == workspace_id,
                     InboxItem.status.in_(("new", "snoozed")),
                 )
-                .order_by(desc(InboxItem.updated_at), desc(InboxItem.created_at))
+                .order_by(desc(InboxItem.created_at))
                 .limit(75)
             )
         )
@@ -539,7 +539,7 @@ def _tasks_for(
                 title=item.title,
                 state_id=state_id,
                 status="blocked",
-                last_updated=item.updated_at or item.created_at,
+                last_updated=item.created_at,
                 context={
                     "source": "inbox",
                     "type": item.type,
