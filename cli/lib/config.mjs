@@ -8,6 +8,7 @@ export function extractGlobalArgv(argv) {
     baseUrl: (
       process.env.SHIP_API_BASE || "https://ship.elmundi.com/api/methodology"
     ).replace(/\/$/, ""),
+    baseUrlSource: process.env.SHIP_API_BASE ? "env" : "default",
     json: false,
     yes: false,
     force: false,
@@ -39,10 +40,12 @@ export function extractGlobalArgv(argv) {
     if (a === "--base-url" && copy[1]) {
       copy.shift();
       out.baseUrl = String(copy.shift()).replace(/\/$/, "");
+      out.baseUrlSource = "flag";
       continue;
     }
     if (a.startsWith("--base-url=")) {
       out.baseUrl = a.slice("--base-url=".length).replace(/\/$/, "");
+      out.baseUrlSource = "flag";
       copy.shift();
       continue;
     }

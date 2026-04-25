@@ -24,6 +24,7 @@ if (raw[0] === "--version" || raw[0] === "-v" || raw[0] === "version") {
 const { _, ...g } = extractGlobalArgv(raw);
 const ctx = {
   baseUrl: g.baseUrl,
+  baseUrlSource: g.baseUrlSource,
   json: g.json,
   yes: g.yes,
   force: g.force,

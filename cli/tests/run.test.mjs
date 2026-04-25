@@ -337,6 +337,69 @@ function runCtlAsync(args, env = {}) {
   });
 }
 
+function startWorkspaceApiMock() {
+  const received = [];
+  return new Promise((resolve) => {
+    const server = http.createServer((req, res) => {
+      received.push({ method: req.method, url: req.url });
+      if (req.url === "/v1/workspaces") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify([{ id: "ws-1" }]));
+        return;
+      }
+      if (req.url === "/v1/workspaces/ws-1/repos") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify([{ id: "repo-1", full_name: "ElMundiUA/ship" }]));
+        return;
+      }
+      if (req.url === "/v1/workspaces/ws-1/repos/repo-1/trigger") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ due_lanes: [] }));
+        return;
+      }
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "not found" }));
+    });
+    server.listen(0, "127.0.0.1", () => {
+      const { address, port } = server.address();
+      resolve({
+        baseUrl: `http://${address}:${port}`,
+        received,
+        close: () =>
+          new Promise((done) => {
+            server.closeAllConnections?.();
+            server.close(() => done());
+          }),
+      });
+    });
+  });
+}
+
+test("shipctl trigger prefers SHIP_WORKSPACE_API_BASE over global methodology default", async () => {
+  const mock = await startWorkspaceApiMock();
+  try {
+    const r = await runCtlAsync(
+      ["trigger", "--event", "schedule", "--repo", "ElMundiUA/ship", "--json"],
+      {
+        SHIP_API_TOKEN: "tok",
+        SHIP_WORKSPACE_API_BASE: mock.baseUrl,
+        SHIP_API_BASE: "",
+      },
+    );
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual(
+      mock.received.map((entry) => entry.url),
+      [
+        "/v1/workspaces",
+        "/v1/workspaces/ws-1/repos",
+        "/v1/workspaces/ws-1/repos/repo-1/trigger",
+      ],
+    );
+  } finally {
+    await mock.close();
+  }
+});
+
 test("shipctl run callback includes lane + pattern + GH breadcrumbs", async () => {
   const dir = mktmp();
   writeConfig(
