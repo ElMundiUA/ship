@@ -49,6 +49,18 @@ export const LANE_FANOUT_MODES = Object.freeze([
 ]);
 export const LANE_FANOUT_DEFAULT = "matrix";
 
+export const PROCESS_AGENT_PROFILES = Object.freeze([
+  "auto",
+  "main",
+  "cheaper",
+  "cursor_agent",
+  "codex_cli",
+  "ship_cloud_agent",
+  "local_cli",
+]);
+
+export const PROCESS_TRIGGER_TYPES = Object.freeze(["manual", "event", "schedule"]);
+
 /* Lane ids travel into file paths (`.ship/state/<key>.json`), workflow
  * file names (`.github/workflows/ship-<lane>.yml`), and env vars, so
  * restrict them conservatively: ASCII lowercase, digits, dash, underscore. */
@@ -346,7 +358,7 @@ function validateV2Process(obj, errors, warnings) {
     }
     pushUnknownKeyWarnings(
       state,
-      new Set(["id", "name", "specialist", "layout", "instructions", "triggers", "exit_conditions", "block_conditions"]),
+      new Set(["id", "name", "specialist", "agent_profile", "layout", "instructions", "triggers", "exit_conditions", "block_conditions"]),
       prefix,
       warnings,
     );
@@ -363,9 +375,33 @@ function validateV2Process(obj, errors, warnings) {
     if (state.instructions !== undefined && typeof state.instructions !== "string") {
       errors.push(`${prefix}.instructions: must be a string when set`);
     }
-    if (state.specialist !== undefined && !isPlainObject(state.specialist) && typeof state.specialist !== "string") {
-      errors.push(`${prefix}.specialist: must be an object or string when set`);
+    if (state.specialist !== undefined) {
+      if (typeof state.specialist === "string") {
+        if (!state.specialist.trim()) {
+          errors.push(`${prefix}.specialist: must be a non-empty string when set`);
+        }
+      } else if (!isPlainObject(state.specialist)) {
+        errors.push(`${prefix}.specialist: must be an object or string when set`);
+      } else {
+        pushUnknownKeyWarnings(
+          state.specialist,
+          new Set(["id", "name", "agent_profile"]),
+          `${prefix}.specialist`,
+          warnings,
+        );
+        requireOptionalString(state.specialist.id, `${prefix}.specialist.id`, errors, { required: false });
+        requireOptionalString(state.specialist.name, `${prefix}.specialist.name`, errors, { required: false });
+        validateProcessAgentProfile(
+          state.specialist.agent_profile,
+          `${prefix}.specialist.agent_profile`,
+          errors,
+        );
+      }
     }
+    validateProcessAgentProfile(state.agent_profile, `${prefix}.agent_profile`, errors);
+    validateProcessTriggers(state.triggers, `${prefix}.triggers`, errors);
+    validateProcessConditions(state.exit_conditions, `${prefix}.exit_conditions`, errors);
+    validateProcessConditions(state.block_conditions, `${prefix}.block_conditions`, errors);
     if (state.layout !== undefined) {
       if (!isPlainObject(state.layout)) {
         errors.push(`${prefix}.layout: must be an object when set`);
@@ -399,12 +435,88 @@ function validateV2Process(obj, errors, warnings) {
         if (!stateIds.has(transition.to)) {
           errors.push(`${prefix}.to: must reference an existing state id`);
         }
+        requireOptionalString(transition.condition, `${prefix}.condition`, errors, { required: false });
       }
     }
   }
 
-  if (process.routines !== undefined && !Array.isArray(process.routines)) {
+  validateProcessRoutines(process.routines, errors, warnings);
+}
+
+function validateProcessAgentProfile(value, prefix, errors) {
+  if (value === undefined || value === null) return;
+  if (typeof value !== "string" || !PROCESS_AGENT_PROFILES.includes(value)) {
+    errors.push(`${prefix}: must be one of ${PROCESS_AGENT_PROFILES.join("|")}`);
+  }
+}
+
+function validateProcessTriggers(value, prefix, errors) {
+  if (value === undefined) return;
+  if (!Array.isArray(value)) {
+    errors.push(`${prefix}: must be a list when set`);
+    return;
+  }
+  for (let i = 0; i < value.length; i += 1) {
+    const trigger = value[i];
+    const itemPrefix = `${prefix}[${i}]`;
+    if (!isPlainObject(trigger)) {
+      errors.push(`${itemPrefix}: must be an object`);
+      continue;
+    }
+    if (!PROCESS_TRIGGER_TYPES.includes(trigger.type)) {
+      errors.push(`${itemPrefix}.type: must be one of ${PROCESS_TRIGGER_TYPES.join("|")}`);
+    }
+    if (trigger.type === "schedule") {
+      requireOptionalString(trigger.interval, `${itemPrefix}.interval`, errors, { required: true });
+    } else if (trigger.type === "event") {
+      requireOptionalString(trigger.event, `${itemPrefix}.event`, errors, { required: true });
+    }
+  }
+}
+
+function validateProcessConditions(value, prefix, errors) {
+  if (value === undefined) return;
+  if (!Array.isArray(value)) {
+    errors.push(`${prefix}: must be a list when set`);
+    return;
+  }
+  for (let i = 0; i < value.length; i += 1) {
+    const condition = value[i];
+    const itemPrefix = `${prefix}[${i}]`;
+    if (!isPlainObject(condition)) {
+      errors.push(`${itemPrefix}: must be an object`);
+      continue;
+    }
+    requireOptionalString(condition.expression, `${itemPrefix}.expression`, errors, { required: true });
+  }
+}
+
+function validateProcessRoutines(value, errors, warnings) {
+  if (value === undefined) return;
+  if (!Array.isArray(value)) {
     errors.push("process.routines: must be a list when set");
+    return;
+  }
+  for (let i = 0; i < value.length; i += 1) {
+    const routine = value[i];
+    const prefix = `process.routines[${i}]`;
+    if (!isPlainObject(routine)) {
+      errors.push(`${prefix}: must be an object`);
+      continue;
+    }
+    pushUnknownKeyWarnings(routine, new Set(["id", "name", "cadence"]), prefix, warnings);
+    requireOptionalString(routine.id, `${prefix}.id`, errors, { required: true });
+    requireOptionalString(routine.name, `${prefix}.name`, errors, { required: true });
+    requireOptionalString(routine.cadence, `${prefix}.cadence`, errors, { required: false });
+  }
+}
+
+function requireOptionalString(value, prefix, errors, { required }) {
+  if ((value === undefined || value === null) && !required) return;
+  if (typeof value !== "string" || !value.trim()) {
+    errors.push(
+      `${prefix}: must be ${required ? "a non-empty string" : "null or a non-empty string"}`,
+    );
   }
 }
 
