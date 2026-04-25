@@ -273,6 +273,61 @@ async def test_admin_can_disable_native_integration(
 
 
 @pytest.mark.asyncio
+async def test_admin_can_probe_native_integration(
+    v1_client,
+    db_session,
+    seed_workspace,
+    monkeypatch,
+) -> None:
+    from backend.app.db.models.integrations import NativeIntegrationAuditEvent
+
+    _, raw, workspace = seed_workspace
+    headers = {"Authorization": f"Bearer {raw}"}
+    outcomes = [(False, "GitLab rejected the PAT or required scopes."), (True, None)]
+
+    async def _fake_probe(*, base_url, pat, group):
+        assert base_url == "https://gitlab.com"
+        assert pat == "gitlab_pat_secret"
+        assert group is None
+        return outcomes.pop(0)
+
+    monkeypatch.setattr(
+        "backend.app.api.v1.routes.native_integrations._probe_gitlab_pat",
+        _fake_probe,
+    )
+
+    created = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/native-integrations/gitlab/pat",
+        headers=headers,
+        json={"host": "gitlab.com", "pat": "gitlab_pat_secret"},
+    )
+    assert created.status_code == 200, created.text
+    body = created.json()
+    assert body["status"] == "error"
+    assert body["last_health_error"] == "GitLab rejected the PAT or required scopes."
+
+    response = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/native-integrations/{body['id']}/probe",
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    probed = response.json()
+    assert probed["status"] == "ready"
+    assert probed["last_health_error"] is None
+    assert probed["has_credential"] is True
+
+    actions = (
+        await db_session.execute(
+            select(NativeIntegrationAuditEvent.action).order_by(
+                NativeIntegrationAuditEvent.created_at
+            )
+        )
+    ).scalars().all()
+    assert actions == ["native_integration.create", "native_integration.probe"]
+
+
+@pytest.mark.asyncio
 async def test_admin_can_connect_atlassian_api_token(
     v1_client,
     db_session,
