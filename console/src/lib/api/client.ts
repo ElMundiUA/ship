@@ -2903,12 +2903,126 @@ export interface ApiNativeIntegration {
   updated_at: string;
 }
 
+export interface ApiNativeResource {
+  resource_type: string;
+  external_id: string;
+  display_name: string;
+  external_url: string | null;
+  provider: string;
+  config: Record<string, unknown>;
+  bound: boolean;
+}
+
+export interface ApiNativeBinding {
+  id: string;
+  installation_id: string;
+  provider: string;
+  resource_type: string;
+  external_id: string;
+  display_name: string;
+  external_url: string | null;
+  config: Record<string, unknown>;
+  status: string;
+  last_synced_at: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ApiNativeCiRun {
+  id: string | number | null;
+  name: string | null;
+  status: string | null;
+  conclusion: string | null;
+  url: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  finished_at?: string | null;
+  ref?: string | null;
+  sha?: string | null;
+  source_branch?: string | null;
+  source_version?: string | null;
+}
+
 export function listNativeIntegrations(
   workspaceId: string,
   token?: string,
 ): Promise<ApiNativeIntegration[]> {
   return apiFetch<ApiNativeIntegration[]>(
     `/v1/workspaces/${encodeURIComponent(workspaceId)}/native-integrations`,
+    { token },
+  );
+}
+
+export function listNativeRepoResources(
+  workspaceId: string,
+  installationId: string,
+  token?: string,
+): Promise<ApiNativeResource[]> {
+  return apiFetch<ApiNativeResource[]>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/native-integrations/${encodeURIComponent(installationId)}/resources/repos`,
+    { token },
+  );
+}
+
+export function listNativeBindings(
+  workspaceId: string,
+  installationId: string,
+  token?: string,
+): Promise<ApiNativeBinding[]> {
+  return apiFetch<ApiNativeBinding[]>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/native-integrations/${encodeURIComponent(installationId)}/bindings`,
+    { token },
+  );
+}
+
+export function replaceNativeBindings(
+  workspaceId: string,
+  installationId: string,
+  input: { resource_type?: string; external_ids: string[] },
+  token?: string,
+): Promise<ApiNativeBinding[]> {
+  return apiFetch<ApiNativeBinding[]>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/native-integrations/${encodeURIComponent(installationId)}/bindings`,
+    { method: "PUT", body: input, token },
+  );
+}
+
+export function listNativeCiRuns(
+  workspaceId: string,
+  installationId: string,
+  bindingId: string,
+  limit = 25,
+  token?: string,
+): Promise<ApiNativeCiRun[]> {
+  return apiFetch<ApiNativeCiRun[]>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/native-integrations/${encodeURIComponent(installationId)}/bindings/${encodeURIComponent(bindingId)}/ci/runs?limit=${encodeURIComponent(String(limit))}`,
+    { token },
+  );
+}
+
+export function rerunNativeCiRun(
+  workspaceId: string,
+  installationId: string,
+  bindingId: string,
+  runId: string,
+  token?: string,
+): Promise<{ status: string }> {
+  return apiFetch<{ status: string }>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/native-integrations/${encodeURIComponent(installationId)}/bindings/${encodeURIComponent(bindingId)}/ci/runs/${encodeURIComponent(runId)}/rerun`,
+    { method: "POST", token },
+  );
+}
+
+export function getNativeCiLogs(
+  workspaceId: string,
+  installationId: string,
+  bindingId: string,
+  runId: string,
+  token?: string,
+): Promise<{ run_id: string; logs: string }> {
+  return apiFetch<{ run_id: string; logs: string }>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/native-integrations/${encodeURIComponent(installationId)}/bindings/${encodeURIComponent(bindingId)}/ci/runs/${encodeURIComponent(runId)}/logs`,
     { token },
   );
 }

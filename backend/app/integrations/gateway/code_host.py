@@ -21,7 +21,7 @@ from typing import Any, Literal, Protocol, runtime_checkable
 class RepoRef:
     """Vendor-discriminated identifier for a single repository."""
 
-    kind: Literal["github"]  # broaden once more code hosts arrive
+    kind: Literal["github", "gitlab", "azure_devops"]
     owner: str
     repo: str
 
@@ -68,7 +68,7 @@ class RepoSummary:
     """
 
     ref: RepoRef
-    external_id: int
+    external_id: int | str
     full_name: str
     default_branch: str
     private: bool

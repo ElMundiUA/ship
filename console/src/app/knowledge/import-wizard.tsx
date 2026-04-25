@@ -191,7 +191,7 @@ export function KnowledgeImportWizard({
               Back
             </SecondaryButton>
             <PrimaryButton disabled={!canReview || pending} onClick={createBuckets}>
-              {pending ? "Creating..." : "Create curated buckets"}
+              {pending ? "Creating and syncing..." : "Create and sync buckets"}
             </PrimaryButton>
           </div>
           {result && <ResultBox result={result} />}
@@ -312,8 +312,18 @@ function ResultBox({ result }: { result: GuidedImportResult }) {
       {result.ok ? (
         <>
           <Badge tone="ok">created</Badge> {result.created.length} bucket
-          {result.created.length === 1 ? "" : "s"} created. Open a bucket to run
-          the first sync.
+          {result.created.length === 1 ? "" : "s"} created;{" "}
+          {result.created.filter((item) => item.synced).length} synced into the
+          index.
+          {result.created.some((item) => !item.synced) && (
+            <span className="mt-1 block text-white/65">
+              Some sources need attention:{" "}
+              {result.created
+                .filter((item) => !item.synced)
+                .map((item) => `${item.slug}: ${item.syncError ?? "sync failed"}`)
+                .join("; ")}
+            </span>
+          )}
         </>
       ) : (
         <>

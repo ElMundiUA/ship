@@ -23,9 +23,13 @@ import {
   ApiUnavailableError,
   isApiConfigured,
   listIntegrations,
+  listNativeBindings,
   listNativeIntegrations,
+  listNativeRepoResources,
   listWorkspaces,
+  type ApiNativeBinding,
   type ApiNativeIntegration,
+  type ApiNativeResource,
 } from "@/lib/api/client";
 import type { ApiIntegration, ApiWorkspace } from "@/lib/api/types";
 import { getSessionToken } from "@/lib/api/session";
@@ -39,6 +43,8 @@ type Mode =
       workspace: ApiWorkspace;
       rows: ApiIntegration[];
       nativeRows: ApiNativeIntegration[];
+      nativeRepoResources: Record<string, ApiNativeResource[]>;
+      nativeBindings: Record<string, ApiNativeBinding[]>;
     }
   | { source: "mock"; reason: string };
 
@@ -172,7 +178,42 @@ async function load(): Promise<Mode> {
       listIntegrations(target.id, token),
       listNativeIntegrations(target.id, token),
     ]);
-    return { source: "live", workspace: target, rows, nativeRows };
+    const codeHostRows = nativeRows.filter(
+      (row) =>
+        !row.disabled_at &&
+        (row.provider === "azure_devops" || row.provider === "gitlab"),
+    );
+    const resourcePairs = await Promise.all(
+      codeHostRows.map(async (row) => {
+        try {
+          const [resources, bindings] = await Promise.all([
+            listNativeRepoResources(target.id, row.id, token),
+            listNativeBindings(target.id, row.id, token),
+          ]);
+          return [row.id, resources, bindings] as const;
+        } catch {
+          return [
+            row.id,
+            [] as ApiNativeResource[],
+            [] as ApiNativeBinding[],
+          ] as const;
+        }
+      }),
+    );
+    const nativeRepoResources: Record<string, ApiNativeResource[]> = {};
+    const nativeBindings: Record<string, ApiNativeBinding[]> = {};
+    for (const [id, resources, bindings] of resourcePairs) {
+      nativeRepoResources[id] = resources;
+      nativeBindings[id] = bindings;
+    }
+    return {
+      source: "live",
+      workspace: target,
+      rows,
+      nativeRows,
+      nativeRepoResources,
+      nativeBindings,
+    };
   } catch (err) {
     if (err instanceof ApiHttpError && err.status === 401) {
       return { source: "mock", reason: "Session expired — sign in again" };
@@ -191,7 +232,7 @@ export default async function IntegrationsPage() {
     return <MockView reason={data.reason} />;
   }
 
-  const { workspace, rows, nativeRows } = data;
+  const { workspace, rows, nativeRows, nativeRepoResources, nativeBindings } = data;
   const connectedNativeProviders = new Set(
     nativeRows.filter((r) => !r.disabled_at).map((r) => r.provider),
   );
@@ -344,6 +385,15 @@ export default async function IntegrationsPage() {
                       />
                     </div>
                   )}
+                  {!i.disabled_at &&
+                    (i.provider === "azure_devops" || i.provider === "gitlab") && (
+                      <NativeRepoBindingForm
+                        workspaceId={workspace.id}
+                        installationId={i.id}
+                        resources={nativeRepoResources[i.id] ?? []}
+                        bindings={nativeBindings[i.id] ?? []}
+                      />
+                    )}
                 </div>
               </li>
             ))}
@@ -689,6 +739,77 @@ function NativeProbeForm({
         Probe now
       </button>
     </form>
+  );
+}
+
+function NativeRepoBindingForm({
+  workspaceId,
+  installationId,
+  resources,
+  bindings,
+}: {
+  workspaceId: string;
+  installationId: string;
+  resources: ApiNativeResource[];
+  bindings: ApiNativeBinding[];
+}) {
+  const activeBindingCount = bindings.filter((b) => b.status !== "disabled").length;
+  return (
+    <details className="mt-3 rounded-lg border border-white/10 bg-white/[0.02] p-2">
+      <summary className="cursor-pointer text-[10px] font-semibold uppercase tracking-widest text-white/55">
+        Repos · {activeBindingCount} selected
+      </summary>
+      {resources.length === 0 ? (
+        <p className="mt-2 text-[10px] text-white/45">
+          No repos discovered yet. Check provider permissions, default group/project,
+          or run Probe now.
+        </p>
+      ) : (
+        <form action="/api/integrations/native-bindings" method="POST" className="mt-2">
+          <input type="hidden" name="ws" value={workspaceId} suppressHydrationWarning />
+          <input
+            type="hidden"
+            name="installation_id"
+            value={installationId}
+            suppressHydrationWarning
+          />
+          <div className="max-h-48 space-y-1 overflow-auto pr-1">
+            {resources.map((resource) => (
+              <label
+                key={resource.external_id}
+                className="flex items-start gap-2 rounded border border-white/5 bg-ink/30 px-2 py-1.5 text-[11px] text-white/70"
+              >
+                <input
+                  type="checkbox"
+                  name="external_id"
+                  value={resource.external_id}
+                  defaultChecked={resource.bound}
+                  className="mt-0.5 accent-aqua"
+                  suppressHydrationWarning
+                />
+                <span className="min-w-0">
+                  <span className="block truncate font-semibold text-white/85">
+                    {resource.display_name}
+                  </span>
+                  <span className="block truncate text-[10px] text-white/40">
+                    {String(resource.config.default_branch ?? "main")}
+                    {resource.external_url ? ` · ${resource.external_url}` : ""}
+                  </span>
+                </span>
+              </label>
+            ))}
+          </div>
+          <div className="mt-2 flex justify-end">
+            <button
+              type="submit"
+              className="rounded-full bg-aqua/15 px-3 py-1 text-[10px] font-bold text-aqua hover:bg-aqua/25"
+            >
+              Save repo access
+            </button>
+          </div>
+        </form>
+      )}
+    </details>
   );
 }
 

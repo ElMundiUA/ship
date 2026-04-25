@@ -1,0 +1,2 @@
+"""GitLab native integration adapters."""
+
