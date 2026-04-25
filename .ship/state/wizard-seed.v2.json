@@ -1,0 +1,19 @@
+{
+  "bundle": [
+    "role-qa-architect",
+    "role-tech-architect",
+    "role-security-officer",
+    "flow-daily-retro",
+    "flow-learning-capture",
+    "role-intake",
+    "role-ba",
+    "role-developer",
+    "flow-qa-acceptance",
+    "op-workflow-self-heal"
+  ],
+  "bundle_version": "53e246822da5",
+  "knowledge": [],
+  "seeded_at": "2026-04-25T16:15:04Z",
+  "ship_version": "unknown",
+  "tracker_kind": "github"
+}

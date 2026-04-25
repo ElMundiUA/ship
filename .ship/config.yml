@@ -2,14 +2,136 @@
 # Learn more: https://app.ship.elmundi.com
 preset: default
 version: 2
+shipctl_min: 0.12.0
 repo: ElMundiUA/ship
+api:
+  base_url: "https://ship.elmundi.com"
+  channel: stable
+  ttl_hours: 24
+  offline_ok: true
+stack:
+  tracker: none
+  ci: gh-actions
+  agents: []
+  language: multi
+agent:
+  default: {}
+  overrides: {}
+process:
+  id: development
+  name: Development Process
+  primary: true
+  states:
+  - id: task_intake
+    name: Intake
+    specialist:
+      id: intake
+      name: Intake specialist
+    layout:
+      x: 72
+      y: 170
+    instructions: Clarify the request, collect missing context, and decide whether the
+      task is ready for requirements.
+  - id: ba_requirements
+    name: Requirements
+    specialist:
+      id: business_analyst
+      name: Business analyst
+    layout:
+      x: 338
+      y: 170
+    instructions: Turn the request into acceptance criteria, constraints, risks, and
+      open questions.
+  - id: dev_implementation
+    name: Implementation
+    specialist:
+      id: developer
+      name: Developer
+    layout:
+      x: 604
+      y: 170
+    instructions: Implement the change, update tests and documentation, and prepare
+      the work for review.
+  - id: qa_manual
+    name: Quality Review
+    specialist:
+      id: qa_engineer
+      name: QA engineer
+    layout:
+      x: 870
+      y: 170
+    instructions: Validate acceptance criteria, edge cases, and user-facing quality
+      before release.
+  - id: pr_review
+    name: Final Review
+    specialist:
+      id: review_owner
+      name: Review owner
+    layout:
+      x: 1136
+      y: 170
+    instructions: Review the completed work for correctness, maintainability, scope,
+      and release readiness.
+  transitions:
+  - from: task_intake
+    to: ba_requirements
+  - from: ba_requirements
+    to: dev_implementation
+  - from: dev_implementation
+    to: qa_manual
+  - from: qa_manual
+    to: pr_review
+  routines: []
 lanes:
-  pr_review:
-    event: pull_request
-    pattern: "**"
-    idempotency_key: "{{pr}}"
-  daily_standup:
-    schedule: "0 9 * * 1-5"
+  daily_architecture_tests_review:
+    kind: schedule
+    cron: "0 8 * * *"
+    pattern: role-qa-architect
+  daily_technical_architecture_review:
+    kind: schedule
+    cron: "0 8 * * *"
+    pattern: role-tech-architect
+  daily_security_review:
+    kind: schedule
+    cron: "0 8 * * *"
+    pattern: role-security-officer
+  daily_digest:
+    kind: schedule
+    cron: "0 9 * * *"
     pattern: flow-daily-retro
-  tech_debt:
-    schedule: "0 6 * * 1"
+  daily_retro:
+    kind: schedule
+    cron: "0 17 * * *"
+    pattern: flow-learning-capture
+  task_intake:
+    kind: schedule
+    cron: "*/15 * * * *"
+    pattern: role-intake
+  ba_requirements:
+    kind: schedule
+    cron: "*/15 * * * *"
+    pattern: role-ba
+  tech_arch_plan:
+    kind: schedule
+    cron: "*/15 * * * *"
+    pattern: role-tech-architect
+  qa_arch_plan:
+    kind: schedule
+    cron: "*/15 * * * *"
+    pattern: role-qa-architect
+  dev_implementation:
+    kind: schedule
+    cron: "*/15 * * * *"
+    pattern: role-developer
+  qa_manual:
+    kind: schedule
+    cron: "*/15 * * * *"
+    pattern: flow-qa-acceptance
+  qa_automation:
+    kind: schedule
+    cron: "*/15 * * * *"
+    pattern: role-qa-architect
+  self_heal:
+    kind: schedule
+    cron: "0 * * * *"
+    pattern: op-workflow-self-heal
