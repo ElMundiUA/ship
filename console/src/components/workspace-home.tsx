@@ -169,6 +169,11 @@ function RepoChannelCard({ repo }: { repo: ApiActivatedRepo }) {
   const [owner, ...rest] = repo.full_name.split("/");
   const name = rest.join("/") || repo.full_name;
   const href = repoBasePath(repo);
+  const installedBundle = repo.installed_bundle_version;
+  const currentBundle = repo.current_bundle_version;
+  const bundleOutdated =
+    installedBundle !== null && installedBundle < currentBundle;
+
   return (
     <li>
       <Link
@@ -197,7 +202,10 @@ function RepoChannelCard({ repo }: { repo: ApiActivatedRepo }) {
             {repo.private ? "private" : "public"}
           </Badge>
           {repo.preset && <Badge tone="info">{repo.preset}</Badge>}
-          {repo.installed_bundle_version == null && (
+          {bundleOutdated && (
+            <Badge tone="warn">update to v{currentBundle}</Badge>
+          )}
+          {installedBundle == null && (
             <Badge tone="warn">never seeded</Badge>
           )}
         </div>
