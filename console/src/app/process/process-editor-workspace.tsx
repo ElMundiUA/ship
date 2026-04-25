@@ -70,6 +70,36 @@ export function ProcessEditorWorkspace({
     );
   }
 
+  function renameState(currentId: string, nextId: string): boolean {
+    const normalized = normalizeStateId(nextId);
+    if (!normalized || normalized === currentId) return false;
+    if (states.some((state) => state.id === normalized)) return false;
+
+    setStates((current) =>
+      current.map((state) =>
+        state.id === currentId ? { ...state, id: normalized } : state,
+      ),
+    );
+    setTransitions((current) =>
+      current.map((transition, index) => {
+        const fromStateId =
+          transition.from_state_id === currentId
+            ? normalized
+            : transition.from_state_id;
+        const toStateId =
+          transition.to_state_id === currentId ? normalized : transition.to_state_id;
+        return {
+          ...transition,
+          from_state_id: fromStateId,
+          to_state_id: toStateId,
+          id: transitionId(fromStateId, toStateId, index),
+        };
+      }),
+    );
+    setActiveStateId(normalized);
+    return true;
+  }
+
   function updatePositions(positions: Record<string, Position>) {
     setStates((current) =>
       current.map((state) => {
@@ -197,6 +227,7 @@ export function ProcessEditorWorkspace({
         transitions={transitions}
         config={config}
         onStateChange={updateState}
+        onStateRename={renameState}
         onTransitionsChange={setTransitions}
         onAddState={addState}
         onDeleteState={deleteState}
@@ -234,6 +265,15 @@ function buildSpecialistOptions(
     });
   }
   return Array.from(options.values());
+}
+
+function normalizeStateId(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .replace(/_+/g, "_");
 }
 
 function uniqueStateId(baseId: string, states: ApiProcessState[]) {

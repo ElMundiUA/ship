@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect, useState } from "react";
+
 import { Card, CardHeader } from "@/components/ui";
 import type {
   ApiProcessState,
@@ -21,6 +23,7 @@ export function StateEditor({
   transitions,
   config,
   onStateChange,
+  onStateRename,
   onTransitionsChange,
   onAddState,
   onDeleteState,
@@ -32,6 +35,7 @@ export function StateEditor({
   transitions: ApiProcessTransition[];
   config: ApiRepoConfig | null;
   onStateChange: (state: ApiProcessState) => void;
+  onStateRename: (currentId: string, nextId: string) => boolean;
   onTransitionsChange: (transitions: ApiProcessTransition[]) => void;
   onAddState: () => void;
   onDeleteState: (stateId: string) => void;
@@ -112,6 +116,11 @@ export function StateEditor({
             label="Step name"
             value={selectedState.name}
             onChange={(value) => patchState({ name: value })}
+          />
+          <StateKeyField
+            stateId={selectedState.id}
+            states={states}
+            onRename={(nextId) => onStateRename(selectedState.id, nextId)}
           />
           <RoleSelector
             value={selectedState.specialist_id}
@@ -234,6 +243,76 @@ export function StateEditor({
         </div>
       </Card>
     </aside>
+  );
+}
+
+function StateKeyField({
+  stateId,
+  states,
+  onRename,
+}: {
+  stateId: string;
+  states: ApiProcessState[];
+  onRename: (nextId: string) => boolean;
+}) {
+  const [draft, setDraft] = useState(stateId);
+  const normalized = normalizeStateId(draft);
+  const duplicate = Boolean(
+    normalized &&
+      normalized !== stateId &&
+      states.some((state) => state.id === normalized),
+  );
+  const invalid = !normalized;
+  const changed = normalized !== stateId;
+
+  useEffect(() => {
+    setDraft(stateId);
+  }, [stateId]);
+
+  function applyRename() {
+    if (!changed || duplicate || invalid) {
+      setDraft(stateId);
+      return;
+    }
+    const renamed = onRename(normalized);
+    setDraft(renamed ? normalized : stateId);
+  }
+
+  return (
+    <label className="block">
+      <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/45">
+        Step key
+      </span>
+      <input
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={applyRename}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            applyRename();
+          }
+          if (event.key === "Escape") {
+            setDraft(stateId);
+            event.currentTarget.blur();
+          }
+        }}
+        className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 font-mono text-sm text-white outline-none focus:border-aqua/40"
+      />
+      <span
+        className={`mt-1 block text-xs ${
+          duplicate || invalid ? "text-coral/80" : "text-white/40"
+        }`}
+      >
+        {invalid
+          ? "Use at least one letter or number."
+          : duplicate
+            ? "This key is already used by another state."
+            : changed
+              ? `Will save as ${normalized}.`
+              : "Used in .ship/config.yml transitions."}
+      </span>
+    </label>
   );
 }
 
@@ -473,6 +552,15 @@ function transitionId(
   index: number,
 ) {
   return `${transition.from_state_id}_to_${transition.to_state_id}_${index + 1}`;
+}
+
+function normalizeStateId(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .replace(/_+/g, "_");
 }
 
 function humanTriggerDetail(state: ApiProcessState): string {
