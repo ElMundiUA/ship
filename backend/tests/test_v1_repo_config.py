@@ -326,9 +326,35 @@ async def test_propose_emits_process_agent_profile(
                             "name": "Developer",
                             "agent_profile": "cursor_agent",
                         },
+                        "triggers": [
+                            {
+                                "type": "event",
+                                "event": "merge_request.ready",
+                                "interval": None,
+                            }
+                        ],
+                        "exit_conditions": [
+                            {"expression": "implementation_complete == true"}
+                        ],
+                        "block_conditions": [
+                            {"expression": "requires_human_input == true"}
+                        ],
                     }
                 ],
-                "transitions": [],
+                "transitions": [
+                    {
+                        "from": "implementation",
+                        "to": "implementation",
+                        "condition": "retry_requested == true",
+                    }
+                ],
+                "routines": [
+                    {
+                        "id": "weekly_triage",
+                        "name": "Weekly triage",
+                        "cadence": "0 9 * * 1",
+                    }
+                ],
             },
         },
     )
@@ -339,6 +365,10 @@ async def test_propose_emits_process_agent_profile(
     _, content = files[0]
     assert "process:" in content
     assert "agent_profile: cursor_agent" in content
+    assert "event: merge_request.ready" in content
+    assert "expression: implementation_complete == true" in content
+    assert "condition: retry_requested == true" in content
+    assert "cadence: 0 9 * * 1" in content
 
 
 @pytest.mark.asyncio
@@ -376,6 +406,67 @@ async def test_propose_rejects_unknown_process_agent_profile(
     detail = response.json()["detail"]
     assert detail["code"] == "invalid_process"
     assert "specialist.agent_profile" in detail["message"]
+
+
+@pytest.mark.asyncio
+async def test_propose_rejects_invalid_process_trigger(
+    v1_client, seed_workspace_with_repo
+) -> None:
+    raw, workspace, _install, repo = seed_workspace_with_repo
+
+    response = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/repos/{repo.id}/config/propose",
+        headers={"Authorization": f"Bearer {raw}"},
+        json={
+            "base_sha": "sha-abc",
+            "lanes": {},
+            "process": {
+                "id": "development",
+                "name": "Development Process",
+                "primary": True,
+                "states": [
+                    {
+                        "id": "implementation",
+                        "name": "Implementation",
+                        "triggers": [{"type": "schedule", "interval": ""}],
+                    }
+                ],
+            },
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    detail = response.json()["detail"]
+    assert detail["code"] == "invalid_process"
+    assert "triggers[0].interval" in detail["message"]
+
+
+@pytest.mark.asyncio
+async def test_propose_rejects_invalid_process_routine(
+    v1_client, seed_workspace_with_repo
+) -> None:
+    raw, workspace, _install, repo = seed_workspace_with_repo
+
+    response = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/repos/{repo.id}/config/propose",
+        headers={"Authorization": f"Bearer {raw}"},
+        json={
+            "base_sha": "sha-abc",
+            "lanes": {},
+            "process": {
+                "id": "development",
+                "name": "Development Process",
+                "primary": True,
+                "states": [{"id": "implementation", "name": "Implementation"}],
+                "routines": [{"id": "weekly_triage", "name": ""}],
+            },
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    detail = response.json()["detail"]
+    assert detail["code"] == "invalid_process"
+    assert "routines[0].name" in detail["message"]
 
 
 # ---------------------------------------------------------------------------

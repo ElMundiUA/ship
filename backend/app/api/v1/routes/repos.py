@@ -2699,6 +2699,7 @@ _PROCESS_AGENT_PROFILES = frozenset(
         "local_cli",
     }
 )
+_PROCESS_TRIGGER_TYPES = frozenset({"manual", "event", "schedule"})
 
 
 def _validate_process_config(process: dict[str, Any]) -> None:
@@ -2826,6 +2827,18 @@ def _validate_process_config(process: dict[str, Any]) -> None:
             state_obj.get("agent_profile"),
             f"process.states[{index}].agent_profile",
         )
+        _validate_process_triggers(
+            state_obj.get("triggers"),
+            f"process.states[{index}].triggers",
+        )
+        _validate_process_conditions(
+            state_obj.get("exit_conditions"),
+            f"process.states[{index}].exit_conditions",
+        )
+        _validate_process_conditions(
+            state_obj.get("block_conditions"),
+            f"process.states[{index}].block_conditions",
+        )
         layout = state_obj.get("layout")
         if layout is not None:
             x_value = layout.get("x") if isinstance(layout, dict) else None
@@ -2849,9 +2862,7 @@ def _validate_process_config(process: dict[str, Any]) -> None:
                 )
 
     transitions = process.get("transitions")
-    if transitions is None:
-        return
-    if not isinstance(transitions, list):
+    if transitions is not None and not isinstance(transitions, list):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={
@@ -2859,7 +2870,7 @@ def _validate_process_config(process: dict[str, Any]) -> None:
                 "message": "process.transitions must be a list when provided",
             },
         )
-    for index, transition in enumerate(transitions):
+    for index, transition in enumerate(transitions or []):
         if not isinstance(transition, dict):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -2881,6 +2892,22 @@ def _validate_process_config(process: dict[str, Any]) -> None:
                     ),
                 },
             )
+        condition = transition.get("condition")
+        if condition is not None and (
+            not isinstance(condition, str) or not condition.strip()
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_process",
+                    "message": (
+                        f"process.transitions[{index}].condition must be "
+                        "a non-empty string"
+                    ),
+                },
+            )
+
+    _validate_process_routines(process.get("routines"))
 
 
 def _validate_process_agent_profile(value: Any, field: str) -> None:
@@ -2893,6 +2920,128 @@ def _validate_process_agent_profile(value: Any, field: str) -> None:
             detail={
                 "code": "invalid_process",
                 "message": f"{field} must be one of {allowed}",
+            },
+        )
+
+
+def _validate_process_triggers(value: Any, field: str) -> None:
+    if value is None:
+        return
+    if not isinstance(value, list):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "invalid_process",
+                "message": f"{field} must be a list when provided",
+            },
+        )
+    for index, trigger in enumerate(value):
+        if not isinstance(trigger, dict):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_process",
+                    "message": f"{field}[{index}] must be an object",
+                },
+            )
+        trigger_type = trigger.get("type")
+        if trigger_type not in _PROCESS_TRIGGER_TYPES:
+            allowed = "|".join(sorted(_PROCESS_TRIGGER_TYPES))
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_process",
+                    "message": f"{field}[{index}].type must be one of {allowed}",
+                },
+            )
+        if trigger_type == "schedule":
+            _require_optional_string(
+                trigger.get("interval"),
+                f"{field}[{index}].interval",
+                required=True,
+            )
+        elif trigger_type == "event":
+            _require_optional_string(
+                trigger.get("event"),
+                f"{field}[{index}].event",
+                required=True,
+            )
+
+
+def _validate_process_conditions(value: Any, field: str) -> None:
+    if value is None:
+        return
+    if not isinstance(value, list):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "invalid_process",
+                "message": f"{field} must be a list when provided",
+            },
+        )
+    for index, condition in enumerate(value):
+        if not isinstance(condition, dict):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_process",
+                    "message": f"{field}[{index}] must be an object",
+                },
+            )
+        _require_optional_string(
+            condition.get("expression"),
+            f"{field}[{index}].expression",
+            required=True,
+        )
+
+
+def _validate_process_routines(value: Any) -> None:
+    if value is None:
+        return
+    if not isinstance(value, list):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "invalid_process",
+                "message": "process.routines must be a list when provided",
+            },
+        )
+    for index, routine in enumerate(value):
+        if not isinstance(routine, dict):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_process",
+                    "message": f"process.routines[{index}] must be an object",
+                },
+            )
+        _require_optional_string(
+            routine.get("id"),
+            f"process.routines[{index}].id",
+            required=True,
+        )
+        _require_optional_string(
+            routine.get("name"),
+            f"process.routines[{index}].name",
+            required=True,
+        )
+        _require_optional_string(
+            routine.get("cadence"),
+            f"process.routines[{index}].cadence",
+            required=False,
+        )
+
+
+def _require_optional_string(value: Any, field: str, *, required: bool) -> None:
+    if value is None and not required:
+        return
+    if not isinstance(value, str) or not value.strip():
+        requirement = "a non-empty string" if required else "null or a non-empty string"
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "invalid_process",
+                "message": f"{field} must be {requirement}",
             },
         )
 
