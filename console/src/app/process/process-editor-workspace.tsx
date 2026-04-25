@@ -11,6 +11,7 @@ import type {
 import { ProcessCanvasEditor, type Position } from "./process-canvas-editor";
 import { processConfigFromApiProcess } from "./process-config";
 import { ProcessConfigProposalFields } from "./process-config-proposal-fields";
+import { BASE_SPECIALIST_CATALOG } from "./specialist-catalog";
 import { StateEditor, type SpecialistOption } from "./state-editor";
 
 export function ProcessEditorWorkspace({
@@ -308,11 +309,18 @@ function buildSpecialistOptions(
   states: ApiProcessState[],
 ): SpecialistOption[] {
   const options = new Map<string, SpecialistOption>();
+  for (const specialist of BASE_SPECIALIST_CATALOG) {
+    options.set(specialist.id, {
+      ...specialist,
+      source: "catalog",
+    });
+  }
   for (const specialist of processSpecialists) {
     options.set(specialist.id, {
       id: specialist.id,
       name: specialist.name,
       role: specialist.role,
+      source: "process",
     });
   }
   for (const state of states) {
@@ -321,6 +329,7 @@ function buildSpecialistOptions(
         id: state.specialist_id,
         name: state.specialist_name,
         role: "Custom role from this process config.",
+        source: "custom",
       });
     }
   }
@@ -329,6 +338,7 @@ function buildSpecialistOptions(
       id: "owner",
       name: "Owner",
       role: "Responsible owner for this state.",
+      source: "custom",
     });
   }
   return Array.from(options.values());
