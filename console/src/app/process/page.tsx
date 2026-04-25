@@ -2,16 +2,26 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { AppShell } from "@/components/app-shell";
-import { Badge, type BadgeTone, Card, CardHeader, MockBanner } from "@/components/ui";
+import { Badge, Card, CardHeader, MockBanner } from "@/components/ui";
+import {
+  type ProcessConfigSource,
+  processFromRepoConfig,
+  selectConfigSource,
+} from "./process-config";
 import { ProcessCanvasEditor } from "./process-canvas-editor";
+import { RepoSelector } from "./repo-selector";
+import { StateEditor } from "./state-editor";
 import {
   ApiHttpError,
   ApiUnavailableError,
+  type ApiActivatedRepo,
   type ApiProcess,
   type ApiProcessState,
-  type ApiProcessTask,
+  type ApiRepoConfig,
+  getRepoConfig,
   getProcess,
   isApiConfigured,
+  listActivatedRepos,
   listProcesses,
   listWorkspaces,
 } from "@/lib/api/client";
@@ -31,15 +41,17 @@ export default async function ProcessPage({
   const selectedStateId =
     typeof params.state === "string" ? params.state : undefined;
   const selectedTab = params.tab === "routines" ? "routines" : "process";
-  const editMode = params.mode === "edit";
+  const selectedRepoId =
+    typeof params.repo === "string" ? params.repo : undefined;
 
   if (!isApiConfigured()) {
     return renderProcessPage({
       workspace: { id: "mock", name: "Mock workspace", slug: "mock" },
       process: mockProcess,
+      repos: mockRepos,
+      selectedRepo: mockRepos[0],
       selectedStateId,
       selectedTab,
-      editMode,
       mock: true,
     });
   }
@@ -47,21 +59,26 @@ export default async function ProcessPage({
   const token = await getSessionToken();
   if (!token) redirect("/login?next=%2Fprocess");
 
-  const result = await loadLiveProcess(token);
+  const result = await loadLiveProcess(token, selectedRepoId);
   if (result === "unauthorized") redirect("/login?next=%2Fprocess");
   if (result === "empty") redirect("/onboarding?step=github");
   if (result === "down") return renderDownState();
 
-  return renderProcessPage({ ...result, selectedStateId, selectedTab, editMode });
+  return renderProcessPage({ ...result, selectedStateId, selectedTab });
 }
 
 type LiveProcess = {
   workspace: ApiWorkspace;
   process: ApiProcess;
+  repos: ApiActivatedRepo[];
+  selectedRepo: ApiActivatedRepo | null;
+  config: ApiRepoConfig | null;
+  configSource: ProcessConfigSource;
 };
 
 async function loadLiveProcess(
   token: string,
+  selectedRepoId?: string,
 ): Promise<LiveProcess | "empty" | "unauthorized" | "down"> {
   let workspaces: ApiWorkspace[];
   try {
@@ -75,10 +92,34 @@ async function loadLiveProcess(
 
   const workspace = workspaces[0];
   try {
-    const processList = await listProcesses(workspace.id, token);
+    const [processList, repos] = await Promise.all([
+      listProcesses(workspace.id, token),
+      listActivatedRepos(workspace.id, token).catch(() => [] as ApiActivatedRepo[]),
+    ]);
     const processId = processList.primary_process_id || "development";
-    const process = await getProcess(workspace.id, processId, token);
-    return { workspace, process };
+    const selectedRepo =
+      repos.find((repo) => repo.id === selectedRepoId) ?? repos[0] ?? null;
+    const [projectedProcess, config] = await Promise.all([
+      getProcess(workspace.id, processId, token, {
+        repoId: selectedRepo?.id,
+      }),
+      selectedRepo
+        ? getRepoConfig(workspace.id, selectedRepo.id, token).catch(
+            () => null as ApiRepoConfig | null,
+          )
+        : Promise.resolve(null),
+    ]);
+    const repoProcess = processFromRepoConfig(config, projectedProcess);
+    const process = repoProcess ?? projectedProcess;
+    const configSource = selectConfigSource(config, repoProcess);
+    return {
+      workspace,
+      process,
+      repos,
+      selectedRepo,
+      config,
+      configSource,
+    };
   } catch (err) {
     if (err instanceof ApiHttpError && err.status === 401) return "unauthorized";
     if (err instanceof ApiUnavailableError) return "down";
@@ -89,24 +130,27 @@ async function loadLiveProcess(
 function renderProcessPage({
   workspace,
   process,
+  repos,
+  selectedRepo,
+  config,
+  configSource,
   selectedStateId,
   selectedTab,
-  editMode,
   mock = false,
 }: {
   workspace: Pick<ApiWorkspace, "id" | "name" | "slug">;
   process: ApiProcess;
+  repos: ApiActivatedRepo[];
+  selectedRepo: ApiActivatedRepo | null;
+  config?: ApiRepoConfig | null;
+  configSource?: ProcessConfigSource;
   selectedStateId?: string;
   selectedTab: "process" | "routines";
-  editMode: boolean;
   mock?: boolean;
 }) {
   const selectedState =
     process.states.find((state) => state.id === selectedStateId) ??
     process.states[0];
-  const selectedTasks = process.tasks.filter(
-    (task) => task.state_id === selectedState?.id,
-  );
 
   return (
     <AppShell
@@ -126,17 +170,20 @@ function renderProcessPage({
     >
       {mock && <MockBanner />}
       <div className="space-y-3">
-        <ProcessTabs selected={selectedTab} />
+        <RepoSelector repos={repos} selectedRepo={selectedRepo} />
+        <ConfigSourceBanner config={config ?? null} source={configSource ?? "fallback"} />
+        <ProcessTabs selected={selectedTab} repoId={selectedRepo?.id} />
         {selectedTab === "routines" ? (
           <RoutinesPanel process={process} />
         ) : (
-          <section className="relative min-h-[680px]">
+          <section className="grid min-h-[calc(100vh-180px)] grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
             <ProcessCanvasEditor
               process={process}
               selectedStateId={selectedState?.id}
-              editMode={editMode}
+              editMode={true}
+              repoId={selectedRepo?.id}
             />
-            <StateDetails state={selectedState} tasks={selectedTasks} />
+            <StateEditor state={selectedState} config={config ?? null} />
           </section>
         )}
       </div>
@@ -144,14 +191,60 @@ function renderProcessPage({
   );
 }
 
-function ProcessTabs({ selected }: { selected: "process" | "routines" }) {
+function ConfigSourceBanner({
+  config,
+  source,
+}: {
+  config: ApiRepoConfig | null;
+  source: ProcessConfigSource;
+}) {
+  if (source === "repo-process") {
+    return (
+      <div className="rounded-2xl border border-aqua/25 bg-aqua/[0.05] px-4 py-2 text-xs text-aqua/90">
+        Editing process from <code className="font-mono">.ship/config.yml</code>
+        {config?.sha ? ` · ${config.sha.slice(0, 7)}` : ""}.
+      </div>
+    );
+  }
+  if (source === "repo-lanes") {
+    return (
+      <div className="rounded-2xl border border-amber-300/25 bg-amber-300/[0.06] px-4 py-2 text-xs text-amber-100/90">
+        This repo has the old <code className="font-mono">lanes:</code> config,
+        not a <code className="font-mono">process:</code> section yet. The canvas
+        shows Ship&apos;s development process template until this repo is reseeded or
+        migrated.
+      </div>
+    );
+  }
+  if (source === "missing") {
+    return (
+      <div className="rounded-2xl border border-coral/25 bg-coral/[0.05] px-4 py-2 text-xs text-coral/90">
+        This repo has no <code className="font-mono">.ship/config.yml</code> on
+        its default branch yet. Reseed the repo to create one.
+      </div>
+    );
+  }
+  return null;
+}
+
+function ProcessTabs({
+  selected,
+  repoId,
+}: {
+  selected: "process" | "routines";
+  repoId?: string;
+}) {
+  const processHref = repoId ? `/process?repo=${encodeURIComponent(repoId)}` : "/process";
+  const routinesHref = repoId
+    ? `/process?tab=routines&repo=${encodeURIComponent(repoId)}`
+    : "/process?tab=routines";
   return (
     <div className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/[0.035] p-2">
       <div className="flex gap-1">
-        <TabLink href="/process" active={selected === "process"}>
+        <TabLink href={processHref} active={selected === "process"}>
           Process canvas
         </TabLink>
-        <TabLink href="/process?tab=routines" active={selected === "routines"}>
+        <TabLink href={routinesHref} active={selected === "routines"}>
           Routines
         </TabLink>
       </div>
@@ -184,84 +277,6 @@ function TabLink({
     >
       {children}
     </Link>
-  );
-}
-
-function StateDetails({
-  state,
-  tasks,
-}: {
-  state?: ApiProcessState;
-  tasks: ApiProcessTask[];
-}) {
-  if (!state) {
-    return (
-      <Card>
-        <CardHeader title="State details" subtitle="No state selected." />
-      </Card>
-    );
-  }
-  return (
-    <aside className="mt-3 space-y-3 xl:absolute xl:right-4 xl:top-4 xl:mt-0 xl:w-[360px]">
-      <Card>
-        <CardHeader
-          title={state.name}
-          subtitle={`Assigned to ${state.specialist_name}`}
-        />
-        <div className="space-y-4 text-sm text-white/70">
-          <DetailBlock title="Instructions">{state.instructions}</DetailBlock>
-          <DetailList
-            title="Triggers"
-            items={state.triggers.map((trigger) =>
-              trigger.type === "schedule"
-                ? `schedule: ${trigger.interval ?? "not configured"}`
-                : trigger.type === "event"
-                  ? `event: ${trigger.event ?? "event"}`
-                  : "manual",
-            )}
-          />
-          <DetailList
-            title="Exit conditions"
-            items={state.exit_conditions.map((item) => item.expression)}
-          />
-          <DetailList
-            title="Block conditions"
-            items={state.block_conditions.map((item) => item.expression)}
-          />
-        </div>
-      </Card>
-      <Card>
-        <CardHeader
-          title="State tasks"
-          subtitle="Side-panel context for the selected state."
-        />
-        {tasks.length === 0 ? (
-          <p className="text-sm text-white/50">No projected tasks in this state.</p>
-        ) : (
-          <ul className="space-y-3">
-            {tasks.map((task) => (
-              <li
-                key={task.id}
-                className="rounded-xl border border-white/10 bg-white/[0.035] p-3"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-semibold text-white">{task.title}</div>
-                    <div className="mt-1 text-xs text-white/45">
-                      {task.last_updated ? formatDate(task.last_updated) : "not updated"}
-                    </div>
-                  </div>
-                  <Badge tone={taskStatusTone(task.status)}>{task.status}</Badge>
-                </div>
-                {task.blockers.length > 0 && (
-                  <div className="mt-2 text-xs text-coral">{task.blockers[0]}</div>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
-      </Card>
-    </aside>
   );
 }
 
@@ -308,44 +323,6 @@ function RoutinesPanel({ process }: { process: ApiProcess }) {
   );
 }
 
-function DetailBlock({
-  title,
-  children,
-}: {
-  title: string;
-  children: string;
-}) {
-  return (
-    <div>
-      <div className="text-xs font-semibold uppercase tracking-wide text-white/40">
-        {title}
-      </div>
-      <p className="mt-1 leading-relaxed text-white/65">{children}</p>
-    </div>
-  );
-}
-
-function DetailList({ title, items }: { title: string; items: string[] }) {
-  return (
-    <div>
-      <div className="text-xs font-semibold uppercase tracking-wide text-white/40">
-        {title}
-      </div>
-      {items.length === 0 ? (
-        <p className="mt-1 text-white/45">None configured.</p>
-      ) : (
-        <ul className="mt-2 space-y-1">
-          {items.map((item) => (
-            <li key={item} className="rounded-lg bg-white/[0.04] px-2 py-1 font-mono text-xs text-white/70">
-              {item}
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
 function renderDownState() {
   return (
     <AppShell title="Process">
@@ -363,67 +340,24 @@ function renderDownState() {
   );
 }
 
-function taskStatusTone(status: ApiProcessTask["status"]): BadgeTone {
-  if (status === "blocked") return "err";
-  if (status === "done") return "ok";
-  return "info";
-}
-
-function formatDate(value: string): string {
-  return new Intl.DateTimeFormat("en", {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(value));
-}
-
 const mockProcess: ApiProcess = {
   id: "development",
   name: "Development Process",
   primary: true,
   state_count: 5,
-  task_count: 3,
-  blocked_count: 1,
-  health: "degraded",
+  task_count: 0,
+  blocked_count: 0,
+  health: "ok",
   specialists: [],
   states: [
-    mockState("task_intake", "Task Intake", "Intake specialist", "ok", 1, 0),
-    mockState("ba_requirements", "BA Requirements", "Business analyst", "ok", 0, 0),
-    mockState("dev_implementation", "Dev Implementation", "Developer", "degraded", 1, 1),
-    mockState("qa_manual", "QA Manual", "QA engineer", "ok", 0, 0),
-    mockState("pr_review", "PR Review", "Code reviewer", "ok", 1, 0),
+    mockState("task_intake", "Intake", "Intake specialist", "ok", 1, 0),
+    mockState("ba_requirements", "Requirements", "Business analyst", "ok", 0, 0),
+    mockState("dev_implementation", "Implementation", "Developer", "ok", 0, 0),
+    mockState("qa_manual", "Quality Review", "QA engineer", "ok", 0, 0),
+    mockState("pr_review", "Final Review", "Review owner", "ok", 1, 0),
   ],
   transitions: [],
-  tasks: [
-    {
-      id: "mock-task-1",
-      title: "Clarify payment retry requirements",
-      state_id: "task_intake",
-      status: "active",
-      last_updated: new Date().toISOString(),
-      context: { source: "mock" },
-      blockers: [],
-    },
-    {
-      id: "mock-task-2",
-      title: "Checkout flow implementation is waiting for approval",
-      state_id: "dev_implementation",
-      status: "blocked",
-      last_updated: new Date().toISOString(),
-      context: { source: "mock" },
-      blockers: ["Approval required before touching payment code."],
-    },
-    {
-      id: "mock-task-3",
-      title: "Reviewed PR · 2 suggestions",
-      state_id: "pr_review",
-      status: "done",
-      last_updated: new Date().toISOString(),
-      context: { source: "mock" },
-      blockers: [],
-    },
-  ],
+  tasks: [],
   routines: [
     {
       id: "self_heal",
@@ -461,6 +395,23 @@ const mockProcess: ApiProcess = {
     },
   ],
 };
+
+const mockRepos: ApiActivatedRepo[] = [
+  {
+    id: "mock-repo",
+    external_id: 1,
+    full_name: "helio/app",
+    default_branch: "main",
+    private: true,
+    html_url: "https://github.com/helio/app",
+    description: "Mock repository",
+    activated_at: new Date().toISOString(),
+    provider: "github",
+    preset: "default",
+    installed_bundle_version: 1,
+    current_bundle_version: 1,
+  },
+];
 
 function mockState(
   id: string,

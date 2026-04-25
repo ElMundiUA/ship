@@ -22,7 +22,9 @@ import {
 import {
   ApiHttpError,
   ApiUnavailableError,
+  type ApiActivatedRepo,
   isApiConfigured,
+  listActivatedRepos,
   listArtifactRepos,
   listTokens,
   listWorkspaces,
@@ -41,6 +43,7 @@ type Mode =
   | {
       source: "live";
       workspace: ApiWorkspace;
+      activatedRepos: ApiActivatedRepo[];
       repos: ApiArtifactRepo[];
       tokens: ApiTokenInfo[];
     }
@@ -93,6 +96,7 @@ function errorMessage(code: string): string {
 
 const TABS = [
   { id: "general", label: "General" },
+  { id: "repositories", label: "Repositories" },
   { id: "catalog", label: "Catalog sources" },
   { id: "repos", label: "Artifact repos" },
   { id: "tokens", label: "Tokens" },
@@ -119,6 +123,9 @@ async function load(): Promise<Mode> {
     const target = ws[0];
     // The artifact-repos call may 404 in older deployments; treat it as
     // empty rather than falling all the way back to mock data.
+    const activatedRepos = await listActivatedRepos(target.id, token).catch(
+      () => [] as ApiActivatedRepo[],
+    );
     let repos: ApiArtifactRepo[] = [];
     try {
       repos = await listArtifactRepos(target.id, token);
@@ -134,7 +141,7 @@ async function load(): Promise<Mode> {
       // than crashing the whole page.
       if (!(err instanceof ApiHttpError) || err.status !== 404) throw err;
     }
-    return { source: "live", workspace: target, repos, tokens };
+    return { source: "live", workspace: target, activatedRepos, repos, tokens };
   } catch (err) {
     if (err instanceof ApiHttpError && err.status === 401)
       return { source: "mock", reason: "Session expired — sign in again" };
@@ -175,7 +182,7 @@ export default async function SettingsPage({
     freshSecret = jar.get("ship_token_just_minted")?.value ?? null;
   }
 
-  const { workspace, repos, tokens } = data;
+  const { workspace, activatedRepos, repos, tokens } = data;
   const sources: Record<CatalogKey, boolean> = {
     global: workspace.catalog_sources?.global ?? true,
     workspace: workspace.catalog_sources?.workspace ?? true,
@@ -230,6 +237,13 @@ export default async function SettingsPage({
                 />
               </div>
             </Card>
+          )}
+
+          {activeTab === "repositories" && (
+            <RepositoriesPanel
+              workspaceId={workspace.id}
+              repositories={activatedRepos}
+            />
           )}
 
           {activeTab === "catalog" && (
@@ -430,6 +444,110 @@ function TokensPanel({
         </details>
       </Card>
     </>
+  );
+}
+
+function RepositoriesPanel({
+  workspaceId,
+  repositories,
+}: {
+  workspaceId: string;
+  repositories: ApiActivatedRepo[];
+}) {
+  return (
+    <Card>
+      <CardHeader
+        title="Repositories"
+        subtitle="Activated project repositories. Re-run setup from here when the seeded Ship bundle is stale."
+      />
+      {repositories.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] p-4 text-sm text-white/55">
+          No repositories are activated for this workspace yet. Use onboarding to
+          connect GitHub and pick at least one repository.
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead className="bg-white/[0.04] text-[10px] uppercase tracking-widest text-white/45">
+              <tr>
+                <th className="px-3 py-2 text-left font-semibold">Repository</th>
+                <th className="px-3 py-2 text-left font-semibold">Provider</th>
+                <th className="px-3 py-2 text-left font-semibold">Seed bundle</th>
+                <th className="px-3 py-2 text-left font-semibold">Activated</th>
+                <th className="px-3 py-2 text-right font-semibold">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {repositories.map((repo) => (
+                <RepositoryRow
+                  key={repo.id}
+                  workspaceId={workspaceId}
+                  repo={repo}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div className="mt-4 rounded-xl border border-aqua/20 bg-aqua/[0.04] px-3 py-2.5 text-[11px] leading-relaxed text-aqua/85">
+        <strong>Reseed.</strong> Open the onboarding confirm step for this
+        workspace and run setup for the stale repo again. It calls{" "}
+        <code className="font-mono">wizard_seed</code>, opens a fresh PR with
+        the current Ship bundle, and updates the installed bundle version after
+        the seed succeeds.
+      </div>
+    </Card>
+  );
+}
+
+function RepositoryRow({
+  workspaceId,
+  repo,
+}: {
+  workspaceId: string;
+  repo: ApiActivatedRepo;
+}) {
+  const installed = repo.installed_bundle_version;
+  const current = repo.current_bundle_version;
+  const stale = installed == null || installed < current;
+  return (
+    <tr className="border-t border-white/5">
+      <td className="px-3 py-2.5 align-top">
+        <a
+          href={repo.html_url}
+          target="_blank"
+          rel="noreferrer"
+          className="font-semibold text-white hover:text-aqua"
+        >
+          {repo.full_name}
+        </a>
+        <div className="mt-1 text-[10px] text-white/45">
+          {repo.private ? "private" : "public"} · {repo.default_branch}
+        </div>
+      </td>
+      <td className="px-3 py-2.5 align-top">
+        <Badge tone="neutral">{repo.provider}</Badge>
+      </td>
+      <td className="px-3 py-2.5 align-top">
+        <Badge tone={stale ? "warn" : "ok"} dot>
+          {stale ? "reseed needed" : "current"}
+        </Badge>
+        <div className="mt-1 text-[10px] text-white/45">
+          installed {installed ?? "never"} · current {current}
+        </div>
+      </td>
+      <td className="px-3 py-2.5 align-top text-xs text-white/60">
+        {repo.activated_at ? new Date(repo.activated_at).toUTCString() : "unknown"}
+      </td>
+      <td className="px-3 py-2.5 align-top text-right">
+        <a
+          href={`/onboarding?step=confirm&ws=${encodeURIComponent(workspaceId)}`}
+          className="inline-flex rounded-full border border-aqua/30 bg-aqua/10 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-aqua transition hover:bg-aqua/20"
+        >
+          Reseed
+        </a>
+      </td>
+    </tr>
   );
 }
 

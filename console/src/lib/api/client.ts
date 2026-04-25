@@ -1877,9 +1877,13 @@ export function getProcess(
   workspaceId: string,
   processId: string,
   token?: string,
+  options: { repoId?: string } = {},
 ): Promise<ApiProcess> {
+  const query = options.repoId
+    ? `?repo_id=${encodeURIComponent(options.repoId)}`
+    : "";
   return apiFetch<ApiProcess>(
-    `/v1/workspaces/${encodeURIComponent(workspaceId)}/processes/${encodeURIComponent(processId)}`,
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/processes/${encodeURIComponent(processId)}${query}`,
     { token },
   );
 }
@@ -2255,6 +2259,7 @@ export interface ApiRepoConfig {
     preset?: string;
     repo?: string;
     lanes?: Record<string, Record<string, unknown>>;
+    process?: unknown;
   } | null;
   parse_error: string | null;
 }
