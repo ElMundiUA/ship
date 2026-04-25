@@ -31,15 +31,18 @@ export async function POST(request: Request) {
     );
     const layout = parseObject(getFormValue(form, "layoutJson"));
     if (stateId) {
-      updateState(process, stateId, {
+      const updated = updateState(process, stateId, {
         name: getFormValue(form, "stateName"),
         specialistName: getFormValue(form, "specialistName"),
         instructions: getFormValue(form, "instructions"),
         triggerType: getFormValue(form, "triggerType"),
         triggerDetail: getFormValue(form, "triggerDetail"),
-        exitCondition: getFormValue(form, "exitCondition"),
-        blockCondition: getFormValue(form, "blockCondition"),
+        exitCondition: conditionFromForm(form, "Exit"),
+        blockCondition: conditionFromForm(form, "Block"),
       });
+      if (!updated) {
+        return back(origin, repoId, stateId, "state_not_found");
+      }
     }
     if (Object.keys(layout).length > 0) {
       updateLayout(process, layout);
@@ -74,7 +77,12 @@ export async function POST(request: Request) {
       }
       return back(origin, repoId, stateId, `http_${err.status}`);
     }
-    return back(origin, repoId, stateId, "unknown");
+    return back(
+      origin,
+      repoId,
+      stateId,
+      err instanceof SyntaxError ? "bad_json" : "unknown",
+    );
   }
 }
 
@@ -109,7 +117,7 @@ function updateState(
     exitCondition: string;
     blockCondition: string;
   },
-) {
+): boolean {
   const states = Array.isArray(process.states) ? process.states : [];
   for (const item of states) {
     if (!item || typeof item !== "object" || Array.isArray(item)) continue;
@@ -125,8 +133,16 @@ function updateState(
     state.triggers = [triggerFromForm(patch.triggerType, patch.triggerDetail)];
     state.exit_conditions = [{ expression: patch.exitCondition }];
     state.block_conditions = [{ expression: patch.blockCondition }];
-    return;
+    return true;
   }
+  return false;
+}
+
+function conditionFromForm(form: FormData, kind: "Exit" | "Block"): string {
+  const value = getFormValue(form, `${kind.toLowerCase()}Condition`);
+  const original = getFormValue(form, `original${kind}Condition`);
+  const originalLabel = getFormValue(form, `original${kind}ConditionLabel`);
+  return value === originalLabel ? original : value;
 }
 
 function updateLayout(
