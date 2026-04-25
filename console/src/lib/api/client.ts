@@ -1772,6 +1772,10 @@ export interface ApiProcessState {
   specialist_id: string;
   specialist_name: string;
   instructions: string;
+  layout?: {
+    x: number;
+    y: number;
+  } | null;
   triggers: ApiProcessTrigger[];
   exit_conditions: ApiProcessCondition[];
   block_conditions: ApiProcessCondition[];

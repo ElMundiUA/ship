@@ -89,6 +89,7 @@ export function processConfigFromApiProcess(process: ApiProcess): Record<string,
         name: state.specialist_name,
       },
       instructions: state.instructions,
+      ...(state.layout ? { layout: state.layout } : {}),
       triggers: state.triggers,
       exit_conditions: state.exit_conditions,
       block_conditions: state.block_conditions,
@@ -136,6 +137,7 @@ function stateFromConfig(
       stringValue(row.description) ??
       fallback?.instructions ??
       "",
+    layout: layoutFromConfig(row.layout) ?? fallback?.layout ?? null,
     triggers:
       triggersFromConfig(row.triggers) ??
       fallback?.triggers ??
@@ -155,6 +157,15 @@ function stateFromConfig(
       health: "ok",
     },
   };
+}
+
+function layoutFromConfig(value: unknown): ApiProcessState["layout"] | null {
+  const row = asRecord(value);
+  if (!row) return null;
+  const x = numberValue(row.x);
+  const y = numberValue(row.y);
+  if (x == null || y == null) return null;
+  return { x, y };
 }
 
 function triggersFromConfig(value: unknown): ApiProcessState["triggers"] | null {
@@ -196,6 +207,10 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function numberValue(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function titleFromId(value: string): string {

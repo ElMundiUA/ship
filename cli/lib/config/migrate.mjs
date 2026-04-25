@@ -189,11 +189,11 @@ function defaultDevelopmentProcess() {
     name: "Development Process",
     primary: true,
     states: [
-      { id: "task_intake", name: "Intake", specialist: { id: "intake", name: "Intake specialist" } },
-      { id: "ba_requirements", name: "Requirements", specialist: { id: "business_analyst", name: "Business analyst" } },
-      { id: "dev_implementation", name: "Implementation", specialist: { id: "developer", name: "Developer" } },
-      { id: "qa_manual", name: "Quality Review", specialist: { id: "qa_engineer", name: "QA engineer" } },
-      { id: "pr_review", name: "Final Review", specialist: { id: "review_owner", name: "Review owner" } },
+      { id: "task_intake", name: "Intake", specialist: { id: "intake", name: "Intake specialist" }, layout: { x: 72, y: 170 } },
+      { id: "ba_requirements", name: "Requirements", specialist: { id: "business_analyst", name: "Business analyst" }, layout: { x: 338, y: 170 } },
+      { id: "dev_implementation", name: "Implementation", specialist: { id: "developer", name: "Developer" }, layout: { x: 604, y: 170 } },
+      { id: "qa_manual", name: "Quality Review", specialist: { id: "qa_engineer", name: "QA engineer" }, layout: { x: 870, y: 170 } },
+      { id: "pr_review", name: "Final Review", specialist: { id: "review_owner", name: "Review owner" }, layout: { x: 1136, y: 170 } },
     ],
     transitions: [
       { from: "task_intake", to: "ba_requirements" },

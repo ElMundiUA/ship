@@ -12,7 +12,7 @@ import {
 } from "react";
 
 import { Card } from "@/components/ui";
-import type { ApiProcess, ApiProcessState } from "@/lib/api/client";
+import type { ApiProcess, ApiProcessState, ApiRepoConfig } from "@/lib/api/client";
 
 const NODE_WIDTH = 210;
 const NODE_HEIGHT = 108;
@@ -30,15 +30,21 @@ type DragState = {
 };
 
 export function ProcessCanvasEditor({
+  workspaceId,
   process,
   selectedStateId,
   editMode,
   repoId,
+  config,
+  processConfig,
 }: {
+  workspaceId: string;
   process: ApiProcess;
   selectedStateId?: string;
   editMode: boolean;
   repoId?: string;
+  config: ApiRepoConfig | null;
+  processConfig: Record<string, unknown>;
 }) {
   const router = useRouter();
   const canvasRef = useRef<HTMLDivElement | null>(null);
@@ -49,7 +55,7 @@ export function ProcessCanvasEditor({
       Object.fromEntries(
         process.states.map((state, index) => [
           state.id,
-          { x: PAD + index * (NODE_WIDTH + GAP), y: START_Y },
+          state.layout ?? { x: PAD + index * (NODE_WIDTH + GAP), y: START_Y },
         ]),
       ) as Record<string, Position>,
     [process.states],
@@ -57,6 +63,42 @@ export function ProcessCanvasEditor({
   const [positions, setPositions] = useState<Record<string, Position>>(
     initialPositions,
   );
+
+  useEffect(() => {
+    setPositions(initialPositions);
+  }, [initialPositions]);
+
+  const layoutJson = useMemo(
+    () =>
+      JSON.stringify(
+        Object.fromEntries(
+          Object.entries(positions).map(([stateId, position]) => [
+            stateId,
+            {
+              x: Math.round(position.x),
+              y: Math.round(position.y),
+            },
+          ]),
+        ),
+      ),
+    [positions],
+  );
+  const initialLayoutJson = useMemo(
+    () =>
+      JSON.stringify(
+        Object.fromEntries(
+          Object.entries(initialPositions).map(([stateId, position]) => [
+            stateId,
+            {
+              x: Math.round(position.x),
+              y: Math.round(position.y),
+            },
+          ]),
+        ),
+      ),
+    [initialPositions],
+  );
+  const hasLayoutChanges = layoutJson !== initialLayoutJson;
 
   const updateDraggedNode = useCallback((clientX: number, clientY: number) => {
     const drag = dragRef.current;
@@ -198,6 +240,29 @@ export function ProcessCanvasEditor({
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <form action="/api/process/config-propose" method="post">
+            <input type="hidden" name="workspaceId" value={workspaceId} />
+            <input type="hidden" name="repoId" value={repoId ?? ""} />
+            <input type="hidden" name="baseSha" value={config?.sha ?? ""} />
+            <input
+              type="hidden"
+              name="lanesJson"
+              value={JSON.stringify(config?.parsed?.lanes ?? {})}
+            />
+            <input
+              type="hidden"
+              name="processJson"
+              value={JSON.stringify(processConfig)}
+            />
+            <input type="hidden" name="layoutJson" value={layoutJson} />
+            <button
+              type="submit"
+              disabled={!repoId || !hasLayoutChanges}
+              className="rounded-full border border-aqua/25 bg-aqua/10 px-3 py-1 text-xs font-semibold text-aqua transition hover:bg-aqua/15 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/[0.04] disabled:text-white/35"
+            >
+              Save layout
+            </button>
+          </form>
           <span className="rounded-full bg-aqua/15 px-3 py-1 text-xs font-semibold text-aqua">
             Editing
           </span>

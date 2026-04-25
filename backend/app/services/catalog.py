@@ -809,6 +809,7 @@ def default_development_process_config() -> dict[str, object]:
                 "id": "task_intake",
                 "name": "Intake",
                 "specialist": {"id": "intake", "name": "Intake specialist"},
+                "layout": {"x": 72, "y": 170},
                 "instructions": (
                     "Clarify the request, collect missing context, and decide "
                     "whether the task is ready for requirements."
@@ -818,6 +819,7 @@ def default_development_process_config() -> dict[str, object]:
                 "id": "ba_requirements",
                 "name": "Requirements",
                 "specialist": {"id": "business_analyst", "name": "Business analyst"},
+                "layout": {"x": 338, "y": 170},
                 "instructions": (
                     "Turn the request into acceptance criteria, constraints, "
                     "risks, and open questions."
@@ -827,6 +829,7 @@ def default_development_process_config() -> dict[str, object]:
                 "id": "dev_implementation",
                 "name": "Implementation",
                 "specialist": {"id": "developer", "name": "Developer"},
+                "layout": {"x": 604, "y": 170},
                 "instructions": (
                     "Implement the change, update tests and documentation, and "
                     "prepare the work for review."
@@ -836,6 +839,7 @@ def default_development_process_config() -> dict[str, object]:
                 "id": "qa_manual",
                 "name": "Quality Review",
                 "specialist": {"id": "qa_engineer", "name": "QA engineer"},
+                "layout": {"x": 870, "y": 170},
                 "instructions": (
                     "Validate acceptance criteria, edge cases, and user-facing "
                     "quality before release."
@@ -845,6 +849,7 @@ def default_development_process_config() -> dict[str, object]:
                 "id": "pr_review",
                 "name": "Final Review",
                 "specialist": {"id": "review_owner", "name": "Review owner"},
+                "layout": {"x": 1136, "y": 170},
                 "instructions": (
                     "Review the completed work for correctness, maintainability, "
                     "scope, and release readiness."
