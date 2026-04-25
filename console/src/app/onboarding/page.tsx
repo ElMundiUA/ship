@@ -102,6 +102,10 @@ const TRACKER_ERRORS: Record<string, string> = {
     "Notion OAuth isn't configured on this deployment (missing NOTION_CLIENT_ID / NOTION_CLIENT_SECRET). You can skip for now and use GitHub Issues — it's already connected via the GitHub App — or ask ops to wire Notion credentials.",
   bad_atlassian_input:
     "Atlassian needs a site, account email, and API token. Fill those fields or skip for now.",
+  bad_azure_devops_input:
+    "Azure DevOps needs an organization slug and PAT. Fill those fields or skip for now.",
+  bad_gitlab_input:
+    "GitLab needs a host and PAT. Fill those fields or skip for now.",
   bad_state:
     "OAuth handshake failed (state expired or tampered). Start the flow again.",
   exchange_failed:
@@ -409,6 +413,8 @@ export default async function OnboardingPage({
             linearStatus={pick(params.linear)}
             notionStatus={pick(params.notion)}
             atlassianStatus={pick(params.atlassian)}
+            azureDevOpsStatus={pick(params.azure_devops)}
+            gitlabStatus={pick(params.gitlab)}
             reposJustWired={pick(params.repos) === "wired"}
           />
         )}
@@ -735,6 +741,8 @@ function TrackerStep({
   linearStatus,
   notionStatus,
   atlassianStatus,
+  azureDevOpsStatus,
+  gitlabStatus,
   reposJustWired,
 }: {
   wsId: string;
@@ -742,11 +750,13 @@ function TrackerStep({
   linearStatus?: string;
   notionStatus?: string;
   atlassianStatus?: string;
+  azureDevOpsStatus?: string;
+  gitlabStatus?: string;
   reposJustWired: boolean;
 }) {
   const message = error ? TRACKER_ERRORS[error] ?? error : null;
   const tiles: {
-    id: "linear" | "notion" | "atlassian" | "github";
+    id: "linear" | "notion" | "atlassian" | "azure_devops" | "gitlab" | "github";
     name: string;
     blurb: string;
     tag: string;
@@ -777,6 +787,30 @@ function TrackerStep({
         { name: "email", label: "Email", type: "email", placeholder: "you@company.com" },
         { name: "api_token", label: "API token", type: "password" },
         { name: "jira_project", label: "Default Jira project", placeholder: "ENG" },
+      ],
+    },
+    {
+      id: "azure_devops",
+      name: "Azure DevOps",
+      blurb:
+        "Connect an Azure DevOps organization for corporate repos and pipeline orchestration.",
+      tag: "PAT · repos + pipelines",
+      fields: [
+        { name: "organization", label: "Organization", placeholder: "acme-corp" },
+        { name: "project", label: "Default project", placeholder: "Platform" },
+        { name: "pat", label: "Personal access token", type: "password" },
+      ],
+    },
+    {
+      id: "gitlab",
+      name: "GitLab",
+      blurb:
+        "Connect GitLab.com or self-hosted GitLab for repos, merge requests, and CI status.",
+      tag: "PAT · GitLab CI",
+      fields: [
+        { name: "host", label: "Host", placeholder: "gitlab.com" },
+        { name: "group", label: "Default group", placeholder: "platform/core" },
+        { name: "pat", label: "Personal access token", type: "password" },
       ],
     },
     {
@@ -838,6 +872,18 @@ function TrackerStep({
           and project bindings after bootstrap.
         </div>
       )}
+      {azureDevOpsStatus === "connected" && (
+        <div className="mt-5 rounded-xl border border-aqua/30 bg-aqua/[0.06] px-4 py-3 text-xs text-white/85">
+          <strong className="text-aqua">Azure DevOps connected.</strong> Repos
+          and pipeline credentials are stored server-side.
+        </div>
+      )}
+      {gitlabStatus === "connected" && (
+        <div className="mt-5 rounded-xl border border-aqua/30 bg-aqua/[0.06] px-4 py-3 text-xs text-white/85">
+          <strong className="text-aqua">GitLab connected.</strong> Repo and CI
+          credentials are stored server-side.
+        </div>
+      )}
 
       {message &&
         (error?.startsWith("not_configured") ? (
@@ -855,7 +901,9 @@ function TrackerStep({
           const connected =
             (tile.id === "linear" && linearStatus === "connected") ||
             (tile.id === "notion" && notionStatus === "connected") ||
-            (tile.id === "atlassian" && atlassianStatus === "connected");
+            (tile.id === "atlassian" && atlassianStatus === "connected") ||
+            (tile.id === "azure_devops" && azureDevOpsStatus === "connected") ||
+            (tile.id === "gitlab" && gitlabStatus === "connected");
           return (
           <form
             key={tile.id}

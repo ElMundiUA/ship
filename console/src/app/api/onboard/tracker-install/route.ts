@@ -1,14 +1,16 @@
 /**
- * Onboarding step — kick off Linear or Notion OAuth, or skip the tracker
- * setup entirely.
+ * Onboarding step — connect a tracker/provider or skip setup entirely.
  *
- * Form submits with `kind=linear|notion|atlassian|github|skip`:
+ * Form submits with
+ * `kind=linear|notion|atlassian|azure_devops|gitlab|github|skip`:
  *
  * - `linear` / `notion` — POST to backend `install/start` for the chosen
  *   vendor, then 303-redirect to the returned `install_url`. The vendor
  *   sends the user to its own OAuth approval page; the backend's
  *   `install/callback` handles persistence and bounces them back into
  *   `?step=done` on the console origin.
+ * - `atlassian` / `azure_devops` / `gitlab` — PAT/API-token-backed native
+ *   provider installs.
  * - `github` — no extra OAuth needed; the GitHub App installed on the
  *   first wizard step already grants Issues access. We just bounce
  *   forward to the done step.
@@ -20,7 +22,9 @@ import { NextResponse } from "next/server";
 import {
   ApiHttpError,
   ApiUnavailableError,
+  connectAzureDevOpsPat,
   connectAtlassianApiToken,
+  connectGitLabPat,
   isApiConfigured,
   startLinearInstall,
   startNotionInstall,
@@ -41,7 +45,13 @@ export async function POST(request: Request) {
     return forward(origin, wsId);
   }
 
-  if (kind !== "linear" && kind !== "notion" && kind !== "atlassian") {
+  if (
+    kind !== "linear" &&
+    kind !== "notion" &&
+    kind !== "atlassian" &&
+    kind !== "azure_devops" &&
+    kind !== "gitlab"
+  ) {
     return wizardError(origin, wsId, "bad_kind");
   }
 
@@ -65,6 +75,36 @@ export async function POST(request: Request) {
         jira_project: jiraProject || null,
       });
       return forward(origin, wsId, { atlassian: "connected" });
+    }
+    if (kind === "azure_devops") {
+      const organization = (form.get("organization") ?? "").toString().trim();
+      const project = (form.get("project") ?? "").toString().trim();
+      const pat = (form.get("pat") ?? "").toString();
+      if (!organization || !pat) {
+        return wizardError(origin, wsId, "bad_azure_devops_input");
+      }
+      await connectAzureDevOpsPat(wsId, {
+        organization,
+        project: project || null,
+        pat,
+        scopes: ["vso.code", "vso.build_execute"],
+      });
+      return forward(origin, wsId, { azure_devops: "connected" });
+    }
+    if (kind === "gitlab") {
+      const host = (form.get("host") ?? "").toString().trim();
+      const group = (form.get("group") ?? "").toString().trim();
+      const pat = (form.get("pat") ?? "").toString();
+      if (!host || !pat) {
+        return wizardError(origin, wsId, "bad_gitlab_input");
+      }
+      await connectGitLabPat(wsId, {
+        host,
+        group: group || null,
+        pat,
+        scopes: ["read_api", "read_repository"],
+      });
+      return forward(origin, wsId, { gitlab: "connected" });
     }
     const start =
       kind === "linear"
