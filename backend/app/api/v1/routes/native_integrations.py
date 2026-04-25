@@ -63,6 +63,13 @@ class AzureDevOpsPatInstall(BaseModel):
     scopes: list[str] = Field(default_factory=list, max_length=64)
 
 
+class GitLabPatInstall(BaseModel):
+    host: str = Field(default="gitlab.com", min_length=1, max_length=255)
+    pat: str = Field(min_length=1, max_length=8192)
+    group: str | None = Field(default=None, max_length=255)
+    scopes: list[str] = Field(default_factory=list, max_length=64)
+
+
 class AtlassianApiTokenInstall(BaseModel):
     site: str = Field(min_length=1, max_length=255)
     email: str = Field(min_length=3, max_length=320)
@@ -83,6 +90,29 @@ def _normalise_azure_org(value: str) -> str:
             detail="organization must be an Azure DevOps organization slug",
         )
     return org
+
+
+def _normalise_gitlab_host(value: str) -> tuple[str, str]:
+    raw = value.strip().strip("/")
+    if not raw:
+        raise HTTPException(status_code=422, detail="host cannot be blank")
+    if raw.startswith("https://"):
+        host = raw.removeprefix("https://").strip("/")
+    elif raw.startswith("http://"):
+        raise HTTPException(status_code=422, detail="GitLab host must use https")
+    else:
+        host = raw
+    if "/" in host:
+        raise HTTPException(
+            status_code=422,
+            detail="host must be a GitLab host like gitlab.com",
+        )
+    return host, f"https://{host}"
+
+
+def _normalise_gitlab_group(value: str | None) -> str | None:
+    group = (value or "").strip().strip("/")
+    return group or None
 
 
 async def _probe_azure_devops_pat(
@@ -118,6 +148,40 @@ async def _probe_azure_devops_pat(
         target = f"project {project!r}" if project else f"organization {organization!r}"
         return False, f"Azure DevOps {target} was not found."
     return False, f"Azure DevOps probe returned HTTP {response.status_code}."
+
+
+async def _probe_gitlab_pat(
+    *,
+    base_url: str,
+    pat: str,
+    group: str | None,
+) -> tuple[bool, str | None]:
+    """Verify GitLab PAT reachability without logging token material."""
+
+    if group:
+        path = f"/api/v4/groups/{quote(group, safe='')}/projects"
+        params = {"per_page": "1"}
+    else:
+        path = "/api/v4/user"
+        params = {}
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+            response = await client.get(
+                f"{base_url}{path}",
+                params=params,
+                headers={"Accept": "application/json", "PRIVATE-TOKEN": pat},
+            )
+    except httpx.HTTPError as exc:
+        return False, f"GitLab probe failed: {exc.__class__.__name__}"
+
+    if response.status_code < 400:
+        return True, None
+    if response.status_code in {401, 403}:
+        return False, "GitLab rejected the PAT or required scopes."
+    if response.status_code == 404:
+        target = f"group {group!r}" if group else "current user"
+        return False, f"GitLab {target} was not found."
+    return False, f"GitLab probe returned HTTP {response.status_code}."
 
 
 def _normalise_atlassian_site(value: str) -> tuple[str, str]:
@@ -305,6 +369,129 @@ async def upsert_azure_devops_pat(
                 "auth_mode": NativeIntegrationAuthMode.PAT,
                 "organization": org,
                 "project": config["project"],
+                "capabilities": row.capabilities,
+                "scopes": scopes,
+                "credential_rotated": True,
+            },
+        )
+    )
+
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="native integration already exists for this provider account",
+        ) from exc
+    await session.refresh(row)
+    return await _row_to_out(session, row)
+
+
+@router.post(
+    "/gitlab/pat",
+    response_model=NativeIntegrationInstallationOut,
+    status_code=status.HTTP_200_OK,
+)
+async def upsert_gitlab_pat(
+    workspace_id: uuid.UUID,
+    payload: GitLabPatInstall,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> NativeIntegrationInstallationOut:
+    """Connect GitLab.com or a self-hosted GitLab instance with a PAT."""
+
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+    host, base_url = _normalise_gitlab_host(payload.host)
+    group = _normalise_gitlab_group(payload.group)
+    now = datetime.now(timezone.utc)
+    scopes = sorted({scope.strip() for scope in payload.scopes if scope.strip()})
+    probe_ok, probe_error = await _probe_gitlab_pat(
+        base_url=base_url,
+        pat=payload.pat,
+        group=group,
+    )
+    config = {
+        "host": host,
+        "base_url": base_url,
+        "group": group,
+    }
+
+    stmt = select(NativeIntegrationInstallation).where(
+        NativeIntegrationInstallation.workspace_id == workspace_id,
+        NativeIntegrationInstallation.provider == NativeIntegrationProvider.GITLAB,
+        NativeIntegrationInstallation.external_account_id == host,
+    )
+    row = (await session.execute(stmt)).scalar_one_or_none()
+    is_new = row is None
+    if row is None:
+        row = NativeIntegrationInstallation(
+            workspace_id=workspace_id,
+            provider=NativeIntegrationProvider.GITLAB,
+            auth_mode=NativeIntegrationAuthMode.PAT,
+            external_account_id=host,
+        )
+        session.add(row)
+
+    row.external_account_name = group or host
+    row.external_account_url = base_url
+    row.capabilities = ["code_host", "orchestrator"]
+    row.scopes = scopes
+    row.config = config
+    row.status = (
+        NativeIntegrationStatus.READY if probe_ok else NativeIntegrationStatus.ERROR
+    )
+    row.last_health_at = now
+    row.last_health_error = probe_error
+    row.connected_at = row.connected_at or now
+    row.disabled_at = None
+    row.updated_at = now
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="native integration already exists for this provider account",
+        ) from exc
+
+    fingerprint = hashlib.sha256(payload.pat.encode("utf-8")).hexdigest()
+    credential = (
+        await session.execute(
+            select(NativeIntegrationCredential).where(
+                NativeIntegrationCredential.installation_id == row.id,
+                NativeIntegrationCredential.kind == "pat",
+            )
+        )
+    ).scalar_one_or_none()
+    if credential is None:
+        credential = NativeIntegrationCredential(
+            installation_id=row.id,
+            kind="pat",
+            secret_ciphertext=encrypt(payload.pat),
+        )
+        session.add(credential)
+    else:
+        credential.secret_ciphertext = encrypt(payload.pat)
+    credential.secret_fingerprint = fingerprint
+    credential.scopes = scopes
+    credential.last_rotated_at = now
+    credential.revoked_at = None
+    credential.updated_at = now
+
+    session.add(
+        NativeIntegrationAuditEvent(
+            workspace_id=workspace_id,
+            installation_id=row.id,
+            actor_user_id=auth.user.id,
+            provider=NativeIntegrationProvider.GITLAB,
+            action="native_integration.create" if is_new else "native_integration.update",
+            target_kind="installation",
+            target_id=str(row.id),
+            payload={
+                "auth_mode": NativeIntegrationAuthMode.PAT,
+                "host": host,
+                "group": group,
                 "capabilities": row.capabilities,
                 "scopes": scopes,
                 "credential_rotated": True,

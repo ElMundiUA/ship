@@ -106,6 +106,98 @@ async def test_admin_can_save_azure_devops_pat_with_failed_probe(
 
 
 @pytest.mark.asyncio
+async def test_admin_can_connect_gitlab_pat(
+    v1_client,
+    db_session,
+    seed_workspace,
+    monkeypatch,
+) -> None:
+    from backend.app.db.models.integrations import (
+        NativeIntegrationCredential,
+        NativeIntegrationInstallation,
+    )
+    from backend.app.security.encryption import decrypt
+
+    _, raw, workspace = seed_workspace
+    headers = {"Authorization": f"Bearer {raw}"}
+
+    async def _fake_probe(*, base_url, pat, group):
+        assert base_url == "https://gitlab.example.com"
+        assert pat == "gitlab_pat_secret"
+        assert group == "platform/core"
+        return True, None
+
+    monkeypatch.setattr(
+        "backend.app.api.v1.routes.native_integrations._probe_gitlab_pat",
+        _fake_probe,
+    )
+
+    response = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/native-integrations/gitlab/pat",
+        headers=headers,
+        json={
+            "host": "https://gitlab.example.com",
+            "group": "platform/core",
+            "pat": "gitlab_pat_secret",
+            "scopes": ["read_api", "read_repository"],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["provider"] == "gitlab"
+    assert body["auth_mode"] == "pat"
+    assert body["external_account_id"] == "gitlab.example.com"
+    assert body["external_account_name"] == "platform/core"
+    assert body["external_account_url"] == "https://gitlab.example.com"
+    assert body["capabilities"] == ["code_host", "orchestrator"]
+    assert body["status"] == "ready"
+    assert body["has_credential"] is True
+    assert "pat" not in body
+
+    installation = (
+        await db_session.execute(select(NativeIntegrationInstallation))
+    ).scalar_one()
+    credential = (
+        await db_session.execute(select(NativeIntegrationCredential))
+    ).scalar_one()
+    assert credential.kind == "pat"
+    assert credential.installation_id == installation.id
+    assert decrypt(credential.secret_ciphertext) == "gitlab_pat_secret"
+
+
+@pytest.mark.asyncio
+async def test_admin_can_save_gitlab_pat_with_failed_probe(
+    v1_client,
+    seed_workspace,
+    monkeypatch,
+) -> None:
+    _, raw, workspace = seed_workspace
+    headers = {"Authorization": f"Bearer {raw}"}
+
+    async def _fake_probe(*, base_url, pat, group):
+        return False, "GitLab rejected the PAT or required scopes."
+
+    monkeypatch.setattr(
+        "backend.app.api.v1.routes.native_integrations._probe_gitlab_pat",
+        _fake_probe,
+    )
+
+    response = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/native-integrations/gitlab/pat",
+        headers=headers,
+        json={"host": "gitlab.com", "pat": "bad_pat"},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["provider"] == "gitlab"
+    assert body["status"] == "error"
+    assert body["last_health_error"] == "GitLab rejected the PAT or required scopes."
+    assert body["has_credential"] is True
+
+
+@pytest.mark.asyncio
 async def test_list_native_integrations_requires_admin(
     v1_client,
     seed_user_with_token,

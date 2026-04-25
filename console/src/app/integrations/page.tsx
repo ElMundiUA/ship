@@ -88,17 +88,6 @@ const CATALOG: {
     secretLabel: "Personal access token (ghp_…)",
   },
   {
-    id: "gitlab",
-    name: "GitLab",
-    group: "Source",
-    body: "MR review and CI status; self-hosted instance supported.",
-    fields: [
-      { name: "host", label: "Host", placeholder: "gitlab.com" },
-      { name: "group", label: "Group", placeholder: "your-group" },
-    ],
-    secretLabel: "Project access token",
-  },
-  {
     id: "slack",
     name: "Slack",
     group: "Comms",
@@ -161,6 +150,13 @@ const NATIVE_CATALOG = [
     group: "Code host + Orchestrator",
     body:
       "Connect a corporate Azure DevOps organization with a PAT for Repos and Pipelines access.",
+  },
+  {
+    id: "gitlab",
+    name: "GitLab",
+    group: "Code host + Orchestrator",
+    body:
+      "Connect GitLab.com or a self-hosted GitLab instance with a PAT for repos and CI status.",
   },
 ];
 
@@ -357,6 +353,8 @@ export default async function IntegrationsPage() {
                 <AtlassianNativeForm workspaceId={workspace.id} />
               ) : c.id === "azure_devops" ? (
                 <AzureDevOpsNativeForm workspaceId={workspace.id} />
+              ) : c.id === "gitlab" ? (
+                <GitLabNativeForm workspaceId={workspace.id} />
               ) : null}
             </div>
           ))}
@@ -386,6 +384,7 @@ export default async function IntegrationsPage() {
 function nativeName(provider: string): string {
   if (provider === "atlassian") return "Jira + Confluence";
   if (provider === "azure_devops") return "Azure DevOps";
+  if (provider === "gitlab") return "GitLab";
   return provider;
 }
 
@@ -519,6 +518,73 @@ function AzureDevOpsNativeForm({ workspaceId }: { workspaceId: string }) {
             className="rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-3 py-1.5 text-[11px] font-bold text-ink hover:brightness-110"
           >
             Save Azure DevOps
+          </button>
+        </div>
+      </form>
+    </details>
+  );
+}
+
+function GitLabNativeForm({ workspaceId }: { workspaceId: string }) {
+  return (
+    <details className="mt-3">
+      <summary className="inline-flex cursor-pointer items-center gap-1 rounded-full border border-aqua/40 bg-aqua/10 px-3 py-1 text-[11px] font-bold text-aqua hover:bg-aqua/20">
+        Connect →
+      </summary>
+      <form
+        action="/api/integrations/native-gitlab"
+        method="POST"
+        className="mt-3 space-y-3 rounded-lg border border-white/10 bg-ink/40 p-3"
+      >
+        <input type="hidden" name="ws" value={workspaceId} suppressHydrationWarning />
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/55">
+            GitLab host
+          </span>
+          <input
+            name="host"
+            placeholder="gitlab.com"
+            defaultValue="gitlab.com"
+            className="w-full rounded border border-white/10 bg-white/[0.04] px-2 py-1.5 text-xs text-white outline-none focus:border-aqua/40"
+            suppressHydrationWarning
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/55">
+            Default group
+          </span>
+          <input
+            name="group"
+            placeholder="platform/core"
+            className="w-full rounded border border-white/10 bg-white/[0.04] px-2 py-1.5 text-xs text-white outline-none focus:border-aqua/40"
+            suppressHydrationWarning
+          />
+          <span className="mt-1 block text-[10px] text-white/40">
+            Optional. Use a full group path for scoped repo discovery.
+          </span>
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/55">
+            Personal access token
+          </span>
+          <input
+            name="pat"
+            type="password"
+            autoComplete="off"
+            className="w-full rounded border border-white/10 bg-white/[0.04] px-2 py-1.5 font-mono text-xs text-white outline-none focus:border-aqua/40"
+            suppressHydrationWarning
+          />
+          <span className="mt-1 block text-[10px] text-white/40">
+            Recommended scopes: read_api and read_repository for the first
+            GitLab code-host pass.
+          </span>
+        </label>
+        <div className="flex items-center justify-end">
+          <button
+            type="submit"
+            className="rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-3 py-1.5 text-[11px] font-bold text-ink hover:brightness-110"
+          >
+            Save GitLab
           </button>
         </div>
       </form>
