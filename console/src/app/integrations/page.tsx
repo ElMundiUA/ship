@@ -51,14 +51,6 @@ const CATALOG: {
   secretLabel: string;
 }[] = [
   {
-    id: "linear",
-    name: "Linear",
-    group: "Tracker",
-    body: "Mirror approved retro/daily action items as issues.",
-    fields: [{ name: "team_id", label: "Team ID", placeholder: "ENG" }],
-    secretLabel: "Linear API key (lin_api_…)",
-  },
-  {
     id: "jira",
     name: "Jira",
     group: "Tracker",
@@ -137,6 +129,13 @@ const CATALOG_BY_ID: Record<string, (typeof CATALOG)[number]> = Object.fromEntri
 );
 
 const NATIVE_CATALOG = [
+  {
+    id: "linear",
+    name: "Linear",
+    group: "Tracker",
+    body:
+      "Connect Linear with OAuth so Ship can create, list, transition, and comment on issues.",
+  },
   {
     id: "atlassian",
     name: "Jira + Confluence",
@@ -370,7 +369,9 @@ export default async function IntegrationsPage() {
               <p className="mt-1.5 line-clamp-3 text-[11px] text-white/55">
                 {c.body}
               </p>
-              {c.id === "atlassian" ? (
+              {c.id === "linear" ? (
+                <LinearOAuthForm workspaceId={workspace.id} />
+              ) : c.id === "atlassian" ? (
                 <AtlassianNativeForm workspaceId={workspace.id} />
               ) : c.id === "azure_devops" ? (
                 <AzureDevOpsNativeForm workspaceId={workspace.id} />
@@ -403,6 +404,7 @@ export default async function IntegrationsPage() {
 }
 
 function nativeName(provider: string): string {
+  if (provider === "linear") return "Linear";
   if (provider === "atlassian") return "Jira + Confluence";
   if (provider === "azure_devops") return "Azure DevOps";
   if (provider === "gitlab") return "GitLab";
@@ -414,6 +416,23 @@ function isShadowedByNativeProvider(kind: string, nativeProviders: Set<string>):
   if (kind === "linear" && nativeProviders.has("linear")) return true;
   if (kind === "confluence" && nativeProviders.has("atlassian")) return true;
   return false;
+}
+
+function LinearOAuthForm({ workspaceId }: { workspaceId: string }) {
+  return (
+    <form action="/api/integrations/linear" method="POST" className="mt-3">
+      <input type="hidden" name="ws" value={workspaceId} suppressHydrationWarning />
+      <button
+        type="submit"
+        className="inline-flex cursor-pointer items-center gap-1 rounded-full border border-aqua/40 bg-aqua/10 px-3 py-1 text-[11px] font-bold text-aqua hover:bg-aqua/20"
+      >
+        Connect with Linear →
+      </button>
+      <p className="mt-2 text-[10px] text-white/45">
+        Opens Linear OAuth. Ship stores the resulting workspace token encrypted.
+      </p>
+    </form>
+  );
 }
 
 function AtlassianNativeForm({ workspaceId }: { workspaceId: string }) {
