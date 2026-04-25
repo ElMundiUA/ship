@@ -194,7 +194,6 @@ export function AppShell({
   kicker,
   actions,
   workspace,
-  scope,
   scopePill,
   me,
 }: {
