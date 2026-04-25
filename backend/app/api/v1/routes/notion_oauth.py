@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.api.v1.deps import AuthContext, get_current_auth
@@ -178,130 +179,140 @@ async def notion_install_callback(
             status_code=303,
         )
 
-    # Workspace-scoped row only. Notion is the knowledge-base
-    # integration and is always workspace-level today; if per-repo
-    # Notion databases land later they'll have their own ``repo_id``
-    # rows and this lookup must not accidentally adopt one.
-    stmt = select(Integration).where(
-        Integration.workspace_id == workspace_id,
-        Integration.kind == "notion",
-        Integration.repo_id.is_(None),
-    )
-    row = (await session.execute(stmt)).scalar_one_or_none()
-    is_new = row is None
-    config_payload = {
-        "bot_id": token.bot_id,
-        "notion_workspace_id": token.workspace_id,
-        "notion_workspace_name": token.workspace_name,
-        "notion_workspace_icon": token.workspace_icon,
-    }
-    if is_new:
-        row = Integration(
-            workspace_id=workspace_id,
-            kind="notion",
-            config=config_payload,
+    try:
+        # Workspace-scoped row only. Notion is the knowledge-base
+        # integration and is always workspace-level today; if per-repo
+        # Notion databases land later they'll have their own ``repo_id``
+        # rows and this lookup must not accidentally adopt one.
+        stmt = select(Integration).where(
+            Integration.workspace_id == workspace_id,
+            Integration.kind == "notion",
+            Integration.repo_id.is_(None),
         )
-        session.add(row)
-    else:
-        merged_config = dict(row.config or {})
-        merged_config.update(config_payload)
-        row.config = merged_config
-    row.secret_ciphertext = encrypt(token.access_token)
-    row.status = "ok"
-    row.last_health_at = datetime.now(timezone.utc)
-    row.last_health_error = None
-    row.updated_at = datetime.now(timezone.utc)
+        row = (await session.execute(stmt)).scalar_one_or_none()
+        is_new = row is None
+        config_payload = {
+            "bot_id": token.bot_id,
+            "notion_workspace_id": token.workspace_id,
+            "notion_workspace_name": token.workspace_name,
+            "notion_workspace_icon": token.workspace_icon,
+        }
+        if is_new:
+            row = Integration(
+                workspace_id=workspace_id,
+                kind="notion",
+                config=config_payload,
+            )
+            session.add(row)
+        else:
+            merged_config = dict(row.config or {})
+            merged_config.update(config_payload)
+            row.config = merged_config
+        row.secret_ciphertext = encrypt(token.access_token)
+        row.status = "ok"
+        row.last_health_at = datetime.now(timezone.utc)
+        row.last_health_error = None
+        row.updated_at = datetime.now(timezone.utc)
 
-    native_stmt = select(NativeIntegrationInstallation).where(
-        NativeIntegrationInstallation.workspace_id == workspace_id,
-        NativeIntegrationInstallation.provider == NativeIntegrationProvider.NOTION,
-        NativeIntegrationInstallation.external_account_id == token.workspace_id,
-    )
-    native = (await session.execute(native_stmt)).scalar_one_or_none()
-    native_is_new = native is None
-    if native is None:
-        native = NativeIntegrationInstallation(
-            workspace_id=workspace_id,
-            provider=NativeIntegrationProvider.NOTION,
-            auth_mode=NativeIntegrationAuthMode.OAUTH,
-            external_account_id=token.workspace_id,
+        native_stmt = select(NativeIntegrationInstallation).where(
+            NativeIntegrationInstallation.workspace_id == workspace_id,
+            NativeIntegrationInstallation.provider == NativeIntegrationProvider.NOTION,
+            NativeIntegrationInstallation.external_account_id == token.workspace_id,
         )
-        session.add(native)
-    native.external_account_name = token.workspace_name or token.workspace_id
-    native.external_account_url = None
-    native.capabilities = ["tracker", "knowledge"]
-    native.scopes = ["notion:workspace"]
-    native.config = config_payload
-    native.status = NativeIntegrationStatus.READY
-    native.last_health_at = datetime.now(timezone.utc)
-    native.last_health_error = None
-    native.connected_at = native.connected_at or datetime.now(timezone.utc)
-    native.disabled_at = None
-    native.updated_at = datetime.now(timezone.utc)
-    await session.flush()
+        native = (await session.execute(native_stmt)).scalar_one_or_none()
+        native_is_new = native is None
+        if native is None:
+            native = NativeIntegrationInstallation(
+                workspace_id=workspace_id,
+                provider=NativeIntegrationProvider.NOTION,
+                auth_mode=NativeIntegrationAuthMode.OAUTH,
+                external_account_id=token.workspace_id,
+            )
+            session.add(native)
+        native.external_account_name = token.workspace_name or token.workspace_id
+        native.external_account_url = None
+        native.capabilities = ["tracker", "knowledge"]
+        native.scopes = ["notion:workspace"]
+        native.config = config_payload
+        native.status = NativeIntegrationStatus.READY
+        native.last_health_at = datetime.now(timezone.utc)
+        native.last_health_error = None
+        native.connected_at = native.connected_at or datetime.now(timezone.utc)
+        native.disabled_at = None
+        native.updated_at = datetime.now(timezone.utc)
+        await session.flush()
 
-    credential = (
-        await session.execute(
-            select(NativeIntegrationCredential).where(
-                NativeIntegrationCredential.installation_id == native.id,
-                NativeIntegrationCredential.kind == "access_token",
+        credential = (
+            await session.execute(
+                select(NativeIntegrationCredential).where(
+                    NativeIntegrationCredential.installation_id == native.id,
+                    NativeIntegrationCredential.kind == "access_token",
+                )
+            )
+        ).scalar_one_or_none()
+        if credential is None:
+            credential = NativeIntegrationCredential(
+                installation_id=native.id,
+                kind="access_token",
+                secret_ciphertext=encrypt(token.access_token),
+            )
+            session.add(credential)
+        else:
+            credential.secret_ciphertext = encrypt(token.access_token)
+        credential.secret_fingerprint = hashlib.sha256(
+            token.access_token.encode("utf-8")
+        ).hexdigest()
+        credential.scopes = native.scopes
+        credential.last_rotated_at = datetime.now(timezone.utc)
+        credential.revoked_at = None
+        credential.updated_at = datetime.now(timezone.utc)
+
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=None,
+                actor_token_id=None,
+                action="integration.create" if is_new else "integration.update",
+                target_kind="integration",
+                target_id=str(row.id),
+                payload={
+                    "kind": "notion",
+                    "via": "oauth",
+                    "notion_workspace_id": token.workspace_id,
+                },
             )
         )
-    ).scalar_one_or_none()
-    if credential is None:
-        credential = NativeIntegrationCredential(
-            installation_id=native.id,
-            kind="access_token",
-            secret_ciphertext=encrypt(token.access_token),
+        session.add(
+            NativeIntegrationAuditEvent(
+                workspace_id=workspace_id,
+                installation_id=native.id,
+                actor_user_id=None,
+                provider=NativeIntegrationProvider.NOTION,
+                action=(
+                    "native_integration.create"
+                    if native_is_new
+                    else "native_integration.update"
+                ),
+                target_kind="installation",
+                target_id=str(native.id),
+                payload={
+                    "auth_mode": NativeIntegrationAuthMode.OAUTH,
+                    "notion_workspace_id": token.workspace_id,
+                    "capabilities": native.capabilities,
+                    "credential_rotated": True,
+                },
+            )
         )
-        session.add(credential)
-    else:
-        credential.secret_ciphertext = encrypt(token.access_token)
-    credential.secret_fingerprint = hashlib.sha256(
-        token.access_token.encode("utf-8")
-    ).hexdigest()
-    credential.scopes = native.scopes
-    credential.last_rotated_at = datetime.now(timezone.utc)
-    credential.revoked_at = None
-    credential.updated_at = datetime.now(timezone.utc)
-
-    session.add(
-        AuditLog(
-            workspace_id=workspace_id,
-            actor_user_id=None,
-            actor_token_id=None,
-            action="integration.create" if is_new else "integration.update",
-            target_kind="integration",
-            target_id=str(row.id),
-            payload={
-                "kind": "notion",
-                "via": "oauth",
-                "notion_workspace_id": token.workspace_id,
-            },
-        )
-    )
-    session.add(
-        NativeIntegrationAuditEvent(
-            workspace_id=workspace_id,
-            installation_id=native.id,
-            actor_user_id=None,
-            provider=NativeIntegrationProvider.NOTION,
-            action=(
-                "native_integration.create"
-                if native_is_new
-                else "native_integration.update"
+        await session.flush()
+    except SQLAlchemyError as exc:
+        logger.exception("Notion OAuth persistence failed: %s", exc)
+        await session.rollback()
+        return RedirectResponse(
+            url=_console_onboarding_url(
+                settings, workspace_id=workspace_id, error="persistence_failed"
             ),
-            target_kind="installation",
-            target_id=str(native.id),
-            payload={
-                "auth_mode": NativeIntegrationAuthMode.OAUTH,
-                "notion_workspace_id": token.workspace_id,
-                "capabilities": native.capabilities,
-                "credential_rotated": True,
-            },
+            status_code=303,
         )
-    )
-    await session.flush()
 
     return RedirectResponse(
         url=_console_onboarding_url(
