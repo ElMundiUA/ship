@@ -198,3 +198,35 @@ def test_list_patterns_by_mode_rejects_unknown_mode():
     import pytest
     with pytest.raises(ValueError):
         catalog.list_patterns_by_mode("bogus")
+
+
+def test_catalog_splits_roles_from_knowledge_recipes():
+    roles = catalog.list_specialist_role_patterns()
+    recipes = catalog.list_knowledge_recipe_patterns()
+
+    role_ids = {entry.id for entry in roles}
+    recipe_ids = {entry.id for entry in recipes}
+
+    assert "role-ba" in role_ids
+    assert "role-developer" in role_ids
+    assert "flow-pr-self-review" in recipe_ids
+    assert "scan-security-deps" in recipe_ids
+    assert role_ids.isdisjoint(recipe_ids)
+
+
+def test_knowledge_recipe_starters_are_generated_from_patterns():
+    slugs = catalog.knowledge_starter_slugs()
+    assert "code-style" in slugs
+    assert "ui-runbook" in slugs
+    assert "ship-recipes/flow-pr-self-review" in slugs
+    assert "ship-recipes/role-ba" not in slugs
+
+    files = catalog.knowledge_starter_files(["ship-recipes/flow-pr-self-review"])
+    assert [path for path, _ in files] == [
+        ".ship/knowledge/ship-recipes/flow-pr-self-review.md"
+    ]
+    body = files[0][1]
+    assert body.startswith("# PR self-review")
+    assert "## Recommended Tools" in body
+    assert "## Legacy Recipe Body" in body
+    assert "Source: `pattern/flow-pr-self-review`" in body

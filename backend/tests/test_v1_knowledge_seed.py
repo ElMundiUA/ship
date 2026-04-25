@@ -53,13 +53,18 @@ async def seed_workspace_with_repo(db_session, seed_workspace):
 
 def test_knowledge_starter_files_default_seeds_everything() -> None:
     from backend.app.services.catalog import (
-        KNOWLEDGE_STARTERS,
+        knowledge_starter_slugs,
         knowledge_starter_files,
     )
 
     files = knowledge_starter_files(None)
     paths = [p for p, _ in files]
-    assert paths == [f".ship/knowledge/{s}.md" for s in KNOWLEDGE_STARTERS]
+    slugs = knowledge_starter_slugs()
+    assert paths == [f".ship/knowledge/{s}.md" for s in slugs]
+    assert ".ship/knowledge/code-style.md" in paths
+    assert ".ship/knowledge/ui-runbook.md" in paths
+    assert ".ship/knowledge/ship-recipes/flow-pr-self-review.md" in paths
+    assert ".ship/knowledge/ship-recipes/role-ba.md" not in paths
     for _, content in files:
         # Sanity: the starter must be non-empty markdown. If we ever
         # ship a blank template by mistake, the knowledge lister would
@@ -71,8 +76,12 @@ def test_knowledge_starter_files_default_seeds_everything() -> None:
 def test_knowledge_starter_files_filters_selection() -> None:
     from backend.app.services.catalog import knowledge_starter_files
 
-    files = knowledge_starter_files(["code-style"])
-    assert [p for p, _ in files] == [".ship/knowledge/code-style.md"]
+    files = knowledge_starter_files(["code-style", "ship-recipes/flow-pr-self-review"])
+    assert [p for p, _ in files] == [
+        ".ship/knowledge/code-style.md",
+        ".ship/knowledge/ship-recipes/flow-pr-self-review.md",
+    ]
+    assert "Source: `pattern/flow-pr-self-review`" in files[1][1]
 
 
 def test_knowledge_starter_files_rejects_unknown_slug() -> None:
@@ -129,9 +138,13 @@ async def test_knowledge_seed_opens_single_pr_for_default_selection(
     body = response.json()
     assert body["pr_number"] == 77
     assert body["pr_url"].endswith("/pull/77")
-    assert body["selection"] == ["code-style", "ui-runbook"]
+    assert "code-style" in body["selection"]
+    assert "ui-runbook" in body["selection"]
+    assert "ship-recipes/flow-pr-self-review" in body["selection"]
+    assert "ship-recipes/role-ba" not in body["selection"]
     assert ".ship/knowledge/code-style.md" in body["files"]
     assert ".ship/knowledge/ui-runbook.md" in body["files"]
+    assert ".ship/knowledge/ship-recipes/flow-pr-self-review.md" in body["files"]
     # No workflows should get committed by the knowledge seed path.
     assert not any(
         p.startswith(".github/workflows/") for p in body["files"]
@@ -165,12 +178,15 @@ async def test_knowledge_seed_honours_custom_selection(
     response = await v1_client.post(
         f"/v1/workspaces/{workspace.id}/repos/{repo.id}/knowledge_seed",
         headers={"Authorization": f"Bearer {raw}"},
-        json={"selection": ["ui-runbook"]},
+        json={"selection": ["ui-runbook", "ship-recipes/flow-pr-self-review"]},
     )
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["selection"] == ["ui-runbook"]
-    assert body["files"] == [".ship/knowledge/ui-runbook.md"]
+    assert body["selection"] == ["ui-runbook", "ship-recipes/flow-pr-self-review"]
+    assert body["files"] == [
+        ".ship/knowledge/ui-runbook.md",
+        ".ship/knowledge/ship-recipes/flow-pr-self-review.md",
+    ]
 
 
 @pytest.mark.asyncio
