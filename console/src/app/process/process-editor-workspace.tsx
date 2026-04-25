@@ -29,13 +29,13 @@ export function ProcessEditorWorkspace({
   const [states, setStates] = useState(process.states);
   const [transitions, setTransitions] = useState(process.transitions);
   const [activeStateId, setActiveStateId] = useState(
-    selectedStateId ?? process.states[0]?.id,
+    initialActiveStateId(process.states, selectedStateId),
   );
 
   useEffect(() => {
     setStates(process.states);
     setTransitions(process.transitions);
-    setActiveStateId(selectedStateId ?? process.states[0]?.id);
+    setActiveStateId(initialActiveStateId(process.states, selectedStateId));
   }, [process, selectedStateId]);
 
   const processDraft = useMemo<ApiProcess>(
@@ -57,6 +57,10 @@ export function ProcessEditorWorkspace({
   );
   const dirty =
     JSON.stringify(processConfig) !== JSON.stringify(initialProcessConfig);
+  const draftSummary = useMemo(
+    () => summarizeDraftChanges(process, states, transitions),
+    [process, states, transitions],
+  );
   const selectedState =
     states.find((state) => state.id === activeStateId) ?? states[0];
   const specialistOptions = useMemo(
@@ -68,6 +72,12 @@ export function ProcessEditorWorkspace({
     setStates((current) =>
       current.map((state) => (state.id === nextState.id ? nextState : state)),
     );
+  }
+
+  function resetDraft() {
+    setStates(process.states);
+    setTransitions(process.transitions);
+    setActiveStateId(initialActiveStateId(process.states, selectedStateId));
   }
 
   function renameState(currentId: string, nextId: string): boolean {
@@ -200,17 +210,27 @@ export function ProcessEditorWorkspace({
             <div className="text-xs font-bold text-white">Process draft</div>
             <div className="mt-0.5 text-xs text-white/45">
               {dirty
-                ? "Unsaved changes will be proposed together."
+                ? draftSummary
                 : "State settings, transitions, and canvas layout save together."}
             </div>
           </div>
-          <button
-            type="submit"
-            disabled={!repoId || !dirty}
-            className="rounded-full border border-aqua/30 bg-aqua/10 px-4 py-2 text-xs font-bold text-aqua transition hover:bg-aqua/15 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/[0.05] disabled:text-white/35"
-          >
-            Open config PR
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={!dirty}
+              onClick={resetDraft}
+              className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-xs font-bold text-white/60 transition hover:border-white/20 hover:text-white disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/[0.03] disabled:text-white/30"
+            >
+              Discard changes
+            </button>
+            <button
+              type="submit"
+              disabled={!repoId || !dirty}
+              className="rounded-full border border-aqua/30 bg-aqua/10 px-4 py-2 text-xs font-bold text-aqua transition hover:bg-aqua/15 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/[0.05] disabled:text-white/35"
+            >
+              Open config PR
+            </button>
+          </div>
         </form>
         <ProcessCanvasEditor
           process={processDraft}
@@ -265,6 +285,83 @@ function buildSpecialistOptions(
     });
   }
   return Array.from(options.values());
+}
+
+function initialActiveStateId(
+  states: ApiProcessState[],
+  selectedStateId?: string,
+) {
+  return states.some((state) => state.id === selectedStateId)
+    ? selectedStateId
+    : states[0]?.id;
+}
+
+function summarizeDraftChanges(
+  initialProcess: ApiProcess,
+  states: ApiProcessState[],
+  transitions: ApiProcess["transitions"],
+) {
+  const initialStateIds = new Set(initialProcess.states.map((state) => state.id));
+  const currentStateIds = new Set(states.map((state) => state.id));
+  const addedStates = states.filter((state) => !initialStateIds.has(state.id)).length;
+  const removedStates = initialProcess.states.filter(
+    (state) => !currentStateIds.has(state.id),
+  ).length;
+
+  const initialStateById = new Map(
+    initialProcess.states.map((state) => [state.id, stateFingerprint(state)]),
+  );
+  const changedStates = states.filter((state) => {
+    const initial = initialStateById.get(state.id);
+    return initial != null && initial !== stateFingerprint(state);
+  }).length;
+
+  const transitionsChanged =
+    transitionFingerprint(initialProcess.transitions) !==
+    transitionFingerprint(transitions);
+
+  const parts = [
+    addedStates ? pluralize(addedStates, "state added", "states added") : null,
+    removedStates
+      ? pluralize(removedStates, "state removed", "states removed")
+      : null,
+    changedStates
+      ? pluralize(changedStates, "state changed", "states changed")
+      : null,
+    transitionsChanged ? "transitions changed" : null,
+  ].filter(Boolean);
+
+  return parts.length > 0
+    ? `Unsaved: ${parts.join(", ")}.`
+    : "Unsaved changes will be proposed together.";
+}
+
+function stateFingerprint(state: ApiProcessState) {
+  return JSON.stringify({
+    id: state.id,
+    name: state.name,
+    specialist_id: state.specialist_id,
+    specialist_name: state.specialist_name,
+    instructions: state.instructions,
+    layout: state.layout ?? null,
+    triggers: state.triggers,
+    exit_conditions: state.exit_conditions,
+    block_conditions: state.block_conditions,
+  });
+}
+
+function transitionFingerprint(transitions: ApiProcess["transitions"]) {
+  return JSON.stringify(
+    transitions.map((transition) => ({
+      from_state_id: transition.from_state_id,
+      to_state_id: transition.to_state_id,
+      conditions: transition.conditions,
+    })),
+  );
+}
+
+function pluralize(count: number, singular: string, plural: string) {
+  return `${count} ${count === 1 ? singular : plural}`;
 }
 
 function normalizeStateId(value: string) {
