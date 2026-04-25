@@ -172,9 +172,11 @@ function renderProcessPage({
         <RepoSelector repos={repos} selectedRepo={selectedRepo} />
         <ProcessNotice reason={reason} />
         <ConfigSourceBanner config={config ?? null} source={configSource ?? "fallback"} />
-        <ProcessTabs selected={selectedTab} repoId={selectedRepo?.id} />
         {selectedTab === "routines" ? (
-          <RoutinesPanel process={process} />
+          <>
+            <ProcessTabs selected={selectedTab} repoId={selectedRepo?.id} />
+            <RoutinesPanel process={process} />
+          </>
         ) : (
           <ProcessEditorWorkspace
             workspaceId={workspace.id}
@@ -182,6 +184,13 @@ function renderProcessPage({
             selectedStateId={selectedStateId}
             repoId={selectedRepo?.id}
             config={config ?? null}
+            tabs={
+              <ProcessTabs
+                selected={selectedTab}
+                repoId={selectedRepo?.id}
+                variant="inline"
+              />
+            }
           />
         )}
       </div>
@@ -256,14 +265,29 @@ function ConfigSourceBanner({
 function ProcessTabs({
   selected,
   repoId,
+  variant = "card",
 }: {
   selected: "process" | "routines";
   repoId?: string;
+  variant?: "card" | "inline";
 }) {
   const processHref = repoId ? `/process?repo=${encodeURIComponent(repoId)}` : "/process";
   const routinesHref = repoId
     ? `/process?tab=routines&repo=${encodeURIComponent(repoId)}`
     : "/process?tab=routines";
+  if (variant === "inline") {
+    return (
+      <div className="flex flex-wrap items-center gap-1">
+        <TabLink href={processHref} active={selected === "process"}>
+          Process canvas
+        </TabLink>
+        <TabLink href={routinesHref} active={selected === "routines"}>
+          Routines
+        </TabLink>
+      </div>
+    );
+  }
+
   return (
     <div className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/[0.035] p-2">
       <div className="flex gap-1">

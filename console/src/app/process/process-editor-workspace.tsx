@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 
 import type {
   ApiProcess,
@@ -20,12 +20,14 @@ export function ProcessEditorWorkspace({
   selectedStateId,
   repoId,
   config,
+  tabs,
 }: {
   workspaceId: string;
   process: ApiProcess;
   selectedStateId?: string;
   repoId?: string;
   config: ApiRepoConfig | null;
+  tabs?: ReactNode;
 }) {
   const [processName, setProcessName] = useState(process.name);
   const [processPrimary, setProcessPrimary] = useState(process.primary);
@@ -206,28 +208,41 @@ export function ProcessEditorWorkspace({
   }
 
   return (
-    <section className="grid min-h-[calc(100vh-180px)] grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-      <div className="space-y-3">
-        <form
-          action="/api/process/config-propose"
-          method="post"
-          className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/[0.035] px-4 py-3"
-        >
-          <ProcessConfigProposalFields
-            workspaceId={workspaceId}
-            repoId={repoId}
-            config={config}
-            processConfig={processConfig}
-          />
-          <div>
-            <div className="text-xs font-bold text-white">Process draft</div>
-            <div className="mt-0.5 text-xs text-white/45">
-              {dirty
-                ? draftSummary
-                : "State settings, transitions, and canvas layout save together."}
+    <section className="min-h-[calc(100vh-180px)] overflow-hidden rounded-2xl border border-white/10 bg-white/[0.035] shadow-card backdrop-blur-xl">
+      <div className="border-b border-white/10 px-4 py-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            {tabs}
+            <div className={tabs ? "mt-3" : undefined}>
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="font-display text-base font-bold text-white">
+                  {processName.trim() || process.name}
+                </h2>
+                <span className="rounded-full bg-aqua/15 px-3 py-1 text-xs font-semibold text-aqua">
+                  Editing
+                </span>
+                <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-white/45">
+                  {states.length} states
+                </span>
+              </div>
+              <p className="mt-1 text-xs text-white/45">
+                {dirty
+                  ? draftSummary
+                  : "Drag cards, edit process settings, and save the config PR from one place."}
+              </p>
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <form
+            action="/api/process/config-propose"
+            method="post"
+            className="flex flex-wrap items-center gap-2"
+          >
+            <ProcessConfigProposalFields
+              workspaceId={workspaceId}
+              repoId={repoId}
+              config={config}
+              processConfig={processConfig}
+            />
             <button
               type="button"
               disabled={!dirty}
@@ -243,9 +258,10 @@ export function ProcessEditorWorkspace({
             >
               Open config PR
             </button>
-          </div>
-        </form>
-        <div className="grid gap-3 rounded-2xl border border-white/10 bg-white/[0.035] p-4 md:grid-cols-[minmax(0,1fr)_220px]">
+          </form>
+        </div>
+
+        <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px]">
           <label className="block">
             <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/45">
               Process name
@@ -256,51 +272,46 @@ export function ProcessEditorWorkspace({
               placeholder="Development Process"
               className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none focus:border-aqua/40"
             />
-            <span className="mt-1 block text-xs text-white/40">
-              Saved as <code className="font-mono">process.name</code> in the repo
-              config.
+          </label>
+          <label className="flex items-center gap-2 rounded-xl border border-white/10 bg-black/10 px-3 py-2 text-sm text-white/75">
+            <input
+              type="checkbox"
+              checked={processPrimary}
+              onChange={(event) => setProcessPrimary(event.target.checked)}
+              className="h-4 w-4 rounded border-white/20 bg-white/[0.04] accent-aqua"
+            />
+            <span>
+              Primary process
+              <span className="block text-xs text-white/40">
+                Opens by default for this repo.
+              </span>
             </span>
           </label>
-          <div className="rounded-xl border border-white/10 bg-black/10 p-3">
-            <div className="text-[10px] font-bold uppercase tracking-widest text-white/45">
-              Process role
-            </div>
-            <label className="mt-3 flex items-start gap-2 text-sm text-white/75">
-              <input
-                type="checkbox"
-                checked={processPrimary}
-                onChange={(event) => setProcessPrimary(event.target.checked)}
-                className="mt-0.5 h-4 w-4 rounded border-white/20 bg-white/[0.04] accent-aqua"
-              />
-              <span>
-                Primary process
-                <span className="mt-1 block text-xs text-white/40">
-                  Opens by default when this repo has multiple processes.
-                </span>
-              </span>
-            </label>
-          </div>
         </div>
+      </div>
+
+      <div className="grid min-h-0 grid-cols-1 xl:grid-cols-[minmax(0,1fr)_360px]">
         <ProcessCanvasEditor
           process={processDraft}
           selectedStateId={selectedState?.id}
           onSelectState={setActiveStateId}
           onPositionsChange={updatePositions}
         />
+        <StateEditor
+          repoId={repoId}
+          state={selectedState}
+          states={states}
+          specialistOptions={specialistOptions}
+          transitions={transitions}
+          config={config}
+          embedded
+          onStateChange={updateState}
+          onStateRename={renameState}
+          onTransitionsChange={setTransitions}
+          onAddState={addState}
+          onDeleteState={deleteState}
+        />
       </div>
-      <StateEditor
-        repoId={repoId}
-        state={selectedState}
-        states={states}
-        specialistOptions={specialistOptions}
-        transitions={transitions}
-        config={config}
-        onStateChange={updateState}
-        onStateRename={renameState}
-        onTransitionsChange={setTransitions}
-        onAddState={addState}
-        onDeleteState={deleteState}
-      />
     </section>
   );
 }
