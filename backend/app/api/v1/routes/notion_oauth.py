@@ -9,6 +9,7 @@ module (Notion uses HTTP Basic auth + ``Notion-Version`` header).
 from __future__ import annotations
 
 import logging
+import hashlib
 import uuid
 from datetime import datetime, timezone
 
@@ -22,6 +23,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.api.v1.deps import AuthContext, get_current_auth
 from backend.app.api.v1.routes.workspaces import ROLES_ADMIN, _require_membership
 from backend.app.core.config import Settings, get_settings
+from backend.app.db.models.integrations import (
+    NativeIntegrationAuditEvent,
+    NativeIntegrationAuthMode,
+    NativeIntegrationCredential,
+    NativeIntegrationInstallation,
+    NativeIntegrationProvider,
+    NativeIntegrationStatus,
+)
 from backend.app.db.models.tenancy import AuditLog, Integration
 from backend.app.db.session import get_session
 from backend.app.integrations.notion.oauth import (
@@ -203,6 +212,59 @@ async def notion_install_callback(
     row.last_health_error = None
     row.updated_at = datetime.now(timezone.utc)
 
+    native_stmt = select(NativeIntegrationInstallation).where(
+        NativeIntegrationInstallation.workspace_id == workspace_id,
+        NativeIntegrationInstallation.provider == NativeIntegrationProvider.NOTION,
+        NativeIntegrationInstallation.external_account_id == token.workspace_id,
+    )
+    native = (await session.execute(native_stmt)).scalar_one_or_none()
+    native_is_new = native is None
+    if native is None:
+        native = NativeIntegrationInstallation(
+            workspace_id=workspace_id,
+            provider=NativeIntegrationProvider.NOTION,
+            auth_mode=NativeIntegrationAuthMode.OAUTH,
+            external_account_id=token.workspace_id,
+        )
+        session.add(native)
+    native.external_account_name = token.workspace_name or token.workspace_id
+    native.external_account_url = None
+    native.capabilities = ["tracker", "knowledge"]
+    native.scopes = ["notion:workspace"]
+    native.config = config_payload
+    native.status = NativeIntegrationStatus.READY
+    native.last_health_at = datetime.now(timezone.utc)
+    native.last_health_error = None
+    native.connected_at = native.connected_at or datetime.now(timezone.utc)
+    native.disabled_at = None
+    native.updated_at = datetime.now(timezone.utc)
+    await session.flush()
+
+    credential = (
+        await session.execute(
+            select(NativeIntegrationCredential).where(
+                NativeIntegrationCredential.installation_id == native.id,
+                NativeIntegrationCredential.kind == "access_token",
+            )
+        )
+    ).scalar_one_or_none()
+    if credential is None:
+        credential = NativeIntegrationCredential(
+            installation_id=native.id,
+            kind="access_token",
+            secret_ciphertext=encrypt(token.access_token),
+        )
+        session.add(credential)
+    else:
+        credential.secret_ciphertext = encrypt(token.access_token)
+    credential.secret_fingerprint = hashlib.sha256(
+        token.access_token.encode("utf-8")
+    ).hexdigest()
+    credential.scopes = native.scopes
+    credential.last_rotated_at = datetime.now(timezone.utc)
+    credential.revoked_at = None
+    credential.updated_at = datetime.now(timezone.utc)
+
     session.add(
         AuditLog(
             workspace_id=workspace_id,
@@ -215,6 +277,27 @@ async def notion_install_callback(
                 "kind": "notion",
                 "via": "oauth",
                 "notion_workspace_id": token.workspace_id,
+            },
+        )
+    )
+    session.add(
+        NativeIntegrationAuditEvent(
+            workspace_id=workspace_id,
+            installation_id=native.id,
+            actor_user_id=None,
+            provider=NativeIntegrationProvider.NOTION,
+            action=(
+                "native_integration.create"
+                if native_is_new
+                else "native_integration.update"
+            ),
+            target_kind="installation",
+            target_id=str(native.id),
+            payload={
+                "auth_mode": NativeIntegrationAuthMode.OAUTH,
+                "notion_workspace_id": token.workspace_id,
+                "capabilities": native.capabilities,
+                "credential_rotated": True,
             },
         )
     )

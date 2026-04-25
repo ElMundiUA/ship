@@ -21,6 +21,7 @@ import { resolveOrigin } from "@/lib/api/origin";
 const ALLOWED_KINDS = new Set([
   "linear",
   "jira",
+  "notion",
   "github",
   "gitlab",
   "slack",

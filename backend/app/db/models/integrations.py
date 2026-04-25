@@ -25,11 +25,14 @@ from datetime import datetime
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     String,
+    Text,
     UniqueConstraint,
     text,
 )
@@ -235,4 +238,343 @@ class WorkspaceRepo(Base):
     workspace: Mapped[Workspace] = relationship()
 
 
-__all__ = ["GitHubInstallation", "WorkspaceRepo"]
+class NativeIntegrationProvider:
+    """Provider ids for first-party integrations owned by Ship backend.
+
+    These are deliberately separate from the legacy ``Integration.kind``
+    strings. The legacy row is still useful for shallow tracker settings;
+    this surface models installable accounts with bindings, credentials,
+    sync cursors, and audit trails.
+    """
+
+    GITHUB = "github"
+    AZURE_DEVOPS = "azure_devops"
+    ATLASSIAN = "atlassian"
+    NOTION = "notion"
+    LINEAR = "linear"
+    GITLAB = "gitlab"
+
+    ALL: tuple[str, ...] = (
+        GITHUB,
+        AZURE_DEVOPS,
+        ATLASSIAN,
+        NOTION,
+        LINEAR,
+        GITLAB,
+    )
+
+
+class NativeIntegrationAuthMode:
+    """How Ship obtained credentials for a native provider account."""
+
+    APP = "app"
+    OAUTH = "oauth"
+    PAT = "pat"
+
+    ALL: tuple[str, ...] = (APP, OAUTH, PAT)
+
+
+class NativeIntegrationStatus:
+    """Lifecycle state shared by native install/binding/sync rows."""
+
+    PENDING = "pending"
+    READY = "ready"
+    ERROR = "error"
+    DISABLED = "disabled"
+
+    ALL: tuple[str, ...] = (PENDING, READY, ERROR, DISABLED)
+
+
+class NativeIntegrationInstallation(Base):
+    """A workspace's first-party connection to one external account.
+
+    Examples:
+    - Azure DevOps organization connected with a PAT.
+    - Atlassian cloud site that powers Jira + Confluence adapters.
+    - Notion workspace connected through OAuth.
+
+    Provider-specific details stay in ``config`` so we can ship one
+    durable contract before every adapter's account model is fully known.
+    """
+
+    __tablename__ = "native_integration_installations"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id",
+            "provider",
+            "external_account_id",
+            name="uq_native_integration_installations_account",
+        ),
+        Index("ix_native_integration_installations_workspace_id", "workspace_id"),
+        Index(
+            "ix_native_integration_installations_provider",
+            "workspace_id",
+            "provider",
+        ),
+        CheckConstraint(
+            "provider IN ('github', 'azure_devops', 'atlassian', "
+            "'notion', 'linear', 'gitlab')",
+            name="ck_native_integration_installations_provider",
+        ),
+        CheckConstraint(
+            "auth_mode IN ('app', 'oauth', 'pat')",
+            name="ck_native_integration_installations_auth_mode",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'ready', 'error', 'disabled')",
+            name="ck_native_integration_installations_status",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    auth_mode: Mapped[str] = mapped_column(String(32), nullable=False)
+    external_account_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    external_account_name: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
+    external_account_url: Mapped[str | None] = mapped_column(
+        String(1024), nullable=True
+    )
+
+    capabilities: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    scopes: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    config: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'pending'")
+    )
+    last_health_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_health_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    connected_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    disabled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    created_at: Mapped[datetime] = _ts_created()
+    updated_at: Mapped[datetime] = _ts_updated()
+
+    workspace: Mapped[Workspace] = relationship()
+
+
+class NativeIntegrationCredential(Base):
+    """Encrypted credential material for a native provider installation."""
+
+    __tablename__ = "native_integration_credentials"
+    __table_args__ = (
+        UniqueConstraint(
+            "installation_id",
+            "kind",
+            name="uq_native_integration_credentials_installation_kind",
+        ),
+        Index(
+            "ix_native_integration_credentials_installation_id",
+            "installation_id",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    installation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("native_integration_installations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # access_token | refresh_token | pat | app_private_key | webhook_secret
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    secret_ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    secret_fingerprint: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    scopes: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_rotated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    created_at: Mapped[datetime] = _ts_created()
+    updated_at: Mapped[datetime] = _ts_updated()
+
+
+class NativeIntegrationBinding(Base):
+    """A selected provider resource that Ship is allowed to operate on."""
+
+    __tablename__ = "native_integration_bindings"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id",
+            "provider",
+            "resource_type",
+            "external_id",
+            name="uq_native_integration_bindings_resource",
+        ),
+        Index("ix_native_integration_bindings_workspace_id", "workspace_id"),
+        Index(
+            "ix_native_integration_bindings_installation_id",
+            "installation_id",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'ready', 'error', 'disabled')",
+            name="ck_native_integration_bindings_status",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    installation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("native_integration_installations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    # repo | project | pipeline | jira_project | confluence_space |
+    # notion_database | notion_page | linear_team
+    resource_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    external_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(512), nullable=False)
+    external_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    config: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'pending'")
+    )
+    last_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = _ts_created()
+    updated_at: Mapped[datetime] = _ts_updated()
+
+
+class NativeIntegrationSyncState(Base):
+    """Cursor and health state for provider sync loops.
+
+    A row can be installation-wide (``binding_id`` is NULL) or scoped to
+    one selected binding. The migration adds partial unique indexes for
+    both shapes because SQL NULL semantics cannot express that invariant
+    with one portable ``UniqueConstraint``.
+    """
+
+    __tablename__ = "native_integration_sync_states"
+    __table_args__ = (
+        Index(
+            "ix_native_integration_sync_states_installation_id",
+            "installation_id",
+        ),
+        Index("ix_native_integration_sync_states_binding_id", "binding_id"),
+        CheckConstraint(
+            "status IN ('pending', 'ready', 'error', 'disabled')",
+            name="ck_native_integration_sync_states_status",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    installation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("native_integration_installations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    binding_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("native_integration_bindings.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    # examples: repo_discovery, pipeline_runs, jira_issues, knowledge_pages
+    sync_kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    cursor: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    content_fingerprint: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'pending'")
+    )
+    last_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = _ts_created()
+    updated_at: Mapped[datetime] = _ts_updated()
+
+
+class NativeIntegrationAuditEvent(Base):
+    """Provider action audit trail for CLI/agent-triggered operations."""
+
+    __tablename__ = "native_integration_audit_events"
+    __table_args__ = (
+        Index(
+            "ix_native_integration_audit_events_workspace_created",
+            "workspace_id",
+            "created_at",
+        ),
+        Index(
+            "ix_native_integration_audit_events_installation_id",
+            "installation_id",
+        ),
+        Index(
+            "ix_native_integration_audit_events_actor_user_id",
+            "actor_user_id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    installation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("native_integration_installations.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    actor_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_kind: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    target_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    payload: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+
+    created_at: Mapped[datetime] = _ts_created()
+
+
+__all__ = [
+    "GitHubInstallation",
+    "NativeIntegrationAuditEvent",
+    "NativeIntegrationAuthMode",
+    "NativeIntegrationBinding",
+    "NativeIntegrationCredential",
+    "NativeIntegrationInstallation",
+    "NativeIntegrationProvider",
+    "NativeIntegrationStatus",
+    "NativeIntegrationSyncState",
+    "WorkspaceRepo",
+]

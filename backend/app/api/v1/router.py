@@ -42,6 +42,7 @@ from backend.app.api.v1.routes import (
     linear_oauth,
     members,
     metrics,
+    native_integrations,
     notifications,
     notion_oauth,
     pipelines,
@@ -66,6 +67,7 @@ api_router.include_router(workspaces.router)
 api_router.include_router(artifact_repos.router)
 api_router.include_router(audit.router)
 api_router.include_router(integrations.router)
+api_router.include_router(native_integrations.router)
 api_router.include_router(knowledge.router)
 api_router.include_router(members.router)
 # Operational groups for inbox routing (RFC-0010 §5). Distinct from

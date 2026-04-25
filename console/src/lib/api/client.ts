@@ -2870,6 +2870,56 @@ export function startNotionInstall(
   );
 }
 
+// --- Native integrations ----------------------------------------------------
+
+export interface ApiNativeIntegration {
+  id: string;
+  workspace_id: string;
+  provider: string;
+  auth_mode: string;
+  external_account_id: string;
+  external_account_name: string | null;
+  external_account_url: string | null;
+  capabilities: string[];
+  scopes: string[];
+  config: Record<string, unknown>;
+  status: string;
+  has_credential: boolean;
+  last_health_at: string | null;
+  last_health_error: string | null;
+  connected_at: string | null;
+  disabled_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export function listNativeIntegrations(
+  workspaceId: string,
+  token?: string,
+): Promise<ApiNativeIntegration[]> {
+  return apiFetch<ApiNativeIntegration[]>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/native-integrations`,
+    { token },
+  );
+}
+
+export function connectAtlassianApiToken(
+  workspaceId: string,
+  input: {
+    site: string;
+    email: string;
+    api_token: string;
+    jira_project?: string | null;
+    scopes?: string[];
+  },
+  token?: string,
+): Promise<ApiNativeIntegration> {
+  return apiFetch<ApiNativeIntegration>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/native-integrations/atlassian/api-token`,
+    { method: "POST", body: input, token },
+  );
+}
+
 // --- Artifact repos --------------------------------------------------------
 
 export function listArtifactRepos(

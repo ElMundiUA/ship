@@ -69,6 +69,7 @@ export type ApiError = {
 export type ApiIntegrationKind =
   | "linear"
   | "jira"
+  | "notion"
   | "github"
   | "gitlab"
   | "slack"
