@@ -43,8 +43,11 @@ export function processFromRepoConfig(
       transition,
     ]),
   );
-  const transitionsFromConfig = Array.isArray(rawProcess.transitions)
+  const rawTransitions = Array.isArray(rawProcess.transitions)
     ? rawProcess.transitions
+    : null;
+  const transitionsFromConfig = rawTransitions && rawTransitions.length > 0
+    ? rawTransitions
         .map((item, index) => {
           const row = asRecord(item);
           const from = stringValue(row?.from);

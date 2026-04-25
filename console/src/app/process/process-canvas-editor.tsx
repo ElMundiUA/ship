@@ -6,6 +6,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -13,6 +14,7 @@ import {
 
 import { Card } from "@/components/ui";
 import type { ApiProcess, ApiProcessState, ApiRepoConfig } from "@/lib/api/client";
+import { ProcessConfigProposalFields } from "./process-config-proposal-fields";
 
 const NODE_WIDTH = 210;
 const NODE_HEIGHT = 108;
@@ -47,6 +49,7 @@ export function ProcessCanvasEditor({
   processConfig: Record<string, unknown>;
 }) {
   const router = useRouter();
+  const arrowMarkerId = `process-arrow-${useId().replaceAll(":", "")}`;
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const suppressClickRef = useRef(false);
@@ -173,6 +176,15 @@ export function ProcessCanvasEditor({
     maxX + NODE_WIDTH + PAD,
   );
   const canvasHeight = Math.max(520, maxY + NODE_HEIGHT + PAD);
+  const edges =
+    process.transitions.length > 0
+      ? process.transitions
+      : process.states.slice(0, -1).map((state, index) => ({
+          id: `${state.id}_to_${process.states[index + 1].id}`,
+          from_state_id: state.id,
+          to_state_id: process.states[index + 1].id,
+          conditions: [],
+        }));
 
   function onPointerDown(
     event: ReactPointerEvent<HTMLDivElement>,
@@ -241,20 +253,13 @@ export function ProcessCanvasEditor({
         </div>
         <div className="flex items-center gap-2">
           <form action="/api/process/config-propose" method="post">
-            <input type="hidden" name="workspaceId" value={workspaceId} />
-            <input type="hidden" name="repoId" value={repoId ?? ""} />
-            <input type="hidden" name="baseSha" value={config?.sha ?? ""} />
-            <input
-              type="hidden"
-              name="lanesJson"
-              value={JSON.stringify(config?.parsed?.lanes ?? {})}
+            <ProcessConfigProposalFields
+              workspaceId={workspaceId}
+              repoId={repoId}
+              config={config}
+              processConfig={processConfig}
+              layoutJson={layoutJson}
             />
-            <input
-              type="hidden"
-              name="processJson"
-              value={JSON.stringify(processConfig)}
-            />
-            <input type="hidden" name="layoutJson" value={layoutJson} />
             <button
               type="submit"
               disabled={!repoId || !hasLayoutChanges}
@@ -282,10 +287,12 @@ export function ProcessCanvasEditor({
             className="absolute inset-0 h-full w-full"
             viewBox={`0 0 ${canvasWidth} ${canvasHeight}`}
           >
-            {process.states.slice(0, -1).map((state, index) => {
-              const from = positions[state.id] ?? initialPositions[state.id];
-              const toState = process.states[index + 1];
-              const to = positions[toState.id] ?? initialPositions[toState.id];
+            {edges.map((edge) => {
+              const from =
+                positions[edge.from_state_id] ?? initialPositions[edge.from_state_id];
+              const to =
+                positions[edge.to_state_id] ?? initialPositions[edge.to_state_id];
+              if (!from || !to) return null;
               const x1 = from.x + NODE_WIDTH;
               const x2 = to.x;
               const y1 = from.y + NODE_HEIGHT / 2;
@@ -293,18 +300,18 @@ export function ProcessCanvasEditor({
               const mid = (x1 + x2) / 2;
               return (
                 <path
-                  key={`${state.id}-edge`}
+                  key={edge.id}
                   d={`M ${x1} ${y1} C ${mid} ${y1}, ${mid} ${y2}, ${x2} ${y2}`}
                   fill="none"
                   stroke="rgba(255,255,255,0.22)"
                   strokeWidth="2"
-                  markerEnd="url(#arrow)"
+                  markerEnd={`url(#${arrowMarkerId})`}
                 />
               );
             })}
             <defs>
               <marker
-                id="arrow"
+                id={arrowMarkerId}
                 markerHeight="8"
                 markerWidth="8"
                 orient="auto"
@@ -368,7 +375,10 @@ function StateNode({
       onMouseDown={onMouseDown}
       onClick={onClick}
       onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") onClick();
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onClick();
+        }
       }}
       style={{ left: x, top: y, touchAction: "none", userSelect: "none" }}
       className={[

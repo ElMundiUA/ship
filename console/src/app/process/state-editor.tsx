@@ -1,5 +1,6 @@
 import { Card, CardHeader } from "@/components/ui";
 import type { ApiProcessState, ApiRepoConfig } from "@/lib/api/client";
+import { ProcessConfigProposalFields } from "./process-config-proposal-fields";
 
 export function StateEditor({
   workspaceId,
@@ -21,6 +22,16 @@ export function StateEditor({
       </Card>
     );
   }
+  const exitExpression = state.exit_conditions[0]?.expression ?? "";
+  const blockExpression = state.block_conditions[0]?.expression ?? "";
+  const exitLabel = humanCondition(
+    exitExpression,
+    "The owner marks the step complete.",
+  );
+  const blockLabel = humanCondition(
+    blockExpression,
+    "The agent needs a decision, approval, or missing context.",
+  );
 
   return (
     <aside className="min-h-0 xl:sticky xl:top-28 xl:max-h-[calc(100vh-8rem)] xl:overflow-y-auto">
@@ -40,20 +51,17 @@ export function StateEditor({
           </div>
         )}
         <form action="/api/process/config-propose" method="post" className="space-y-4">
-          <input type="hidden" name="workspaceId" value={workspaceId} />
-          <input type="hidden" name="repoId" value={repoId ?? ""} />
-          <input type="hidden" name="stateId" value={state.id} />
-          <input type="hidden" name="baseSha" value={config?.sha ?? ""} />
-          <input
-            type="hidden"
-            name="lanesJson"
-            value={JSON.stringify(config?.parsed?.lanes ?? {})}
+          <ProcessConfigProposalFields
+            workspaceId={workspaceId}
+            repoId={repoId}
+            config={config}
+            processConfig={processConfig}
+            stateId={state.id}
           />
-          <input
-            type="hidden"
-            name="processJson"
-            value={JSON.stringify(processConfig)}
-          />
+          <input type="hidden" name="originalExitCondition" value={exitExpression} />
+          <input type="hidden" name="originalExitConditionLabel" value={exitLabel} />
+          <input type="hidden" name="originalBlockCondition" value={blockExpression} />
+          <input type="hidden" name="originalBlockConditionLabel" value={blockLabel} />
           <EditorField name="stateName" label="Step name" defaultValue={state.name} />
           <EditorField
             name="specialistName"
@@ -94,18 +102,12 @@ export function StateEditor({
           <RuleTextArea
             name="exitCondition"
             label="Ready to move forward when"
-            value={humanCondition(
-              state.exit_conditions[0]?.expression,
-              "The owner marks the step complete.",
-            )}
+            value={exitLabel}
           />
           <RuleTextArea
             name="blockCondition"
             label="Pause and ask for help when"
-            value={humanCondition(
-              state.block_conditions[0]?.expression,
-              "The agent needs a decision, approval, or missing context.",
-            )}
+            value={blockLabel}
           />
           <button
             type="submit"

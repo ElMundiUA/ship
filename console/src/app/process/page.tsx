@@ -156,6 +156,7 @@ function renderProcessPage({
   const selectedState =
     process.states.find((state) => state.id === selectedStateId) ??
     process.states[0];
+  const processConfig = processConfigFromApiProcess(process);
 
   return (
     <AppShell
@@ -190,14 +191,14 @@ function renderProcessPage({
               editMode={true}
               repoId={selectedRepo?.id}
               config={config ?? null}
-              processConfig={processConfigFromApiProcess(process)}
+              processConfig={processConfig}
             />
             <StateEditor
               workspaceId={workspace.id}
               repoId={selectedRepo?.id}
               state={selectedState}
               config={config ?? null}
-              processConfig={processConfigFromApiProcess(process)}
+              processConfig={processConfig}
             />
           </section>
         )}
@@ -225,6 +226,8 @@ function ProcessNotice({ reason }: { reason?: string }) {
 
 function noticeMessage(reason: string): string {
   if (reason === "bad_request") return "Process save could not start: missing repository or workspace.";
+  if (reason === "bad_json") return "Process save failed because the submitted config payload was malformed.";
+  if (reason === "state_not_found") return "Process save failed because the selected state is no longer in the config.";
   if (reason === "api_unavailable") return "Backend is unreachable. Try again after the API is back.";
   if (reason === "http_409") return ".ship/config.yml changed since the editor loaded. Reload before saving.";
   if (reason === "http_422") return "Process config is invalid. Check state ids, transitions, and layout values.";
