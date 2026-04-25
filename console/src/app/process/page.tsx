@@ -2,7 +2,8 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { AppShell } from "@/components/app-shell";
-import { Badge, type BadgeTone, ButtonPrimary, Card, CardHeader, MockBanner } from "@/components/ui";
+import { Badge, type BadgeTone, Card, CardHeader, MockBanner } from "@/components/ui";
+import { ProcessCanvasEditor } from "./process-canvas-editor";
 import {
   ApiHttpError,
   ApiUnavailableError,
@@ -30,6 +31,7 @@ export default async function ProcessPage({
   const selectedStateId =
     typeof params.state === "string" ? params.state : undefined;
   const selectedTab = params.tab === "routines" ? "routines" : "process";
+  const editMode = params.mode === "edit";
 
   if (!isApiConfigured()) {
     return renderProcessPage({
@@ -37,6 +39,7 @@ export default async function ProcessPage({
       process: mockProcess,
       selectedStateId,
       selectedTab,
+      editMode,
       mock: true,
     });
   }
@@ -49,7 +52,7 @@ export default async function ProcessPage({
   if (result === "empty") redirect("/onboarding?step=github");
   if (result === "down") return renderDownState();
 
-  return renderProcessPage({ ...result, selectedStateId, selectedTab });
+  return renderProcessPage({ ...result, selectedStateId, selectedTab, editMode });
 }
 
 type LiveProcess = {
@@ -88,12 +91,14 @@ function renderProcessPage({
   process,
   selectedStateId,
   selectedTab,
+  editMode,
   mock = false,
 }: {
   workspace: Pick<ApiWorkspace, "id" | "name" | "slug">;
   process: ApiProcess;
   selectedStateId?: string;
   selectedTab: "process" | "routines";
+  editMode: boolean;
   mock?: boolean;
 }) {
   const selectedState =
@@ -117,9 +122,6 @@ function renderProcessPage({
           >
             Inbox
           </Link>
-          <ButtonPrimary>
-            <Link href="/process?mode=edit">Edit process</Link>
-          </ButtonPrimary>
         </>
       }
     >
@@ -130,7 +132,11 @@ function renderProcessPage({
           <RoutinesPanel process={process} />
         ) : (
           <section className="relative min-h-[680px]">
-            <ProcessCanvas process={process} selectedStateId={selectedState?.id} />
+            <ProcessCanvasEditor
+              process={process}
+              selectedStateId={selectedState?.id}
+              editMode={editMode}
+            />
             <StateDetails state={selectedState} tasks={selectedTasks} />
           </section>
         )}
@@ -178,139 +184,6 @@ function TabLink({
       ].join(" ")}
     >
       {children}
-    </Link>
-  );
-}
-
-function ProcessCanvas({
-  process,
-  selectedStateId,
-}: {
-  process: ApiProcess;
-  selectedStateId?: string;
-}) {
-  const nodeWidth = 210;
-  const nodeHeight = 108;
-  const gap = 56;
-  const pad = 72;
-  const y = 230;
-  const canvasWidth = Math.max(1120, pad * 2 + process.states.length * nodeWidth + Math.max(0, process.states.length - 1) * gap);
-  const canvasHeight = 620;
-
-  return (
-    <Card className="min-h-[680px] overflow-hidden" padded={false}>
-      <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
-        <div>
-          <h2 className="font-display text-base font-bold text-white">
-            {process.name}
-          </h2>
-          <p className="mt-0.5 text-xs text-white/45">
-            Canvas view. Select a state to inspect instructions, rules, and
-            tasks in the side panel.
-          </p>
-        </div>
-        <div className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-white/45">
-          {process.states.length} states
-        </div>
-      </div>
-      <div className="h-[620px] overflow-auto bg-[radial-gradient(circle_at_1px_1px,rgba(255,255,255,0.10)_1px,transparent_0)] [background-size:24px_24px]">
-        <div
-          className="relative"
-          style={{ width: canvasWidth, height: canvasHeight }}
-        >
-          <svg
-            aria-hidden
-            className="absolute inset-0 h-full w-full"
-            viewBox={`0 0 ${canvasWidth} ${canvasHeight}`}
-          >
-            {process.states.slice(0, -1).map((state, index) => {
-              const x1 = pad + index * (nodeWidth + gap) + nodeWidth;
-              const x2 = pad + (index + 1) * (nodeWidth + gap);
-              const mid = (x1 + x2) / 2;
-              const cy = y + nodeHeight / 2;
-              return (
-                <path
-                  key={`${state.id}-edge`}
-                  d={`M ${x1} ${cy} C ${mid} ${cy}, ${mid} ${cy}, ${x2} ${cy}`}
-                  fill="none"
-                  stroke="rgba(255,255,255,0.22)"
-                  strokeWidth="2"
-                  markerEnd="url(#arrow)"
-                />
-              );
-            })}
-            <defs>
-              <marker
-                id="arrow"
-                markerHeight="8"
-                markerWidth="8"
-                orient="auto"
-                refX="7"
-                refY="4"
-              >
-                <path d="M 0 0 L 8 4 L 0 8 z" fill="rgba(255,255,255,0.32)" />
-              </marker>
-            </defs>
-          </svg>
-          {process.states.map((state, index) => (
-            <StateNode
-              key={state.id}
-              state={state}
-              selected={state.id === selectedStateId}
-              step={index + 1}
-              x={pad + index * (nodeWidth + gap)}
-              y={y}
-            />
-          ))}
-        </div>
-      </div>
-    </Card>
-  );
-}
-
-function StateNode({
-  state,
-  selected,
-  step,
-  x,
-  y,
-}: {
-  state: ApiProcessState;
-  selected: boolean;
-  step: number;
-  x: number;
-  y: number;
-}) {
-  return (
-    <Link
-      href={`/process?state=${encodeURIComponent(state.id)}`}
-      style={{ left: x, top: y }}
-      className={[
-        "absolute block h-[108px] w-[210px] rounded-2xl border p-4 transition",
-        selected
-          ? "border-aqua/60 bg-aqua/[0.08] shadow-glow"
-          : "border-white/10 bg-white/[0.035] hover:border-white/25 hover:bg-white/[0.06]",
-      ].join(" ")}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="text-[10px] font-semibold uppercase tracking-wide text-white/35">
-            Step {step}
-          </div>
-          <div className="mt-1 truncate font-display text-base font-bold text-white">
-            {state.name}
-          </div>
-          <div className="mt-1 truncate text-xs text-white/55">
-            {state.specialist_name}
-          </div>
-        </div>
-        <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] font-semibold text-white/45">
-          {step}
-        </span>
-      </div>
-      <div className="mt-3 rounded-xl border border-white/10 bg-black/20 px-3 py-1.5 text-xs text-white/55">
-        Inspect rules
-      </div>
     </Link>
   );
 }
