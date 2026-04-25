@@ -13,6 +13,7 @@ export type SpecialistOption = {
   id: string;
   name: string;
   role: string;
+  source?: "catalog" | "process" | "custom";
 };
 
 export function StateEditor({
@@ -345,11 +346,24 @@ function RoleSelector({
           </option>
         ))}
       </select>
-      <span className="mt-1 block text-xs text-white/40">
-        {selectedOption?.role ?? "Choose who owns this state."}
-      </span>
+      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
+        <span className="text-white/40">
+          {selectedOption?.role ?? "Choose who owns this state."}
+        </span>
+        {selectedOption?.source ? (
+          <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white/35">
+            {sourceLabel(selectedOption.source)}
+          </span>
+        ) : null}
+      </div>
     </label>
   );
+}
+
+function sourceLabel(source: NonNullable<SpecialistOption["source"]>) {
+  if (source === "catalog") return "Base catalog";
+  if (source === "process") return "Process";
+  return "Custom";
 }
 
 function EditorField({
