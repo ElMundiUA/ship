@@ -1523,10 +1523,10 @@ async def wizard_seed(
        authenticate on their first tick. On any failure here the PR is
        never opened — a PR without the secret would silently break
        every schedule-triggered lane it installs.
-    2b. Push ``SHIP_API_BASE`` (``SHIP_PUBLIC_URL``) on every seed, and
-       mint a workspace-scoped PAT as ``SHIP_API_TOKEN`` whenever step 2
-       mints a new run token, so ``shipctl run`` in Actions can reach the
-       Ship API without the operator pasting those secrets manually.
+    2b. Push ``SHIP_API_BASE`` (``SHIP_PUBLIC_URL``) and mint a fresh
+       workspace-scoped PAT as ``SHIP_API_TOKEN`` on every seed, so
+       re-seeding older repos repairs missing CI secrets even when the
+       long-lived run token is not rotated.
     3. Compose the file list via
        :func:`backend.app.services.seed_bundle.compose_seed_files`
        against the canonical
@@ -1674,7 +1674,7 @@ async def wizard_seed(
             repo=repo_row,
             install=install_row,
             settings=settings,
-            mint_new_api_pat=should_mint,
+            mint_new_api_pat=True,
         )
     except Exception as exc:  # pragma: no cover — surfaced as 502
         raise HTTPException(

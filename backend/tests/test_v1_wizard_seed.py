@@ -68,6 +68,8 @@ def _patch_github(monkeypatch):
     from backend.app.integrations.github.workflows import StarterWorkflowPR
     from backend.app.services import repo_tokens as tokens_svc
 
+    captured = {"secrets": []}
+
     # put_repo_secret is invoked by mint_repo_callback_token. We
     # replace it on the tokens module since that's where mint looks
     # it up.
@@ -80,11 +82,10 @@ def _patch_github(monkeypatch):
             tokens_svc.SHIP_API_TOKEN_SECRET_NAME,
         }
         assert isinstance(plaintext, str) and plaintext
+        captured["secrets"].append(name)
         return "keyid-stub"
 
     monkeypatch.setattr(tokens_svc, "put_repo_secret", _fake_put_secret)
-
-    captured: dict[str, object] = {}
 
     async def _fake_commit_pr(
         repo, install, *, files, title, branch_label, pr_body_header,
@@ -184,8 +185,10 @@ async def test_wizard_seed_first_run_mints_token_and_opens_pr(
 async def test_wizard_seed_skips_rotation_on_second_run(
     monkeypatch, v1_client, db_session, seeded_wizard_repo
 ) -> None:
+    from backend.app.services import repo_tokens as tokens_svc
+
     raw, workspace, _install, repo = seeded_wizard_repo
-    _patch_github(monkeypatch)
+    captured = _patch_github(monkeypatch)
 
     first = await v1_client.post(
         f"/v1/workspaces/{workspace.id}/repos/{repo.id}/wizard_seed",
@@ -204,6 +207,9 @@ async def test_wizard_seed_skips_rotation_on_second_run(
     assert second.status_code == 200
     assert second.json()["run_token_rotated"] is False
     assert second.json()["run_token_prefix"] == first_prefix
+    assert captured["secrets"].count(tokens_svc.SHIP_RUN_TOKEN_SECRET_NAME) == 1
+    assert captured["secrets"].count(tokens_svc.SHIP_API_BASE_SECRET_NAME) == 2
+    assert captured["secrets"].count(tokens_svc.SHIP_API_TOKEN_SECRET_NAME) == 2
 
 
 @pytest.mark.asyncio
@@ -806,15 +812,13 @@ async def test_real_merge_sync_promotes_synthetic_origin_to_merged(
     await db_session.flush()
 
     # Pick a synthetic row whose lane shape round-trips through YAML
-    # cleanly. ``pr_review`` carries ``pattern: **`` which YAML
-    # rejects as a bare scalar; we want a lane whose pattern is a
-    # plain identifier so the reconciler can match on
-    # ``(lane_id, kind)`` rather than crashing on parse.
+    # cleanly: a schedule lane with a plain pattern identifier lets
+    # the reconciler match on ``(lane_id, kind)``.
     synth = (
         await db_session.execute(
             select(Lane).where(
                 Lane.repo_id == repo.id,
-                Lane.lane_id == "scan-security-deps",
+                Lane.lane_id == "daily_standup",
             )
         )
     ).scalar_one()
@@ -833,7 +837,7 @@ async def test_real_merge_sync_promotes_synthetic_origin_to_merged(
         f"    pattern: {synth_pattern}\n"
     )
     assert synth_kind == "schedule", (
-        "test fixture changed: expected scan-security-deps to be a "
+        "test fixture changed: expected daily_standup to be a "
         "schedule lane"
     )
     config_yaml = (
