@@ -23,7 +23,9 @@ import {
   ApiUnavailableError,
   isApiConfigured,
   listIntegrations,
+  listNativeIntegrations,
   listWorkspaces,
+  type ApiNativeIntegration,
 } from "@/lib/api/client";
 import type { ApiIntegration, ApiWorkspace } from "@/lib/api/types";
 import { getSessionToken } from "@/lib/api/session";
@@ -32,7 +34,12 @@ import { integrations as mockIntegrations, workspaces as mockWorkspaces } from "
 export const dynamic = "force-dynamic";
 
 type Mode =
-  | { source: "live"; workspace: ApiWorkspace; rows: ApiIntegration[] }
+  | {
+      source: "live";
+      workspace: ApiWorkspace;
+      rows: ApiIntegration[];
+      nativeRows: ApiNativeIntegration[];
+    }
   | { source: "mock"; reason: string };
 
 const CATALOG: {
@@ -140,6 +147,16 @@ const CATALOG_BY_ID: Record<string, (typeof CATALOG)[number]> = Object.fromEntri
   CATALOG.map((c) => [c.id, c]),
 );
 
+const NATIVE_CATALOG = [
+  {
+    id: "atlassian",
+    name: "Jira + Confluence",
+    group: "Tracker + Knowledge",
+    body:
+      "Connect one Atlassian Cloud site. Jira handles corporate tickets; Confluence feeds curated knowledge buckets.",
+  },
+];
+
 async function load(): Promise<Mode> {
   if (!isApiConfigured()) return { source: "mock", reason: "SHIP_API_URL not set" };
   const token = await getSessionToken();
@@ -149,8 +166,11 @@ async function load(): Promise<Mode> {
     if (ws.length === 0)
       return { source: "mock", reason: "Create a workspace first to wire integrations" };
     const target = ws[0];
-    const rows = await listIntegrations(target.id, token);
-    return { source: "live", workspace: target, rows };
+    const [rows, nativeRows] = await Promise.all([
+      listIntegrations(target.id, token),
+      listNativeIntegrations(target.id, token),
+    ]);
+    return { source: "live", workspace: target, rows, nativeRows };
   } catch (err) {
     if (err instanceof ApiHttpError && err.status === 401) {
       return { source: "mock", reason: "Session expired — sign in again" };
@@ -169,9 +189,13 @@ export default async function IntegrationsPage() {
     return <MockView reason={data.reason} />;
   }
 
-  const { workspace, rows } = data;
+  const { workspace, rows, nativeRows } = data;
   const connectedIds = new Set(rows.map((r) => r.kind));
   const available = CATALOG.filter((c) => !connectedIds.has(c.id));
+  const connectedNativeProviders = new Set(nativeRows.map((r) => r.provider));
+  const nativeAvailable = NATIVE_CATALOG.filter(
+    (c) => !connectedNativeProviders.has(c.id),
+  );
 
   return (
     <AppShell
@@ -248,12 +272,79 @@ export default async function IntegrationsPage() {
         )}
       </Card>
 
+      <Card className="mb-8">
+        <CardHeader
+          title="Native provider installs"
+          subtitle="First-party installs used by Ship adapters, CLI calls, and knowledge sync."
+        />
+        {nativeRows.length === 0 ? (
+          <p className="text-sm text-white/55">
+            No native providers connected yet. Use Atlassian below for Jira +
+            Confluence.
+          </p>
+        ) : (
+          <ul className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {nativeRows.map((i) => (
+              <li
+                key={i.id}
+                className="flex items-start gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-3"
+              >
+                <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-white/15 to-white/[0.02] text-xs font-bold uppercase text-white/85">
+                  {i.provider.slice(0, 2)}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-sm font-semibold text-white">
+                      {nativeName(i.provider)}
+                    </span>
+                    <Badge
+                      tone={
+                        i.status === "ready"
+                          ? "ok"
+                          : i.status === "error"
+                          ? "warn"
+                          : "neutral"
+                      }
+                      dot
+                    >
+                      {i.status}
+                    </Badge>
+                  </div>
+                  <div className="mt-0.5 text-[11px] text-white/55">
+                    {i.external_account_name ?? i.external_account_id}
+                    {i.has_credential ? " · credential stored" : " · no credential"}
+                  </div>
+                  <div className="mt-0.5 text-[10px] text-white/40">
+                    {i.capabilities.join(" · ") || "no capabilities"}
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+
       <Card>
         <CardHeader
           title="Available"
           subtitle="One-click setup; secrets are encrypted with the workspace key and never leave Postgres."
         />
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {nativeAvailable.map((c) => (
+            <div
+              key={c.id}
+              className="rounded-xl border border-aqua/20 bg-aqua/[0.03] p-4 transition hover:border-aqua/40"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-semibold text-white">{c.name}</span>
+                <Badge tone="neutral">{c.group}</Badge>
+              </div>
+              <p className="mt-1.5 line-clamp-3 text-[11px] text-white/55">
+                {c.body}
+              </p>
+              <AtlassianNativeForm workspaceId={workspace.id} />
+            </div>
+          ))}
           {available.map((c) => (
             <div
               key={c.id}
@@ -270,6 +361,83 @@ export default async function IntegrationsPage() {
         </div>
       </Card>
     </AppShell>
+  );
+}
+
+function nativeName(provider: string): string {
+  if (provider === "atlassian") return "Jira + Confluence";
+  if (provider === "azure_devops") return "Azure DevOps";
+  return provider;
+}
+
+function AtlassianNativeForm({ workspaceId }: { workspaceId: string }) {
+  return (
+    <details className="mt-3">
+      <summary className="inline-flex cursor-pointer items-center gap-1 rounded-full border border-aqua/40 bg-aqua/10 px-3 py-1 text-[11px] font-bold text-aqua hover:bg-aqua/20">
+        Connect →
+      </summary>
+      <form
+        action="/api/integrations/native-atlassian"
+        method="POST"
+        className="mt-3 space-y-3 rounded-lg border border-white/10 bg-ink/40 p-3"
+      >
+        <input type="hidden" name="ws" value={workspaceId} suppressHydrationWarning />
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/55">
+            Atlassian site
+          </span>
+          <input
+            name="site"
+            placeholder="yourorg.atlassian.net"
+            className="w-full rounded border border-white/10 bg-white/[0.04] px-2 py-1.5 text-xs text-white outline-none focus:border-aqua/40"
+            suppressHydrationWarning
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/55">
+            Account email
+          </span>
+          <input
+            name="email"
+            type="email"
+            placeholder="you@company.com"
+            className="w-full rounded border border-white/10 bg-white/[0.04] px-2 py-1.5 text-xs text-white outline-none focus:border-aqua/40"
+            suppressHydrationWarning
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/55">
+            API token
+          </span>
+          <input
+            name="api_token"
+            type="password"
+            autoComplete="off"
+            className="w-full rounded border border-white/10 bg-white/[0.04] px-2 py-1.5 font-mono text-xs text-white outline-none focus:border-aqua/40"
+            suppressHydrationWarning
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/55">
+            Default Jira project
+          </span>
+          <input
+            name="jira_project"
+            placeholder="ENG"
+            className="w-full rounded border border-white/10 bg-white/[0.04] px-2 py-1.5 text-xs text-white outline-none focus:border-aqua/40"
+            suppressHydrationWarning
+          />
+        </label>
+        <div className="flex items-center justify-end">
+          <button
+            type="submit"
+            className="rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-3 py-1.5 text-[11px] font-bold text-ink hover:brightness-110"
+          >
+            Save Atlassian
+          </button>
+        </div>
+      </form>
+    </details>
   );
 }
 

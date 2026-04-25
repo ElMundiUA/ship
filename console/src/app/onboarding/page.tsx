@@ -100,6 +100,8 @@ const TRACKER_ERRORS: Record<string, string> = {
     "Linear OAuth isn't configured on this deployment (missing LINEAR_CLIENT_ID / LINEAR_CLIENT_SECRET). You can skip for now and use GitHub Issues — it's already connected via the GitHub App — or ask ops to wire Linear credentials.",
   not_configured_notion:
     "Notion OAuth isn't configured on this deployment (missing NOTION_CLIENT_ID / NOTION_CLIENT_SECRET). You can skip for now and use GitHub Issues — it's already connected via the GitHub App — or ask ops to wire Notion credentials.",
+  bad_atlassian_input:
+    "Atlassian needs a site, account email, and API token. Fill those fields or skip for now.",
   bad_state:
     "OAuth handshake failed (state expired or tampered). Start the flow again.",
   exchange_failed:
@@ -406,6 +408,7 @@ export default async function OnboardingPage({
             error={error}
             linearStatus={pick(params.linear)}
             notionStatus={pick(params.notion)}
+            atlassianStatus={pick(params.atlassian)}
             reposJustWired={pick(params.repos) === "wired"}
           />
         )}
@@ -731,20 +734,23 @@ function TrackerStep({
   error,
   linearStatus,
   notionStatus,
+  atlassianStatus,
   reposJustWired,
 }: {
   wsId: string;
   error?: string;
   linearStatus?: string;
   notionStatus?: string;
+  atlassianStatus?: string;
   reposJustWired: boolean;
 }) {
   const message = error ? TRACKER_ERRORS[error] ?? error : null;
   const tiles: {
-    id: "linear" | "notion" | "github";
+    id: "linear" | "notion" | "atlassian" | "github";
     name: string;
     blurb: string;
     tag: string;
+    fields?: { name: string; label: string; type?: string; placeholder?: string }[];
   }[] = [
     {
       id: "linear",
@@ -761,6 +767,19 @@ function TrackerStep({
       tag: "OAuth \u00b7 1 click",
     },
     {
+      id: "atlassian",
+      name: "Jira + Confluence",
+      blurb:
+        "Connect one Atlassian Cloud site. Jira powers corporate tickets; Confluence feeds the curated knowledge index.",
+      tag: "API token · Jira + docs",
+      fields: [
+        { name: "site", label: "Site", placeholder: "yourorg.atlassian.net" },
+        { name: "email", label: "Email", type: "email", placeholder: "you@company.com" },
+        { name: "api_token", label: "API token", type: "password" },
+        { name: "jira_project", label: "Default Jira project", placeholder: "ENG" },
+      ],
+    },
+    {
       id: "github",
       name: "GitHub Issues",
       blurb:
@@ -771,15 +790,15 @@ function TrackerStep({
   return (
     <section>
       <p className="font-mono text-[11px] uppercase tracking-[0.3em] text-aqua/85">
-        Step 3 of 4 &middot; Workspace tracker (OAuth)
+        Step 3 of 4 &middot; Workspace tracker
       </p>
       <h1 className="mt-2 font-display text-4xl font-bold leading-tight">
         Connect your tracker.
       </h1>
       <p className="mt-3 max-w-2xl text-sm leading-relaxed text-white/70">
-        This workspace-level OAuth is reused by <em>every</em> repo — the
+        This workspace-level connection is reused by <em>every</em> repo — the
         Confirm step lets you override the tracker kind per repo (Linear,
-        GitHub Issues, Jira) and the team/project it writes to. OAuth
+        GitHub Issues, Jira) and the team/project it writes to. Provider
         tokens are encrypted with the workspace key; the API only ever
         exposes{" "}
         <code className="rounded bg-white/5 px-1 py-[1px] text-aqua">
@@ -812,6 +831,13 @@ function TrackerStep({
           read your queue.
         </div>
       )}
+      {atlassianStatus === "connected" && (
+        <div className="mt-5 rounded-xl border border-aqua/30 bg-aqua/[0.06] px-4 py-3 text-xs text-white/85">
+          <strong className="text-aqua">Atlassian connected.</strong> Jira and
+          Confluence credentials are stored server-side. You can tune buckets
+          and project bindings after bootstrap.
+        </div>
+      )}
 
       {message &&
         (error?.startsWith("not_configured") ? (
@@ -824,7 +850,7 @@ function TrackerStep({
           </div>
         ))}
 
-      <div className="mt-7 grid grid-cols-1 gap-4 md:grid-cols-3">
+      <div className="mt-7 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
         {tiles.map((tile) => (
           <form
             key={tile.id}
@@ -856,6 +882,24 @@ function TrackerStep({
             <p className="mt-2 flex-1 text-[12px] leading-relaxed text-white/65">
               {tile.blurb}
             </p>
+            {tile.fields && (
+              <div className="mt-4 space-y-2">
+                {tile.fields.map((field) => (
+                  <label key={field.name} className="block">
+                    <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/45">
+                      {field.label}
+                    </span>
+                    <input
+                      name={field.name}
+                      type={field.type ?? "text"}
+                      placeholder={field.placeholder}
+                      className="w-full rounded border border-white/10 bg-white/[0.04] px-2 py-1.5 text-xs text-white outline-none focus:border-aqua/40"
+                      suppressHydrationWarning
+                    />
+                  </label>
+                ))}
+              </div>
+            )}
             <button
               type="submit"
               className="mt-4 rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-4 py-2 text-xs font-bold text-ink shadow-glow transition hover:brightness-110"

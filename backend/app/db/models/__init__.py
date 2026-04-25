@@ -26,7 +26,15 @@ from backend.app.db.models.inbox import (
     MemberGroupMember,
     RunEscalation,
 )
-from backend.app.db.models.integrations import GitHubInstallation, WorkspaceRepo
+from backend.app.db.models.integrations import (
+    GitHubInstallation,
+    NativeIntegrationAuditEvent,
+    NativeIntegrationBinding,
+    NativeIntegrationCredential,
+    NativeIntegrationInstallation,
+    NativeIntegrationSyncState,
+    WorkspaceRepo,
+)
 from backend.app.db.models.knowledge_promotion import KnowledgePromotionCandidate
 from backend.app.db.models.lanes import Lane
 from backend.app.db.models.notifications import WorkspaceNotification
@@ -83,6 +91,11 @@ __all__ = [
     "Lane",
     "MemberGroup",
     "MemberGroupMember",
+    "NativeIntegrationAuditEvent",
+    "NativeIntegrationBinding",
+    "NativeIntegrationCredential",
+    "NativeIntegrationInstallation",
+    "NativeIntegrationSyncState",
     "Org",
     "OrgMember",
     "Pipeline",

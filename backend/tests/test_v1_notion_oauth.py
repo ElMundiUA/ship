@@ -83,6 +83,11 @@ async def test_notion_install_callback_persists_token(
     v1_client, db_session, seed_workspace, notion_env, monkeypatch
 ) -> None:
     from backend.app.core.config import get_settings
+    from backend.app.db.models.integrations import (
+        NativeIntegrationAuditEvent,
+        NativeIntegrationCredential,
+        NativeIntegrationInstallation,
+    )
     from backend.app.db.models.tenancy import AuditLog, Integration
     from backend.app.integrations.notion.oauth import (
         NotionTokenBundle,
@@ -146,6 +151,41 @@ async def test_notion_install_callback_persists_token(
     ).scalar_one()
     assert audit.payload["kind"] == "notion"
     assert audit.payload["notion_workspace_id"] == "notion-ws-1"
+
+    native = (
+        await db_session.execute(
+            select(NativeIntegrationInstallation).where(
+                NativeIntegrationInstallation.workspace_id == workspace_id,
+                NativeIntegrationInstallation.provider == "notion",
+            )
+        )
+    ).scalar_one()
+    assert native.auth_mode == "oauth"
+    assert native.external_account_id == "notion-ws-1"
+    assert native.external_account_name == "Acme"
+    assert native.capabilities == ["tracker", "knowledge"]
+    assert native.status == "ready"
+
+    native_credential = (
+        await db_session.execute(
+            select(NativeIntegrationCredential).where(
+                NativeIntegrationCredential.installation_id == native.id,
+                NativeIntegrationCredential.kind == "access_token",
+            )
+        )
+    ).scalar_one()
+    assert decrypt(native_credential.secret_ciphertext) == "ntn_secret_token"
+
+    native_audit = (
+        await db_session.execute(
+            select(NativeIntegrationAuditEvent).where(
+                NativeIntegrationAuditEvent.workspace_id == workspace_id,
+                NativeIntegrationAuditEvent.provider == "notion",
+            )
+        )
+    ).scalar_one()
+    assert native_audit.action == "native_integration.create"
+    assert native_audit.payload["notion_workspace_id"] == "notion-ws-1"
 
 
 @pytest.mark.asyncio

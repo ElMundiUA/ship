@@ -101,6 +101,11 @@ async def test_linear_install_callback_persists_token(
 ) -> None:
     """Round-trip the callback and ensure an Integration row is written."""
     from backend.app.core.config import get_settings
+    from backend.app.db.models.integrations import (
+        NativeIntegrationAuditEvent,
+        NativeIntegrationCredential,
+        NativeIntegrationInstallation,
+    )
     from backend.app.db.models.tenancy import AuditLog, Integration
     from backend.app.integrations.linear import oauth as linear_oauth_mod
     from backend.app.integrations.linear.oauth import (
@@ -170,6 +175,41 @@ async def test_linear_install_callback_persists_token(
     ).scalar_one()
     assert audit.payload["kind"] == "linear"
     assert audit.payload["via"] == "oauth"
+
+    native = (
+        await db_session.execute(
+            select(NativeIntegrationInstallation).where(
+                NativeIntegrationInstallation.workspace_id == workspace_id,
+                NativeIntegrationInstallation.provider == "linear",
+            )
+        )
+    ).scalar_one()
+    assert native.auth_mode == "oauth"
+    assert native.external_account_id == "default"
+    assert native.capabilities == ["tracker"]
+    assert native.scopes == ["read", "write"]
+    assert native.status == "ready"
+
+    native_credential = (
+        await db_session.execute(
+            select(NativeIntegrationCredential).where(
+                NativeIntegrationCredential.installation_id == native.id,
+                NativeIntegrationCredential.kind == "access_token",
+            )
+        )
+    ).scalar_one()
+    assert decrypt(native_credential.secret_ciphertext) == "lin_access_token_xyz"
+
+    native_audit = (
+        await db_session.execute(
+            select(NativeIntegrationAuditEvent).where(
+                NativeIntegrationAuditEvent.workspace_id == workspace_id,
+                NativeIntegrationAuditEvent.provider == "linear",
+            )
+        )
+    ).scalar_one()
+    assert native_audit.action == "native_integration.create"
+    assert native_audit.payload["scope"] == "read,write"
 
 
 @pytest.mark.asyncio

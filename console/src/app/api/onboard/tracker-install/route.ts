@@ -2,7 +2,7 @@
  * Onboarding step — kick off Linear or Notion OAuth, or skip the tracker
  * setup entirely.
  *
- * Form submits with `kind=linear|notion|github|skip`:
+ * Form submits with `kind=linear|notion|atlassian|github|skip`:
  *
  * - `linear` / `notion` — POST to backend `install/start` for the chosen
  *   vendor, then 303-redirect to the returned `install_url`. The vendor
@@ -20,6 +20,7 @@ import { NextResponse } from "next/server";
 import {
   ApiHttpError,
   ApiUnavailableError,
+  connectAtlassianApiToken,
   isApiConfigured,
   startLinearInstall,
   startNotionInstall,
@@ -40,7 +41,7 @@ export async function POST(request: Request) {
     return forward(origin, wsId);
   }
 
-  if (kind !== "linear" && kind !== "notion") {
+  if (kind !== "linear" && kind !== "notion" && kind !== "atlassian") {
     return wizardError(origin, wsId, "bad_kind");
   }
 
@@ -49,6 +50,22 @@ export async function POST(request: Request) {
   }
 
   try {
+    if (kind === "atlassian") {
+      const site = (form.get("site") ?? "").toString().trim();
+      const email = (form.get("email") ?? "").toString().trim();
+      const apiToken = (form.get("api_token") ?? "").toString();
+      const jiraProject = (form.get("jira_project") ?? "").toString().trim();
+      if (!site || !email || !apiToken) {
+        return wizardError(origin, wsId, "bad_atlassian_input");
+      }
+      await connectAtlassianApiToken(wsId, {
+        site,
+        email,
+        api_token: apiToken,
+        jira_project: jiraProject || null,
+      });
+      return forward(origin, wsId, { atlassian: "connected" });
+    }
     const start =
       kind === "linear"
         ? await startLinearInstall(wsId)
@@ -76,7 +93,11 @@ export async function POST(request: Request) {
   }
 }
 
-function forward(origin: string, wsId: string) {
+function forward(
+  origin: string,
+  wsId: string,
+  extra?: Record<string, string>,
+) {
   // Wave-8c: after the workspace-level tracker OAuth, drop the user
   // into the per-repo Confirm bootstrap step. That's where they
   // review the canonical Plays bundle, bind a tracker / push agent
@@ -84,6 +105,9 @@ function forward(origin: string, wsId: string) {
   const url = new URL("/onboarding", origin);
   url.searchParams.set("step", "confirm");
   url.searchParams.set("ws", wsId);
+  for (const [key, value] of Object.entries(extra ?? {})) {
+    url.searchParams.set(key, value);
+  }
   return NextResponse.redirect(url, 303);
 }
 
