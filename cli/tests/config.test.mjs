@@ -179,6 +179,58 @@ test("v2 config with a full lanes map validates cleanly", () => {
   assert.equal(res.ok, true, JSON.stringify(res.errors || []));
 });
 
+test("v2 process schema accepts agent profile, triggers, conditions, and routines", () => {
+  const cfg = DEFAULT_CONFIG();
+  cfg.process.states[0] = {
+    ...cfg.process.states[0],
+    specialist: {
+      id: "developer",
+      name: "Developer",
+      agent_profile: "cursor_agent",
+    },
+    triggers: [{ type: "event", event: "merge_request.ready", interval: null }],
+    exit_conditions: [{ expression: "implementation_complete == true" }],
+    block_conditions: [{ expression: "requires_human_input == true" }],
+  };
+  cfg.process.transitions = [
+    {
+      from: "task_intake",
+      to: "ba_requirements",
+      condition: "requirements_ready == true",
+    },
+  ];
+  cfg.process.routines = [
+    { id: "weekly_triage", name: "Weekly triage", cadence: "0 9 * * 1" },
+  ];
+
+  const res = validateConfig(cfg);
+  assert.equal(res.ok, true, JSON.stringify(res.errors || []));
+});
+
+test("v2 process schema rejects invalid agent profile, trigger, and routine", () => {
+  const badProfile = DEFAULT_CONFIG();
+  badProfile.process.states[0].specialist = {
+    id: "developer",
+    name: "Developer",
+    agent_profile: "teleport",
+  };
+  const profileResult = validateConfig(badProfile);
+  assert.equal(profileResult.ok, false);
+  assert.ok(profileResult.errors.some((e) => e.includes("specialist.agent_profile")));
+
+  const badTrigger = DEFAULT_CONFIG();
+  badTrigger.process.states[0].triggers = [{ type: "schedule", interval: "" }];
+  const triggerResult = validateConfig(badTrigger);
+  assert.equal(triggerResult.ok, false);
+  assert.ok(triggerResult.errors.some((e) => e.includes("triggers[0].interval")));
+
+  const badRoutine = DEFAULT_CONFIG();
+  badRoutine.process.routines = [{ id: "weekly_triage", name: "" }];
+  const routineResult = validateConfig(badRoutine);
+  assert.equal(routineResult.ok, false);
+  assert.ok(routineResult.errors.some((e) => e.includes("routines[0].name")));
+});
+
 test("v4 wizard seed lane shape validates cleanly", () => {
   const cfg = YAML.parse(`
 preset: default
