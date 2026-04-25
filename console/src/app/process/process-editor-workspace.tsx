@@ -1,11 +1,10 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import type {
   ApiProcess,
   ApiProcessState,
-  ApiProcessTransition,
   ApiRepoConfig,
 } from "@/lib/api/client";
 import { ProcessCanvasEditor, type Position } from "./process-canvas-editor";
@@ -28,6 +27,15 @@ export function ProcessEditorWorkspace({
 }) {
   const [states, setStates] = useState(process.states);
   const [transitions, setTransitions] = useState(process.transitions);
+  const [activeStateId, setActiveStateId] = useState(
+    selectedStateId ?? process.states[0]?.id,
+  );
+
+  useEffect(() => {
+    setStates(process.states);
+    setTransitions(process.transitions);
+    setActiveStateId(selectedStateId ?? process.states[0]?.id);
+  }, [process, selectedStateId]);
 
   const processDraft = useMemo<ApiProcess>(
     () => ({
@@ -49,7 +57,7 @@ export function ProcessEditorWorkspace({
   const dirty =
     JSON.stringify(processConfig) !== JSON.stringify(initialProcessConfig);
   const selectedState =
-    states.find((state) => state.id === selectedStateId) ?? states[0];
+    states.find((state) => state.id === activeStateId) ?? states[0];
 
   function updateState(nextState: ApiProcessState) {
     setStates((current) =>
@@ -74,6 +82,66 @@ export function ProcessEditorWorkspace({
     );
   }
 
+  function addState() {
+    const baseId = "new_state";
+    const nextId = uniqueStateId(baseId, states);
+    const selectedIndex = Math.max(
+      states.findIndex((state) => state.id === selectedState?.id),
+      0,
+    );
+    const anchor = selectedState ?? states[states.length - 1];
+    const nextState: ApiProcessState = {
+      id: nextId,
+      name: "New State",
+      specialist_id: "owner",
+      specialist_name: "Owner",
+      instructions: "Describe what should happen in this step.",
+      layout: {
+        x: (anchor?.layout?.x ?? 72) + 266,
+        y: anchor?.layout?.y ?? 170,
+      },
+      triggers: [{ type: "manual", interval: null, event: null }],
+      exit_conditions: [{ expression: "state_complete == true" }],
+      block_conditions: [{ expression: "requires_human_input == true" }],
+      runtime: {
+        task_count: 0,
+        blocked_count: 0,
+        last_execution_time: null,
+        health: "ok",
+      },
+    };
+    setStates((current) => [
+      ...current.slice(0, selectedIndex + 1),
+      nextState,
+      ...current.slice(selectedIndex + 1),
+    ]);
+    if (selectedState) {
+      const nextTransition = {
+        id: transitionId(selectedState.id, nextState.id, transitions.length),
+        from_state_id: selectedState.id,
+        to_state_id: nextState.id,
+        conditions: [{ expression: "exit_conditions_met == true" }],
+      };
+      setTransitions((current) => [...current, nextTransition]);
+    }
+    setActiveStateId(nextState.id);
+  }
+
+  function deleteState(stateId: string) {
+    if (states.length <= 1) return;
+    const index = states.findIndex((state) => state.id === stateId);
+    const fallback =
+      states[index + 1]?.id ?? states[index - 1]?.id ?? states[0]?.id;
+    setStates((current) => current.filter((state) => state.id !== stateId));
+    setTransitions((current) =>
+      current.filter(
+        (transition) =>
+          transition.from_state_id !== stateId && transition.to_state_id !== stateId,
+      ),
+    );
+    setActiveStateId(fallback);
+  }
+
   return (
     <section className="grid min-h-[calc(100vh-180px)] grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
       <div className="space-y-3">
@@ -91,7 +159,9 @@ export function ProcessEditorWorkspace({
           <div>
             <div className="text-xs font-bold text-white">Process draft</div>
             <div className="mt-0.5 text-xs text-white/45">
-              State settings, transitions, and canvas layout save together.
+              {dirty
+                ? "Unsaved changes will be proposed together."
+                : "State settings, transitions, and canvas layout save together."}
             </div>
           </div>
           <button
@@ -105,7 +175,7 @@ export function ProcessEditorWorkspace({
         <ProcessCanvasEditor
           process={processDraft}
           selectedStateId={selectedState?.id}
-          repoId={repoId}
+          onSelectState={setActiveStateId}
           onPositionsChange={updatePositions}
         />
       </div>
@@ -117,14 +187,23 @@ export function ProcessEditorWorkspace({
         config={config}
         onStateChange={updateState}
         onTransitionsChange={setTransitions}
+        onAddState={addState}
+        onDeleteState={deleteState}
       />
     </section>
   );
 }
 
-export function makeTransitionId(
-  transition: Pick<ApiProcessTransition, "from_state_id" | "to_state_id">,
-  index: number,
-) {
-  return `${transition.from_state_id}_to_${transition.to_state_id}_${index + 1}`;
+function uniqueStateId(baseId: string, states: ApiProcessState[]) {
+  const existing = new Set(states.map((state) => state.id));
+  if (!existing.has(baseId)) return baseId;
+  for (let index = 2; index < 1000; index += 1) {
+    const candidate = `${baseId}_${index}`;
+    if (!existing.has(candidate)) return candidate;
+  }
+  return `${baseId}_${Date.now()}`;
+}
+
+function transitionId(fromStateId: string, toStateId: string, index: number) {
+  return `${fromStateId}_to_${toStateId}_${index + 1}`;
 }

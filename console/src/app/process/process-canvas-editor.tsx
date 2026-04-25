@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
@@ -33,15 +32,14 @@ type DragState = {
 export function ProcessCanvasEditor({
   process,
   selectedStateId,
-  repoId,
+  onSelectState,
   onPositionsChange,
 }: {
   process: ApiProcess;
   selectedStateId?: string;
-  repoId?: string;
+  onSelectState: (stateId: string) => void;
   onPositionsChange: (positions: Record<string, Position>) => void;
 }) {
-  const router = useRouter();
   const arrowMarkerId = `process-arrow-${useId().replaceAll(":", "")}`;
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
@@ -198,9 +196,7 @@ export function ProcessCanvasEditor({
       suppressClickRef.current = false;
       return;
     }
-    const params = new URLSearchParams({ state: stateId });
-    if (repoId) params.set("repo", repoId);
-    router.push(`/process?${params.toString()}`);
+    onSelectState(stateId);
   }
 
   return (
