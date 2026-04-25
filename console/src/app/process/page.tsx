@@ -124,12 +124,10 @@ function renderProcessPage({
       <div className="space-y-4">
         <ProcessHero process={process} />
         <AdapterDiagnostics diagnostics={process.adapter_diagnostics} />
-        <section className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.45fr)_420px]">
-          <div className="space-y-4">
-            <ProcessCanvas process={process} selectedStateId={selectedState?.id} />
-            <RoutinesPanel process={process} />
-          </div>
+        <ProcessCanvas process={process} selectedStateId={selectedState?.id} />
+        <section className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
           <StateDetails state={selectedState} tasks={selectedTasks} />
+          <RoutinesPanel process={process} />
         </section>
       </div>
     </AppShell>
@@ -174,23 +172,25 @@ function ProcessCanvas({
     <Card>
       <CardHeader
         title="Development FSM"
-        subtitle="Linear MVP layout. Each node is a state with runtime overlay."
+        subtitle="Responsive process map. States wrap so the full flow stays visible."
       />
-      <div className="overflow-x-auto pb-2">
-        <div className="flex min-w-max items-stretch gap-3">
-          {process.states.map((state, index) => (
-            <div key={state.id} className="flex items-center gap-3">
-              <StateNode state={state} selected={state.id === selectedStateId} />
-              {index < process.states.length - 1 && (
-                <div className="flex items-center gap-2 text-white/30">
-                  <div className="h-px w-10 bg-white/20" />
-                  <span className="text-xs">→</span>
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-4">
+        {process.states.map((state, index) => (
+          <StateNode
+            key={state.id}
+            state={state}
+            selected={state.id === selectedStateId}
+            step={index + 1}
+            nextName={process.states[index + 1]?.name}
+          />
+        ))}
       </div>
+      {process.states.length > 4 && (
+        <p className="mt-3 text-xs text-white/45">
+          Large processes wrap into additional rows. Use the state detail panel
+          below to inspect rules and current tasks.
+        </p>
+      )}
     </Card>
   );
 }
@@ -198,15 +198,19 @@ function ProcessCanvas({
 function StateNode({
   state,
   selected,
+  step,
+  nextName,
 }: {
   state: ApiProcessState;
   selected: boolean;
+  step: number;
+  nextName?: string;
 }) {
   return (
     <Link
       href={`/process?state=${encodeURIComponent(state.id)}`}
       className={[
-        "block w-64 rounded-2xl border p-4 transition",
+        "block min-h-[188px] rounded-2xl border p-4 transition",
         selected
           ? "border-aqua/60 bg-aqua/[0.08] shadow-glow"
           : "border-white/10 bg-white/[0.035] hover:border-white/25 hover:bg-white/[0.06]",
@@ -214,7 +218,10 @@ function StateNode({
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="truncate font-display text-base font-bold text-white">
+          <div className="text-[10px] font-semibold uppercase tracking-wide text-white/35">
+            Step {step}
+          </div>
+          <div className="mt-1 truncate font-display text-base font-bold text-white">
             {state.name}
           </div>
           <div className="mt-1 truncate text-xs text-white/55">
@@ -240,6 +247,15 @@ function StateNode({
             ? formatDate(state.runtime.last_execution_time)
             : "not tracked"}
         </span>
+      </div>
+      <div className="mt-3 border-t border-white/10 pt-2 text-[11px] text-white/40">
+        {nextName ? (
+          <>
+            Next: <span className="text-white/65">{nextName}</span>
+          </>
+        ) : (
+          <span>Terminal state</span>
+        )}
       </div>
     </Link>
   );
