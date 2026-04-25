@@ -2300,6 +2300,7 @@ export interface ApiLaneTriggerIn {
 
 export interface ApiRepoConfigProposeIn {
   lanes: Record<string, ApiLaneTriggerIn>;
+  process?: unknown;
   base_sha: string | null;
   change_summary?: string;
   preset?: string | null;

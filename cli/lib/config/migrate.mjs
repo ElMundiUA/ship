@@ -132,6 +132,10 @@ export function migrateV1ToV2(input) {
     out.agent.default.provider = liftedProvider;
   }
 
+  if (!out.process || typeof out.process !== "object" || Array.isArray(out.process)) {
+    out.process = defaultDevelopmentProcess();
+  }
+
   /* lanes: translate from the legacy list-of-strings shape. */
   out.lanes = {};
   const srcLanes = src.lanes;
@@ -176,6 +180,28 @@ export function migrateV1ToV2(input) {
     config: out,
     warnings,
     stub_lanes: stubLanes,
+  };
+}
+
+function defaultDevelopmentProcess() {
+  return {
+    id: "development",
+    name: "Development Process",
+    primary: true,
+    states: [
+      { id: "task_intake", name: "Intake", specialist: { id: "intake", name: "Intake specialist" } },
+      { id: "ba_requirements", name: "Requirements", specialist: { id: "business_analyst", name: "Business analyst" } },
+      { id: "dev_implementation", name: "Implementation", specialist: { id: "developer", name: "Developer" } },
+      { id: "qa_manual", name: "Quality Review", specialist: { id: "qa_engineer", name: "QA engineer" } },
+      { id: "pr_review", name: "Final Review", specialist: { id: "review_owner", name: "Review owner" } },
+    ],
+    transitions: [
+      { from: "task_intake", to: "ba_requirements" },
+      { from: "ba_requirements", to: "dev_implementation" },
+      { from: "dev_implementation", to: "qa_manual" },
+      { from: "qa_manual", to: "pr_review" },
+    ],
+    routines: [],
   };
 }
 

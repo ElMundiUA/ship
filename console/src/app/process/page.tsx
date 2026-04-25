@@ -5,6 +5,7 @@ import { AppShell } from "@/components/app-shell";
 import { Badge, Card, CardHeader, MockBanner } from "@/components/ui";
 import {
   type ProcessConfigSource,
+  processConfigFromApiProcess,
   processFromRepoConfig,
   selectConfigSource,
 } from "./process-config";
@@ -183,7 +184,13 @@ function renderProcessPage({
               editMode={true}
               repoId={selectedRepo?.id}
             />
-            <StateEditor state={selectedState} config={config ?? null} />
+            <StateEditor
+              workspaceId={workspace.id}
+              repoId={selectedRepo?.id}
+              state={selectedState}
+              config={config ?? null}
+              processConfig={processConfigFromApiProcess(process)}
+            />
           </section>
         )}
       </div>

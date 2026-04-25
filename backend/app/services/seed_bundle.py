@@ -260,6 +260,7 @@ def compose_seed_files(
         preset_id="default",
         repo_full_name=repo_full_name,
         lanes=default_seed_lanes(),
+        process=catalog_service.default_development_process_config(),
     )
     _add(CONFIG_PATH, config_yaml)
 
