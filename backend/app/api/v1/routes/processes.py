@@ -435,7 +435,7 @@ def _specialists() -> dict[str, ProcessSpecialistOut]:
             capabilities=["qa", "test_plans", "regression"],
         ),
         ProcessSpecialistOut(
-            id="code_reviewer",
+            id="review_owner",
             name="Review owner",
             role="Reviews completed work for correctness, scope, and maintainability.",
             capabilities=["review", "ci_triage", "risk_review"],
@@ -462,7 +462,7 @@ def _specialist_for_lane(lane_id: str) -> str:
     if "qa" in lane_id or "test" in lane_id:
         return "qa_engineer"
     if "review" in lane_id or "pr" in lane_id:
-        return "code_reviewer"
+        return "review_owner"
     return "devops_platform"
 
 
@@ -612,7 +612,7 @@ def _default_states(
         ("tech_arch_plan", "technical_architect"),
         ("dev_implementation", "developer"),
         ("qa_manual", "qa_engineer"),
-        ("pr_review", "code_reviewer"),
+        ("pr_review", "review_owner"),
     ]
     return [
         ProcessStateOut(
