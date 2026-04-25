@@ -2946,6 +2946,22 @@ export function connectAzureDevOpsPat(
   );
 }
 
+export function connectGitLabPat(
+  workspaceId: string,
+  input: {
+    host: string;
+    group?: string | null;
+    pat: string;
+    scopes?: string[];
+  },
+  token?: string,
+): Promise<ApiNativeIntegration> {
+  return apiFetch<ApiNativeIntegration>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/native-integrations/gitlab/pat`,
+    { method: "POST", body: input, token },
+  );
+}
+
 // --- Artifact repos --------------------------------------------------------
 
 export function listArtifactRepos(
