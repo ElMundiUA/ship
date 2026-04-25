@@ -75,6 +75,7 @@ export function processFromRepoConfig(
     ...fallback,
     id: stringValue(rawProcess.id) ?? fallback.id,
     name: stringValue(rawProcess.name) ?? fallback.name,
+    primary: booleanValue(rawProcess.primary) ?? fallback.primary,
     state_count: states.length,
     states,
     transitions: transitionsFromConfig,
@@ -85,7 +86,7 @@ export function processConfigFromApiProcess(process: ApiProcess): Record<string,
   return {
     id: process.id,
     name: process.name,
-    primary: process.id === "development",
+    primary: process.primary,
     states: process.states.map((state) => ({
       id: state.id,
       name: state.name,
@@ -216,6 +217,10 @@ function stringValue(value: unknown): string | undefined {
 
 function numberValue(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function booleanValue(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
 }
 
 function titleFromId(value: string): string {
