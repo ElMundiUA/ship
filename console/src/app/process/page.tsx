@@ -113,7 +113,6 @@ function renderProcessPage({
       title="Process"
       kicker={workspace.slug}
       workspace={{ id: workspace.id, name: workspace.name, slug: workspace.slug }}
-      wide
       actions={
         <>
           <Link

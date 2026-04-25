@@ -197,7 +197,6 @@ export function AppShell({
   scope,
   scopePill,
   me,
-  wide = false,
 }: {
   children: ReactNode;
   title: string;
@@ -205,7 +204,6 @@ export function AppShell({
   actions?: ReactNode;
   workspace?: AppShellWorkspace;
   scope?: AppShellScope;
-  wide?: boolean;
   /**
    * Phase 4: optional scope filter for the header. Pages that care
    * about scope (e.g. ``/knowledge``) pass the pill pre-rendered
@@ -252,7 +250,7 @@ export function AppShell({
 
   return (
     <div className="min-h-screen bg-ink text-mist">
-      <div className={cn("mx-auto flex gap-0", wide ? "max-w-none" : "max-w-[1480px]")}>
+      <div className="flex w-full gap-0">
         {/* sidebar */}
         <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-white/10 bg-black/30 backdrop-blur-xl lg:flex">
           <div className="border-b border-white/10 px-4 py-5">
