@@ -153,6 +153,9 @@ from backend.app.db.models.inbox import (
 )
 from backend.app.db.models.integrations import (
     GitHubInstallation,
+    NativeIntegrationCredential,
+    NativeIntegrationInstallation,
+    NativeIntegrationProvider,
     WorkspaceRepo,
 )
 from backend.app.db.models.lanes import Lane
@@ -179,6 +182,7 @@ from backend.app.integrations.gateway.tracker import (
 )
 from backend.app.integrations.github.code_host_adapter import GitHubCodeHost
 from backend.app.integrations.github.issues_tracker import GitHubIssuesTracker
+from backend.app.integrations.jira.tracker_adapter import JiraTracker
 from backend.app.integrations.linear.tracker_adapter import LinearTracker
 from backend.app.integrations.notion.tracker_adapter import NotionTracker
 from backend.app.security.encryption import decrypt
@@ -462,7 +466,7 @@ class ToolBox:
                 name="create_ticket",
                 description=(
                     "Open a ticket on the workspace's connected tracker "
-                    "(Linear, Notion, or GitHub Issues). Only call when "
+                    "(Linear, Notion, Jira, or GitHub Issues). Only call when "
                     "the user has explicitly asked to track work or you "
                     "have their confirmation — never autofile."
                 ),
@@ -471,7 +475,7 @@ class ToolBox:
                     "properties": {
                         "tracker": {
                             "type": "string",
-                            "enum": ["linear", "notion", "github_issues"],
+                            "enum": ["linear", "notion", "jira", "github_issues"],
                             "description": (
                                 "Which tracker to post to. If the workspace "
                                 "has only one configured tracker, omit and "
@@ -491,7 +495,7 @@ class ToolBox:
                             "type": "string",
                             "description": (
                                 "Linear team key or UUID / Notion database id / "
-                                "GitHub owner/repo. Omit for single-target "
+                                "Jira project key / GitHub owner/repo. Omit for single-target "
                                 "workspaces."
                             ),
                         },
@@ -669,7 +673,7 @@ class ToolBox:
                 name="list_tickets",
                 description=(
                     "Read the most-recently-updated tickets from the "
-                    "workspace's connected tracker (Linear / Notion / "
+                    "workspace's connected tracker (Linear / Notion / Jira / "
                     "GitHub Issues). Use to answer 'what's on my plate?' "
                     "or 'does a ticket already exist for X?' before "
                     "considering ``create_ticket``. Supports coarse "
@@ -682,7 +686,7 @@ class ToolBox:
                     "properties": {
                         "tracker": {
                             "type": "string",
-                            "enum": ["linear", "notion", "github_issues"],
+                            "enum": ["linear", "notion", "jira", "github_issues"],
                             "description": (
                                 "Which tracker to query. Omit when the "
                                 "workspace only has one configured."
@@ -692,8 +696,8 @@ class ToolBox:
                             "type": "string",
                             "description": (
                                 "Forwarded to the tracker for GitHub "
-                                "Issues (``owner/repo``); usually "
-                                "unnecessary for Linear/Notion."
+                                "Issues (``owner/repo``), Jira project key, "
+                                "or Notion database id."
                             ),
                         },
                         "state": {
@@ -4070,8 +4074,31 @@ class ToolBox:
             )
         ).scalars().all()
         for row in integrations:
-            if row.kind in {"linear", "notion"} and row.secret_ciphertext:
+            if row.kind in {"linear", "notion", "jira"} and row.secret_ciphertext:
                 candidates[row.kind] = row
+
+        native_atlassian = (
+            await self._session.execute(
+                select(NativeIntegrationInstallation).where(
+                    NativeIntegrationInstallation.workspace_id == self._workspace_id,
+                    NativeIntegrationInstallation.provider
+                    == NativeIntegrationProvider.ATLASSIAN,
+                    NativeIntegrationInstallation.disabled_at.is_(None),
+                )
+            )
+        ).scalars().first()
+        native_atlassian_credential: NativeIntegrationCredential | None = None
+        if native_atlassian is not None:
+            native_atlassian_credential = (
+                await self._session.execute(
+                    select(NativeIntegrationCredential).where(
+                        NativeIntegrationCredential.installation_id
+                        == native_atlassian.id,
+                        NativeIntegrationCredential.kind == "api_token",
+                        NativeIntegrationCredential.revoked_at.is_(None),
+                    )
+                )
+            ).scalar_one_or_none()
 
         # Any activated repo gives us a GitHub Issues target without
         # a dedicated Integration row — the App installation token
@@ -4086,6 +4113,8 @@ class ToolBox:
         ).scalar_one_or_none() is not None
 
         available = set(candidates)
+        if native_atlassian_credential is not None:
+            available.add("jira")
         if has_github_install:
             available.add("github_issues")
 
@@ -4102,7 +4131,27 @@ class ToolBox:
                 f"multiple trackers available ({sorted(available)}); pass tracker="
             )
 
-        if chosen in {"linear", "notion"}:
+        if chosen in {"linear", "notion", "jira"}:
+            if chosen == "jira" and native_atlassian_credential is not None:
+                try:
+                    token = decrypt(native_atlassian_credential.secret_ciphertext)
+                except Exception as exc:  # noqa: BLE001
+                    raise ToolInvocationError(
+                        "Atlassian token is unreadable; rotate the integration."
+                    ) from exc
+                config = native_atlassian.config or {}
+                site_url = str(config.get("site_url") or "").strip()
+                email = str(config.get("email") or "").strip()
+                if not site_url or not email:
+                    raise ToolInvocationError(
+                        "Atlassian integration is missing site_url/email config."
+                    )
+                return JiraTracker(
+                    site_url=site_url,
+                    email=email,
+                    api_token=token,
+                    default_project=config.get("jira_project"),
+                )
             row = candidates[chosen]
             try:
                 token = decrypt(row.secret_ciphertext or b"")
@@ -4112,6 +4161,21 @@ class ToolBox:
                 ) from exc
             if chosen == "linear":
                 return LinearTracker(token)
+            if chosen == "jira":
+                config = row.config or {}
+                host = str(config.get("host") or config.get("site") or "").strip()
+                email = str(config.get("user") or config.get("email") or "").strip()
+                if not host or not email:
+                    raise ToolInvocationError(
+                        "Jira integration is missing host and user/email config."
+                    )
+                site_url = host if host.startswith("http") else f"https://{host}"
+                return JiraTracker(
+                    site_url=site_url,
+                    email=email,
+                    api_token=token,
+                    default_project=config.get("project"),
+                )
             return NotionTracker(token)
 
         # GitHub Issues path.
@@ -7443,6 +7507,8 @@ def _tracker_kind_of(tracker: TrackerGateway) -> str:
         return "linear"
     if isinstance(tracker, NotionTracker):
         return "notion"
+    if isinstance(tracker, JiraTracker):
+        return "jira"
     if isinstance(tracker, GitHubIssuesTracker):
         return "github_issues"
     return "unknown"

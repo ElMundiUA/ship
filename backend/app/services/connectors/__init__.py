@@ -142,6 +142,7 @@ def _ensure_loaded() -> None:
     for module in (
         "backend.app.services.connectors.notion",
         "backend.app.services.connectors.linear",
+        "backend.app.services.connectors.confluence",
     ):
         try:
             importlib.import_module(module)

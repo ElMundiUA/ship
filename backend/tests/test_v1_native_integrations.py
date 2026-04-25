@@ -87,6 +87,7 @@ async def test_admin_can_connect_atlassian_api_token(
         NativeIntegrationCredential,
         NativeIntegrationInstallation,
     )
+    from backend.app.db.models.tenancy import Integration
     from backend.app.security.encryption import decrypt
 
     _, raw, workspace = seed_workspace
@@ -124,3 +125,12 @@ async def test_admin_can_connect_atlassian_api_token(
     assert credential.kind == "api_token"
     assert credential.installation_id == installation.id
     assert decrypt(credential.secret_ciphertext) == "atlassian_secret"
+
+    confluence = (
+        await db_session.execute(
+            select(Integration).where(Integration.kind == "confluence")
+        )
+    ).scalar_one()
+    assert confluence.config["site_url"] == "https://acme.atlassian.net"
+    assert confluence.config["email"] == "owner@example.com"
+    assert decrypt(confluence.secret_ciphertext) == "atlassian_secret"

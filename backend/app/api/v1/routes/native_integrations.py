@@ -22,6 +22,7 @@ from backend.app.db.models.integrations import (
     NativeIntegrationProvider,
     NativeIntegrationStatus,
 )
+from backend.app.db.models.tenancy import Integration
 from backend.app.db.session import get_session
 from backend.app.security.encryption import encrypt
 
@@ -378,6 +379,37 @@ async def upsert_atlassian_api_token(
     credential.last_rotated_at = now
     credential.revoked_at = None
     credential.updated_at = now
+
+    confluence_row = (
+        await session.execute(
+            select(Integration).where(
+                Integration.workspace_id == workspace_id,
+                Integration.kind == "confluence",
+                Integration.repo_id.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if confluence_row is None:
+        confluence_row = Integration(
+            workspace_id=workspace_id,
+            kind="confluence",
+            config={
+                "site": host,
+                "site_url": site_url,
+                "email": email,
+            },
+            status="ok",
+        )
+        session.add(confluence_row)
+    else:
+        merged = dict(confluence_row.config or {})
+        merged.update({"site": host, "site_url": site_url, "email": email})
+        confluence_row.config = merged
+        confluence_row.status = "ok"
+    confluence_row.secret_ciphertext = encrypt(payload.api_token)
+    confluence_row.last_health_at = now
+    confluence_row.last_health_error = None
+    confluence_row.updated_at = now
 
     session.add(
         NativeIntegrationAuditEvent(
