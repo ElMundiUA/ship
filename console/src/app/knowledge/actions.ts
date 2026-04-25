@@ -16,6 +16,7 @@ import {
   createBucket,
   createConnectorBucket,
   listWorkspaces,
+  syncConnectorBucket,
 } from "@/lib/api/client";
 import type { ApiBucketScope } from "@/lib/api/types";
 import { getSessionToken } from "@/lib/api/session";
@@ -46,7 +47,10 @@ export type GuidedImportItem = {
 };
 
 export type GuidedImportResult =
-  | { ok: true; created: { slug: string; title: string }[] }
+  | {
+      ok: true;
+      created: { slug: string; title: string; synced: boolean; syncError?: string }[];
+    }
   | { ok: false; message: string; status?: number };
 
 const GUIDED_IMPORT_MAX_BUCKETS = 20;
@@ -195,7 +199,7 @@ export async function createGuidedImportAction(
     };
   }
 
-  const created: { slug: string; title: string }[] = [];
+  const created: { slug: string; title: string; synced: boolean; syncError?: string }[] = [];
   for (const item of input.items) {
     const title = item.title.trim();
     if (!title) return { ok: false, message: "Every import row needs a title." };
@@ -215,7 +219,20 @@ export async function createGuidedImportAction(
         },
         { token },
       );
-      created.push({ slug: bucket.slug, title });
+      try {
+        await syncConnectorBucket(workspaceId, bucket.slug, token);
+        created.push({ slug: bucket.slug, title, synced: true });
+      } catch (syncErr) {
+        const syncError =
+          syncErr instanceof ApiHttpError
+            ? typeof syncErr.detail === "string"
+              ? syncErr.detail
+              : syncErr.message
+            : syncErr instanceof Error
+              ? syncErr.message
+              : String(syncErr);
+        created.push({ slug: bucket.slug, title, synced: false, syncError });
+      }
     } catch (err) {
       if (err instanceof ApiHttpError) {
         const detail =
