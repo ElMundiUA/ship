@@ -26,6 +26,8 @@ export function ProcessEditorWorkspace({
   repoId?: string;
   config: ApiRepoConfig | null;
 }) {
+  const [processName, setProcessName] = useState(process.name);
+  const [processPrimary, setProcessPrimary] = useState(process.primary);
   const [states, setStates] = useState(process.states);
   const [transitions, setTransitions] = useState(process.transitions);
   const [activeStateId, setActiveStateId] = useState(
@@ -33,6 +35,8 @@ export function ProcessEditorWorkspace({
   );
 
   useEffect(() => {
+    setProcessName(process.name);
+    setProcessPrimary(process.primary);
     setStates(process.states);
     setTransitions(process.transitions);
     setActiveStateId(initialActiveStateId(process.states, selectedStateId));
@@ -41,11 +45,13 @@ export function ProcessEditorWorkspace({
   const processDraft = useMemo<ApiProcess>(
     () => ({
       ...process,
+      name: processName.trim() || process.name,
+      primary: processPrimary,
       state_count: states.length,
       states,
       transitions,
     }),
-    [process, states, transitions],
+    [process, processName, processPrimary, states, transitions],
   );
   const processConfig = useMemo(
     () => processConfigFromApiProcess(processDraft),
@@ -58,8 +64,8 @@ export function ProcessEditorWorkspace({
   const dirty =
     JSON.stringify(processConfig) !== JSON.stringify(initialProcessConfig);
   const draftSummary = useMemo(
-    () => summarizeDraftChanges(process, states, transitions),
-    [process, states, transitions],
+    () => summarizeDraftChanges(process, processDraft, states, transitions),
+    [process, processDraft, states, transitions],
   );
   const selectedState =
     states.find((state) => state.id === activeStateId) ?? states[0];
@@ -75,6 +81,8 @@ export function ProcessEditorWorkspace({
   }
 
   function resetDraft() {
+    setProcessName(process.name);
+    setProcessPrimary(process.primary);
     setStates(process.states);
     setTransitions(process.transitions);
     setActiveStateId(initialActiveStateId(process.states, selectedStateId));
@@ -235,6 +243,42 @@ export function ProcessEditorWorkspace({
             </button>
           </div>
         </form>
+        <div className="grid gap-3 rounded-2xl border border-white/10 bg-white/[0.035] p-4 md:grid-cols-[minmax(0,1fr)_220px]">
+          <label className="block">
+            <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/45">
+              Process name
+            </span>
+            <input
+              value={processName}
+              onChange={(event) => setProcessName(event.target.value)}
+              placeholder="Development Process"
+              className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none focus:border-aqua/40"
+            />
+            <span className="mt-1 block text-xs text-white/40">
+              Saved as <code className="font-mono">process.name</code> in the repo
+              config.
+            </span>
+          </label>
+          <div className="rounded-xl border border-white/10 bg-black/10 p-3">
+            <div className="text-[10px] font-bold uppercase tracking-widest text-white/45">
+              Process role
+            </div>
+            <label className="mt-3 flex items-start gap-2 text-sm text-white/75">
+              <input
+                type="checkbox"
+                checked={processPrimary}
+                onChange={(event) => setProcessPrimary(event.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-white/20 bg-white/[0.04] accent-aqua"
+              />
+              <span>
+                Primary process
+                <span className="mt-1 block text-xs text-white/40">
+                  Opens by default when this repo has multiple processes.
+                </span>
+              </span>
+            </label>
+          </div>
+        </div>
         <ProcessCanvasEditor
           process={processDraft}
           selectedStateId={selectedState?.id}
@@ -301,6 +345,7 @@ function initialActiveStateId(
 
 function summarizeDraftChanges(
   initialProcess: ApiProcess,
+  draftProcess: ApiProcess,
   states: ApiProcessState[],
   transitions: ApiProcess["transitions"],
 ) {
@@ -322,8 +367,12 @@ function summarizeDraftChanges(
   const transitionsChanged =
     transitionFingerprint(initialProcess.transitions) !==
     transitionFingerprint(transitions);
+  const processSettingsChanged =
+    initialProcess.name !== draftProcess.name ||
+    initialProcess.primary !== draftProcess.primary;
 
   const parts = [
+    processSettingsChanged ? "process settings changed" : null,
     addedStates ? pluralize(addedStates, "state added", "states added") : null,
     removedStates
       ? pluralize(removedStates, "state removed", "states removed")
