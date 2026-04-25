@@ -67,10 +67,8 @@ function buildWorkspaceNav(): NavGroup[] {
       section: "Workspace",
       items: [
         { href: "/", label: "Home", icon: <DotIcon /> },
+        { href: "/process", label: "Process", icon: <DotIcon /> },
         { href: "/inbox", label: "Inbox", icon: <DotIcon /> },
-        { href: "/plays", label: "Plays", icon: <DotIcon /> },
-        { href: "/automations", label: "Automations", icon: <DotIcon /> },
-        { href: "/runs", label: "Runs", icon: <DotIcon /> },
         { href: "/fleet/knowledge", label: "Knowledge", icon: <DotIcon /> },
       ],
     },

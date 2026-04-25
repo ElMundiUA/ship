@@ -68,7 +68,7 @@ function SystemStatusCard({ summary }: { summary: ApiOpsDashboard }) {
       </div>
       <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
         <StatusMetric
-          label="Failing pipelines"
+          label="Failed executions"
           value={status.failing_pipelines_count}
           tone={status.failing_pipelines_count > 0 ? "err" : "ok"}
         />
@@ -78,7 +78,7 @@ function SystemStatusCard({ summary }: { summary: ApiOpsDashboard }) {
           tone={status.stuck_prs_count > 0 ? "warn" : "ok"}
         />
         <StatusMetric
-          label="Broken automations"
+          label="Process issues"
           value={status.broken_automations_count}
           tone={status.broken_automations_count > 0 ? "err" : "ok"}
         />
@@ -251,7 +251,7 @@ function AutomationHealthCard({ summary }: { summary: ApiOpsDashboard }) {
   return (
     <Card>
       <CardHeader
-        title="Automation Health"
+        title="Process Health"
         subtitle="Last 24h execution and intervention signals."
       />
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-2">
@@ -267,7 +267,7 @@ function AutomationHealthCard({ summary }: { summary: ApiOpsDashboard }) {
           label="Success rate"
           value={
             health.success_rate === null
-              ? "No runs"
+              ? "No executions"
               : formatPercent(health.success_rate)
           }
           tone={health.success_rate !== null && health.success_rate < 0.8 ? "warn" : "ok"}

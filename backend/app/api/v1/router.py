@@ -45,6 +45,7 @@ from backend.app.api.v1.routes import (
     notifications,
     notion_oauth,
     pipelines,
+    processes,
     plays,
     policies,
     repo_home,
@@ -105,6 +106,7 @@ api_router.include_router(notion_oauth.router)
 # no workspace prefix).
 api_router.include_router(pipelines.router)
 api_router.include_router(pipelines.public_router)
+api_router.include_router(processes.router)
 api_router.include_router(dashboard.router)
 # Per-repo Home rollup (RFC-0008 §F — PR-4) — a single snapshot the
 # /r/<slug> page renders as Now + Trends tabs without fanning out to

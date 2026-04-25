@@ -1739,6 +1739,161 @@ export interface ApiOpsDashboard {
   suggested_actions: ApiOpsSuggestedAction[];
 }
 
+// --- Process orchestration ---------------------------------------------------
+
+export type ApiProcessHealth = "ok" | "degraded" | "failed";
+export type ApiProcessTaskStatus = "active" | "blocked" | "done";
+export type ApiProcessLinkType =
+  | "handoff"
+  | "dependency"
+  | "approval"
+  | "notification";
+
+export interface ApiProcessCondition {
+  expression: string;
+}
+
+export interface ApiProcessTrigger {
+  type: "schedule" | "event" | "manual";
+  interval: string | null;
+  event: string | null;
+}
+
+export interface ApiProcessStateRuntime {
+  task_count: number;
+  blocked_count: number;
+  last_execution_time: string | null;
+  health: ApiProcessHealth;
+}
+
+export interface ApiProcessState {
+  id: string;
+  name: string;
+  specialist_id: string;
+  specialist_name: string;
+  instructions: string;
+  triggers: ApiProcessTrigger[];
+  exit_conditions: ApiProcessCondition[];
+  block_conditions: ApiProcessCondition[];
+  runtime: ApiProcessStateRuntime;
+}
+
+export interface ApiProcessTransition {
+  id: string;
+  from_state_id: string;
+  to_state_id: string;
+  conditions: ApiProcessCondition[];
+}
+
+export interface ApiProcessSpecialist {
+  id: string;
+  name: string;
+  role: string;
+  capabilities: string[];
+  agent_profile: string;
+}
+
+export interface ApiProcessTask {
+  id: string;
+  title: string;
+  state_id: string;
+  status: ApiProcessTaskStatus;
+  last_updated: string | null;
+  context: Record<string, unknown>;
+  blockers: string[];
+}
+
+export interface ApiProcessRoutine {
+  id: string;
+  name: string;
+  specialist_id: string;
+  specialist_name: string;
+  schedule: string | null;
+  instructions: string;
+  last_run: string | null;
+  status: string | null;
+}
+
+export interface ApiProcessLink {
+  id: string;
+  from_process_id: string;
+  from_state_id: string | null;
+  to_process_id: string;
+  to_state_id: string | null;
+  type: ApiProcessLinkType;
+  conditions: ApiProcessCondition[];
+}
+
+export interface ApiProcessGraph {
+  links: ApiProcessLink[];
+}
+
+export interface ApiProcessSummary {
+  id: string;
+  name: string;
+  primary: boolean;
+  state_count: number;
+  task_count: number;
+  blocked_count: number;
+  health: ApiProcessHealth;
+}
+
+export interface ApiProcessAdapterDiagnostic {
+  kind: "tracker" | "runner" | "agent";
+  name: string;
+  status: "ok" | "degraded" | "not_configured" | "unknown";
+  message: string;
+  capabilities: string[];
+}
+
+export interface ApiProcessList {
+  primary_process_id: string;
+  processes: ApiProcessSummary[];
+  process_graph: ApiProcessGraph;
+  adapter_diagnostics: ApiProcessAdapterDiagnostic[];
+}
+
+export interface ApiProcess extends ApiProcessSummary {
+  specialists: ApiProcessSpecialist[];
+  states: ApiProcessState[];
+  transitions: ApiProcessTransition[];
+  tasks: ApiProcessTask[];
+  routines: ApiProcessRoutine[];
+  process_graph: ApiProcessGraph;
+  adapter_diagnostics: ApiProcessAdapterDiagnostic[];
+}
+
+export function listProcesses(
+  workspaceId: string,
+  token?: string,
+): Promise<ApiProcessList> {
+  return apiFetch<ApiProcessList>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/processes`,
+    { token },
+  );
+}
+
+export function getProcess(
+  workspaceId: string,
+  processId: string,
+  token?: string,
+): Promise<ApiProcess> {
+  return apiFetch<ApiProcess>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/processes/${encodeURIComponent(processId)}`,
+    { token },
+  );
+}
+
+export function getProcessAdapters(
+  workspaceId: string,
+  token?: string,
+): Promise<ApiProcessAdapterDiagnostic[]> {
+  return apiFetch<ApiProcessAdapterDiagnostic[]>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/processes/adapters`,
+    { token },
+  );
+}
+
 export function listPipelines(
   workspaceId: string,
   token?: string,
