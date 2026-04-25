@@ -155,6 +155,13 @@ const NATIVE_CATALOG = [
     body:
       "Connect one Atlassian Cloud site. Jira handles corporate tickets; Confluence feeds curated knowledge buckets.",
   },
+  {
+    id: "azure_devops",
+    name: "Azure DevOps",
+    group: "Code host + Orchestrator",
+    body:
+      "Connect a corporate Azure DevOps organization with a PAT for Repos and Pipelines access.",
+  },
 ];
 
 async function load(): Promise<Mode> {
@@ -346,7 +353,11 @@ export default async function IntegrationsPage() {
               <p className="mt-1.5 line-clamp-3 text-[11px] text-white/55">
                 {c.body}
               </p>
-              <AtlassianNativeForm workspaceId={workspace.id} />
+              {c.id === "atlassian" ? (
+                <AtlassianNativeForm workspaceId={workspace.id} />
+              ) : c.id === "azure_devops" ? (
+                <AzureDevOpsNativeForm workspaceId={workspace.id} />
+              ) : null}
             </div>
           ))}
           {available.map((c) => (
@@ -442,6 +453,72 @@ function AtlassianNativeForm({ workspaceId }: { workspaceId: string }) {
             className="rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-3 py-1.5 text-[11px] font-bold text-ink hover:brightness-110"
           >
             Save Atlassian
+          </button>
+        </div>
+      </form>
+    </details>
+  );
+}
+
+function AzureDevOpsNativeForm({ workspaceId }: { workspaceId: string }) {
+  return (
+    <details className="mt-3">
+      <summary className="inline-flex cursor-pointer items-center gap-1 rounded-full border border-aqua/40 bg-aqua/10 px-3 py-1 text-[11px] font-bold text-aqua hover:bg-aqua/20">
+        Connect →
+      </summary>
+      <form
+        action="/api/integrations/native-azure-devops"
+        method="POST"
+        className="mt-3 space-y-3 rounded-lg border border-white/10 bg-ink/40 p-3"
+      >
+        <input type="hidden" name="ws" value={workspaceId} suppressHydrationWarning />
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/55">
+            Organization
+          </span>
+          <input
+            name="organization"
+            placeholder="acme-corp"
+            className="w-full rounded border border-white/10 bg-white/[0.04] px-2 py-1.5 text-xs text-white outline-none focus:border-aqua/40"
+            suppressHydrationWarning
+          />
+          <span className="mt-1 block text-[10px] text-white/40">
+            Use the org slug from dev.azure.com/acme-corp, not the full URL.
+          </span>
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/55">
+            Default project
+          </span>
+          <input
+            name="project"
+            placeholder="Platform"
+            className="w-full rounded border border-white/10 bg-white/[0.04] px-2 py-1.5 text-xs text-white outline-none focus:border-aqua/40"
+            suppressHydrationWarning
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/55">
+            Personal access token
+          </span>
+          <input
+            name="pat"
+            type="password"
+            autoComplete="off"
+            className="w-full rounded border border-white/10 bg-white/[0.04] px-2 py-1.5 font-mono text-xs text-white outline-none focus:border-aqua/40"
+            suppressHydrationWarning
+          />
+          <span className="mt-1 block text-[10px] text-white/40">
+            Recommended scopes: Code read and Build execute/read for the first
+            orchestrator pass.
+          </span>
+        </label>
+        <div className="flex items-center justify-end">
+          <button
+            type="submit"
+            className="rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-3 py-1.5 text-[11px] font-bold text-ink hover:brightness-110"
+          >
+            Save Azure DevOps
           </button>
         </div>
       </form>

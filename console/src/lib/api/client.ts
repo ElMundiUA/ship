@@ -2930,6 +2930,22 @@ export function connectAtlassianApiToken(
   );
 }
 
+export function connectAzureDevOpsPat(
+  workspaceId: string,
+  input: {
+    organization: string;
+    project?: string | null;
+    pat: string;
+    scopes?: string[];
+  },
+  token?: string,
+): Promise<ApiNativeIntegration> {
+  return apiFetch<ApiNativeIntegration>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/native-integrations/azure-devops/pat`,
+    { method: "POST", body: input, token },
+  );
+}
+
 // --- Artifact repos --------------------------------------------------------
 
 export function listArtifactRepos(
