@@ -2,14 +2,51 @@
 # Learn more: https://app.ship.elmundi.com
 preset: default
 version: 2
+shipctl_min: 0.12.0
 repo: ElMundiUA/ship
+api:
+  base_url: "https://ship.elmundi.com"
+  channel: stable
+  ttl_hours: 24
+  offline_ok: true
+stack:
+  tracker: none
+  ci: gh-actions
+  agents: []
+  language: multi
+agent:
+  default: {}
+  overrides: {}
 lanes:
   pr_review:
-    event: pull_request
+    kind: event
+    on: pull_request
     pattern: "**"
-    idempotency_key: "{{pr}}"
+  scan-security-deps:
+    kind: schedule
+    cron: "0 7 * * *"
+    pattern: scan-security-deps
+  scan-license-deps:
+    kind: event
+    on: pull_request
+    pattern: "paths:package.json,package-lock.json,yarn.lock,pnpm-lock.yaml,requirements*.txt,pyproject.toml,Cargo.toml,Cargo.lock,go.mod,go.sum"
   daily_standup:
-    schedule: "0 9 * * 1-5"
+    kind: schedule
+    cron: "0 9 * * 1-5"
     pattern: flow-daily-retro
-  tech_debt:
-    schedule: "0 6 * * 1"
+  scan-docs-freshness:
+    kind: schedule
+    cron: "0 8 * * 1"
+    pattern: scan-docs-freshness
+  scan-tech-debt:
+    kind: schedule
+    cron: "0 6 * * 1"
+    pattern: scan-tech-debt
+  self_heal:
+    kind: schedule
+    cron: "0 4 * * *"
+    pattern: op-workflow-self-heal
+  flow-release-notes:
+    kind: event
+    on: push
+    pattern: "refs/tags/v*"

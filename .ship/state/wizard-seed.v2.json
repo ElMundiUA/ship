@@ -1,0 +1,21 @@
+{
+  "bundle": [
+    "flow-pr-self-review",
+    "scan-security-deps",
+    "scan-license-deps",
+    "flow-daily-retro",
+    "scan-docs-freshness",
+    "scan-tech-debt",
+    "op-workflow-self-heal",
+    "flow-release-notes",
+    "onboard-seed-knowledge"
+  ],
+  "bundle_version": "75300ec4860f",
+  "knowledge": [
+    "code-style",
+    "ui-runbook"
+  ],
+  "seeded_at": "2026-04-25T09:14:52Z",
+  "ship_version": "unknown",
+  "tracker_kind": "github"
+}
