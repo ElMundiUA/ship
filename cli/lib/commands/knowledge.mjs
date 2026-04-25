@@ -44,10 +44,12 @@
 
 const VERSION = "v1";
 
-/** Ship ships two starter buckets today — keep in lockstep with
- * ``backend.app.services.catalog.KNOWLEDGE_STARTERS`` and
- * ``console/src/lib/api/client.ts#KNOWLEDGE_STARTERS``. */
-const KNOWN_SLUGS = ["code-style", "ui-runbook"];
+/** Static starters with source markdown under ``artifacts/knowledge-starters``.
+ * Procedural catalog recipes are exposed by the backend under the
+ * ``ship-recipes/<pattern-id>`` prefix because that list is generated from
+ * on-disk pattern artifacts at runtime. */
+export const STATIC_KNOWLEDGE_SLUGS = ["code-style", "ui-runbook"];
+export const RECIPE_KNOWLEDGE_PREFIX = "ship-recipes/";
 
 /**
  * @param {{baseUrl?: string, json?: boolean}} ctx
@@ -100,7 +102,9 @@ INIT FLAGS
                      Defaults to the most-recently activated repo in
                      the resolved workspace.
   --only <csv>       Comma-separated starter slugs. Defaults to the
-                     full catalog (${KNOWN_SLUGS.join(", ")}).
+                     full backend catalog, including static starters
+                     (${STATIC_KNOWLEDGE_SLUGS.join(", ")}) and generated
+                     recipe starters under ${RECIPE_KNOWLEDGE_PREFIX}<pattern-id>.
   --base-url URL     Workspace control-plane API. See env fallbacks.
   --json             Emit a machine-readable JSON summary.
 
@@ -134,10 +138,10 @@ async function knowledgeInitCommand(ctx, args) {
 
   const selection = opts.only;
   if (selection !== null) {
-    const unknown = selection.filter((s) => !KNOWN_SLUGS.includes(s));
+    const unknown = selection.filter((s) => !isKnownKnowledgeStarterSlug(s));
     if (unknown.length) {
       console.error(
-        `Unknown knowledge slug(s): ${unknown.join(", ")}\nKnown: ${KNOWN_SLUGS.join(", ")}`,
+        `Unknown knowledge slug(s): ${unknown.join(", ")}\nKnown static slugs: ${STATIC_KNOWLEDGE_SLUGS.join(", ")}; recipe slugs must start with ${RECIPE_KNOWLEDGE_PREFIX}`,
       );
       process.exit(1);
     }
@@ -170,6 +174,13 @@ async function knowledgeInitCommand(ctx, args) {
       `  Files: ${files.join(", ") || "(none)"}\n` +
       `\nShip-owned repository context is refreshed separately with:\n` +
       `  shipctl knowledge refresh-intel --workspace ${workspaceId} --repo ${repoId}`,
+  );
+}
+
+export function isKnownKnowledgeStarterSlug(slug) {
+  return (
+    STATIC_KNOWLEDGE_SLUGS.includes(slug) ||
+    slug.startsWith(RECIPE_KNOWLEDGE_PREFIX)
   );
 }
 

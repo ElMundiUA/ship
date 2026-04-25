@@ -52,6 +52,8 @@ __all__ = [
     "list_presets",
     "list_collections",
     "list_patterns",
+    "list_specialist_role_patterns",
+    "list_knowledge_recipe_patterns",
     "list_patterns_by_mode",
     "list_patterns_for_workspace",
     "list_patterns_by_mode_for_workspace",
@@ -59,6 +61,7 @@ __all__ = [
     "resolve_lane_workflow",
     "list_tools",
     "KNOWLEDGE_STARTERS",
+    "knowledge_starter_slugs",
     "knowledge_starter_files",
 ]
 
@@ -140,6 +143,24 @@ _PLURAL_BY_KIND: Final[dict[str, str]] = {
     "pattern": "patterns",
     "tool": "tools",
     "collection": "collections",
+}
+
+_STATIC_KNOWLEDGE_STARTERS: Final[tuple[str, ...]] = ("code-style", "ui-runbook")
+_SHIP_RECIPE_STARTER_PREFIX: Final[str] = "ship-recipes/"
+_ROLE_PATTERN_PREFIX: Final[str] = "role-"
+_KNOWLEDGE_RECIPE_PREFIXES: Final[tuple[str, ...]] = (
+    "common-",
+    "flow-",
+    "onboard-",
+    "op-",
+    "scan-",
+)
+_KNOWLEDGE_RECIPE_CATEGORIES: Final[set[str]] = {
+    "common",
+    "flow",
+    "onboard",
+    "op",
+    "scan",
 }
 
 _REQUIRED_FIELDS: Final[tuple[str, ...]] = (
@@ -506,6 +527,28 @@ def invalidate_cache() -> None:
 
 def list_patterns() -> list[CatalogArtifact]:
     return _load_kind("pattern")
+
+
+def _is_specialist_role_pattern(entry: CatalogArtifact) -> bool:
+    return entry.id.startswith(_ROLE_PATTERN_PREFIX) or entry.category == "role"
+
+
+def _is_knowledge_recipe_pattern(entry: CatalogArtifact) -> bool:
+    if _is_specialist_role_pattern(entry):
+        return False
+    if entry.id.startswith(_KNOWLEDGE_RECIPE_PREFIXES):
+        return True
+    return entry.category in _KNOWLEDGE_RECIPE_CATEGORIES
+
+
+def list_specialist_role_patterns() -> list[CatalogArtifact]:
+    """Pattern artifacts that now back the Specialist template catalog."""
+    return [entry for entry in list_patterns() if _is_specialist_role_pattern(entry)]
+
+
+def list_knowledge_recipe_patterns() -> list[CatalogArtifact]:
+    """Procedural catalog entries exposed as seedable knowledge recipes."""
+    return [entry for entry in list_patterns() if _is_knowledge_recipe_pattern(entry)]
 
 
 def list_tools() -> list[CatalogArtifact]:
@@ -1011,12 +1054,25 @@ def preset_bundle_files(
 # no-op (path stays the same, content gets overwritten only if the
 # tenant hand-rebases — we never force-push over their edits).
 #
-# Sources live under ``artifacts/knowledge-starters/<slug>.md`` so the
-# content is part of the same artifact catalog that ``ship_artifact_check``
-# vets. Keep the slug list in lockstep with the wizard's checkbox labels.
+# Static sources live under ``artifacts/knowledge-starters/<slug>.md``.
+# Ship recipe starters are generated from procedural ``artifacts/patterns``
+# entries so we can split the catalog without duplicating dozens of legacy
+# prompt bodies. The generated articles intentionally use the native knowledge
+# shape first, then carry the old prompt text under "Legacy recipe body" until
+# the editorial rewrite pass lands.
 # ---------------------------------------------------------------------------
 
-KNOWLEDGE_STARTERS: Final[tuple[str, ...]] = ("code-style", "ui-runbook")
+
+def knowledge_starter_slugs() -> tuple[str, ...]:
+    """Return every seedable knowledge starter slug in deterministic order."""
+    recipe_slugs = tuple(
+        f"{_SHIP_RECIPE_STARTER_PREFIX}{entry.id}"
+        for entry in list_knowledge_recipe_patterns()
+    )
+    return (*_STATIC_KNOWLEDGE_STARTERS, *recipe_slugs)
+
+
+KNOWLEDGE_STARTERS: Final[tuple[str, ...]] = knowledge_starter_slugs()
 
 
 def knowledge_starter_files(
@@ -1024,17 +1080,18 @@ def knowledge_starter_files(
 ) -> list[tuple[str, str]]:
     """Return ``(path, content)`` tuples for the selected knowledge starters.
 
-    ``selection`` filters ``KNOWLEDGE_STARTERS``; ``None`` means "seed
+    ``selection`` filters :func:`knowledge_starter_slugs`; ``None`` means "seed
     everything". Unknown slugs raise :class:`CatalogError` so a stale
     UI can't silently drop a checkbox.
 
-    Each starter source lives at
-    ``artifacts/knowledge-starters/<slug>.md`` and is installed at
-    ``.ship/knowledge/<slug>.md`` — the exact shape
-    :mod:`backend.app.services.knowledge_lister` scans for.
+    Static starter sources live at ``artifacts/knowledge-starters/<slug>.md``.
+    Recipe starters are generated from procedural pattern artifacts and
+    installed under ``.ship/knowledge/ship-recipes/<pattern-id>.md``.
     """
+    known = knowledge_starter_slugs()
+    known_set = set(known)
     if selection is None:
-        chosen: list[str] = list(KNOWLEDGE_STARTERS)
+        chosen: list[str] = list(known)
     else:
         cleaned: list[str] = []
         seen: set[str] = set()
@@ -1042,27 +1099,128 @@ def knowledge_starter_files(
             slug = raw.strip()
             if not slug or slug in seen:
                 continue
-            if slug not in KNOWLEDGE_STARTERS:
+            if slug not in known_set:
                 raise CatalogError(
                     f"Unknown knowledge starter {slug!r}. "
-                    f"Expected one of: {sorted(KNOWLEDGE_STARTERS)}"
+                    f"Expected one of: {sorted(known)}"
                 )
             cleaned.append(slug)
             seen.add(slug)
         chosen = cleaned
 
     root = ARTIFACTS_ROOT / "knowledge-starters"
+    recipes_by_slug = {
+        f"{_SHIP_RECIPE_STARTER_PREFIX}{entry.id}": entry
+        for entry in list_knowledge_recipe_patterns()
+    }
     out: list[tuple[str, str]] = []
     for slug in chosen:
-        source = root / f"{slug}.md"
-        try:
-            content = source.read_text(encoding="utf-8")
-        except OSError as exc:
-            raise CatalogError(
-                f"Knowledge starter {slug!r} is missing on disk ({source}): {exc}"
-            ) from exc
+        recipe = recipes_by_slug.get(slug)
+        if recipe is not None:
+            content = _render_recipe_knowledge_article(recipe)
+        else:
+            source = root / f"{slug}.md"
+            try:
+                content = source.read_text(encoding="utf-8")
+            except OSError as exc:
+                raise CatalogError(
+                    f"Knowledge starter {slug!r} is missing on disk ({source}): {exc}"
+                ) from exc
         out.append((f".ship/knowledge/{slug}.md", content))
     return out
+
+
+def _render_recipe_knowledge_article(entry: CatalogArtifact) -> str:
+    """Render a procedural pattern as a first-class knowledge article."""
+    title = entry.name or entry.id
+    tags = ", ".join(f"`{tag}`" for tag in entry.tags) if entry.tags else "`none`"
+    category = entry.category or entry.group or "recipe"
+    source = f"pattern/{entry.id}"
+    recommended_tools = _recommended_tools_for_recipe(entry)
+    lines: list[str] = [
+        f"# {title}",
+        "",
+        "## Metadata",
+        "",
+        f"- Source: `{source}`",
+        f"- Legacy slug: `{entry.id}`",
+        f"- Category: `{category}`",
+        f"- Tags: {tags}",
+        f"- Version: `{entry.version or 'unknown'}`",
+        "",
+        "## When To Use",
+        "",
+        entry.description or "Use this recipe when its title, tags, or source task match the current work.",
+        "",
+        "## Inputs",
+        "",
+        _render_recipe_inputs(entry),
+        "",
+        "## Recommended Tools",
+        "",
+        *[f"- {tool}" for tool in recommended_tools],
+        "",
+        "These tools are recommendations for Ship-controlled orchestration. They do not grant direct tracker writes, undeclared FSM transitions, unaudited side effects, or direct repository pushes.",
+        "",
+        "## Steps",
+        "",
+        "Start from the legacy recipe body below. During the editorial rewrite pass, promote the useful instructions into concise knowledge-article steps.",
+        "",
+        "## Checks",
+        "",
+        "- Confirm the selected recipe actually applies to the ticket or technical question.",
+        "- Prefer existing repository and workspace knowledge before inventing a new approach.",
+        "- Record material actions through the Ship audit path.",
+        "",
+        "## Risks",
+        "",
+        "- Legacy pattern text may mention direct tracker, PR, or git actions. Treat those as desired intents; Ship must still enforce configured transitions, PR-only repository writes, and audit logging.",
+        "",
+        "## Related Policies",
+        "",
+        "- Workspace policies injected by Ship remain mandatory and override this recipe.",
+        "",
+        "## Legacy Recipe Body",
+        "",
+        entry.body.strip(),
+        "",
+    ]
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _render_recipe_inputs(entry: CatalogArtifact) -> str:
+    inputs = entry.inputs
+    if not inputs:
+        return "- Relevant ticket or request context.\n- Repository/workspace context needed to evaluate the recipe."
+    lines: list[str] = []
+    for item in inputs:
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        input_type = str(item.get("type") or "string")
+        required = "required" if item.get("required") else "optional"
+        hint = str(item.get("hint") or "").strip()
+        suffix = f" - {hint}" if hint else ""
+        lines.append(f"- `{name}` ({input_type}, {required}){suffix}")
+    return "\n".join(lines) if lines else "- Relevant ticket or request context."
+
+
+def _recommended_tools_for_recipe(entry: CatalogArtifact) -> list[str]:
+    tools = [
+        "`knowledge_search_v2` or workspace knowledge search before inventing a solution",
+    ]
+    category = entry.category or entry.group or ""
+    tags = {str(tag).lower() for tag in entry.tags}
+    if category == "scan" or entry.id.startswith("scan-"):
+        tools.append("Repository/code search and CI evidence readers for concrete findings")
+    if "pr" in tags or "review" in tags or "pull_request" in repr(entry.default_trigger):
+        tools.append("Pull request readers for diff, checks, comments, and linked ticket context")
+    if "docs" in tags or "runbook" in tags:
+        tools.append("Repository file readers for docs and runbook verification")
+    if "security" in tags or "iam" in tags or "pii" in tags:
+        tools.append("Secret, dependency, and policy evidence readers where configured")
+    tools.append("Ship callback/audit reporting for outcomes, escalations, and handoffs")
+    return tools
 
 
 # ---------------------------------------------------------------------------
