@@ -111,20 +111,23 @@ export function ProcessEditorWorkspace({
   }
 
   function updatePositions(positions: Record<string, Position>) {
-    setStates((current) =>
-      current.map((state) => {
+    setStates((current) => {
+      let changed = false;
+      const next = current.map((state) => {
         const position = positions[state.id];
-        return position
-          ? {
-              ...state,
-              layout: {
-                x: Math.round(position.x),
-                y: Math.round(position.y),
-              },
-            }
-          : state;
-      }),
-    );
+        if (!position) return state;
+        const layout = {
+          x: Math.round(position.x),
+          y: Math.round(position.y),
+        };
+        if (state.layout?.x === layout.x && state.layout?.y === layout.y) {
+          return state;
+        }
+        changed = true;
+        return { ...state, layout };
+      });
+      return changed ? next : current;
+    });
   }
 
   function addState() {

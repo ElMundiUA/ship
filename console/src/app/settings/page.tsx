@@ -18,11 +18,14 @@ import {
   CardHeader,
   LiveBanner,
   MockBanner,
+  type BadgeTone,
 } from "@/components/ui";
 import {
   ApiHttpError,
   ApiUnavailableError,
   type ApiActivatedRepo,
+  type ApiRepoConfig,
+  getRepoConfig,
   isApiConfigured,
   listActivatedRepos,
   listArtifactRepos,
@@ -44,6 +47,7 @@ type Mode =
       source: "live";
       workspace: ApiWorkspace;
       activatedRepos: ApiActivatedRepo[];
+      repoConfigs: Record<string, RepoConfigStatus>;
       repos: ApiArtifactRepo[];
       tokens: ApiTokenInfo[];
     }
@@ -51,6 +55,12 @@ type Mode =
 
 const CATALOG_KEYS = ["global", "workspace", "project"] as const;
 type CatalogKey = (typeof CATALOG_KEYS)[number];
+
+type RepoConfigStatus =
+  | { kind: "ready"; label: string; detail: string }
+  | { kind: "legacy"; label: string; detail: string }
+  | { kind: "missing"; label: string; detail: string }
+  | { kind: "error"; label: string; detail: string };
 
 const SOURCE_DESCRIPTIONS: Record<
   CatalogKey,
@@ -85,6 +95,14 @@ function errorMessage(code: string): string {
       return "You don’t have permission to change this workspace. Ask an admin to retry.";
     case "not_found":
       return "That artifact repo no longer exists — it may have been removed in another tab.";
+    case "session_expired":
+      return "Session expired — sign in again and retry.";
+    case "bad_body":
+      return "Ship could not build the seed request. Refresh and retry.";
+    case "github_api_error":
+      return "GitHub rejected the seed PR request. Check repo permissions and retry.";
+    case "precondition_failed":
+      return "Ship cannot open the seed PR yet because a setup precondition is missing.";
     case "slug_mismatch":
       return "Slug confirmation didn’t match. Type the workspace slug exactly as shown.";
     case "api_unavailable":
@@ -126,6 +144,14 @@ async function load(): Promise<Mode> {
     const activatedRepos = await listActivatedRepos(target.id, token).catch(
       () => [] as ApiActivatedRepo[],
     );
+    const repoConfigs = Object.fromEntries(
+      await Promise.all(
+        activatedRepos.map(async (repo) => [
+          repo.id,
+          await loadRepoConfigStatus(target.id, repo.id, token),
+        ]),
+      ),
+    );
     let repos: ApiArtifactRepo[] = [];
     try {
       repos = await listArtifactRepos(target.id, token);
@@ -141,7 +167,14 @@ async function load(): Promise<Mode> {
       // than crashing the whole page.
       if (!(err instanceof ApiHttpError) || err.status !== 404) throw err;
     }
-    return { source: "live", workspace: target, activatedRepos, repos, tokens };
+    return {
+      source: "live",
+      workspace: target,
+      activatedRepos,
+      repoConfigs,
+      repos,
+      tokens,
+    };
   } catch (err) {
     if (err instanceof ApiHttpError && err.status === 401)
       return { source: "mock", reason: "Session expired — sign in again" };
@@ -149,6 +182,58 @@ async function load(): Promise<Mode> {
       return { source: "mock", reason: "Backend unreachable" };
     return { source: "mock", reason: "Backend returned an error" };
   }
+}
+
+async function loadRepoConfigStatus(
+  workspaceId: string,
+  repoId: string,
+  token: string,
+): Promise<RepoConfigStatus> {
+  try {
+    return repoConfigStatus(await getRepoConfig(workspaceId, repoId, token));
+  } catch (err) {
+    if (err instanceof ApiHttpError && err.status === 404) {
+      return {
+        kind: "missing",
+        label: "missing config",
+        detail: "No .ship/config.yml found on the default branch.",
+      };
+    }
+    return {
+      kind: "error",
+      label: "config unknown",
+      detail: "Ship could not read this repo config right now.",
+    };
+  }
+}
+
+function repoConfigStatus(config: ApiRepoConfig): RepoConfigStatus {
+  if (!config.exists) {
+    return {
+      kind: "missing",
+      label: "missing config",
+      detail: "No .ship/config.yml found on the default branch.",
+    };
+  }
+  if (config.parse_error) {
+    return {
+      kind: "error",
+      label: "parse error",
+      detail: config.parse_error,
+    };
+  }
+  if (config.parsed?.process) {
+    return {
+      kind: "ready",
+      label: "FSM ready",
+      detail: "This repo has a process: block in .ship/config.yml.",
+    };
+  }
+  return {
+    kind: "legacy",
+    label: "legacy lanes",
+    detail: "Config exists, but it has no process: block yet.",
+  };
 }
 
 export default async function SettingsPage({
@@ -182,7 +267,7 @@ export default async function SettingsPage({
     freshSecret = jar.get("ship_token_just_minted")?.value ?? null;
   }
 
-  const { workspace, activatedRepos, repos, tokens } = data;
+  const { workspace, activatedRepos, repoConfigs, repos, tokens } = data;
   const sources: Record<CatalogKey, boolean> = {
     global: workspace.catalog_sources?.global ?? true,
     workspace: workspace.catalog_sources?.workspace ?? true,
@@ -243,6 +328,7 @@ export default async function SettingsPage({
             <RepositoriesPanel
               workspaceId={workspace.id}
               repositories={activatedRepos}
+              repoConfigs={repoConfigs}
             />
           )}
 
@@ -450,9 +536,11 @@ function TokensPanel({
 function RepositoriesPanel({
   workspaceId,
   repositories,
+  repoConfigs,
 }: {
   workspaceId: string;
   repositories: ApiActivatedRepo[];
+  repoConfigs: Record<string, RepoConfigStatus>;
 }) {
   return (
     <Card>
@@ -473,6 +561,7 @@ function RepositoriesPanel({
                 <th className="px-3 py-2 text-left font-semibold">Repository</th>
                 <th className="px-3 py-2 text-left font-semibold">Provider</th>
                 <th className="px-3 py-2 text-left font-semibold">Seed bundle</th>
+                <th className="px-3 py-2 text-left font-semibold">Config</th>
                 <th className="px-3 py-2 text-left font-semibold">Activated</th>
                 <th className="px-3 py-2 text-right font-semibold">Actions</th>
               </tr>
@@ -483,6 +572,7 @@ function RepositoriesPanel({
                   key={repo.id}
                   workspaceId={workspaceId}
                   repo={repo}
+                  configStatus={repoConfigs[repo.id] ?? unknownRepoConfigStatus}
                 />
               ))}
             </tbody>
@@ -490,11 +580,11 @@ function RepositoriesPanel({
         </div>
       )}
       <div className="mt-4 rounded-xl border border-aqua/20 bg-aqua/[0.04] px-3 py-2.5 text-[11px] leading-relaxed text-aqua/85">
-        <strong>Reseed.</strong> Open the onboarding confirm step for this
-        workspace and run setup for the stale repo again. It calls{" "}
-        <code className="font-mono">wizard_seed</code>, opens a fresh PR with
-        the current Ship bundle, and updates the installed bundle version after
-        the seed succeeds.
+        <strong>FSM config.</strong> Repositories without a{" "}
+        <code className="font-mono">process:</code> block can open a fresh seed PR
+        directly from this table. The PR includes the current Ship bundle and
+        updates <code className="font-mono">.ship/config.yml</code> with the
+        process template.
       </div>
     </Card>
   );
@@ -503,9 +593,11 @@ function RepositoriesPanel({
 function RepositoryRow({
   workspaceId,
   repo,
+  configStatus,
 }: {
   workspaceId: string;
   repo: ApiActivatedRepo;
+  configStatus: RepoConfigStatus;
 }) {
   const installed = repo.installed_bundle_version;
   const current = repo.current_bundle_version;
@@ -536,19 +628,57 @@ function RepositoryRow({
           installed {installed ?? "never"} · current {current}
         </div>
       </td>
+      <td className="px-3 py-2.5 align-top">
+        <Badge tone={repoConfigTone(configStatus)} dot>
+          {configStatus.label}
+        </Badge>
+        <div className="mt-1 max-w-[18rem] text-[10px] text-white/45">
+          {configStatus.detail}
+        </div>
+      </td>
       <td className="px-3 py-2.5 align-top text-xs text-white/60">
         {repo.activated_at ? new Date(repo.activated_at).toUTCString() : "unknown"}
       </td>
-      <td className="px-3 py-2.5 align-top text-right">
+      <td className="space-y-2 px-3 py-2.5 text-right align-top">
+        <form action="/api/settings/repositories/reseed" method="post">
+          <input type="hidden" name="workspaceId" value={workspaceId} />
+          <input type="hidden" name="repoId" value={repo.id} />
+          <button
+            type="submit"
+            disabled={configStatus.kind === "ready"}
+            className="inline-flex rounded-full border border-aqua/30 bg-aqua/10 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-aqua transition hover:bg-aqua/20 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/[0.04] disabled:text-white/30"
+          >
+            Open seed PR
+          </button>
+        </form>
         <a
           href={`/onboarding?step=confirm&ws=${encodeURIComponent(workspaceId)}`}
-          className="inline-flex rounded-full border border-aqua/30 bg-aqua/10 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-aqua transition hover:bg-aqua/20"
+          className="inline-flex text-[10px] font-semibold uppercase tracking-widest text-white/40 hover:text-white/70"
         >
-          Reseed
+          Full setup wizard
         </a>
       </td>
     </tr>
   );
+}
+
+const unknownRepoConfigStatus: RepoConfigStatus = {
+  kind: "error",
+  label: "config unknown",
+  detail: "Ship did not load this repository config.",
+};
+
+function repoConfigTone(status: RepoConfigStatus): BadgeTone {
+  switch (status.kind) {
+    case "ready":
+      return "ok";
+    case "legacy":
+      return "warn";
+    case "missing":
+      return "info";
+    case "error":
+      return "err";
+  }
 }
 
 function TokenRow({ token }: { token: ApiTokenInfo }) {
