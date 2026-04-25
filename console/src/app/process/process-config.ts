@@ -102,7 +102,7 @@ export function processConfigFromApiProcess(process: ApiProcess): Record<string,
     routines: process.routines.map((routine) => ({
       id: routine.id,
       name: routine.name,
-      cadence: routine.cadence,
+      cadence: routine.schedule,
     })),
   };
 }
