@@ -214,6 +214,65 @@ async def test_list_native_integrations_requires_admin(
 
 
 @pytest.mark.asyncio
+async def test_admin_can_disable_native_integration(
+    v1_client,
+    db_session,
+    seed_workspace,
+    monkeypatch,
+) -> None:
+    from backend.app.db.models.integrations import (
+        NativeIntegrationAuditEvent,
+        NativeIntegrationCredential,
+        NativeIntegrationInstallation,
+    )
+
+    _, raw, workspace = seed_workspace
+    headers = {"Authorization": f"Bearer {raw}"}
+
+    async def _fake_probe(*, base_url, pat, group):
+        return True, None
+
+    monkeypatch.setattr(
+        "backend.app.api.v1.routes.native_integrations._probe_gitlab_pat",
+        _fake_probe,
+    )
+
+    created = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/native-integrations/gitlab/pat",
+        headers=headers,
+        json={"host": "gitlab.com", "pat": "gitlab_pat_secret"},
+    )
+    assert created.status_code == 200, created.text
+    installation_id = created.json()["id"]
+
+    response = await v1_client.delete(
+        f"/v1/workspaces/{workspace.id}/native-integrations/{installation_id}",
+        headers=headers,
+    )
+
+    assert response.status_code == 204, response.text
+    installation = (
+        await db_session.execute(select(NativeIntegrationInstallation))
+    ).scalar_one()
+    assert installation.status == "disabled"
+    assert installation.disabled_at is not None
+
+    credential = (
+        await db_session.execute(select(NativeIntegrationCredential))
+    ).scalar_one()
+    assert credential.revoked_at is not None
+
+    actions = (
+        await db_session.execute(
+            select(NativeIntegrationAuditEvent.action).order_by(
+                NativeIntegrationAuditEvent.created_at
+            )
+        )
+    ).scalars().all()
+    assert actions == ["native_integration.create", "native_integration.disable"]
+
+
+@pytest.mark.asyncio
 async def test_admin_can_connect_atlassian_api_token(
     v1_client,
     db_session,
