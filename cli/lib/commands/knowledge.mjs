@@ -123,7 +123,7 @@ EXIT
  */
 async function knowledgeInitCommand(ctx, args) {
   const opts = parseInitArgs(args);
-  const baseUrl = resolveBaseUrl(opts.baseUrl || ctx.baseUrl);
+  const baseUrl = resolveBaseUrl(opts.baseUrl || explicitGlobalBaseUrl(ctx));
   const token = process.env.SHIP_API_TOKEN || "";
   if (!token) {
     console.error(
@@ -175,7 +175,7 @@ async function knowledgeInitCommand(ctx, args) {
 
 async function knowledgeFetchCommand(ctx, args) {
   const opts = parseFetchArgs(args);
-  const baseUrl = resolveBaseUrl(opts.baseUrl || ctx.baseUrl);
+  const baseUrl = resolveBaseUrl(opts.baseUrl || explicitGlobalBaseUrl(ctx));
   const token = requireToken();
   let workspaceId = opts.workspace;
   if (!workspaceId) {
@@ -218,7 +218,7 @@ async function knowledgeFetchCommand(ctx, args) {
 
 async function knowledgeRefreshIntelCommand(ctx, args) {
   const opts = parseRefreshArgs(args);
-  const baseUrl = resolveBaseUrl(opts.baseUrl || ctx.baseUrl);
+  const baseUrl = resolveBaseUrl(opts.baseUrl || explicitGlobalBaseUrl(ctx));
   const token = requireToken();
   let workspaceId = opts.workspace;
   if (!workspaceId) {
@@ -246,7 +246,7 @@ async function knowledgeRefreshIntelCommand(ctx, args) {
 
 async function knowledgeBootstrapCommand(ctx, args) {
   const opts = parseBootstrapArgs(args);
-  const baseUrl = resolveBaseUrl(opts.baseUrl || ctx.baseUrl);
+  const baseUrl = resolveBaseUrl(opts.baseUrl || explicitGlobalBaseUrl(ctx));
   const token = requireToken();
   let workspaceId = opts.workspace;
   if (!workspaceId) {
@@ -276,6 +276,10 @@ async function knowledgeBootstrapCommand(ctx, args) {
       `  ${result.pr_url}\n` +
       `  Files: ${files.join(", ") || "(none)"}`,
   );
+}
+
+function explicitGlobalBaseUrl(ctx) {
+  return ctx?.baseUrlSource === "flag" ? ctx.baseUrl : null;
 }
 
 /**

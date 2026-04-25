@@ -445,8 +445,8 @@ shipctl lanes install --yes
 shipctl lanes install --only pr-self-review,release-cut
 
 # wire to a specific shipctl version pin
-shipctl lanes install --shipctl-version 0.12.0 \
-  --owner elmundi --repo ship --ref v0.12.0
+shipctl lanes install --shipctl-version 0.12.1 \
+  --owner elmundi --repo ship --ref v0.12.1
 
 # inspect what's on disk vs config.yml
 shipctl lanes list --json

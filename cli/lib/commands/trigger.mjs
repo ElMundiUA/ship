@@ -4,7 +4,7 @@ const VERSION = "v1";
 
 export async function triggerCommand(ctx, rest) {
   const opts = parseArgs(rest);
-  const baseUrl = resolveBaseUrl(opts.baseUrl || ctx.baseUrl);
+  const baseUrl = resolveBaseUrl(opts.baseUrl || explicitGlobalBaseUrl(ctx));
   const token = requireToken();
   let workspaceId = opts.workspace;
   if (!workspaceId) workspaceId = await resolveSoleWorkspace(baseUrl, token);
@@ -38,6 +38,10 @@ export async function triggerCommand(ctx, rest) {
   }
   console.log(`Ship trigger ${opts.event}: ${due.length} lane(s) due`);
   for (const lane of due) console.log(`  - ${lane.lane_id}`);
+}
+
+function explicitGlobalBaseUrl(ctx) {
+  return ctx?.baseUrlSource === "flag" ? ctx.baseUrl : null;
 }
 
 function printHelp() {
