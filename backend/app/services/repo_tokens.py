@@ -216,10 +216,11 @@ async def push_ship_methodology_github_secrets(
     so ``shipctl run`` can ``POST /fetch`` from Actions when the repo
     config has no ``api.base_url``.
 
-    When ``mint_new_api_pat`` is true (same cadence as (re)minting
-    ``SHIP_RUN_TOKEN``), mint a workspace-scoped PAT for the acting
-    user, persist only its hash, and push the plaintext once to GitHub
-    as ``SHIP_API_TOKEN``.
+    When ``mint_new_api_pat`` is true, mint a workspace-scoped PAT for
+    the acting user, persist only its hash, and push the plaintext once
+    to GitHub as ``SHIP_API_TOKEN``. Wizard re-seeds intentionally do
+    this even when ``SHIP_RUN_TOKEN`` is not rotated: older installs may
+    already have the callback token but lack the newer API token secret.
     """
 
     base = settings.public_url.rstrip("/")
