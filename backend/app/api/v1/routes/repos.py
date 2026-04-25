@@ -2688,6 +2688,17 @@ class RepoConfigProposeOut(BaseModel):
 
 
 _LANES_CONFIG_PATH = ".ship/config.yml"
+_PROCESS_AGENT_PROFILES = frozenset(
+    {
+        "auto",
+        "main",
+        "cheaper",
+        "cursor_agent",
+        "codex_cli",
+        "ship_cloud_agent",
+        "local_cli",
+    }
+)
 
 
 def _validate_process_config(process: dict[str, Any]) -> None:
@@ -2699,6 +2710,22 @@ def _validate_process_config(process: dict[str, Any]) -> None:
             detail={
                 "code": "invalid_process",
                 "message": "process.id must be a non-empty string",
+            },
+        )
+    if not isinstance(process.get("name"), str) or not process["name"].strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "invalid_process",
+                "message": "process.name must be a non-empty string",
+            },
+        )
+    if not isinstance(process.get("primary"), bool):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "invalid_process",
+                "message": "process.primary must be a boolean",
             },
         )
     states = process.get("states")
@@ -2738,6 +2765,67 @@ def _validate_process_config(process: dict[str, Any]) -> None:
                 },
             )
         state_ids.add(state_id)
+        state_name = state_obj.get("name")
+        if state_name is not None and (
+            not isinstance(state_name, str) or not state_name.strip()
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_process",
+                    "message": (
+                        f"process.states[{index}].name must be a non-empty string"
+                    ),
+                },
+            )
+        specialist = state_obj.get("specialist")
+        if specialist is not None:
+            if not isinstance(specialist, dict):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={
+                        "code": "invalid_process",
+                        "message": (
+                            f"process.states[{index}].specialist must be an object"
+                        ),
+                    },
+                )
+            specialist_id = specialist.get("id")
+            if specialist_id is not None and (
+                not isinstance(specialist_id, str) or not specialist_id.strip()
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={
+                        "code": "invalid_process",
+                        "message": (
+                            f"process.states[{index}].specialist.id must be "
+                            "a non-empty string"
+                        ),
+                    },
+                )
+            specialist_name = specialist.get("name")
+            if specialist_name is not None and (
+                not isinstance(specialist_name, str) or not specialist_name.strip()
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={
+                        "code": "invalid_process",
+                        "message": (
+                            f"process.states[{index}].specialist.name must be "
+                            "a non-empty string"
+                        ),
+                    },
+                )
+            _validate_process_agent_profile(
+                specialist.get("agent_profile"),
+                f"process.states[{index}].specialist.agent_profile",
+            )
+        _validate_process_agent_profile(
+            state_obj.get("agent_profile"),
+            f"process.states[{index}].agent_profile",
+        )
         layout = state_obj.get("layout")
         if layout is not None:
             x_value = layout.get("x") if isinstance(layout, dict) else None
@@ -2793,6 +2881,20 @@ def _validate_process_config(process: dict[str, Any]) -> None:
                     ),
                 },
             )
+
+
+def _validate_process_agent_profile(value: Any, field: str) -> None:
+    if value is None:
+        return
+    if not isinstance(value, str) or value not in _PROCESS_AGENT_PROFILES:
+        allowed = "|".join(sorted(_PROCESS_AGENT_PROFILES))
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "invalid_process",
+                "message": f"{field} must be one of {allowed}",
+            },
+        )
 
 
 @router.get("/{repo_id}/config", response_model=RepoConfigOut)

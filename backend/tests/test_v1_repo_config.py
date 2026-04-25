@@ -282,6 +282,102 @@ async def test_propose_rejects_empty_lanes(
     assert response.json()["detail"]["code"] == "empty_lanes"
 
 
+@pytest.mark.asyncio
+async def test_propose_emits_process_agent_profile(
+    monkeypatch, v1_client, seed_workspace_with_repo
+) -> None:
+    from backend.app.integrations.github.workflows import StarterWorkflowPR
+
+    raw, workspace, _install, repo = seed_workspace_with_repo
+    _patch_blob(monkeypatch, content=_SAMPLE_CONFIG, sha="sha-abc")
+    captured: dict[str, object] = {}
+
+    async def _commit(
+        repo, install, *, files, title, branch_label, pr_body_header, settings,
+        return_url=None, client=None,
+    ):
+        captured["files"] = files
+        return StarterWorkflowPR(
+            pr_url="https://github.com/acme/lanes-config/pull/13",
+            pr_number=13,
+            branch="ship/process-agent-profile",
+        )
+
+    monkeypatch.setattr(
+        "backend.app.integrations.github.workflows.commit_bundle_pr", _commit
+    )
+
+    response = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/repos/{repo.id}/config/propose",
+        headers={"Authorization": f"Bearer {raw}"},
+        json={
+            "base_sha": "sha-abc",
+            "lanes": {},
+            "process": {
+                "id": "development",
+                "name": "Development Process",
+                "primary": True,
+                "states": [
+                    {
+                        "id": "implementation",
+                        "name": "Implementation",
+                        "specialist": {
+                            "id": "developer",
+                            "name": "Developer",
+                            "agent_profile": "cursor_agent",
+                        },
+                    }
+                ],
+                "transitions": [],
+            },
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    files = captured["files"]
+    assert isinstance(files, list) and len(files) == 1
+    _, content = files[0]
+    assert "process:" in content
+    assert "agent_profile: cursor_agent" in content
+
+
+@pytest.mark.asyncio
+async def test_propose_rejects_unknown_process_agent_profile(
+    v1_client, seed_workspace_with_repo
+) -> None:
+    raw, workspace, _install, repo = seed_workspace_with_repo
+
+    response = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/repos/{repo.id}/config/propose",
+        headers={"Authorization": f"Bearer {raw}"},
+        json={
+            "base_sha": "sha-abc",
+            "lanes": {},
+            "process": {
+                "id": "development",
+                "name": "Development Process",
+                "primary": True,
+                "states": [
+                    {
+                        "id": "implementation",
+                        "name": "Implementation",
+                        "specialist": {
+                            "id": "developer",
+                            "name": "Developer",
+                            "agent_profile": "teleport",
+                        },
+                    }
+                ],
+            },
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    detail = response.json()["detail"]
+    assert detail["code"] == "invalid_process"
+    assert "specialist.agent_profile" in detail["message"]
+
+
 # ---------------------------------------------------------------------------
 # RFC-0008 C3.1 — ``patterns: [ids]`` on POST /config/propose
 # ---------------------------------------------------------------------------
