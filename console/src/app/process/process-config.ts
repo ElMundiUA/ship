@@ -37,16 +37,71 @@ export function processFromRepoConfig(
 
   if (states.length === 0) return null;
 
+  const transitionByPair = new Map(
+    fallback.transitions.map((transition) => [
+      `${transition.from_state_id}->${transition.to_state_id}`,
+      transition,
+    ]),
+  );
+  const transitionsFromConfig = Array.isArray(rawProcess.transitions)
+    ? rawProcess.transitions
+        .map((item, index) => {
+          const row = asRecord(item);
+          const from = stringValue(row?.from);
+          const to = stringValue(row?.to);
+          if (!from || !to) return null;
+          const fallbackTransition = transitionByPair.get(`${from}->${to}`);
+          return {
+            id: fallbackTransition?.id ?? `${from}_to_${to}_${index + 1}`,
+            from_state_id: from,
+            to_state_id: to,
+            conditions: fallbackTransition?.conditions ?? [],
+          };
+        })
+        .filter((transition): transition is ApiProcess["transitions"][number] => transition != null)
+    : states.slice(0, -1).map((state, index) => ({
+        id: `${state.id}_to_${states[index + 1].id}`,
+        from_state_id: state.id,
+        to_state_id: states[index + 1].id,
+        conditions: [{ expression: "exit_conditions_met == true" }],
+      }));
+
   return {
     ...fallback,
+    id: stringValue(rawProcess.id) ?? fallback.id,
     name: stringValue(rawProcess.name) ?? fallback.name,
     state_count: states.length,
     states,
-    transitions: states.slice(0, -1).map((state, index) => ({
-      id: `${state.id}_to_${states[index + 1].id}`,
-      from_state_id: state.id,
-      to_state_id: states[index + 1].id,
-      conditions: [{ expression: "exit_conditions_met == true" }],
+    transitions: transitionsFromConfig,
+  };
+}
+
+export function processConfigFromApiProcess(process: ApiProcess): Record<string, unknown> {
+  return {
+    id: process.id,
+    name: process.name,
+    primary: process.id === "development",
+    states: process.states.map((state) => ({
+      id: state.id,
+      name: state.name,
+      specialist: {
+        id: state.specialist_id,
+        name: state.specialist_name,
+      },
+      instructions: state.instructions,
+      triggers: state.triggers,
+      exit_conditions: state.exit_conditions,
+      block_conditions: state.block_conditions,
+    })),
+    transitions: process.transitions.map((transition) => ({
+      from: transition.from_state_id,
+      to: transition.to_state_id,
+      condition: transition.conditions[0]?.expression,
+    })),
+    routines: process.routines.map((routine) => ({
+      id: routine.id,
+      name: routine.name,
+      cadence: routine.cadence,
     })),
   };
 }
@@ -81,11 +136,18 @@ function stateFromConfig(
       stringValue(row.description) ??
       fallback?.instructions ??
       "",
-    triggers: fallback?.triggers ?? [{ type: "manual", interval: null, event: null }],
+    triggers:
+      triggersFromConfig(row.triggers) ??
+      fallback?.triggers ??
+      [{ type: "manual", interval: null, event: null }],
     exit_conditions:
-      fallback?.exit_conditions ?? [{ expression: "state_complete == true" }],
+      conditionsFromConfig(row.exit_conditions) ??
+      fallback?.exit_conditions ??
+      [{ expression: "state_complete == true" }],
     block_conditions:
-      fallback?.block_conditions ?? [{ expression: "requires_human_input == true" }],
+      conditionsFromConfig(row.block_conditions) ??
+      fallback?.block_conditions ??
+      [{ expression: "requires_human_input == true" }],
     runtime: fallback?.runtime ?? {
       task_count: 0,
       blocked_count: 0,
@@ -93,6 +155,37 @@ function stateFromConfig(
       health: "ok",
     },
   };
+}
+
+function triggersFromConfig(value: unknown): ApiProcessState["triggers"] | null {
+  if (!Array.isArray(value)) return null;
+  const triggers = value
+    .map((item) => {
+      const row = asRecord(item);
+      const type = stringValue(row?.type);
+      if (!type) return null;
+      return {
+        type: type as ApiProcessState["triggers"][number]["type"],
+        interval: stringValue(row?.interval) ?? null,
+        event: stringValue(row?.event) ?? null,
+      };
+    })
+    .filter((trigger): trigger is ApiProcessState["triggers"][number] => trigger != null);
+  return triggers.length ? triggers : null;
+}
+
+function conditionsFromConfig(
+  value: unknown,
+): ApiProcessState["exit_conditions"] | null {
+  if (!Array.isArray(value)) return null;
+  const conditions = value
+    .map((item) => {
+      const row = asRecord(item);
+      const expression = stringValue(row?.expression);
+      return expression ? { expression } : null;
+    })
+    .filter((condition): condition is ApiProcessState["exit_conditions"][number] => condition != null);
+  return conditions.length ? conditions : null;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

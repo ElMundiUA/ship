@@ -703,6 +703,7 @@ def emit_config_yaml_for_bundle(
         preset_id=preset_id,
         repo_full_name=repo_full_name,
         lanes=lanes,
+        process=default_development_process_config(),
     )
 
 
@@ -711,6 +712,7 @@ def emit_config_yaml(
     preset_id: str | None,
     repo_full_name: str | None,
     lanes: "Mapping[str, Mapping[str, object]]",
+    process: "Mapping[str, object] | None" = None,
 ) -> str:
     """Serialize a ``.ship/config.yml`` body in schema v2.
 
@@ -760,6 +762,17 @@ def emit_config_yaml(
         ]
     )
 
+    if process:
+        lines.append("process:")
+        dumped = yaml.safe_dump(
+            dict(process),
+            sort_keys=False,
+            default_flow_style=False,
+            allow_unicode=False,
+        ).rstrip()
+        for line in dumped.splitlines():
+            lines.append(f"  {line}" if line else "")
+
     if lanes:
         lines.append("lanes:")
         for lane_id, trigger in lanes.items():
@@ -777,6 +790,75 @@ def emit_config_yaml(
                     lines.append(f"    {key}: {_render_yaml_scalar(value)}")
 
     return "\n".join(lines) + "\n"
+
+
+def default_development_process_config() -> dict[str, object]:
+    """Return the minimal FSM process seeded into new repo configs.
+
+    This is intentionally product-language first. Runtime ``lanes:`` remain
+    below it as the compatibility layer until the executor reads ``process:``
+    directly.
+    """
+
+    return {
+        "id": "development",
+        "name": "Development Process",
+        "primary": True,
+        "states": [
+            {
+                "id": "task_intake",
+                "name": "Intake",
+                "specialist": {"id": "intake", "name": "Intake specialist"},
+                "instructions": (
+                    "Clarify the request, collect missing context, and decide "
+                    "whether the task is ready for requirements."
+                ),
+            },
+            {
+                "id": "ba_requirements",
+                "name": "Requirements",
+                "specialist": {"id": "business_analyst", "name": "Business analyst"},
+                "instructions": (
+                    "Turn the request into acceptance criteria, constraints, "
+                    "risks, and open questions."
+                ),
+            },
+            {
+                "id": "dev_implementation",
+                "name": "Implementation",
+                "specialist": {"id": "developer", "name": "Developer"},
+                "instructions": (
+                    "Implement the change, update tests and documentation, and "
+                    "prepare the work for review."
+                ),
+            },
+            {
+                "id": "qa_manual",
+                "name": "Quality Review",
+                "specialist": {"id": "qa_engineer", "name": "QA engineer"},
+                "instructions": (
+                    "Validate acceptance criteria, edge cases, and user-facing "
+                    "quality before release."
+                ),
+            },
+            {
+                "id": "pr_review",
+                "name": "Final Review",
+                "specialist": {"id": "review_owner", "name": "Review owner"},
+                "instructions": (
+                    "Review the completed work for correctness, maintainability, "
+                    "scope, and release readiness."
+                ),
+            },
+        ],
+        "transitions": [
+            {"from": "task_intake", "to": "ba_requirements"},
+            {"from": "ba_requirements", "to": "dev_implementation"},
+            {"from": "dev_implementation", "to": "qa_manual"},
+            {"from": "qa_manual", "to": "pr_review"},
+        ],
+        "routines": [],
+    }
 
 
 def _normalise_lane_for_config(trigger: "Mapping[str, object]") -> dict[str, object]:

@@ -59,17 +59,17 @@ def test_compose_default_bundle_emits_config_yml() -> None:
     assert "api:\n" in config_body
     assert "stack:\n" in config_body
     assert "agent:\n" in config_body
-    assert "kind: event" in config_body
+    assert "process:\n" in config_body
+    assert "name: Development Process" in config_body
     assert "kind: schedule" in config_body
     assert "cron:" in config_body
-    assert "daily_standup:" in config_body
+    assert "task_intake:" in config_body
     assert "self_heal:" in config_body
     assert "schedule:" not in config_body
     # Every pattern in the bundle that contributes a lane should
     # surface as a ``lanes.*`` mapping key — sanity-check the
     # round-trip from bundle → catalog → YAML.
     assert "role-intake" in bundle.bundle
-    assert "task_intake:" in config_body
 
 
 def test_compose_default_bundle_emits_dedup_workflows() -> None:

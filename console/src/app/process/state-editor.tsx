@@ -2,11 +2,17 @@ import { Card, CardHeader } from "@/components/ui";
 import type { ApiProcessState, ApiRepoConfig } from "@/lib/api/client";
 
 export function StateEditor({
+  workspaceId,
+  repoId,
   state,
   config,
+  processConfig,
 }: {
+  workspaceId: string;
+  repoId?: string;
   state?: ApiProcessState;
   config: ApiRepoConfig | null;
+  processConfig: Record<string, unknown>;
 }) {
   if (!state) {
     return (
@@ -28,14 +34,38 @@ export function StateEditor({
             Config YAML parse error: {config.parse_error}
           </div>
         )}
-        <form className="space-y-4">
-          <EditorField label="Step name" defaultValue={state.name} />
-          <EditorField label="Owner role" defaultValue={state.specialist_name} />
+        {!repoId && (
+          <div className="rounded-xl border border-amber-300/25 bg-amber-300/[0.06] px-3 py-2 text-xs text-amber-100/90">
+            Select a repository before saving process changes.
+          </div>
+        )}
+        <form action="/api/process/config-propose" method="post" className="space-y-4">
+          <input type="hidden" name="workspaceId" value={workspaceId} />
+          <input type="hidden" name="repoId" value={repoId ?? ""} />
+          <input type="hidden" name="stateId" value={state.id} />
+          <input type="hidden" name="baseSha" value={config?.sha ?? ""} />
+          <input
+            type="hidden"
+            name="lanesJson"
+            value={JSON.stringify(config?.parsed?.lanes ?? {})}
+          />
+          <input
+            type="hidden"
+            name="processJson"
+            value={JSON.stringify(processConfig)}
+          />
+          <EditorField name="stateName" label="Step name" defaultValue={state.name} />
+          <EditorField
+            name="specialistName"
+            label="Owner role"
+            defaultValue={state.specialist_name}
+          />
           <label className="block">
             <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/45">
               What should happen here
             </span>
             <textarea
+              name="instructions"
               defaultValue={state.instructions}
               rows={5}
               className="w-full resize-none rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm leading-relaxed text-white outline-none focus:border-aqua/40"
@@ -46,6 +76,7 @@ export function StateEditor({
               Starts when
             </div>
             <select
+              name="triggerType"
               defaultValue={state.triggers[0]?.type ?? "manual"}
               className="mt-2 w-full rounded-lg border border-white/10 bg-ink px-2 py-2 text-sm text-white outline-none focus:border-aqua/40"
             >
@@ -54,12 +85,14 @@ export function StateEditor({
               <option value="schedule">It runs on a schedule</option>
             </select>
             <input
+              name="triggerDetail"
               defaultValue={humanTriggerDetail(state)}
               placeholder="Example: every weekday morning, or ticket moved to Ready"
               className="mt-2 w-full rounded-lg border border-white/10 bg-white/[0.04] px-2 py-2 text-xs text-white outline-none focus:border-aqua/40"
             />
           </div>
           <RuleTextArea
+            name="exitCondition"
             label="Ready to move forward when"
             value={humanCondition(
               state.exit_conditions[0]?.expression,
@@ -67,6 +100,7 @@ export function StateEditor({
             )}
           />
           <RuleTextArea
+            name="blockCondition"
             label="Pause and ask for help when"
             value={humanCondition(
               state.block_conditions[0]?.expression,
@@ -74,11 +108,11 @@ export function StateEditor({
             )}
           />
           <button
-            type="button"
-            className="w-full rounded-full border border-white/10 bg-white/[0.05] px-3 py-2 text-xs font-bold text-white/45"
-            title="Persistence lands with the process config API."
+            type="submit"
+            disabled={!repoId}
+            className="w-full rounded-full border border-aqua/30 bg-aqua/10 px-3 py-2 text-xs font-bold text-aqua transition hover:bg-aqua/15 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/[0.05] disabled:text-white/35"
           >
-            Save draft locally
+            Open config PR
           </button>
           {config?.raw_yaml && (
             <details className="rounded-xl border border-white/10 bg-white/[0.025] p-3">
@@ -97,9 +131,11 @@ export function StateEditor({
 }
 
 function EditorField({
+  name,
   label,
   defaultValue,
 }: {
+  name: string;
   label: string;
   defaultValue: string;
 }) {
@@ -109,6 +145,7 @@ function EditorField({
         {label}
       </span>
       <input
+        name={name}
         defaultValue={defaultValue}
         className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none focus:border-aqua/40"
       />
@@ -116,13 +153,22 @@ function EditorField({
   );
 }
 
-function RuleTextArea({ label, value }: { label: string; value: string }) {
+function RuleTextArea({
+  name,
+  label,
+  value,
+}: {
+  name: string;
+  label: string;
+  value: string;
+}) {
   return (
     <div className="rounded-xl border border-white/10 bg-white/[0.025] p-3">
       <div className="text-[10px] font-bold uppercase tracking-widest text-white/45">
         {label}
       </div>
       <textarea
+        name={name}
         defaultValue={value}
         rows={3}
         className="mt-2 w-full resize-none rounded-lg border border-white/10 bg-white/[0.04] px-2 py-2 text-xs leading-relaxed text-white outline-none focus:border-aqua/40"

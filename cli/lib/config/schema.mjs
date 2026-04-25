@@ -172,10 +172,33 @@ export function DEFAULT_CONFIG_V2() {
       default: { provider: null },
       overrides: {},
     },
+    process: DEFAULT_PROCESS_CONFIG(),
     lanes: {},
     artifacts: v1.artifacts,
     cache: v1.cache,
     telemetry: v1.telemetry,
+  };
+}
+
+export function DEFAULT_PROCESS_CONFIG() {
+  return {
+    id: "development",
+    name: "Development Process",
+    primary: true,
+    states: [
+      { id: "task_intake", name: "Intake", specialist: { id: "intake", name: "Intake specialist" } },
+      { id: "ba_requirements", name: "Requirements", specialist: { id: "business_analyst", name: "Business analyst" } },
+      { id: "dev_implementation", name: "Implementation", specialist: { id: "developer", name: "Developer" } },
+      { id: "qa_manual", name: "Quality Review", specialist: { id: "qa_engineer", name: "QA engineer" } },
+      { id: "pr_review", name: "Final Review", specialist: { id: "review_owner", name: "Review owner" } },
+    ],
+    transitions: [
+      { from: "task_intake", to: "ba_requirements" },
+      { from: "ba_requirements", to: "dev_implementation" },
+      { from: "dev_implementation", to: "qa_manual" },
+      { from: "qa_manual", to: "pr_review" },
+    ],
+    routines: [],
   };
 }
 
@@ -206,6 +229,7 @@ const KNOWN_TOP_LEVEL_V2 = new Set([
   "api",
   "stack",
   "agent",
+  "process",
   "lanes",
   "artifacts",
   "cache",
@@ -285,6 +309,92 @@ function validateSharedSections(obj, errors, warnings) {
  * @param {string[]} errors
  * @param {string[]} warnings
  */
+function validateV2Process(obj, errors, warnings) {
+  const process = obj.process;
+  if (process === undefined) return;
+  if (!isPlainObject(process)) {
+    errors.push("process: must be an object");
+    return;
+  }
+  pushUnknownKeyWarnings(
+    process,
+    new Set(["id", "name", "primary", "states", "transitions", "routines"]),
+    "process",
+    warnings,
+  );
+  if (typeof process.id !== "string" || !process.id.trim()) {
+    errors.push("process.id: must be a non-empty string");
+  }
+  if (process.name !== undefined && (typeof process.name !== "string" || !process.name.trim())) {
+    errors.push("process.name: must be a non-empty string when set");
+  }
+  if (process.primary !== undefined && typeof process.primary !== "boolean") {
+    errors.push("process.primary: must be boolean when set");
+  }
+
+  if (!Array.isArray(process.states) || process.states.length < 1) {
+    errors.push("process.states: must contain at least one state");
+    return;
+  }
+  const stateIds = new Set();
+  for (let i = 0; i < process.states.length; i += 1) {
+    const state = process.states[i];
+    const prefix = `process.states[${i}]`;
+    if (!isPlainObject(state)) {
+      errors.push(`${prefix}: must be an object`);
+      continue;
+    }
+    pushUnknownKeyWarnings(
+      state,
+      new Set(["id", "name", "specialist", "instructions", "triggers", "exit_conditions", "block_conditions"]),
+      prefix,
+      warnings,
+    );
+    if (typeof state.id !== "string" || !state.id.trim()) {
+      errors.push(`${prefix}.id: must be a non-empty string`);
+    } else if (stateIds.has(state.id)) {
+      errors.push(`${prefix}.id: duplicate state id ${JSON.stringify(state.id)}`);
+    } else {
+      stateIds.add(state.id);
+    }
+    if (state.name !== undefined && (typeof state.name !== "string" || !state.name.trim())) {
+      errors.push(`${prefix}.name: must be a non-empty string when set`);
+    }
+    if (state.instructions !== undefined && typeof state.instructions !== "string") {
+      errors.push(`${prefix}.instructions: must be a string when set`);
+    }
+    if (state.specialist !== undefined && !isPlainObject(state.specialist) && typeof state.specialist !== "string") {
+      errors.push(`${prefix}.specialist: must be an object or string when set`);
+    }
+  }
+
+  if (process.transitions !== undefined) {
+    if (!Array.isArray(process.transitions)) {
+      errors.push("process.transitions: must be a list when set");
+    } else {
+      for (let i = 0; i < process.transitions.length; i += 1) {
+        const transition = process.transitions[i];
+        const prefix = `process.transitions[${i}]`;
+        if (!isPlainObject(transition)) {
+          errors.push(`${prefix}: must be an object`);
+          continue;
+        }
+        pushUnknownKeyWarnings(transition, new Set(["from", "to", "condition"]), prefix, warnings);
+        if (!stateIds.has(transition.from)) {
+          errors.push(`${prefix}.from: must reference an existing state id`);
+        }
+        if (!stateIds.has(transition.to)) {
+          errors.push(`${prefix}.to: must reference an existing state id`);
+        }
+      }
+    }
+  }
+
+  if (process.routines !== undefined && !Array.isArray(process.routines)) {
+    errors.push("process.routines: must be a list when set");
+  }
+}
+
 function validateV2Lanes(obj, errors, warnings) {
   const agent = obj.agent;
   if (agent !== undefined) {
@@ -560,6 +670,7 @@ export function validateConfig(obj) {
 
   validateSharedSections(obj, errors, warnings);
   if (isV2) {
+    validateV2Process(obj, errors, warnings);
     validateV2Lanes(obj, errors, warnings);
   }
 

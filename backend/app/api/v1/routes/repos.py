@@ -2656,6 +2656,13 @@ class RepoConfigProposeIn(BaseModel):
     """
 
     lanes: dict[str, LaneTriggerIn]
+    process: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Optional top-level ``process:`` FSM editor payload. When omitted, "
+            "the generated config keeps the legacy lanes-only shape."
+        ),
+    )
     base_sha: str | None
     change_summary: str = Field(
         default="",
@@ -2681,6 +2688,90 @@ class RepoConfigProposeOut(BaseModel):
 
 
 _LANES_CONFIG_PATH = ".ship/config.yml"
+
+
+def _validate_process_config(process: dict[str, Any]) -> None:
+    """Minimal guardrail for the repo-backed FSM editor payload."""
+
+    if not isinstance(process.get("id"), str) or not process["id"].strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "invalid_process",
+                "message": "process.id must be a non-empty string",
+            },
+        )
+    states = process.get("states")
+    if not isinstance(states, list) or not states:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "invalid_process",
+                "message": "process.states must contain at least one state",
+            },
+        )
+    state_ids: set[str] = set()
+    for index, state_obj in enumerate(states):
+        if not isinstance(state_obj, dict):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_process",
+                    "message": f"process.states[{index}] must be an object",
+                },
+            )
+        state_id = state_obj.get("id")
+        if not isinstance(state_id, str) or not state_id.strip():
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_process",
+                    "message": f"process.states[{index}].id must be a non-empty string",
+                },
+            )
+        if state_id in state_ids:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_process",
+                    "message": f"process.states contains duplicate id {state_id!r}",
+                },
+            )
+        state_ids.add(state_id)
+
+    transitions = process.get("transitions")
+    if transitions is None:
+        return
+    if not isinstance(transitions, list):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "invalid_process",
+                "message": "process.transitions must be a list when provided",
+            },
+        )
+    for index, transition in enumerate(transitions):
+        if not isinstance(transition, dict):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_process",
+                    "message": f"process.transitions[{index}] must be an object",
+                },
+            )
+        from_state = transition.get("from")
+        to_state = transition.get("to")
+        if from_state not in state_ids or to_state not in state_ids:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_process",
+                    "message": (
+                        f"process.transitions[{index}] must reference existing "
+                        "state ids"
+                    ),
+                },
+            )
 
 
 @router.get("/{repo_id}/config", response_model=RepoConfigOut)
@@ -2857,14 +2948,14 @@ async def propose_repo_config(
         )
 
     # ------ validate the edited mapping before any network calls ----
-    if not payload.lanes:
+    if not payload.lanes and not payload.process:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={
                 "code": "empty_lanes",
                 "message": (
-                    "Proposal has no lanes — use a delete-config flow "
-                    "if that's intentional."
+                    "Proposal has no lanes or process definition — use a "
+                    "delete-config flow if that's intentional."
                 ),
             },
         )
@@ -2976,6 +3067,9 @@ async def propose_repo_config(
             flat["idempotency_key"] = trigger.idempotency_key
         normalised[lane_id] = flat
 
+    if payload.process is not None:
+        _validate_process_config(payload.process)
+
     # ------ optimistic-locking check against the live blob ---------
     owner, _, name = repo_row.full_name.partition("/")
     ref = RepoRef(kind="github", owner=owner, repo=name)
@@ -3017,6 +3111,7 @@ async def propose_repo_config(
         preset_id=payload.preset or repo_row.preset,
         repo_full_name=repo_row.full_name,
         lanes=normalised,
+        process=payload.process,
     )
 
     pr_body_header = (
@@ -3064,6 +3159,7 @@ async def propose_repo_config(
                 "pr_url": result.pr_url,
                 "branch": result.branch,
                 "lanes": sorted(normalised.keys()),
+                "process": payload.process.get("id") if payload.process else None,
                 "base_sha": payload.base_sha,
                 "change_summary": payload.change_summary or None,
             },
