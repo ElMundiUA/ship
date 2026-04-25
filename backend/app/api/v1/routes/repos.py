@@ -902,10 +902,6 @@ async def install_bundle(
             },
         ) from exc
 
-    # Stamp the bundle version so the dashboard can tell "up to date"
-    # from "upgrade available" next render.
-    repo_row.installed_bundle_version = _BUNDLE_VERSION
-
     session.add(
         AuditLog(
             workspace_id=workspace_id,
@@ -920,7 +916,7 @@ async def install_bundle(
                 "pr_number": result.pr_number,
                 "pr_url": result.pr_url,
                 "branch": result.branch,
-                "bundle_version": _BUNDLE_VERSION,
+                "legacy_bundle": True,
             },
         )
     )

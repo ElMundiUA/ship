@@ -55,6 +55,16 @@ def test_compose_default_bundle_emits_config_yml() -> None:
     # ``lanes:`` map only renders when ``emit_config_yaml_for_bundle``
     # is in play.
     assert "lanes:" in config_body
+    assert "shipctl_min: 0.12.0" in config_body
+    assert "api:\n" in config_body
+    assert "stack:\n" in config_body
+    assert "agent:\n" in config_body
+    assert "kind: event" in config_body
+    assert "kind: schedule" in config_body
+    assert "cron:" in config_body
+    assert "daily_standup:" in config_body
+    assert "self_heal:" in config_body
+    assert "schedule:" not in config_body
     # Every pattern in the bundle that contributes a lane should
     # surface as a ``lanes.*`` mapping key — sanity-check the
     # round-trip from bundle → catalog → YAML.
@@ -195,6 +205,17 @@ def test_compose_includes_adhoc_agent_run_workflow() -> None:
     assert any(p.endswith("/adhoc-agent-run.yml") for p in paths), (
         f"adhoc-agent-run.yml not found in {paths!r}"
     )
+
+
+def test_compose_self_heal_workflow_inspects_failed_run_context() -> None:
+    from backend.app.services import starter_workflows
+
+    body = starter_workflows.read_yaml("pipeline-self-heal") or ""
+
+    assert "ship_failed_run_id" in body
+    assert "gh run view" in body
+    assert "E2E_CONSOLE_BASE_URL" in body
+    assert "missing_secret" in body
 
 
 def test_compose_tracker_fsm_gated_by_kind() -> None:

@@ -58,10 +58,14 @@ DEFAULT_BUNDLE: tuple[str, ...] = (
     "scan-security-deps",
     # PR-attached license check on dependency-manifest changes.
     "scan-license-deps",
+    # Weekday retro over recent workflow failures and lane health.
+    "flow-daily-retro",
     # Weekly docs-vs-code drift sweep so docs stay shippable.
     "scan-docs-freshness",
     # Weekly tree sweep for hotspots / TODO clusters / duplication.
     "scan-tech-debt",
+    # Auto-diagnose failed non-Ship workflows when GitHub reports a failure.
+    "op-workflow-self-heal",
     # On-tag changelog drafter — proves value at the next release.
     "flow-release-notes",
     # One-shot seed for ``.ship/knowledge/*`` so day-zero agent runs

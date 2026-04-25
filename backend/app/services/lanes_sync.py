@@ -91,16 +91,17 @@ def _parse_lane_entry(
     """
     if not isinstance(raw, dict):
         return None
-    # Config v2 uses the trigger key itself as the kind discriminator:
-    # ``once: install`` / ``event: pull_request`` / ``schedule: "0 9 * * *"``.
-    # Pick the first recognised trigger; if two are set, prefer the
-    # most specific (``once`` → ``event`` → ``schedule``) and flag
-    # the others in ``config_blob`` so the Console can warn.
-    kind: str | None = None
-    for candidate in ("once", "event", "schedule"):
-        if candidate in raw:
-            kind = candidate
-            break
+    # Current config v2 uses ``kind`` + kind-specific keys (``on`` /
+    # ``cron`` / ``idempotency``). Older generated configs used the
+    # trigger key itself as the discriminator
+    # (``event: pull_request`` / ``schedule: "0 9 * * *"``). Accept
+    # both so existing repos can sync long enough to receive a v4 seed.
+    kind = raw.get("kind") if isinstance(raw.get("kind"), str) else None
+    if kind is None:
+        for candidate in ("once", "event", "schedule"):
+            if candidate in raw:
+                kind = candidate
+                break
     if kind is None:
         return None
     # Accept both the canonical ``patterns: [ids]`` (RFC-0008 C3.1) and
@@ -130,15 +131,26 @@ def _parse_lane_entry(
         fanout = raw_fanout
     else:
         fanout = "matrix"
+    trigger_value = raw.get(kind)
+    if kind == "event":
+        trigger_value = raw.get("on", trigger_value)
+    elif kind == "schedule":
+        trigger_value = raw.get("cron", trigger_value)
+
+    idem_raw = raw.get("idempotency")
+    idem_key = raw.get("idempotency_key")
+    if isinstance(idem_raw, dict):
+        idem_key = idem_raw.get("key")
+
     flat = {
         "lane_id": lane_id,
         "kind": kind,
-        "trigger": raw.get(kind),
+        "trigger": trigger_value,
         "pattern": primary_pattern,
         "patterns": patterns_list,
         "fanout": fanout,
-        "cron": raw.get("schedule") if kind == "schedule" else None,
-        "idempotency_key": raw.get("idempotency_key"),
+        "cron": trigger_value if kind == "schedule" else None,
+        "idempotency_key": idem_key,
         # Carry the whole thing so forward-compat fields land in
         # ``config_blob`` untouched.
         "raw": raw,

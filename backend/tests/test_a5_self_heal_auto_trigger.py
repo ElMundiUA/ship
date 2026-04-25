@@ -8,7 +8,7 @@ dispatcher wire end-to-end for every branch in the decision tree:
 - happy path (enabled + installed)
 - pipeline row disabled
 - workflow YAML not yet installed
-- no ``self_heal`` pipeline seeded at all (silent)
+- no ``self_heal`` pipeline seeded at all (workflow failure still surfaces)
 - workflow conclusion != failure (silent)
 - our own ``Ship · …`` workflow failing (silent — would recurse)
 - dedupe on webhook replay
@@ -223,12 +223,18 @@ async def test_workflow_run_failure_auto_dispatches_self_heal(
             )
         )
     ).scalars().all()
-    assert len(notifs) == 1
-    n = notifs[0]
+    assert {n.kind for n in notifs} == {
+        "workflow_failure",
+        "self_heal_dispatched",
+    }
+    n = next(n for n in notifs if n.kind == "self_heal_dispatched")
     assert n.kind == "self_heal_dispatched"
     assert n.dedupe_key == "self_heal:5001001"
     assert "heal-me" in n.title
     assert n.payload["healing_run_id"] == str(runs[0].id)
+    wf = next(n for n in notifs if n.kind == "workflow_failure")
+    assert wf.dedupe_key == "workflow_failure:5001001"
+    assert wf.payload["failed_workflow_name"] == "Deploy to staging"
 
 
 @pytest.mark.asyncio
@@ -279,9 +285,9 @@ async def test_workflow_run_failure_when_pipeline_disabled_records_skipped(
             )
         )
     ).scalars().all()
-    assert len(notifs) == 1
-    assert notifs[0].kind == "self_heal_skipped"
-    assert "disabled" in (notifs[0].payload.get("reason") or "").lower()
+    assert {n.kind for n in notifs} == {"workflow_failure", "self_heal_skipped"}
+    skipped = next(n for n in notifs if n.kind == "self_heal_skipped")
+    assert "disabled" in (skipped.payload.get("reason") or "").lower()
 
 
 @pytest.mark.asyncio
@@ -321,16 +327,16 @@ async def test_workflow_run_failure_when_yaml_not_installed_records_skipped(
             )
         )
     ).scalars().all()
-    assert len(notifs) == 1
-    assert notifs[0].kind == "self_heal_skipped"
-    assert "not installed" in (notifs[0].payload.get("reason") or "").lower()
+    assert {n.kind for n in notifs} == {"workflow_failure", "self_heal_skipped"}
+    skipped = next(n for n in notifs if n.kind == "self_heal_skipped")
+    assert "not installed" in (skipped.payload.get("reason") or "").lower()
 
 
 @pytest.mark.asyncio
-async def test_workflow_run_failure_without_pipeline_is_silent(
+async def test_workflow_run_failure_without_pipeline_records_workflow_failure(
     v1_client, db_session, github_app_env, seed_workspace, monkeypatch
 ) -> None:
-    """No self_heal pipeline row at all → no dispatch, no banner (quiet)."""
+    """No self_heal pipeline row → no dispatch, but the failure is visible."""
     from backend.app.db.models.integrations import (
         GitHubInstallation,
         WorkspaceRepo,
@@ -388,7 +394,9 @@ async def test_workflow_run_failure_without_pipeline_is_silent(
             )
         )
     ).scalars().all()
-    assert notifs == []
+    assert len(notifs) == 1
+    assert notifs[0].kind == "workflow_failure"
+    assert notifs[0].dedupe_key == "workflow_failure:5001004"
 
 
 @pytest.mark.asyncio
@@ -527,7 +535,8 @@ async def test_replayed_failure_webhook_does_not_double_dispatch(
             )
         )
     ).scalars().all()
-    assert len(notifs) == 1
+    assert len(notifs) == 2
+    assert {n.kind for n in notifs} == {"workflow_failure", "self_heal_dispatched"}
 
     runs = (
         await db_session.execute(

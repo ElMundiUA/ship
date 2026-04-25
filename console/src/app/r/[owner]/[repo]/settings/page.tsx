@@ -315,7 +315,7 @@ function BundleCard({
     <Card>
       <CardHeader
         title="Bundle & install PR"
-        subtitle="Workflow YAMLs + .ship/config.yml shipped to this repo."
+        subtitle="Current wizard seed: workflows, .ship/config.yml, FSM, knowledge and routing."
       />
       <div className="mb-4 flex flex-wrap items-center gap-3 text-xs">
         <Badge tone={tone} dot>
@@ -335,27 +335,14 @@ function BundleCard({
       >
         <input type="hidden" name="ws" value={workspace} />
         <input type="hidden" name="repo_id" value={repo.id} />
-        <label className="flex flex-col gap-1">
-          <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/50">
-            Presets (optional)
-          </span>
-          <input
-            type="text"
-            name="presets"
-            defaultValue={repo.preset ?? ""}
-            placeholder="adoption-minimum"
-            className="w-56 rounded-md border border-white/15 bg-black/30 px-3 py-1.5 font-mono text-xs text-white placeholder:text-white/30 focus:border-aqua/60 focus:outline-none"
-          />
-        </label>
         <button
           type="submit"
           className="inline-flex items-center rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-4 py-1.5 text-[11px] font-bold text-ink shadow-glow transition hover:brightness-110"
         >
-          Open install PR
+          Open wizard seed PR
         </button>
         <p className="text-[11px] text-white/45">
-          Opens one PR in the customer repo with every workflow the
-          preset needs.
+          Opens one PR with the current v{current} seed bundle.
         </p>
       </form>
     </Card>

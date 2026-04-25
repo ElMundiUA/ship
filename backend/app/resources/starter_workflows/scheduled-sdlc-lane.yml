@@ -1,5 +1,5 @@
 name: Ship · Scheduled SDLC lane
-# Day-4 Phase-2 starter workflow for the `daily_standup` pipeline kind.
+# Starter workflow for the `daily_standup` / retro lane.
 # Runs on a cron (default 09:00 UTC) and via dashboard "Run now"
 # (workflow_dispatch). The reporting contract matches pr-and-ci-gate.
 #
@@ -41,13 +41,33 @@ jobs:
       - name: Install shipctl
         run: npm install -g @elmundi/ship-cli@latest
 
-      - name: Run SDLC lane pick
+      - name: Run scheduled retro lane
         id: lane
         run: |
           set -euo pipefail
-          shipctl kickoff --pattern kickoff > /tmp/ship-kickoff.md || true
+          set +e
+          shipctl run --lane daily_standup --trigger schedule --json > /tmp/ship-sdlc.json 2> /tmp/ship-sdlc.err
+          code=$?
+          set -e
+          if [ "$code" -ne 0 ]; then
+            summary="$(tr '\n' ' ' < /tmp/ship-sdlc.err | cut -c1-500)"
+            echo "status=failed" >> "$GITHUB_OUTPUT"
+            echo "summary=${summary:-Scheduled SDLC lane failed}" >> "$GITHUB_OUTPUT"
+            cat /tmp/ship-sdlc.err >&2
+            exit "$code"
+          fi
+
+          status="$(jq -r '.status // empty' /tmp/ship-sdlc.json)"
+          reason="$(jq -r '.reason // empty' /tmp/ship-sdlc.json)"
+          if [ "$status" = "noop" ]; then
+            echo "status=failed" >> "$GITHUB_OUTPUT"
+            echo "summary=Scheduled SDLC lane did not execute: ${reason}" >> "$GITHUB_OUTPUT"
+            cat /tmp/ship-sdlc.json
+            exit 1
+          fi
+
           echo "status=succeeded" >> "$GITHUB_OUTPUT"
-          echo "summary=Scheduled SDLC lane completed (starter stub — wire tracker pick + agent)" >> "$GITHUB_OUTPUT"
+          echo "summary=Scheduled SDLC lane completed" >> "$GITHUB_OUTPUT"
 
       - name: Report back to Ship
         if: always() && inputs.ship_callback_url != ''
