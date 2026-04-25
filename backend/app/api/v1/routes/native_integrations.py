@@ -5,7 +5,9 @@ from __future__ import annotations
 import hashlib
 import uuid
 from datetime import datetime, timezone
+from urllib.parse import quote
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -81,6 +83,41 @@ def _normalise_azure_org(value: str) -> str:
             detail="organization must be an Azure DevOps organization slug",
         )
     return org
+
+
+async def _probe_azure_devops_pat(
+    *,
+    organization: str,
+    pat: str,
+    project: str | None,
+) -> tuple[bool, str | None]:
+    """Verify PAT reachability without exposing token details in errors."""
+
+    base = f"https://dev.azure.com/{quote(organization, safe='')}"
+    if project:
+        path = f"/{quote(project, safe='')}/_apis/git/repositories"
+    else:
+        path = "/_apis/projects"
+    url = f"{base}{path}"
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+            response = await client.get(
+                url,
+                params={"api-version": "7.1", "$top": "1"},
+                auth=("", pat),
+                headers={"Accept": "application/json"},
+            )
+    except httpx.HTTPError as exc:
+        return False, f"Azure DevOps probe failed: {exc.__class__.__name__}"
+
+    if response.status_code < 400:
+        return True, None
+    if response.status_code in {401, 403}:
+        return False, "Azure DevOps rejected the PAT or required scopes."
+    if response.status_code == 404:
+        target = f"project {project!r}" if project else f"organization {organization!r}"
+        return False, f"Azure DevOps {target} was not found."
+    return False, f"Azure DevOps probe returned HTTP {response.status_code}."
 
 
 def _normalise_atlassian_site(value: str) -> tuple[str, str]:
@@ -182,9 +219,15 @@ async def upsert_azure_devops_pat(
     now = datetime.now(timezone.utc)
     account_url = f"https://dev.azure.com/{org}"
     scopes = sorted({scope.strip() for scope in payload.scopes if scope.strip()})
+    project = payload.project.strip() if payload.project else None
+    probe_ok, probe_error = await _probe_azure_devops_pat(
+        organization=org,
+        pat=payload.pat,
+        project=project,
+    )
     config = {
         "organization": org,
-        "project": payload.project.strip() if payload.project else None,
+        "project": project,
     }
 
     stmt = select(NativeIntegrationInstallation).where(
@@ -208,9 +251,11 @@ async def upsert_azure_devops_pat(
     row.capabilities = ["code_host", "orchestrator"]
     row.scopes = scopes
     row.config = config
-    row.status = NativeIntegrationStatus.PENDING
-    row.last_health_at = None
-    row.last_health_error = None
+    row.status = (
+        NativeIntegrationStatus.READY if probe_ok else NativeIntegrationStatus.ERROR
+    )
+    row.last_health_at = now
+    row.last_health_error = probe_error
     row.connected_at = row.connected_at or now
     row.disabled_at = None
     row.updated_at = now

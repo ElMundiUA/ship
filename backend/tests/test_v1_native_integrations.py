@@ -11,6 +11,7 @@ async def test_admin_can_connect_azure_devops_pat(
     v1_client,
     db_session,
     seed_workspace,
+    monkeypatch,
 ) -> None:
     from backend.app.db.models.integrations import (
         NativeIntegrationAuditEvent,
@@ -21,6 +22,17 @@ async def test_admin_can_connect_azure_devops_pat(
 
     _, raw, workspace = seed_workspace
     headers = {"Authorization": f"Bearer {raw}"}
+
+    async def _fake_probe(*, organization, pat, project):
+        assert organization == "acme-corp"
+        assert pat == "ado_pat_secret"
+        assert project == "Platform"
+        return True, None
+
+    monkeypatch.setattr(
+        "backend.app.api.v1.routes.native_integrations._probe_azure_devops_pat",
+        _fake_probe,
+    )
 
     response = await v1_client.post(
         f"/v1/workspaces/{workspace.id}/native-integrations/azure-devops/pat",
@@ -40,7 +52,8 @@ async def test_admin_can_connect_azure_devops_pat(
     assert body["external_account_id"] == "acme-corp"
     assert body["external_account_url"] == "https://dev.azure.com/acme-corp"
     assert body["capabilities"] == ["code_host", "orchestrator"]
-    assert body["status"] == "pending"
+    assert body["status"] == "ready"
+    assert body["last_health_error"] is None
     assert body["has_credential"] is True
     assert "pat" not in body
 
@@ -59,6 +72,37 @@ async def test_admin_can_connect_azure_devops_pat(
     assert audit_event.provider == "azure_devops"
     assert audit_event.action == "native_integration.create"
     assert audit_event.payload["credential_rotated"] is True
+
+
+@pytest.mark.asyncio
+async def test_admin_can_save_azure_devops_pat_with_failed_probe(
+    v1_client,
+    seed_workspace,
+    monkeypatch,
+) -> None:
+    _, raw, workspace = seed_workspace
+    headers = {"Authorization": f"Bearer {raw}"}
+
+    async def _fake_probe(*, organization, pat, project):
+        return False, "Azure DevOps rejected the PAT or required scopes."
+
+    monkeypatch.setattr(
+        "backend.app.api.v1.routes.native_integrations._probe_azure_devops_pat",
+        _fake_probe,
+    )
+
+    response = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/native-integrations/azure-devops/pat",
+        headers=headers,
+        json={"organization": "acme-corp", "pat": "bad_pat"},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["provider"] == "azure_devops"
+    assert body["status"] == "error"
+    assert body["last_health_error"] == "Azure DevOps rejected the PAT or required scopes."
+    assert body["has_credential"] is True
 
 
 @pytest.mark.asyncio
