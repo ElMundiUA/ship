@@ -1,8 +1,15 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { type PointerEvent, useMemo, useRef, useState } from "react";
+import {
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { Card } from "@/components/ui";
 import type { ApiProcess, ApiProcessState } from "@/lib/api/client";
@@ -11,13 +18,12 @@ const NODE_WIDTH = 210;
 const NODE_HEIGHT = 108;
 const GAP = 56;
 const PAD = 72;
-const START_Y = 230;
-const INSPECTOR_RESERVE = 420;
+const START_Y = 170;
 
 type Position = { x: number; y: number };
 type DragState = {
   id: string;
-  pointerId: number;
+  pointerId: number | null;
   offsetX: number;
   offsetY: number;
   moved: boolean;
@@ -27,10 +33,12 @@ export function ProcessCanvasEditor({
   process,
   selectedStateId,
   editMode,
+  repoId,
 }: {
   process: ApiProcess;
   selectedStateId?: string;
   editMode: boolean;
+  repoId?: string;
 }) {
   const router = useRouter();
   const canvasRef = useRef<HTMLDivElement | null>(null);
@@ -50,6 +58,66 @@ export function ProcessCanvasEditor({
     initialPositions,
   );
 
+  const updateDraggedNode = useCallback((clientX: number, clientY: number) => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const next = {
+      x: Math.max(PAD / 2, clientX - rect.left - drag.offsetX),
+      y: Math.max(96, clientY - rect.top - drag.offsetY),
+    };
+    drag.moved = true;
+    setPositions((current) => ({ ...current, [drag.id]: next }));
+  }, []);
+
+  const moveDraggedNode = useCallback((event: PointerEvent) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    updateDraggedNode(event.clientX, event.clientY);
+  }, [updateDraggedNode]);
+
+  const moveDraggedNodeWithMouse = useCallback((event: MouseEvent) => {
+    if (!dragRef.current) return;
+    event.preventDefault();
+    updateDraggedNode(event.clientX, event.clientY);
+  }, [updateDraggedNode]);
+
+  const removeDragListeners = useCallback(() => {
+    window.removeEventListener("pointermove", moveDraggedNode);
+    window.removeEventListener("mousemove", moveDraggedNodeWithMouse);
+  }, [moveDraggedNode, moveDraggedNodeWithMouse]);
+
+  const stopDragging = useCallback((event: PointerEvent) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    suppressClickRef.current = drag.moved;
+    dragRef.current = null;
+    removeDragListeners();
+    window.removeEventListener("pointerup", stopDragging);
+    window.removeEventListener("pointercancel", stopDragging);
+  }, [removeDragListeners]);
+
+  const stopDraggingWithMouse = useCallback(() => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    suppressClickRef.current = drag.moved;
+    dragRef.current = null;
+    removeDragListeners();
+    window.removeEventListener("mouseup", stopDraggingWithMouse);
+  }, [removeDragListeners]);
+
+  useEffect(() => {
+    return () => {
+      dragRef.current = null;
+      removeDragListeners();
+      window.removeEventListener("pointerup", stopDragging);
+      window.removeEventListener("pointercancel", stopDragging);
+      window.removeEventListener("mouseup", stopDraggingWithMouse);
+    };
+  }, [removeDragListeners, stopDragging, stopDraggingWithMouse]);
+
   const maxX = Math.max(
     ...process.states.map((state) => positions[state.id]?.x ?? PAD),
     PAD,
@@ -59,13 +127,13 @@ export function ProcessCanvasEditor({
     START_Y,
   );
   const canvasWidth = Math.max(
-    1280,
-    maxX + NODE_WIDTH + PAD + INSPECTOR_RESERVE,
+    1120,
+    maxX + NODE_WIDTH + PAD,
   );
-  const canvasHeight = Math.max(620, maxY + NODE_HEIGHT + PAD);
+  const canvasHeight = Math.max(520, maxY + NODE_HEIGHT + PAD);
 
   function onPointerDown(
-    event: PointerEvent<HTMLDivElement>,
+    event: ReactPointerEvent<HTMLDivElement>,
     stateId: string,
   ) {
     if (!editMode) return;
@@ -73,7 +141,7 @@ export function ProcessCanvasEditor({
     if (!pos) return;
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
-    event.currentTarget.setPointerCapture(event.pointerId);
+    event.preventDefault();
     dragRef.current = {
       id: stateId,
       pointerId: event.pointerId,
@@ -81,26 +149,30 @@ export function ProcessCanvasEditor({
       offsetY: event.clientY - rect.top - pos.y,
       moved: false,
     };
+    window.addEventListener("pointermove", moveDraggedNode);
+    window.addEventListener("pointerup", stopDragging);
+    window.addEventListener("pointercancel", stopDragging);
   }
 
-  function onPointerMove(event: PointerEvent<HTMLDivElement>) {
-    const drag = dragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
+  function onMouseDown(
+    event: ReactMouseEvent<HTMLDivElement>,
+    stateId: string,
+  ) {
+    if (!editMode || dragRef.current) return;
+    const pos = positions[stateId] ?? initialPositions[stateId];
+    if (!pos) return;
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
-    const next = {
-      x: Math.max(PAD / 2, event.clientX - rect.left - drag.offsetX),
-      y: Math.max(96, event.clientY - rect.top - drag.offsetY),
+    event.preventDefault();
+    dragRef.current = {
+      id: stateId,
+      pointerId: null,
+      offsetX: event.clientX - rect.left - pos.x,
+      offsetY: event.clientY - rect.top - pos.y,
+      moved: false,
     };
-    drag.moved = true;
-    setPositions((current) => ({ ...current, [drag.id]: next }));
-  }
-
-  function onPointerUp(event: PointerEvent<HTMLDivElement>) {
-    const drag = dragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    suppressClickRef.current = drag.moved;
-    dragRef.current = null;
+    window.addEventListener("mousemove", moveDraggedNodeWithMouse);
+    window.addEventListener("mouseup", stopDraggingWithMouse);
   }
 
   function onNodeClick(stateId: string) {
@@ -108,51 +180,33 @@ export function ProcessCanvasEditor({
       suppressClickRef.current = false;
       return;
     }
-    router.push(`/process${editMode ? "?mode=edit&" : "?"}state=${stateId}`);
+    const params = new URLSearchParams({ state: stateId });
+    if (repoId) params.set("repo", repoId);
+    router.push(`/process?${params.toString()}`);
   }
 
   return (
-    <Card className="min-h-[680px] overflow-hidden" padded={false}>
+    <Card className="h-full min-h-[560px] overflow-hidden" padded={false}>
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
         <div>
           <h2 className="font-display text-base font-bold text-white">
             {process.name}
           </h2>
           <p className="mt-0.5 text-xs text-white/45">
-            {editMode
-              ? "Edit layout mode. Drag state cards around the canvas."
-              : "Canvas view. Select a state to inspect instructions, rules, and tasks in the side panel."}
+            Drag cards to reshape the process. Select a card to edit its launch
+            and completion rules.
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Link
-            href="/process"
-            className={[
-              "rounded-full px-3 py-1 text-xs font-semibold transition",
-              !editMode
-                ? "bg-aqua/15 text-aqua"
-                : "border border-white/10 bg-white/[0.04] text-white/55 hover:text-white",
-            ].join(" ")}
-          >
-            View
-          </Link>
-          <Link
-            href="/process?mode=edit"
-            className={[
-              "rounded-full px-3 py-1 text-xs font-semibold transition",
-              editMode
-                ? "bg-aqua/15 text-aqua"
-                : "border border-white/10 bg-white/[0.04] text-white/55 hover:text-white",
-            ].join(" ")}
-          >
-            Edit layout
-          </Link>
+          <span className="rounded-full bg-aqua/15 px-3 py-1 text-xs font-semibold text-aqua">
+            Editing
+          </span>
           <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-white/45">
             {process.states.length} states
           </span>
         </div>
       </div>
-      <div className="h-[620px] overflow-auto bg-[radial-gradient(circle_at_1px_1px,rgba(255,255,255,0.10)_1px,transparent_0)] [background-size:24px_24px]">
+      <div className="h-[calc(100%-73px)] overflow-auto bg-[radial-gradient(circle_at_1px_1px,rgba(255,255,255,0.10)_1px,transparent_0)] [background-size:24px_24px]">
         <div
           ref={canvasRef}
           className="relative"
@@ -208,8 +262,7 @@ export function ProcessCanvasEditor({
                 y={pos.y}
                 editMode={editMode}
                 onPointerDown={(event) => onPointerDown(event, state.id)}
-                onPointerMove={onPointerMove}
-                onPointerUp={onPointerUp}
+                onMouseDown={(event) => onMouseDown(event, state.id)}
                 onClick={() => onNodeClick(state.id)}
               />
             );
@@ -228,8 +281,7 @@ function StateNode({
   y,
   editMode,
   onPointerDown,
-  onPointerMove,
-  onPointerUp,
+  onMouseDown,
   onClick,
 }: {
   state: ApiProcessState;
@@ -238,23 +290,22 @@ function StateNode({
   x: number;
   y: number;
   editMode: boolean;
-  onPointerDown: (event: PointerEvent<HTMLDivElement>) => void;
-  onPointerMove: (event: PointerEvent<HTMLDivElement>) => void;
-  onPointerUp: (event: PointerEvent<HTMLDivElement>) => void;
+  onPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  onMouseDown: (event: ReactMouseEvent<HTMLDivElement>) => void;
   onClick: () => void;
 }) {
   return (
     <div
       role="button"
       tabIndex={0}
+      draggable={false}
       onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
+      onMouseDown={onMouseDown}
       onClick={onClick}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") onClick();
       }}
-      style={{ left: x, top: y }}
+      style={{ left: x, top: y, touchAction: "none", userSelect: "none" }}
       className={[
         "absolute block h-[108px] w-[210px] rounded-2xl border p-4 transition",
         editMode ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
@@ -280,7 +331,7 @@ function StateNode({
         </span>
       </div>
       <div className="mt-3 rounded-xl border border-white/10 bg-black/20 px-3 py-1.5 text-xs text-white/55">
-        {editMode ? "Drag to move" : "Inspect rules"}
+        Drag to move · click to edit
       </div>
     </div>
   );

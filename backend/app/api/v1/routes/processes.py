@@ -14,7 +14,7 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -221,6 +221,7 @@ async def get_process_adapters(
 async def get_process(
     workspace_id: uuid.UUID,
     process_id: str,
+    repo_id: uuid.UUID | None = Query(default=None),
     auth: AuthContext = Depends(get_current_auth),
     session: AsyncSession = Depends(get_session),
 ) -> ProcessOut:
@@ -230,46 +231,72 @@ async def get_process(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="process not found",
         )
-    return await _build_development_process(session, workspace_id)
+    return await _build_development_process(session, workspace_id, repo_id=repo_id)
 
 
 async def _build_development_process(
-    session: AsyncSession, workspace_id: uuid.UUID
+    session: AsyncSession, workspace_id: uuid.UUID, repo_id: uuid.UUID | None = None
 ) -> ProcessOut:
+    repo_rows = list(
+        (
+            await session.execute(
+                select(WorkspaceRepo).where(WorkspaceRepo.workspace_id == workspace_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    repos = {row.id: row.full_name for row in repo_rows}
+    if repo_id is not None and repo_id not in repos:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="repo not found",
+        )
+
+    lane_stmt = select(Lane).where(Lane.workspace_id == workspace_id)
+    if repo_id is not None:
+        lane_stmt = lane_stmt.where(Lane.repo_id == repo_id)
     lanes = list(
         (
             await session.execute(
-                select(Lane)
-                .where(Lane.workspace_id == workspace_id)
-                .order_by(Lane.created_at)
+                lane_stmt.order_by(Lane.created_at)
             )
         )
         .scalars()
         .all()
     )
+
+    pipeline_stmt = select(Pipeline).where(Pipeline.workspace_id == workspace_id)
+    if repo_id is not None:
+        pipeline_stmt = pipeline_stmt.where(Pipeline.repo_id == repo_id)
     pipelines = list(
         (
             await session.execute(
-                select(Pipeline)
-                .where(Pipeline.workspace_id == workspace_id)
-                .order_by(Pipeline.created_at)
+                pipeline_stmt.order_by(Pipeline.created_at)
             )
         )
         .scalars()
         .all()
     )
-    runs = list(
-        (
-            await session.execute(
-                select(PipelineRun)
-                .where(PipelineRun.workspace_id == workspace_id)
-                .order_by(desc(PipelineRun.started_at), desc(PipelineRun.created_at))
-                .limit(75)
+    pipeline_ids = {pipeline.id for pipeline in pipelines}
+    if repo_id is not None and not pipeline_ids:
+        runs = []
+    else:
+        run_stmt = select(PipelineRun).where(PipelineRun.workspace_id == workspace_id)
+        if repo_id is not None:
+            run_stmt = run_stmt.where(PipelineRun.pipeline_id.in_(pipeline_ids))
+        runs = list(
+            (
+                await session.execute(
+                    run_stmt.order_by(
+                        desc(PipelineRun.started_at),
+                        desc(PipelineRun.created_at),
+                    ).limit(75)
+                )
             )
+            .scalars()
+            .all()
         )
-        .scalars()
-        .all()
-    )
     inbox_items = list(
         (
             await session.execute(
@@ -285,21 +312,6 @@ async def _build_development_process(
         .scalars()
         .all()
     )
-    repos = {
-        row.id: row.full_name
-        for row in (
-            (
-                await session.execute(
-                    select(WorkspaceRepo).where(
-                        WorkspaceRepo.workspace_id == workspace_id
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-    }
-
     pipeline_by_id = {p.id: p for p in pipelines}
     lane_by_uuid = {lane.id: lane for lane in lanes}
     lane_keys = _state_lane_ids(lanes, pipelines)
@@ -317,7 +329,7 @@ async def _build_development_process(
         runtime.blocked_count = blocked_by_state[lane_key]
         if runtime.blocked_count > 0 and runtime.health == "ok":
             runtime.health = "degraded"
-        if lane_key in _ROUTINE_IDS or (lane and lane.kind == "schedule" and lane_key not in _PROCESS_STATE_ORDER):
+        if lane_key not in _PROCESS_STATE_ORDER or lane_key in _ROUTINE_IDS:
             routines.append(
                 ProcessRoutineOut(
                     id=lane_key,
@@ -385,7 +397,7 @@ async def _build_development_process(
 
 def _state_lane_ids(lanes: list[Lane], pipelines: list[Pipeline]) -> list[str]:
     seen = {row.lane_id for row in lanes} | {row.lane_id for row in pipelines}
-    ordered = [lane_id for lane_id in _PROCESS_STATE_ORDER if lane_id in seen]
+    ordered = list(_PROCESS_STATE_ORDER)
     extras = sorted(seen - set(ordered))
     return ordered + extras
 
@@ -424,8 +436,8 @@ def _specialists() -> dict[str, ProcessSpecialistOut]:
         ),
         ProcessSpecialistOut(
             id="code_reviewer",
-            name="Code reviewer",
-            role="Reviews PRs for correctness, scope, and maintainability.",
+            name="Review owner",
+            role="Reviews completed work for correctness, scope, and maintainability.",
             capabilities=["review", "ci_triage", "risk_review"],
         ),
         ProcessSpecialistOut(
@@ -704,4 +716,16 @@ async def _adapter_diagnostics(
 
 
 def _titleize(value: str) -> str:
+    labels = {
+        "task_intake": "Intake",
+        "ba_requirements": "Requirements",
+        "tech_arch_plan": "Solution Plan",
+        "qa_arch_plan": "Quality Plan",
+        "dev_implementation": "Implementation",
+        "qa_manual": "Quality Review",
+        "qa_automation": "Automated Checks",
+        "pr_review": "Final Review",
+    }
+    if value in labels:
+        return labels[value]
     return value.replace("_", " ").replace("-", " ").title()
