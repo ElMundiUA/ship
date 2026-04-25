@@ -44,6 +44,7 @@ export default async function ProcessPage({
   const selectedTab = params.tab === "routines" ? "routines" : "process";
   const selectedRepoId =
     typeof params.repo === "string" ? params.repo : undefined;
+  const reason = typeof params.reason === "string" ? params.reason : undefined;
 
   if (!isApiConfigured()) {
     return renderProcessPage({
@@ -53,6 +54,7 @@ export default async function ProcessPage({
       selectedRepo: mockRepos[0],
       selectedStateId,
       selectedTab,
+      reason,
       mock: true,
     });
   }
@@ -65,7 +67,7 @@ export default async function ProcessPage({
   if (result === "empty") redirect("/onboarding?step=github");
   if (result === "down") return renderDownState();
 
-  return renderProcessPage({ ...result, selectedStateId, selectedTab });
+  return renderProcessPage({ ...result, selectedStateId, selectedTab, reason });
 }
 
 type LiveProcess = {
@@ -137,6 +139,7 @@ function renderProcessPage({
   configSource,
   selectedStateId,
   selectedTab,
+  reason,
   mock = false,
 }: {
   workspace: Pick<ApiWorkspace, "id" | "name" | "slug">;
@@ -147,6 +150,7 @@ function renderProcessPage({
   configSource?: ProcessConfigSource;
   selectedStateId?: string;
   selectedTab: "process" | "routines";
+  reason?: string;
   mock?: boolean;
 }) {
   const selectedState =
@@ -172,6 +176,7 @@ function renderProcessPage({
       {mock && <MockBanner />}
       <div className="space-y-3">
         <RepoSelector repos={repos} selectedRepo={selectedRepo} />
+        <ProcessNotice reason={reason} />
         <ConfigSourceBanner config={config ?? null} source={configSource ?? "fallback"} />
         <ProcessTabs selected={selectedTab} repoId={selectedRepo?.id} />
         {selectedTab === "routines" ? (
@@ -179,10 +184,13 @@ function renderProcessPage({
         ) : (
           <section className="grid min-h-[calc(100vh-180px)] grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
             <ProcessCanvasEditor
+              workspaceId={workspace.id}
               process={process}
               selectedStateId={selectedState?.id}
               editMode={true}
               repoId={selectedRepo?.id}
+              config={config ?? null}
+              processConfig={processConfigFromApiProcess(process)}
             />
             <StateEditor
               workspaceId={workspace.id}
@@ -196,6 +204,32 @@ function renderProcessPage({
       </div>
     </AppShell>
   );
+}
+
+function ProcessNotice({ reason }: { reason?: string }) {
+  if (!reason) return null;
+  const message = noticeMessage(reason);
+  const isError = reason !== "pr_opened";
+  return (
+    <div
+      className={
+        isError
+          ? "rounded-2xl border border-coral/25 bg-coral/[0.05] px-4 py-2 text-xs text-coral/90"
+          : "rounded-2xl border border-aqua/25 bg-aqua/[0.05] px-4 py-2 text-xs text-aqua/90"
+      }
+    >
+      {message}
+    </div>
+  );
+}
+
+function noticeMessage(reason: string): string {
+  if (reason === "bad_request") return "Process save could not start: missing repository or workspace.";
+  if (reason === "api_unavailable") return "Backend is unreachable. Try again after the API is back.";
+  if (reason === "http_409") return ".ship/config.yml changed since the editor loaded. Reload before saving.";
+  if (reason === "http_422") return "Process config is invalid. Check state ids, transitions, and layout values.";
+  if (reason.startsWith("http_")) return `Process save failed (${reason.replace("http_", "HTTP ")}).`;
+  return "Process save failed. Please retry.";
 }
 
 function ConfigSourceBanner({

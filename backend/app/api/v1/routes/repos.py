@@ -2738,6 +2738,27 @@ def _validate_process_config(process: dict[str, Any]) -> None:
                 },
             )
         state_ids.add(state_id)
+        layout = state_obj.get("layout")
+        if layout is not None:
+            x_value = layout.get("x") if isinstance(layout, dict) else None
+            y_value = layout.get("y") if isinstance(layout, dict) else None
+            if (
+                not isinstance(layout, dict)
+                or isinstance(x_value, bool)
+                or isinstance(y_value, bool)
+                or not isinstance(x_value, (int, float))
+                or not isinstance(y_value, (int, float))
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={
+                        "code": "invalid_process",
+                        "message": (
+                            f"process.states[{index}].layout must contain "
+                            "numeric x and y values"
+                        ),
+                    },
+                )
 
     transitions = process.get("transitions")
     if transitions is None:

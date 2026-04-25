@@ -186,11 +186,11 @@ export function DEFAULT_PROCESS_CONFIG() {
     name: "Development Process",
     primary: true,
     states: [
-      { id: "task_intake", name: "Intake", specialist: { id: "intake", name: "Intake specialist" } },
-      { id: "ba_requirements", name: "Requirements", specialist: { id: "business_analyst", name: "Business analyst" } },
-      { id: "dev_implementation", name: "Implementation", specialist: { id: "developer", name: "Developer" } },
-      { id: "qa_manual", name: "Quality Review", specialist: { id: "qa_engineer", name: "QA engineer" } },
-      { id: "pr_review", name: "Final Review", specialist: { id: "review_owner", name: "Review owner" } },
+      { id: "task_intake", name: "Intake", specialist: { id: "intake", name: "Intake specialist" }, layout: { x: 72, y: 170 } },
+      { id: "ba_requirements", name: "Requirements", specialist: { id: "business_analyst", name: "Business analyst" }, layout: { x: 338, y: 170 } },
+      { id: "dev_implementation", name: "Implementation", specialist: { id: "developer", name: "Developer" }, layout: { x: 604, y: 170 } },
+      { id: "qa_manual", name: "Quality Review", specialist: { id: "qa_engineer", name: "QA engineer" }, layout: { x: 870, y: 170 } },
+      { id: "pr_review", name: "Final Review", specialist: { id: "review_owner", name: "Review owner" }, layout: { x: 1136, y: 170 } },
     ],
     transitions: [
       { from: "task_intake", to: "ba_requirements" },
@@ -346,7 +346,7 @@ function validateV2Process(obj, errors, warnings) {
     }
     pushUnknownKeyWarnings(
       state,
-      new Set(["id", "name", "specialist", "instructions", "triggers", "exit_conditions", "block_conditions"]),
+      new Set(["id", "name", "specialist", "layout", "instructions", "triggers", "exit_conditions", "block_conditions"]),
       prefix,
       warnings,
     );
@@ -365,6 +365,19 @@ function validateV2Process(obj, errors, warnings) {
     }
     if (state.specialist !== undefined && !isPlainObject(state.specialist) && typeof state.specialist !== "string") {
       errors.push(`${prefix}.specialist: must be an object or string when set`);
+    }
+    if (state.layout !== undefined) {
+      if (!isPlainObject(state.layout)) {
+        errors.push(`${prefix}.layout: must be an object when set`);
+      } else {
+        pushUnknownKeyWarnings(state.layout, new Set(["x", "y"]), `${prefix}.layout`, warnings);
+        if (typeof state.layout.x !== "number" || !Number.isFinite(state.layout.x)) {
+          errors.push(`${prefix}.layout.x: must be a finite number`);
+        }
+        if (typeof state.layout.y !== "number" || !Number.isFinite(state.layout.y)) {
+          errors.push(`${prefix}.layout.y: must be a finite number`);
+        }
+      }
     }
   }
 

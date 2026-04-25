@@ -17,7 +17,7 @@ export async function POST(request: Request) {
   const repoId = getFormValue(form, "repoId");
   const stateId = getFormValue(form, "stateId");
 
-  if (!workspaceId || !repoId || !stateId) {
+  if (!workspaceId || !repoId) {
     return back(origin, repoId, stateId, "bad_request");
   }
   if (!isApiConfigured()) {
@@ -29,15 +29,21 @@ export async function POST(request: Request) {
     const lanes = normalizeLanesForProposal(
       parseObject(getFormValue(form, "lanesJson")),
     );
-    updateState(process, stateId, {
-      name: getFormValue(form, "stateName"),
-      specialistName: getFormValue(form, "specialistName"),
-      instructions: getFormValue(form, "instructions"),
-      triggerType: getFormValue(form, "triggerType"),
-      triggerDetail: getFormValue(form, "triggerDetail"),
-      exitCondition: getFormValue(form, "exitCondition"),
-      blockCondition: getFormValue(form, "blockCondition"),
-    });
+    const layout = parseObject(getFormValue(form, "layoutJson"));
+    if (stateId) {
+      updateState(process, stateId, {
+        name: getFormValue(form, "stateName"),
+        specialistName: getFormValue(form, "specialistName"),
+        instructions: getFormValue(form, "instructions"),
+        triggerType: getFormValue(form, "triggerType"),
+        triggerDetail: getFormValue(form, "triggerDetail"),
+        exitCondition: getFormValue(form, "exitCondition"),
+        blockCondition: getFormValue(form, "blockCondition"),
+      });
+    }
+    if (Object.keys(layout).length > 0) {
+      updateLayout(process, layout);
+    }
 
     const token = (await getSessionToken()) ?? undefined;
     const result = await proposeRepoConfig(
@@ -47,7 +53,9 @@ export async function POST(request: Request) {
         lanes,
         process,
         base_sha: getFormValue(form, "baseSha") || null,
-        change_summary: `Update process state ${stateId}`,
+        change_summary: stateId
+          ? `Update process state ${stateId}`
+          : "Update process canvas layout",
       },
       token,
     );
@@ -121,6 +129,24 @@ function updateState(
   }
 }
 
+function updateLayout(
+  process: Record<string, unknown>,
+  layout: Record<string, unknown>,
+) {
+  const states = Array.isArray(process.states) ? process.states : [];
+  for (const item of states) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const state = item as Record<string, unknown>;
+    const stateId = typeof state.id === "string" ? state.id : "";
+    const position = isRecord(layout[stateId]) ? layout[stateId] : null;
+    if (!position) continue;
+    const x = numberValue(position.x);
+    const y = numberValue(position.y);
+    if (x == null || y == null) continue;
+    state.layout = { x, y };
+  }
+}
+
 function triggerFromForm(type: string, detail: string) {
   if (type === "schedule") return { type, interval: detail || null, event: null };
   if (type === "event") return { type, interval: null, event: detail || null };
@@ -167,4 +193,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function stringValue(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null;
+}
+
+function numberValue(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
