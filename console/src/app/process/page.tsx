@@ -188,7 +188,6 @@ function renderProcessPage({
               workspaceId={workspace.id}
               process={process}
               selectedStateId={selectedState?.id}
-              editMode={true}
               repoId={selectedRepo?.id}
               config={config ?? null}
               processConfig={processConfig}
