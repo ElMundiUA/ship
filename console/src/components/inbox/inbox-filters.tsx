@@ -40,6 +40,8 @@ export type InboxFiltersProps = {
   counts?: {
     ownership?: Partial<Record<InboxFilterState["ownership"], number>>;
     types?: Partial<Record<InboxType, number>>;
+    /** Total across types for this view (no type filter); matches sum of per-type counts. */
+    allTypes?: number;
   };
   className?: string;
 };
@@ -108,6 +110,18 @@ export function InboxFilters({
           )}
         >
           All
+          {counts?.allTypes !== undefined && (
+            <span
+              className={cn(
+                "rounded-full px-1.5 text-[10px] font-bold",
+                value.types.length === 0
+                  ? "bg-aqua/30 text-white"
+                  : "bg-white/10 text-white/55",
+              )}
+            >
+              {counts.allTypes}
+            </span>
+          )}
         </button>
         {INBOX_FILTER_TYPES.map((t) => {
           const active = value.types.includes(t);

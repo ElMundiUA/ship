@@ -238,6 +238,14 @@ function pickTypeCounts(
   return out;
 }
 
+function sumInboxTypeCounts(
+  c: Partial<Record<InboxType, number>>,
+): number {
+  let n = 0;
+  for (const t of INBOX_TYPES) n += c[t] ?? 0;
+  return n;
+}
+
 export default async function InboxPage({
   searchParams,
 }: {
@@ -264,6 +272,7 @@ export default async function InboxPage({
   const { workspace, allWorkspaces, me, list, filters, cursor, repo, play } =
     data;
   const typeCounts = pickTypeCounts(list.counts_by_type);
+  const allTypesCount = sumInboxTypeCounts(typeCounts);
   const activeFilterCount = countActiveFilters(filters, { repo, play });
   const multiWs = allWorkspaces.length > 1;
   const inboxWs = multiWs ? workspace.id : undefined;
@@ -302,7 +311,7 @@ export default async function InboxPage({
         />
         <InboxFiltersControlled
           value={filters}
-          counts={{ types: typeCounts }}
+          counts={{ types: typeCounts, allTypes: allTypesCount }}
           repo={repo}
           play={play}
           workspaceScope={inboxWs}
@@ -722,7 +731,10 @@ function MockView({
         />
         <InboxFiltersControlled
           value={filters}
-          counts={{ types: typeCounts }}
+          counts={{
+            types: typeCounts,
+            allTypes: sumInboxTypeCounts(typeCounts),
+          }}
         />
       </Card>
 
