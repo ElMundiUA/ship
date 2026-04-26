@@ -26,6 +26,11 @@ import type {
 } from "@/lib/api/client";
 import { resolveRepoContext, type RepoContext } from "@/lib/repo-context";
 import { slugFromParams, type RepoRouteParams } from "@/lib/repo-slug";
+import {
+  parseWorkspaceIdParam,
+  toAppShellWorkspaces,
+  withWorkspaceQuery,
+} from "@/lib/workspace-scope";
 
 /**
  * Repo home (``/r/<owner>/<repo>``).
@@ -63,6 +68,7 @@ export default async function RepoHomePage({
   const slug = slugFromParams(resolved);
   if (!slug) notFound();
   const tab = parseTab(search.tab);
+  const wsParam = parseWorkspaceIdParam(search.ws);
 
   if (!isApiConfigured()) {
     return renderMock(slug, tab);
@@ -73,7 +79,7 @@ export default async function RepoHomePage({
     redirect(`/login?next=${encodeURIComponent(`/r/${slug}`)}`);
   }
 
-  const result = await resolveRepoContext(token, slug);
+  const result = await resolveRepoContext(token, slug, wsParam);
   if (result.kind === "unauthorized") {
     redirect(`/login?next=${encodeURIComponent(`/r/${slug}`)}`);
   }
@@ -98,13 +104,23 @@ export default async function RepoHomePage({
 }
 
 function renderRepoHome(ctx: RepoContext, report: ApiRepoHomeReport | null, tab: Tab) {
-  const { workspace, repo, repos } = ctx;
+  const { workspace, allWorkspaces, repo, repos } = ctx;
   const base = `/r/${repo.full_name}`;
+  const multi = allWorkspaces.length > 1;
+  const settingsHref = multi
+    ? `${base}/settings?ws=${encodeURIComponent(workspace.id)}`
+    : `${base}/settings`;
+  const playsHref = withWorkspaceQuery(
+    `/plays?scope=repo&repo=${encodeURIComponent(repo.id)}`,
+    workspace.id,
+    multi,
+  );
   return (
     <AppShell
       title={`${repo.full_name}`}
       kicker="repo"
       workspace={{ id: workspace.id, name: workspace.name, slug: workspace.slug }}
+      allWorkspaces={toAppShellWorkspaces(allWorkspaces)}
       scope={{
         repos: repos.map((r) => ({ id: r.id, full_name: r.full_name })),
         selectedRepoId: repo.id,
@@ -112,15 +128,13 @@ function renderRepoHome(ctx: RepoContext, report: ApiRepoHomeReport | null, tab:
       actions={
         <>
           <Link
-            href={`${base}/settings`}
+            href={settingsHref}
             className="text-xs font-semibold text-white/65 hover:text-white"
           >
             Repo settings
           </Link>
           <ButtonPrimary>
-            <Link href={`/plays?scope=repo&repo=${encodeURIComponent(repo.id)}`}>
-              Start a request →
-            </Link>
+            <Link href={playsHref}>Start a request →</Link>
           </ButtonPrimary>
         </>
       }

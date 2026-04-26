@@ -22,6 +22,12 @@ import {
 import type { ApiWorkspace } from "@/lib/api/types";
 import { getSessionToken } from "@/lib/api/session";
 import { workspaces as mockWorkspaces } from "@/lib/mock/cloud";
+import {
+  parseWorkspaceIdParam,
+  pickWorkspace,
+  toAppShellWorkspaces,
+  withWorkspaceQuery,
+} from "@/lib/workspace-scope";
 
 export const dynamic = "force-dynamic";
 
@@ -57,7 +63,8 @@ export default async function CloudHomePage({
   const token = await getSessionToken();
   if (!token) redirect("/login?next=%2F");
 
-  const result = await loadLiveContext(token);
+  const wsParam = parseWorkspaceIdParam(params.ws);
+  const result = await loadLiveContext(token, wsParam);
   if (result === "unauthorized") redirect("/login?next=%2F");
   if (result === "empty") redirect("/onboarding?step=github");
   if (result === "down") return renderDownState();
@@ -74,6 +81,7 @@ export default async function CloudHomePage({
 
 type LiveContext = {
   workspace: ApiWorkspace;
+  allWorkspaces: ApiWorkspace[];
   data: ApiOpsDashboard;
   repos: ApiActivatedRepo[];
 };
@@ -99,6 +107,7 @@ function isGreenfieldWorkspace(ctx: LiveContext): boolean {
 
 async function loadLiveContext(
   token: string,
+  wsParam: string | undefined,
 ): Promise<LiveContext | "empty" | "unauthorized" | "down"> {
   let list: ApiWorkspace[];
   try {
@@ -110,13 +119,13 @@ async function loadLiveContext(
   }
   if (list.length === 0) return "empty";
 
-  const workspace = list[0];
+  const workspace = pickWorkspace(list, wsParam);
   try {
     const [data, repos] = await Promise.all([
       getOpsDashboard(workspace.id, token),
       listActivatedRepos(workspace.id, token).catch(() => [] as ApiActivatedRepo[]),
     ]);
-    return { workspace, data, repos };
+    return { workspace, allWorkspaces: list, data, repos };
   } catch (err) {
     if (err instanceof ApiHttpError && err.status === 401) return "unauthorized";
     if (err instanceof ApiUnavailableError) return "down";
@@ -125,15 +134,21 @@ async function loadLiveContext(
 }
 
 function renderWorkspaceHome(ctx: LiveContext) {
-  const { workspace, data } = ctx;
+  const { workspace, data, allWorkspaces } = ctx;
+  const multi = allWorkspaces.length > 1;
   return (
     <AppShell
       title="Workspace home"
       kicker={workspace.slug}
       workspace={{ id: workspace.id, name: workspace.name, slug: workspace.slug }}
+      allWorkspaces={toAppShellWorkspaces(allWorkspaces)}
       actions={
         <ButtonPrimary>
-          <Link href="/inbox">Review actions →</Link>
+          <Link
+            href={withWorkspaceQuery("/inbox", workspace.id, multi)}
+          >
+            Review actions →
+          </Link>
         </ButtonPrimary>
       }
     >

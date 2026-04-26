@@ -39,6 +39,11 @@ import type {
 } from "@/lib/api/types";
 import { getSessionToken } from "@/lib/api/session";
 import { workspaces as mockWorkspaces } from "@/lib/mock/cloud";
+import {
+  parseWorkspaceIdParam,
+  pickWorkspace,
+  toAppShellWorkspaces,
+} from "@/lib/workspace-scope";
 
 export const dynamic = "force-dynamic";
 
@@ -46,6 +51,7 @@ type Mode =
   | {
       source: "live";
       workspace: ApiWorkspace;
+      allWorkspaces: ApiWorkspace[];
       activatedRepos: ApiActivatedRepo[];
       repoConfigs: Record<string, RepoConfigStatus>;
       repos: ApiArtifactRepo[];
@@ -127,7 +133,7 @@ function isTabId(value: string): value is TabId {
   return (TAB_IDS as readonly string[]).includes(value);
 }
 
-async function load(): Promise<Mode> {
+async function load(wsParam: string | undefined): Promise<Mode> {
   if (!isApiConfigured()) return { source: "mock", reason: "SHIP_API_URL not set" };
   const token = await getSessionToken();
   if (!token) return { source: "mock", reason: "Sign in to manage real settings" };
@@ -138,7 +144,7 @@ async function load(): Promise<Mode> {
         source: "mock",
         reason: "Create a workspace first to manage settings",
       };
-    const target = ws[0];
+    const target = pickWorkspace(ws, wsParam);
     // The artifact-repos call may 404 in older deployments; treat it as
     // empty rather than falling all the way back to mock data.
     const activatedRepos = await listActivatedRepos(target.id, token).catch(
@@ -170,6 +176,7 @@ async function load(): Promise<Mode> {
     return {
       source: "live",
       workspace: target,
+      allWorkspaces: ws,
       activatedRepos,
       repoConfigs,
       repos,
@@ -241,11 +248,12 @@ export default async function SettingsPage({
 }: {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const data = await load();
   const params = ((await (searchParams ?? Promise.resolve({}))) ?? {}) as Record<
     string,
     string | string[] | undefined
   >;
+  const wsParam = parseWorkspaceIdParam(params.ws);
+  const data = await load(wsParam);
   const errorCode = typeof params.error === "string" ? params.error : null;
   const requestedTab = typeof params.tab === "string" ? params.tab : null;
   const activeTab: TabId =
@@ -267,7 +275,15 @@ export default async function SettingsPage({
     freshSecret = jar.get("ship_token_just_minted")?.value ?? null;
   }
 
-  const { workspace, activatedRepos, repoConfigs, repos, tokens } = data;
+  const { workspace, allWorkspaces, activatedRepos, repoConfigs, repos, tokens } =
+    data;
+  const multiWs = allWorkspaces.length > 1;
+  const settingsTabHref = (tabId: TabId) => {
+    const p = new URLSearchParams();
+    p.set("tab", tabId);
+    if (multiWs) p.set("ws", workspace.id);
+    return `?${p.toString()}`;
+  };
   const sources: Record<CatalogKey, boolean> = {
     global: workspace.catalog_sources?.global ?? true,
     workspace: workspace.catalog_sources?.workspace ?? true,
@@ -278,6 +294,8 @@ export default async function SettingsPage({
     <AppShell
       kicker={`${workspace.name} · settings`}
       title="Workspace settings"
+      workspace={{ id: workspace.id, name: workspace.name, slug: workspace.slug }}
+      allWorkspaces={toAppShellWorkspaces(allWorkspaces)}
     >
       <LiveBanner workspace={workspace.slug} />
       {errorCode && (
@@ -293,7 +311,7 @@ export default async function SettingsPage({
             return (
               <a
                 key={tab.id}
-                href={`?tab=${tab.id}`}
+                href={settingsTabHref(tab.id)}
                 className={
                   "block rounded-md px-3 py-1.5 transition " +
                   (current

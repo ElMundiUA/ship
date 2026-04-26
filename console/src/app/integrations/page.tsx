@@ -34,6 +34,11 @@ import {
 import type { ApiIntegration, ApiWorkspace } from "@/lib/api/types";
 import { getSessionToken } from "@/lib/api/session";
 import { integrations as mockIntegrations, workspaces as mockWorkspaces } from "@/lib/mock/cloud";
+import {
+  parseWorkspaceIdParam,
+  pickWorkspace,
+  toAppShellWorkspaces,
+} from "@/lib/workspace-scope";
 
 export const dynamic = "force-dynamic";
 
@@ -41,6 +46,7 @@ type Mode =
   | {
       source: "live";
       workspace: ApiWorkspace;
+      allWorkspaces: ApiWorkspace[];
       rows: ApiIntegration[];
       nativeRows: ApiNativeIntegration[];
       nativeRepoResources: Record<string, ApiNativeResource[]>;
@@ -165,7 +171,7 @@ const NATIVE_CATALOG = [
   },
 ];
 
-async function load(): Promise<Mode> {
+async function load(wsParam: string | undefined): Promise<Mode> {
   if (!isApiConfigured()) return { source: "mock", reason: "SHIP_API_URL not set" };
   const token = await getSessionToken();
   if (!token) return { source: "mock", reason: "Sign in to manage real integrations" };
@@ -173,7 +179,7 @@ async function load(): Promise<Mode> {
     const ws = await listWorkspaces(token);
     if (ws.length === 0)
       return { source: "mock", reason: "Create a workspace first to wire integrations" };
-    const target = ws[0];
+    const target = pickWorkspace(ws, wsParam);
     const [rows, nativeRows] = await Promise.all([
       listIntegrations(target.id, token),
       listNativeIntegrations(target.id, token),
@@ -209,6 +215,7 @@ async function load(): Promise<Mode> {
     return {
       source: "live",
       workspace: target,
+      allWorkspaces: ws,
       rows,
       nativeRows,
       nativeRepoResources,
@@ -225,14 +232,30 @@ async function load(): Promise<Mode> {
   }
 }
 
-export default async function IntegrationsPage() {
-  const data = await load();
+export default async function IntegrationsPage({
+  searchParams,
+}: {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const params = (await (searchParams ?? Promise.resolve({}))) as Record<
+    string,
+    string | string[] | undefined
+  >;
+  const wsParam = parseWorkspaceIdParam(params.ws);
+  const data = await load(wsParam);
 
   if (data.source === "mock") {
     return <MockView reason={data.reason} />;
   }
 
-  const { workspace, rows, nativeRows, nativeRepoResources, nativeBindings } = data;
+  const {
+    workspace,
+    allWorkspaces,
+    rows,
+    nativeRows,
+    nativeRepoResources,
+    nativeBindings,
+  } = data;
   const connectedNativeProviders = new Set(
     nativeRows.filter((r) => !r.disabled_at).map((r) => r.provider),
   );
@@ -249,6 +272,8 @@ export default async function IntegrationsPage() {
     <AppShell
       kicker={`${workspace.name} · integrations`}
       title="Integrations"
+      workspace={{ id: workspace.id, name: workspace.name, slug: workspace.slug }}
+      allWorkspaces={toAppShellWorkspaces(allWorkspaces)}
       actions={<ButtonPrimary>+ Custom integration</ButtonPrimary>}
     >
       <LiveBanner workspace={workspace.slug} />

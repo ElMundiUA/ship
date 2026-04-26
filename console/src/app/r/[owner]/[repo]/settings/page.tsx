@@ -31,6 +31,7 @@ import {
 import { getSessionToken } from "@/lib/api/session";
 import { resolveRepoContext, type RepoContext } from "@/lib/repo-context";
 import { slugFromParams, type RepoRouteParams } from "@/lib/repo-slug";
+import { parseWorkspaceIdParam, toAppShellWorkspaces } from "@/lib/workspace-scope";
 
 /**
  * Repo-mode Settings (``/r/<owner>/<repo>/settings``).
@@ -81,13 +82,14 @@ export default async function RepoSettingsPage({
   params: Promise<RepoRouteParams>;
   searchParams?: Promise<SearchParamsBag>;
 }) {
-  const [resolved] = await Promise.all([
+  const [resolved, rawSearch] = await Promise.all([
     params,
     searchParams ?? Promise.resolve({} as SearchParamsBag),
   ]);
   const slug = slugFromParams(resolved);
   if (!slug) notFound();
   const basePath = `/r/${slug}/settings`;
+  const wsParam = parseWorkspaceIdParam(rawSearch.ws);
 
   if (!isApiConfigured()) {
     return (
@@ -105,7 +107,7 @@ export default async function RepoSettingsPage({
   const token = await getSessionToken();
   if (!token) redirect(`/login?next=${encodeURIComponent(basePath)}`);
 
-  const result = await resolveRepoContext(token, slug);
+  const result = await resolveRepoContext(token, slug, wsParam);
   if (result.kind === "unauthorized") {
     redirect(`/login?next=${encodeURIComponent(basePath)}`);
   }
@@ -163,20 +165,25 @@ function describe(err: unknown): string {
 }
 
 function renderShell(ctx: RepoContext, bundle: SettingsBundle) {
-  const { workspace, repo, repos } = ctx;
+  const { workspace, allWorkspaces, repo, repos } = ctx;
   const base = `/r/${repo.full_name}`;
+  const multi = allWorkspaces.length > 1;
+  const homeHref = multi
+    ? `${base}?ws=${encodeURIComponent(workspace.id)}`
+    : base;
   return (
     <AppShell
       title="Settings"
       kicker={`${repo.full_name} · repo`}
       workspace={{ id: workspace.id, name: workspace.name, slug: workspace.slug }}
+      allWorkspaces={toAppShellWorkspaces(allWorkspaces)}
       scope={{
         repos: repos.map((r) => ({ id: r.id, full_name: r.full_name })),
         selectedRepoId: repo.id,
       }}
       actions={
         <Link
-          href={base}
+          href={homeHref}
           className="text-xs font-semibold text-white/65 hover:text-white"
         >
           ← Repo home

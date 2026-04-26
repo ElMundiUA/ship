@@ -27,6 +27,8 @@ export type InboxFiltersControlledProps = {
   repo?: string | null;
   /** Play scope to preserve across filter changes (URL `play` param). */
   play?: string | null;
+  /** When the user has multiple workspaces, preserve ``?ws=`` in the URL. */
+  workspaceScope?: string | null;
   className?: string;
 };
 
@@ -35,6 +37,7 @@ export function InboxFiltersControlled({
   counts,
   repo,
   play,
+  workspaceScope,
   className,
 }: InboxFiltersControlledProps) {
   const router = useRouter();
@@ -44,7 +47,7 @@ export function InboxFiltersControlled({
       counts={counts}
       className={className}
       onChange={(next) =>
-        router.push(buildInboxUrl(next, { repo, play }))
+        router.push(buildInboxUrl(next, { repo, play, workspaceScope }))
       }
     />
   );

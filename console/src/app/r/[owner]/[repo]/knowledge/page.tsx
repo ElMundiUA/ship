@@ -13,6 +13,11 @@ import type { ApiResolvedBucket } from "@/lib/api/types";
 import { getSessionToken } from "@/lib/api/session";
 import { resolveRepoContext } from "@/lib/repo-context";
 import { slugFromParams, type RepoRouteParams } from "@/lib/repo-slug";
+import {
+  parseWorkspaceIdParam,
+  toAppShellWorkspaces,
+  withWorkspaceQuery,
+} from "@/lib/workspace-scope";
 
 /**
  * Repo-mode Knowledge (``/r/<owner>/<repo>/knowledge``).
@@ -29,13 +34,19 @@ export const dynamic = "force-dynamic";
 
 export default async function RepoKnowledgePage({
   params,
+  searchParams,
 }: {
   params: Promise<RepoRouteParams>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const resolved = await params;
+  const [resolved, rawSearch] = await Promise.all([
+    params,
+    searchParams ?? Promise.resolve({} as Record<string, string | string[] | undefined>),
+  ]);
   const slug = slugFromParams(resolved);
   if (!slug) notFound();
   const here = `/r/${slug}/knowledge`;
+  const wsParam = parseWorkspaceIdParam(rawSearch.ws);
 
   if (!isApiConfigured()) {
     return (
@@ -53,7 +64,7 @@ export default async function RepoKnowledgePage({
   const token = await getSessionToken();
   if (!token) redirect(`/login?next=${encodeURIComponent(here)}`);
 
-  const result = await resolveRepoContext(token, slug);
+  const result = await resolveRepoContext(token, slug, wsParam);
   if (result.kind === "unauthorized") {
     redirect(`/login?next=${encodeURIComponent(here)}`);
   }
@@ -62,6 +73,7 @@ export default async function RepoKnowledgePage({
   if (result.kind === "not-found") notFound();
 
   const ctx = result.ctx;
+  const multi = ctx.allWorkspaces.length > 1;
 
   let buckets: ApiResolvedBucket[] = [];
   try {
@@ -87,13 +99,18 @@ export default async function RepoKnowledgePage({
         name: ctx.workspace.name,
         slug: ctx.workspace.slug,
       }}
+      allWorkspaces={toAppShellWorkspaces(ctx.allWorkspaces)}
       scope={{
         repos: ctx.repos.map((r) => ({ id: r.id, full_name: r.full_name })),
         selectedRepoId: ctx.repo.id,
       }}
       actions={
         <Link
-          href={`/r/${ctx.repo.full_name}`}
+          href={withWorkspaceQuery(
+            `/r/${ctx.repo.full_name}`,
+            ctx.workspace.id,
+            multi,
+          )}
           className="text-xs font-semibold text-white/65 hover:text-white"
         >
           ← Repo
@@ -107,7 +124,10 @@ export default async function RepoKnowledgePage({
         <span className="font-mono text-white/80">{ctx.repo.full_name}</span> —
         per-repo overlays plus the workspace-wide canonicals that
         this repo inherits. Use the workspace{" "}
-        <Link href="/knowledge" className="text-aqua hover:underline">
+        <Link
+          href={withWorkspaceQuery("/knowledge", ctx.workspace.id, multi)}
+          className="text-aqua hover:underline"
+        >
           knowledge surface
         </Link>{" "}
         to edit canonicals or pack new buckets from Navigator.
@@ -115,7 +135,11 @@ export default async function RepoKnowledgePage({
 
       <div className="mb-6 flex justify-end">
         <ButtonGhost>
-          <Link href="/knowledge">Browse all buckets →</Link>
+          <Link
+            href={withWorkspaceQuery("/knowledge", ctx.workspace.id, multi)}
+          >
+            Browse all buckets →
+          </Link>
         </ButtonGhost>
       </div>
 

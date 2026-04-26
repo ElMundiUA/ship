@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { type ReactNode, useState } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
+import { type ReactNode, Suspense, useState } from "react";
 import { cn } from "@/lib/cn";
 import { currentUser, workspaces } from "@/lib/mock/cloud";
 import { NavigatorLauncher } from "@/components/navigator-launcher";
@@ -194,6 +194,7 @@ export function AppShell({
   kicker,
   actions,
   workspace,
+  allWorkspaces,
   scopePill,
   me,
 }: {
@@ -202,6 +203,11 @@ export function AppShell({
   kicker?: string;
   actions?: ReactNode;
   workspace?: AppShellWorkspace;
+  /**
+   * When the signed-in user belongs to more than one workspace, pass the
+   * full list so the header can switch ``?ws=`` and the sidebar preserves it.
+   */
+  allWorkspaces?: AppShellWorkspace[];
   scope?: AppShellScope;
   /**
    * Phase 4: optional scope filter for the header. Pages that care
@@ -227,6 +233,18 @@ export function AppShell({
   const mockWs = workspaces[0];
   const wsLabel = workspace?.name ?? mockWs.name;
   const wsKicker = workspace?.slug ?? mockWs.org;
+  const multiWorkspace =
+    Boolean(workspace?.id) &&
+    Array.isArray(allWorkspaces) &&
+    allWorkspaces.length > 1;
+  const withWorkspaceHref = (href: string) => {
+    if (!multiWorkspace || !workspace?.id) {
+      return href;
+    }
+    const u = new URL(href, "http://local.workspace");
+    u.searchParams.set("ws", workspace.id);
+    return u.pathname + u.search;
+  };
   const userInfo = me ?? {
     name: currentUser.name,
     email: currentUser.email,
@@ -253,7 +271,10 @@ export function AppShell({
         {/* sidebar */}
         <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-white/10 bg-black/30 backdrop-blur-xl lg:flex">
           <div className="border-b border-white/10 px-4 py-5">
-            <Link href="/" className="font-display text-base font-bold tracking-tight text-white">
+            <Link
+              href={withWorkspaceHref("/")}
+              className="font-display text-base font-bold tracking-tight text-white"
+            >
               Ship<span className="text-aqua">.</span>
               <span className="ml-1 rounded-md border border-aqua/40 bg-aqua/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-widest text-aqua/90">
                 cloud
@@ -264,7 +285,7 @@ export function AppShell({
           {repoChip && (
             <div className="border-b border-white/10 px-3 py-3">
               <Link
-                href="/"
+                href={withWorkspaceHref("/")}
                 className="mb-2 inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-widest text-white/45 hover:text-white"
                 title="Back to workspace home"
               >
@@ -302,7 +323,7 @@ export function AppShell({
                     return (
                       <li key={item.href}>
                         <Link
-                          href={item.href}
+                          href={withWorkspaceHref(item.href)}
                           aria-current={active ? "page" : undefined}
                           className={cn(
                             "flex items-center gap-2.5 rounded-md px-3 py-1.5 text-sm transition",
@@ -356,7 +377,7 @@ export function AppShell({
                 <div className="truncate text-[10px] text-white/40">{userInfo.email}</div>
               </div>
               <Link
-                href="/settings"
+                href={withWorkspaceHref("/settings")}
                 className="rounded-md p-1 text-white/40 hover:bg-white/5 hover:text-white"
                 aria-label="Account settings"
               >
@@ -380,7 +401,7 @@ export function AppShell({
         <div className="flex min-w-0 flex-1 flex-col">
           <header className="sticky top-0 z-40 border-b border-white/10 bg-ink/80 backdrop-blur-xl">
             <div className="flex items-center gap-3 px-6 py-4 lg:px-8">
-              <div className="min-w-0 flex-1">
+              <div className="relative min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <WorkspaceChip
                     label={wsLabel}
@@ -399,23 +420,23 @@ export function AppShell({
                   {title}
                 </h1>
                 {wsOpen && (
-                  <div className="absolute left-6 top-[68px] z-50 w-72 overflow-hidden rounded-xl border border-white/10 bg-black/80 shadow-2xl backdrop-blur-xl lg:left-8">
-                    <div className="border-b border-white/10 px-4 py-3 text-[11px] uppercase tracking-widest text-white/45">
-                      Switch workspace
-                    </div>
-                    <div className="px-4 py-3 text-[11px] leading-snug text-white/55">
-                      Multi-workspace switching ships in a follow-up. For now this
-                      account has access to{" "}
-                      <span className="font-semibold text-white/80">{wsLabel}</span>{" "}
-                      only.
-                    </div>
-                    <Link
-                      href="/settings"
-                      className="block border-t border-white/10 bg-white/[0.02] px-4 py-2.5 text-center text-[11px] font-semibold text-aqua hover:underline"
-                    >
-                      Workspace settings →
-                    </Link>
-                  </div>
+                  <Suspense
+                    fallback={
+                      <div className="absolute left-0 top-[68px] z-50 w-72 overflow-hidden rounded-xl border border-white/10 bg-black/60 px-4 py-3 text-[11px] text-white/45">
+                        Loading…
+                      </div>
+                    }
+                  >
+                    <WorkspaceSwitcherMenu
+                      pathname={pathname}
+                      wsLabel={wsLabel}
+                      workspace={workspace}
+                      allWorkspaces={allWorkspaces}
+                      multiWorkspace={multiWorkspace}
+                      withWorkspaceHref={withWorkspaceHref}
+                      onPick={() => setWsOpen(false)}
+                    />
+                  </Suspense>
                 )}
               </div>
               <div className="flex shrink-0 items-center gap-2">
@@ -427,6 +448,81 @@ export function AppShell({
           <main className="px-6 pb-16 pt-6 lg:px-8 lg:pb-20 lg:pt-8">{children}</main>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Isolated so ``useSearchParams`` can be wrapped in ``Suspense`` (Next
+ * static / prerender).
+ */
+function WorkspaceSwitcherMenu({
+  pathname,
+  wsLabel,
+  workspace,
+  allWorkspaces,
+  multiWorkspace,
+  withWorkspaceHref,
+  onPick,
+}: {
+  pathname: string | null;
+  wsLabel: string;
+  workspace?: AppShellWorkspace;
+  allWorkspaces?: AppShellWorkspace[];
+  multiWorkspace: boolean;
+  withWorkspaceHref: (href: string) => string;
+  onPick: () => void;
+}) {
+  const searchParams = useSearchParams();
+  const basePath = pathname ?? "/";
+  const hrefSwitchWorkspace = (targetId: string) => {
+    const sp = new URLSearchParams(searchParams.toString());
+    sp.set("ws", targetId);
+    const q = sp.toString();
+    return q ? `${basePath}?${q}` : basePath;
+  };
+  return (
+    <div className="absolute left-0 top-[68px] z-50 w-72 overflow-hidden rounded-xl border border-white/10 bg-black/80 shadow-2xl backdrop-blur-xl">
+      <div className="border-b border-white/10 px-4 py-3 text-[11px] uppercase tracking-widest text-white/45">
+        {multiWorkspace ? "Switch workspace" : "Workspace"}
+      </div>
+      {multiWorkspace && allWorkspaces ? (
+        <ul className="max-h-60 overflow-y-auto py-1">
+          {allWorkspaces.map((w) => {
+            const active = w.id === workspace?.id;
+            return (
+              <li key={w.id}>
+                <Link
+                  href={hrefSwitchWorkspace(w.id)}
+                  onClick={onPick}
+                  className={cn(
+                    "block px-4 py-2.5 text-sm transition",
+                    active
+                      ? "bg-white/[0.08] font-semibold text-white"
+                      : "text-white/75 hover:bg-white/[0.05] hover:text-white",
+                  )}
+                >
+                  <span className="block truncate">{w.name}</span>
+                  <span className="block truncate text-[10px] font-normal uppercase tracking-wider text-white/40">
+                    {w.slug}
+                  </span>
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+      ) : (
+        <div className="px-4 py-3 text-[11px] leading-snug text-white/55">
+          This account currently has access to{" "}
+          <span className="font-semibold text-white/80">{wsLabel}</span>.
+        </div>
+      )}
+      <Link
+        href={withWorkspaceHref("/settings")}
+        className="block border-t border-white/10 bg-white/[0.02] px-4 py-2.5 text-center text-[11px] font-semibold text-aqua hover:underline"
+      >
+        Workspace settings →
+      </Link>
     </div>
   );
 }
