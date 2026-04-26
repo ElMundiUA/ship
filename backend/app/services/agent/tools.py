@@ -64,8 +64,6 @@ Tool inventory (C12 Phase 2.2):
   has asked humans, answered/skipped history).
 - :meth:`list_improvements` — C8 inbox (agent-proposed improvements
   and their pending/accepted/declined decisions).
-- :meth:`get_metrics_overview` — dashboard aggregates (pipelines,
-  runs, clarifications, improvements, chat, DORA) for a window.
 - :meth:`search_code` — GitHub code search scoped to one activated
   repo (symbol / string search; complements embedding-only KB search).
 - :meth:`list_audit_events` — workspace audit log (admin-only).
@@ -1117,26 +1115,6 @@ class ToolBox:
                             "minimum": 1,
                             "maximum": _MAX_IMPROVEMENTS,
                             "default": 20,
-                        },
-                    },
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
-                name="get_metrics_overview",
-                description=(
-                    "Aggregate dashboard metrics for the workspace over "
-                    "a rolling window: pipelines, runs, clarifications, "
-                    "improvements, chat, DORA approximations. Use when "
-                    "the user asks for KPIs or how Ship is performing."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "window": {
-                            "type": "string",
-                            "enum": ["7d", "30d", "90d"],
-                            "default": "30d",
                         },
                     },
                     "additionalProperties": False,
@@ -2240,7 +2218,6 @@ class ToolBox:
             "get_pipeline_run": self._tool_get_pipeline_run,
             "list_clarifications": self._tool_list_clarifications,
             "list_improvements": self._tool_list_improvements,
-            "get_metrics_overview": self._tool_get_metrics_overview,
             "search_code": self._tool_search_code,
             "list_audit_events": self._tool_list_audit_events,
             "list_workspace_members": self._tool_list_workspace_members,
@@ -3318,50 +3295,6 @@ class ToolBox:
             for r in rows
         ]
         return _json_result({"improvements": items, "count": len(items)})
-
-    async def _tool_get_metrics_overview(self, args: dict[str, Any]) -> str:
-        window_label = (args.get("window") or "30d").lower()
-        if window_label not in {"7d", "30d", "90d"}:
-            raise ToolInvocationError(
-                f"invalid window {window_label!r}; expected 7d/30d/90d"
-            )
-        # Lazy import: the metrics route module transitively imports chat.py
-        # which imports us, so a top-level import would deadlock at startup.
-        from backend.app.api.v1.routes import metrics as metrics_routes
-
-        window = metrics_routes._resolve_window(window_label)
-        pipelines_panel = await metrics_routes._pipelines_panel(
-            self._session, self._workspace_id
-        )
-        runs_panel = await metrics_routes._runs_panel(
-            self._session, self._workspace_id, window
-        )
-        clarifications_panel = await metrics_routes._clarifications_panel(
-            self._session, self._workspace_id, window
-        )
-        improvements_panel = await metrics_routes._improvements_panel(
-            self._session, self._workspace_id, window
-        )
-        chat_panel = await metrics_routes._chat_panel(
-            self._session, self._workspace_id, window
-        )
-        dora_panel = await metrics_routes._dora_panel(
-            self._session, self._workspace_id, window
-        )
-        return _json_result(
-            {
-                "window": window_label,
-                "window_days": window.days,
-                "window_start": window.start.isoformat(),
-                "window_end": window.end.isoformat(),
-                "pipelines": pipelines_panel.model_dump(),
-                "runs": runs_panel.model_dump(),
-                "clarifications": clarifications_panel.model_dump(),
-                "improvements": improvements_panel.model_dump(),
-                "chat": chat_panel.model_dump(),
-                "dora": dora_panel.model_dump(),
-            }
-        )
 
     async def _tool_search_code(self, args: dict[str, Any]) -> str:
         repo_id = _parse_uuid(args, "repo_id")

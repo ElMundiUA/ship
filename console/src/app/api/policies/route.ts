@@ -2,9 +2,8 @@
  * Browser-side proxy for creating a workspace prose-rule policy
  * (``POST /v1/workspaces/{ws}/policies``).
  *
- * Mirrors ``/api/fleet-lanes`` — passes the session bearer through
- * and normalises the error envelope so the client doesn't need to
- * know about ``ApiHttpError``.
+ * Passes the session bearer through and normalises the error envelope
+ * so the client doesn't need to know about ``ApiHttpError``.
  */
 
 import { NextResponse } from "next/server";

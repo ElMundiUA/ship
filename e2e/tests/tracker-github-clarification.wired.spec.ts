@@ -121,9 +121,9 @@ test.describe("tracker: GitHub issue → clarifications projection", () => {
       .toBe(true);
 
     if (hasPlaywrightStorageState()) {
-      await page.goto("/clarifications");
+      await page.goto("/inbox?type=clarification");
       await expect(
-        page.getByRole("heading", { name: "Clarifications" }),
+        page.getByRole("heading", { name: "Inbox" }),
       ).toBeVisible({ timeout: 30_000 });
       await expect(
         page.getByText(marker, { exact: false }).first(),

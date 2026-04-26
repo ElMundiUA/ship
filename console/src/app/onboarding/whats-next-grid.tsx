@@ -5,9 +5,8 @@
  * Tiles link into the new IA the wave-8c redesign establishes:
  *
  *   - /inbox        — clarification / approval requests as they arrive
- *   - /plays        — catalog of installable Plays (we installed N by default)
- *   - /automations  — scheduled / event-driven Plays per repo
- *   - /coverage     — which repos are missing critical Plays
+ *   - /process      — specialist workflow for the workspace
+ *   - /knowledge    — generated project knowledge after bootstrap
  *
  * Server-side because we don't need any interactivity; passing the
  * workspace id through the URL keeps the destination pages happy
@@ -41,23 +40,18 @@ export function WhatsNextGrid({
         "Clarification and approval requests show up here as agents need a human in the loop.",
     },
     {
-      href: `/plays${wsQuery}`,
-      title: "Browse Plays →",
+      href: `/process${wsQuery}`,
+      title: "Open Process →",
       blurb:
         installedCount != null
-          ? `Pick more from the catalog. We installed ${installedCount} by default.`
-          : "Pick more from the catalog. We installed a default bundle for you.",
+          ? `Review the seeded development process. The old ${installedCount}-play bundle is no longer the operator model.`
+          : "Review the seeded development process and specialist handoffs.",
     },
     {
-      href: `/automations${wsQuery}`,
-      title: "Open Automations →",
+      href: `/knowledge${wsQuery}`,
+      title: "Open Knowledge →",
       blurb:
-        "See what's scheduled and on which repos. Tweak triggers, fan-out, and idempotency.",
-    },
-    {
-      href: `/automations${wsQuery}${wsQuery ? "&" : "?"}view=coverage`,
-      title: "Coverage →",
-      blurb: "Which repos are missing critical Plays — at a glance.",
+        "Generated repository knowledge appears here after the bootstrap PR lands.",
     },
   ];
 

@@ -28,11 +28,9 @@ the public face of the same conceptual object (the chat window):
    with the bucket's summaries pre-injected into the running
    summary.
 
-3. **Artifact feedback** —
-   ``/workspaces/{ws}/artifact-feedback`` list + create, plus the
-   :meth:`create_artifact_feedback` tool feeds into the same
-   table. Separate from chat threads because feedback lives past
-   any individual conversation.
+3. **Artifact feedback memory** —
+   :meth:`create_artifact_feedback` feeds into the feedback table for
+   agent use. The old console HTTP surface has been retired.
 
 We deliberately do not keep the old C10 "scope a ticket" surface
 around — the single-window model replaces it. Migrations keep
@@ -976,7 +974,6 @@ async def _run_agent_turn(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/chat/threads/{thread_id}/pack", response_model=BucketSummaryOut)
 async def pack_thread(
     workspace_id: uuid.UUID,
     thread_id: uuid.UUID,
@@ -1437,9 +1434,6 @@ async def update_bucket(
     return _serialize_bucket(row, summary_count=count)
 
 
-@router.get(
-    "/buckets/{slug}/summaries", response_model=list[BucketSummaryOut]
-)
 async def list_bucket_summaries(
     workspace_id: uuid.UUID,
     slug: str,
@@ -1665,7 +1659,6 @@ def _slugify(value: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/artifact-feedback", response_model=list[ArtifactFeedbackOut])
 async def list_artifact_feedback(
     workspace_id: uuid.UUID,
     status_filter: Literal["open", "triaged", "merged", "closed"] | None = None,
@@ -1684,11 +1677,6 @@ async def list_artifact_feedback(
     return [_feedback_to_out(r) for r in rows]
 
 
-@router.post(
-    "/artifact-feedback",
-    response_model=ArtifactFeedbackOut,
-    status_code=status.HTTP_201_CREATED,
-)
 async def create_artifact_feedback_route(
     workspace_id: uuid.UUID,
     payload: ArtifactFeedbackIn,
@@ -1710,9 +1698,6 @@ async def create_artifact_feedback_route(
     return _feedback_to_out(row)
 
 
-@router.patch(
-    "/artifact-feedback/{feedback_id}", response_model=ArtifactFeedbackOut
-)
 async def update_artifact_feedback(
     workspace_id: uuid.UUID,
     feedback_id: uuid.UUID,

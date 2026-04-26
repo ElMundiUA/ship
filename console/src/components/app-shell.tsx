@@ -56,25 +56,21 @@ const SHIP_FEEDBACK_LABEL =
  * configure pages (workspace settings, members, integrations,
  * audit log). No duplication between the two modes.
  *
- * Old top-level paths (``/lanes``, ``/metrics``, …) keep rendering
- * for now so migration can happen page-by-page; they simply drop
- * out of the sidebar. Subsequent PRs move their content under
- * ``/r/<slug>/*`` or retire them entirely.
+ * Retired mock/reporting pages and pre-redesign top-level paths are no
+ * longer kept around as standalone routes.
  */
 function buildWorkspaceNav(): NavGroup[] {
   return [
     {
       section: "Workspace",
       items: [
-        { href: "/", label: "Home", icon: <DotIcon /> },
-        { href: "/process", label: "Process", icon: <DotIcon /> },
+        { href: "/", label: "Dashboard", icon: <DotIcon /> },
         { href: "/inbox", label: "Inbox", icon: <DotIcon /> },
+        { href: "/process", label: "Process", icon: <DotIcon /> },
         { href: "/knowledge", label: "Knowledge", icon: <DotIcon /> },
+        { href: "/settings/policy", label: "Policies", icon: <DotIcon /> },
+        { href: "/audit", label: "Audit", icon: <DotIcon /> },
       ],
-    },
-    {
-      section: "Configure",
-      items: [{ href: "/audit", label: "Audit log", icon: <DotIcon /> }],
     },
   ];
 }
@@ -275,6 +271,35 @@ export function AppShell({
             </Link>
           </div>
 
+          <div className="relative border-b border-white/10 px-3 py-3">
+            <WorkspaceChip
+              label={wsLabel}
+              kicker={wsKicker}
+              open={wsOpen}
+              onToggle={() => setWsOpen((s) => !s)}
+              className="w-full justify-start rounded-xl px-3 py-2"
+            />
+            {wsOpen && (
+              <Suspense
+                fallback={
+                  <div className="absolute left-3 right-3 top-[60px] z-50 overflow-hidden rounded-xl border border-white/10 bg-black/60 px-4 py-3 text-[11px] text-white/45">
+                    Loading…
+                  </div>
+                }
+              >
+                <WorkspaceSwitcherMenu
+                  pathname={pathname}
+                  wsLabel={wsLabel}
+                  workspace={workspace}
+                  allWorkspaces={allWorkspaces}
+                  multiWorkspace={multiWorkspace}
+                  withWorkspaceHref={withWorkspaceHref}
+                  onPick={() => setWsOpen(false)}
+                />
+              </Suspense>
+            )}
+          </div>
+
           {repoChip && (
             <div className="border-b border-white/10 px-3 py-3">
               <Link
@@ -371,8 +396,9 @@ export function AppShell({
               </div>
               <Link
                 href={withWorkspaceHref("/settings")}
-                className="rounded-md p-1 text-white/40 hover:bg-white/5 hover:text-white"
+                className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-xl text-white/55 transition hover:bg-white/10 hover:text-white"
                 aria-label="Workspace settings"
+                title="Workspace settings"
               >
                 ⚙︎
               </Link>
@@ -396,12 +422,6 @@ export function AppShell({
             <div className="flex items-center gap-3 px-6 py-4 lg:px-8">
               <div className="relative min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
-                  <WorkspaceChip
-                    label={wsLabel}
-                    kicker={wsKicker}
-                    open={wsOpen}
-                    onToggle={() => setWsOpen((s) => !s)}
-                  />
                   {scopePill}
                   {kicker && kicker !== wsKicker && (
                     <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-aqua/80">
@@ -412,25 +432,6 @@ export function AppShell({
                 <h1 className="font-display mt-1 truncate text-xl font-bold leading-tight text-white sm:text-2xl">
                   {title}
                 </h1>
-                {wsOpen && (
-                  <Suspense
-                    fallback={
-                      <div className="absolute left-0 top-[68px] z-50 w-72 overflow-hidden rounded-xl border border-white/10 bg-black/60 px-4 py-3 text-[11px] text-white/45">
-                        Loading…
-                      </div>
-                    }
-                  >
-                    <WorkspaceSwitcherMenu
-                      pathname={pathname}
-                      wsLabel={wsLabel}
-                      workspace={workspace}
-                      allWorkspaces={allWorkspaces}
-                      multiWorkspace={multiWorkspace}
-                      withWorkspaceHref={withWorkspaceHref}
-                      onPick={() => setWsOpen(false)}
-                    />
-                  </Suspense>
-                )}
               </div>
               <div className="flex shrink-0 items-center gap-2">
                 <NavigatorLauncher />
@@ -475,7 +476,7 @@ function WorkspaceSwitcherMenu({
     return q ? `${basePath}?${q}` : basePath;
   };
   return (
-    <div className="absolute left-0 top-[68px] z-50 w-72 overflow-hidden rounded-xl border border-white/10 bg-black/80 shadow-2xl backdrop-blur-xl">
+    <div className="absolute left-3 right-3 top-[60px] z-50 overflow-hidden rounded-xl border border-white/10 bg-black/80 shadow-2xl backdrop-blur-xl">
       <div className="border-b border-white/10 px-4 py-3 text-[11px] uppercase tracking-widest text-white/45">
         {multiWorkspace ? "Switch workspace" : "Workspace"}
       </div>
@@ -525,11 +526,13 @@ function WorkspaceChip({
   kicker,
   open,
   onToggle,
+  className,
 }: {
   label: string;
   kicker: string;
   open: boolean;
   onToggle: () => void;
+  className?: string;
 }) {
   return (
     <button
@@ -543,6 +546,7 @@ function WorkspaceChip({
         open
           ? "border-aqua/50 bg-aqua/10 text-aqua"
           : "border-white/10 bg-white/[0.04] text-white/70 hover:border-white/20 hover:text-white",
+        className,
       )}
     >
       <span className="grid h-4 w-4 shrink-0 place-items-center rounded-sm bg-gradient-to-br from-lilac via-aqua to-coral text-[8px] font-bold text-ink">

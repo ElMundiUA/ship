@@ -295,11 +295,6 @@ function AutomationTestingCard({ summary }: { summary: ApiOpsDashboard }) {
           }
         />
       </div>
-      <div className="mt-3 text-xs text-white/45">
-        <Link href="/runs" className="text-aqua hover:underline">
-          Open runs →
-        </Link>
-      </div>
     </Card>
   );
 }

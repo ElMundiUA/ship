@@ -20,12 +20,25 @@ import {
   listWorkspaces,
 } from "@/lib/api/client";
 import { getSessionToken } from "@/lib/api/session";
+import { getResolvedWorkspaceId } from "@/lib/workspace-resolve.server";
+import {
+  pickWorkspace,
+  toAppShellWorkspaces,
+  withWorkspaceQuery,
+} from "@/lib/workspace-scope";
 
 import { NewPolicyForm } from "./policy-form";
 
 export const dynamic = "force-dynamic";
 
-export default async function NewPolicyPage() {
+type SearchParams = Promise<Record<string, string | string[] | undefined>>;
+
+export default async function NewPolicyPage({
+  searchParams,
+}: {
+  searchParams?: SearchParams;
+}) {
+  const params = (await (searchParams ?? Promise.resolve({}))) ?? {};
   if (!isApiConfigured()) {
     return (
       <AppShell title="New policy" kicker="settings">
@@ -52,15 +65,23 @@ export default async function NewPolicyPage() {
     return renderUnavailable(err);
   }
   if (workspaces.length === 0) redirect("/onboarding?step=github");
-  const workspace = workspaces[0];
+  const resolved = await getResolvedWorkspaceId(params, workspaces);
+  const workspace = pickWorkspace(workspaces, resolved);
+  const multiWorkspace = workspaces.length > 1;
 
   return (
     <AppShell
       title="New policy"
-      kicker="settings"
+      kicker={workspace.slug}
+      workspace={{ id: workspace.id, name: workspace.name, slug: workspace.slug }}
+      allWorkspaces={toAppShellWorkspaces(workspaces)}
       actions={
         <Link
-          href="/settings/policy"
+          href={withWorkspaceQuery(
+            "/settings/policy",
+            workspace.id,
+            multiWorkspace,
+          )}
           className="text-xs font-semibold text-white/65 hover:text-white"
         >
           ← Policies

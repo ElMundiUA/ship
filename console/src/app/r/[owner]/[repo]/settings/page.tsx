@@ -42,7 +42,7 @@ import { toAppShellWorkspaces } from "@/lib/workspace-scope";
  * internal console-refactor-backlog):
  *
  * - Repo facts + GitHub link (from ``listActivatedRepos`` via ctx)
- * - Bundle & install PR (``getRepoHome`` flags + ``installBundle`` form)
+ * - Bundle & install PR status from ``getRepoHome`` flags
  * - ``.ship/config.yml`` preview (``getRepoConfig``)
  * - Tracker binding summary (``getRepoTrackerBinding``)
  * - Ship-managed Actions secrets summary (``listRepoSecrets`` +
@@ -209,7 +209,6 @@ function renderShell(ctx: RepoContext, bundle: SettingsBundle) {
           config={bundle.config}
           error={bundle.configError}
           repoFullName={repo.full_name}
-          editHref={`${base}/lanes?tab=library`}
         />
         <TrackerCard
           tracker={bundle.tracker}
@@ -371,12 +370,10 @@ function ConfigCard({
   config,
   error,
   repoFullName,
-  editHref,
 }: {
   config: ApiRepoConfig | null;
   error: string | null;
   repoFullName: string;
-  editHref: string;
 }) {
   if (error && !config) {
     return (
@@ -435,14 +432,9 @@ function ConfigCard({
         </pre>
       ) : (
         <p className="text-xs text-white/55">
-          Use the Library tab to seed a config or enable lanes.
+          Re-run the repository seed from onboarding to restore the process config.
         </p>
       )}
-      <div className="mt-3">
-        <ButtonGhost>
-          <Link href={editHref}>Edit in Library →</Link>
-        </ButtonGhost>
-      </div>
     </Card>
   );
 }

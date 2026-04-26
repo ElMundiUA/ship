@@ -67,11 +67,6 @@ export function RepoResultCard({
           workspaceId={workspaceId}
           repoId={repo?.id ?? null}
         />
-        <LanesRow
-          workspaceId={workspaceId}
-          repoId={repo?.id ?? null}
-          syntheticLanes={result.synthetic_lanes_created}
-        />
         <IntelRow
           workspaceId={workspaceId}
           repoId={repo?.id ?? null}
@@ -156,13 +151,7 @@ function CodeownersRow({
         <p className="mt-2 text-[11px] leading-relaxed text-white/65">
           We didn&apos;t find a <code className="text-white/85">CODEOWNERS</code>{" "}
           file. Routing can be reconciled after the seed PR is merged so
-          clarification requests land on the right reviewers.{" "}
-          <Link
-            href="/documentation/inbox-routing#codeowners"
-            className="text-aqua underline"
-          >
-            How to add CODEOWNERS →
-          </Link>
+          clarification requests land on the right reviewers.
         </p>
       </Section>
     );
@@ -202,41 +191,6 @@ function CodeownersRow({
   );
 }
 
-function LanesRow({
-  workspaceId,
-  repoId,
-  syntheticLanes,
-}: {
-  workspaceId: string | null;
-  repoId: string | null;
-  syntheticLanes: number;
-}) {
-  return (
-    <Section label="Lanes after merge">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="rounded-full border border-aqua/40 bg-aqua/[0.08] px-2 py-0.5 text-[10px] uppercase tracking-widest text-aqua">
-          {syntheticLanes} lane{syntheticLanes === 1 ? "" : "s"}
-        </span>
-        <span className="text-[11px] text-white/55">
-          materialized from the merged Ship config
-        </span>
-        {workspaceId && repoId && (
-          <Link
-            href={`/automations?ws=${encodeURIComponent(workspaceId)}&scope=repo&repo=${encodeURIComponent(repoId)}`}
-            className="ml-auto text-[11px] text-white/55 hover:text-white"
-          >
-            View lanes →
-          </Link>
-        )}
-      </div>
-      <p className="mt-2 text-[11px] leading-relaxed text-white/55">
-        The seed PR no longer creates preview lanes. Ship reconciles lanes
-        from the merged default branch.
-      </p>
-    </Section>
-  );
-}
-
 function IntelRow({
   workspaceId,
   repoId,
@@ -268,7 +222,7 @@ function FileCountRow({ fileCount }: { fileCount: number }) {
   return (
     <p className="text-[11px] text-white/45">
       {fileCount} file{fileCount === 1 ? "" : "s"} committed (config,
-      workflows, scheduled lanes,{" "}
+      workflows,{" "}
       <code className="rounded bg-white/5 px-1 text-white/65">
         .ship/config.yml
       </code>
@@ -283,6 +237,7 @@ function FileCountRow({ fileCount }: { fileCount: number }) {
  * backend mints as ``ship/<labelled>-<seed>``. Returns ``null`` if
  * nothing usable is parseable.
  */
-function deriveOwnerRepoFromBranch(_branch: string): string | null {
+function deriveOwnerRepoFromBranch(branch: string): string | null {
+  void branch;
   return null;
 }

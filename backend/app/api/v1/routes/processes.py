@@ -259,7 +259,6 @@ async def list_processes(
     )
 
 
-@router.get("/adapters", response_model=list[ProcessAdapterDiagnosticOut])
 async def get_process_adapters(
     workspace_id: uuid.UUID,
     auth: AuthContext = Depends(get_current_auth),
@@ -286,7 +285,6 @@ async def get_process(
     return await _build_development_process(session, workspace_id, repo_id=repo_id)
 
 
-@router.get("/{process_id}/tickets", response_model=ProcessTicketPickerOut)
 async def list_process_tickets(
     workspace_id: uuid.UUID,
     process_id: str,
@@ -362,7 +360,6 @@ async def list_process_tickets(
     )
 
 
-@router.post("/{process_id}/exits", response_model=ProcessExitIntentOut)
 async def submit_process_exit_intent(
     workspace_id: uuid.UUID,
     process_id: str,

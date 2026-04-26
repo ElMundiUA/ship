@@ -27,22 +27,17 @@ import { hasPlaywrightStorageState } from "../lib/storage";
  *
  *   0. (opt-in) Reset the sandbox + run the onboarding wizard end to
  *      end so the recording opens with the full install flow.
- *   1. Dashboard (`/`)                  — operating KPIs + recent runs
- *   2. Pipelines (`/pipelines`)         — repo-grouped swimlanes
- *   3. Pipeline run (`/pipelines/.../runs/...`) — single run detail
- *   4. Clarifications (`/clarifications`) — tracker-projected items
- *   5. Improvements (`/improvements`)   — agent proposals
- *   6. Feedback (`/artifact-feedback`)  — catalog feedback inbox
- *   7. Navigator (`/chat`)              — agent chat + buckets sidebar
- *   8. Knowledge (`/knowledge`)         — bucket grid
- *   9. Catalog (`/catalog`)             — artifact catalog
- *  10. Repo secrets (`/repos/<id>/secrets`) — Ship-managed Actions
- *  11. Metrics (`/metrics`)             — DORA-ish window toggles
- *  12. Settings (`/settings`)           — workspace tabs
- *  13. Members (`/members`)             — roster
- *  14. Integrations (`/integrations`)   — connected vs available
- *  15. Audit (`/audit`)                 — audit log
- *  16. Back to dashboard                — final card on tape
+ *   1. Home (`/`)                       — workspace overview
+ *   2. Process (`/process`)             — specialist workflow
+ *   3. Inbox (`/inbox`)                 — tracker-projected items
+ *   4. Navigator (`/chat`)              — agent chat + buckets sidebar
+ *   6. Knowledge (`/knowledge`)         — bucket grid
+ *   7. Repo secrets (`/repos/<id>/secrets`) — Ship-managed Actions
+ *   8. Settings (`/settings`)           — workspace tabs
+ *   9. Members (`/members`)             — roster
+ *  10. Integrations (`/integrations`)   — connected vs available
+ *  11. Audit (`/audit`)                 — audit log
+ *  12. Back to dashboard                — final card on tape
  *
  * Knobs:
  *   - E2E_TOUR_INCLUDE_WIZARD=1  — prepend the wizard tour (resets
@@ -235,57 +230,17 @@ test.describe("product tour (deployed dev)", () => {
     await visit(page, "/", "Workspace home");
 
     // -----------------------------------------------------------------
-    // 2. Pipelines (repo-grouped swimlanes — proves workflows installed)
+    // 2. Process
     // -----------------------------------------------------------------
-    await visit(page, "/pipelines", "Pipelines");
+    await visit(page, "/process", "Process");
 
     // -----------------------------------------------------------------
-    // 3. Pipeline run detail — pick the most recent run via API.
+    // 3. Inbox
     // -----------------------------------------------------------------
-    await test.step("pipeline run detail (most recent)", async () => {
-      try {
-        const res = await shipApiGet(
-          request,
-          `/v1/workspaces/${wsEnc}/pipelines`,
-        );
-        if (!res.ok()) return;
-        const pipelines = (await res.json()) as { id: string }[];
-        for (const p of pipelines) {
-          const runsRes = await shipApiGet(
-            request,
-            `/v1/workspaces/${wsEnc}/pipelines/${encodeURIComponent(
-              p.id,
-            )}/runs?limit=1`,
-          );
-          if (!runsRes.ok()) continue;
-          const runs = (await runsRes.json()) as { id: string }[];
-          if (!runs.length) continue;
-          const url = `/pipelines/${p.id}/runs/${runs[0].id}?ws=${wsEnc}`;
-          await visit(page, url, "Pipeline run", { allowMissing: true });
-          return;
-        }
-      } catch {
-        /* tour-friendly: skip if API hiccups */
-      }
-    });
+    await visit(page, "/inbox", "Inbox");
 
     // -----------------------------------------------------------------
-    // 4. Clarifications (tracker-projected items)
-    // -----------------------------------------------------------------
-    await visit(page, "/clarifications", "Clarifications");
-
-    // -----------------------------------------------------------------
-    // 5. Improvements
-    // -----------------------------------------------------------------
-    await visit(page, "/improvements", "Improvements");
-
-    // -----------------------------------------------------------------
-    // 6. Artifact feedback
-    // -----------------------------------------------------------------
-    await visit(page, "/artifact-feedback", "Artifact feedback");
-
-    // -----------------------------------------------------------------
-    // 7. Navigator (agent chat) — type a sample message into composer.
+    // 5. Navigator (agent chat) — type a sample message into composer.
     // -----------------------------------------------------------------
     await test.step("navigator", async () => {
       await page.goto("/chat");
@@ -309,13 +264,12 @@ test.describe("product tour (deployed dev)", () => {
     });
 
     // -----------------------------------------------------------------
-    // 8–9. Knowledge + Catalog
+    // 6. Knowledge
     // -----------------------------------------------------------------
     await visit(page, "/knowledge", /knowledge/i);
-    await visit(page, "/catalog", "Artifact catalog");
 
     // -----------------------------------------------------------------
-    // 10. Repo secrets (Ship-managed Actions secrets) — first activated.
+    // 7. Repo secrets (Ship-managed Actions secrets) — first activated.
     // -----------------------------------------------------------------
     await test.step("repo secrets (first activated)", async () => {
       try {
@@ -332,22 +286,17 @@ test.describe("product tour (deployed dev)", () => {
     });
 
     // -----------------------------------------------------------------
-    // 11. Metrics — show the 30d window
-    // -----------------------------------------------------------------
-    await visit(page, "/metrics?window=30d", "Metrics");
-
-    // -----------------------------------------------------------------
-    // 12. Settings (with tab=tokens — pretty for demo)
+    // 11. Settings (with tab=tokens — pretty for demo)
     // -----------------------------------------------------------------
     await visit(page, "/settings?tab=tokens", "Workspace settings");
 
     // -----------------------------------------------------------------
-    // 13. Members
+    // 12. Members
     // -----------------------------------------------------------------
     await visit(page, "/members", "Members");
 
     // -----------------------------------------------------------------
-    // 14. Integrations
+    // 13. Integrations
     // -----------------------------------------------------------------
     await visit(page, "/integrations", "Integrations");
 

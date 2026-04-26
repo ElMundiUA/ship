@@ -196,10 +196,8 @@ def test_compose_writes_v2_marker_with_bundle_hash() -> None:
     assert bundle.bundle_hash == payload["bundle_version"]
 
 
-def test_compose_includes_adhoc_agent_run_workflow() -> None:
-    """``adhoc-agent-run.yml`` is installed regardless of bundle
-    contents so the Console's ``/requests`` surface can dispatch
-    one-shot runs immediately after merge."""
+def test_compose_omits_adhoc_agent_run_workflow() -> None:
+    """The retired one-shot Requests surface no longer ships a runner."""
 
     from backend.app.services.seed_bundle import compose_seed_files
 
@@ -213,9 +211,7 @@ def test_compose_includes_adhoc_agent_run_workflow() -> None:
     )
 
     paths = [p for p, _ in bundle.files]
-    assert any(p.endswith("/adhoc-agent-run.yml") for p in paths), (
-        f"adhoc-agent-run.yml not found in {paths!r}"
-    )
+    assert not any(p.endswith("/adhoc-agent-run.yml") for p in paths)
 
 
 def test_compose_self_heal_workflow_inspects_failed_run_context() -> None:

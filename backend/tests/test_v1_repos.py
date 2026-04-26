@@ -243,7 +243,6 @@ async def test_activate_with_legacy_preset_collapses_to_default(
     whole point of the collapse."""
     from backend.app.api.v1.routes import repos as repos_module
     from backend.app.db.models.integrations import WorkspaceRepo
-    from backend.app.db.models.pipelines import Pipeline
     from backend.app.db.models.tenancy import AuditLog
 
     _, raw, workspace = seed_workspace
@@ -275,19 +274,6 @@ async def test_activate_with_legacy_preset_collapses_to_default(
         )
     ).scalars().all()
     assert rows[0].preset == "default"
-
-    pipelines = (
-        await db_session.execute(
-            select(Pipeline).where(Pipeline.workspace_id == workspace_id)
-        )
-    ).scalars().all()
-    by_kind = {p.lane_id: p for p in pipelines}
-    # Default-enabled lanes land enabled; ``self_heal`` is opt-in and
-    # does NOT auto-enable under the canonical preset (the legacy
-    # ``monorepo``-special behaviour is gone post-collapse).
-    assert by_kind["pr_review"].enabled is True
-    assert by_kind["daily_standup"].enabled is True
-    assert by_kind["self_heal"].enabled is False
 
     audits = (
         await db_session.execute(
@@ -371,56 +357,6 @@ async def test_activate_rejects_unknown_external_id(
     )
     assert response.status_code == 422, response.text
     assert "9999" in response.json()["detail"]
-
-
-@pytest.mark.asyncio
-async def test_code_map_returns_truncated_file_list(
-    v1_client,
-    db_session,
-    seed_workspace,
-    github_app_env,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from backend.app.api.v1.routes import repos as repos_module
-    from backend.app.db.models.integrations import WorkspaceRepo
-
-    _, raw, workspace = seed_workspace
-    install = await _seed_installation(db_session, workspace.id)
-    repo_row = WorkspaceRepo(
-        workspace_id=workspace.id,
-        installation_id=install.id,
-        provider="github",
-        external_id=1001,
-        full_name="acme/alpha",
-        default_branch="main",
-        private=False,
-        html_url="https://github.com/acme/alpha",
-        activated_at=datetime.now(timezone.utc),
-    )
-    db_session.add(repo_row)
-    await db_session.flush()
-    repo_id = repo_row.id
-
-    # Generate enough fake paths to exceed the 5000 cap so we can assert
-    # the truncated flag is set without pulling in real network data.
-    fake_paths = [f"src/file_{i:05d}.py" for i in range(5050)]
-
-    async def _stub_files(self, ref, *, ref_sha=None):
-        return fake_paths
-
-    monkeypatch.setattr(repos_module.GitHubCodeHost, "list_files", _stub_files)
-
-    response = await v1_client.get(
-        f"/v1/workspaces/{workspace.id}/repos/{repo_id}/code-map",
-        headers={"Authorization": f"Bearer {raw}"},
-    )
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["truncated"] is True
-    assert len(body["files"]) == 5000
-    assert body["files"][0] == "src/file_00000.py"
-    assert body["full_name"] == "acme/alpha"
-    assert body["default_branch"] == "main"
 
 
 @pytest.mark.asyncio

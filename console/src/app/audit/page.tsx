@@ -44,6 +44,12 @@ import {
 import type { ApiAuditEntry, ApiAuditPage, ApiWorkspace } from "@/lib/api/types";
 import { getSessionToken } from "@/lib/api/session";
 import { workspaces as mockWorkspaces } from "@/lib/mock/cloud";
+import { getResolvedWorkspaceId } from "@/lib/workspace-resolve.server";
+import {
+  pickWorkspace,
+  toAppShellWorkspaces,
+  withWorkspaceQuery,
+} from "@/lib/workspace-scope";
 
 import { AuditPayloadCell } from "./audit-payload-cell";
 
@@ -111,6 +117,7 @@ type Mode =
   | {
       source: "live";
       workspace: ApiWorkspace;
+      allWorkspaces: ApiWorkspace[];
       page: ApiAuditPage;
       filters: AuditFilters;
     }
@@ -139,7 +146,10 @@ function parseFilters(
   };
 }
 
-async function load(filters: AuditFilters): Promise<Mode> {
+async function load(
+  filters: AuditFilters,
+  params: Record<string, string | string[] | undefined>,
+): Promise<Mode> {
   if (!isApiConfigured())
     return { source: "mock", reason: "SHIP_API_URL not set", filters };
   const token = await getSessionToken();
@@ -153,7 +163,8 @@ async function load(filters: AuditFilters): Promise<Mode> {
         reason: "Create a workspace first to see audit history",
         filters,
       };
-    const target = ws[0];
+    const resolved = await getResolvedWorkspaceId(params, ws);
+    const target = pickWorkspace(ws, resolved);
     const page = await listAuditLog(
       target.id,
       {
@@ -167,7 +178,7 @@ async function load(filters: AuditFilters): Promise<Mode> {
       },
       token,
     );
-    return { source: "live", workspace: target, page, filters };
+    return { source: "live", workspace: target, allWorkspaces: ws, page, filters };
   } catch (err) {
     if (err instanceof ApiHttpError && err.status === 401)
       return { source: "mock", reason: "Session expired — sign in again", filters };
@@ -232,24 +243,27 @@ export default async function AuditPage({
     string | string[] | undefined
   >;
   const filters = parseFilters(params);
-  const data = await load(filters);
+  const data = await load(filters, params);
 
   if (data.source === "mock") {
     return <MockView reason={data.reason} filters={filters} />;
   }
 
-  const { workspace, page } = data;
+  const { workspace, allWorkspaces, page } = data;
+  const multiWorkspace = allWorkspaces.length > 1;
   const items = page.items;
   const nextHref =
     page.next_cursor !== null ? buildPagerUrl(filters, page.next_cursor) : null;
 
   return (
     <AppShell
-      kicker={`${workspace.name} · history`}
-      title="Audit log"
+      kicker={workspace.slug}
+      title="Audit"
+      workspace={{ id: workspace.id, name: workspace.name, slug: workspace.slug }}
+      allWorkspaces={toAppShellWorkspaces(allWorkspaces)}
       actions={
         <Link
-          href="/audit"
+          href={withWorkspaceQuery("/audit", workspace.id, multiWorkspace)}
           className="rounded-full border border-white/15 bg-white/[0.04] px-3 py-1.5 text-xs font-bold text-white/85 transition hover:bg-white/[0.08]"
         >
           Reset

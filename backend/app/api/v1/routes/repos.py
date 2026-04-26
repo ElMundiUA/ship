@@ -13,10 +13,6 @@ Two surfaces:
   deleted) so the picker stays "what you see is what's wired".
 - ``GET /v1/workspaces/{ws}/repos`` — already-activated set, served
   straight from Postgres for the dashboard / Day-3 default-pipeline UI.
-- ``GET /v1/workspaces/{ws}/repos/{repo_id}/code-map`` — Day-2 Code Map
-  MVP. Returns the recursive file list of the repo's default branch via
-  the GitHub Trees API, capped to 5_000 paths. Synchronous because the
-  upstream API itself is sub-second for sane repos.
 """
 
 from __future__ import annotations
@@ -41,16 +37,11 @@ from backend.app.api.v1.routes.workspaces import (
 )
 from backend.app.core.config import Settings, get_settings
 from backend.app.db.models.integrations import GitHubInstallation, WorkspaceRepo
-from backend.app.db.models.pipelines import Pipeline
 from backend.app.db.models.tenancy import AuditLog
 from backend.app.db.session import get_session
-from backend.app.integrations.gateway.code_host import RepoRef, RepoSummary
+from backend.app.integrations.gateway.code_host import RepoSummary
 from backend.app.integrations.github.code_host_adapter import GitHubCodeHost
-from backend.app.services.agent.kb_indexer import reindex_repo_kb
-from backend.app.services.lane_recipes import (
-    normalize_preset,
-    seed_default_pipelines,
-)
+from backend.app.services.lane_recipes import normalize_preset
 from backend.app.services.seed_bundle import BUNDLE_VERSION as _BUNDLE_VERSION
 
 
@@ -60,11 +51,6 @@ router = APIRouter(
 )
 
 logger = logging.getLogger(__name__)
-
-
-# Day-2 cap; the picker UI starts to suffer past a few hundred repos
-# anyway. The adapter caps at 500 too — kept symmetric on purpose.
-_CODE_MAP_FILE_CAP = 5_000
 
 
 # ---------------------------------------------------------------------------
@@ -133,17 +119,6 @@ class RepoActivateIn(BaseModel):
             "``\"default\"``."
         ),
     )
-
-
-class CodeMapOut(BaseModel):
-    """Flat file listing for the Code Map MVP."""
-
-    repo_id: uuid.UUID
-    full_name: str
-    default_branch: str
-    ref_sha: str
-    files: list[str]
-    truncated: bool
 
 
 # ---------------------------------------------------------------------------
@@ -386,83 +361,11 @@ async def activate_repos(
         await session.delete(row)
         removed.append(ext_id)
 
-    # Seed the default pipeline set if this is the workspace's first
-    # activation (idempotent; subsequent activations are no-ops). We
-    # do this before the audit log so the audit row can record how
-    # many pipelines we materialised in the same transaction.
-    pipeline_count_before = (
-        await session.execute(
-            select(Pipeline.id).where(Pipeline.workspace_id == workspace_id)
-        )
-    ).scalars().all()
-
-    # Pick a "default" repo to bind newly seeded pipelines to. Pilot
-    # heuristic: lexicographically smallest ``full_name`` from the
-    # currently desired set keeps the choice deterministic across
-    # re-activations (whatever the user re-toggles, the binding is
-    # stable so workflow_dispatch lands in the same repo every time).
-    default_repo_id: uuid.UUID | None = None
-    if desired_ids:
-        binding_stmt = (
-            select(WorkspaceRepo)
-            .where(WorkspaceRepo.workspace_id == workspace_id)
-            .where(WorkspaceRepo.external_id.in_(desired_ids))
-            .order_by(WorkspaceRepo.full_name)
-        )
-        default_row = (await session.execute(binding_stmt)).scalars().first()
-        if default_row is not None:
-            default_repo_id = default_row.id
-
-    # Prefer the preset requested on this call; otherwise adopt the
-    # preset stored on the "default" repo the pipelines will bind to
-    # so a reseed call without an explicit preset still respects the
-    # original pick. Normalize either source so audit telemetry stops
-    # fragmenting on legacy ids (P5-01: stale rows may still hold
-    # ``"web-app"`` etc., which we collapse to ``"default"``).
-    seed_preset = preset
-    if seed_preset is None and default_repo_id is not None:
-        default_row = await session.get(WorkspaceRepo, default_repo_id)
-        if default_row is not None and default_row.preset is not None:
-            seed_preset = normalize_preset(default_row.preset)
-
-    seeded_pipelines = await seed_default_pipelines(
-        session,
-        workspace_id,
-        default_repo_id=default_repo_id,
-        preset=seed_preset,
-    )
-
-    # Phase 2 consolidation: on first activation, mirror each new
-    # repo's ``.ship/knowledge/*.md`` into ``knowledge_buckets`` so
-    # the operator sees the /knowledge list populated without having
-    # to push an unrelated commit. Scoped to ``added`` only — updates
-    # and removes are no-ops here; push webhooks + manual reindex own
-    # those paths. Failures are swallowed per-repo so one misbehaving
-    # repo doesn't abort the whole activation transaction.
-    if added:
-        from backend.app.services.bucket_repo_files_sync import (
-            sync_repo_files,
-        )
-
-        for ext_id in added:
-            new_row = (
-                await session.execute(
-                    select(WorkspaceRepo).where(
-                        WorkspaceRepo.workspace_id == workspace_id,
-                        WorkspaceRepo.external_id == ext_id,
-                    )
-                )
-            ).scalars().first()
-            if new_row is None:
-                continue
-            try:
-                await sync_repo_files(session, new_row, install)
-            except Exception:  # pragma: no cover — defensive
-                # Swallow: next push / manual reindex will retry.
-                # Don't log the traceback verbatim; the audit log
-                # already records the activation and the push-webhook
-                # path logs its own failures.
-                continue
+    # Activation now only records repository membership. The old flow
+    # also materialised default Pipeline rows and mirrored committed
+    # `.ship/knowledge/*.md` files into `knowledge_buckets`; both are
+    # intentionally owned by the unified wizard seed + post-merge
+    # bootstrap process now.
 
     session.add(
         AuditLog(
@@ -477,12 +380,7 @@ async def activate_repos(
                 "updated": sorted(updated),
                 "removed": sorted(removed),
                 "installation_id": install.installation_id,
-                # Tells the audit consumer how many default pipelines
-                # already existed and how many are alive after seed
-                # (delta = newly created in this call).
-                "pipelines_existing": len(pipeline_count_before),
-                "pipelines_total": len(seeded_pipelines),
-                "preset": seed_preset,
+                "preset": preset,
             },
         )
     )
@@ -497,438 +395,6 @@ async def activate_repos(
         )
     ).scalars().all()
     return [_row_to_out(r) for r in rows]
-
-
-@router.get("/{repo_id}/code-map", response_model=CodeMapOut)
-async def get_code_map(
-    workspace_id: uuid.UUID,
-    repo_id: uuid.UUID,
-    auth: AuthContext = Depends(get_current_auth),
-    session: AsyncSession = Depends(get_session),
-    settings: Settings = Depends(get_settings),
-) -> CodeMapOut:
-    """Code Map MVP — flat list of files at the default branch HEAD.
-
-    Synchronous because the GitHub Trees API itself is fast enough for
-    the pilot scope; we cap at ``_CODE_MAP_FILE_CAP`` paths so an
-    unusually large monorepo doesn't blow the response size. The
-    ``truncated`` flag tells the frontend whether it's looking at the
-    head of a longer list.
-    """
-    await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
-
-    stmt = select(WorkspaceRepo).where(
-        WorkspaceRepo.workspace_id == workspace_id,
-        WorkspaceRepo.id == repo_id,
-    )
-    row = (await session.execute(stmt)).scalars().first()
-    if row is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    if row.installation_id is None:
-        # Non-GitHub repos don't have a code-map source yet (no PAT
-        # cloning since git_sync went away). 409 = "concept exists, this
-        # particular row can't satisfy it".
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Repo is not backed by a GitHub App installation.",
-        )
-
-    install = await session.get(GitHubInstallation, row.installation_id)
-    if install is None or install.suspended_at is not None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                "GitHub App installation for this repo is missing or "
-                "suspended. Reinstall the Ship app."
-            ),
-        )
-
-    owner, _, name = row.full_name.partition("/")
-    ref = RepoRef(kind="github", owner=owner, repo=name)
-
-    gateway = GitHubCodeHost(install.installation_id, settings=settings)
-    try:
-        files = await gateway.list_files(ref, ref_sha=row.default_branch)
-    except httpx.HTTPStatusError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=(
-                "GitHub Trees API rejected the request "
-                f"(HTTP {exc.response.status_code})."
-            ),
-        ) from exc
-
-    truncated = len(files) > _CODE_MAP_FILE_CAP
-    return CodeMapOut(
-        repo_id=row.id,
-        full_name=row.full_name,
-        default_branch=row.default_branch,
-        ref_sha=row.default_branch,
-        files=files[:_CODE_MAP_FILE_CAP],
-        truncated=truncated,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Agent KB reindex (C12 Phase 1.3)
-# ---------------------------------------------------------------------------
-
-
-class KbReindexOut(BaseModel):
-    """Result of a manual ``POST /{repo_id}/kb/reindex`` call.
-
-    Mirrors :class:`~backend.app.services.agent.kb_indexer.IndexReport`
-    but typed with pydantic so the console can render the numbers
-    inline after the button click.
-    """
-
-    repo_id: uuid.UUID
-    files_discovered: int
-    files_indexed: int
-    files_skipped_unchanged: int
-    files_skipped_too_big: int
-    files_skipped_binary: int
-    chunks_deleted: int
-    chunks_written: int
-
-
-@router.post("/{repo_id}/kb/reindex", response_model=KbReindexOut)
-async def reindex_repo_kb_route(
-    workspace_id: uuid.UUID,
-    repo_id: uuid.UUID,
-    auth: AuthContext = Depends(get_current_auth),
-    session: AsyncSession = Depends(get_session),
-    settings: Settings = Depends(get_settings),
-) -> KbReindexOut:
-    """Re-embed ``.ship/knowledge/**/*.md`` for one repo on demand.
-
-    Synchronous by design: KB corpora are small (dozens of docs, not
-    thousands) so the whole pass finishes inside a request window.
-    When that stops being true we'll queue a job and stream the
-    report over SSE; for now keep it simple.
-
-    Admin-only. The push webhook (Day-3 polish) calls
-    :func:`reindex_repo_kb` directly, without going through this
-    route, so pushing code doesn't require an API token.
-    """
-    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
-
-    row = (await session.execute(
-        select(WorkspaceRepo).where(
-            WorkspaceRepo.workspace_id == workspace_id,
-            WorkspaceRepo.id == repo_id,
-        )
-    )).scalars().first()
-    if row is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    if row.installation_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Repo is not backed by a GitHub App installation.",
-        )
-    install = await session.get(GitHubInstallation, row.installation_id)
-    if install is None or install.suspended_at is not None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                "GitHub App installation for this repo is missing or "
-                "suspended. Reinstall the Ship app."
-            ),
-        )
-
-    try:
-        report = await reindex_repo_kb(
-            session, row, install, settings=settings
-        )
-    except RuntimeError as exc:
-        # ``embed_texts`` raises RuntimeError when OPENAI_API_KEY is
-        # missing; surface that as a 412 (precondition) so the operator
-        # sees a clear "configure this first" message.
-        raise HTTPException(
-            status_code=status.HTTP_412_PRECONDITION_FAILED,
-            detail=str(exc),
-        ) from exc
-    except httpx.HTTPStatusError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=(
-                "GitHub API rejected a KB indexer request "
-                f"(HTTP {exc.response.status_code})."
-            ),
-        ) from exc
-
-    # Phase 2 consolidation: mirror into ``knowledge_buckets`` so the
-    # operator console's /knowledge page reflects the same reindex run.
-    # Failures here are non-fatal for the embedder's audit trail —
-    # logged + captured in the bucket-sync counters, not the 200
-    # response shape (which is the KB indexer's contract).
-    try:
-        from backend.app.services.bucket_repo_files_sync import (
-            sync_repo_files,
-        )
-
-        bucket_report = await sync_repo_files(
-            session, row, install, settings=settings
-        )
-    except Exception:
-        bucket_report = None
-
-    session.add(
-        AuditLog(
-            workspace_id=workspace_id,
-            actor_user_id=auth.user.id,
-            actor_token_id=None,
-            action="agent.kb.reindex",
-            target_kind="workspace_repo",
-            target_id=str(repo_id),
-            payload={
-                "files_discovered": report.files_discovered,
-                "files_indexed": report.files_indexed,
-                "chunks_written": report.chunks_written,
-                "chunks_deleted": report.chunks_deleted,
-                "buckets_created": (
-                    bucket_report.buckets_created if bucket_report else 0
-                ),
-                "buckets_updated": (
-                    bucket_report.buckets_updated if bucket_report else 0
-                ),
-                "buckets_archived": (
-                    bucket_report.buckets_archived if bucket_report else 0
-                ),
-            },
-        )
-    )
-    await session.flush()
-
-    return KbReindexOut(
-        repo_id=repo_id,
-        files_discovered=report.files_discovered,
-        files_indexed=report.files_indexed,
-        files_skipped_unchanged=report.files_skipped_unchanged,
-        files_skipped_too_big=report.files_skipped_too_big,
-        files_skipped_binary=report.files_skipped_binary,
-        chunks_deleted=report.chunks_deleted,
-        chunks_written=report.chunks_written,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Multi-preset bundle install
-# ---------------------------------------------------------------------------
-
-
-class BundleInstallIn(BaseModel):
-    """Body for ``POST /workspaces/{ws}/repos/{repo_id}/install_bundle``."""
-
-    # Comma/array of preset ids to bundle together. ``None`` means
-    # "use the repo's persisted preset"; at least one valid preset
-    # must resolve after expansion or the request fails 422.
-    presets: list[str] | None = Field(
-        default=None,
-        description=(
-            "Preset ids to bundle (e.g. ['web-app']). Defaults to the "
-            "repo's persisted preset; pass multiple to combine."
-        ),
-    )
-
-
-class BundleInstallOut(BaseModel):
-    pr_url: str
-    pr_number: int
-    branch: str
-    files: list[str]
-    presets: list[str]
-
-
-@router.post("/{repo_id}/install_bundle", response_model=BundleInstallOut)
-async def install_bundle(
-    workspace_id: uuid.UUID,
-    repo_id: uuid.UUID,
-    payload: BundleInstallIn | None = None,
-    auth: AuthContext = Depends(get_current_auth),
-    session: AsyncSession = Depends(get_session),
-    settings: Settings = Depends(get_settings),
-) -> BundleInstallOut:
-    """Open a single PR carrying every workflow + ``.ship/`` file a preset needs.
-
-    Admin-only. Combines one or more presets into a single
-    ``ship/bundle-<label>-<unix>`` PR so the operator reviews + merges
-    *once* instead of per-lane. On merge, the knowledge-gathering
-    webhook takes over and auto-dispatches ``tech_debt`` / ``code_map``
-    (see ``auto_dispatch_knowledge_pipelines``).
-
-    Returns ``412`` with a structured code when the repo has no
-    resolvable preset or the bundle comes out empty (preset maps only
-    to YAML-less lanes — currently ``code_map`` alone).
-    """
-    # Local imports keep the catalog + github-workflows modules out of
-    # the hot path for the code-map / availability endpoints that
-    # don't need them.
-    from backend.app.db.models.integrations import GitHubInstallation
-    from backend.app.integrations.github.workflows import (
-        WorkflowDispatchError,
-        commit_bundle_pr,
-    )
-    from backend.app.services import catalog as catalog_service
-
-    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
-
-    repo_row = (
-        await session.execute(
-            select(WorkspaceRepo).where(
-                WorkspaceRepo.id == repo_id,
-                WorkspaceRepo.workspace_id == workspace_id,
-            )
-        )
-    ).scalars().first()
-    if repo_row is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Repo not found in this workspace.",
-        )
-
-    install_row = (
-        await session.execute(
-            select(GitHubInstallation).where(
-                GitHubInstallation.id == repo_row.installation_id
-            )
-        )
-    ).scalars().first()
-    if install_row is None:
-        raise HTTPException(
-            status_code=status.HTTP_412_PRECONDITION_FAILED,
-            detail={
-                "code": "github_app_missing",
-                "message": (
-                    "Ship's GitHub App isn't installed for the workspace. "
-                    "Reconnect it before opening a bundle PR."
-                ),
-            },
-        )
-
-    # Resolve the effective preset list. Prefer the caller's explicit
-    # list, else fall back to the repo's persisted preset. Each id is
-    # passed through :func:`normalize_preset` so legacy ids (and any
-    # stale value persisted before P5-01) collapse to ``"default"``
-    # before bundle composition; an empty/whitespace id is dropped.
-    requested = payload.presets if payload and payload.presets else None
-    if requested is None:
-        requested = [repo_row.preset] if repo_row.preset else []
-    cleaned: list[str] = []
-    seen: set[str] = set()
-    for pid in requested:
-        pid = (pid or "").strip()
-        if not pid:
-            continue
-        normalized = normalize_preset(pid)
-        if normalized in seen:
-            continue
-        cleaned.append(normalized)
-        seen.add(normalized)
-    if not cleaned:
-        raise HTTPException(
-            status_code=status.HTTP_412_PRECONDITION_FAILED,
-            detail={
-                "code": "preset_required",
-                "message": (
-                    "Pass at least one preset or set it on the repo before "
-                    "opening a bundle PR."
-                ),
-            },
-        )
-
-    # Collect the per-preset bundles, de-duplicating on path — two
-    # presets can legitimately share a workflow (e.g. web-app +
-    # api-backend both ship pr-and-ci-gate) and the second copy
-    # would break the tree create.
-    seen_paths: set[str] = set()
-    files: list[tuple[str, str]] = []
-    for pid in cleaned:
-        for path, content in catalog_service.preset_bundle_files(
-            pid, repo_full_name=repo_row.full_name
-        ):
-            # ``.ship/config.yml`` gets rebuilt per preset but the
-            # bundle needs exactly one — last preset wins, which is
-            # fine since config.yml just records the label.
-            if path == ".ship/config.yml":
-                files = [
-                    (p, c) for (p, c) in files if p != ".ship/config.yml"
-                ]
-                seen_paths.discard(path)
-            if path in seen_paths:
-                continue
-            files.append((path, content))
-            seen_paths.add(path)
-
-    if not files:
-        raise HTTPException(
-            status_code=status.HTTP_412_PRECONDITION_FAILED,
-            detail={
-                "code": "empty_bundle",
-                "message": (
-                    f"Preset(s) {cleaned!r} resolved to zero installable files. "
-                    "Likely the preset only declares YAML-less lanes today."
-                ),
-            },
-        )
-
-    return_url = (
-        f"{settings.console_url.rstrip('/')}/?ws={workspace_id}"
-        f"&installed=bundle&reason=back_from_pr"
-    )
-    branch_label = "-".join(cleaned)
-    try:
-        result = await commit_bundle_pr(
-            repo_row,
-            install_row,
-            files=files,
-            title=f"Ship: install {', '.join(cleaned)} preset bundle",
-            branch_label=branch_label,
-            pr_body_header=(
-                f"This PR wires Ship into this repo by installing every "
-                f"workflow the selected preset(s) need in **one merge**:\n\n"
-                f"**Presets**: {', '.join('`' + p + '`' for p in cleaned)}"
-            ),
-            settings=settings,
-            return_url=return_url,
-        )
-    except WorkflowDispatchError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail={
-                "code": "install_bundle_failed",
-                "upstream_status": exc.status_code,
-                "message": exc.message[:512],
-            },
-        ) from exc
-
-    session.add(
-        AuditLog(
-            workspace_id=workspace_id,
-            actor_user_id=auth.user.id,
-            actor_token_id=auth.token.id if auth.token else None,
-            action="repo.install_bundle",
-            target_kind="workspace_repo",
-            target_id=str(repo_row.id),
-            payload={
-                "presets": cleaned,
-                "files": [p for p, _ in files],
-                "pr_number": result.pr_number,
-                "pr_url": result.pr_url,
-                "branch": result.branch,
-                "legacy_bundle": True,
-            },
-        )
-    )
-    await session.flush()
-
-    return BundleInstallOut(
-        pr_url=result.pr_url,
-        pr_number=result.pr_number,
-        branch=result.branch,
-        files=[p for p, _ in files],
-        presets=cleaned,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -1126,12 +592,8 @@ class RepoPresetPatchIn(BaseModel):
 
     Only the ``preset`` field is mutable today; future fields (e.g.
     ``default_branch`` or per-repo config) can land here without a new
-    endpoint. ``reshape`` controls whether we also rewrite the
-    ``enabled`` flag on lanes bound to this repo so they match the
-    new preset's default shape. It defaults to ``False`` because the
-    seed path is "additive only" (we never silently disable a lane
-    the operator turned on) — flipping this flag is an explicit
-    operator choice surfaced in the UI copy.
+    endpoint. ``reshape`` is retained for legacy clients but ignored
+    because repository activation no longer materializes Pipeline rows.
     """
 
     preset: str | None = None
@@ -1146,7 +608,7 @@ async def update_repo(
     auth: AuthContext = Depends(get_current_auth),
     session: AsyncSession = Depends(get_session),
 ) -> ActivatedRepoOut:
-    """Mutate the preset bound to ``repo`` (and optionally reshape lanes).
+    """Mutate the preset bound to ``repo`` without touching runtime rows.
 
     Admin-only. Post-P5-01 the meaningful preset is the single
     ``"default"`` value; legacy preset ids passed by older Console
@@ -1154,28 +616,7 @@ async def update_repo(
     :func:`backend.app.services.lane_recipes.normalize_preset` before
     being persisted. ``None`` clears the binding and falls back to
     the canonical default shape on future seeds.
-
-    Behavioural notes:
-
-    - If ``reshape`` is true the new preset's enabled lane set
-      (derived via :func:`resolve_enabled_lane_ids`) is applied to
-      every ``Pipeline`` in the workspace whose ``repo_id`` matches
-      this row. Workspace-level (unbound) lanes are untouched — they
-      keep their hand-toggled state because they're shared across
-      repos.
-    - The seed helper is invoked afterwards so a tenant that picked
-      e.g. ``monorepo`` later gets the ``self_heal`` lane created if
-      it didn't exist yet.
-    - Every call records an ``AuditLog`` entry with the old / new
-      preset + counts so we can trace "why did my code_map lane
-      flip on overnight" later.
     """
-    from backend.app.db.models.pipelines import Pipeline
-    from backend.app.services.lane_recipes import (
-        resolve_enabled_lane_ids,
-        seed_default_pipelines,
-    )
-
     await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
 
     repo_row = (
@@ -1204,33 +645,6 @@ async def update_repo(
     old_preset = repo_row.preset
     repo_row.preset = new_preset
 
-    reshape_applied = 0
-    if payload.reshape and new_preset is not None:
-        # Limit reshape to lanes actually bound to this repo; shared
-        # workspace-level lanes stay untouched (they may be driving
-        # other repos in the same workspace).
-        enabled_kinds = resolve_enabled_lane_ids(new_preset)
-        bound_lanes = (
-            await session.execute(
-                select(Pipeline).where(Pipeline.repo_id == repo_row.id)
-            )
-        ).scalars().all()
-        for lane in bound_lanes:
-            desired = lane.lane_id in enabled_kinds
-            if lane.enabled != desired:
-                lane.enabled = desired
-                reshape_applied += 1
-
-    # Additive seed — creates lanes that the new preset implies but
-    # that weren't part of the old one (e.g. ``self_heal`` on
-    # ``monorepo``). Never disables anything.
-    await seed_default_pipelines(
-        session,
-        workspace_id,
-        default_repo_id=repo_row.id,
-        preset=new_preset,
-    )
-
     session.add(
         AuditLog(
             workspace_id=workspace_id,
@@ -1244,7 +658,7 @@ async def update_repo(
                 "old_preset": old_preset,
                 "new_preset": new_preset,
                 "reshape": bool(payload.reshape),
-                "reshape_applied": reshape_applied,
+                "reshape_applied": 0,
             },
         )
     )
@@ -3504,289 +2918,3 @@ async def propose_repo_config(
     )
 
 
-# ---------------------------------------------------------------------------
-# Custom lane author (Phase 3 of RFC-0007 lanes/requests)
-# ---------------------------------------------------------------------------
-
-
-class CustomLaneProposeIn(BaseModel):
-    """Body for ``POST /{repo_id}/lanes/propose``.
-
-    The Console's ``/lanes?tab=new`` form collects:
-
-    - ``lane_id`` — slug that becomes the key under ``lanes:``, the
-      workflow filename (``ship-<slug>.yml``), and the prompt file
-      path (``.ship/lanes/<slug>.md``).
-    - ``agent_slug`` — currently informational (surfaced to the
-      reviewer in the PR body). The custom-lane workflow doesn't
-      wire the agent choice directly yet; the prompt file is where
-      operators describe what the lane does.
-    - ``schedule`` — cron. Required because the MVP only supports
-      scheduled lanes; event-driven custom lanes land in a follow-up.
-    - ``prompt`` — becomes ``.ship/lanes/<slug>.md``.
-    - ``base_sha`` — optimistic lock, same semantics as
-      ``RepoConfigProposeIn.base_sha``.
-    """
-
-    lane_id: str = Field(..., min_length=1, max_length=63)
-    agent_slug: str = Field(..., min_length=1, max_length=64)
-    schedule: str = Field(..., min_length=1, max_length=128)
-    prompt: str = Field(..., min_length=1, max_length=8192)
-    base_sha: str | None = None
-    change_summary: str = Field(default="", max_length=1024)
-
-
-class CustomLaneProposeOut(BaseModel):
-    pr_url: str
-    pr_number: int
-    branch: str
-
-
-@router.post(
-    "/{repo_id}/lanes/propose", response_model=CustomLaneProposeOut
-)
-async def propose_custom_lane(
-    workspace_id: uuid.UUID,
-    repo_id: uuid.UUID,
-    payload: CustomLaneProposeIn,
-    auth: AuthContext = Depends(get_current_auth),
-    session: AsyncSession = Depends(get_session),
-    settings: Settings = Depends(get_settings),
-) -> CustomLaneProposeOut:
-    """Open a PR that adds a brand-new lane to ``.ship/config.yml``.
-
-    Admin-only. Emits three files in a single commit:
-
-    1. ``.github/workflows/ship-<slug>.yml`` — rendered from the
-       ``custom-lane.yml`` starter template with ``{{LANE_SLUG}}`` /
-       ``{{LANE_SCHEDULE}}`` substitutions.
-    2. ``.ship/lanes/<slug>.md`` — the prompt / system instruction.
-    3. ``.ship/config.yml`` — appends the new lane to the existing
-       mapping (or creates the file if absent). Uses the same
-       optimistic-lock semantics as ``config/propose``.
-    """
-    from backend.app.integrations.gateway.code_host import RepoRef
-    from backend.app.integrations.github.workflows import (
-        WorkflowDispatchError,
-        commit_bundle_pr,
-    )
-    from backend.app.services import catalog as catalog_service
-
-    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
-
-    if not re.match(r"^[a-z][a-z0-9_-]{0,62}$", payload.lane_id):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                "code": "invalid_lane_id",
-                "message": (
-                    "lane_id must be a lowercase slug (letters, digits, "
-                    "`_`, `-`) starting with a letter."
-                ),
-            },
-        )
-
-    repo_row = (
-        await session.execute(
-            select(WorkspaceRepo).where(
-                WorkspaceRepo.id == repo_id,
-                WorkspaceRepo.workspace_id == workspace_id,
-            )
-        )
-    ).scalars().first()
-    if repo_row is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Repo not found in this workspace.",
-        )
-    if repo_row.installation_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_412_PRECONDITION_FAILED,
-            detail={
-                "code": "github_app_missing",
-                "message": (
-                    "Ship's GitHub App isn't installed for this repo. "
-                    "Reconnect it before opening a lane PR."
-                ),
-            },
-        )
-    install_row = await session.get(GitHubInstallation, repo_row.installation_id)
-    if install_row is None or install_row.suspended_at is not None:
-        raise HTTPException(
-            status_code=status.HTTP_412_PRECONDITION_FAILED,
-            detail={
-                "code": "github_app_missing",
-                "message": (
-                    "Ship's GitHub App installation is missing or "
-                    "suspended. Reinstall the Ship app."
-                ),
-            },
-        )
-
-    # --- Load + merge existing config.yml ------------------------------
-    owner, _, name = repo_row.full_name.partition("/")
-    ref = RepoRef(kind="github", owner=owner, repo=name)
-    gateway = GitHubCodeHost(install_row.installation_id, settings=settings)
-    current_sha: str | None = None
-    existing_lanes: dict[str, dict[str, Any]] = {}
-    try:
-        current_blob = await gateway.get_blob(
-            ref, path=_LANES_CONFIG_PATH, ref_sha=repo_row.default_branch
-        )
-        current_sha = current_blob.sha
-        import yaml as _yaml
-
-        parsed = _yaml.safe_load(current_blob.decode("utf-8")) or {}
-        if isinstance(parsed, dict):
-            raw_lanes = parsed.get("lanes") or {}
-            if isinstance(raw_lanes, dict):
-                for k, v in raw_lanes.items():
-                    if isinstance(v, dict):
-                        existing_lanes[str(k)] = {str(kk): vv for kk, vv in v.items()}
-    except FileNotFoundError:
-        current_sha = None
-    except httpx.HTTPStatusError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail={
-                "code": "github_unreachable",
-                "upstream_status": exc.response.status_code,
-                "message": "GitHub rejected the base-SHA check.",
-            },
-        ) from exc
-
-    if current_sha != payload.base_sha:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "sha_mismatch",
-                "message": (
-                    "``.ship/config.yml`` moved since the editor loaded "
-                    "it. Reload and reapply your edits."
-                ),
-                "current_sha": current_sha,
-                "base_sha": payload.base_sha,
-            },
-        )
-
-    if payload.lane_id in existing_lanes:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "lane_exists",
-                "message": (
-                    f"lane {payload.lane_id!r} already exists — pick a "
-                    "different slug or edit via the Library tab."
-                ),
-            },
-        )
-
-    # --- Render the starter files --------------------------------------
-    # ``custom-lane.yml`` is a template (not a registered starter) that
-    # lives alongside the other starter YAMLs. Read it raw and
-    # substitute the per-lane placeholders.
-    from pathlib import Path
-
-    template_path = (
-        Path(__file__).resolve().parents[3]
-        / "resources"
-        / "starter_workflows"
-        / "custom-lane.yml"
-    )
-    if not template_path.exists():
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="custom-lane.yml starter template is missing",
-        )
-    workflow_body = (
-        template_path.read_text(encoding="utf-8")
-        .replace("{{LANE_SLUG}}", payload.lane_id)
-        .replace("{{LANE_SCHEDULE}}", payload.schedule)
-    )
-    workflow_path = f".github/workflows/ship-{payload.lane_id}.yml"
-    prompt_path = f".ship/lanes/{payload.lane_id}.md"
-    prompt_body = (
-        f"# Lane: {payload.lane_id}\n\n"
-        f"Agent: `{payload.agent_slug}`\n\n"
-        "## Instruction\n\n"
-        f"{payload.prompt.strip()}\n"
-    )
-
-    # Merge existing lanes + new one; emit fresh YAML.
-    merged: dict[str, Any] = dict(existing_lanes)
-    merged[payload.lane_id] = {
-        "schedule": payload.schedule,
-        "idempotency_key": f"custom-{payload.lane_id}" "-{{date}}",
-    }
-    new_config_yaml = catalog_service.emit_config_yaml(
-        preset_id=repo_row.preset,
-        repo_full_name=repo_row.full_name,
-        lanes=merged,
-    )
-
-    files = [
-        (workflow_path, workflow_body),
-        (prompt_path, prompt_body),
-        (_LANES_CONFIG_PATH, new_config_yaml),
-    ]
-
-    pr_body_header = (
-        f"This PR adds a new custom lane `{payload.lane_id}` "
-        f"to your Ship configuration.\n\n"
-        f"- Workflow: `{workflow_path}`\n"
-        f"- Prompt: `{prompt_path}`\n"
-        f"- Agent: `{payload.agent_slug}`\n"
-        f"- Schedule: `{payload.schedule}`\n"
-    )
-    if payload.change_summary:
-        pr_body_header += f"\n> {payload.change_summary}"
-
-    try:
-        result = await commit_bundle_pr(
-            repo_row,
-            install_row,
-            files=files,
-            title=f"Ship: add custom lane `{payload.lane_id}`",
-            branch_label=f"custom-lane-{payload.lane_id}",
-            pr_body_header=pr_body_header,
-            settings=settings,
-            return_url=(
-                f"{settings.console_url.rstrip('/')}/lanes?tab=active"
-            ),
-        )
-    except WorkflowDispatchError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail={
-                "code": "propose_failed",
-                "upstream_status": exc.status_code,
-                "message": exc.message[:512],
-            },
-        ) from exc
-
-    session.add(
-        AuditLog(
-            workspace_id=workspace_id,
-            actor_user_id=auth.user.id,
-            actor_token_id=auth.token.id if auth.token else None,
-            action="repo.custom_lane_propose",
-            target_kind="workspace_repo",
-            target_id=str(repo_row.id),
-            payload={
-                "pr_number": result.pr_number,
-                "pr_url": result.pr_url,
-                "branch": result.branch,
-                "lane_id": payload.lane_id,
-                "agent_slug": payload.agent_slug,
-                "schedule": payload.schedule,
-                "base_sha": payload.base_sha,
-            },
-        )
-    )
-    await session.flush()
-
-    return CustomLaneProposeOut(
-        pr_url=result.pr_url,
-        pr_number=result.pr_number,
-        branch=result.branch,
-    )

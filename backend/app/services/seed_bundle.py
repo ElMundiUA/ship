@@ -16,8 +16,6 @@ operator reviews + merges exactly **one** PR to get Ship wired:
 * ``.ship/state/wizard-seed.v2.json`` — idempotency marker that
   records the bundle hash + knowledge versions so the wizard can
   detect drift on re-run without re-walking the catalog.
-* ``.github/workflows/adhoc-agent-run.yml`` — the Phase-3 one-shot
-  runner the Console's ``/requests`` surface dispatches against.
 * ``.ship/tracker-fsm.md`` — gated by ``include_fsm`` + the resolved
   ``tracker_kind``; renders the finite-state-machine doc the agent
   consults when transitioning tracker tickets.
@@ -77,7 +75,7 @@ from backend.app.services.tracker_fsm import (
 # ``1`` → baseline Wizard-v2 iter-5 bundle (config-schema v1 lanes
 #         list, CLI pinned by exact semver)
 # ``2`` → config-schema v2 ``lanes:`` mapping + CLI ``@latest``
-# ``3`` → Phase 3 "Requests" — bundle now ships ``adhoc-agent-run.yml``
+# ``3`` → Phase 3 "Requests" — bundle shipped ``adhoc-agent-run.yml``
 # ``4`` → P5-05 collapse: bundle-based composer, repo-intel placeholder,
 #         ``.ship/state/wizard-seed.v2.json`` idempotency marker.
 # ``5`` → post-merge knowledge bootstrap workflow; PR 1 is infra-only.
@@ -272,16 +270,6 @@ def compose_seed_files(
         trigger_body = trigger_entry.read_yaml()
         if trigger_body:
             _add(trigger_entry.install_target, trigger_body)
-
-    # ── Phase-3 ad-hoc agent dispatcher ──────────────────────────
-    # Always installed regardless of bundle contents so the
-    # Console's ``/requests`` surface can dispatch one-shot runs
-    # immediately after merge.
-    adhoc_entry = starter_workflows.get("adhoc-agent-run")
-    if adhoc_entry is not None:
-        adhoc_body = adhoc_entry.read_yaml()
-        if adhoc_body:
-            _add(adhoc_entry.install_target, adhoc_body)
 
     bootstrap_entry = starter_workflows.get("ship-bootstrap")
     if bootstrap_entry is not None:

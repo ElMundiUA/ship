@@ -109,8 +109,6 @@ _AGENT_SYSTEM_PROMPT = (
     "``list_clarifications`` / ``list_improvements`` — consult these "
     "*before* proposing something new so you don't re-surface declined "
     "items.\n"
-    "- Asked about dashboard KPIs / DORA / success rate / 'how are we "
-    "doing?' — ``get_metrics_overview``.\n"
     "- Need a specific slice of a large file? Prefer "
     "``get_repo_file`` with ``start_line`` / ``end_line`` over dumping "
     "the whole blob. For monorepos, narrow ``list_code_map`` with "

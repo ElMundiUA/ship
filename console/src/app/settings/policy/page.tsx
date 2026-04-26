@@ -30,15 +30,28 @@ import {
   listWorkspaces,
 } from "@/lib/api/client";
 import { getSessionToken } from "@/lib/api/session";
+import { getResolvedWorkspaceId } from "@/lib/workspace-resolve.server";
+import {
+  pickWorkspace,
+  toAppShellWorkspaces,
+  withWorkspaceQuery,
+} from "@/lib/workspace-scope";
 
 import { PoliciesList } from "./policies-list";
 
 export const dynamic = "force-dynamic";
 
-export default async function PoliciesPage() {
+type SearchParams = Promise<Record<string, string | string[] | undefined>>;
+
+export default async function PoliciesPage({
+  searchParams,
+}: {
+  searchParams?: SearchParams;
+}) {
+  const params = (await (searchParams ?? Promise.resolve({}))) ?? {};
   if (!isApiConfigured()) {
     return (
-      <AppShell title="Policy" kicker="settings">
+      <AppShell title="Policies" kicker="settings">
         <Card>
           <CardHeader
             title="Backend not configured"
@@ -62,7 +75,9 @@ export default async function PoliciesPage() {
     return renderUnavailable(err);
   }
   if (workspaces.length === 0) redirect("/onboarding?step=github");
-  const workspace = workspaces[0];
+  const resolved = await getResolvedWorkspaceId(params, workspaces);
+  const workspace = pickWorkspace(workspaces, resolved);
+  const multiWorkspace = workspaces.length > 1;
 
   let policies: ApiPolicy[];
   try {
@@ -76,10 +91,18 @@ export default async function PoliciesPage() {
 
   return (
     <AppShell
-      title="Policy"
-      kicker="settings"
+      title="Policies"
+      kicker={workspace.slug}
+      workspace={{ id: workspace.id, name: workspace.name, slug: workspace.slug }}
+      allWorkspaces={toAppShellWorkspaces(workspaces)}
       actions={
-        <Link href="/settings/policy/new">
+        <Link
+          href={withWorkspaceQuery(
+            "/settings/policy/new",
+            workspace.id,
+            multiWorkspace,
+          )}
+        >
           <ButtonPrimary>New policy</ButtonPrimary>
         </Link>
       }
@@ -120,7 +143,7 @@ function renderUnavailable(err: unknown) {
         ? err.message
         : "Unknown error";
   return (
-    <AppShell title="Policy" kicker="settings">
+    <AppShell title="Policies" kicker="settings">
       <Card>
         <CardHeader
           title="Backend unreachable"
