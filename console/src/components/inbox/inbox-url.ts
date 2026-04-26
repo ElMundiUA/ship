@@ -8,9 +8,10 @@
  * keep it in one pure helper module — no React, no `'use client'`.
  *
  * Encoding rules:
- *   - Default values are omitted (so `/inbox` == "open queue, mine
- *     only"), and the clear-filters link target is just `/inbox`.
- *   - `types` and `statuses` are emitted as repeated query params
+ *   - Default values are omitted (so `/inbox` == "all items, all types
+ *     in the default status slice"), and the clear-filters link
+ *     target is just `/inbox`.
+ *   - `types` are emitted as repeated query params
  *     (e.g. `?type=clarification&type=approval`) — the API client
  *     in `lib/api/client.ts` uses the same convention via
  *     `URLSearchParams.append`.
@@ -33,12 +34,6 @@ export type BuildInboxUrlExtras = {
   workspaceScope?: string | null;
 };
 
-function statusesEqualDefault(statuses: InboxFilterState["statuses"]): boolean {
-  const defaults = DEFAULT_INBOX_FILTERS.statuses;
-  if (statuses.length !== defaults.length) return false;
-  return statuses.every((s) => defaults.includes(s));
-}
-
 export function buildInboxUrl(
   filters: InboxFilterState,
   extras: BuildInboxUrlExtras = {},
@@ -48,9 +43,6 @@ export function buildInboxUrl(
     params.set("ownership", filters.ownership);
   }
   for (const t of filters.types) params.append("type", t);
-  if (!statusesEqualDefault(filters.statuses)) {
-    for (const s of filters.statuses) params.append("status", s);
-  }
   if (extras.repo) params.set("repo", extras.repo);
   if (extras.play) params.set("play", extras.play);
   if (extras.cursor) params.set("cursor", extras.cursor);
@@ -60,9 +52,8 @@ export function buildInboxUrl(
 }
 
 /**
- * Count of non-default filter axes — drives the "Filters active"
- * stat tile + the clear-filters link visibility. Each axis (ownership,
- * types, statuses, repo, play) contributes at most 1.
+ * Count of non-default filter axes. Each axis (ownership, types, repo, play)
+ * contributes at most 1.
  */
 export function countActiveFilters(
   filters: InboxFilterState,
@@ -71,7 +62,6 @@ export function countActiveFilters(
   let n = 0;
   if (filters.ownership !== DEFAULT_INBOX_FILTERS.ownership) n += 1;
   if (filters.types.length > 0) n += 1;
-  if (!statusesEqualDefault(filters.statuses)) n += 1;
   if (extras.repo) n += 1;
   if (extras.play) n += 1;
   return n;

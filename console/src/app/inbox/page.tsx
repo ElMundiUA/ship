@@ -4,7 +4,7 @@
  * Server component that wires the just-shipped foundation pieces
  * together: `listInboxItems` from the API client, `InboxItemRow` for
  * each row, `InboxFilters` (via the `InboxFiltersControlled` client
- * shell) for the three-axis filter chips. State lives in the URL so
+ * shell) for ownership + type chips. State lives in the URL so
  * admins can deep-link / share / refresh without losing context;
  * `searchParams` are parsed defensively through the type guards in
  * `inbox-types.ts` so a hostile URL can't smuggle bad enum values
@@ -28,17 +28,8 @@ import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
 import { InboxFiltersControlled } from "@/components/inbox/inbox-filters-controlled";
 import { InboxItemRow } from "@/components/inbox/inbox-item-row";
-import {
-  buildInboxUrl,
-  countActiveFilters,
-} from "@/components/inbox/inbox-url";
-import {
-  Card,
-  CardHeader,
-  EmptyState,
-  LiveBanner,
-  MockBanner,
-} from "@/components/ui";
+import { buildInboxUrl, countActiveFilters } from "@/components/inbox/inbox-url";
+import { Card, CardHeader, EmptyState, MockBanner } from "@/components/ui";
 import {
   ApiHttpError,
   ApiUnavailableError,
@@ -51,15 +42,12 @@ import { getSessionToken } from "@/lib/api/session";
 import type { ApiUser, ApiWorkspace } from "@/lib/api/types";
 import {
   DEFAULT_INBOX_FILTERS,
-  INBOX_STATUSES,
+  INBOX_LIST_DEFAULT_STATUSES,
   INBOX_TYPES,
-  INBOX_TYPE_META,
-  isInboxStatus,
   isInboxType,
   type InboxFilterState,
   type InboxItem,
   type InboxListResponse,
-  type InboxStatus,
   type InboxType,
 } from "@/lib/inbox-types";
 import { workspaces as mockWorkspaces } from "@/lib/mock/cloud";
@@ -134,18 +122,6 @@ function parseSearchParams(
     (v): v is InboxType => typeof v === "string" && isInboxType(v),
   );
 
-  const statusRaw = raw.status;
-  const statusArr = Array.isArray(statusRaw)
-    ? statusRaw
-    : typeof statusRaw === "string"
-      ? [statusRaw]
-      : [];
-  const statusesParsed = statusArr.filter(
-    (v): v is InboxStatus => typeof v === "string" && isInboxStatus(v),
-  );
-  const statuses =
-    statusArr.length > 0 ? statusesParsed : [...DEFAULT_INBOX_FILTERS.statuses];
-
   const cursorRaw = typeof raw.cursor === "string" ? raw.cursor : null;
   const cursor = cursorRaw && cursorRaw.length > 0 ? cursorRaw : null;
   const repoRaw = typeof raw.repo === "string" ? raw.repo : null;
@@ -155,7 +131,7 @@ function parseSearchParams(
   const errorCode = typeof raw.error === "string" ? raw.error : null;
 
   return {
-    filters: { ownership, types, statuses },
+    filters: { ownership, types },
     cursor,
     repo,
     play,
@@ -206,7 +182,7 @@ async function load(
         {
           ownership: parsed.filters.ownership,
           types: parsed.filters.types,
-          statuses: parsed.filters.statuses,
+          statuses: INBOX_LIST_DEFAULT_STATUSES,
           repo_id: parsed.repo ?? undefined,
           play_key: parsed.play ?? undefined,
           cursor: parsed.cursor,
@@ -262,16 +238,6 @@ function pickTypeCounts(
   return out;
 }
 
-function pickStatusCounts(
-  raw: Record<string, number>,
-): Partial<Record<InboxStatus, number>> {
-  const out: Partial<Record<InboxStatus, number>> = {};
-  for (const s of INBOX_STATUSES) {
-    if (typeof raw[s] === "number") out[s] = raw[s];
-  }
-  return out;
-}
-
 export default async function InboxPage({
   searchParams,
 }: {
@@ -298,7 +264,6 @@ export default async function InboxPage({
   const { workspace, allWorkspaces, me, list, filters, cursor, repo, play } =
     data;
   const typeCounts = pickTypeCounts(list.counts_by_type);
-  const statusCounts = pickStatusCounts(list.counts_by_status);
   const activeFilterCount = countActiveFilters(filters, { repo, play });
   const multiWs = allWorkspaces.length > 1;
   const inboxWs = multiWs ? workspace.id : undefined;
@@ -324,29 +289,20 @@ export default async function InboxPage({
         />
       }
     >
-      <LiveBanner workspace={workspace.slug} />
-
       {parsed.errorCode && (
         <div className="mb-5 rounded-xl border border-coral/30 bg-coral/[0.06] px-3 py-2 text-xs text-coral/95">
           {errorMessage(parsed.errorCode)}
         </div>
       )}
 
-      <CountsStats
-        list={list}
-        typeCounts={typeCounts}
-        activeFilterCount={activeFilterCount}
-        workspaceScope={inboxWs}
-      />
-
       <Card className="mt-5">
         <CardHeader
           title="Filters"
-          subtitle="Three axes — ownership, type, status. Default view shows your open queue."
+          subtitle="Scope by owner, then narrow by work type. Default is everything in your workspace."
         />
         <InboxFiltersControlled
           value={filters}
-          counts={{ types: typeCounts, statuses: statusCounts }}
+          counts={{ types: typeCounts }}
           repo={repo}
           play={play}
           workspaceScope={inboxWs}
@@ -393,80 +349,6 @@ export default async function InboxPage({
         workspaceScope={inboxWs}
       />
     </AppShell>
-  );
-}
-
-function CountsStats({
-  list,
-  typeCounts,
-  activeFilterCount,
-  workspaceScope,
-}: {
-  list: InboxListResponse;
-  typeCounts: Partial<Record<InboxType, number>>;
-  activeFilterCount: number;
-  workspaceScope?: string;
-}) {
-  return (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-      <Card>
-        <div className="text-[10px] font-bold uppercase tracking-widest text-white/45">
-          Total in view
-        </div>
-        <div className="mt-1 font-display text-2xl font-bold text-white">
-          {list.total.toString()}
-        </div>
-        <div className="mt-1 text-[10px] text-white/45">
-          Server-side count for the current filter set.
-        </div>
-      </Card>
-
-      <Card>
-        <div className="text-[10px] font-bold uppercase tracking-widest text-white/45">
-          By type
-        </div>
-        <div className="mt-2 flex flex-wrap items-center gap-1.5">
-          {INBOX_TYPES.map((t) => (
-            <span
-              key={t}
-              title={INBOX_TYPE_META[t].blurb}
-              className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] font-semibold text-white/65"
-            >
-              {INBOX_TYPE_META[t].label.replace(/s$/, "")}
-              <span className="rounded-full bg-white/10 px-1 text-[9px] font-bold text-white/85">
-                {typeCounts[t] ?? 0}
-              </span>
-            </span>
-          ))}
-        </div>
-      </Card>
-
-      <Card>
-        <div className="text-[10px] font-bold uppercase tracking-widest text-white/45">
-          Filters active
-        </div>
-        <div className="mt-1 flex items-baseline gap-2">
-          <div className="font-display text-2xl font-bold text-white">
-            {activeFilterCount.toString()}
-          </div>
-          {activeFilterCount > 0 && (
-            <Link
-              href={buildInboxUrl(DEFAULT_INBOX_FILTERS, {
-                workspaceScope,
-              })}
-              className="text-[11px] font-semibold text-aqua/80 hover:text-aqua"
-            >
-              clear all →
-            </Link>
-          )}
-        </div>
-        <div className="mt-1 text-[10px] text-white/45">
-          {activeFilterCount === 0
-            ? "Showing the default view (your open queue)."
-            : "Tap clear all to drop scope + filters back to defaults."}
-        </div>
-      </Card>
-    </div>
   );
 }
 
@@ -639,9 +521,6 @@ function RefreshButton({
       )}
       {filters.types.map((t) => (
         <input key={t} type="hidden" name="type" value={t} />
-      ))}
-      {filters.statuses.map((s) => (
-        <input key={s} type="hidden" name="status" value={s} />
       ))}
       {repo && <input type="hidden" name="repo" value={repo} />}
       {play && <input type="hidden" name="play" value={play} />}
@@ -827,13 +706,6 @@ function MockView({
   for (const item of items) {
     typeCounts[item.type] = (typeCounts[item.type] ?? 0) + 1;
   }
-  const fakeList: InboxListResponse = {
-    items,
-    total: items.length,
-    counts_by_type: typeCounts as Record<string, number>,
-    counts_by_status: { new: 5, snoozed: 1, resolved: 0, dismissed: 0 },
-    next_cursor: null,
-  };
   return (
     <AppShell kicker="attention" title="Inbox">
       <MockBanner reason={reason} />
@@ -843,11 +715,16 @@ function MockView({
         </div>
       )}
 
-      <CountsStats
-        list={fakeList}
-        typeCounts={typeCounts}
-        activeFilterCount={countActiveFilters(filters, {})}
-      />
+      <Card className="mt-5">
+        <CardHeader
+          title="Filters"
+          subtitle="Scope by owner, then narrow by work type. Default is everything in your workspace."
+        />
+        <InboxFiltersControlled
+          value={filters}
+          counts={{ types: typeCounts }}
+        />
+      </Card>
 
       <Card padded={false} className="mt-5 overflow-hidden">
         <CardHeader

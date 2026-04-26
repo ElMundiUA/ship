@@ -33,6 +33,8 @@ import type {
   InboxListResponse,
   InboxCountsResponse,
   InboxFilterState,
+  InboxStatus,
+  InboxType,
   InboxRoutingRule,
   InboxRoutingRuleDetail,
   InboxRoutingHandlesOut,
@@ -3794,7 +3796,11 @@ export function removeInboxGroupMember(
 
 // --- Inbox: list / detail / disposition (RFC-0010 §5) ---------------------
 
-export type InboxListQuery = Partial<InboxFilterState> & {
+export type InboxListQuery = {
+  ownership?: InboxFilterState["ownership"];
+  types?: InboxType[];
+  /** Optional; omitted uses API default. */
+  statuses?: InboxStatus[];
   repo_id?: string;
   play_key?: string;
   cursor?: string | null;

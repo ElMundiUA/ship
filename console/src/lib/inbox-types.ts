@@ -223,15 +223,29 @@ export type InboxRoutingPreviewOut = {
  */
 export type InboxFilterState = {
   ownership: "mine" | "unassigned" | "all";
-  types: InboxType[]; // empty = all types
-  statuses: InboxStatus[]; // empty = ['new', 'snoozed']
+  /** Subset to show; empty = all types. */
+  types: InboxType[];
 };
 
 export const DEFAULT_INBOX_FILTERS: InboxFilterState = {
-  ownership: "mine",
+  ownership: "all",
   types: [],
-  statuses: ["new"],
 };
+
+/** Shown in the list without explicit status filters in the URL. */
+export const INBOX_LIST_DEFAULT_STATUSES: InboxStatus[] = ["new", "snoozed"];
+
+/**
+ * Primary type chips on the inbox list (stuck / blockers are list-only, not
+ * in this row).
+ */
+export const INBOX_FILTER_TYPES = [
+  "clarification",
+  "improvement",
+  "failure",
+  "approval",
+  "exception",
+] as const satisfies readonly InboxType[];
 
 /**
  * Type guard for a string that should be an InboxType. Use when
