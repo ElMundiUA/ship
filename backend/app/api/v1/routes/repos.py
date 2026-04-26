@@ -2392,6 +2392,10 @@ def _validate_process_config(process: dict[str, Any]) -> None:
             state_obj.get("block_conditions"),
             f"process.states[{index}].block_conditions",
         )
+        _validate_ticket_contract(
+            state_obj.get("ticket_contract"),
+            f"process.states[{index}].ticket_contract",
+        )
         layout = state_obj.get("layout")
         if layout is not None:
             x_value = layout.get("x") if isinstance(layout, dict) else None
@@ -2488,6 +2492,8 @@ def _validate_process_config(process: dict[str, Any]) -> None:
                 },
             )
 
+    _validate_process_schedule(process.get("schedule"))
+    _validate_tracker_mapping(process.get("tracker_mapping"), states)
     _validate_process_routines(process.get("routines"))
 
 
@@ -2576,6 +2582,217 @@ def _validate_process_conditions(value: Any, field: str) -> None:
         )
 
 
+def _validate_ticket_contract(value: Any, field: str) -> None:
+    if value is None:
+        return
+    if not isinstance(value, dict):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "invalid_process",
+                "message": f"{field} must be an object when provided",
+            },
+        )
+    for key in ("input_state", "claim_state", "success_state"):
+        _require_optional_string(value.get(key), f"{field}.{key}", required=True)
+    for key in ("blocked_state", "needs_info_state", "approval_state"):
+        _require_optional_string(value.get(key), f"{field}.{key}", required=False)
+
+
+def _validate_process_schedule(value: Any) -> None:
+    if value is None:
+        return
+    if not isinstance(value, dict):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "invalid_process",
+                "message": "process.schedule must be an object when provided",
+            },
+        )
+    _require_optional_string(
+        value.get("time_zone"),
+        "process.schedule.time_zone",
+        required=False,
+    )
+    trigger = value.get("trigger")
+    if trigger is not None:
+        if not isinstance(trigger, dict):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_process",
+                    "message": "process.schedule.trigger must be an object",
+                },
+            )
+        kind = trigger.get("kind")
+        if kind is not None and kind not in {"schedule", "event", "manual"}:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_process",
+                    "message": "process.schedule.trigger.kind must be schedule|event|manual",
+                },
+            )
+        _require_optional_string(
+            trigger.get("event"),
+            "process.schedule.trigger.event",
+            required=False,
+        )
+    slots = value.get("slots")
+    if slots is None:
+        return
+    if not isinstance(slots, list):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "invalid_process",
+                "message": "process.schedule.slots must be a list when provided",
+            },
+        )
+    seen_slot_ids: set[str] = set()
+    for index, slot in enumerate(slots):
+        field = f"process.schedule.slots[{index}]"
+        if not isinstance(slot, dict):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"code": "invalid_process", "message": f"{field} must be an object"},
+            )
+        slot_id = slot.get("id")
+        _require_optional_string(slot_id, f"{field}.id", required=True)
+        if isinstance(slot_id, str):
+            if slot_id in seen_slot_ids:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={
+                        "code": "invalid_process",
+                        "message": "process.schedule.slots must not contain duplicate ids",
+                    },
+                )
+            seen_slot_ids.add(slot_id)
+        local_time = slot.get("local_time")
+        if not isinstance(local_time, str) or not re.match(r"^\d{2}:\d{2}$", local_time):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_process",
+                    "message": f"{field}.local_time must use HH:MM local time",
+                },
+            )
+        weekdays = slot.get("weekdays")
+        if weekdays is not None and (
+            not isinstance(weekdays, list)
+            or any(not isinstance(day, int) or day < 0 or day > 6 for day in weekdays)
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_process",
+                    "message": f"{field}.weekdays must be weekday numbers 0-6",
+                },
+            )
+        specialists = slot.get("specialist_ids", slot.get("specialists"))
+        if not isinstance(specialists, list) or not specialists:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_process",
+                    "message": f"{field}.specialist_ids must contain at least one specialist",
+                },
+            )
+        normalized = []
+        for specialist in specialists:
+            if not isinstance(specialist, str) or not specialist.strip():
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={
+                        "code": "invalid_process",
+                        "message": f"{field}.specialist_ids must be non-empty strings",
+                    },
+                )
+            normalized.append(specialist.strip())
+        if len(normalized) != len(set(normalized)):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_process",
+                    "message": (
+                        f"{field} contains the same specialist more than once; "
+                        "split duplicate capacity into a different slot"
+                    ),
+                },
+            )
+
+
+def _validate_tracker_mapping(value: Any, states: list[Any]) -> None:
+    if value is None:
+        return
+    if not isinstance(value, dict):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "invalid_process",
+                "message": "process.tracker_mapping must be a tracker-keyed map",
+            },
+        )
+    required_states: set[str] = set()
+    for state in states:
+        if not isinstance(state, dict):
+            continue
+        contract = state.get("ticket_contract")
+        if not isinstance(contract, dict):
+            continue
+        for key in (
+            "input_state",
+            "claim_state",
+            "success_state",
+            "blocked_state",
+            "needs_info_state",
+            "approval_state",
+        ):
+            mapped = contract.get(key)
+            if isinstance(mapped, str) and mapped.strip():
+                required_states.add(mapped)
+    for tracker, mapping in value.items():
+        if not isinstance(mapping, dict):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_process",
+                    "message": f"process.tracker_mapping.{tracker} must be an object",
+                },
+            )
+        for canonical, native in mapping.items():
+            if not isinstance(canonical, str) or not canonical.strip() or not isinstance(native, str) or not native.strip():
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={
+                        "code": "invalid_process",
+                        "message": f"process.tracker_mapping.{tracker} must map non-empty strings",
+                    },
+                )
+    if required_states:
+        covered = set().union(
+            *[
+                set(mapping.keys())
+                for mapping in value.values()
+                if isinstance(mapping, dict)
+            ],
+        )
+        missing = sorted(required_states - covered)
+        if missing:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_process",
+                    "message": (
+                        "process.tracker_mapping is missing canonical states: "
+                        + ", ".join(missing)
+                    ),
+                },
+            )
+
+
 def _validate_process_routines(value: Any) -> None:
     if value is None:
         return
@@ -2650,6 +2867,117 @@ def _validate_process_routines(value: Any) -> None:
                 f"{field}.{opt_key}",
                 required=False,
             )
+        mutation_text = " ".join(
+            str(routine.get(key) or "")
+            for key in ("description", "instructions", "prompt", "name")
+        )
+        if re.search(
+            r"\b(pick|claim|move|transition|work on next|take next)\b.*\b(ticket|issue|task)\b",
+            mutation_text,
+            flags=re.IGNORECASE,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_process",
+                    "message": (
+                        f"{field} looks like ticket-processing work; model it as "
+                        "a scheduled process step, not a routine"
+                    ),
+                },
+            )
+        trigger = routine.get("trigger")
+        if trigger is not None:
+            if not isinstance(trigger, dict):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={
+                        "code": "invalid_process",
+                        "message": f"{field}.trigger must be an object when provided",
+                    },
+                )
+            trigger_type = trigger.get("type")
+            if trigger_type is not None and trigger_type not in {"schedule", "event", "manual"}:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={
+                        "code": "invalid_process",
+                        "message": f"{field}.trigger.type must be schedule|event|manual",
+                    },
+                )
+            for key in ("cron", "event", "window", "catchup"):
+                _require_optional_string(
+                    trigger.get(key),
+                    f"{field}.trigger.{key}",
+                    required=False,
+                )
+        for object_key in ("scope", "output"):
+            obj = routine.get(object_key)
+            if obj is not None and not isinstance(obj, dict):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={
+                        "code": "invalid_process",
+                        "message": f"{field}.{object_key} must be an object when provided",
+                    },
+                )
+        prompt_record = routine.get("prompt_record")
+        if prompt_record is not None:
+            if not isinstance(prompt_record, dict):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={
+                        "code": "invalid_process",
+                        "message": f"{field}.prompt_record must be an object when provided",
+                    },
+                )
+            _require_optional_string(
+                prompt_record.get("id"),
+                f"{field}.prompt_record.id",
+                required=True,
+            )
+            if not isinstance(prompt_record.get("version"), int) or prompt_record["version"] < 1:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={
+                        "code": "invalid_process",
+                        "message": f"{field}.prompt_record.version must be a positive integer",
+                    },
+                )
+            _require_optional_string(
+                prompt_record.get("source"),
+                f"{field}.prompt_record.source",
+                required=True,
+            )
+            assumptions = prompt_record.get("assumptions")
+            if assumptions is not None and (
+                not isinstance(assumptions, list)
+                or any(not isinstance(item, str) or not item.strip() for item in assumptions)
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={
+                        "code": "invalid_process",
+                        "message": f"{field}.prompt_record.assumptions must be strings",
+                    },
+                )
+        output = routine.get("output")
+        if isinstance(output, dict):
+            destination = output.get("destination")
+            if destination is not None and destination not in {
+                "inbox",
+                "digest",
+                "tracker_comment",
+                "pr_comment",
+                "slack_later",
+            }:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={
+                        "code": "invalid_process",
+                        "message": f"{field}.output.destination is not supported",
+                    },
+                )
         patterns = routine.get("patterns")
         if patterns is not None and (
             not isinstance(patterns, list)

@@ -49,6 +49,7 @@ export async function POST(request: Request) {
     }
 
     const token = (await getSessionToken()) ?? undefined;
+    const submittedSummary = getFormValue(form, "changeSummary");
     const result = await proposeRepoConfig(
       workspaceId,
       repoId,
@@ -56,11 +57,11 @@ export async function POST(request: Request) {
         lanes,
         process,
         base_sha: getFormValue(form, "baseSha") || null,
-        change_summary: stateId
+        change_summary: submittedSummary || (stateId
           ? `Update process state ${stateId}`
           : Object.keys(layout).length > 0
             ? "Update process canvas layout"
-            : "Update process config",
+            : "Update process config"),
       },
       token,
     );

@@ -5,6 +5,7 @@ export function ProcessConfigProposalFields({
   repoId,
   config,
   processConfig,
+  changeSummary,
   stateId,
   layoutJson,
 }: {
@@ -12,6 +13,7 @@ export function ProcessConfigProposalFields({
   repoId?: string;
   config: ApiRepoConfig | null;
   processConfig: Record<string, unknown>;
+  changeSummary?: string;
   stateId?: string;
   layoutJson?: string;
 }) {
@@ -31,6 +33,7 @@ export function ProcessConfigProposalFields({
         name="processJson"
         value={JSON.stringify(processConfig)}
       />
+      <input type="hidden" name="changeSummary" value={changeSummary ?? ""} />
       {layoutJson ? (
         <input type="hidden" name="layoutJson" value={layoutJson} />
       ) : null}

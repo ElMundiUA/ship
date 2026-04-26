@@ -8,8 +8,10 @@ import {
   processFromRepoConfig,
   selectConfigSource,
 } from "./process-config";
+import { FlowSchedulePanel } from "./flow-schedule-panel";
 import { ProcessEditorWorkspace } from "./process-editor-workspace";
 import { RoutinesPanel } from "./routines-panel";
+import { TrackerMappingPanel } from "./tracker-mapping-panel";
 import { RepoSelector } from "./repo-selector";
 import {
   ApiHttpError,
@@ -33,6 +35,7 @@ import { pickWorkspace, toAppShellWorkspaces } from "@/lib/workspace-scope";
 export const dynamic = "force-dynamic";
 
 type SearchParams = { [key: string]: string | string[] | undefined };
+type ProcessTab = "flow" | "schedule" | "routines" | "mapping";
 
 export default async function ProcessPage({
   searchParams,
@@ -42,7 +45,7 @@ export default async function ProcessPage({
   const params = (await searchParams) ?? {};
   const selectedStateId =
     typeof params.state === "string" ? params.state : undefined;
-  const selectedTab = params.tab === "routines" ? "routines" : "process";
+  const selectedTab = parseProcessTab(params.tab);
   const selectedRepoId =
     typeof params.repo === "string" ? params.repo : undefined;
   const reason = typeof params.reason === "string" ? params.reason : undefined;
@@ -156,7 +159,7 @@ function renderProcessPage({
   config?: ApiRepoConfig | null;
   configSource?: ProcessConfigSource;
   selectedStateId?: string;
-  selectedTab: "process" | "routines";
+  selectedTab: ProcessTab;
   reason?: string;
   mock?: boolean;
 }) {
@@ -176,30 +179,35 @@ function renderProcessPage({
         <RepoSelector repos={repos} selectedRepo={selectedRepo} />
         <ProcessNotice reason={reason} />
         <ConfigSourceBanner config={config ?? null} source={configSource ?? "fallback"} />
-        {selectedTab === "routines" ? (
-          <>
-            <ProcessTabs selected={selectedTab} repoId={selectedRepo?.id} />
-            <RoutinesPanel
-              workspaceId={workspace.id}
-              process={process}
-              repoId={selectedRepo?.id}
-              config={config ?? null}
-            />
-          </>
-        ) : (
+        <ProcessTabs selected={selectedTab} repoId={selectedRepo?.id} />
+        {selectedTab === "flow" ? (
           <ProcessEditorWorkspace
             workspaceId={workspace.id}
             process={process}
             selectedStateId={selectedStateId}
             repoId={selectedRepo?.id}
             config={config ?? null}
-            tabs={
-              <ProcessTabs
-                selected={selectedTab}
-                repoId={selectedRepo?.id}
-                variant="inline"
-              />
-            }
+          />
+        ) : selectedTab === "schedule" ? (
+          <FlowSchedulePanel
+            workspaceId={workspace.id}
+            process={process}
+            repoId={selectedRepo?.id}
+            config={config ?? null}
+          />
+        ) : selectedTab === "mapping" ? (
+          <TrackerMappingPanel
+            workspaceId={workspace.id}
+            process={process}
+            repoId={selectedRepo?.id}
+            config={config ?? null}
+          />
+        ) : (
+          <RoutinesPanel
+            workspaceId={workspace.id}
+            process={process}
+            repoId={selectedRepo?.id}
+            config={config ?? null}
           />
         )}
       </div>
@@ -274,45 +282,45 @@ function ConfigSourceBanner({
 function ProcessTabs({
   selected,
   repoId,
-  variant = "card",
 }: {
-  selected: "process" | "routines";
+  selected: ProcessTab;
   repoId?: string;
-  variant?: "card" | "inline";
 }) {
-  const processHref = repoId ? `/process?repo=${encodeURIComponent(repoId)}` : "/process";
-  const routinesHref = repoId
-    ? `/process?tab=routines&repo=${encodeURIComponent(repoId)}`
-    : "/process?tab=routines";
-  if (variant === "inline") {
-    return (
-      <div className="flex flex-wrap items-center gap-1">
-        <TabLink href={processHref} active={selected === "process"}>
-          Process canvas
-        </TabLink>
-        <TabLink href={routinesHref} active={selected === "routines"}>
-          Routines
-        </TabLink>
-      </div>
-    );
-  }
-
+  const hrefFor = (tab: ProcessTab) => {
+    const query = new URLSearchParams();
+    if (tab !== "flow") query.set("tab", tab);
+    if (repoId) query.set("repo", repoId);
+    const suffix = query.toString();
+    return suffix ? `/process?${suffix}` : "/process";
+  };
   return (
     <div className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/[0.035] p-2">
       <div className="flex gap-1">
-        <TabLink href={processHref} active={selected === "process"}>
-          Process canvas
+        <TabLink href={hrefFor("flow")} active={selected === "flow"}>
+          Flow
         </TabLink>
-        <TabLink href={routinesHref} active={selected === "routines"}>
+        <TabLink href={hrefFor("schedule")} active={selected === "schedule"}>
+          Flow schedule
+        </TabLink>
+        <TabLink href={hrefFor("routines")} active={selected === "routines"}>
           Routines
+        </TabLink>
+        <TabLink href={hrefFor("mapping")} active={selected === "mapping"}>
+          Tracker mapping
         </TabLink>
       </div>
       <p className="hidden text-xs text-white/45 md:block">
-        Runtime metrics stay in dashboard/analytics; this page is for editing the
-        flow.
+        One development process: flow, capacity, standalone routines, and tracker states.
       </p>
     </div>
   );
+}
+
+function parseProcessTab(value: string | string[] | undefined): ProcessTab {
+  if (value === "schedule") return "schedule";
+  if (value === "routines") return "routines";
+  if (value === "mapping" || value === "tracker") return "mapping";
+  return "flow";
 }
 
 function TabLink({
@@ -364,7 +372,43 @@ const mockProcess: ApiProcess = {
   task_count: 0,
   blocked_count: 0,
   health: "ok",
-  specialists: [],
+  specialists: [
+    {
+      id: "intake",
+      name: "Intake specialist",
+      role: "Clarifies incoming work and routes tasks.",
+      capabilities: ["triage"],
+      agent_profile: "auto",
+    },
+    {
+      id: "business_analyst",
+      name: "Business analyst",
+      role: "Turns requests into requirements and acceptance criteria.",
+      capabilities: ["requirements"],
+      agent_profile: "auto",
+    },
+    {
+      id: "developer",
+      name: "Developer",
+      role: "Implements code changes, tests, and PR updates.",
+      capabilities: ["implementation"],
+      agent_profile: "auto",
+    },
+    {
+      id: "qa_engineer",
+      name: "QA engineer",
+      role: "Validates acceptance criteria and quality gates.",
+      capabilities: ["qa"],
+      agent_profile: "auto",
+    },
+    {
+      id: "review_owner",
+      name: "Review owner",
+      role: "Reviews completed work for correctness and scope.",
+      capabilities: ["review"],
+      agent_profile: "auto",
+    },
+  ],
   states: [
     mockState("task_intake", "Intake", "Intake specialist", "ok", 1, 0),
     mockState("ba_requirements", "Requirements", "Business analyst", "ok", 0, 0),
@@ -389,6 +433,44 @@ const mockProcess: ApiProcess = {
       description: "Reconcile CI, workflows, and guardrails after failed runs.",
     },
   ],
+  schedule: {
+    trigger: { kind: "schedule", event: null },
+    time_zone: "Europe/Kiev",
+    slots: [
+      {
+        id: "weekday_morning",
+        label: "Weekday morning",
+        local_time: "09:00",
+        weekdays: [1, 2, 3, 4, 5],
+        specialist_ids: ["business_analyst", "developer"],
+      },
+      {
+        id: "weekday_afternoon",
+        label: "Weekday afternoon",
+        local_time: "13:00",
+        weekdays: [1, 2, 3, 4, 5],
+        specialist_ids: ["qa_engineer", "review_owner"],
+      },
+    ],
+  },
+  tracker_mapping: {
+    ship: {
+      new: "New",
+      intake_in_progress: "Intake In Progress",
+      ready_for_analysis: "Ready For Analysis",
+      analysis_in_progress: "Analysis In Progress",
+      ready_for_development: "Ready For Development",
+      development_in_progress: "Development In Progress",
+      in_review: "In Review",
+      qa_in_progress: "QA In Progress",
+      ready_for_release: "Ready For Release",
+      final_review_in_progress: "Final Review In Progress",
+      done: "Done",
+      blocked: "Blocked",
+      needs_info: "Needs Info",
+      needs_human_approval: "Needs Human Approval",
+    },
+  },
   process_graph: { links: [] },
   adapter_diagnostics: [
     {
@@ -440,21 +522,82 @@ function mockState(
   taskCount: number,
   blockedCount: number,
 ): ApiProcessState {
+  const specialistId = mockSpecialistId(specialistName);
   return {
     id,
     name,
-    specialist_id: specialistName.toLowerCase().replaceAll(" ", "_"),
+    specialist_id: specialistId,
     specialist_name: specialistName,
     instructions:
       "Execute this state using task context and runtime pattern discovery.",
     triggers: [{ type: "manual", interval: null, event: null }],
     exit_conditions: [{ expression: "state_complete == true" }],
     block_conditions: [{ expression: "requires_human_input == true" }],
+    ticket_contract: mockTicketContract(id),
     runtime: {
       task_count: taskCount,
       blocked_count: blockedCount,
       last_execution_time: new Date().toISOString(),
       health,
     },
+  };
+}
+
+function mockSpecialistId(name: string) {
+  const byName: Record<string, string> = {
+    "Intake specialist": "intake",
+    "Business analyst": "business_analyst",
+    Developer: "developer",
+    "QA engineer": "qa_engineer",
+    "Review owner": "review_owner",
+  };
+  return byName[name] ?? name.toLowerCase().replaceAll(" ", "_");
+}
+
+function mockTicketContract(id: string): NonNullable<ApiProcessState["ticket_contract"]> {
+  const defaults: Record<string, NonNullable<ApiProcessState["ticket_contract"]>> = {
+    task_intake: {
+      input_state: "new",
+      claim_state: "intake_in_progress",
+      success_state: "ready_for_analysis",
+      blocked_state: "blocked",
+      needs_info_state: "needs_info",
+    },
+    ba_requirements: {
+      input_state: "ready_for_analysis",
+      claim_state: "analysis_in_progress",
+      success_state: "ready_for_development",
+      blocked_state: "blocked",
+      needs_info_state: "needs_info",
+    },
+    dev_implementation: {
+      input_state: "ready_for_development",
+      claim_state: "development_in_progress",
+      success_state: "in_review",
+      blocked_state: "blocked",
+      needs_info_state: "needs_info",
+    },
+    qa_manual: {
+      input_state: "in_review",
+      claim_state: "qa_in_progress",
+      success_state: "ready_for_release",
+      blocked_state: "blocked",
+      needs_info_state: "needs_info",
+    },
+    pr_review: {
+      input_state: "ready_for_release",
+      claim_state: "final_review_in_progress",
+      success_state: "done",
+      blocked_state: "blocked",
+      needs_info_state: "needs_info",
+      approval_state: "needs_human_approval",
+    },
+  };
+  return defaults[id] ?? {
+    input_state: `${id}_ready`,
+    claim_state: `${id}_in_progress`,
+    success_state: `${id}_done`,
+    blocked_state: "blocked",
+    needs_info_state: "needs_info",
   };
 }

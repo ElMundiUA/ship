@@ -37,6 +37,7 @@ from backend.app.db.session import get_session
 from backend.app.integrations.gateway.tracker import TicketRef
 from backend.app.services.agent.tools import ToolBox, ToolInvocationError
 from backend.app.services.inbox.dual_write import mirror_clarification_create
+from backend.app.services.role_templates import default_role_templates
 
 
 router = APIRouter(
@@ -85,6 +86,34 @@ class ProcessTriggerOut(BaseModel):
     event: str | None = None
 
 
+class ProcessScheduleTriggerOut(BaseModel):
+    kind: Literal["schedule", "event", "manual"] = "schedule"
+    event: str | None = None
+
+
+class ProcessScheduleSlotOut(BaseModel):
+    id: str
+    local_time: str
+    weekdays: list[int] = Field(default_factory=lambda: [1, 2, 3, 4, 5])
+    specialist_ids: list[str] = Field(default_factory=list)
+    label: str | None = None
+
+
+class ProcessScheduleOut(BaseModel):
+    trigger: ProcessScheduleTriggerOut = Field(default_factory=ProcessScheduleTriggerOut)
+    time_zone: str = "UTC"
+    slots: list[ProcessScheduleSlotOut] = Field(default_factory=list)
+
+
+class ProcessTicketContractOut(BaseModel):
+    input_state: str
+    claim_state: str
+    success_state: str
+    blocked_state: str | None = None
+    needs_info_state: str | None = None
+    approval_state: str | None = None
+
+
 class ProcessStateRuntimeOut(BaseModel):
     task_count: int = 0
     blocked_count: int = 0
@@ -101,6 +130,7 @@ class ProcessStateOut(BaseModel):
     triggers: list[ProcessTriggerOut] = Field(default_factory=list)
     exit_conditions: list[ProcessConditionOut] = Field(default_factory=list)
     block_conditions: list[ProcessConditionOut] = Field(default_factory=list)
+    ticket_contract: ProcessTicketContractOut | None = None
     runtime: ProcessStateRuntimeOut = Field(default_factory=ProcessStateRuntimeOut)
 
 
@@ -118,6 +148,20 @@ class ProcessSpecialistOut(BaseModel):
     role: str
     capabilities: list[str] = Field(default_factory=list)
     agent_profile: str = "auto"
+    version: str | None = "ship-default-v1"
+    source: str = "ship_managed"
+
+
+class RoleTemplateOut(BaseModel):
+    id: str
+    name: str
+    description: str
+    prompt_template: str
+    capabilities: list[str] = Field(default_factory=list)
+    default_agent_profile: str = "auto"
+    version: str
+    source: str
+    default_phases: list[str] = Field(default_factory=list)
 
 
 class ProcessTaskOut(BaseModel):
@@ -142,6 +186,10 @@ class ProcessRoutineOut(BaseModel):
     status: str | None = None
     enabled: bool = True
     description: str = ""
+    trigger: dict[str, Any] | None = None
+    scope: dict[str, Any] | None = None
+    output: dict[str, Any] | None = None
+    prompt_record: dict[str, Any] | None = None
 
 
 class ProcessLinkOut(BaseModel):
@@ -174,6 +222,7 @@ class ProcessAdapterDiagnosticOut(BaseModel):
     status: Literal["ok", "degraded", "not_configured", "unknown"]
     message: str
     capabilities: list[str] = Field(default_factory=list)
+    missing_mappings: list[str] = Field(default_factory=list)
 
 
 class ProcessListOut(BaseModel):
@@ -189,6 +238,8 @@ class ProcessOut(ProcessSummaryOut):
     transitions: list[ProcessTransitionOut] = Field(default_factory=list)
     tasks: list[ProcessTaskOut] = Field(default_factory=list)
     routines: list[ProcessRoutineOut] = Field(default_factory=list)
+    schedule: ProcessScheduleOut | None = None
+    tracker_mapping: dict[str, dict[str, str]] = Field(default_factory=dict)
     process_graph: ProcessGraphOut = Field(default_factory=ProcessGraphOut)
     adapter_diagnostics: list[ProcessAdapterDiagnosticOut] = Field(default_factory=list)
 
@@ -266,6 +317,29 @@ async def get_process_adapters(
 ) -> list[ProcessAdapterDiagnosticOut]:
     await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
     return await _adapter_diagnostics(session, workspace_id)
+
+
+@router.get("/role-templates", response_model=list[RoleTemplateOut])
+async def list_role_templates(
+    workspace_id: uuid.UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> list[RoleTemplateOut]:
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
+    return [
+        RoleTemplateOut(
+            id=role.id,
+            name=role.name,
+            description=role.description,
+            prompt_template=role.prompt_template,
+            capabilities=list(role.capabilities),
+            default_agent_profile=role.default_agent_profile,
+            version=role.version,
+            source=role.source,
+            default_phases=list(role.default_phases),
+        )
+        for role in default_role_templates()
+    ]
 
 
 @router.get("/{process_id}", response_model=ProcessOut)
@@ -819,6 +893,7 @@ async def _build_development_process(
                 triggers=_triggers_for(lane, pipeline),
                 exit_conditions=[ProcessConditionOut(expression="state_complete == true")],
                 block_conditions=[ProcessConditionOut(expression="requires_human_input == true")],
+                ticket_contract=_ticket_contract_for_state(lane_key),
                 runtime=runtime,
             )
         )
@@ -856,6 +931,8 @@ async def _build_development_process(
         transitions=transitions,
         tasks=tasks,
         routines=routines,
+        schedule=_default_schedule(states),
+        tracker_mapping=_default_tracker_mapping(states),
         process_graph=ProcessGraphOut(),
         adapter_diagnostics=adapter_diagnostics,
     )
@@ -871,47 +948,15 @@ def _state_lane_ids(lanes: list[Lane], pipelines: list[Pipeline]) -> list[str]:
 def _specialists() -> dict[str, ProcessSpecialistOut]:
     rows = [
         ProcessSpecialistOut(
-            id="intake",
-            name="Intake specialist",
-            role="Clarifies incoming work and validates minimum context.",
-            capabilities=["triage", "clarification", "routing"],
-        ),
-        ProcessSpecialistOut(
-            id="business_analyst",
-            name="Business analyst",
-            role="Turns requests into requirements and acceptance criteria.",
-            capabilities=["requirements", "acceptance_criteria", "stakeholder_questions"],
-        ),
-        ProcessSpecialistOut(
-            id="technical_architect",
-            name="Technical architect",
-            role="Plans architecture, migration strategy, and risk boundaries.",
-            capabilities=["architecture", "planning", "risk_review"],
-        ),
-        ProcessSpecialistOut(
-            id="developer",
-            name="Developer",
-            role="Implements code changes, tests, and PR updates.",
-            capabilities=["implementation", "tests", "pull_requests"],
-        ),
-        ProcessSpecialistOut(
-            id="qa_engineer",
-            name="QA engineer",
-            role="Validates acceptance criteria and quality gates.",
-            capabilities=["qa", "test_plans", "regression"],
-        ),
-        ProcessSpecialistOut(
-            id="review_owner",
-            name="Review owner",
-            role="Reviews completed work for correctness, scope, and maintainability.",
-            capabilities=["review", "ci_triage", "risk_review"],
-        ),
-        ProcessSpecialistOut(
-            id="devops_platform",
-            name="DevOps/platform",
-            role="Handles runtime, CI, deployment, and operational health.",
-            capabilities=["ci", "deployment", "infrastructure"],
-        ),
+            id=role.id,
+            name=role.name,
+            role=role.description,
+            capabilities=list(role.capabilities),
+            agent_profile=role.default_agent_profile,
+            version=role.version,
+            source=role.source,
+        )
+        for role in default_role_templates()
     ]
     return {row.id: row for row in rows}
 
@@ -928,8 +973,117 @@ def _specialist_for_lane(lane_id: str) -> str:
     if "qa" in lane_id or "test" in lane_id:
         return "qa_engineer"
     if "review" in lane_id or "pr" in lane_id:
-        return "review_owner"
+        return "code_reviewer"
     return "devops_platform"
+
+
+def _ticket_contract_for_state(state_id: str) -> ProcessTicketContractOut:
+    known = {
+        "task_intake": ProcessTicketContractOut(
+            input_state="new",
+            claim_state="intake_in_progress",
+            success_state="ready_for_analysis",
+            blocked_state="blocked",
+            needs_info_state="needs_info",
+        ),
+        "ba_requirements": ProcessTicketContractOut(
+            input_state="ready_for_analysis",
+            claim_state="analysis_in_progress",
+            success_state="ready_for_development",
+            blocked_state="blocked",
+            needs_info_state="needs_info",
+        ),
+        "tech_arch_plan": ProcessTicketContractOut(
+            input_state="ready_for_development",
+            claim_state="architecture_in_progress",
+            success_state="ready_for_implementation",
+            blocked_state="blocked",
+            needs_info_state="needs_info",
+            approval_state="needs_human_approval",
+        ),
+        "dev_implementation": ProcessTicketContractOut(
+            input_state="ready_for_implementation",
+            claim_state="development_in_progress",
+            success_state="in_review",
+            blocked_state="blocked",
+            needs_info_state="needs_info",
+        ),
+        "qa_manual": ProcessTicketContractOut(
+            input_state="in_review",
+            claim_state="qa_in_progress",
+            success_state="ready_for_release",
+            blocked_state="blocked",
+            needs_info_state="needs_info",
+        ),
+        "pr_review": ProcessTicketContractOut(
+            input_state="ready_for_release",
+            claim_state="final_review_in_progress",
+            success_state="done",
+            blocked_state="blocked",
+            needs_info_state="needs_info",
+            approval_state="needs_human_approval",
+        ),
+    }
+    return known.get(
+        state_id,
+        ProcessTicketContractOut(
+            input_state=f"{state_id}_ready",
+            claim_state=f"{state_id}_in_progress",
+            success_state=f"{state_id}_done",
+            blocked_state="blocked",
+            needs_info_state="needs_info",
+        ),
+    )
+
+
+def _default_schedule(states: list[ProcessStateOut]) -> ProcessScheduleOut:
+    specialists = []
+    for state in states:
+        if state.specialist_id not in specialists:
+            specialists.append(state.specialist_id)
+    return ProcessScheduleOut(
+        trigger=ProcessScheduleTriggerOut(kind="schedule"),
+        time_zone="UTC",
+        slots=[
+            ProcessScheduleSlotOut(
+                id="weekday_morning",
+                label="Weekday morning",
+                local_time="09:00",
+                weekdays=[1, 2, 3, 4, 5],
+                specialist_ids=specialists[:2] or ["business_analyst", "developer"],
+            ),
+            ProcessScheduleSlotOut(
+                id="weekday_afternoon",
+                label="Weekday afternoon",
+                local_time="13:00",
+                weekdays=[1, 2, 3, 4, 5],
+                specialist_ids=specialists[2:4] or ["qa_engineer"],
+            ),
+        ],
+    )
+
+
+def _default_tracker_mapping(
+    states: list[ProcessStateOut],
+) -> dict[str, dict[str, str]]:
+    canonical: set[str] = set()
+    for state in states:
+        contract = state.ticket_contract
+        if contract is None:
+            continue
+        for value in (
+            contract.input_state,
+            contract.claim_state,
+            contract.success_state,
+            contract.blocked_state,
+            contract.needs_info_state,
+            contract.approval_state,
+        ):
+            if value:
+                canonical.add(value)
+    return {
+        "ship": {state: state.replace("_", " ").title() for state in sorted(canonical)}
+    }
 
 
 def _runtime_by_state(
@@ -1078,7 +1232,7 @@ def _default_states(
         ("tech_arch_plan", "technical_architect"),
         ("dev_implementation", "developer"),
         ("qa_manual", "qa_engineer"),
-        ("pr_review", "review_owner"),
+        ("pr_review", "code_reviewer"),
     ]
     return [
         ProcessStateOut(
@@ -1090,6 +1244,7 @@ def _default_states(
             triggers=[ProcessTriggerOut(type="manual")],
             exit_conditions=[ProcessConditionOut(expression="state_complete == true")],
             block_conditions=[ProcessConditionOut(expression="requires_human_input == true")],
+            ticket_contract=_ticket_contract_for_state(state_id),
         )
         for state_id, specialist_id in rows
     ]
