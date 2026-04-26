@@ -28,10 +28,16 @@ from sqlalchemy import inspect, select, text
 
 from backend.app.db.models.agent_memory import (
     BucketArticle,
+    BucketArticleSource,
     BucketArticleStatus,
     BucketScope,
     BucketSource,
     KnowledgeBucket,
+    KnowledgeImportSource,
+    KnowledgeImportSourceKind,
+    KnowledgeIngestionRun,
+    KnowledgeIngestionStatus,
+    KnowledgeSourceItem,
 )
 from backend.app.db.models.integrations import (
     GitHubInstallation,
@@ -531,7 +537,7 @@ async def test_commit_style_freeform_when_unmatched(
 
 
 @pytest.mark.asyncio
-async def test_writes_repo_intel_md_to_knowledge_bucket(
+async def test_writes_repo_intel_md_to_workspace_import_source(
     db_session, seed_activated_repo
 ) -> None:
     workspace, repo, _ = seed_activated_repo
@@ -554,41 +560,86 @@ async def test_writes_repo_intel_md_to_knowledge_bucket(
     )
     assert report.knowledge_articles_written == 6
 
-    bucket = (
+    repo_bucket = (
         await db_session.execute(
             select(KnowledgeBucket).where(
                 KnowledgeBucket.workspace_id == workspace.id,
                 KnowledgeBucket.repo_id == repo.id,
                 KnowledgeBucket.scope_kind == BucketScope.REPO,
                 KnowledgeBucket.source_kind == BucketSource.REPO_CONTEXT,
-                KnowledgeBucket.slug == "repository-context",
             )
         )
     ).scalars().first()
-    assert bucket is not None
-    assert bucket.source_ref is not None
-    assert bucket.source_ref["harvest"] == "repo_context"
+    assert repo_bucket is None
+
+    source = (
+        await db_session.execute(
+            select(KnowledgeImportSource).where(
+                KnowledgeImportSource.workspace_id == workspace.id,
+                KnowledgeImportSource.repo_id == repo.id,
+                KnowledgeImportSource.kind == KnowledgeImportSourceKind.DOCS_REPO,
+            )
+        )
+    ).scalars().one()
+    assert source.config["harvester"] == "repo_intel"
+    assert source.content_fingerprint
 
     articles = (
         await db_session.execute(
-            select(BucketArticle).where(
-                BucketArticle.bucket_id == bucket.id,
+            select(BucketArticle, KnowledgeBucket)
+            .join(KnowledgeBucket, KnowledgeBucket.id == BucketArticle.bucket_id)
+            .where(
+                KnowledgeBucket.workspace_id == workspace.id,
+                KnowledgeBucket.scope_kind == BucketScope.WORKSPACE,
                 BucketArticle.status == BucketArticleStatus.PUBLISHED,
+                BucketArticle.provenance["repo_id"].astext == str(repo.id),
             )
         )
-    ).scalars().all()
-    assert {article.slug for article in articles} == {
-        "architecture",
-        "dev-environment",
-        "overview",
-        "rules",
-        "visual-style",
-        "workflow",
+    ).all()
+    repo_slug = repo.full_name.replace("/", "-")
+    assert {article.slug for article, _ in articles} == {
+        f"{repo_slug}-{slug}"
+        for slug in {
+            "architecture",
+            "dev-environment",
+            "overview",
+            "rules",
+            "visual-style",
+            "workflow",
+        }
     }
-    overview = next(article for article in articles if article.slug == "overview")
+    assert {bucket.scope_kind for _, bucket in articles} == {BucketScope.WORKSPACE}
+    overview = next(
+        article
+        for article, _ in articles
+        if article.slug == f"{repo_slug}-overview"
+    )
     assert "# Repository overview" in overview.body_md
     assert "next.js" in overview.body_md
     assert overview.provenance.get("source") == "repo_context"
+
+    items = (
+        await db_session.execute(
+            select(KnowledgeSourceItem).where(
+                KnowledgeSourceItem.source_id == source.id,
+            )
+        )
+    ).scalars().all()
+    assert len(items) == 6
+    run = (
+        await db_session.execute(
+            select(KnowledgeIngestionRun).where(
+                KnowledgeIngestionRun.source_id == source.id
+            )
+        )
+    ).scalars().one()
+    assert run.status == KnowledgeIngestionStatus.DONE
+    links = (
+        await db_session.execute(
+            select(BucketArticleSource).where(BucketArticleSource.run_id == run.id)
+        )
+    ).scalars().all()
+    assert len(links) == 6
 
 
 # ---------------------------------------------------------------------------
