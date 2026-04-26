@@ -69,7 +69,7 @@ function buildWorkspaceNav(): NavGroup[] {
         { href: "/", label: "Home", icon: <DotIcon /> },
         { href: "/process", label: "Process", icon: <DotIcon /> },
         { href: "/inbox", label: "Inbox", icon: <DotIcon /> },
-        { href: "/fleet/knowledge", label: "Knowledge", icon: <DotIcon /> },
+        { href: "/knowledge", label: "Knowledge", icon: <DotIcon /> },
       ],
     },
     {
