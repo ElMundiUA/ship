@@ -131,6 +131,8 @@ _ESCALATION_REASON_BY_TYPE: dict[str, str] = {
     "clarification": "needs_clarification",
     "improvement": "improvement_proposed",
     "exception": "play_exception",
+    "stuck": "stale_work",
+    "blocker": "self_heal_failed",
 }
 
 

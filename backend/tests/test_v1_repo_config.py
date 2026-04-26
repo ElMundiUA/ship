@@ -372,6 +372,164 @@ async def test_propose_emits_process_agent_profile(
 
 
 @pytest.mark.asyncio
+async def test_propose_rejects_duplicate_process_transition_pair(
+    v1_client, seed_workspace_with_repo
+) -> None:
+    raw, workspace, _install, repo = seed_workspace_with_repo
+    response = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/repos/{repo.id}/config/propose",
+        headers={"Authorization": f"Bearer {raw}"},
+        json={
+            "base_sha": "sha-abc",
+            "lanes": {},
+            "process": {
+                "id": "development",
+                "name": "Development Process",
+                "primary": True,
+                "states": [
+                    {
+                        "id": "a",
+                        "name": "A",
+                        "specialist": {
+                            "id": "dev",
+                            "name": "Dev",
+                        },
+                    },
+                    {
+                        "id": "b",
+                        "name": "B",
+                        "specialist": {
+                            "id": "dev",
+                            "name": "Dev",
+                        },
+                    },
+                ],
+                "transitions": [
+                    {
+                        "from": "a",
+                        "to": "b",
+                        "condition": "s1",
+                    },
+                    {
+                        "from": "a",
+                        "to": "b",
+                        "condition": "s2",
+                    },
+                ],
+            },
+        },
+    )
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"]["code"] == "invalid_process"
+    assert "duplicate" in response.json()["detail"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_propose_rejects_non_bool_requires_human(
+    v1_client, seed_workspace_with_repo
+) -> None:
+    raw, workspace, _install, repo = seed_workspace_with_repo
+    response = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/repos/{repo.id}/config/propose",
+        headers={"Authorization": f"Bearer {raw}"},
+        json={
+            "base_sha": "sha-abc",
+            "lanes": {},
+            "process": {
+                "id": "development",
+                "name": "Development Process",
+                "primary": True,
+                "states": [
+                    {
+                        "id": "a",
+                        "name": "A",
+                        "specialist": {
+                            "id": "dev",
+                            "name": "Dev",
+                        },
+                    },
+                ],
+                "transitions": [
+                    {
+                        "from": "a",
+                        "to": "a",
+                        "condition": "t",
+                        "requires_human": "yes",
+                    }
+                ],
+            },
+        },
+    )
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"]["code"] == "invalid_process"
+    assert "requires_human" in response.json()["detail"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_propose_emits_requires_human_in_yaml(
+    monkeypatch, v1_client, seed_workspace_with_repo
+) -> None:
+    from backend.app.integrations.github.workflows import StarterWorkflowPR
+
+    raw, workspace, _install, repo = seed_workspace_with_repo
+    _patch_blob(monkeypatch, content=_SAMPLE_CONFIG, sha="sha-abc")
+    captured: dict[str, object] = {}
+
+    async def _commit(
+        repo, install, *, files, title, branch_label, pr_body_header, settings,
+        return_url=None, client=None,
+    ):
+        captured["files"] = files
+        return StarterWorkflowPR(
+            pr_url="https://github.com/acme/lanes-config/pull/14",
+            pr_number=14,
+            branch="ship/process-transition-human",
+        )
+
+    monkeypatch.setattr(
+        "backend.app.integrations.github.workflows.commit_bundle_pr", _commit
+    )
+    response = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/repos/{repo.id}/config/propose",
+        headers={"Authorization": f"Bearer {raw}"},
+        json={
+            "base_sha": "sha-abc",
+            "lanes": {},
+            "process": {
+                "id": "development",
+                "name": "Development Process",
+                "primary": True,
+                "states": [
+                    {
+                        "id": "implementation",
+                        "name": "Implementation",
+                        "specialist": {
+                            "id": "developer",
+                            "name": "Developer",
+                            "agent_profile": "auto",
+                        },
+                    }
+                ],
+                "transitions": [
+                    {
+                        "from": "implementation",
+                        "to": "implementation",
+                        "condition": "moved",
+                        "requires_human": True,
+                    }
+                ],
+            },
+        },
+    )
+    assert response.status_code == 200, response.text
+    files = captured["files"]
+    assert isinstance(files, list) and len(files) == 1
+    _, content = files[0]
+    assert "requires_human: true" in content
+    assert "condition: moved" in content
+
+
+@pytest.mark.asyncio
 async def test_propose_rejects_unknown_process_agent_profile(
     v1_client, seed_workspace_with_repo
 ) -> None:

@@ -1,5 +1,5 @@
 # RFC-0010 inbox profile catalog. Each profile defines emit rules per
-# inbox type (clarification | approval | failure | improvement | exception).
+# inbox type (clarification | approval | failure | improvement | exception | stuck).
 # Pattern frontmatter references a profile by name and may add per-type
 # overrides (see scan-cost-delta for an example).
 #
@@ -27,6 +27,8 @@ inbox_profiles:
     failure:       { enabled: false }
     improvement:   { enabled: false }
     exception:     { enabled: false }
+    stuck:         { enabled: false }
+    blocker:       { enabled: false }
 
   scan_default:
     # Scheduled scanners. Findings = Run only. Human only on dysfunction.

@@ -32,6 +32,8 @@ const TYPE_TONE: Record<InboxType, BadgeTone> = {
   failure: "err",
   approval: "warn",
   exception: "err",
+  stuck: "warn",
+  blocker: "err",
 };
 
 const STATUS_TONE: Record<InboxItem["status"], BadgeTone> = {

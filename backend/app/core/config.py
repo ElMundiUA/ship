@@ -197,6 +197,9 @@ class Settings(BaseSettings):
     # docker-compose stack works out of the box.
     console_url: str = Field(default="http://localhost:3001", alias="SHIP_CONSOLE_URL")
     auth_mode: str = Field(default="local", alias="SHIP_AUTH_MODE")  # local | auth0
+    allow_local_auth0_callbacks: bool = Field(
+        default=False, alias="SHIP_ALLOW_LOCAL_AUTH0_CALLBACKS"
+    )
 
     # --- Auth0 (used when auth_mode == "auth0") ---
     auth0_domain: str | None = Field(default=None, alias="AUTH0_DOMAIN")
@@ -434,11 +437,14 @@ class Settings(BaseSettings):
         onboarding ended on a "site can't be reached" tab.
 
         We can't do that to operators, so cloud (``SHIP_AUTH_MODE=auth0``)
-        bootstrap fails fast with a clear message. Local docker-compose
-        (``SHIP_AUTH_MODE=local``) keeps the dev defaults so ``make up``
-        works out of the box.
+        bootstrap fails fast with a clear message. The direct laptop dev
+        targets set ``SHIP_ALLOW_LOCAL_AUTH0_CALLBACKS=true`` so engineers can
+        reuse the shared dev Auth0 tenant while the console and backend run on
+        localhost.
         """
         if self.auth_mode != "auth0":
+            return self
+        if self.allow_local_auth0_callbacks:
             return self
         offenders: list[str] = []
         for env_name, value in (

@@ -36,6 +36,9 @@ export function ProcessEditorWorkspace({
   const [activeStateId, setActiveStateId] = useState(
     initialActiveStateId(process.states, selectedStateId),
   );
+  const [selectedTransitionId, setSelectedTransitionId] = useState<string | null>(
+    null,
+  );
 
   useEffect(() => {
     setProcessName(process.name);
@@ -43,6 +46,7 @@ export function ProcessEditorWorkspace({
     setStates(process.states);
     setTransitions(process.transitions);
     setActiveStateId(initialActiveStateId(process.states, selectedStateId));
+    setSelectedTransitionId(null);
   }, [process, selectedStateId]);
 
   const processDraft = useMemo<ApiProcess>(
@@ -89,36 +93,18 @@ export function ProcessEditorWorkspace({
     setStates(process.states);
     setTransitions(process.transitions);
     setActiveStateId(initialActiveStateId(process.states, selectedStateId));
+    setSelectedTransitionId(null);
   }
 
-  function renameState(currentId: string, nextId: string): boolean {
-    const normalized = normalizeStateId(nextId);
-    if (!normalized || normalized === currentId) return false;
-    if (states.some((state) => state.id === normalized)) return false;
+  function selectStateId(stateId: string) {
+    setActiveStateId(stateId);
+    setSelectedTransitionId(null);
+  }
 
-    setStates((current) =>
-      current.map((state) =>
-        state.id === currentId ? { ...state, id: normalized } : state,
-      ),
-    );
-    setTransitions((current) =>
-      current.map((transition, index) => {
-        const fromStateId =
-          transition.from_state_id === currentId
-            ? normalized
-            : transition.from_state_id;
-        const toStateId =
-          transition.to_state_id === currentId ? normalized : transition.to_state_id;
-        return {
-          ...transition,
-          from_state_id: fromStateId,
-          to_state_id: toStateId,
-          id: transitionId(fromStateId, toStateId, index),
-        };
-      }),
-    );
-    setActiveStateId(normalized);
-    return true;
+  function selectTransitionId(transitionId: string) {
+    const t = transitions.find((row) => row.id === transitionId);
+    setSelectedTransitionId(transitionId);
+    if (t) setActiveStateId(t.from_state_id);
   }
 
   function updatePositions(positions: Record<string, Position>) {
@@ -159,13 +145,13 @@ export function ProcessEditorWorkspace({
       name: "New State",
       specialist_id: defaultSpecialist.id,
       specialist_name: defaultSpecialist.name,
-      specialist_agent_profile: "auto",
-      instructions: "Describe what should happen in this step.",
+      specialist_agent_profile: "main",
+      instructions: defaultSpecialist.role,
       layout: {
         x: (anchor?.layout?.x ?? 72) + 266,
         y: anchor?.layout?.y ?? 170,
       },
-      triggers: [{ type: "manual", interval: null, event: null }],
+      triggers: defaultSdlcStateTriggers(),
       exit_conditions: [{ expression: "state_complete == true" }],
       block_conditions: [{ expression: "requires_human_input == true" }],
       runtime: {
@@ -190,6 +176,7 @@ export function ProcessEditorWorkspace({
       setTransitions((current) => [...current, nextTransition]);
     }
     setActiveStateId(nextState.id);
+    setSelectedTransitionId(null);
   }
 
   function deleteState(stateId: string) {
@@ -205,6 +192,7 @@ export function ProcessEditorWorkspace({
       ),
     );
     setActiveStateId(fallback);
+    setSelectedTransitionId(null);
   }
 
   return (
@@ -218,12 +206,6 @@ export function ProcessEditorWorkspace({
                 <h2 className="font-display text-base font-bold text-white">
                   {processName.trim() || process.name}
                 </h2>
-                <span className="rounded-full bg-aqua/15 px-3 py-1 text-xs font-semibold text-aqua">
-                  Editing
-                </span>
-                <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-white/45">
-                  {states.length} states
-                </span>
               </div>
               <p className="mt-1 text-xs text-white/45">
                 {dirty
@@ -294,7 +276,10 @@ export function ProcessEditorWorkspace({
         <ProcessCanvasEditor
           process={processDraft}
           selectedStateId={selectedState?.id}
-          onSelectState={setActiveStateId}
+          selectedTransitionId={selectedTransitionId}
+          onSelectState={selectStateId}
+          onSelectTransition={selectTransitionId}
+          onAddState={addState}
           onPositionsChange={updatePositions}
         />
         <StateEditor
@@ -302,13 +287,9 @@ export function ProcessEditorWorkspace({
           state={selectedState}
           states={states}
           specialistOptions={specialistOptions}
-          transitions={transitions}
           config={config}
           embedded
           onStateChange={updateState}
-          onStateRename={renameState}
-          onTransitionsChange={setTransitions}
-          onAddState={addState}
           onDeleteState={deleteState}
         />
       </div>
@@ -425,10 +406,20 @@ function stateFingerprint(state: ApiProcessState) {
   });
 }
 
+function defaultSdlcStateTriggers(): ApiProcessState["triggers"] {
+  return [
+    {
+      type: "schedule",
+      interval: "0 9,13,17 * * 1-5",
+      event: null,
+    },
+  ];
+}
+
 function agentProfileFromState(state: ApiProcessState) {
   return (
     (state as ApiProcessState & { specialist_agent_profile?: string | null })
-      .specialist_agent_profile || "auto"
+      .specialist_agent_profile || "main"
   );
 }
 
@@ -444,15 +435,6 @@ function transitionFingerprint(transitions: ApiProcess["transitions"]) {
 
 function pluralize(count: number, singular: string, plural: string) {
   return `${count} ${count === 1 ? singular : plural}`;
-}
-
-function normalizeStateId(value: string) {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .replace(/_+/g, "_");
 }
 
 function uniqueStateId(baseId: string, states: ApiProcessState[]) {

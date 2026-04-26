@@ -42,6 +42,10 @@ INBOX_TYPES: tuple[str, ...] = (
     "failure",
     "approval",
     "exception",
+    # Operational mirror: tracker / PR idle >24h (dashboard sweeper).
+    "stuck",
+    # Self-heal lane failed — only minted from pipeline result callback.
+    "blocker",
 )
 
 # Meta-keys that may appear inside a profile body but are NOT inbox

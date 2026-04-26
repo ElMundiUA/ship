@@ -128,6 +128,8 @@ async def test_list_empty_returns_zero_counts(v1_client, seed_workspace):
         "failure": 0,
         "approval": 0,
         "exception": 0,
+        "stuck": 0,
+        "blocker": 0,
     }
     assert body["counts_by_status"] == {
         "new": 0,
@@ -297,6 +299,8 @@ async def test_counts_endpoint_groups_by_type_and_status(
     assert body["by_type"]["failure"] == 1
     assert body["by_type"]["improvement"] == 1
     assert body["by_type"]["exception"] == 0  # exception is snoozed, not new
+    assert body["by_type"]["stuck"] == 0
+    assert body["by_type"]["blocker"] == 0
     assert body["by_status"]["new"] == 4
     assert body["by_status"]["snoozed"] == 1
     assert body["by_status"]["resolved"] == 1

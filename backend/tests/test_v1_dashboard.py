@@ -310,11 +310,19 @@ async def test_ops_dashboard_prioritizes_blockers_and_shipped_24h(
 
     assert body["system_status"]["overall_status"] == "critical"
     assert body["system_status"]["failing_pipelines_count"] == 1
-    assert body["system_status"]["stuck_prs_count"] == 1
+    assert body["system_status"]["stuck_prs_count"] == 0
     assert body["system_status"]["broken_automations_count"] == 2
-    assert [b["impact"] for b in body["blockers"]][:3] == ["high", "high", "high"]
-    assert any(b["type"] == "pr" for b in body["blockers"])
-    assert len(body["blockers"]) <= 7
+    assert body["blockers"] == []
+    assert body["bottlenecks"] == []
+    assert body["suggested_actions"] == []
     assert body["shipped"]["fixes_count"] == 1
     assert body["shipped"]["items"][0]["type"] == "fix"
-    assert len(body["suggested_actions"]) <= 5
+
+    inbox_res = await v1_client.get(
+        f"/v1/workspaces/{workspace.id}/inbox?ownership=all&type=stuck",
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert inbox_res.status_code == 200, inbox_res.text
+    stuck_items = inbox_res.json()["items"]
+    assert len(stuck_items) == 1
+    assert stuck_items[0]["type"] == "stuck"

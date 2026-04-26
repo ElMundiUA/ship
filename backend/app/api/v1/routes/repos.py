@@ -2870,6 +2870,7 @@ def _validate_process_config(process: dict[str, Any]) -> None:
                 "message": "process.transitions must be a list when provided",
             },
         )
+    seen_transition_pairs: set[tuple[str, str]] = set()
     for index, transition in enumerate(transitions or []):
         if not isinstance(transition, dict):
             raise HTTPException(
@@ -2892,6 +2893,20 @@ def _validate_process_config(process: dict[str, Any]) -> None:
                     ),
                 },
             )
+        pair = (from_state, to_state)
+        if pair in seen_transition_pairs:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_process",
+                    "message": (
+                        "process.transitions must not contain duplicate "
+                        "(from, to) pairs; split different outcomes into different "
+                        "target states"
+                    ),
+                },
+            )
+        seen_transition_pairs.add(pair)
         condition = transition.get("condition")
         if condition is not None and (
             not isinstance(condition, str) or not condition.strip()
@@ -2903,6 +2918,19 @@ def _validate_process_config(process: dict[str, Any]) -> None:
                     "message": (
                         f"process.transitions[{index}].condition must be "
                         "a non-empty string"
+                    ),
+                },
+            )
+        if transition.get("requires_human") is not None and not isinstance(
+            transition.get("requires_human"), bool
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_process",
+                    "message": (
+                        f"process.transitions[{index}].requires_human must be "
+                        "a boolean when provided"
                     ),
                 },
             )
@@ -3030,6 +3058,21 @@ def _validate_process_routines(value: Any) -> None:
             f"process.routines[{index}].cadence",
             required=False,
         )
+        en = routine.get("enabled")
+        if en is not None and not isinstance(en, bool):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_process",
+                    "message": f"process.routines[{index}].enabled must be a boolean when set",
+                },
+            )
+        for opt_key in ("description", "instructions", "specialist_id", "specialist_name"):
+            _require_optional_string(
+                routine.get(opt_key),
+                f"process.routines[{index}].{opt_key}",
+                required=False,
+            )
 
 
 def _require_optional_string(value: Any, field: str, *, required: bool) -> None:

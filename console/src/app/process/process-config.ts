@@ -1,6 +1,8 @@
 import type {
   ApiProcess,
+  ApiProcessRoutine,
   ApiProcessState,
+  ApiProcessTransition,
   ApiRepoConfig,
 } from "@/lib/api/client";
 
@@ -54,26 +56,40 @@ export function processFromRepoConfig(
     ? rawTransitions
         .map((item, index) => {
           const row = asRecord(item);
-          const from = stringValue(row?.from);
-          const to = stringValue(row?.to);
+          if (!row) return null;
+          const from = stringValue(row.from);
+          const to = stringValue(row.to);
           if (!from || !to) return null;
           const fallbackTransition = transitionByPair.get(`${from}->${to}`);
           return {
             id: fallbackTransition?.id ?? `${from}_to_${to}_${index + 1}`,
             from_state_id: from,
             to_state_id: to,
-            conditions: stringValue(row?.condition)
-              ? [{ expression: stringValue(row?.condition) as string }]
+            conditions: stringValue(row.condition)
+              ? [{ expression: stringValue(row.condition) as string }]
               : fallbackTransition?.conditions ?? [],
-          };
+            requires_human: requiresHumanFromConfigRow(row, fallbackTransition),
+          } as ApiProcessTransition;
         })
-        .filter((transition): transition is ApiProcess["transitions"][number] => transition != null)
-    : states.slice(0, -1).map((state, index) => ({
-        id: `${state.id}_to_${states[index + 1].id}`,
-        from_state_id: state.id,
-        to_state_id: states[index + 1].id,
-        conditions: [{ expression: "exit_conditions_met == true" }],
-      }));
+        .filter(
+          (transition): transition is ApiProcessTransition => transition != null,
+        )
+    : states.slice(0, -1).map(
+        (state, index) =>
+          ({
+            id: `${state.id}_to_${states[index + 1].id}`,
+            from_state_id: state.id,
+            to_state_id: states[index + 1].id,
+            conditions: [{ expression: "exit_conditions_met == true" }],
+          }) as ApiProcessTransition,
+      );
+
+  const rawRoutines = Array.isArray(rawProcess.routines)
+    ? rawProcess.routines
+    : null;
+  const routines = rawRoutines
+    ? mergeProcessRoutines(fallback.routines, rawRoutines)
+    : fallback.routines;
 
   return {
     ...fallback,
@@ -83,6 +99,7 @@ export function processFromRepoConfig(
     state_count: states.length,
     states,
     transitions: transitionsFromConfig,
+    routines,
   };
 }
 
@@ -109,12 +126,21 @@ export function processConfigFromApiProcess(process: ApiProcess): Record<string,
       from: transition.from_state_id,
       to: transition.to_state_id,
       condition: transition.conditions[0]?.expression,
+      ...(transition.requires_human ? { requires_human: true } : {}),
     })),
-    routines: process.routines.map((routine) => ({
-      id: routine.id,
-      name: routine.name,
-      cadence: routine.schedule,
-    })),
+    routines: process.routines.map((routine) => {
+      const row: Record<string, unknown> = {
+        id: routine.id,
+        name: routine.name,
+        cadence: routine.schedule,
+      };
+      if (routine.enabled === false) row.enabled = false;
+      if (routine.description?.trim()) row.description = routine.description;
+      if (routine.specialist_id) row.specialist_id = routine.specialist_id;
+      if (routine.specialist_name) row.specialist_name = routine.specialist_name;
+      if (routine.instructions?.trim()) row.instructions = routine.instructions;
+      return row;
+    }),
   };
 }
 
@@ -147,7 +173,7 @@ function stateFromConfig(
       stringValue(specialist?.agent_profile) ??
       stringValue(row.agent_profile) ??
       agentProfileFromState(fallback) ??
-      "auto",
+      "main",
     instructions:
       stringValue(row.instructions) ??
       stringValue(row.description) ??
@@ -233,9 +259,120 @@ function booleanValue(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
+function requiresHumanFromConfigRow(
+  row: Record<string, unknown>,
+  fallback: ApiProcessTransition | undefined,
+): boolean | undefined {
+  const direct = booleanValue(row["requires_human"]);
+  if (direct === true) return true;
+  if (direct === false) return undefined;
+  return fallback?.requires_human ? true : undefined;
+}
+
 function agentProfileFromState(state: ApiProcessState | undefined): string {
   const extended = state as ProcessStateWithAgentProfile | undefined;
-  return extended?.specialist_agent_profile || "auto";
+  return extended?.specialist_agent_profile || "main";
+}
+
+function mergeProcessRoutines(
+  projected: ApiProcessRoutine[],
+  yamlRoutines: unknown[],
+): ApiProcessRoutine[] {
+  const yamlById = new Map(
+    yamlRoutines
+      .map((item) => {
+        const row = asRecord(item);
+        const id = row ? stringValue(row.id) : undefined;
+        return id && row ? ([id, row] as const) : null;
+      })
+      .filter(
+        (entry): entry is readonly [string, Record<string, unknown>] =>
+          entry != null,
+      ),
+  );
+  const seenYaml = new Set<string>();
+  const merged = projected.map((routine) => {
+    const y = yamlById.get(routine.id);
+    if (!y) return routine;
+    seenYaml.add(routine.id);
+    return applyRoutineYamlOverlay(routine, y);
+  });
+  for (const [id, y] of yamlById) {
+    if (seenYaml.has(id)) continue;
+    const created = routineFromYamlOnly(id, y);
+    if (created) merged.push(created);
+  }
+  return merged;
+}
+
+function applyRoutineYamlOverlay(
+  base: ApiProcessRoutine,
+  y: Record<string, unknown>,
+): ApiProcessRoutine {
+  const name = stringValue(y.name) ?? base.name;
+  const cadence = stringValue(y.cadence);
+  const specialist = asRecord(y.specialist);
+  const description = stringValue(y.description);
+  const instructions = stringValue(y.instructions);
+  return {
+    ...base,
+    name,
+    schedule: cadence ?? base.schedule,
+    specialist_id:
+      stringValue(specialist?.id) ??
+      stringValue(y.specialist_id) ??
+      base.specialist_id,
+    specialist_name:
+      stringValue(specialist?.name) ??
+      stringValue(y.specialist_name) ??
+      base.specialist_name,
+    instructions: instructions ?? base.instructions,
+    description: description ?? base.description,
+    enabled: coalesceRoutineEnabled(
+      booleanFromYaml(y.enabled),
+      base.enabled,
+    ),
+  };
+}
+
+function routineFromYamlOnly(
+  id: string,
+  y: Record<string, unknown>,
+): ApiProcessRoutine | null {
+  const name = stringValue(y.name);
+  if (!name) return null;
+  const specialist = asRecord(y.specialist);
+  return {
+    id,
+    name,
+    specialist_id:
+      stringValue(specialist?.id) ?? stringValue(y.specialist_id) ?? "devops_platform",
+    specialist_name:
+      stringValue(specialist?.name) ??
+      stringValue(y.specialist_name) ??
+      "DevOps/platform",
+    schedule: stringValue(y.cadence) ?? null,
+    instructions: stringValue(y.instructions) ?? "",
+    last_run: null,
+    status: null,
+    description: stringValue(y.description) ?? undefined,
+    enabled: booleanFromYaml(y.enabled) ?? true,
+  };
+}
+
+function booleanFromYaml(value: unknown): boolean | undefined {
+  if (value === true) return true;
+  if (value === false) return false;
+  return undefined;
+}
+
+function coalesceRoutineEnabled(
+  fromYaml: boolean | undefined,
+  base: boolean | undefined,
+): boolean | undefined {
+  if (fromYaml !== undefined) return fromYaml;
+  if (base === false) return false;
+  return base;
 }
 
 function titleFromId(value: string): string {

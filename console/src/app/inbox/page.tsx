@@ -736,6 +736,25 @@ function mockItems(workspaceId: string): InboxItem[] {
       resolved_at: null,
       resolution: null,
     },
+    {
+      id: "inbox_stuck_demo",
+      workspace_id: workspaceId,
+      repo_id: "repo_api",
+      type: "stuck",
+      status: "new",
+      title: "Stuck work: PR #88 — no activity 24h+",
+      summary: "ENG-4412: Payments retry backoff — no commits or reviews in 2d.",
+      intake_handle: null,
+      intake_reason: "dashboard:stuck_pr",
+      owner: null,
+      play_key: null,
+      run_id: null,
+      created_at: isoDaysAgo(2),
+      due_at: null,
+      snoozed_until: null,
+      resolved_at: null,
+      resolution: null,
+    },
   ];
 }
 
@@ -758,7 +777,7 @@ function MockView({
     items,
     total: items.length,
     counts_by_type: typeCounts as Record<string, number>,
-    counts_by_status: { new: 4, snoozed: 1, resolved: 0, dismissed: 0 },
+    counts_by_status: { new: 5, snoozed: 1, resolved: 0, dismissed: 0 },
     next_cursor: null,
   };
   return (
@@ -780,7 +799,7 @@ function MockView({
         <CardHeader
           className="px-5 pt-5"
           title="Items (sample)"
-          subtitle="Sign in to view the real queue. The five rows below preview the type distribution + stale-age badge."
+          subtitle="Sign in to view the real queue. The rows below preview the type distribution + stale-age badge."
         />
         <ul className="space-y-2 px-3 pb-3">
           {items.map((item) => (

@@ -1,9 +1,8 @@
 import Link from "next/link";
 
 import type {
-  ApiOpsBlocker,
+  ApiActivatedRepo,
   ApiOpsDashboard,
-  ApiOpsImpact,
   ApiOpsStatus,
   ApiOpsWorkItem,
 } from "@/lib/api/client";
@@ -11,24 +10,80 @@ import { Badge, type BadgeTone, Card, CardHeader } from "@/components/ui";
 
 export type WorkspaceHomeProps = {
   summary: ApiOpsDashboard;
+  repos: ApiActivatedRepo[];
+  workspaceId: string;
 };
 
-export function WorkspaceHome({ summary }: WorkspaceHomeProps) {
+export function WorkspaceHome({ summary, repos, workspaceId }: WorkspaceHomeProps) {
+  const reposNeedingShipUpdate = repos.filter(needsShipTemplateUpdate);
+
   return (
     <>
-      <section className="grid grid-cols-1 gap-4 lg:grid-cols-[1.4fr_1fr]">
+      {reposNeedingShipUpdate.length > 0 && (
+        <NeedsShipUpdateBanner repos={reposNeedingShipUpdate} workspaceId={workspaceId} />
+      )}
+
+      <section className="grid grid-cols-1 gap-4">
         <SystemStatusCard summary={summary} />
-        <SuggestedActionsCard summary={summary} />
       </section>
 
       <section className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <BlockersCard blockers={summary.blockers.slice(0, 7)} />
         <WorkInProgressCard items={summary.work_in_progress.slice(0, 7)} />
         <ShippedCard summary={summary} />
-        <BottlenecksCard summary={summary} />
-        <AutomationHealthCard summary={summary} />
+        <AutomationTestingCard summary={summary} />
       </section>
     </>
+  );
+}
+
+function needsShipTemplateUpdate(repo: ApiActivatedRepo): boolean {
+  const installed = repo.installed_bundle_version;
+  const current = repo.current_bundle_version;
+  if (installed == null) return true;
+  return installed < current;
+}
+
+function NeedsShipUpdateBanner({
+  repos,
+  workspaceId,
+}: {
+  repos: ApiActivatedRepo[];
+  workspaceId: string;
+}) {
+  const configureHref = `/onboarding?step=configure&ws=${encodeURIComponent(workspaceId)}`;
+  return (
+    <section className="mb-4 rounded-2xl border border-aqua/25 bg-aqua/[0.06] px-4 py-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="font-display text-sm font-bold text-white">Ship template update needed</h3>
+          <p className="mt-1 text-xs text-white/60">
+            These repos are behind the current Ship bundle — open the wizard to refresh workflows and
+            config.
+          </p>
+        </div>
+        <Link
+          href={configureHref}
+          className="shrink-0 rounded-full border border-aqua/50 bg-aqua/10 px-3 py-1.5 text-xs font-bold text-aqua hover:bg-aqua/20"
+        >
+          Open wizard →
+        </Link>
+      </div>
+      <ul className="mt-3 space-y-2">
+        {repos.map((repo) => (
+          <li
+            key={repo.id}
+            className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs"
+          >
+            <span className="font-mono text-white/90">{repo.full_name}</span>
+            <span className="text-white/50">
+              {repo.installed_bundle_version == null
+                ? "Not seeded yet"
+                : `v${repo.installed_bundle_version} → v${repo.current_bundle_version} available`}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 
@@ -49,12 +104,13 @@ function SystemStatusCard({ summary }: { summary: ApiOpsDashboard }) {
           <Badge tone={tone} dot>
             {status.overall_status}
           </Badge>
-          <h2 className="mt-3 font-display text-2xl font-bold text-white">
-            {title}
-          </h2>
+          <h2 className="mt-3 font-display text-2xl font-bold text-white">{title}</h2>
           <p className="mt-1 max-w-2xl text-sm leading-relaxed text-white/60">
-            The dashboard shows only issues, active work and decisions needed
-            now. Historical and setup metrics stay out of this view.
+            Blockers and idle work surface in{" "}
+            <Link href="/inbox" className="text-aqua hover:underline">
+              Inbox
+            </Link>
+            . This card tracks failing pipelines and automation signals only.
           </p>
         </div>
         <div className="text-right text-xs text-white/45">
@@ -66,19 +122,14 @@ function SystemStatusCard({ summary }: { summary: ApiOpsDashboard }) {
           </div>
         </div>
       </div>
-      <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
+      <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2">
         <StatusMetric
-          label="Failed executions"
+          label="Failed pipeline runs (24h)"
           value={status.failing_pipelines_count}
           tone={status.failing_pipelines_count > 0 ? "err" : "ok"}
         />
         <StatusMetric
-          label="Stuck PRs"
-          value={status.stuck_prs_count}
-          tone={status.stuck_prs_count > 0 ? "warn" : "ok"}
-        />
-        <StatusMetric
-          label="Process issues"
+          label="Broken automations (24h)"
           value={status.broken_automations_count}
           tone={status.broken_automations_count > 0 ? "err" : "ok"}
         />
@@ -87,70 +138,12 @@ function SystemStatusCard({ summary }: { summary: ApiOpsDashboard }) {
   );
 }
 
-function SuggestedActionsCard({ summary }: { summary: ApiOpsDashboard }) {
-  return (
-    <Card>
-      <CardHeader
-        title="Suggested Actions"
-        subtitle="Priority actions generated from current blockers."
-      />
-      {summary.suggested_actions.length === 0 ? (
-        <EmptyText>No suggested actions.</EmptyText>
-      ) : (
-        <ul className="space-y-3">
-          {summary.suggested_actions.slice(0, 5).map((item) => (
-            <li key={`${item.action}-${item.reason}`}>
-              <ActionRow
-                href={item.href}
-                title={item.action}
-                meta={item.reason}
-                badge={item.priority}
-                badgeTone={impactTone(item.priority)}
-              />
-            </li>
-          ))}
-        </ul>
-      )}
-    </Card>
-  );
-}
-
-function BlockersCard({ blockers }: { blockers: ApiOpsBlocker[] }) {
-  return (
-    <Card>
-      <CardHeader
-        title="Blockers"
-        subtitle="Highest-impact issues, sorted by impact and age."
-      />
-      {blockers.length === 0 ? (
-        <EmptyText>No blockers.</EmptyText>
-      ) : (
-        <ul className="space-y-3">
-          {blockers.map((item) => (
-            <li key={`${item.type}-${item.title}-${item.age_seconds}`}>
-              <ActionRow
-                href={item.href}
-                title={item.title}
-                meta={[item.repo, item.scope, formatAge(item.age_seconds)]
-                  .filter(Boolean)
-                  .join(" · ")}
-                badge={item.impact}
-                badgeTone={impactTone(item.impact)}
-              />
-            </li>
-          ))}
-        </ul>
-      )}
-    </Card>
-  );
-}
-
 function WorkInProgressCard({ items }: { items: ApiOpsWorkItem[] }) {
   return (
     <Card>
       <CardHeader
-        title="Work In Progress"
-        subtitle="Active work updated in the last 7 days."
+        title="Work in progress"
+        subtitle="Open tickets from each repo’s connected tracker (GitHub Issues / Linear / Jira). Without a tracker binding, open PRs fill this list instead."
       />
       {items.length === 0 ? (
         <EmptyText>No active WIP.</EmptyText>
@@ -158,20 +151,77 @@ function WorkInProgressCard({ items }: { items: ApiOpsWorkItem[] }) {
         <ul className="space-y-3">
           {items.map((item) => (
             <li key={`${item.name}-${item.updated_at}`}>
-              <ActionRow
-                href={item.href}
-                title={item.name}
-                meta={[item.repo, item.scope, formatDate(item.updated_at)]
-                  .filter(Boolean)
-                  .join(" · ")}
-                badge={item.status.replace("_", " ")}
-                badgeTone={item.status === "blocked" ? "err" : "info"}
-              />
+              <WorkInProgressRow item={item} />
             </li>
           ))}
         </ul>
       )}
     </Card>
+  );
+}
+
+function WorkInProgressRow({ item }: { item: ApiOpsWorkItem }) {
+  const pr = item.pull_request;
+  const href = item.href;
+  const hrefIsExternal =
+    href != null && (href.startsWith("http://") || href.startsWith("https://"));
+  const chips = [
+    item.board_column,
+    item.tracker ? `Tracker · ${item.tracker}` : null,
+    item.active_agent ? `Agent · ${item.active_agent}` : null,
+    item.repo,
+    formatDate(item.updated_at),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  return (
+    <div className="group flex flex-col gap-2 rounded-xl border border-white/10 bg-white/[0.03] p-3 transition hover:border-white/25 hover:bg-white/[0.06]">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          {href ? (
+            hrefIsExternal ? (
+              <a href={href} className="block" target="_blank" rel="noreferrer">
+                <div className="truncate text-sm font-semibold text-white group-hover:text-aqua">
+                  {item.name}
+                </div>
+              </a>
+            ) : (
+              <Link href={href} className="block">
+                <div className="truncate text-sm font-semibold text-white group-hover:text-aqua">
+                  {item.name}
+                </div>
+              </Link>
+            )
+          ) : (
+            <div className="truncate text-sm font-semibold text-white">{item.name}</div>
+          )}
+          <div className="mt-1 truncate text-xs text-white/50">{chips}</div>
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+          {item.ticket_ref ? (
+            <Badge tone="ok">{item.ticket_ref}</Badge>
+          ) : (
+            <Badge tone="neutral">No ticket key in title</Badge>
+          )}
+          <Badge tone={item.status === "blocked" ? "err" : "info"}>
+            {item.status.replace("_", " ")}
+          </Badge>
+        </div>
+      </div>
+      {pr ? (
+        <div className="flex flex-wrap gap-2">
+          <a
+            href={pr.href}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center rounded-lg border border-white/15 bg-white/[0.05] px-2.5 py-1 text-[11px] font-semibold text-white/75 hover:border-aqua/40 hover:text-aqua"
+          >
+            PR #{pr.number} →
+          </a>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -209,52 +259,33 @@ function ShippedCard({ summary }: { summary: ApiOpsDashboard }) {
   );
 }
 
-function BottlenecksCard({ summary }: { summary: ApiOpsDashboard }) {
-  return (
-    <Card>
-      <CardHeader
-        title="Bottlenecks"
-        subtitle="Detected signals, not long-range charts."
-      />
-      {summary.bottlenecks.length === 0 ? (
-        <EmptyText>No bottlenecks detected.</EmptyText>
-      ) : (
-        <ul className="space-y-3">
-          {summary.bottlenecks.slice(0, 5).map((item) => (
-            <li
-              key={item.metric}
-              className="rounded-xl border border-white/10 bg-white/[0.03] p-3"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <div className="text-sm font-semibold text-white">
-                    {item.metric}
-                  </div>
-                  <div className="mt-1 text-xs text-white/50">
-                    Current: {item.current_value}
-                    {item.delta ? ` · ${item.delta}` : ""}
-                  </div>
-                </div>
-                <Badge tone={impactTone(item.severity)}>{item.severity}</Badge>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-    </Card>
-  );
-}
-
-function AutomationHealthCard({ summary }: { summary: ApiOpsDashboard }) {
+function AutomationTestingCard({ summary }: { summary: ApiOpsDashboard }) {
   const health = summary.automation_health;
 
   return (
     <Card>
       <CardHeader
-        title="Process Health"
-        subtitle="Last 24h execution and intervention signals."
+        title="Automation testing (24h)"
+        subtitle="Pipeline run success rate and related CI failures — not overall process health."
       />
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-2">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <MiniMetric
+          label="Success rate"
+          value={
+            health.success_rate === null ? "No executions" : formatPercent(health.success_rate)
+          }
+          tone={health.success_rate !== null && health.success_rate < 0.8 ? "warn" : "ok"}
+        />
+        <MiniMetric
+          label="Failures"
+          value={health.failures_count}
+          tone={health.failures_count > 0 ? "err" : "ok"}
+        />
+        <MiniMetric
+          label="Manual asks"
+          value={health.manual_interventions_count}
+          tone={health.manual_interventions_count > 0 ? "warn" : "ok"}
+        />
         <MiniMetric
           label="Coverage"
           value={
@@ -263,25 +294,11 @@ function AutomationHealthCard({ summary }: { summary: ApiOpsDashboard }) {
               : formatPercent(health.automation_coverage)
           }
         />
-        <MiniMetric
-          label="Success rate"
-          value={
-            health.success_rate === null
-              ? "No executions"
-              : formatPercent(health.success_rate)
-          }
-          tone={health.success_rate !== null && health.success_rate < 0.8 ? "warn" : "ok"}
-        />
-        <MiniMetric
-          label="Manual asks"
-          value={health.manual_interventions_count}
-          tone={health.manual_interventions_count > 0 ? "warn" : "ok"}
-        />
-        <MiniMetric
-          label="Failures"
-          value={health.failures_count}
-          tone={health.failures_count > 0 ? "err" : "ok"}
-        />
+      </div>
+      <div className="mt-3 text-xs text-white/45">
+        <Link href="/runs" className="text-aqua hover:underline">
+          Open runs →
+        </Link>
       </div>
     </Card>
   );
@@ -372,20 +389,6 @@ function statusTone(status: ApiOpsStatus): BadgeTone {
   if (status === "critical") return "err";
   if (status === "degraded") return "warn";
   return "ok";
-}
-
-function impactTone(impact: ApiOpsImpact): BadgeTone {
-  if (impact === "high") return "err";
-  if (impact === "medium") return "warn";
-  return "info";
-}
-
-function formatAge(seconds: number): string {
-  const hours = Math.floor(seconds / 3600);
-  if (hours < 1) return "just now";
-  if (hours < 24) return `${hours}h old`;
-  const days = Math.floor(hours / 24);
-  return `${days}d old`;
 }
 
 function formatDate(value: string): string {
