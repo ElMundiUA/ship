@@ -471,7 +471,7 @@ const mockProcess: ApiProcess = {
       needs_human_approval: "Needs Human Approval",
     },
   },
-  process_graph: { links: [] },
+  process_graph: { nodes: [], links: [] },
   adapter_diagnostics: [
     {
       kind: "tracker",
