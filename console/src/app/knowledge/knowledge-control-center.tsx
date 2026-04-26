@@ -57,7 +57,7 @@ export type KnowledgeControlBucket = {
 
 export type KnowledgeControlSource = {
   id: string;
-  bucketSlug: string;
+  bucketSlug: string | null;
   bucketName: string;
   kind: string;
   status: string;
@@ -213,6 +213,7 @@ export function KnowledgeControlCenter({
           mode={mode}
           sources={sources}
           integrations={integrations}
+          repos={repos}
           defaultScope={defaultScope}
         />
       )}
@@ -775,11 +776,13 @@ function SourcesTab({
   mode,
   sources,
   integrations,
+  repos,
   defaultScope,
 }: {
   mode: "live" | "mock";
   sources: KnowledgeControlSource[];
   integrations: ApiIntegration[];
+  repos: ApiActivatedRepo[];
   defaultScope: ApiBucketScope;
 }) {
   return (
@@ -787,6 +790,7 @@ function SourcesTab({
       {mode === "live" && (
         <KnowledgeImportWizard
           integrations={integrations}
+          repos={repos}
           defaultScope={defaultScope}
         />
       )}
@@ -795,7 +799,7 @@ function SourcesTab({
         <CardHeader
           className="px-5 pt-5"
           title="Sources / Ingestion"
-          subtitle="Every source should have an owning bucket, sync status, and a path back to the original system."
+          subtitle="Workspace sources are synced once, fingerprinted, analyzed, and routed into the right buckets."
         />
         {sources.length === 0 ? (
           <p className="px-5 pb-5 text-sm text-white/60">
@@ -830,12 +834,18 @@ function SourcesTab({
                       )}
                     </td>
                     <td className="px-4 py-3 align-top">
-                      <Link
-                        href={`/knowledge/${encodeURIComponent(source.bucketSlug)}`}
-                        className="font-semibold text-aqua hover:underline"
-                      >
-                        {source.bucketName}
-                      </Link>
+                      {source.bucketSlug ? (
+                        <Link
+                          href={`/knowledge/${encodeURIComponent(source.bucketSlug)}`}
+                          className="font-semibold text-aqua hover:underline"
+                        >
+                          {source.bucketName}
+                        </Link>
+                      ) : (
+                        <span className="font-semibold text-white/70">
+                          {source.bucketName}
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-3 align-top">
                       <Badge tone={source.status === "error" ? "err" : "ok"}>
@@ -862,20 +872,15 @@ function SourcesTab({
       <Card>
         <CardHeader
           title="Supported source types"
-          subtitle="MVP import is wired for connector roots and manual uploads; the rest are modeled in the UI."
+          subtitle="Workspace sources sync into Ship's database and route changed content into the recommended buckets."
         />
         <div className="flex flex-wrap gap-2">
           {[
-            "manual document",
-            "repository README/docs",
-            "codebase scan",
             "Notion",
             "Confluence",
-            "Google Docs",
-            "Markdown files",
-            "OpenAPI / AsyncAPI",
+            "docs repository",
+            "website via Firecrawl",
             "uploaded files",
-            "generated agent output",
           ].map((source) => (
             <Badge key={source} tone="neutral">
               {source}
