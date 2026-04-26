@@ -5,8 +5,8 @@
  * Every repo-scoped page performs the same dance:
  *
  *   1. Read the current session token; if missing → redirect to login.
- *   2. Fetch the caller's workspaces; pick one via ``?ws=`` when present
- *      (multi-workspace), else the first list entry.
+ *   2. Fetch the caller's workspaces; pick one via ``?ws=`` or the
+ *      persisted ``ship.ws`` cookie, else the first list entry.
  *   3. List activated repos and match by ``owner/repo`` slug. If the
  *      repo isn't there, the user either mistyped or the repo was
  *      decommissioned — produce a 404.
@@ -27,6 +27,7 @@ import {
 } from "@/lib/api/client";
 import type { ApiWorkspace } from "@/lib/api/types";
 import { findRepoBySlug } from "@/lib/repo-slug";
+import { getResolvedWorkspaceId } from "@/lib/workspace-resolve.server";
 import { pickWorkspace } from "@/lib/workspace-scope";
 
 export type RepoContext = {
@@ -54,8 +55,8 @@ export type RepoContextResult =
 export async function resolveRepoContext(
   token: string,
   slug: string,
-  /** ``searchParams.get(\"ws\")`` from the current URL when switching workspaces. */
-  workspaceId?: string | null,
+  /** Current URL search params; ``?ws=`` and persisted cookie are merged. */
+  searchParams: Record<string, string | string[] | undefined> | undefined,
 ): Promise<RepoContextResult> {
   let workspaces: ApiWorkspace[];
   try {
@@ -68,7 +69,11 @@ export async function resolveRepoContext(
     return { kind: "down" };
   }
   if (workspaces.length === 0) return { kind: "empty" };
-  const workspace = pickWorkspace(workspaces, workspaceId ?? undefined);
+  const resolvedWs = await getResolvedWorkspaceId(
+    searchParams ?? {},
+    workspaces,
+  );
+  const workspace = pickWorkspace(workspaces, resolvedWs);
 
   let repos: ApiActivatedRepo[];
   try {

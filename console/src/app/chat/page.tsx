@@ -17,8 +17,8 @@ import {
   listWorkspaces,
 } from "@/lib/api/client";
 import { getSessionToken } from "@/lib/api/session";
+import { getResolvedWorkspaceId } from "@/lib/workspace-resolve.server";
 import {
-  parseWorkspaceIdParam,
   pickWorkspace,
   toAppShellWorkspaces,
   withWorkspaceQuery,
@@ -49,9 +49,11 @@ export default async function ChatPage({
     ws?: string;
   }>;
 }) {
-  const params = await searchParams;
+  const params = (await searchParams) as Record<
+    string,
+    string | string[] | undefined
+  >;
   const scope = resolveScopeFromSearch(params);
-  const wsParam = parseWorkspaceIdParam(params.ws);
   if (!isApiConfigured()) {
     return (
       <AppShell title="Navigator">
@@ -77,7 +79,8 @@ export default async function ChatPage({
     return renderUnavailable(err);
   }
   if (workspaces.length === 0) redirect("/onboarding?step=github");
-  const workspace = pickWorkspace(workspaces, wsParam);
+  const resolved = await getResolvedWorkspaceId(params, workspaces);
+  const workspace = pickWorkspace(workspaces, resolved);
   const multi = workspaces.length > 1;
 
   let thread: ApiChatThread | null = null;

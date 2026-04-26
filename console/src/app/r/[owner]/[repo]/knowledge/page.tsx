@@ -13,11 +13,7 @@ import type { ApiResolvedBucket } from "@/lib/api/types";
 import { getSessionToken } from "@/lib/api/session";
 import { resolveRepoContext } from "@/lib/repo-context";
 import { slugFromParams, type RepoRouteParams } from "@/lib/repo-slug";
-import {
-  parseWorkspaceIdParam,
-  toAppShellWorkspaces,
-  withWorkspaceQuery,
-} from "@/lib/workspace-scope";
+import { toAppShellWorkspaces, withWorkspaceQuery } from "@/lib/workspace-scope";
 
 /**
  * Repo-mode Knowledge (``/r/<owner>/<repo>/knowledge``).
@@ -46,7 +42,6 @@ export default async function RepoKnowledgePage({
   const slug = slugFromParams(resolved);
   if (!slug) notFound();
   const here = `/r/${slug}/knowledge`;
-  const wsParam = parseWorkspaceIdParam(rawSearch.ws);
 
   if (!isApiConfigured()) {
     return (
@@ -64,7 +59,7 @@ export default async function RepoKnowledgePage({
   const token = await getSessionToken();
   if (!token) redirect(`/login?next=${encodeURIComponent(here)}`);
 
-  const result = await resolveRepoContext(token, slug, wsParam);
+  const result = await resolveRepoContext(token, slug, rawSearch);
   if (result.kind === "unauthorized") {
     redirect(`/login?next=${encodeURIComponent(here)}`);
   }

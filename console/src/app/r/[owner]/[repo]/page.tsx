@@ -26,11 +26,7 @@ import type {
 } from "@/lib/api/client";
 import { resolveRepoContext, type RepoContext } from "@/lib/repo-context";
 import { slugFromParams, type RepoRouteParams } from "@/lib/repo-slug";
-import {
-  parseWorkspaceIdParam,
-  toAppShellWorkspaces,
-  withWorkspaceQuery,
-} from "@/lib/workspace-scope";
+import { toAppShellWorkspaces, withWorkspaceQuery } from "@/lib/workspace-scope";
 
 /**
  * Repo home (``/r/<owner>/<repo>``).
@@ -68,7 +64,6 @@ export default async function RepoHomePage({
   const slug = slugFromParams(resolved);
   if (!slug) notFound();
   const tab = parseTab(search.tab);
-  const wsParam = parseWorkspaceIdParam(search.ws);
 
   if (!isApiConfigured()) {
     return renderMock(slug, tab);
@@ -79,7 +74,7 @@ export default async function RepoHomePage({
     redirect(`/login?next=${encodeURIComponent(`/r/${slug}`)}`);
   }
 
-  const result = await resolveRepoContext(token, slug, wsParam);
+  const result = await resolveRepoContext(token, slug, search);
   if (result.kind === "unauthorized") {
     redirect(`/login?next=${encodeURIComponent(`/r/${slug}`)}`);
   }

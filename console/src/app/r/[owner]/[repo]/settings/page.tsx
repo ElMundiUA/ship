@@ -31,7 +31,7 @@ import {
 import { getSessionToken } from "@/lib/api/session";
 import { resolveRepoContext, type RepoContext } from "@/lib/repo-context";
 import { slugFromParams, type RepoRouteParams } from "@/lib/repo-slug";
-import { parseWorkspaceIdParam, toAppShellWorkspaces } from "@/lib/workspace-scope";
+import { toAppShellWorkspaces } from "@/lib/workspace-scope";
 
 /**
  * Repo-mode Settings (``/r/<owner>/<repo>/settings``).
@@ -89,7 +89,6 @@ export default async function RepoSettingsPage({
   const slug = slugFromParams(resolved);
   if (!slug) notFound();
   const basePath = `/r/${slug}/settings`;
-  const wsParam = parseWorkspaceIdParam(rawSearch.ws);
 
   if (!isApiConfigured()) {
     return (
@@ -107,7 +106,7 @@ export default async function RepoSettingsPage({
   const token = await getSessionToken();
   if (!token) redirect(`/login?next=${encodeURIComponent(basePath)}`);
 
-  const result = await resolveRepoContext(token, slug, wsParam);
+  const result = await resolveRepoContext(token, slug, rawSearch);
   if (result.kind === "unauthorized") {
     redirect(`/login?next=${encodeURIComponent(basePath)}`);
   }

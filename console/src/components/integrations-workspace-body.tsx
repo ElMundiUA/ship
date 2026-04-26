@@ -31,7 +31,8 @@ import {
 } from "@/lib/api/client";
 import type { ApiIntegration, ApiWorkspace } from "@/lib/api/types";
 import { getSessionToken } from "@/lib/api/session";
-import { parseWorkspaceIdParam, pickWorkspace } from "@/lib/workspace-scope";
+import { getResolvedWorkspaceId } from "@/lib/workspace-resolve.server";
+import { pickWorkspace } from "@/lib/workspace-scope";
 
 type Mode =
   | {
@@ -163,7 +164,7 @@ const NATIVE_CATALOG = [
 ];
 
 export async function loadIntegrationsWorkspaceMode(
-  wsParam: string | undefined,
+  searchParams: Record<string, string | string[] | undefined>,
 ): Promise<Mode> {
   if (!isApiConfigured()) return { source: "mock", reason: "SHIP_API_URL not set" };
   const token = await getSessionToken();
@@ -172,7 +173,8 @@ export async function loadIntegrationsWorkspaceMode(
     const ws = await listWorkspaces(token);
     if (ws.length === 0)
       return { source: "mock", reason: "Create a workspace first to wire integrations" };
-    const target = pickWorkspace(ws, wsParam);
+    const resolved = await getResolvedWorkspaceId(searchParams, ws);
+    const target = pickWorkspace(ws, resolved);
     const [rows, nativeRows] = await Promise.all([
       listIntegrations(target.id, token),
       listNativeIntegrations(target.id, token),

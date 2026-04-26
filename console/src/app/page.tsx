@@ -24,8 +24,8 @@ import {
 import type { ApiWorkspace } from "@/lib/api/types";
 import { getSessionToken } from "@/lib/api/session";
 import { workspaces as mockWorkspaces } from "@/lib/mock/cloud";
+import { getResolvedWorkspaceId } from "@/lib/workspace-resolve.server";
 import {
-  parseWorkspaceIdParam,
   pickWorkspace,
   toAppShellWorkspaces,
   withWorkspaceQuery,
@@ -48,8 +48,8 @@ type SearchParams = { [key: string]: string | string[] | undefined };
  * dashboard:
  *   - no session → ``/login?next=/``
  *   - no workspace yet → ``/onboarding?step=github``
- *   - more than one workspace and no ``?ws=`` → choose a workspace (avoids
- *     sending invitees into the personal JIT shell / wizard by default)
+ *   - more than one workspace and no URL ``?ws=`` or persisted pick → choose
+ *     a workspace (avoids sending invitees into the personal JIT shell / default)
  *   - greenfield for the *selected* workspace (zero repos / zero runs) → onboarding
  *   - ``?skipWizard=1`` escape hatch for returning operators.
  */
@@ -67,7 +67,6 @@ export default async function CloudHomePage({
   const token = await getSessionToken();
   if (!token) redirect("/login?next=%2F");
 
-  const wsParam = parseWorkspaceIdParam(params.ws);
   const skipWizard = params.skipWizard === "1";
 
   let list: ApiWorkspace[];
@@ -86,6 +85,7 @@ export default async function CloudHomePage({
     redirect("/onboarding?step=github");
   }
 
+  const wsParam = await getResolvedWorkspaceId(params, list);
   if (list.length > 1 && !wsParam) {
     return (
       <WorkspaceGateLayout>
