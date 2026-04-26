@@ -15,7 +15,9 @@ import {
   ApiHttpError,
   createBucket,
   createConnectorBucket,
+  createKnowledgeImportSource,
   listWorkspaces,
+  syncKnowledgeImportSource,
   syncConnectorBucket,
   updateBucket,
 } from "@/lib/api/client";
@@ -57,6 +59,10 @@ export type GuidedImportResult =
       ok: true;
       created: { slug: string; title: string; synced: boolean; syncError?: string }[];
     }
+  | { ok: false; message: string; status?: number };
+
+export type ImportSourceResult =
+  | { ok: true; sourceId: string; synced: boolean; stats?: Record<string, unknown>; syncError?: string }
   | { ok: false; message: string; status?: number };
 
 const GUIDED_IMPORT_MAX_BUCKETS = 20;
@@ -325,6 +331,65 @@ export async function createGuidedImportAction(
   return { ok: true, created };
 }
 
+export async function createImportSourceAction(input: {
+  kind: "notion" | "confluence" | "static_upload" | "docs_repo" | "website";
+  name: string;
+  config: Record<string, unknown>;
+  integrationId?: string | null;
+  repoId?: string | null;
+  syncNow?: boolean;
+}): Promise<ImportSourceResult> {
+  const name = input.name.trim();
+  if (!name) return { ok: false, message: "Source name is required." };
+
+  let token: string;
+  let workspaceId: string;
+  try {
+    token = await requireToken();
+    workspaceId = await requireWorkspaceId(token);
+  } catch (err) {
+    return {
+      ok: false,
+      message: err instanceof Error ? err.message : String(err),
+    };
+  }
+
+  try {
+    const source = await createKnowledgeImportSource(
+      workspaceId,
+      {
+        kind: input.kind,
+        name,
+        config: input.config,
+        integration_id: input.integrationId ?? null,
+        repo_id: input.repoId ?? null,
+        sync_interval_minutes:
+          input.kind === "static_upload" ? null : 24 * 60,
+      },
+      { token },
+    );
+    if (!input.syncNow) {
+      return { ok: true, sourceId: source.id, synced: false };
+    }
+    try {
+      const run = await syncKnowledgeImportSource(workspaceId, source.id, token);
+      return { ok: true, sourceId: source.id, synced: true, stats: run.stats };
+    } catch (err) {
+      return {
+        ok: true,
+        sourceId: source.id,
+        synced: false,
+        syncError: apiErrorMessage(err),
+      };
+    }
+  } catch (err) {
+    if (err instanceof ApiHttpError) {
+      return { ok: false, message: apiErrorMessage(err), status: err.status };
+    }
+    return { ok: false, message: apiErrorMessage(err) };
+  }
+}
+
 function knowledgeMetadata(input: Input): Record<string, unknown> | null {
   const metadata = {
     purpose: input.purpose?.trim() || undefined,
@@ -341,16 +406,21 @@ function knowledgeMetadata(input: Input): Record<string, unknown> | null {
 
 function bucketActionError(err: unknown): UpdateBucketResult {
   if (err instanceof ApiHttpError) {
-    const detail =
-      typeof err.detail === "string"
-        ? err.detail
-        : err.detail && typeof err.detail === "object"
-          ? JSON.stringify(err.detail)
-          : err.message;
-    return { ok: false, message: detail, status: err.status };
+    return { ok: false, message: apiErrorMessage(err), status: err.status };
   }
   return {
     ok: false,
-    message: err instanceof Error ? err.message : String(err),
+    message: apiErrorMessage(err),
   };
+}
+
+function apiErrorMessage(err: unknown): string {
+  if (err instanceof ApiHttpError) {
+    return typeof err.detail === "string"
+      ? err.detail
+      : err.detail && typeof err.detail === "object"
+        ? JSON.stringify(err.detail)
+        : err.message;
+  }
+  return err instanceof Error ? err.message : String(err);
 }

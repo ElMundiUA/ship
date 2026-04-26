@@ -170,6 +170,29 @@ class KnowledgeSourceStatus:
     ALL: tuple[str, ...] = (READY, SYNCING, ERROR, DISABLED)
 
 
+class KnowledgeImportSourceKind:
+    """Workspace-level external sources that feed many buckets."""
+
+    NOTION = "notion"
+    CONFLUENCE = "confluence"
+    STATIC_UPLOAD = "static_upload"
+    DOCS_REPO = "docs_repo"
+    WEBSITE = "website"
+
+    ALL: tuple[str, ...] = (NOTION, CONFLUENCE, STATIC_UPLOAD, DOCS_REPO, WEBSITE)
+
+
+class KnowledgeIngestionStatus:
+    """Lifecycle for source sync and analysis runs."""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    DONE = "done"
+    ERROR = "error"
+
+    ALL: tuple[str, ...] = (PENDING, RUNNING, DONE, ERROR)
+
+
 class KnowledgeBucket(Base):
     """User-curated bucket holding packed summaries of past topics.
 
@@ -265,6 +288,158 @@ class KnowledgeBucket(Base):
         DateTime(timezone=True), nullable=True
     )
 
+    created_at: Mapped[datetime] = _ts_created()
+    updated_at: Mapped[datetime] = _ts_updated()
+
+
+class KnowledgeImportSource(Base):
+    """Workspace-level source whose content is routed into knowledge buckets."""
+
+    __tablename__ = "knowledge_import_sources"
+    __table_args__ = (
+        Index("ix_knowledge_import_sources_workspace_id", "workspace_id"),
+        Index("ix_knowledge_import_sources_kind", "workspace_id", "kind"),
+        CheckConstraint(
+            "kind IN ('notion', 'confluence', 'static_upload', 'docs_repo', 'website')",
+            name="ck_knowledge_import_sources_kind",
+        ),
+        CheckConstraint(
+            "status IN ('ready', 'syncing', 'error', 'disabled')",
+            name="ck_knowledge_import_sources_status",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    integration_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("integrations.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    repo_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspace_repos.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    config: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'ready'")
+    )
+    sync_cursor: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    content_fingerprint: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    sync_interval_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    archived_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = _ts_created()
+    updated_at: Mapped[datetime] = _ts_updated()
+
+
+class KnowledgeSourceItem(Base):
+    """One external page/file/url discovered inside an import source."""
+
+    __tablename__ = "knowledge_source_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_id",
+            "external_id",
+            name="uq_knowledge_source_items_source_external",
+        ),
+        Index("ix_knowledge_source_items_workspace_id", "workspace_id"),
+        Index("ix_knowledge_source_items_source_id", "source_id"),
+        Index("ix_knowledge_source_items_fingerprint", "content_fingerprint"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("knowledge_import_sources.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    external_id: Mapped[str] = mapped_column(String(1024), nullable=False)
+    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    external_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    item_ref: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    content_fingerprint: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    cursor: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = _ts_created()
+    updated_at: Mapped[datetime] = _ts_updated()
+
+
+class KnowledgeIngestionRun(Base):
+    """One sync/analyze attempt for a workspace import source."""
+
+    __tablename__ = "knowledge_ingestion_runs"
+    __table_args__ = (
+        Index("ix_knowledge_ingestion_runs_workspace_id", "workspace_id"),
+        Index("ix_knowledge_ingestion_runs_source_id", "source_id"),
+        Index("ix_knowledge_ingestion_runs_status", "status"),
+        CheckConstraint(
+            "status IN ('pending', 'running', 'done', 'error')",
+            name="ck_knowledge_ingestion_runs_status",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("knowledge_import_sources.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'pending'")
+    )
+    trigger: Mapped[str] = mapped_column(String(32), nullable=False)
+    stats: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = _ts_created()
     updated_at: Mapped[datetime] = _ts_updated()
 
@@ -432,6 +607,42 @@ class BucketArticle(Base):
     )
     created_at: Mapped[datetime] = _ts_created()
     updated_at: Mapped[datetime] = _ts_updated()
+
+
+class BucketArticleSource(Base):
+    """Provenance link from a bucket article version to an external item."""
+
+    __tablename__ = "bucket_article_sources"
+    __table_args__ = (
+        UniqueConstraint(
+            "article_id",
+            "source_item_id",
+            name="uq_bucket_article_sources_article_item",
+        ),
+        Index("ix_bucket_article_sources_article_id", "article_id"),
+        Index("ix_bucket_article_sources_source_item_id", "source_item_id"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    article_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("bucket_articles.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    source_item_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("knowledge_source_items.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("knowledge_ingestion_runs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    role: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=text("'primary'")
+    )
+    created_at: Mapped[datetime] = _ts_created()
 
 
 class BucketSummary(Base):
@@ -673,6 +884,7 @@ class DistillerRun(Base):
 __all__ = [
     "ArtifactFeedback",
     "BucketArticle",
+    "BucketArticleSource",
     "BucketArticleStatus",
     "BucketScope",
     "BucketSource",
@@ -683,4 +895,10 @@ __all__ = [
     "EMBED_DIM",
     "KbChunk",
     "KnowledgeBucket",
+    "KnowledgeImportSource",
+    "KnowledgeImportSourceKind",
+    "KnowledgeIngestionRun",
+    "KnowledgeIngestionStatus",
+    "KnowledgeSource",
+    "KnowledgeSourceItem",
 ]

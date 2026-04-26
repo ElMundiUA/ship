@@ -15,6 +15,8 @@ import type {
   ApiIntegration,
   ApiIntegrationKind,
   ApiKnowledgeBucket,
+  ApiKnowledgeImportSource,
+  ApiKnowledgeIngestionRun,
   ApiMember,
   ApiMemberRole,
   ApiSession,
@@ -1153,6 +1155,45 @@ export function listBucketSources(
   );
 }
 
+export function listKnowledgeImportSources(
+  workspaceId: string,
+  token?: string,
+): Promise<ApiKnowledgeImportSource[]> {
+  return apiFetch<ApiKnowledgeImportSource[]>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/knowledge/sources`,
+    { token },
+  );
+}
+
+export function createKnowledgeImportSource(
+  workspaceId: string,
+  payload: {
+    kind: string;
+    name: string;
+    config?: Record<string, unknown>;
+    integration_id?: string | null;
+    repo_id?: string | null;
+    sync_interval_minutes?: number | null;
+  },
+  options: { token?: string } = {},
+): Promise<ApiKnowledgeImportSource> {
+  return apiFetch<ApiKnowledgeImportSource>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/knowledge/sources`,
+    { method: "POST", body: payload, token: options.token },
+  );
+}
+
+export function syncKnowledgeImportSource(
+  workspaceId: string,
+  sourceId: string,
+  token?: string,
+): Promise<ApiKnowledgeIngestionRun> {
+  return apiFetch<ApiKnowledgeIngestionRun>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/knowledge/sources/${encodeURIComponent(sourceId)}/sync`,
+    { method: "POST", token },
+  );
+}
+
 export interface CreateBucketInput {
   slug?: string | null;
   name: string;
@@ -1631,13 +1672,39 @@ export interface ApiProcessLink {
   id: string;
   from_process_id: string;
   from_state_id: string | null;
+  from_node_id?: string | null;
   to_process_id: string;
   to_state_id: string | null;
+  to_node_id?: string | null;
   type: ApiProcessLinkType;
   conditions: ApiProcessCondition[];
+  label?: string | null;
+  io_contract?: Record<string, unknown>;
+}
+
+export type ApiProcessNodeType =
+  | "workspace"
+  | "process"
+  | "subprocess"
+  | "routine"
+  | "approval";
+
+export interface ApiProcessNode {
+  id: string;
+  process_id: string;
+  type: ApiProcessNodeType;
+  name: string;
+  description: string;
+  parent_process_id: string | null;
+  child_process_id?: string | null;
+  template_id?: string | null;
+  x: number;
+  y: number;
+  status: ApiProcessHealth;
 }
 
 export interface ApiProcessGraph {
+  nodes: ApiProcessNode[];
   links: ApiProcessLink[];
 }
 
@@ -1649,6 +1716,10 @@ export interface ApiProcessSummary {
   task_count: number;
   blocked_count: number;
   health: ApiProcessHealth;
+  description?: string;
+  parent_process_id?: string | null;
+  node_type?: ApiProcessNodeType;
+  template_id?: string | null;
 }
 
 export interface ApiProcessAdapterDiagnostic {
