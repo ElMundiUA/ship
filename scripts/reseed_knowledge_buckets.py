@@ -74,6 +74,11 @@ async def _main() -> int:
         help="Restrict the reseed to a workspace id. Repeatable. Defaults to all workspaces.",
     )
     parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the dry-run summary without mutating rows (default).",
+    )
+    parser.add_argument(
         "--execute",
         action="store_true",
         help="Actually delete and recreate rows. Without this, only prints a dry-run summary.",
@@ -90,6 +95,9 @@ async def _main() -> int:
         help="Directory for JSON backup snapshots.",
     )
     args = parser.parse_args()
+
+    if args.dry_run and args.execute:
+        parser.error("--dry-run and --execute are mutually exclusive")
 
     if args.execute and _is_probably_production_database() and not args.confirm_production:
         parser.error(

@@ -2,12 +2,8 @@
 
 Covers:
 - empty workspace returns ``{buckets: []}`` (no repos registered)
-- a project repo's ``.ship/knowledge/<slug>.md`` shows up in the listing
-- project layer wins over workspace layer for the same slug (precedence
-  mirrors the catalog resolver)
-- detail endpoint returns the full markdown body
-- disabling the ``project`` source in ``catalog_sources`` hides project
-  buckets without affecting workspace ones
+- legacy repo files and repo-scoped DB rows are ignored
+- workspace-scoped DB buckets are listed and readable
 """
 
 from __future__ import annotations
@@ -17,6 +13,11 @@ from pathlib import Path
 
 import pytest
 
+from backend.app.db.models.agent_memory import (
+    BucketScope,
+    BucketSource,
+    KnowledgeBucket,
+)
 from backend.app.db.models.tenancy import ArtifactRepo
 
 
@@ -40,7 +41,7 @@ async def test_empty_workspace_returns_empty_list(v1_client, seed_workspace):
     assert body["buckets"] == []
 
 
-async def test_project_bucket_shows_up(
+async def test_legacy_project_bucket_is_ignored(
     v1_client, seed_workspace, db_session, tmp_path
 ):
     _, raw, ws = seed_workspace
@@ -66,18 +67,10 @@ async def test_project_bucket_shows_up(
 
     resp = await v1_client.get(f"/v1/workspaces/{ws.id}/knowledge", headers=headers)
     assert resp.status_code == 200, resp.text
-    buckets = resp.json()["buckets"]
-    assert len(buckets) == 1
-    [bucket] = buckets
-    assert bucket["slug"] == "brandbook"
-    assert bucket["title"] == "Helio Platform · brandbook"
-    assert bucket["visibility"] == "project"
-    assert "payments rails" in bucket["excerpt"]
-    # list endpoint never returns the body
-    assert "body" not in bucket
+    assert resp.json()["buckets"] == []
 
 
-async def test_project_overrides_workspace(
+async def test_workspace_db_bucket_is_listed_and_readable(
     v1_client, seed_workspace, db_session, tmp_path
 ):
     _, raw, ws = seed_workspace
@@ -99,20 +92,33 @@ async def test_project_overrides_workspace(
     db_session.add(
         ArtifactRepo(workspace_id=ws.id, kind="project", url=f"file://{tmp_path / 'proj'}")
     )
+    db_session.add(
+        KnowledgeBucket(
+            workspace_id=ws.id,
+            slug="code-style",
+            name="Code style",
+            description="DB-owned workspace knowledge.",
+            scope_kind=BucketScope.WORKSPACE,
+            source_kind=BucketSource.EXTERNAL_STATIC,
+        )
+    )
     await db_session.flush()
 
     resp = await v1_client.get(f"/v1/workspaces/{ws.id}/knowledge", headers=headers)
     assert resp.status_code == 200, resp.text
     [bucket] = resp.json()["buckets"]
-    assert bucket["visibility"] == "project"
+    assert bucket["visibility"] == "workspace"
+    assert bucket["scope_kind"] == "workspace"
+    assert bucket["source_kind"] == "external_static"
+    assert bucket["excerpt"] == "DB-owned workspace knowledge."
 
     detail = await v1_client.get(
         f"/v1/workspaces/{ws.id}/knowledge/code-style", headers=headers
     )
     assert detail.status_code == 200, detail.text
     body = detail.json()
-    assert "project level body wins" in body["body"]
-    assert body["visibility"] == "project"
+    assert body["body"] == "DB-owned workspace knowledge."
+    assert body["visibility"] == "workspace"
 
 
 async def test_detail_404_when_missing(v1_client, seed_workspace):
@@ -125,7 +131,7 @@ async def test_detail_404_when_missing(v1_client, seed_workspace):
     assert resp.status_code == 404
 
 
-async def test_disabling_project_source_hides_project_buckets(
+async def test_catalog_source_flags_do_not_resurrect_legacy_knowledge(
     v1_client, seed_workspace, db_session, tmp_path
 ):
     _, raw, ws = seed_workspace
@@ -150,16 +156,8 @@ async def test_disabling_project_source_hides_project_buckets(
 
 
 # ---------------------------------------------------------------------------
-# Phase 2: DB-backed ``repo_files`` buckets
+# DB-only knowledge cutover
 # ---------------------------------------------------------------------------
-#
-# The sync service stores ``.ship/knowledge/*.md`` as ``scope_kind='repo'``
-# + ``source_kind='repo_files'`` rows in ``knowledge_buckets``. The route
-# reads those rows first; legacy disk-lister output is a fallback for the
-# self-hosted dev surface. Tests here seed the rows directly (skipping the
-# GitHub round-trip) so we can isolate the route's projection logic from
-# the sync service's correctness (covered separately in
-# ``test_bucket_repo_files_sync.py``).
 
 
 def _seed_repo_files_bucket(
@@ -233,7 +231,7 @@ async def _seed_workspace_repo(db_session, *, workspace_id, full_name="acme/note
     return repo
 
 
-async def test_db_repo_files_bucket_shows_up_with_phase2_fields(
+async def test_db_repo_files_bucket_is_hidden(
     v1_client, seed_workspace, db_session
 ):
     _, raw, ws = seed_workspace
@@ -256,18 +254,7 @@ async def test_db_repo_files_bucket_shows_up_with_phase2_fields(
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["version"] == 2
-    [bucket] = body["buckets"]
-    assert bucket["slug"] == "code-style"
-    assert bucket["title"] == "Code style"
-    # Phase 2 additions exposed for new consumers.
-    assert bucket["scope_kind"] == "repo"
-    assert bucket["source_kind"] == "repo_files"
-    assert bucket["repo_full_name"] == "acme/notes"
-    assert bucket["repo_url"] == "https://github.com/acme/notes"
-    assert bucket["path"] == ".ship/knowledge/code-style.md"
-    assert bucket["source_ref"]["content_sha"] == "sha-v1"
-    # Legacy ``visibility`` keeps its slot so old clients don't 500.
-    assert bucket["visibility"] == "repo"
+    assert body["buckets"] == []
 
 
 async def test_archived_db_row_is_hidden_from_list(
@@ -302,21 +289,12 @@ async def test_archived_db_row_is_hidden_from_list(
 
     resp = await v1_client.get(f"/v1/workspaces/{ws.id}/knowledge", headers=headers)
     assert resp.status_code == 200
-    slugs = [b["slug"] for b in resp.json()["buckets"]]
-    assert slugs == ["kept"]
+    assert resp.json()["buckets"] == []
 
 
-async def test_db_row_wins_over_legacy_for_same_slug(
+async def test_workspace_bucket_wins_over_legacy_and_repo_for_same_slug(
     v1_client, seed_workspace, db_session, tmp_path
 ):
-    """DB-backed repo_files row shadows a legacy disk-lister entry.
-
-    This is the SaaS-meets-self-hosted corner: an operator mirrors a
-    knowledge repo into a local ``ArtifactRepo`` (old path) and also
-    activates the same repo as a ``WorkspaceRepo`` (new path). We
-    want exactly one entry in the response, and it must be the DB
-    one because that row carries the vendor SHA + push trail.
-    """
     _, raw, ws = seed_workspace
     headers = {"Authorization": f"Bearer {raw}"}
 
@@ -346,11 +324,21 @@ async def test_db_row_wins_over_legacy_for_same_slug(
         path=".ship/knowledge/shared.md",
         content_sha="sha-db",
     )
+    db_session.add(
+        KnowledgeBucket(
+            workspace_id=ws.id,
+            slug="shared",
+            name="Shared (workspace DB)",
+            description="workspace db excerpt.",
+            scope_kind=BucketScope.WORKSPACE,
+            source_kind=BucketSource.EXTERNAL_STATIC,
+        )
+    )
     await db_session.flush()
 
     resp = await v1_client.get(f"/v1/workspaces/{ws.id}/knowledge", headers=headers)
     assert resp.status_code == 200
     buckets = resp.json()["buckets"]
     assert len(buckets) == 1
-    assert buckets[0]["title"] == "Shared (DB copy)"
-    assert buckets[0]["source_kind"] == "repo_files"
+    assert buckets[0]["title"] == "Shared (workspace DB)"
+    assert buckets[0]["source_kind"] == "external_static"

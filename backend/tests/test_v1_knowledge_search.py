@@ -237,7 +237,7 @@ def _patch_embedder(monkeypatch, embedder: _FakeEmbedder) -> None:
 
 
 @pytest.mark.asyncio
-async def test_search_ranks_repo_match_first(
+async def test_search_returns_workspace_hits_only_even_with_repo_hint(
     v1_client, seed_search_workspace, monkeypatch
 ) -> None:
     ctx = seed_search_workspace
@@ -257,25 +257,12 @@ async def test_search_ranks_repo_match_first(
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    rank_buckets = [hit["rank_bucket"] for hit in body["hits"]]
-
-    # Every repo_match row must come before every workspace row,
-    # and every workspace row must come before every other_repo row.
-    order = {"repo_match": 0, "workspace": 1, "other_repo": 2}
-    for earlier, later in zip(rank_buckets, rank_buckets[1:]):
-        assert order[earlier] <= order[later], rank_buckets
-
-    # Sanity: all three bands represented, and the very first hit
-    # is scoped to repo_a.
-    assert body["hits"][0]["rank_bucket"] == "repo_match"
-    assert body["hits"][0]["repo_id"] == str(ctx["repo_a"].id)
-    assert "repo_match" in rank_buckets
-    assert "workspace" in rank_buckets
-    assert "other_repo" in rank_buckets
+    assert [hit["rank_bucket"] for hit in body["hits"]] == ["workspace"]
+    assert body["hits"][0]["repo_id"] is None
 
 
 @pytest.mark.asyncio
-async def test_search_ranks_workspace_second_without_repo_match(
+async def test_search_ranks_workspace_first_without_repo_match(
     v1_client, seed_search_workspace, monkeypatch
 ) -> None:
     ctx = seed_search_workspace
@@ -293,16 +280,7 @@ async def test_search_ranks_workspace_second_without_repo_match(
     body = resp.json()
     rank_buckets = [hit["rank_bucket"] for hit in body["hits"]]
 
-    # With no ``repo_id`` hint the workspace band is on top.
-    assert "repo_match" not in rank_buckets
-    assert rank_buckets[0] == "workspace"
-    # Workspace then other_repo — no interleaving.
-    seen_other = False
-    for b in rank_buckets:
-        if b == "other_repo":
-            seen_other = True
-        else:
-            assert not seen_other, rank_buckets
+    assert rank_buckets == ["workspace"]
 
 
 @pytest.mark.asyncio
@@ -355,7 +333,7 @@ async def test_canonical_lists_workspace_scope_buckets(
 
 
 @pytest.mark.asyncio
-async def test_canonical_orphan_slugs_require_two_repos(
+async def test_canonical_orphan_slugs_are_disabled(
     v1_client, seed_search_workspace, db_session
 ) -> None:
     from backend.app.db.models.agent_memory import (
@@ -411,18 +389,7 @@ async def test_canonical_orphan_slugs_require_two_repos(
     assert resp.status_code == 200, resp.text
     body = resp.json()
 
-    orphan_slugs = {o["slug"] for o in body["orphan_slugs"]}
-    assert "shared-runbook" in orphan_slugs
-    assert "solo-runbook" not in orphan_slugs
-    # ``auth-runbook`` is in 2 repos but also has a workspace-scope
-    # copy, so it must NOT be reported as orphan.
-    assert "auth-runbook" not in orphan_slugs
-
-    shared = next(
-        o for o in body["orphan_slugs"] if o["slug"] == "shared-runbook"
-    )
-    assert shared["repo_count"] == 2
-    assert shared["sample_repo_full_name"] in {"ks/api", "ks/web"}
+    assert body["orphan_slugs"] == []
 
 
 @pytest.mark.asyncio
@@ -448,4 +415,4 @@ async def test_override_link_reflected_in_override_count(
     ws_entry = next(
         b for b in body["canonical"] if b["id"] == str(ctx["ws_bucket"].id)
     )
-    assert ws_entry["override_count"] == 1
+    assert ws_entry["override_count"] == 0

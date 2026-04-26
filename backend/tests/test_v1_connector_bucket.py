@@ -124,6 +124,26 @@ async def test_create_connector_bucket_requires_integration_id(
 
 
 @pytest.mark.asyncio
+async def test_create_bucket_rejects_non_workspace_scope(
+    v1_client, seed_workspace
+) -> None:
+    _, raw, workspace = seed_workspace
+    resp = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/buckets",
+        headers=_auth(raw),
+        json={
+            "slug": "repo-docs",
+            "name": "Repo docs",
+            "scope_kind": BucketScope.REPO,
+            "source_kind": BucketSource.REPO_FILES,
+            "repo_id": str(uuid.uuid4()),
+        },
+    )
+    assert resp.status_code == 400
+    assert "workspace-scoped only" in resp.text
+
+
+@pytest.mark.asyncio
 async def test_create_connector_bucket_rejects_other_workspace_integration(
     v1_client, seed_workspace, db_session
 ) -> None:

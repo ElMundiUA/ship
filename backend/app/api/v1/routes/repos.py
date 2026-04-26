@@ -449,6 +449,17 @@ async def knowledge_seed(
     merge. After merge, the knowledge lister picks up the new files
     on the next workspace read (no cache invalidation needed).
     """
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail={
+            "code": "repo_knowledge_deprecated",
+            "message": (
+                "Repo-backed .ship/knowledge PR seeding is deprecated. "
+                "Use workspace-level Knowledge buckets stored in Ship's database."
+            ),
+        },
+    )
+
     from backend.app.db.models.integrations import GitHubInstallation
     from backend.app.integrations.github.workflows import (
         WorkflowDispatchError,
@@ -1269,6 +1280,16 @@ async def bootstrap_repo_knowledge(
     settings: Settings = Depends(get_settings),
 ) -> KnowledgeBootstrapOut:
     """Analyze the merged repo and open PR 2 with generated knowledge docs."""
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail={
+            "code": "repo_knowledge_deprecated",
+            "message": (
+                "Generated repository knowledge PRs are deprecated. "
+                "Ship Knowledge is workspace-scoped and stored in the database."
+            ),
+        },
+    )
 
     from backend.app.db.models.repo_intel import RepoIntelTriggeredBy
     from backend.app.integrations.github.workflows import (

@@ -13,15 +13,18 @@ export function Card({
   className,
   padded = true,
   id,
+  "data-testid": dataTestId,
 }: {
   children: ReactNode;
   className?: string;
   padded?: boolean;
   id?: string;
+  "data-testid"?: string;
 }) {
   return (
     <div
       id={id}
+      data-testid={dataTestId}
       className={cn(
         "rounded-2xl border border-white/10 bg-white/[0.04] backdrop-blur-xl shadow-card",
         padded && "p-5",

@@ -38,6 +38,7 @@ from backend.app.db.models.agent_memory import (
     BucketArticle,
     BucketArticleStatus,
     BucketScope,
+    BucketSource,
     KnowledgeBucket,
 )
 from backend.app.db.models.integrations import WorkspaceRepo
@@ -159,6 +160,8 @@ async def search_workspace_knowledge(
         .where(
             and_(
                 KnowledgeBucket.workspace_id == workspace_id,
+                KnowledgeBucket.scope_kind == BucketScope.WORKSPACE,
+                KnowledgeBucket.source_kind != BucketSource.REPO_FILES,
                 BucketArticle.archived_at.is_(None),
                 BucketArticle.embedding.is_not(None),
                 BucketArticle.status == BucketArticleStatus.PUBLISHED,

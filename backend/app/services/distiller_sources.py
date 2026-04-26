@@ -296,6 +296,12 @@ async def ingest_pr_merge(
     the payload doesn't describe a merged PR (we're tolerant of
     replays + unrelated actions).
     """
+    logger.debug(
+        "ingest_pr_merge: skipping repo-scoped PR knowledge for workspace_id=%s",
+        workspace_id,
+    )
+    return None
+
     pr = payload.get("pull_request") or {}
     if not pr:
         return None

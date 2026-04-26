@@ -1168,6 +1168,8 @@ async def list_buckets(
     stmt = (
         select(KnowledgeBucket)
         .where(KnowledgeBucket.workspace_id == workspace_id)
+        .where(KnowledgeBucket.scope_kind == BucketScope.WORKSPACE)
+        .where(KnowledgeBucket.source_kind != BucketSource.REPO_FILES)
         # Phase 8: hide other users' user-scoped rows the same way
         # the Phase 3 resolver does. ``list_buckets`` is used by the
         # console and the `/knowledge` surface, both of which must
@@ -1228,6 +1230,16 @@ async def create_bucket(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"unknown source_kind {payload.source_kind!r}",
+        )
+    if payload.scope_kind != BucketScope.WORKSPACE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="knowledge buckets are workspace-scoped only",
+        )
+    if payload.source_kind == BucketSource.REPO_FILES:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="repo-backed .ship/knowledge buckets are deprecated",
         )
 
     # CHECK-constraint-friendly carrier validation.
@@ -1592,7 +1604,8 @@ async def _load_bucket(
             select(KnowledgeBucket).where(
                 KnowledgeBucket.workspace_id == workspace_id,
                 KnowledgeBucket.slug == slug,
-                KnowledgeBucket.scope_kind == "workspace",
+                KnowledgeBucket.scope_kind == BucketScope.WORKSPACE,
+                KnowledgeBucket.source_kind != BucketSource.REPO_FILES,
             )
         )
     ).scalars().first()
