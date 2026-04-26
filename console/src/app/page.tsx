@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import type { ReactNode } from "react";
 
 import { AppShell } from "@/components/app-shell";
 import {
@@ -8,6 +9,7 @@ import {
   CardHeader,
   MockBanner,
 } from "@/components/ui";
+import { WorkspaceEntryPicker } from "@/components/workspace-entry-picker";
 import { WorkspaceHome } from "@/components/workspace-home";
 import {
   type ApiActivatedRepo,
@@ -46,7 +48,9 @@ type SearchParams = { [key: string]: string | string[] | undefined };
  * dashboard:
  *   - no session → ``/login?next=/``
  *   - no workspace yet → ``/onboarding?step=github``
- *   - greenfield workspace (zero repos / zero runs) → onboarding
+ *   - more than one workspace and no ``?ws=`` → choose a workspace (avoids
+ *     sending invitees into the personal JIT shell / wizard by default)
+ *   - greenfield for the *selected* workspace (zero repos / zero runs) → onboarding
  *   - ``?skipWizard=1`` escape hatch for returning operators.
  */
 export default async function CloudHomePage({
@@ -64,12 +68,36 @@ export default async function CloudHomePage({
   if (!token) redirect("/login?next=%2F");
 
   const wsParam = parseWorkspaceIdParam(params.ws);
-  const result = await loadLiveContext(token, wsParam);
+  const skipWizard = params.skipWizard === "1";
+
+  let list: ApiWorkspace[];
+  try {
+    list = await listWorkspaces(token);
+  } catch (err) {
+    if (err instanceof ApiHttpError && err.status === 401) {
+      redirect("/login?next=%2F");
+    }
+    if (err instanceof ApiUnavailableError) {
+      return renderDownState();
+    }
+    return renderDownState();
+  }
+  if (list.length === 0) {
+    redirect("/onboarding?step=github");
+  }
+
+  if (list.length > 1 && !wsParam) {
+    return (
+      <WorkspaceGateLayout>
+        <WorkspaceEntryPicker workspaces={list} skipWizard={skipWizard} />
+      </WorkspaceGateLayout>
+    );
+  }
+
+  const result = await loadLiveContext(token, list, wsParam);
   if (result === "unauthorized") redirect("/login?next=%2F");
-  if (result === "empty") redirect("/onboarding?step=github");
   if (result === "down") return renderDownState();
 
-  const skipWizard = params.skipWizard === "1";
   if (!skipWizard && isGreenfieldWorkspace(result)) {
     redirect(
       `/onboarding?step=github&ws=${encodeURIComponent(result.workspace.id)}`,
@@ -107,18 +135,9 @@ function isGreenfieldWorkspace(ctx: LiveContext): boolean {
 
 async function loadLiveContext(
   token: string,
+  list: ApiWorkspace[],
   wsParam: string | undefined,
-): Promise<LiveContext | "empty" | "unauthorized" | "down"> {
-  let list: ApiWorkspace[];
-  try {
-    list = await listWorkspaces(token);
-  } catch (err) {
-    if (err instanceof ApiHttpError && err.status === 401) return "unauthorized";
-    if (err instanceof ApiUnavailableError) return "down";
-    return "down";
-  }
-  if (list.length === 0) return "empty";
-
+): Promise<LiveContext | "unauthorized" | "down"> {
   const workspace = pickWorkspace(list, wsParam);
   try {
     const [data, repos] = await Promise.all([
@@ -189,6 +208,45 @@ function renderMock() {
       <MockBanner />
       <WorkspaceHome summary={mockOpsDashboard} repos={[]} workspaceId="mock-workspace" />
     </AppShell>
+  );
+}
+
+/**
+ * Strips the main sidebar on purpose: while no ``?ws=`` is set, the default
+ * nav would send multi-workspace users to surfaces that still resolve
+ * ``list[0]`` and defeat the chooser.
+ */
+function WorkspaceGateLayout({ children }: { children: ReactNode }) {
+  return (
+    <div className="min-h-screen bg-ink text-mist">
+      <header className="border-b border-white/10 bg-ink/80 px-6 py-4 lg:px-8">
+        <div className="mx-auto flex max-w-5xl items-center justify-between">
+          <span className="font-display text-base font-bold tracking-tight text-white">
+            Ship<span className="text-aqua">.</span>
+            <span className="ml-1 rounded-md border border-aqua/40 bg-aqua/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-widest text-aqua/90">
+              cloud
+            </span>
+          </span>
+          <form action="/logout" method="POST">
+            <button
+              type="submit"
+              className="text-[11px] font-semibold text-white/45 hover:text-white"
+            >
+              Sign out
+            </button>
+          </form>
+        </div>
+      </header>
+      <main className="mx-auto w-full max-w-5xl px-6 py-10 lg:px-8">
+        <h1 className="font-display text-xl font-bold text-white sm:text-2xl">
+          Open a workspace
+        </h1>
+        <p className="mt-1 text-sm text-white/50">
+          Choose which organization to load before the dashboard.
+        </p>
+        {children}
+      </main>
+    </div>
   );
 }
 

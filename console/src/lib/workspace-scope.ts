@@ -47,3 +47,16 @@ export function withWorkspaceQuery(
   const joiner = path.includes("?") ? "&" : "?";
   return `${path}${joiner}ws=${encodeURIComponent(workspaceId)}`;
 }
+
+/** Heuristic for the JIT personal workspace name from the backend. */
+export function looksLikeJitPersonalWorkspace(w: { name: string }): boolean {
+  return /'s workspace$/i.test(w.name.trim());
+}
+
+/** Home after picking a row on the multi-workspace chooser. */
+export function homeEntryHref(workspaceId: string, skipWizard: boolean): string {
+  const p = new URLSearchParams();
+  p.set("ws", workspaceId);
+  if (skipWizard) p.set("skipWizard", "1");
+  return `/?${p.toString()}`;
+}
