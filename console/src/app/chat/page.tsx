@@ -17,6 +17,12 @@ import {
   listWorkspaces,
 } from "@/lib/api/client";
 import { getSessionToken } from "@/lib/api/session";
+import {
+  parseWorkspaceIdParam,
+  pickWorkspace,
+  toAppShellWorkspaces,
+  withWorkspaceQuery,
+} from "@/lib/workspace-scope";
 
 import { SingleWindowChat } from "./single-window-chat";
 
@@ -40,10 +46,12 @@ export default async function ChatPage({
     scope?: string;
     repo_id?: string;
     project_id?: string;
+    ws?: string;
   }>;
 }) {
   const params = await searchParams;
   const scope = resolveScopeFromSearch(params);
+  const wsParam = parseWorkspaceIdParam(params.ws);
   if (!isApiConfigured()) {
     return (
       <AppShell title="Navigator">
@@ -69,7 +77,8 @@ export default async function ChatPage({
     return renderUnavailable(err);
   }
   if (workspaces.length === 0) redirect("/onboarding?step=github");
-  const workspace = workspaces[0];
+  const workspace = pickWorkspace(workspaces, wsParam);
+  const multi = workspaces.length > 1;
 
   let thread: ApiChatThread | null = null;
   let repos: Awaited<ReturnType<typeof listActivatedRepos>> = [];
@@ -90,6 +99,7 @@ export default async function ChatPage({
         <AppShell
           title="Navigator"
           workspace={{ id: workspace.id, name: workspace.name, slug: workspace.slug }}
+          allWorkspaces={toAppShellWorkspaces(workspaces)}
         >
           <Card>
             <CardHeader
@@ -137,6 +147,7 @@ export default async function ChatPage({
     <AppShell
       title="Navigator"
       workspace={{ id: workspace.id, name: workspace.name, slug: workspace.slug }}
+      allWorkspaces={toAppShellWorkspaces(workspaces)}
       me={
         me
           ? {
@@ -154,13 +165,13 @@ export default async function ChatPage({
       actions={
         <div className="flex items-center gap-4">
           <Link
-            href="/chat/archived"
+            href={withWorkspaceQuery("/chat/archived", workspace.id, multi)}
             className="text-xs font-semibold text-white/55 hover:text-white"
           >
             Archived chats
           </Link>
           <Link
-            href="/"
+            href={withWorkspaceQuery("/", workspace.id, multi)}
             className="text-xs font-semibold text-white/65 hover:text-white"
           >
             ← Dashboard

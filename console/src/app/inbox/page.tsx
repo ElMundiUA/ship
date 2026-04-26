@@ -63,6 +63,12 @@ import {
   type InboxType,
 } from "@/lib/inbox-types";
 import { workspaces as mockWorkspaces } from "@/lib/mock/cloud";
+import {
+  parseWorkspaceIdParam,
+  pickWorkspace,
+  toAppShellWorkspaces,
+  withWorkspaceQuery,
+} from "@/lib/workspace-scope";
 
 export const dynamic = "force-dynamic";
 
@@ -80,6 +86,7 @@ type Mode =
   | {
       source: "live";
       workspace: ApiWorkspace;
+      allWorkspaces: ApiWorkspace[];
       me: ApiUser | null;
       list: InboxListResponse;
       filters: InboxFilterState;
@@ -156,7 +163,10 @@ function parseSearchParams(
   };
 }
 
-async function load(parsed: ParsedParams): Promise<Mode> {
+async function load(
+  parsed: ParsedParams,
+  wsParam: string | undefined,
+): Promise<Mode> {
   if (!isApiConfigured()) {
     return { source: "mock", reason: "SHIP_API_URL is not set" };
   }
@@ -165,6 +175,7 @@ async function load(parsed: ParsedParams): Promise<Mode> {
     return { source: "mock", reason: "Sign in to view your real inbox" };
   }
   let workspace: ApiWorkspace;
+  let allWorkspaces: ApiWorkspace[];
   try {
     const ws = await listWorkspaces(token);
     if (ws.length === 0) {
@@ -173,7 +184,8 @@ async function load(parsed: ParsedParams): Promise<Mode> {
         reason: "Create a workspace first to use the inbox",
       };
     }
-    workspace = ws[0];
+    allWorkspaces = ws;
+    workspace = pickWorkspace(ws, wsParam);
   } catch (err) {
     if (err instanceof ApiHttpError && err.status === 401) {
       return { source: "mock", reason: "Session expired — sign in again" };
@@ -207,6 +219,7 @@ async function load(parsed: ParsedParams): Promise<Mode> {
     return {
       source: "live",
       workspace,
+      allWorkspaces,
       me,
       list,
       filters: parsed.filters,
@@ -269,7 +282,8 @@ export default async function InboxPage({
     string | string[] | undefined
   >;
   const parsed = parseSearchParams(params);
-  const data = await load(parsed);
+  const wsParam = parseWorkspaceIdParam(params.ws);
+  const data = await load(parsed, wsParam);
 
   if (data.source === "mock") {
     return (
@@ -281,10 +295,13 @@ export default async function InboxPage({
     );
   }
 
-  const { workspace, me, list, filters, cursor, repo, play } = data;
+  const { workspace, allWorkspaces, me, list, filters, cursor, repo, play } =
+    data;
   const typeCounts = pickTypeCounts(list.counts_by_type);
   const statusCounts = pickStatusCounts(list.counts_by_status);
   const activeFilterCount = countActiveFilters(filters, { repo, play });
+  const multiWs = allWorkspaces.length > 1;
+  const inboxWs = multiWs ? workspace.id : undefined;
 
   return (
     <AppShell
@@ -295,6 +312,7 @@ export default async function InboxPage({
         name: workspace.name,
         slug: workspace.slug,
       }}
+      allWorkspaces={toAppShellWorkspaces(allWorkspaces)}
       me={meToShellUser(me)}
       actions={
         <RefreshButton
@@ -302,6 +320,7 @@ export default async function InboxPage({
           repo={repo}
           play={play}
           cursor={cursor}
+          workspaceScope={inboxWs}
         />
       }
     >
@@ -317,6 +336,7 @@ export default async function InboxPage({
         list={list}
         typeCounts={typeCounts}
         activeFilterCount={activeFilterCount}
+        workspaceScope={inboxWs}
       />
 
       <Card className="mt-5">
@@ -329,6 +349,7 @@ export default async function InboxPage({
           counts={{ types: typeCounts, statuses: statusCounts }}
           repo={repo}
           play={play}
+          workspaceScope={inboxWs}
         />
         {(repo || play) && (
           <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-white/55">
@@ -345,7 +366,7 @@ export default async function InboxPage({
               </span>
             )}
             <a
-              href={buildInboxUrl(filters, {})}
+              href={buildInboxUrl(filters, { workspaceScope: inboxWs })}
               className="text-[11px] font-semibold text-aqua/80 hover:text-aqua"
             >
               clear scope
@@ -360,6 +381,7 @@ export default async function InboxPage({
         repo={repo}
         play={play}
         activeFilterCount={activeFilterCount}
+        workspaceScope={inboxWs}
       />
 
       <Pager
@@ -368,6 +390,7 @@ export default async function InboxPage({
         filters={filters}
         repo={repo}
         play={play}
+        workspaceScope={inboxWs}
       />
     </AppShell>
   );
@@ -377,10 +400,12 @@ function CountsStats({
   list,
   typeCounts,
   activeFilterCount,
+  workspaceScope,
 }: {
   list: InboxListResponse;
   typeCounts: Partial<Record<InboxType, number>>;
   activeFilterCount: number;
+  workspaceScope?: string;
 }) {
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -426,7 +451,9 @@ function CountsStats({
           </div>
           {activeFilterCount > 0 && (
             <Link
-              href="/inbox"
+              href={buildInboxUrl(DEFAULT_INBOX_FILTERS, {
+                workspaceScope,
+              })}
               className="text-[11px] font-semibold text-aqua/80 hover:text-aqua"
             >
               clear all →
@@ -449,12 +476,14 @@ function ItemsTable({
   repo,
   play,
   activeFilterCount,
+  workspaceScope,
 }: {
   items: InboxItem[];
   filters: InboxFilterState;
   repo: string | null;
   play: string | null;
   activeFilterCount: number;
+  workspaceScope?: string;
 }) {
   if (items.length === 0) {
     if (activeFilterCount > 0) {
@@ -465,7 +494,9 @@ function ItemsTable({
             body="Try widening the ownership tab to All, clearing the type chips, or dropping the repo/play scope."
             action={
               <Link
-                href="/inbox"
+                href={buildInboxUrl(DEFAULT_INBOX_FILTERS, {
+                  workspaceScope,
+                })}
                 className="inline-flex items-center gap-1 rounded-full border border-aqua/40 bg-aqua/10 px-3 py-1.5 text-xs font-semibold text-aqua hover:bg-aqua/20"
               >
                 Clear all filters
@@ -485,7 +516,7 @@ function ItemsTable({
               <a
                 href={buildInboxUrl(
                   { ...filters, ownership: "all" },
-                  { repo, play },
+                  { repo, play, workspaceScope },
                 )}
                 className="inline-flex items-center gap-1 rounded-full border border-white/15 bg-white/[0.04] px-3 py-1.5 text-xs font-semibold text-white/85 hover:border-white/30 hover:bg-white/[0.08]"
               >
@@ -501,9 +532,13 @@ function ItemsTable({
         <EmptyState
           title="Inbox empty"
           body="Either nothing has fired or the routing rules need attention — check Settings → Inbox routing."
-          action={
+            action={
             <a
-              href="/settings/inbox-routing"
+              href={withWorkspaceQuery(
+                "/settings/inbox-routing",
+                workspaceScope ?? "",
+                Boolean(workspaceScope),
+              )}
               className="inline-flex items-center gap-1 rounded-full border border-aqua/40 bg-aqua/10 px-3 py-1.5 text-xs font-semibold text-aqua hover:bg-aqua/20"
             >
               Open Inbox routing
@@ -524,7 +559,14 @@ function ItemsTable({
       <ul className="space-y-2 px-3 pb-3">
         {items.map((item) => (
           <li key={item.id}>
-            <InboxItemRow item={item} href={`/inbox/${item.id}`} />
+            <InboxItemRow
+              item={item}
+              href={
+                workspaceScope
+                  ? `/inbox/${item.id}?ws=${encodeURIComponent(workspaceScope)}`
+                  : `/inbox/${item.id}`
+              }
+            />
           </li>
         ))}
       </ul>
@@ -538,19 +580,21 @@ function Pager({
   filters,
   repo,
   play,
+  workspaceScope,
 }: {
   nextCursor: string | null;
   currentCursor: string | null;
   filters: InboxFilterState;
   repo: string | null;
   play: string | null;
+  workspaceScope?: string;
 }) {
   if (!nextCursor && !currentCursor) return null;
   return (
     <div className="mt-5 flex items-center justify-between">
       {currentCursor ? (
         <a
-          href={buildInboxUrl(filters, { repo, play })}
+          href={buildInboxUrl(filters, { repo, play, workspaceScope })}
           className="text-[11px] font-semibold text-white/55 hover:text-white"
         >
           ← First page
@@ -560,7 +604,12 @@ function Pager({
       )}
       {nextCursor && (
         <a
-          href={buildInboxUrl(filters, { repo, play, cursor: nextCursor })}
+          href={buildInboxUrl(filters, {
+            repo,
+            play,
+            cursor: nextCursor,
+            workspaceScope,
+          })}
           className="rounded-full border border-aqua/40 bg-aqua/10 px-3 py-1.5 text-xs font-semibold text-aqua hover:bg-aqua/20"
         >
           Load older →
@@ -575,11 +624,13 @@ function RefreshButton({
   repo,
   play,
   cursor,
+  workspaceScope,
 }: {
   filters: InboxFilterState;
   repo: string | null;
   play: string | null;
   cursor: string | null;
+  workspaceScope?: string;
 }) {
   return (
     <form action="/inbox" method="GET" className="contents">
@@ -595,6 +646,9 @@ function RefreshButton({
       {repo && <input type="hidden" name="repo" value={repo} />}
       {play && <input type="hidden" name="play" value={play} />}
       {cursor && <input type="hidden" name="cursor" value={cursor} />}
+      {workspaceScope && (
+        <input type="hidden" name="ws" value={workspaceScope} />
+      )}
       <button
         type="submit"
         className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/[0.04] px-3 py-1.5 text-xs font-semibold text-white/85 transition hover:border-white/30 hover:bg-white/[0.08]"

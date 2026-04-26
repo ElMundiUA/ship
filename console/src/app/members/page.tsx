@@ -40,6 +40,11 @@ import type {
 } from "@/lib/api/types";
 import { getSessionToken } from "@/lib/api/session";
 import { workspaces as mockWorkspaces } from "@/lib/mock/cloud";
+import {
+  parseWorkspaceIdParam,
+  pickWorkspace,
+  toAppShellWorkspaces,
+} from "@/lib/workspace-scope";
 
 export const dynamic = "force-dynamic";
 
@@ -55,6 +60,7 @@ type Mode =
   | {
       source: "live";
       workspace: ApiWorkspace;
+      allWorkspaces: ApiWorkspace[];
       members: ApiMember[];
       invites: ApiInvite[];
       me: ApiUser | null;
@@ -82,7 +88,7 @@ function errorMessage(code: string): string {
   }
 }
 
-async function load(): Promise<Mode> {
+async function load(wsParam: string | undefined): Promise<Mode> {
   if (!isApiConfigured()) return { source: "mock", reason: "SHIP_API_URL not set" };
   const token = await getSessionToken();
   if (!token) return { source: "mock", reason: "Sign in to manage real members" };
@@ -93,13 +99,20 @@ async function load(): Promise<Mode> {
         source: "mock",
         reason: "Create a workspace first to manage members",
       };
-    const target = ws[0];
+    const target = pickWorkspace(ws, wsParam);
     const [members, invites, me] = await Promise.all([
       listMembers(target.id, token),
       listInvites(target.id, token).catch(() => [] as ApiInvite[]),
       getMe(token).catch(() => null as ApiUser | null),
     ]);
-    return { source: "live", workspace: target, members, invites, me };
+    return {
+      source: "live",
+      workspace: target,
+      allWorkspaces: ws,
+      members,
+      invites,
+      me,
+    };
   } catch (err) {
     if (err instanceof ApiHttpError && err.status === 401)
       return { source: "mock", reason: "Session expired — sign in again" };
@@ -137,18 +150,19 @@ export default async function MembersPage({
 }: {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const data = await load();
   const params = ((await (searchParams ?? Promise.resolve({}))) ?? {}) as Record<
     string,
     string | string[] | undefined
   >;
+  const wsParam = parseWorkspaceIdParam(params.ws);
+  const data = await load(wsParam);
   const errorCode = typeof params.error === "string" ? params.error : null;
 
   if (data.source === "mock") {
     return <MockView reason={data.reason} errorCode={errorCode} />;
   }
 
-  const { workspace, members, invites, me } = data;
+  const { workspace, allWorkspaces, members, invites, me } = data;
   const freshTokens = await consumeInviteTokens();
   const invitedCount = (() => {
     const raw = params.invited;
@@ -168,6 +182,7 @@ export default async function MembersPage({
       kicker="access"
       title="Members"
       workspace={{ id: workspace.id, name: workspace.name, slug: workspace.slug }}
+      allWorkspaces={toAppShellWorkspaces(allWorkspaces)}
       me={meToShellUser(me)}
       actions={
         <>

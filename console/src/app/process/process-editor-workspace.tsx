@@ -202,10 +202,26 @@ export function ProcessEditorWorkspace({
           <div className="min-w-0">
             {tabs}
             <div className={tabs ? "mt-3" : undefined}>
-              <div className="flex flex-wrap items-center gap-2">
-                <h2 className="font-display text-base font-bold text-white">
-                  {processName.trim() || process.name}
-                </h2>
+              <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
+                <input
+                  type="text"
+                  value={processName}
+                  onChange={(event) => setProcessName(event.target.value)}
+                  placeholder={process.name}
+                  aria-label="Process name"
+                  className="min-w-0 flex-1 border-b border-transparent bg-transparent font-display text-base font-bold text-white outline-none transition placeholder:text-white/35 hover:border-white/15 focus:border-aqua/40"
+                />
+                <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-[11px] font-medium text-white/45">
+                  <input
+                    type="checkbox"
+                    checked={processPrimary}
+                    onChange={(event) =>
+                      setProcessPrimary(event.target.checked)
+                    }
+                    className="h-3 w-3 rounded border-white/25 bg-white/[0.04] accent-aqua"
+                  />
+                  <span title="Opens by default for this repo.">Default</span>
+                </label>
               </div>
               <p className="mt-1 text-xs text-white/45">
                 {dirty
@@ -241,34 +257,6 @@ export function ProcessEditorWorkspace({
               Open config PR
             </button>
           </form>
-        </div>
-
-        <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px]">
-          <label className="block">
-            <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/45">
-              Process name
-            </span>
-            <input
-              value={processName}
-              onChange={(event) => setProcessName(event.target.value)}
-              placeholder="Development Process"
-              className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none focus:border-aqua/40"
-            />
-          </label>
-          <label className="flex items-center gap-2 rounded-xl border border-white/10 bg-black/10 px-3 py-2 text-sm text-white/75">
-            <input
-              type="checkbox"
-              checked={processPrimary}
-              onChange={(event) => setProcessPrimary(event.target.checked)}
-              className="h-4 w-4 rounded border-white/20 bg-white/[0.04] accent-aqua"
-            />
-            <span>
-              Primary process
-              <span className="block text-xs text-white/40">
-                Opens by default for this repo.
-              </span>
-            </span>
-          </label>
         </div>
       </div>
 

@@ -27,6 +27,11 @@ import {
 } from "@/lib/api/client";
 import type { ApiWorkspace } from "@/lib/api/types";
 import { getSessionToken } from "@/lib/api/session";
+import {
+  parseWorkspaceIdParam,
+  pickWorkspace,
+  toAppShellWorkspaces,
+} from "@/lib/workspace-scope";
 
 export const dynamic = "force-dynamic";
 
@@ -44,6 +49,7 @@ export default async function ProcessPage({
   const selectedRepoId =
     typeof params.repo === "string" ? params.repo : undefined;
   const reason = typeof params.reason === "string" ? params.reason : undefined;
+  const wsParam = parseWorkspaceIdParam(params.ws);
 
   if (!isApiConfigured()) {
     return renderProcessPage({
@@ -61,7 +67,7 @@ export default async function ProcessPage({
   const token = await getSessionToken();
   if (!token) redirect("/login?next=%2Fprocess");
 
-  const result = await loadLiveProcess(token, selectedRepoId);
+  const result = await loadLiveProcess(token, selectedRepoId, wsParam);
   if (result === "unauthorized") redirect("/login?next=%2Fprocess");
   if (result === "empty") redirect("/onboarding?step=github");
   if (result === "down") return renderDownState();
@@ -71,6 +77,7 @@ export default async function ProcessPage({
 
 type LiveProcess = {
   workspace: ApiWorkspace;
+  allWorkspaces: ApiWorkspace[];
   process: ApiProcess;
   repos: ApiActivatedRepo[];
   selectedRepo: ApiActivatedRepo | null;
@@ -80,7 +87,8 @@ type LiveProcess = {
 
 async function loadLiveProcess(
   token: string,
-  selectedRepoId?: string,
+  selectedRepoId: string | undefined,
+  wsParam: string | undefined,
 ): Promise<LiveProcess | "empty" | "unauthorized" | "down"> {
   let workspaces: ApiWorkspace[];
   try {
@@ -92,7 +100,7 @@ async function loadLiveProcess(
   }
   if (workspaces.length === 0) return "empty";
 
-  const workspace = workspaces[0];
+  const workspace = pickWorkspace(workspaces, wsParam);
   try {
     const [processList, repos] = await Promise.all([
       listProcesses(workspace.id, token),
@@ -116,6 +124,7 @@ async function loadLiveProcess(
     const configSource = selectConfigSource(config, repoProcess);
     return {
       workspace,
+      allWorkspaces: workspaces,
       process,
       repos,
       selectedRepo,
@@ -131,6 +140,7 @@ async function loadLiveProcess(
 
 function renderProcessPage({
   workspace,
+  allWorkspaces,
   process,
   repos,
   selectedRepo,
@@ -142,6 +152,7 @@ function renderProcessPage({
   mock = false,
 }: {
   workspace: Pick<ApiWorkspace, "id" | "name" | "slug">;
+  allWorkspaces?: ApiWorkspace[];
   process: ApiProcess;
   repos: ApiActivatedRepo[];
   selectedRepo: ApiActivatedRepo | null;
@@ -157,6 +168,11 @@ function renderProcessPage({
       title="Process"
       kicker={workspace.slug}
       workspace={{ id: workspace.id, name: workspace.name, slug: workspace.slug }}
+      allWorkspaces={
+        allWorkspaces && allWorkspaces.length > 0
+          ? toAppShellWorkspaces(allWorkspaces)
+          : undefined
+      }
     >
       {mock && <MockBanner />}
       <div className="space-y-3">

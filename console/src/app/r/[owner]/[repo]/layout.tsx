@@ -5,6 +5,7 @@ import { isApiConfigured } from "@/lib/api/client";
 import { getSessionToken } from "@/lib/api/session";
 import { resolveRepoContext } from "@/lib/repo-context";
 import { slugFromParams, type RepoRouteParams } from "@/lib/repo-slug";
+import { parseWorkspaceIdParam } from "@/lib/workspace-scope";
 
 /**
  * Phase-1 two-mode shell: ``/r/[owner]/[repo]`` is the **repo mode**
@@ -24,14 +25,20 @@ import { slugFromParams, type RepoRouteParams } from "@/lib/repo-slug";
 
 export default async function RepoLayout({
   params,
+  searchParams,
   children,
 }: {
   params: Promise<RepoRouteParams>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
   children: ReactNode;
 }) {
-  const resolved = await params;
+  const [resolved, rawSearch] = await Promise.all([
+    params,
+    searchParams ?? Promise.resolve({} as Record<string, string | string[] | undefined>),
+  ]);
   const slug = slugFromParams(resolved);
   if (!slug) notFound();
+  const wsParam = parseWorkspaceIdParam(rawSearch.ws);
 
   if (!isApiConfigured()) {
     return <>{children}</>;
@@ -43,7 +50,7 @@ export default async function RepoLayout({
     redirect(`/login?next=${next}`);
   }
 
-  const result = await resolveRepoContext(token, slug);
+  const result = await resolveRepoContext(token, slug, wsParam);
   if (result.kind === "unauthorized") {
     const next = encodeURIComponent(`/r/${slug}`);
     redirect(`/login?next=${next}`);

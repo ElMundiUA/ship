@@ -29,6 +29,8 @@ export type BuildInboxUrlExtras = {
   cursor?: string | null;
   repo?: string | null;
   play?: string | null;
+  /** Multi-workspace accounts: keep ``?ws=`` on every inbox URL. */
+  workspaceScope?: string | null;
 };
 
 function statusesEqualDefault(statuses: InboxFilterState["statuses"]): boolean {
@@ -52,6 +54,7 @@ export function buildInboxUrl(
   if (extras.repo) params.set("repo", extras.repo);
   if (extras.play) params.set("play", extras.play);
   if (extras.cursor) params.set("cursor", extras.cursor);
+  if (extras.workspaceScope) params.set("ws", extras.workspaceScope);
   const qs = params.toString();
   return qs ? `/inbox?${qs}` : "/inbox";
 }
