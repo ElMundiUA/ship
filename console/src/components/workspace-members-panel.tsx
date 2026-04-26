@@ -24,6 +24,7 @@ import { consumeInviteTokens } from "@/lib/api/invite-stash";
 import { MEMBER_ROLES } from "@/lib/member-access";
 import type { ApiMember, ApiWorkspace } from "@/lib/api/types";
 import { getSessionToken } from "@/lib/api/session";
+import { getResolvedWorkspaceId } from "@/lib/workspace-resolve.server";
 import { pickWorkspace } from "@/lib/workspace-scope";
 
 type Mode =
@@ -58,7 +59,7 @@ function errorMessage(code: string): string {
 }
 
 export async function loadMembersWorkspaceMode(
-  wsParam: string | undefined,
+  searchParams: Record<string, string | string[] | undefined>,
 ): Promise<Mode> {
   if (!isApiConfigured()) return { source: "mock", reason: "SHIP_API_URL not set" };
   const token = await getSessionToken();
@@ -70,7 +71,8 @@ export async function loadMembersWorkspaceMode(
         source: "mock",
         reason: "Create a workspace first to manage members",
       };
-    const target = pickWorkspace(ws, wsParam);
+    const resolved = await getResolvedWorkspaceId(searchParams, ws);
+    const target = pickWorkspace(ws, resolved);
     const [members, invites] = await Promise.all([
       listMembers(target.id, token),
       listInvites(target.id, token).catch(() => [] as ApiInvite[]),
@@ -115,9 +117,7 @@ export async function WorkspaceMembersPanelLoader({
     string,
     string | string[] | undefined
   >;
-  const { parseWorkspaceIdParam } = await import("@/lib/workspace-scope");
-  const wsParam = parseWorkspaceIdParam(params.ws);
-  const data = await loadMembersWorkspaceMode(wsParam);
+  const data = await loadMembersWorkspaceMode(params);
   const errorCode = typeof params.error === "string" ? params.error : null;
   if (data.source === "mock") {
     return (

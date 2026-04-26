@@ -33,6 +33,8 @@ import {
 } from "@/lib/api/client";
 import type { ApiMember, ApiUser, ApiWorkspace } from "@/lib/api/types";
 import { getSessionToken } from "@/lib/api/session";
+import { getResolvedWorkspaceId } from "@/lib/workspace-resolve.server";
+import { pickWorkspace } from "@/lib/workspace-scope";
 import {
   INBOX_TYPE_META,
   type InboxItemDetail,
@@ -177,7 +179,10 @@ type Mode =
     }
   | { source: "mock"; reason: string };
 
-async function load(itemId: string): Promise<Mode> {
+async function load(
+  itemId: string,
+  searchParams: Record<string, string | string[] | undefined>,
+): Promise<Mode> {
   if (!isApiConfigured())
     return { source: "mock", reason: "SHIP_API_URL not set" };
   const token = await getSessionToken();
@@ -198,7 +203,8 @@ async function load(itemId: string): Promise<Mode> {
   }
   if (workspaces.length === 0)
     return { source: "mock", reason: "Create a workspace first" };
-  const workspace = workspaces[0];
+  const resolved = await getResolvedWorkspaceId(searchParams, workspaces);
+  const workspace = pickWorkspace(workspaces, resolved);
 
   let detail: InboxItemDetail;
   try {
@@ -247,7 +253,7 @@ export default async function InboxItemPage({
   >;
   const errorCode = typeof sp.error === "string" ? sp.error : null;
 
-  const data = await load(id);
+  const data = await load(id, sp);
   if (data.source === "mock") {
     return <MockView reason={data.reason} errorCode={errorCode} id={id} />;
   }

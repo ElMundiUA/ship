@@ -27,11 +27,8 @@ import {
 } from "@/lib/api/client";
 import type { ApiWorkspace } from "@/lib/api/types";
 import { getSessionToken } from "@/lib/api/session";
-import {
-  parseWorkspaceIdParam,
-  pickWorkspace,
-  toAppShellWorkspaces,
-} from "@/lib/workspace-scope";
+import { getResolvedWorkspaceId } from "@/lib/workspace-resolve.server";
+import { pickWorkspace, toAppShellWorkspaces } from "@/lib/workspace-scope";
 
 export const dynamic = "force-dynamic";
 
@@ -49,7 +46,6 @@ export default async function ProcessPage({
   const selectedRepoId =
     typeof params.repo === "string" ? params.repo : undefined;
   const reason = typeof params.reason === "string" ? params.reason : undefined;
-  const wsParam = parseWorkspaceIdParam(params.ws);
 
   if (!isApiConfigured()) {
     return renderProcessPage({
@@ -67,7 +63,7 @@ export default async function ProcessPage({
   const token = await getSessionToken();
   if (!token) redirect("/login?next=%2Fprocess");
 
-  const result = await loadLiveProcess(token, selectedRepoId, wsParam);
+  const result = await loadLiveProcess(token, selectedRepoId, params);
   if (result === "unauthorized") redirect("/login?next=%2Fprocess");
   if (result === "empty") redirect("/onboarding?step=github");
   if (result === "down") return renderDownState();
@@ -88,7 +84,7 @@ type LiveProcess = {
 async function loadLiveProcess(
   token: string,
   selectedRepoId: string | undefined,
-  wsParam: string | undefined,
+  searchParams: SearchParams,
 ): Promise<LiveProcess | "empty" | "unauthorized" | "down"> {
   let workspaces: ApiWorkspace[];
   try {
@@ -100,7 +96,8 @@ async function loadLiveProcess(
   }
   if (workspaces.length === 0) return "empty";
 
-  const workspace = pickWorkspace(workspaces, wsParam);
+  const resolved = await getResolvedWorkspaceId(searchParams, workspaces);
+  const workspace = pickWorkspace(workspaces, resolved);
   try {
     const [processList, repos] = await Promise.all([
       listProcesses(workspace.id, token),

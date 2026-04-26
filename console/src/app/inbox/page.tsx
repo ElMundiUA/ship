@@ -39,6 +39,7 @@ import {
   listWorkspaces,
 } from "@/lib/api/client";
 import { getSessionToken } from "@/lib/api/session";
+import { getResolvedWorkspaceId } from "@/lib/workspace-resolve.server";
 import type { ApiUser, ApiWorkspace } from "@/lib/api/types";
 import {
   DEFAULT_INBOX_FILTERS,
@@ -52,7 +53,6 @@ import {
 } from "@/lib/inbox-types";
 import { workspaces as mockWorkspaces } from "@/lib/mock/cloud";
 import {
-  parseWorkspaceIdParam,
   pickWorkspace,
   toAppShellWorkspaces,
   withWorkspaceQuery,
@@ -141,7 +141,7 @@ function parseSearchParams(
 
 async function load(
   parsed: ParsedParams,
-  wsParam: string | undefined,
+  searchParams: Record<string, string | string[] | undefined>,
 ): Promise<Mode> {
   if (!isApiConfigured()) {
     return { source: "mock", reason: "SHIP_API_URL is not set" };
@@ -161,7 +161,8 @@ async function load(
       };
     }
     allWorkspaces = ws;
-    workspace = pickWorkspace(ws, wsParam);
+    const resolved = await getResolvedWorkspaceId(searchParams, ws);
+    workspace = pickWorkspace(ws, resolved);
   } catch (err) {
     if (err instanceof ApiHttpError && err.status === 401) {
       return { source: "mock", reason: "Session expired — sign in again" };
@@ -256,8 +257,7 @@ export default async function InboxPage({
     string | string[] | undefined
   >;
   const parsed = parseSearchParams(params);
-  const wsParam = parseWorkspaceIdParam(params.ws);
-  const data = await load(parsed, wsParam);
+  const data = await load(parsed, params);
 
   if (data.source === "mock") {
     return (

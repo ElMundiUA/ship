@@ -41,11 +41,8 @@ import type {
 } from "@/lib/api/types";
 import { getSessionToken } from "@/lib/api/session";
 import { workspaces as mockWorkspaces } from "@/lib/mock/cloud";
-import {
-  parseWorkspaceIdParam,
-  pickWorkspace,
-  toAppShellWorkspaces,
-} from "@/lib/workspace-scope";
+import { getResolvedWorkspaceId } from "@/lib/workspace-resolve.server";
+import { pickWorkspace, toAppShellWorkspaces } from "@/lib/workspace-scope";
 
 export const dynamic = "force-dynamic";
 
@@ -112,7 +109,9 @@ function isTabId(value: string): value is TabId {
   return (TAB_IDS as readonly string[]).includes(value);
 }
 
-async function load(wsParam: string | undefined): Promise<Mode> {
+async function load(
+  searchParams: Record<string, string | string[] | undefined>,
+): Promise<Mode> {
   if (!isApiConfigured()) return { source: "mock", reason: "SHIP_API_URL not set" };
   const token = await getSessionToken();
   if (!token) return { source: "mock", reason: "Sign in to manage real settings" };
@@ -123,7 +122,8 @@ async function load(wsParam: string | undefined): Promise<Mode> {
         source: "mock",
         reason: "Create a workspace first to manage settings",
       };
-    const target = pickWorkspace(ws, wsParam);
+    const resolved = await getResolvedWorkspaceId(searchParams, ws);
+    const target = pickWorkspace(ws, resolved);
     // The artifact-repos call may 404 in older deployments; treat it as
     // empty rather than falling all the way back to mock data.
     const activatedRepos = await listActivatedRepos(target.id, token).catch(
@@ -231,8 +231,7 @@ export default async function SettingsPage({
     string,
     string | string[] | undefined
   >;
-  const wsParam = parseWorkspaceIdParam(params.ws);
-  const data = await load(wsParam);
+  const data = await load(params);
   const errorCode = typeof params.error === "string" ? params.error : null;
   let requestedTab = typeof params.tab === "string" ? params.tab : null;
   if (requestedTab === "tokens") requestedTab = "api-keys";
@@ -375,7 +374,7 @@ export default async function SettingsPage({
           )}
 
           {activeTab === "integrations" && (
-            <SettingsIntegrationsTab wsParam={wsParam} />
+            <SettingsIntegrationsTab searchParams={params} />
           )}
 
           {activeTab === "danger" && (
@@ -783,11 +782,11 @@ function Field({
 }
 
 async function SettingsIntegrationsTab({
-  wsParam,
+  searchParams,
 }: {
-  wsParam: string | undefined;
+  searchParams: Record<string, string | string[] | undefined>;
 }) {
-  const data = await loadIntegrationsWorkspaceMode(wsParam);
+  const data = await loadIntegrationsWorkspaceMode(searchParams);
   if (data.source === "mock") {
     return (
       <p className="text-sm text-white/55">Integrations aren&apos;t available: {data.reason}</p>

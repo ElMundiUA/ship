@@ -12,12 +12,36 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 import { auth0, isAuth0Mode } from "@/lib/auth0";
+import {
+  isLikelyWorkspaceId,
+  SHIP_ACTIVE_WORKSPACE_COOKIE,
+} from "@/lib/workspace-scope";
+
+function applyWorkspaceCookie(
+  request: NextRequest,
+  response: NextResponse,
+): NextResponse {
+  const ws = request.nextUrl.searchParams.get("ws");
+  if (ws && isLikelyWorkspaceId(ws)) {
+    response.cookies.set(SHIP_ACTIVE_WORKSPACE_COOKIE, ws, {
+      path: "/",
+      maxAge: 60 * 60 * 24 * 400,
+      sameSite: "lax",
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+    });
+  }
+  return response;
+}
 
 export async function middleware(request: NextRequest) {
+  let response: NextResponse;
   if (isAuth0Mode && auth0) {
-    return auth0.middleware(request);
+    response = await auth0.middleware(request);
+  } else {
+    response = NextResponse.next();
   }
-  return NextResponse.next();
+  return applyWorkspaceCookie(request, response);
 }
 
 export const config = {
