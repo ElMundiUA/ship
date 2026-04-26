@@ -51,7 +51,7 @@ FLAGS
                        version. Use when intentionally bumping a pin.
   --dry-run            Print the resolution plan; do not write or fetch.
   --lock               After sync, materialise every pattern referenced
-                       by the declared lanes and write
+                       by the declared routines and write
                        .ship/shipctl.lock.json (used by
                        'shipctl run --offline').
   --json               Emit a structured JSON summary on stdout.

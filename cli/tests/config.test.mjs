@@ -313,7 +313,7 @@ test("v2 lane id regex enforced", () => {
 });
 
 /* ------------------------------------------------------------------ */
-/* RFC-0008 C3.1 — lanes.<id>.patterns: [ids] (multi-pattern lanes)    */
+/* RFC-0008 C3.1 — routines.<id>.patterns: [ids] (multi-pattern routines) */
 /* ------------------------------------------------------------------ */
 
 test("v2 lane accepts `patterns: [ids]` canonical form", () => {

@@ -57,8 +57,8 @@ WHAT THIS COMMAND IS FOR
   idempotency, and emits the prompt for an agent to consume. Behaviour
   by routine trigger:
     - kind: once             — executed fully here, locally.
-    - kind: lane / event /   — recognised but NOT executed locally;
-        schedule               those run via the workspace's GitHub
+    - kind: event / schedule — recognised but NOT executed locally;
+                               those run via the workspace's GitHub
                                Actions runner using the reusable
                                .github/workflows/run-agent.yml. shipctl
                                run exits 0 with a no-op summary so CI
@@ -74,13 +74,13 @@ USAGE
 FLAGS
   --routine <id>            Routine id declared in process.routines. Required.
   --lane <id>               Back-compat alias for --routine.
-  --pattern <id>            For multi-pattern lanes: run only this pattern. This
+  --pattern <id>            For multi-pattern routines: run only this pattern. This
                             is the per-entry call issued by the matrix workflow
                             (one matrix job per pattern). Must be one of the
-                            lane's declared patterns.
-  --fanout <mode>           Override the lane's configured fan-out for this run
+                            routine's declared patterns.
+  --fanout <mode>           Override the routine's configured fan-out for this run
                             (matrix|sequential|concurrent). Meaningful only
-                            when the lane has ≥2 patterns and --pattern is not
+                            when the routine has ≥2 patterns and --pattern is not
                             set. Matrix mode without --pattern is rejected;
                             it requires a driving workflow.
   --trigger <kind>          Force the trigger context (event|schedule|manual|once).
@@ -98,10 +98,10 @@ FLAGS
   --help                    Show this help.
 
 EXIT
-  0  lane executed or no-op
+  0  routine executed or no-op
   1  usage / config error
   2  config is v1 — run 'shipctl migrate' first
-  3  callback failed (lane itself may have succeeded)
+  3  callback failed (routine itself may have succeeded)
   4  idempotency marker read/write failure
  10  missing SHIP_RUN_TOKEN when a callback URL is configured
 
@@ -163,15 +163,15 @@ export async function runCommand(ctx, rest) {
     const joined = [...known.routines, ...known.lanes].sort();
     die(
       EXIT_USAGE,
-      `unknown lane/routine '${args.routine}'. Known routines: ${joined.length ? joined.join(", ") : "(none)"}`,
+      `unknown routine '${args.routine}'. Known routines: ${joined.length ? joined.join(", ") : "(none)"}`,
     );
   }
   const executable = resolved.executable;
 
   const effectiveTrigger = resolveTrigger(args.trigger, executable.kind);
   if (!effectiveTrigger.fits) {
-    /* Not an error — scheduler fired us but the lane doesn't want this
-     * trigger. Exit 0 so parallel lanes in the same workflow don't all
+    /* Not an error — scheduler fired us but the routine doesn't want this
+     * trigger. Exit 0 so parallel routines in the same workflow don't all
      * fail just because one didn't match. */
     const summary = {
       routine: args.routine,
@@ -190,11 +190,11 @@ export async function runCommand(ctx, rest) {
   //
   //   --pattern <id>     → run only that pattern (the per-entry call
   //                         issued by the matrix workflow). The pattern
-  //                         must be one of the lane's declared patterns,
+  //                         must be one of the routine's declared patterns,
   //                         otherwise we refuse so typos don't silently
   //                         execute an unrelated pattern.
-  //   (none)             → run every pattern the lane declares, using
-  //                         the lane's fan-out mode. Matrix mode without
+  //   (none)             → run every pattern the routine declares, using
+  //                         the routine's fan-out mode. Matrix mode without
   //                         --pattern is rejected because it requires a
   //                         driving workflow (see run-agent.yml).
   const allPatterns = executablePatterns(executable);
@@ -210,7 +210,7 @@ export async function runCommand(ctx, rest) {
     if (!allPatterns.includes(args.pattern)) {
       die(
         EXIT_USAGE,
-        `--pattern=${JSON.stringify(args.pattern)} is not declared on lane/routine ${JSON.stringify(args.routine)}. ` +
+        `--pattern=${JSON.stringify(args.pattern)} is not declared on routine ${JSON.stringify(args.routine)}. ` +
           `Known patterns: ${allPatterns.join(", ")}.`,
       );
     }
@@ -235,10 +235,10 @@ export async function runCommand(ctx, rest) {
     runMode = effectiveFanout;
   }
 
-  // Idempotency markers are lane-scoped (not per-pattern) so we read
+  // Idempotency markers are routine-scoped (not per-pattern) so we read
   // once up front; per-pattern decisions are derived from the
   // concatenated pattern SHA set below so a change to any member of
-  // the list re-triggers the run (expected behaviour for audit lanes).
+  // the list re-triggers the run (expected behaviour for audit routines).
   const idem = executable.kind === "once" ? executable.idempotency : null;
   let marker = null;
   if (idem) {
@@ -291,8 +291,8 @@ export async function runCommand(ctx, rest) {
 
   // Composite SHA over all pattern bodies. ``reset_on=version-change``
   // fires when any member's body drifts — which is the correct
-  // semantics for a multi-pattern audit lane: if one role's playbook
-  // updates, we want the whole lane to re-run.
+  // semantics for a multi-pattern audit routine: if one role's playbook
+  // updates, we want the whole routine to re-run.
   const compositeBody = runs.map((r) => `#${r.patternId}\n${r.body}`).join("\n---\n");
   const decision = idem
     ? decideRun(marker, compositeBody, idem.reset_on || "version-change")
@@ -409,7 +409,7 @@ export async function runCommand(ctx, rest) {
     // For single-pattern runs we keep the legacy ``pattern: {…}`` key
     // alongside the new ``patterns: […]`` list so existing consumers
     // (and tests) don't break when they upgrade shipctl before
-    // starting to declare multi-pattern lanes.
+    // starting to declare multi-pattern routines.
     const summaryPayload = {
       routine: args.routine,
       lane: resolved.kind === "lane" ? args.routine : undefined,
@@ -479,7 +479,7 @@ function emitPoliciesPreamble(preamble) {
  *  - or the request fails for any reason.
  *
  * Failures are surfaced as ``warn:`` lines on stderr so an operator
- * can debug them without breaking the lane execution.
+ * can debug them without breaking the routine execution.
  */
 async function fetchPoliciesPreamble(args) {
   const callbackUrl = args.callbackUrl || process.env.SHIP_CALLBACK_URL;
@@ -616,7 +616,7 @@ function resolveTrigger(explicit, laneKind) {
     inferFromEnv();
   const trigger = raw || "manual";
 
-  /* `once` lanes only run under `manual` or `once` triggers. Scheduler
+  /* `once` routines only run under `manual` or `once` triggers. Scheduler
    * or event triggers must not accidentally repeat seeding because the
    * cron happens to tick. */
   if (laneKind === "once") {
@@ -795,7 +795,7 @@ function resolveMethodologyBase(ctx, config) {
 
 /*
  * Assemble the callback `metrics` bag so Ship's backend can tie each
- * run back to its lane + GitHub Actions run without re-parsing logs.
+ * run back to its routine + GitHub Actions run without re-parsing logs.
  *
  * Always-on breadcrumbs (iff we have the data):
  *   - lane_id             — id from `.ship/config.yml`; also recoverable

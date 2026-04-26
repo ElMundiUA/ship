@@ -80,7 +80,7 @@ The full Cartesian product is ~14 × 7 × 7 ≈ **686 combos**. Realistically we
 
 | # | Tracker | Agent | Scheduler | Status | Reference |
 |---|---------|-------|-----------|--------|-----------|
-| 1  | Linear         | Cursor             | GitHub Actions   | validated | [`patterns/role-developer`](artifacts/patterns/role-developer/) + `.ship/config.yml` lane |
+| 1  | Linear         | Cursor             | GitHub Actions   | validated | [`patterns/role-developer`](artifacts/patterns/role-developer/) + `.ship/config.yml` routine |
 | 2  | Linear         | Cursor Cloud       | GitHub Actions   | validated | [`tools/cursor-cloud-agent`](artifacts/tools/cursor-cloud-agent/) |
 | 3  | Linear         | Claude Code        | GitHub Actions   | partial   | [`collections/agent-rules-claude`](artifacts/collections/agent-rules-claude/) |
 | 4  | Linear         | Codex CLI          | GitHub Actions   | partial   | [`collections/agent-rules-codex`](artifacts/collections/agent-rules-codex/) |

@@ -203,7 +203,7 @@ test("shipctl run --offline reads patterns from the lockfile + cache", () => {
    * network call on the happy path. */
   const res = runCtl(
     dir,
-    ["run", "--lane", "seed_knowledge_starters", "--trigger", "manual", "--offline", "--json"],
+    ["run", "--routine", "seed_knowledge_starters", "--trigger", "manual", "--offline", "--json"],
     { SHIP_API_BASE: "http://127.0.0.1:1" },
   );
   assert.equal(res.status, 0, `stderr: ${res.stderr}`);
@@ -216,7 +216,7 @@ test("shipctl run --offline fails when the lockfile is absent", () => {
   const { dir } = seedRepo(mktmp());
   const res = runCtl(
     dir,
-    ["run", "--lane", "seed_knowledge_starters", "--trigger", "manual", "--offline", "--json"],
+    ["run", "--routine", "seed_knowledge_starters", "--trigger", "manual", "--offline", "--json"],
     { SHIP_API_BASE: "http://127.0.0.1:1" },
   );
   assert.notEqual(res.status, 0);
@@ -234,7 +234,7 @@ test("shipctl run --offline rejects a cache body that drifts from the lock", () 
 
   const res = runCtl(
     dir,
-    ["run", "--lane", "seed_knowledge_starters", "--trigger", "manual", "--offline", "--json"],
+    ["run", "--routine", "seed_knowledge_starters", "--trigger", "manual", "--offline", "--json"],
     { SHIP_API_BASE: "http://127.0.0.1:1" },
   );
   assert.notEqual(res.status, 0);
@@ -255,7 +255,7 @@ test("shipctl run online warns when the pattern drifts from the lockfile", () =>
 
   const res = runCtl(
     dir,
-    ["run", "--lane", "seed_knowledge_starters", "--trigger", "manual", "--json"],
+    ["run", "--routine", "seed_knowledge_starters", "--trigger", "manual", "--json"],
   );
   assert.equal(res.status, 0, `stderr: ${res.stderr}`);
   assert.match(res.stderr, /sha256 drift vs lockfile/);

@@ -191,7 +191,7 @@ function listCmd(ctx, rest) {
       kind: lane.kind,
       // ``pattern`` keeps the single-string shape for humans/scripts
       // that eyeball the first pattern; ``patterns`` always lists all
-      // so multi-pattern lanes (RFC-0008 C3.1) surface correctly.
+      // so multi-pattern routines (RFC-0008 C3.1) surface correctly.
       pattern: pats[0] || null,
       patterns: pats,
       // ``fanout`` resolves to the runtime default (``matrix``) when

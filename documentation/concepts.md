@@ -44,8 +44,8 @@ A Play assigned to a scope with a cadence. "Run *PR review* on every pull reques
 | **In the console** | The `/automations` page (operator reference: [Automations](./automations.md)). List view with scope filter (`fleet` / `repo` / `all`), Coverage tab, edit / pause / delete per row. |
 | **Scope** | One of `repo` (one repo), `selected` (a chosen subset), or `fleet` (every activated repo). Fleet vs per-repo is a parameter, not a parallel hierarchy. |
 | **Cadence** | A trigger: `event` (webhook), `schedule` (cron), or `once` (idempotent bootstrap). |
-| **In `.ship/config.yml`** | One row in `lanes:` per Automation, in the affected repo's `.ship/config.yml`. The console renames `lanes` to **Automations** for the operator surface; the YAML schema is unchanged. See [Configuration → `lanes`](./configuration.md#lanes). |
-| **Lifecycle** | Created from a Play card (*Automate*), from the after-success banner on a Run page, or from `shipctl init`. Toggled via *enable/disable* in the console (which edits the underlying `lane` row). |
+| **In `.ship/config.yml`** | One entry under `process.routines` per scheduled/manual routine. Legacy `lanes:` blocks are still accepted as compatibility input. |
+| **Lifecycle** | Created by seed/config generation or edited through a PR against `.ship/config.yml`. Runtime invocation uses `shipctl run --routine <id>` (`--lane` remains a legacy alias). |
 
 ### Runs
 

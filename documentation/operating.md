@@ -2,7 +2,7 @@
 
 Day-2 recipes for an operator running Ship in a real repository. The order on this page mirrors the order an operator actually meets the work: open the **Inbox** to see what needs you today, use **Coverage** to find Plays you should be running but aren't, then drop into the `shipctl` recipes for sync / verify / doctor / telemetry / lanes / bootstrap / secrets when you need them. For single-command syntax see [`/cli`](/cli); for the meaning of every `.ship/config.yml` field see [Configuration](/docs/configuration); when a noun is unfamiliar (Play, Automation, Run, Inbox, artifact, channel, pin, marker), look it up once in [Concepts](/docs/concepts). Failures are not on this page — when something is broken, jump to [Troubleshooting](/docs/troubleshooting).
 
-> **Vocabulary box.** When this page says **Play** it means a row in the catalog at `/plays` (a `pattern:` ref under the hood). **Automation** is a Play assigned to a scope with a cadence — one row in `lanes:` in the affected repo's `.ship/config.yml`. **Run** is a single execution of a Play. **Inbox** is the single attention surface at `/inbox`. **Coverage** is the *"how many of my activated repos have this Play assigned"* view at `/automations?tab=coverage`. The console renames `lane` → `Automation` and `pipeline_run` → `Run` for the operator surface; the YAML and the CLI keep the protocol terms unchanged. See [Concepts](/docs/concepts) for the full vocabulary.
+> **Vocabulary box.** When this page says **Play** it means a `pattern:` artifact. A **routine** is a Play assigned to a scope with a cadence — one entry under `process.routines` in `.ship/config.yml`. Older repositories and commands may still say `lanes:` / `--lane`; those are compatibility aliases, not the preferred vocabulary.
 
 ## Inbox first
 
@@ -254,50 +254,50 @@ Telemetry is opt-in and OFF by default. Nothing leaves the repo until you flip t
 - **What to check:** the dry-run shows `would flush <n> events to <your-host>/telemetry`; a real flush returns success.
 - **Common pitfall:** mixing self-hosted telemetry with the public artifact API — if `api.base_url` is your internal host, `shipctl sync` also goes there. Run a thin proxy that forwards `/patterns`, `/tools`, `/collections`, `/fetch` to `ship.elmundi.com` if you only want to intercept telemetry.
 
-## Lanes (Automations on disk)
+## Routines on disk
 
-Each [Automation](/docs/automations) you see in the console is one row under `lanes:` in the affected repo's `.ship/config.yml`, plus a generated `.github/workflows/ship-<lane>.yml` wrapper per entry. The console renames `lane` → `Automation` for the operator surface; the YAML schema is unchanged from [RFC-0007](/docs/protocol/rfc-0007-lanes-and-run-agent). The field-level reference is in [Configuration → `lanes`](/docs/configuration#lanes); the operator surface is in [Automations](/docs/automations); this section is the YAML-first day-2 recipes for when you'd rather edit `.ship/config.yml` than walk the wizard.
+Each scheduled/manual process entry lives under `process.routines` in `.ship/config.yml`, plus a generated `.github/workflows/ship-<id>.yml` wrapper when GitHub Actions needs to fire it. Legacy `lanes:` blocks and `shipctl lanes` are still accepted for already-seeded repositories.
 
-### Install lane wrappers after editing `.ship/config.yml`
+### Install wrappers after editing `.ship/config.yml`
 
-- **Goal:** regenerate the caller workflows so GitHub knows when to fire each lane.
+- **Goal:** regenerate the caller workflows so GitHub knows when to fire each routine.
 - **Steps:**
-  1. Edit `lanes:` in `.ship/config.yml` (add / remove / re-kind). Run `shipctl config validate` — an invalid lane exits `10` before you commit a broken file.
-  2. `shipctl lanes install` — writes one `.github/workflows/ship-<lane>.yml` per declared lane, banner-guarded with `# ship-cli: lanes v1`. Idempotent; re-running is a no-op.
+  1. Edit `process.routines` in `.ship/config.yml` (add / remove / retime). Run `shipctl config validate` before you commit a broken file.
+  2. `shipctl lanes install` — legacy wrapper reconciler; writes one `.github/workflows/ship-<id>.yml` per declared routine, banner-guarded with `# ship-cli: lanes v1`. Idempotent; re-running is a no-op.
   3. Inspect each generated wrapper, then `git add .github/workflows/ship-*.yml .ship/config.yml` and commit in the same PR.
-- **What to check:** `shipctl lanes list` prints the same set of lanes you see in `.ship/config.yml`; each generated file contains the reusable-workflow line `uses: ElMundiUA/ship/.github/workflows/run-agent.yml@v<shipctl_min>`.
+- **What to check:** `shipctl lanes list` prints the same set of routine ids you see in `.ship/config.yml`; each generated file contains the reusable-workflow line `uses: ElMundiUA/ship/.github/workflows/run-agent.yml@v<shipctl_min>`.
 - **Common pitfall:** a pre-existing `.github/workflows/ship-<id>.yml` without the Ship banner — `install` refuses to overwrite it. Delete the file or pass `--force` once you've confirmed it's safe.
 
-### Lock lane patterns for reproducible CI
+### Lock routine patterns for reproducible CI
 
-- **Goal:** pin the exact pattern bodies a lane runs so CI is reproducible and air-gapped runners work.
+- **Goal:** pin the exact pattern bodies a routine runs so CI is reproducible and air-gapped runners work.
 - **Steps:**
-  1. `shipctl sync --lock` — walks every lane's `pattern` / `patterns`, materialises the body into `.ship/cache/pattern/<id>@<version>/`, and writes `.ship/shipctl.lock.json` with one entry per resolved pattern (`version`, `content_sha256`, `cached_path`).
+  1. `shipctl sync --lock` — walks every routine's `pattern` / `patterns`, materialises the body into `.ship/cache/pattern/<id>@<version>/`, and writes `.ship/shipctl.lock.json` with one entry per resolved pattern (`version`, `content_sha256`, `cached_path`).
   2. Commit `.ship/shipctl.lock.json` alongside `.ship/config.yml`. The lockfile has no secrets; everything in it is reproducible from the public manifest.
   3. When a live pattern version drifts from the lockfile, `shipctl run` prints a `pattern/<id> sha256 drift vs lockfile` warning on stderr and proceeds with the live body — re-run `shipctl sync --lock` to re-pin.
 - **What to check:** `shipctl sync --lock` reports `wrote .ship/shipctl.lock.json (<N> entries, 0 unresolved)`. Unresolved entries exit `20`; re-run after fixing the pattern id.
 - **Common pitfall:** forgetting to re-lock after bumping a `pattern_version:` — the lockfile pins an older sha and CI noisily warns on every run.
 
-### Run a lane locally (or in CI)
+### Run a routine locally (or in CI)
 
-- **Goal:** invoke a lane end-to-end without the GitHub Actions wrapper.
+- **Goal:** invoke a routine end-to-end without the GitHub Actions wrapper.
 - **Steps:**
-  1. `shipctl run --lane <id>` — resolves the lane, fetches the pattern, and emits the prompt on stdout (pipe into your agent). Only `kind: once` lanes execute fully today; `kind: event` and `kind: schedule` are recognised but emit `status: noop` on stdout (they rely on the GitHub Actions wrappers until Phase 3 of RFC-0007 wires the reusable workflow).
+  1. `shipctl run --routine <id>` — resolves the routine, fetches the pattern, and emits the prompt on stdout (pipe into your agent). `--lane` is accepted as a legacy alias.
   2. In air-gapped CI, add `--offline` — the command resolves exclusively through `.ship/shipctl.lock.json` and `.ship/cache/` and never contacts the methodology API. Fails loud if the lockfile is missing a pattern.
   3. For local debugging, use `--dry-run` to print the prompt without writing the idempotency marker or firing the callback.
-- **What to check:** `shipctl run --lane <id> --dry-run` prints the expected pattern body and exits `0`; on real runs `.ship/state/<idempotency.key>.json` is created for `kind: once` lanes.
+- **What to check:** `shipctl run --routine <id> --dry-run` prints the expected pattern body and exits `0`; on real runs `.ship/state/<idempotency.key>.json` is created for `type: once` routines.
 - **Common pitfall:** running from outside the repo root — `shipctl run` searches upward for `.ship/config.yml` like every other command, but if you `cd` into a submodule it will find the submodule's config instead. Use `--cwd <repo-root>` to be explicit.
 
 ### Upgrade a legacy v1 config
 
-- **Goal:** move a repo from the pre-lanes schema onto v2.
+- **Goal:** move a repo from the old config schema onto v2.
 - **Steps:**
   1. `shipctl migrate --dry-run` — prints the proposed v2 config without writing; review the translation.
-  2. `shipctl migrate --yes` — writes `.ship/config.yml.bak`, then rewrites `.ship/config.yml` with `version: 2`, `shipctl_min: "0.12.0"`, and a `lanes:` map seeded from preset defaults. Moves `stack.agent.provider` → `agent.default.provider`.
+  2. `shipctl migrate --yes` — writes `.ship/config.yml.bak`, then rewrites `.ship/config.yml` with the current schema. Moves `stack.agent.provider` → `agent.default.provider`.
   3. Diff the result (`git diff .ship/config.yml`), then `shipctl config validate`.
   4. `shipctl lanes install` to render the caller workflows; `shipctl sync --lock` to pin the patterns.
   5. Commit `.ship/config.yml`, `.ship/shipctl.lock.json`, and the generated wrappers.
-- **What to check:** `shipctl config show | head -5` reports `version: 2`; `shipctl run --lane <id>` no longer exits `2`.
+- **What to check:** `shipctl config show | head -5` reports `version: 2`; `shipctl run --routine <id>` no longer exits `2`.
 - **Common pitfall:** running `shipctl migrate` against a v2 config and expecting a no-op to look different — it exits `0` with `already at the latest schema (no changes)`. That's success; keep going.
 
 ## Feedback

@@ -31,7 +31,7 @@ function runCtl(cwd, args) {
   });
 }
 
-test("shipctl automations --help exits 0 and mentions the lane surface", () => {
+test("shipctl automations --help exits 0 and points to legacy lanes command", () => {
   const r = runCtl(process.cwd(), ["automations", "--help"]);
   assert.equal(r.status, 0, `stderr: ${r.stderr}`);
   assert.ok(r.stdout.length > 0, "automations --help produced empty stdout");

@@ -78,28 +78,28 @@ test("shipctl run --help exits 0", () => {
   assert.match(r.stdout, /shipctl run/);
 });
 
-test("shipctl run rejects missing --lane", () => {
+test("shipctl run rejects missing --routine", () => {
   const dir = mktmp();
   writeConfig(dir, baseConfig());
   const r = runCtl(["run", "--cwd", dir]);
   assert.equal(r.status, 1);
-  assert.match(r.stderr, /--lane/);
+  assert.match(r.stderr, /--routine/);
 });
 
 test("shipctl run on v1 config exits 2 with migration hint", () => {
   const dir = mktmp();
   writeConfig(dir, { version: 1, shipctl_min: "0.11.2", api: { base_url: "https://x" }, stack: { tracker: "none", ci: "manual" }, artifacts: { pins: {} }, telemetry: { share: false } });
-  const r = runCtl(["run", "--lane", "anything", "--cwd", dir]);
+  const r = runCtl(["run", "--routine", "anything", "--cwd", dir]);
   assert.equal(r.status, 2, `${r.stdout}\n${r.stderr}`);
   assert.match(r.stderr, /shipctl migrate/);
 });
 
-test("shipctl run on unknown lane exits 1", () => {
+test("shipctl run on unknown routine exits 1", () => {
   const dir = mktmp();
   writeConfig(dir, baseConfig({ lanes: { foo: { kind: "once", pattern: "p", idempotency: { key: "k" } } } }));
-  const r = runCtl(["run", "--lane", "bar", "--cwd", dir]);
+  const r = runCtl(["run", "--routine", "bar", "--cwd", dir]);
   assert.equal(r.status, 1);
-  assert.match(r.stderr, /unknown lane/);
+  assert.match(r.stderr, /unknown routine/);
 });
 
 test("shipctl run --dry-run prints pattern for kind=once without marker", () => {
@@ -117,7 +117,7 @@ test("shipctl run --dry-run prints pattern for kind=once without marker", () => 
     }),
   );
   const r = runCtl(
-    ["run", "--lane", "seed", "--dry-run", "--trigger", "manual", "--cwd", dir],
+    ["run", "--routine", "seed", "--dry-run", "--trigger", "manual", "--cwd", dir],
     { SHIP_REPO: REPO_ROOT },
   );
   assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
@@ -144,7 +144,7 @@ test("shipctl run kind=once writes marker and subsequent run is a no-op", () => 
     }),
   );
   const first = runCtl(
-    ["run", "--lane", "seed", "--trigger", "manual", "--cwd", dir, "--json"],
+    ["run", "--routine", "seed", "--trigger", "manual", "--cwd", dir, "--json"],
     { SHIP_REPO: REPO_ROOT },
   );
   assert.equal(first.status, 0, `${first.stdout}\n${first.stderr}`);
@@ -159,7 +159,7 @@ test("shipctl run kind=once writes marker and subsequent run is a no-op", () => 
   assert.equal(typeof marker.pattern_sha256, "string");
 
   const second = runCtl(
-    ["run", "--lane", "seed", "--trigger", "manual", "--cwd", dir, "--json"],
+    ["run", "--routine", "seed", "--trigger", "manual", "--cwd", dir, "--json"],
     { SHIP_REPO: REPO_ROOT },
   );
   assert.equal(second.status, 0, `${second.stdout}\n${second.stderr}`);
@@ -183,7 +183,7 @@ test("shipctl run kind=event executes when trigger matches", () => {
     }),
   );
   const r = runCtl(
-    ["run", "--lane", "pr_review", "--trigger", "event", "--cwd", dir, "--json"],
+    ["run", "--routine", "pr_review", "--trigger", "event", "--cwd", dir, "--json"],
     { SHIP_REPO: REPO_ROOT },
   );
   assert.equal(r.status, 0, r.stderr);
@@ -208,7 +208,7 @@ test("shipctl run rejects mismatched trigger for kind=once", () => {
     }),
   );
   const r = runCtl(
-    ["run", "--lane", "seed", "--trigger", "schedule", "--cwd", dir, "--json"],
+    ["run", "--routine", "seed", "--trigger", "schedule", "--cwd", dir, "--json"],
     { SHIP_REPO: REPO_ROOT },
   );
   assert.equal(r.status, 0, r.stderr);
@@ -418,7 +418,7 @@ test("shipctl trigger prefers SHIP_WORKSPACE_API_BASE over global methodology de
   }
 });
 
-test("shipctl run callback includes lane + pattern + GH breadcrumbs", async () => {
+test("shipctl run callback includes routine + pattern + GH breadcrumbs", async () => {
   const dir = mktmp();
   writeConfig(
     dir,
@@ -435,7 +435,7 @@ test("shipctl run callback includes lane + pattern + GH breadcrumbs", async () =
   const mock = await startMockShip();
   try {
     const r = await runCtlAsync(
-      ["run", "--lane", "seed", "--trigger", "manual", "--cwd", dir, "--json"],
+      ["run", "--routine", "seed", "--trigger", "manual", "--cwd", dir, "--json"],
       {
         SHIP_CALLBACK_URL: mock.url,
         SHIP_RUN_TOKEN: "test-token",
@@ -465,7 +465,7 @@ test("shipctl run callback includes lane + pattern + GH breadcrumbs", async () =
 });
 
 /* ------------------------------------------------------------------ */
-/* RFC-0008 C3.2 — multi-pattern lanes                                 */
+/* RFC-0008 C3.2 — multi-pattern routines                              */
 /* ------------------------------------------------------------------ */
 
 // The monorepo ships these three patterns on disk; we use them because
@@ -477,7 +477,7 @@ const AUDIT_PATTERNS = [
   "role-security-officer",
 ];
 
-test("shipctl run rejects multi-pattern matrix lane without --pattern", () => {
+test("shipctl run rejects multi-pattern matrix routine without --pattern", () => {
   const dir = mktmp();
   writeConfig(
     dir,
@@ -493,7 +493,7 @@ test("shipctl run rejects multi-pattern matrix lane without --pattern", () => {
     }),
   );
   const r = runCtl(
-    ["run", "--lane", "audit", "--trigger", "manual", "--cwd", dir],
+    ["run", "--routine", "audit", "--trigger", "manual", "--cwd", dir],
     { SHIP_REPO: REPO_ROOT },
   );
   assert.equal(r.status, 1, `${r.stdout}\n${r.stderr}`);
@@ -501,7 +501,7 @@ test("shipctl run rejects multi-pattern matrix lane without --pattern", () => {
   assert.match(r.stderr, /--pattern/);
 });
 
-test("shipctl run --pattern executes a single pattern from a matrix lane", () => {
+test("shipctl run --pattern executes a single pattern from a matrix routine", () => {
   const dir = mktmp();
   writeConfig(
     dir,
@@ -518,7 +518,7 @@ test("shipctl run --pattern executes a single pattern from a matrix lane", () =>
   const r = runCtl(
     [
       "run",
-      "--lane",
+      "--routine",
       "audit",
       "--pattern",
       "role-qa-architect",
@@ -538,7 +538,7 @@ test("shipctl run --pattern executes a single pattern from a matrix lane", () =>
   assert.equal(payload.patterns[0].id, "role-qa-architect");
 });
 
-test("shipctl run --pattern rejects patterns not declared on the lane", () => {
+test("shipctl run --pattern rejects patterns not declared on the routine", () => {
   const dir = mktmp();
   writeConfig(
     dir,
@@ -555,7 +555,7 @@ test("shipctl run --pattern rejects patterns not declared on the lane", () => {
   const r = runCtl(
     [
       "run",
-      "--lane",
+      "--routine",
       "audit",
       "--pattern",
       "role-intake",
@@ -567,7 +567,7 @@ test("shipctl run --pattern rejects patterns not declared on the lane", () => {
     { SHIP_REPO: REPO_ROOT },
   );
   assert.equal(r.status, 1, `${r.stdout}\n${r.stderr}`);
-  assert.match(r.stderr, /not declared on lane/);
+  assert.match(r.stderr, /not declared on routine/);
 });
 
 test("shipctl run fanout=sequential emits every pattern's body with a banner", () => {
@@ -586,7 +586,7 @@ test("shipctl run fanout=sequential emits every pattern's body with a banner", (
     }),
   );
   const r = runCtl(
-    ["run", "--lane", "audit", "--trigger", "manual", "--cwd", dir],
+    ["run", "--routine", "audit", "--trigger", "manual", "--cwd", dir],
     { SHIP_REPO: REPO_ROOT },
   );
   assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
@@ -595,7 +595,7 @@ test("shipctl run fanout=sequential emits every pattern's body with a banner", (
   }
 });
 
-test("shipctl run --fanout=sequential overrides a matrix-configured lane", () => {
+test("shipctl run --fanout=sequential overrides a matrix-configured routine", () => {
   const dir = mktmp();
   writeConfig(
     dir,
@@ -612,7 +612,7 @@ test("shipctl run --fanout=sequential overrides a matrix-configured lane", () =>
   const r = runCtl(
     [
       "run",
-      "--lane",
+      "--routine",
       "audit",
       "--fanout",
       "sequential",
@@ -652,7 +652,7 @@ test("shipctl run multi-pattern callback lists all patterns in metrics", async (
   const mock = await startMockShip();
   try {
     const r = await runCtlAsync(
-      ["run", "--lane", "audit", "--trigger", "manual", "--cwd", dir, "--json"],
+      ["run", "--routine", "audit", "--trigger", "manual", "--cwd", dir, "--json"],
       { SHIP_CALLBACK_URL: mock.url, SHIP_RUN_TOKEN: "tok" },
     );
     assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
@@ -687,7 +687,7 @@ test("shipctl run callback omits GH metrics when env is clean", async () => {
   const mock = await startMockShip();
   try {
     const r = await runCtlAsync(
-      ["run", "--lane", "seed", "--trigger", "manual", "--cwd", dir, "--json"],
+      ["run", "--routine", "seed", "--trigger", "manual", "--cwd", dir, "--json"],
       {
         SHIP_CALLBACK_URL: mock.url,
         SHIP_RUN_TOKEN: "test-token",
@@ -735,7 +735,7 @@ test("shipctl run prepends policies-preamble to pattern body", async () => {
   const mock = await startMockShip({ policiesPreamble: preamble });
   try {
     const r = await runCtlAsync(
-      ["run", "--lane", "seed", "--trigger", "manual", "--cwd", dir],
+      ["run", "--routine", "seed", "--trigger", "manual", "--cwd", dir],
       { SHIP_CALLBACK_URL: mock.url, SHIP_RUN_TOKEN: "tok" },
     );
     assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
@@ -774,7 +774,7 @@ test("shipctl run skips preamble when backend returns null", async () => {
   const mock = await startMockShip({ policiesPreamble: null });
   try {
     const r = await runCtlAsync(
-      ["run", "--lane", "seed", "--trigger", "manual", "--cwd", dir],
+      ["run", "--routine", "seed", "--trigger", "manual", "--cwd", dir],
       { SHIP_CALLBACK_URL: mock.url, SHIP_RUN_TOKEN: "tok" },
     );
     assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
@@ -806,7 +806,7 @@ test("shipctl run continues without preamble when fetch fails", async () => {
   const mock = await startMockShip();
   try {
     const r = await runCtlAsync(
-      ["run", "--lane", "seed", "--trigger", "manual", "--cwd", dir],
+      ["run", "--routine", "seed", "--trigger", "manual", "--cwd", dir],
       { SHIP_CALLBACK_URL: mock.url, SHIP_RUN_TOKEN: "tok" },
     );
     assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);

@@ -33,7 +33,7 @@ export const LANE_EVENT_TYPES = Object.freeze([
 export const LANE_IDEMPOTENCY_STORES = Object.freeze(["file", "backend"]);
 export const LANE_IDEMPOTENCY_RESET_ON = Object.freeze(["version-change", "manual"]);
 
-/* RFC-0008 C3.2 — fan-out strategy for multi-pattern lanes.
+/* RFC-0008 C3.2 — fan-out strategy for multi-pattern routines.
  *
  *   matrix      — GitHub Actions matrix: one runner per pattern, parallel.
  *   sequential  — Single runner, `shipctl run` iterates patterns in order.
@@ -730,8 +730,8 @@ function validateLane(laneId, lane, errors, warnings) {
   ) {
     errors.push(`${prefix}.pattern_version: must be a non-empty semver string when set`);
   }
-  // RFC-0008 C3.2 — `fanout` picks how multi-pattern lanes execute.
-  // Single-pattern lanes ignore it (it's a no-op for them); we emit a
+  // RFC-0008 C3.2 — `fanout` picks how multi-pattern routines execute.
+  // Single-pattern routines ignore it (it's a no-op for them); we emit a
   // warning rather than an error so schedule templates that set it
   // blindly remain portable across single/multi-pattern use.
   if (lane.fanout !== undefined) {
