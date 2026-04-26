@@ -40,14 +40,14 @@ jobs:
         run: |
           set -euo pipefail
           shipctl trigger --event schedule --repo "$SHIP_REPO" --json > /tmp/ship-trigger.json
-          jq -r '.due_lanes[].lane_id' /tmp/ship-trigger.json > /tmp/ship-due-lanes.txt
-          if [ ! -s /tmp/ship-due-lanes.txt ]; then
-            echo "No Ship lanes due in this tick."
+          jq -r '.due_routines[].routine_id' /tmp/ship-trigger.json > /tmp/ship-due-routines.txt
+          if [ ! -s /tmp/ship-due-routines.txt ]; then
+            echo "No Ship routines due in this tick."
             exit 0
           fi
 
-          while IFS= read -r lane; do
-            echo "::group::Ship lane ${lane}"
-            SHIP_REPO="" shipctl run --lane "$lane" --trigger schedule
+          while IFS= read -r routine; do
+            echo "::group::Ship routine ${routine}"
+            SHIP_REPO="" shipctl run --routine "$routine" --trigger schedule
             echo "::endgroup::"
-          done < /tmp/ship-due-lanes.txt
+          done < /tmp/ship-due-routines.txt

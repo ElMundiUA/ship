@@ -427,8 +427,8 @@ const mockRepos: ApiActivatedRepo[] = [
     activated_at: new Date().toISOString(),
     provider: "github",
     preset: "default",
-    installed_bundle_version: 1,
-    current_bundle_version: 1,
+    installed_bundle_version: "0.6",
+    current_bundle_version: "0.6",
   },
 ];
 

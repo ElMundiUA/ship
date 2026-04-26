@@ -130,7 +130,7 @@ class PipelineRun(Base):
     __table_args__ = (
         Index("ix_pipeline_runs_pipeline_id_started", "pipeline_id", "started_at"),
         Index("ix_pipeline_runs_workspace_id", "workspace_id"),
-        Index("ix_pipeline_runs_lane_id", "lane_id"),
+        Index("ix_pipeline_runs_routine_id", "routine_id"),
     )
 
     id: Mapped[uuid.UUID] = _pk()
@@ -184,8 +184,9 @@ class PipelineRun(Base):
     # from a ``.ship/config.yml`` lane. Populated by future "Trigger
     # lane now" paths.
     lane_id: Mapped[uuid.UUID | None] = mapped_column(
+        "routine_id",
         UUID(as_uuid=True),
-        ForeignKey("lanes.id", ondelete="SET NULL"),
+        ForeignKey("routines.id", ondelete="SET NULL"),
         nullable=True,
     )
 

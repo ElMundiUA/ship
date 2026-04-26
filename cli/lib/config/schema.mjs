@@ -210,14 +210,14 @@ export function DEFAULT_PROCESS_CONFIG() {
       { from: "dev_implementation", to: "qa_manual" },
       { from: "qa_manual", to: "pr_review" },
     ],
-    routines: [],
+    routines: {},
   };
 }
 
 /**
  * Back-compat alias. Pre-existing callers expect DEFAULT_CONFIG() to
  * return the current schema's shape; default to v2 so new installs
- * benefit from lanes.
+ * benefit from process routines.
  */
 export function DEFAULT_CONFIG() {
   return DEFAULT_CONFIG_V2();
@@ -493,13 +493,16 @@ function validateProcessConditions(value, prefix, errors) {
 
 function validateProcessRoutines(value, errors, warnings) {
   if (value === undefined) return;
-  if (!Array.isArray(value)) {
-    errors.push("process.routines: must be a list when set");
+  const entries = Array.isArray(value)
+    ? value.map((routine, i) => [String(i), routine, `process.routines[${i}]`])
+    : isPlainObject(value)
+      ? Object.entries(value).map(([id, routine]) => [id, routine, `process.routines.${id}`])
+      : null;
+  if (!entries) {
+    errors.push("process.routines: must be a map or list when set");
     return;
   }
-  for (let i = 0; i < value.length; i += 1) {
-    const routine = value[i];
-    const prefix = `process.routines[${i}]`;
+  for (const [routineId, routine, prefix] of entries) {
     if (!isPlainObject(routine)) {
       errors.push(`${prefix}: must be an object`);
       continue;
@@ -511,18 +514,31 @@ function validateProcessRoutines(value, errors, warnings) {
         "name",
         "cadence",
         "enabled",
+        "trigger",
         "description",
         "prompt",
         "instructions",
+        "pattern",
+        "patterns",
+        "pattern_version",
+        "fanout",
+        "idempotency",
+        "agent_profile",
         "specialist_id",
         "specialist_name",
         "specialist",
         "schedule",
+        "window",
+        "event",
       ]),
       prefix,
       warnings,
     );
-    requireOptionalString(routine.id, `${prefix}.id`, errors, { required: true });
+    if (Array.isArray(value)) {
+      requireOptionalString(routine.id, `${prefix}.id`, errors, { required: true });
+    } else if (!LANE_ID_REGEX.test(routineId)) {
+      errors.push(`${prefix}: invalid routine id`);
+    }
     requireOptionalString(routine.name, `${prefix}.name`, errors, { required: true });
     requireOptionalString(routine.cadence, `${prefix}.cadence`, errors, { required: false });
     if (routine.enabled !== undefined && routine.enabled !== null && typeof routine.enabled !== "boolean") {
@@ -531,13 +547,41 @@ function validateProcessRoutines(value, errors, warnings) {
     requireOptionalString(routine.description, `${prefix}.description`, errors, { required: false });
     requireOptionalString(routine.instructions, `${prefix}.instructions`, errors, { required: false });
     requireOptionalString(routine.prompt, `${prefix}.prompt`, errors, { required: false });
-    requireOptionalString(routine.specialist_id, `${prefix}.specialist_id`, errors, { required: false });
-    requireOptionalString(routine.specialist_name, `${prefix}.specialist_name`, errors, { required: false });
-    if (routine.schedule !== undefined && routine.schedule !== null) {
-      if (!isPlainObject(routine.schedule)) {
-        errors.push(`${prefix}.schedule: must be an object when set`);
+    requireOptionalString(routine.pattern, `${prefix}.pattern`, errors, { required: false });
+    if (routine.patterns !== undefined) {
+      if (!Array.isArray(routine.patterns) || routine.patterns.some((p) => typeof p !== "string" || !p.trim())) {
+        errors.push(`${prefix}.patterns: must be a list of non-empty strings`);
       }
     }
+    if (routine.fanout !== undefined && !LANE_FANOUT_MODES.includes(routine.fanout)) {
+      errors.push(`${prefix}.fanout: must be one of ${LANE_FANOUT_MODES.join("|")}`);
+    }
+    requireOptionalString(routine.specialist_id, `${prefix}.specialist_id`, errors, { required: false });
+    requireOptionalString(routine.specialist_name, `${prefix}.specialist_name`, errors, { required: false });
+    validateProcessAgentProfile(routine.agent_profile, `${prefix}.agent_profile`, errors);
+    validateRoutineTrigger(routine.trigger, `${prefix}.trigger`, errors);
+    if (routine.schedule !== undefined && routine.schedule !== null) {
+      if (typeof routine.schedule !== "string" && !isPlainObject(routine.schedule)) {
+        errors.push(`${prefix}.schedule: must be an object or cron string when set`);
+      }
+    }
+  }
+}
+
+function validateRoutineTrigger(value, prefix, errors) {
+  if (value === undefined || value === null) return;
+  if (!isPlainObject(value)) {
+    errors.push(`${prefix}: must be an object when set`);
+    return;
+  }
+  if (!PROCESS_TRIGGER_TYPES.includes(value.type)) {
+    errors.push(`${prefix}.type: must be one of ${PROCESS_TRIGGER_TYPES.join("|")}`);
+  }
+  if (value.type === "schedule") {
+    requireOptionalString(value.cron ?? value.interval, `${prefix}.cron`, errors, { required: true });
+  }
+  if (value.type === "event") {
+    requireOptionalString(value.event, `${prefix}.event`, errors, { required: true });
   }
 }
 

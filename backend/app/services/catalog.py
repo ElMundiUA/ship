@@ -735,9 +735,9 @@ def emit_config_yaml_for_bundle(
     """Render ``.ship/config.yml`` directly from a bundle of pattern keys.
 
     Wave-8 wizard path: the canonical bundle (``DEFAULT_BUNDLE``) is
-    the only input — no per-preset branching. Internally calls
-    :func:`bundle_lane_entries` to derive the ``lanes:`` mapping
-    and :func:`emit_config_yaml` to serialise (so the YAML preamble,
+    the only input — no per-preset branching. Internally derives
+    ``process.routines`` from bundle triggers and calls
+    :func:`emit_config_yaml` to serialise (so the YAML preamble,
     quoting, and key ordering stay byte-identical to the editor
     path that powers ``POST .../config/propose``).
     """
@@ -745,8 +745,8 @@ def emit_config_yaml_for_bundle(
     return emit_config_yaml(
         preset_id=preset_id,
         repo_full_name=repo_full_name,
-        lanes=lanes,
-        process=default_development_process_config(),
+        lanes={},
+        process=default_development_process_config(routines=bundle_routine_entries(lanes)),
     )
 
 
@@ -835,12 +835,49 @@ def emit_config_yaml(
     return "\n".join(lines) + "\n"
 
 
-def default_development_process_config() -> dict[str, object]:
+def bundle_routine_entries(
+    lanes: "Mapping[str, Mapping[str, object]]",
+) -> dict[str, dict[str, object]]:
+    routines: dict[str, dict[str, object]] = {}
+    for routine_id, lane in lanes.items():
+        trigger: dict[str, object]
+        kind = str(lane.get("kind") or "")
+        if kind == "schedule":
+            trigger = {
+                "type": "schedule",
+                "cron": str(lane.get("cron") or "0 8 * * *"),
+                "window": "30m",
+                "catchup": "latest",
+            }
+        elif kind == "event":
+            trigger = {
+                "type": "event",
+                "event": str(lane.get("on") or "push"),
+            }
+        else:
+            trigger = {"type": "manual"}
+        routine: dict[str, object] = {
+            "name": str(routine_id).replace("_", " ").title(),
+            "enabled": True,
+            "trigger": trigger,
+        }
+        if isinstance(lane.get("pattern"), str):
+            routine["pattern"] = str(lane["pattern"])
+        if isinstance(lane.get("patterns"), list):
+            routine["patterns"] = list(lane["patterns"])
+        if isinstance(lane.get("fanout"), str):
+            routine["fanout"] = str(lane["fanout"])
+        routines[str(routine_id)] = routine
+    return routines
+
+
+def default_development_process_config(
+    *, routines: "Mapping[str, Mapping[str, object]] | None" = None
+) -> dict[str, object]:
     """Return the minimal FSM process seeded into new repo configs.
 
-    This is intentionally product-language first. Runtime ``lanes:`` remain
-    below it as the compatibility layer until the executor reads ``process:``
-    directly.
+    This is intentionally product-language first. Runtime routines live under
+    ``process:`` so new repositories no longer need a top-level ``lanes:`` map.
     """
 
     return {
@@ -905,7 +942,7 @@ def default_development_process_config() -> dict[str, object]:
             {"from": "dev_implementation", "to": "qa_manual"},
             {"from": "qa_manual", "to": "pr_review"},
         ],
-        "routines": [],
+        "routines": dict(routines or {}),
     }
 
 
@@ -1014,13 +1051,11 @@ def preset_bundle_files(
         files.append((entry.install_target, content))
         included_recipes.append(recipe)
 
-    # .ship/config.yml — config schema v2. Emits ``lanes:`` as a
-    # mapping so ``lanes_sync`` can parse trigger/pattern/idempotency
-    # per-lane. Resolver-only recipes (``trigger is None``, e.g.
-    # ``code_map``) are skipped. Multi-pattern recipes emit the
-    # ``patterns: [ids]`` list (RFC-0008 C3.1) and fan-out mode
-    # (C3.2); single-pattern recipes emit the scalar ``pattern: <id>``
-    # form so diffs against older bundles stay minimal.
+    # .ship/config.yml — config schema v2. Emits ``process.routines``
+    # so new repos use the same local scheduling path as the wizard seed.
+    # Resolver-only recipes (``trigger is None``, e.g. ``code_map``) are
+    # skipped. The legacy ``lanes:`` renderer stays available only for
+    # existing config editor callers that explicitly pass a lanes map.
     lanes_map: dict[str, Mapping[str, object]] = {}
     for recipe in included_recipes:
         if recipe.trigger is None:
@@ -1036,7 +1071,10 @@ def preset_bundle_files(
     yaml_body = emit_config_yaml(
         preset_id=preset_id,
         repo_full_name=repo_full_name,
-        lanes=lanes_map,
+        lanes={},
+        process=default_development_process_config(
+            routines=bundle_routine_entries(lanes_map)
+        ),
     )
     files.append((".ship/config.yml", yaml_body))
     return files

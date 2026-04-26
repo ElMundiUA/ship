@@ -46,7 +46,7 @@ jobs:
         run: |
           set -euo pipefail
           set +e
-          shipctl run --lane daily_standup --trigger schedule --json > /tmp/ship-sdlc.json 2> /tmp/ship-sdlc.err
+          shipctl run --routine daily_standup --trigger schedule --json > /tmp/ship-sdlc.json 2> /tmp/ship-sdlc.err
           code=$?
           set -e
           if [ "$code" -ne 0 ]; then

@@ -27,7 +27,7 @@ def _seeded_at() -> datetime:
 
 def test_compose_default_bundle_emits_config_yml() -> None:
     """Default bundle composes ``.ship/config.yml`` rendered against
-    the *whole* bundle (one ``lanes:`` block, no per-preset shards)."""
+    the *whole* bundle (one ``process.routines`` block, no per-preset shards)."""
 
     from backend.app.services.lane_recipes import DEFAULT_BUNDLE
     from backend.app.services.seed_bundle import (
@@ -50,24 +50,24 @@ def test_compose_default_bundle_emits_config_yml() -> None:
     # Repo-scoping line — one place to grep when debugging the
     # wizard's "wrong repo on the YAML" reports.
     assert "acme/widgets" in config_body
-    # ``lanes:`` is the v2 bundle block — the mere presence of a
+    # ``routines:`` is the v2 runtime block — the mere presence of a
     # ``preset:`` header doesn't prove the new shape, but the
-    # ``lanes:`` map only renders when ``emit_config_yaml_for_bundle``
+    # ``process.routines`` map only renders when the bundle renderer
     # is in play.
-    assert "lanes:" in config_body
+    assert "routines:" in config_body
+    assert "lanes:" not in config_body
     assert "shipctl_min: 0.12.0" in config_body
     assert "api:\n" in config_body
     assert "stack:\n" in config_body
     assert "agent:\n" in config_body
     assert "process:\n" in config_body
     assert "name: Development Process" in config_body
-    assert "kind: schedule" in config_body
+    assert "type: schedule" in config_body
     assert "cron:" in config_body
     assert "task_intake:" in config_body
     assert "self_heal:" in config_body
-    assert "schedule:" not in config_body
-    # Every pattern in the bundle that contributes a lane should
-    # surface as a ``lanes.*`` mapping key — sanity-check the
+    # Every pattern in the bundle that contributes a routine should
+    # surface as a ``process.routines.*`` mapping key — sanity-check the
     # round-trip from bundle → catalog → YAML.
     assert "role-intake" in bundle.bundle
 

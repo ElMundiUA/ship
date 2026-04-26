@@ -1,8 +1,8 @@
-"""Lanes — materialised projection of customer ``.ship/config.yml`` lanes (RFC-0007 Phase 7).
+"""Routines — materialised projection of customer ``.ship/config.yml`` routines.
 
-The backend maintains one :class:`Lane` row per ``(repo, lane_id)`` by
+The backend maintains one :class:`Lane` row per ``(repo, routine_id)`` by
 periodically (or webhook-driven) pulling ``.ship/config.yml`` from the
-customer's default branch, parsing the v2 ``lanes:`` section, and
+customer's default branch, parsing ``process.routines``, and
 upserting. See :mod:`backend.app.services.lanes_sync` for the sync
 logic.
 
@@ -57,11 +57,12 @@ from backend.app.db.models.tenancy import (
 )
 
 
-class Lane(Base):
-    """One lane declared in a repo's ``.ship/config.yml``.
+class Routine(Base):
+    """One routine declared in a repo's ``.ship/config.yml``.
 
-    The tuple ``(repo_id, lane_id)`` is unique. ``lane_id`` is the
-    YAML key under ``lanes:`` in config v2 — e.g. ``pr_review`` in::
+    The tuple ``(repo_id, routine_id)`` is unique. The Python attribute is
+    still named ``lane_id`` while the API is being cleaned up, but the database
+    column is ``routine_id`` after migration 0041.
 
         lanes:
           pr_review:
@@ -75,22 +76,22 @@ class Lane(Base):
     them) without a schema change.
     """
 
-    __tablename__ = "lanes"
+    __tablename__ = "routines"
     __table_args__ = (
-        UniqueConstraint("repo_id", "lane_id", name="uq_lanes_repo_lane"),
+        UniqueConstraint("repo_id", "routine_id", name="uq_routines_repo_routine"),
         CheckConstraint(
             "kind IN ('once', 'event', 'schedule')",
-            name="ck_lanes_kind",
+            name="ck_routines_kind",
         ),
         # Mirrors the migration in 0035_lane_origin.py — keep both in
         # lockstep with :data:`_LANE_ORIGIN_VALUES`.
         CheckConstraint(
             "origin IN ('merged', 'wizard_seed_synthetic', 'manual')",
-            name="ck_lanes_origin",
+            name="ck_routines_origin",
         ),
-        Index("ix_lanes_workspace_id", "workspace_id"),
-        Index("ix_lanes_repo_id", "repo_id"),
-        Index("ix_lanes_repo_origin", "repo_id", "origin"),
+        Index("ix_routines_workspace_id", "workspace_id"),
+        Index("ix_routines_repo_id", "repo_id"),
+        Index("ix_routines_repo_origin", "repo_id", "origin"),
     )
 
     id: Mapped[uuid.UUID] = _pk()
@@ -104,10 +105,9 @@ class Lane(Base):
         ForeignKey("workspace_repos.id", ondelete="CASCADE"),
         nullable=False,
     )
-    # YAML key from ``lanes:`` — matches ``shipctl run <lane_id>`` and
-    # is embedded in the generated wrapper path
-    # ``.github/workflows/ship-<lane_id>.yml``.
-    lane_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Routine id from ``process.routines``. Attribute remains ``lane_id`` for
+    # compatibility with older service code during the DB migration.
+    lane_id: Mapped[str] = mapped_column("routine_id", String(64), nullable=False)
     # ``once`` = one-shot install-time task, ``event`` = webhook-driven
     # (pull_request / push / …), ``schedule`` = cron. Matches the
     # discriminator used by :mod:`cli.lib.commands.lanes`.
@@ -181,4 +181,7 @@ _LANE_ORIGIN_VALUES: Final[tuple[str, ...]] = (
 )
 
 
-__all__ = ["Lane", "_LANE_ORIGIN_VALUES"]
+Lane = Routine
+
+
+__all__ = ["Routine", "Lane", "_LANE_ORIGIN_VALUES"]

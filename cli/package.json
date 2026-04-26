@@ -1,13 +1,13 @@
 {
   "name": "@elmundi/ship-cli",
-  "version": "0.12.1",
+  "version": "0.12.2",
   "type": "module",
-  "description": "Ship CLI: bootstrap a repo, sync the Plays catalog, run Automations, report Runs.",
+  "description": "Ship CLI: bootstrap a repo, sync the catalog, run process routines, report outcomes.",
   "license": "Apache-2.0",
   "author": "Denys Kuzin",
   "repository": {
     "type": "git",
-    "url": "https://github.com/ElMundiUA/ship.git",
+    "url": "git+https://github.com/ElMundiUA/ship.git",
     "directory": "cli"
   },
   "bugs": {
@@ -32,7 +32,7 @@
     "access": "public"
   },
   "bin": {
-    "shipctl": "./bin/shipctl.mjs"
+    "shipctl": "bin/shipctl.mjs"
   },
   "scripts": {
     "test": "node --test tests/*.test.mjs"

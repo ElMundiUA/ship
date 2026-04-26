@@ -130,11 +130,11 @@ export function MemberAccessModal({ member, workspaceId }: Props) {
 
               <div>
                 <h3 className="mb-1 text-[10px] font-bold uppercase tracking-widest text-white/45">
-                  Inbox / specialist lanes
+                  Inbox / specialist types
                 </h3>
                 <p className="mb-3 text-[11px] leading-snug text-white/50">
                   Who can take BA, QA, and other specialist work. Owners can
-                  cover all lanes or narrow below.
+                  cover all specialist types or narrow below.
                 </p>
                 <form action="/api/members/specialists" method="POST" className="space-y-3">
                   <input type="hidden" name="ws" value={workspaceId} />
@@ -178,7 +178,7 @@ export function MemberAccessModal({ member, workspaceId }: Props) {
                       type="submit"
                       className="rounded-full bg-aqua/80 px-4 py-2 text-xs font-bold text-ink transition hover:bg-aqua"
                     >
-                      Save lanes
+                      Save access
                     </button>
                   </div>
                 </form>

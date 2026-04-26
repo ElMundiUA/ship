@@ -155,7 +155,7 @@ function renderMock(slug: string, tab: Tab) {
             provider: "github",
             preset: null,
             installed_bundle_version: null,
-            current_bundle_version: 0,
+            current_bundle_version: "0.6",
           } as ApiActivatedRepo
         }
         base={base}

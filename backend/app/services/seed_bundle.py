@@ -3,11 +3,10 @@
 Composes every file the Wave-8 wizard's seed PR drops into a repo so the
 operator reviews + merges exactly **one** PR to get Ship wired:
 
-* ``.ship/config.yml`` — single rendered YAML covering every Play in
+* ``.ship/config.yml`` — single rendered YAML covering every routine in
   the canonical :data:`~backend.app.services.lane_recipes.DEFAULT_BUNDLE`.
-  Rendered via :func:`catalog_service.emit_config_yaml_for_bundle` so
-  the schema / preamble / key ordering stays byte-identical to the
-  Console editor's propose-config path.
+  Rendered as ``process.routines`` so shipctl owns local scheduling and
+  Ship only claims schedule windows.
 * ``.github/workflows/<starter>.yml`` — one per pattern's required
   starter workflow (deduped if multiple Plays share a starter, e.g.
   the ``pr-and-ci-gate`` starter underpinning every PR-attached lane).
@@ -79,7 +78,9 @@ from backend.app.services.tracker_fsm import (
 # ``4`` → P5-05 collapse: bundle-based composer, repo-intel placeholder,
 #         ``.ship/state/wizard-seed.v2.json`` idempotency marker.
 # ``5`` → post-merge knowledge bootstrap workflow; PR 1 is infra-only.
-BUNDLE_VERSION: int = 5
+# ``0.6`` → process.routines runtime: generated config drops top-level
+#         ``lanes:`` and schedule workflow uses local due calculation.
+BUNDLE_VERSION: str = "0.6"
 
 
 # Default knowledge starters for PR 1. Empty by design: generated knowledge is
@@ -251,20 +252,21 @@ def compose_seed_files(
 
     # ── .ship/config.yml ─────────────────────────────────────────
     # Single render against the *whole* bundle. Patterns that don't
-    # contribute a lane (request-only templates, missing trigger)
-    # silently fall out of the lanes mapping; they still belong in
+    # contribute a routine (request-only templates, missing trigger)
+    # silently fall out of the runtime mapping; they still belong in
     # the bundle accounting (v2 marker) so the wizard can show them.
+    routine_entries = catalog_service.bundle_routine_entries(default_seed_lanes())
     config_yaml = catalog_service.emit_config_yaml(
         preset_id="default",
         repo_full_name=repo_full_name,
-        lanes=default_seed_lanes(),
-        process=catalog_service.default_development_process_config(),
+        lanes={},
+        process=catalog_service.default_development_process_config(routines=routine_entries),
     )
     _add(CONFIG_PATH, config_yaml)
 
     # ── Trigger adapters ─────────────────────────────────────────
-    # v5 makes GitHub Actions a thin event source. The workflow ticks Ship;
-    # Ship reads .ship/config.yml and decides which lanes are due.
+    # v5 makes GitHub Actions a thin runner. shipctl reads .ship/config.yml,
+    # computes due routines locally, then asks Ship only to claim the window.
     trigger_entry = starter_workflows.get("ship-trigger-schedule")
     if trigger_entry is not None:
         trigger_body = trigger_entry.read_yaml()
