@@ -136,7 +136,8 @@ class ProcessRoutineOut(BaseModel):
     specialist_id: str
     specialist_name: str
     schedule: str | None = None
-    instructions: str
+    prompt: str = ""
+    instructions: str = ""
     last_run: datetime | None = None
     status: str | None = None
     enabled: bool = True
@@ -793,6 +794,7 @@ async def _build_development_process(
         if runtime.blocked_count > 0 and runtime.health == "ok":
             runtime.health = "degraded"
         if lane_key not in _PROCESS_STATE_ORDER or lane_key in _ROUTINE_IDS:
+            routine_text = _routine_instructions(lane_key)
             routines.append(
                 ProcessRoutineOut(
                     id=lane_key,
@@ -800,7 +802,8 @@ async def _build_development_process(
                     specialist_id=specialist_id,
                     specialist_name=specialists[specialist_id].name,
                     schedule=lane.cron if lane else _cron_from_pipeline(pipeline),
-                    instructions=_routine_instructions(lane_key),
+                    prompt=routine_text,
+                    instructions=routine_text,
                     last_run=runtime.last_execution_time,
                     status=(lane.last_run_status if lane else pipeline.last_run_status if pipeline else None),
                     enabled=lane.enabled if lane else True,

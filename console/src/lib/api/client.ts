@@ -42,6 +42,7 @@ import type {
   InboxRoutingTargetType,
   InboxAssignmentStrategy,
 } from "@/lib/inbox-types";
+import type { RoutineScheduleV1 } from "@/lib/routine-schedule-spec";
 import { getSessionToken } from "./session";
 
 const PLURAL: Record<ApiArtifactKind, string> = {
@@ -1827,13 +1828,22 @@ export interface ApiProcessRoutine {
   specialist_id: string;
   specialist_name: string;
   schedule: string | null;
-  instructions: string;
+  /** Agent prompt; persisted as `prompt` in .ship/config.yml. */
+  prompt?: string;
+  /**
+   * @deprecated API mirror of prompt for older projections; use `prompt`.
+   */
+  instructions?: string;
   last_run: string | null;
   status: string | null;
   /** When false, routine is declared but should not run (from repo process config). */
   enabled?: boolean;
-  /** Optional description for console; may come from YAML or API projection. */
+  /** Optional human summary for cards; if omitted at save, derived from `prompt`. */
   description?: string;
+  /**
+   * Editor state from YAML `schedule` block; used to rehydrate the schedule UI.
+   */
+  schedule_spec?: RoutineScheduleV1 | null;
 }
 
 export interface ApiProcessLink {

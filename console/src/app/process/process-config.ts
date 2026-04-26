@@ -1,3 +1,5 @@
+import { deriveDescriptionFromPrompt } from "@/lib/derive-routine-description";
+import { parseScheduleFromYaml } from "@/lib/routine-schedule-spec";
 import type {
   ApiProcess,
   ApiProcessRoutine,
@@ -135,10 +137,18 @@ export function processConfigFromApiProcess(process: ApiProcess): Record<string,
         cadence: routine.schedule,
       };
       if (routine.enabled === false) row.enabled = false;
-      if (routine.description?.trim()) row.description = routine.description;
+      if (routine.prompt?.trim()) row.prompt = routine.prompt;
       if (routine.specialist_id) row.specialist_id = routine.specialist_id;
       if (routine.specialist_name) row.specialist_name = routine.specialist_name;
-      if (routine.instructions?.trim()) row.instructions = routine.instructions;
+      const userDescription = routine.description?.trim();
+      if (userDescription) {
+        row.description = userDescription;
+      } else if (routine.prompt?.trim()) {
+        row.description = deriveDescriptionFromPrompt(routine.prompt);
+      }
+      if (routine.schedule_spec) {
+        row.schedule = routine.schedule_spec;
+      }
       return row;
     }),
   };
@@ -313,7 +323,9 @@ function applyRoutineYamlOverlay(
   const cadence = stringValue(y.cadence);
   const specialist = asRecord(y.specialist);
   const description = stringValue(y.description);
-  const instructions = stringValue(y.instructions);
+  const prompt =
+    stringValue(y.prompt) ?? stringValue(y.instructions) ?? base.prompt;
+  const scheduleSpec = parseScheduleFromYaml(y, cadence ?? null);
   return {
     ...base,
     name,
@@ -326,8 +338,10 @@ function applyRoutineYamlOverlay(
       stringValue(specialist?.name) ??
       stringValue(y.specialist_name) ??
       base.specialist_name,
-    instructions: instructions ?? base.instructions,
+    prompt: prompt || "",
+    instructions: prompt || base.instructions,
     description: description ?? base.description,
+    schedule_spec: scheduleSpec,
     enabled: coalesceRoutineEnabled(
       booleanFromYaml(y.enabled),
       base.enabled,
@@ -342,6 +356,10 @@ function routineFromYamlOnly(
   const name = stringValue(y.name);
   if (!name) return null;
   const specialist = asRecord(y.specialist);
+  const cadence = stringValue(y.cadence) ?? null;
+  const prompt =
+    stringValue(y.prompt) ?? stringValue(y.instructions) ?? "";
+  const spec = parseScheduleFromYaml(y, cadence);
   return {
     id,
     name,
@@ -351,11 +369,13 @@ function routineFromYamlOnly(
       stringValue(specialist?.name) ??
       stringValue(y.specialist_name) ??
       "DevOps/platform",
-    schedule: stringValue(y.cadence) ?? null,
-    instructions: stringValue(y.instructions) ?? "",
+    schedule: cadence,
+    prompt: prompt || "",
+    instructions: prompt || undefined,
     last_run: null,
     status: null,
     description: stringValue(y.description) ?? undefined,
+    schedule_spec: spec,
     enabled: booleanFromYaml(y.enabled) ?? true,
   };
 }

@@ -512,10 +512,12 @@ function validateProcessRoutines(value, errors, warnings) {
         "cadence",
         "enabled",
         "description",
+        "prompt",
         "instructions",
         "specialist_id",
         "specialist_name",
         "specialist",
+        "schedule",
       ]),
       prefix,
       warnings,
@@ -528,8 +530,14 @@ function validateProcessRoutines(value, errors, warnings) {
     }
     requireOptionalString(routine.description, `${prefix}.description`, errors, { required: false });
     requireOptionalString(routine.instructions, `${prefix}.instructions`, errors, { required: false });
+    requireOptionalString(routine.prompt, `${prefix}.prompt`, errors, { required: false });
     requireOptionalString(routine.specialist_id, `${prefix}.specialist_id`, errors, { required: false });
     requireOptionalString(routine.specialist_name, `${prefix}.specialist_name`, errors, { required: false });
+    if (routine.schedule !== undefined && routine.schedule !== null) {
+      if (!isPlainObject(routine.schedule)) {
+        errors.push(`${prefix}.schedule: must be an object when set`);
+      }
+    }
   }
 }
 

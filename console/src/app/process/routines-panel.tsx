@@ -2,18 +2,42 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import { Card, CardHeader } from "@/components/ui";
+import { Card, CardHeader, Switch } from "@/components/ui";
 import type { ApiProcess, ApiProcessRoutine, ApiRepoConfig } from "@/lib/api/client";
+import { deriveDescriptionFromPrompt } from "@/lib/derive-routine-description";
 import { formatNextRun } from "@/lib/cron-next";
+import {
+  buildUtcCadenceFromSpec,
+  defaultScheduleSpec,
+  parseScheduleFromYaml,
+} from "@/lib/routine-schedule-spec";
 import { processConfigFromApiProcess } from "./process-config";
 import { ProcessConfigProposalFields } from "./process-config-proposal-fields";
 import { BASE_SPECIALIST_CATALOG } from "./specialist-catalog";
-import { BUILTIN_ROUTINE_CATALOG, CRON_PRESETS } from "./routine-catalog";
+import { BUILTIN_ROUTINE_CATALOG } from "./routine-catalog";
+import { RoutineScheduleForm } from "./routine-schedule-form";
 
 const SPECIALIST_OPTIONS = BASE_SPECIALIST_CATALOG.map((s) => ({
   id: s.id,
   name: s.name,
 }));
+
+function normalizeRoutine(r: ApiProcessRoutine): ApiProcessRoutine {
+  const prompt = (r.prompt ?? r.instructions ?? "").trim();
+  const spec =
+    r.schedule_spec ??
+    parseScheduleFromYaml({} as Record<string, unknown>, r.schedule);
+  return {
+    ...r,
+    prompt,
+    schedule_spec: spec,
+  };
+}
+
+function cardDescription(r: ApiProcessRoutine): string {
+  if (r.description?.trim()) return r.description.trim();
+  return deriveDescriptionFromPrompt(r.prompt ?? "");
+}
 
 export function RoutinesPanel({
   workspaceId,
@@ -26,12 +50,24 @@ export function RoutinesPanel({
   repoId?: string;
   config: ApiRepoConfig | null;
 }) {
-  const [routines, setRoutines] = useState<ApiProcessRoutine[]>(process.routines);
+  const [routines, setRoutines] = useState<ApiProcessRoutine[]>(() =>
+    process.routines.map(normalizeRoutine),
+  );
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [knownZones, setKnownZones] = useState<string[]>([]);
 
   useEffect(() => {
-    setRoutines(process.routines);
+    setRoutines(process.routines.map(normalizeRoutine));
   }, [process.routines]);
+
+  useEffect(() => {
+    try {
+      const z = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (z) setKnownZones((prev) => (prev.includes(z) ? prev : [z, ...prev]));
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   const processDraft = useMemo<ApiProcess>(
     () => ({ ...process, routines }),
@@ -42,7 +78,10 @@ export function RoutinesPanel({
     [processDraft],
   );
   const initialConfig = useMemo(
-    () => processConfigFromApiProcess(process),
+    () => processConfigFromApiProcess({
+      ...process,
+      routines: process.routines.map(normalizeRoutine),
+    }),
     [process],
   );
   const dirty = JSON.stringify(processConfig) !== JSON.stringify(initialConfig);
@@ -52,20 +91,32 @@ export function RoutinesPanel({
     const row = BUILTIN_ROUTINE_CATALOG.find((c) => c.id === catalogId);
     if (!row) return;
     const sp = SPECIALIST_OPTIONS.find((s) => s.id === "devops_platform") ?? SPECIALIST_OPTIONS[0];
+    const tz =
+      (typeof window !== "undefined" &&
+        Intl.DateTimeFormat().resolvedOptions().timeZone) ||
+      "UTC";
+    const spec = {
+      v: 1 as const,
+      time_zone: tz,
+      mode: "expert_utc" as const,
+      cron_utc: row.defaultCron,
+    };
     setRoutines((current) => [
       ...current,
-      {
+      normalizeRoutine({
         id: row.id,
         name: row.name,
         specialist_id: sp.id,
         specialist_name: sp.name,
         schedule: row.defaultCron,
-        instructions: row.description,
+        prompt: row.prompt,
+        instructions: row.prompt,
         last_run: null,
         status: null,
         enabled: true,
-        description: row.description,
-      },
+        description: "",
+        schedule_spec: spec,
+      }),
     ]);
   }
 
@@ -84,20 +135,24 @@ export function RoutinesPanel({
       n += 1;
     }
     const sp = SPECIALIST_OPTIONS.find((s) => s.id === "devops_platform") ?? SPECIALIST_OPTIONS[0];
+    const spec = defaultScheduleSpec();
+    const cad = buildUtcCadenceFromSpec(spec) ?? "0 9 * * 1-5";
     setRoutines((current) => [
       ...current,
-      {
+      normalizeRoutine({
         id,
         name,
         specialist_id: sp.id,
         specialist_name: sp.name,
-        schedule: "0 9 * * 1-5",
+        schedule: cad,
+        prompt: "",
         instructions: "",
         last_run: null,
         status: null,
         enabled: true,
         description: "",
-      },
+        schedule_spec: spec,
+      }),
     ]);
   }
 
@@ -106,7 +161,7 @@ export function RoutinesPanel({
     patch: Partial<ApiProcessRoutine>,
   ) {
     setRoutines((current) =>
-      current.map((r) => (r.id === id ? { ...r, ...patch } : r)),
+      current.map((r) => (r.id === id ? normalizeRoutine({ ...r, ...patch }) : r)),
     );
   }
 
@@ -121,7 +176,7 @@ export function RoutinesPanel({
           <CardHeader
             className="p-0"
             title="Routines"
-            subtitle="Recurring work on a cron or lane trigger. Changes go to .ship/config.yml via PR."
+            subtitle="Recurring work. The cadence in the file is stored as a UTC 5-field cron; the schedule builder uses your time zone. Changes go to .ship/config.yml via PR."
           />
           <form
             action="/api/process/config-propose"
@@ -202,82 +257,83 @@ export function RoutinesPanel({
           <p className="text-sm text-white/50">No routines in this process yet.</p>
         ) : (
           <ul className="space-y-3">
-            {routines.map((routine) => (
-              <li
-                key={routine.id}
-                className="rounded-xl border border-white/10 bg-white/[0.035] p-3"
-              >
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="min-w-0 flex-1">
-                    <div className="text-sm font-semibold text-white">{routine.name}</div>
-                    {routine.description ? (
-                      <p className="mt-1 text-xs leading-relaxed text-white/50">
-                        {routine.description}
-                      </p>
-                    ) : null}
-                    <div className="mt-2 grid gap-1 text-xs text-white/45 sm:grid-cols-2">
-                      <div>
-                        Schedule:{" "}
-                        <span className="font-mono text-white/70">
-                          {routine.schedule ?? "—"}
-                        </span>
-                      </div>
-                      <div>
-                        Last status:{" "}
-                        <span className="text-white/70">{routine.status ?? "—"}</span>
-                      </div>
-                      <div>
-                        Last run:{" "}
-                        <span className="text-white/70">
-                          {formatRunTime(routine.last_run)}
-                        </span>
-                      </div>
-                      <div>
-                        Next run (est.):{" "}
-                        <span className="text-white/70">
-                          {formatNextRun(routine.schedule)}
-                        </span>
+            {routines.map((routine) => {
+              const desc = cardDescription(routine);
+              return (
+                <li
+                  key={routine.id}
+                  className="rounded-xl border border-white/10 bg-white/[0.035] p-3"
+                >
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-semibold text-white">{routine.name}</div>
+                      {desc ? (
+                        <p className="mt-1 text-xs leading-relaxed text-white/50">
+                          {desc}
+                        </p>
+                      ) : null}
+                      <div className="mt-2 grid gap-1 text-xs text-white/45 sm:grid-cols-2">
+                        <div>
+                          Cadence (UTC):{" "}
+                          <span className="font-mono text-white/70">
+                            {routine.schedule ?? "—"}
+                          </span>
+                        </div>
+                        <div>
+                          Last status:{" "}
+                          <span className="text-white/70">{routine.status ?? "—"}</span>
+                        </div>
+                        <div>
+                          Last run:{" "}
+                          <span className="text-white/70">
+                            {formatRunTime(routine.last_run)}
+                          </span>
+                        </div>
+                        <div>
+                          Next (est. UTC):{" "}
+                          <span className="text-white/70">
+                            {formatNextRun(routine.schedule)}
+                          </span>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2 sm:flex-col sm:items-end">
-                    <label className="flex cursor-pointer items-center gap-2 text-xs text-white/70">
-                      <input
-                        type="checkbox"
-                        className="h-3.5 w-3.5 rounded border-white/20 bg-white/[0.04] accent-aqua"
-                        checked={routine.enabled !== false}
-                        onChange={(e) =>
-                          patchRoutine(routine.id, { enabled: e.target.checked })
+                    <div className="flex flex-wrap items-center gap-3 sm:flex-col sm:items-end">
+                      <div className="flex items-center gap-2 text-xs text-white/55">
+                        <span>Enabled</span>
+                        <Switch
+                          checked={routine.enabled !== false}
+                          onChange={(next) => patchRoutine(routine.id, { enabled: next })}
+                          aria-label={`Enable ${routine.name}`}
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setEditingId(editingId === routine.id ? null : routine.id)
                         }
-                      />
-                      <span>Enabled</span>
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setEditingId(editingId === routine.id ? null : routine.id)
-                      }
-                      className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-xs font-semibold text-aqua/90 hover:border-aqua/30"
-                    >
-                      {editingId === routine.id ? "Close" : "Edit"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => removeRoutine(routine.id)}
-                      className="rounded-full border border-coral/25 px-3 py-1 text-xs font-semibold text-coral/90 hover:bg-coral/10"
-                    >
-                      Remove
-                    </button>
+                        className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-xs font-semibold text-aqua/90 hover:border-aqua/30"
+                      >
+                        {editingId === routine.id ? "Close" : "Edit"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => removeRoutine(routine.id)}
+                        className="rounded-full border border-coral/25 px-3 py-1 text-xs font-semibold text-coral/90 hover:bg-coral/10"
+                      >
+                        Remove
+                      </button>
+                    </div>
                   </div>
-                </div>
-                {editingId === routine.id ? (
-                  <RoutineEditForm
-                    routine={routine}
-                    onChange={(patch) => patchRoutine(routine.id, patch)}
-                  />
-                ) : null}
-              </li>
-            ))}
+                  {editingId === routine.id ? (
+                    <RoutineEditForm
+                      routine={routine}
+                      knownZones={knownZones}
+                      onChange={(patch) => patchRoutine(routine.id, patch)}
+                    />
+                  ) : null}
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>
@@ -295,14 +351,13 @@ function formatRunTime(iso: string | null | undefined): string {
 function RoutineEditForm({
   routine,
   onChange,
+  knownZones,
 }: {
   routine: ApiProcessRoutine;
   onChange: (patch: Partial<ApiProcessRoutine>) => void;
+  knownZones: string[];
 }) {
-  const [customCron, setCustomCron] = useState(routine.schedule ?? "");
-  useEffect(() => {
-    setCustomCron(routine.schedule ?? "");
-  }, [routine.id, routine.schedule]);
+  const spec = routine.schedule_spec ?? defaultScheduleSpec();
   return (
     <div className="mt-3 space-y-3 border-t border-white/10 pt-3">
       <label className="block">
@@ -322,7 +377,20 @@ function RoutineEditForm({
         <textarea
           value={routine.description ?? ""}
           onChange={(e) => onChange({ description: e.target.value })}
-          rows={3}
+          rows={2}
+          placeholder="Optional. If empty, it is auto-filled from the prompt when you save the PR."
+          className="w-full resize-none rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none focus:border-aqua/40"
+        />
+      </label>
+      <label className="block">
+        <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/45">
+          Prompt
+        </span>
+        <textarea
+          value={routine.prompt ?? ""}
+          onChange={(e) => onChange({ prompt: e.target.value, instructions: e.target.value })}
+          rows={4}
+          placeholder="Instructions for the agent…"
           className="w-full resize-none rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none focus:border-aqua/40"
         />
       </label>
@@ -345,38 +413,28 @@ function RoutineEditForm({
           ))}
         </select>
       </label>
-      <label className="block">
-        <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/45">
-          Cron (UTC, 5 fields)
+      <div>
+        <span className="mb-2 block text-[10px] font-bold uppercase tracking-widest text-white/45">
+          Schedule
         </span>
-        <select
-          className="mb-2 w-full rounded-xl border border-white/10 bg-ink px-3 py-2 text-sm text-white outline-none focus:border-aqua/40"
-          value=""
-          onChange={(e) => {
-            const v = e.target.value;
-            if (v) {
-              setCustomCron(v);
-              onChange({ schedule: v });
-            }
+        <RoutineScheduleForm
+          spec={spec}
+          onChange={(next) => {
+            const cad = buildUtcCadenceFromSpec(next) ?? routine.schedule;
+            onChange({
+              schedule_spec: { ...next, v: 1 },
+              schedule: cad,
+            });
           }}
-        >
-          <option value="">Load preset…</option>
-          {CRON_PRESETS.map((p) => (
-            <option key={p.value} value={p.value}>
-              {p.label}
-            </option>
-          ))}
-        </select>
-        <input
-          value={customCron}
-          onChange={(e) => {
-            setCustomCron(e.target.value);
-            onChange({ schedule: e.target.value || null });
-          }}
-          placeholder="0 9 * * 1-5"
-          className="w-full rounded-xl border border-white/10 bg-white/[0.04] font-mono px-3 py-2 text-sm text-white outline-none focus:border-aqua/40"
+          allZones={knownZones}
         />
-      </label>
+      </div>
+      {routine.schedule ? (
+        <p className="text-[11px] text-white/40">
+          Resulting <code className="font-mono">cadence</code>:{" "}
+          <code className="font-mono text-white/60">{routine.schedule}</code>
+        </p>
+      ) : null}
     </div>
   );
 }

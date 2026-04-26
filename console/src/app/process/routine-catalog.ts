@@ -5,54 +5,67 @@ export const BUILTIN_ROUTINE_CATALOG: {
   id: string;
   name: string;
   description: string;
+  /** Default agent prompt (stored as `prompt` in config). */
+  prompt: string;
   defaultCron: string;
 }[] = [
   {
     id: "daily_architecture_tests_review",
     name: "Architecture tests review",
     description: "Recurring check on test architecture and coverage signals.",
+    prompt:
+      "Review test architecture, coverage, and flakiness; report high-signal findings.",
     defaultCron: "0 8 * * 1-5",
   },
   {
     id: "daily_technical_architecture_review",
     name: "Technical architecture review",
     description: "Architecture drift and design consistency review.",
+    prompt:
+      "Check architecture and API boundaries; flag drift, coupling, and migration risks.",
     defaultCron: "0 10 * * 1",
   },
   {
     id: "daily_security_review",
     name: "Security review",
     description: "Security posture and dependency signal sweep.",
+    prompt: "Scan dependencies and secrets policy; list actionable security follow-ups.",
     defaultCron: "0 6 * * *",
   },
   {
     id: "daily_digest",
     name: "Daily digest",
     description: "Consolidated summary of work and blockers for the team.",
+    prompt: "Summarize in-flight work, blockers, and risks for the team.",
     defaultCron: "0 8 * * 1-5",
   },
   {
     id: "daily_retro",
     name: "Daily retro",
     description: "Lightweight team retro prompts and follow-ups.",
+    prompt: "Run a short retro: what went well, what to improve, next actions.",
     defaultCron: "0 16 * * 5",
   },
   {
     id: "self_heal",
     name: "Self heal",
     description: "Reconcile CI, workflows, and guardrails after failed runs.",
+    prompt:
+      "Reconcile CI, workflows, and guardrails; open minimal fixes for broken gates.",
     defaultCron: "0 */2 * * *",
   },
   {
     id: "daily_standup",
     name: "Daily standup",
     description: "Asynchronous standup nudge with lane status.",
+    prompt: "Collect async standup updates: yesterday, today, blockers, links.",
     defaultCron: "0 9 * * 1-5",
   },
   {
     id: "tech_debt",
     name: "Tech debt",
     description: "Triage and size technical-debt work for upcoming cycles.",
+    prompt: "Triage tech-debt items; size and link to product priorities.",
     defaultCron: "0 4 * * 0",
   },
 ];
