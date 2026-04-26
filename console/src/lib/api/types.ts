@@ -211,6 +211,13 @@ export type ApiKnowledgeSourceKind =
   | "audio_transcript"
   | "promoted";
 
+export type ApiKnowledgeImportSourceKind =
+  | "notion"
+  | "confluence"
+  | "static_upload"
+  | "docs_repo"
+  | "website";
+
 export type ApiKnowledgeSource = {
   id: string;
   bucket_id: string;
@@ -221,6 +228,40 @@ export type ApiKnowledgeSource = {
   content_fingerprint: string | null;
   last_synced_at: string | null;
   last_error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ApiKnowledgeImportSource = {
+  id: string;
+  workspace_id: string;
+  integration_id: string | null;
+  repo_id: string | null;
+  kind: ApiKnowledgeImportSourceKind | string;
+  name: string;
+  config: Record<string, unknown>;
+  status: "ready" | "syncing" | "error" | "disabled" | string;
+  sync_cursor: Record<string, unknown> | null;
+  content_fingerprint: string | null;
+  sync_interval_minutes: number | null;
+  last_synced_at: string | null;
+  last_error: string | null;
+  archived_at: string | null;
+  created_by_user_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ApiKnowledgeIngestionRun = {
+  id: string;
+  source_id: string;
+  status: "pending" | "running" | "done" | "error" | string;
+  trigger: string;
+  stats: Record<string, unknown>;
+  error: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  created_by_user_id: string | null;
   created_at: string;
   updated_at: string;
 };

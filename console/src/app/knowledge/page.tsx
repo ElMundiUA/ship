@@ -9,6 +9,7 @@ import {
   isApiConfigured,
   listActivatedRepos,
   listBucketSources,
+  listKnowledgeImportSources,
   listBuckets,
   listIntegrations,
   listWorkspaces,
@@ -21,6 +22,7 @@ import {
 } from "@/lib/workspace-scope";
 import type {
   ApiIntegration,
+  ApiKnowledgeImportSource,
   ApiKnowledgeSource,
   ApiUser,
 } from "@/lib/api/types";
@@ -83,13 +85,17 @@ async function load(
     const resolved = await getResolvedWorkspaceId(params, workspaceRows);
     const workspace = pickWorkspace(workspaceRows, resolved);
 
-    const [repos, integrations, me, rawBuckets, canonical] = await Promise.all([
+    const [repos, integrations, me, rawBuckets, canonical, importSources] =
+      await Promise.all([
       listActivatedRepos(workspace.id, token).catch(() => [] as ApiActivatedRepo[]),
       listIntegrations(workspace.id, token).catch(() => [] as ApiIntegration[]),
       getMe(token).catch(() => null as ApiUser | null),
       listBuckets(workspace.id, { token }),
       getKnowledgeCanonical(workspace.id, token).catch(
         () => null as ApiKnowledgeCanonicalResponse | null,
+      ),
+      listKnowledgeImportSources(workspace.id, token).catch(
+        () => [] as ApiKnowledgeImportSource[],
       ),
     ]);
 
@@ -101,9 +107,12 @@ async function load(
         ),
       })),
     );
-    const sources = sourcePairs.flatMap(({ bucket, sources }) =>
-      sources.map((source) => normalizeSource(bucket, source)),
-    );
+    const sources = [
+      ...importSources.map(normalizeImportSource),
+      ...sourcePairs.flatMap(({ bucket, sources }) =>
+        sources.map((source) => normalizeSource(bucket, source)),
+      ),
+    ];
 
     return {
       source: "live",
@@ -243,6 +252,29 @@ function normalizeSource(
       asString(source.config.path) ??
       asString(source.config.page_id) ??
       asString(source.config.space_key),
+  };
+}
+
+function normalizeImportSource(
+  source: ApiKnowledgeImportSource,
+): KnowledgeControlSource {
+  const config = source.config ?? {};
+  return {
+    id: source.id,
+    bucketSlug: null,
+    bucketName: "Auto-routed",
+    kind: source.kind,
+    status: source.status,
+    lastSyncedAt: source.last_synced_at,
+    nextSyncAt: null,
+    lastError: source.last_error,
+    documents: asNumber(config.document_count),
+    chunks: null,
+    urlOrPath:
+      asString(config.url) ??
+      asString(config.root_url) ??
+      asString(config.path) ??
+      source.name,
   };
 }
 
