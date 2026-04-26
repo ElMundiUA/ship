@@ -184,8 +184,8 @@ export function RuleEditor(props: RuleEditorProps) {
           {noMembers ? (
             <p className="text-xs text-coral/85">
               No workspace members to pick from. Invite users under{" "}
-              <a className="underline underline-offset-2" href="/members">
-                /members
+              <a className="underline underline-offset-2" href="/settings?tab=members">
+                Settings → Members
               </a>{" "}
               first.
             </p>
@@ -221,12 +221,12 @@ export function RuleEditor(props: RuleEditorProps) {
             </label>
             {noGroups ? (
               <p className="text-xs text-coral/85">
-                No operational groups defined. Create one under{" "}
+                No operational groups defined. Configure the team under{" "}
                 <a
                   className="underline underline-offset-2"
-                  href="/settings/groups"
+                  href="/settings?tab=members"
                 >
-                  Settings → Operational groups
+                  Settings → Members
                 </a>{" "}
                 first.
               </p>

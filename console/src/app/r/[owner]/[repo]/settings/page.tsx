@@ -182,12 +182,20 @@ function renderShell(ctx: RepoContext, bundle: SettingsBundle) {
         selectedRepoId: repo.id,
       }}
       actions={
-        <Link
-          href={homeHref}
-          className="text-xs font-semibold text-white/65 hover:text-white"
-        >
-          ← Repo home
-        </Link>
+        <div className="flex flex-wrap items-center gap-3">
+          <Link
+            href={`/onboarding?step=repos&ws=${encodeURIComponent(workspace.id)}`}
+            className="rounded-full border border-aqua/35 bg-aqua/10 px-3 py-1 text-xs font-bold text-aqua/90 transition hover:bg-aqua/20"
+          >
+            + Add repository
+          </Link>
+          <Link
+            href={homeHref}
+            className="text-xs font-semibold text-white/65 hover:text-white"
+          >
+            ← Repo home
+          </Link>
+        </div>
       }
     >
       <div className="space-y-5">

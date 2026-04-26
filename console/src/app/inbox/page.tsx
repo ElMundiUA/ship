@@ -422,17 +422,17 @@ function ItemsTable({
       <div className="mt-5">
         <EmptyState
           title="Inbox empty"
-          body="Either nothing has fired or the routing rules need attention — check Settings → Inbox routing."
+          body="Either nothing has fired or your team coverage needs attention — check who can answer under Settings → Members."
             action={
             <a
               href={withWorkspaceQuery(
-                "/settings/inbox-routing",
+                "/settings?tab=members",
                 workspaceScope ?? "",
                 Boolean(workspaceScope),
               )}
               className="inline-flex items-center gap-1 rounded-full border border-aqua/40 bg-aqua/10 px-3 py-1.5 text-xs font-semibold text-aqua hover:bg-aqua/20"
             >
-              Open Inbox routing
+              Open Members
             </a>
           }
         />

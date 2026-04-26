@@ -74,14 +74,7 @@ function buildWorkspaceNav(): NavGroup[] {
     },
     {
       section: "Configure",
-      items: [
-        { href: "/settings", label: "Settings", icon: <DotIcon /> },
-        { href: "/members", label: "Members", icon: <DotIcon /> },
-        { href: "/settings/groups", label: "Groups", icon: <DotIcon /> },
-        { href: "/settings/inbox-routing", label: "Routing", icon: <DotIcon /> },
-        { href: "/integrations", label: "Integrations", icon: <DotIcon /> },
-        { href: "/audit", label: "Audit log", icon: <DotIcon /> },
-      ],
+      items: [{ href: "/audit", label: "Audit log", icon: <DotIcon /> }],
     },
   ];
 }
@@ -379,7 +372,7 @@ export function AppShell({
               <Link
                 href={withWorkspaceHref("/settings")}
                 className="rounded-md p-1 text-white/40 hover:bg-white/5 hover:text-white"
-                aria-label="Account settings"
+                aria-label="Workspace settings"
               >
                 ⚙︎
               </Link>

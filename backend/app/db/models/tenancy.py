@@ -200,6 +200,13 @@ class WorkspaceMember(Base):
     )
     # owner | admin | maintainer | member | viewer
     role: Mapped[str] = mapped_column(String(32), nullable=False)
+    # Specialist queues (BA, QA, …) this member may answer; ["*"] = all.
+    answer_specialist_slugs: Mapped[list[str]] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'[]'::jsonb"),
+        insert_default=list,
+    )
 
     created_at: Mapped[datetime] = _ts_created()
 

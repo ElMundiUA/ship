@@ -32,7 +32,7 @@ from backend.app.api.v1.routes.workspaces import (
 from backend.app.api.v1.schemas import (
     MemberInviteRequest,
     MemberOut,
-    MemberRoleUpdate,
+    MemberPatch,
 )
 from backend.app.db.models.tenancy import (
     AuditLog,
@@ -55,6 +55,7 @@ def _row_to_out(member: WorkspaceMember, user: User) -> MemberOut:
         email=user.email,
         display_name=user.display_name,
         role=member.role,
+        answer_specialist_slugs=list(member.answer_specialist_slugs or []),
         # "Pending" = pre-invited row that has never been bound to an Auth0
         # subject. Local-mode users skip this state because signup also sets
         # password_hash; we treat either signal as "active".
@@ -193,11 +194,11 @@ async def _load_member(
 async def update_member(
     workspace_id: uuid.UUID,
     member_id: uuid.UUID,
-    payload: MemberRoleUpdate,
+    payload: MemberPatch,
     auth: AuthContext = Depends(get_current_auth),
     session: AsyncSession = Depends(get_session),
 ) -> MemberOut:
-    """Change a member's role.
+    """Change a member's role and/or specialist-lane coverage.
 
     Refuses to demote the **last owner** — if the workspace has exactly one
     owner and the caller is asking to set them to anything else, we 409 so
@@ -205,34 +206,58 @@ async def update_member(
     """
     await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
     membership, user = await _load_member(session, workspace_id, member_id)
-    if membership.role == payload.role:
+
+    current_slugs = list(membership.answer_specialist_slugs or [])
+    if payload.role is not None and payload.answer_specialist_slugs is None:
+        if membership.role == payload.role:
+            return _row_to_out(membership, user)
+    if (
+        payload.role is None
+        and payload.answer_specialist_slugs is not None
+        and payload.answer_specialist_slugs == current_slugs
+    ):
         return _row_to_out(membership, user)
 
-    if membership.role == "owner" and payload.role != "owner":
-        owner_count_stmt = select(WorkspaceMember).where(
-            WorkspaceMember.workspace_id == workspace_id,
-            WorkspaceMember.role == "owner",
-        )
-        owners = (await session.execute(owner_count_stmt)).scalars().all()
-        if len(owners) <= 1:
-            raise HTTPException(
-                status_code=409,
-                detail="cannot demote the last owner — promote another member first",
+    if payload.role is not None and membership.role != payload.role:
+        if membership.role == "owner" and payload.role != "owner":
+            owner_count_stmt = select(WorkspaceMember).where(
+                WorkspaceMember.workspace_id == workspace_id,
+                WorkspaceMember.role == "owner",
             )
-
-    previous = membership.role
-    membership.role = payload.role
-    session.add(
-        AuditLog(
-            workspace_id=workspace_id,
-            actor_user_id=auth.user.id,
-            actor_token_id=auth.token.id if auth.token else None,
-            action="member.role_change",
-            target_kind="user",
-            target_id=str(user.id),
-            payload={"from": previous, "to": payload.role},
+            owners = (await session.execute(owner_count_stmt)).scalars().all()
+            if len(owners) <= 1:
+                raise HTTPException(
+                    status_code=409,
+                    detail="cannot demote the last owner — promote another member first",
+                )
+        previous = membership.role
+        membership.role = payload.role
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=auth.user.id,
+                actor_token_id=auth.token.id if auth.token else None,
+                action="member.role_change",
+                target_kind="user",
+                target_id=str(user.id),
+                payload={"from": previous, "to": payload.role},
+            )
         )
-    )
+
+    if payload.answer_specialist_slugs is not None:
+        membership.answer_specialist_slugs = list(payload.answer_specialist_slugs)
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=auth.user.id,
+                actor_token_id=auth.token.id if auth.token else None,
+                action="member.specialists_update",
+                target_kind="user",
+                target_id=str(user.id),
+                payload={"answer_specialist_slugs": payload.answer_specialist_slugs},
+            )
+        )
+
     await session.flush()
     return _row_to_out(membership, user)
 

@@ -1,17 +1,19 @@
 /**
  * Workspace settings page.
  *
- * Reads from `/v1/workspaces/{id}` (general + catalog_sources) and
- * `/v1/workspaces/{id}/artifact-repos` (registered repos) when a live
- * session + workspace exist; otherwise falls back to the mock fixtures so
- * the marketing-style preview keeps something to show. Catalog source
- * toggles are wired via tiny native form POSTs to
- * `/api/settings/catalog-sources` so the page stays a server component.
+ * Reads from `/v1/workspaces/{id}` and related endpoints. Mutations that
+ * need forms POST to small route handlers so the page stays a server
+ * component.
  */
 
 import { cookies } from "next/headers";
 
 import { AppShell } from "@/components/app-shell";
+import {
+  IntegrationsWorkspaceBody,
+  loadIntegrationsWorkspaceMode,
+} from "@/components/integrations-workspace-body";
+import { WorkspaceMembersPanelLoader } from "@/components/workspace-members-panel";
 import {
   Badge,
   Card,
@@ -59,35 +61,11 @@ type Mode =
     }
   | { source: "mock"; reason: string };
 
-const CATALOG_KEYS = ["global", "workspace", "project"] as const;
-type CatalogKey = (typeof CATALOG_KEYS)[number];
-
 type RepoConfigStatus =
   | { kind: "ready"; label: string; detail: string }
   | { kind: "legacy"; label: string; detail: string }
   | { kind: "missing"; label: string; detail: string }
   | { kind: "error"; label: string; detail: string };
-
-const SOURCE_DESCRIPTIONS: Record<
-  CatalogKey,
-  { title: string; description: string }
-> = {
-  global: {
-    title: "Global catalog",
-    description:
-      "Read-only mirror of the public Ship monorepo. Disable for air-gapped enterprise installs.",
-  },
-  workspace: {
-    title: "Workspace catalog",
-    description:
-      "Artifacts authored by this workspace. Backed by your registered artifact repos.",
-  },
-  project: {
-    title: "Project catalog",
-    description:
-      "Per-project pins (.ship/artifacts/) — overrides everything else for that project.",
-  },
-};
 
 function errorMessage(code: string): string {
   switch (code) {
@@ -120,10 +98,11 @@ function errorMessage(code: string): string {
 
 const TABS = [
   { id: "general", label: "General" },
-  { id: "repositories", label: "Repositories" },
-  { id: "catalog", label: "Catalog sources" },
-  { id: "repos", label: "Artifact repos" },
-  { id: "tokens", label: "Tokens" },
+  { id: "repositories", label: "Connected code" },
+  { id: "registries", label: "Registries" },
+  { id: "members", label: "Members" },
+  { id: "integrations", label: "Integrations" },
+  { id: "api-keys", label: "API keys" },
   { id: "danger", label: "Danger zone" },
 ] as const;
 type TabId = (typeof TABS)[number]["id"];
@@ -255,7 +234,10 @@ export default async function SettingsPage({
   const wsParam = parseWorkspaceIdParam(params.ws);
   const data = await load(wsParam);
   const errorCode = typeof params.error === "string" ? params.error : null;
-  const requestedTab = typeof params.tab === "string" ? params.tab : null;
+  let requestedTab = typeof params.tab === "string" ? params.tab : null;
+  if (requestedTab === "tokens") requestedTab = "api-keys";
+  if (requestedTab === "repos") requestedTab = "registries";
+  if (requestedTab === "catalog") requestedTab = "general";
   const activeTab: TabId =
     requestedTab && isTabId(requestedTab) ? requestedTab : "general";
   const justMintedFlag =
@@ -283,11 +265,6 @@ export default async function SettingsPage({
     p.set("tab", tabId);
     if (multiWs) p.set("ws", workspace.id);
     return `?${p.toString()}`;
-  };
-  const sources: Record<CatalogKey, boolean> = {
-    global: workspace.catalog_sources?.global ?? true,
-    workspace: workspace.catalog_sources?.workspace ?? true,
-    project: workspace.catalog_sources?.project ?? true,
   };
 
   return (
@@ -350,38 +327,11 @@ export default async function SettingsPage({
             />
           )}
 
-          {activeTab === "catalog" && (
+          {activeTab === "registries" && (
             <Card>
               <CardHeader
-                title="Catalog sources"
-                subtitle="Which layers are merged when the CLI / UI lists artifacts. Higher layer wins."
-              />
-              <ul className="space-y-3">
-                {CATALOG_KEYS.map((key) => (
-                  <SourceToggle
-                    key={key}
-                    workspaceId={workspace.id}
-                    toneKey={key}
-                    title={SOURCE_DESCRIPTIONS[key].title}
-                    description={SOURCE_DESCRIPTIONS[key].description}
-                    on={sources[key]}
-                  />
-                ))}
-              </ul>
-              <div className="mt-4 rounded-xl border border-aqua/20 bg-aqua/[0.04] px-3 py-2.5 text-[11px] text-aqua/85">
-                <strong>Tip.</strong> When the same id exists in multiple layers,{" "}
-                <span className="font-mono">project &gt; workspace &gt; global</span>. The
-                CLI shows <span className="font-mono">effective_source</span> on every
-                fetched artifact so the agent can audit where the override came from.
-              </div>
-            </Card>
-          )}
-
-          {activeTab === "repos" && (
-            <Card>
-              <CardHeader
-                title="Artifact repos"
-                subtitle="Where workspace + project layers are read from. Local file:// works inline; git URLs sync via the worker."
+                title="Registries"
+                subtitle="Package and artifact sources Ship merges for this workspace. File paths work offline; git URLs sync in the background."
               />
               {repos.length === 0 ? (
                 <p className="text-sm text-white/55">
@@ -412,12 +362,20 @@ export default async function SettingsPage({
             </Card>
           )}
 
-          {activeTab === "tokens" && (
+          {activeTab === "api-keys" && (
             <TokensPanel
               workspaceId={workspace.id}
               tokens={tokens}
               freshSecret={freshSecret}
             />
+          )}
+
+          {activeTab === "members" && (
+            <WorkspaceMembersPanelLoader searchParams={searchParams} />
+          )}
+
+          {activeTab === "integrations" && (
+            <SettingsIntegrationsTab wsParam={wsParam} />
           )}
 
           {activeTab === "danger" && (
@@ -443,7 +401,7 @@ function TokensPanel({
       {freshSecret && (
         <Card className="border-aqua/40 bg-aqua/[0.06]">
           <CardHeader
-            title="Token created"
+            title="API key created"
             subtitle="Copy it now — the secret will never be shown again."
           />
           <div className="rounded-xl border border-aqua/30 bg-ink/60 p-3">
@@ -459,8 +417,8 @@ function TokensPanel({
       )}
       <Card>
         <CardHeader
-          title="Personal access tokens"
-          subtitle="Long-lived bearer tokens for the CLI / CI. Each shows once at mint time."
+          title="API keys"
+          subtitle="Long-lived keys for the Ship API, CLI, and CI. The secret is shown only once at creation."
         />
         {tokens.length === 0 ? (
           <p className="mb-4 text-sm text-white/55">
@@ -488,7 +446,7 @@ function TokensPanel({
         )}
         <details className="mt-4 rounded-xl border border-white/10 bg-white/[0.02] p-3 text-sm">
           <summary className="cursor-pointer text-[11px] font-bold uppercase tracking-widest text-white/65 hover:text-white">
-            + Mint token
+            + Create API key
           </summary>
           <form
             action="/api/tokens/mint"
@@ -541,8 +499,8 @@ function TokensPanel({
             </div>
           </form>
           <p className="mt-2 text-[11px] text-white/55">
-            Workspace-scoped tokens can only act on this workspace. Leave TTL
-            empty for a non-expiring token (revoke it manually when no longer
+            Workspace-scoped keys can only act on this workspace. Leave TTL
+            empty for a non-expiring key (revoke it manually when no longer
             needed).
           </p>
         </details>
@@ -563,13 +521,13 @@ function RepositoriesPanel({
   return (
     <Card>
       <CardHeader
-        title="Repositories"
-        subtitle="Activated project repositories. Re-run setup from here when the seeded Ship bundle is stale."
+        title="Connected code"
+        subtitle="Git repositories Ship is wired into. Re-seed the bundle when the install PR goes stale."
       />
       {repositories.length === 0 ? (
         <div className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] p-4 text-sm text-white/55">
-          No repositories are activated for this workspace yet. Use onboarding to
-          connect GitHub and pick at least one repository.
+          No repositories are activated for this workspace yet. Use the setup
+          flow to connect GitHub and pick at least one repository.
         </div>
       ) : (
         <div className="overflow-x-auto">
@@ -603,6 +561,17 @@ function RepositoriesPanel({
         directly from this table. The PR includes the current Ship bundle and
         updates <code className="font-mono">.ship/config.yml</code> with the
         process template.
+      </div>
+      <div className="mt-4">
+        <a
+          href={`/onboarding?step=repos&ws=${encodeURIComponent(workspaceId)}`}
+          className="inline-flex rounded-full border border-aqua/40 bg-aqua/15 px-4 py-1.5 text-xs font-bold text-aqua transition hover:bg-aqua/25"
+        >
+          + Add another repository
+        </a>
+        <p className="mt-2 text-[11px] text-white/45">
+          Opens the connect flow so you can pick an additional GitHub repository.
+        </p>
       </div>
     </Card>
   );
@@ -813,70 +782,18 @@ function Field({
   );
 }
 
-function SourceToggle({
-  workspaceId,
-  toneKey,
-  title,
-  description,
-  on,
+async function SettingsIntegrationsTab({
+  wsParam,
 }: {
-  workspaceId: string;
-  toneKey: CatalogKey;
-  title: string;
-  description: string;
-  on: boolean;
+  wsParam: string | undefined;
 }) {
-  // The visual toggle is just a label wrapping a hidden submit button. The
-  // form posts the *target* state (`!on`) so a single click flips it; no
-  // client-side React state needed.
-  return (
-    <li className="flex items-start justify-between gap-4 rounded-xl border border-white/10 bg-white/[0.02] p-3">
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <Badge tone={toneKey}>{toneKey}</Badge>
-          <span className="text-sm font-semibold text-white">{title}</span>
-        </div>
-        <p className="mt-1 text-[11px] leading-snug text-white/55">{description}</p>
-      </div>
-      <form
-        action="/api/settings/catalog-sources"
-        method="POST"
-        className="shrink-0"
-      >
-        {/*
-          Browser autofill (Chrome PasswordManager + extensions like
-          1Password) likes to inject style/data attrs onto every <input>
-          right as React hydrates, which trips React #418. Suppressing
-          the warning per-input is the React-blessed escape hatch.
-        */}
-        <input type="hidden" name="ws" value={workspaceId} suppressHydrationWarning />
-        <input type="hidden" name="key" value={toneKey} suppressHydrationWarning />
-        <input
-          type="hidden"
-          name="enabled"
-          value={on ? "false" : "true"}
-          suppressHydrationWarning
-        />
-        <button
-          type="submit"
-          aria-label={`Toggle ${title}`}
-          className={
-            "relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full transition " +
-            (on
-              ? "bg-aqua/70 hover:bg-aqua/85"
-              : "bg-white/10 hover:bg-white/20")
-          }
-        >
-          <span
-            className={
-              "inline-block h-5 w-5 transform rounded-full bg-white shadow transition " +
-              (on ? "translate-x-5" : "translate-x-0.5")
-            }
-          />
-        </button>
-      </form>
-    </li>
-  );
+  const data = await loadIntegrationsWorkspaceMode(wsParam);
+  if (data.source === "mock") {
+    return (
+      <p className="text-sm text-white/55">Integrations aren&apos;t available: {data.reason}</p>
+    );
+  }
+  return <IntegrationsWorkspaceBody data={data} />;
 }
 
 function RepoRow({
@@ -1031,32 +948,13 @@ function MockView({ reason }: { reason: string }) {
       <MockBanner reason={reason} />
       <Card>
         <CardHeader
-          title="Catalog sources"
-          subtitle="Which layers are merged when the CLI / UI lists artifacts. Higher layer wins."
+          title="Workspace settings"
+          subtitle="Connect the Ship API to edit workspace, members, integrations, and API keys in one place."
         />
-        <ul className="space-y-3">
-          {CATALOG_KEYS.map((key) => (
-            <li
-              key={key}
-              className="flex items-start justify-between gap-4 rounded-xl border border-white/10 bg-white/[0.02] p-3"
-            >
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <Badge tone={key}>{key}</Badge>
-                  <span className="text-sm font-semibold text-white">
-                    {SOURCE_DESCRIPTIONS[key].title}
-                  </span>
-                </div>
-                <p className="mt-1 text-[11px] leading-snug text-white/55">
-                  {SOURCE_DESCRIPTIONS[key].description}
-                </p>
-              </div>
-              <span className="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full bg-white/10">
-                <span className="inline-block h-5 w-5 translate-x-0.5 transform rounded-full bg-white shadow" />
-              </span>
-            </li>
-          ))}
-        </ul>
+        <p className="text-sm text-white/55">
+          When signed in, the side navigation stays minimal — open the gear
+          next to your name to reach this page.
+        </p>
       </Card>
     </AppShell>
   );

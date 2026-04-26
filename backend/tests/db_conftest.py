@@ -200,7 +200,12 @@ async def seed_workspace(db_session: AsyncSession, seed_user_with_token, seed_us
     db_session.add(workspace)
     await db_session.flush()
     db_session.add(
-        WorkspaceMember(workspace_id=workspace.id, user_id=user.id, role="owner")
+        WorkspaceMember(
+            workspace_id=workspace.id,
+            user_id=user.id,
+            role="owner",
+            answer_specialist_slugs=["*"],
+        )
     )
     await db_session.flush()
     return user, raw, workspace

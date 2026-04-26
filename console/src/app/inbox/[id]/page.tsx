@@ -1258,6 +1258,7 @@ function MockView({
       role: "owner",
       pending: false,
       created_at: MOCK_REFERENCE_ISO,
+      answer_specialist_slugs: [],
     },
     {
       id: "mem_mt",
@@ -1267,6 +1268,7 @@ function MockView({
       role: "admin",
       pending: false,
       created_at: MOCK_REFERENCE_ISO,
+      answer_specialist_slugs: [],
     },
     {
       id: "mem_jl",
@@ -1276,6 +1278,7 @@ function MockView({
       role: "maintainer",
       pending: false,
       created_at: MOCK_REFERENCE_ISO,
+      answer_specialist_slugs: [],
     },
   ];
   return (

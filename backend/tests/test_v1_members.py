@@ -26,6 +26,7 @@ async def test_list_members_returns_owner_only_initially(
     assert row["user_id"] == str(user.id)
     assert row["role"] == "owner"
     assert row["email"] == user.email
+    assert row["answer_specialist_slugs"] == ["*"]
     # Owner row was created via local-mode signup fixture (no Auth0 sub) but
     # also has no password — for fixture consistency, we treat that as
     # "pending". Real local-signup users have a password_hash set.
@@ -95,6 +96,25 @@ async def test_invite_same_role_returns_409(
         json={"email": "noop@helio.dev", "role": "member"},
     )
     assert b.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_patch_answer_specialist_slugs(v1_client, seed_workspace) -> None:
+    _, raw, ws = seed_workspace
+    invited = await v1_client.post(
+        f"/v1/workspaces/{ws.id}/members",
+        headers=_auth(raw),
+        json={"email": "lanes@helio.dev", "role": "member"},
+    )
+    member_id = invited.json()["id"]
+
+    patched = await v1_client.patch(
+        f"/v1/workspaces/{ws.id}/members/{member_id}",
+        headers=_auth(raw),
+        json={"answer_specialist_slugs": ["ba", "qa"]},
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["answer_specialist_slugs"] == ["ba", "qa"]
 
 
 @pytest.mark.asyncio
