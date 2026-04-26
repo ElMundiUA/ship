@@ -225,39 +225,6 @@ export type ApiKnowledgeSource = {
   updated_at: string;
 };
 
-export type ApiResolvedBucket = {
-  id: string;
-  slug: string;
-  name: string;
-  description: string | null;
-  scope_kind: ApiBucketScope;
-  source_kind: ApiBucketSource;
-  source_ref: Record<string, unknown> | null;
-  project_id: string | null;
-  repo_id: string | null;
-  user_id: string | null;
-  summary_count: number;
-  archived_at: string | null;
-  created_at: string;
-  updated_at: string;
-  priority: number;
-  effective_scope: ApiBucketScope;
-  effective: boolean;
-};
-
-export type ApiResolvedContext = {
-  workspace_id: string;
-  project_id: string | null;
-  repo_id: string | null;
-  user_id: string;
-};
-
-export type ApiResolvedBucketsResponse = {
-  context: ApiResolvedContext;
-  buckets: ApiResolvedBucket[];
-  winners_by_slug: Record<string, string>;
-};
-
 // --- Phase 5d: canonical article shape -------------------------------------
 
 export type ApiBucketArticleStatus =

@@ -99,15 +99,8 @@ export default async function LoginPage({
           )}
 
           <p className="mt-6 text-[11px] leading-snug text-white/45">
-            By signing in you accept the Ship{" "}
-            <Link href="/legal/terms" className="text-white/70 hover:underline">
-              Terms
-            </Link>{" "}
-            and{" "}
-            <Link href="/legal/privacy" className="text-white/70 hover:underline">
-              Privacy notice
-            </Link>
-            . Your tenant data never leaves your workspace boundary.
+            By signing in you accept the Ship workspace terms. Your tenant data
+            never leaves your workspace boundary.
           </p>
         </section>
       </main>

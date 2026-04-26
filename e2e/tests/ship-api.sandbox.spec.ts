@@ -49,7 +49,7 @@ test.describe("Ship API — /v1 workspace orchestration (sandbox)", () => {
     expect(data.length).toBeGreaterThan(0);
   });
 
-  test("GET pipelines, dashboard, clarifications, improvements, artifact-feedback", async ({
+  test("GET pipelines, dashboard, clarifications, improvements", async ({
     request,
   }) => {
     let wsId = process.env.E2E_WORKSPACE_ID?.trim();
@@ -84,12 +84,5 @@ test.describe("Ship API — /v1 workspace orchestration (sandbox)", () => {
     const impr = await shipGet(request, `/v1/workspaces/${enc}/improvements`);
     expect(impr.ok(), `improvements ${impr.status()}`).toBeTruthy();
     expect(Array.isArray(await impr.json())).toBeTruthy();
-
-    const fb = await shipGet(
-      request,
-      `/v1/workspaces/${enc}/artifact-feedback`,
-    );
-    expect(fb.ok(), `artifact-feedback ${fb.status()}`).toBeTruthy();
-    expect(Array.isArray(await fb.json())).toBeTruthy();
   });
 });

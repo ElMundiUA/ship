@@ -8,7 +8,6 @@ all pointing at the same sync service
 
 * push webhook (``_apply_push_event_for_kb``) on the repo's default
   branch,
-* manual ``POST /repos/{id}/kb/reindex`` admin call,
 * first-time repo activation.
 
 Before Phase 2 this route scanned ``ArtifactRepo`` rows on disk via

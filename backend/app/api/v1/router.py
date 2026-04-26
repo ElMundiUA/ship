@@ -14,7 +14,6 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from backend.app.api.v1.routes import (
-    adoption,
     agent_secrets,
     artifact_repos,
     audit,
@@ -26,9 +25,6 @@ from backend.app.api.v1.routes import (
     custom_patterns,
     dashboard,
     distiller,
-    feature_flags,
-    fleet_lanes,
-    fleet_requests,
     github_app,
     health,
     improvements,
@@ -41,21 +37,16 @@ from backend.app.api.v1.routes import (
     lanes,
     linear_oauth,
     members,
-    metrics,
     native_integrations,
     notifications,
     notion_oauth,
     pipelines,
     processes,
-    plays,
     policies,
     repo_home,
     repo_secrets,
     repos,
-    requests_api,
     tracker_binding,
-    tracker_fsm,
-    workspace_artifacts,
     workspaces,
 )
 
@@ -88,7 +79,6 @@ api_router.include_router(inbox_routing.router)
 # routing service (services.inbox.routing). Owner-or-admin RBAC for
 # mutations; member RBAC for reads.
 api_router.include_router(inbox.router)
-api_router.include_router(workspace_artifacts.router)
 # Workspace repo activations (pilot Day 2 — picker UI + Code Map MVP).
 # Lives next to artifact_repos but is keyed off GitHub App installations
 # instead of paste-URL clones.
@@ -149,9 +139,6 @@ api_router.include_router(distiller.router)
 # belong to the same "conversational surface" object and share a
 # router prefix under /workspaces/{ws}.
 api_router.include_router(chat.router)
-# Metrics overview (D11 — SHIP-book dashboard). Single aggregator
-# endpoint under /workspaces/{ws}/metrics/overview.
-api_router.include_router(metrics.router)
 # Dashboard notifications / dismissible banners (A4 "PR-merged" +
 # A5 "self-heal auto-triggered"). Reader + dismiss surface; writes
 # happen from the webhook handlers via `services.notifications`.
@@ -165,37 +152,6 @@ api_router.include_router(repo_secrets.router)
 # Phase 7). List + per-repo sync trigger. Webhook-driven re-syncs on
 # pushes to ``.ship/config.yml`` live in ``routes.github_app``.
 api_router.include_router(lanes.router)
-# Plays coverage (RFC-0010 P4-00) — workspace aggregation surface
-# powering the Console's Coverage tab. One row per Play (= pattern
-# id) with activated_repos_total / assignments_count / coverage_pct
-# and a covered/uncovered repo split. Read-only, member RBAC.
-# Mounted next to lanes because both surfaces project Lane rows; this
-# one collapses by pattern, lanes.router lists them verbatim.
-api_router.include_router(plays.router)
-# Ad-hoc agent runs ("Requests", RFC-0007 Phase 3). Workspace-scoped
-# list + per-repo dispatch endpoint. Dispatches ``adhoc-agent-run.yml``
-# that's seeded into every activated repo by the wizard bundle.
-api_router.include_router(requests_api.router)
-# Fleet Requests (RFC-0008 §D) — workspace-level fan-out of a single
-# catalog pattern across many repos. Best-effort: pre-flight
-# rejections (repo not found, GitHub App missing) land on the
-# parent's ``rejections`` JSONB without blocking the rest; dispatch-
-# time failures persist on the child :class:`AgentRequest` row with
-# ``status=dispatch_failed``.
-api_router.include_router(fleet_requests.router)
-# Adoption funnel (RFC-0008 §E) — workspace-level rollup of "how far
-# has Ship landed across these repos" (installed → activated →
-# seeded → first_run → steady). Read-only; the rollup is computed
-# live from WorkspaceRepo + PipelineRun + WorkflowRun + AgentRequest
-# and returned in one shot.
-api_router.include_router(adoption.router)
-# Workspace-level Fleet lanes primitive (RFC-0008 §G — PR-5,
-# previously called "policies") — mirror-lane rules + per-repo
-# opt-outs with live compliance rollup. Read is member;
-# create/delete/exception are admin. Renamed from "policies" to
-# free up that name for free-text standing rules injected into
-# agent instructions; see ``routes.fleet_lanes`` docstring.
-api_router.include_router(fleet_lanes.router)
 # Workspace prose-rule policies (Workspace policy injection) —
 # free-text standing rules ("Always work via PR", "Never commit
 # secrets") that get rendered into the agent system prompt at
@@ -217,14 +173,3 @@ api_router.include_router(agent_secrets.router)
 # OAuth connections (no per-repo tokens); stores the team/project
 # selection and falls back to the workspace default on read.
 api_router.include_router(tracker_binding.router)
-# Tracker FSM catalog (Wizard v2 iter 7). Read-only surface: the
-# canonical Ship states, per-tracker mapping hints, and (optional)
-# rendered markdown previews per activated repo — exactly what the
-# seed PR writes into ``.ship/tracker-fsm.md``. Source of truth is
-# the committed file; this endpoint just mirrors it for the console.
-api_router.include_router(tracker_fsm.router)
-# Workspace feature flags (P2-19) — single JSONB-backed dict on the
-# workspace row, gated read=member / write=owner. Adds the lever
-# the inbox redesign rollout needs without coupling the inbox
-# routes to the helper yet (that's a follow-up ticket).
-api_router.include_router(feature_flags.router)

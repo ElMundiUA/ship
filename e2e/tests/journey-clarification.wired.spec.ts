@@ -37,8 +37,8 @@ test.describe("journey: clarification answer (wired, serial)", () => {
     );
     expect(create.ok(), `create clarification ${create.status()}`).toBeTruthy();
 
-    await page.goto("/clarifications");
-    await expect(page.getByRole("heading", { name: "Clarifications" })).toBeVisible({
+    await page.goto("/inbox?type=clarification");
+    await expect(page.getByRole("heading", { name: "Inbox" })).toBeVisible({
       timeout: 30_000,
     });
     const row = page.locator("li").filter({ hasText: marker });

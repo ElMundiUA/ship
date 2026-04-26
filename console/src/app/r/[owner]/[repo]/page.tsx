@@ -105,11 +105,7 @@ function renderRepoHome(ctx: RepoContext, report: ApiRepoHomeReport | null, tab:
   const settingsHref = multi
     ? `${base}/settings?ws=${encodeURIComponent(workspace.id)}`
     : `${base}/settings`;
-  const playsHref = withWorkspaceQuery(
-    `/plays?scope=repo&repo=${encodeURIComponent(repo.id)}`,
-    workspace.id,
-    multi,
-  );
+  const processHref = withWorkspaceQuery("/process", workspace.id, multi);
   return (
     <AppShell
       title={`${repo.full_name}`}
@@ -129,7 +125,7 @@ function renderRepoHome(ctx: RepoContext, report: ApiRepoHomeReport | null, tab:
             Repo settings
           </Link>
           <ButtonPrimary>
-            <Link href={playsHref}>Start a request →</Link>
+            <Link href={processHref}>Open process →</Link>
           </ButtonPrimary>
         </>
       }
@@ -215,7 +211,7 @@ function RepoHomeBody({
         <TrendsTab report={report} />
       )}
 
-      <RepoFactsAndNav repo={repo} base={base} />
+      <RepoFactsAndNav repo={repo} />
     </>
   );
 }
@@ -530,10 +526,8 @@ function Histogram({
 
 function RepoFactsAndNav({
   repo,
-  base,
 }: {
   repo: ApiActivatedRepo;
-  base: string;
 }) {
   const tiles: {
     href: string;
@@ -541,20 +535,10 @@ function RepoFactsAndNav({
     body: string;
     tone: "ok" | "info" | "warn";
   }[] = [
-    // RFC-0010: per-repo lanes/requests/clarifications/improvements/
-    // artifact-feedback retired; tiles now point at the workspace
-    // surfaces that own the data, with the repo's id pre-filtered
-    // via ``?scope=repo&repo=<id>`` (or ``?type=`` for inbox folds).
     {
-      href: `/automations?scope=repo&repo=${encodeURIComponent(repo.id)}`,
-      label: "Automations",
-      body: "Scheduled + event-driven patterns wired from .ship/config.yml.",
-      tone: "info",
-    },
-    {
-      href: `/runs?scope=repo&repo=${encodeURIComponent(repo.id)}`,
-      label: "Runs",
-      body: "Catalog of one-shot agent patterns dispatched from this repo.",
+      href: `/process?repo=${encodeURIComponent(repo.id)}`,
+      label: "Process",
+      body: "Specialists, states, handoffs, and active work for this repo.",
       tone: "info",
     },
     {
@@ -567,12 +551,6 @@ function RepoFactsAndNav({
       href: `/inbox?type=improvement`,
       label: "Improvements",
       body: "Agent-proposed refactors, housekeeping, follow-ups.",
-      tone: "info",
-    },
-    {
-      href: `${base}/knowledge`,
-      label: "Knowledge",
-      body: "Parsed runbooks, wiki pages, slide decks scoped to this repo.",
       tone: "info",
     },
   ];
@@ -622,14 +600,12 @@ function RepoFactsAndNav({
           />
           <div className="flex flex-wrap gap-2">
             <ButtonPrimary>
-              <Link href={`/plays?scope=repo&repo=${encodeURIComponent(repo.id)}`}>
-                Plays catalog
+              <Link href={`/process?repo=${encodeURIComponent(repo.id)}`}>
+                Open process
               </Link>
             </ButtonPrimary>
             <ButtonGhost>
-              <Link href={`/automations?scope=repo&repo=${encodeURIComponent(repo.id)}`}>
-                Review automations
-              </Link>
+              <Link href="/knowledge">Knowledge</Link>
             </ButtonGhost>
           </div>
         </Card>

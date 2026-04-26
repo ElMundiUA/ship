@@ -877,7 +877,7 @@ function RenderPlaysCoverage(result: ToolResult): ReactNode {
         </div>
         <div className="mt-2">
           <Chip
-            href="/automations?tab=coverage"
+            href="/process"
             label="Open Coverage"
             glyph="↗"
           />
@@ -893,7 +893,7 @@ function RenderPlaysCoverage(result: ToolResult): ReactNode {
           {pluralize(rows.length, "play")}
         </span>
         <Chip
-          href="/automations?tab=coverage"
+          href="/process"
           label="Open Coverage"
           glyph="↗"
         />
@@ -930,7 +930,7 @@ function RenderPlaysCoverage(result: ToolResult): ReactNode {
                   <Badge tone="ok">covered</Badge>
                 )}
                 <Chip
-                  href={`/automations?tab=coverage&play=${encodeURIComponent(
+                  href={`/process&play=${encodeURIComponent(
                     row.play_key,
                   )}`}
                   label="Open"
@@ -992,7 +992,7 @@ function RenderPlaysGet(result: ToolResult): ReactNode {
         </div>
         {playKey ? (
           <Chip
-            href={`/plays?play=${encodeURIComponent(playKey)}`}
+            href={`/process`}
             label="Open Play"
             glyph="↗"
           />
@@ -1068,7 +1068,7 @@ function RenderRunsQuery(result: ToolResult): ReactNode {
           No runs match — try widening the filter.
         </div>
         <div className="mt-2">
-          <Chip href="/runs" label="Open Runs" glyph="↗" />
+          <Chip href="/process" label="Open Runs" glyph="↗" />
         </div>
       </ToolCard>
     );
@@ -1080,7 +1080,7 @@ function RenderRunsQuery(result: ToolResult): ReactNode {
         <span className="text-[12px] text-white/70">
           {pluralize(runs.length, "run")}
         </span>
-        <Chip href="/runs" label="Open Runs" glyph="↗" />
+        <Chip href="/process" label="Open Runs" glyph="↗" />
       </div>
       <ul className="space-y-2">
         {runs.map((run) => {
@@ -1132,7 +1132,7 @@ function RenderRunsQuery(result: ToolResult): ReactNode {
                 ) : null}
                 {run.id ? (
                   <Chip
-                    href={`/runs/${run.id}`}
+                    href={`/process`}
                     label="Open Run"
                     glyph="→"
                     tone="muted"
@@ -1212,7 +1212,7 @@ function RenderRunDetail(result: ToolResult): ReactNode {
             </div>
           ) : null}
         </div>
-        {id ? <Chip href={`/runs/${id}`} label="Open Run" glyph="↗" /> : null}
+        {id ? <Chip href={`/process`} label="Open Run" glyph="↗" /> : null}
       </div>
 
       {sevs.length > 0 ? (
@@ -1294,7 +1294,7 @@ function RenderPlayRunNow(result: ToolResult): ReactNode {
           </div>
         </div>
         {runId ? (
-          <Chip href={`/runs/${runId}`} label="Open Run" glyph="↗" />
+          <Chip href={`/process`} label="Open Run" glyph="↗" />
         ) : null}
       </div>
     </ToolCard>
@@ -1339,7 +1339,7 @@ function RenderAutomationToggle(result: ToolResult): ReactNode {
         </div>
         {pipelineId ? (
           <Chip
-            href={`/automations?id=${encodeURIComponent(pipelineId)}`}
+            href={`/process`}
             label="Open Automation"
             glyph="↗"
           />

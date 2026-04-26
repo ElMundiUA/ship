@@ -24,17 +24,12 @@ import { slugFromParams, type RepoRouteParams } from "@/lib/repo-slug";
 
 export default async function RepoLayout({
   params,
-  searchParams,
   children,
 }: {
   params: Promise<RepoRouteParams>;
-  searchParams?: Promise<Record<string, string | string[] | undefined>>;
   children: ReactNode;
 }) {
-  const [resolved, rawSearch] = await Promise.all([
-    params,
-    searchParams ?? Promise.resolve({} as Record<string, string | string[] | undefined>),
-  ]);
+  const resolved = await params;
   const slug = slugFromParams(resolved);
   if (!slug) notFound();
   if (!isApiConfigured()) {
@@ -47,7 +42,7 @@ export default async function RepoLayout({
     redirect(`/login?next=${next}`);
   }
 
-  const result = await resolveRepoContext(token, slug, rawSearch);
+  const result = await resolveRepoContext(token, slug, undefined);
   if (result.kind === "unauthorized") {
     const next = encodeURIComponent(`/r/${slug}`);
     redirect(`/login?next=${next}`);

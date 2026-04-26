@@ -439,8 +439,8 @@ async def test_wizard_seed_uses_default_bundle_regardless_of_payload_presets(
     """P5-06 collapse: payload's ``presets`` list is silently ignored.
 
     The composed file list MUST reflect the canonical
-    ``DEFAULT_BUNDLE`` shape (config + at least one workflow + ad-hoc
-    runner + bootstrap workflow + v2 marker) regardless of what
+    ``DEFAULT_BUNDLE`` shape (config + trigger workflow +
+    bootstrap workflow + v2 marker) regardless of what
     the legacy FE/CLI sends in the body.
     """
     raw, workspace, _install, repo = seeded_wizard_repo
@@ -463,7 +463,7 @@ async def test_wizard_seed_uses_default_bundle_regardless_of_payload_presets(
     assert ".ship/state/wizard-seed.v2.json" in files
     assert ".ship/knowledge/repo-intel.md" not in files
     assert not any(p.startswith(".ship/knowledge/") for p in files)
-    assert any(p.endswith("/adhoc-agent-run.yml") for p in files)
+    assert not any(p.endswith("/adhoc-agent-run.yml") for p in files)
     assert ".github/workflows/ship-bootstrap.yml" in files
     assert ".github/workflows/ship-trigger-schedule.yml" in files
     assert ".github/workflows/scheduled-sdlc-lane.yml" not in files

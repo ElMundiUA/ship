@@ -14,6 +14,11 @@ import {
   listWorkspaces,
 } from "@/lib/api/client";
 import { getSessionToken } from "@/lib/api/session";
+import { getResolvedWorkspaceId } from "@/lib/workspace-resolve.server";
+import {
+  pickWorkspace,
+  toAppShellWorkspaces,
+} from "@/lib/workspace-scope";
 import type {
   ApiIntegration,
   ApiKnowledgeSource,
@@ -39,6 +44,7 @@ const FALLBACK_WS = workspaces[0];
 type LiveData = {
   source: "live";
   workspace: { id: string; slug: string; name: string };
+  allWorkspaces: Awaited<ReturnType<typeof listWorkspaces>>;
   buckets: KnowledgeControlBucket[];
   sources: KnowledgeControlSource[];
   canonical: ApiKnowledgeCanonicalResponse | null;
@@ -56,8 +62,11 @@ type MockData = {
 };
 
 type Loaded = LiveData | MockData;
+type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 
-async function load(): Promise<Loaded> {
+async function load(
+  params: Record<string, string | string[] | undefined>,
+): Promise<Loaded> {
   if (!isApiConfigured()) {
     return mockData("backend not configured (SHIP_API_URL unset)");
   }
@@ -67,11 +76,12 @@ async function load(): Promise<Loaded> {
   }
 
   try {
-    const workspaces = await listWorkspaces(token);
-    if (workspaces.length === 0) {
+    const workspaceRows = await listWorkspaces(token);
+    if (workspaceRows.length === 0) {
       return mockData("no workspaces yet — finish onboarding first");
     }
-    const workspace = workspaces[0];
+    const resolved = await getResolvedWorkspaceId(params, workspaceRows);
+    const workspace = pickWorkspace(workspaceRows, resolved);
 
     const [repos, integrations, me, rawBuckets, canonical] = await Promise.all([
       listActivatedRepos(workspace.id, token).catch(() => [] as ApiActivatedRepo[]),
@@ -98,6 +108,7 @@ async function load(): Promise<Loaded> {
     return {
       source: "live",
       workspace: { id: workspace.id, slug: workspace.slug, name: workspace.name },
+      allWorkspaces: workspaceRows,
       buckets: sourcePairs.map(({ bucket, sources }) =>
         normalizeBucket(bucket, sources),
       ),
@@ -113,8 +124,13 @@ async function load(): Promise<Loaded> {
   }
 }
 
-export default async function KnowledgeIndexPage() {
-  const data = await load();
+export default async function KnowledgeIndexPage({
+  searchParams,
+}: {
+  searchParams?: SearchParams;
+}) {
+  const params = (await (searchParams ?? Promise.resolve({}))) ?? {};
+  const data = await load(params);
   const workspace = data.workspace;
   const scopePill =
     data.source === "live" ? (
@@ -140,6 +156,20 @@ export default async function KnowledgeIndexPage() {
     <AppShell
       kicker={`${workspace.name} · knowledge`}
       title="Knowledge"
+      workspace={
+        data.source === "live"
+          ? {
+              id: data.workspace.id,
+              name: data.workspace.name,
+              slug: data.workspace.slug,
+            }
+          : undefined
+      }
+      allWorkspaces={
+        data.source === "live"
+          ? toAppShellWorkspaces(data.allWorkspaces)
+          : undefined
+      }
       scopePill={scopePill}
     >
       <KnowledgeControlCenter

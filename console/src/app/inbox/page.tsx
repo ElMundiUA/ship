@@ -10,7 +10,7 @@
  * `inbox-types.ts` so a hostile URL can't smuggle bad enum values
  * into the API query.
  *
- * Two modes, mirroring `/members` and `/settings/groups`:
+ * Two modes, mirroring the member/project surfaces:
  *   - **live**: `SHIP_API_URL` set + valid session → real list +
  *     counts from `/v1/workspaces/{ws}/inbox`.
  *   - **mock**: API unconfigured, session missing/expired, or the

@@ -3,7 +3,7 @@
  * (``POST /v1/workspaces/{ws}/knowledge/search``), PR-7A.
  *
  * Kept in Next.js so the session bearer never leaves the httpOnly
- * cookie; the ``/fleet/knowledge`` Search tab posts here.
+ * cookie; workspace knowledge search posts here.
  */
 
 import { NextResponse } from "next/server";

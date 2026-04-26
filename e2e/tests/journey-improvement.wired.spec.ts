@@ -40,9 +40,9 @@ test.describe("journey: improvement accept (wired, serial)", () => {
     );
     expect(create.ok(), `create improvement ${create.status()}`).toBeTruthy();
 
-    await page.goto("/improvements");
+    await page.goto("/inbox?type=improvement");
     await expect(
-      page.getByRole("heading", { name: "Improvements" }),
+      page.getByRole("heading", { name: "Inbox" }),
     ).toBeVisible({ timeout: 30_000 });
     const row = page.locator("li").filter({ hasText: marker });
     await expect(row).toBeVisible({ timeout: 15_000 });

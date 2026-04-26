@@ -4,8 +4,6 @@
  * Mirrors the Pydantic shapes returned by the Phase-2 backend:
  *   - GET /v1/workspaces/{ws}/inbox             → InboxListResponse
  *   - GET /v1/workspaces/{ws}/inbox/{id}        → InboxItemDetail
- *   - GET /v1/workspaces/{ws}/inbox/groups      → InboxGroup[]
- *   - GET /v1/workspaces/{ws}/inbox/routing     → InboxRoutingRule[]
  *
  * Kept dependency-free so it can be imported from server components,
  * route handlers, and pure helpers without dragging in React. The
@@ -156,61 +154,6 @@ export type InboxItemEvent = {
     | "commented";
   payload: Record<string, unknown>;
   created_at: string;
-};
-
-/**
- * Operational group — distinct from `WorkspaceMember.role`. Routing
- * rules dereference symbolic handles (e.g. `secops`) into one of
- * these groups; group strategy then picks the concrete owner.
- */
-export type InboxGroup = {
-  id: string;
-  workspace_id: string;
-  key: string;
-  name: string;
-  description: string | null;
-  assignment_strategy: "round_robin" | "oncall" | "first";
-  member_count: number;
-  created_at: string;
-};
-
-export type InboxRoutingTargetType = "user" | "group" | "strategy";
-export type InboxAssignmentStrategy = "round_robin" | "oncall" | "first";
-
-export type InboxRoutingRule = {
-  id: string;
-  workspace_id: string;
-  handle: string;
-  target_type: InboxRoutingTargetType;
-  target_user_id: string | null;
-  target_group_id: string | null;
-  target_strategy: string | null;
-  assignment_strategy: InboxAssignmentStrategy | null;
-  strategy_config: Record<string, unknown>;
-  is_enabled: boolean;
-  created_at: string;
-  updated_at: string;
-};
-
-export type InboxRoutingRuleDetail = InboxRoutingRule & {
-  target_user_email: string | null;
-  target_group_key: string | null;
-  target_group_name: string | null;
-};
-
-export type InboxRoutingHandlesOut = {
-  bound_handles: string[];
-  used_handles: string[];
-  orphaned_handles: string[];
-  unbound_handles: string[];
-};
-
-export type InboxRoutingPreviewOut = {
-  handle: string;
-  resolved_user_id: string | null;
-  resolved_user_email: string | null;
-  intake_handle: string;
-  intake_reason: string;
 };
 
 /**

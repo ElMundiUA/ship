@@ -34,47 +34,11 @@ test.describe("console surfaces (wired, serial)", () => {
     ).toBeVisible();
   });
 
-  test("02 — pipelines", async ({ page }) => {
-    await page.goto("/pipelines");
+  test("03 — inbox", async ({ page }) => {
+    await page.goto("/inbox");
     await expect(
-      page.getByRole("heading", { name: "Pipelines", exact: true }),
+      page.getByRole("heading", { name: "Inbox", exact: true }),
     ).toBeVisible({ timeout: 30_000 });
-    await expect(
-      page.getByText(
-        /All lanes Ship knows about|No pipelines yet\. Activate at least one repo/i,
-      ),
-    ).toBeVisible();
-  });
-
-  test("03 — clarifications inbox", async ({ page }) => {
-    await page.goto("/clarifications");
-    await expect(
-      page.getByRole("heading", { name: "Clarifications", exact: true }),
-    ).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByRole("link", { name: /^Open\d*$/ })).toBeVisible();
-    await expect(
-      page.getByRole("link", { name: /^Answered\d*$/ }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole("link", { name: /^Skipped\d*$/ }),
-    ).toBeVisible();
-  });
-
-  test("04 — improvements", async ({ page }) => {
-    await page.goto("/improvements");
-    await expect(
-      page.getByRole("heading", { name: "Improvements", exact: true }),
-    ).toBeVisible({ timeout: 30_000 });
-  });
-
-  test("05 — artifact feedback", async ({ page }) => {
-    await page.goto("/artifact-feedback");
-    await expect(
-      page.getByRole("heading", { name: "Artifact feedback", exact: true }),
-    ).toBeVisible({ timeout: 30_000 });
-    await expect(
-      page.getByText(/Complaints against catalog artifacts/i),
-    ).toBeVisible();
   });
 
   test("06 — navigator (agent chat)", async ({ page }) => {
@@ -89,13 +53,6 @@ test.describe("console surfaces (wired, serial)", () => {
     ).toBeVisible();
   });
 
-  test("07 — artifact catalog", async ({ page }) => {
-    await page.goto("/catalog");
-    await expect(
-      page.getByRole("heading", { name: "Artifact catalog", exact: true }),
-    ).toBeVisible({ timeout: 30_000 });
-  });
-
   test("08 — knowledge buckets", async ({ page }) => {
     await page.goto("/knowledge");
     await expect(
@@ -108,7 +65,7 @@ test.describe("console surfaces (wired, serial)", () => {
     await expect(pill).toHaveAttribute("data-scope", "workspace");
   });
 
-  test("08c — scope pill is mounted on catalog/clarifications/improvements/chat (Phase 4b)", async ({
+  test("08c — scope pill is mounted on inbox/chat (Phase 4b)", async ({
     page,
   }) => {
     // One pill test per surface so regressions flag which page lost
@@ -116,9 +73,7 @@ test.describe("console surfaces (wired, serial)", () => {
     // assertion shape — default scope is workspace when no query
     // param is set.
     const surfaces = [
-      "/catalog",
-      "/clarifications",
-      "/improvements",
+      "/inbox",
       "/chat",
     ] as const;
     for (const path of surfaces) {
@@ -149,13 +104,6 @@ test.describe("console surfaces (wired, serial)", () => {
     await expect(pill).toHaveAttribute("data-scope", "workspace");
   });
 
-  test("09 — metrics", async ({ page }) => {
-    await page.goto("/metrics");
-    await expect(
-      page.getByRole("heading", { name: "Metrics", exact: true }),
-    ).toBeVisible({ timeout: 30_000 });
-  });
-
   test("10 — workspace settings", async ({ page }) => {
     await page.goto("/settings");
     await expect(
@@ -184,24 +132,15 @@ test.describe("console surfaces (wired, serial)", () => {
     ).toBeVisible({ timeout: 30_000 });
   });
 
-  test("14 — rail: workspace nav exposes Fleet + Configure", async ({
+  test("14 — rail: workspace nav exposes active workspace pages", async ({
     page,
   }) => {
-    // Phase-1 two-mode shell: on `/` the sidebar shows only
-    // workspace-unique primitives. Per-repo surfaces (Pipelines /
-    // Clarifications / Improvements / Feedback) moved under
-    // `/r/<owner>/<repo>/...` and are not reachable from the
-    // workspace rail by design.
     await page.goto("/");
     const nav = page.locator("aside nav");
     const checks: [string, RegExp][] = [
-      ["Fleet requests", /\/fleet\/requests$/],
-      ["Policy", /\/fleet\/policy$/],
-      ["Adoption", /\/fleet\/adoption$/],
-      ["Knowledge graph", /\/fleet\/knowledge$/],
-      ["Workspace settings", /\/settings$/],
-      ["Members", /\/members$/],
-      ["Integrations", /\/integrations$/],
+      ["Process", /\/process$/],
+      ["Inbox", /\/inbox$/],
+      ["Knowledge", /\/knowledge$/],
       ["Audit log", /\/audit$/],
     ];
     for (const [label, pathRe] of checks) {
