@@ -48,8 +48,44 @@ router = APIRouter(
 Health = Literal["ok", "degraded", "failed"]
 TaskStatus = Literal["active", "blocked", "done"]
 ProcessLinkType = Literal["handoff", "dependency", "approval", "notification"]
+ProcessNodeType = Literal["workspace", "process", "subprocess", "routine", "approval"]
 
 PRIMARY_PROCESS_ID = "development"
+
+_SEEDED_PROCESSES: tuple[dict[str, Any], ...] = (
+    {
+        "id": "development",
+        "name": "Development",
+        "description": "Ticket-driven SDLC flow from intake through implementation and review.",
+        "parent_process_id": None,
+        "node_type": "process",
+        "template_id": "process-development",
+    },
+    {
+        "id": "development.requirements",
+        "name": "Requirements",
+        "description": "Clarify scope, acceptance criteria, and handoff notes.",
+        "parent_process_id": "development",
+        "node_type": "subprocess",
+        "template_id": "subprocess-requirements",
+    },
+    {
+        "id": "development.implementation",
+        "name": "Implementation",
+        "description": "Plan, implement, test, and prepare code changes.",
+        "parent_process_id": "development",
+        "node_type": "subprocess",
+        "template_id": "subprocess-implementation",
+    },
+    {
+        "id": "development.qa",
+        "name": "Quality Review",
+        "description": "Validate acceptance criteria and release readiness.",
+        "parent_process_id": "development",
+        "node_type": "subprocess",
+        "template_id": "subprocess-qa",
+    },
+)
 
 _PROCESS_STATE_ORDER: tuple[str, ...] = (
     "task_intake",
@@ -196,13 +232,32 @@ class ProcessLinkOut(BaseModel):
     id: str
     from_process_id: str
     from_state_id: str | None = None
+    from_node_id: str | None = None
     to_process_id: str
     to_state_id: str | None = None
+    to_node_id: str | None = None
     type: ProcessLinkType
     conditions: list[ProcessConditionOut] = Field(default_factory=list)
+    label: str | None = None
+    io_contract: dict[str, Any] = Field(default_factory=dict)
+
+
+class ProcessNodeOut(BaseModel):
+    id: str
+    process_id: str
+    type: ProcessNodeType
+    name: str
+    description: str = ""
+    parent_process_id: str | None = None
+    child_process_id: str | None = None
+    template_id: str | None = None
+    x: int = 0
+    y: int = 0
+    status: Health = "ok"
 
 
 class ProcessGraphOut(BaseModel):
+    nodes: list[ProcessNodeOut] = Field(default_factory=list)
     links: list[ProcessLinkOut] = Field(default_factory=list)
 
 
@@ -214,6 +269,10 @@ class ProcessSummaryOut(BaseModel):
     task_count: int
     blocked_count: int
     health: Health
+    description: str = ""
+    parent_process_id: str | None = None
+    node_type: ProcessNodeType = "process"
+    template_id: str | None = None
 
 
 class ProcessAdapterDiagnosticOut(BaseModel):
@@ -292,20 +351,11 @@ async def list_processes(
 ) -> ProcessListOut:
     await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
     process = await _build_development_process(session, workspace_id)
+    summaries = _seeded_process_summaries(process)
     return ProcessListOut(
         primary_process_id=PRIMARY_PROCESS_ID,
-        processes=[
-            ProcessSummaryOut(
-                id=process.id,
-                name=process.name,
-                primary=process.primary,
-                state_count=process.state_count,
-                task_count=process.task_count,
-                blocked_count=process.blocked_count,
-                health=process.health,
-            )
-        ],
-        process_graph=process.process_graph,
+        processes=summaries,
+        process_graph=_workspace_process_graph(summaries),
         adapter_diagnostics=process.adapter_diagnostics,
     )
 
@@ -351,12 +401,18 @@ async def get_process(
     session: AsyncSession = Depends(get_session),
 ) -> ProcessOut:
     await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
-    if process_id != PRIMARY_PROCESS_ID:
+    known_process_ids = {str(row["id"]) for row in _SEEDED_PROCESSES}
+    if process_id not in known_process_ids:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="process not found",
         )
-    return await _build_development_process(session, workspace_id, repo_id=repo_id)
+    return await _build_development_process(
+        session,
+        workspace_id,
+        repo_id=repo_id,
+        process_id=process_id,
+    )
 
 
 async def list_process_tickets(
@@ -770,7 +826,10 @@ def _add_process_audit(
 
 
 async def _build_development_process(
-    session: AsyncSession, workspace_id: uuid.UUID, repo_id: uuid.UUID | None = None
+    session: AsyncSession,
+    workspace_id: uuid.UUID,
+    repo_id: uuid.UUID | None = None,
+    process_id: str = PRIMARY_PROCESS_ID,
 ) -> ProcessOut:
     repo_rows = list(
         (
@@ -918,24 +977,214 @@ async def _build_development_process(
     health = _process_health(states, blocked_count)
     adapter_diagnostics = await _adapter_diagnostics(session, workspace_id)
 
+    process_meta = _seeded_process_meta(process_id)
+    scoped_states = _states_for_process_id(process_id, states)
+    scoped_transitions = [
+        transition
+        for transition in transitions
+        if any(state.id == transition.from_state_id for state in scoped_states)
+        and any(state.id == transition.to_state_id for state in scoped_states)
+    ]
+    scoped_tasks = [
+        task for task in tasks if any(state.id == task.state_id for state in scoped_states)
+    ]
+    scoped_blocked_count = sum(1 for task in scoped_tasks if task.status == "blocked")
+    scoped_health = _process_health(scoped_states, scoped_blocked_count)
+
     return ProcessOut(
-        id=PRIMARY_PROCESS_ID,
-        name="Development Process",
-        primary=True,
-        state_count=state_count,
-        task_count=task_count,
-        blocked_count=blocked_count,
-        health=health,
+        id=process_id,
+        name=str(process_meta["name"]),
+        primary=process_id == PRIMARY_PROCESS_ID,
+        state_count=len(scoped_states),
+        task_count=len(scoped_tasks),
+        blocked_count=scoped_blocked_count,
+        health=scoped_health,
+        description=str(process_meta["description"]),
+        parent_process_id=process_meta["parent_process_id"],
+        node_type=process_meta["node_type"],
+        template_id=process_meta["template_id"],
         specialists=list(specialists.values()),
-        states=states,
-        transitions=transitions,
-        tasks=tasks,
+        states=scoped_states,
+        transitions=scoped_transitions,
+        tasks=scoped_tasks,
         routines=routines,
-        schedule=_default_schedule(states),
-        tracker_mapping=_default_tracker_mapping(states),
-        process_graph=ProcessGraphOut(),
+        schedule=_default_schedule(scoped_states),
+        tracker_mapping=_default_tracker_mapping(scoped_states),
+        process_graph=_inner_process_graph(process_id, scoped_states, scoped_transitions),
         adapter_diagnostics=adapter_diagnostics,
     )
+
+
+def _seeded_process_meta(process_id: str) -> dict[str, Any]:
+    return next(
+        (row for row in _SEEDED_PROCESSES if row["id"] == process_id),
+        _SEEDED_PROCESSES[0],
+    )
+
+
+def _seeded_process_summaries(process: ProcessOut) -> list[ProcessSummaryOut]:
+    summaries: list[ProcessSummaryOut] = []
+    for row in _SEEDED_PROCESSES:
+        is_primary = row["id"] == PRIMARY_PROCESS_ID
+        summaries.append(
+            ProcessSummaryOut(
+                id=str(row["id"]),
+                name=str(row["name"]),
+                primary=is_primary,
+                state_count=process.state_count if is_primary else 0,
+                task_count=process.task_count if is_primary else 0,
+                blocked_count=process.blocked_count if is_primary else 0,
+                health=process.health if is_primary else "ok",
+                description=str(row["description"]),
+                parent_process_id=row["parent_process_id"],
+                node_type=row["node_type"],
+                template_id=row["template_id"],
+            )
+        )
+    return summaries
+
+
+def _workspace_process_graph(summaries: list[ProcessSummaryOut]) -> ProcessGraphOut:
+    top_level_summaries = [
+        summary for summary in summaries if summary.parent_process_id is None
+    ]
+    positions = {
+        "workspace": (340, 270),
+        "development": (340, 42),
+    }
+    nodes = [
+        ProcessNodeOut(
+            id="node-workspace",
+            process_id="workspace",
+            type="workspace",
+            name="Workspace",
+            description="Root orchestration map for this workspace.",
+            x=positions["workspace"][0],
+            y=positions["workspace"][1],
+            status="ok",
+        ),
+        *[
+        ProcessNodeOut(
+            id=f"node-{summary.id}",
+            process_id=summary.id,
+            type=summary.node_type,
+            name=summary.name,
+            description=summary.description,
+            parent_process_id=summary.parent_process_id,
+            child_process_id=summary.id if summary.node_type == "subprocess" else None,
+            template_id=summary.template_id,
+            x=positions.get(summary.id, (80, 80))[0],
+            y=positions.get(summary.id, (80, 80))[1],
+            status=summary.health,
+        )
+        for summary in top_level_summaries
+        ],
+    ]
+    return ProcessGraphOut(
+        nodes=nodes,
+        links=[
+            ProcessLinkOut(
+                id="workspace-to-development",
+                from_process_id="workspace",
+                from_node_id="node-workspace",
+                to_process_id="development",
+                to_node_id="node-development",
+                type="handoff",
+                label="Development process",
+                conditions=[ProcessConditionOut(expression="workspace.process == 'development'")],
+                io_contract={"passes": ["workspace_policies", "tracker_mapping"]},
+            ),
+        ],
+    )
+
+
+def _inner_process_graph(
+    process_id: str,
+    states: list[ProcessStateOut],
+    transitions: list[ProcessTransitionOut],
+) -> ProcessGraphOut:
+    nodes = [
+        ProcessNodeOut(
+            id=f"{process_id}.{state.id}",
+            process_id=process_id,
+            type="subprocess" if process_id != PRIMARY_PROCESS_ID else "process",
+            name=state.name,
+            description=state.instructions,
+            parent_process_id=process_id,
+            template_id=state.specialist_id,
+            x=120 + index * 240,
+            y=120,
+            status=state.runtime.health if state.runtime else "ok",
+        )
+        for index, state in enumerate(states)
+    ]
+    links = [
+        ProcessLinkOut(
+            id=f"{process_id}.{transition.id}",
+            from_process_id=process_id,
+            from_state_id=transition.from_state_id,
+            from_node_id=f"{process_id}.{transition.from_state_id}",
+            to_process_id=process_id,
+            to_state_id=transition.to_state_id,
+            to_node_id=f"{process_id}.{transition.to_state_id}",
+            type="handoff",
+            label="Next state",
+            conditions=transition.conditions,
+        )
+        for transition in transitions
+    ]
+    return ProcessGraphOut(nodes=nodes, links=links)
+
+
+def _states_for_process_id(
+    process_id: str,
+    states: list[ProcessStateOut],
+) -> list[ProcessStateOut]:
+    if process_id == "development.requirements":
+        return states[:2] or _default_states(_specialists())[:2]
+    if process_id == "development.implementation":
+        return states[1:4] or _default_states(_specialists())[1:4]
+    if process_id == "development.qa":
+        return states[-2:] or _default_states(_specialists())[-2:]
+    if process_id == "documentation":
+        return _placeholder_process_states(
+            "docs_review",
+            "Documentation review",
+            "technical_writer",
+            "Review merged changes, update docs, and prepare release notes.",
+        )
+    if process_id == "marketing":
+        return _placeholder_process_states(
+            "launch_review",
+            "Launch review",
+            "product_marketer",
+            "Check whether the change needs customer-facing launch work.",
+        )
+    return states
+
+
+def _placeholder_process_states(
+    state_id: str,
+    name: str,
+    specialist_id: str,
+    instructions: str,
+) -> list[ProcessStateOut]:
+    specialists = _specialists()
+    specialist = specialists.get(specialist_id) or next(iter(specialists.values()))
+    return [
+        ProcessStateOut(
+            id=state_id,
+            name=name,
+            specialist_id=specialist.id,
+            specialist_name=specialist.name,
+            instructions=instructions,
+            triggers=[ProcessTriggerOut(type="event", event="process_graph.handoff")],
+            exit_conditions=[ProcessConditionOut(expression="review.complete == true")],
+            block_conditions=[ProcessConditionOut(expression="requires_human_input == true")],
+            ticket_contract=_ticket_contract_for_state(state_id),
+            runtime=ProcessStateRuntimeOut(health="ok"),
+        )
+    ]
 
 
 def _state_lane_ids(lanes: list[Lane], pipelines: list[Pipeline]) -> list[str]:

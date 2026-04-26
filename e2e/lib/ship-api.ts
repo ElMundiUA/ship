@@ -78,3 +78,34 @@ export async function shipApiPatch(
     data: JSON.stringify(body),
   });
 }
+
+export async function shipApiPut(
+  request: APIRequestContext,
+  path: string,
+  body: unknown,
+): Promise<Awaited<ReturnType<APIRequestContext["put"]>>> {
+  const base = shipApiBase()!;
+  const token = shipApiToken()!;
+  return request.put(`${base}${path}`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    data: JSON.stringify(body),
+  });
+}
+
+export async function shipApiDelete(
+  request: APIRequestContext,
+  path: string,
+): Promise<Awaited<ReturnType<APIRequestContext["delete"]>>> {
+  const base = shipApiBase()!;
+  const token = shipApiToken()!;
+  return request.delete(`${base}${path}`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/json",
+    },
+  });
+}

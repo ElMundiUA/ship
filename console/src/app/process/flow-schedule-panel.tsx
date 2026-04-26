@@ -1,6 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import {
+  type DragEvent as ReactDragEvent,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 
 import { Card, CardHeader } from "@/components/ui";
 import type {
@@ -22,6 +27,8 @@ const WEEKDAYS = [
   { id: 6, label: "Sat" },
   { id: 0, label: "Sun" },
 ] as const;
+const DEFAULT_TIMES = ["09:00", "13:00", "17:00"];
+const DRAG_SPECIALIST_MIME = "application/x-ship-specialist";
 
 export function FlowSchedulePanel({
   workspaceId,
@@ -37,9 +44,11 @@ export function FlowSchedulePanel({
   const [schedule, setSchedule] = useState<ApiProcessSchedule>(() =>
     normalizedSchedule(process),
   );
+  const [extraTimes, setExtraTimes] = useState<string[]>([]);
 
   useEffect(() => {
     setSchedule(normalizedSchedule(process));
+    setExtraTimes([]);
   }, [process]);
 
   const processDraft = useMemo<ApiProcess>(
@@ -64,37 +73,76 @@ export function FlowSchedulePanel({
   ]);
   const warnings = schedule.slots.flatMap((slot) => duplicateWarnings(slot));
 
-  function patchSlot(slotId: string, patch: Partial<ApiProcessScheduleSlot>) {
+  const timeRows = useMemo(() => knownTimes(schedule, extraTimes), [schedule, extraTimes]);
+  const assignments = useMemo(() => assignmentMap(schedule), [schedule]);
+  const assignedSpecialistIds = useMemo(
+    () => new Set(schedule.slots.flatMap((slot) => slot.specialist_ids)),
+    [schedule.slots],
+  );
+
+  function addSpecialistToCell(day: number, localTime: string, specialistId: string) {
+    setSchedule((current) => {
+      const key = cellKey(day, localTime);
+      const existing = current.slots.find((slot) => slot.id === key);
+      if (existing) {
+        if (existing.specialist_ids.includes(specialistId)) return current;
+        return {
+          ...current,
+          trigger: { kind: "schedule", event: null },
+          slots: current.slots.map((slot) =>
+            slot.id === key
+              ? {
+                  ...slot,
+                  specialist_ids: [...slot.specialist_ids, specialistId],
+                }
+              : slot,
+          ),
+        };
+      }
+      return {
+        ...current,
+        trigger: { kind: "schedule", event: null },
+        slots: [
+          ...current.slots,
+          {
+            id: key,
+            label: cellLabel(day, localTime),
+            local_time: localTime,
+            weekdays: [day],
+            specialist_ids: [specialistId],
+          },
+        ],
+      };
+    });
+  }
+
+  function removeSpecialistFromCell(day: number, localTime: string, specialistId: string) {
     setSchedule((current) => ({
       ...current,
-      slots: current.slots.map((slot) =>
-        slot.id === slotId ? { ...slot, ...patch } : slot,
-      ),
+      slots: current.slots
+        .map((slot) => {
+          if (slot.local_time !== localTime || !slot.weekdays.includes(day)) {
+            return slot;
+          }
+          const nextIds = slot.specialist_ids.filter((id) => id !== specialistId);
+          const nextWeekdays =
+            nextIds.length === 0
+              ? slot.weekdays.filter((weekday) => weekday !== day)
+              : slot.weekdays;
+          return {
+            ...slot,
+            specialist_ids: nextIds,
+            weekdays: nextWeekdays,
+          };
+        })
+        .filter((slot) => slot.specialist_ids.length > 0 && slot.weekdays.length > 0),
     }));
   }
 
-  function addSlot() {
-    setSchedule((current) => ({
-      ...current,
-      trigger: { kind: "schedule", event: null },
-      slots: [
-        ...current.slots,
-        {
-          id: uniqueSlotId(current.slots),
-          label: "New slot",
-          local_time: "09:00",
-          weekdays: [1, 2, 3, 4, 5],
-          specialist_ids: [process.specialists[0]?.id ?? "business_analyst"],
-        },
-      ],
-    }));
-  }
-
-  function removeSlot(slotId: string) {
-    setSchedule((current) => ({
-      ...current,
-      slots: current.slots.filter((slot) => slot.id !== slotId),
-    }));
+  function addTimeRow() {
+    const nextTime = nextAvailableTime(timeRows);
+    if (!nextTime) return;
+    setExtraTimes((current) => [...current, nextTime].sort());
   }
 
   return (
@@ -134,8 +182,8 @@ export function FlowSchedulePanel({
           changedAreas={dirty ? ["Flow schedule slots changed"] : []}
         />
 
-        <div className="rounded-xl border border-white/10 bg-white/[0.025] p-3">
-          <div className="grid gap-3 sm:grid-cols-[180px_minmax(0,1fr)]">
+        <div className="rounded-2xl border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(99,245,255,0.10),transparent_28%),rgba(255,255,255,0.03)] p-3">
+          <div className="grid gap-3 sm:grid-cols-[220px_minmax(0,1fr)]">
             <label className="block">
               <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/45">
                 Time zone
@@ -152,16 +200,11 @@ export function FlowSchedulePanel({
               />
             </label>
             <div className="text-xs leading-relaxed text-white/50">
-              Ship opens capacity for the selected specialists at the local wall time below.
-              If matching tickets do not exist, the backend agent does not start.
+              Ship already knows the available capacity slots from the process config.
+              Drag a specialist into a day/time cell to let that role pick matching
+              tickets in that window.
             </div>
           </div>
-        </div>
-
-        <div className="rounded-xl border border-white/10 bg-white/[0.025] px-3 py-2 text-xs leading-relaxed text-white/45">
-          First build guardrail: config/UI validation prevents duplicate specialists
-          in a slot. Deep runtime locks by process, slot start, and specialist remain
-          a follow-up executor phase.
         </div>
 
         {warnings.length > 0 ? (
@@ -170,113 +213,184 @@ export function FlowSchedulePanel({
           </div>
         ) : null}
 
-        <div className="space-y-3">
-          {schedule.slots.map((slot) => (
-            <div
-              key={slot.id}
-              className="rounded-xl border border-white/10 bg-white/[0.035] p-3"
-            >
-              <div className="grid gap-3 lg:grid-cols-[160px_120px_minmax(0,1fr)_auto]">
-                <label className="block">
-                  <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/45">
-                    Slot name
-                  </span>
-                  <input
-                    value={slot.label ?? ""}
-                    onChange={(e) => patchSlot(slot.id, { label: e.target.value })}
-                    placeholder={slot.id}
-                    className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none focus:border-aqua/40"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/45">
-                    Local time
-                  </span>
-                  <input
-                    type="time"
-                    value={slot.local_time}
-                    onChange={(e) => patchSlot(slot.id, { local_time: e.target.value })}
-                    className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none focus:border-aqua/40"
-                  />
-                </label>
-                <div>
-                  <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/45">
-                    Specialists
-                  </span>
-                  <div className="flex flex-wrap gap-2">
-                    {process.specialists.map((specialist) => {
-                      const checked = slot.specialist_ids.includes(specialist.id);
+        <div className="grid gap-3 xl:grid-cols-[240px_minmax(0,1fr)]">
+          <aside className="rounded-3xl border border-white/10 bg-black/25 p-3">
+            <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-aqua/70">
+              Role palette
+            </div>
+            <p className="mt-1 text-xs leading-relaxed text-white/45">
+              Drag roles into the calendar. Assigned roles stay highlighted so
+              it is obvious what already has coverage.
+            </p>
+            <div className="mt-3 grid gap-2">
+              {process.specialists.map((specialist) => (
+                <button
+                  key={specialist.id}
+                  type="button"
+                  draggable
+                  onDragStart={(event) => {
+                    event.dataTransfer.setData(DRAG_SPECIALIST_MIME, specialist.id);
+                    event.dataTransfer.effectAllowed = "copy";
+                  }}
+                  className={[
+                    "cursor-grab rounded-2xl border px-3 py-2 text-left transition active:cursor-grabbing",
+                    assignedSpecialistIds.has(specialist.id)
+                      ? "border-aqua/25 bg-aqua/[0.08]"
+                      : "border-white/10 bg-white/[0.035] hover:border-aqua/25",
+                  ].join(" ")}
+                >
+                  <div className="text-xs font-semibold text-white">
+                    {specialist.name}
+                  </div>
+                  <div className="mt-1 line-clamp-2 text-[11px] leading-4 text-white/40">
+                    {specialist.role}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </aside>
+
+          <section className="overflow-hidden rounded-3xl border border-white/10 bg-[#050a15] shadow-2xl shadow-black/30">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 bg-white/[0.035] px-4 py-3">
+              <div>
+                <div className="text-sm font-semibold text-white">Capacity calendar</div>
+                <div className="text-xs text-white/45">
+                  {timeRows.length} time windows · local to {schedule.time_zone || "UTC"}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={addTimeRow}
+                className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-bold text-white/60 transition hover:border-aqua/25 hover:text-aqua"
+              >
+                Add time window
+              </button>
+            </div>
+
+            <div className="overflow-x-auto">
+              <div className="min-w-[980px]">
+                <div className="grid grid-cols-[92px_repeat(7,minmax(120px,1fr))] border-b border-white/10">
+                  <div className="bg-black/20 px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-white/35">
+                    Time
+                  </div>
+                  {WEEKDAYS.map((day) => (
+                    <div
+                      key={day.id}
+                      className="border-l border-white/10 px-3 py-2 text-center text-[10px] font-bold uppercase tracking-widest text-white/45"
+                    >
+                      {day.label}
+                    </div>
+                  ))}
+                </div>
+                {timeRows.map((localTime) => (
+                  <div
+                    key={localTime}
+                    className="grid grid-cols-[92px_repeat(7,minmax(120px,1fr))] border-b border-white/10 last:border-b-0"
+                  >
+                    <div className="flex items-start justify-center bg-black/20 px-3 py-4 font-mono text-sm font-semibold text-aqua/80">
+                      {localTime}
+                    </div>
+                    {WEEKDAYS.map((day) => {
+                      const ids = assignments.get(cellKey(day.id, localTime)) ?? [];
                       return (
-                        <label
-                          key={specialist.id}
-                          className={[
-                            "cursor-pointer rounded-full border px-3 py-1 text-xs font-semibold transition",
-                            checked
-                              ? "border-aqua/35 bg-aqua/10 text-aqua"
-                              : "border-white/10 bg-white/[0.03] text-white/55 hover:border-white/20",
-                          ].join(" ")}
-                        >
-                          <input
-                            type="checkbox"
-                            className="sr-only"
-                            checked={checked}
-                            onChange={(e) => {
-                              const next = e.target.checked
-                                ? [...slot.specialist_ids, specialist.id]
-                                : slot.specialist_ids.filter((id) => id !== specialist.id);
-                              patchSlot(slot.id, { specialist_ids: Array.from(new Set(next)) });
-                            }}
-                          />
-                          {specialist.name}
-                        </label>
+                        <CalendarCell
+                          key={`${day.id}-${localTime}`}
+                          day={day.id}
+                          localTime={localTime}
+                          specialistIds={ids}
+                          process={process}
+                          onDropSpecialist={addSpecialistToCell}
+                          onRemoveSpecialist={removeSpecialistFromCell}
+                        />
                       );
                     })}
                   </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => removeSlot(slot.id)}
-                  className="self-end rounded-full border border-coral/25 px-3 py-2 text-xs font-semibold text-coral/90 hover:bg-coral/10"
-                >
-                  Remove
-                </button>
-              </div>
-              <div className="mt-3 flex flex-wrap gap-2">
-                {WEEKDAYS.map((day) => (
-                  <label key={day.id} className="text-xs text-white/55">
-                    <input
-                      type="checkbox"
-                      checked={slot.weekdays.includes(day.id)}
-                      onChange={(e) => {
-                        const next = e.target.checked
-                          ? [...slot.weekdays, day.id]
-                          : slot.weekdays.filter((value) => value !== day.id);
-                        patchSlot(slot.id, { weekdays: next.sort((a, b) => a - b) });
-                      }}
-                      className="mr-1 accent-aqua"
-                    />
-                    {day.label}
-                  </label>
                 ))}
               </div>
-              <p className="mt-3 text-xs text-white/45">
-                At {slot.local_time}, {slot.specialist_ids.length
-                  ? namesFor(slot.specialist_ids, process)
-                  : "no specialists"} may pick work if matching tickets exist.
-              </p>
             </div>
-          ))}
+          </section>
         </div>
-
-        <button
-          type="button"
-          onClick={addSlot}
-          className="rounded-full border border-white/10 bg-white/[0.05] px-4 py-2 text-xs font-bold text-white/75 transition hover:border-aqua/25 hover:text-aqua"
-        >
-          Add capacity slot
-        </button>
       </div>
     </Card>
+  );
+}
+
+function CalendarCell({
+  day,
+  localTime,
+  specialistIds,
+  process,
+  onDropSpecialist,
+  onRemoveSpecialist,
+}: {
+  day: number;
+  localTime: string;
+  specialistIds: string[];
+  process: ApiProcess;
+  onDropSpecialist: (day: number, localTime: string, specialistId: string) => void;
+  onRemoveSpecialist: (day: number, localTime: string, specialistId: string) => void;
+}) {
+  const [hovering, setHovering] = useState(false);
+  const byId = useMemo(
+    () => new Map(process.specialists.map((specialist) => [specialist.id, specialist])),
+    [process.specialists],
+  );
+
+  function handleDrop(event: ReactDragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    setHovering(false);
+    const specialistId = event.dataTransfer.getData(DRAG_SPECIALIST_MIME);
+    if (!specialistId) return;
+    onDropSpecialist(day, localTime, specialistId);
+  }
+
+  return (
+    <div
+      onDragOver={(event) => {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "copy";
+        setHovering(true);
+      }}
+      onDragLeave={() => setHovering(false)}
+      onDrop={handleDrop}
+      className={[
+        "min-h-[112px] border-l border-white/10 p-2 transition",
+        hovering
+          ? "bg-aqua/[0.12] shadow-[inset_0_0_0_1px_rgba(99,245,255,0.35)]"
+          : specialistIds.length
+            ? "bg-aqua/[0.035]"
+            : "bg-white/[0.015] hover:bg-white/[0.035]",
+      ].join(" ")}
+    >
+      <div className="flex min-h-full flex-col gap-1.5">
+        {specialistIds.map((id) => {
+          const specialist = byId.get(id);
+          return (
+            <button
+              key={id}
+              type="button"
+              onClick={() => onRemoveSpecialist(day, localTime, id)}
+              className="group rounded-xl border border-aqua/20 bg-aqua/[0.09] px-2 py-1.5 text-left transition hover:border-coral/35 hover:bg-coral/[0.08]"
+              title="Click to remove from this slot"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="truncate text-[11px] font-semibold text-white">
+                  {specialist?.name ?? id}
+                </span>
+                <span className="text-[10px] text-aqua/60 group-hover:text-coral">
+                  remove
+                </span>
+              </div>
+            </button>
+          );
+        })}
+        {specialistIds.length === 0 ? (
+          <div className="grid flex-1 place-items-center rounded-xl border border-dashed border-white/10 text-center text-[11px] leading-4 text-white/25">
+            Drop role
+          </div>
+        ) : null}
+      </div>
+    </div>
   );
 }
 
@@ -291,6 +405,38 @@ function normalizedSchedule(process: ApiProcess): ApiProcessSchedule {
   };
 }
 
+function knownTimes(schedule: ApiProcessSchedule, extras: string[] = []): string[] {
+  const times = new Set(
+    [...schedule.slots.map((slot) => slot.local_time), ...extras]
+      .filter((value): value is string => Boolean(value)),
+  );
+  if (times.size === 0) {
+    for (const time of DEFAULT_TIMES) times.add(time);
+  }
+  return Array.from(times).sort();
+}
+
+function assignmentMap(schedule: ApiProcessSchedule): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const slot of schedule.slots) {
+    for (const day of slot.weekdays) {
+      const key = cellKey(day, slot.local_time);
+      const current = out.get(key) ?? [];
+      out.set(key, Array.from(new Set([...current, ...slot.specialist_ids])));
+    }
+  }
+  return out;
+}
+
+function cellKey(day: number, localTime: string) {
+  return `slot_${localTime.replace(":", "")}_${day}`;
+}
+
+function cellLabel(day: number, localTime: string) {
+  const weekday = WEEKDAYS.find((item) => item.id === day)?.label ?? `Day ${day}`;
+  return `${weekday} ${localTime}`;
+}
+
 function duplicateWarnings(slot: ApiProcessScheduleSlot): string[] {
   const duplicates = slot.specialist_ids.filter(
     (id, index) => slot.specialist_ids.indexOf(id) !== index,
@@ -300,15 +446,9 @@ function duplicateWarnings(slot: ApiProcessScheduleSlot): string[] {
     : [];
 }
 
-function uniqueSlotId(slots: ApiProcessScheduleSlot[]) {
-  for (let index = 1; index < 1000; index += 1) {
-    const id = `slot_${index}`;
-    if (!slots.some((slot) => slot.id === id)) return id;
+function nextAvailableTime(existing: string[]) {
+  for (const time of DEFAULT_TIMES) {
+    if (!existing.includes(time)) return time;
   }
-  return `slot_${Date.now()}`;
-}
-
-function namesFor(ids: string[], process: ApiProcess) {
-  const byId = new Map(process.specialists.map((specialist) => [specialist.id, specialist.name]));
-  return ids.map((id) => byId.get(id) ?? id).join(" and ");
+  return null;
 }

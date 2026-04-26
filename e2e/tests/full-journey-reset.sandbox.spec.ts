@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 import {
+  EXTERNAL_INTEGRATION_KINDS,
   resetGithubSandboxRepo,
   resetShipWorkspace,
 } from "../lib/reset";
@@ -18,10 +19,9 @@ import {
  * Rolls back two surfaces:
  *   - GitHub `E2E_SANDBOX_REPO` — closes `[e2e]` issues + Ship-authored PRs,
  *     deletes `ship/*` branches (opt-in via `E2E_RESET_DELETE_BRANCHES=1`).
- *   - Ship workspace — disconnects activated repos + removes the tracker
- *     integration, so a subsequent run of `full-journey.wired.spec.ts`
- *     starts from a clean "step=repos" state (or "step=github" if the App
- *     install was also reverted out-of-band).
+ *   - Ship workspace — disconnects activated repos + removes tracker
+ *     integrations. With `E2E_RESET_EXTERNAL_INTEGRATIONS=1` it also removes
+ *     live probe rows and disables native integrations (Jira/GitLab/Azure).
  *
  * This is the **sandbox** (API-only) spec project — no browser session, no
  * `E2E_STORAGE_STATE` required. Needs:
@@ -69,6 +69,7 @@ test.describe("full-journey reset (sandbox)", () => {
     ).toEqual([]);
 
     const wsId = await shipResolveWorkspaceId(request);
+    const resetExternal = process.env.E2E_RESET_EXTERNAL_INTEGRATIONS === "1";
     const ship = await resetShipWorkspace(request, {
       base: shipApiBase()!,
       token: shipApiToken()!,
@@ -78,6 +79,8 @@ test.describe("full-journey reset (sandbox)", () => {
       // workspace is truly dedicated to e2e.
       onlyRepoFullName:
         process.env.E2E_RESET_ALL_REPOS === "1" ? undefined : repo,
+      trackerKinds: resetExternal ? EXTERNAL_INTEGRATION_KINDS : undefined,
+      removeNativeIntegrations: resetExternal,
     });
     test.info().annotations.push({
       type: "ship-reset",
