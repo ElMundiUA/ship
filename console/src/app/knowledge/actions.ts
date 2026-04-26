@@ -17,6 +17,7 @@ import {
   createConnectorBucket,
   listWorkspaces,
   syncConnectorBucket,
+  updateBucket,
 } from "@/lib/api/client";
 import type { ApiBucketScope } from "@/lib/api/types";
 import { getSessionToken } from "@/lib/api/session";
@@ -30,6 +31,11 @@ type Input = {
   name: string;
   slug?: string;
   description?: string;
+  purpose?: string;
+  bucketType?: string;
+  authority?: string;
+  accessLevel?: string;
+  freshnessPolicy?: string;
   scope?: ApiBucketScope;
   repoId?: string | null;
   projectId?: string | null;
@@ -54,6 +60,10 @@ export type GuidedImportResult =
   | { ok: false; message: string; status?: number };
 
 const GUIDED_IMPORT_MAX_BUCKETS = 20;
+
+export type UpdateBucketResult =
+  | { ok: true; slug: string }
+  | { ok: false; message: string; status?: number };
 
 async function requireToken(): Promise<string> {
   const token = await getSessionToken();
@@ -136,6 +146,7 @@ export async function createBucketAction(
           description: input.description?.trim() || undefined,
           scope_kind: input.scope ?? "workspace",
           source_kind: "external_static",
+          source_ref: knowledgeMetadata(input),
           repo_id: input.repoId ?? null,
           project_id: input.projectId ?? null,
         },
@@ -169,6 +180,68 @@ export async function createBucketAction(
   // we're fine here because the surrounding try is only for the
   // create call, not this redirect.
   redirect(`/knowledge/${encodeURIComponent(slug)}`);
+}
+
+export async function updateBucketMetadataAction(input: {
+  slug: string;
+  name?: string;
+  description?: string;
+}): Promise<UpdateBucketResult> {
+  const slug = input.slug.trim();
+  if (!slug) return { ok: false, message: "Bucket slug is required." };
+
+  let token: string;
+  let workspaceId: string;
+  try {
+    token = await requireToken();
+    workspaceId = await requireWorkspaceId(token);
+  } catch (err) {
+    return {
+      ok: false,
+      message: err instanceof Error ? err.message : String(err),
+    };
+  }
+
+  try {
+    await updateBucket(
+      workspaceId,
+      slug,
+      {
+        name: input.name?.trim() || undefined,
+        description: input.description?.trim() || undefined,
+      },
+      { token },
+    );
+    return { ok: true, slug };
+  } catch (err) {
+    return bucketActionError(err);
+  }
+}
+
+export async function archiveBucketAction(
+  slug: string,
+): Promise<UpdateBucketResult> {
+  const cleanSlug = slug.trim();
+  if (!cleanSlug) return { ok: false, message: "Bucket slug is required." };
+
+  let token: string;
+  let workspaceId: string;
+  try {
+    token = await requireToken();
+    workspaceId = await requireWorkspaceId(token);
+  } catch (err) {
+    return {
+      ok: false,
+      message: err instanceof Error ? err.message : String(err),
+    };
+  }
+
+  try {
+    await updateBucket(workspaceId, cleanSlug, { archived: true }, { token });
+    return { ok: true, slug: cleanSlug };
+  } catch (err) {
+    return bucketActionError(err);
+  }
 }
 
 export async function createGuidedImportAction(
@@ -250,4 +323,34 @@ export async function createGuidedImportAction(
     }
   }
   return { ok: true, created };
+}
+
+function knowledgeMetadata(input: Input): Record<string, unknown> | null {
+  const metadata = {
+    purpose: input.purpose?.trim() || undefined,
+    bucket_type: input.bucketType?.trim() || undefined,
+    authority: input.authority?.trim() || undefined,
+    access_level: input.accessLevel?.trim() || undefined,
+    freshness_policy: input.freshnessPolicy?.trim() || undefined,
+  };
+  if (Object.values(metadata).every((value) => value === undefined)) {
+    return null;
+  }
+  return { knowledge_metadata: metadata };
+}
+
+function bucketActionError(err: unknown): UpdateBucketResult {
+  if (err instanceof ApiHttpError) {
+    const detail =
+      typeof err.detail === "string"
+        ? err.detail
+        : err.detail && typeof err.detail === "object"
+          ? JSON.stringify(err.detail)
+          : err.message;
+    return { ok: false, message: detail, status: err.status };
+  }
+  return {
+    ok: false,
+    message: err instanceof Error ? err.message : String(err),
+  };
 }

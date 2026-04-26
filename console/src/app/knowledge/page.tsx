@@ -1,162 +1,129 @@
-import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
-import { ResolvedBucketGrid } from "@/components/resolved-bucket-grid";
 import { ScopePill } from "@/components/scope-pill";
-import { resolveScopeFromSearch } from "@/lib/scope";
-
-// Reads cookies + fetches per request.
-export const dynamic = "force-dynamic";
-
-import {
-  Badge,
-  ButtonGhost,
-  Card,
-  CardHeader,
-  LiveBanner,
-  MockBanner,
-} from "@/components/ui";
 import {
   type ApiActivatedRepo,
+  type ApiBucket,
+  type ApiKnowledgeCanonicalResponse,
+  getKnowledgeCanonical,
   getMe,
   isApiConfigured,
   listActivatedRepos,
+  listBucketSources,
+  listBuckets,
   listIntegrations,
-  listKnowledgeBuckets,
-  listResolvedBuckets,
   listWorkspaces,
 } from "@/lib/api/client";
 import { getSessionToken } from "@/lib/api/session";
 import type {
   ApiIntegration,
-  ApiKnowledgeBucket,
-  ApiResolvedBucket,
+  ApiKnowledgeSource,
   ApiUser,
 } from "@/lib/api/types";
-
-import { KnowledgeImportWizard } from "./import-wizard";
-import { NewBucketDialog } from "./new-bucket-dialog";
 import {
-  formatBytes,
   knowledgeBuckets as mockBuckets,
   knowledgeDocs as mockDocs,
-  relativeTime,
   workspaces,
 } from "@/lib/mock/cloud";
 
-const FALLBACK_WS = workspaces[0];
+import {
+  KnowledgeControlCenter,
+  type KnowledgeControlBucket,
+  type KnowledgeControlSource,
+  type KnowledgeBucketStatus,
+} from "./knowledge-control-center";
 
-type Scope = { kind: "workspace" | "repo" | "user"; repoId: string | null; projectId: string | null };
+export const dynamic = "force-dynamic";
+
+const FALLBACK_WS = workspaces[0];
 
 type LiveData = {
   source: "live";
   workspace: { id: string; slug: string; name: string };
-  scope: Scope;
-  /** Legacy list (.ship/knowledge mirrors + agent memory) — used when scope='workspace'. */
-  legacyBuckets?: ApiKnowledgeBucket[];
-  /** Phase 3 resolver output — used when scope != 'workspace'. */
-  resolvedBuckets?: ApiResolvedBucket[];
+  buckets: KnowledgeControlBucket[];
+  sources: KnowledgeControlSource[];
+  canonical: ApiKnowledgeCanonicalResponse | null;
   repos: ApiActivatedRepo[];
-  me: ApiUser | null;
-  /** Integrations available for connector-bucket creation. Empty if admin perms missing. */
   integrations: ApiIntegration[];
+  me: ApiUser | null;
 };
 
 type MockData = {
   source: "mock";
   workspace: { slug: string; name: string };
   reason: string;
+  buckets: KnowledgeControlBucket[];
+  sources: KnowledgeControlSource[];
 };
 
 type Loaded = LiveData | MockData;
 
-type SearchParams = {
-  scope?: string | string[];
-  repo_id?: string | string[];
-  project_id?: string | string[];
-};
-
-async function load(searchParams: SearchParams): Promise<Loaded> {
+async function load(): Promise<Loaded> {
   if (!isApiConfigured()) {
-    return { source: "mock", workspace: FALLBACK_WS, reason: "backend not configured (SHIP_API_URL unset)" };
+    return mockData("backend not configured (SHIP_API_URL unset)");
   }
   const token = await getSessionToken();
   if (!token) {
-    return { source: "mock", workspace: FALLBACK_WS, reason: "not signed in — showing demo data" };
+    return mockData("not signed in — showing demo data");
   }
-  try {
-    const wss = await listWorkspaces(token);
-    if (wss.length === 0) {
-      return { source: "mock", workspace: FALLBACK_WS, reason: "no workspaces yet — finish onboarding first" };
-    }
-    const ws = wss[0];
-    const scope = resolveScopeFromSearch(searchParams);
 
-    // Fan out only the calls we need for the current scope.
-    // Repos + me always feed the pill; bucket data is one or the
-    // other depending on what the user selected.
-    const [reposRaw, me, integrationsRaw] = await Promise.all([
-      listActivatedRepos(ws.id, token).catch(() => [] as ApiActivatedRepo[]),
+  try {
+    const workspaces = await listWorkspaces(token);
+    if (workspaces.length === 0) {
+      return mockData("no workspaces yet — finish onboarding first");
+    }
+    const workspace = workspaces[0];
+
+    const [repos, integrations, me, rawBuckets, canonical] = await Promise.all([
+      listActivatedRepos(workspace.id, token).catch(() => [] as ApiActivatedRepo[]),
+      listIntegrations(workspace.id, token).catch(() => [] as ApiIntegration[]),
       getMe(token).catch(() => null as ApiUser | null),
-      // Integrations list is admin-only; viewers get 403 back. Fail
-      // open with an empty list so the page still renders for them
-      // (they just won't see the connector tab in the new-bucket
-      // dialog, which is the correct behaviour).
-      listIntegrations(ws.id, token).catch(() => [] as ApiIntegration[]),
+      listBuckets(workspace.id, { token }),
+      getKnowledgeCanonical(workspace.id, token).catch(
+        () => null as ApiKnowledgeCanonicalResponse | null,
+      ),
     ]);
 
-    let legacyBuckets: ApiKnowledgeBucket[] | undefined;
-    let resolvedBuckets: ApiResolvedBucket[] | undefined;
-    if (scope.kind === "workspace") {
-      // Keep the legacy list for the default view — it already mirrors
-      // ``repo_files`` into markdown-card shape the grid below renders.
-      legacyBuckets = await listKnowledgeBuckets(ws.id, token);
-    } else {
-      const resp = await listResolvedBuckets(
-        ws.id,
-        {
-          repoId: scope.kind === "repo" ? scope.repoId : undefined,
-          projectId: scope.kind === "repo" ? scope.projectId : undefined,
-        },
-        token,
-      );
-      // In non-workspace scopes we render the effective winners only
-      // — that's the scope the user is currently "inside" per the
-      // Phase 3 ladder. The ``buckets`` array contains every
-      // ancestor/overlay row too, which is useful for admin views
-      // but noisy on the default page.
-      resolvedBuckets = resp.buckets.filter((b) => b.effective);
-    }
+    const sourcePairs = await Promise.all(
+      rawBuckets.map(async (bucket) => ({
+        bucket,
+        sources: await listBucketSources(workspace.id, bucket.slug, token).catch(
+          () => [] as ApiKnowledgeSource[],
+        ),
+      })),
+    );
+    const sources = sourcePairs.flatMap(({ bucket, sources }) =>
+      sources.map((source) => normalizeSource(bucket, source)),
+    );
 
     return {
       source: "live",
-      workspace: { id: ws.id, slug: ws.slug, name: ws.name },
-      scope,
-      legacyBuckets,
-      resolvedBuckets,
-      repos: reposRaw,
+      workspace: { id: workspace.id, slug: workspace.slug, name: workspace.name },
+      buckets: sourcePairs.map(({ bucket, sources }) =>
+        normalizeBucket(bucket, sources),
+      ),
+      sources,
+      canonical,
+      repos,
+      integrations,
       me,
-      integrations: integrationsRaw,
     };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { source: "mock", workspace: FALLBACK_WS, reason: `backend error: ${msg}` };
+    const message = err instanceof Error ? err.message : String(err);
+    return mockData(`backend error: ${message}`);
   }
 }
 
-export default async function KnowledgeIndexPage({
-  searchParams,
-}: {
-  searchParams: Promise<SearchParams>;
-}) {
-  const sp = await searchParams;
-  const data = await load(sp);
-  const ws = data.workspace;
-
+export default async function KnowledgeIndexPage() {
+  const data = await load();
+  const workspace = data.workspace;
   const scopePill =
     data.source === "live" ? (
       <ScopePill
-        workspaceName={ws.name}
-        repos={data.repos.map((r) => ({ id: r.id, full_name: r.full_name }))}
+        workspaceName={workspace.name}
+        repos={data.repos.map((repo) => ({
+          id: repo.id,
+          full_name: repo.full_name,
+        }))}
         me={
           data.me
             ? {
@@ -171,236 +138,225 @@ export default async function KnowledgeIndexPage({
 
   return (
     <AppShell
-      kicker={`${ws.name} · knowledge`}
-      title="Knowledge buckets"
+      kicker={`${workspace.name} · knowledge`}
+      title="Knowledge"
       scopePill={scopePill}
-      actions={<ButtonGhost>Browse global packs</ButtonGhost>}
     >
-      {data.source === "live" ? (
-        <LiveBanner workspace={ws.slug} />
-      ) : (
-        <MockBanner reason={data.reason} />
-      )}
-
-      <p className="mb-5 max-w-3xl text-sm text-white/65">
-        Each bucket lives at a specific scope — workspace-wide, a repo,
-        or your personal overlay. Use the scope pill in the header to
-        switch between them. The legacy mirror of{" "}
-        <code className="rounded bg-white/[0.06] px-1.5 py-0.5 font-mono text-[11px] text-aqua/95">
-          .ship/knowledge/&lt;slug&gt;.md
-        </code>{" "}
-        is still served under &ldquo;workspace&rdquo; scope during the consolidation.
-      </p>
-
-      {data.source === "live" && (
-        <div className="mb-6 space-y-4">
-          <NewBucketDialog
-            integrations={data.integrations}
-            defaultScope={
-              data.scope.kind === "repo"
-                ? "repo"
-                : data.scope.kind === "user"
-                  ? "user"
-                  : "workspace"
-            }
-          />
-          <KnowledgeImportWizard
-            integrations={data.integrations}
-            defaultScope="workspace"
-          />
-        </div>
-      )}
-
-      {data.source === "live" ? (
-        data.scope.kind === "workspace" ? (
-          <LegacyBucketGrid buckets={data.legacyBuckets ?? []} />
-        ) : (
-          <ResolvedBucketGrid
-            buckets={data.resolvedBuckets ?? []}
-            scopeKind={data.scope.kind}
-          />
-        )
-      ) : (
-        <MockBucketGrid />
-      )}
+      <KnowledgeControlCenter
+        mode={data.source}
+        workspace={workspace}
+        reason={data.source === "mock" ? data.reason : undefined}
+        buckets={data.buckets}
+        sources={data.sources}
+        canonical={data.source === "live" ? data.canonical : null}
+        repos={data.source === "live" ? data.repos : []}
+        integrations={data.source === "live" ? data.integrations : []}
+        defaultScope="workspace"
+      />
     </AppShell>
   );
 }
 
-function LegacyBucketGrid({ buckets }: { buckets: ApiKnowledgeBucket[] }) {
-  if (buckets.length === 0) {
-    return (
-      <Card className="text-center">
-        <p className="text-sm text-white/70">
-          No knowledge buckets yet. Finish onboarding (or run{" "}
-          <code className="rounded bg-white/[0.06] px-1.5 py-0.5 font-mono text-[11px] text-aqua/95">
-            shipctl knowledge seed
-          </code>
-          ) to populate{" "}
-          <code className="rounded bg-white/[0.06] px-1.5 py-0.5 font-mono text-[11px] text-aqua/95">
-            .ship/knowledge/
-          </code>{" "}
-          in your repo.
-        </p>
-        <div className="mt-4 flex justify-center gap-2">
-          <Link
-            href="/onboarding"
-            className="inline-flex items-center gap-1.5 rounded-full border border-aqua/40 bg-aqua/10 px-3 py-1.5 text-xs font-bold text-aqua hover:bg-aqua/20"
-          >
-            Open onboarding →
-          </Link>
-        </div>
-      </Card>
-    );
+function normalizeBucket(
+  bucket: ApiBucket,
+  sources: ApiKnowledgeSource[],
+): KnowledgeControlBucket {
+  const metadata = metadataFromRef(bucket.source_ref);
+  const lastIndexedAt =
+    maxDate(sources.map((source) => source.last_synced_at)) ?? bucket.updated_at;
+  const sourceCount =
+    sources.length > 0 ? sources.length : bucket.source_kind ? 1 : 0;
+
+  return {
+    id: bucket.id,
+    slug: bucket.slug,
+    name: bucket.name,
+    description: bucket.description ?? "",
+    bucketType: metadata.bucketType ?? inferBucketType(bucket),
+    scope: bucket.scope_kind ?? "workspace",
+    sourceKind: bucket.source_kind ?? "agent_memory",
+    authority: metadata.authority ?? inferAuthority(bucket),
+    accessLevel: metadata.accessLevel ?? inferAccess(bucket),
+    freshnessPolicy: metadata.freshnessPolicy ?? "Manual refresh",
+    status: bucketStatus(bucket, sources),
+    articles: bucket.summary_count ?? 0,
+    chunks: inferChunks(bucket, sources),
+    sourceCount,
+    sourceNames:
+      sources.length > 0
+        ? sources.map((source) => source.kind)
+        : bucket.source_kind
+          ? [bucket.source_kind]
+          : [],
+    lastIndexedAt,
+    updatedAt: bucket.updated_at,
+  };
+}
+
+function normalizeSource(
+  bucket: ApiBucket,
+  source: ApiKnowledgeSource,
+): KnowledgeControlSource {
+  return {
+    id: source.id,
+    bucketSlug: bucket.slug,
+    bucketName: bucket.name,
+    kind: source.kind,
+    status: source.status,
+    lastSyncedAt: source.last_synced_at,
+    nextSyncAt: asString(source.config.next_sync_at),
+    lastError: source.last_error,
+    documents: asNumber(source.config.document_count),
+    chunks: asNumber(source.config.chunk_count),
+    urlOrPath:
+      asString(source.config.url) ??
+      asString(source.config.path) ??
+      asString(source.config.page_id) ??
+      asString(source.config.space_key),
+  };
+}
+
+function mockData(reason: string): MockData {
+  const buckets = mockBuckets.map((bucket): KnowledgeControlBucket => {
+    const docs = mockDocs.filter((doc) => doc.bucketId === bucket.id);
+    return {
+      id: bucket.id,
+      slug: bucket.id,
+      name: bucket.name,
+      description: bucket.summary,
+      bucketType: inferMockType(bucket.glyph),
+      scope: bucket.visibility === "private" ? "user" : bucket.visibility,
+      sourceKind: "static_upload",
+      authority: bucket.glyph === "security" ? "Source of truth" : "Reference",
+      accessLevel: bucket.visibility === "private" ? "Restricted" : "Workspace",
+      freshnessPolicy: "Manual refresh",
+      status:
+        bucket.status === "ready"
+          ? "Ready"
+          : bucket.status === "indexing"
+            ? "Indexing"
+            : "Failed",
+      articles: bucket.documents,
+      chunks: bucket.embeddings,
+      sourceCount: docs.length,
+      sourceNames: docs.map((doc) => doc.type),
+      lastIndexedAt: bucket.updatedAt,
+      updatedAt: bucket.updatedAt,
+    };
+  });
+
+  return {
+    source: "mock",
+    workspace: FALLBACK_WS,
+    reason,
+    buckets,
+    sources: mockDocs.map((doc) => {
+      const bucket = buckets.find((item) => item.slug === doc.bucketId);
+      return {
+        id: doc.id,
+        bucketSlug: doc.bucketId,
+        bucketName: bucket?.name ?? doc.bucketId,
+        kind: doc.type,
+        status: doc.status,
+        lastSyncedAt: doc.uploadedAt,
+        nextSyncAt: null,
+        lastError: doc.status === "failed" ? "Parser failed in demo data." : null,
+        documents: 1,
+        chunks: doc.chunks,
+        urlOrPath: doc.name,
+      };
+    }),
+  };
+}
+
+function bucketStatus(
+  bucket: ApiBucket,
+  sources: ApiKnowledgeSource[],
+): KnowledgeBucketStatus {
+  if (bucket.archived_at) return "Stale";
+  if (sources.some((source) => source.status === "error")) return "Failed";
+  if (sources.some((source) => source.status === "syncing")) return "Indexing";
+  if ((bucket.summary_count ?? 0) === 0 && sources.length === 0) return "Empty";
+  const lastIndexedAt = maxDate(sources.map((source) => source.last_synced_at));
+  if (lastIndexedAt && Date.now() - Date.parse(lastIndexedAt) > 30 * 86_400_000) {
+    return "Stale";
   }
-  return (
-    <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-      {buckets.map((b) => (
-        <Card key={`${b.repo_id}-${b.slug}`} className="flex flex-col">
-          <div className="flex items-start justify-between gap-3">
-            <div className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-lilac/40 via-aqua/30 to-coral/30 text-xl font-bold text-white">
-              {emojiFor(b.slug)}
-            </div>
-            <Badge tone={b.visibility === "project" ? "project" : "workspace"}>
-              {b.visibility}
-            </Badge>
-          </div>
-          <h3 className="mt-3 font-display text-base font-bold text-white">
-            {b.title}
-          </h3>
-          <p className="mt-1 line-clamp-3 text-xs text-white/60">
-            {b.excerpt || "No content yet."}
-          </p>
-          <dl className="mt-4 grid grid-cols-2 gap-3 text-[11px]">
-            <Stat k="Size" v={formatBytes(b.size)} />
-            <Stat k="Updated" v={relativeTime(b.updated_at)} />
-          </dl>
-          <div className="mt-auto pt-4">
-            <Link
-              href={`/knowledge/${encodeURIComponent(b.slug)}`}
-              className="font-semibold text-aqua hover:underline"
-            >
-              Open →
-            </Link>
-          </div>
-        </Card>
-      ))}
-    </section>
-  );
+  return "Ready";
 }
 
-function MockBucketGrid() {
-  return (
-    <>
-      <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {mockBuckets.map((b) => (
-          <Card key={b.id} className="flex flex-col">
-            <div className="flex items-start justify-between gap-3">
-              <div className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-lilac/40 via-aqua/30 to-coral/30 text-xl font-bold text-white">
-                {emojiFor(b.glyph)}
-              </div>
-              <Badge
-                tone={
-                  b.status === "ready"
-                    ? "ok"
-                    : b.status === "indexing"
-                      ? "warn"
-                      : "err"
-                }
-                dot
-              >
-                {b.status}
-              </Badge>
-            </div>
-            <h3 className="mt-3 font-display text-base font-bold text-white">{b.name}</h3>
-            <p className="mt-1 line-clamp-2 text-xs text-white/60">{b.summary}</p>
-            <dl className="mt-4 grid grid-cols-3 gap-3 text-[11px]">
-              <Stat k="Docs" v={b.documents.toString()} />
-              <Stat k="Chunks" v={b.embeddings.toLocaleString()} />
-              <Stat k="Size" v={formatBytes(b.totalBytes)} />
-            </dl>
-            <div className="mt-auto flex items-center justify-between pt-4 text-[11px]">
-              <Badge
-                tone={
-                  b.visibility === "project"
-                    ? "project"
-                    : b.visibility === "workspace"
-                      ? "workspace"
-                      : "neutral"
-                }
-              >
-                {b.visibility}
-              </Badge>
-              <Link
-                href={`/knowledge/${b.id}`}
-                className="font-semibold text-aqua hover:underline"
-              >
-                Open →
-              </Link>
-            </div>
-            <div className="mt-3 text-[10px] uppercase tracking-widest text-white/35">
-              updated {relativeTime(b.updatedAt)}
-            </div>
-          </Card>
-        ))}
-      </section>
-
-      <Card className="mt-8">
-        <CardHeader
-          title="Recent uploads · DevOps rules · Helio"
-          subtitle="Per-document parsing & embedding pipeline (mock)"
-        />
-        <table className="min-w-full text-sm">
-          <thead className="bg-white/[0.04] text-[10px] uppercase tracking-widest text-white/45">
-            <tr>
-              <th className="px-3 py-2 text-left font-semibold">Document</th>
-              <th className="px-3 py-2 text-left font-semibold">Type</th>
-              <th className="px-3 py-2 text-left font-semibold">Pages</th>
-              <th className="px-3 py-2 text-left font-semibold">Size</th>
-              <th className="px-3 py-2 text-left font-semibold">Uploaded</th>
-            </tr>
-          </thead>
-          <tbody>
-            {mockDocs.map((d) => (
-              <tr key={d.id} className="border-t border-white/5">
-                <td className="px-3 py-2.5 align-top">
-                  <div className="font-semibold text-white">{d.name}</div>
-                  <div className="text-[10px] text-white/45">{d.uploadedBy}</div>
-                </td>
-                <td className="px-3 py-2.5 align-top text-[11px] uppercase tracking-widest text-white/55">
-                  {d.type}
-                </td>
-                <td className="px-3 py-2.5 align-top text-xs text-white/65">{d.pages}</td>
-                <td className="px-3 py-2.5 align-top text-xs text-white/65">{formatBytes(d.size)}</td>
-                <td className="px-3 py-2.5 align-top text-xs text-white/55">
-                  {relativeTime(d.uploadedAt)}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </Card>
-    </>
-  );
+function metadataFromRef(sourceRef: Record<string, unknown> | null | undefined) {
+  const raw =
+    sourceRef &&
+    typeof sourceRef.knowledge_metadata === "object" &&
+    sourceRef.knowledge_metadata !== null
+      ? (sourceRef.knowledge_metadata as Record<string, unknown>)
+      : {};
+  return {
+    bucketType: asString(raw.bucket_type),
+    authority: asString(raw.authority),
+    accessLevel: asString(raw.access_level),
+    freshnessPolicy: asString(raw.freshness_policy),
+  };
 }
 
-function Stat({ k, v }: { k: string; v: string }) {
-  return (
-    <div className="rounded-md border border-white/10 bg-white/[0.02] px-2 py-1.5">
-      <div className="text-[9px] font-bold uppercase tracking-widest text-white/40">{k}</div>
-      <div className="mt-0.5 font-semibold text-white">{v}</div>
-    </div>
-  );
+function inferBucketType(bucket: ApiBucket): string {
+  const haystack = `${bucket.name} ${bucket.slug} ${bucket.description ?? ""}`.toLowerCase();
+  if (haystack.includes("architect")) return "Architecture";
+  if (haystack.includes("runbook") || haystack.includes("ops")) return "Runbooks";
+  if (haystack.includes("security") || haystack.includes("access")) return "Security";
+  if (haystack.includes("product")) return "Product Knowledge";
+  if (haystack.includes("glossary") || haystack.includes("data")) return "Data Glossary";
+  if (bucket.source_kind === "repo_context" || bucket.source_kind === "repo_files") {
+    return "Source Intelligence";
+  }
+  return "Custom";
 }
 
-function emojiFor(slug: string): string {
-  const lower = slug.toLowerCase();
-  if (lower.includes("brand")) return "✦";
-  if (lower.includes("style") || lower.includes("code")) return "⌘";
-  if (lower.includes("test")) return "✓";
-  if (lower.includes("devops") || lower.includes("ops")) return "⚙";
-  if (lower.includes("security")) return "🛡";
-  if (lower.includes("design")) return "✦";
-  if (lower.includes("compliance")) return "§";
-  return "◆";
+function inferMockType(glyph: string): string {
+  if (glyph === "devops") return "Runbooks";
+  if (glyph === "security") return "Security";
+  if (glyph === "design") return "Product Knowledge";
+  return "Custom";
+}
+
+function inferAuthority(bucket: ApiBucket): string {
+  if (bucket.scope_kind === "workspace" && bucket.source_kind === "promoted") {
+    return "Source of truth";
+  }
+  if (bucket.source_kind === "agent_memory" || bucket.source_kind === "repo_context") {
+    return "Generated / low-authority";
+  }
+  if (bucket.source_kind === "audio_transcript") return "Temporary memory";
+  return "High-confidence reference";
+}
+
+function inferAccess(bucket: ApiBucket): string {
+  if (bucket.scope_kind === "user") return "Restricted";
+  if (bucket.scope_kind === "repo") return "Repository-specific";
+  return "Workspace";
+}
+
+function inferChunks(bucket: ApiBucket, sources: ApiKnowledgeSource[]): number {
+  const sourceChunks = sources.reduce(
+    (sum, source) => sum + (asNumber(source.config.chunk_count) ?? 0),
+    0,
+  );
+  if (sourceChunks > 0) return sourceChunks;
+  return (bucket.summary_count ?? 0) * 8;
+}
+
+function maxDate(values: Array<string | null | undefined>): string | null {
+  const times = values
+    .map((value) => (value ? Date.parse(value) : Number.NaN))
+    .filter((value) => Number.isFinite(value));
+  if (times.length === 0) return null;
+  return new Date(Math.max(...times)).toISOString();
+}
+
+function asString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function asNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }

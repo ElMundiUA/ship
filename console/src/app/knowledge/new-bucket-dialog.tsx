@@ -38,6 +38,43 @@ const GUIDED_IMPORT_MAX_BUCKETS = 20;
 const DEFAULT_GUIDED_IMPORT = `Runbook overview | notion-or-confluence-page-id | runbook-overview
 Incident response | second-page-id`;
 
+const BUCKET_TYPES = [
+  "Project Map",
+  "Architecture",
+  "Engineering Standards",
+  "Runbooks",
+  "Product Knowledge",
+  "Source Intelligence",
+  "Generated Assets",
+  "Security",
+  "Integrations",
+  "Data Glossary",
+  "Custom",
+];
+
+const AUTHORITY_LEVELS = [
+  "Source of truth",
+  "High-confidence reference",
+  "Generated / low-authority",
+  "Temporary memory",
+];
+
+const ACCESS_LEVELS = [
+  "Workspace",
+  "Repository-specific",
+  "Team-specific",
+  "Client-specific",
+  "Private/restricted",
+];
+
+const FRESHNESS_POLICIES = [
+  "Manual refresh",
+  "Refresh daily",
+  "Refresh weekly",
+  "Refresh on source change",
+  "Temporary / expires soon",
+];
+
 export function NewBucketDialog({
   integrations,
   defaultScope = "workspace",
@@ -50,6 +87,11 @@ export function NewBucketDialog({
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
   const [description, setDescription] = useState("");
+  const [purpose, setPurpose] = useState("");
+  const [bucketType, setBucketType] = useState(BUCKET_TYPES[0]);
+  const [authority, setAuthority] = useState(AUTHORITY_LEVELS[1]);
+  const [accessLevel, setAccessLevel] = useState(ACCESS_LEVELS[0]);
+  const [freshnessPolicy, setFreshnessPolicy] = useState(FRESHNESS_POLICIES[0]);
   const [integrationId, setIntegrationId] = useState<string>(
     integrations[0]?.id ?? "",
   );
@@ -72,6 +114,11 @@ export function NewBucketDialog({
     setName("");
     setSlug("");
     setDescription("");
+    setPurpose("");
+    setBucketType(BUCKET_TYPES[0]);
+    setAuthority(AUTHORITY_LEVELS[1]);
+    setAccessLevel(ACCESS_LEVELS[0]);
+    setFreshnessPolicy(FRESHNESS_POLICIES[0]);
     setResult(null);
     setGuidedResult(null);
   }
@@ -138,6 +185,11 @@ export function NewBucketDialog({
         name,
         slug: slug || undefined,
         description: description || undefined,
+        purpose: purpose || undefined,
+        bucketType,
+        authority,
+        accessLevel,
+        freshnessPolicy,
         scope: defaultScope,
         integrationId: kind === "connector_proxy" ? integrationId : undefined,
         resourceRef,
@@ -179,7 +231,7 @@ export function NewBucketDialog({
     <Card className="mb-6" data-testid="new-bucket-dialog">
       <CardHeader
         title="Create a new bucket"
-        subtitle="Upload bucket hosts files you paste in; connector bucket mirrors a third-party source."
+        subtitle="Define what this memory is for, who can use it, and how fresh it should stay."
         action={
           <button
             type="button"
@@ -281,6 +333,79 @@ export function NewBucketDialog({
               className="w-full rounded border border-white/15 bg-black/30 px-3 py-2 text-sm text-white/90"
             />
           </Field>
+
+          <Field label="Bucket purpose">
+            <textarea
+              data-testid="new-bucket-purpose"
+              value={purpose}
+              onChange={(e) => setPurpose(e.target.value)}
+              rows={2}
+              placeholder="Use this when agents or humans need deployment, rollback, and incident response context."
+              className="w-full rounded border border-white/15 bg-black/30 px-3 py-2 text-sm text-white/90"
+            />
+          </Field>
+
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <Field label="Bucket type">
+              <select
+                data-testid="new-bucket-type"
+                value={bucketType}
+                onChange={(e) => setBucketType(e.target.value)}
+                className="w-full rounded border border-white/15 bg-black/30 px-3 py-2 text-sm text-white/90"
+              >
+                {BUCKET_TYPES.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            <Field label="Authority level">
+              <select
+                data-testid="new-bucket-authority"
+                value={authority}
+                onChange={(e) => setAuthority(e.target.value)}
+                className="w-full rounded border border-white/15 bg-black/30 px-3 py-2 text-sm text-white/90"
+              >
+                {AUTHORITY_LEVELS.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            <Field label="Access level">
+              <select
+                data-testid="new-bucket-access"
+                value={accessLevel}
+                onChange={(e) => setAccessLevel(e.target.value)}
+                className="w-full rounded border border-white/15 bg-black/30 px-3 py-2 text-sm text-white/90"
+              >
+                {ACCESS_LEVELS.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            <Field label="Freshness policy">
+              <select
+                data-testid="new-bucket-freshness"
+                value={freshnessPolicy}
+                onChange={(e) => setFreshnessPolicy(e.target.value)}
+                className="w-full rounded border border-white/15 bg-black/30 px-3 py-2 text-sm text-white/90"
+              >
+                {FRESHNESS_POLICIES.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </div>
 
           {kind === "connector_proxy" && (
             <>

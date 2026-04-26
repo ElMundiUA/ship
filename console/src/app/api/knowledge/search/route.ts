@@ -20,6 +20,7 @@ type Body = {
   workspaceId: string;
   query: string;
   repoId?: string | null;
+  bucketSlug?: string | null;
   limit?: number;
 };
 
@@ -59,7 +60,12 @@ export async function POST(request: Request) {
     const token = (await getSessionToken()) ?? undefined;
     const resp = await searchKnowledge(
       body.workspaceId,
-      { query, repoId: body.repoId ?? null, limit: body.limit },
+      {
+        query,
+        repoId: body.repoId ?? null,
+        bucketSlug: body.bucketSlug ?? null,
+        limit: body.limit,
+      },
       token,
     );
     return NextResponse.json(resp, { status: 200 });
