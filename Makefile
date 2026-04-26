@@ -13,6 +13,10 @@ BACKEND_SVC := ship-server
 WORKER_SVC := ship-worker
 CONSOLE_SVC := console
 DB_SVC := postgres
+DEV_BACKEND_HOST ?= 127.0.0.1
+DEV_BACKEND_PORT ?= 8100
+DEV_CONSOLE_PORT ?= 3001
+DEV_API_URL ?= http://localhost:$(DEV_BACKEND_PORT)
 
 # Override on the command line, e.g.: make smoke SMOKE_BASE=http://staging:3001
 SMOKE_BASE ?= http://localhost:3001
@@ -23,7 +27,8 @@ SMOKE_API ?= http://localhost:8100
 .PHONY: help bootstrap up down restart rebuild logs logs-server logs-worker \
         logs-console health smoke psql redis-cli migrate revision shell \
         test test-backend test-fast clean nuke status backup backup-prune ps env-check \
-        prod-up prod-down prod-logs bunny-deploy bunny-deploy-dry
+        dev-env-check dev-port-backend dev-port-console dev-migrate dev-backend \
+        dev-console dev-local prod-up prod-down prod-logs bunny-deploy bunny-deploy-dry
 
 help: ## Show this help.
 	@awk 'BEGIN {FS = ":.*##"; printf "Targets:\n"} \
@@ -35,6 +40,62 @@ bootstrap: ## Generate .env with random secrets + Auth0 placeholders (idempotent
 
 env-check: ## Fail fast if .env is missing.
 	@test -f .env || { echo "no .env — run: make bootstrap"; exit 1; }
+
+dev-env-check: env-check ## Fail fast if .venv is missing for direct local dev.
+	@test -x .venv/bin/python || { echo "no .venv — run: python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements-backend.txt"; exit 1; }
+
+dev-port-backend: ## Fail if the local backend dev port is already in use.
+	@if lsof -iTCP:$(DEV_BACKEND_PORT) -sTCP:LISTEN >/dev/null 2>&1; then \
+		echo "port $(DEV_BACKEND_PORT) is already in use; stop that process before running local backend dev"; \
+		lsof -iTCP:$(DEV_BACKEND_PORT) -sTCP:LISTEN; \
+		exit 1; \
+	fi
+
+dev-port-console: ## Fail if the local console dev port is already in use.
+	@if lsof -iTCP:$(DEV_CONSOLE_PORT) -sTCP:LISTEN >/dev/null 2>&1; then \
+		echo "port $(DEV_CONSOLE_PORT) is already in use; stop that process before running local console dev"; \
+		lsof -iTCP:$(DEV_CONSOLE_PORT) -sTCP:LISTEN; \
+		exit 1; \
+	fi
+
+dev-migrate: dev-env-check ## Run Alembic from .venv against DATABASE_URL/ALEMBIC_DATABASE_URL in .env.
+	@node scripts/run-with-dotenv.mjs -- \
+		.venv/bin/alembic -c backend/alembic.ini upgrade head
+
+dev-backend: dev-env-check dev-port-backend ## Run FastAPI locally from .venv using root .env.
+	@node scripts/run-with-dotenv.mjs \
+		--set SHIP_ALLOW_LOCAL_AUTH0_CALLBACKS=true \
+		--default SHIP_PUBLIC_URL=http://localhost:$(DEV_BACKEND_PORT) \
+		--default SHIP_CONSOLE_URL=http://localhost:$(DEV_CONSOLE_PORT) \
+		-- .venv/bin/uvicorn backend.app.main:app --reload --host $(DEV_BACKEND_HOST) --port $(DEV_BACKEND_PORT)
+
+dev-console: env-check dev-port-console ## Run the console locally against the local backend and root .env.
+	@node scripts/run-with-dotenv.mjs \
+		--default SHIP_API_URL=$(DEV_API_URL) \
+		--default APP_BASE_URL=http://localhost:$(DEV_CONSOLE_PORT) \
+		--default SHIP_CONSOLE_URL=http://localhost:$(DEV_CONSOLE_PORT) \
+		-- npm run dev --prefix console
+
+dev-local: dev-env-check dev-port-backend dev-port-console ## Run backend + console locally against shared dev infrastructure.
+	@set -euo pipefail; \
+		backend_pid=""; console_pid=""; \
+		cleanup() { \
+			[ -n "$$backend_pid" ] && kill "$$backend_pid" >/dev/null 2>&1 || true; \
+			[ -n "$$console_pid" ] && kill "$$console_pid" >/dev/null 2>&1 || true; \
+			wait >/dev/null 2>&1 || true; \
+		}; \
+		trap cleanup INT TERM EXIT; \
+		( node scripts/run-with-dotenv.mjs \
+		  --set SHIP_ALLOW_LOCAL_AUTH0_CALLBACKS=true \
+		  --default SHIP_PUBLIC_URL=http://localhost:$(DEV_BACKEND_PORT) \
+		  --default SHIP_CONSOLE_URL=http://localhost:$(DEV_CONSOLE_PORT) \
+		  -- .venv/bin/uvicorn backend.app.main:app --reload --host $(DEV_BACKEND_HOST) --port $(DEV_BACKEND_PORT) ) & backend_pid=$$!; \
+		( node scripts/run-with-dotenv.mjs \
+		  --default SHIP_API_URL=$(DEV_API_URL) \
+		  --default APP_BASE_URL=http://localhost:$(DEV_CONSOLE_PORT) \
+		  --default SHIP_CONSOLE_URL=http://localhost:$(DEV_CONSOLE_PORT) \
+		  -- npm run dev --prefix console ) & console_pid=$$!; \
+		wait "$$backend_pid" "$$console_pid"
 
 up: env-check ## Build images + start the full stack in the background.
 	$(COMPOSE) up -d --build

@@ -109,6 +109,7 @@ class ProcessTransitionOut(BaseModel):
     from_state_id: str
     to_state_id: str
     conditions: list[ProcessConditionOut] = Field(default_factory=list)
+    requires_human: bool = False
 
 
 class ProcessSpecialistOut(BaseModel):
@@ -138,6 +139,8 @@ class ProcessRoutineOut(BaseModel):
     instructions: str
     last_run: datetime | None = None
     status: str | None = None
+    enabled: bool = True
+    description: str = ""
 
 
 class ProcessLinkOut(BaseModel):
@@ -800,6 +803,8 @@ async def _build_development_process(
                     instructions=_routine_instructions(lane_key),
                     last_run=runtime.last_execution_time,
                     status=(lane.last_run_status if lane else pipeline.last_run_status if pipeline else None),
+                    enabled=lane.enabled if lane else True,
+                    description=_routine_description(lane_key),
                 )
             )
             continue
@@ -827,6 +832,7 @@ async def _build_development_process(
             from_state_id=left.id,
             to_state_id=right.id,
             conditions=[ProcessConditionOut(expression="exit_conditions_met == true")],
+            requires_human=False,
         )
         for left, right in zip(states, states[1:])
     ]
@@ -1123,6 +1129,23 @@ def _routine_instructions(lane_id: str) -> str:
         "Run this supporting routine on its configured cadence and attach "
         "evidence back to the process history."
     )
+
+
+def _routine_description(lane_id: str) -> str:
+    """Short human copy for the routine card; distinct from long-form instructions."""
+    known = {
+        "daily_architecture_tests_review": "Recurring check on test architecture and coverage signals.",
+        "daily_technical_architecture_review": "Architecture drift and design consistency review.",
+        "daily_security_review": "Security posture and dependency signal sweep.",
+        "daily_digest": "Consolidated summary of work and blockers for the team.",
+        "daily_retro": "Lightweight team retro prompts and follow-ups.",
+        "self_heal": "Reconcile CI, workflows, and guardrails after failed runs.",
+        "daily_standup": "Asynchronous standup nudge with lane status.",
+        "tech_debt": "Triage and size technical-debt work for upcoming cycles.",
+    }
+    if lane_id in known:
+        return known[lane_id]
+    return _titleize(lane_id)
 
 
 def _process_health(states: list[ProcessStateOut], blocked_count: int) -> Health:

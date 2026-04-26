@@ -20,6 +20,8 @@ export const INBOX_TYPES = [
   "failure",
   "approval",
   "exception",
+  "stuck",
+  "blocker",
 ] as const;
 export type InboxType = (typeof INBOX_TYPES)[number];
 
@@ -76,6 +78,16 @@ export const INBOX_TYPE_META: Record<
     label: "Exceptions",
     blurb: "Policy or routing edge cases that bypassed automation.",
     order: 5,
+  },
+  stuck: {
+    label: "Stuck work",
+    blurb: "Tracker or PR idle with no status movement for 24h+.",
+    order: 6,
+  },
+  blocker: {
+    label: "Blockers",
+    blurb: "Self-heal could not recover — needs human follow-up.",
+    order: 7,
   },
 };
 

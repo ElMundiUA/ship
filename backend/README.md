@@ -73,6 +73,23 @@ uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8100
 arq backend.app.workers.main.WorkerSettings
 ```
 
+## Run against shared dev infrastructure
+
+For the fast laptop loop, keep the backend and console local while reusing the
+shared dev Postgres/Auth0/S3 configuration from the repo-root `.env`.
+
+```bash
+make dev-migrate   # optional: applies Alembic to the configured dev database
+make dev-backend   # FastAPI on http://127.0.0.1:8100
+```
+
+The direct dev targets run under `.venv`, load `.env`, and export
+`SHIP_ALLOW_LOCAL_AUTH0_CALLBACKS=true` so `SHIP_AUTH_MODE=auth0` can use
+`SHIP_PUBLIC_URL=http://localhost:8100` and
+`SHIP_CONSOLE_URL=http://localhost:3001`. The flag is not set by the Docker or
+production targets, so deployed Auth0 environments still fail fast if callback
+origins accidentally point at localhost.
+
 ## Required env
 
 Methodology API:

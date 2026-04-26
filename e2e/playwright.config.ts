@@ -24,22 +24,20 @@ export default defineConfig({
     trace: "on-first-retry",
     screenshot: "only-on-failure",
     ...devices["Desktop Chrome"],
-    ...(storageState ? { storageState } : {}),
   },
   projects: [
     {
       name: "public",
       testMatch: /.*\.public\.spec\.ts/,
-      use: { storageState: undefined },
     },
     {
       name: "authenticated",
       testMatch: /.*\.wired\.spec\.ts/,
+      ...(storageState ? { use: { storageState } } : {}),
     },
     {
       name: "sandbox-api",
       testMatch: /.*\.sandbox\.spec\.ts/,
-      use: { storageState: undefined },
     },
     /** Без cookies — только когда E2E_STORAGE_STATE не задан глобально. */
     {

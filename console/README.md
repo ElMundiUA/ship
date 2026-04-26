@@ -21,14 +21,21 @@ Wiring status:
 
 ## Run
 
+From the repo root:
+
 ```bash
-cd console
-npm install
-SHIP_API_URL=http://localhost:8100 npm run dev
+npm install --prefix console
+make dev-console
 ```
 
 Defaults to **port 3001** so it doesn't collide with the marketing landing on
 3000. Open <http://localhost:3001>.
+
+`make dev-console` loads the repo-root `.env`, defaults
+`SHIP_API_URL=http://localhost:8100`, and sets `APP_BASE_URL` /
+`SHIP_CONSOLE_URL` to `http://localhost:3001` for the Auth0 callback flow.
+Run `make dev-backend` in another terminal, or use `make dev-local` from the
+repo root to start both local components together.
 
 When `SHIP_API_URL` is unset, the console renders the mock fixtures and
 shows a yellow `mock` badge in the sign-in card. With it set, you'll see a

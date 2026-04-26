@@ -652,6 +652,68 @@ async def test_callback_updates_run_with_valid_token(
 
 
 @pytest.mark.asyncio
+async def test_self_heal_callback_failed_mints_blocker_inbox(
+    monkeypatch, v1_client, db_session, seed_repo_and_install
+) -> None:
+    from sqlalchemy import select
+
+    from backend.app.api.v1.routes import pipelines as pipelines_route
+    from backend.app.db.models.inbox import InboxItem
+    from backend.app.db.models.pipelines import PipelineRun
+
+    raw, workspace, _install, repo = seed_repo_and_install
+    pipelines = await _seed_bound_pipelines(db_session, workspace.id, repo.id)
+    sh = pipelines["self_heal"]
+    sh.enabled = True
+    await db_session.flush()
+
+    captured: dict[str, str] = {}
+
+    async def _probe(repo, install, *, settings, **_):
+        return frozenset({"pipeline-self-heal.yml"})
+
+    async def _dispatch(repo, install, workflow_file, *, inputs, settings, **_):
+        captured.update(inputs)
+
+    monkeypatch.setattr(pipelines_route, "list_repo_workflows", _probe)
+    monkeypatch.setattr(pipelines_route, "dispatch_workflow", _dispatch)
+
+    dispatch_resp = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/pipelines/{sh.id}/runs",
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert dispatch_resp.status_code == 202, dispatch_resp.text
+    run_id = dispatch_resp.json()["id"]
+    token = captured["ship_run_token"]
+
+    callback_resp = await v1_client.post(
+        f"/v1/pipelines/runs/{run_id}/result",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"status": "failed", "summary": "Could not repair workflow"},
+    )
+    assert callback_resp.status_code == 200, callback_resp.text
+
+    item = (
+        await db_session.execute(
+            select(InboxItem).where(
+                InboxItem.workspace_id == workspace.id,
+                InboxItem.type == "blocker",
+            )
+        )
+    ).scalar_one()
+    assert item.source_table == "self_heal_run"
+    assert item.source_id == uuid.UUID(run_id)
+    assert "repair" in (item.summary or "").lower()
+
+    run_row = (
+        await db_session.execute(
+            select(PipelineRun).where(PipelineRun.id == uuid.UUID(run_id))
+        )
+    ).scalar_one()
+    assert run_row.status == "failed"
+
+
+@pytest.mark.asyncio
 async def test_callback_rejects_missing_bearer(v1_client) -> None:
     response = await v1_client.post(
         f"/v1/pipelines/runs/{uuid.uuid4()}/result",

@@ -160,6 +160,34 @@ pip install -r requirements-backend.txt
 uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8100
 ```
 
+### Cloud platform against shared dev infra
+
+Use this when deploying every UI/API change is too slow, but the database,
+Auth0 tenant, S3 bucket, and third-party integrations should stay on the
+shared dev environment.
+
+Put the dev values in the repo-root `.env` (`DATABASE_URL`,
+`ALEMBIC_DATABASE_URL`, `SHIP_AUTH_MODE=auth0`, `AUTH0_*`, `S3_*`) and keep
+the browser-facing URLs local:
+
+```bash
+SHIP_PUBLIC_URL=http://localhost:8100
+SHIP_CONSOLE_URL=http://localhost:3001
+APP_BASE_URL=http://localhost:3001
+```
+
+Then run local components from the repo root:
+
+```bash
+npm install --prefix console
+make dev-migrate   # optional: apply local migrations to the dev DB
+make dev-local     # backend on 8100 + console on 3001
+```
+
+For split terminals, use `make dev-backend` and `make dev-console`. These
+targets load `.env`, run Python under `.venv`, and set the local Auth0 callback
+allowance only for this laptop dev loop.
+
 Tests:
 
 ```bash

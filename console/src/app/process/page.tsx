@@ -2,13 +2,14 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { AppShell } from "@/components/app-shell";
-import { Badge, Card, CardHeader, MockBanner } from "@/components/ui";
+import { Card, CardHeader, MockBanner } from "@/components/ui";
 import {
   type ProcessConfigSource,
   processFromRepoConfig,
   selectConfigSource,
 } from "./process-config";
 import { ProcessEditorWorkspace } from "./process-editor-workspace";
+import { RoutinesPanel } from "./routines-panel";
 import { RepoSelector } from "./repo-selector";
 import {
   ApiHttpError,
@@ -156,16 +157,6 @@ function renderProcessPage({
       title="Process"
       kicker={workspace.slug}
       workspace={{ id: workspace.id, name: workspace.name, slug: workspace.slug }}
-      actions={
-        <>
-          <Link
-            href="/inbox"
-            className="text-xs font-semibold text-white/65 hover:text-white"
-          >
-            Inbox
-          </Link>
-        </>
-      }
     >
       {mock && <MockBanner />}
       <div className="space-y-3">
@@ -175,7 +166,12 @@ function renderProcessPage({
         {selectedTab === "routines" ? (
           <>
             <ProcessTabs selected={selectedTab} repoId={selectedRepo?.id} />
-            <RoutinesPanel process={process} />
+            <RoutinesPanel
+              workspaceId={workspace.id}
+              process={process}
+              repoId={selectedRepo?.id}
+              config={config ?? null}
+            />
           </>
         ) : (
           <ProcessEditorWorkspace
@@ -330,49 +326,6 @@ function TabLink({
   );
 }
 
-function RoutinesPanel({ process }: { process: ApiProcess }) {
-  return (
-    <Card>
-      <CardHeader
-        title="Routines"
-        subtitle="Supporting recurring work. These are not task FSM states."
-      />
-      {process.routines.length === 0 ? (
-        <p className="text-sm text-white/50">No routines projected yet.</p>
-      ) : (
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-          {process.routines.map((routine) => (
-            <div
-              key={routine.id}
-              className="rounded-xl border border-white/10 bg-white/[0.035] p-3"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <div className="text-sm font-semibold text-white">
-                    {routine.name}
-                  </div>
-                  <div className="mt-1 text-xs text-white/50">
-                    {routine.specialist_name}
-                  </div>
-                </div>
-                <Badge tone={routine.status === "failed" ? "err" : "neutral"}>
-                  {routine.status ?? "idle"}
-                </Badge>
-              </div>
-              <div className="mt-3 text-xs text-white/45">
-                Schedule:{" "}
-                <span className="text-white/65">
-                  {routine.schedule ?? "not configured"}
-                </span>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </Card>
-  );
-}
-
 function renderDownState() {
   return (
     <AppShell title="Process">
@@ -418,6 +371,8 @@ const mockProcess: ApiProcess = {
       instructions: "Check execution health.",
       last_run: null,
       status: "idle",
+      enabled: true,
+      description: "Reconcile CI, workflows, and guardrails after failed runs.",
     },
   ],
   process_graph: { links: [] },

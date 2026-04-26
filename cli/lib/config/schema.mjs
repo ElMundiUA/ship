@@ -504,10 +504,32 @@ function validateProcessRoutines(value, errors, warnings) {
       errors.push(`${prefix}: must be an object`);
       continue;
     }
-    pushUnknownKeyWarnings(routine, new Set(["id", "name", "cadence"]), prefix, warnings);
+    pushUnknownKeyWarnings(
+      routine,
+      new Set([
+        "id",
+        "name",
+        "cadence",
+        "enabled",
+        "description",
+        "instructions",
+        "specialist_id",
+        "specialist_name",
+        "specialist",
+      ]),
+      prefix,
+      warnings,
+    );
     requireOptionalString(routine.id, `${prefix}.id`, errors, { required: true });
     requireOptionalString(routine.name, `${prefix}.name`, errors, { required: true });
     requireOptionalString(routine.cadence, `${prefix}.cadence`, errors, { required: false });
+    if (routine.enabled !== undefined && routine.enabled !== null && typeof routine.enabled !== "boolean") {
+      errors.push(`${prefix}.enabled: must be a boolean when set`);
+    }
+    requireOptionalString(routine.description, `${prefix}.description`, errors, { required: false });
+    requireOptionalString(routine.instructions, `${prefix}.instructions`, errors, { required: false });
+    requireOptionalString(routine.specialist_id, `${prefix}.specialist_id`, errors, { required: false });
+    requireOptionalString(routine.specialist_name, `${prefix}.specialist_name`, errors, { required: false });
   }
 }
 

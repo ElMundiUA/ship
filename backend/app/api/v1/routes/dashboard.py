@@ -17,6 +17,7 @@ Members can read; admin-only verbs (run, toggle) live on the
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Literal
@@ -49,6 +50,12 @@ from backend.app.db.models.pipelines import (
     WorkflowRun,
 )
 from backend.app.db.session import get_session
+from backend.app.services.dashboard_tracker_wip import (
+    collect_tracker_wip_candidates,
+    effective_tracker_for_repo,
+    tracker_label,
+    workspace_has_tracker_binding,
+)
 
 
 router = APIRouter(
@@ -64,8 +71,9 @@ _RECENT_LIMIT = 10
 # refresh reveals the rest.
 _NOTIFICATION_LIMIT = 5
 _OPS_LIST_LIMIT = 7
-_OPS_SUGGESTED_LIMIT = 5
-_OPS_STUCK_PR_THRESHOLD = timedelta(hours=24)
+_OPS_STUCK_PR_THRESHOLD = timedelta(days=1)
+_TICKET_REF_RE = re.compile(r"\b([A-Z][A-Z0-9]{1,10}-\d+)\b")
+_INBOX_OPEN = ("new", "snoozed")
 _OPS_WIP_WINDOW = timedelta(days=7)
 _OPS_STALE_RUN_THRESHOLD = timedelta(hours=2)
 
@@ -147,6 +155,11 @@ class DashboardBlockerOut(BaseModel):
     href: str | None = None
 
 
+class DashboardWorkItemPrLinkOut(BaseModel):
+    number: int
+    href: str
+
+
 class DashboardWorkItemOut(BaseModel):
     name: str
     status: Literal["in_progress", "review", "blocked"]
@@ -155,6 +168,11 @@ class DashboardWorkItemOut(BaseModel):
     updated_at: datetime
     blocker_ref: str | None = None
     href: str | None = None
+    ticket_ref: str | None = None
+    tracker: str | None = None
+    board_column: str | None = None
+    active_agent: str | None = None
+    pull_request: DashboardWorkItemPrLinkOut | None = None
 
 
 class DashboardShippedItemOut(BaseModel):
@@ -257,10 +275,6 @@ def _age_seconds(now: datetime, since: datetime | None) -> int:
     return max(0, int((now - since).total_seconds()))
 
 
-def _impact_rank(impact: Impact) -> int:
-    return {"high": 0, "medium": 1, "low": 2}[impact]
-
-
 def _title_type(title: str) -> Literal["feature", "fix", "rollback"]:
     lower = title.lower()
     if "rollback" in lower or "revert" in lower:
@@ -276,11 +290,97 @@ def _pct(numerator: int, denominator: int) -> float | None:
     return round(numerator / denominator, 4)
 
 
+def _ticket_ref_from_text(text: str | None) -> str | None:
+    if not text:
+        return None
+    match = _TICKET_REF_RE.search(text)
+    return match.group(1) if match else None
+
+
+def _match_pr_for_ticket(
+    ticket_ref: str | None,
+    repo_full_name: str | None,
+    open_prs: list[PullRequest],
+) -> DashboardWorkItemPrLinkOut | None:
+    if not ticket_ref:
+        return None
+    ref = ticket_ref.strip()
+    pool = [
+        pr
+        for pr in open_prs
+        if not repo_full_name or pr.repo_full_name == repo_full_name
+    ]
+    if not pool:
+        pool = list(open_prs)
+    for pr in pool:
+        title = pr.title or ""
+        if ref in title:
+            return DashboardWorkItemPrLinkOut(number=pr.number, href=pr.html_url)
+        if "#" in ref:
+            suffix = ref.split("#")[-1].strip()
+            if suffix.isdigit() and (f"#{suffix}" in title or f"#{suffix}:" in title):
+                return DashboardWorkItemPrLinkOut(number=pr.number, href=pr.html_url)
+    return None
+
+
+async def _mirror_stuck_prs_to_inbox(
+    session: AsyncSession,
+    workspace_id: uuid.UUID,
+    stuck_prs: list[PullRequest],
+    now: datetime,
+) -> None:
+    stuck_ids = {pr.id for pr in stuck_prs}
+    reconciled = (
+        await session.scalars(
+            select(InboxItem).where(
+                InboxItem.workspace_id == workspace_id,
+                InboxItem.source_table == "stuck_pr",
+                InboxItem.status.in_(_INBOX_OPEN),
+            )
+        )
+    ).all()
+    for item in reconciled:
+        if item.source_id is None or item.source_id not in stuck_ids:
+            item.status = "dismissed"
+            item.resolution = "dismissed"
+            item.resolved_at = now
+
+    for pr in stuck_prs:
+        exists = await session.scalar(
+            select(func.count(InboxItem.id)).where(
+                InboxItem.workspace_id == workspace_id,
+                InboxItem.source_table == "stuck_pr",
+                InboxItem.source_id == pr.id,
+                InboxItem.status.in_(_INBOX_OPEN),
+            )
+        )
+        if int(exists or 0) > 0:
+            continue
+        session.add(
+            InboxItem(
+                workspace_id=workspace_id,
+                repo_id=pr.repo_id,
+                type="stuck",
+                title=f"Stuck work: PR #{pr.number} — no activity 24h+",
+                summary=pr.title[:500] if pr.title else None,
+                payload={
+                    "kind": "stuck_pr",
+                    "pr_number": pr.number,
+                    "html_url": pr.html_url,
+                },
+                status="new",
+                source_table="stuck_pr",
+                source_id=pr.id,
+            )
+        )
+
+
 @router.get("/ops", response_model=DashboardOpsOut)
 async def get_ops_dashboard(
     workspace_id: uuid.UUID,
     auth: AuthContext = Depends(get_current_auth),
     session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
 ) -> DashboardOpsOut:
     await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
 
@@ -381,9 +481,10 @@ async def get_ops_dashboard(
         pr_updated_at = _event_time(pr.updated_at_external, pr.updated_at, pr.opened_at)
         if pr_updated_at is not None and pr_updated_at < stuck_cutoff:
             stuck_prs.append(pr)
-    open_interventions = [
-        item for item in open_inbox_items if item.type in {"failure", "exception", "approval"}
-    ]
+
+    await _mirror_stuck_prs_to_inbox(session, workspace_id, stuck_prs, now)
+    await session.flush()
+
     broken_interventions = [
         item for item in open_inbox_items if item.type in {"failure", "exception"}
     ]
@@ -394,110 +495,77 @@ async def get_ops_dashboard(
         and item.type in {"failure", "exception", "approval", "clarification"}
     ]
 
-    blockers: list[DashboardBlockerOut] = []
-    for run, pipeline in failed_pipeline_runs:
-        blockers.append(
-            DashboardBlockerOut(
-                type="pipeline",
-                title=f"{pipeline.name} failed",
-                scope=pipeline.lane_id,
-                age_seconds=_age_seconds(
-                    now, _event_time(run.finished_at, run.started_at, run.created_at)
-                ),
-                impact="high",
-                href="/runs",
-            )
-        )
-    for run, pipeline in stale_pipeline_runs:
-        blockers.append(
-            DashboardBlockerOut(
-                type="pipeline",
-                title=f"{pipeline.name} is still running",
-                scope=pipeline.lane_id,
-                age_seconds=_age_seconds(now, _event_time(run.started_at, run.created_at)),
-                impact="medium",
-                href="/runs",
-            )
-        )
-    for run in failed_workflow_runs:
-        blockers.append(
-            DashboardBlockerOut(
-                type="automation",
-                title=f"{run.name} failed",
-                repo=run.repo_full_name,
-                scope=run.event,
-                age_seconds=_age_seconds(
-                    now, _event_time(run.finished_at, run.started_at, run.created_at)
-                ),
-                impact="high",
-                href=run.html_url,
-            )
-        )
-    for pr in stuck_prs:
-        blockers.append(
-            DashboardBlockerOut(
-                type="pr",
-                title=f"PR #{pr.number}: {pr.title}",
-                repo=pr.repo_full_name,
-                age_seconds=_age_seconds(
-                    now, _event_time(pr.updated_at_external, pr.updated_at, pr.opened_at)
-                ),
-                impact="medium",
-                href=pr.html_url,
-            )
-        )
-    for item in open_interventions:
-        impact: Impact = "high" if item.type in {"failure", "exception"} else "medium"
-        blockers.append(
-            DashboardBlockerOut(
-                type="external",
-                title=item.title,
-                scope=item.type,
-                age_seconds=_age_seconds(now, item.created_at),
-                impact=impact,
-                href=f"/inbox/{item.id}",
-            )
-        )
-
-    blockers = sorted(
-        blockers,
-        key=lambda item: (_impact_rank(item.impact), -item.age_seconds),
-    )[:_OPS_LIST_LIMIT]
-
     work_items: list[DashboardWorkItemOut] = []
-    for pr in open_prs:
-        updated_at = _event_time(pr.updated_at_external, pr.updated_at, pr.opened_at)
-        if updated_at is None or updated_at < cutoff_wip:
-            continue
-        blocker_ref = f"pr:{pr.id}" if pr in stuck_prs else None
-        work_items.append(
-            DashboardWorkItemOut(
-                name=f"PR #{pr.number}: {pr.title}",
-                status="in_progress" if pr.draft else "review",
-                repo=pr.repo_full_name,
-                updated_at=updated_at,
-                blocker_ref=blocker_ref,
-                href=pr.html_url,
-            )
+    if await workspace_has_tracker_binding(session, workspace_id):
+        candidates = await collect_tracker_wip_candidates(
+            session,
+            settings,
+            workspace_id,
+            auth.user.id,
+            cutoff_wip=cutoff_wip,
+            listing_cap=15,
         )
-    for item in open_inbox_items:
-        created_at = _as_utc(item.created_at)
-        if created_at < cutoff_wip:
-            continue
-        is_blocked = item.type in {"failure", "exception", "approval"}
-        work_items.append(
-            DashboardWorkItemOut(
-                name=item.title,
-                status="blocked" if is_blocked else "in_progress",
-                scope=item.type,
-                updated_at=created_at,
-                blocker_ref=f"inbox:{item.id}" if is_blocked else None,
-                href=f"/inbox/{item.id}",
+        for c in candidates[:_OPS_LIST_LIMIT]:
+            pr_link = _match_pr_for_ticket(c.ticket_ref, c.repo_full_name, open_prs)
+            href = c.href or (pr_link.href if pr_link else None)
+            work_items.append(
+                DashboardWorkItemOut(
+                    name=c.name,
+                    status=c.status,
+                    repo=c.repo_full_name,
+                    updated_at=c.updated_at,
+                    blocker_ref=None,
+                    href=href,
+                    ticket_ref=c.ticket_ref,
+                    tracker=tracker_label(c.tracker_kind),
+                    board_column=c.board_column,
+                    active_agent=c.active_agent,
+                    pull_request=pr_link,
+                )
             )
-        )
-    work_items = sorted(work_items, key=lambda item: item.updated_at, reverse=True)[
-        :_OPS_LIST_LIMIT
-    ]
+    else:
+        for pr in open_prs:
+            updated_at = _event_time(
+                pr.updated_at_external, pr.updated_at, pr.opened_at
+            )
+            if updated_at is None or updated_at < cutoff_wip:
+                continue
+            ticket_ref = _ticket_ref_from_text(pr.title)
+            raw_title = (pr.title or "").strip()
+            if ticket_ref and raw_title.startswith(ticket_ref):
+                remainder = raw_title[len(ticket_ref) :].lstrip(" :-—\t")
+                work_title = remainder or raw_title
+            else:
+                work_title = raw_title or f"PR #{pr.number}"
+            display_name = f"{ticket_ref}: {work_title}" if ticket_ref else work_title
+            rid = pr.repo_id
+            eff_kind, _ = (
+                await effective_tracker_for_repo(session, workspace_id, rid)
+                if rid is not None
+                else (None, {})
+            )
+            tr_lbl = tracker_label(eff_kind) if eff_kind else None
+            work_items.append(
+                DashboardWorkItemOut(
+                    name=display_name,
+                    status="in_progress" if pr.draft else "review",
+                    repo=pr.repo_full_name,
+                    updated_at=updated_at,
+                    blocker_ref=None,
+                    href=pr.html_url,
+                    ticket_ref=ticket_ref,
+                    tracker=tr_lbl,
+                    board_column="Draft" if pr.draft else "In review",
+                    active_agent=None,
+                    pull_request=DashboardWorkItemPrLinkOut(
+                        number=pr.number,
+                        href=pr.html_url,
+                    ),
+                )
+            )
+        work_items = sorted(
+            work_items, key=lambda item: item.updated_at, reverse=True
+        )[:_OPS_LIST_LIMIT]
 
     shipped_items = [
         DashboardShippedItemOut(
@@ -522,61 +590,22 @@ async def get_ops_dashboard(
     broken_automations_count = failed_workflows_count + len(broken_interventions)
     success_rate = _pct(succeeded_runs, len(terminal_runs))
 
-    bottlenecks: list[DashboardBottleneckOut] = []
-    if stuck_prs:
-        bottlenecks.append(
-            DashboardBottleneckOut(
-                metric="Stuck PRs",
-                current_value=str(len(stuck_prs)),
-                severity="high" if len(stuck_prs) >= 3 else "medium",
-            )
-        )
-    failure_denominator = len(terminal_runs) + len(failed_workflow_runs)
-    failure_rate = _pct(failed_runs_count + failed_workflows_count, failure_denominator)
-    if failure_rate is not None and failure_denominator >= 3 and failure_rate >= 0.2:
-        bottlenecks.append(
-            DashboardBottleneckOut(
-                metric="Automation failure rate",
-                current_value=f"{round(failure_rate * 100)}%",
-                severity="high" if failure_rate >= 0.5 else "medium",
-            )
-        )
-    if recent_interventions:
-        bottlenecks.append(
-            DashboardBottleneckOut(
-                metric="Manual interventions",
-                current_value=str(len(recent_interventions)),
-                severity="medium",
-            )
-        )
-    bottlenecks = bottlenecks[:5]
-
     if failed_runs_count > 0 or broken_automations_count > 0:
         overall_status: OpsStatus = "critical"
-    elif stuck_prs or stale_pipeline_runs or bottlenecks:
+    elif stale_pipeline_runs:
         overall_status = "degraded"
     else:
         overall_status = "ok"
-
-    suggested_actions = [
-        DashboardSuggestedActionOut(
-            action=_suggest_action(blocker),
-            reason=blocker.title,
-            priority=blocker.impact,
-            href=blocker.href,
-        )
-        for blocker in blockers[:_OPS_SUGGESTED_LIMIT]
-    ]
 
     return DashboardOpsOut(
         system_status=DashboardSystemStatusOut(
             overall_status=overall_status,
             failing_pipelines_count=failed_runs_count,
-            stuck_prs_count=len(stuck_prs),
+            stuck_prs_count=0,
             broken_automations_count=broken_automations_count,
             last_deploy=None,
         ),
-        blockers=blockers,
+        blockers=[],
         work_in_progress=work_items,
         shipped=DashboardShippedOut(
             features_shipped_count=features_count,
@@ -584,25 +613,15 @@ async def get_ops_dashboard(
             rollbacks_count=rollbacks_count,
             items=shipped_items,
         ),
-        bottlenecks=bottlenecks,
+        bottlenecks=[],
         automation_health=DashboardAutomationHealthOut(
             automation_coverage=None,
             success_rate=success_rate,
             manual_interventions_count=len(recent_interventions),
             failures_count=failed_runs_count + failed_workflows_count,
         ),
-        suggested_actions=suggested_actions,
+        suggested_actions=[],
     )
-
-
-def _suggest_action(blocker: DashboardBlockerOut) -> str:
-    if blocker.type == "pipeline":
-        return f"Inspect {blocker.title}"
-    if blocker.type == "pr":
-        return f"Review {blocker.title.split(':', 1)[0]}"
-    if blocker.type == "automation":
-        return f"Fix {blocker.title}"
-    return f"Resolve {blocker.title}"
 
 
 @router.get("", response_model=DashboardOut)

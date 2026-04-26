@@ -132,26 +132,12 @@ function renderWorkspaceHome(ctx: LiveContext) {
       kicker={workspace.slug}
       workspace={{ id: workspace.id, name: workspace.name, slug: workspace.slug }}
       actions={
-        <>
-          <Link
-            href="/inbox"
-            className="text-xs font-semibold text-white/65 hover:text-white"
-          >
-            Inbox
-          </Link>
-          <Link
-            href="/process"
-            className="text-xs font-semibold text-white/65 hover:text-white"
-          >
-            Process
-          </Link>
-          <ButtonPrimary>
-            <Link href="/inbox">Review actions →</Link>
-          </ButtonPrimary>
-        </>
+        <ButtonPrimary>
+          <Link href="/inbox">Review actions →</Link>
+        </ButtonPrimary>
       }
     >
-      <WorkspaceHome summary={data} />
+      <WorkspaceHome summary={data} repos={ctx.repos} workspaceId={workspace.id} />
     </AppShell>
   );
 }
@@ -180,27 +166,13 @@ function renderMock() {
       title="Workspace home"
       kicker={ws.org}
       actions={
-        <>
-          <Link
-            href="/inbox"
-            className="text-xs font-semibold text-white/65 hover:text-white"
-          >
-            Inbox
-          </Link>
-          <Link
-            href="/process"
-            className="text-xs font-semibold text-white/65 hover:text-white"
-          >
-            Process
-          </Link>
-          <ButtonPrimary>
-            <Link href="/inbox">Review actions →</Link>
-          </ButtonPrimary>
-        </>
+        <ButtonPrimary>
+          <Link href="/inbox">Review actions →</Link>
+        </ButtonPrimary>
       }
     >
       <MockBanner />
-      <WorkspaceHome summary={mockOpsDashboard} />
+      <WorkspaceHome summary={mockOpsDashboard} repos={[]} workspaceId="mock-workspace" />
     </AppShell>
   );
 }
@@ -209,39 +181,28 @@ const mockOpsDashboard: ApiOpsDashboard = {
   system_status: {
     overall_status: "degraded",
     failing_pipelines_count: 1,
-    stuck_prs_count: 2,
+    stuck_prs_count: 0,
     broken_automations_count: 1,
     last_deploy: null,
   },
-  blockers: [
-    {
-      type: "pipeline",
-      title: "PR review gate failed",
-      repo: "helio/api",
-      scope: "pr_review",
-      age_seconds: 7200,
-      impact: "high",
-      href: "/runs",
-    },
-    {
-      type: "pr",
-      title: "PR #42: Add billing webhook retry",
-      repo: "helio/payments",
-      scope: null,
-      age_seconds: 93600,
-      impact: "medium",
-      href: null,
-    },
-  ],
+  blockers: [],
   work_in_progress: [
     {
-      name: "PR #42: Add billing webhook retry",
+      name: "ENG-2042: Add billing webhook retry",
       status: "review",
       repo: "helio/payments",
       scope: null,
       updated_at: new Date().toISOString(),
-      blocker_ref: "pr:42",
-      href: null,
+      blocker_ref: null,
+      href: "https://github.com/helio/payments/pull/42",
+      ticket_ref: "ENG-2042",
+      tracker: "Linear",
+      board_column: "In review",
+      active_agent: null,
+      pull_request: {
+        number: 42,
+        href: "https://github.com/helio/payments/pull/42",
+      },
     },
     {
       name: "Update onboarding seed bundle",
@@ -250,7 +211,14 @@ const mockOpsDashboard: ApiOpsDashboard = {
       scope: "feature",
       updated_at: new Date().toISOString(),
       blocker_ref: null,
-      href: null,
+      href: "https://github.com/helio/web/pull/12",
+      ticket_ref: null,
+      tracker: "Linear",
+      board_column: "Draft",
+      pull_request: {
+        number: 12,
+        href: "https://github.com/helio/web/pull/12",
+      },
     },
   ],
   shipped: {
@@ -266,26 +234,12 @@ const mockOpsDashboard: ApiOpsDashboard = {
       },
     ],
   },
-  bottlenecks: [
-    {
-      metric: "Stuck PRs",
-      current_value: "2",
-      delta: null,
-      severity: "medium",
-    },
-  ],
+  bottlenecks: [],
   automation_health: {
     automation_coverage: null,
     success_rate: 0.82,
     manual_interventions_count: 3,
     failures_count: 1,
   },
-  suggested_actions: [
-    {
-      action: "Inspect PR review gate failed",
-      reason: "Pipeline failure blocks merge confidence",
-      priority: "high",
-      href: "/runs",
-    },
-  ],
+  suggested_actions: [],
 };

@@ -139,6 +139,28 @@ const DISPOSITION_BY_TYPE: Record<
       },
     ],
   },
+  stuck: {
+    primary: { action: "resolve", label: "Mark addressed", style: "primary" },
+    secondary: [
+      {
+        action: "dismiss",
+        label: "Dismiss",
+        style: "danger",
+        confirm: "Dismiss this stuck-work reminder?",
+      },
+    ],
+  },
+  blocker: {
+    primary: { action: "resolve", label: "Mark handled", style: "primary" },
+    secondary: [
+      {
+        action: "dismiss",
+        label: "Dismiss",
+        style: "danger",
+        confirm: "Dismiss this blocker record?",
+      },
+    ],
+  },
 };
 
 // ---------------------------------------------------------------------------

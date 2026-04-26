@@ -39,7 +39,7 @@ import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, status
 from jose import JWTError, jwt
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.api.v1.deps import AuthContext, get_current_auth
@@ -51,6 +51,7 @@ from backend.app.api.v1.routes.workspaces import (
 from backend.app.core.config import Settings, get_settings
 from backend.app.db.models.fleet_lanes import FleetLane
 from backend.app.db.models.integrations import GitHubInstallation, WorkspaceRepo
+from backend.app.db.models.inbox import InboxItem
 from backend.app.db.models.pipelines import Pipeline, PipelineRun
 from backend.app.db.models.tenancy import AuditLog
 from backend.app.db.session import get_session
@@ -639,6 +640,48 @@ class PipelineRunResultIn(BaseModel):
 
 
 _TERMINAL_STATUSES: Final[set[str]] = {"succeeded", "failed", "cancelled"}
+
+_INBOX_OPEN: Final[tuple[str, ...]] = ("new", "snoozed")
+
+
+async def _emit_self_heal_blocker_inbox(
+    session: AsyncSession,
+    *,
+    run: PipelineRun,
+    pipeline: Pipeline,
+) -> None:
+    """Mirror a failed self-heal run into the inbox (trusted callback path only)."""
+    if pipeline.lane_id != "self_heal" or run.status != "failed":
+        return
+    exists = await session.scalar(
+        select(func.count(InboxItem.id)).where(
+            InboxItem.workspace_id == run.workspace_id,
+            InboxItem.source_table == "self_heal_run",
+            InboxItem.source_id == run.id,
+            InboxItem.status.in_(_INBOX_OPEN),
+        )
+    )
+    if int(exists or 0) > 0:
+        return
+    summary = (run.summary or pipeline.name or "Self-heal")[:500]
+    title = f"Self-heal could not fix: {summary}"[:255]
+    session.add(
+        InboxItem(
+            workspace_id=run.workspace_id,
+            repo_id=pipeline.repo_id,
+            type="blocker",
+            title=title,
+            summary=summary,
+            payload={
+                "kind": "self_heal_failed",
+                "pipeline_id": str(pipeline.id),
+                "run_id": str(run.id),
+            },
+            status="new",
+            source_table="self_heal_run",
+            source_id=run.id,
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1554,6 +1597,8 @@ async def report_run_result(
             },
         )
     )
+    if pipeline is not None:
+        await _emit_self_heal_blocker_inbox(session, run=run, pipeline=pipeline)
     await session.flush()
     return _run_to_out(run)
 

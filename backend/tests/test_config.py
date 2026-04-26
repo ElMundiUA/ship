@@ -13,7 +13,7 @@ import pytest
 from backend.app.core.config import Settings
 
 
-def test_cloud_mode_rejects_localhost_public_url() -> None:
+def test_auth0_mode_rejects_localhost_public_url_by_default() -> None:
     """Cloud bootstrap fails fast when SHIP_PUBLIC_URL points at dev defaults.
 
     Otherwise the install callback / OAuth dance silently bounces real
@@ -31,7 +31,7 @@ def test_cloud_mode_rejects_localhost_public_url() -> None:
         )
 
 
-def test_cloud_mode_rejects_localhost_console_url() -> None:
+def test_auth0_mode_rejects_localhost_console_url_by_default() -> None:
     with pytest.raises(ValueError, match="SHIP_CONSOLE_URL"):
         Settings(
             SHIP_AUTH_MODE="auth0",
@@ -40,6 +40,21 @@ def test_cloud_mode_rejects_localhost_console_url() -> None:
             AUTH0_DOMAIN="ship.test.com",
             AUTH0_AUDIENCE="https://api.ship.test",
         )
+
+
+def test_local_dev_auth0_can_use_localhost_callbacks() -> None:
+    """Direct laptop dev can reuse Auth0 while backend/console run locally."""
+    settings = Settings(
+        SHIP_AUTH_MODE="auth0",
+        SHIP_ALLOW_LOCAL_AUTH0_CALLBACKS=True,
+        SHIP_PUBLIC_URL="http://localhost:8100",
+        SHIP_CONSOLE_URL="http://localhost:3001",
+        AUTH0_DOMAIN="ship.test.com",
+        AUTH0_AUDIENCE="https://api.ship.test",
+    )
+    assert settings.allow_local_auth0_callbacks is True
+    assert settings.public_url == "http://localhost:8100"
+    assert settings.console_url == "http://localhost:3001"
 
 
 def test_local_mode_keeps_dev_defaults() -> None:

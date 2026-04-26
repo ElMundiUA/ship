@@ -1684,6 +1684,11 @@ export interface ApiOpsBlocker {
   href: string | null;
 }
 
+export interface ApiOpsWorkItemPrLink {
+  number: number;
+  href: string;
+}
+
 export interface ApiOpsWorkItem {
   name: string;
   status: "in_progress" | "review" | "blocked";
@@ -1692,6 +1697,11 @@ export interface ApiOpsWorkItem {
   updated_at: string;
   blocker_ref: string | null;
   href: string | null;
+  ticket_ref?: string | null;
+  tracker?: string | null;
+  board_column?: string | null;
+  active_agent?: string | null;
+  pull_request?: ApiOpsWorkItemPrLink | null;
 }
 
 export interface ApiOpsShippedItem {
@@ -1787,6 +1797,8 @@ export interface ApiProcessTransition {
   from_state_id: string;
   to_state_id: string;
   conditions: ApiProcessCondition[];
+  /** When true, the transition needs an explicit human action in the console before it can fire. */
+  requires_human?: boolean;
 }
 
 export interface ApiProcessSpecialist {
@@ -1816,6 +1828,10 @@ export interface ApiProcessRoutine {
   instructions: string;
   last_run: string | null;
   status: string | null;
+  /** When false, routine is declared but should not run (from repo process config). */
+  enabled?: boolean;
+  /** Optional description for console; may come from YAML or API projection. */
+  description?: string;
 }
 
 export interface ApiProcessLink {
