@@ -70,11 +70,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.core.config import Settings, get_settings
 from backend.app.db.models.agent_memory import (
     BucketArticle,
+    BucketArticleSource,
     BucketArticleStatus,
     BucketScope,
     BucketSource,
     KnowledgeBucket,
-    KnowledgeSourceKind,
+    KnowledgeImportSource,
+    KnowledgeImportSourceKind,
+    KnowledgeIngestionRun,
+    KnowledgeIngestionStatus,
+    KnowledgeSourceItem,
+    KnowledgeSourceStatus,
 )
 from backend.app.db.models.integrations import GitHubInstallation, WorkspaceRepo
 from backend.app.db.models.repo_intel import RepoIntel, RepoIntelTriggeredBy
@@ -84,13 +90,6 @@ from backend.app.integrations.gateway.code_host import (
     RepoRef,
 )
 from backend.app.integrations.github.code_host_adapter import GitHubCodeHost
-from backend.app.services.knowledge_sources import (
-    ensure_source_for_bucket,
-    fingerprint_payload,
-    mark_source_synced,
-)
-
-
 logger = logging.getLogger(__name__)
 
 
@@ -146,9 +145,18 @@ _COMMIT_SAMPLE_SIZE: int = 200
 _CONVENTIONAL_THRESHOLD: float = 0.5
 
 # Bucket / article slugs the project surfaces under.
-_INTEL_BUCKET_SLUG: str = "repository-context"
 _INTEL_ARTICLE_PATH: str = ".ship/knowledge/repo-intel.md"
 _HARVESTER_VERSION: int = 2
+
+
+def _slugify_repo(full_name: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", full_name.lower()).strip("-")
+    return slug or "repository"
+
+
+def _fingerprint_payload(payload: Any) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -1093,44 +1101,232 @@ async def _write_intel_markdown(
     repo: WorkspaceRepo,
     intel: RepoIntel,
 ) -> int:
-    """Project ``intel`` to the Ship-owned repository context bucket."""
-    bucket = await _get_or_create_intel_bucket(session, repo=repo)
-    source = await ensure_source_for_bucket(
-        session,
-        bucket,
-        kind=KnowledgeSourceKind.REPO_CONTEXT,
-        config={
-            "repo_id": str(repo.id),
-            "repo_full_name": repo.full_name,
-            "branch": repo.default_branch or "main",
-            "harvester": "repo_intel",
-            "harvester_version": _HARVESTER_VERSION,
-        },
+    """Project ``intel`` into workspace buckets via import-source provenance."""
+
+    source = await _get_or_create_intel_import_source(session, repo=repo)
+    source.status = KnowledgeSourceStatus.SYNCING
+    run = KnowledgeIngestionRun(
+        id=uuid.uuid4(),
+        workspace_id=repo.workspace_id,
+        source_id=source.id,
+        status=KnowledgeIngestionStatus.RUNNING,
+        trigger="repo_intel_harvest",
+        stats={},
+        started_at=datetime.now(timezone.utc),
     )
+    session.add(run)
+    await session.flush()
+
     articles = _render_repo_context_articles(intel=intel, repo=repo)
     written = 0
     for slug, title, body in articles:
-        written += await _upsert_context_article(
+        item = await _upsert_intel_source_item(
             session,
-            bucket=bucket,
+            source=source,
             slug=slug,
             title=title,
             body=body,
             intel=intel,
             repo=repo,
         )
-    mark_source_synced(
-        source,
-        content_fingerprint=fingerprint_payload(
-            {
-                "intel_id": str(intel.id),
-                "version": intel.version,
-                "articles": [(slug, body) for slug, _, body in articles],
-            }
-        ),
-        cursor={"intel_id": str(intel.id), "version": intel.version},
+        bucket = await _get_workspace_bucket_for_intel_article(
+            session, repo=repo, article_slug=slug
+        )
+        article_id, changed = await _upsert_context_article(
+            session,
+            bucket=bucket,
+            slug=f"{_slugify_repo(repo.full_name)}-{slug}",
+            title=f"{repo.full_name}: {title}",
+            body=body,
+            intel=intel,
+            repo=repo,
+            source_item_id=item.id,
+        )
+        if changed:
+            written += 1
+            session.add(
+                BucketArticleSource(
+                    id=uuid.uuid4(),
+                    article_id=article_id,
+                    source_item_id=item.id,
+                    run_id=run.id,
+                )
+            )
+
+    source.status = KnowledgeSourceStatus.READY
+    source.last_synced_at = datetime.now(timezone.utc)
+    source.last_error = None
+    source.content_fingerprint = _fingerprint_payload(
+        {
+            "intel_id": str(intel.id),
+            "version": intel.version,
+            "articles": [(slug, body) for slug, _, body in articles],
+        }
     )
+    source.sync_cursor = {"intel_id": str(intel.id), "version": intel.version}
+    run.status = KnowledgeIngestionStatus.DONE
+    run.finished_at = datetime.now(timezone.utc)
+    run.stats = {
+        "discovered": len(articles),
+        "changed": written,
+        "skipped": len(articles) - written,
+        "articles_created_or_updated": written,
+    }
     return written
+
+
+async def _get_or_create_intel_import_source(
+    session: AsyncSession, *, repo: WorkspaceRepo
+) -> KnowledgeImportSource:
+    existing = (
+        await session.execute(
+            select(KnowledgeImportSource).where(
+                KnowledgeImportSource.workspace_id == repo.workspace_id,
+                KnowledgeImportSource.repo_id == repo.id,
+                KnowledgeImportSource.kind == KnowledgeImportSourceKind.DOCS_REPO,
+                KnowledgeImportSource.name == f"Repository context: {repo.full_name}",
+                KnowledgeImportSource.archived_at.is_(None),
+            )
+        )
+    ).scalars().first()
+    config = {
+        "repo_id": str(repo.id),
+        "repo_full_name": repo.full_name,
+        "branch": repo.default_branch or "main",
+        "harvester": "repo_intel",
+        "harvester_version": _HARVESTER_VERSION,
+    }
+    if existing is not None:
+        existing.name = f"Repository context: {repo.full_name}"
+        existing.config = config
+        return existing
+
+    source = KnowledgeImportSource(
+        id=uuid.uuid4(),
+        workspace_id=repo.workspace_id,
+        repo_id=repo.id,
+        kind=KnowledgeImportSourceKind.DOCS_REPO,
+        name=f"Repository context: {repo.full_name}",
+        config=config,
+        sync_interval_minutes=None,
+    )
+    session.add(source)
+    await session.flush()
+    return source
+
+
+async def _upsert_intel_source_item(
+    session: AsyncSession,
+    *,
+    source: KnowledgeImportSource,
+    slug: str,
+    title: str,
+    body: str,
+    intel: RepoIntel,
+    repo: WorkspaceRepo,
+) -> KnowledgeSourceItem:
+    external_id = f"{repo.id}:{slug}"
+    content_fingerprint = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    existing = (
+        await session.execute(
+            select(KnowledgeSourceItem).where(
+                KnowledgeSourceItem.source_id == source.id,
+                KnowledgeSourceItem.external_id == external_id,
+            )
+        )
+    ).scalars().first()
+    item_ref = {
+        "repo_id": str(repo.id),
+        "repo_full_name": repo.full_name,
+        "intel_id": str(intel.id),
+        "intel_version": intel.version,
+        "article_slug": slug,
+        "harvester_version": _HARVESTER_VERSION,
+    }
+    if existing is not None:
+        existing.title = title
+        existing.item_ref = item_ref
+        existing.content_fingerprint = content_fingerprint
+        existing.cursor = {"intel_id": str(intel.id), "version": intel.version}
+        existing.last_seen_at = datetime.now(timezone.utc)
+        existing.deleted_at = None
+        return existing
+
+    item = KnowledgeSourceItem(
+        id=uuid.uuid4(),
+        workspace_id=repo.workspace_id,
+        source_id=source.id,
+        external_id=external_id,
+        title=title,
+        external_url=repo.html_url,
+        item_ref=item_ref,
+        content_fingerprint=content_fingerprint,
+        cursor={"intel_id": str(intel.id), "version": intel.version},
+        last_seen_at=datetime.now(timezone.utc),
+    )
+    session.add(item)
+    await session.flush()
+    return item
+
+
+async def _get_workspace_bucket_for_intel_article(
+    session: AsyncSession, *, repo: WorkspaceRepo, article_slug: str
+) -> KnowledgeBucket:
+    workspace_id = repo.workspace_id
+    preferred = {
+        "overview": "project-map",
+        "dev-environment": "engineering-standards",
+        "architecture": "architecture-decisions",
+        "workflow": "runbooks-operations",
+        "visual-style": "product-knowledge",
+        "rules": "security-access",
+    }.get(article_slug, "source-intelligence")
+    bucket = (
+        await session.execute(
+            select(KnowledgeBucket).where(
+                KnowledgeBucket.workspace_id == workspace_id,
+                KnowledgeBucket.scope_kind == BucketScope.WORKSPACE,
+                KnowledgeBucket.source_kind != BucketSource.REPO_FILES,
+                KnowledgeBucket.archived_at.is_(None),
+                KnowledgeBucket.slug == preferred,
+            )
+        )
+    ).scalars().first()
+    if bucket is not None:
+        return bucket
+
+    fallback = (
+        await session.execute(
+            select(KnowledgeBucket)
+            .where(
+                KnowledgeBucket.workspace_id == workspace_id,
+                KnowledgeBucket.scope_kind == BucketScope.WORKSPACE,
+                KnowledgeBucket.source_kind != BucketSource.REPO_FILES,
+                KnowledgeBucket.archived_at.is_(None),
+            )
+            .order_by(KnowledgeBucket.slug)
+        )
+    ).scalars().first()
+    if fallback is not None:
+        return fallback
+
+    bucket = KnowledgeBucket(
+        id=uuid.uuid4(),
+        workspace_id=workspace_id,
+        scope_kind=BucketScope.WORKSPACE,
+        source_kind=BucketSource.REPO_CONTEXT,
+        slug="source-intelligence",
+        name="Source Intelligence",
+        description="Ship-generated source and repository intelligence.",
+        source_ref={
+            "repo_id": str(repo.id),
+            "repo_full_name": repo.full_name,
+            "generated_by": "repo_intel",
+        },
+    )
+    session.add(bucket)
+    await session.flush()
+    return bucket
 
 
 async def _upsert_context_article(
@@ -1142,7 +1338,8 @@ async def _upsert_context_article(
     body: str,
     intel: RepoIntel,
     repo: WorkspaceRepo,
-) -> int:
+    source_item_id: uuid.UUID,
+) -> tuple[uuid.UUID, bool]:
     content_sha = hashlib.sha256(body.encode("utf-8")).hexdigest()
 
     current = (
@@ -1156,7 +1353,7 @@ async def _upsert_context_article(
     ).scalars().first()
 
     if current is not None and current.content_sha == content_sha:
-        return 0
+        return current.id, False
 
     if current is not None:
         current.status = BucketArticleStatus.SUPERSEDED
@@ -1186,63 +1383,20 @@ async def _upsert_context_article(
         supersedes_id=supersedes_id,
         provenance={
             "source_kind": BucketSource.REPO_CONTEXT,
-            "source": KnowledgeSourceKind.REPO_CONTEXT,
+            "source": "repo_context",
             "intel_id": str(intel.id),
             "intel_version": intel.version,
             "article_version": next_version,
             "repo_id": str(repo.id),
             "repo_full_name": repo.full_name,
             "branch": repo.default_branch or "main",
+            "source_item_id": str(source_item_id),
             "harvester_version": _HARVESTER_VERSION,
         },
     )
     session.add(article)
-    return 1
-
-
-async def _get_or_create_intel_bucket(
-    session: AsyncSession, *, repo: WorkspaceRepo
-) -> KnowledgeBucket:
-    existing = (
-        await session.execute(
-            select(KnowledgeBucket).where(
-                and_(
-                    KnowledgeBucket.workspace_id == repo.workspace_id,
-                    KnowledgeBucket.repo_id == repo.id,
-                    KnowledgeBucket.scope_kind == BucketScope.REPO,
-                    KnowledgeBucket.source_kind == BucketSource.REPO_CONTEXT,
-                    KnowledgeBucket.slug == _INTEL_BUCKET_SLUG,
-                )
-            )
-        )
-    ).scalars().first()
-    if existing is not None:
-        if existing.archived_at is not None:
-            existing.archived_at = None
-        return existing
-
-    bucket = KnowledgeBucket(
-        id=uuid.uuid4(),
-        workspace_id=repo.workspace_id,
-        repo_id=repo.id,
-        scope_kind=BucketScope.REPO,
-        source_kind=BucketSource.REPO_CONTEXT,
-        slug=_INTEL_BUCKET_SLUG,
-        name="Repository context",
-        description=(
-            "Ship-generated development context for this repository: "
-            "architecture, commands, workflow, rules, and visual style."
-        ),
-        source_ref={
-            "repo_id": str(repo.id),
-            "branch": repo.default_branch or "main",
-            "harvest": "repo_context",
-            "harvester_version": _HARVESTER_VERSION,
-        },
-    )
-    session.add(bucket)
     await session.flush()
-    return bucket
+    return article.id, True
 
 
 def _render_repo_context_articles(

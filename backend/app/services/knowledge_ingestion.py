@@ -346,6 +346,11 @@ async def fetch_source_documents(
 ) -> list[SourceDocument]:
     if source.kind in {KnowledgeImportSourceKind.NOTION, KnowledgeImportSourceKind.CONFLUENCE}:
         return await _fetch_connector_documents(session, source)
+    if (
+        source.kind == KnowledgeImportSourceKind.DOCS_REPO
+        and source.config.get("harvester") == "repo_intel"
+    ):
+        return []
     if source.kind == KnowledgeImportSourceKind.WEBSITE:
         return await _fetch_firecrawl_documents(source, settings=settings)
     if source.kind == KnowledgeImportSourceKind.STATIC_UPLOAD:
