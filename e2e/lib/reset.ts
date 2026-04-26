@@ -173,10 +173,24 @@ export async function resetGithubSandboxRepo(
 // ---------------------------------------------------------------------------
 
 const DEFAULT_TRACKER_KINDS = ["github", "linear", "notion"] as const;
+export const EXTERNAL_INTEGRATION_KINDS = [
+  "github",
+  "linear",
+  "jira",
+  "confluence",
+  "notion",
+  "gitlab",
+  "slack",
+  "teams",
+  "otel",
+  "webhook",
+  "s3-export",
+] as const;
 
 export interface WorkspaceResetReport {
   disconnectedRepos: string[];
   removedIntegrations: string[];
+  disabledNativeIntegrations: string[];
   errors: string[];
 }
 
@@ -200,11 +214,13 @@ export async function resetShipWorkspace(
     workspaceId: string;
     trackerKinds?: readonly string[];
     onlyRepoFullName?: string;
+    removeNativeIntegrations?: boolean;
   },
 ): Promise<WorkspaceResetReport> {
   const report: WorkspaceResetReport = {
     disconnectedRepos: [],
     removedIntegrations: [],
+    disabledNativeIntegrations: [],
     errors: [],
   };
   const base = opts.base.replace(/\/+$/, "");
@@ -248,6 +264,36 @@ export async function resetShipWorkspace(
       report.removedIntegrations.push(kind);
     } else {
       report.errors.push(`integration ${kind} → ${del.status()}`);
+    }
+  }
+
+  if (opts.removeNativeIntegrations) {
+    const nativeList = await request.get(
+      `${base}/v1/workspaces/${wsEnc}/native-integrations`,
+      { headers: authHeaders },
+    );
+    if (nativeList.ok()) {
+      const rows = (await nativeList.json()) as {
+        id: string;
+        provider?: string;
+        status?: string;
+      }[];
+      for (const row of rows) {
+        if (row.status === "disabled") continue;
+        const del = await request.delete(
+          `${base}/v1/workspaces/${wsEnc}/native-integrations/${encodeURIComponent(row.id)}`,
+          { headers: authHeaders },
+        );
+        if (del.ok() || del.status() === 404 || del.status() === 204) {
+          report.disabledNativeIntegrations.push(row.provider ?? row.id);
+        } else {
+          report.errors.push(
+            `native integration ${row.provider ?? row.id} → ${del.status()}`,
+          );
+        }
+      }
+    } else if (nativeList.status() !== 404) {
+      report.errors.push(`list native integrations → ${nativeList.status()}`);
     }
   }
 

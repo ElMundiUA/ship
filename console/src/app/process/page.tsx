@@ -9,6 +9,7 @@ import {
   selectConfigSource,
 } from "./process-config";
 import { FlowSchedulePanel } from "./flow-schedule-panel";
+import { ProcessGraphOverview } from "./process-graph-overview";
 import { ProcessEditorWorkspace } from "./process-editor-workspace";
 import { RoutinesPanel } from "./routines-panel";
 import { TrackerMappingPanel } from "./tracker-mapping-panel";
@@ -18,6 +19,7 @@ import {
   ApiUnavailableError,
   type ApiActivatedRepo,
   type ApiProcess,
+  type ApiProcessList,
   type ApiProcessState,
   type ApiRepoConfig,
   getRepoConfig,
@@ -48,12 +50,25 @@ export default async function ProcessPage({
   const selectedTab = parseProcessTab(params.tab);
   const selectedRepoId =
     typeof params.repo === "string" ? params.repo : undefined;
+  const explicitProcessId =
+    typeof params.process === "string" ? params.process : undefined;
+  const selectedProcessId =
+    explicitProcessId || (params.tab || params.state ? "development" : undefined);
   const reason = typeof params.reason === "string" ? params.reason : undefined;
 
   if (!isApiConfigured()) {
+    if (!selectedProcessId) {
+      return renderProcessGraphPage({
+        workspace: { id: "mock", name: "Mock workspace", slug: "mock" },
+        processList: mockProcessList,
+        repos: mockRepos,
+        selectedRepo: mockRepos[0],
+        mock: true,
+      });
+    }
     return renderProcessPage({
       workspace: { id: "mock", name: "Mock workspace", slug: "mock" },
-      process: mockProcess,
+      process: mockProcessForId(selectedProcessId),
       repos: mockRepos,
       selectedRepo: mockRepos[0],
       selectedStateId,
@@ -66,7 +81,15 @@ export default async function ProcessPage({
   const token = await getSessionToken();
   if (!token) redirect("/login?next=%2Fprocess");
 
-  const result = await loadLiveProcess(token, selectedRepoId, params);
+  if (!selectedProcessId) {
+    const graphResult = await loadLiveProcessGraph(token, selectedRepoId, params);
+    if (graphResult === "unauthorized") redirect("/login?next=%2Fprocess");
+    if (graphResult === "empty") redirect("/onboarding?step=github");
+    if (graphResult === "down") return renderDownState();
+    return renderProcessGraphPage({ ...graphResult, mock: false });
+  }
+
+  const result = await loadLiveProcess(token, selectedProcessId, selectedRepoId, params);
   if (result === "unauthorized") redirect("/login?next=%2Fprocess");
   if (result === "empty") redirect("/onboarding?step=github");
   if (result === "down") return renderDownState();
@@ -84,8 +107,17 @@ type LiveProcess = {
   configSource: ProcessConfigSource;
 };
 
+type LiveProcessGraph = {
+  workspace: ApiWorkspace;
+  allWorkspaces: ApiWorkspace[];
+  processList: ApiProcessList;
+  repos: ApiActivatedRepo[];
+  selectedRepo: ApiActivatedRepo | null;
+};
+
 async function loadLiveProcess(
   token: string,
+  processId: string,
   selectedRepoId: string | undefined,
   searchParams: SearchParams,
 ): Promise<LiveProcess | "empty" | "unauthorized" | "down"> {
@@ -106,11 +138,14 @@ async function loadLiveProcess(
       listProcesses(workspace.id, token),
       listActivatedRepos(workspace.id, token).catch(() => [] as ApiActivatedRepo[]),
     ]);
-    const processId = processList.primary_process_id || "development";
+    const resolvedProcessId =
+      processList.processes.some((process) => process.id === processId)
+        ? processId
+        : processList.primary_process_id || "development";
     const selectedRepo =
       repos.find((repo) => repo.id === selectedRepoId) ?? repos[0] ?? null;
     const [projectedProcess, config] = await Promise.all([
-      getProcess(workspace.id, processId, token, {
+      getProcess(workspace.id, resolvedProcessId, token, {
         repoId: selectedRepo?.id,
       }),
       selectedRepo
@@ -136,6 +171,77 @@ async function loadLiveProcess(
     if (err instanceof ApiUnavailableError) return "down";
     return "down";
   }
+}
+
+async function loadLiveProcessGraph(
+  token: string,
+  selectedRepoId: string | undefined,
+  searchParams: SearchParams,
+): Promise<LiveProcessGraph | "empty" | "unauthorized" | "down"> {
+  let workspaces: ApiWorkspace[];
+  try {
+    workspaces = await listWorkspaces(token);
+  } catch (err) {
+    if (err instanceof ApiHttpError && err.status === 401) return "unauthorized";
+    if (err instanceof ApiUnavailableError) return "down";
+    return "down";
+  }
+  if (workspaces.length === 0) return "empty";
+
+  const resolved = await getResolvedWorkspaceId(searchParams, workspaces);
+  const workspace = pickWorkspace(workspaces, resolved);
+  try {
+    const [processList, repos] = await Promise.all([
+      listProcesses(workspace.id, token),
+      listActivatedRepos(workspace.id, token).catch(() => [] as ApiActivatedRepo[]),
+    ]);
+    return {
+      workspace,
+      allWorkspaces: workspaces,
+      processList,
+      repos,
+      selectedRepo: repos.find((repo) => repo.id === selectedRepoId) ?? repos[0] ?? null,
+    };
+  } catch (err) {
+    if (err instanceof ApiHttpError && err.status === 401) return "unauthorized";
+    if (err instanceof ApiUnavailableError) return "down";
+    return "down";
+  }
+}
+
+function renderProcessGraphPage({
+  workspace,
+  allWorkspaces,
+  processList,
+  repos,
+  selectedRepo,
+  mock = false,
+}: {
+  workspace: Pick<ApiWorkspace, "id" | "name" | "slug">;
+  allWorkspaces?: ApiWorkspace[];
+  processList: ApiProcessList;
+  repos: ApiActivatedRepo[];
+  selectedRepo: ApiActivatedRepo | null;
+  mock?: boolean;
+}) {
+  return (
+    <AppShell
+      title="Process graph"
+      kicker={workspace.slug}
+      workspace={{ id: workspace.id, name: workspace.name, slug: workspace.slug }}
+      allWorkspaces={
+        allWorkspaces && allWorkspaces.length > 0
+          ? toAppShellWorkspaces(allWorkspaces)
+          : undefined
+      }
+    >
+      {mock && <MockBanner />}
+      <div className="space-y-3">
+        <RepoSelector repos={repos} selectedRepo={selectedRepo} />
+        <ProcessGraphOverview processList={processList} repoId={selectedRepo?.id} />
+      </div>
+    </AppShell>
+  );
 }
 
 function renderProcessPage({
@@ -176,10 +282,18 @@ function renderProcessPage({
     >
       {mock && <MockBanner />}
       <div className="space-y-3">
-        <RepoSelector repos={repos} selectedRepo={selectedRepo} />
+        <RepoSelector
+          repos={repos}
+          selectedRepo={selectedRepo}
+          processId={process.id}
+        />
         <ProcessNotice reason={reason} />
         <ConfigSourceBanner config={config ?? null} source={configSource ?? "fallback"} />
-        <ProcessTabs selected={selectedTab} repoId={selectedRepo?.id} />
+        <ProcessTabs
+          selected={selectedTab}
+          processId={process.id}
+          repoId={selectedRepo?.id}
+        />
         {selectedTab === "flow" ? (
           <ProcessEditorWorkspace
             workspaceId={workspace.id}
@@ -281,9 +395,11 @@ function ConfigSourceBanner({
 
 function ProcessTabs({
   selected,
+  processId,
   repoId,
 }: {
   selected: ProcessTab;
+  processId: string;
   repoId?: string;
 }) {
   const hrefFor = (tab: ProcessTab) => {
@@ -291,7 +407,9 @@ function ProcessTabs({
     if (tab !== "flow") query.set("tab", tab);
     if (repoId) query.set("repo", repoId);
     const suffix = query.toString();
-    return suffix ? `/process?${suffix}` : "/process";
+    return suffix
+      ? `/process/${encodeURIComponent(processId)}?${suffix}`
+      : `/process/${encodeURIComponent(processId)}`;
   };
   return (
     <div className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/[0.035] p-2">
@@ -471,6 +589,9 @@ const mockProcess: ApiProcess = {
       needs_human_approval: "Needs Human Approval",
     },
   },
+  description: "Ticket-driven SDLC flow from intake through review.",
+  node_type: "process",
+  template_id: "process-development",
   process_graph: { nodes: [], links: [] },
   adapter_diagnostics: [
     {
@@ -497,6 +618,74 @@ const mockProcess: ApiProcess = {
   ],
 };
 
+const mockProcessList: ApiProcessList = {
+  primary_process_id: "development",
+  processes: [
+    {
+      id: "development",
+      name: "Development",
+      primary: true,
+      state_count: 5,
+      task_count: 0,
+      blocked_count: 0,
+      health: "ok",
+      description: "Ticket-driven SDLC flow from intake through review.",
+      parent_process_id: null,
+      node_type: "process",
+      template_id: "process-development",
+    },
+    {
+      id: "development.requirements",
+      name: "Requirements",
+      primary: false,
+      state_count: 2,
+      task_count: 0,
+      blocked_count: 0,
+      health: "ok",
+      description: "Clarify scope, acceptance criteria, and handoff notes.",
+      parent_process_id: "development",
+      node_type: "subprocess",
+      template_id: "subprocess-requirements",
+    },
+    {
+      id: "development.implementation",
+      name: "Implementation",
+      primary: false,
+      state_count: 2,
+      task_count: 0,
+      blocked_count: 0,
+      health: "ok",
+      description: "Plan, implement, test, and prepare code changes.",
+      parent_process_id: "development",
+      node_type: "subprocess",
+      template_id: "subprocess-implementation",
+    },
+    {
+      id: "development.qa",
+      name: "Quality Review",
+      primary: false,
+      state_count: 2,
+      task_count: 0,
+      blocked_count: 0,
+      health: "ok",
+      description: "Validate acceptance criteria and release readiness.",
+      parent_process_id: "development",
+      node_type: "subprocess",
+      template_id: "subprocess-qa",
+    },
+  ],
+  process_graph: {
+    nodes: [
+      mockGraphNode("workspace", "Workspace", "workspace", 340, 270),
+      mockGraphNode("development", "Development", "process", 340, 42),
+    ],
+    links: [
+      mockGraphLink("workspace", "development", "Development process"),
+    ],
+  },
+  adapter_diagnostics: [],
+};
+
 const mockRepos: ApiActivatedRepo[] = [
   {
     id: "mock-repo",
@@ -513,6 +702,78 @@ const mockRepos: ApiActivatedRepo[] = [
     current_bundle_version: "0.6",
   },
 ];
+
+function mockProcessForId(processId: string): ApiProcess {
+  const summary =
+    mockProcessList.processes.find((process) => process.id === processId) ??
+    mockProcessList.processes[0];
+  if (summary.id === "development") return mockProcess;
+  const stateIdsByProcess: Record<string, string[]> = {
+    "development.requirements": ["task_intake", "ba_requirements"],
+    "development.implementation": ["ba_requirements", "dev_implementation"],
+    "development.qa": ["qa_manual", "pr_review"],
+  };
+  const stateIds = stateIdsByProcess[summary.id] ?? [];
+  const states = mockProcess.states.filter((state) => stateIds.includes(state.id));
+  return {
+    ...mockProcess,
+    id: summary.id,
+    name: summary.name,
+    primary: summary.primary,
+    state_count: states.length,
+    task_count: summary.task_count,
+    blocked_count: summary.blocked_count,
+    health: summary.health,
+    description: summary.description,
+    parent_process_id: summary.parent_process_id,
+    node_type: summary.node_type,
+    template_id: summary.template_id,
+    states: states.length > 0 ? states : mockProcess.states.slice(0, 1),
+    transitions: [],
+    tasks: [],
+  };
+}
+
+function mockGraphNode(
+  processId: string,
+  name: string,
+  type: "workspace" | "process" | "subprocess",
+  x: number,
+  y: number,
+  parentProcessId: string | null = null,
+) {
+  return {
+    id: `node-${processId}`,
+    process_id: processId,
+    type,
+    name,
+    description:
+      type === "workspace"
+        ? "Root orchestration map for this workspace."
+        : `${name} process node`,
+    parent_process_id: parentProcessId,
+    template_id: `${type}-${processId.replaceAll(".", "-")}`,
+    x,
+    y,
+    status: "ok" as const,
+  };
+}
+
+function mockGraphLink(fromProcessId: string, toProcessId: string, label: string) {
+  return {
+    id: `${fromProcessId}-to-${toProcessId}`,
+    from_process_id: fromProcessId,
+    from_state_id: null,
+    from_node_id: `node-${fromProcessId}`,
+    to_process_id: toProcessId,
+    to_state_id: null,
+    to_node_id: `node-${toProcessId}`,
+    type: "handoff" as const,
+    conditions: [{ expression: label.toLowerCase().replaceAll(" ", "_") }],
+    label,
+    io_contract: {},
+  };
+}
 
 function mockState(
   id: string,

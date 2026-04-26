@@ -211,12 +211,20 @@ export function ProcessEditorWorkspace({
   }
 
   return (
-    <section className="min-h-[calc(100vh-180px)] overflow-hidden rounded-2xl border border-white/10 bg-white/[0.035] shadow-card backdrop-blur-xl">
-      <div className="border-b border-white/10 px-4 py-3">
+    <section className="min-h-[calc(100vh-180px)] overflow-hidden rounded-[2rem] border border-aqua/15 bg-[radial-gradient(circle_at_top_left,rgba(99,245,255,0.10),transparent_30%),linear-gradient(135deg,rgba(255,255,255,0.07),rgba(255,255,255,0.025))] shadow-2xl shadow-black/40 backdrop-blur-xl">
+      <div className="border-b border-white/10 px-5 py-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
             {tabs}
-            <div className={tabs ? "mt-3" : undefined}>
+            <div className={tabs ? "mt-4" : undefined}>
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <span className="rounded-full border border-aqua/20 bg-aqua/[0.08] px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.22em] text-aqua/80">
+                  Process editor
+                </span>
+                <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-[10px] font-semibold text-white/45">
+                  {states.length} nodes · {transitions.length || Math.max(0, states.length - 1)} handoffs
+                </span>
+              </div>
               <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
                 <input
                   type="text"
@@ -224,7 +232,7 @@ export function ProcessEditorWorkspace({
                   onChange={(event) => setProcessName(event.target.value)}
                   placeholder={process.name}
                   aria-label="Process name"
-                  className="min-w-0 flex-1 border-b border-transparent bg-transparent font-display text-base font-bold text-white outline-none transition placeholder:text-white/35 hover:border-white/15 focus:border-aqua/40"
+                  className="min-w-0 flex-1 border-b border-transparent bg-transparent font-display text-2xl font-bold text-white outline-none transition placeholder:text-white/35 hover:border-white/15 focus:border-aqua/40"
                 />
                 <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-[11px] font-medium text-white/45">
                   <input
@@ -241,7 +249,7 @@ export function ProcessEditorWorkspace({
               <p className="mt-1 text-xs text-white/45">
                 {dirty
                   ? draftSummary
-                  : "Build the process flow from typed nodes, then publish a reviewable process change."}
+                  : "Drag the flow, tune the selected node, then publish a reviewable process change."}
               </p>
             </div>
           </div>
@@ -261,14 +269,14 @@ export function ProcessEditorWorkspace({
               type="button"
               disabled={!dirty}
               onClick={resetDraft}
-              className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-xs font-bold text-white/60 transition hover:border-white/20 hover:text-white disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/[0.03] disabled:text-white/30"
+              className="rounded-full border border-white/10 bg-black/25 px-4 py-2 text-xs font-bold text-white/65 transition hover:border-white/20 hover:text-white disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/[0.03] disabled:text-white/30"
             >
               Discard changes
             </button>
             <button
               type="submit"
               disabled={!repoId || !dirty}
-              className="rounded-full border border-aqua/30 bg-aqua/10 px-4 py-2 text-xs font-bold text-aqua transition hover:bg-aqua/15 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/[0.05] disabled:text-white/35"
+              className="rounded-full border border-aqua/35 bg-aqua/15 px-4 py-2 text-xs font-bold text-aqua shadow-lg shadow-aqua/5 transition hover:bg-aqua/20 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/[0.05] disabled:text-white/35"
             >
               Publish process changes
             </button>
@@ -283,7 +291,7 @@ export function ProcessEditorWorkspace({
         </div>
       </div>
 
-      <div className="grid min-h-0 grid-cols-1 xl:grid-cols-[180px_minmax(0,1fr)_360px]">
+      <div className="grid min-h-0 grid-cols-1 xl:grid-cols-[230px_minmax(0,1fr)_390px]">
         <NodePalette onAdd={addState} />
         <ProcessCanvasEditor
           process={processDraft}
@@ -295,6 +303,7 @@ export function ProcessEditorWorkspace({
           onPositionsChange={updatePositions}
         />
         <StateEditor
+          processId={process.id}
           repoId={repoId}
           state={selectedState}
           states={states}
@@ -391,28 +400,53 @@ const NODE_TEMPLATES: NodeTemplate[] = [
 ];
 
 function NodePalette({ onAdd }: { onAdd: (template: NodeTemplate) => void }) {
+  const primaryTemplate = NODE_TEMPLATES[0] as NodeTemplate;
   return (
-    <aside className="border-b border-white/10 bg-white/[0.02] p-3 xl:border-b-0 xl:border-r">
-      <div className="text-[10px] font-bold uppercase tracking-widest text-white/45">
-        Node library
-      </div>
-      <p className="mt-1 text-xs leading-relaxed text-white/40">
-        Add typed work nodes, then connect and tune them on the canvas.
-      </p>
-      <div className="mt-3 space-y-2">
+    <aside className="border-b border-white/10 bg-[radial-gradient(circle_at_top,rgba(99,245,255,0.10),transparent_34%),rgba(0,0,0,0.22)] p-4 xl:border-b-0 xl:border-r">
+      <button
+        type="button"
+        onClick={() => onAdd(primaryTemplate)}
+        className="group relative w-full overflow-hidden rounded-[1.6rem] border border-aqua/25 bg-[linear-gradient(135deg,rgba(99,245,255,0.18),rgba(168,85,247,0.10),rgba(255,255,255,0.04))] p-4 text-left shadow-2xl shadow-aqua/5 transition hover:-translate-y-1 hover:border-aqua/45"
+      >
+        <div className="absolute -right-8 -top-8 h-24 w-24 rounded-full bg-aqua/20 blur-2xl transition group-hover:bg-aqua/30" />
+        <div className="relative text-[10px] font-bold uppercase tracking-[0.26em] text-aqua/75">
+          Create subprocess
+        </div>
+        <div className="relative mt-3 font-display text-lg font-bold text-white">
+          New work block
+        </div>
+        <p className="relative mt-2 text-xs leading-relaxed text-white/55">
+          Adds a draggable process block to this development canvas.
+        </p>
+        <div className="relative mt-4 inline-flex rounded-full border border-aqua/30 bg-aqua/10 px-3 py-1 text-xs font-semibold text-aqua">
+          Add to canvas
+        </div>
+      </button>
+
+      <div className="mt-4">
+        <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.22em] text-white/35">
+          Building blocks
+        </div>
+        <div className="grid gap-2">
         {NODE_TEMPLATES.map((template) => (
           <button
             key={template.id}
             type="button"
             onClick={() => onAdd(template)}
-            className="w-full rounded-xl border border-white/10 bg-white/[0.035] p-3 text-left transition hover:border-aqua/25 hover:bg-aqua/[0.05]"
+            className="group w-full rounded-2xl border border-white/10 bg-black/25 px-3 py-2.5 text-left transition hover:border-aqua/25 hover:bg-aqua/[0.055]"
           >
-            <div className="text-xs font-semibold text-white/85">{template.name}</div>
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-xs font-semibold text-white/85">{template.name}</div>
+              <span className="grid h-5 w-5 place-items-center rounded-full border border-white/10 text-aqua/50 transition group-hover:border-aqua/30 group-hover:text-aqua">
+                +
+              </span>
+            </div>
             <div className="mt-1 text-[11px] leading-relaxed text-white/40">
               {template.description}
             </div>
           </button>
         ))}
+        </div>
       </div>
     </aside>
   );

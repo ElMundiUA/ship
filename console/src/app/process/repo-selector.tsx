@@ -7,9 +7,11 @@ import type { ApiActivatedRepo } from "@/lib/api/client";
 export function RepoSelector({
   repos,
   selectedRepo,
+  processId,
 }: {
   repos: ApiActivatedRepo[];
   selectedRepo: ApiActivatedRepo | null;
+  processId?: string;
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -34,7 +36,10 @@ export function RepoSelector({
           const next = new URLSearchParams(searchParams.toString());
           next.set("repo", event.currentTarget.value);
           next.delete("state");
-          router.push(`/process?${next.toString()}`);
+          const base = processId
+            ? `/process/${encodeURIComponent(processId)}`
+            : "/process";
+          router.push(`${base}?${next.toString()}`);
         }}
         className="w-full rounded-xl border border-white/10 bg-ink px-3 py-2 text-sm font-semibold text-white outline-none focus:border-aqua/40"
       >

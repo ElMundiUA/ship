@@ -23,6 +23,7 @@ type EditableProcessState = ApiProcessState & {
 };
 
 export function StateEditor({
+  processId,
   repoId,
   state,
   states,
@@ -34,6 +35,7 @@ export function StateEditor({
   onDeleteState,
   embedded = false,
 }: {
+  processId?: string;
   repoId?: string;
   state?: ApiProcessState;
   states: ApiProcessState[];
@@ -48,7 +50,7 @@ export function StateEditor({
   if (!state) {
     if (embedded) {
       return (
-        <aside className="border-t border-white/10 p-4 xl:border-l xl:border-t-0">
+        <aside className="border-t border-white/10 bg-black/20 p-4 xl:border-l xl:border-t-0">
           <CardHeader title="State details" subtitle="No state selected." />
         </aside>
       );
@@ -77,10 +79,17 @@ export function StateEditor({
 
   const editorContent = (
     <div className="space-y-4">
-      <CardHeader
-        title="Step settings"
-        subtitle="What happens, how work is picked, when it can run, and where it goes next."
-      />
+      <div className="rounded-3xl border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(99,245,255,0.12),transparent_32%),linear-gradient(135deg,rgba(255,255,255,0.08),rgba(255,255,255,0.03))] p-4">
+        <div className="text-[10px] font-bold uppercase tracking-[0.24em] text-aqua/70">
+          Inspector
+        </div>
+        <h2 className="mt-2 font-display text-xl font-bold text-white">
+          Step settings
+        </h2>
+        <p className="mt-1 text-xs leading-relaxed text-white/50">
+          Tune what happens, how work is picked, when it can run, and where it goes next.
+        </p>
+      </div>
       {config?.parse_error && (
         <div className="rounded-xl border border-coral/25 bg-coral/[0.05] px-3 py-2 text-xs text-coral/90">
           Config YAML parse error: {config.parse_error}
@@ -117,7 +126,7 @@ export function StateEditor({
               value={selectedState.instructions}
               onChange={(event) => patchState({ instructions: event.target.value })}
               rows={3}
-              className="w-full resize-none rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none focus:border-aqua/40"
+              className="w-full resize-none rounded-2xl border border-white/10 bg-black/25 px-3 py-2 text-sm text-white outline-none transition focus:border-aqua/40 focus:bg-aqua/[0.04]"
             />
           </label>
           <p className="text-xs leading-relaxed text-white/45">
@@ -132,14 +141,19 @@ export function StateEditor({
         </Section>
 
         <Section title="When it can run">
-          <ScheduleSummary state={selectedState} schedule={schedule} repoId={repoId} />
+          <ScheduleSummary
+            state={selectedState}
+            schedule={schedule}
+            processId={processId}
+            repoId={repoId}
+          />
         </Section>
 
         <Section title="What happens next">
           <NextHandoffSummary nextStates={nextStates} />
         </Section>
 
-        <details className="rounded-xl border border-white/10 bg-white/[0.025] p-3">
+        <details className="rounded-2xl border border-white/10 bg-white/[0.035] p-3">
           <summary className="cursor-pointer text-xs font-bold uppercase tracking-widest text-white/45">
             Advanced execution
           </summary>
@@ -150,7 +164,7 @@ export function StateEditor({
             />
           </div>
         </details>
-        <div className="rounded-xl border border-coral/20 bg-coral/[0.04] p-3">
+        <div className="rounded-2xl border border-coral/20 bg-coral/[0.04] p-3">
           <div className="text-[10px] font-bold uppercase tracking-widest text-coral/80">
             Danger zone
           </div>
@@ -177,7 +191,7 @@ export function StateEditor({
 
   if (embedded) {
     return (
-      <aside className="min-h-0 border-t border-white/10 p-4 xl:max-h-[calc(100vh-14rem)] xl:overflow-y-auto xl:border-l xl:border-t-0">
+      <aside className="min-h-0 border-t border-white/10 bg-black/20 p-4 xl:max-h-[calc(100vh-14rem)] xl:overflow-y-auto xl:border-l xl:border-t-0">
         {editorContent}
       </aside>
     );
@@ -198,8 +212,8 @@ function Section({
   children: ReactNode;
 }) {
   return (
-    <section className="space-y-3 rounded-xl border border-white/10 bg-white/[0.025] p-3">
-      <div className="text-[10px] font-bold uppercase tracking-widest text-white/45">
+    <section className="space-y-3 rounded-2xl border border-white/10 bg-[linear-gradient(135deg,rgba(255,255,255,0.065),rgba(255,255,255,0.025))] p-3 shadow-lg shadow-black/10">
+      <div className="text-[10px] font-bold uppercase tracking-widest text-aqua/55">
         {title}
       </div>
       {children}
@@ -242,7 +256,7 @@ function ContractRow({
   value?: string | null;
 }) {
   return (
-    <div className="flex items-center justify-between gap-2 rounded-lg bg-white/[0.03] px-2 py-1">
+    <div className="flex items-center justify-between gap-2 rounded-xl bg-black/20 px-2 py-1.5">
       <span className="text-white/40">{label}</span>
       <CodeLabel>{value ?? "not configured"}</CodeLabel>
     </div>
@@ -252,18 +266,22 @@ function ContractRow({
 function ScheduleSummary({
   state,
   schedule,
+  processId,
   repoId,
 }: {
   state: ApiProcessState;
   schedule?: ApiProcess["schedule"] | null;
+  processId?: string;
   repoId?: string;
 }) {
   const matchingSlots =
     schedule?.slots.filter((slot) => slot.specialist_ids.includes(state.specialist_id)) ??
     [];
-  const scheduleHref = repoId
-    ? `/process?tab=schedule&repo=${encodeURIComponent(repoId)}`
-    : "/process?tab=schedule";
+  const query = new URLSearchParams({ tab: "schedule" });
+  if (repoId) query.set("repo", repoId);
+  const scheduleHref = processId
+    ? `/process/${encodeURIComponent(processId)}?${query.toString()}`
+    : `/process?${query.toString()}`;
   if (schedule?.trigger?.kind === "event") {
     return (
       <p className="text-xs leading-relaxed text-white/45">
@@ -344,7 +362,7 @@ function RoleSelector({
           const next = options.find((option) => option.id === event.target.value);
           if (next) onChange(next);
         }}
-        className="w-full rounded-xl border border-white/10 bg-ink px-3 py-2 text-sm text-white outline-none focus:border-aqua/40"
+        className="w-full rounded-2xl border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-aqua/40"
       >
         {options.map((option) => (
           <option key={option.id} value={option.id}>
@@ -398,7 +416,7 @@ function AgentProfileSelector({
       <select
         value={selectedOption.id}
         onChange={(event) => onChange(event.target.value)}
-        className="w-full rounded-xl border border-white/10 bg-ink px-3 py-2 text-sm text-white outline-none focus:border-aqua/40"
+        className="w-full rounded-2xl border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-aqua/40"
       >
         {AGENT_PROFILE_OPTIONS.map((option) => (
           <option key={option.id} value={option.id}>
@@ -430,7 +448,7 @@ function EditorField({
       <input
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none focus:border-aqua/40"
+        className="w-full rounded-2xl border border-white/10 bg-black/25 px-3 py-2 text-sm text-white outline-none transition focus:border-aqua/40 focus:bg-aqua/[0.04]"
       />
     </label>
   );
