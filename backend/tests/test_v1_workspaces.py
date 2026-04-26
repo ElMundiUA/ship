@@ -6,9 +6,13 @@ Skipped automatically when the local Postgres stack is not running — see
 
 from __future__ import annotations
 
+import secrets
 import uuid
 
 import pytest
+
+from backend.app.api.v1.deps import PAT_PREFIX, _hash_token
+from backend.app.db.models.tenancy import ApiToken, User, WorkspaceMember
 
 
 @pytest.mark.asyncio
@@ -49,6 +53,56 @@ async def test_list_workspaces_jit_creates_personal_for_fresh_user(
     again = listed_again.json()
     assert len(again) == 1
     assert again[0]["id"] == rows[0]["id"]
+
+
+@pytest.mark.asyncio
+async def test_list_workspaces_prefers_team_workspace_over_jit_personal(
+    v1_client, db_session, seed_workspace
+) -> None:
+    """A user can have both a JIT personal shell and a team membership.
+
+    Typical sequence: they sign in once (``GET /v1/workspaces`` with zero
+    memberships materialises the personal org/workspace), *then* they accept
+    a team invite. The personal row is newer than the team workspace, so a
+    naive ``created_at DESC`` ordering would surface the empty personal
+    workspace first — the console treats ``list[0]`` as the home scope and
+    incorrectly redirects to the onboarding wizard. Team/shared orgs must
+    sort before auto-provisioned personal orgs.
+    """
+    _, _owner_raw, team_ws = seed_workspace
+
+    invitee = User(email="teammate@example.com", display_name="Teammate")
+    db_session.add(invitee)
+    await db_session.flush()
+    raw_b = f"{PAT_PREFIX}{secrets.token_urlsafe(24)}"
+    db_session.add(
+        ApiToken(
+            user_id=invitee.id,
+            name="invitee-pat",
+            hashed_secret=_hash_token(raw_b),
+            prefix=PAT_PREFIX,
+            scopes=["workspace:read", "workspace:write"],
+        )
+    )
+    await db_session.flush()
+
+    headers = {"Authorization": f"Bearer {raw_b}"}
+    bootstrap = await v1_client.get("/v1/workspaces", headers=headers)
+    assert bootstrap.status_code == 200, bootstrap.text
+    assert len(bootstrap.json()) == 1
+
+    db_session.add(
+        WorkspaceMember(
+            workspace_id=team_ws.id, user_id=invitee.id, role="member"
+        )
+    )
+    await db_session.flush()
+
+    listed = await v1_client.get("/v1/workspaces", headers=headers)
+    assert listed.status_code == 200, listed.text
+    rows = listed.json()
+    assert len(rows) == 2
+    assert rows[0]["id"] == str(team_ws.id)
 
 
 @pytest.mark.asyncio
