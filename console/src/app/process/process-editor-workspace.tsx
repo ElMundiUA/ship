@@ -11,6 +11,7 @@ import type {
 import { ProcessCanvasEditor, type Position } from "./process-canvas-editor";
 import { processConfigFromApiProcess } from "./process-config";
 import { ProcessConfigProposalFields } from "./process-config-proposal-fields";
+import { ProcessReviewSummary, processChangeSummary } from "./process-review-summary";
 import { BASE_SPECIALIST_CATALOG } from "./specialist-catalog";
 import { StateEditor, type SpecialistOption } from "./state-editor";
 
@@ -70,6 +71,10 @@ export function ProcessEditorWorkspace({
   );
   const dirty =
     JSON.stringify(processConfig) !== JSON.stringify(initialProcessConfig);
+  const changeSummary = useMemo(
+    () => processChangeSummary(process, processDraft, dirty ? ["Flow reviewed"] : []),
+    [process, processDraft, dirty],
+  );
   const draftSummary = useMemo(
     () => summarizeDraftChanges(process, processDraft, states, transitions),
     [process, processDraft, states, transitions],
@@ -127,8 +132,8 @@ export function ProcessEditorWorkspace({
     });
   }
 
-  function addState() {
-    const baseId = "new_state";
+  function addState(template: NodeTemplate = NODE_TEMPLATES[0]) {
+    const baseId = template.baseId;
     const nextId = uniqueStateId(baseId, states);
     const selectedIndex = Math.max(
       states.findIndex((state) => state.id === selectedState?.id),
@@ -140,13 +145,16 @@ export function ProcessEditorWorkspace({
       name: "Owner",
       role: "Responsible owner for this state.",
     };
+    const templateSpecialist =
+      specialistOptions.find((option) => option.id === template.specialistId) ??
+      defaultSpecialist;
     const nextState: ApiProcessState = {
       id: nextId,
-      name: "New State",
-      specialist_id: defaultSpecialist.id,
-      specialist_name: defaultSpecialist.name,
+      name: template.name,
+      specialist_id: templateSpecialist.id,
+      specialist_name: templateSpecialist.name,
       specialist_agent_profile: "main",
-      instructions: defaultSpecialist.role,
+      instructions: templateSpecialist.role,
       layout: {
         x: (anchor?.layout?.x ?? 72) + 266,
         y: anchor?.layout?.y ?? 170,
@@ -154,6 +162,13 @@ export function ProcessEditorWorkspace({
       triggers: defaultSdlcStateTriggers(),
       exit_conditions: [{ expression: "state_complete == true" }],
       block_conditions: [{ expression: "requires_human_input == true" }],
+      ticket_contract: {
+        input_state: `${nextId}_ready`,
+        claim_state: `${nextId}_in_progress`,
+        success_state: `${nextId}_done`,
+        blocked_state: "blocked",
+        needs_info_state: "needs_info",
+      },
       runtime: {
         task_count: 0,
         blocked_count: 0,
@@ -226,7 +241,7 @@ export function ProcessEditorWorkspace({
               <p className="mt-1 text-xs text-white/45">
                 {dirty
                   ? draftSummary
-                  : "Drag cards, edit process settings, and save the config PR from one place."}
+                  : "Build the process flow from typed nodes, then publish a reviewable process change."}
               </p>
             </div>
           </div>
@@ -240,6 +255,7 @@ export function ProcessEditorWorkspace({
               repoId={repoId}
               config={config}
               processConfig={processConfig}
+              changeSummary={changeSummary}
             />
             <button
               type="button"
@@ -254,26 +270,36 @@ export function ProcessEditorWorkspace({
               disabled={!repoId || !dirty}
               className="rounded-full border border-aqua/30 bg-aqua/10 px-4 py-2 text-xs font-bold text-aqua transition hover:bg-aqua/15 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/[0.05] disabled:text-white/35"
             >
-              Open config PR
+              Publish process changes
             </button>
           </form>
         </div>
+        <div className="mt-3">
+          <ProcessReviewSummary
+            initial={process}
+            draft={processDraft}
+            changedAreas={dirty ? ["Flow reviewed"] : []}
+          />
+        </div>
       </div>
 
-      <div className="grid min-h-0 grid-cols-1 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="grid min-h-0 grid-cols-1 xl:grid-cols-[180px_minmax(0,1fr)_360px]">
+        <NodePalette onAdd={addState} />
         <ProcessCanvasEditor
           process={processDraft}
           selectedStateId={selectedState?.id}
           selectedTransitionId={selectedTransitionId}
           onSelectState={selectStateId}
           onSelectTransition={selectTransitionId}
-          onAddState={addState}
+          onAddState={() => addState()}
           onPositionsChange={updatePositions}
         />
         <StateEditor
           repoId={repoId}
           state={selectedState}
           states={states}
+          schedule={processDraft.schedule ?? null}
+          transitions={transitions}
           specialistOptions={specialistOptions}
           config={config}
           embedded
@@ -323,6 +349,73 @@ function buildSpecialistOptions(
     });
   }
   return Array.from(options.values());
+}
+
+type NodeTemplate = {
+  id: string;
+  name: string;
+  description: string;
+  baseId: string;
+  specialistId: string;
+};
+
+const NODE_TEMPLATES: NodeTemplate[] = [
+  {
+    id: "specialist_work",
+    name: "Specialist work",
+    description: "A ticket-driven process step owned by a role template.",
+    baseId: "specialist_work",
+    specialistId: "business_analyst",
+  },
+  {
+    id: "human_approval",
+    name: "Human approval",
+    description: "Pause the handoff until a person approves in Ship Inbox.",
+    baseId: "human_approval",
+    specialistId: "product_manager",
+  },
+  {
+    id: "clarification",
+    name: "Clarification",
+    description: "Ask for missing information and return to the flow.",
+    baseId: "clarification",
+    specialistId: "intake",
+  },
+  {
+    id: "quality_review",
+    name: "Quality review",
+    description: "Validate acceptance criteria before release.",
+    baseId: "quality_review",
+    specialistId: "qa_engineer",
+  },
+];
+
+function NodePalette({ onAdd }: { onAdd: (template: NodeTemplate) => void }) {
+  return (
+    <aside className="border-b border-white/10 bg-white/[0.02] p-3 xl:border-b-0 xl:border-r">
+      <div className="text-[10px] font-bold uppercase tracking-widest text-white/45">
+        Node library
+      </div>
+      <p className="mt-1 text-xs leading-relaxed text-white/40">
+        Add typed work nodes, then connect and tune them on the canvas.
+      </p>
+      <div className="mt-3 space-y-2">
+        {NODE_TEMPLATES.map((template) => (
+          <button
+            key={template.id}
+            type="button"
+            onClick={() => onAdd(template)}
+            className="w-full rounded-xl border border-white/10 bg-white/[0.035] p-3 text-left transition hover:border-aqua/25 hover:bg-aqua/[0.05]"
+          >
+            <div className="text-xs font-semibold text-white/85">{template.name}</div>
+            <div className="mt-1 text-[11px] leading-relaxed text-white/40">
+              {template.description}
+            </div>
+          </button>
+        ))}
+      </div>
+    </aside>
+  );
 }
 
 function initialActiveStateId(
@@ -391,6 +484,7 @@ function stateFingerprint(state: ApiProcessState) {
     triggers: state.triggers,
     exit_conditions: state.exit_conditions,
     block_conditions: state.block_conditions,
+    ticket_contract: state.ticket_contract,
   });
 }
 

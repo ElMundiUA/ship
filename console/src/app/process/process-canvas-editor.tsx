@@ -439,7 +439,7 @@ export function ProcessCanvasEditor({
             onClick={onAddState}
             className="rounded-full border border-aqua/30 bg-aqua/10 px-3 py-1.5 text-xs font-semibold text-aqua shadow-card transition hover:bg-aqua/15"
           >
-            Add state
+            Add from palette
           </button>
         </div>
       </div>

@@ -1499,6 +1499,32 @@ export interface ApiProcessTrigger {
   event: string | null;
 }
 
+export interface ApiProcessScheduleSlot {
+  id: string;
+  local_time: string;
+  weekdays: number[];
+  specialist_ids: string[];
+  label?: string | null;
+}
+
+export interface ApiProcessSchedule {
+  trigger?: {
+    kind: "schedule" | "event" | "manual";
+    event?: string | null;
+  } | null;
+  time_zone: string;
+  slots: ApiProcessScheduleSlot[];
+}
+
+export interface ApiProcessTicketContract {
+  input_state: string;
+  claim_state: string;
+  success_state: string;
+  blocked_state?: string | null;
+  needs_info_state?: string | null;
+  approval_state?: string | null;
+}
+
 export interface ApiProcessStateRuntime {
   task_count: number;
   blocked_count: number;
@@ -1519,6 +1545,7 @@ export interface ApiProcessState {
   triggers: ApiProcessTrigger[];
   exit_conditions: ApiProcessCondition[];
   block_conditions: ApiProcessCondition[];
+  ticket_contract?: ApiProcessTicketContract | null;
   runtime: ApiProcessStateRuntime;
 }
 
@@ -1537,6 +1564,20 @@ export interface ApiProcessSpecialist {
   role: string;
   capabilities: string[];
   agent_profile: string;
+  version?: string | null;
+  source?: "ship_managed" | "workspace_custom" | "process" | string;
+}
+
+export interface ApiProcessRoleTemplate {
+  id: string;
+  name: string;
+  description: string;
+  prompt_template: string;
+  capabilities: string[];
+  default_agent_profile: string;
+  version: string;
+  source: "ship_managed" | "workspace_custom" | string;
+  default_phases: string[];
 }
 
 export interface ApiProcessTask {
@@ -1567,6 +1608,19 @@ export interface ApiProcessRoutine {
   enabled?: boolean;
   /** Optional human summary for cards; if omitted at save, derived from `prompt`. */
   description?: string;
+  /** Routine execution trigger from `process.routines`; never used for ticket picking. */
+  trigger?: Record<string, unknown> | null;
+  /** Read-only context contract such as repos, commits, PRs, runs, and lookback window. */
+  scope?: Record<string, unknown> | null;
+  /** Typed routine output destination, e.g. inbox, digest, or tracker_comment. */
+  output?: Record<string, unknown> | null;
+  /** Optional backend-managed prompt metadata for generated/versioned routine prompts. */
+  prompt_record?: {
+    id: string;
+    version: number;
+    source: "ai_draft" | "manual" | "seed" | string;
+    assumptions?: string[];
+  } | null;
   /**
    * Editor state from YAML `schedule` block; used to rehydrate the schedule UI.
    */
@@ -1603,6 +1657,7 @@ export interface ApiProcessAdapterDiagnostic {
   status: "ok" | "degraded" | "not_configured" | "unknown";
   message: string;
   capabilities: string[];
+  missing_mappings?: string[];
 }
 
 export interface ApiProcessList {
@@ -1618,6 +1673,8 @@ export interface ApiProcess extends ApiProcessSummary {
   transitions: ApiProcessTransition[];
   tasks: ApiProcessTask[];
   routines: ApiProcessRoutine[];
+  schedule?: ApiProcessSchedule | null;
+  tracker_mapping?: Record<string, Record<string, string>>;
   process_graph: ApiProcessGraph;
   adapter_diagnostics: ApiProcessAdapterDiagnostic[];
 }
@@ -1643,6 +1700,16 @@ export function getProcess(
     : "";
   return apiFetch<ApiProcess>(
     `/v1/workspaces/${encodeURIComponent(workspaceId)}/processes/${encodeURIComponent(processId)}${query}`,
+    { token },
+  );
+}
+
+export function listProcessRoleTemplates(
+  workspaceId: string,
+  token?: string,
+): Promise<ApiProcessRoleTemplate[]> {
+  return apiFetch<ApiProcessRoleTemplate[]>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/processes/role-templates`,
     { token },
   );
 }

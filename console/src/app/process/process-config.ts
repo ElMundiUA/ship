@@ -86,9 +86,7 @@ export function processFromRepoConfig(
           }) as ApiProcessTransition,
       );
 
-  const rawRoutines = Array.isArray(rawProcess.routines)
-    ? rawProcess.routines
-    : null;
+  const rawRoutines = routineRowsFromConfig(rawProcess.routines);
   const routines = rawRoutines
     ? mergeProcessRoutines(fallback.routines, rawRoutines)
     : fallback.routines;
@@ -102,6 +100,10 @@ export function processFromRepoConfig(
     states,
     transitions: transitionsFromConfig,
     routines,
+    schedule: scheduleFromConfig(rawProcess.schedule) ?? fallback.schedule ?? null,
+    tracker_mapping:
+      recordOfRecordsFromConfig(rawProcess.tracker_mapping) ??
+      fallback.tracker_mapping,
   };
 }
 
@@ -123,6 +125,7 @@ export function processConfigFromApiProcess(process: ApiProcess): Record<string,
       triggers: state.triggers,
       exit_conditions: state.exit_conditions,
       block_conditions: state.block_conditions,
+      ...(state.ticket_contract ? { ticket_contract: state.ticket_contract } : {}),
     })),
     transitions: process.transitions.map((transition) => ({
       from: transition.from_state_id,
@@ -130,16 +133,26 @@ export function processConfigFromApiProcess(process: ApiProcess): Record<string,
       condition: transition.conditions[0]?.expression,
       ...(transition.requires_human ? { requires_human: true } : {}),
     })),
-    routines: process.routines.map((routine) => {
+    ...(process.schedule ? { schedule: process.schedule } : {}),
+    ...(process.tracker_mapping ? { tracker_mapping: process.tracker_mapping } : {}),
+    process_schema_version: 1,
+    routines: Object.fromEntries(process.routines.map((routine) => {
       const row: Record<string, unknown> = {
-        id: routine.id,
         name: routine.name,
-        cadence: routine.schedule,
       };
       if (routine.enabled === false) row.enabled = false;
+      if (routine.schedule) row.cadence = routine.schedule;
+      if (routine.trigger && Object.keys(routine.trigger).length) {
+        row.trigger = routine.trigger;
+      } else if (routine.schedule) {
+        row.trigger = { type: "schedule", cron: routine.schedule, window: "30m" };
+      }
       if (routine.prompt?.trim()) row.prompt = routine.prompt;
       if (routine.specialist_id) row.specialist_id = routine.specialist_id;
       if (routine.specialist_name) row.specialist_name = routine.specialist_name;
+      if (routine.scope && Object.keys(routine.scope).length) row.scope = routine.scope;
+      if (routine.output && Object.keys(routine.output).length) row.output = routine.output;
+      if (routine.prompt_record) row.prompt_record = routine.prompt_record;
       const userDescription = routine.description?.trim();
       if (userDescription) {
         row.description = userDescription;
@@ -149,8 +162,8 @@ export function processConfigFromApiProcess(process: ApiProcess): Record<string,
       if (routine.schedule_spec) {
         row.schedule = routine.schedule_spec;
       }
-      return row;
-    }),
+      return [routine.id, row] as const;
+    })),
   };
 }
 
@@ -202,6 +215,10 @@ function stateFromConfig(
       conditionsFromConfig(row.block_conditions) ??
       fallback?.block_conditions ??
       [{ expression: "requires_human_input == true" }],
+    ticket_contract:
+      ticketContractFromConfig(row.ticket_contract) ??
+      fallback?.ticket_contract ??
+      defaultTicketContract(id),
     runtime: fallback?.runtime ?? {
       task_count: 0,
       blocked_count: 0,
@@ -209,6 +226,137 @@ function stateFromConfig(
       health: "ok",
     },
   } as ProcessStateWithAgentProfile;
+}
+
+function routineRowsFromConfig(value: unknown): Record<string, unknown>[] | null {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => asRecord(item))
+      .filter((row): row is Record<string, unknown> => row != null);
+  }
+  const map = asRecord(value);
+  if (!map) return null;
+  return Object.entries(map)
+    .map(([id, item]) => {
+      const row = asRecord(item);
+      return row ? ({ id, ...row } as Record<string, unknown>) : null;
+    })
+    .filter((row): row is Record<string, unknown> => row != null);
+}
+
+function scheduleFromConfig(value: unknown): ApiProcess["schedule"] | null {
+  const row = asRecord(value);
+  if (!row) return null;
+  const trigger = asRecord(row.trigger);
+  const slotsRaw = Array.isArray(row.slots) ? row.slots : [];
+  const slots = slotsRaw
+    .map((item, index) => {
+      const slot = asRecord(item);
+      if (!slot) return null;
+      const localTime = stringValue(slot.local_time);
+      const ids = Array.isArray(slot.specialists)
+        ? slot.specialists
+        : Array.isArray(slot.specialist_ids)
+          ? slot.specialist_ids
+          : [];
+      const specialistIds = ids.filter((id): id is string => typeof id === "string" && !!id.trim());
+      if (!localTime || specialistIds.length === 0) return null;
+      return {
+        id: stringValue(slot.id) ?? `slot_${index + 1}`,
+        local_time: localTime,
+        weekdays: Array.isArray(slot.weekdays)
+          ? slot.weekdays.filter((day): day is number => typeof day === "number")
+          : [1, 2, 3, 4, 5],
+        specialist_ids: specialistIds,
+        label: stringValue(slot.label) ?? null,
+      };
+    })
+    .filter((slot): slot is NonNullable<typeof slot> => slot != null);
+  return {
+    trigger: trigger
+      ? {
+          kind:
+            stringValue(trigger.kind) === "event" || stringValue(trigger.kind) === "manual"
+              ? (stringValue(trigger.kind) as "event" | "manual")
+              : "schedule",
+          event: stringValue(trigger.event) ?? null,
+        }
+      : { kind: slots.length ? "schedule" : "manual", event: null },
+    time_zone: stringValue(row.time_zone) ?? "UTC",
+    slots,
+  };
+}
+
+function ticketContractFromConfig(
+  value: unknown,
+): ApiProcessState["ticket_contract"] | null {
+  const row = asRecord(value);
+  if (!row) return null;
+  const input_state = stringValue(row.input_state);
+  const claim_state = stringValue(row.claim_state);
+  const success_state = stringValue(row.success_state);
+  if (!input_state || !claim_state || !success_state) return null;
+  return {
+    input_state,
+    claim_state,
+    success_state,
+    blocked_state: stringValue(row.blocked_state) ?? null,
+    needs_info_state: stringValue(row.needs_info_state) ?? null,
+    approval_state: stringValue(row.approval_state) ?? null,
+  };
+}
+
+function defaultTicketContract(
+  stateId: string,
+): ApiProcessState["ticket_contract"] {
+  const defaults: Record<string, NonNullable<ApiProcessState["ticket_contract"]>> = {
+    task_intake: {
+      input_state: "new",
+      claim_state: "intake_in_progress",
+      success_state: "ready_for_analysis",
+      blocked_state: "blocked",
+      needs_info_state: "needs_info",
+    },
+    ba_requirements: {
+      input_state: "ready_for_analysis",
+      claim_state: "analysis_in_progress",
+      success_state: "ready_for_development",
+      blocked_state: "blocked",
+      needs_info_state: "needs_info",
+    },
+    dev_implementation: {
+      input_state: "ready_for_development",
+      claim_state: "development_in_progress",
+      success_state: "in_review",
+      blocked_state: "blocked",
+      needs_info_state: "needs_info",
+    },
+  };
+  return defaults[stateId] ?? {
+    input_state: `${stateId}_ready`,
+    claim_state: `${stateId}_in_progress`,
+    success_state: `${stateId}_done`,
+    blocked_state: "blocked",
+    needs_info_state: "needs_info",
+  };
+}
+
+function recordOfRecordsFromConfig(
+  value: unknown,
+): Record<string, Record<string, string>> | undefined {
+  const outer = asRecord(value);
+  if (!outer) return undefined;
+  const result: Record<string, Record<string, string>> = {};
+  for (const [key, nested] of Object.entries(outer)) {
+    const row = asRecord(nested);
+    if (!row) continue;
+    result[key] = Object.fromEntries(
+      Object.entries(row).filter(
+        (entry): entry is [string, string] => typeof entry[1] === "string",
+      ),
+    );
+  }
+  return Object.keys(result).length ? result : undefined;
 }
 
 function layoutFromConfig(value: unknown): ApiProcessState["layout"] | null {
@@ -286,7 +434,7 @@ function agentProfileFromState(state: ApiProcessState | undefined): string {
 
 function mergeProcessRoutines(
   projected: ApiProcessRoutine[],
-  yamlRoutines: unknown[],
+  yamlRoutines: Record<string, unknown>[],
 ): ApiProcessRoutine[] {
   const yamlById = new Map(
     yamlRoutines
@@ -320,7 +468,8 @@ function applyRoutineYamlOverlay(
   y: Record<string, unknown>,
 ): ApiProcessRoutine {
   const name = stringValue(y.name) ?? base.name;
-  const cadence = stringValue(y.cadence);
+  const trigger = asRecord(y.trigger);
+  const cadence = stringValue(y.cadence) ?? stringValue(trigger?.cron);
   const specialist = asRecord(y.specialist);
   const description = stringValue(y.description);
   const prompt =
@@ -342,6 +491,10 @@ function applyRoutineYamlOverlay(
     instructions: prompt || base.instructions,
     description: description ?? base.description,
     schedule_spec: scheduleSpec,
+    trigger: trigger ?? base.trigger ?? null,
+    scope: asRecord(y.scope) ?? base.scope ?? null,
+    output: asRecord(y.output) ?? base.output ?? null,
+    prompt_record: promptRecordFromConfig(y.prompt_record) ?? base.prompt_record ?? null,
     enabled: coalesceRoutineEnabled(
       booleanFromYaml(y.enabled),
       base.enabled,
@@ -356,7 +509,8 @@ function routineFromYamlOnly(
   const name = stringValue(y.name);
   if (!name) return null;
   const specialist = asRecord(y.specialist);
-  const cadence = stringValue(y.cadence) ?? null;
+  const trigger = asRecord(y.trigger);
+  const cadence = stringValue(y.cadence) ?? stringValue(trigger?.cron) ?? null;
   const prompt =
     stringValue(y.prompt) ?? stringValue(y.instructions) ?? "";
   const spec = parseScheduleFromYaml(y, cadence);
@@ -375,8 +529,31 @@ function routineFromYamlOnly(
     last_run: null,
     status: null,
     description: stringValue(y.description) ?? undefined,
+    trigger: trigger ?? null,
+    scope: asRecord(y.scope),
+    output: asRecord(y.output),
+    prompt_record: promptRecordFromConfig(y.prompt_record),
     schedule_spec: spec,
     enabled: booleanFromYaml(y.enabled) ?? true,
+  };
+}
+
+function promptRecordFromConfig(
+  value: unknown,
+): ApiProcessRoutine["prompt_record"] | null {
+  const row = asRecord(value);
+  if (!row) return null;
+  const id = stringValue(row.id);
+  const version = numberValue(row.version);
+  const source = stringValue(row.source);
+  if (!id || version == null || !source) return null;
+  return {
+    id,
+    version,
+    source,
+    assumptions: Array.isArray(row.assumptions)
+      ? row.assumptions.filter((item): item is string => typeof item === "string")
+      : undefined,
   };
 }
 

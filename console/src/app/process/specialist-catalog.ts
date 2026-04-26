@@ -2,7 +2,8 @@ export type SpecialistTemplate = {
   id: string;
   name: string;
   role: string;
-  artifactId?: string;
+  version?: string;
+  source?: "ship_managed" | "workspace_custom";
   tags?: string[];
 };
 
@@ -84,113 +85,9 @@ const STATIC_SPECIALIST_CATALOG: SpecialistTemplate[] = [
   },
 ];
 
-const ARTIFACT_SPECIALIST_CATALOG: SpecialistTemplate[] = [
-  {
-    id: "intake",
-    name: "Intake",
-    role: "Role prompt for intake lane on the SDLC grid.",
-    artifactId: "role-intake",
-    tags: ["intake", "triage"],
-  },
-  {
-    id: "business_analyst",
-    name: "BA / specification",
-    role: "Specification and handoff quality before implementation picks.",
-    artifactId: "role-ba",
-    tags: ["ba", "spec"],
-  },
-  {
-    id: "product_manager",
-    name: "Product manager triage",
-    role: "Triages freshly opened tickets, sizes them, assigns priority, and routes to the right role.",
-    artifactId: "role-product-manager",
-    tags: ["product", "triage"],
-  },
-  {
-    id: "designer",
-    name: "Designer review",
-    role: "Reviews UI and design-touching work against design system, component, responsive, and copy conventions.",
-    artifactId: "role-designer",
-    tags: ["design", "review"],
-  },
-  {
-    id: "technical_architect",
-    name: "Tech architect",
-    role: "Reviews architecture, migration strategy, technical debt, and cross-boundary risk.",
-    artifactId: "role-tech-architect",
-    tags: ["architecture", "tech-debt"],
-  },
-  {
-    id: "developer",
-    name: "Developer",
-    role: "Implementation role for branch contract, PR shape, tests, and delivery evidence.",
-    artifactId: "role-developer",
-    tags: ["implementation", "pr"],
-  },
-  {
-    id: "qa_architect",
-    name: "QA architect",
-    role: "Defines test strategy, automation hooks, and delivery-quality evidence.",
-    artifactId: "role-qa-architect",
-    tags: ["test-strategy", "automation"],
-  },
-  {
-    id: "security_engineer",
-    name: "Security officer",
-    role: "Routes and reviews security findings without stealing delivery throughput.",
-    artifactId: "role-security-officer",
-    tags: ["security", "findings"],
-  },
-  {
-    id: "data_ml_engineer",
-    name: "ML reviewer",
-    role: "Reviews training, inference, and data-pipeline changes for ML-specific pitfalls.",
-    artifactId: "role-ml-reviewer",
-    tags: ["ml", "review"],
-  },
-  {
-    id: "clarification",
-    name: "Clarification",
-    role: "Creates structured follow-ups when requirements are incomplete.",
-    artifactId: "role-clarification",
-    tags: ["clarification", "requirements"],
-  },
-  {
-    id: "desktop_reviewer",
-    name: "Desktop native reviewer",
-    role: "Reviews desktop native-integration surfaces, OS permissions, lifecycle, and privilege boundaries.",
-    artifactId: "role-desktop-reviewer",
-    tags: ["desktop", "native", "review"],
-  },
-  {
-    id: "mobile_reviewer",
-    name: "Mobile reviewer",
-    role: "Reviews native mobile code for lifecycle, main-thread, memory, and battery pitfalls.",
-    artifactId: "role-mobile-reviewer",
-    tags: ["mobile", "native", "review"],
-  },
-  {
-    id: "game_balance_reviewer",
-    name: "Game balance reviewer",
-    role: "Reviews tuning and balance changes against design intent and evidence.",
-    artifactId: "role-game-balance-reviewer",
-    tags: ["game", "balance", "review"],
-  },
-];
-
 export const BASE_SPECIALIST_CATALOG: SpecialistTemplate[] =
-  mergeSpecialistCatalogs(STATIC_SPECIALIST_CATALOG, ARTIFACT_SPECIALIST_CATALOG);
-
-function mergeSpecialistCatalogs(
-  fallback: SpecialistTemplate[],
-  artifactBacked: SpecialistTemplate[],
-): SpecialistTemplate[] {
-  const byId = new Map<string, SpecialistTemplate>();
-  for (const specialist of fallback) {
-    byId.set(specialist.id, specialist);
-  }
-  for (const specialist of artifactBacked) {
-    byId.set(specialist.id, specialist);
-  }
-  return Array.from(byId.values());
-}
+  STATIC_SPECIALIST_CATALOG.map((specialist) => ({
+    ...specialist,
+    version: "ship-default-v1",
+    source: "ship_managed",
+  }));
