@@ -29,7 +29,11 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${heading.variable} ${sans.variable}`}>
+    <html
+      lang="en"
+      data-scroll-behavior="smooth"
+      className={`${heading.variable} ${sans.variable}`}
+    >
       <body className="min-h-screen font-sans">{children}</body>
     </html>
   );

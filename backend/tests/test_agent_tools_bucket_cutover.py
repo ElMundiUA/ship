@@ -301,16 +301,10 @@ async def test_list_buckets_summary_count_reflects_articles(
 
 
 @pytest.mark.asyncio
-async def test_list_buckets_counts_repo_files_articles(
+async def test_list_buckets_hides_repo_files_articles(
     db_session, toolbox
 ) -> None:
-    """repo_files buckets finally report a meaningful count.
-
-    Pre-Phase-2 these buckets didn't exist. Pre-Phase-5a they existed
-    but had 0 summaries (since they're never packed). Phase 5a gave
-    them articles; Phase 5d's switched ``summary_count`` surfaces
-    that.
-    """
+    """repo_files buckets are hidden after the DB-only knowledge cutover."""
     box, workspace = toolbox
     repo_bucket = await _seed_bucket(
         db_session, workspace, slug="kb", source_kind=BucketSource.REPO_FILES
@@ -319,6 +313,4 @@ async def test_list_buckets_counts_repo_files_articles(
     await db_session.flush()
 
     out = json.loads(await box.invoke("list_buckets", {}))
-    [row] = [b for b in out["buckets"] if b["slug"] == "kb"]
-    assert row["summary_count"] == 1
-    assert row["source_kind"] == "repo_files"
+    assert [b for b in out["buckets"] if b["slug"] == "kb"] == []

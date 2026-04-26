@@ -150,12 +150,7 @@ export function KnowledgeControlCenter({
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <ExportButton
-              workspace={workspace}
-              buckets={buckets}
-              sources={sources}
-              canonical={canonical}
-            />
+            <ExportButton workspace={workspace} />
             <button
               type="button"
               onClick={() => setTab("sources")}
@@ -1020,7 +1015,7 @@ function SettingsTab({ buckets }: { buckets: KnowledgeControlBucket[] }) {
           subtitle="Modeled here now; deeper enforcement belongs to bucket-level backend permissions."
         />
         <div className="space-y-3 text-sm text-white/65">
-          <PolicyRow label="Visibility" value="Workspace, repo, team, client, restricted" />
+          <PolicyRow label="Visibility" value="Workspace, team, client, restricted" />
           <PolicyRow label="Permissions" value="Read, write, manage sources, delete, search" />
           <PolicyRow label="Routing hints" value="Use for / do not use for prompts per bucket" />
           <PolicyRow label="Freshness" value="Manual, scheduled, source-change, stale alerts" />
@@ -1030,44 +1025,21 @@ function SettingsTab({ buckets }: { buckets: KnowledgeControlBucket[] }) {
   );
 }
 
-function ExportButton({
-  workspace,
-  buckets,
-  sources,
-  canonical,
-}: {
+function ExportButton({ workspace }: {
   workspace: Props["workspace"];
-  buckets: KnowledgeControlBucket[];
-  sources: KnowledgeControlSource[];
-  canonical: ApiKnowledgeCanonicalResponse | null;
 }) {
-  function exportSnapshot() {
-    const snapshot = {
-      exported_at: new Date().toISOString(),
-      workspace,
-      buckets,
-      sources,
-      canonical,
-    };
-    const blob = new Blob([JSON.stringify(snapshot, null, 2)], {
-      type: "application/json",
-    });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = `ship-knowledge-${workspace.slug}.json`;
-    anchor.click();
-    URL.revokeObjectURL(url);
-  }
+  const href = workspace.id
+    ? `/api/knowledge/export?workspaceId=${encodeURIComponent(workspace.id)}`
+    : undefined;
 
   return (
-    <button
-      type="button"
-      onClick={exportSnapshot}
-      className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/[0.04] px-3 py-1.5 text-xs font-semibold text-white/85 transition hover:border-white/30 hover:bg-white/[0.08]"
+    <a
+      href={href}
+      aria-disabled={!href}
+      className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/[0.04] px-3 py-1.5 text-xs font-semibold text-white/85 transition hover:border-white/30 hover:bg-white/[0.08] aria-disabled:pointer-events-none aria-disabled:opacity-50"
     >
-      Export
-    </button>
+      Export ZIP
+    </a>
   );
 }
 

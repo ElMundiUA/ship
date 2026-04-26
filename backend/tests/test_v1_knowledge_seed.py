@@ -104,89 +104,32 @@ def test_knowledge_starter_files_dedups_and_trims() -> None:
 
 
 @pytest.mark.asyncio
-async def test_knowledge_seed_opens_single_pr_for_default_selection(
-    monkeypatch, v1_client, db_session, seed_workspace_with_repo
+async def test_knowledge_seed_is_deprecated(
+    v1_client, seed_workspace_with_repo
 ) -> None:
-    from backend.app.integrations.github.workflows import StarterWorkflowPR
-
     raw, workspace, _install, repo = seed_workspace_with_repo
-    captured: dict[str, object] = {}
-
-    async def _commit(
-        repo, install, *, files, title, branch_label, pr_body_header, settings,
-        return_url=None, client=None,
-    ):
-        captured["files"] = [p for p, _ in files]
-        captured["branch_label"] = branch_label
-        captured["title"] = title
-        captured["return_url"] = return_url
-        return StarterWorkflowPR(
-            pr_url="https://github.com/acme/knowledge-target/pull/77",
-            pr_number=77,
-            branch="ship/bundle-knowledge-seed-456",
-        )
-
-    monkeypatch.setattr(
-        "backend.app.integrations.github.workflows.commit_bundle_pr", _commit
-    )
 
     response = await v1_client.post(
         f"/v1/workspaces/{workspace.id}/repos/{repo.id}/knowledge_seed",
         headers={"Authorization": f"Bearer {raw}"},
     )
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["pr_number"] == 77
-    assert body["pr_url"].endswith("/pull/77")
-    assert "code-style" in body["selection"]
-    assert "ui-runbook" in body["selection"]
-    assert "ship-recipes/flow-pr-self-review" in body["selection"]
-    assert "ship-recipes/role-ba" not in body["selection"]
-    assert ".ship/knowledge/code-style.md" in body["files"]
-    assert ".ship/knowledge/ui-runbook.md" in body["files"]
-    assert ".ship/knowledge/ship-recipes/flow-pr-self-review.md" in body["files"]
-    # No workflows should get committed by the knowledge seed path.
-    assert not any(
-        p.startswith(".github/workflows/") for p in body["files"]
-    )
-    assert captured["branch_label"] == "knowledge-seed"
-    assert "starter knowledge" in str(captured["title"]).lower()
+    assert response.status_code == 410, response.text
+    assert response.json()["detail"]["code"] == "repo_knowledge_deprecated"
 
 
 @pytest.mark.asyncio
-async def test_knowledge_seed_honours_custom_selection(
-    monkeypatch, v1_client, db_session, seed_workspace_with_repo
+async def test_knowledge_seed_deprecation_ignores_custom_selection(
+    v1_client, seed_workspace_with_repo
 ) -> None:
-    from backend.app.integrations.github.workflows import StarterWorkflowPR
-
     raw, workspace, _install, repo = seed_workspace_with_repo
-
-    async def _commit(
-        repo, install, *, files, title, branch_label, pr_body_header, settings,
-        return_url=None, client=None,
-    ):
-        return StarterWorkflowPR(
-            pr_url="https://github.com/acme/knowledge-target/pull/78",
-            pr_number=78,
-            branch="ship/bundle-knowledge-seed-457",
-        )
-
-    monkeypatch.setattr(
-        "backend.app.integrations.github.workflows.commit_bundle_pr", _commit
-    )
 
     response = await v1_client.post(
         f"/v1/workspaces/{workspace.id}/repos/{repo.id}/knowledge_seed",
         headers={"Authorization": f"Bearer {raw}"},
         json={"selection": ["ui-runbook", "ship-recipes/flow-pr-self-review"]},
     )
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["selection"] == ["ui-runbook", "ship-recipes/flow-pr-self-review"]
-    assert body["files"] == [
-        ".ship/knowledge/ui-runbook.md",
-        ".ship/knowledge/ship-recipes/flow-pr-self-review.md",
-    ]
+    assert response.status_code == 410, response.text
+    assert response.json()["detail"]["code"] == "repo_knowledge_deprecated"
 
 
 @pytest.mark.asyncio
@@ -200,7 +143,7 @@ async def test_knowledge_seed_rejects_unknown_slug(
         headers={"Authorization": f"Bearer {raw}"},
         json={"selection": ["does-not-exist"]},
     )
-    assert response.status_code == 422, response.text
+    assert response.status_code == 410, response.text
 
 
 # NOTE: the "GitHub App missing" 412 branch is already exercised by

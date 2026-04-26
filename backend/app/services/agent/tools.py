@@ -134,6 +134,7 @@ from backend.app.db.models.agent_memory import (
     ArtifactFeedback,
     BucketArticle,
     BucketArticleStatus,
+    BucketScope,
     BucketSource,
     KnowledgeBucket,
 )
@@ -316,56 +317,6 @@ class ToolBox:
         to try first.
         """
         return [
-            ToolSpec(
-                name="search_repo_kb",
-                description=(
-                    "Semantic search over repository-scoped knowledge bucket "
-                    "articles. Use for grounded answers about repo docs, "
-                    "generated repository context, decisions, and runbooks. "
-                    "Optional ``bucket_slug`` narrows to one bucket; "
-                    "``include_full_content`` returns a longer ``content`` "
-                    "field (still capped)."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "Natural-language question.",
-                        },
-                        "repo_id": {
-                            "type": "string",
-                            "description": (
-                                "Optional UUID of a specific activated repo; "
-                                "omit to search across all activated repos."
-                            ),
-                        },
-                        "bucket_slug": {
-                            "type": "string",
-                            "description": (
-                                "Optional knowledge bucket slug, e.g. "
-                                "``repository-context``."
-                            ),
-                        },
-                        "include_full_content": {
-                            "type": "boolean",
-                            "default": False,
-                            "description": (
-                                "Include ``content`` with a larger cap than "
-                                "the default snippet."
-                            ),
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": _MAX_KB_RESULTS,
-                            "default": 5,
-                        },
-                    },
-                    "required": ["query"],
-                    "additionalProperties": False,
-                },
-            ),
             ToolSpec(
                 name="get_repo_file",
                 description=(
@@ -2197,7 +2148,6 @@ class ToolBox:
 
     def _handlers(self) -> dict[str, Callable[[dict[str, Any]], Awaitable[str]]]:
         return {
-            "search_repo_kb": self._tool_search_repo_kb,
             "get_repo_file": self._tool_get_repo_file,
             "list_code_map": self._tool_list_code_map,
             "list_activated_repos": self._tool_list_activated_repos,
@@ -2887,6 +2837,8 @@ class ToolBox:
         stmt = (
             select(KnowledgeBucket)
             .where(KnowledgeBucket.workspace_id == self._workspace_id)
+            .where(KnowledgeBucket.scope_kind == BucketScope.WORKSPACE)
+            .where(KnowledgeBucket.source_kind != BucketSource.REPO_FILES)
             .order_by(KnowledgeBucket.name)
             .limit(limit)
         )

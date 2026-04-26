@@ -1,34 +1,4 @@
-"""Workspace-scoped knowledge buckets.
-
-This endpoint surfaces every ``.ship/knowledge/*.md`` file that has
-been mirrored into ``knowledge_buckets`` as a repo-scoped,
-``source_kind='repo_files'`` row. Mirroring happens in three places,
-all pointing at the same sync service
-(:mod:`backend.app.services.bucket_repo_files_sync`):
-
-* push webhook (``_apply_push_event_for_kb``) on the repo's default
-  branch,
-* first-time repo activation.
-
-Before Phase 2 this route scanned ``ArtifactRepo`` rows on disk via
-:mod:`backend.app.services.knowledge_lister`. That surface only worked
-for local-dev `file://` URLs and was effectively empty in SaaS. We
-keep it wired as a **fallback** so self-hosted dev workflows still
-list their buckets — DB rows win when both sources know about the
-same slug (the DB row carries the vendor SHA + push trail, so it's
-authoritative).
-
-Wire shape (``buckets[i]``) is backward-compatible with the
-disk-lister output: ``slug / title / visibility / repo_id / repo_url /
-path / size / updated_at / excerpt``. Two additions for Phase 2
-consumers that opt in:
-
-* ``scope_kind`` — ``"repo"`` for DB-backed rows; ``"workspace"`` or
-  ``"project"`` for legacy disk rows (mirrors the old ``visibility``
-  field). Kept side-by-side so old clients aren't broken.
-* ``source_kind`` — ``"repo_files"`` for DB-backed rows; ``"legacy"``
-  for disk rows until we delete the fallback in Phase 5.
-"""
+"""Workspace-scoped DB knowledge buckets."""
 
 from __future__ import annotations
 
@@ -241,6 +211,27 @@ def _legacy_to_dict_with_phase2(bucket: Any) -> dict[str, Any]:
     return out
 
 
+def _workspace_bucket_to_dict(bucket: KnowledgeBucket) -> dict[str, Any]:
+    updated = bucket.updated_at
+    return {
+        "slug": bucket.slug,
+        "title": bucket.name,
+        "visibility": "workspace",
+        "repo_id": None,
+        "repo_url": None,
+        "repo_full_name": None,
+        "path": None,
+        "size": None,
+        "updated_at": updated.isoformat().replace("+00:00", "Z")
+        if updated
+        else None,
+        "excerpt": bucket.description,
+        "scope_kind": bucket.scope_kind,
+        "source_kind": bucket.source_kind,
+        "source_ref": bucket.source_ref,
+    }
+
+
 @router.get("")
 async def list_workspace_knowledge(
     workspace_id: uuid.UUID,
@@ -249,24 +240,25 @@ async def list_workspace_knowledge(
 ) -> dict[str, Any]:
     workspace = await _load_workspace(session, workspace_id, auth.user.id)
 
-    db_rows = await _load_repo_files_buckets(session, workspace_id)
-    db_entries = [_db_bucket_to_dict(b, r) for b, r in db_rows]
-    db_slugs = {entry["slug"] for entry in db_entries}
-
-    legacy_entries: list[dict[str, Any]] = []
-    try:
-        legacy_buckets = await legacy_list_buckets(session, workspace)
-    except Exception:
-        legacy_buckets = []
-    for b in legacy_buckets:
-        if b.slug in db_slugs:
-            # DB row wins: it carries the vendor SHA + push trail, so
-            # even if a local ArtifactRepo mirrors the same slug we
-            # show the authoritative row.
-            continue
-        legacy_entries.append(_legacy_to_dict_with_phase2(b))
-
-    buckets = sorted(db_entries + legacy_entries, key=lambda e: e["slug"])
+    rows = list(
+        (
+            await session.execute(
+                select(KnowledgeBucket)
+                .where(
+                    and_(
+                        KnowledgeBucket.workspace_id == workspace.id,
+                        KnowledgeBucket.scope_kind == BucketScope.WORKSPACE,
+                        KnowledgeBucket.source_kind != BucketSource.REPO_FILES,
+                        KnowledgeBucket.archived_at.is_(None),
+                    )
+                )
+                .order_by(KnowledgeBucket.slug)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    buckets = [_workspace_bucket_to_dict(row) for row in rows]
     return {
         "version": 2,
         "workspace_id": str(workspace.id),
@@ -393,6 +385,7 @@ async def list_canonical_knowledge(
                     and_(
                         KnowledgeBucket.workspace_id == workspace_id,
                         KnowledgeBucket.scope_kind == BucketScope.WORKSPACE,
+                        KnowledgeBucket.source_kind != BucketSource.REPO_FILES,
                         KnowledgeBucket.archived_at.is_(None),
                     )
                 )
@@ -424,29 +417,6 @@ async def list_canonical_knowledge(
         ).all()
         article_counts = {row[0]: int(row[1]) for row in article_count_rows}
 
-        # Override counts: each row is a narrower-scope article
-        # whose ``overrides_workspace_article_id`` points at an
-        # article inside a canonical bucket. Join the FK back through
-        # ``bucket_articles`` to resolve the bucket ownership.
-        from sqlalchemy.orm import aliased
-
-        target = aliased(BucketArticle)
-        override_count_rows = (
-            await session.execute(
-                select(
-                    target.bucket_id,
-                    func.count(BucketArticle.id).label("n"),
-                )
-                .join(
-                    target,
-                    target.id == BucketArticle.overrides_workspace_article_id,
-                )
-                .where(target.bucket_id.in_(bucket_ids))
-                .group_by(target.bucket_id)
-            )
-        ).all()
-        override_counts = {row[0]: int(row[1]) for row in override_count_rows}
-
         for bucket in canonical_buckets:
             canonical_out.append(
                 KnowledgeCanonicalBucket(
@@ -455,78 +425,14 @@ async def list_canonical_knowledge(
                     name=bucket.name,
                     description=bucket.description,
                     article_count=article_counts.get(bucket.id, 0),
-                    override_count=override_counts.get(bucket.id, 0),
+                    override_count=0,
                 )
             )
-
-    # Orphan slugs: same slug seen in ≥2 different repo-scope buckets,
-    # *and* not present at workspace scope. We compute this in two
-    # small queries instead of one giant one so the EXCEPT / NOT-EXISTS
-    # clause stays legible.
-    canonical_slugs = {b.slug for b in canonical_buckets}
-
-    orphan_rows = (
-        await session.execute(
-            select(
-                KnowledgeBucket.slug,
-                func.count(func.distinct(KnowledgeBucket.repo_id)).label(
-                    "repo_count"
-                ),
-                # Postgres has no ``min(uuid)`` — pick any representative
-                # via array_agg + subscript. Ordering is stable-enough for
-                # a "sample repo" column (we only use it to render an
-                # illustrative link in the UI).
-                func.array_agg(KnowledgeBucket.repo_id)[1].label(
-                    "sample_repo_id"
-                ),
-            )
-            .where(
-                and_(
-                    KnowledgeBucket.workspace_id == workspace_id,
-                    KnowledgeBucket.scope_kind == BucketScope.REPO,
-                    KnowledgeBucket.archived_at.is_(None),
-                    KnowledgeBucket.repo_id.is_not(None),
-                )
-            )
-            .group_by(KnowledgeBucket.slug)
-            .having(func.count(func.distinct(KnowledgeBucket.repo_id)) >= 2)
-        )
-    ).all()
-
-    sample_repo_ids = [row[2] for row in orphan_rows if row[2] is not None]
-    repo_name_map: dict[uuid.UUID, str | None] = {}
-    if sample_repo_ids:
-        repo_name_map = {
-            r[0]: r[1]
-            for r in (
-                await session.execute(
-                    select(WorkspaceRepo.id, WorkspaceRepo.full_name).where(
-                        WorkspaceRepo.id.in_(sample_repo_ids)
-                    )
-                )
-            ).all()
-        }
-
-    orphans: list[KnowledgeOrphanSlug] = []
-    for slug, repo_count, sample_repo_id in orphan_rows:
-        if slug in canonical_slugs:
-            continue
-        if sample_repo_id is None:
-            continue
-        orphans.append(
-            KnowledgeOrphanSlug(
-                slug=slug,
-                repo_count=int(repo_count),
-                sample_repo_id=sample_repo_id,
-                sample_repo_full_name=repo_name_map.get(sample_repo_id),
-            )
-        )
-    orphans.sort(key=lambda o: (-o.repo_count, o.slug))
 
     return KnowledgeCanonicalResponse(
         workspace_id=workspace_id,
         canonical=canonical_out,
-        orphan_slugs=orphans,
+        orphan_slugs=[],
     )
 
 
@@ -735,25 +641,14 @@ async def list_promotion_candidates(
     auth: AuthContext = Depends(get_current_auth),
     session: AsyncSession = Depends(get_session),
 ) -> KnowledgeCandidatesResponse:
-    """List cached promotion candidates, recomputing on cache miss.
-
-    ``is_fresh=True`` means we served purely from cache; ``False``
-    means we just rebuilt. Either way the response is the same shape
-    so the Console can render without branching.
-    """
+    """Return no repo-derived promotion candidates in DB-only knowledge mode."""
     await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
 
-    rows = await list_fresh_candidates(session, workspace_id)
-    is_fresh = True
-    if rows is None:
-        rows = await rebuild_candidates(session, workspace_id)
-        is_fresh = False
-    candidates = await _render_candidates(session, workspace_id, list(rows))
     return KnowledgeCandidatesResponse(
         workspace_id=workspace_id,
-        candidates=candidates,
+        candidates=[],
         computed_at=datetime.now(timezone.utc),
-        is_fresh=is_fresh,
+        is_fresh=True,
     )
 
 
@@ -765,19 +660,13 @@ async def refresh_promotion_candidates(
     auth: AuthContext = Depends(get_current_auth),
     session: AsyncSession = Depends(get_session),
 ) -> KnowledgeCandidatesResponse:
-    """Force a rebuild of the candidate cache.
-
-    Admin-gated because recompute walks every repo-scope article in
-    the workspace; we don't want a read-only viewer triggering it.
-    """
+    """Repo-scope promotion candidates are disabled in DB-only knowledge mode."""
     await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
-    rows = await rebuild_candidates(session, workspace_id)
-    candidates = await _render_candidates(session, workspace_id, list(rows))
     return KnowledgeCandidatesResponse(
         workspace_id=workspace_id,
-        candidates=candidates,
+        candidates=[],
         computed_at=datetime.now(timezone.utc),
-        is_fresh=False,
+        is_fresh=True,
     )
 
 
@@ -1023,24 +912,21 @@ async def get_workspace_knowledge(
 ) -> dict[str, Any]:
     workspace = await _load_workspace(session, workspace_id, auth.user.id)
 
-    # DB first: the live-fetch of the body here is the headline of
-    # this endpoint — list cards are fine with excerpts, detail pages
-    # expect the full markdown.
-    db_rows = await _load_repo_files_buckets(session, workspace_id)
-    for bucket, repo in db_rows:
-        if bucket.slug != slug:
-            continue
-        out = _db_bucket_to_dict(bucket, repo, include_body=True)
-        body = await _fetch_body_for_bucket(session, bucket, repo)
-        out["body"] = body
-        return out
-
-    # Fallback to the disk lister for local-dev `ArtifactRepo` rows.
-    legacy = await legacy_get_bucket(session, workspace, slug)
-    if legacy is not None:
-        return _legacy_to_dict_with_phase2(legacy) | {"body": legacy.body}
+    bucket = (
+        await session.execute(
+            select(KnowledgeBucket).where(
+                KnowledgeBucket.workspace_id == workspace.id,
+                KnowledgeBucket.scope_kind == BucketScope.WORKSPACE,
+                KnowledgeBucket.source_kind != BucketSource.REPO_FILES,
+                KnowledgeBucket.slug == slug,
+                KnowledgeBucket.archived_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if bucket is not None:
+        return _workspace_bucket_to_dict(bucket) | {"body": bucket.description}
 
     raise HTTPException(
         status_code=404,
-        detail=f"knowledge bucket '{slug}' not found in any enabled repo",
+        detail=f"knowledge bucket '{slug}' not found",
     )

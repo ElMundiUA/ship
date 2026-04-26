@@ -309,18 +309,11 @@ async def github_webhook(
         await _apply_workflow_run_event(session, payload, action)
         await session.flush()
     elif event == "push":
-        # C12: a push to the repo's default branch that touches
-        # ``.ship/knowledge/`` invalidates the agent's KB corpus. We
-        # run the reindexer inline because corpora are small (dozens
-        # of docs). If that becomes a hot spot we'll move it to a
-        # background task; for now keeping it in-request gives us a
-        # crisp 502 when embeddings are misconfigured instead of a
-        # silent delivery-succeeded / indexer-failed split.
-        await _apply_push_event_for_kb(session, payload, settings=settings)
+        # DB-only knowledge: pushes to `.ship/knowledge/` are ignored.
+        # Workspace buckets and articles are managed through Ship's DB APIs.
         # RFC-0007 Phase 7: same push, different mirror — re-pull
         # ``.ship/config.yml`` into the :class:`Lane` projection when
-        # the file is in the commit diff. Runs *after* the KB hook
-        # so a YAML-only change still gets its fast path.
+        # the file is in the commit diff.
         await _apply_push_event_for_lanes(session, payload, settings=settings)
         await session.flush()
     else:

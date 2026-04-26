@@ -51,7 +51,7 @@ export function WhatsNextGrid({
       href: `/knowledge${wsQuery}`,
       title: "Open Knowledge →",
       blurb:
-        "Generated repository knowledge appears here after the bootstrap PR lands.",
+        "Workspace knowledge buckets live here and are stored in Ship's database.",
     },
   ];
 
