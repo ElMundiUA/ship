@@ -3636,13 +3636,17 @@ export function revokeToken(tokenId: string, token?: string): Promise<void> {
 
 // --- Members ---------------------------------------------------------------
 
-export function listMembers(
+export async function listMembers(
   workspaceId: string,
   token?: string,
 ): Promise<ApiMember[]> {
-  return apiFetch<ApiMember[]>(`/v1/workspaces/${workspaceId}/members`, {
+  const rows = await apiFetch<ApiMember[]>(`/v1/workspaces/${workspaceId}/members`, {
     token,
   });
+  return rows.map((m) => ({
+    ...m,
+    answer_specialist_slugs: m.answer_specialist_slugs ?? [],
+  }));
 }
 
 export function inviteMember(
@@ -3666,6 +3670,18 @@ export function updateMemberRole(
   return apiFetch<ApiMember>(
     `/v1/workspaces/${workspaceId}/members/${encodeURIComponent(memberId)}`,
     { method: "PATCH", body: { role }, token },
+  );
+}
+
+export function patchMember(
+  workspaceId: string,
+  memberId: string,
+  body: { role?: ApiMemberRole; answer_specialist_slugs?: string[] },
+  token?: string,
+): Promise<ApiMember> {
+  return apiFetch<ApiMember>(
+    `/v1/workspaces/${workspaceId}/members/${encodeURIComponent(memberId)}`,
+    { method: "PATCH", body, token },
   );
 }
 

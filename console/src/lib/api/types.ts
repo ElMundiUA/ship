@@ -127,6 +127,8 @@ export type ApiMember = {
   email: string;
   display_name: string | null;
   role: ApiMemberRole;
+  /** Which specialist Inbox lanes (BA, QA, …) this person may answer; `["*"]` = all. */
+  answer_specialist_slugs: string[];
   pending: boolean;
   created_at: string;
 };

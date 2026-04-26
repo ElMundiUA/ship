@@ -9,7 +9,14 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 
 class UserOut(BaseModel):
@@ -130,6 +137,9 @@ class MemberOut(BaseModel):
     ``WorkspaceMember`` rows. ``pending`` tells the UI whether the row was
     pre-invited (no Auth0 ``external_subject`` yet) so it can render a
     "waiting for first sign-in" badge instead of a fake last-active timestamp.
+
+    ``answer_specialist_slugs`` lists which Inbox / specialist lanes (BA, QA, …)
+    the member can take; ``["*"]`` means all lanes.
     """
 
     model_config = ConfigDict(from_attributes=True)
@@ -140,6 +150,7 @@ class MemberOut(BaseModel):
     display_name: str | None
     role: str
     pending: bool
+    answer_specialist_slugs: list[str]
     created_at: datetime
 
 
@@ -160,6 +171,36 @@ class MemberInviteRequest(BaseModel):
 
 class MemberRoleUpdate(BaseModel):
     role: str = Field(pattern=r"^(owner|admin|maintainer|member|viewer)$")
+
+
+class MemberPatch(BaseModel):
+    """Partial update: change role, specialist lanes, or both."""
+
+    role: str | None = Field(
+        default=None, pattern=r"^(owner|admin|maintainer|member|viewer)$"
+    )
+    answer_specialist_slugs: list[str] | None = None
+
+    @field_validator("answer_specialist_slugs")
+    @classmethod
+    def check_specialist_slugs(
+        cls, v: list[str] | None
+    ) -> list[str] | None:
+        if v is None:
+            return v
+        allowed = {"ba", "qa", "eng", "sec", "pm", "dev", "*"}
+        if "*" in v and len(v) > 1:
+            raise ValueError("cannot mix * with other specialist slugs")
+        for s in v:
+            if s not in allowed:
+                raise ValueError(f"invalid specialist slug: {s!r}")
+        return v
+
+    @model_validator(mode="after")
+    def at_least_one_field(self) -> MemberPatch:
+        if self.role is None and self.answer_specialist_slugs is None:
+            raise ValueError("at least one of role, answer_specialist_slugs is required")
+        return self
 
 
 class WorkspaceDeleteRequest(BaseModel):

@@ -238,10 +238,10 @@ function InboxRouting({ profile }: { profile: string | null }) {
         </span>
       )}
       <Link
-        href="/settings/inbox-routing"
+        href="/settings?tab=members"
         className="text-[11px] font-semibold text-aqua hover:text-aqua/80"
       >
-        What gets routed? →
+        Who answers? →
       </Link>
     </div>
   );

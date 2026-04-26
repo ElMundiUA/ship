@@ -232,7 +232,12 @@ async def create_workspace(
         ) from exc
 
     session.add(
-        WorkspaceMember(workspace_id=workspace.id, user_id=auth.user.id, role="owner")
+        WorkspaceMember(
+            workspace_id=workspace.id,
+            user_id=auth.user.id,
+            role="owner",
+            answer_specialist_slugs=["*"],
+        )
     )
     session.add(
         AuditLog(

@@ -22,6 +22,7 @@ import {
 } from "@/lib/api/client";
 import { resolveOrigin } from "@/lib/api/origin";
 import { stashInviteTokens } from "@/lib/api/invite-stash";
+import { workspaceMembersSettingsUrl } from "@/lib/members-settings-url";
 
 export async function POST(request: Request) {
   const origin = resolveOrigin(request);
@@ -31,11 +32,10 @@ export async function POST(request: Request) {
   const role = (form.get("role") ?? "member").toString();
   const ttl = Number(form.get("ttl_days") ?? "7") || 7;
 
-  if (!wsId) return NextResponse.redirect(new URL("/members", origin), 303);
-  if (!isApiConfigured())
-    return back(origin, "api_unavailable");
-  if (!emails.trim())
-    return back(origin, "empty");
+  if (!wsId)
+    return NextResponse.redirect(workspaceMembersSettingsUrl(origin, undefined), 303);
+  if (!isApiConfigured()) return back(origin, wsId, "api_unavailable");
+  if (!emails.trim()) return back(origin, wsId, "empty");
 
   try {
     const created = await createInvites(wsId, {
@@ -52,28 +52,30 @@ export async function POST(request: Request) {
           .map((row) => [row.id, row.accept_url as string]),
       ),
     );
-    const url = new URL("/members", origin);
-    url.searchParams.set("invited", String(created.length));
+    const url = workspaceMembersSettingsUrl(origin, wsId, {
+      invited: String(created.length),
+    });
     return NextResponse.redirect(url, 303);
   } catch (err) {
     if (err instanceof ApiUnavailableError)
-      return back(origin, "api_unavailable");
+      return back(origin, wsId, "api_unavailable");
     if (err instanceof ApiHttpError) {
       if (err.status === 401)
         return NextResponse.redirect(
-          new URL("/login?next=%2Fmembers", origin),
+          new URL("/login?next=%2Fsettings%3Ftab%3Dmembers", origin),
           303,
         );
-      if (err.status === 403) return back(origin, "forbidden");
-      if (err.status === 422) return back(origin, "bad_input");
-      return back(origin, `http_${err.status}`);
+      if (err.status === 403) return back(origin, wsId, "forbidden");
+      if (err.status === 422) return back(origin, wsId, "bad_input");
+      return back(origin, wsId, `http_${err.status}`);
     }
-    return back(origin, "unknown");
+    return back(origin, wsId, "unknown");
   }
 }
 
-function back(origin: string, reason: string) {
-  const url = new URL("/members", origin);
-  url.searchParams.set("invite_error", reason);
+function back(origin: string, workspaceId: string | undefined, reason: string) {
+  const url = workspaceMembersSettingsUrl(origin, workspaceId, {
+    invite_error: reason,
+  });
   return NextResponse.redirect(url, 303);
 }
