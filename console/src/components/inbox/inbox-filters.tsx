@@ -2,29 +2,21 @@
 
 import { cn } from "@/lib/cn";
 import {
-  INBOX_STATUSES,
+  INBOX_FILTER_TYPES,
   INBOX_TYPE_META,
-  INBOX_TYPES,
   type InboxFilterState,
-  type InboxStatus,
   type InboxType,
 } from "@/lib/inbox-types";
 
 /**
  * Filter controls for the unified Inbox list (RFC-0010 P2-12).
  *
- * Three-axis filtering:
- *   - Ownership tabs:  Mine | Unassigned | All
- *   - Type chips:      Clarification | Improvement | Failure | Approval | Exception
- *   - Status pills:    new (default) | snoozed | resolved | dismissed
+ * Ownership: All (default) | Mine | Unassigned
+ * Type row:  All, then Clarifications … Exceptions (stuck / blockers stay in the
+ * list but are not in this chip row).
  *
- * State is owned by the parent (so it can mirror to the URL via
- * `useSearchParams` + `router.replace`). This component is the
- * "view" half of the controlled-pattern: it renders the current
- * state and emits `onChange(next)` for every interaction.
- *
- * Counts (next to each pill) are optional — pass `counts={...}` to
- * decorate, omit for static demos.
+ * List status slice (e.g. open + snoozed) is fixed in the data layer — not
+ * user-configurable here.
  */
 
 const OWNERSHIP_OPTIONS: {
@@ -32,21 +24,14 @@ const OWNERSHIP_OPTIONS: {
   label: string;
   hint: string;
 }[] = [
+  { key: "all", label: "All", hint: "Entire workspace queue" },
   { key: "mine", label: "Mine", hint: "Items routed to you" },
   {
     key: "unassigned",
     label: "Unassigned",
-    hint: "Routing fallback failed — needs an admin",
+    hint: "No owner — needs assignment",
   },
-  { key: "all", label: "All", hint: "Workspace-wide firehose (admin)" },
 ];
-
-const STATUS_LABEL: Record<InboxStatus, string> = {
-  new: "Open",
-  snoozed: "Snoozed",
-  resolved: "Resolved",
-  dismissed: "Dismissed",
-};
 
 export type InboxFiltersProps = {
   value: InboxFilterState;
@@ -55,7 +40,6 @@ export type InboxFiltersProps = {
   counts?: {
     ownership?: Partial<Record<InboxFilterState["ownership"], number>>;
     types?: Partial<Record<InboxType, number>>;
-    statuses?: Partial<Record<InboxStatus, number>>;
   };
   className?: string;
 };
@@ -112,7 +96,20 @@ export function InboxFilters({
       </div>
 
       <div className="flex flex-wrap items-center gap-1.5">
-        {INBOX_TYPES.map((t) => {
+        <button
+          type="button"
+          aria-pressed={value.types.length === 0}
+          onClick={() => onChange({ ...value, types: [] })}
+          className={cn(
+            "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] font-semibold transition",
+            value.types.length === 0
+              ? "border-aqua/50 bg-aqua/15 text-aqua"
+              : "border-white/10 bg-white/[0.04] text-white/65 hover:border-white/20 hover:text-white/85",
+          )}
+        >
+          All
+        </button>
+        {INBOX_FILTER_TYPES.map((t) => {
           const active = value.types.includes(t);
           const count = counts?.types?.[t];
           return (
@@ -136,50 +133,6 @@ export function InboxFilters({
                   className={cn(
                     "rounded-full px-1.5 text-[10px] font-bold",
                     active ? "bg-aqua/30 text-white" : "bg-white/10 text-white/55",
-                  )}
-                >
-                  {count}
-                </span>
-              )}
-            </button>
-          );
-        })}
-        {value.types.length > 0 && (
-          <button
-            type="button"
-            onClick={() => onChange({ ...value, types: [] })}
-            className="ml-1 text-[10px] font-semibold uppercase tracking-wider text-white/40 hover:text-white/70"
-          >
-            clear
-          </button>
-        )}
-      </div>
-
-      <div className="flex flex-wrap items-center gap-1.5">
-        {INBOX_STATUSES.map((s) => {
-          const active = value.statuses.includes(s);
-          const count = counts?.statuses?.[s];
-          return (
-            <button
-              key={s}
-              type="button"
-              aria-pressed={active}
-              onClick={() =>
-                onChange({ ...value, statuses: toggle(value.statuses, s) })
-              }
-              className={cn(
-                "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider transition",
-                active
-                  ? "border-lilac/50 bg-lilac/15 text-lilac"
-                  : "border-white/10 bg-white/[0.02] text-white/55 hover:border-white/20 hover:text-white/75",
-              )}
-            >
-              {STATUS_LABEL[s]}
-              {count !== undefined && (
-                <span
-                  className={cn(
-                    "rounded-full px-1 text-[9px] font-bold",
-                    active ? "bg-lilac/30 text-white" : "bg-white/10 text-white/55",
                   )}
                 >
                   {count}
