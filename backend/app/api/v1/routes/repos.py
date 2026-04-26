@@ -3067,11 +3067,26 @@ def _validate_process_routines(value: Any) -> None:
                     "message": f"process.routines[{index}].enabled must be a boolean when set",
                 },
             )
-        for opt_key in ("description", "instructions", "specialist_id", "specialist_name"):
+        for opt_key in (
+            "description",
+            "instructions",
+            "prompt",
+            "specialist_id",
+            "specialist_name",
+        ):
             _require_optional_string(
                 routine.get(opt_key),
                 f"process.routines[{index}].{opt_key}",
                 required=False,
+            )
+        sch = routine.get("schedule")
+        if sch is not None and not isinstance(sch, dict):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_process",
+                    "message": f"process.routines[{index}].schedule must be an object when set",
+                },
             )
 
 

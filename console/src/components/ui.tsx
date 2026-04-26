@@ -298,6 +298,40 @@ export function MockBanner({ reason }: { reason?: ReactNode } = {}) {
   );
 }
 
+export function Switch({
+  checked,
+  onChange,
+  "aria-label": ariaLabel,
+  id,
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  "aria-label"?: string;
+  id?: string;
+}) {
+  return (
+    <button
+      type="button"
+      id={id}
+      role="switch"
+      aria-checked={checked}
+      aria-label={ariaLabel}
+      onClick={() => onChange(!checked)}
+      className={cn(
+        "relative h-6 w-11 shrink-0 rounded-full border transition focus:outline-none focus-visible:ring-2 focus-visible:ring-aqua/40",
+        checked ? "border-aqua/40 bg-aqua/20" : "border-white/15 bg-white/[0.08]",
+      )}
+    >
+      <span
+        className={cn(
+          "absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform duration-200 ease-out",
+          checked ? "translate-x-5" : "translate-x-0.5",
+        )}
+      />
+    </button>
+  );
+}
+
 export function LiveBanner({ workspace }: { workspace: string }) {
   return (
     <div className="mb-5 flex items-center gap-2 rounded-xl border border-aqua/30 bg-aqua/5 px-3 py-2 text-xs text-aqua/95">
