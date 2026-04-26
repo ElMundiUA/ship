@@ -95,8 +95,8 @@ class RepoHomeNow(BaseModel):
     dispatches_in_flight: int
     lanes_enabled: int
     lanes_total: int
-    bundle_installed_version: int | None
-    bundle_current_version: int
+    bundle_installed_version: str | None
+    bundle_current_version: str
     bundle_drift: bool
     install_suspended: bool
     install_missing: bool
@@ -479,10 +479,7 @@ def _build_now(
         :_RECENT_ACTIVITY_LIMIT
     ]
 
-    bundle_drift = (
-        repo.installed_bundle_version is not None
-        and repo.installed_bundle_version < BUNDLE_VERSION
-    )
+    bundle_drift = _bundle_version_lt(repo.installed_bundle_version, BUNDLE_VERSION)
 
     return RepoHomeNow(
         runs_in_flight=runs_in_flight,
@@ -512,6 +509,22 @@ def _build_now(
             for a in recent
         ],
     )
+
+
+def _bundle_version_lt(installed: str | None, current: str) -> bool:
+    if installed is None:
+        return False
+    return _bundle_version_tuple(installed) < _bundle_version_tuple(current)
+
+
+def _bundle_version_tuple(value: str) -> tuple[int, ...]:
+    parts: list[int] = []
+    for part in str(value).split("."):
+        try:
+            parts.append(int(part))
+        except ValueError:
+            parts.append(0)
+    return tuple(parts)
 
 
 def _build_trends(

@@ -305,9 +305,9 @@ export interface ApiActivatedRepo {
    * ``null`` means never seeded (fresh activation) or seeded before
    * the column existed — UI surfaces that as "run the wizard".
    */
-  installed_bundle_version: number | null;
+  installed_bundle_version: string | null;
   /** Current ``BUNDLE_VERSION`` the backend would emit on a re-seed. */
-  current_bundle_version: number;
+  current_bundle_version: string;
 }
 
 export function listAvailableRepos(
@@ -3560,8 +3560,8 @@ export interface ApiRepoHomeNow {
   dispatches_in_flight: number;
   lanes_enabled: number;
   lanes_total: number;
-  bundle_installed_version: number | null;
-  bundle_current_version: number;
+  bundle_installed_version: string | null;
+  bundle_current_version: string;
   bundle_drift: boolean;
   install_suspended: boolean;
   install_missing: boolean;

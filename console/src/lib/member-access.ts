@@ -22,7 +22,7 @@ export const SPECIALIST_LANES: { id: string; label: string }[] = [
  */
 export function specialistSummary(slugs: string[] | undefined): string {
   const list = slugs ?? [];
-  if (list.includes("*")) return "All lanes";
+  if (list.includes("*")) return "All specialist types";
   const picked = SPECIALIST_LANES.filter((l) => list.includes(l.id));
   if (picked.length === 0) return "None";
   return picked.map((p) => p.label).join(" · ");

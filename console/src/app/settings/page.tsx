@@ -587,7 +587,7 @@ function RepositoryRow({
 }) {
   const installed = repo.installed_bundle_version;
   const current = repo.current_bundle_version;
-  const stale = installed == null || installed < current;
+  const stale = installed == null || compareBundleVersions(installed, current) < 0;
   return (
     <tr className="border-t border-white/5">
       <td className="px-3 py-2.5 align-top">
@@ -665,6 +665,17 @@ function repoConfigTone(status: RepoConfigStatus): BadgeTone {
     case "error":
       return "err";
   }
+}
+
+function compareBundleVersions(left: string, right: string): number {
+  const a = left.split(".").map((part) => Number.parseInt(part, 10) || 0);
+  const b = right.split(".").map((part) => Number.parseInt(part, 10) || 0);
+  const length = Math.max(a.length, b.length);
+  for (let i = 0; i < length; i += 1) {
+    const diff = (a[i] ?? 0) - (b[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
 }
 
 function TokenRow({ token }: { token: ApiTokenInfo }) {

@@ -1,20 +1,20 @@
 export function printHelp() {
-  console.log(`shipctl — adopt Ship in a repo, sync the catalog, run lanes, report Runs.
+  console.log(`shipctl — adopt Ship in a repo, sync the catalog, run routines, report outcomes.
 
 Bootstrap a new or existing repo (init / new / doctor), pull the
-methodology catalog into .ship/cache (sync), execute one-shot lanes or
-emit prompts for the workspace runner (run / lanes / kickoff /
+methodology catalog into .ship/cache (sync), execute one-shot routines or
+emit prompts for the workspace runner (trigger / run / kickoff /
 callback). Talks to the methodology + orchestration APIs over HTTPS.
 
 VOCABULARY
-  lanes:   (.ship/config.yml)  → operator console: Automations
-  pattern: (artifact kind)     → operator console: Plays
-  pipeline_runs (DB / API)     → operator console: Runs
-  attention surface            → operator console: Inbox
+  process.routines: (.ship/config.yml) → repo-local scheduled/manual work
+  pattern:          (artifact kind)    → cached role/playbook prompt body
+  routine claim:    (Ship API)         → idempotent schedule-window claim
+  attention surface                    → operator console: Inbox
 
-The protocol-stable terms (lanes:, pattern:, pipeline_runs) stay
-literal in YAML, CLI flags, and HTTP. Operator-facing prose uses the
-console nouns.
+Legacy 'lanes:' configs and '--lane' flags are still accepted as aliases
+so already-seeded repositories keep working while new repos use
+'process.routines'.
 
 GLOBAL FLAGS
   --base-url URL   Methodology API (default: SHIP_API_BASE or
@@ -66,22 +66,18 @@ COMMANDS
                  [--force-unpin] [--dry-run] [--lock] [--json] [--cwd <dir>]
                                        — fetch artifacts into .ship/cache. With --lock,
                                          also writes .ship/shipctl.lock.json covering
-                                         every pattern the declared lanes depend on.
+                                        every pattern the declared routines depend on.
 
   Run
     shipctl trigger --event schedule --repo <id|owner/name> [--workspace <id>] [--json]
-                                       — ask Ship which configured lanes are
-                                         due for the current GitHub trigger.
-    shipctl run --lane <id> [--pattern <id>] [--fanout matrix|sequential|concurrent]
+                                       — compute due routines locally, then claim
+                                         the schedule window in Ship.
+    shipctl run --routine <id> [--pattern <id>] [--fanout matrix|sequential|concurrent]
                 [--trigger event|schedule|manual|once]
                 [--dry-run] [--offline] [--json] [--cwd <dir>]
                 [--ship-run-id <uuid>] [--ship-callback-url <url>] [--ship-run-token <jwt>]
-                                       — one-shot dispatch entry point. 'kind: once'
-                                         lanes execute fully here; 'kind: lane / event /
-                                         schedule' lanes are queued for the workspace
-                                         runner via .github/workflows/run-agent.yml.
-                                         Reports its terminal status via the callback URL
-                                         Ship injected into the workflow.
+                                       — one-shot routine dispatch entry point.
+                                         Use --lane as a legacy alias.
     shipctl lanes install [--only <csv>] [--ref <git-ref>] [--owner <gh>] [--repo <name>]
                           [--shipctl-version <v>] [--dry-run] [--force] [--json] [--cwd <dir>]
     shipctl lanes list   [--json] [--cwd <dir>]

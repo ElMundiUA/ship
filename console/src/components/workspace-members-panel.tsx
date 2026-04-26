@@ -211,7 +211,7 @@ export function WorkspaceMembersPanelContent({
         <CardHeader
           className="px-5 pt-5"
           title="Workspace members"
-          subtitle="Workspace role and which specialist Inbox lanes each person can cover — use Edit access to change."
+          subtitle="Workspace role and which specialist work each person can cover — use Edit access to change."
         />
         <table className="min-w-full text-sm">
           <thead className="bg-white/[0.04] text-[10px] uppercase tracking-widest text-white/45">

@@ -29,7 +29,6 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
-    Integer,
     LargeBinary,
     String,
     Text,
@@ -228,8 +227,8 @@ class WorkspaceRepo(Base):
     # ``NULL`` means either never seeded (greenfield wizard state)
     # or seeded before this column existed — the UI surfaces that
     # as "run the wizard" rather than "upgrade".
-    installed_bundle_version: Mapped[int | None] = mapped_column(
-        Integer, nullable=True
+    installed_bundle_version: Mapped[str | None] = mapped_column(
+        String(16), nullable=True
     )
 
     created_at: Mapped[datetime] = _ts_created()

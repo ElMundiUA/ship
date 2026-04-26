@@ -831,19 +831,26 @@ async def test_real_merge_sync_promotes_synthetic_origin_to_merged(
     synth_pattern = synth.pattern
 
     cron = synth.cron or "0 7 * * *"
-    yaml_lanes_block = (
-        f"  {synth_lane_id}:\n"
-        f"    schedule: \"{cron}\"\n"
-        f"    pattern: {synth_pattern}\n"
-    )
     assert synth_kind == "schedule", (
         "test fixture changed: expected daily_standup to be a "
         "schedule lane"
     )
     config_yaml = (
         "version: 2\n"
-        "lanes:\n"
-        f"{yaml_lanes_block}"
+        "process:\n"
+        "  id: development\n"
+        "  name: Development Process\n"
+        "  states:\n"
+        "    - id: task_intake\n"
+        "      name: Intake\n"
+        "  routines:\n"
+        f"    {synth_lane_id}:\n"
+        f"      name: {synth_lane_id}\n"
+        "      trigger:\n"
+        "        type: schedule\n"
+        f"        cron: \"{cron}\"\n"
+        "        window: 30m\n"
+        f"      pattern: {synth_pattern}\n"
     )
     _patch_lanes_gateway(monkeypatch, content=config_yaml)
 

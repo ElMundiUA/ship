@@ -89,8 +89,8 @@ class ActivatedRepoOut(BaseModel):
     # CTA (never seeded), "Update available" CTA (drift), or no CTA
     # (up to date). ``current`` mirrors ``seed_bundle.BUNDLE_VERSION``
     # so the client doesn't need a separate meta endpoint.
-    installed_bundle_version: int | None = None
-    current_bundle_version: int = _BUNDLE_VERSION
+    installed_bundle_version: str | None = None
+    current_bundle_version: str = _BUNDLE_VERSION
 
 
 class RepoActivateIn(BaseModel):
@@ -822,6 +822,22 @@ class RepoTriggerOut(BaseModel):
     skipped_lanes: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class RoutineRunClaimIn(BaseModel):
+    event: str = Field(pattern="^(schedule|manual|pull_request|push)$")
+    routine_id: str = Field(min_length=1, max_length=128)
+    window_key: str = Field(min_length=1, max_length=255)
+    scheduled_for: datetime
+    window_start: datetime
+    window_end: datetime
+    github: dict[str, Any] = Field(default_factory=dict)
+
+
+class RoutineRunClaimOut(BaseModel):
+    status: str
+    routine_id: str
+    window_key: str
+
+
 async def _dispatch_intel_harvest(
     *,
     request: Request | None,
@@ -1396,6 +1412,80 @@ async def bootstrap_repo_knowledge(
     return KnowledgeBootstrapOut(**result_payload)
 
 
+@router.post(
+    "/{repo_id}/routine-runs/claim",
+    response_model=RoutineRunClaimOut,
+)
+async def claim_routine_run(
+    workspace_id: uuid.UUID,
+    repo_id: uuid.UUID,
+    payload: RoutineRunClaimIn,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> RoutineRunClaimOut:
+    """Claim a routine schedule window computed locally by ``shipctl``.
+
+    The backend no longer parses ``.ship/config.yml`` to decide what is due.
+    It only validates workspace/repo membership and records the window claim so
+    repeated GitHub schedule ticks don't run the same routine window twice.
+    """
+
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+    repo_row = (
+        await session.execute(
+            select(WorkspaceRepo).where(
+                WorkspaceRepo.id == repo_id,
+                WorkspaceRepo.workspace_id == workspace_id,
+            )
+        )
+    ).scalars().first()
+    if repo_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Repo not found in this workspace.",
+        )
+
+    if await _routine_window_seen(
+        session,
+        workspace_id=workspace_id,
+        repo_id=repo_row.id,
+        routine_id=payload.routine_id,
+        window_key=payload.window_key,
+    ):
+        return RoutineRunClaimOut(
+            status="already_claimed",
+            routine_id=payload.routine_id,
+            window_key=payload.window_key,
+        )
+
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=auth.user.id,
+            actor_token_id=auth.token.id if auth.token else None,
+            action="repo.routine_run_claim",
+            target_kind="workspace_repo",
+            target_id=str(repo_row.id),
+            payload={
+                "event": payload.event,
+                "routine_id": payload.routine_id,
+                "window_key": payload.window_key,
+                "scheduled_for": payload.scheduled_for.isoformat(),
+                "window_start": payload.window_start.isoformat(),
+                "window_end": payload.window_end.isoformat(),
+                "github": payload.github,
+                "status": "claimed",
+            },
+        )
+    )
+    await session.flush()
+    return RoutineRunClaimOut(
+        status="claimed",
+        routine_id=payload.routine_id,
+        window_key=payload.window_key,
+    )
+
+
 @router.post("/{repo_id}/trigger", response_model=RepoTriggerOut)
 async def trigger_repo_lanes(
     workspace_id: uuid.UUID,
@@ -1624,6 +1714,34 @@ async def _trigger_window_seen(
     ).scalars().all()
     return any(
         (row.payload or {}).get("lane_id") == lane_id
+        and (row.payload or {}).get("window_key") == window_key
+        for row in rows
+    )
+
+
+async def _routine_window_seen(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    repo_id: uuid.UUID,
+    routine_id: str,
+    window_key: str,
+) -> bool:
+    rows = (
+        await session.execute(
+            select(AuditLog)
+            .where(
+                AuditLog.workspace_id == workspace_id,
+                AuditLog.action == "repo.routine_run_claim",
+                AuditLog.target_kind == "workspace_repo",
+                AuditLog.target_id == str(repo_id),
+            )
+            .order_by(AuditLog.created_at.desc())
+            .limit(500)
+        )
+    ).scalars().all()
+    return any(
+        (row.payload or {}).get("routine_id") == routine_id
         and (row.payload or {}).get("window_key") == window_key
         for row in rows
     )
@@ -2440,36 +2558,49 @@ def _validate_process_conditions(value: Any, field: str) -> None:
 def _validate_process_routines(value: Any) -> None:
     if value is None:
         return
-    if not isinstance(value, list):
+    if isinstance(value, list):
+        entries = [(str(index), routine, f"process.routines[{index}]", True) for index, routine in enumerate(value)]
+    elif isinstance(value, dict):
+        entries = [(str(key), routine, f"process.routines.{key}", False) for key, routine in value.items()]
+    else:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={
                 "code": "invalid_process",
-                "message": "process.routines must be a list when provided",
+                "message": "process.routines must be a map or list when provided",
             },
         )
-    for index, routine in enumerate(value):
+    for routine_id, routine, field, requires_inline_id in entries:
         if not isinstance(routine, dict):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail={
                     "code": "invalid_process",
-                    "message": f"process.routines[{index}] must be an object",
+                    "message": f"{field} must be an object",
+                },
+            )
+        if requires_inline_id:
+            _require_optional_string(
+                routine.get("id"),
+                f"{field}.id",
+                required=True,
+            )
+        elif not re.match(r"^[a-z0-9][a-z0-9_-]{0,63}$", routine_id):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_process",
+                    "message": f"{field} has an invalid routine id",
                 },
             )
         _require_optional_string(
-            routine.get("id"),
-            f"process.routines[{index}].id",
-            required=True,
-        )
-        _require_optional_string(
             routine.get("name"),
-            f"process.routines[{index}].name",
+            f"{field}.name",
             required=True,
         )
         _require_optional_string(
             routine.get("cadence"),
-            f"process.routines[{index}].cadence",
+            f"{field}.cadence",
             required=False,
         )
         en = routine.get("enabled")
@@ -2478,28 +2609,45 @@ def _validate_process_routines(value: Any) -> None:
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail={
                     "code": "invalid_process",
-                    "message": f"process.routines[{index}].enabled must be a boolean when set",
+                    "message": f"{field}.enabled must be a boolean when set",
                 },
             )
         for opt_key in (
             "description",
             "instructions",
             "prompt",
+            "pattern",
+            "pattern_version",
+            "agent_profile",
             "specialist_id",
             "specialist_name",
+            "window",
+            "event",
         ):
             _require_optional_string(
                 routine.get(opt_key),
-                f"process.routines[{index}].{opt_key}",
+                f"{field}.{opt_key}",
                 required=False,
             )
-        sch = routine.get("schedule")
-        if sch is not None and not isinstance(sch, dict):
+        patterns = routine.get("patterns")
+        if patterns is not None and (
+            not isinstance(patterns, list)
+            or any(not isinstance(item, str) or not item.strip() for item in patterns)
+        ):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail={
                     "code": "invalid_process",
-                    "message": f"process.routines[{index}].schedule must be an object when set",
+                    "message": f"{field}.patterns must be a list of non-empty strings",
+                },
+            )
+        sch = routine.get("schedule")
+        if sch is not None and not isinstance(sch, (dict, str)):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_process",
+                    "message": f"{field}.schedule must be an object or cron string when set",
                 },
             )
 

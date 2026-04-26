@@ -129,6 +129,39 @@ lanes:
 """
 
 
+_YAML_PROCESS_ROUTINES = """
+version: 2
+process:
+  id: development
+  name: Development Process
+  states:
+    - id: task_intake
+      name: Intake
+  routines:
+    daily_standup:
+      name: Daily Standup
+      enabled: true
+      trigger:
+        type: schedule
+        cron: "0 9 * * *"
+        window: 30m
+      pattern: scheduled-sdlc-lane
+    pr_review:
+      name: PR Review
+      trigger:
+        type: event
+        event: pull_request
+      pattern: pr-and-ci-gate
+    seed:
+      name: Seed
+      trigger:
+        type: manual
+      pattern: onboard-seed-knowledge
+      idempotency:
+        key: seed-v1
+"""
+
+
 @pytest.mark.asyncio
 async def test_sync_creates_rows_for_v2_config(
     db_session, seed_workspace, patch_gateway
@@ -149,7 +182,7 @@ async def test_sync_creates_rows_for_v2_config(
     assert report.sync_source is not None
 
     rows = {
-        row.lane_id: row
+        row.routine_id: row
         for row in (
             await db_session.execute(
                 Lane.__table__.select().where(Lane.repo_id == repo.id)
@@ -161,6 +194,40 @@ async def test_sync_creates_rows_for_v2_config(
     assert rows["pr_review"]["pattern"] == "pr-and-ci-gate"
     assert rows["daily"]["kind"] == "schedule"
     assert rows["daily"]["cron"] == "0 9 * * *"
+    assert rows["seed"]["kind"] == "once"
+    assert rows["seed"]["idempotency_key"] == "seed-v1"
+
+
+@pytest.mark.asyncio
+async def test_sync_creates_rows_for_process_routines_config(
+    db_session, seed_workspace, patch_gateway
+) -> None:
+    from backend.app.db.models.lanes import Lane
+
+    _workspace, install, repo = await _seed(db_session, seed_workspace)
+    patch_gateway(_YAML_PROCESS_ROUTINES)
+
+    report = await sync_lanes_for_repo(
+        session=db_session, repo=repo, install=install
+    )
+
+    assert report.added == 3
+    assert report.errors == []
+
+    rows = {
+        row["routine_id"]: row
+        for row in (
+            await db_session.execute(
+                Lane.__table__.select().where(Lane.repo_id == repo.id)
+            )
+        ).mappings()
+    }
+    assert set(rows) == {"daily_standup", "pr_review", "seed"}
+    assert rows["daily_standup"]["kind"] == "schedule"
+    assert rows["daily_standup"]["cron"] == "0 9 * * *"
+    assert rows["daily_standup"]["pattern"] == "scheduled-sdlc-lane"
+    assert rows["pr_review"]["kind"] == "event"
+    assert rows["pr_review"]["pattern"] == "pr-and-ci-gate"
     assert rows["seed"]["kind"] == "once"
     assert rows["seed"]["idempotency_key"] == "seed-v1"
 
@@ -206,9 +273,9 @@ lanes:
             Lane.__table__.select().where(Lane.repo_id == repo.id)
         )
     ).mappings().all()
-    ids = {row["lane_id"] for row in rows}
+    ids = {row["routine_id"] for row in rows}
     assert ids == {"pr_review", "daily"}
-    pr_row = next(row for row in rows if row["lane_id"] == "pr_review")
+    pr_row = next(row for row in rows if row["routine_id"] == "pr_review")
     assert pr_row["pattern"] == "pr-and-ci-gate-v2"
 
 
@@ -330,7 +397,7 @@ async def test_sync_parses_patterns_list_and_keeps_primary_in_column(
     assert report.errors == []
 
     rows = {
-        row.lane_id: row
+        row.routine_id: row
         for row in (
             await db_session.execute(
                 Lane.__table__.select().where(Lane.repo_id == repo.id)

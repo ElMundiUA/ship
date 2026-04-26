@@ -1,10 +1,10 @@
-"""Lanes sync service — pull ``.ship/config.yml`` and upsert :class:`Lane` rows.
+"""Runtime sync service — pull ``.ship/config.yml`` and upsert :class:`Lane` rows.
 
 Entry points:
 
 - :func:`sync_lanes_for_repo` — given a :class:`WorkspaceRepo` with a
   live GitHub App installation, fetch ``.ship/config.yml`` from the
-  default branch, parse the v2 ``lanes:`` block, and upsert
+  default branch, parse ``process.routines`` (or legacy ``lanes:``), and upsert
   :class:`Lane` rows. Returns a :class:`SyncReport`.
 - :func:`apply_workflow_run_completion` — called by the
   ``workflow_run.completed`` webhook to update a lane's
@@ -158,6 +158,83 @@ def _parse_lane_entry(
     return kind, flat
 
 
+def _runtime_entries_from_config(parsed: dict[str, Any]) -> dict[str, Any]:
+    """Return DB-compatible runtime entries from new or legacy config.
+
+    New seed PRs commit ``process.routines`` only. The rest of the backend still
+    uses ``Lane`` rows as the runtime projection for Process UI and historical
+    runs, so this syncer projects routines into the same flat shape while keeping
+    legacy ``lanes:`` configs readable.
+    """
+
+    routines = _process_routines_block(parsed)
+    if routines:
+        return routines
+    lanes_block = parsed.get("lanes") or {}
+    if isinstance(lanes_block, dict):
+        return lanes_block
+    return {}
+
+
+def _process_routines_block(parsed: dict[str, Any]) -> dict[str, Any]:
+    process = parsed.get("process")
+    if not isinstance(process, dict):
+        return {}
+    raw = process.get("routines")
+    if isinstance(raw, dict):
+        items = raw.items()
+    elif isinstance(raw, list):
+        items = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            routine_id = item.get("id")
+            if isinstance(routine_id, str) and routine_id.strip():
+                items.append((routine_id.strip(), item))
+    else:
+        return {}
+
+    out: dict[str, Any] = {}
+    for routine_id, routine in items:
+        if not isinstance(routine_id, str) or not isinstance(routine, dict):
+            continue
+        projected = _project_routine_as_lane_entry(routine)
+        if projected is not None:
+            out[routine_id] = projected
+    return out
+
+
+def _project_routine_as_lane_entry(routine: dict[str, Any]) -> dict[str, Any] | None:
+    trigger = routine.get("trigger")
+    if isinstance(trigger, dict):
+        trigger_type = trigger.get("type")
+    else:
+        trigger_type = None
+
+    if routine.get("schedule") is not None or trigger_type == "schedule":
+        schedule = routine.get("schedule")
+        if isinstance(schedule, dict):
+            cron = schedule.get("cron") or schedule.get("interval")
+        elif isinstance(schedule, str):
+            cron = schedule
+        else:
+            cron = None
+        cron = trigger.get("cron") or trigger.get("interval") or cron if isinstance(trigger, dict) else cron
+        kind = "schedule"
+        out: dict[str, Any] = {"kind": kind, "cron": cron}
+    elif routine.get("event") is not None or trigger_type == "event":
+        event = trigger.get("event") if isinstance(trigger, dict) else None
+        out = {"kind": "event", "on": event or routine.get("event")}
+    else:
+        out = {"kind": "once", "once": "manual"}
+
+    for key in ("pattern", "patterns", "pattern_version", "fanout", "idempotency", "idempotency_key"):
+        if key in routine:
+            out[key] = routine[key]
+    out["routine"] = routine
+    return out
+
+
 async def sync_lanes_for_repo(
     *,
     session: AsyncSession,
@@ -202,12 +279,12 @@ async def sync_lanes_for_repo(
         report.errors.append("config root is not a mapping")
         return report
 
-    # ``lanes:`` is the v2-only block. If missing we still want to
-    # remove any previously-synced rows so the cache doesn't linger
-    # after a downgrade/cleanup.
-    lanes_block = parsed.get("lanes") or {}
+    # New configs use ``process.routines``. Legacy repos may still carry
+    # ``lanes:``; project both into the same Lane table until the DB/API
+    # runtime model is renamed.
+    lanes_block = _runtime_entries_from_config(parsed)
     if not isinstance(lanes_block, dict):
-        report.errors.append("`lanes:` is not a mapping")
+        report.errors.append("runtime entries are not a mapping")
         lanes_block = {}
 
     # P5-07 — promote any wizard-seeded synthetic rows whose

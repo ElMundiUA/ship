@@ -1,43 +1,51 @@
 import { readConfig } from "../config/io.mjs";
+import { dueLanesFromRoutines, dueRoutines } from "../runtime/routines.mjs";
 
-const VERSION = "v1";
+const VERSION = "v2";
 
 export async function triggerCommand(ctx, rest) {
   const opts = parseArgs(rest);
-  const baseUrl = resolveBaseUrl(opts.baseUrl || explicitGlobalBaseUrl(ctx));
-  const token = requireToken();
-  let workspaceId = opts.workspace;
-  if (!workspaceId) workspaceId = await resolveSoleWorkspace(baseUrl, token);
-  const repoId = await resolveRepoId(baseUrl, token, workspaceId, opts.repo);
   const { config } = readConfig(opts.cwd || process.cwd());
+  const local = dueRoutines(config, { event: opts.event, now: opts.now ? new Date(opts.now) : new Date() });
+  let due = local.due;
 
-  const result = await apiPostJson(
-    baseUrl,
-    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/trigger`,
-    {
-      event: opts.event,
-      config,
-      github: {
-        event_name: process.env.SHIP_EVENT_NAME || process.env.GITHUB_EVENT_NAME || "",
-        ref: process.env.SHIP_REF || process.env.GITHUB_REF || "",
-        sha: process.env.SHIP_SHA || process.env.GITHUB_SHA || "",
-        run_id: process.env.GITHUB_RUN_ID || "",
-      },
-    },
-    token,
-  );
+  const baseUrl = resolveBaseUrl(opts.baseUrl || explicitGlobalBaseUrl(ctx));
+  const token = process.env.SHIP_API_TOKEN || "";
+  let claimStatus = "skipped:no-token";
+  if (token && due.length > 0 && !opts.noClaim) {
+    let workspaceId = opts.workspace;
+    if (!workspaceId) workspaceId = await resolveSoleWorkspace(baseUrl, token);
+    const repoId = await resolveRepoId(baseUrl, token, workspaceId, opts.repo);
+    const claimed = [];
+    for (const routine of due) {
+      const claim = await claimRoutine(baseUrl, token, workspaceId, repoId, opts.event, routine);
+      if (claim.status === "claimed" || claim.status === "unavailable") {
+        claimed.push({ ...routine, claim_status: claim.status });
+      }
+    }
+    due = claimed;
+    claimStatus = "attempted";
+  }
+
+  const result = {
+    event: opts.event,
+    status: due.length ? "due" : "noop",
+    due_routines: due,
+    due_lanes: dueLanesFromRoutines(due),
+    skipped_routines: local.skipped,
+    claim_status: claimStatus,
+  };
 
   if (ctx.json || opts.json) {
     console.log(JSON.stringify(result, null, 2));
     return;
   }
-  const due = Array.isArray(result.due_lanes) ? result.due_lanes : [];
   if (!due.length) {
-    console.log(`Ship trigger ${opts.event}: no lanes due.`);
+    console.log(`Ship trigger ${opts.event}: no routines due.`);
     return;
   }
-  console.log(`Ship trigger ${opts.event}: ${due.length} lane(s) due`);
-  for (const lane of due) console.log(`  - ${lane.lane_id}`);
+  console.log(`Ship trigger ${opts.event}: ${due.length} routine(s) due`);
+  for (const routine of due) console.log(`  - ${routine.routine_id}`);
 }
 
 function explicitGlobalBaseUrl(ctx) {
@@ -45,13 +53,13 @@ function explicitGlobalBaseUrl(ctx) {
 }
 
 function printHelp() {
-  console.log(`shipctl trigger — ask Ship which lanes are due (${VERSION})
+  console.log(`shipctl trigger — compute which routines are due (${VERSION})
 
 USAGE
-  shipctl trigger --event schedule --repo <id|owner/name> [--workspace <id>] [--json]
+  shipctl trigger --event schedule [--repo <id|owner/name>] [--workspace <id>] [--json]
 
 ENV
-  SHIP_API_TOKEN             Required.
+  SHIP_API_TOKEN             Optional. When set, due routines are claimed in Ship.
   SHIP_WORKSPACE_API_BASE    Optional API base override.
   SHIP_API_BASE              Fallback API base override.
 `);
@@ -64,6 +72,8 @@ function parseArgs(args) {
     repo: null,
     baseUrl: null,
     cwd: null,
+    now: null,
+    noClaim: false,
     json: false,
   };
   const copy = [...args];
@@ -87,8 +97,14 @@ function parseArgs(args) {
       consume("--workspace", "workspace") ||
       consume("--repo", "repo") ||
       consume("--base-url", "baseUrl") ||
-      consume("--cwd", "cwd")
+      consume("--cwd", "cwd") ||
+      consume("--now", "now")
     ) {
+      continue;
+    }
+    if (copy[0] === "--no-claim") {
+      out.noClaim = true;
+      copy.shift();
       continue;
     }
     if (copy[0] === "--json") {
@@ -112,15 +128,6 @@ function parseArgs(args) {
     process.exit(1);
   }
   return out;
-}
-
-function requireToken() {
-  const token = process.env.SHIP_API_TOKEN || "";
-  if (!token) {
-    console.error("SHIP_API_TOKEN is required.");
-    process.exit(1);
-  }
-  return token;
 }
 
 function resolveBaseUrl(explicit) {
@@ -169,6 +176,33 @@ async function apiPostJson(baseUrl, path, body, token) {
   return apiRequest(baseUrl, path, "POST", token, body);
 }
 
+async function claimRoutine(baseUrl, token, workspaceId, repoId, event, routine) {
+  try {
+    return await apiPostJson(
+      baseUrl,
+      `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/routine-runs/claim`,
+      {
+        event,
+        routine_id: routine.routine_id,
+        window_key: routine.window_key,
+        scheduled_for: routine.scheduled_for,
+        window_start: routine.window_start,
+        window_end: routine.window_end,
+        github: {
+          event_name: process.env.SHIP_EVENT_NAME || process.env.GITHUB_EVENT_NAME || "",
+          ref: process.env.SHIP_REF || process.env.GITHUB_REF || "",
+          sha: process.env.SHIP_SHA || process.env.GITHUB_SHA || "",
+          run_id: process.env.GITHUB_RUN_ID || "",
+        },
+      },
+      token,
+    );
+  } catch (err) {
+    console.error(`warn: routine claim failed, running locally: ${err instanceof Error ? err.message : err}`);
+    return { status: "unavailable" };
+  }
+}
+
 async function apiRequest(baseUrl, path, method, token, body) {
   const url = `${baseUrl}${path}`;
   let res;
@@ -195,6 +229,5 @@ async function apiRequest(baseUrl, path, method, token, body) {
   }
   if (res.ok) return data;
   const msg = typeof data === "string" ? data : JSON.stringify(data);
-  console.error(`HTTP ${res.status} ${res.statusText} on ${method} ${url}\n${msg}`);
-  process.exit(res.status >= 500 ? 3 : 1);
+  throw new Error(`HTTP ${res.status} ${res.statusText} on ${method} ${url}\n${msg}`);
 }

@@ -352,9 +352,9 @@ function startWorkspaceApiMock() {
         res.end(JSON.stringify([{ id: "repo-1", full_name: "ElMundiUA/ship" }]));
         return;
       }
-      if (req.url === "/v1/workspaces/ws-1/repos/repo-1/trigger") {
+      if (req.url === "/v1/workspaces/ws-1/repos/repo-1/routine-runs/claim") {
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ due_lanes: [] }));
+        res.end(JSON.stringify({ status: "claimed", routine_id: "daily", window_key: "schedule:daily:20260426T0800" }));
         return;
       }
       res.writeHead(404, { "Content-Type": "application/json" });
@@ -377,9 +377,27 @@ function startWorkspaceApiMock() {
 
 test("shipctl trigger prefers SHIP_WORKSPACE_API_BASE over global methodology default", async () => {
   const mock = await startWorkspaceApiMock();
+  const dir = mktmp();
+  writeConfig(
+    dir,
+    baseConfig({
+      process: {
+        id: "development",
+        name: "Development Process",
+        states: [{ id: "task_intake", name: "Intake" }],
+        routines: {
+          daily: {
+            name: "Daily",
+            trigger: { type: "schedule", cron: "0 8 * * *", window: "30m" },
+            prompt: "Summarize the day.",
+          },
+        },
+      },
+    }),
+  );
   try {
     const r = await runCtlAsync(
-      ["trigger", "--event", "schedule", "--repo", "ElMundiUA/ship", "--json"],
+      ["trigger", "--event", "schedule", "--repo", "ElMundiUA/ship", "--cwd", dir, "--now", "2026-04-26T08:06:00Z", "--json"],
       {
         SHIP_API_TOKEN: "tok",
         SHIP_WORKSPACE_API_BASE: mock.baseUrl,
@@ -392,7 +410,7 @@ test("shipctl trigger prefers SHIP_WORKSPACE_API_BASE over global methodology de
       [
         "/v1/workspaces",
         "/v1/workspaces/ws-1/repos",
-        "/v1/workspaces/ws-1/repos/repo-1/trigger",
+        "/v1/workspaces/ws-1/repos/repo-1/routine-runs/claim",
       ],
     );
   } finally {
