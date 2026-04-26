@@ -51,15 +51,15 @@ product. For product changes, see the [/blog](/blog).
 
 The operator-facing Manual moved to the new information architecture
 defined in [RFC-0010](./protocol/rfc-0010-plays-and-inbox.md). This
-is **vocabulary-only** at the Manual level: the `.ship/config.yml`
-schema (`lanes:`, `pattern:`) and the `shipctl` CLI are unchanged
-and remain protocol-stable.
+entry is historical: current seed bundles now emit `process.routines`
+and `shipctl run --routine`; `lanes:` / `--lane` remain compatibility
+aliases for already-seeded repositories.
 
 ### What renamed
 
 | Before | Now (in the operator console + Manual) | Where it still applies as-is |
 |---|---|---|
-| Lanes | **Automations** | `lanes:` key in `.ship/config.yml`; `shipctl lanes` commands |
+| Lanes | **Routines / Automations** | Legacy `lanes:` key and `shipctl lanes` wrapper commands |
 | Patterns (in user-facing prose) | **Plays** | `pattern:` field; catalog folder layout |
 | Pipelines | **Runs** | `pipeline_runs` table; backend telemetry |
 | Clarifications + Improvements (separate UIs) | **Inbox** (single attention surface) | DB table names retained for compatibility |

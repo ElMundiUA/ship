@@ -7,7 +7,7 @@
    artifacts the same way every other client does.
 2. **Sync the catalog** of `pattern` / `tool` / `collection` artifacts into
    `.ship/cache/` and pin versions for reproducible runs.
-3. **Run lanes** (one-shot dispatch + GitHub Actions wrappers) and
+3. **Run routines** (one-shot dispatch + GitHub Actions wrappers) and
    **report Runs** so the operator console can render outcomes and route any
    escalations into the Inbox.
 
@@ -18,14 +18,15 @@ Published as **`@elmundi/ship-cli`** under the [elmundi](https://www.npmjs.com/o
 >
 > | CLI / YAML / API (literal) | Operator console (prose) |
 > |----------------------------|--------------------------|
-> | `lanes:` entries in `.ship/config.yml`, `--lane <id>` | **Automations** |
+> | `process.routines` entries in `.ship/config.yml`, `--routine <id>` | **Process routines** |
+> | legacy `lanes:` entries / `--lane <id>` | Compatibility aliases |
 > | `pattern:` artifacts (RFC-0001) | **Plays** |
 > | `pipeline_runs` rows + `shipctl callback` payloads | **Runs** |
 > | clarifications / improvements / approvals queue | **Inbox** items |
 >
-> The CLI keeps `lanes:` / `pattern:` / `--lane` literal forever; we are
-> never going to break the YAML and flag surface. Help text and prose
-> reach for the operator nouns when describing what users see.
+> New projects should use `process.routines` and `--routine`. The CLI still
+> accepts legacy `lanes:` and `--lane` so already-seeded repositories can
+> upgrade without a flag-day migration.
 
 ## Requirements
 
@@ -230,16 +231,16 @@ Next:
 | **`shipctl search`** | Vector search over docs + prompts (`POST /search`). | `documentation/discovery.md` |
 | **`shipctl docs fetch`**, **`shipctl docs feedback`** | Documentation file fetch and retro feedback. | `documentation/discovery.md` |
 | **`shipctl pattern\|tool\|collection`** **`list \| show \| fetch \| search`** | Versioned artifact bodies; plural aliases (`patterns`, `tools`, `collections`) work. | `documentation/authoring.md` |
-| **`shipctl sync`** | Pull artifacts into `.ship/cache/`; with `--lock` writes `.ship/shipctl.lock.json` covering every Play the declared lanes depend on. | this README, `Config & Sync` |
-| **`shipctl run`** | One-shot dispatch entry point. `kind: once` runs locally; other lane kinds are queued for the workspace runner. Reports its terminal status via the callback URL Ship injected. | `documentation/automations.md`, this README |
-| **`shipctl lanes`** | Generate / inspect / delete the `.github/workflows/ship-<lane>.yml` thin wrappers (`install` / `list` / `remove`). | `documentation/automations.md`, this README |
+| **`shipctl sync`** | Pull artifacts into `.ship/cache/`; with `--lock` writes `.ship/shipctl.lock.json` covering every Play the declared routines depend on. | this README, `Config & Sync` |
+| **`shipctl run`** | One-shot routine dispatch entry point. `kind: once` runs locally; scheduled/event routines are queued for the workspace runner. Reports its terminal status via the callback URL Ship injected. | `documentation/automations.md`, this README |
+| **`shipctl lanes`** | Legacy wrapper reconciler: generate / inspect / delete the `.github/workflows/ship-<id>.yml` thin wrappers (`install` / `list` / `remove`). | `documentation/automations.md`, this README |
 | **`shipctl kickoff`** | Print a Play's pattern body for piping into the customer's agent in CI. | `documentation/automations.md` |
 | **`shipctl callback`** | Pattern-side: report a Run's terminal status + RunSummary outcome so Ship can render the row and route escalations into the Inbox. | this README |
 | **`shipctl knowledge init`** | Open a PR that seeds `.ship/knowledge/*.md` starter buckets. | `documentation/knowledge-buckets.md` |
 | **`shipctl telemetry`** | Opt-in anonymous usage events (default OFF). | this README, `Telemetry & Feedback` |
 | **`shipctl feedback`** | Local markdown drafts → POST `/feedback` → GitHub issue. | this README |
 | **`shipctl verify`** | Post-adoption liveness checks (local + config + network). | this README, `New & Verify` |
-| **`shipctl migrate`** | Upgrade `.ship/config.yml` from v1 to v2 (lanes-as-config). | `documentation/configuration.md` |
+| **`shipctl migrate`** | Upgrade older `.ship/config.yml` shapes to the current schema. | `documentation/configuration.md` |
 | **`shipctl help`** | Top-level command list with the same vocabulary callout. | — |
 
 **Maintainers / full Ship checkout:** if the current directory (or **`SHIP_REPO`**) is inside the Ship monorepo, **`list` / `show` / `fetch`** for catalogs can read manifests from **disk** instead of HTTP. **`shipctl search`** always uses HTTP.
@@ -301,12 +302,12 @@ repo git history — `shipctl sync` caches them in `.ship/cache/`, which is
 
 ```
 .ship/
-├── config.yml                 # RFC-0002 schema; committed. `lanes:` entries
-│                              # are what the operator console renders as
-│                              # Automations.
+├── config.yml                 # committed. New projects declare
+│                              # process.routines; legacy lanes: blocks are
+│                              # still accepted as compatibility input.
 ├── state.json                 # last_sync_at, last_manifest_hash; gitignored
 ├── shipctl.lock.json          # set by `shipctl sync --lock`; pins every
-│                              # pattern the declared lanes depend on
+│                              # pattern the declared routines depend on
 ├── cache/                     # per-repo artifact cache (gitignored)
 │   ├── pattern/<id>@<v>/
 │   │   ├── ARTIFACT.md        # full body (frontmatter + content), per RFC-0005
@@ -373,7 +374,7 @@ Pins are honoured: an entry whose manifest version does not satisfy the pin is
 reported as `skipped_pin` unless `--force-unpin` is set. After a successful
 sync, `.ship/state.json` records `last_sync_at` and `last_manifest_hash`. With
 `--lock`, `shipctl sync` also writes `.ship/shipctl.lock.json` covering every
-Play that the declared lanes depend on, so subsequent `shipctl run` invocations
+Play that the declared routines depend on, so subsequent `shipctl run` invocations
 can refuse to drift off the pinned set.
 
 > Methodology docs never live in your repo. `shipctl sync` caches them in
@@ -381,20 +382,20 @@ can refuse to drift off the pinned set.
 
 ## Run
 
-`shipctl run` is the **one-shot dispatch entry point** for an Automation
-(YAML key: `lanes:`). What it does depends on the lane's `kind`:
+`shipctl run` is the **one-shot dispatch entry point** for a routine
+(YAML key: `process.routines`). What it does depends on the routine's `kind`:
 
 | `kind:` value | Behaviour of `shipctl run` |
 |---------------|----------------------------|
-| `once` | Executes the lane fully on the local machine (the pattern body is fed to the configured agent; the result is reported back via `shipctl callback`). |
-| `lane` / `event` / `schedule` | Refuses to execute locally; the workspace's GitHub Actions runner picks the lane up via `.github/workflows/run-agent.yml`. The CLI exits with a clear message naming the lane id and its kind. |
+| `once` | Executes the routine fully on the local machine (the pattern body is fed to the configured agent; the result is reported back via `shipctl callback`). |
+| `event` / `schedule` | Refuses to execute locally; the workspace's GitHub Actions runner picks the routine up via `.github/workflows/run-agent.yml`. The CLI exits with a clear message naming the routine id and its kind. |
 
 ```bash
-# preview which patterns + parameters the lane would dispatch with
-shipctl run --lane pr-self-review --dry-run
+# preview which patterns + parameters the routine would dispatch with
+shipctl run --routine pr-self-review --dry-run
 
 # fanout: the same pattern over every repo in the workspace
-shipctl run --lane fleet-mobile-knowledge-refresh \
+shipctl run --routine fleet-mobile-knowledge-refresh \
   --pattern fleet-knowledge-pack \
   --fanout matrix \
   --trigger event \
@@ -402,7 +403,7 @@ shipctl run --lane fleet-mobile-knowledge-refresh \
 
 # CI usage: shipctl injects --ship-run-id / --ship-callback-url / --ship-run-token
 # automatically; you only set them by hand when running outside the workspace runner
-shipctl run --lane release-cut \
+shipctl run --routine release-cut \
   --ship-run-id "$SHIP_RUN_ID" \
   --ship-callback-url "$SHIP_CALLBACK_URL" \
   --ship-run-token "$SHIP_RUN_TOKEN"
@@ -410,11 +411,11 @@ shipctl run --lane release-cut \
 
 Important flags:
 
-- `--pattern <id>` — override the lane's default pattern (a composite Play may
+- `--pattern <id>` — override the routine's default pattern (a composite Play may
   declare several; this lets you target one specifically).
 - `--fanout matrix|sequential|concurrent` — only meaningful for fleet-scope
-  lanes that target multiple repos.
-- `--trigger event|schedule|manual|once` — the trigger the lane was wired for;
+  routines that target multiple repos.
+- `--trigger event|schedule|manual|once` — the trigger the routine was wired for;
   used to choose the payload shape.
 - `--offline` — skip every HTTP probe (resolves patterns from `.ship/cache/`
   only); useful for hermetic CI.
@@ -422,26 +423,25 @@ Important flags:
 
 A full Run lifecycle in production looks like: console (or schedule) creates a
 `pipeline_run` row → workspace runner is dispatched → runner calls
-`shipctl run --lane <id>` for `kind: once` lanes (or invokes the agent
-directly for `kind: lane`) → the pattern calls `shipctl callback` with the
+`shipctl run --routine <id>` for the selected routine → the pattern calls `shipctl callback` with the
 RunSummary → console renders the outcome row in `/runs` and any escalations
 land in `/inbox`.
 
-## Lanes
+## Routine Wrappers
 
-`shipctl lanes` manages the **thin GitHub Actions wrappers** that delegate to
-the reusable `run-agent.yml` workflow. Each lane in `.ship/config.yml`
-generates one `.github/workflows/ship-<lane>.yml` file. The file itself is a
+`shipctl lanes` is the legacy command that manages the **thin GitHub Actions
+wrappers** delegating to the reusable `run-agent.yml` workflow. Each routine
+in `.ship/config.yml` generates one `.github/workflows/ship-<routine>.yml` file. The file itself is a
 ~12-line yaml that does nothing more than `uses: ./.github/workflows/run-agent.yml`
-with the right `lane:` input — all the logic lives in the reusable workflow,
+with the right routine/lane input — all the logic lives in the reusable workflow,
 so wrappers can be regenerated without touching execution semantics.
 
 ```bash
-# write workflow files for every lane in config.yml
+# write workflow files for every legacy lane/routine in config.yml
 shipctl lanes install --dry-run
 shipctl lanes install --yes
 
-# only one lane (or a few)
+# only one routine (or a few)
 shipctl lanes install --only pr-self-review,release-cut
 
 # wire to a specific shipctl version pin
@@ -451,20 +451,20 @@ shipctl lanes install --shipctl-version 0.12.1 \
 # inspect what's on disk vs config.yml
 shipctl lanes list --json
 
-# remove generated wrappers (does NOT touch lanes: config)
+# remove generated wrappers (does NOT touch config)
 shipctl lanes remove --dry-run
 shipctl lanes remove --only deprecated-lane --yes
 ```
 
 Notes:
 
-- `lanes install` writes files **only** for lanes with a configured trigger
-  (`on.push`, `on.schedule`, `on.workflow_dispatch`). `kind: once` lanes
+- `lanes install` writes files **only** for routines with a configured trigger
+  (`on.push`, `on.schedule`, `on.workflow_dispatch`). `kind: once` routines
   intended to run only via `shipctl run` don't get a wrapper.
-- The same wrapper covers a fleet-scope lane (one workflow file in your
+- The same wrapper covers a fleet-scope routine (one workflow file in your
   pilot repo, fanout happens server-side via the matrix Ship dispatches).
-- Removing a wrapper does **not** remove the lane from `.ship/config.yml`;
-  to fully retire an Automation, drop the `lanes.<id>` block from the YAML
+- Removing a wrapper does **not** remove the routine from `.ship/config.yml`;
+  to fully retire it, drop the `process.routines.<id>` block from the YAML
   and re-run `shipctl lanes install` so the file is reconciled.
 
 ## Callback
