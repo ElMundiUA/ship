@@ -13,7 +13,7 @@ End-to-end checks for the **operator console** and a **sandbox GitHub repo** aft
 cd e2e && npm run test:deployed
 ```
 
-**GitHub Actions:** `.github/workflows/e2e-console.yml` — секреты `E2E_CONSOLE_BASE_URL`, опционально `E2E_SHIP_API_BASE`, `E2E_SHIP_API_TOKEN`, `E2E_PLAYWRIGHT_STORAGE_JSON` (сырой JSON Playwright storage), `E2E_SANDBOX_REPO`, `E2E_GITHUB_TOKEN`.
+**GitHub Actions:** `.github/workflows/e2e-console.yml` — секреты `E2E_CONSOLE_BASE_URL`, опционально `E2E_SHIP_API_BASE`, `E2E_SHIP_API_TOKEN`, `E2E_PLAYWRIGHT_STORAGE_JSON` (сырой JSON Playwright storage), `E2E_SANDBOX_REPO`, `E2E_GITHUB_TOKEN`, Mailosaur и sandbox-секреты интеграций из раздела ниже.
 
 ## Implementation plan (phases)
 
@@ -28,8 +28,9 @@ cd e2e && npm run test:deployed
 | **F — Сквозные journey** | Clarification: POST → ответ формой в UI (`journey-clarification.wired.spec.ts`). Improvement: POST → Accept (`journey-improvement.wired.spec.ts`). Health dev: `/login` + `GET /v1/health` (`deployed-health.public.spec.ts`). Без сессии: редирект на логин (`session.noauth.spec.ts`, проект `noauth`) |
 | **G — Трекер GitHub → Ship** | Issue + лейбл + коммент `@ship clarification:` → `POST …/clarifications/sync` → poll GET → опционально UI (`tracker-github-clarification.wired.spec.ts`). Нужны репа с Ship App, трекер GitHub Issues в воркспейсе, PAT с `issues:write` |
 | **H — Full journey + reset** | Сквозной Elmundi-подобный путь: GitHub App (опц.) → preset + sandbox-репо → трекер GitHub Issues → done, с проверкой seed pipelines через Ship API (`full-journey.wired.spec.ts`). Откат состояния для повторного прогона: `full-journey-reset.sandbox.spec.ts` |
+| **I — Live staging automation** | Scheduled/manual staging suite: aggregate product/API check (`live-full-journey.wired.spec.ts`), Mailosaur invite delivery (`live-mailosaur-invite.wired.spec.ts`), external provider probes (`live-integrations.sandbox.spec.ts`) |
 
-**Регистрация в Ship не автоматизируется** — нужна уже сохранённая сессия. **Установка GitHub App** — см. фазу B2 (`tests/github-app.wired.spec.ts`); OAuth других трекеров — пока вне scope.
+**Регистрация в Ship не автоматизируется** — нужна уже сохранённая сессия. **Установка GitHub App** — см. фазу B2 (`tests/github-app.wired.spec.ts`). Linear/Jira/Notion/Slack/etc. покрываются отдельными live probe specs, чтобы OAuth/provider flakiness не ломала основной onboarding path.
 
 ## Запись демо-видео полного journey
 
@@ -221,6 +222,70 @@ npx playwright test --project=sandbox-api tests/full-journey-reset.sandbox.spec.
 
 > Файлы в `.github/workflows/*.yml` и `.ship/config.yml` самого репо **не трогаются** — если ты установил Ship workflows через PR, либо смерж и потом откати отдельным reset-коммитом, либо держи тестовый репо на baseline-теге (`git push -f origin e2e-baseline:main` в отдельном ручном шаге).
 
+## Live staging automation (phase I)
+
+Scheduled CI runs the live staging suite against real services when the
+corresponding secrets exist. Manual `workflow_dispatch` exposes the same knobs:
+
+```bash
+cd e2e
+E2E_RUN_LIVE_FULL_JOURNEY=1 \
+E2E_RUN_MAILOSAUR=1 \
+E2E_RUN_EXTERNAL_INTEGRATIONS=1 \
+npm run test:deployed
+```
+
+### Mailosaur invite delivery
+
+`tests/live-mailosaur-invite.wired.spec.ts` creates a viewer invite through
+`/v1/workspaces/{ws}/invites`, waits for the transactional email in Mailosaur,
+extracts `/invite?token=...`, verifies `GET /v1/invites/{token}`, and opens the
+public invite page.
+
+Required:
+
+- `MAILOSAUR_API_KEY`
+- `MAILOSAUR_SERVER_ID`
+- `E2E_RUN_MAILOSAUR=1`
+- staging email provider must actually deliver to Mailosaur
+
+Optional:
+
+- `E2E_EMAIL_DOMAIN` — defaults to `<MAILOSAUR_SERVER_ID>.mailosaur.net`.
+- `E2E_INVITEE_STORAGE_STATE` or CI secret `E2E_INVITEE_PLAYWRIGHT_STORAGE_JSON` — enables the final Accept click with a pre-authenticated invitee account whose email matches the generated Mailosaur address. Without it, the test still covers delivery, token peek, and invite page rendering.
+
+### External integration probes
+
+`tests/live-integrations.sandbox.spec.ts` probes each configured provider
+independently. Missing secrets skip only that provider.
+
+Workspace integration secrets:
+
+- GitHub: `E2E_GITHUB_TOKEN` or `GITHUB_TOKEN`
+- Linear: `E2E_LINEAR_API_KEY`
+- Jira: `E2E_JIRA_SITE`, `E2E_JIRA_EMAIL`, `E2E_JIRA_API_TOKEN`
+- Notion: `E2E_NOTION_TOKEN`
+- Slack: `E2E_SLACK_BOT_TOKEN`
+- GitLab: `E2E_GITLAB_TOKEN`, optional `E2E_GITLAB_HOST`, `E2E_GITLAB_GROUP`
+- Webhook: `E2E_WEBHOOK_URL`, `E2E_WEBHOOK_SECRET`
+- Teams: `E2E_TEAMS_WEBHOOK_URL`
+- OTEL: `E2E_OTEL_ENDPOINT`, `E2E_OTEL_BEARER_TOKEN`
+- S3 export: `E2E_S3_BUCKET`, `E2E_S3_ACCESS_KEY_ID`, `E2E_S3_SECRET_ACCESS_KEY`, optional `E2E_S3_REGION`
+
+Native integration secrets:
+
+- Atlassian/Jira: `E2E_JIRA_SITE`, `E2E_JIRA_EMAIL`, `E2E_JIRA_API_TOKEN`, optional `E2E_JIRA_PROJECT`
+- GitLab native: `E2E_GITLAB_TOKEN`, optional `E2E_GITLAB_HOST`, `E2E_GITLAB_GROUP`
+- Azure DevOps: `E2E_AZURE_DEVOPS_ORG`, `E2E_AZURE_DEVOPS_PAT`, optional `E2E_AZURE_DEVOPS_PROJECT`
+
+### Extended reset
+
+`E2E_RESET_EXTERNAL_INTEGRATIONS=1` extends `full-journey-reset.sandbox.spec.ts`
+so it removes all workspace-level integration probe rows and disables native
+installations. Keep this flag for dedicated e2e workspaces only.
+
 ## CI
 
-Workflow `.github/workflows/e2e-console.yml` runs **public** tests against `E2E_CONSOLE_BASE_URL` (required). Full-journey / reset шаги опциональны: включаются `workflow_dispatch`-инпутами `run_full_journey` и `reset_sandbox` (см. файл workflow). Секреты: `E2E_PLAYWRIGHT_STORAGE_JSON`, `E2E_SHIP_API_*`, `E2E_SANDBOX_REPO`, `E2E_GITHUB_TOKEN`, опц. `E2E_PRESET`, `E2E_GITHUB_INSTALL_ACCOUNT`.
+Workflow `.github/workflows/e2e-console.yml` runs **public** tests against `E2E_CONSOLE_BASE_URL` (required). Scheduled runs enable `run_full_journey`, `run_live_full_journey`, `run_mailosaur`, and `run_external_integrations`; missing provider secrets turn into targeted skips. Manual `workflow_dispatch` can toggle `run_full_journey`, `run_live_full_journey`, `run_mailosaur`, `run_external_integrations`, `run_github_app_install`, `reset_sandbox`, and `reset_external_integrations`.
+
+Core secrets: `E2E_PLAYWRIGHT_STORAGE_JSON`, `E2E_SHIP_API_*`, `E2E_SANDBOX_REPO`, `E2E_GITHUB_TOKEN`, optional `E2E_PRESET`, `E2E_GITHUB_INSTALL_ACCOUNT`. Live provider secrets are listed in phase I above.

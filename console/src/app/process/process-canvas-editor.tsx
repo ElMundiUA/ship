@@ -13,8 +13,8 @@ import {
 
 import type { ApiProcess, ApiProcessState, ApiProcessTransition } from "@/lib/api/client";
 
-const NODE_WIDTH = 210;
-const NODE_HEIGHT = 76;
+const NODE_WIDTH = 218;
+const NODE_HEIGHT = 84;
 const GAP = 56;
 const PAD = 72;
 const START_Y = 170;
@@ -398,13 +398,13 @@ export function ProcessCanvasEditor({
       onPointerMove={onViewportPointerMove}
       onPointerUp={stopViewportPan}
       onPointerCancel={stopViewportPan}
-      className="relative min-h-[520px] cursor-grab overflow-hidden bg-ink/20 active:cursor-grabbing"
+      className="relative min-h-[560px] cursor-grab overflow-hidden bg-[#040814] active:cursor-grabbing"
     >
       <div className="pointer-events-none sticky left-0 top-0 z-20 flex h-0 justify-end p-3">
         <div className="pointer-events-auto flex items-center gap-2">
           <div
             data-process-control
-            className="flex items-center gap-1 rounded-full border border-white/10 bg-ink/85 p-1 shadow-card backdrop-blur-xl"
+            className="flex items-center gap-1 rounded-full border border-white/10 bg-black/65 p-1 shadow-2xl backdrop-blur-xl"
           >
             <button
               type="button"
@@ -437,7 +437,7 @@ export function ProcessCanvasEditor({
             type="button"
             data-process-control
             onClick={onAddState}
-            className="rounded-full border border-aqua/30 bg-aqua/10 px-3 py-1.5 text-xs font-semibold text-aqua shadow-card transition hover:bg-aqua/15"
+            className="rounded-full border border-aqua/35 bg-aqua/15 px-3 py-1.5 text-xs font-semibold text-aqua shadow-lg shadow-aqua/5 transition hover:bg-aqua/20"
           >
             Add from palette
           </button>
@@ -445,7 +445,7 @@ export function ProcessCanvasEditor({
       </div>
       <div className="absolute inset-0">
         <div
-          className="absolute left-0 top-0 bg-[radial-gradient(circle_at_1px_1px,rgba(255,255,255,0.10)_1px,transparent_0)] [background-size:24px_24px]"
+          className="absolute left-0 top-0 bg-[radial-gradient(circle_at_1px_1px,rgba(99,245,255,0.18)_1px,transparent_0),radial-gradient(circle_at_50%_40%,rgba(99,245,255,0.10),transparent_28%)] [background-size:24px_24px,100%_100%]"
           style={{
             width: canvasWidth,
             height: canvasHeight,
@@ -507,8 +507,8 @@ export function ProcessCanvasEditor({
                     fill="none"
                     stroke={
                       isSelected
-                        ? "rgba(0, 232, 220, 0.55)"
-                        : "rgba(255,255,255,0.22)"
+                        ? "rgba(99, 245, 255, 0.75)"
+                        : "rgba(99,245,255,0.34)"
                     }
                     strokeWidth={isSelected ? 3 : 2}
                     markerEnd={`url(#${arrowMarkerId})`}
@@ -625,19 +625,28 @@ function StateNode({
       }}
       style={{ left: x, top: y, touchAction: "none", userSelect: "none" }}
       className={[
-        "absolute block h-[76px] w-[210px] rounded-2xl border px-4 py-3 transition",
-        "cursor-grab active:cursor-grabbing",
+        "absolute block h-[84px] w-[218px] rounded-[1.35rem] border px-4 py-3 transition",
+        "cursor-grab select-none shadow-2xl active:cursor-grabbing",
         selected
-          ? "border-aqua/60 bg-aqua/[0.08] shadow-glow"
-          : "border-white/10 bg-white/[0.035] hover:border-white/25 hover:bg-white/[0.06]",
+          ? "border-aqua/70 bg-[linear-gradient(135deg,rgba(99,245,255,0.18),rgba(99,245,255,0.06))] shadow-aqua/20"
+          : "border-white/12 bg-[linear-gradient(135deg,rgba(255,255,255,0.09),rgba(255,255,255,0.035))] hover:border-aqua/35 hover:bg-white/[0.07]",
       ].join(" ")}
     >
-      <div className="min-w-0">
-        <div className="truncate font-display text-base font-bold text-white">
-          {state.name}
+      <div className="flex h-full min-w-0 flex-col justify-between">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <div className="truncate font-display text-base font-bold text-white">
+              {state.name}
+            </div>
+            <div className="mt-1 truncate text-xs text-white/55">
+              {state.specialist_name}
+            </div>
+          </div>
+          <span className="mt-0.5 h-2 w-2 shrink-0 rounded-full bg-aqua shadow-[0_0_18px_rgba(99,245,255,0.8)]" />
         </div>
-        <div className="mt-1 truncate text-xs text-white/55">
-          {state.specialist_name}
+        <div className="flex items-center justify-between text-[10px] uppercase tracking-[0.18em] text-white/35">
+          <span>Process</span>
+          <span>{state.runtime.health}</span>
         </div>
       </div>
     </div>
