@@ -144,6 +144,8 @@ def _jsonable(value: Any) -> Any:
         return str(value)
     if isinstance(value, datetime):
         return value.isoformat()
+    if hasattr(value, "tolist"):
+        return _jsonable(value.tolist())
     if isinstance(value, tuple):
         return [_jsonable(item) for item in value]
     if isinstance(value, list):

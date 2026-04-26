@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -18,6 +19,7 @@ from backend.app.db.models.agent_memory import (
 from backend.app.db.models.knowledge_promotion import KnowledgePromotionCandidate
 from backend.app.services.knowledge_reseed import (
     RECOMMENDED_BUCKETS,
+    _jsonable,
     build_backup_snapshot,
     preview_reseed_counts,
     reseed_workspace_knowledge,
@@ -25,6 +27,15 @@ from backend.app.services.knowledge_reseed import (
 
 
 pytestmark = pytest.mark.asyncio
+
+
+class _ArrayLike:
+    def tolist(self):
+        return [0.1, 0.2]
+
+
+async def test_backup_serializer_handles_vector_values() -> None:
+    assert json.dumps(_jsonable({"embedding": _ArrayLike()}))
 
 
 async def test_reseed_deletes_old_knowledge_and_creates_recommended_buckets(
