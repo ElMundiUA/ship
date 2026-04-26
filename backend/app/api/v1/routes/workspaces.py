@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -92,11 +92,22 @@ async def list_workspaces(
     auth: AuthContext = Depends(get_current_auth),
     session: AsyncSession = Depends(get_session),
 ) -> list[WorkspaceOut]:
+    # JIT personal workspaces (``_ensure_personal_*``) live under an org whose
+    # slug is ``personal-<hex>``. Sort those *after* team/shared orgs. Otherwise
+    # ``order_by(created_at.desc())`` alone surfaces the auto-provisioned
+    # personal shell first — it is always newest — and the console's ``list[0]``
+    # becomes an empty "greenfield" workspace even when the user is also a
+    # member of an onboarded team (e.g. accepted an invite).
+    is_personal_org = Org.slug.like("personal-%")
     stmt = (
         select(Workspace)
         .join(WorkspaceMember, WorkspaceMember.workspace_id == Workspace.id)
+        .join(Org, Org.id == Workspace.org_id)
         .where(WorkspaceMember.user_id == auth.user.id)
-        .order_by(Workspace.created_at.desc())
+        .order_by(
+            case((is_personal_org, 1), else_=0).asc(),
+            Workspace.created_at.desc(),
+        )
     )
     rows = list((await session.execute(stmt)).scalars().all())
     if rows:
