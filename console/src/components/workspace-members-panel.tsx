@@ -10,6 +10,7 @@ import {
   Card,
   CardHeader,
 } from "@/components/ui";
+import { MemberAccessModal } from "@/components/member-access-modal";
 import {
   ApiHttpError,
   ApiUnavailableError,
@@ -20,26 +21,10 @@ import {
   type ApiInvite,
 } from "@/lib/api/client";
 import { consumeInviteTokens } from "@/lib/api/invite-stash";
-import type { ApiMember, ApiMemberRole, ApiWorkspace } from "@/lib/api/types";
+import { MEMBER_ROLES } from "@/lib/member-access";
+import type { ApiMember, ApiWorkspace } from "@/lib/api/types";
 import { getSessionToken } from "@/lib/api/session";
 import { pickWorkspace } from "@/lib/workspace-scope";
-
-const SPECIALIST_LANES: { id: string; label: string }[] = [
-  { id: "ba", label: "BA" },
-  { id: "qa", label: "QA" },
-  { id: "eng", label: "Eng" },
-  { id: "sec", label: "Sec" },
-  { id: "pm", label: "PM" },
-  { id: "dev", label: "Dev" },
-];
-
-const ROLES: readonly ApiMemberRole[] = [
-  "owner",
-  "admin",
-  "maintainer",
-  "member",
-  "viewer",
-];
 
 type Mode =
   | {
@@ -226,14 +211,13 @@ export function WorkspaceMembersPanelContent({
         <CardHeader
           className="px-5 pt-5"
           title="Workspace members"
-          subtitle="RBAC roles plus which specialist Inbox lanes (BA, QA, …) each person can cover."
+          subtitle="Workspace role and which specialist Inbox lanes each person can cover — use Edit access to change."
         />
         <table className="min-w-full text-sm">
           <thead className="bg-white/[0.04] text-[10px] uppercase tracking-widest text-white/45">
             <tr>
               <th className="px-4 py-2 text-left font-semibold">Member</th>
-              <th className="px-4 py-2 text-left font-semibold">Role</th>
-              <th className="px-4 py-2 text-left font-semibold">Can answer</th>
+              <th className="px-4 py-2 text-left font-semibold">Access</th>
               <th className="px-4 py-2 text-left font-semibold">Status</th>
               <th className="px-4 py-2 text-left font-semibold">Added</th>
               <th className="px-4 py-2 text-right font-semibold"></th>
@@ -296,7 +280,7 @@ export function WorkspaceMembersPanelContent({
               suppressHydrationWarning
               className="w-full rounded border border-white/10 bg-white/[0.04] px-2 py-1.5 text-sm text-white outline-none focus:border-aqua/40"
             >
-              {ROLES.filter((r) => r !== "owner").map((r) => (
+              {MEMBER_ROLES.filter((r) => r !== "owner").map((r) => (
                 <option key={r} value={r}>
                   {r}
                 </option>
@@ -324,64 +308,6 @@ export function WorkspaceMembersPanelContent({
   );
 }
 
-function SpecialistLanesForm({
-  member,
-  workspaceId,
-}: {
-  member: ApiMember;
-  workspaceId: string;
-}) {
-  const slugs = member.answer_specialist_slugs ?? [];
-  const all = slugs.includes("*");
-  return (
-    <form
-      action="/api/members/specialists"
-      method="POST"
-      className="max-w-[15rem] space-y-2"
-    >
-      <input type="hidden" name="ws" value={workspaceId} />
-      <input type="hidden" name="member" value={member.id} />
-      {member.role === "owner" ? (
-        <input type="hidden" name="is_owner" value="1" />
-      ) : null}
-      {member.role === "owner" ? (
-        <label className="flex items-center gap-2 text-[11px] text-white/80">
-          <input
-            type="checkbox"
-            name="all_specialist"
-            value="1"
-            defaultChecked={all}
-          />
-          All types
-        </label>
-      ) : null}
-      <div className="flex flex-wrap gap-x-2 gap-y-1">
-        {SPECIALIST_LANES.map(({ id, label }) => (
-          <label
-            key={id}
-            className="flex cursor-pointer items-center gap-1 text-[10px] text-white/60"
-          >
-            <input
-              type="checkbox"
-              name={`sp_${id}`}
-              value="1"
-              defaultChecked={!all && slugs.includes(id)}
-              disabled={all && member.role === "owner"}
-            />
-            {label}
-          </label>
-        ))}
-      </div>
-      <button
-        type="submit"
-        className="rounded-full border border-aqua/30 bg-aqua/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest text-aqua/85 transition hover:bg-aqua/20"
-      >
-        Save
-      </button>
-    </form>
-  );
-}
-
 function MemberRow({
   member,
   workspaceId,
@@ -405,50 +331,7 @@ function MemberRow({
         </div>
       </td>
       <td className="px-4 py-3 align-top">
-        <form
-          action="/api/members/role"
-          method="POST"
-          className="inline-flex items-center"
-        >
-          <input
-            type="hidden"
-            name="ws"
-            value={workspaceId}
-            suppressHydrationWarning
-          />
-          <input
-            type="hidden"
-            name="member"
-            value={member.id}
-            suppressHydrationWarning
-          />
-          <select
-            name="role"
-            defaultValue={member.role}
-            suppressHydrationWarning
-            className="rounded-full border border-white/15 bg-white/[0.05] px-3 py-1 text-xs font-semibold text-white/85 outline-none focus:border-aqua/40"
-          >
-            {ROLES.map((role) => (
-              <option key={role} value={role}>
-                {role}
-              </option>
-            ))}
-          </select>
-          {/*
-            Auto-submit on change keeps the row read-only while still being
-            client-JS-free: the <select> name "role" + the <button> below
-            both post to the same handler.
-          */}
-          <button
-            type="submit"
-            className="ml-2 rounded-full border border-aqua/30 bg-aqua/10 px-2 py-1 text-[10px] font-bold uppercase tracking-widest text-aqua/85 transition hover:bg-aqua/20"
-          >
-            save
-          </button>
-        </form>
-      </td>
-      <td className="px-4 py-3 align-top">
-        <SpecialistLanesForm member={member} workspaceId={workspaceId} />
+        <MemberAccessModal member={member} workspaceId={workspaceId} />
       </td>
       <td className="px-4 py-3 align-top">
         {member.pending ? (
