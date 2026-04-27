@@ -160,31 +160,158 @@ export function TrackerMappingPanel({
           </div>
         )}
 
-        <div className="overflow-hidden rounded-xl border border-white/10">
-          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] border-b border-white/10 bg-white/[0.035] px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-white/40">
-            <div>Ship canonical state</div>
-            <div>Tracker status / label</div>
-          </div>
-          {canonicalStates.map((canonical) => (
-            <div
-              key={canonical}
-              className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-center gap-3 border-b border-white/10 px-3 py-2 last:border-b-0"
-            >
-              <div>
-                <div className="font-mono text-xs text-white/75">{canonical}</div>
-                <div className="mt-0.5 text-[11px] text-white/35">{usageFor(canonical, process)}</div>
-              </div>
-              <input
-                value={activeMapping[canonical] ?? ""}
-                onChange={(e) => patchCanonical(canonical, e.target.value)}
-                placeholder={titleize(canonical)}
-                className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none focus:border-aqua/40"
+        <TrackerMappingGraph
+          process={process}
+          mapping={activeMapping}
+          onPatchCanonical={patchCanonical}
+        />
+      </div>
+    </Card>
+  );
+}
+
+function TrackerMappingGraph({
+  process,
+  mapping,
+  onPatchCanonical,
+}: {
+  process: ApiProcess;
+  mapping: Record<string, string>;
+  onPatchCanonical: (canonical: string, native: string) => void;
+}) {
+  const exceptionStates = collectExceptionStates(process);
+  return (
+    <div className="overflow-hidden rounded-[2rem] border border-white/10 bg-[#050a15] shadow-2xl shadow-black/30">
+      <div className="border-b border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(99,245,255,0.10),transparent_34%),rgba(255,255,255,0.035)] px-4 py-3">
+        <div className="text-sm font-semibold text-white">Mapping graph</div>
+        <p className="mt-1 text-xs text-white/45">
+          Read left to right: Ship canonical states flow through each process step,
+          while each node edits the tracker status or label projected outward.
+        </p>
+      </div>
+
+      <div className="overflow-x-auto p-4">
+        <div className="flex min-w-max items-stretch gap-3">
+          {process.states.map((state, index) => (
+            <div key={state.id} className="flex items-center gap-3">
+              <MappingStateCard
+                state={state}
+                mapping={mapping}
+                onPatchCanonical={onPatchCanonical}
               />
+              {index < process.states.length - 1 ? (
+                <div className="flex w-14 items-center">
+                  <div className="h-px flex-1 bg-aqua/35 shadow-[0_0_18px_rgba(99,245,255,0.35)]" />
+                  <div className="h-2 w-2 rotate-45 border-r border-t border-aqua/60" />
+                </div>
+              ) : null}
             </div>
           ))}
         </div>
       </div>
-    </Card>
+
+      {exceptionStates.length > 0 ? (
+        <div className="border-t border-white/10 bg-black/20 p-4">
+          <div className="mb-3 text-[10px] font-bold uppercase tracking-[0.22em] text-white/35">
+            Shared exits
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {exceptionStates.map((canonical) => (
+              <MappingChip
+                key={canonical}
+                canonical={canonical}
+                mapping={mapping}
+                tone={canonical.includes("blocked") ? "danger" : "warning"}
+                onPatchCanonical={onPatchCanonical}
+              />
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function MappingStateCard({
+  state,
+  mapping,
+  onPatchCanonical,
+}: {
+  state: ApiProcess["states"][number];
+  mapping: Record<string, string>;
+  onPatchCanonical: (canonical: string, native: string) => void;
+}) {
+  const ordered = orderedContractStates(state);
+  return (
+    <section className="w-[280px] rounded-3xl border border-white/10 bg-[linear-gradient(135deg,rgba(255,255,255,0.08),rgba(255,255,255,0.025))] p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-semibold text-white">{state.name}</div>
+          <div className="mt-0.5 truncate text-[11px] text-white/40">
+            {state.specialist_name}
+          </div>
+        </div>
+        <span className="rounded-full border border-aqua/20 bg-aqua/[0.07] px-2 py-1 text-[10px] font-semibold uppercase tracking-widest text-aqua/70">
+          Step
+        </span>
+      </div>
+
+      <div className="mt-4 space-y-2">
+        {ordered.map((item, index) => (
+          <div key={item.canonical} className="flex items-center gap-2">
+            <MappingChip
+              canonical={item.canonical}
+              label={item.label}
+              mapping={mapping}
+              tone={item.tone}
+              onPatchCanonical={onPatchCanonical}
+            />
+            {index < ordered.length - 1 ? (
+              <div className="text-aqua/45">→</div>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function MappingChip({
+  canonical,
+  label,
+  mapping,
+  tone = "normal",
+  onPatchCanonical,
+}: {
+  canonical: string;
+  label?: string;
+  mapping: Record<string, string>;
+  tone?: "normal" | "success" | "warning" | "danger";
+  onPatchCanonical: (canonical: string, native: string) => void;
+}) {
+  const toneClass =
+    tone === "success"
+      ? "border-aqua/25 bg-aqua/[0.08]"
+      : tone === "warning"
+        ? "border-amber-300/25 bg-amber-300/[0.07]"
+        : tone === "danger"
+          ? "border-coral/25 bg-coral/[0.07]"
+          : "border-white/10 bg-black/25";
+  return (
+    <label className={`min-w-0 flex-1 rounded-2xl border p-2 ${toneClass}`}>
+      <span className="block text-[9px] font-bold uppercase tracking-[0.18em] text-white/35">
+        {label ?? "Ship state"}
+      </span>
+      <span className="mt-1 block truncate font-mono text-[11px] text-white/70">
+        {canonical}
+      </span>
+      <input
+        value={mapping[canonical] ?? ""}
+        onChange={(event) => onPatchCanonical(canonical, event.target.value)}
+        placeholder={titleize(canonical)}
+        className="mt-2 w-full rounded-xl border border-white/10 bg-black/30 px-2 py-1.5 text-xs text-white outline-none transition placeholder:text-white/25 focus:border-aqua/40 focus:bg-aqua/[0.04]"
+      />
+    </label>
   );
 }
 
@@ -207,6 +334,49 @@ function collectCanonicalStates(process: ApiProcess) {
   return Array.from(values).sort();
 }
 
+function orderedContractStates(state: ApiProcess["states"][number]) {
+  const contract = state.ticket_contract;
+  if (!contract) return [];
+  return [
+    contract.input_state
+      ? {
+          canonical: contract.input_state,
+          label: "Input",
+          tone: "normal" as const,
+        }
+      : null,
+    contract.claim_state
+      ? {
+          canonical: contract.claim_state,
+          label: "Claim",
+          tone: "warning" as const,
+        }
+      : null,
+    contract.success_state
+      ? {
+          canonical: contract.success_state,
+          label: "Success",
+          tone: "success" as const,
+        }
+      : null,
+  ].filter(
+    (item): item is { canonical: string; label: string; tone: "normal" | "success" | "warning" } =>
+      item != null,
+  );
+}
+
+function collectExceptionStates(process: ApiProcess) {
+  const out = new Set<string>();
+  for (const state of process.states) {
+    const contract = state.ticket_contract;
+    if (!contract) continue;
+    if (contract.blocked_state) out.add(contract.blocked_state);
+    if (contract.needs_info_state) out.add(contract.needs_info_state);
+    if (contract.approval_state) out.add(contract.approval_state);
+  }
+  return Array.from(out).sort();
+}
+
 function normalizedMapping(
   process: ApiProcess,
   canonicalStates: string[],
@@ -220,11 +390,4 @@ function normalizedMapping(
 
 function titleize(value: string) {
   return value.replaceAll("_", " ").replaceAll("-", " ").replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-function usageFor(canonical: string, process: ApiProcess) {
-  const states = process.states
-    .filter((state) => Object.values(state.ticket_contract ?? {}).includes(canonical))
-    .map((state) => state.name);
-  return states.length ? `Used by ${states.join(", ")}` : "Not used by current flow";
 }
