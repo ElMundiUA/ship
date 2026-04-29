@@ -4,7 +4,7 @@ const nouns = [
   {
     title: "Workspace",
     blurb:
-      "The team, repos, policies, and integrations that define where Ship is allowed to observe and assist.",
+      "The owner, repos, policies, and integrations that define where Ship is allowed to observe and assist.",
     href: "/getting-started",
     cta: "Plan the setup",
     accent: "aqua",
@@ -60,9 +60,9 @@ export function OperatorLoopSection() {
           The console is built around ownership, not internal jargon.
         </h2>
         <p className="mt-4 max-w-3xl text-lg text-white/65">
-          Product owners need to know whether the team can safely move, not which internal table wrote the latest row.
-          Ship keeps the visible product loop small: setup the workspace, review the inbox, maintain knowledge, and
-          follow the evidence.
+          Solo founders and product owners need to know whether work can safely move, not which internal table wrote the
+          latest row. Ship keeps the visible loop small: set policies, review the Inbox, maintain knowledge, and follow
+          the evidence.
         </p>
 
         <div className="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
@@ -106,8 +106,8 @@ export function OperatorLoopSection() {
                 <p className="font-mono text-[11px] uppercase tracking-widest text-coral/80">Engineering contract</p>
                 <ul className="mt-2 space-y-1.5 text-sm text-white/65">
                   <li>Versioned prompts and rules</li>
+                  <li>Policies for what agents may do</li>
                   <li>Repo and tracker bindings</li>
-                  <li>Secrets handled by the platform</li>
                   <li>Pull requests with traceable context</li>
                 </ul>
               </div>

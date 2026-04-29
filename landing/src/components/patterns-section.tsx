@@ -9,28 +9,28 @@ export function PatternsSection() {
             <div className="absolute inset-0 bg-gradient-to-br from-aqua/10 via-transparent to-lilac/10" />
             <p className="relative text-xs font-bold uppercase tracking-widest text-white/40">Library</p>
             <p className="relative mt-4 font-display text-2xl font-semibold leading-snug text-white sm:text-3xl">
-              Patterns are reusable procedures
+              Policies and procedures are reviewable
             </p>
             <ul className="relative mt-6 space-y-3 text-sm leading-relaxed text-white/65">
               <li className="flex gap-2">
                 <span className="text-aqua">✦</span>
                 <span>
-                  <strong className="text-white/85">Patterns</strong> — short, reviewable Markdown bodies for PR self-review,
-                  release checks, knowledge refreshes, dependency reviews, and audits.
+                  <strong className="text-white/85">Policies</strong> — short boundaries for allowed repos, review gates,
+                  evidence requirements, and when an owner must decide.
                 </span>
               </li>
               <li className="flex gap-2">
                 <span className="text-aqua">✦</span>
                 <span>
-                  <strong className="text-white/85">Tools</strong> — who integrates where, listed once so security and
-                  platform teams can review without chasing wikis.
+                  <strong className="text-white/85">Procedures</strong> — repeatable review paths for release checks,
+                  knowledge refreshes, dependency reviews, and audits.
                 </span>
               </li>
               <li className="flex gap-2">
                 <span className="text-aqua">✦</span>
                 <span>
-                  <strong className="text-white/85">Collections</strong> — bundles for common product shapes (web app, API
-                  backend, mobile app, monorepo) so a new team inherits opinion without inheriting mystery.
+                  <strong className="text-white/85">Evidence</strong> — every procedure should leave a ticket, PR, check,
+                  comment, or Inbox decision that a non-engineer can inspect.
                 </span>
               </li>
             </ul>
@@ -41,21 +41,18 @@ export function PatternsSection() {
           <div className="order-1 lg:order-2">
             <p className="text-sm font-bold uppercase tracking-widest text-lilac">Reviewable content</p>
             <h2 className="font-display mt-3 text-3xl font-bold leading-tight text-white sm:text-4xl">
-              Procedures your teams can discover, review, and improve
+              Rules a solo founder can explain and a team can audit
             </h2>
             <p className="mt-5 text-lg text-white/70">
-              The goal is legibility: a product owner can understand the procedure while an engineer can pull the same
-              versioned text into local setup or agent work.
+              The goal is legibility: a product owner can understand the boundary before automation starts, and engineers
+              can keep the same rule versioned beside the work.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
               <Link href="/patterns" className="btn-primary inline-flex">
-                Browse patterns
+                Browse policies
               </Link>
-              <Link href="/tools" className="btn-secondary inline-flex">
-                Tools
-              </Link>
-              <Link href="/collections" className="btn-secondary inline-flex">
-                Collections
+              <Link href="/docs/automations" className="btn-secondary inline-flex">
+                Bounded automation
               </Link>
             </div>
           </div>

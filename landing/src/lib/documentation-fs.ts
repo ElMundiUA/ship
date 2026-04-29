@@ -35,7 +35,7 @@ export function relPathToSlug(rel: string): string[] {
 
 function shouldSkip(relPath: string): boolean {
   const n = relPath.replace(/\\/g, "/");
-  /* getting-started has its own static React route with the AgentSetupForm wizard. */
+  /* getting-started has its own static React route for owner workspace setup. */
   if (n.startsWith("getting-started/")) return true;
   /* Internal planning notes are source material for maintainers, not public docs. */
   if (n.startsWith("internal/")) return true;

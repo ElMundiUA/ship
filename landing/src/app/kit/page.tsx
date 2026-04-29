@@ -4,9 +4,9 @@ import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 
 export const metadata: Metadata = {
-  title: "The Ship kit — patterns, collections, tools",
+  title: "Ship product surfaces — workspace, policies, knowledge, evidence",
   description:
-    "One hub for the versioned procedures, bundles, and integrations Ship uses to keep agent-assisted delivery reviewable.",
+    "One hub for the owner-facing surfaces Ship uses to keep AI-assisted delivery bounded, explainable, and reviewable.",
 };
 
 type Tile = {
@@ -26,31 +26,40 @@ type Tile = {
 
 const TILES: Tile[] = [
   {
-    href: "/patterns",
-    kicker: "Procedures",
-    title: "Patterns",
-    body: "Versioned markdown procedures for PR self-review, release checks, knowledge refreshes, audits, and other repeatable work.",
+    href: "/getting-started",
+    kicker: "Control",
+    title: "Workspace",
+    body: "Connect the product repo, tracker, owner, members, and integrations before automation starts moving work.",
     accentText: "text-aqua",
     accentBorderHover: "hover:border-aqua/40",
     accentDot: "bg-aqua",
   },
   {
-    href: "/collections",
-    kicker: "Starter bundles",
-    title: "Collections",
-    body: "Curated stacks for common product shapes — presets like web-app, api-backend, mobile-app — plus the per-agent rule sets shipctl installs at the right paths on init.",
+    href: "/patterns",
+    kicker: "Boundaries",
+    title: "Policies",
+    body: "Standing rules for allowed actions, review gates, required evidence, and the moments where a human must decide.",
     accentText: "text-sun",
     accentBorderHover: "hover:border-sun/40",
     accentDot: "bg-sun",
   },
   {
-    href: "/tools",
-    kicker: "Integrations",
-    title: "Tools",
-    body: "Tracker, CI, language, and agent adapters — declarative, versioned, security-reviewable. Spell out who plugs into what so platform teams can review once and forget.",
+    href: "/docs/knowledge-buckets",
+    kicker: "Context",
+    title: "Knowledge",
+    body: "Repo facts, product constraints, customer context, and review notes agents can use without stale chat archaeology.",
     accentText: "text-coral",
     accentBorderHover: "hover:border-coral/40",
     accentDot: "bg-coral",
+  },
+  {
+    href: "/docs/operating",
+    kicker: "Proof",
+    title: "Evidence",
+    body: "Tickets, pull requests, checks, comments, and Inbox decisions connected into a story a buyer or reviewer can follow.",
+    accentText: "text-lilac",
+    accentBorderHover: "hover:border-lilac/40",
+    accentDot: "bg-lilac",
   },
 ];
 
@@ -64,21 +73,21 @@ export default function KitPage() {
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_90%_60%_at_50%_-10%,rgba(46,230,214,0.18),transparent_55%)]" />
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_50%_40%_at_100%_20%,rgba(179,136,255,0.12),transparent_50%)]" />
           <div className="relative mx-auto max-w-5xl px-4 sm:px-6">
-            <p className="text-sm font-bold uppercase tracking-widest text-aqua">The kit</p>
+            <p className="text-sm font-bold uppercase tracking-widest text-aqua">Product surfaces</p>
             <h1 className="font-display mt-4 text-4xl font-bold leading-[1.05] tracking-tight text-white sm:text-5xl lg:text-6xl">
-              Everything inside the box —{" "}
+              The owner workspace —{" "}
               <span className="bg-gradient-to-r from-aqua via-lilac to-coral bg-clip-text text-transparent">
-                browseable
+                bounded
               </span>{" "}
-              and versioned.
+              before agents move.
             </h1>
             <p className="mt-6 max-w-2xl text-lg text-white/70">
-              Ship distributes reviewable procedures, bundles, and integrations. They share one repository and manifest
-              so product language, developer setup, and agent instructions cannot silently diverge.
+              Ship now starts from the product owner view: workspace, policies, knowledge, and evidence. Engineers still
+              get reviewable contracts underneath, but the visible product is built for solo founders and owners first.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
               <Link href="#kinds" className="btn-primary inline-flex">
-                Browse the kit
+                Browse the surfaces
               </Link>
               <Link href="/docs/concepts" className="btn-secondary inline-flex">
                 Product concepts →
@@ -87,13 +96,13 @@ export default function KitPage() {
           </div>
         </section>
 
-        {/* Four kinds */}
+        {/* Four surfaces */}
         <section id="kinds" className="py-16 sm:py-20">
           <div className="mx-auto max-w-6xl px-4 sm:px-6">
             <div className="mb-10 flex items-baseline justify-between">
-              <h2 className="font-display text-2xl font-bold text-white sm:text-3xl">The kit surfaces</h2>
+              <h2 className="font-display text-2xl font-bold text-white sm:text-3xl">The workspace surfaces</h2>
               <span className="hidden text-xs font-semibold uppercase tracking-[0.2em] text-white/35 sm:inline">
-                Browseable on this site · fetchable for developer setup
+                Owner-readable · engineer-auditable
               </span>
             </div>
             <div className="grid gap-5 lg:grid-cols-2">
@@ -130,34 +139,34 @@ export default function KitPage() {
           </div>
         </section>
 
-        {/* How to consume */}
+        {/* How to operate */}
         <section className="border-t border-white/10 bg-black/30 py-16 sm:py-20">
           <div className="mx-auto max-w-6xl px-4 sm:px-6">
-            <p className="text-xs font-bold uppercase tracking-[0.22em] text-white/45">One reader for every kind</p>
+            <p className="text-xs font-bold uppercase tracking-[0.22em] text-white/45">Two words on policies</p>
             <h2 className="font-display mt-2 text-2xl font-bold text-white sm:text-3xl">
-              Developer tooling reads the same catalog the site shows.
+              Policies are the guardrails, not the bureaucracy.
             </h2>
             <p className="mt-4 max-w-2xl text-base text-white/65">
-              The catalog you browse on this site is the same manifest the CLI reads. Engineers use it to prove which
-              procedure, rule, or integration a repo consumed.
+              A policy says what an agent may do, what evidence it must leave, and when it must stop for a human. That is
+              how Ship keeps founder speed without turning the repo into an unsupervised experiment.
             </p>
             <div className="mt-10 grid gap-4 sm:grid-cols-2">
               {[
                 {
-                  cmd: "shipctl pattern list",
-                  body: "Browse the patterns catalog from the terminal. Pair with shipctl search for fuzzy matching.",
+                  cmd: "Allowed scope",
+                  body: "Which repos, tracker states, files, and automations are in bounds for this workspace.",
                 },
                 {
-                  cmd: "shipctl pattern show <id>",
-                  body: "Print one pattern body to stdout. Fetch the rendered file with shipctl pattern fetch <id>.",
+                  cmd: "Review gates",
+                  body: "Which changes require owner approval, code review, test evidence, or a release note before they move.",
                 },
                 {
-                  cmd: "shipctl collection list",
-                  body: "List presets, addendums, and per-agent rule sets used by developer setup.",
+                  cmd: "Evidence rules",
+                  body: "Which ticket, PR, check, comment, or Inbox decision must exist before work can be considered done.",
                 },
                 {
-                  cmd: "shipctl tool show <id>",
-                  body: "Inspect an integration adapter — tracker, CI, language, or agent — before wiring it into your config.",
+                  cmd: "Escalation",
+                  body: "The moments where automation stops and asks the founder, product owner, or reviewer to decide.",
                 },
               ].map((row) => (
                 <div
@@ -170,36 +179,32 @@ export default function KitPage() {
               ))}
             </div>
             <div className="mt-10 flex flex-wrap gap-3">
-              <Link href="/cli" className="btn-primary inline-flex">
-                Full CLI reference
-              </Link>
               <Link href="/getting-started" className="btn-secondary inline-flex">
-                Product setup →
+                Workspace setup →
               </Link>
-              <Link href="/docs/authoring" className="btn-secondary inline-flex">
-                Author your own artifact →
+              <Link href="/patterns" className="btn-primary inline-flex">
+                Policy library →
               </Link>
             </div>
           </div>
         </section>
 
-        {/* Where the kit fits in the rest of the site */}
+        {/* Where the product surfaces fit in the rest of the site */}
         <section className="py-16 sm:py-20">
           <div className="mx-auto max-w-6xl px-4 sm:px-6">
             <p className="text-xs font-bold uppercase tracking-[0.22em] text-white/45">Looking for something else?</p>
-            <h2 className="font-display mt-2 text-2xl font-bold text-white sm:text-3xl">Not in the kit</h2>
+            <h2 className="font-display mt-2 text-2xl font-bold text-white sm:text-3xl">Related surfaces</h2>
             <p className="mt-3 max-w-2xl text-sm text-white/65">
-              The kit is the catalog. The narrative, product docs, and field proof live elsewhere on this
-              site so the four pages above stay focused on browsing.
+              The product surfaces above are the public entry point. Longer rationale, docs, and field proof live
+              elsewhere on this site.
             </p>
             <ul className="mt-6 grid gap-2 text-sm text-white/75 sm:grid-cols-2">
               {[
                 { href: "/use-cases", label: "Reference deployments & customer stories" },
                 { href: "/docs", label: "Product docs and technical reference" },
-                { href: "/cli", label: "CLI reference for developers" },
                 { href: "/book", label: "The book — long-form rationale" },
-                { href: "/getting-started", label: "Interactive setup wizard" },
-                { href: "/docs/authoring", label: "How to author a new artifact" },
+                { href: "/getting-started", label: "Workspace setup guide" },
+                { href: "/docs/automations", label: "Bounded automations" },
               ].map((row) => (
                 <li key={row.href}>
                   <Link

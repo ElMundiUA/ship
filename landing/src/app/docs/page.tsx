@@ -5,7 +5,7 @@ import { ACCENT_HOVER_BORDER, ACCENT_TEXT, DOCS_NAV } from "@/lib/docs-nav";
 export const metadata: Metadata = {
   title: "Ship docs — product workspace guide",
   description:
-    "Docs for setting up and operating Ship workspaces: repos, trackers, knowledge, Inbox, automations, evidence, and CLI reference.",
+    "Docs for setting up and operating Ship workspaces: repos, trackers, policies, knowledge, Inbox, automations, and evidence.",
 };
 
 export default function DocsHomePage() {
@@ -22,8 +22,8 @@ export default function DocsHomePage() {
           {" "}readable.
         </h1>
         <p className="docs-hero-lede">
-          Start with a workspace, connected repos, tracker binding, knowledge, and an Inbox for decisions. The technical
-          reference is still here for developers and platform teams, but the first path is about ownership and evidence.
+          Start with a workspace, connected repos, tracker binding, policies, knowledge, and an Inbox for decisions. The
+          first path is about founder ownership, product decisions, and evidence.
         </p>
         <div className="mt-7 flex flex-wrap gap-3">
           <Link href="/getting-started" className="btn-primary inline-flex">
@@ -31,9 +31,6 @@ export default function DocsHomePage() {
           </Link>
           <Link href="/docs/concepts" className="btn-secondary inline-flex">
             Browse product concepts
-          </Link>
-          <Link href="/cli" className="btn-secondary inline-flex">
-            CLI reference →
           </Link>
         </div>
       </section>
@@ -87,13 +84,12 @@ export default function DocsHomePage() {
           Not in the Docs
         </h2>
         <p className="mt-3 max-w-2xl text-sm text-white/65">
-          Some surfaces live outside this manual so product owners, platform teams,
-          and engineers can enter at the right altitude.
+          Some surfaces live outside this manual so founders, product owners, platform teams, and engineers can enter at
+          the right altitude.
         </p>
         <ul className="mt-6 grid gap-2 text-sm text-white/75 sm:grid-cols-2">
           {[
-            { href: "/kit", label: "The kit — patterns, collections, tools" },
-            { href: "/cli", label: "shipctl CLI reference" },
+            { href: "/kit", label: "Product surfaces — workspace, policies, knowledge, evidence" },
             { href: "/use-cases", label: "Customer stories & reference deployments" },
             { href: "/book", label: "Long-form rationale (the book)" },
           ].map((row) => (

@@ -1,19 +1,18 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { AgentSetupForm } from "@/components/agent-setup-form";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 
 export const metadata: Metadata = {
   title: "Getting started — Ship",
   description:
-    "Start Ship from the product workspace: connect a repo, bind the tracker, seed knowledge, and keep decisions tied to evidence.",
+    "Start Ship from the founder workspace: connect a repo, bind the tracker, set policies, seed knowledge, and keep decisions tied to evidence.",
 };
 
 const SETUP_STEPS: { title: string; body: string; proof: string }[] = [
   {
     title: "Create the workspace",
-    body: "Name the team or product area that owns the outcome. Invite the people who make product decisions, review changes, and own production risk.",
+    body: "Name the company, product, or product area that owns the outcome. Invite the founder, product owner, reviewers, and anyone who owns production risk.",
     proof: "A workspace with members and admin policy.",
   },
   {
@@ -27,9 +26,9 @@ const SETUP_STEPS: { title: string; body: string; proof: string }[] = [
     proof: "Work in progress and blockers point back to tickets.",
   },
   {
-    title: "Seed knowledge and secrets",
-    body: "Add repo facts, product constraints, standing rules, and agent keys through the console so prompts do not carry secrets or stale context.",
-    proof: "Knowledge pages, policy, and repo secrets are visible to admins.",
+    title: "Set policies and seed knowledge",
+    body: "Add repo facts, product constraints, standing rules, and review policy through the console so agents have boundaries before they act.",
+    proof: "Knowledge pages and policies are visible to admins.",
   },
   {
     title: "Review the dashboard and Inbox",
@@ -60,8 +59,8 @@ const STACK_EXPECTATIONS: { label: string; body: string }[] = [
     body: "Agent and repo credentials live in the platform or host secret store, never in instructions copied into chat.",
   },
   {
-    label: "Versioned instructions",
-    body: "Prompts, rules, and setup can be reviewed, changed, and rolled back like code.",
+    label: "Policies before automation",
+    body: "Allowed actions, review gates, required evidence, and escalation points are explicit before agents move work.",
   },
 ];
 
@@ -87,11 +86,6 @@ const NEXT_LINKS: { href: string; title: string; body: string }[] = [
     body: "How to review blockers, shipped work, decisions, and evidence after setup.",
   },
   {
-    href: "/cli",
-    title: "CLI reference",
-    body: "Developer setup, local verification, sync, config, and catalog commands.",
-  },
-  {
     href: "/use-cases",
     title: "Use cases",
     body: "How different owners use Ship without changing the core method.",
@@ -104,12 +98,12 @@ export default function GettingStartedPage() {
       <SiteHeader />
       <main className="mx-auto max-w-5xl px-4 py-10 sm:px-6 sm:py-12 lg:py-16">
         <header className="docs-hero">
-          <p className="docs-hero-kicker">Product setup</p>
-          <h1 className="docs-hero-title">Start with the workspace, not the terminal</h1>
+          <p className="docs-hero-kicker">Workspace setup</p>
+          <h1 className="docs-hero-title">Start with the owner workspace</h1>
           <p className="docs-hero-lede">
-            Ship works best when the product owner can see the same delivery story engineers can audit: which repo is
-            connected, which tracker item is moving, what needs a decision, and where the evidence lives. The CLI still
-            exists for local setup, but the first mile is a product workspace.
+            Ship works best when the solo founder or product owner can see the same delivery story engineers can audit:
+            which repo is connected, which tracker item is moving, what policy applies, what needs a decision, and where
+            the evidence lives.
           </p>
         </header>
 
@@ -117,7 +111,7 @@ export default function GettingStartedPage() {
           <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
             <div>
               <h2 className="font-display text-2xl font-bold text-white sm:text-3xl">
-                1 · Wire the product workspace
+            1 · Wire the owner workspace
               </h2>
               <p className="mt-3 max-w-3xl text-base text-white/65 sm:text-lg">
                 Use this sequence whether you are testing one repo or bringing a team into Ship. Each step should leave a
@@ -175,20 +169,7 @@ export default function GettingStartedPage() {
         </section>
 
         <section className="mt-16">
-          <h2 className="font-display text-2xl font-bold text-white sm:text-3xl">
-            3 · Developer setup, when you need local control
-          </h2>
-          <p className="mt-3 max-w-3xl text-base text-white/65 sm:text-lg">
-            Platform and engineering teams can generate local commands for rule files, config checks, and reproducible
-            agent setup. Keep this path for implementation work; do not make product owners start here.
-          </p>
-          <div className="mt-8">
-            <AgentSetupForm />
-          </div>
-        </section>
-
-        <section className="mt-16">
-          <h2 className="font-display text-2xl font-bold text-white sm:text-3xl">4 · Where to go next</h2>
+          <h2 className="font-display text-2xl font-bold text-white sm:text-3xl">3 · Where to go next</h2>
           <div className="mt-8 grid gap-4 sm:grid-cols-2">
             {NEXT_LINKS.map((link) => (
               <Link

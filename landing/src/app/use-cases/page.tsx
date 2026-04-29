@@ -6,7 +6,7 @@ import { SiteHeader } from "@/components/site-header";
 export const metadata: Metadata = {
   title: "Customer stories — Ship",
   description:
-    "Product and engineering teams use Ship to adopt AI-assisted delivery without losing ownership, evidence, or review discipline.",
+    "Solo founders, product owners, and engineering teams use Ship to adopt AI-assisted delivery without losing ownership, policies, evidence, or review discipline.",
 };
 
 type Story = {
@@ -34,20 +34,6 @@ const STORIES: Story[] = [
     ],
     stack: ["Linear", "GitHub Actions", "Cursor Cloud Agent", "Playwright", "Sentry"],
   },
-  {
-    slug: "ship",
-    industry: "Developer tools · Open methodology",
-    org: "Ship (this kit)",
-    headline: "Shipped the methodology like enterprise software so procurement stops blocking pilots",
-    outcome:
-      "Packaged forty chapters of operating doctrine, a versioned artifact catalog (patterns / tools / collections), a CLI, and a small agent API behind one Apache-2.0 surface — so security review is a license check, not a vendor questionnaire.",
-    bullets: [
-      "Apache-2.0 + public repo removes the legal-review gate before a pilot can start",
-      "Docs, catalog, and CLI all read the same source of truth — no drift between sales deck and runbook",
-      "Adopters compose what they need: take a single pattern, or wire the full reference stack",
-    ],
-    stack: ["Next.js", "FastAPI", "shipctl", "MDX", "Apache-2.0"],
-  },
 ];
 
 export default function UseCasesIndexPage() {
@@ -60,7 +46,7 @@ export default function UseCasesIndexPage() {
           <div className="relative mx-auto max-w-4xl px-4 text-center sm:px-6">
             <p className="text-xs font-bold uppercase tracking-[0.2em] text-aqua/90">Customer stories</p>
             <h1 className="font-display mt-4 text-4xl font-bold text-white sm:text-5xl">
-              AI-assisted delivery product owners can explain after the demo
+              AI-assisted delivery founders and product owners can explain after the demo
             </h1>
             <p className="mx-auto mt-6 max-w-2xl text-lg text-white/70">
               The reference deployments below share the same discipline: humans own intent, automations stay bounded,
@@ -163,8 +149,8 @@ export default function UseCasesIndexPage() {
               Run the same loop in your repo this week
             </h2>
             <p className="mt-4 text-base leading-relaxed text-white/70">
-              The kit is open source and the console is built around the same method. Start with a workspace, connect a
-              repo and tracker, seed knowledge, then use the CLI only where developer setup needs local control.
+              The workspace is open source and built around the same method. Start with a workspace, connect a repo and
+              tracker, set policies, seed knowledge, and keep evidence attached to every automated step.
             </p>
             <div className="mt-8 flex flex-wrap justify-center gap-3">
               <Link href="/getting-started" className="btn-primary inline-flex">
@@ -174,7 +160,7 @@ export default function UseCasesIndexPage() {
                 Read the book
               </Link>
               <Link href="/patterns" className="btn-secondary inline-flex">
-                Browse patterns
+                Browse policies
               </Link>
             </div>
           </div>
@@ -189,7 +175,7 @@ const WHY: { kicker: string; title: string; body: string }[] = [
   {
     kicker: "Throughput",
     title: "Useful speed without mystery work",
-    body: "Agents can take repeatable setup and review work, but humans keep the product decision. The win is work that moves with ownership and evidence, not a bigger pile of unexplained activity.",
+    body: "Agents can take repeatable review work, but humans keep the product decision. The win is work that moves with ownership, policy, and evidence, not a bigger pile of unexplained activity.",
   },
   {
     kicker: "Governance",
@@ -199,6 +185,6 @@ const WHY: { kicker: string; title: string; body: string }[] = [
   {
     kicker: "Risk",
     title: "Boring architecture, no proprietary control plane",
-    body: "Versioned instructions, portable integrations, and reviewable repo changes keep vendors replaceable. The method survives a tool migration because the story is yours.",
+    body: "Versioned policies, portable integrations, and reviewable repo changes keep vendors replaceable. The method survives a tool migration because the story is yours.",
   },
 ];
