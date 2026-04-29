@@ -6,7 +6,6 @@ site/
 node_modules/
 landing/.next/
 landing/.playwright-cli/
-landing/content/book.md
 landing/public/.book.tmp.html
 landing/public/.book.tmp.html.md
 landing/tsconfig.tsbuildinfo
