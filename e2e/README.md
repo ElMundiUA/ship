@@ -13,7 +13,7 @@ End-to-end checks for the **operator console** and a **sandbox GitHub repo** aft
 cd e2e && npm run test:deployed
 ```
 
-**GitHub Actions:** `.github/workflows/e2e-console.yml` — секреты `E2E_CONSOLE_BASE_URL`, опционально `E2E_SHIP_API_BASE`, `E2E_SHIP_API_TOKEN`, `E2E_PLAYWRIGHT_STORAGE_JSON` (сырой JSON Playwright storage), `E2E_SANDBOX_REPO`, `E2E_GITHUB_TOKEN`, Mailosaur и sandbox-секреты интеграций из раздела ниже.
+**CI в монорепо:** воркфлоу Playwright в `.github/workflows/` нет — прогон только локально/вручную по шагам выше (переменные те же: `E2E_CONSOLE_BASE_URL`, `E2E_SHIP_*`, storage, sandbox, Mailosaur и т.д.).
 
 ## Implementation plan (phases)
 
@@ -286,6 +286,4 @@ installations. Keep this flag for dedicated e2e workspaces only.
 
 ## CI
 
-Workflow `.github/workflows/e2e-console.yml` runs **public** tests against `E2E_CONSOLE_BASE_URL` (required). Scheduled runs enable `run_full_journey`, `run_live_full_journey`, `run_mailosaur`, and `run_external_integrations`; missing provider secrets turn into targeted skips. Manual `workflow_dispatch` can toggle `run_full_journey`, `run_live_full_journey`, `run_mailosaur`, `run_external_integrations`, `run_github_app_install`, `reset_sandbox`, and `reset_external_integrations`.
-
-Core secrets: `E2E_PLAYWRIGHT_STORAGE_JSON`, `E2E_SHIP_API_*`, `E2E_SANDBOX_REPO`, `E2E_GITHUB_TOKEN`, optional `E2E_PRESET`, `E2E_GITHUB_INSTALL_ACCOUNT`. Live provider secrets are listed in phase I above.
+В репозитории нет GitHub Actions workflow для e2e. Запускай локально: `cd e2e && npm test` / `npm run test:deployed` с `.env` по примерам выше. Секреты те же (`E2E_CONSOLE_BASE_URL`, `E2E_PLAYWRIGHT_STORAGE_JSON` или `E2E_STORAGE_STATE`, `E2E_SHIP_API_*`, sandbox, интеграции — см. фазы выше).

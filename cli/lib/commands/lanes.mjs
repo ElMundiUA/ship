@@ -1,14 +1,14 @@
 /**
  * `shipctl lanes` — generate and manage the thin GitHub Actions caller
- * workflows that delegate to the reusable `run-agent.yml` (RFC-0007 Phase 3).
+ * workflows that delegate to a **vendored** reusable `run-agent.yml` in the
+ * same repository (RFC-0007 Phase 3).
  *
  * Each lane in `.ship/config.yml` (v2) gets one file at
  *   .github/workflows/ship-<lane_id>.yml
- * whose body is nothing but the `on:` triggers (derived from the lane
- * kind) and a single `uses: ElMundiUA/ship/.github/workflows/run-agent.yml@<ref>`
- * call. Any customisation — flags, payload shape, callback URL wiring — is
- * centralised in the reusable workflow so upgrading customer fleets is a
- * single ref bump.
+ * whose body is the `on:` triggers (derived from the lane kind) and
+ *   `uses: ./.github/workflows/run-agent.yml`
+ * `shipctl lanes install` also writes `.github/workflows/run-agent.yml`
+ * from the template bundled inside `@elmundi/ship-cli`.
  *
  * Subcommands:
  *   install   — render wrappers for every declared lane (or just --only X).
@@ -21,6 +21,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import YAML from "yaml";
 
 import { findShipRoot, readConfig } from "../config/io.mjs";
@@ -28,7 +29,6 @@ import {
   validateConfig,
   CONFIG_SCHEMA_VERSION,
   lanePatterns,
-  lanePrimaryPattern,
   laneFanout,
 } from "../config/schema.mjs";
 
@@ -42,9 +42,16 @@ const BANNER_HEADER = `${BANNER_MARKER}
 # Regenerate via: shipctl lanes install
 # Hand edits OUTSIDE the \`ship-cli:\` markers will NOT be overwritten.`;
 
-const DEFAULT_REUSABLE_OWNER = "ElMundiUA";
-const DEFAULT_REUSABLE_REPO = "ship";
-const DEFAULT_REUSABLE_PATH = ".github/workflows/run-agent.yml";
+/** Same-repo reusable workflow path (GitHub Actions). */
+const LOCAL_REUSABLE_USES = "./.github/workflows/run-agent.yml";
+
+const RUN_AGENT_MARKER = "# ship-cli: run-agent v1";
+
+function readRunAgentTemplate() {
+  const dir = path.dirname(fileURLToPath(import.meta.url));
+  const vendor = path.join(dir, "..", "vendor", "run-agent.workflow.yml");
+  return fs.readFileSync(vendor, "utf8");
+}
 
 function printHelp() {
   console.log(`shipctl lanes — manage GitHub Actions caller workflows for the
@@ -62,11 +69,8 @@ USAGE
 
 FLAGS (install)
   --only <ids>           Comma-separated lane ids to render (default: all).
-  --ref <git-ref>        Git ref of ElMundiUA/ship to pin the reusable workflow
-                         to (default: the shipctl_min version from config.yml,
-                         prefixed with 'v' — e.g. v0.12.0).
-  --owner <gh-owner>     GitHub owner of the ship repo (default: ElMundiUA).
-  --repo <name>          GitHub repo name (default: ship).
+  --ref, --owner, --repo Ignored (legacy); reusable workflow is always
+                         ${LOCAL_REUSABLE_USES} in the caller repo.
   --shipctl-version <v>  Pin the @elmundi/ship-cli version the reusable
                          workflow installs on the runner (default: latest).
   --force                Overwrite wrappers that exist but were not generated
@@ -97,6 +101,45 @@ export async function lanesCommand(ctx, rest) {
 
 /* ─────────────────────────── install ─────────────────────────── */
 
+/**
+ * Copy vendored `run-agent.workflow.yml` into `.github/workflows/run-agent.yml`.
+ */
+function syncRunAgentTemplate({ runAgentFile, runAgentRel, dryRun, force, installed, skipped }) {
+  let template;
+  try {
+    template = readRunAgentTemplate();
+  } catch (err) {
+    throw new Error(
+      `cannot read bundled run-agent template: ${err instanceof Error ? err.message : err}`,
+    );
+  }
+  const existed = fs.existsSync(runAgentFile);
+  if (existed) {
+    const cur = fs.readFileSync(runAgentFile, "utf8");
+    if (!cur.includes(RUN_AGENT_MARKER) && !force) {
+      skipped.push({ path: runAgentRel, reason: "run-agent-exists-without-banner" });
+      return;
+    }
+    if (cur === template) {
+      skipped.push({ path: runAgentRel, reason: "run-agent-up-to-date" });
+      return;
+    }
+  }
+  if (dryRun) {
+    installed.push({
+      path: runAgentRel,
+      action: existed ? "would-update-run-agent" : "would-write-run-agent",
+    });
+    return;
+  }
+  fs.mkdirSync(path.dirname(runAgentFile), { recursive: true });
+  fs.writeFileSync(runAgentFile, template, "utf8");
+  installed.push({
+    path: runAgentRel,
+    action: existed ? "updated-run-agent" : "wrote-run-agent",
+  });
+}
+
 async function installCmd(ctx, rest) {
   const args = parseInstallArgs(rest);
   args.dryRun = args.dryRun || Boolean(ctx.dryRun);
@@ -112,19 +155,25 @@ async function installCmd(ctx, rest) {
     );
   }
 
-  const ref = args.ref || deriveDefaultRef(config);
-  const reusable = formatReusableRef({
-    owner: args.owner || DEFAULT_REUSABLE_OWNER,
-    repo: args.repo || DEFAULT_REUSABLE_REPO,
-    ref,
-  });
-
+  const reusable = LOCAL_REUSABLE_USES;
   const targetDir = path.join(shipRoot, WORKFLOW_DIR);
-  if (!args.dryRun) fs.mkdirSync(targetDir, { recursive: true });
+  const runAgentFile = path.join(targetDir, "run-agent.yml");
+  const runAgentRel = path.relative(shipRoot, runAgentFile) || runAgentFile;
 
   const installed = [];
   const skipped = [];
   const errors = [];
+
+  syncRunAgentTemplate({
+    runAgentFile,
+    runAgentRel,
+    dryRun: args.dryRun,
+    force: args.force,
+    installed,
+    skipped,
+  });
+
+  if (!args.dryRun) fs.mkdirSync(targetDir, { recursive: true });
 
   for (const [laneId, lane] of wanted) {
     const file = path.join(targetDir, `ship-${laneId}.yml`);
@@ -169,7 +218,7 @@ async function installCmd(ctx, rest) {
   };
 
   emitSummary(ctx, args, payload, () => {
-    console.log(`Ship lanes → ${reusable}`);
+    console.log(`Ship lanes → reusable ${reusable}`);
     for (const row of installed) console.log(`  ${row.action}: ${row.path}`);
     for (const row of skipped) console.log(`  skipped (${row.reason}): ${row.path}`);
     for (const row of errors) console.log(`  ERROR: ${row.lane}: ${row.error}`);
@@ -308,16 +357,6 @@ function selectLanes(config, onlyCsv) {
   if (!onlyCsv || onlyCsv.length === 0) return all;
   const wanted = new Set(onlyCsv);
   return all.filter(([id]) => wanted.has(id));
-}
-
-function deriveDefaultRef(config) {
-  const min = config.shipctl_min;
-  if (typeof min === "string" && /^\d+\.\d+\.\d+/.test(min)) return `v${min}`;
-  return "main";
-}
-
-function formatReusableRef({ owner, repo, ref }) {
-  return `${owner}/${repo}/${DEFAULT_REUSABLE_PATH}@${ref}`;
 }
 
 /**

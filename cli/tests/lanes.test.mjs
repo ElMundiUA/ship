@@ -77,7 +77,7 @@ test("renderWrapper emits valid YAML for kind=once", () => {
   const out = renderWrapper({
     laneId: "seed_knowledge_starters",
     lane: { kind: "once", pattern: "onboard-seed-knowledge" },
-    reusable: "ElMundiUA/ship/.github/workflows/run-agent.yml@v0.12.0",
+    reusable: "./.github/workflows/run-agent.yml",
     shipctlVersion: "latest",
   });
   assert.equal(out.error, undefined);
@@ -85,7 +85,7 @@ test("renderWrapper emits valid YAML for kind=once", () => {
   const parsed = YAML.parse(stripBanner(out.content));
   assert.equal(parsed.name, "Ship · seed_knowledge_starters");
   assert.ok(parsed.on.workflow_dispatch, "once lane exposes workflow_dispatch");
-  assert.equal(parsed.jobs.run.uses, "ElMundiUA/ship/.github/workflows/run-agent.yml@v0.12.0");
+  assert.equal(parsed.jobs.run.uses, "./.github/workflows/run-agent.yml");
   assert.equal(parsed.jobs.run.with.lane, "seed_knowledge_starters");
   assert.equal(parsed.jobs.run.with.shipctl_version, "latest");
   assert.equal(parsed.jobs.run.secrets, "inherit");
@@ -95,7 +95,7 @@ test("renderWrapper emits schedule trigger for kind=schedule", () => {
   const out = renderWrapper({
     laneId: "daily_standup",
     lane: { kind: "schedule", cron: "0 9 * * 1-5", pattern: "flow-daily-retro" },
-    reusable: "owner/repo/.github/workflows/run-agent.yml@main",
+    reusable: "./.github/workflows/run-agent.yml",
     shipctlVersion: "0.12.0",
   });
   const parsed = YAML.parse(stripBanner(out.content));
@@ -112,7 +112,7 @@ test("renderWrapper emits event trigger for kind=event and honours permissions",
       pattern: "p",
       permissions: { contents: "read", "pull-requests": "write" },
     },
-    reusable: "owner/repo/.github/workflows/run-agent.yml@v1",
+    reusable: "./.github/workflows/run-agent.yml",
     shipctlVersion: "latest",
   });
   const parsed = YAML.parse(stripBanner(out.content));
@@ -134,13 +134,16 @@ test("shipctl lanes install creates one wrapper per declared lane", () => {
   assert.equal(res.status, 0, `stderr: ${res.stderr}`);
   const summary = JSON.parse(res.stdout);
   assert.equal(summary.ok, true);
-  assert.equal(summary.installed.length, 3, "3 lanes → 3 wrappers");
+  assert.equal(summary.installed.length, 4, "run-agent + 3 lane wrappers");
+  const byPath = Object.fromEntries(summary.installed.map((r) => [r.path, r]));
+  assert.ok(byPath[".github/workflows/run-agent.yml"], "vendored reusable");
   for (const row of summary.installed) {
+    if (row.path.endsWith("run-agent.yml")) continue;
     const abs = path.join(dir, row.path);
     assert.ok(fs.existsSync(abs), `wrote ${row.path}`);
     const parsed = YAML.parse(stripBanner(fs.readFileSync(abs, "utf8")));
     assert.equal(parsed.jobs.run.with.lane, row.lane);
-    assert.match(parsed.jobs.run.uses, /ElMundiUA\/ship\/\.github\/workflows\/run-agent\.yml@v0\.12\.0/);
+    assert.equal(parsed.jobs.run.uses, "./.github/workflows/run-agent.yml");
   }
 });
 
@@ -151,8 +154,8 @@ test("shipctl lanes install is idempotent (re-run reports up-to-date)", () => {
   assert.equal(second.status, 0);
   const summary = JSON.parse(second.stdout);
   assert.equal(summary.installed.length, 0);
-  assert.equal(summary.skipped.length, 3);
-  assert.ok(summary.skipped.every((r) => r.reason === "up-to-date"));
+  assert.equal(summary.skipped.length, 4);
+  assert.ok(summary.skipped.every((r) => /up-to-date|run-agent-up-to-date/.test(r.reason)));
 });
 
 test("shipctl lanes install --only filters lane ids", () => {
@@ -166,8 +169,10 @@ test("shipctl lanes install --only filters lane ids", () => {
   ]);
   assert.equal(res.status, 0);
   const summary = JSON.parse(res.stdout);
-  assert.equal(summary.installed.length, 2);
-  const written = new Set(summary.installed.map((r) => r.lane));
+  assert.equal(summary.installed.length, 3, "run-agent + 2 lane wrappers");
+  const laneRows = summary.installed.filter((r) => r.lane);
+  assert.equal(laneRows.length, 2);
+  const written = new Set(laneRows.map((r) => r.lane));
   assert.ok(written.has("seed_knowledge_starters"));
   assert.ok(written.has("pr_review"));
   assert.ok(!written.has("daily_standup"));
@@ -179,23 +184,23 @@ test("shipctl lanes install --dry-run writes nothing", () => {
   assert.equal(res.status, 0);
   const summary = JSON.parse(res.stdout);
   assert.equal(summary.dry_run, true);
-  assert.equal(summary.installed.length, 3);
-  assert.ok(summary.installed.every((r) => r.action === "would-write"));
+  assert.equal(summary.installed.length, 4);
+  assert.ok(summary.installed.every((r) => String(r.action).startsWith("would-write")));
   const wfDir = path.join(dir, ".github", "workflows");
   assert.ok(!fs.existsSync(wfDir) || fs.readdirSync(wfDir).length === 0);
 });
 
-test("shipctl lanes install --ref overrides the pinned ref", () => {
+test("shipctl lanes install --ref is ignored (local reusable path)", () => {
   const { dir } = seedRepo(mktmp());
   const res = runShipctl(dir, ["lanes", "install", "--ref", "main", "--json"]);
   assert.equal(res.status, 0);
   const summary = JSON.parse(res.stdout);
-  assert.match(summary.reusable, /@main$/);
+  assert.equal(summary.reusable, "./.github/workflows/run-agent.yml");
   const wrapper = fs.readFileSync(
     path.join(dir, ".github", "workflows", "ship-pr_review.yml"),
     "utf8",
   );
-  assert.match(wrapper, /run-agent\.yml@main/);
+  assert.match(wrapper, /uses: \.\/\.github\/workflows\/run-agent\.yml/);
 });
 
 test("shipctl lanes install refuses to overwrite foreign files without --force", () => {

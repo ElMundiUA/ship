@@ -3,7 +3,7 @@ name: Ship · Schedule trigger
 on:
   workflow_dispatch: {}
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "*/30 * * * *"
 
 permissions:
   contents: read
