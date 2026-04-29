@@ -22,9 +22,9 @@ export const DOCS_NAV: DocsNavGroup[] = [
     items: [
       {
         href: "/getting-started",
-        label: "Product setup",
+        label: "Workspace setup",
         blurb:
-          "Create a workspace, connect repos, bind the tracker, seed knowledge, and review the first Inbox items.",
+          "Create a workspace, connect repos, bind the tracker, set policies, seed knowledge, and review the first Inbox items.",
       },
       {
         href: "/docs/concepts",
@@ -77,12 +77,12 @@ export const DOCS_NAV: DocsNavGroup[] = [
       {
         href: "/docs/troubleshooting",
         label: "Troubleshooting",
-        blurb: "Symptom → cause → fix for common setup, console, and CLI failures.",
+        blurb: "Symptom → cause → fix for common workspace, console, automation, and evidence issues.",
       },
       {
         href: "/docs/authoring",
         label: "Authoring",
-        blurb: "Write your own pattern, tool, collection, preset, or adapter (workflow artifacts were retired in RFC-0007 Phase 6).",
+        blurb: "Write your own policy or procedure so repeated work stays reviewable.",
       },
     ],
   },

@@ -3,8 +3,8 @@ import path from "node:path";
 import { repoRoot } from "@/lib/repo-path";
 
 /**
- * Generic artifact entry shape, shared across patterns / tools /
- * collections. The catalog page components only read a handful of fields
+ * Generic artifact entry shape, used by the policy/procedure library.
+ * The public page components only read a handful of fields
  * (id, title, summary, path, tags, group); everything else is preserved so
  * detail pages can grow into them without another refactor.
  */
@@ -34,11 +34,7 @@ export interface ArtifactCatalog<E extends ArtifactEntry = ArtifactEntry> {
 
 const KIND_DESCRIPTIONS: Record<string, string> = {
   patterns:
-    "Reviewable markdown procedures the operator console renders as Plays — scheduled Automations, onboarding, and the cloud-agent grid.",
-  tools:
-    "Vendor-neutral integration descriptors for trackers, CI, e2e, and platform surfaces Ship snaps to.",
-  collections:
-    "Bundled starter sets: presets, addendums, and per-agent rules collections that compose into a Ship workspace.",
+    "Reviewable policies and procedures for bounded automation, owner decisions, and evidence-backed delivery.",
 };
 
 /**

@@ -17,10 +17,10 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
   const { slug } = await params;
   try {
     const p = getPatternById(slug);
-    if (!p) return { title: "Pattern — Ship" };
-    return { title: `${p.title} — Org patterns · Ship`, description: p.summary };
+    if (!p) return { title: "Policy — Ship" };
+    return { title: `${p.title} — Policies · Ship`, description: p.summary };
   } catch {
-    return { title: "Pattern — Ship" };
+    return { title: "Policy — Ship" };
   }
 }
 
@@ -46,7 +46,7 @@ export default async function PatternDetailPage({ params }: { params: Promise<{ 
       <main className="book-shell py-14 sm:py-16">
         <nav className="text-sm text-white/50">
           <Link href="/patterns" className="font-semibold text-aqua underline-offset-2 hover:underline">
-            Org patterns
+            Policies
           </Link>
           <span className="mx-2 text-white/25">/</span>
           <span className="text-white/70">{pattern.title}</span>
@@ -74,8 +74,8 @@ export default async function PatternDetailPage({ params }: { params: Promise<{ 
             >
               View on GitHub
             </a>
-            <Link href="/patterns#cli" className="btn-secondary inline-flex !py-2 !text-sm">
-              CLI reference
+            <Link href="/docs/automations" className="btn-secondary inline-flex !py-2 !text-sm">
+              Automation guide
             </Link>
           </div>
         </header>

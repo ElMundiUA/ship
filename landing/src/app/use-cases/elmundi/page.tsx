@@ -26,9 +26,9 @@ const EVIDENCE = [
   },
   {
     src: "/use-cases/elmundi-dev-collections.png",
-    alt: "ElMundi collections on dev.elmundi.com",
+    alt: "ElMundi product pages on dev.elmundi.com",
     caption:
-      "Collections on staging. Each collection page corresponds to merged tickets that passed the same audit chain — Linear → PR → Playwright trace.",
+      "Product pages on staging. Each visible change corresponds to merged tickets that passed the same audit chain — Linear → PR → Playwright trace.",
   },
   {
     src: "/use-cases/elmundi-manual-chapter.png",
@@ -47,7 +47,7 @@ export default function ElmundiUseCasePage() {
           eyebrow="Customer story · E-commerce · Reference deployment"
           title="From scattered Slack pings to one Inbox: how ElMundi runs Ship on itself"
           subtitle="A small e-commerce team replaced ad-hoc agent prompting with a reviewable product workspace: every ticket can be traced from Linear to branch, PR, Playwright evidence, release notes, and the Inbox decision that needed a human."
-          executive="ElMundi is the public reference deployment for Ship. Engineering wanted agentic throughput; the founders wanted procurement-grade evidence; nobody wanted a second control plane to babysit. The team shipped both by making the monorepo itself the system of record — and the result is an SDLC where 'who decided this, when, and on which branch' is a click in tools the team already paid for."
+          executive="ElMundi is the public reference deployment for Ship. Engineering wanted agentic throughput; the founders wanted procurement-grade evidence; nobody wanted a second control plane to babysit. The team shipped both by making the workspace policies, tracker, repo, and evidence trail the system of record."
         />
 
         <UseCaseSnapshot
@@ -99,10 +99,10 @@ export default function ElmundiUseCasePage() {
 
         <UseCaseSection id="solution" kicker="03 · Resolution" title="Treat the monorepo as the SDLC control plane">
           <p>
-            ElMundi adopted the Ship methodology kit and wired it on top of Linear and GitHub. The fix is not another
-            dashboard — it is <strong>instruction-first documentation</strong> plus{" "}
-            <strong>automation that matches the words</strong>. Ship ships the patterns; ElMundi&apos;s install names
-            the exact files so security can grep instead of guess.
+            ElMundi adopted Ship as an owner workspace on top of Linear and GitHub. The fix is not another dashboard —
+            it is <strong>policy-first documentation</strong> plus{" "}
+            <strong>automation that matches the words</strong>. Ship names the rules, owners, and evidence so security
+            can inspect instead of guess.
           </p>
           <ul>
             <li>
@@ -132,16 +132,15 @@ export default function ElmundiUseCasePage() {
 
         <UseCaseSection id="implementation" kicker="04 · Rollout" title="Wired in days, not quarters">
           <p>
-            The implementation was deliberately small because the kit is. The team installed{" "}
-            <code className="text-aqua">shipctl</code> against the monorepo, generated the project-local config, copied
-            in the patterns they wanted to start with (intake, planning, agent-launch, release-readiness), and pointed
-            existing GitHub Actions at the new workflows. The first end-to-end run — a ticket in Linear, a branch cut
-            by an agent, a PR with a Playwright trace, a merge — happened on day one. The follow-up week was spent
-            tightening labels, naming conventions, and the on-call rota that owns failed runs.
+            The implementation was deliberately small. The team started with one workspace, connected Linear and GitHub,
+            named the first policies they wanted to enforce (intake, planning, agent launch, release readiness), and
+            pointed existing GitHub Actions at the new workflows. The first end-to-end run — a ticket in Linear, a branch
+            cut by an agent, a PR with a Playwright trace, a merge — happened on day one. The follow-up week was spent
+            tightening labels, naming conventions, and the owner rota for failed runs.
           </p>
           <p>
             What did <em>not</em> happen is also worth naming. There was no migration project, no &quot;adoption
-            committee&quot;, no parallel staging org, no rewriting of existing code to suit a vendor schema. The kit is
+            committee&quot;, no parallel staging org, no rewriting of existing code to suit a vendor schema. The workspace is
             additive; the existing CI, branch protection rules, and Linear automations stayed exactly as they were.
           </p>
         </UseCaseSection>
@@ -166,7 +165,7 @@ export default function ElmundiUseCasePage() {
               headline: "Zero",
               label: "New control planes to license",
               detail:
-                "No new SaaS to procure, no secrets leaving GitHub, no proprietary API in the critical path. The audit trail lives in tools your team already pays for and your auditors already accept.",
+                "No new SaaS to procure, no secrets leaving GitHub, no proprietary API in the critical path. The audit trail lives in systems your team already pays for and your auditors already accept.",
             },
           ]}
         />
@@ -205,7 +204,6 @@ export default function ElmundiUseCasePage() {
           links={[
             { href: "/getting-started", label: "Adopt the same loop", variant: "primary" },
             { href: "/use-cases/elmundi", label: "Read the engineering chapter", variant: "secondary" },
-            { href: "/use-cases/ship", label: "Story 2 — Ship as a product", variant: "secondary" },
             { href: "/use-cases", label: "All customer stories", variant: "secondary" },
           ]}
         />

@@ -2,10 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import type { MetadataRoute } from "next";
 import { listBlogPosts } from "@/lib/blog";
-import { loadCollectionsManifest } from "@/lib/collections";
 import { listDocumentationPages } from "@/lib/documentation-fs";
 import { loadPatternsManifest } from "@/lib/patterns";
-import { loadToolsManifest } from "@/lib/tools";
 import { repoRoot } from "@/lib/repo-path";
 import { resolveMetadataBase } from "@/lib/site-url";
 
@@ -13,8 +11,8 @@ import { resolveMetadataBase } from "@/lib/site-url";
  * App Router sitemap.
  *
  * Enumerates the marketing routes plus every dynamic route that has a
- * `generateStaticParams` (blog posts, docs pages, patterns / tools /
- * collections). `lastModified` uses the source file's mtime where we have
+ * `generateStaticParams` (blog posts, docs pages, policies/procedures).
+ * `lastModified` uses the source file's mtime where we have
  * one; static marketing pages fall back to the build date.
  */
 
@@ -45,14 +43,10 @@ export default function sitemap(): MetadataRoute.Sitemap {
   const staticRoutes: { path: string; priority: Priority; changeFrequency: ChangeFreq }[] = [
     { path: "/", priority: 1.0, changeFrequency: "weekly" },
     { path: "/getting-started", priority: 0.9, changeFrequency: "weekly" },
-    { path: "/cli", priority: 0.8, changeFrequency: "weekly" },
     { path: "/kit", priority: 0.8, changeFrequency: "weekly" },
     { path: "/patterns", priority: 0.8, changeFrequency: "weekly" },
-    { path: "/tools", priority: 0.7, changeFrequency: "weekly" },
-    { path: "/collections", priority: 0.7, changeFrequency: "weekly" },
     { path: "/use-cases", priority: 0.7, changeFrequency: "monthly" },
     { path: "/use-cases/elmundi", priority: 0.6, changeFrequency: "monthly" },
-    { path: "/use-cases/ship", priority: 0.6, changeFrequency: "monthly" },
     { path: "/blog", priority: 0.7, changeFrequency: "weekly" },
     { path: "/book", priority: 0.7, changeFrequency: "monthly" },
     { path: "/docs", priority: 0.8, changeFrequency: "weekly" },
@@ -88,7 +82,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
     });
   }
 
-  /* Catalog detail pages. updated_at on the artifact frontmatter where
+  /* Policy/procedure detail pages. updated_at on the artifact frontmatter where
    * present, otherwise the source file mtime. */
   for (const p of loadPatternsManifest().patterns) {
     out.push({
@@ -98,22 +92,5 @@ export default function sitemap(): MetadataRoute.Sitemap {
       priority: 0.6,
     });
   }
-  for (const t of loadToolsManifest().tools) {
-    out.push({
-      url: url(`/tools/${t.id}`),
-      lastModified: t.updated_at ? parseISO(t.updated_at) : safeMtime(path.join(root, t.path)),
-      changeFrequency: "monthly",
-      priority: 0.5,
-    });
-  }
-  for (const c of loadCollectionsManifest().collections) {
-    out.push({
-      url: url(`/collections/${c.id}`),
-      lastModified: c.updated_at ? parseISO(c.updated_at) : safeMtime(path.join(root, c.path)),
-      changeFrequency: "monthly",
-      priority: 0.5,
-    });
-  }
-
   return out;
 }

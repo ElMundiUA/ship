@@ -27,10 +27,10 @@ const previewShots: Preview[] = [
   },
   {
     kind: "internal",
-    href: "/use-cases/ship",
+    href: "/getting-started",
     src: "/use-cases/ship-home.png",
-    alt: "Ship methodology — marketing home",
-    caption: "Ship kit story",
+    alt: "Ship workspace setup page",
+    caption: "Workspace setup",
   },
   {
     kind: "external",

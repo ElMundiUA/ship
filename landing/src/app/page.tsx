@@ -1,6 +1,5 @@
 import { BackendStrip } from "@/components/backend-strip";
 import { BookSection } from "@/components/book-section";
-import { CommandBuilderSection } from "@/components/command-builder-section";
 import { ExamplesSection } from "@/components/examples-section";
 import { HeroSection } from "@/components/hero-section";
 import { HowItWorksSection } from "@/components/how-it-works-section";
@@ -10,6 +9,7 @@ import { PatternsSection } from "@/components/patterns-section";
 import { PillarsSection } from "@/components/pillars-section";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
+import { TeamSection } from "@/components/team-section";
 
 export default function Home() {
   return (
@@ -21,10 +21,10 @@ export default function Home() {
         <OperatorLoopSection />
         <PillarsSection />
         <KitSurfaceSection />
-        <CommandBuilderSection />
         <BookSection />
         <PatternsSection />
         <ExamplesSection />
+        <TeamSection />
         <BackendStrip />
       </main>
       <SiteFooter />

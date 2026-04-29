@@ -4,7 +4,7 @@ const steps = [
   {
     n: "01",
     title: "Create a workspace",
-    body: "Start with the team and product area that owns the outcome. Ship keeps that scope visible before any automation runs.",
+    body: "Start with the founder, product owner, or product area that owns the outcome. Ship keeps that scope visible before any automation runs.",
     code: "Workspace · members · policy",
   },
   {
@@ -21,8 +21,8 @@ const steps = [
   },
   {
     n: "04",
-    title: "Seed knowledge",
-    body: "Give agents and reviewers the product facts they need: brand, code style, tests, standing rules, and repo context.",
+    title: "Set policies and knowledge",
+    body: "Give agents and reviewers the product facts and boundaries they need: brand, code style, tests, review rules, and repo context.",
     code: "Knowledge · policies · secrets",
   },
   {
@@ -44,9 +44,9 @@ export function HowItWorksSection() {
           One place to see what moved, what stalled, and who decides.
         </h2>
         <p className="mt-4 max-w-3xl text-lg text-white/65">
-          Ship is not a promise that agents will choose for you. It is a workspace that makes each automated step
-          bounded and readable: where the request came from, which repo it touched, what evidence it left, and which
-          human owns the next decision.
+          Ship is not a promise that agents will choose for you. It is a workspace that lets a solo founder or product
+          owner set boundaries, inspect progress, and keep every automated step readable: where the request came from,
+          which repo it touched, what evidence it left, and who owns the next decision.
         </p>
 
         <ol className="mt-12 grid gap-5 md:grid-cols-2 lg:grid-cols-5">
@@ -83,12 +83,6 @@ export function HowItWorksSection() {
             href="/docs/concepts"
           >
             Read the product concepts
-          </Link>
-          <Link
-            className="inline-flex items-center rounded-full border border-white/15 bg-white/[0.04] px-4 py-1.5 font-semibold text-white/80 hover:border-white/30"
-            href="/cli"
-          >
-            Developer setup and CLI
           </Link>
         </div>
       </div>

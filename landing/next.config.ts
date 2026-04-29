@@ -14,10 +14,12 @@ const nextConfig: NextConfig = {
        * not reference material, so it sits at the top level next to /cli. */
       { source: "/docs/getting-started", destination: "/getting-started", permanent: false },
       /* CLI moved to top-level `/cli` in v0.10. */
-      { source: "/docs/shipctl", destination: "/cli", permanent: false },
-      { source: "/docs/shipctl/:path*", destination: "/cli", permanent: false },
+      { source: "/docs/shipctl", destination: "/docs/configuration", permanent: false },
+      { source: "/docs/shipctl/:path*", destination: "/docs/configuration", permanent: false },
+      { source: "/cli", destination: "/docs/configuration", permanent: false },
+      { source: "/cli/:path*", destination: "/docs/configuration", permanent: false },
       /* Old MkDocs paths a few external docs link to. */
-      { source: "/docs/tools/shipctl-cli", destination: "/cli", permanent: false },
+      { source: "/docs/tools/shipctl-cli", destination: "/docs/configuration", permanent: false },
       { source: "/docs/tools/ship-agent-trackers", destination: "/tools", permanent: false },
       { source: "/docs/tools/ship-agent-ci", destination: "/tools", permanent: false },
       /* Docs reorganisation — v0.11. */
@@ -36,12 +38,18 @@ const nextConfig: NextConfig = {
       { source: "/docs/legal-copyright", destination: "/docs/legal", permanent: false },
       { source: "/docs/rfc", destination: "/docs/protocol", permanent: false },
       { source: "/docs/rfc/:path*", destination: "/docs/protocol/:path*", permanent: false },
+      { source: "/tools", destination: "/docs", permanent: false },
+      { source: "/tools/:path*", destination: "/docs", permanent: false },
+      { source: "/collections", destination: "/getting-started", permanent: false },
+      { source: "/collections/:path*", destination: "/getting-started", permanent: false },
+      { source: "/use-cases/ship", destination: "/use-cases", permanent: false },
     ];
   },
   images: {
     remotePatterns: [
       { protocol: "https", hostname: "api.together.ai", pathname: "/**" },
       { protocol: "https", hostname: "**.together.ai", pathname: "/**" },
+      { protocol: "https", hostname: "avatars.githubusercontent.com", pathname: "/u/**" },
     ],
   },
   outputFileTracingIncludes: {

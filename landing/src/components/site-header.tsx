@@ -7,8 +7,7 @@ import { repoUrl } from "@/lib/config";
 /**
  * Top nav, left → right after the logo:
  *   Use cases  — buyer-facing proof / reference deployments
- *   Get started — product setup and docs entry
- *   Kit         — the consolidated artifact-catalog hub
+ *   Get started — workspace setup and docs entry
  *   Docs        — product and technical documentation
  *   The book    — long-form rationale (loud accent CTA)
  *   GitHub      — repo
@@ -25,8 +24,7 @@ type NavItem = {
   className: string;
   /**
    * Extra path prefixes that should also light up this nav item. Lets us
-   * highlight "Get started" while the user is on /getting-started, and
-   * highlight "Kit" while they are inside any of the four catalog routes.
+   * highlight "Get started" while the user is on /getting-started.
    */
   alsoActiveOn?: string[];
 };
@@ -39,12 +37,7 @@ const NAV: NavItem[] = [
     className: "",
     alsoActiveOn: ["/docs"],
   },
-  {
-    href: "/kit",
-    label: "Kit",
-    className: "",
-    alsoActiveOn: ["/patterns", "/collections", "/tools"],
-  },
+  { href: "/patterns", label: "Policies", className: "" },
   { href: "/docs", label: "Docs", className: "" },
   { href: "/blog", label: "Blog", className: "" },
 ];
