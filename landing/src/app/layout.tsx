@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { DM_Sans, Plus_Jakarta_Sans } from "next/font/google";
-import { AdoptionWizardProvider } from "@/components/adoption-wizard";
 import { resolveMetadataBase } from "@/lib/site-url";
 import "./globals.css";
 
@@ -20,13 +19,13 @@ const sans = DM_Sans({
 });
 
 export const metadata: Metadata = {
-  title: "Ship — product delivery workspace",
+  title: "Ship — founder workspace for AI-assisted delivery",
   description:
-    "Ship connects repos, trackers, knowledge, automations, and evidence so product owners can steer AI-assisted delivery without losing human ownership.",
+    "Ship connects repos, trackers, policies, knowledge, automations, and evidence so solo founders and product owners can steer AI-assisted delivery without losing ownership.",
   metadataBase: resolveMetadataBase(),
   openGraph: {
     title: "Ship",
-    description: "A product delivery workspace for decisions, evidence, knowledge, and bounded agent-assisted work.",
+    description: "A founder workspace for policies, decisions, evidence, knowledge, and bounded agent-assisted work.",
     type: "website",
   },
 };
@@ -37,10 +36,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${heading.variable} ${sans.variable}`}>
-      <body className="min-h-screen font-sans">
-        <AdoptionWizardProvider>{children}</AdoptionWizardProvider>
-      </body>
+    <html lang="en" data-scroll-behavior="smooth" className={`${heading.variable} ${sans.variable}`}>
+      <body className="min-h-screen font-sans">{children}</body>
     </html>
   );
 }

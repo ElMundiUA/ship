@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { AdoptionWizardButton } from "@/components/adoption-wizard";
 import { repoUrl } from "@/lib/config";
 
 const YEAR = new Date().getFullYear();
@@ -18,13 +17,10 @@ export function SiteFooter() {
               The framework, the delivery verb, the thing in production — same word, three beats.
             </p>
             <p className="mt-5 max-w-md text-base leading-relaxed text-white/60">
-              Apache-2.0 product delivery workspace: one site where product owners and engineers read the same story —
-              docs, procedures, integrations, and use cases you can audit. The public vocabulary is documented under{" "}
+              Apache-2.0 product delivery workspace for solo founders, product owners, and engineers: one place for
+              policies, decisions, knowledge, and evidence you can audit. The public vocabulary is documented under{" "}
               <Link className="text-aqua hover:text-white" href="/docs/concepts">Concepts</Link>.
             </p>
-            <AdoptionWizardButton className="mt-6 text-left text-sm font-semibold text-aqua underline-offset-4 hover:underline">
-              Open adoption wizard
-            </AdoptionWizardButton>
           </div>
 
           <div className="grid gap-10 sm:col-span-2 sm:grid-cols-2 lg:col-span-8 lg:grid-cols-3">
@@ -38,25 +34,25 @@ export function SiteFooter() {
                   Get started
                 </Link>
                 <Link className="text-white/70 transition hover:text-aqua" href="/getting-started">
-                  Product setup
+                  Workspace setup
+                </Link>
+                <Link className="text-white/70 transition hover:text-aqua" href="/#team">
+                  Team
                 </Link>
               </nav>
             </div>
 
             <div className="space-y-4">
-              <p className="text-xs font-bold uppercase tracking-[0.18em] text-white/40">Kit</p>
+              <p className="text-xs font-bold uppercase tracking-[0.18em] text-white/40">Workspace</p>
               <nav className="flex flex-col gap-3 text-base">
                 <Link className="text-white/70 transition hover:text-aqua" href="/kit">
-                  All catalog kinds
+                  Product surfaces
                 </Link>
                 <Link className="text-white/70 transition hover:text-aqua" href="/patterns">
-                  Patterns
+                  Policies
                 </Link>
-                <Link className="text-white/70 transition hover:text-aqua" href="/collections">
-                  Collections
-                </Link>
-                <Link className="text-white/70 transition hover:text-aqua" href="/tools">
-                  Tools &amp; integrations
+                <Link className="text-white/70 transition hover:text-aqua" href="/docs/knowledge-buckets">
+                  Knowledge
                 </Link>
               </nav>
             </div>
@@ -64,9 +60,6 @@ export function SiteFooter() {
             <div className="space-y-4 sm:col-span-2 lg:col-span-1">
               <p className="text-xs font-bold uppercase tracking-[0.18em] text-white/40">Reference</p>
               <nav className="flex flex-col gap-3 text-base">
-                <Link className="text-white/70 transition hover:text-aqua" href="/cli">
-                  shipctl CLI
-                </Link>
                 <Link className="text-white/70 transition hover:text-aqua" href="/book">
                   The book
                 </Link>
