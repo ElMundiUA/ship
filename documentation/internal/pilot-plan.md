@@ -911,19 +911,21 @@ SENTRY_SERVICE_NAME=ship-server
 ### Console env vars (Bunny `ship-console`)
 
 ```
-NEXT_PUBLIC_SHIP_API_URL=https://api.ship.<your-domain>
-NEXT_PUBLIC_AUTH0_DOMAIN=<tenant>.eu.auth0.com
-NEXT_PUBLIC_AUTH0_CLIENT_ID=<console SPA client id>
-NEXT_PUBLIC_AUTH0_AUDIENCE=https://api.ship.<your-domain>
-AUTH0_SECRET=<openssl rand -hex 32>                     # for cookie encryption (server-side)
-AUTH0_BASE_URL=https://ship.<your-domain>
-AUTH0_ISSUER_BASE_URL=https://<tenant>.eu.auth0.com
+SHIP_API_URL=https://api.ship.<your-domain>
+SHIP_AUTH_MODE=auth0
+APP_BASE_URL=https://ship.<your-domain>
+SHIP_CONSOLE_URL=https://ship.<your-domain>
+AUTH0_DOMAIN=<tenant>.eu.auth0.com
+AUTH0_AUDIENCE=https://api.ship.<your-domain>            # Auth0 API identifier
+AUTH0_SESSION_SECRET=<openssl rand -hex 32>              # for cookie encryption (server-side)
 AUTH0_CLIENT_ID=<console regular web app client id>
 AUTH0_CLIENT_SECRET=<...>
 
 NEXT_PUBLIC_SENTRY_DSN=https://...@sentry.io/...
+NEXT_PUBLIC_SENTRY_ENVIRONMENT=pilot
 SENTRY_ENVIRONMENT=pilot
 SHIP_VERSION=sha-<short>
+NEXT_PUBLIC_SHIP_VERSION=sha-<short>
 SENTRY_SERVICE_NAME=ship-console
 ```
 

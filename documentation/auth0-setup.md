@@ -81,7 +81,17 @@ public URL of the Console:
 ```bash
 SHIP_AUTH_MODE=auth0
 APP_BASE_URL=https://ship.example.com   # http://localhost:3001 for laptop
+SHIP_CONSOLE_URL=https://ship.example.com
+SHIP_PUBLIC_URL=https://api.ship.example.com
 ```
+
+Use the same Auth0 variable names everywhere. The console reads
+`AUTH0_DOMAIN`, `AUTH0_CLIENT_ID`, `AUTH0_CLIENT_SECRET`, `AUTH0_AUDIENCE`,
+`AUTH0_SESSION_SECRET`, and `APP_BASE_URL`; the backend reads
+`AUTH0_DOMAIN`, `AUTH0_AUDIENCE`, `AUTH0_ISSUER`, `SHIP_PUBLIC_URL`, and
+`SHIP_CONSOLE_URL`. `AUTH0_AUDIENCE` must match the API identifier configured
+in Auth0, which is commonly the same string as `SHIP_PUBLIC_URL` but is still
+an Auth0 API setting rather than a browser URL.
 
 `make restart` and you're done. The `/login` page now shows a "Continue
 with Auth0" button instead of the local email/password form.

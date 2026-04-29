@@ -92,9 +92,9 @@ services:
       minio:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-ship}:${POSTGRES_PASSWORD:-ship}@postgres:5432/${POSTGRES_DB:-ship}
-      ALEMBIC_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ship}:${POSTGRES_PASSWORD:-ship}@postgres:5432/${POSTGRES_DB:-ship}
-      S3_ENDPOINT_URL: http://minio:9000
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://${POSTGRES_USER:-ship}:${POSTGRES_PASSWORD:-ship}@postgres:5432/${POSTGRES_DB:-ship}}
+      ALEMBIC_DATABASE_URL: ${ALEMBIC_DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-ship}:${POSTGRES_PASSWORD:-ship}@postgres:5432/${POSTGRES_DB:-ship}}
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-http://minio:9000}
       S3_BUCKET: ${S3_BUCKET:-ship-documents}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY:-shipminio}
       S3_SECRET_KEY: ${S3_SECRET_KEY:-shipminio}
@@ -150,9 +150,9 @@ services:
         # the mock banner for no good reason.
         condition: service_healthy
     environment:
-      # Console talks to ship-server over the internal compose network.
-      # next.config.ts proxies /api/* -> ${SHIP_API_URL}/v1/* when set.
-      SHIP_API_URL: http://ship-server:8100
+      # Console talks to ship-server over the internal compose network by
+      # default. Set SHIP_API_URL to point the same image at shared infra.
+      SHIP_API_URL: ${SHIP_API_URL:-http://ship-server:8100}
       PORT: "3001"
       SHIP_AUTH_MODE: ${SHIP_AUTH_MODE:-local}
       # Auth0 (used when SHIP_AUTH_MODE=auth0). The SDK reads these from
@@ -173,6 +173,7 @@ services:
       NEXT_PUBLIC_SENTRY_ENVIRONMENT: ${NEXT_PUBLIC_SENTRY_ENVIRONMENT:-${SENTRY_ENVIRONMENT:-local}}
       NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE: ${NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE:-${SENTRY_TRACES_SAMPLE_RATE:-0.0}}
       SHIP_VERSION: ${SHIP_VERSION:-}
+      NEXT_PUBLIC_SHIP_VERSION: ${NEXT_PUBLIC_SHIP_VERSION:-${SHIP_VERSION:-}}
     ports:
       - "${SHIP_CONSOLE_PORT:-3001}:3001"
     healthcheck:
@@ -217,9 +218,9 @@ services:
     environment:
       # Server runs migrations; worker should not race on them.
       SHIP_SKIP_MIGRATIONS: "1"
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-ship}:${POSTGRES_PASSWORD:-ship}@postgres:5432/${POSTGRES_DB:-ship}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://${POSTGRES_USER:-ship}:${POSTGRES_PASSWORD:-ship}@postgres:5432/${POSTGRES_DB:-ship}}
       REDIS_URL: redis://redis:6379/0
-      S3_ENDPOINT_URL: http://minio:9000
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-http://minio:9000}
       S3_BUCKET: ${S3_BUCKET:-ship-documents}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY:-shipminio}
       S3_SECRET_KEY: ${S3_SECRET_KEY:-shipminio}

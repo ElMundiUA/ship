@@ -77,6 +77,28 @@ def test_cloud_mode_accepts_real_hostnames() -> None:
     assert settings.console_url.startswith("https://")
 
 
+def test_neon_style_database_urls_normalize_for_runtime_and_migrations() -> None:
+    """Neon/libpq DSNs use the same env keys in local and network setups."""
+    settings = Settings(
+        DATABASE_URL=(
+            "postgresql://ship:secret@ep-test.us-east-1.aws.neon.tech/ship"
+            "?sslmode=require&channel_binding=require"
+        ),
+        ALEMBIC_DATABASE_URL=(
+            "postgresql://ship:secret@ep-test.us-east-1.aws.neon.tech/ship"
+            "?sslmode=require"
+        ),
+    )
+
+    assert settings.async_database_url == (
+        "postgresql+asyncpg://ship:secret@ep-test.us-east-1.aws.neon.tech/ship"
+    )
+    assert settings.sync_database_url == (
+        "postgresql+psycopg://ship:secret@ep-test.us-east-1.aws.neon.tech/ship"
+        "?sslmode=require"
+    )
+
+
 def test_anthropic_vendor_swaps_default_openai_model_ids() -> None:
     """Anthropic + key + default ``gpt-*`` env → Claude ids (avoids 404 model)."""
     settings = Settings(

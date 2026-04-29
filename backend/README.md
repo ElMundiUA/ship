@@ -39,9 +39,14 @@ The API version is reported by `GET /openapi.json` and matches the canonical Shi
 The lean backend stack (Postgres+pgvector, MinIO, API server, console) lives behind a single `docker-compose.yml` at the repo root.
 
 ```bash
-cp .env.example .env       # defaults are fine for local
+cp .env.example .env       # defaults are fine for bundled local services
 docker compose up --build
 ```
+
+The same `.env` keys are used for bundled local services and shared
+infrastructure. By default Compose fills `DATABASE_URL`, `ALEMBIC_DATABASE_URL`,
+and S3 with the in-network Postgres/MinIO service URLs; set those keys in
+`.env` to point the same containers at Neon/S3 instead.
 
 The ARQ worker + Redis are behind a `worker` profile so the default `up` matches the cloud SaaS topology (no worker, no Redis). Spin them up locally only when you need background jobs:
 
@@ -64,13 +69,13 @@ The first boot runs Alembic migrations against the empty database; subsequent bo
 pip install -r requirements-backend.txt
 
 # Migrations (Postgres must already be reachable at DATABASE_URL)
-alembic -c backend/alembic.ini upgrade head
+node scripts/run-with-dotenv.mjs -- .venv/bin/alembic -c backend/alembic.ini upgrade head
 
 # API
-uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8100
+node scripts/run-with-dotenv.mjs -- .venv/bin/uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8100
 
 # Worker (separate shell)
-arq backend.app.workers.main.WorkerSettings
+node scripts/run-with-dotenv.mjs -- .venv/bin/arq backend.app.workers.main.WorkerSettings
 ```
 
 ## Run against shared dev infrastructure
