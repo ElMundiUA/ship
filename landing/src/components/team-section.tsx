@@ -57,7 +57,7 @@ const team: TeamMember[] = [
     handle: "svetlanamitar",
     role: "Team",
     href: "https://github.com/svetlanamitar",
-    avatar: "https://avatars.githubusercontent.com/u/6459255?v=4",
+    avatar: "/team/svetlana-mitar.png",
   },
   {
     name: "vvladyslav-dev",
