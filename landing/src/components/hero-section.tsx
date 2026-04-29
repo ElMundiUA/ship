@@ -2,9 +2,11 @@ import Link from "next/link";
 import { AdoptionWizardButton } from "@/components/adoption-wizard";
 import pkg from "../../package.json";
 
-const HERO_SNIPPET = `npx @elmundi/ship-cli new pharma-pilot \\
-  --preset mobile-app --tracker linear --ci gh-actions \\
-  --agents cursor,claude-md,codex --yes`;
+const HERO_CHECKLIST = [
+  "Connect the repo and tracker",
+  "See blockers and shipped work",
+  "Keep decisions tied to evidence",
+];
 
 const KIT_VERSION = `v${pkg.version}`;
 
@@ -20,22 +22,24 @@ export function HeroSection() {
       />
       <div className="relative mx-auto max-w-6xl px-4 sm:px-6">
         <p className="mb-3 inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/[0.06] px-4 py-1.5 text-xs font-semibold uppercase tracking-widest text-aqua">
-          <span>Methodology kit · {KIT_VERSION}</span>
+          <span>Product delivery workspace · {KIT_VERSION}</span>
           <span aria-hidden className="text-white/30">·</span>
-          <span className="text-white/75">shipctl + console</span>
+          <span className="text-white/75">console + evidence trail</span>
         </p>
         <h1 className="font-display max-w-5xl text-[2.125rem] font-bold leading-[1.08] tracking-normal text-white sm:text-5xl sm:leading-[1.06] md:text-6xl md:leading-[1.05] lg:text-[3.45rem] lg:leading-[1.03]">
-          Ship the{" "}
+          Give product owners a{" "}
           <span className="bg-gradient-to-r from-coral via-sun to-aqua bg-clip-text text-transparent">
-            methodology
+            clear cockpit
           </span>
-          , not another toolchain tax.
+          {" "}for AI-assisted delivery.
         </h1>
         <p className="mt-6 max-w-2xl text-lg leading-relaxed text-white/70 sm:text-xl md:text-[1.35rem] md:leading-relaxed">
-          One CLI — <code className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-[0.9em] text-aqua">shipctl</code> — one config — <code className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-[0.9em] text-aqua">.ship/config.yml</code> — and an operator console with four nouns: <strong className="text-white/90">Plays</strong> you assign as <strong className="text-white/90">Automations</strong>, <strong className="text-white/90">Runs</strong> you watch, and an <strong className="text-white/90">Inbox</strong> that catches what needs you. The same versioned artifacts power your agents, your CI, and the console.
+          Ship connects your repo, tracker, automation, and knowledge into one workspace. Product owners see what is moving,
+          what is blocked, who decided, and which evidence backs the work; engineers still keep prompts, rules, and setup
+          versioned where they can be reviewed.
         </p>
 
-        <figure className="mt-10 max-w-4xl" aria-label="Example shipctl command">
+        <figure className="mt-10 max-w-4xl" aria-label="Ship workspace checklist">
           <div className="relative rounded-2xl border border-aqua/30 bg-gradient-to-br from-aqua/[0.10] via-white/[0.02] to-coral/10 p-px shadow-[0_28px_90px_-40px_rgba(46,230,214,0.45)]">
             <div className="overflow-hidden rounded-[calc(1rem-1px)] bg-[#05060d] ring-1 ring-black/50">
               <div className="flex items-center justify-between border-b border-white/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-widest text-white/50">
@@ -43,29 +47,35 @@ export function HeroSection() {
                   <span className="inline-block h-2 w-2 rounded-full bg-coral/80" aria-hidden />
                   <span className="inline-block h-2 w-2 rounded-full bg-sun/80" aria-hidden />
                   <span className="inline-block h-2 w-2 rounded-full bg-aqua/80" aria-hidden />
-                  <span className="ml-2">Greenfield example · shipctl new</span>
+                  <span className="ml-2">Workspace setup</span>
                 </span>
-                <span className="hidden sm:inline text-white/40">Pharma mobile pilot</span>
+                <span className="hidden sm:inline text-white/40">Product owner view</span>
               </div>
-              <pre className="overflow-x-auto px-4 py-5 text-[13px] leading-relaxed text-aqua/95 sm:text-sm">
-{HERO_SNIPPET}
-              </pre>
+              <div className="grid gap-3 px-4 py-5 sm:grid-cols-3">
+                {HERO_CHECKLIST.map((item) => (
+                  <div key={item} className="rounded-xl border border-white/10 bg-white/[0.04] p-4">
+                    <div className="mb-3 h-2 w-2 rounded-full bg-aqua" aria-hidden />
+                    <p className="text-sm font-semibold text-white">{item}</p>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
           <figcaption className="mt-3 text-xs text-white/45">
-            Existing repo? Use <code className="rounded bg-white/10 px-1 py-0.5 font-mono text-aqua/90">shipctl init</code>. CI smoke test? <code className="rounded bg-white/10 px-1 py-0.5 font-mono text-aqua/90">shipctl verify --no-network</code>.
+            The first screen is for decisions and evidence. Terminal setup is still available for teams that want local,
+            reviewable control.
           </figcaption>
         </figure>
 
         <div className="mt-10 flex flex-col flex-wrap gap-4 sm:flex-row sm:items-center">
-          <Link className="btn-primary text-center sm:text-left" href="#command-builder">
-            Open the command builder
+          <Link className="btn-primary text-center sm:text-left" href="/getting-started">
+            Plan your workspace
           </Link>
-          <Link className="btn-secondary text-center" href="/getting-started">
-            Three adoption paths
+          <Link className="btn-secondary text-center" href="/use-cases">
+            See product use cases
           </Link>
           <AdoptionWizardButton className="btn-secondary text-center">
-            Adoption wizard
+            Create adoption brief
           </AdoptionWizardButton>
         </div>
 
@@ -97,19 +107,19 @@ export function HeroSection() {
         <div className="mt-14 grid gap-4 sm:grid-cols-3">
           {[
             {
-              k: "Existing repo",
-              v: "shipctl init writes .ship/config.yml, seeds the cache, and installs per-agent rule files at the targets each collection declares.",
-              code: "shipctl init --yes",
+              k: "One workspace",
+              v: "Connect the product repo, tracker, knowledge, and team settings before work starts moving.",
+              code: "Workspace + repo",
             },
             {
-              k: "Greenfield",
-              v: "shipctl new scaffolds a brand-new product: git init, minimal README, seeded config, rule files for the agents you picked.",
-              code: "shipctl new my-product",
+              k: "One attention surface",
+              v: "Clarifications, improvements, failures, and approvals land where an owner can make a decision.",
+              code: "Inbox",
             },
             {
-              k: "Quick verify",
-              v: "shipctl verify runs every check under cli/lib/verify/checks/. --no-network keeps it offline for CI smoke tests.",
-              code: "shipctl verify --no-network",
+              k: "One audit trail",
+              v: "Tickets, pull requests, checks, and knowledge updates stay linked so the story survives review.",
+              code: "Evidence",
             },
           ].map((item) => (
             <div key={item.k} className="glass-panel p-5">

@@ -9,7 +9,7 @@ import { loadCollectionsManifest } from "@/lib/collections";
 export const metadata: Metadata = {
   title: "Collections — Ship",
   description:
-    "Collections — curated bundles of patterns (Plays), tools, and rules for common product shapes (web app, API backend, mobile app, monorepo).",
+    "Collections are curated bundles of procedures, tools, and agent rules for common product shapes.",
 };
 
 export default function CollectionsPage() {
@@ -27,7 +27,7 @@ export default function CollectionsPage() {
               One page: tools + patterns
             </h1>
             <p className="mx-auto mt-6 max-w-2xl text-lg text-white/70">
-              A <strong className="text-white">collection</strong> is a curated bundle for a product shape—tables of links into{" "}
+              A <strong className="text-white">collection</strong> is a curated bundle for a product shape: links into{" "}
               <Link href="/tools" className="font-semibold text-lilac underline-offset-2 hover:underline">tools</Link> and{" "}
               <Link href="/patterns" className="font-semibold text-lilac underline-offset-2 hover:underline">patterns</Link>, plus docs pages when you need prose.
             </p>
@@ -55,7 +55,7 @@ export default function CollectionsPage() {
               <a className="font-semibold text-lilac underline-offset-2 hover:underline" href={`${repoUrl}/tree/main/artifacts/collections`}>
                 artifacts/collections/&lt;id&gt;/ARTIFACT.md
               </a>{" "}
-              — YAML frontmatter plus body in one file, reviewed in normal PRs.
+              — metadata plus body in one file, reviewed in normal PRs.
             </p>
           </div>
         </section>

@@ -49,19 +49,22 @@ export function BookHero() {
 
           <div>
             <p className="mb-3 inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/[0.06] px-4 py-1.5 text-xs font-semibold uppercase tracking-widest text-sun">
-              Long read · same Ship UI
+              Long read · why the workspace exists
             </p>
             <h1 className="font-display max-w-3xl text-4xl font-bold leading-tight text-white sm:text-5xl lg:text-[3.1rem] lg:leading-[1.08]">
               The book —{" "}
               <span className="bg-gradient-to-r from-aqua via-lilac to-coral bg-clip-text text-transparent">why Ship</span>
             </h1>
             <p className="mt-5 max-w-2xl text-lg leading-relaxed text-white/70 sm:text-xl">
-              Chapters, diagrams, and callouts — laid out like the landing: glass, gradients, and neon discipline. Links to
-              Getting started and examples still hop out to the docs site when you need filenames and cron tables.
+              The product starts with workspaces, owners, knowledge, and evidence. The book explains why those fences
+              exist: quiet systems, human-owned intent, bounded automation, and vendors that stay replaceable.
             </p>
             <div className="mt-8 flex flex-wrap items-center gap-3">
               <Link href="/" className="btn-secondary">
                 ← Landing
+              </Link>
+              <Link href="/docs" className="btn-secondary">
+                Product docs
               </Link>
               <a className="btn-primary" href="#the-idea">
                 Start at “The idea”

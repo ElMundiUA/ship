@@ -1,17 +1,17 @@
 const pillars = [
   {
     title: "One story for the room",
-    body: "Executives see outcomes and governance; engineers see filenames and gates. Ship keeps both in the same repository so alignment does not depend on a slide deck that aged out last quarter.",
+    body: "Product owners see outcomes and decisions; engineers see filenames and gates. Ship keeps both tied to the same evidence trail.",
     accent: "from-coral/30 to-transparent",
   },
   {
     title: "Adoption that fits you",
-    body: "The wizard captures how you already track work, ship releases, and run agents — then hands off a concrete brief. No forced migration to a single vendor stack.",
+    body: "Connect the repo, tracker, knowledge, and team policies you already use. No forced migration to one vendor stack.",
     accent: "from-aqua/30 to-transparent",
   },
   {
     title: "Evidence you can show",
-    body: "Use cases, screenshots, and published manuals give procurement and security something to click through — not a promise buried in a sales email.",
+    body: "Tickets, pull requests, checks, and knowledge updates stay linked so procurement, security, and team leads can review the trail.",
     accent: "from-lilac/35 to-transparent",
   },
 ];
@@ -20,10 +20,10 @@ export function PillarsSection() {
   return (
     <section id="method" className="border-y border-white/10 bg-black/20 py-20 sm:py-24">
       <div className="mx-auto max-w-6xl px-4 sm:px-6">
-        <h2 className="font-display text-3xl font-bold text-white sm:text-4xl">Why teams buy the kit, not a dashboard</h2>
+        <h2 className="font-display text-3xl font-bold text-white sm:text-4xl">Why teams buy control, not another AI demo</h2>
         <p className="mt-4 max-w-2xl text-white/65">
-          Apache-2.0, file-backed content, and a public site you can host yourself. You are investing in a shared operating
-          model — not renting another pane of glass that goes out of sync the week after rollout.
+          Ship keeps autonomy bounded: humans own intent, automation leaves evidence, and vendors stay replaceable.
+          The console makes that discipline visible without hiding the contracts engineers need to review.
         </p>
         <div className="mt-12 grid gap-6 md:grid-cols-3">
           {pillars.map((p) => (

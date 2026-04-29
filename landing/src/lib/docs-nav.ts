@@ -16,76 +16,68 @@ export type DocsNavGroup = {
 };
 
 export const DOCS_NAV: DocsNavGroup[] = [
-  /* The Get started slot in the top nav points at /docs (this section).
-   * The setup wizard itself lives at the top-level /getting-started URL
-   * but appears here as the first sidebar entry so people who clicked
-   * "Get started" can find it in one more click. */
   {
     label: "Start here",
     accent: "aqua",
     items: [
       {
         href: "/getting-started",
-        label: "Setup wizard",
+        label: "Product setup",
         blurb:
-          "Pick an adoption path, generate the exact shipctl init command, and prompt your agent — three paths, one command.",
+          "Create a workspace, connect repos, bind the tracker, seed knowledge, and review the first Inbox items.",
+      },
+      {
+        href: "/docs/concepts",
+        label: "Product concepts",
+        blurb:
+          "Plain-language vocabulary for workspace, repo, tracker, Inbox, knowledge, evidence, and automation.",
       },
     ],
   },
   {
-    label: "Reference",
+    label: "Workspace guides",
     accent: "lilac",
     items: [
       {
-        href: "/docs/concepts",
-        label: "Concepts",
-        blurb: "Vocabulary: Plays, Automations, Runs, Inbox — and the internal config terms they map onto.",
-      },
-      {
         href: "/docs/automations",
         label: "Automations",
-        blurb: "Plays running on a cadence: the Console /automations page, Coverage tab, and the lanes: config that backs them.",
-      },
-      {
-        href: "/docs/concepts#plays",
-        label: "Plays",
-        blurb: "The catalog of operational procedures operators pick from. Currently covered as a section of Concepts.",
+        blurb: "Repeatable product and engineering actions that stay bounded, reviewable, and tied to evidence.",
       },
       {
         href: "/docs/concepts#inbox",
         label: "Inbox",
-        blurb: "The single attention surface for clarifications, improvements, failures, approvals, and exceptions.",
-      },
-      {
-        href: "/docs/configuration",
-        label: "Configuration",
-        blurb: "Every field of .ship/config.yml plus the on-disk layout under .ship/.",
+        blurb: "The attention surface for clarifications, improvements, approvals, failures, and exceptions.",
       },
       {
         href: "/docs/knowledge-buckets",
-        label: "Knowledge buckets",
-        blurb: "Scoped bucket model, Distiller inbound adapters, and how patterns reach knowledge via spec.knowledge_topics.",
+        label: "Knowledge",
+        blurb: "How product facts, repo context, and standing rules reach agents and reviewers.",
+      },
+    ],
+  },
+  {
+    label: "Technical reference",
+    accent: "sun",
+    items: [
+      {
+        href: "/docs/configuration",
+        label: "Configuration",
+        blurb: "The .ship/ layout and config fields for developers and platform teams.",
       },
       {
         href: "/docs/agent-matrix",
         label: "Agent matrix",
         blurb: "Supported agent ids, on-disk markers, install targets, adapter artifact for each.",
       },
-    ],
-  },
-  {
-    label: "Guides",
-    accent: "sun",
-    items: [
       {
         href: "/docs/operating",
         label: "Operating",
-        blurb: "Day-2 work: pin a version, switch channel, read verify, debug sync, draft feedback.",
+        blurb: "Review blockers, decisions, shipped work, and evidence after setup.",
       },
       {
         href: "/docs/troubleshooting",
         label: "Troubleshooting",
-        blurb: "Symptom → cause → fix for the errors you actually hit when running shipctl.",
+        blurb: "Symptom → cause → fix for common setup, console, and CLI failures.",
       },
       {
         href: "/docs/authoring",
@@ -95,7 +87,7 @@ export const DOCS_NAV: DocsNavGroup[] = [
     ],
   },
   {
-    label: "Spec",
+    label: "Implementation spec",
     accent: "coral",
     items: [
       {

@@ -6,7 +6,7 @@ import { SiteHeader } from "@/components/site-header";
 export const metadata: Metadata = {
   title: "Customer stories — Ship",
   description:
-    "Enterprise teams use Ship to roll out agentic SDLC without trading governance for speed. Read how reference deployments turned scattered prompts and Slack pings into Plays they ship, Runs they watch, and an Inbox that catches the rest.",
+    "Product and engineering teams use Ship to adopt AI-assisted delivery without losing ownership, evidence, or review discipline.",
 };
 
 type Story = {
@@ -26,9 +26,9 @@ const STORIES: Story[] = [
     org: "ElMundi",
     headline: "From scattered Slack pings to one Inbox: how ElMundi runs Ship on itself",
     outcome:
-      "Replaced ad-hoc agent prompting with a scheduled, audit-friendly delivery loop on a public monorepo — every ticket walks Linear → branch → PR → Playwright → release behind named Automations, with escalations landing in a single Inbox.",
+      "Replaced ad-hoc agent prompting with a workspace where each ticket can be traced from tracker intent to branch, PR, checks, release evidence, and decision owner.",
     bullets: [
-      "Operators launch the day with one Automation, not six tabs",
+      "Product and engineering leads start from one attention surface, not six tabs",
       "Every agent action is reviewable in GitHub Actions and Linear history",
       "Onboarding a new contributor is a single page of the docs, not a tribal call",
     ],
@@ -60,16 +60,14 @@ export default function UseCasesIndexPage() {
           <div className="relative mx-auto max-w-4xl px-4 text-center sm:px-6">
             <p className="text-xs font-bold uppercase tracking-[0.2em] text-aqua/90">Customer stories</p>
             <h1 className="font-display mt-4 text-4xl font-bold text-white sm:text-5xl">
-              Predictable agent-driven delivery, with the audit trail your CISO already asked for
+              AI-assisted delivery product owners can explain after the demo
             </h1>
             <p className="mx-auto mt-6 max-w-2xl text-lg text-white/70">
-              The reference deployments below all run on the same four operator nouns: <strong className="text-white">Plays</strong>{" "}
-              they ship, <strong className="text-white">Automations</strong> they assign, <strong className="text-white">Runs</strong>{" "}
-              they watch, and the <strong className="text-white">Inbox</strong> that catches the rest. Security and procurement read
-              the same artifacts the team runs.
+              The reference deployments below share the same discipline: humans own intent, automations stay bounded,
+              decisions land in the Inbox, and evidence stays attached to the work.
             </p>
             <p className="mx-auto mt-4 max-w-2xl text-sm text-white/55">
-              If these nouns are new to you, the four-noun primer is here →{" "}
+              If the product vocabulary is new to you, start here →{" "}
               <Link href="/docs/concepts" className="font-semibold text-aqua underline-offset-2 hover:underline">
                 /docs/concepts
               </Link>
@@ -77,7 +75,7 @@ export default function UseCasesIndexPage() {
             </p>
             <div className="mt-10 flex flex-wrap justify-center gap-3">
               <Link href="/getting-started" className="btn-primary inline-flex">
-                Start a 30-day pilot
+                Plan a workspace
               </Link>
               <Link href="#stories" className="btn-secondary inline-flex">
                 Read the stories
@@ -91,7 +89,7 @@ export default function UseCasesIndexPage() {
           <div className="mx-auto max-w-5xl px-4 sm:px-6">
             <p className="text-xs font-bold uppercase tracking-widest text-white/45">Why teams adopt Ship</p>
             <h2 className="font-display mt-2 text-2xl font-bold text-white sm:text-3xl">
-              The delivery problem agentic SDLC actually solves
+              The delivery problem Ship actually solves
             </h2>
             <div className="mt-10 grid gap-6 md:grid-cols-3">
               {WHY.map((w) => (
@@ -165,9 +163,8 @@ export default function UseCasesIndexPage() {
               Run the same loop in your repo this week
             </h2>
             <p className="mt-4 text-base leading-relaxed text-white/70">
-              The kit is open source. Most teams stand up a working delivery loop in under an hour using{" "}
-              <code className="rounded bg-white/10 px-1.5 py-0.5 text-aqua/90">shipctl init</code>. The deck-friendly story
-              is on this page; the rest is the docs and a CLI you can read end-to-end on the plane home.
+              The kit is open source and the console is built around the same method. Start with a workspace, connect a
+              repo and tracker, seed knowledge, then use the CLI only where developer setup needs local control.
             </p>
             <div className="mt-8 flex flex-wrap justify-center gap-3">
               <Link href="/getting-started" className="btn-primary inline-flex">
@@ -191,17 +188,17 @@ export default function UseCasesIndexPage() {
 const WHY: { kicker: string; title: string; body: string }[] = [
   {
     kicker: "Throughput",
-    title: "More tickets per engineer-hour, with the same review bar",
-    body: "Agents take the boring half of every ticket — branch, scaffold, write the failing test, draft the PR — so engineers spend their time on judgement, not setup. Every Run holds to the same code-review and QA standard whether a human or an agent did the typing.",
+    title: "Useful speed without mystery work",
+    body: "Agents can take repeatable setup and review work, but humans keep the product decision. The win is work that moves with ownership and evidence, not a bigger pile of unexplained activity.",
   },
   {
     kicker: "Governance",
     title: "Audit trail is a side-effect, not a project",
-    body: "Every action — pick, branch, PR, test run, merge — leaves a receipt in your existing tools (Linear, GitHub Actions, Sentry). Security and compliance read the same artifacts engineers diff, instead of asking for monthly screenshot exports.",
+    body: "Every important action should point to a tracker item, branch, PR, check, comment, or knowledge article. Security and compliance read the same trail the team uses.",
   },
   {
     kicker: "Risk",
     title: "Boring architecture, no proprietary control plane",
-    body: "Markdown in git, manifests as catalogs, GitHub Actions for scheduling. There is no Ship server holding your secrets or your code. Apache-2.0 license, public repo, runs on infrastructure your team already owns and audits.",
+    body: "Versioned instructions, portable integrations, and reviewable repo changes keep vendors replaceable. The method survives a tool migration because the story is yours.",
   },
 ];

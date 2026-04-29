@@ -1,411 +1,141 @@
 # Troubleshooting
 
-Failure-first lookup. Find the symptom with `Cmd-F` (operator language, not internals), then read the four-part entry: **Symptom · Likely cause · Fix · Where to verify**. For non-failure recipes go to [Operating](/docs/operating); for field definitions to [Configuration](/docs/configuration); for command surface to [/cli](/cli).
+Find the symptom, then check the likely cause, fix, and verification point. Start with product-facing symptoms; drop into CLI details only when repo wiring is the problem.
 
-## `shipctl init`
+## Workspace and onboarding
 
-#### Init refuses my `--preset` value
+### I am redirected back to onboarding
 
-- **Symptom:** init exits 1 with `init: unknown --preset "<x>". Allowed: web-app, api-backend, mobile-app, cli, monorepo, adoption-minimum`.
-- **Likely cause:** typo or a preset id that hasn't shipped yet — `PRESETS` in `cli/lib/config/schema.mjs` is the closed enum.
-- **Fix:** pick a value from the allowed list (same enum applies to `--tracker`, `--ci`, `--language`, `--channel`, `--agents`). For unsupported combos, scaffold by hand from `SHIP_BOOTSTRAP_PLAN.md` (see [Operating → Bootstrap](/docs/operating)).
-- **Verify:** `shipctl init --dry-run --preset <x>` exits 0 and prints the plan header.
+**Likely cause:** the selected workspace has no activated repos, no shipped history, and no meaningful dashboard data yet.
 
-#### Init says my agent id is unknown
+**Fix:** connect GitHub, activate at least one repo, or use the `skipWizard=1` escape hatch if you are intentionally inspecting an empty workspace.
 
-- **Symptom:** `init: unknown agent "<x>". Allowed: aider, claude, claude-md, cline, codex, ...`.
-- **Likely cause:** the id you passed is not a key of `KNOWN_AGENTS` (`cli/lib/detect.mjs`).
-- **Fix:** use one of the listed ids; agent rule artifacts on the manifest are named `agent-rules-<agent>` for each.
-- **Verify:** `shipctl doctor` lists the same id under "Agents:" with a confidence score, and `shipctl collection list` shows `agent-rules-<agent>`.
+**Verify:** the workspace home shows health, repos, work in progress, or shipped data instead of the onboarding step.
 
-#### `--copy-rules` did nothing — no rules were installed
+### A repo shows “template update needed”
 
-- **Symptom:** init prints `warn: --copy-rules: no cached artifact for collection/agent-rules-<agent> (was the fetch successful?)` and the rules file is missing on disk.
-- **Likely cause:** the embedded sync step failed for that artifact (offline, 4xx, sha mismatch). Init logs `warn: artifact fetch partially failed (...)` earlier in the same run.
-- **Fix:** re-run after fixing the network/auth issue.
-  ```bash
-  shipctl sync --only collection:agent-rules-<agent>
-  shipctl init --copy-rules --agents <agent>
-  ```
-- **Verify:** `ls .ship/cache/collection/agent-rules-<agent>@*` and the install target file (e.g. `.cursor/rules/ship-artifacts-protocol.mdc`) both exist.
+**Likely cause:** the repo has no installed Ship bundle version or is behind the current bundle.
 
-#### Init refuses to overwrite my existing rules file
+**Fix:** open the configuration wizard from the banner, review the generated changes, and merge the update PR.
 
-- **Symptom:** `warn: <path> has ship-cli installed-from @X.Y.Z; pass --force to replace with @A.B.C` and the install record reports `action: skipped`.
-- **Likely cause:** the previously installed `installed-from` footer pins a different version; init is being conservative on purpose (`installAgentRule` in `cli/lib/commands/init.mjs`).
-- **Fix:** verify your custom edits sit *outside* the marker block (`<!-- ship-cli: artifacts-protocol v1 -->` … `<!-- ship-cli:end artifacts-protocol -->`), then rerun with `shipctl init --copy-rules --force`. Hand edits inside the marker block will be replaced.
-- **Verify:** the footer line at the bottom of the file reads `<!-- ship-cli: installed-from collection/agent-rules-<agent>@<new-version> -->`.
+**Verify:** the repo no longer appears in the update-needed banner.
 
-#### Telemetry flag rejected
+### GitHub App install did not return to Ship
 
-- **Symptom:** `init: --telemetry must be on|off|ask (got "<x>")` and exit 1.
-- **Likely cause:** `--telemetry` only accepts those three literals.
-- **Fix:** `--telemetry off` for non-interactive runs (the same default `--yes` picks); `--telemetry on` to opt in immediately.
-- **Verify:** the printed summary shows `Telemetry: on|off`.
+**Likely cause:** the installation callback was interrupted, the wrong account was selected, or the session expired.
 
-#### Init exits with `--copy-rules: no install_target for <agent>`
+**Fix:** restart the GitHub install step from onboarding while signed in to the intended GitHub account and Ship workspace.
 
-- **Symptom:** warn line `--copy-rules: no install_target for <agent>; skipping` and the target file is not written.
-- **Likely cause:** the cached `agent-rules-<agent>` artifact has no `install_target` in its front-matter and the agent id has no `KNOWN_AGENTS` fallback (`fallbackInstallTarget` in `cli/lib/commands/init.mjs`).
-- **Fix:** sync to refresh the artifact (front-matter may have been added since); if the artifact genuinely lacks `install_target`, raise it via `shipctl feedback draft --kind collection --id agent-rules-<agent>`.
-- **Verify:** `shipctl collection show agent-rules-<agent>` displays `spec.install_target` in the front-matter.
+**Verify:** activated repositories appear in the workspace and repo picker.
 
-#### My tracker/CI/preset triple has no bootstrap template
+## Tracker and work visibility
 
-- **Symptom:** with `--bootstrap`, you only get `SHIP_BOOTSTRAP_PLAN.md` and no real workflow files; the bootstrap-files verify check skips with `combo <x>+<y>+<z> has no bootstrap template`.
-- **Likely cause:** v1 only special-cases `mobile-app + gh-actions + linear` (`cli/lib/verify/checks/bootstrap-files.mjs`). Every other combination falls through to plan-only.
-- **Fix:** follow the TODO checklist in `SHIP_BOOTSTRAP_PLAN.md` to hand-bootstrap, or pick the supported triple while you pilot.
-- **Verify:** `shipctl verify --check bootstrap-files` reports `skip` (expected) for unsupported combos and `pass` once the supported triple is rendered with `ship-managed` markers.
+### Work in progress is empty
 
-## `shipctl sync`
+**Likely cause:** no tracker is bound, no repo is activated, or there are no open PRs/tickets matching the current workspace.
 
-#### Sync fails before contacting the API: ".ship/ not found"
+**Fix:** bind the tracker for the repo or confirm that open PRs exist with recognizable ticket context.
 
-- **Symptom:** `.ship/ not found. Run 'shipctl config init' first.` and exit 10.
-- **Likely cause:** `findShipRoot` walked up from cwd and found no `.ship/config.yml` (`cli/lib/config/io.mjs`).
-- **Fix:** `cd` to the repo root, or pass `--cwd <repo>`, or run `shipctl config init` first.
-- **Verify:** `shipctl config path` prints the absolute config path.
+**Verify:** the workspace home lists tracker-backed work or open PR fallback items.
 
-#### Sync reports `content_sha256 mismatch`
+### A PR has no ticket key
 
-- **Symptom:** `failed: <kind>/<id>@<version> content_sha256 mismatch (manifest=<x> got=<y>)` and exit 20.
-- **Likely cause:** the body returned by `POST /fetch` does not match the hash in the manifest — usually a stale CDN edge or a partial transfer (`syncArtifacts` in `cli/lib/commands/sync.mjs`).
-- **Fix:** re-run `shipctl sync` (transient); if it persists for the same version, file feedback so the artifact is re-stamped (the server hashes per RFC-0005, see `normalizeForArtifactSha` in `cli/lib/cache/store.mjs`).
-- **Verify:** the next sync prints `updated: 1` (or `up_to_date`) for the same key with `failed: 0`.
+**Likely cause:** branch or PR naming does not include the tracker identifier, or the tracker binding is missing.
 
-#### Sync says my pin was skipped
+**Fix:** link the PR to the tracker item or rename/update the PR according to the team contract. Fix the tracker binding if Ship cannot resolve the source.
 
-- **Symptom:** `skipped_pin: <kind>/<id> pinned=<pin> upstream=<version>` in the notes; the entry is not refreshed.
-- **Likely cause:** the manifest version no longer satisfies the value at `artifacts.pins.<kind>/<id>` in `.ship/config.yml` (`pinSatisfies` in `cli/lib/commands/sync.mjs`).
-- **Fix:** intentional — bump or remove the pin (`shipctl config set artifacts.pins.<kind>/<id> <new>`), or test with `shipctl sync --force-unpin`.
-- **Verify:** `shipctl <kind> show <id>` prints the version you expect and the next sync moves the entry to `updated`.
+**Verify:** the work item shows a ticket reference instead of “No ticket key in title”.
 
-#### Sync says an artifact is `yanked` or `deprecated`
+### Inbox items go to the wrong owner
 
-- **Symptom:** notes line `yanked: <key>@<v>` or `deprecated: <key>@<v> → <replaced_by>`.
-- **Likely cause:** the publisher marked the version `yanked: true` (hard refusal) or `deprecated: true` (soft warning) in the manifest.
-- **Fix:** for `deprecated`, follow `replaced_by` and update your pin/agents list. For `yanked`, you must move off the version — pinning it will be ignored on next sync.
-- **Verify:** `shipctl sync` shows `yanked: 0` and `deprecated: 0` after you migrate.
+**Likely cause:** routing rules, groups, or repo ownership are stale.
 
-#### Sync re-fetches even though nothing changed upstream
+**Fix:** reassign the current item with a reason, then update workspace routing so the next item resolves correctly.
 
-- **Symptom:** notes line `refetch: <key>@<v> (missing|drifted|...)` on every run.
-- **Likely cause:** the on-disk body was deleted or hand-edited after caching; `verifyCachedOnDisk` (`cli/lib/cache/store.mjs`) detects drift and forces a re-fetch (this is the integrity guard).
-- **Fix:** stop editing files under `.ship/cache/` directly. If you need a local override, check it into your repo as a *fork* of the artifact, not in the cache.
-- **Verify:** the next sync moves the entry to `up_to_date` and stays there.
+**Verify:** the timeline records the reassignment and the next similar item lands with the intended owner.
 
-#### Sync gets HTTP 401/403/5xx from the methodology API
+## Knowledge
 
-- **Symptom:** sync exits 20 with `HTTP 401 Unauthorized for <baseUrl>/...` (or 403 / 5xx) and stops before any cache writes.
-- **Likely cause:** `SHIP_API_TOKEN` missing/invalid for a private mirror, or the configured `api.base_url` is unreachable.
-- **Fix:** export a valid `SHIP_API_TOKEN` (or unset it for the public host); confirm `api.base_url` in `.ship/config.yml` and `SHIP_API_BASE` agree.
-- **Verify:** `shipctl verify --check api-reachable` returns `pass`.
+### The assistant gives stale product context
 
-#### Sync hangs — no progress, no exit
+**Likely cause:** knowledge was not seeded, the repo mirror is stale, or an older article is still published.
 
-- **Symptom:** sync produces no output and never returns.
-- **Likely cause:** a Node `fetch` to `api.base_url` is blocked by an outbound proxy/firewall; the CLI uses no timeouts (`cli/lib/http.mjs`).
-- **Fix:** Ctrl-C, then re-run with the right proxy env (`HTTPS_PROXY=...`) or point `SHIP_API_BASE` at a reachable mirror. `api.offline_ok: true` lets you operate from cache.
-- **Verify:** `curl -sS $SHIP_API_BASE/health` returns a body, and `shipctl verify --check api-reachable` passes.
+**Fix:** update the relevant `.ship/knowledge/*.md` file or console knowledge article, then reindex or publish the new version.
 
-## `shipctl verify`
+**Verify:** the knowledge page shows the updated article and the assistant cites the new fact.
 
-#### `config-present` fails
+### The same clarification keeps appearing
 
-- **Symptom:** `[fail] config-present  missing .ship/config.yml — run 'shipctl config init'` (or `... invalid: <error>`).
-- **Likely cause:** the file isn't there, or `validateConfig` rejected it (`cli/lib/verify/checks/config-present.mjs`).
-- **Fix:** `shipctl config init`, or apply `shipctl config validate` and fix the first reported error.
-- **Verify:** `shipctl verify --check config-present` returns `pass`.
+**Likely cause:** the answer is not available as reusable knowledge or the automation scope is missing a required fact.
 
-#### `stack-enums` fails
+**Fix:** add a short knowledge article with the answer, or tighten the automation so it asks only when a real decision is needed.
 
-- **Symptom:** `[fail] stack-enums  stack.tracker: "<x>" is not valid. Expected one of: linear, jira, ...`.
-- **Likely cause:** a `stack.*` field in `.ship/config.yml` is not in the enum (`cli/lib/config/schema.mjs`).
-- **Fix:** edit the field with `shipctl config set stack.tracker <valid>` (see [Configuration](/docs/configuration) for enum lists).
-- **Verify:** rerun `shipctl verify --check stack-enums`.
+**Verify:** new work no longer creates the same clarification.
 
-#### `agents-on-disk` warns "no on-disk signal for declared agents"
+## Automations and evidence
 
-- **Symptom:** `[warn] agents-on-disk  no on-disk signal for declared agents: <agent>`.
-- **Likely cause:** `stack.agents` lists an agent the detector can't find (no marker file/dir, no install_target on disk; `cli/lib/verify/checks/agents-on-disk.mjs`).
-- **Fix:** install the rules with `shipctl init --copy-rules --agents <agent>`, or remove the agent from `stack.agents` if you don't actually use it.
-- **Verify:** `shipctl doctor` shows the agent under "disk:" with non-zero confidence.
+### An automation keeps failing
 
-#### `rules-markers` fails on a rule file
+**Likely cause:** missing secret, missing knowledge, wrong trigger, unsupported repo shape, or a broken generated workflow.
 
-- **Symptom:** `[fail] rules-markers  <agent>: <path> has no '<!-- ship-cli: artifacts-protocol v1 -->' marker` (or `... has no 'installed-from' footer`, or `footer @X, cache has @Y`).
-- **Likely cause:** the rule file was hand-rewritten without the marker / footer; or `shipctl sync` fetched a newer agent-rules artifact and `--copy-rules` hasn't been run yet (`cli/lib/verify/checks/rules-markers.mjs`).
-- **Fix:** `shipctl init --copy-rules --force` to reinstall the marker block, then keep custom content outside the markers.
-- **Verify:** rerun `shipctl verify --check rules-markers` — should `pass` for every declared agent.
+**Fix:** inspect the latest evidence first. If it is a credentials issue, update the secret store. If it is context, update knowledge. If it is scope, disable or edit the automation before retrying.
 
-#### `cache-integrity` fails with "tampered"
+**Verify:** the next execution leaves a successful check or a clearer Inbox item with one owner.
 
-- **Symptom:** `[fail] cache-integrity  N/M cached entries tampered: <kind>/<id>@<v>...`.
-- **Likely cause:** the body in `.ship/cache/<kind>/<id>@<version>/ARTIFACT.md` was edited by hand and no longer matches `.meta.json:content_sha256` (`verifyCached` in `cli/lib/cache/store.mjs`).
-- **Fix:** never edit cache bodies. Restore by re-syncing:
-  ```bash
-  rm -rf .ship/cache/<kind>/<id>@<v>
-  shipctl sync --only <kind>:<id>
-  ```
-- **Verify:** `shipctl verify --check cache-integrity` returns `pass`.
+### The dashboard is quiet and I expected activity
 
-#### `gitignore-cache` warns ".ship/cache/ not listed"
+**Likely cause:** no eligible work exists, the tracker binding is missing, or the automation trigger has not fired.
 
-- **Symptom:** `[warn] gitignore-cache  .ship/cache/ not listed in .gitignore — add it to avoid committing cached bodies`.
-- **Likely cause:** init normally appends `.ship/cache/`, but the file may have been pruned or this repo was set up before init had the helper (`cli/lib/verify/checks/gitignore-cache.mjs`).
-- **Fix:** append `.ship/cache/` to `.gitignore`, or set `cache.vcs_tracked: true` in `.ship/config.yml` if you intentionally want the cache committed (the inverse warning fires if both are set).
-- **Verify:** rerun the check; `pass` once the line is present (or `vcs_tracked=true` is acknowledged).
+**Fix:** confirm the tracker state, repo activation, and recent workflow activity. Do not widen the automation just to make the dashboard look busy.
 
-#### `bootstrap-files` fails with "missing"
+**Verify:** either the workspace remains quiet for a clear reason, or the missing binding/trigger is fixed and evidence appears.
 
-- **Symptom:** `[fail] bootstrap-files  .github/workflows/ship-pilot.yml: missing` (and similar for `.ship/labels.yml`, `.env.example`).
-- **Likely cause:** the `mobile-app + gh-actions + linear` triple is declared in `.ship/config.yml` but the bootstrap scaffolding hasn't been rendered (`cli/lib/verify/checks/bootstrap-files.mjs`).
-- **Fix:** `shipctl init --bootstrap`. For other combos, the check `skip`s and you scaffold by hand (see [Operating → Bootstrap](/docs/operating)).
-- **Verify:** all three target files contain the `ship-managed` marker the check looks for.
+### Evidence is missing for a decision
 
-#### `ci-secrets` warns about a missing secret
+**Likely cause:** the decision happened in chat, outside the tracker/PR/check trail, or the automation did not write back.
 
-- **Symptom:** `[warn] ci-secrets  secrets referenced in workflows but missing from .env.example: <NAME>`.
-- **Likely cause:** a `${{ secrets.NAME }}` reference in `.github/workflows/*.yml` is not declared in `.env.example` (`cli/lib/verify/checks/ci-secrets.mjs`; `GITHUB_TOKEN` is excluded).
-- **Fix:** add `NAME=` (no value) to `.env.example` so reviewers know the workflow needs it; configure the actual value in your CI provider's secret store, never in `.ship/config.yml`.
-- **Verify:** rerun the check; `pass` reports `all N referenced secret(s) declared`.
+**Fix:** add the missing link or summary to the tracker item, PR, Inbox item, or knowledge article. Then fix the workflow so future decisions write evidence where reviewers expect it.
 
-#### `api-reachable` fails
+**Verify:** a future reader can follow the decision without Slack archaeology.
 
-- **Symptom:** `[fail] api-reachable  <baseUrl> unreachable: <status / network error>`.
-- **Likely cause:** `api.base_url` (or `SHIP_API_BASE`) is wrong, the host is down, or you're behind a proxy. The check tries `/health` and then `/patterns` (`cli/lib/verify/checks/api-reachable.mjs`).
-- **Fix:** confirm `shipctl config get api.base_url`, set `HTTPS_PROXY` if needed, or run `shipctl verify --no-network` while offline.
-- **Verify:** the check returns `pass: <baseUrl>/health → 200`.
+## CLI and local setup
 
-#### `tracker-labels` warns about missing Linear labels
+### `.ship/` is not found
 
-- **Symptom:** `[warn] tracker-labels  missing labels on Linear: <label1>, <label2>` (when `LINEAR_API_KEY` is set; otherwise the check `skip`s).
-- **Likely cause:** `.ship/labels.yml` declares labels the workspace doesn't have yet (`cli/lib/verify/checks/tracker-labels.mjs`).
-- **Fix:** create the labels in Linear, or remove them from `.ship/labels.yml` if you stopped using them.
-- **Verify:** rerun with `LINEAR_API_KEY` exported; `pass` once the sets agree.
+**Likely cause:** you are not running the command from a repo with `.ship/config.yml`.
 
-## `shipctl doctor`
+**Fix:** `cd` to the repo root, pass `--cwd`, or run setup from the console/developer setup path first.
 
-#### Doctor doesn't list an agent I do use
+**Verify:** `shipctl config show` prints the expected config.
 
-- **Symptom:** "Agents:" line is empty or missing your agent.
-- **Likely cause:** the agent's marker file/dir isn't where the adapter looks (e.g. `.cursor/`, `AGENTS.md`, `.claude/`); the detector requires confidence ≥ 0.5 (`inferStack` in `cli/lib/commands/doctor.mjs`).
-- **Fix:** create the expected file (the table in [/cli](/cli) lists the marker per agent), or declare the agent explicitly in `stack.agents` so verify still recognises it.
-- **Verify:** `shipctl doctor` lists the agent with confidence ≥ 0.5; `shipctl verify --check agents-on-disk` returns `pass`.
+### Agent rules were not installed
 
-#### Doctor's preset guess is wrong
+**Likely cause:** the selected agent id is wrong, the artifact was not synced, or the target file already has a conflicting marker.
 
-- **Symptom:** `Inferred preset: <wrong>` when the repo is something else.
-- **Likely cause:** the heuristic order in `inferPreset` matches a high-priority signal first (e.g. `pubspec.yaml` → `mobile-app` even in a hybrid repo).
-- **Fix:** declare the preset in `.ship/config.yml` — `shipctl config set stack.preset <correct>`. Doctor's "config wins" rule means future runs won't fight you (`reconcileStack` in `cli/lib/commands/doctor.mjs`).
-- **Verify:** `shipctl doctor` shows `Preset: <correct> (config) [disk inferred: <wrong>]`.
+**Fix:** run `shipctl doctor`, then `shipctl sync`, then reinstall the rules for the declared agents. Use `--force` only after confirming custom edits are outside Ship-owned markers.
 
-#### Doctor crashes with "unknown argument"
+**Verify:** `shipctl verify --check rules-markers,agents-on-disk` passes.
 
-- **Symptom:** `doctor: unknown argument: <flag>` and a stack trace.
-- **Likely cause:** doctor's arg parser is strict; only `--cwd`, `--write-inventory`, `--json`, `--no-network`, `--help` are accepted.
-- **Fix:** drop the unknown flag — doctor never makes network calls in v1, so `--no-network` is a no-op kept for forward compatibility.
-- **Verify:** `shipctl doctor --help` shows the closed flag list.
+### `shipctl verify` fails
 
-#### Doctor and verify disagree about my agents
+**Likely cause:** config schema error, cache drift, missing rule target, missing secret declaration, or unreachable API.
 
-- **Symptom:** doctor lists an agent that verify reports as missing (or vice versa).
-- **Likely cause:** doctor unions `config.stack.agents` with disk signals (so a config-declared agent shows up "for free"); verify only inspects on-disk install targets.
-- **Fix:** install rules with `shipctl init --copy-rules --agents <agent>` so the install_target file exists. Or remove the agent from config if it isn't really there.
-- **Verify:** `shipctl verify --check agents-on-disk` and `--check rules-markers` both `pass`.
+**Fix:** read the first failing check, fix that one issue, and rerun the specific check. Use `--no-network` only when you are intentionally offline.
 
-## `shipctl <kind> show / list`
+**Verify:** `shipctl verify` exits `0`, or every remaining warning has an explicit reason in the PR.
 
-#### `show` exits 1 with "Unknown id"
+### Sync reports a hash or cache mismatch
 
-- **Symptom:** `Unknown id: <id>` (disk mode) or `HTTP 404 Not Found for <baseUrl>/<plural>/<id>` (hosted mode).
-- **Likely cause:** the id you typed isn't on the manifest for that kind. List entries are scanned from `artifacts/<plural>/` on disk or from `GET /<plural>` over HTTP (`cli/lib/commands/manifest-catalog.mjs`).
-- **Fix:** `shipctl <kind> list` to discover real ids; check spelling (artifact ids are kebab-case).
-- **Verify:** `shipctl <kind> show <correct-id>` prints front-matter + body.
+**Likely cause:** cached artifact content was edited or the downloaded body does not match the manifest.
 
-#### `fetch` says "artifact not found" for a version that exists
+**Fix:** delete the affected cache entry and run `shipctl sync` again. Do not hand-edit `.ship/cache/`.
 
-- **Symptom:** `artifact not found: <kind>:<id>@<version>` from `fetchArtifact` (`cli/lib/http.mjs`).
-- **Likely cause:** the `<version>` doesn't exist on the channel you're configured for; only `stable` is listed by default — `edge`-only versions need an explicit channel.
-- **Fix:** drop `--version` to get latest, or `shipctl sync --channel edge` and retry.
-- **Verify:** `shipctl <kind> list --json | rg <id>` shows the exact version string you expect.
+**Verify:** `shipctl verify --check cache-integrity` passes.
 
-#### `show` returns a body that looks unrendered (front-matter visible)
+## When to escalate
 
-- **Symptom:** the output starts with `---\nartifact_kind: ...\n---` and the rest is raw markdown.
-- **Likely cause:** this is normal — `show` prints the raw artifact body so agents can parse the front-matter (`spec.install_target`, etc.). It is not cache poisoning.
-- **Fix:** none. Use a markdown viewer (`glow`, `bat -l md`) for nicer rendering, or `shipctl <kind> show <id> --json` and pipe through `jq -r .content`.
-- **Verify:** `shipctl verify --check cache-integrity` returns `pass` — the cache is fine.
-
-## Telemetry
-
-#### Outbox grows but never drains
-
-- **Symptom:** `shipctl telemetry status` reports `outbox_pending=N` but `last_flush_at=never`.
-- **Likely cause:** `telemetry.share=false` so flush no-ops with `telemetry disabled; nothing to send` (`cli/lib/commands/telemetry.mjs`); or `flush` exits 20 silently in CI because the API is unreachable. Events are appended any time `appendEvent` is called by code that *was* enabled at write time.
-- **Fix:** `shipctl telemetry on --yes` if you want to send, or `shipctl telemetry off` and delete the file (`rm .ship/telemetry-outbox.jsonl`) if you don't.
-- **Verify:** after `shipctl telemetry flush`, `outbox_pending=0` and `last_flush_at` is updated.
-
-#### Flush exits 20 with no obvious error
-
-- **Symptom:** `flushed 0 events, N failed` and exit 20.
-- **Likely cause:** every batch POST to `<baseUrl>/telemetry` failed (network or 4xx). The CLI rewrites the outbox with the un-sent batch so retries are safe.
-- **Fix:** confirm `api-reachable` passes; check `SHIP_API_BASE`; retry. If you need to discard the queue, `rm .ship/telemetry-outbox.jsonl`.
-- **Verify:** next `shipctl telemetry flush` reports `flushed N events, 0 failed`.
-
-#### A field I want to send is being stripped
-
-- **Symptom:** `appendEvent` silently drops payload keys; under `SHIP_DEBUG=1` you see `[ship:telemetry] stripped denylisted keys from <type>: <key>`.
-- **Likely cause:** the key is in the RFC-0003 denylist (`path, code, diff, branch, remote, email`) — `cli/lib/telemetry/outbox.mjs:DENYLIST_KEYS`.
-- **Fix:** rename the field to something outside the denylist, or fold it into a non-sensitive aggregate (e.g. `path → path_kind`). The denylist is intentional and not configurable.
-- **Verify:** `SHIP_DEBUG=1 shipctl telemetry buffer --limit 1` shows the event without the denied key.
-
-## Feedback
-
-#### `feedback submit` exits 1 with "missing required fields"
-
-- **Symptom:** `missing required fields: kind, id, title, summary` or any subset.
-- **Likely cause:** the draft front-matter is missing `kind`, `id`, or `title`; or the body has no `**Summary**:` line. `cmdSubmit` validates against both (`cli/lib/commands/feedback.mjs`).
-- **Fix:** `shipctl feedback edit <draft>` and add the missing field(s) — front-matter for `kind/id/title`, body for `**Summary**:` and `**Recommendation**:`.
-- **Verify:** rerun `shipctl feedback submit`; the response prints an `issue_url`.
-
-#### Submit returns 4xx from `/feedback`
-
-- **Symptom:** `HTTP 4xx <status> for <baseUrl>/feedback` and exit 20; the draft is *not* moved to `sent/`.
-- **Likely cause:** the server rejected the payload (oversize, schema mismatch, deduped). Sometimes the response body says `deduplicated: true` instead of erroring, in which case the CLI prints `(deduplicated: comment added to existing issue)` and exit 0.
-- **Fix:** read the server message (printed verbatim by `HttpError`); shorten the title/summary or check that `--kind` is one of `pattern, tool, collection, doc`.
-- **Verify:** rerun submit; on success the draft file moves to `.ship/feedback-drafts/sent/`.
-
-#### Drafts pile up in `feedback-drafts/` and never get sent
-
-- **Symptom:** `shipctl feedback list` shows old drafts without `[sent]`.
-- **Likely cause:** `feedback submit` is a deliberate, per-draft action — there is no auto-flush. Drafts persist until you submit or `feedback remove` them.
-- **Fix:** triage with `shipctl feedback list`, then `shipctl feedback submit <path> --yes` for keepers and `shipctl feedback remove <path>` for the rest.
-- **Verify:** the directory only contains drafts you actually intend to send; sent ones live under `sent/`.
-
-## Cloud agents
-
-#### Cursor Cloud secrets are not picked up
-
-- **Symptom:** the cloud agent boots but `shipctl sync` fails with 401/403, or the agent says it cannot reach private mirrors.
-- **Likely cause:** Cursor Cloud reads secrets from the environment of the cloud machine, not from your local `.env`. `SHIP_API_TOKEN` (and any tracker key like `LINEAR_API_KEY`) must be set in the Cursor Cloud secrets pane.
-- **Fix:** add the env vars in Cursor Cloud → Environment → Secrets; ensure `.cursor/environments.json`'s `install` list runs `shipctl sync` *after* `npm i -g @ship/shipctl` (see `artifacts/collections/agent-rules-cursor-cloud/ARTIFACT.md`).
-- **Verify:** in the cloud agent log, `shipctl verify --check api-reachable` returns `pass` on the first task.
-
-#### Cloud setup script ran "successfully" but the agent has no rules
-
-- **Symptom:** the cloud agent answers without any Ship context; `.cursor/rules/ship-artifacts-protocol.mdc` is missing inside the container.
-- **Likely cause:** the Dockerfile (or build step) ran `shipctl init --copy-rules` *before* `COPY artifacts/ ./artifacts` landed, so the local artifact tree wasn't readable yet. In hosted mode this also means the install step ran before `shipctl sync` could populate `.ship/cache/`.
-- **Fix:** order the build steps so artifacts are present *first*. Use the order in the repo's `Dockerfile` (`COPY landing` → `COPY documentation` → `COPY artifacts` → then any `shipctl` step). For Cursor Cloud `install` arrays, put `shipctl sync` after `npm i -g @ship/shipctl` and before any agent task.
-- **Verify:** in the running container, `ls .cursor/rules/ship-artifacts-protocol.mdc` and `shipctl verify --no-network` both succeed.
-
-#### Cloud agent runs the wrong preset
-
-- **Symptom:** the agent talks about `mobile-app` workflow gates in a `web-app` repo (or vice versa).
-- **Likely cause:** the repo committed a `.ship/config.yml` whose `stack.preset` doesn't match the runtime; or no `.ship/config.yml` exists and doctor's heuristic guessed wrong.
-- **Fix:** commit a correct `.ship/config.yml` (`shipctl config set stack.preset <correct>` then commit). Cloud agents must read config from the checkout, not infer per-task.
-- **Verify:** `shipctl doctor` inside the cloud env reports `Preset: <correct> (config)`.
-
-#### Cloud agent installed shipctl but commands aren't found
-
-- **Symptom:** `command not found: shipctl` after `npm i -g @ship/shipctl` in the install step.
-- **Likely cause:** the cloud sandbox's npm prefix isn't on the agent's `PATH`, or you used the legacy package name (current name is `@elmundi/ship-cli`, binary `shipctl`).
-- **Fix:** install with `npm i -g @elmundi/ship-cli`; if `PATH` is the issue, invoke `npx @elmundi/ship-cli` from your install script instead of relying on global resolution.
-- **Verify:** `shipctl --version` (or `npx @elmundi/ship-cli --version`) prints a version string.
-
-## Environment
-
-#### `command not found: shipctl`
-
-- **Symptom:** the shell can't find `shipctl` after install.
-- **Likely cause:** the global npm prefix isn't on `PATH`, or you ran `npx` once (which doesn't install globally).
-- **Fix:** `npm i -g @elmundi/ship-cli` and ensure `$(npm prefix -g)/bin` is in `PATH`. For one-off use without global install, `npx @elmundi/ship-cli <cmd>`.
-- **Verify:** `which shipctl` prints a path; `shipctl --version` prints a version.
-
-#### `shipctl --version` reports an unexpected version
-
-- **Symptom:** the version printed doesn't match the latest you just installed (or differs between projects).
-- **Likely cause:** you have multiple installations — a local `node_modules/.bin/shipctl` (project install) shadows the global one; or `npx` is resolving from cache.
-- **Fix:** `which -a shipctl` to see all candidates. Either pin a project-local install (`npm i -D @elmundi/ship-cli` and call via `npx shipctl`) or remove the local copy. `npx --no-install @elmundi/ship-cli --version` shows what npx would use.
-- **Verify:** `shipctl --version` matches `npm view @elmundi/ship-cli version` (latest) or your pinned dependency.
-
-#### Node version too old
-
-- **Symptom:** `shipctl` exits with `SyntaxError: Unexpected token '?'` or an `node:fs/promises` import error on startup.
-- **Likely cause:** the CLI requires Node 20+ (`cli/README.md → Requirements`). The package uses ESM and modern syntax that older Node versions reject.
-- **Fix:** install Node 20 LTS or newer (e.g. `nvm install 20 && nvm use 20`).
-- **Verify:** `node --version` is `v20.x` or higher; `shipctl --version` runs without parse errors.
-
-## Inbox & routing
-
-#### Inbox items keep landing on the workspace owners
-
-- **Symptom:** items consistently arrive in `/inbox?owner=group:workspace-owners` with the diagnostic chip *"couldn't resolve `<handle>`, fell back to workspace owners — fix?"* on the item detail.
-- **Likely cause:** the [Play](/docs/concepts#plays) declares an abstract handle (e.g. `code_owner`, `release_manager`) that the workspace's routing rules don't map to a user, group, or strategy. The mandatory fallback (RFC-0010 §R2) catches the item so it isn't lost; `intake_reason` records *why*.
-- **Fix:**
-  1. Open `Settings → Inbox routing`. Confirm whether the unresolved handle is missing entirely or maps to a strategy that returned no owner (e.g. `codeowners` against a path with no `CODEOWNERS` entry).
-  2. Add the missing rule. Pick one of: `user:<id>`, `group:<slug>` (with an assignment strategy — `round_robin` / `oncall` / `first`), or one of the runtime strategies (`pr_author`, `codeowners`, `requested_by`, `repo_role`, `repo_metadata`).
-  3. Use the Navigator's `inbox_routing_preview` tool (or the *Preview* button in the rule editor) to dry-run the resolver against a synthetic item before saving — it returns the owner that *would* land without writing anything.
-- **Verify:** new items of that type now show a non-fallback owner; the diagnostic chip is gone; `inbox_routing_preview` for the same handle returns the same user as the item's `owner`.
-
-#### `inbox_routing_preview` returns *no owner*
-
-- **Symptom:** the preview tool (or the *Preview* button) reports `owner: null, reason: <strategy returned empty>` for a handle you expect to resolve.
-- **Likely cause:** the strategy ran but found nothing — `codeowners` with no matching `CODEOWNERS` line, `repo_role` with no member in that role, `pr_author` against a synthetic item with no PR context, `requested_by` against a scheduled run with no requester.
-- **Fix:** either fix the underlying signal (add the path to `CODEOWNERS`, fill the repo role on `Settings → Members`) or fall back to a deterministic target — change the rule to `group:<slug>` with `round_robin`, or to a single `user:<id>` for handles that should always page the same person.
-- **Verify:** rerun `inbox_routing_preview` for the same `(handle, repo, type)` triple — the response carries an `owner` and the same target appears on the next live item.
-
-#### Reassigning an Inbox item bounces back to the same owner
-
-- **Symptom:** you reassign an item to user A; the next event timeline entry shows it reassigned again to user B (the original owner) within seconds.
-- **Likely cause:** an Automation (or a Navigator rule) is re-emitting the item from the source row (`clarifications`, `improvements`, `pipeline_runs.outcome`) on every push of new evidence, and routing re-runs at intake. The single-owner discipline (RFC-0010 §I3) holds, but each fresh emission is a *new* `inbox_items` row with its own routing pass.
-- **Fix:** check the Run that produced the item (`/runs/<rid>`) — if the same Play is firing on every commit, throttle the cadence (`event` → `schedule`, or add a `when:` filter), or accept the underlying improvement so it is no longer re-proposed.
-- **Verify:** `/inbox?source=<source_table>:<row_id>` shows one open row again instead of a chain; the *assigned* event timeline stops bouncing.
-
-#### `inbox.profile` change in a pattern doesn't take effect
-
-- **Symptom:** you bumped `spec.inbox.profile` (or added `spec.inbox.overrides`) on a pattern, but new Inbox items still carry the old `(handle, when[])` shape.
-- **Likely cause:** profile resolution happens at intake against the **cached** pattern body. If `shipctl sync` hasn't refreshed the artifact (or the workspace pins an older version under `artifacts.pins`), the old profile is still in flight.
-- **Fix:** `shipctl sync` (or bump the pin), then re-trigger the Play. The next Run's escalations carry the new profile. Use `inbox_routing_preview` to dry-run the new shape against a synthetic item before re-triggering.
-- **Verify:** `shipctl pattern show <id> --json | jq '.spec.inbox'` returns the new block; the next Run page shows escalations with the expected `handle` resolved correctly.
-
-## Routines
-
-#### `shipctl run --routine <id>` exits 2
-
-- **Symptom:** `.ship/config.yml is at v1; shipctl run requires v2. Run 'shipctl migrate' to upgrade.` and exit 2.
-- **Likely cause:** the repo hasn't been migrated to the current config schema yet; `shipctl run` refuses to read v1.
-- **Fix:** `shipctl migrate --dry-run` to review the upgrade, then `shipctl migrate --yes` to write it. The v1 file is saved to `.ship/config.yml.bak`.
-- **Verify:** `shipctl config get version` prints `2`; the next `shipctl run --routine <id>` proceeds past argument parsing.
-
-#### `shipctl run --routine <id>` exits 4 (idempotency write failure)
-
-- **Symptom:** `idempotency write failed: EACCES: permission denied, open '.ship/state/<key>.json'` and exit 4.
-- **Likely cause:** the runner cannot write under `.ship/state/` (missing directory permissions, read-only checkout, or a file marker owned by another user).
-- **Fix:** create the directory with correct ownership (`mkdir -p .ship/state && chmod u+rw .ship/state`); on CI, ensure the checkout step runs before `shipctl run` and that the job has write access. For a stubbornly-stale marker, delete `.ship/state/<idempotency.key>.json` and re-run.
-- **Verify:** after a successful run, `.ship/state/<idempotency.key>.json` exists and contains the pattern sha; re-running the routine reports `status: noop, reason: already-done`.
-
-#### `shipctl lanes install` refuses to overwrite `.github/workflows/ship-<id>.yml`
-
-- **Symptom:** `skipped (exists-without-banner): .github/workflows/ship-<id>.yml` and the file is left untouched.
-- **Likely cause:** the file exists but lacks the `# ship-cli: lanes v1` banner, so the installer treats it as hand-authored and refuses to clobber it.
-- **Fix:** inspect the file. If it's a hand-written legacy wrapper, delete it and re-run `shipctl lanes install`. If you intentionally want the installer to take ownership, pass `--force` — the existing content will be replaced.
-- **Verify:** the generated file starts with `# ship-cli: lanes v1 — generated by shipctl lanes install.`; `shipctl lanes list` shows the routine wired.
-
-#### v1 config still validates but prints a deprecation warning
-
-- **Symptom:** every `shipctl` command emits `warn: version: config is at v1; run 'shipctl migrate' to upgrade to v2` on stderr.
-- **Likely cause:** this is intentional — v1 is still accepted (with warnings) so teams aren't forced to migrate in the same PR as a `shipctl` upgrade. Lane-dependent commands (`shipctl run`, `shipctl lanes install`) will still refuse to proceed against v1.
-- **Fix:** when you're ready, run `shipctl migrate --yes`. No action required until then.
-- **Verify:** after migration, the warning disappears and `shipctl config get version` prints `2`.
-
-#### `shipctl sync --lock` reports unresolved patterns
-
-- **Symptom:** `unresolved: pattern/<id>: <reason>` in the notes and exit 20.
-- **Likely cause:** a lane references a pattern id that isn't on the configured channel (typo after the RFC-0008 rename, or `channel: stable` when the id is still `edge`-only).
-- **Fix:** run `shipctl pattern list` to see real ids on your channel; update `.ship/config.yml` with the correct `<category>-<name>` id (e.g. `role-developer`, `flow-daily-retro`) and re-lock. For `edge`-only ids, either switch `api.channel` or wait for the stable promotion.
-- **Verify:** `shipctl sync --lock` reports `0 unresolved` and exit 0.
+Fix in place when one clear change ends the failure class. Escalate when the same symptom repeats across repos, owners, or runs. Repeated failures usually mean a missing boundary, stale knowledge, bad routing, or an artifact that needs revision.
 
 ## Where to next
 
-If a recipe (not a failure) is what you actually need — pinning, channel switching, telemetry opt-in, bootstrap walkthroughs, Automation install / lock / run — read [Operating](/docs/operating). For the operator surfaces themselves see [Concepts](/docs/concepts) (Plays / Automations / Runs / Inbox), [Automations](/docs/automations) (Coverage tab + assignment wizard), and [Knowledge buckets](/docs/knowledge-buckets). For field-level config detail go to [Configuration](/docs/configuration). The exact command / flag surface is documented in [/cli](/cli), and the normative behaviour behind every error on this page traces back to the [Protocol RFCs](/docs/protocol) — RFC-0001 (artifacts), RFC-0002 (config), RFC-0003 (telemetry & feedback), RFC-0005 (artifact folders), RFC-0007 (lanes), RFC-0010 (Plays / Automations / Runs / Inbox).
+Use [Operating](./operating.md) for normal review, [Knowledge](./knowledge-buckets.md) for context fixes, [Configuration](./configuration.md) for repo wiring, and [/cli](/cli) for command syntax.

@@ -21,10 +21,9 @@ export default function BookPage() {
         <main className="mx-auto max-w-xl px-4 pb-24 pt-28 text-center">
           <h1 className="font-display text-2xl font-bold text-white">Book source not synced</h1>
           <p className="mt-4 text-white/65">
-            Run from repo root: <code className="text-aqua">npm run landing:dev</code> or{" "}
-            <code className="text-aqua">npm run landing:build</code> — the <code className="text-aqua">predev</code> /{" "}
-            <code className="text-aqua">prebuild</code> step copies <code className="text-aqua">documentation/framework/index.md</code>{" "}
-            into <code className="text-aqua">landing/content/book.md</code>.
+            Expected source file: <code className="text-aqua">landing/content/book.md</code>. Run from repo root with{" "}
+            <code className="text-aqua">npm run landing:dev</code> or{" "}
+            <code className="text-aqua">npm run landing:build</code> after restoring that file.
           </p>
         </main>
         <SiteFooter />

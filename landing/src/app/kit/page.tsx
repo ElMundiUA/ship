@@ -6,7 +6,7 @@ import { SiteHeader } from "@/components/site-header";
 export const metadata: Metadata = {
   title: "The Ship kit — patterns, collections, tools",
   description:
-    "One hub for the three kinds of versioned artifacts Ship distributes: patterns (org playbooks), collections (starter bundles), and tools (integrations). Browseable on the site, fetchable with shipctl.",
+    "One hub for the versioned procedures, bundles, and integrations Ship uses to keep agent-assisted delivery reviewable.",
 };
 
 type Tile = {
@@ -27,9 +27,9 @@ type Tile = {
 const TILES: Tile[] = [
   {
     href: "/patterns",
-    kicker: "Plays catalog",
+    kicker: "Procedures",
     title: "Patterns",
-    body: "Versioned markdown procedures — PR self-review, release cuts, knowledge refreshes, scheduled cloud roles. The operator console renders each one as a Play your team picks from a menu and assigns as an Automation.",
+    body: "Versioned markdown procedures for PR self-review, release checks, knowledge refreshes, audits, and other repeatable work.",
     accentText: "text-aqua",
     accentBorderHover: "hover:border-aqua/40",
     accentDot: "bg-aqua",
@@ -73,19 +73,15 @@ export default function KitPage() {
               and versioned.
             </h1>
             <p className="mt-6 max-w-2xl text-lg text-white/70">
-              Ship distributes four kinds of versioned artifacts. They share one repository, one manifest, and one CLI —
-              so the story buyers read on this site and the wiring operators run in their terminal can never silently
-              diverge.
+              Ship distributes reviewable procedures, bundles, and integrations. They share one repository and manifest
+              so product language, developer setup, and agent instructions cannot silently diverge.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
               <Link href="#kinds" className="btn-primary inline-flex">
-                Browse the four kinds
-              </Link>
-              <Link href="/cli" className="btn-secondary inline-flex">
-                shipctl reference →
+                Browse the kit
               </Link>
               <Link href="/docs/concepts" className="btn-secondary inline-flex">
-                What is an artifact? →
+                Product concepts →
               </Link>
             </div>
           </div>
@@ -95,9 +91,9 @@ export default function KitPage() {
         <section id="kinds" className="py-16 sm:py-20">
           <div className="mx-auto max-w-6xl px-4 sm:px-6">
             <div className="mb-10 flex items-baseline justify-between">
-              <h2 className="font-display text-2xl font-bold text-white sm:text-3xl">The four artifact kinds</h2>
+              <h2 className="font-display text-2xl font-bold text-white sm:text-3xl">The kit surfaces</h2>
               <span className="hidden text-xs font-semibold uppercase tracking-[0.2em] text-white/35 sm:inline">
-                Browseable on this site · fetchable with <code className="font-mono text-aqua/85">shipctl</code>
+                Browseable on this site · fetchable for developer setup
               </span>
             </div>
             <div className="grid gap-5 lg:grid-cols-2">
@@ -139,11 +135,11 @@ export default function KitPage() {
           <div className="mx-auto max-w-6xl px-4 sm:px-6">
             <p className="text-xs font-bold uppercase tracking-[0.22em] text-white/45">One reader for every kind</p>
             <h2 className="font-display mt-2 text-2xl font-bold text-white sm:text-3xl">
-              <code className="font-mono text-aqua/95">shipctl</code> is the only thing your repo installs.
+              Developer tooling reads the same catalog the site shows.
             </h2>
             <p className="mt-4 max-w-2xl text-base text-white/65">
-              The catalog you browse on this site is the same manifest the CLI reads. One subcommand per kind, the same
-              flags everywhere, the same provenance string in every PR.
+              The catalog you browse on this site is the same manifest the CLI reads. Engineers use it to prove which
+              procedure, rule, or integration a repo consumed.
             </p>
             <div className="mt-10 grid gap-4 sm:grid-cols-2">
               {[
@@ -157,7 +153,7 @@ export default function KitPage() {
                 },
                 {
                   cmd: "shipctl collection list",
-                  body: "List presets, addendums, and per-agent rule sets. shipctl init --copy-rules installs them.",
+                  body: "List presets, addendums, and per-agent rule sets used by developer setup.",
                 },
                 {
                   cmd: "shipctl tool show <id>",
@@ -178,7 +174,7 @@ export default function KitPage() {
                 Full CLI reference
               </Link>
               <Link href="/getting-started" className="btn-secondary inline-flex">
-                Setup wizard →
+                Product setup →
               </Link>
               <Link href="/docs/authoring" className="btn-secondary inline-flex">
                 Author your own artifact →
@@ -193,14 +189,14 @@ export default function KitPage() {
             <p className="text-xs font-bold uppercase tracking-[0.22em] text-white/45">Looking for something else?</p>
             <h2 className="font-display mt-2 text-2xl font-bold text-white sm:text-3xl">Not in the kit</h2>
             <p className="mt-3 max-w-2xl text-sm text-white/65">
-              The kit is the catalog. The narrative, the operator&rsquo;s reference, and the field proof live elsewhere on this
+              The kit is the catalog. The narrative, product docs, and field proof live elsewhere on this
               site so the four pages above stay focused on browsing.
             </p>
             <ul className="mt-6 grid gap-2 text-sm text-white/75 sm:grid-cols-2">
               {[
                 { href: "/use-cases", label: "Reference deployments & customer stories" },
-                { href: "/docs", label: "Operator's reference (concepts, configuration, operating)" },
-                { href: "/cli", label: "shipctl CLI reference" },
+                { href: "/docs", label: "Product docs and technical reference" },
+                { href: "/cli", label: "CLI reference for developers" },
                 { href: "/book", label: "The book — long-form rationale" },
                 { href: "/getting-started", label: "Interactive setup wizard" },
                 { href: "/docs/authoring", label: "How to author a new artifact" },
