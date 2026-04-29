@@ -7,9 +7,9 @@ import { repoUrl, shipApiBase } from "@/lib/config";
 import { loadPatternsManifest } from "@/lib/patterns";
 
 export const metadata: Metadata = {
-  title: "Patterns — the source of Plays — Ship",
+  title: "Patterns — Ship",
   description:
-    "Patterns are the source of Plays — versioned operational procedures the operator console renders as Plays you assign as Automations. Browse the catalog or fetch any body with the Ship CLI (pattern list/show/fetch).",
+    "Patterns are versioned procedures for repeatable product and engineering work: review, release, knowledge, audit, and safety checks.",
 };
 
 export default function PatternsPage() {
@@ -23,17 +23,16 @@ export default function PatternsPage() {
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_90%_60%_at_50%_-10%,rgba(179,136,255,0.35),transparent_55%)]" />
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_50%_40%_at_100%_20%,rgba(255,213,74,0.12),transparent_50%)]" />
           <div className="relative mx-auto max-w-4xl px-4 text-center sm:px-6">
-            <p className="text-sm font-bold uppercase tracking-widest text-lilac">Catalog · the source of Plays</p>
+            <p className="text-sm font-bold uppercase tracking-widest text-lilac">Catalog · procedures</p>
             <h1 className="font-display mt-4 text-4xl font-bold leading-tight text-white sm:text-5xl">
-              Patterns are the source of Plays
+              Patterns are reusable procedures
             </h1>
             <p className="mx-auto mt-6 max-w-2xl text-lg text-white/70">
-              A <strong className="text-white">pattern</strong> is a versioned, reviewable markdown procedure (RFC-0001) — PR
-              self-review, release cut, knowledge refresh, dependency upgrade. The operator console renders each one as
-              a <strong className="text-white">Play</strong> your team picks from a menu and assigns as an{" "}
-              <strong className="text-white">Automation</strong>. New to the four-noun model?{" "}
+              A <strong className="text-white">pattern</strong> is a versioned, reviewable markdown procedure for work
+              teams repeat: PR self-review, release checks, knowledge refreshes, dependency reviews, and audits. New to
+              the product vocabulary?{" "}
               <Link href="/docs/concepts" className="font-semibold text-aqua underline-offset-2 hover:underline">
-                Read the operator primer →
+                Read the concepts →
               </Link>
             </p>
             <div className="mt-10 flex flex-wrap justify-center gap-3">
@@ -57,10 +56,8 @@ export default function PatternsPage() {
                 <p className="text-xs font-bold uppercase tracking-widest text-aqua">Why</p>
                 <h2 className="font-display mt-2 text-xl font-bold text-white">Improvements land in your Inbox</h2>
                 <p className="mt-3 text-sm leading-relaxed text-white/65">
-                  When an agent flags a tweak during a Run — a missing edge case, a tighter rule, a clearer prompt — it opens
-                  an <strong className="text-white/85">improvement</strong> Inbox item routed to the right owner. Accept it
-                  and the change lands as a normal PR against this repo; once merged, every project that pins the catalog
-                  picks it up on the next <code className="text-aqua/90">shipctl sync</code>.
+                  When an agent or reviewer finds a better rule, it should become an improvement with an owner and a PR,
+                  not a private prompt tweak. Once merged, teams can update through the normal catalog path.
                 </p>
               </div>
               <div className="glass-panel p-6 sm:p-8">
@@ -93,9 +90,8 @@ export default function PatternsPage() {
                 <div>
                   <p className="font-display font-semibold text-white">Pin the repo (or subtree)</p>
                   <p className="mt-1 text-sm leading-relaxed">
-                    Each pattern lives at <code className="text-aqua/90">artifacts/patterns/&lt;id&gt;/ARTIFACT.md</code> with
-                    YAML frontmatter as the single source of truth. Your fork owns the folder; upstream Ship can be merged
-                    like any other dependency.
+                    Each pattern lives at <code className="text-aqua/90">artifacts/patterns/&lt;id&gt;/ARTIFACT.md</code>.
+                    The folder is reviewable, versioned, and safe to pin during rollout.
                   </p>
                 </div>
               </li>
@@ -106,8 +102,8 @@ export default function PatternsPage() {
                 <div>
                   <p className="font-display font-semibold text-white">Give agents a standing policy</p>
                   <p className="mt-1 text-sm leading-relaxed">
-                    In your root agent instructions: before a task, call the methodology API — list patterns, optionally
-                    search, fetch the body, compare to what the workspace already cached, then adapt locally.
+                    Agent rules point at the catalog before a task: list or search procedures, fetch the relevant body,
+                    and record which version shaped the work.
                   </p>
                 </div>
               </li>
@@ -125,11 +121,7 @@ export default function PatternsPage() {
               </li>
             </ol>
             <p className="mt-12 text-center text-sm text-white/50">
-              Operational detail for ElMundi-style wiring lives in{" "}
-              <a className="font-semibold text-aqua underline-offset-2 hover:underline" href={`${repoUrl}/tree/main/documentation/examples/elmundi`}>
-                documentation/examples/elmundi
-              </a>
-              .
+              Keep procedure changes in pull requests so product decisions and agent instructions move together.
             </p>
           </div>
         </section>

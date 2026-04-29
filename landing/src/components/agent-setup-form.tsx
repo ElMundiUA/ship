@@ -125,7 +125,7 @@ function buildPrompt(s: {
   language: string;
 }) {
   const agentsCsv = s.agents.length ? s.agents.join(",") : "cursor";
-  return `You are integrating Ship into THIS repository following the artifacts protocol (RFC-0001).
+  return `You are integrating Ship into THIS repository as developer setup for a product workspace.
 
 Stack hints from the user:
 - Adoption mode: ${s.mode}
@@ -137,22 +137,21 @@ Stack hints from the user:
 
 Rules:
 1. Every artifact you consume MUST be resolved via \`shipctl\` (pattern / tool /
-   collection show|fetch — patterns are what the operator console renders as
-   Plays) and pinned by version. Never vendor the artifact body into this
-   repository.
+   collection show|fetch) and pinned by version. Never vendor the artifact body
+   into this repository.
 2. Record every consumed artifact in the PR description as one line per entry
-   using \`<kind>:<id>@<version>\` (RFC-0001).
+   using \`<kind>:<id>@<version>\`.
 3. \`.ship/config.yml\` is the only source of truth for adapter selection
-   (RFC-0002). Mutate it only via \`shipctl config set\`.
+   in local setup. Mutate it only via \`shipctl config set\`.
 4. Telemetry is opt-in; never enable it without explicit user consent.
 
 Steps:
 1. Run the shipctl command the user copied. Confirm \`.ship/config.yml\` and the
    seeded \`.ship/cache/\` match the preset.
-2. Read the protocol you must obey:
-   - documentation/protocol/rfc-0001-artifacts-protocol.md
-   - documentation/protocol/rfc-0002-shipctl-config.md
-   - documentation/adoption/agent-setup-contract.md
+2. Read the setup docs you must obey:
+   - documentation/configuration.md
+   - documentation/discovery.md
+   - documentation/knowledge-buckets.md
 3. Run a discovery interview: tracker fields, CI stages, release policy,
    evidence trail, secret *names* (never values). Persist answers in the PR.
 4. Resolve and apply the relevant rule + preset collections via \`shipctl\`:
@@ -161,7 +160,7 @@ Steps:
 5. Open one PR with the adoption notes (mapping, gates, secret names,
    follow-ups) and the \`<kind>:<id>@<version>\` list of artifacts consumed.
 
-Day two:
+After setup:
 - \`shipctl doctor\` — refresh stack inference from on-disk signals.
 - \`shipctl sync\` — pull artifact updates (honours \`artifacts.pins\`).
 - \`shipctl verify\` — local + network checks before merging.
@@ -252,7 +251,7 @@ export function AgentSetupForm() {
       {/* Mode toggle */}
       <div className="mt-5 flex flex-wrap gap-1 rounded-xl border border-white/10 bg-black/40 p-1">
         {([
-          { k: "new", label: "new  (greenfield)" },
+          { k: "new", label: "new  (empty repo)" },
           { k: "init", label: "init  (existing repo)" },
           { k: "verify", label: "verify  (smoke test)" },
         ] as const).map((opt) => (
@@ -291,7 +290,7 @@ export function AgentSetupForm() {
             </Field>
           )}
 
-          <Field label="Preset (RFC-0004)">
+          <Field label="Preset">
             <select
               className="input-ship input-ship-wizard"
               value={preset}

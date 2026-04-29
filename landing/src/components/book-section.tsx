@@ -11,13 +11,13 @@ export function BookSection() {
               Long-form rationale that survives the hype cycle
             </h2>
             <p className="mt-5 text-lg text-white/70">
-              Getting started gets you moving. The book explains why the fences exist — duplicate pull requests, label drift,
-              preview habits, and how saying no protects capacity. It is linked from the top of every page so sponsors can
-              read the same narrative engineers reference.
+              Getting started gets the workspace moving. The book explains why the fences exist — duplicate pull requests,
+              label drift, preview habits, and how saying no protects capacity. Product owners, engineering leads, platform,
+              and security should be able to read the same narrative.
             </p>
             <ul className="mt-8 space-y-3 text-sm text-white/75">
               <li className="flex gap-3">
-                <span className="text-aqua">✦</span> Narrative glue for engineering managers and agent operators.
+                <span className="text-aqua">✦</span> Narrative glue for product owners, engineering managers, and platform teams.
               </li>
               <li className="flex gap-3">
                 <span className="text-aqua">✦</span> Shared vocabulary for audits, retros, and vendor reviews.
@@ -37,7 +37,8 @@ export function BookSection() {
                 &ldquo;Operations live in the mean. The flashy demo celebrates the exception.&rdquo;
               </blockquote>
               <p className="relative mt-6 text-sm text-white/55">
-                That is the tone we protect when we say Ship is a methodology layer — not a script dump.
+                That is the tone we protect when we say Ship is a product workspace with a methodology underneath — not a
+                script dump.
               </p>
               <div className="relative mt-8 flex flex-wrap gap-3 text-xs font-semibold uppercase tracking-wide text-white/45">
                 <span className="rounded-full border border-white/15 px-3 py-1">Traceability</span>

@@ -1,148 +1,91 @@
 # Discovery contract
 
-Normative spec for how an agent picks up a repo and brings it to a working
-Ship installation. The contract has five phases (Phase 0 → Phase 4); the
-agent moves to the next phase only when the previous one's deliverables
-exist. Skipping a phase is a contract violation.
+Discovery is the first conversation before Ship changes a repo. Use it when an agent, developer, or platform engineer is bringing a repository into a workspace for the first time.
 
-Audience: anyone integrating an agent (or a human) with Ship for the first
-time on a given repo. Operators rerunning `shipctl` on a configured repo
-do not need this page — see [Operating](/docs/operating).
+The goal is not to collect every possible detail. The goal is to record enough intent, scope, and evidence expectations that setup can be reviewed later.
 
-> **First hour as an operator.** If you're not standing up a new repo
-> but landing on a workspace that is *already* running Ship, the
-> default loop is shorter and the order is fixed:
->
-> 1. Open **[Inbox](/docs/concepts#inbox)** at `/inbox` — anything
->    that needs you (clarifications, approvals, repeated failures,
->    proposed improvements) is here, routed to one owner per item.
->    Drain *Mine*; reassign or snooze the rest.
-> 2. Browse **[Plays](/docs/concepts#plays)** at `/plays` — the
->    catalog of operational procedures organised into seven
->    categories. **Run now** on a card if you want to see the output
->    once; **Automate** if you want it on a cadence.
-> 3. Check **Coverage** at `/automations?tab=coverage` — sorted by
->    uncovered count, with critical Plays badged red. *Apply to all
->    uncovered* opens one PR per affected repo. See
->    [Automations](/docs/automations) for the full walkthrough.
-> 4. Drop into **[Runs](/docs/concepts#runs)** at `/runs` to read
->    outcomes and trace any escalation back to its Inbox item.
->
-> Use this Discovery contract when you're an *agent* bringing a new
-> repo onto Ship for the first time. Use the four-step loop above
-> when you're an *operator* opening the console on a Monday morning.
+## Who uses this page
 
-## Phase 0 — machine-readable preamble (required)
+- Product owners use it to make sure the workspace matches how the team decides work.
+- Engineers use it to avoid guessing tracker, CI, agent, and secret setup.
+- Agents use it as a stop condition: do not write files until the required answers are known.
 
-Before opening the interview, the agent MUST:
+If the workspace is already wired, use [Operating](./operating.md) instead.
 
-1. **Look for `.ship/config.yml`.** If present, parse it (RFC-0002). Use
-   `stack.tracker / stack.ci / stack.preset / stack.agents / stack.language`
-   as defaults; surface them to the human for confirmation rather than
-   re-asking blindly.
-2. **Run `shipctl doctor --json`.** This calls every adapter's `detect(cwd)`
-   hook (RFC-0004) and returns an inferred stack with confidence scores
-   plus evidence. Offer those values as the default answers in Phase 1.
-   Add `--write-inventory` if the human consents — `shipctl init --bootstrap`
-   reads `.ship/inventory.json` to skip re-detection.
-3. **Record every confirmed answer explicitly.** The agent keeps a structured
-   block (yaml or json) with one key per Phase 1 question and writes it to
-   the PR description so reviewers can audit which answers were inferred,
-   confirmed, or overridden. The same block is the input to
-   `shipctl init --bootstrap`.
+## Phase 0 — inspect what already exists
 
-If `.ship/config.yml` is absent and `shipctl doctor` is not yet installed,
-fall straight into Phase 1 and run `shipctl init` at the end of Phase 3.
+Before asking questions, inspect the repo and workspace:
 
-## Phase 1 — discovery interview (required)
+- Is there already a `.ship/config.yml`?
+- Which agents have on-disk markers?
+- Which CI provider is present?
+- Which tracker references appear in branches, PRs, or issue links?
+- Are there existing knowledge files under `.ship/knowledge/`?
 
-The agent must ask and confirm:
+Use `shipctl doctor` when local CLI access is available. Treat its output as evidence to confirm, not as permission to proceed silently.
 
-1. **Tracker**: system (`linear|jira|github-issues|azure-boards|clickup|spreadsheet|none`), states, labels/fields, API limitations.
-2. **Scheduler/CI**: what can run on cron/manual/webhook (`gh-actions|gitlab-ci|buildkite|circleci|azure-pipelines|jenkins|manual`).
-3. **Agent runtime**: any subset of the 13 supported (Cursor, Codex, Claude/Claude-md, Copilot, Aider, Cline, Continue, Windsurf, Zed, Gemini, OpenCode, Cursor Cloud, Agents.md). Multiple are common.
-4. **Quality model**: manual QA role, QA automation scope, regression cadence.
-5. **Release policy**: manual or scheduled prod promote, required gates.
-6. **Communication**: digest/retro email recipients (recommend DL aliases).
-7. **Constraints**: compliance, data residency, no-go actions, addendums needed (`addendum-pharma`, `addendum-fin`, …).
-8. **Preset**: choose one of `web-app|api-backend|mobile-app|cli|monorepo|adoption-minimum`.
+## Phase 1 — confirm ownership and scope
 
-Each answer overrides the corresponding default surfaced from Phase 0.
+Ask these questions in plain language:
 
-## Phase 2 — adaptation proposal
+1. Which product area or team owns this workspace?
+2. Which repos should Ship observe or help wire?
+3. Which tracker is the record of product intent?
+4. Which states mean “not ready”, “ready”, “active”, “blocked”, “review”, and “done”?
+5. Who can approve risky changes or policy exceptions?
+6. Which agents may be used, and where should their rules live?
+7. Which secrets are required, and which secret store owns them?
+8. Which product or repo facts should become knowledge before the first meaningful run?
 
-Agent provides 1-2 concrete implementation options with trade-offs:
+Record confirmed answers in the setup PR, onboarding note, or workspace record.
 
-- fast/simple option,
-- stricter/governance-first option.
+## Phase 2 — propose the setup
 
-User chooses one before file edits. The chosen option is stored alongside
-the Phase 1 record so the PR description shows both.
+Give one recommended setup and, if useful, one stricter alternative. Each proposal should name:
 
-## Phase 3 — implementation
+- repos to activate;
+- tracker and owner mapping;
+- knowledge to seed;
+- agent rule targets;
+- automations to enable now versus later;
+- evidence each automation must leave;
+- human follow-up needed for secrets or permissions.
 
-Before writing any file, the agent MUST follow the **artifact protocol**
-(RFC-0001):
+Do not hide uncertainty. If an answer is unknown, leave it as a blocker or Inbox item rather than guessing.
 
-- Fetch `collection/agent-rules-<self>` for each agent the human picked
-  (one per id) via `shipctl collection show <id>` or `shipctl collection
-  fetch <id>`. The agent installs the body at the `install_target` declared
-  in the artifact's front-matter, with the `marker` block, and a footer
-  `<!-- ship-cli: installed-from collection/agent-rules-<id>@<version> -->`.
-  This is exactly what `shipctl init --copy-rules` automates.
-- Fetch `collection/preset-<preset>` for the chosen preset and apply its
-  scaffolding (CI workflow, labels, secret list). For unsupported preset
-  triples, `shipctl init --bootstrap` writes a `SHIP_BOOTSTRAP_PLAN.md`
-  with the next-step checklist.
-- Fetch any active addendum collections and apply them on top of the preset
-  (addendums tighten or annotate; they never silently relax a base rule).
+## Phase 3 — implement through reviewable changes
 
-After installation the agent records every consumed artifact in the final
-PR description as `<kind>:<id>@<version>`, one per line. The list is paired
-with the v2 `lanes:` block that actually runs each pattern — each row is
-an [Automation](/docs/automations) in the operator console (schema v2 is
-the default for new installs; for repos still on v1, run `shipctl migrate`
-before authoring the lane block):
+When the human accepts the setup:
 
-```
-collection:agent-rules-cursor@1.0.0
-collection:preset-web-app@2.1.3
-pattern:role-developer@1.4.2
-pattern:flow-daily-retro@1.2.0
+- connect or activate the repo through the console where possible;
+- install or refresh versioned agent rules through the supported CLI path;
+- add knowledge files or articles through reviewable changes;
+- configure secrets through the platform, not committed files;
+- open PRs for repo changes instead of mutating hidden state;
+- record which artifacts, prompts, rules, or templates were consumed.
 
-lanes.daily_retro.kind: schedule
-lanes.daily_retro.cron: "0 9 * * 1-5"
-lanes.daily_retro.pattern: flow-daily-retro
-```
+The setup should leave enough evidence that a reviewer can see what was installed and why.
 
-Concrete deliverables for Phase 3:
+## Phase 4 — validate
 
-- setup runbook,
-- mapping docs (tracker states/labels equivalents),
-- automation entrypoints (`.github/workflows/ship-pilot.yml` or equivalent),
-- quality/release gates,
-- daily digest + retro definitions,
-- `.ship/config.yml` updated via `shipctl config set` (never edited by hand),
-- `.env.example` extended via the `# --- ship-managed ---` block.
+Before calling setup complete, show:
 
-## Phase 4 — validation
-
-Agent must show:
-
-- what was changed (diff scoped per file),
-- what still requires human secrets/permissions,
-- first green-path test plan,
-- rollback path,
-- output of `shipctl verify` (and `shipctl verify --no-network` for offline
-  reviews) — every check name + status,
-- the consumed-artifact list with versions, mirrored in the PR description.
+- workspace and repo activation status;
+- tracker binding status;
+- knowledge seeded or intentionally deferred;
+- secrets configured or still waiting on a human;
+- local `shipctl verify` result when CLI wiring changed;
+- any Inbox items created for unresolved decisions;
+- rollback path for generated repo changes.
 
 ## Non-negotiable rules
 
 - No secret commits.
-- No destructive changes without explicit approval.
-- No silent assumptions when infrastructure is unknown.
-- Every automated transition must leave evidence.
-- No copying of artifact bodies into the client repo — reference id + version.
-- No mutation of `.ship/config.yml` outside `shipctl config` calls.
-- Feedback is opt-in and human-initiated only (`shipctl feedback submit`).
+- No silent assumptions about tracker states, ownership, or release gates.
+- No automation without a named scope and evidence destination.
+- No agent rules that cannot be reviewed or rolled back.
+- No claim of success without a visible record.
+
+## Where to next
+
+Use [Getting started](/getting-started) for the product flow, [Configuration](./configuration.md) for local files, [Knowledge](./knowledge-buckets.md) for context, and [Troubleshooting](./troubleshooting.md) when validation fails.

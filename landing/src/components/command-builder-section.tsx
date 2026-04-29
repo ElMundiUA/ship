@@ -6,15 +6,13 @@ export function CommandBuilderSection() {
       <div className="mx-auto max-w-5xl px-4 sm:px-6">
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div className="max-w-3xl">
-            <p className="text-sm font-bold uppercase tracking-widest text-aqua/90">Command builder</p>
+            <p className="text-sm font-bold uppercase tracking-widest text-aqua/90">Developer setup</p>
             <h2 className="font-display mt-2 text-3xl font-bold text-white sm:text-4xl">
-              Build your <code className="rounded bg-white/10 px-2 py-0.5 font-mono text-aqua/90">shipctl</code> command
+              Keep local setup reviewable when your team needs it
             </h2>
             <p className="mt-4 text-lg text-white/65">
-              Pick an adoption path, preset, tracker, CI, and the agents on your laptop. You get an exact{" "}
-              <code className="rounded bg-white/10 px-1 font-mono text-aqua/90">shipctl init</code> /
-              <code className="rounded bg-white/10 px-1 font-mono text-aqua/90"> new</code> command to paste, plus a
-              starter agent prompt primed with the RFC-0001 artifacts protocol framing. Nothing is uploaded — all of it
+              Most product owners start in the console. Developers and platform teams can still generate the exact local
+              setup command for agent rules, config checks, and reproducible repo wiring. Nothing is uploaded — all of it
               stays in your browser until you copy.
             </p>
           </div>

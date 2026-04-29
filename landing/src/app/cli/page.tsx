@@ -11,7 +11,7 @@ import { repoRoot } from "@/lib/repo-path";
 export const metadata: Metadata = {
   title: "shipctl CLI — Ship",
   description:
-    "shipctl is Ship's CLI: bootstrap a repo, sync the Plays catalog, run Automations, and report Runs. One binary, one config (.ship/config.yml), zero vendor lock-in.",
+    "shipctl is Ship's developer workbench: local setup, artifact sync, verification, config, knowledge, and agent rule installation.",
 };
 
 function readCliReadme(): string {
@@ -30,7 +30,7 @@ const COMMANDS: { cmd: string; blurb: string }[] = [
   {
     cmd: "shipctl init",
     blurb:
-      "Bootstrap an existing repo: write agent rules into the agent files you already have (Cursor, AGENTS.md, CLAUDE.md, …) and seed the Plays catalog into .ship/cache/. Detects what is on disk; --dry-run shows the plan.",
+      "Bootstrap repo-level developer setup: config, detected stack, selected artifacts, and agent rule files. --dry-run shows the plan.",
   },
   {
     cmd: "shipctl doctor",
@@ -40,7 +40,7 @@ const COMMANDS: { cmd: string; blurb: string }[] = [
   {
     cmd: "shipctl sync",
     blurb:
-      "Fetch the artifacts your config asks for (collections, agent rules, Plays) into .ship/cache/. With --lock writes .ship/shipctl.lock.json that pins every Play the declared lanes depend on.",
+      "Fetch the artifacts your config asks for into .ship/cache/. With --lock writes .ship/shipctl.lock.json for reproducibility.",
   },
   {
     cmd: "shipctl verify",
@@ -50,22 +50,22 @@ const COMMANDS: { cmd: string; blurb: string }[] = [
   {
     cmd: "shipctl new",
     blurb:
-      "Greenfield path: git init, minimal README, .ship/config.yml from your stack flags, then init --copy-rules in one shot.",
+      "Empty-repo path: git init, minimal README, .ship/config.yml from your stack flags, then init --copy-rules in one shot.",
   },
   {
     cmd: "shipctl run",
     blurb:
-      "One-shot dispatch for an Automation. kind: once lanes execute locally; other lane kinds are queued for the workspace runner via .github/workflows/run-agent.yml.",
+      "Technical dispatch for configured routines. Use it when the repo-level workflow needs local or CI execution.",
   },
   {
     cmd: "shipctl lanes",
     blurb:
-      "Generate / inspect / delete the .github/workflows/ship-<lane>.yml thin wrappers around each Automation (install / list / remove). Also available as shipctl automations.",
+      "Legacy wrapper reconciler for generated .github/workflows/ship-<id>.yml files. Kept for already-seeded repos.",
   },
   {
     cmd: "shipctl callback",
     blurb:
-      "Pattern-side: report a Run's terminal status + RunSummary so Ship can render the row in /runs and route any escalations into /inbox.",
+      "Report a terminal status and structured outcome back to Ship so the workspace can show evidence and route decisions.",
   },
   {
     cmd: "shipctl knowledge init",
@@ -88,17 +88,17 @@ export default function CliPage() {
           <div className="relative mx-auto max-w-4xl px-4 text-center sm:px-6">
             <p className="text-sm font-bold uppercase tracking-widest text-aqua">CLI</p>
             <h1 className="font-display mt-4 text-4xl font-bold leading-tight text-white sm:text-5xl">
-              One binary. One config. Every Ship action.
+              Developer setup for a product workspace.
             </h1>
             <p className="mx-auto mt-6 max-w-2xl text-lg text-white/70">
               <code className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-aqua/95">shipctl</code> is the only thing
-              your repo needs to install. It writes{" "}
+              your repo needs when local control matters. It writes{" "}
               <code className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-aqua/95">.ship/config.yml</code>, fetches
-              artifacts on demand, and tells your agent what is true today — without locking you to a vendor.
+              versioned artifacts, installs agent rules, and verifies setup without becoming the product entry point.
             </p>
             <div className="mt-10 flex flex-wrap justify-center gap-3">
               <Link href="/getting-started" className="btn-primary inline-flex">
-                Build your init command
+                Product setup
               </Link>
               <a href="#install" className="btn-secondary inline-flex">
                 Install
@@ -149,7 +149,7 @@ export default function CliPage() {
           <div className="mx-auto max-w-4xl px-4 sm:px-6">
             <h2 className="font-display text-2xl font-bold text-white sm:text-3xl">Quick commands</h2>
             <p className="mt-3 max-w-2xl text-base text-white/65 sm:text-lg">
-              The verbs you actually run day-to-day, grouped roughly Setup → Catalog → Run → Knowledge. Every command
+              The verbs developers actually run, grouped roughly Setup → Catalog → Run → Knowledge. Every command
               supports <code className="rounded bg-white/10 px-1 font-mono text-aqua/90">--json</code>,{" "}
               <code className="rounded bg-white/10 px-1 font-mono text-aqua/90">--cwd</code>, and{" "}
               <code className="rounded bg-white/10 px-1 font-mono text-aqua/90">--dry-run</code> where it makes sense.
@@ -157,11 +157,8 @@ export default function CliPage() {
               <code className="rounded bg-white/10 px-1 font-mono text-aqua/90">shipctl help</code>.
             </p>
             <p className="mt-3 text-xs uppercase tracking-[0.18em] text-white/45">
-              Vocabulary · <code className="font-mono text-aqua/80">lanes:</code> in YAML and{" "}
-              <code className="font-mono text-aqua/80">--lane</code> on the CLI stay literal forever; the operator
-              console renders the same things as <span className="text-white/70">Automations</span> /{" "}
-              <span className="text-white/70">Plays</span> / <span className="text-white/70">Runs</span> /{" "}
-              <span className="text-white/70">Inbox</span>.
+              Product docs use workspace, knowledge, Inbox, automation, and evidence. This page keeps the literal CLI
+              names developers need when reviewing files and commands.
             </p>
             <ul className="mt-8 space-y-3">
               {COMMANDS.map((row) => (
@@ -207,15 +204,14 @@ export default function CliPage() {
               >
                 <span className="font-display text-base font-bold text-white group-hover:text-aqua">Getting started</span>
                 <p className="text-sm leading-relaxed text-white/60">
-                  Pick a path, generate the exact <code className="font-mono">shipctl init</code> command, paste the prompt
-                  into your agent.
+                  Start from workspace, repo, tracker, knowledge, dashboard, and Inbox.
                 </p>
               </Link>
               <Link
                 href="/docs"
                 className="group flex flex-col gap-2 rounded-2xl border border-white/10 bg-gradient-to-br from-white/[0.04] to-transparent p-5 text-left transition hover:border-aqua/40 hover:bg-white/[0.06]"
               >
-                <span className="font-display text-base font-bold text-white group-hover:text-aqua">Adoption hub</span>
+                <span className="font-display text-base font-bold text-white group-hover:text-aqua">Docs</span>
                 <p className="text-sm leading-relaxed text-white/60">
                   How a real team sequences PRs, lands the first agent, and rolls out across squads.
                 </p>

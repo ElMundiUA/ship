@@ -19,9 +19,9 @@ export default function Home() {
         <HeroSection />
         <HowItWorksSection />
         <OperatorLoopSection />
-        <CommandBuilderSection />
         <PillarsSection />
         <KitSurfaceSection />
+        <CommandBuilderSection />
         <BookSection />
         <PatternsSection />
         <ExamplesSection />

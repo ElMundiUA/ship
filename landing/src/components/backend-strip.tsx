@@ -3,7 +3,7 @@ import Link from "next/link";
 const capabilities = [
   {
     title: "Search the methodology library",
-    body: "Ask in plain language and get pointed to the right chapters and playbooks — useful when an agent or script needs context before opening a ticket.",
+    body: "Ask in plain language and get pointed to the right docs, procedures, and integration notes before an agent or script acts.",
   },
   {
     title: "Pull the full chapter",
@@ -28,8 +28,8 @@ export function BackendStrip() {
               the same documentation humans read — plus list pattern metadata — without scraping HTML.
             </p>
             <p className="mt-4 text-sm text-white/50">
-              Catalogs for patterns (Plays), tools, and collections stay in-repo; operators usually manage those through
-              the Ship CLI and the operator console without running the service.
+              Catalogs for patterns, tools, and collections stay in-repo; product teams use the console while developers
+              use the CLI when local control is needed.
             </p>
             <Link href="/docs/tools/backend-api" className="btn-secondary mt-8 inline-flex">
               Technical reference

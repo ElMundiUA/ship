@@ -3,9 +3,9 @@ import Link from "next/link";
 import { ACCENT_HOVER_BORDER, ACCENT_TEXT, DOCS_NAV } from "@/lib/docs-nav";
 
 export const metadata: Metadata = {
-  title: "Ship docs — operator's reference",
+  title: "Ship docs — product workspace guide",
   description:
-    "The Docs are the operator's reference for Ship: how the framework works on disk, what the moving parts are called, and how to keep a working installation working.",
+    "Docs for setting up and operating Ship workspaces: repos, trackers, knowledge, Inbox, automations, evidence, and CLI reference.",
 };
 
 export default function DocsHomePage() {
@@ -15,24 +15,25 @@ export default function DocsHomePage() {
       <section className="docs-hero">
         <p className="docs-hero-kicker">Get started with Ship</p>
         <h1 className="docs-hero-title">
-          Run the wizard, then read the{" "}
+          Connect the product workspace, then keep the{" "}
           <span className="bg-gradient-to-r from-aqua via-lilac to-coral bg-clip-text text-transparent">
-            operator&rsquo;s reference
+            evidence trail
           </span>
-          .
+          {" "}readable.
         </h1>
         <p className="docs-hero-lede">
-          The setup wizard prints the exact <code className="rounded-md border border-white/10 bg-white/[0.06] px-1.5 py-0.5 font-mono text-[0.9em] text-aqua/95">shipctl init</code> command for your stack and agents. Everything below is the operator&rsquo;s reference: how the framework works on disk, what the moving parts are called, and how to keep a working installation working.
+          Start with a workspace, connected repos, tracker binding, knowledge, and an Inbox for decisions. The technical
+          reference is still here for developers and platform teams, but the first path is about ownership and evidence.
         </p>
         <div className="mt-7 flex flex-wrap gap-3">
           <Link href="/getting-started" className="btn-primary inline-flex">
-            Run the setup wizard
+            Plan workspace setup
           </Link>
           <Link href="/docs/concepts" className="btn-secondary inline-flex">
-            Browse concepts
+            Browse product concepts
           </Link>
           <Link href="/cli" className="btn-secondary inline-flex">
-            shipctl reference →
+            CLI reference →
           </Link>
         </div>
       </section>
@@ -86,9 +87,8 @@ export default function DocsHomePage() {
           Not in the Docs
         </h2>
         <p className="mt-3 max-w-2xl text-sm text-white/65">
-          If a Docs page repeats one of these surfaces, it is a bug — open an
-          issue. They live at the top level of the site so buyers and operators
-          land on them first.
+          Some surfaces live outside this manual so product owners, platform teams,
+          and engineers can enter at the right altitude.
         </p>
         <ul className="mt-6 grid gap-2 text-sm text-white/75 sm:grid-cols-2">
           {[

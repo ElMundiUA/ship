@@ -9,9 +9,9 @@ const tiles = [
   },
   {
     href: "/patterns",
-    kicker: "Source of Plays",
+    kicker: "Reusable procedures",
     title: "Patterns",
-    body: "Versioned Markdown procedures — PR self-review, release cuts, knowledge refreshes — that the operator console renders as Plays you assign as Automations.",
+    body: "Versioned Markdown procedures for repeatable work: PR self-review, release checks, knowledge refreshes, and audits.",
   },
   {
     href: "/collections",
@@ -34,8 +34,8 @@ export function KitSurfaceSection() {
         <p className="text-sm font-bold uppercase tracking-widest text-aqua/90">What you get in the box</p>
         <h2 className="font-display mt-2 text-3xl font-bold text-white sm:text-4xl">Docs, book, and catalogs — one experience</h2>
         <p className="mt-4 max-w-3xl text-lg text-white/65">
-          Buyers read the narrative; operators browse tools and patterns; engineers deep-link into chapters. Everything
-          ships from the same repository so the story and the wiring cannot silently diverge.
+          Product owners read the workflow; platform teams review integrations; engineers deep-link into the technical
+          reference. Everything ships from the same repository so the story and the wiring cannot silently diverge.
         </p>
         <div className="mt-12 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
           {tiles.map((t) => (
@@ -55,20 +55,19 @@ export function KitSurfaceSection() {
         <div className="mt-10 grid gap-5 md:grid-cols-2">
           <div className="rounded-2xl border border-aqua/25 bg-gradient-to-br from-aqua/[0.08] to-transparent p-6 sm:p-8">
             <p className="text-xs font-bold uppercase tracking-widest text-aqua/90">Toolchain</p>
-            <h3 className="font-display mt-2 text-xl font-bold text-white">Ship CLI — unified control</h3>
+            <h3 className="font-display mt-2 text-xl font-bold text-white">Developer setup stays versioned</h3>
             <p className="mt-3 text-sm leading-relaxed text-white/65">
-              One terminal entry point lists patterns, tools, and collections from the same manifests this site
-              renders — so operators, scripts, and agents never argue about which copy is “current.”
+              The CLI lists patterns, tools, and collections from the same manifests this site renders, so scripts,
+              agents, and pull requests can prove which instructions they used.
             </p>
-            <p className="mt-4 text-xs text-white/45">Shipped with the repo; documented under Getting started.</p>
+            <p className="mt-4 text-xs text-white/45">Shipped with the repo; documented under CLI reference.</p>
           </div>
           <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-6 sm:p-8">
-            <p className="text-xs font-bold uppercase tracking-widest text-white/40">Operator console</p>
-            <h3 className="font-display mt-2 text-xl font-bold text-white">Inbox · Plays · Automations · Runs</h3>
+            <p className="text-xs font-bold uppercase tracking-widest text-white/40">Product console</p>
+            <h3 className="font-display mt-2 text-xl font-bold text-white">Dashboard · Inbox · Knowledge · Integrations</h3>
             <p className="mt-3 text-sm leading-relaxed text-white/65">
-              Four product nouns mirror the four protocol surfaces. The Navigator agent — same chat window — has tools
-              for every one: triage the Inbox, run a Play, toggle an Automation, query Runs. Members can ask, admins
-              can mutate.
+              The console shows the live workspace: health, work in progress, shipped outcomes, repo wiring, decisions,
+              and knowledge that agents can use without improvising.
             </p>
             <p className="mt-4 text-xs text-white/45">
               Shipped today; documented under{" "}
