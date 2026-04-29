@@ -20,13 +20,13 @@ const sans = DM_Sans({
 });
 
 export const metadata: Metadata = {
-  title: "Ship — methodology your agent can run",
+  title: "Ship — product delivery workspace",
   description:
-    "Ship is a methodology kit for shipping safer, faster: Plays you assign as Automations, Runs you watch, an Inbox that catches what needs you. Apache-2.0; one CLI; one config.",
+    "Ship connects repos, trackers, knowledge, automations, and evidence so product owners can steer AI-assisted delivery without losing human ownership.",
   metadataBase: resolveMetadataBase(),
   openGraph: {
     title: "Ship",
-    description: "Plays, Automations, Runs, Inbox — the operator loop your agent can run.",
+    description: "A product delivery workspace for decisions, evidence, knowledge, and bounded agent-assisted work.",
     type: "website",
   },
 };

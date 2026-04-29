@@ -1,231 +1,88 @@
-# Knowledge buckets
+# Knowledge
 
-A **knowledge bucket** is a scoped, named collection of retrievable
-articles the agent can consult at render time. Patterns are *methods*;
-buckets are the *content* those methods look up when they need
-project-specific facts (code style, brand rules, API contracts, prior
-incidents). Buckets close the gap between "the pattern is universal"
-and "the answer is specific to this repo".
+Knowledge is the product and repo context Ship can use without guessing. It keeps prompts thin and decisions traceable: code style, test commands, product rules, runbooks, brand voice, integration notes, and lessons from repeated clarifications.
 
-The end-to-end pipeline — storage, inbound adapters, resolver, console
-surface — landed across Phases 1–8 in April 2026. This page is the
-operator's reference; the authoritative schema lives in
-`backend/app/db/models/agent_memory.py` and the service code under
-`backend/app/services/`.
+Patterns and automations describe **how** work should happen. Knowledge describes **what is true here**.
 
-## The model
+## What belongs in knowledge
 
-- **Bucket** (`knowledge_buckets` row) — a named, scoped container
-  (`slug`, `name`, optional description) bound to a workspace and to
-  one scope carrier.
-- **Article** (`bucket_articles` row) — a single retrievable chunk
-  with `title`, `body_md`, `version`, `status`, `provenance`, and an
-  embedding for vector search. One bucket may carry many articles; one
-  slug is published at a time.
-- **Scope** — one of `workspace | project | repo | user`. Declared
-  as `scope_kind` on the bucket and enforced by
-  `ck_knowledge_buckets_scope_carrier` in the DB (exactly one scope
-  carrier FK is non-null per scope).
-- **Source** — how the bucket obtains its content. `source_kind` is
-  one of `agent_memory`, `repo_files`, `external_static`,
-  `connector_proxy`, `audio_transcript`.
-- **Topic** — the join key between a pattern and a bucket. Patterns
-  declare `spec.knowledge_topics: [...]` (see
-  [RFC-0008 § Metadata schema](/docs/protocol/rfc-0008-catalog-reform#metadata-schema));
-  buckets carry topic tags on their articles.
+Add knowledge when the answer is reusable:
 
-### Scopes at a glance
+- how to run tests in this repo;
+- how the product names features or customer segments;
+- which API contracts are stable;
+- which rollout or rollback policy applies;
+- which files are safe or unsafe to touch;
+- how a recurring clarification should be answered next time.
 
-| Scope        | Visibility                                | Typical use                                                       |
-|--------------|-------------------------------------------|-------------------------------------------------------------------|
-| `workspace`  | Every member of the workspace             | Org-wide rules: brand, tone, security policy                      |
-| `project`    | Every repo grouped under the project      | Cross-repo conventions: shared API contracts, design system       |
-| `repo`       | One repo                                  | `.ship/knowledge/*.md` mirrors: code style, runbooks              |
-| `user`       | The signed-in user only (private)         | Per-user memory; Phase 8 privacy guards on read and write         |
+Do not use knowledge for secrets, temporary chat transcripts without review, or one-off decisions that belong on a ticket.
 
-The resolver (`backend/app/services/agent/topic.py`) walks the ladder
-most-specific-first: repo shadows project shadows workspace; the
-`user` overlay sits alongside as a private layer for the signed-in
-user. See `backend/app/db/models/agent_memory.py:BucketScope` for the
-authoritative enum.
+## Scope
 
-## On-disk contract: `.ship/knowledge/`
+Knowledge can live at different scopes:
 
-The simplest way to land content is to commit Markdown under
-`.ship/knowledge/*.md` in an activated repo. The backend mirrors each
-file into a `source_kind='repo_files'`, `scope_kind='repo'` bucket via
-`backend/app/services/bucket_repo_files_sync.py`, keyed on the file's
-basename (minus `.md`). Mirroring fires on push-webhook, on first repo
-activation, and on the `POST /repos/{id}/kb/reindex` admin call.
+| Scope | Use it for |
+| --- | --- |
+| Workspace | Company or team-wide policy, brand, security, delivery rules. |
+| Project | Shared facts across related repos or a product line. |
+| Repo | Code style, test commands, runbooks, architecture notes. |
+| User | Private memory for the signed-in user where supported. |
 
-Today's on-disk shape is deliberately minimal — plain Markdown, H1
-taken as the bucket title, body is the single article (slug `"main"`,
-version bumps on edit). Structured frontmatter on knowledge files is
-not yet read; for the authoritative per-field contract see
-`backend/app/services/bucket_repo_files_sync.py` (Phase 5a scope
-comment explains the single-article-per-file rule and lists what the
-row carries — path, `content_sha`, branch, excerpt).
+The resolver prefers the most specific relevant knowledge. Repo knowledge can override project or workspace guidance when that repo has a real exception.
 
-Git is canonical:
+## Repo knowledge
 
-- **Edits** bump the article version; the old row flips to
-  `superseded`.
-- **Deletes** set `archived_at` on the bucket row — nothing is
-  hard-dropped, so downstream citations stay resolvable.
-- **Idempotency.** Re-running sync with the same SHA is a no-op, so a
-  webhook that touches 99 unrelated files doesn't rewrite 100 rows.
+The simplest source is Markdown under `.ship/knowledge/*.md` in a connected repo. Keep files short and named by topic:
 
-The CLI entry point is `shipctl knowledge` (see
-`cli/lib/commands/knowledge.mjs`). Today it ships one subcommand —
-`shipctl knowledge init` — which posts to the backend's `knowledge_seed`
-endpoint and opens a PR dropping `code-style.md` + `ui-runbook.md`
-starters under `.ship/knowledge/`. The starter list is held in lockstep
-with `backend.app.services.catalog.KNOWLEDGE_STARTERS`.
+```text
+.ship/knowledge/
+  code-style.md
+  testing.md
+  product-context.md
+  release.md
+```
 
-## The Distiller
+When the repo is activated or updated, Ship mirrors these files into the workspace knowledge surface. Edits should go through normal review because agents may use the content later.
 
-The Distiller is the LLM-backed classifier at
-`backend/app/services/distiller.py`. It turns raw inbound content into
-`bucket_articles` rows with topic + scope tags. Entry points:
+## Imported knowledge
 
-| Endpoint                                                   | Phase | Purpose                                                              |
-|------------------------------------------------------------|-------|----------------------------------------------------------------------|
-| `POST /v1/workspaces/{ws}/buckets/{slug}/distill`           | 6a    | Run the classifier against a pending source payload.                 |
-| `POST /v1/workspaces/{ws}/buckets/{slug}/upload`            | 6c    | External-static upload (file or paste); routes into the classifier.  |
-| `POST /v1/workspaces/{ws}/buckets/{slug}/sync`              | 7b    | Connector-proxy sync (refetches the upstream + runs classifier).     |
-| `GET  /v1/workspaces/{ws}/buckets/{slug}/distill/runs`      | 6a    | Run history, rendered on the bucket detail page.                     |
+The console can also ingest or sync knowledge from uploaded content and connected sources such as Notion or tracker items where the backend supports it. Imported content should still have provenance: where it came from, when it was fetched, and who approved it for use.
 
-Inbound adapters (`backend/app/services/distiller_sources.py`):
+## Distillation and review
 
-- **`.ship/knowledge/*.md` repo mirror** — Phase 2; the `repo_files`
-  source.
-- **External-static upload** — Phase 6c; the console's "Upload" card
-  on the bucket detail page.
-- **Notion connector** — Phase 7c;
-  `backend/app/integrations/` fetcher projects pages into a
-  `connector_proxy` bucket.
-- **Linear connector** — Phase 7c; same shape, issues as articles.
-- **Agent memory** — packed chat summaries from the Navigator,
-  routed through `TopicService.pack_topic`.
-- **Audio transcript** — interview transcripts ingested into articles.
+Ship can classify raw content into knowledge articles, but human review still matters. The safe flow is:
 
-Every adapter routes through the same `run_distiller(...)` contract, so
-topic / scope tagging and staging semantics stay identical across
-sources.
+1. Import or mirror content.
+2. Let the system propose topic and scope.
+3. Review the article.
+4. Publish it for agents and reviewers.
+5. Supersede or archive it when it changes.
 
-## Console surface
+No knowledge path should silently turn a private note into policy.
 
-- `/knowledge` (`console/src/app/knowledge/page.tsx`) — scope-aware
-  bucket list. The scope pill in AppShell (Phase 4a) switches the
-  active context and the page re-renders with the resolver's output
-  for the chosen scope.
-- **Bucket detail** — article list (reads from `bucket_articles`),
-  upload surface (Phase 7a), connector-proxy create/sync surface
-  (Phase 7b), Distiller run history.
-- **Scope pill propagation** (Phase 4b) — the current scope travels to
-  every operator surface that needs it: [Plays](./concepts.md#plays),
-  [Automations](./automations.md), [Runs](./concepts.md#runs), the
-  [Inbox](./concepts.md#inbox), and the [Navigator](./concepts.md#navigator).
-  Each surface accepts `?repo=<id>` and renders a filtered view; the
-  scope pill is what keeps them all agreeing on "what the user is
-  currently inside".
+## Knowledge and the Inbox
 
-## Per-user memory
+Knowledge is reference material. Inbox items are decisions.
 
-Phase 8 added a `scope_kind='user'` bucket per authenticated user.
-Privacy guards on the read path make sure a user only sees their own
-`user`-scoped articles; the write path refuses to land a `user` row
-under someone else's id. The overlay is parallel to the team ladder —
-team reads still walk `workspace → project → repo`, and the `user`
-layer adds private notes on top for the signed-in session. See
-`backend/tests/test_v1_user_memory_bucket.py` for the enforced
-semantics.
+If the same clarification appears repeatedly, add or update knowledge. If a piece of knowledge creates a new risk or trade-off, open or route an Inbox item so a human can decide.
 
-## Pattern ↔ bucket wiring
+## Good article shape
 
-Two entry points for a pattern (or the [Navigator](./concepts.md#navigator))
-to consult a bucket:
+A useful article usually has:
 
-- **Declarative.** `spec.knowledge_topics: [...]` in the pattern's
-  frontmatter. Normative declaration in
-  [RFC-0008](./protocol/rfc-0008-catalog-reform.md#metadata-schema).
-  At render time the resolver walks the scope ladder and returns the
-  most-specific article per topic.
-- **Imperative.** Agent tools exposed by
-  `backend/app/services/agent/tools.py`:
-  - `list_buckets` — enumerate buckets visible to the current scope.
-  - `search_buckets` / `knowledge_search_v2` — vector search over
-    `bucket_articles` (Phase 5d reads from the articles table;
-    previously read from `bucket_summaries`).
-  - `get_knowledge_bucket` — fetch one bucket by slug with its
-    articles.
+- a clear title;
+- one topic;
+- the current rule or fact;
+- examples only where they reduce ambiguity;
+- source or provenance;
+- owner or review expectation.
 
-The agent picks whichever entry point matches its context; the
-resolver + privacy guards are the same for both. As of Phase 6 the
-Navigator has tools spanning the full
-[Inbox](./concepts.md#inbox) / [Plays](./concepts.md#plays) /
-[Automations](./automations.md) / [Runs](./concepts.md#runs) surface
-in addition to knowledge — so it can answer "what's broken?",
-"what should we run that we aren't?", and "which Play handles
-this?" without making the operator hunt across pages. Full tool
-inventory and the auth / audit story lives in
-[navigator-tools](./internal/navigator-tools.md) (internal).
+Short articles age better than broad handbooks.
 
-## Buckets vs the Inbox
+## Technical reference
 
-Buckets are the **content** layer Plays reach for at render time.
-The [Inbox](./concepts.md#inbox) is the **action** layer where Plays
-escalate to a human. They never overlap: a bucket article is
-read-mostly reference material; an Inbox item demands a typed
-disposition. The five Inbox item types — `clarification`,
-`improvement`, `failure`, `approval`, `exception` — are the only
-things that land on the operator's attention surface, and they're
-created by Runs (or by Plays mid-execution), not by anything in
-this bucket pipeline. See
-[RFC-0010 § Inbox model](./protocol/rfc-0010-plays-and-inbox.md#inbox-model)
-for the full lifecycle.
-
-Two practical implications:
-
-- If a Play repeatedly needs the same context to answer a
-  clarification, the right fix is usually to land that context as a
-  bucket article (so the next Run resolves it without escalating)
-  rather than to keep dispositioning the same `clarification` items
-  in the Inbox. The Distiller's `improvement` proposals will often
-  surface this pattern automatically.
-- The legacy `/clarifications` and `/improvements` routes
-  (mentioned in older docs and in some `bucket_articles`
-  provenance) now 301-redirect to `/inbox?type=clarification` and
-  `/inbox?type=improvement` respectively; the bucket pipeline
-  itself is unchanged.
-
-## Harvesting, staging, drift
-
-Three editorial rules the Distiller + mirror pipelines enforce, shared
-with the [Pattern vs knowledge](/docs/authoring/pattern-vs-knowledge)
-rubric:
-
-1. **Staged, not active.** New articles land as `status='draft'` on
-   the Distiller's staging side. Publishing flips the row to
-   `status='published'` and supersedes the previous version. Archived
-   rows stay resolvable for citations.
-2. **Provenance, then drift.** Every article carries a `provenance`
-   JSON blob (source adapter, upstream id, fetched-at) and a
-   `content_sha`. `shipctl verify` flags drift between a repo-mirrored
-   bucket and the file on disk so buckets don't silently fork from the
-   living docs.
-3. **Human in the loop.** The Phase 6b LLM classifier proposes
-   topic / scope; the operator confirms before articles become
-   visible to agents. No silent enforcement promotions, ever.
+Engineers may see this implemented as buckets, articles, source kinds, distiller runs, and resolver scopes under the `/v1` API. Those names are implementation detail. Product docs should say knowledge unless they are explaining backend or CLI behavior.
 
 ## Where to next
 
-- The editorial rubric (is this a pattern or a bucket?):
-  [Pattern vs knowledge](/docs/authoring/pattern-vs-knowledge).
-- `.ship/knowledge/*.md` and `shipctl knowledge`:
-  [Configuration](/docs/configuration) and the CLI reference.
-- The normative pattern frontmatter shape
-  (`spec.knowledge_topics`, `spec.include`, `spec.modes`):
-  [RFC-0008](/docs/protocol/rfc-0008-catalog-reform).
-- Authoring a pattern that consults buckets:
-  [Authoring artifacts](/docs/authoring).
+Read [Concepts](./concepts.md) for the product vocabulary, [Operating](./operating.md) for day-to-day use, [Configuration](./configuration.md) for `.ship/knowledge`, and [Authoring](./authoring.md) when deciding whether a rule belongs in a reusable artifact or a workspace-specific knowledge article.

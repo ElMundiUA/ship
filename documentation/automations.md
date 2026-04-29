@@ -1,238 +1,87 @@
 # Automations
 
-An **Automation** is a [Play](./concepts.md#plays) assigned to a scope with a cadence — "run *PR review* on every pull request in this repo", "run *Technical audit* on the fleet every Monday at 06:00". Automations are how you make Ship *keep doing* something without anyone hitting a button.
+An automation is repeatable work that runs under explicit rules. It might review a pull request, check release readiness, inspect dependencies, seed knowledge, or open a finding. The important part is not that a machine acted; the important part is that the action was bounded, visible, and tied to evidence.
 
-This page is historical operator reference for the old Automations surface. New runtime config should use `process.routines` in `.ship/config.yml`; the CLI still accepts legacy `lanes:` blocks as compatibility input. When this page and `cli/lib/config/schema.mjs` disagree, the CLI wins.
+## What an automation needs
 
-## What an Automation is
+Every automation should answer five plain questions:
 
-> **Vocabulary box.** The current runtime term is **routine**: a `process.routines.<id>` entry in `.ship/config.yml` referencing one or more `pattern:` artifacts. Older docs and repositories may still say **lane** or **Automation**; those are legacy names for the same class of scheduled/manual work.
+| Question | Why it matters |
+| --- | --- |
+| What may run? | The procedure, check, or agent-assisted action must be named. |
+| Where may it run? | Scope can be one repo, selected repos, or the whole workspace. |
+| When may it run? | Trigger can be manual, scheduled, or event-driven. |
+| Who owns the result? | A human or team remains responsible for risk and next steps. |
+| What evidence is left? | The result must link to tickets, pull requests, checks, comments, or Inbox items. |
 
-Three things define an Automation:
+If you cannot answer those questions, do not automate the work yet. Tighten the workflow first.
 
-1. **Play** — what to run (e.g. *PR review*, *Security deps scan*, *Technical audit*). Picked from the [Plays catalog](./concepts.md#plays).
-2. **Scope** — where to run it. One of `repo` (one repo), `selected` (a chosen subset), or `fleet` (every activated repo in the workspace).
-3. **Cadence** — when to run it. A trigger of `event` (webhook), `schedule` (cron), or `once` (idempotent bootstrap).
+## The safe default
 
-You assemble those three on the Automations page or via the *Automate* CTA on a Play card; the console writes the result back to the right `.ship/config.yml` files as a PR. You never edit Automations through the API directly — the YAML in your repo is canonical.
+Ship follows the book's posture:
 
-## The Automations console page
+- Humans own intent.
+- Machines run inside fences.
+- Empty or skipped work is acceptable when the rules say nothing is eligible.
+- One clear owner is better than a queue where everyone assumes someone else will decide.
+- Evidence matters more than volume.
 
-`/automations` has two tabs: **Active** and **Coverage**.
+That means an automation should be small enough to explain in one sentence and predictable enough to review after it runs.
 
-### Active tab
+## Common automation shapes
 
-A list of every Automation visible to your current scope. The page accepts these query params:
+### Pull request review
 
-| Param | Values | Effect |
-|---|---|---|
-| `scope` | `fleet` · `repo` · `all` | Filter to fleet-wide, single-repo, or everything. |
-| `repo` | `<repo_id>` | Drill into one repo. The breadcrumb takes you back to the workspace view. |
-| `play` | `<play_key>` | Show only Automations of one Play. |
-| `status` | `enabled` · `disabled` | Hide paused Automations or only show paused ones. |
+Use for repeatable review checks that should attach evidence to a PR: self-review, policy checks, release notes, or change-risk summaries.
 
-Each row shows the Play name, the scope (`this repo` / `selected: 4 repos` / `fleet`), the cadence (e.g. `Mon 09:00 UTC` or `on pull_request`), the next run time, and the last run outcome. Per-Automation actions: **Run now** (one-shot dispatch outside the cadence), **Edit**, **Pause / Resume**, **Delete**. Edits and deletes flow through a PR proposal against the affected repo's `.ship/config.yml` so the YAML stays the source of truth.
+Good evidence: PR comment, check result, linked ticket, and any follow-up Inbox item.
 
-Clicking a row opens a detail drawer with:
+### Knowledge refresh
 
-- The full raw `lane` YAML the row compiled to.
-- The sync source (`<ref_sha>:.ship/config.yml`).
-- Up to 20 recent [Runs](./concepts.md#runs) for this Automation, with deeplinks into `/runs`.
-- Any open Inbox items that escalated from those Runs.
+Use when repo facts or product context need to be seeded or refreshed. The goal is to reduce repeated clarifications, not to hide decisions in generated prose.
 
-### Coverage tab
+Good evidence: knowledge article version, source path, provenance, and reviewer approval when needed.
 
-Coverage answers a single question: **which Plays are running where, and where are the gaps?** It's a list (not a matrix — the matrix view is deferred to v2) sorted by uncovered count descending. Each row is one Play with a progress bar showing `N / M` activated repos that have it assigned. Critical Plays (`scan-security-deps`, `scan-license-deps`, `scan-pii-leakage`, `flow-pr-self-review`, `flow-incident-postmortem`, `flow-release-notes`, `flow-cert-compliance`) carry a red badge whenever coverage drops below 100%.
+### Audit pass
 
-Drill-down on a row shows the **covered / uncovered split** — which repos already have this Play assigned and which don't — plus an **Apply to all uncovered** CTA. Hitting it opens the Automate wizard with the Play, scope (`selected: <uncovered repos>`), and a default cadence pre-filled; one PR per affected repo is opened with the new `lane` row.
+Use for security, dependency, QA, or architecture findings that should not compete with product delivery in the same queue.
 
-If you're trying to figure out "what should we be running that we aren't yet", Coverage is the page to start on.
+Good evidence: finding ticket, report link, affected repo, severity, and owner.
 
-## Creating an Automation
+### Release readiness
 
-Three entry points lead to the same wizard.
+Use before a promotion or release window to gather checks and gaps. This should inform a human decision, not silently declare production safe.
 
-1. **From the Plays catalog.** Open `/plays`, find the Play, hit **Automate** on its card. Pick a scope and cadence. Submit.
-2. **From the after-success banner on a Run.** When you trigger a Play with **Run now** and it succeeds, the result page shows a banner: *"→ Run this {play} every Monday automatically"*. One click opens the wizard with scope = the repo you ran it on and a sensible default cadence for the Play's category.
-3. **From `shipctl init`.** A fresh install drops starter `process.routines` entries in `.ship/config.yml`. Legacy `lanes:` blocks are still read, but new edits should use routines.
+Good evidence: release checklist, CI links, rollback note, and final approval.
 
-The wizard ends by opening a PR against each affected repo. The Automation appears on the page as soon as that PR merges to the default branch and the webhook lands.
+## Inbox behavior
 
-## Editing and disabling
+Automations should escalate only when a human decision is useful. Typical Inbox items are:
 
-Editing happens through the same flow:
+- a missing fact blocks progress;
+- a proposed improvement needs approval;
+- a repeated failure needs ownership;
+- a policy exception needs review;
+- a release or risky change needs explicit consent.
 
-| Action | Console UI | Underlying effect |
-|---|---|---|
-| Edit cadence (cron, event filter, etc.) | Edit on the row → wizard pre-filled | Rewrites the matching `lane` row in `.ship/config.yml`; opens a PR. |
-| Pause | **Pause** on the row | Edits the lane to `enabled: false` (or removes the trigger temporarily); the Console's Active tab keeps showing the row, marked *paused*. |
-| Resume | **Resume** | Reverts the pause edit. |
-| Delete | **Delete** on the row → confirm | Removes the `lane` entry from `.ship/config.yml`; the generated wrapper at `.github/workflows/ship-<lane>.yml` is dropped on the next `shipctl lanes install`. |
-| Run outside the cadence | **Run now** on the row | One-shot dispatch (`adhoc-agent-run.yml`); doesn't change the cadence or write to YAML. |
+Do not use the Inbox as a log stream. If no decision is needed, leave evidence on the original ticket, PR, check, or dashboard row.
 
-For a pause that keeps the wrapper on disk (e.g. so you can re-enable it without a PR round-trip), use a GitHub Actions `if:` guard in the wrapper — but most teams find "delete + re-add" simpler and more auditable.
+## Technical reference
 
-If you prefer the YAML-first path, the Navigator (and any human with PR access) can edit `.ship/config.yml` directly; the Console picks up the change on the next push to the default branch. Use the *Sync now* button on the page if a webhook missed the delivery.
+Developers may see automations represented as routines, generated workflows, callback payloads, and pipeline records. That layer is intentionally technical and belongs in [Configuration](./configuration.md), [Operating](./operating.md), and [/cli](/cli).
 
-## Triggers (cadence) at a glance
+New user-facing examples should avoid legacy terms such as `lane`, `run`, and `pipeline_run` unless the page is explaining the implementation.
 
-Every Automation declares exactly one trigger. The console wizard exposes them as **Schedule**, **Event**, and **One-off**; in YAML they appear as `kind: schedule` / `kind: event` / `kind: once`.
+## Checklist before enabling an automation
 
-| Cadence | YAML `kind` | Extra fields | Fires when | Typical use |
-|---|---|---|---|---|
-| **One-off** | `once` | `idempotency: { key, store?, reset_on? }` | Dispatched manually or by the dashboard; guarded by a ledger key so duplicate runs no-op. | Seeding, one-off backfills, first-time installs |
-| **Event** | `event` | `on: pull_request \| push \| workflow_run \| deployment_status` (+ optional `when: {…}`) | A matching webhook from the code host. | PR gates, code-review Plays, CI follow-ups |
-| **Schedule** | `schedule` | `cron: "<5-field>"` (+ optional `cron_tz`) | UTC cron, 5 fields, GitHub Actions syntax. | Daily/weekly ceremonies, drift checks |
+- The scope is explicit.
+- The trigger is explicit.
+- The owner is explicit.
+- The evidence destination is explicit.
+- Secrets live in the host or Ship secret store, not in prompts.
+- A failed or empty execution leaves a readable reason.
+- The related prompt, rule, or artifact can be reviewed and rolled back.
 
-Automations are the *only* place triggers live. `shipctl` does not accept ad-hoc workflow YAMLs; the files under `.github/workflows/` named `ship-<lane_id>.yml` are generated by [`shipctl lanes install`](/cli#shipctl-lanes-install) and carry a `# ship-cli: lanes v1` banner. Hand-edits outside the banner survive re-runs; edits inside the banner will be overwritten.
+## Where to next
 
-## Relationship to `process.routines` in `.ship/config.yml`
-
-Under the hood, scheduled/manual work is declared under `process.routines` in the affected repo's `.ship/config.yml`. `lanes:` remains a legacy alias for already-seeded repositories; don't use it for new examples.
-
-A worked YAML example covering all three trigger kinds:
-
-```yaml
-version: 2
-shipctl_min: "0.12.0"
-
-process:
-  routines:
-    pr_review:
-      type: event
-      event: pull_request
-      pattern: flow-pr-self-review
-
-    daily_retro:
-      type: schedule
-      cron: "0 9 * * 1-5"
-      window: PT15M
-      patterns:
-        - flow-daily-retro
-
-    seed_knowledge:
-      type: once
-      pattern: onboard-seed-knowledge
-      idempotency:
-        key: seed-knowledge-v1
-        store: file
-        reset_on: version-change
-```
-
-Each entry compiles to one routine in the runtime. Keys under `process.routines` are routine ids matching `/^[a-z0-9][a-z0-9_-]{0,63}$/` (ids starting with `ship_` are reserved). Each routine declares exactly one trigger (`type`) and exactly one of `pattern:` / `patterns:`.
-
-### Multiple patterns per Automation (composite Plays)
-
-A composite Play maps to several patterns sharing one trigger — *Technical audit*, for example, runs a tech-architect, QA, and security review on the same schedule:
-
-```yaml
-process:
-  routines:
-    tech_debt_audit:
-      type: schedule
-      cron: "0 6 * * 1"
-      window: PT15M
-      patterns:
-        - role-tech-architect
-        - role-qa-architect
-        - role-security-officer
-```
-
-Rules:
-
-- `pattern: <id>` (scalar) and `patterns: [<id>, …]` (list) are mutually exclusive — declare exactly one.
-- `patterns` must be a non-empty list of existing pattern ids.
-- `shipctl run --routine <id>` dispatches every pattern the routine declares (a composite routine with `patterns: [a, b, c]` will fan out across all three using the routine's `fanout:` setting — `matrix` by default). To target one specific pattern inside a composite routine, pass `--pattern <id>`. See `cli/tests/run.test.mjs` for the full multi-pattern coverage.
-
-## What `shipctl` does with a routine
-
-Four commands deal with routines directly:
-
-- **`shipctl migrate`** — one-shot upgrade from v1 → v2. Backs up the current file to `.ship/config.yml.bak`, moves `stack.agent.provider` → `agent.default.provider`, and translates a legacy `lanes: [id, id, …]` list into the v2 lanes map using preset defaults. Safe to re-run: already-v2 configs exit `0` with `no changes`.
-- **`shipctl lanes install`** — reads `.ship/config.yml`, renders one `.github/workflows/ship-<lane>.yml` wrapper per declared lane that calls `ElMundiUA/ship/.github/workflows/run-agent.yml@vN` (the `ref` defaults to `v<shipctl_min>`). Banner-guarded with `# ship-cli: lanes v1`. Refuses to overwrite a non-Ship file without `--force`. Idempotent. `shipctl lanes remove` only deletes files it owns.
-- **`shipctl run --routine <id>`** — the single execution entry point. `type: once` runs end-to-end (resolve the pattern, check the idempotency marker, emit the prompt on stdout, write the marker, POST the callback). `type: event` and `type: schedule` are parsed, validated, and triggered through the workspace runner. `--lane` is accepted as a legacy alias.
-- **`shipctl sync --lock`** — materialises every routine's pattern into `.ship/cache/` and writes `.ship/shipctl.lock.json`. The lockfile is safe to commit and is the reproducibility anchor for `run --offline`.
-
-If you're installing Ship for the first time, `shipctl init` drops a starter `lanes:` block for you and runs `shipctl lanes install` to generate the matching wrappers.
-
-## What the backend does with an Automation
-
-Two things:
-
-1. **Projects it into a `lanes` table** that the Console reads. The table is a cache — the YAML file is the source of truth — so toggling an Automation on/off through the API is *not* supported. You edit the YAML (or use the wizard, which opens a PR for you) and push. The cache refreshes automatically when a push to the default branch touches `.ship/config.yml`, and you can force a re-pull with the *Sync now* button.
-2. **Reconciles Runs.** When GitHub sends a `workflow_run.completed` event for `ship-<lane_id>.yml`, the backend pins `last_run_at` / `last_run_status` on the matching row. That's what powers the freshness badge in the console without polling GitHub per page load.
-
-## Migrating from the old "workflow artifact" world
-
-[RFC-0007](./protocol/rfc-0007-lanes-and-run-agent.md) removed `artifact_kind=workflow` from the public surface. What used to be a workflow artifact is now a `lane` declared in `.ship/config.yml` — and an **Automation** in the console:
-
-| Before | After |
-|---|---|
-| `.github/workflows/ship-pr-and-ci-gate.yml` | `lanes.pr_review:` — `kind: event`, `on: pull_request`, `pattern: flow-pr-self-review` |
-| `.github/workflows/ship-scheduled-sdlc-lane.yml` | `lanes.daily_retro:` — `kind: schedule`, `cron: "0 9 * * 1-5"`, `pattern: flow-daily-retro` |
-| `.github/workflows/ship-onboard-seed-knowledge.yml` | `lanes.seed_knowledge:` — `kind: once`, `idempotency: { key: seed-knowledge-v1 }`, `pattern: onboard-seed-knowledge` |
-
-The wrapper filenames survive as starter scaffolding (e.g. `scheduled-sdlc-lane.yml` is still the filename the starter renderer emits, even though `scheduled-sdlc-lane` is no longer a pattern id). `shipctl lanes install` regenerates them from the v2 lane block.
-
-If your repo still ships a hand-written workflow that hasn't been migrated, the generator will refuse to overwrite it (no `ship-cli: lanes v1` banner); delete the file, pass `--force`, or migrate your config through `shipctl migrate`.
-
-## Cookbook
-
-### Add a new Automation
-
-1. Edit `.ship/config.yml`:
-
-    ```yaml
-    lanes:
-      friday_retro:
-        kind: schedule
-        cron: "0 15 * * FRI"
-        pattern: flow-daily-retro
-    ```
-
-2. `shipctl lanes install` to write `.github/workflows/ship-friday_retro.yml`.
-3. `shipctl sync --lock` to refresh `.ship/shipctl.lock.json` with the new pattern.
-4. Commit `.ship/config.yml`, the generated wrapper, and the updated lockfile in the same PR. The Console picks it up on the next push to the default branch.
-
-The console wizard does steps 1–4 for you; doing it by hand is the fallback for offline editing or scripted migrations.
-
-### Pause an Automation temporarily
-
-Comment out (or delete) the lane block and push. The backend cleans up the row on the next webhook tick; the generated wrapper will stop being rendered by `shipctl lanes install` on the next run. Use `shipctl lanes remove --only <id>` to drop the wrapper file (it only deletes files carrying the Ship banner). Or hit **Pause** on the row in the console — same end state, less ceremony.
-
-### Trigger a Play manually outside the cadence
-
-Use **Run now** on the Automation row, or on the underlying Play card on `/plays`. Either dispatches a one-shot `adhoc-agent-run.yml` and streams the run back into `/runs`. For a stable manual override that bypasses the dashboard entirely, use the native GitHub Actions **Run workflow** menu on any `ship-<lane_id>.yml` wrapper — wrappers expose `ship_run_id` and `ship_callback_url` inputs so the run reports back to the dashboard the same way a scheduled run would.
-
-### Find Plays you should be running but aren't
-
-Open the **Coverage** tab on `/automations`. Sort is uncovered-count descending; critical Plays in red. Drill into a row to see the covered / uncovered split, and use **Apply to all uncovered** to fan out one PR per affected repo.
-
-### Keep the `lanes` table in sync
-
-In normal operation you don't have to do anything — push-to-default keeps the cache fresh. Use **Sync now** on `/automations` when:
-
-- you rewrote history and the webhook didn't fire;
-- you're debugging a parse error and need the backend's take on the current YAML;
-- you just flipped an Automation on/off and want the Console to reflect it without waiting for the next push.
-
-## Troubleshooting
-
-| Symptom | Cause | Fix |
-|---|---|---|
-| `/automations` shows no rows despite a `process.routines` block in `.ship/config.yml` | Either (a) `.ship/config.yml` wasn't pushed to the default branch yet, or (b) webhook delivery hasn't landed. | Push the commit; if the webhook is lost, click **Sync now** on the page. |
-| "Missing `.ship/config.yml`" on sync | Repo's default branch has no `.ship/config.yml`. | Run `shipctl init` or point the `default_branch` at the branch that has it. |
-| `shipctl run --routine X` exits 2 | `.ship/config.yml` is still v1. | Run `shipctl migrate`, review `.ship/config.yml.bak`, commit the new v2 file. |
-| Automation row shows trigger `event` but the Run never fires | The wrapper file wasn't regenerated after the YAML change. | Re-run `shipctl lanes install`, commit the updated wrapper. |
-| `shipctl lanes install` refuses to overwrite `.github/workflows/ship-<id>.yml` | The existing file lacks the `# ship-cli: lanes v1` banner; the generator assumes it's hand-authored and won't clobber it. | Delete the file or pass `--force` to replace it. |
-| Automation row stays `running` forever | `workflow_run.completed` webhook delivery failed. | Re-send the delivery from the GitHub App settings → Advanced → Recent deliveries. |
-| `shipctl sync --lock` reports unresolved entries | An Automation references a pattern id that isn't published on the configured channel. | Fix the pattern id (see [RFC-0008](./protocol/rfc-0008-catalog-reform.md) for the current naming), or switch to `channel: edge`. |
-
-## See also
-
-- [Concepts](./concepts.md) — the operator vocabulary, including Plays, Runs, and Inbox.
-- [Configuration → `lanes`](./configuration.md#lanes) — the field-by-field YAML schema.
-- [RFC-0010 — Plays, Automations, Runs, Inbox](./protocol/rfc-0010-plays-and-inbox.md) — the operator IA spec.
-- [RFC-0007 — Lanes and `run-agent.yml`](./protocol/rfc-0007-lanes-and-run-agent.md) — the underlying execution model.
-- [RFC-0008 — Catalog reform (pattern naming)](./protocol/rfc-0008-catalog-reform.md) — the catalog ids referenced from `pattern:` / `patterns:`.
-- [CLI → `shipctl run`](/cli#shipctl-run) · [`shipctl lanes install`](/cli#shipctl-lanes-install) · [`shipctl migrate`](/cli#shipctl-migrate)
+Read [Concepts](./concepts.md) for the product vocabulary, [Knowledge](./knowledge-buckets.md) for context, [Operating](./operating.md) for day-to-day review, and [Configuration](./configuration.md) for the repo-level fields that developers maintain.

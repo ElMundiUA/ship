@@ -37,6 +37,8 @@ function shouldSkip(relPath: string): boolean {
   const n = relPath.replace(/\\/g, "/");
   /* getting-started has its own static React route with the AgentSetupForm wizard. */
   if (n.startsWith("getting-started/")) return true;
+  /* Internal planning notes are source material for maintainers, not public docs. */
+  if (n.startsWith("internal/")) return true;
   /* Ukrainian translations were retired in v0.10. */
   if (n.endsWith(".uk.md")) return true;
   return false;

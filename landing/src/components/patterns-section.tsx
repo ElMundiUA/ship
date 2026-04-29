@@ -9,15 +9,14 @@ export function PatternsSection() {
             <div className="absolute inset-0 bg-gradient-to-br from-aqua/10 via-transparent to-lilac/10" />
             <p className="relative text-xs font-bold uppercase tracking-widest text-white/40">Library</p>
             <p className="relative mt-4 font-display text-2xl font-semibold leading-snug text-white sm:text-3xl">
-              Patterns are the source of Plays
+              Patterns are reusable procedures
             </p>
             <ul className="relative mt-6 space-y-3 text-sm leading-relaxed text-white/65">
               <li className="flex gap-2">
                 <span className="text-aqua">✦</span>
                 <span>
                   <strong className="text-white/85">Patterns</strong> — short, reviewable Markdown bodies for PR self-review,
-                  release cuts, knowledge refreshes, dependency upgrades. The operator console renders each one as a{" "}
-                  <strong className="text-white/85">Play</strong>.
+                  release checks, knowledge refreshes, dependency reviews, and audits.
                 </span>
               </li>
               <li className="flex gap-2">
@@ -40,13 +39,13 @@ export function PatternsSection() {
             </p>
           </div>
           <div className="order-1 lg:order-2">
-            <p className="text-sm font-bold uppercase tracking-widest text-lilac">Operating content</p>
+            <p className="text-sm font-bold uppercase tracking-widest text-lilac">Reviewable content</p>
             <h2 className="font-display mt-3 text-3xl font-bold leading-tight text-white sm:text-4xl">
-              Playbooks your teams can discover — not email attachments
+              Procedures your teams can discover, review, and improve
             </h2>
             <p className="mt-5 text-lg text-white/70">
-              The goal is legibility: a program manager can browse tools and patterns while an engineer pulls the same
-              pattern text into an agent run — without a separate “internal wiki” that goes stale.
+              The goal is legibility: a product owner can understand the procedure while an engineer can pull the same
+              versioned text into local setup or agent work.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
               <Link href="/patterns" className="btn-primary inline-flex">

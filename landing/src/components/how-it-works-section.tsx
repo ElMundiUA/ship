@@ -1,36 +1,35 @@
 import Link from "next/link";
-import { repoUrl } from "@/lib/config";
 
 const steps = [
   {
     n: "01",
-    title: "Bootstrap",
-    body: "shipctl init writes .ship/config.yml (RFC-0002), resolves the starter Plays for your stack, and installs per-agent rule files at the targets each collection declares. Nothing is copied blindly — every artifact is pinned by version.",
-    code: "shipctl init --yes \\\n  --agents cursor,codex,claude-md \\\n  --tracker linear --ci gh-actions",
+    title: "Create a workspace",
+    body: "Start with the team and product area that owns the outcome. Ship keeps that scope visible before any automation runs.",
+    code: "Workspace · members · policy",
   },
   {
     n: "02",
-    title: "Pick Plays",
-    body: "Browse the same catalog the site publishes. A Play is a versioned operational procedure (PR self-review, release cut, knowledge refresh) backed by a pattern artifact. shipctl sync caches them under .ship/cache/ so agents run offline-first.",
-    code: "shipctl sync --lock\nshipctl pattern list\nshipctl pattern show flow-pr-self-review",
+    title: "Connect the repo",
+    body: "Install the GitHub App, activate the repositories Ship should observe, and let the console detect what is already wired.",
+    code: "Repo · GitHub App · bundle",
   },
   {
     n: "03",
-    title: "Assign as Automations",
-    body: "Bind a Play to a scope and a trigger and you have an Automation — declared in lanes:, generated as a thin GitHub Actions wrapper around run-agent.yml. Same lane definition shows up in the operator console as an Automation row.",
-    code: "shipctl lanes install --yes\n# or, operator-friendly alias:\nshipctl automations install --yes",
+    title: "Bind the tracker",
+    body: "Tie work back to Linear, GitHub Issues, Jira, or the tracker your team already uses so intent stays human-owned.",
+    code: "Tracker · states · owners",
   },
   {
     n: "04",
-    title: "Watch Runs",
-    body: "Every dispatch produces a Run with an outcome-first row in the console: \"Reviewed PR · 3 suggestions · 1 fix applied\". The pattern reports its own RunSummary via shipctl callback so the row writes itself.",
-    code: "shipctl callback --status ok \\\n  --outcome-text \"Reviewed PR · 3 suggestions\" \\\n  --findings-count 3",
+    title: "Seed knowledge",
+    body: "Give agents and reviewers the product facts they need: brand, code style, tests, standing rules, and repo context.",
+    code: "Knowledge · policies · secrets",
   },
   {
     n: "05",
-    title: "Triage Inbox",
-    body: "When a Run needs a human — clarification, approval, escalation — it lands in the Inbox routed to the right owner via CODEOWNERS. One disposition closes the loop: accept, reject, snooze, or reassign.",
-    code: "# the Navigator agent can do this for you:\n\"What's in my inbox?\"\n\"Resolve the PR-review item with a fix-it-myself note.\"",
+    title: "Review decisions",
+    body: "The dashboard and Inbox show blockers, clarifications, improvements, shipped work, and the evidence behind each action.",
+    code: "Dashboard · Inbox · PR evidence",
   },
 ];
 
@@ -39,20 +38,15 @@ export function HowItWorksSection() {
     <section id="how-it-works" className="border-y border-white/10 bg-black/25 py-20 sm:py-24">
       <div className="mx-auto max-w-6xl px-4 sm:px-6">
         <p className="text-sm font-bold uppercase tracking-widest text-aqua/90">
-          How it works · five steps from repo to operator loop
+          How it works · from workspace to evidence
         </p>
         <h2 className="font-display mt-2 text-3xl font-bold text-white sm:text-4xl">
-          One protocol for every agent. One console for every operator.
+          One place to see what moved, what stalled, and who decides.
         </h2>
         <p className="mt-4 max-w-3xl text-lg text-white/65">
-          Ship serves versioned artifacts — patterns (Plays), tools, collections — from the same site you are reading.{" "}
-          <code className="mx-1 rounded bg-white/10 px-1.5 py-0.5 font-mono text-[0.92em] text-aqua">shipctl</code> caches
-          them locally under{" "}
-          <code className="mx-1 rounded bg-white/10 px-1.5 py-0.5 font-mono text-[0.92em] text-aqua">.ship/cache/</code>,
-          so agents run offline-first and record the exact versions they consumed in each pull request. Every Run
-          reports back via{" "}
-          <code className="mx-1 rounded bg-white/10 px-1.5 py-0.5 font-mono text-[0.92em] text-aqua">shipctl callback</code>{" "}
-          so the operator console can render an outcome row and route any escalations into the Inbox. Telemetry is opt-in.
+          Ship is not a promise that agents will choose for you. It is a workspace that makes each automated step
+          bounded and readable: where the request came from, which repo it touched, what evidence it left, and which
+          human owns the next decision.
         </p>
 
         <ol className="mt-12 grid gap-5 md:grid-cols-2 lg:grid-cols-5">
@@ -80,36 +74,22 @@ export function HowItWorksSection() {
         <div className="mt-10 flex flex-wrap items-center gap-3 text-sm">
           <Link
             className="inline-flex items-center rounded-full border border-aqua/30 bg-aqua/[0.08] px-4 py-1.5 font-semibold text-aqua hover:border-aqua/60"
+            href="/getting-started"
+          >
+            Start with the workspace guide
+          </Link>
+          <Link
+            className="inline-flex items-center rounded-full border border-white/15 bg-white/[0.04] px-4 py-1.5 font-semibold text-white/80 hover:border-white/30"
             href="/docs/concepts"
           >
-            Concepts (Plays / Automations / Runs / Inbox)
+            Read the product concepts
           </Link>
           <Link
             className="inline-flex items-center rounded-full border border-white/15 bg-white/[0.04] px-4 py-1.5 font-semibold text-white/80 hover:border-white/30"
-            href="/docs/protocol/rfc-0010-plays-and-inbox"
+            href="/cli"
           >
-            RFC-0010 (operator IA)
+            Developer setup and CLI
           </Link>
-          <Link
-            className="inline-flex items-center rounded-full border border-white/15 bg-white/[0.04] px-4 py-1.5 font-semibold text-white/80 hover:border-white/30"
-            href="/docs/protocol/rfc-0001-artifacts-protocol"
-          >
-            RFC-0001 (artifacts protocol)
-          </Link>
-          <Link
-            className="inline-flex items-center rounded-full border border-white/15 bg-white/[0.04] px-4 py-1.5 font-semibold text-white/80 hover:border-white/30"
-            href="/docs/protocol/rfc-0002-shipctl-config"
-          >
-            RFC-0002 (shipctl config)
-          </Link>
-          <a
-            className="inline-flex items-center rounded-full border border-white/15 bg-white/[0.04] px-4 py-1.5 font-semibold text-white/80 hover:border-white/30"
-            href={`${repoUrl}/tree/main/documentation/protocol`}
-            target="_blank"
-            rel="noreferrer"
-          >
-            RFC index on GitHub
-          </a>
         </div>
       </div>
     </section>

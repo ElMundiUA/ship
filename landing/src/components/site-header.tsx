@@ -7,9 +7,9 @@ import { repoUrl } from "@/lib/config";
 /**
  * Top nav, left → right after the logo:
  *   Use cases  — buyer-facing proof / reference deployments
- *   Get started — operator section ( /docs ); also where the wizard lives
+ *   Get started — product setup and docs entry
  *   Kit         — the consolidated artifact-catalog hub
- *   CLI         — single-binary reference
+ *   Docs        — product and technical documentation
  *   The book    — long-form rationale (loud accent CTA)
  *   GitHub      — repo
  *
@@ -34,10 +34,10 @@ type NavItem = {
 const NAV: NavItem[] = [
   { href: "/use-cases", label: "Use cases", className: "" },
   {
-    href: "/docs",
+    href: "/getting-started",
     label: "Get started",
     className: "",
-    alsoActiveOn: ["/getting-started"],
+    alsoActiveOn: ["/docs"],
   },
   {
     href: "/kit",
@@ -45,7 +45,7 @@ const NAV: NavItem[] = [
     className: "",
     alsoActiveOn: ["/patterns", "/collections", "/tools"],
   },
-  { href: "/cli", label: "CLI", className: "" },
+  { href: "/docs", label: "Docs", className: "" },
   { href: "/blog", label: "Blog", className: "" },
 ];
 
