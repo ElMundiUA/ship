@@ -6,7 +6,6 @@ type TeamMember = {
   role: string;
   href?: string;
   avatar?: string;
-  note?: string;
   featured?: boolean;
 };
 
@@ -32,7 +31,6 @@ const leadership: TeamMember[] = [
     role: "Board Advisor · Client Strategy",
     href: "https://sessionize.com/nikolai-chesalin",
     avatar: "/team/nikolai-chesalin.png",
-    note: "AI product architect and enterprise client advisor.",
     featured: true,
   },
 ];
@@ -41,28 +39,28 @@ const team: TeamMember[] = [
   {
     name: "Katsiaryna Laurynovich",
     handle: "KatsiarynaLaurynovich",
-    role: "Team",
+    role: "Developer",
     href: "https://github.com/KatsiarynaLaurynovich",
     avatar: "https://avatars.githubusercontent.com/u/7498477?v=4",
   },
   {
     name: "Danylo Mochuliak",
     handle: "omolynad",
-    role: "Team",
+    role: "QA",
     href: "https://github.com/omolynad",
     avatar: "https://avatars.githubusercontent.com/u/278433395?v=4",
   },
   {
     name: "svetlanamitar",
     handle: "svetlanamitar",
-    role: "Team",
+    role: "Developer",
     href: "https://github.com/svetlanamitar",
     avatar: "/team/svetlana-mitar.png",
   },
   {
     name: "vvladyslav-dev",
     handle: "vvladyslav-dev",
-    role: "Team",
+    role: "Developer",
     href: "https://github.com/vvladyslav-dev",
     avatar: "https://avatars.githubusercontent.com/u/236387037?v=4",
   },
@@ -118,7 +116,6 @@ function MemberCard({ member }: { member: TeamMember }) {
         <p className="mt-3 text-sm font-semibold uppercase tracking-[0.16em] text-white/45">
           {member.role}
         </p>
-        {member.note ? <p className="mt-3 text-sm leading-relaxed text-white/60">{member.note}</p> : null}
       </div>
     </>
   );
@@ -151,6 +148,9 @@ function CompactMember({ member }: { member: TeamMember }) {
           {member.name}
         </p>
         <p className="mt-1 truncate font-mono text-[11px] text-white/45">@{member.handle}</p>
+        <p className="mt-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-white/40">
+          {member.role}
+        </p>
       </div>
     </a>
   );
