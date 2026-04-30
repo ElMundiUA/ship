@@ -41,6 +41,7 @@ from backend.app.db.models.integrations import (
 )
 from backend.app.db.models.knowledge_promotion import KnowledgePromotionCandidate
 from backend.app.db.models.lanes import Lane
+from backend.app.db.models.methodology import MethodologyChunk
 from backend.app.db.models.notifications import WorkspaceNotification
 from backend.app.db.models.pipelines import (
     AgentRequest,
@@ -98,6 +99,7 @@ __all__ = [
     "KnowledgeSourceItem",
     "KnowledgePromotionCandidate",
     "Lane",
+    "MethodologyChunk",
     "MemberGroup",
     "MemberGroupMember",
     "NativeIntegrationAuditEvent",

@@ -17,8 +17,9 @@ This module owns:
 - the **upsert** (idempotent: chunks whose ``content_sha`` already
   matches in the DB are skipped — so a cold restart does not re-embed
   the entire corpus, only the deltas);
-- the **search** (cosine distance over the HNSW index, returning the
-  same JSON shape as the old Chroma path so the released CLI sees no
+- the **search** (cosine distance via
+  ``MethodologyChunk.embedding.cosine_distance``, returning the same
+  JSON shape as the old Chroma path so the released CLI sees no
   contract drift).
 
 The module is independent of FastAPI; ``backend/app/main.py`` calls
@@ -29,17 +30,22 @@ The module is independent of FastAPI; ``backend/app/main.py`` calls
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from sqlalchemy import select, text
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.app.db.models.methodology import EMBED_DIM, MethodologyChunk
 from backend.app.db.session import get_engine
-from backend.app.services.agent.embedding import EMBED_DIM, embed_texts
+from backend.app.services.agent.embedding import embed_texts
+
+
+log = logging.getLogger(__name__)
 
 
 APP_ROOT = Path(__file__).resolve().parents[3]
@@ -94,7 +100,7 @@ def _index_path_for(path: Path) -> str:
 def _kind_for(path: Path) -> str:
     if path.name == "ARTIFACT.md":
         return "artifact"
-    if path.relative_to(APP_ROOT).parts[0] == "README.md".lower() or path.name == "README.md":
+    if path.name == "README.md":
         return "readme"
     return "doc"
 
@@ -216,11 +222,13 @@ async def _existing_index(
     session: AsyncSession,
 ) -> dict[tuple[str, int], str]:
     rows = await session.execute(
-        text(
-            "SELECT path, chunk_idx, content_sha FROM methodology_chunks"
+        select(
+            MethodologyChunk.path,
+            MethodologyChunk.chunk_idx,
+            MethodologyChunk.content_sha,
         )
     )
-    return {(row[0], row[1]): row[2] for row in rows.all()}
+    return {(r[0], r[1]): r[2] for r in rows.all()}
 
 
 async def _upsert_chunks(
@@ -228,63 +236,66 @@ async def _upsert_chunks(
     chunks: list[_Chunk],
     embeddings: list[list[float]],
 ) -> None:
+    """ON CONFLICT-aware bulk insert via the Postgres dialect.
+
+    Going through the dialect-level ``insert(...).on_conflict_do_update``
+    keeps the path/chunk_idx unique-index conflict resolution server-side
+    and lets the ``Vector`` type adapter serialize the embedding properly
+    on asyncpg. The earlier raw-SQL ``::vector`` cast fell over silently
+    here.
+    """
     if not chunks:
         return
     if len(chunks) != len(embeddings):  # pragma: no cover — defensive
         raise RuntimeError(
             f"embedder returned {len(embeddings)} vectors for {len(chunks)} chunks"
         )
+    rows = []
     for c, e in zip(chunks, embeddings, strict=True):
         if len(e) != EMBED_DIM:  # pragma: no cover — defensive
             raise RuntimeError(
                 f"embedder returned {len(e)}-d vector; expected {EMBED_DIM}"
             )
-        await session.execute(
-            text(
-                "INSERT INTO methodology_chunks "
-                "(path, chunk_idx, body, content_sha, embedding, kind, slug) "
-                "VALUES (:path, :chunk_idx, :body, :content_sha, "
-                "        :embedding::vector, :kind, :slug) "
-                "ON CONFLICT (path, chunk_idx) DO UPDATE SET "
-                "    body = EXCLUDED.body, "
-                "    content_sha = EXCLUDED.content_sha, "
-                "    embedding = EXCLUDED.embedding, "
-                "    kind = EXCLUDED.kind, "
-                "    slug = EXCLUDED.slug, "
-                "    indexed_at = now()"
-            ),
+        rows.append(
             {
                 "path": c.path,
                 "chunk_idx": c.chunk_idx,
                 "body": c.body,
                 "content_sha": c.content_sha,
-                # pgvector accepts the canonical "[0.1,0.2,…]" string form;
-                # asyncpg won't auto-cast a Python list to vector otherwise.
-                "embedding": "[" + ",".join(repr(float(x)) for x in e) + "]",
+                "embedding": e,
                 "kind": c.kind,
                 "slug": c.slug,
-            },
+            }
         )
+    stmt = pg_insert(MethodologyChunk).values(rows)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["path", "chunk_idx"],
+        set_={
+            "body": stmt.excluded.body,
+            "content_sha": stmt.excluded.content_sha,
+            "embedding": stmt.excluded.embedding,
+            "kind": stmt.excluded.kind,
+            "slug": stmt.excluded.slug,
+        },
+    )
+    await session.execute(stmt)
 
 
 async def _prune_missing(
     session: AsyncSession, seen_keys: set[tuple[str, int]]
 ) -> int:
     rows = await session.execute(
-        text("SELECT path, chunk_idx FROM methodology_chunks")
+        select(MethodologyChunk.path, MethodologyChunk.chunk_idx)
     )
-    to_delete = [
-        (row[0], row[1]) for row in rows.all() if (row[0], row[1]) not in seen_keys
-    ]
+    to_delete = [(r[0], r[1]) for r in rows.all() if (r[0], r[1]) not in seen_keys]
     if not to_delete:
         return 0
     for path, chunk_idx in to_delete:
         await session.execute(
-            text(
-                "DELETE FROM methodology_chunks "
-                "WHERE path = :path AND chunk_idx = :chunk_idx"
-            ),
-            {"path": path, "chunk_idx": chunk_idx},
+            delete(MethodologyChunk).where(
+                MethodologyChunk.path == path,
+                MethodologyChunk.chunk_idx == chunk_idx,
+            )
         )
     return len(to_delete)
 
@@ -304,18 +315,22 @@ async def search(query: str, top_k: int = 10) -> list[dict[str, Any]]:
     if not query.strip():
         return []
     [embedding] = await embed_texts([query])
-    embedding_lit = "[" + ",".join(repr(float(x)) for x in embedding) + "]"
     engine = get_engine()
     async with AsyncSession(engine) as session:
+        dist_col = MethodologyChunk.embedding.cosine_distance(embedding).label("dist")
         rows = await session.execute(
-            text(
-                "SELECT id, path, chunk_idx, body, kind, slug, "
-                "       embedding <=> :q::vector AS distance "
-                "FROM methodology_chunks "
-                "ORDER BY embedding <=> :q::vector "
-                "LIMIT :top_k"
-            ),
-            {"q": embedding_lit, "top_k": top_k},
+            select(
+                MethodologyChunk.id,
+                MethodologyChunk.path,
+                MethodologyChunk.chunk_idx,
+                MethodologyChunk.body,
+                MethodologyChunk.kind,
+                MethodologyChunk.slug,
+                dist_col,
+            )
+            .where(MethodologyChunk.embedding.isnot(None))
+            .order_by(dist_col)
+            .limit(top_k)
         )
         out: list[dict[str, Any]] = []
         for row in rows.all():
