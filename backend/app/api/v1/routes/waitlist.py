@@ -17,7 +17,11 @@ from fastapi import APIRouter, Depends, status
 
 from backend.app.db.models.tenancy import WaitlistSubmission
 from backend.app.db.session import get_session
-from backend.app.security.rate_limit import rate_limit, GENERAL_LIMITER
+
+# NB: no rate limiter on this public endpoint yet — sized for the closed-beta
+# trickle. ``backend/app/security/rate_limit.py`` exposes LOGIN/SIGNUP/
+# TOKEN_MINT limiters; add a WAITLIST_LIMITER and ``Depends(rate_limit(...))``
+# on the route below if traffic warrants it post-beta.
 
 
 router = APIRouter(
@@ -56,8 +60,6 @@ async def submit_waitlist(
     Accepts email (required) and optional fields: role, tracker, agent, note.
     Always returns ``{ ok: true }`` even on duplicate emails (idempotent UX).
 
-    Rate-limited per IP using GENERAL_LIMITER.
-
     Args:
         form: Waitlist submission data
         session: Database session
@@ -65,9 +67,6 @@ async def submit_waitlist(
     Returns:
         Success response with ok=true
     """
-    # Apply rate limit (future: configure per-IP limits if needed)
-    # TODO: Implement rate limiting based on client IP if GENERAL_LIMITER is available
-
     # Normalize email to lowercase for consistency
     email = form.email.lower()
 
