@@ -112,7 +112,15 @@ Server consumes git pushes via its own webhook (or polls), updates the methodolo
 
 ### What this means for the seed bundle
 
-It already matches: the latest seed only emits the schedule workflow, not the legacy `run-agent.yml` (vendored in CLI for `shipctl lanes install` only). `process.routines:` is the live config shape; `lanes:` lingers in already-installed repos (Ship-on-Ship S3 included) and needs an upgrade-path migration.
+Half-matches today (verified 2026-04-30):
+
+- ✅ `.ship/config.yml` is rendered with `process.routines:` — the v0.7 live shape; no `lanes:`. (`backend/app/services/seed_bundle.py:260-267`)
+- ✅ `.github/workflows/ship-trigger-schedule.yml` is the only cron workflow installed.
+- ✅ Legacy `run-agent.yml` is NOT installed by the seed (vendored in CLI for `shipctl lanes install` only).
+- ✅ The other 4 registered starter workflows (`pr-and-ci-gate`, `scheduled-sdlc-lane`, `parallel-audit-lanes`, `pipeline-self-heal`) are NOT installed by the seed.
+- ❌ **`.github/workflows/ship-bootstrap.yml` IS installed by the seed** (`seed_bundle.py:278-282`). It is event-triggered on `push` to `.ship/config.yml`, which directly violates the "exactly one workflow file, no event triggers" rule above. Tracked as B8.
+
+Upgrade-path note: `commit_bundle_pr` is purely additive (it uses `base_tree` + new entries; never deletes). When an existing repo at v0.6 re-runs the wizard, `.ship/config.yml` is overwritten cleanly (so the legacy `lanes:` block disappears), but stale workflow files from prior bundles stay on disk. Ship-on-Ship is already clean, so this is a future-repo concern, not a current blocker.
 
 ## Open questions (resolve as we go)
 
@@ -152,8 +160,10 @@ Walk used the maintainer's authenticated session against `app.ship.elmundi.com`.
 
 | # | Severity | Finding | Action |
 |---|---|---|---|
-| **B1** | **P0** | `/inbox` 500 — page-level server-side exception on the most product-critical surface | **Fixed.** Root cause: `InboxItemRow` is a server component but passed an inline `onClick={() => onSelect?.(item.id)}` arrow function to `<Link>` (a client component). Next.js cannot serialize a non-Server-Action function across the RSC boundary, so each row threw with digest `1450717433` and the page 500'd. Fix: dropped the unused `onSelect` prop entirely (no caller used it). Sibling check: every other inline `onClick={...}` in the console is inside a `"use client"` file. |
-| B2 | P1 | "Bundle out of date v0.6 → v0.7" — banner is correct (we just bumped in #54). Need to verify the wizard's upgrade-path actually applies cleanly. | Walk the wizard |
+| **B1** | **P0** | `/inbox` 500 — page-level server-side exception on the most product-critical surface | **Fixed in PR #56.** Root cause: `InboxItemRow` is a server component but passed an inline `onClick={() => onSelect?.(item.id)}` arrow function to `<Link>` (a client component). Next.js cannot serialize a non-Server-Action function across the RSC boundary, so each row threw with digest `1450717433` and the page 500'd. Fix: dropped the unused `onSelect` prop entirely (no caller used it). Sibling check: every other inline `onClick={...}` in the console is inside a `"use client"` file. |
+| B2 | P1 | "Bundle out of date v0.6 → v0.7" — banner is correct. Wizard re-seed flow inspected: it overwrites `.ship/config.yml` with the new `process.routines:` shape and **drops the legacy `lanes:` block**. `commit_bundle_pr` is additive-only — it never deletes files, so the upgrade path leaves stale workflows on disk if any were installed by older bundles. Ship-on-Ship's repo is already clean (only `ship-trigger-schedule.yml` present), but the dirtiness budget for other repos is unbounded. Need to verify that an actual re-seed produces a sane PR diff and that shipctl reads `process.routines:` (not the now-absent `lanes:`) once the PR merges. | Walk the wizard end-to-end on Ship-on-Ship as the next step |
+| **B8** | **P0 (arch)** | **Seed installs TWO workflows, not one** — `ship-trigger-schedule.yml` (the cron — correct) AND `ship-bootstrap.yml` (event-triggered on push to `.ship/config.yml` — VIOLATES the locked "exactly one workflow file" decision). `ship-bootstrap.yml` runs `shipctl knowledge bootstrap` after a config change; per the locked architecture, knowledge ingestion is server-side / async via webhook, not an in-repo workflow. `backend/app/services/seed_bundle.py:278-282` adds it unconditionally; `backend/app/api/v1/routes/repos.py:1178` even names it in the PR body. The 4 other registered starter workflows (`pr-and-ci-gate`, `scheduled-sdlc-lane`, `parallel-audit-lanes`, `pipeline-self-heal`) are NOT in the seed — those are reachable only via the legacy `shipctl lanes install` path and don't pollute new repos. | Drop `ship-bootstrap` from `compose_seed_files`; move "open generated knowledge PR" to a server-side webhook handler (post-beta E14 territory, but the workflow drop itself is a one-line change). |
+| B9 | P3 | Cron is `*/15 * * * *`, not `*/30 * * * *` as the locked decision says (`E03-walk-plan.md` "Why no GitHub event triggers"). 15-min ticks are more responsive than 30-min — strictly inside the budget — but the doc and the workflow disagree. | Either bump the workflow to `*/30` or amend the doc; cheapest is doc-side. |
 | B3 | P1 | `BROKEN AUTOMATIONS (24H) = 7` on workspace home — origin unclear. Can't tell if real failures or stale signal. | Trace which signal feeds this counter |
 | B4 | P2 (UX) | No global "tracker not bound" alert. The fact that PRs fill the WIP list "without a tracker" is buried as descriptive text in a card subtitle, not a surfaced action. | E12 polish — add a workspace banner |
 | B5 | OK | Cron loop is alive — Schedule trigger ran 25m ago and succeeded. Legacy "smart agent" loop is functional. | No action |
