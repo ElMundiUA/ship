@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-07T20:41:22+03:00"
-content_sha256: f2d5e8576db9fa96dd6a19d78d3c5aa0f6ed3220840c0a81e5be37d5d91d67c4
+content_sha256: b60ebe88fc61755c51ee6c9dc2dea56d647d72d80fa0a75883d649fef5c7bd7a
 deprecated: false
 replaced_by: null
 yanked: false
@@ -25,7 +25,9 @@ spec:
   include: [common-base]
   # E14: tracker stage this pattern operates on. ``shipctl agent-run``
   # uses this to pick the next eligible ticket via ``GET /tracker/next``.
-  fsm_stage: triage
+  # Aligns with ``services/linear_provisioner.SHIP_FSM_STAGES`` so the
+  # adapter can translate to a Linear filter without an extra map.
+  fsm_stage: task_intake
   inbox:
     profile: role_reviewer
     overrides:

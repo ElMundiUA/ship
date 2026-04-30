@@ -30,7 +30,8 @@ logger = logging.getLogger(__name__)
 
 
 # Ship FSM stages that need a label on Linear. Add new stages here
-# when patterns declare them in ``spec.fsm_stage``.
+# when patterns declare them in ``spec.fsm_stage``. Order matters —
+# the adapter uses adjacency to compute "previous stage done" filters.
 SHIP_FSM_STAGES: tuple[str, ...] = (
     "task_intake",
     "ba_requirements",
@@ -40,6 +41,30 @@ SHIP_FSM_STAGES: tuple[str, ...] = (
     "pr_review",
     "self_heal",
 )
+
+
+# Linear order of the SDLC stages. Self-heal is parallel to the main
+# pipeline (any open ticket) so it stays out of the chain.
+FSM_STAGE_ORDER: tuple[str, ...] = (
+    "task_intake",
+    "ba_requirements",
+    "tech_arch_plan",
+    "dev_implementation",
+    "qa_manual",
+    "pr_review",
+)
+
+
+def previous_stage(stage: str) -> str | None:
+    """Return the SDLC stage immediately before ``stage``, or ``None``
+    when ``stage`` is the entry / runs out-of-band.
+    """
+    if stage not in FSM_STAGE_ORDER:
+        return None
+    idx = FSM_STAGE_ORDER.index(stage)
+    if idx == 0:
+        return None
+    return FSM_STAGE_ORDER[idx - 1]
 
 
 # Ship FSM stage → Linear workflow state name. Keys here drive label
