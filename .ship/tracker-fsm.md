@@ -7,6 +7,7 @@ Every Ship-driven ticket moves through this finite-state machine. The states are
 
 **Repository**: `ElMundiUA/ship`
 **Tracker**: `github`
+  (overrides the workspace default of `linear`)
 
 ## States
 
