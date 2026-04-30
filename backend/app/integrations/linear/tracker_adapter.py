@@ -196,36 +196,45 @@ class LinearTracker:
     def _fsm_filter(self, stage: str) -> list[dict[str, Any]]:
         """Translate a Ship FSM stage name into Linear filter parts.
 
-        The convention: every FSM stage maps to a Linear workflow
-        state name (``Todo`` / ``In Progress`` / ``Review``) and a
-        ``stage:<fsm>`` label. The entry stage is special — it has no
-        stage label yet, so we filter by *absence* of every other
-        stage label rather than presence of an entry-stage label. (We
-        could add ``stage:task_intake`` after intake runs; the entry
-        check needs to keep working in either case.)
+        Convention (one label namespace, ``stage:<fsm>``):
+
+        * ``stage:<X>`` is added when role X has finished its work on the
+          ticket. The label is "this role is done", not "this role is
+          assigned".
+        * To pick a ticket for stage X:
+            - Linear state matches ``FSM_TO_LINEAR_STATE[X]``.
+            - The ``stage:<previous>`` label is present (previous role
+              has produced its output) — except for the entry stage,
+              which has no previous.
+            - The ``stage:<X>`` label is **not** present (this role
+              hasn't run on this ticket yet) — guarantees idempotency.
+
+        ``self_heal`` is intentionally not in ``FSM_STAGE_ORDER``; it
+        runs out-of-band against any open ticket and falls back to the
+        coarse "open" filter via ``list_tickets(state="open")``.
         """
+        from backend.app.services.linear_provisioner import previous_stage
+
         parts: list[dict[str, Any]] = []
         target_state_name = self._fsm_to_linear_state.get(stage)
         if target_state_name and target_state_name in self._state_id_by_name:
             parts.append(
                 {"state": {"id": {"eq": self._state_id_by_name[target_state_name]}}}
             )
-        # Entry stage = task_intake = "no stage label yet". Anything else
-        # filters on the matching label-id.
-        if stage == "task_intake":
-            other_label_ids = [
-                lid
-                for s, lid in self._label_id_by_stage.items()
-                if s != stage
-            ]
-            if other_label_ids:
+
+        # "this role hasn't finished yet" — never re-pick.
+        own_label = self._label_id_by_stage.get(stage)
+        if own_label:
+            parts.append({"labels": {"id": {"nin": [own_label]}}})
+
+        # "previous role is done" — for non-entry stages.
+        prev = previous_stage(stage)
+        if prev:
+            prev_label = self._label_id_by_stage.get(prev)
+            if prev_label:
                 parts.append(
-                    {"labels": {"id": {"nin": other_label_ids}}}
+                    {"labels": {"some": {"id": {"eq": prev_label}}}}
                 )
-        else:
-            label_id = self._label_id_by_stage.get(stage)
-            if label_id:
-                parts.append({"labels": {"id": {"eq": label_id}}})
         return parts
 
     async def transition(self, ticket: TicketRef, *, to_state: str) -> None:
