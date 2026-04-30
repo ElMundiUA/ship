@@ -48,6 +48,7 @@ from backend.app.api.v1.routes import (
     repo_home,
     repo_secrets,
     repos,
+    routines,
     tracker_binding,
     waitlist,
     workspaces,
@@ -91,6 +92,11 @@ api_router.include_router(inbox.router)
 # Lives next to artifact_repos but is keyed off GitHub App installations
 # instead of paste-URL clones.
 api_router.include_router(repos.router)
+# E14 — server-side routine dispatch. ``POST /v1/.../routines/{id}/dispatch``
+# resolves the pattern, picks a tracker ticket if applicable, packages the
+# prompt, and hands work off to Cursor Cloud Agent. Owns the routine-run
+# loop end-to-end so the customer-side cron tick can stay a thin wake-up.
+api_router.include_router(routines.router)
 # GitHub App OAuth + webhooks (pilot WOW-onboarding flow). Webhook route
 # is public; install start/callback do their own auth.
 api_router.include_router(github_app.router)
