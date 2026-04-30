@@ -118,8 +118,9 @@ def test_compose_omits_generated_knowledge_by_default() -> None:
     paths = [p for p, _ in bundle.files]
     assert REPO_INTEL_PLACEHOLDER_PATH not in paths
     assert not any(p.startswith(".ship/knowledge/") for p in paths)
-    assert ".github/workflows/ship-bootstrap.yml" in paths
-    assert ".github/workflows/ship-trigger-schedule.yml" in paths
+    # Bundle 0.8: exactly one workflow file lands in the customer repo.
+    workflow_paths = [p for p in paths if p.startswith(".github/workflows/")]
+    assert workflow_paths == [".github/workflows/ship-trigger-schedule.yml"]
 
 
 def test_compose_emits_repo_intel_placeholder_when_explicit() -> None:

@@ -30,6 +30,7 @@ from backend.app.db.models.tenancy import (
     WorkspaceMember,
 )
 from backend.app.db.session import get_session
+from backend.app.services.seed_bundle import seed_default_knowledge
 
 
 # Standard role tiers used across workspace-scoped routes.
@@ -210,6 +211,13 @@ async def _ensure_personal_workspace(
         )
     )
     await session.flush()
+    # Seed the default knowledge bucket + starter article so the new
+    # workspace lands in a coherent state. Idempotent on re-runs.
+    await seed_default_knowledge(
+        session=session,
+        workspace_id=workspace.id,
+        workspace_name=workspace.name,
+    )
     return workspace
 
 
@@ -264,6 +272,11 @@ async def create_workspace(
         )
     )
     await session.flush()
+    await seed_default_knowledge(
+        session=session,
+        workspace_id=workspace.id,
+        workspace_name=workspace.name,
+    )
     return WorkspaceOut.model_validate(workspace)
 
 
