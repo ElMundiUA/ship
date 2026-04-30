@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-07T20:41:22+03:00"
-content_sha256: 41b590c88218ec8f92c6ec9e029b2f20afc5887ae3c8f1cfd3492dd09baab3bf
+content_sha256: 418a943f30f266780db2ad07f81598d8392903db15498abc64e4d7689c1bc2a9
 deprecated: false
 replaced_by: null
 yanked: false
