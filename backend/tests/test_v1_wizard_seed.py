@@ -464,10 +464,9 @@ async def test_wizard_seed_uses_default_bundle_regardless_of_payload_presets(
     assert ".ship/knowledge/repo-intel.md" not in files
     assert not any(p.startswith(".ship/knowledge/") for p in files)
     assert not any(p.endswith("/adhoc-agent-run.yml") for p in files)
-    assert ".github/workflows/ship-bootstrap.yml" in files
-    assert ".github/workflows/ship-trigger-schedule.yml" in files
-    assert ".github/workflows/scheduled-sdlc-lane.yml" not in files
-    assert ".github/workflows/parallel-audit-lanes.yml" not in files
+    # Bundle 0.8: exactly one workflow file ships in the seed PR.
+    workflow_files = [p for p in files if p.startswith(".github/workflows/")]
+    assert workflow_files == [".github/workflows/ship-trigger-schedule.yml"]
 
 
 @pytest.mark.asyncio
