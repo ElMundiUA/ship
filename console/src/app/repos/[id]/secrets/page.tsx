@@ -21,12 +21,12 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 
 import { AppShell } from "@/components/app-shell";
+import { ApiUnavailable } from "@/components/api-unavailable";
 import {
   Badge,
   Card,
   CardHeader,
   LiveBanner,
-  MockBanner,
   type BadgeTone,
 } from "@/components/ui";
 import {
@@ -188,7 +188,7 @@ export default async function RepoSecretsPage(props: PageProps) {
     >
       <div className="space-y-6">
         {mode.source === "mock" ? (
-          <MockBanner reason={mode.reason} />
+          <ApiUnavailable scope="repo secrets" details={mode.reason} />
         ) : (
           <LiveBanner workspace={mode.workspace.name} />
         )}

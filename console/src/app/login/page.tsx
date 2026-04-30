@@ -21,10 +21,12 @@ export default async function LoginPage({
   const apiConfigured = isApiConfigured();
   const error = typeof params.error === "string" ? params.error : undefined;
   const email = typeof params.email === "string" ? params.email : undefined;
+  const reason = typeof params.reason === "string" ? params.reason : undefined;
   const mode =
     params.mode === "signup" || params.mode === "login"
       ? (params.mode as "signup" | "login")
       : undefined;
+  const requestedLocalMode = params.mode === "local";
   return (
     <div className="relative min-h-screen overflow-hidden bg-ink text-white">
       {/* gradient backdrop matching marketing chrome */}
@@ -51,6 +53,14 @@ export default async function LoginPage({
           </Link>
         </div>
       </header>
+
+      {reason === "session_expired" && (
+        <div className="mx-auto w-full max-w-6xl px-6 pb-4">
+          <div className="rounded-lg border border-sun/30 bg-sun/[0.08] px-4 py-2.5 text-sm text-sun/95">
+            Your session expired — please sign in again.
+          </div>
+        </div>
+      )}
 
       <main className="mx-auto grid w-full max-w-6xl grid-cols-1 gap-10 px-6 pb-16 pt-6 lg:grid-cols-[1.05fr_0.95fr] lg:items-center">
         <section className="hidden lg:block">
@@ -87,7 +97,7 @@ export default async function LoginPage({
         </section>
 
         <section className="rounded-2xl border border-white/10 bg-white/[0.04] p-7 backdrop-blur-xl shadow-card">
-          {isAuth0Mode ? (
+          {isAuth0Mode && !requestedLocalMode ? (
             <Auth0SignInPanel next={typeof params.next === "string" ? params.next : "/"} />
           ) : (
             <LoginForm

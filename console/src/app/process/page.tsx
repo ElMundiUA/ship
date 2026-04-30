@@ -2,7 +2,8 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { AppShell } from "@/components/app-shell";
-import { Card, CardHeader, MockBanner } from "@/components/ui";
+import { Card, CardHeader } from "@/components/ui";
+import { ApiUnavailable } from "@/components/api-unavailable";
 import {
   type ProcessConfigSource,
   processFromRepoConfig,
@@ -57,40 +58,22 @@ export default async function ProcessPage({
   const reason = typeof params.reason === "string" ? params.reason : undefined;
 
   if (!isApiConfigured()) {
-    if (!selectedProcessId) {
-      return renderProcessGraphPage({
-        workspace: { id: "mock", name: "Mock workspace", slug: "mock" },
-        processList: mockProcessList,
-        repos: mockRepos,
-        selectedRepo: mockRepos[0],
-        mock: true,
-      });
-    }
-    return renderProcessPage({
-      workspace: { id: "mock", name: "Mock workspace", slug: "mock" },
-      process: mockProcessForId(selectedProcessId),
-      repos: mockRepos,
-      selectedRepo: mockRepos[0],
-      selectedStateId,
-      selectedTab,
-      reason,
-      mock: true,
-    });
+    return renderDownState("SHIP_API_URL is not set on this deployment.");
   }
 
   const token = await getSessionToken();
-  if (!token) redirect("/login?next=%2Fprocess");
+  if (!token) redirect("/login?next=%2Fprocess&reason=session_expired");
 
   if (!selectedProcessId) {
     const graphResult = await loadLiveProcessGraph(token, selectedRepoId, params);
-    if (graphResult === "unauthorized") redirect("/login?next=%2Fprocess");
+    if (graphResult === "unauthorized") redirect("/login?next=%2Fprocess&reason=session_expired");
     if (graphResult === "empty") redirect("/onboarding?step=github");
     if (graphResult === "down") return renderDownState();
-    return renderProcessGraphPage({ ...graphResult, mock: false });
+    return renderProcessGraphPage(graphResult);
   }
 
   const result = await loadLiveProcess(token, selectedProcessId, selectedRepoId, params);
-  if (result === "unauthorized") redirect("/login?next=%2Fprocess");
+  if (result === "unauthorized") redirect("/login?next=%2Fprocess&reason=session_expired");
   if (result === "empty") redirect("/onboarding?step=github");
   if (result === "down") return renderDownState();
 
@@ -215,14 +198,12 @@ function renderProcessGraphPage({
   processList,
   repos,
   selectedRepo,
-  mock = false,
 }: {
   workspace: Pick<ApiWorkspace, "id" | "name" | "slug">;
   allWorkspaces?: ApiWorkspace[];
   processList: ApiProcessList;
   repos: ApiActivatedRepo[];
   selectedRepo: ApiActivatedRepo | null;
-  mock?: boolean;
 }) {
   return (
     <AppShell
@@ -235,7 +216,6 @@ function renderProcessGraphPage({
           : undefined
       }
     >
-      {mock && <MockBanner />}
       <div className="space-y-3">
         <RepoSelector repos={repos} selectedRepo={selectedRepo} />
         <ProcessGraphOverview processList={processList} repoId={selectedRepo?.id} />
@@ -255,7 +235,6 @@ function renderProcessPage({
   selectedStateId,
   selectedTab,
   reason,
-  mock = false,
 }: {
   workspace: Pick<ApiWorkspace, "id" | "name" | "slug">;
   allWorkspaces?: ApiWorkspace[];
@@ -267,7 +246,6 @@ function renderProcessPage({
   selectedStateId?: string;
   selectedTab: ProcessTab;
   reason?: string;
-  mock?: boolean;
 }) {
   return (
     <AppShell
@@ -280,7 +258,6 @@ function renderProcessPage({
           : undefined
       }
     >
-      {mock && <MockBanner />}
       <div className="space-y-3">
         <RepoSelector
           repos={repos}
@@ -465,400 +442,10 @@ function TabLink({
   );
 }
 
-function renderDownState() {
+function renderDownState(details?: string) {
   return (
     <AppShell title="Process">
-      <Card>
-        <CardHeader
-          title="Backend unreachable"
-          subtitle="The process view couldn't load live orchestration data."
-        />
-        <p className="text-sm text-white/70">
-          Try again in a few seconds. If this keeps happening, check the
-          backend service in the dev Ship environment.
-        </p>
-      </Card>
+      <ApiUnavailable scope="process" details={details} />
     </AppShell>
   );
-}
-
-const mockProcess: ApiProcess = {
-  id: "development",
-  name: "Development Process",
-  primary: true,
-  state_count: 5,
-  task_count: 0,
-  blocked_count: 0,
-  health: "ok",
-  specialists: [
-    {
-      id: "intake",
-      name: "Intake specialist",
-      role: "Clarifies incoming work and routes tasks.",
-      capabilities: ["triage"],
-      agent_profile: "auto",
-    },
-    {
-      id: "business_analyst",
-      name: "Business analyst",
-      role: "Turns requests into requirements and acceptance criteria.",
-      capabilities: ["requirements"],
-      agent_profile: "auto",
-    },
-    {
-      id: "developer",
-      name: "Developer",
-      role: "Implements code changes, tests, and PR updates.",
-      capabilities: ["implementation"],
-      agent_profile: "auto",
-    },
-    {
-      id: "qa_engineer",
-      name: "QA engineer",
-      role: "Validates acceptance criteria and quality gates.",
-      capabilities: ["qa"],
-      agent_profile: "auto",
-    },
-    {
-      id: "review_owner",
-      name: "Review owner",
-      role: "Reviews completed work for correctness and scope.",
-      capabilities: ["review"],
-      agent_profile: "auto",
-    },
-  ],
-  states: [
-    mockState("task_intake", "Intake", "Intake specialist", "ok", 1, 0),
-    mockState("ba_requirements", "Requirements", "Business analyst", "ok", 0, 0),
-    mockState("dev_implementation", "Implementation", "Developer", "ok", 0, 0),
-    mockState("qa_manual", "Quality Review", "QA engineer", "ok", 0, 0),
-    mockState("pr_review", "Final Review", "Review owner", "ok", 1, 0),
-  ],
-  transitions: [],
-  tasks: [],
-  routines: [
-    {
-      id: "self_heal",
-      name: "Self Heal",
-      specialist_id: "devops_platform",
-      specialist_name: "DevOps/platform",
-      schedule: "0 * * * *",
-      prompt: "Check execution health and reconcile CI signals.",
-      instructions: "Check execution health and reconcile CI signals.",
-      last_run: null,
-      status: "idle",
-      enabled: true,
-      description: "Reconcile CI, workflows, and guardrails after failed runs.",
-    },
-  ],
-  schedule: {
-    trigger: { kind: "schedule", event: null },
-    time_zone: "Europe/Kiev",
-    slots: [
-      {
-        id: "weekday_morning",
-        label: "Weekday morning",
-        local_time: "09:00",
-        weekdays: [1, 2, 3, 4, 5],
-        specialist_ids: ["business_analyst", "developer"],
-      },
-      {
-        id: "weekday_afternoon",
-        label: "Weekday afternoon",
-        local_time: "13:00",
-        weekdays: [1, 2, 3, 4, 5],
-        specialist_ids: ["qa_engineer", "review_owner"],
-      },
-    ],
-  },
-  tracker_mapping: {
-    ship: {
-      new: "New",
-      intake_in_progress: "Intake In Progress",
-      ready_for_analysis: "Ready For Analysis",
-      analysis_in_progress: "Analysis In Progress",
-      ready_for_development: "Ready For Development",
-      development_in_progress: "Development In Progress",
-      in_review: "In Review",
-      qa_in_progress: "QA In Progress",
-      ready_for_release: "Ready For Release",
-      final_review_in_progress: "Final Review In Progress",
-      done: "Done",
-      blocked: "Blocked",
-      needs_info: "Needs Info",
-      needs_human_approval: "Needs Human Approval",
-    },
-  },
-  description: "Ticket-driven SDLC flow from intake through review.",
-  node_type: "process",
-  template_id: "process-development",
-  process_graph: { nodes: [], links: [] },
-  adapter_diagnostics: [
-    {
-      kind: "tracker",
-      name: "Tracker adapter",
-      status: "unknown",
-      message: "Mock projection uses Ship-managed state.",
-      capabilities: ["shadow_state"],
-    },
-    {
-      kind: "runner",
-      name: "Runner adapter",
-      status: "ok",
-      message: "Execution windows are projected into the process.",
-      capabilities: ["execution_windows"],
-    },
-    {
-      kind: "agent",
-      name: "Agent profile",
-      status: "unknown",
-      message: "Agent profile selection lands in a later phase.",
-      capabilities: ["auto_select"],
-    },
-  ],
-};
-
-const mockProcessList: ApiProcessList = {
-  primary_process_id: "development",
-  processes: [
-    {
-      id: "development",
-      name: "Development",
-      primary: true,
-      state_count: 5,
-      task_count: 0,
-      blocked_count: 0,
-      health: "ok",
-      description: "Ticket-driven SDLC flow from intake through review.",
-      parent_process_id: null,
-      node_type: "process",
-      template_id: "process-development",
-    },
-    {
-      id: "development.requirements",
-      name: "Requirements",
-      primary: false,
-      state_count: 2,
-      task_count: 0,
-      blocked_count: 0,
-      health: "ok",
-      description: "Clarify scope, acceptance criteria, and handoff notes.",
-      parent_process_id: "development",
-      node_type: "subprocess",
-      template_id: "subprocess-requirements",
-    },
-    {
-      id: "development.implementation",
-      name: "Implementation",
-      primary: false,
-      state_count: 2,
-      task_count: 0,
-      blocked_count: 0,
-      health: "ok",
-      description: "Plan, implement, test, and prepare code changes.",
-      parent_process_id: "development",
-      node_type: "subprocess",
-      template_id: "subprocess-implementation",
-    },
-    {
-      id: "development.qa",
-      name: "Quality Review",
-      primary: false,
-      state_count: 2,
-      task_count: 0,
-      blocked_count: 0,
-      health: "ok",
-      description: "Validate acceptance criteria and release readiness.",
-      parent_process_id: "development",
-      node_type: "subprocess",
-      template_id: "subprocess-qa",
-    },
-  ],
-  process_graph: {
-    nodes: [
-      mockGraphNode("workspace", "Workspace", "workspace", 340, 270),
-      mockGraphNode("development", "Development", "process", 340, 42),
-    ],
-    links: [
-      mockGraphLink("workspace", "development", "Development process"),
-    ],
-  },
-  adapter_diagnostics: [],
-};
-
-const mockRepos: ApiActivatedRepo[] = [
-  {
-    id: "mock-repo",
-    external_id: 1,
-    full_name: "helio/app",
-    default_branch: "main",
-    private: true,
-    html_url: "https://github.com/helio/app",
-    description: "Mock repository",
-    activated_at: new Date().toISOString(),
-    provider: "github",
-    preset: "default",
-    installed_bundle_version: "0.6",
-    current_bundle_version: "0.6",
-  },
-];
-
-function mockProcessForId(processId: string): ApiProcess {
-  const summary =
-    mockProcessList.processes.find((process) => process.id === processId) ??
-    mockProcessList.processes[0];
-  if (summary.id === "development") return mockProcess;
-  const stateIdsByProcess: Record<string, string[]> = {
-    "development.requirements": ["task_intake", "ba_requirements"],
-    "development.implementation": ["ba_requirements", "dev_implementation"],
-    "development.qa": ["qa_manual", "pr_review"],
-  };
-  const stateIds = stateIdsByProcess[summary.id] ?? [];
-  const states = mockProcess.states.filter((state) => stateIds.includes(state.id));
-  return {
-    ...mockProcess,
-    id: summary.id,
-    name: summary.name,
-    primary: summary.primary,
-    state_count: states.length,
-    task_count: summary.task_count,
-    blocked_count: summary.blocked_count,
-    health: summary.health,
-    description: summary.description,
-    parent_process_id: summary.parent_process_id,
-    node_type: summary.node_type,
-    template_id: summary.template_id,
-    states: states.length > 0 ? states : mockProcess.states.slice(0, 1),
-    transitions: [],
-    tasks: [],
-  };
-}
-
-function mockGraphNode(
-  processId: string,
-  name: string,
-  type: "workspace" | "process" | "subprocess",
-  x: number,
-  y: number,
-  parentProcessId: string | null = null,
-) {
-  return {
-    id: `node-${processId}`,
-    process_id: processId,
-    type,
-    name,
-    description:
-      type === "workspace"
-        ? "Root orchestration map for this workspace."
-        : `${name} process node`,
-    parent_process_id: parentProcessId,
-    template_id: `${type}-${processId.replaceAll(".", "-")}`,
-    x,
-    y,
-    status: "ok" as const,
-  };
-}
-
-function mockGraphLink(fromProcessId: string, toProcessId: string, label: string) {
-  return {
-    id: `${fromProcessId}-to-${toProcessId}`,
-    from_process_id: fromProcessId,
-    from_state_id: null,
-    from_node_id: `node-${fromProcessId}`,
-    to_process_id: toProcessId,
-    to_state_id: null,
-    to_node_id: `node-${toProcessId}`,
-    type: "handoff" as const,
-    conditions: [{ expression: label.toLowerCase().replaceAll(" ", "_") }],
-    label,
-    io_contract: {},
-  };
-}
-
-function mockState(
-  id: string,
-  name: string,
-  specialistName: string,
-  health: ApiProcess["health"],
-  taskCount: number,
-  blockedCount: number,
-): ApiProcessState {
-  const specialistId = mockSpecialistId(specialistName);
-  return {
-    id,
-    name,
-    specialist_id: specialistId,
-    specialist_name: specialistName,
-    instructions:
-      "Execute this state using task context and runtime pattern discovery.",
-    triggers: [{ type: "manual", interval: null, event: null }],
-    exit_conditions: [{ expression: "state_complete == true" }],
-    block_conditions: [{ expression: "requires_human_input == true" }],
-    ticket_contract: mockTicketContract(id),
-    runtime: {
-      task_count: taskCount,
-      blocked_count: blockedCount,
-      last_execution_time: new Date().toISOString(),
-      health,
-    },
-  };
-}
-
-function mockSpecialistId(name: string) {
-  const byName: Record<string, string> = {
-    "Intake specialist": "intake",
-    "Business analyst": "business_analyst",
-    Developer: "developer",
-    "QA engineer": "qa_engineer",
-    "Review owner": "review_owner",
-  };
-  return byName[name] ?? name.toLowerCase().replaceAll(" ", "_");
-}
-
-function mockTicketContract(id: string): NonNullable<ApiProcessState["ticket_contract"]> {
-  const defaults: Record<string, NonNullable<ApiProcessState["ticket_contract"]>> = {
-    task_intake: {
-      input_state: "new",
-      claim_state: "intake_in_progress",
-      success_state: "ready_for_analysis",
-      blocked_state: "blocked",
-      needs_info_state: "needs_info",
-    },
-    ba_requirements: {
-      input_state: "ready_for_analysis",
-      claim_state: "analysis_in_progress",
-      success_state: "ready_for_development",
-      blocked_state: "blocked",
-      needs_info_state: "needs_info",
-    },
-    dev_implementation: {
-      input_state: "ready_for_development",
-      claim_state: "development_in_progress",
-      success_state: "in_review",
-      blocked_state: "blocked",
-      needs_info_state: "needs_info",
-    },
-    qa_manual: {
-      input_state: "in_review",
-      claim_state: "qa_in_progress",
-      success_state: "ready_for_release",
-      blocked_state: "blocked",
-      needs_info_state: "needs_info",
-    },
-    pr_review: {
-      input_state: "ready_for_release",
-      claim_state: "final_review_in_progress",
-      success_state: "done",
-      blocked_state: "blocked",
-      needs_info_state: "needs_info",
-      approval_state: "needs_human_approval",
-    },
-  };
-  return defaults[id] ?? {
-    input_state: `${id}_ready`,
-    claim_state: `${id}_in_progress`,
-    success_state: `${id}_done`,
-    blocked_state: "blocked",
-    needs_info_state: "needs_info",
-  };
 }

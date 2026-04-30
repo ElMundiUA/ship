@@ -4,7 +4,6 @@ import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { type ReactNode, Suspense, useState } from "react";
 import { cn } from "@/lib/cn";
-import { currentUser, workspaces } from "@/lib/mock/cloud";
 import { NavigatorLauncher } from "@/components/navigator-launcher";
 
 /**
@@ -219,9 +218,9 @@ export function AppShell({
 }) {
   const pathname = usePathname();
   const [wsOpen, setWsOpen] = useState(false);
-  const mockWs = workspaces[0];
-  const wsLabel = workspace?.name ?? mockWs.name;
-  const wsKicker = workspace?.slug ?? mockWs.org;
+  const defaultWs = { name: "Workspace", org: "Organization" };
+  const wsLabel = workspace?.name ?? defaultWs.name;
+  const wsKicker = workspace?.slug ?? defaultWs.org;
   const multiWorkspace =
     Boolean(workspace?.id) &&
     Array.isArray(allWorkspaces) &&
@@ -235,9 +234,9 @@ export function AppShell({
     return u.pathname + u.search;
   };
   const userInfo = me ?? {
-    name: currentUser.name,
-    email: currentUser.email,
-    initials: currentUser.avatarInitials,
+    name: "User",
+    email: "user@example.com",
+    initials: "U",
   };
   const NAV = navFor(pathname);
   const allNavHrefs = NAV.flatMap((g) => g.items.map((i) => i.href));

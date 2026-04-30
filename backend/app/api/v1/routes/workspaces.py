@@ -74,6 +74,10 @@ async def _ensure_personal_org(session: AsyncSession, auth: AuthContext) -> Org:
     The slug is derived from the user id so it never collides with another
     user's chosen slug, and so the Org is invisible until the user upgrades to
     a real team plan.
+
+    Idempotent under concurrent first-logins: a duplicate INSERT fails on
+    the unique slug constraint and is recovered by re-fetching the row that
+    won the race. Mirrors the pattern in :func:`_ensure_personal_workspace`.
     """
     personal_slug = f"personal-{str(auth.user.id).replace('-', '')[:12]}"
     stmt = select(Org).where(Org.slug == personal_slug)
@@ -82,7 +86,16 @@ async def _ensure_personal_org(session: AsyncSession, auth: AuthContext) -> Org:
         return org
     org = Org(slug=personal_slug, name=f"{auth.user.email}'s personal org", plan="free")
     session.add(org)
-    await session.flush()
+    try:
+        await session.flush()
+    except IntegrityError:
+        # Two concurrent first-login flushes for the same user. Second one
+        # loses on the unique-slug constraint; recover by re-fetching.
+        await session.rollback()
+        existing = (await session.execute(stmt)).scalar_one_or_none()
+        if existing is None:  # pragma: no cover — defensive
+            raise
+        return existing
     session.add(OrgMember(org_id=org.id, user_id=auth.user.id, role="org_owner"))
     return org
 

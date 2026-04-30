@@ -10,13 +10,11 @@
  * `inbox-types.ts` so a hostile URL can't smuggle bad enum values
  * into the API query.
  *
- * Two modes, mirroring the member/project surfaces:
- *   - **live**: `SHIP_API_URL` set + valid session → real list +
- *     counts from `/v1/workspaces/{ws}/inbox`.
- *   - **mock**: API unconfigured, session missing/expired, or the
- *     backend is unreachable → static MockView with five sample
- *     items (one per inbox type) so the marketing-style preview
- *     deployment has something to show.
+ * Three outcomes:
+ *   - **live**: backend reachable + session valid → real list + counts
+ *     from `/v1/workspaces/{ws}/inbox`.
+ *   - **redirect**: missing session → `/login`; no workspaces → `/onboarding`.
+ *   - **down**: API misconfigured or unreachable → `<ApiUnavailable>`.
  *
  * The detail page (P2-13) and routing settings (P2-16) are sibling
  * tickets — this file links to `/inbox/{id}` but does not own that
@@ -24,12 +22,14 @@
  */
 
 import Link from "next/link";
+import { redirect } from "next/navigation";
 
 import { AppShell } from "@/components/app-shell";
+import { ApiUnavailable } from "@/components/api-unavailable";
 import { InboxFiltersControlled } from "@/components/inbox/inbox-filters-controlled";
 import { InboxItemRow } from "@/components/inbox/inbox-item-row";
 import { buildInboxUrl, countActiveFilters } from "@/components/inbox/inbox-url";
-import { Card, CardHeader, EmptyState, MockBanner } from "@/components/ui";
+import { Card, CardHeader, EmptyState } from "@/components/ui";
 import {
   ApiHttpError,
   ApiUnavailableError,
@@ -51,7 +51,6 @@ import {
   type InboxListResponse,
   type InboxType,
 } from "@/lib/inbox-types";
-import { workspaces as mockWorkspaces } from "@/lib/mock/cloud";
 import {
   pickWorkspace,
   toAppShellWorkspaces,
@@ -82,7 +81,8 @@ type Mode =
       repo: string | null;
       play: string | null;
     }
-  | { source: "mock"; reason: string };
+  | { source: "redirect"; href: string }
+  | { source: "down"; reason: string };
 
 function errorMessage(code: string): string {
   switch (code) {
@@ -144,35 +144,35 @@ async function load(
   searchParams: Record<string, string | string[] | undefined>,
 ): Promise<Mode> {
   if (!isApiConfigured()) {
-    return { source: "mock", reason: "SHIP_API_URL is not set" };
+    return { source: "down", reason: "SHIP_API_URL is not set on this deployment." };
   }
   const token = await getSessionToken();
   if (!token) {
-    return { source: "mock", reason: "Sign in to view your real inbox" };
+    return {
+      source: "redirect",
+      href: "/login?next=%2Finbox&reason=session_expired",
+    };
   }
   let workspace: ApiWorkspace;
   let allWorkspaces: ApiWorkspace[];
   try {
     const ws = await listWorkspaces(token);
     if (ws.length === 0) {
-      return {
-        source: "mock",
-        reason: "Create a workspace first to use the inbox",
-      };
+      return { source: "redirect", href: "/onboarding?step=github" };
     }
     allWorkspaces = ws;
     const resolved = await getResolvedWorkspaceId(searchParams, ws);
     workspace = pickWorkspace(ws, resolved);
   } catch (err) {
     if (err instanceof ApiHttpError && err.status === 401) {
-      return { source: "mock", reason: "Session expired — sign in again" };
-    }
-    if (err instanceof ApiUnavailableError) {
-      return { source: "mock", reason: "Backend unreachable" };
+      return {
+        source: "redirect",
+        href: "/login?next=%2Finbox&reason=session_expired",
+      };
     }
     return {
-      source: "mock",
-      reason: err instanceof Error ? err.message : "Backend returned an error",
+      source: "down",
+      reason: err instanceof Error ? err.message : "Could not load workspaces.",
     };
   }
 
@@ -206,14 +206,14 @@ async function load(
     };
   } catch (err) {
     if (err instanceof ApiHttpError && err.status === 401) {
-      return { source: "mock", reason: "Session expired — sign in again" };
-    }
-    if (err instanceof ApiUnavailableError) {
-      return { source: "mock", reason: "Backend unreachable" };
+      return {
+        source: "redirect",
+        href: "/login?next=%2Finbox&reason=session_expired",
+      };
     }
     return {
-      source: "mock",
-      reason: err instanceof Error ? err.message : "Backend returned an error",
+      source: "down",
+      reason: err instanceof Error ? err.message : "Could not load inbox items.",
     };
   }
 }
@@ -259,13 +259,19 @@ export default async function InboxPage({
   const parsed = parseSearchParams(params);
   const data = await load(parsed, params);
 
-  if (data.source === "mock") {
+  if (data.source === "redirect") {
+    redirect(data.href);
+  }
+  if (data.source === "down") {
     return (
-      <MockView
-        reason={data.reason}
-        filters={parsed.filters}
-        errorCode={parsed.errorCode}
-      />
+      <AppShell kicker="attention" title="Inbox">
+        {parsed.errorCode && (
+          <div className="mb-5 rounded-xl border border-coral/30 bg-coral/[0.06] px-3 py-2 text-xs text-coral/95">
+            {errorMessage(parsed.errorCode)}
+          </div>
+        )}
+        <ApiUnavailable scope="inbox" details={data.reason} />
+      </AppShell>
     );
   }
 
@@ -548,213 +554,3 @@ function RefreshButton({
   );
 }
 
-// ---------------------------------------------------------------------------
-// MockView — static preview deployment fallback (no Math.random / Date.now).
-// ---------------------------------------------------------------------------
-
-const MOCK_REFERENCE_DATE = new Date("2026-04-22T12:00:00Z");
-
-function isoDaysAgo(days: number): string {
-  const d = new Date(MOCK_REFERENCE_DATE);
-  d.setUTCDate(d.getUTCDate() - days);
-  return d.toISOString();
-}
-
-function mockItems(workspaceId: string): InboxItem[] {
-  return [
-    {
-      id: "inbox_clarification_demo",
-      workspace_id: workspaceId,
-      repo_id: "repo_billing",
-      type: "clarification",
-      status: "new",
-      title: "Confirm rotated key for stripe-prod",
-      summary:
-        "Pipeline blocked: which env should the rotated STRIPE_KEY land in?",
-      intake_handle: "secops",
-      intake_reason: "rule:secops",
-      owner: {
-        user_id: "u_mira",
-        email: "mira@helio.dev",
-        display_name: "Mira Tan",
-      },
-      play_key: "rotate-secrets",
-      run_id: "run_001",
-      created_at: isoDaysAgo(1),
-      due_at: null,
-      snoozed_until: null,
-      resolved_at: null,
-      resolution: null,
-    },
-    {
-      id: "inbox_approval_demo",
-      workspace_id: workspaceId,
-      repo_id: "repo_api",
-      type: "approval",
-      status: "new",
-      title: "Approve schema migration to v17",
-      summary:
-        "Add nullable `last_seen_at` column to users — non-blocking, but requires owner sign-off.",
-      intake_handle: "release_manager",
-      intake_reason: "rule:release_manager",
-      owner: {
-        user_id: "u_dk",
-        email: "denis@helio.dev",
-        display_name: "Denis K.",
-      },
-      play_key: "schema-migrate",
-      run_id: "run_002",
-      created_at: isoDaysAgo(3),
-      due_at: null,
-      snoozed_until: null,
-      resolved_at: null,
-      resolution: null,
-    },
-    {
-      id: "inbox_failure_demo",
-      workspace_id: workspaceId,
-      repo_id: "repo_user_svc",
-      type: "failure",
-      status: "new",
-      title: "scan-secrets failed on user-svc",
-      summary:
-        "3 consecutive failures on the nightly scan. Workflow log shows a 503 from GitHub Advanced Security.",
-      intake_handle: "code_owner",
-      intake_reason: "rule:code_owner",
-      owner: null,
-      play_key: "scan-secrets",
-      run_id: "run_003",
-      created_at: isoDaysAgo(8),
-      due_at: null,
-      snoozed_until: null,
-      resolved_at: null,
-      resolution: null,
-    },
-    {
-      id: "inbox_improvement_demo",
-      workspace_id: workspaceId,
-      repo_id: "repo_api",
-      type: "improvement",
-      status: "snoozed",
-      title: "Bundle bump available for api-backend preset",
-      summary:
-        "v18 ships richer FSM hints and an updated lint rule for inbox payloads.",
-      intake_handle: "pr_author",
-      intake_reason: "fallback:workspace_admin",
-      owner: {
-        user_id: "u_jordan",
-        email: "jordan@helio.dev",
-        display_name: "Jordan Lee",
-      },
-      play_key: "bundle-upgrade",
-      run_id: null,
-      created_at: isoDaysAgo(2),
-      due_at: null,
-      snoozed_until: isoDaysAgo(-1),
-      resolved_at: null,
-      resolution: null,
-    },
-    {
-      id: "inbox_exception_demo",
-      workspace_id: workspaceId,
-      repo_id: "repo_billing",
-      type: "exception",
-      status: "new",
-      title: "Waiver requested: deploy outside change window",
-      summary:
-        "Charlie wants to push the billing hotfix Saturday 23:00; needs an explicit override.",
-      intake_handle: "secops",
-      intake_reason: "rule:secops",
-      owner: {
-        user_id: "u_asha",
-        email: "asha@helio.dev",
-        display_name: "Asha Verma",
-      },
-      play_key: "deploy-billing",
-      run_id: "run_005",
-      created_at: isoDaysAgo(5),
-      due_at: null,
-      snoozed_until: null,
-      resolved_at: null,
-      resolution: null,
-    },
-    {
-      id: "inbox_stuck_demo",
-      workspace_id: workspaceId,
-      repo_id: "repo_api",
-      type: "stuck",
-      status: "new",
-      title: "Stuck work: PR #88 — no activity 24h+",
-      summary: "ENG-4412: Payments retry backoff — no commits or reviews in 2d.",
-      intake_handle: null,
-      intake_reason: "dashboard:stuck_pr",
-      owner: null,
-      play_key: null,
-      run_id: null,
-      created_at: isoDaysAgo(2),
-      due_at: null,
-      snoozed_until: null,
-      resolved_at: null,
-      resolution: null,
-    },
-  ];
-}
-
-function MockView({
-  reason,
-  filters,
-  errorCode,
-}: {
-  reason: string;
-  filters: InboxFilterState;
-  errorCode: string | null;
-}) {
-  const ws = mockWorkspaces[0];
-  const items = mockItems(ws.id);
-  const typeCounts: Partial<Record<InboxType, number>> = {};
-  for (const item of items) {
-    typeCounts[item.type] = (typeCounts[item.type] ?? 0) + 1;
-  }
-  return (
-    <AppShell kicker="attention" title="Inbox">
-      <MockBanner reason={reason} />
-      {errorCode && (
-        <div className="mb-5 rounded-xl border border-coral/30 bg-coral/[0.06] px-3 py-2 text-xs text-coral/95">
-          {errorMessage(errorCode)}
-        </div>
-      )}
-
-      <Card className="mt-5">
-        <CardHeader
-          title="Filters"
-          subtitle="Scope by owner, then narrow by work type. Default is everything in your workspace."
-        />
-        <InboxFiltersControlled
-          value={filters}
-          counts={{
-            types: typeCounts,
-            allTypes: sumInboxTypeCounts(typeCounts),
-          }}
-        />
-      </Card>
-
-      <Card padded={false} className="mt-5 overflow-hidden">
-        <CardHeader
-          className="px-5 pt-5"
-          title="Items (sample)"
-          subtitle="Sign in to view the real queue. The rows below preview the type distribution + stale-age badge."
-        />
-        <ul className="space-y-2 px-3 pb-3">
-          {items.map((item) => (
-            <li key={item.id}>
-              <InboxItemRow
-                item={item}
-                referenceDate={MOCK_REFERENCE_DATE}
-              />
-            </li>
-          ))}
-        </ul>
-      </Card>
-    </AppShell>
-  );
-}

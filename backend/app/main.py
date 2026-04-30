@@ -12,7 +12,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import chromadb
 import httpx
 import yaml
 from fastapi import FastAPI, Header, HTTPException, Query, Response
@@ -30,9 +29,6 @@ init_sentry(service_name="ship-server")
 
 
 APP_ROOT = Path(__file__).resolve().parents[2]
-CHROMA_DIR = APP_ROOT / "backend" / ".chroma"
-CHROMA_MANIFEST_PATH = CHROMA_DIR / "manifest.json"
-COLLECTION_NAME = "ship_methodology"
 DEFAULT_PATHS = ("documentation", "README.md")
 ARTIFACTS_ROOT = APP_ROOT / "artifacts"
 TELEMETRY_DIR = APP_ROOT / "backend" / "telemetry"
@@ -114,156 +110,6 @@ class TelemetryBatch(BaseModel):
     events: list[TelemetryEvent] = Field(default_factory=list)
 
 
-class IndexStore:
-    def __init__(self) -> None:
-        self.client: chromadb.ClientAPI | None = None
-        self.collection: Any | None = None
-
-    def _embedding_function(self):
-        api_key = os.getenv("OPENAI_API_KEY", "").strip()
-        if not api_key:
-            raise HTTPException(status_code=500, detail="OPENAI_API_KEY is required for vector search.")
-        return chromadb.utils.embedding_functions.OpenAIEmbeddingFunction(
-            api_key=api_key,
-            model_name=os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small"),
-        )
-
-    def _allowed_files(self) -> list[Path]:
-        files: list[Path] = []
-        for entry in DEFAULT_PATHS:
-            candidate = APP_ROOT / entry
-            if candidate.is_file():
-                files.append(candidate)
-            elif candidate.is_dir():
-                files.extend(sorted(candidate.rglob("*.md")))
-        if ARTIFACTS_ROOT.is_dir():
-            files.extend(sorted(ARTIFACTS_ROOT.rglob("ARTIFACT.md")))
-        return [p for p in files if p.is_file()]
-
-    def _index_path_for(self, path: Path) -> str:
-        """Return the path that clients should use to fetch this content again.
-
-        For ARTIFACT.md files inside `artifacts/<plural>/<id>/`, return the
-        artifact folder path so clients can fetch the whole artifact bundle.
-        Other files use their plain repo-relative path.
-        """
-        rel = path.relative_to(APP_ROOT)
-        if path.name == "ARTIFACT.md" and len(rel.parts) >= 3 and rel.parts[0] == "artifacts":
-            return str(rel.parent)
-        return str(rel)
-
-    def _index_text_for(self, path: Path) -> str:
-        text = path.read_text(encoding="utf-8", errors="ignore")
-        if path.name == "ARTIFACT.md" and text.startswith("---\n"):
-            end = text.find("\n---\n", 4)
-            if end != -1:
-                return text[end + len("\n---\n"):]
-        return text
-
-    def _fingerprint(self, path: Path) -> str:
-        data = path.read_bytes()
-        return hashlib.sha256(data).hexdigest()
-
-    def _build_manifest(self, files: list[Path]) -> dict[str, str]:
-        return {str(f.relative_to(APP_ROOT)): self._fingerprint(f) for f in files}
-
-    def _chunk_text(self, text: str, chunk_size: int = 1200, overlap: int = 180) -> list[str]:
-        clean = re.sub(r"\s+\n", "\n", text).strip()
-        if len(clean) <= chunk_size:
-            return [clean] if clean else []
-        chunks: list[str] = []
-        start = 0
-        while start < len(clean):
-            end = min(len(clean), start + chunk_size)
-            chunks.append(clean[start:end])
-            if end == len(clean):
-                break
-            start = max(0, end - overlap)
-        return chunks
-
-    def _needs_reindex(self, new_manifest: dict[str, str]) -> bool:
-        if os.getenv("FORCE_REINDEX", "").lower() in {"1", "true", "yes"}:
-            return True
-        if not CHROMA_MANIFEST_PATH.exists():
-            return True
-        try:
-            old_manifest = json.loads(CHROMA_MANIFEST_PATH.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            return True
-        return old_manifest != new_manifest
-
-    def _write_manifest(self, manifest: dict[str, str]) -> None:
-        CHROMA_DIR.mkdir(parents=True, exist_ok=True)
-        CHROMA_MANIFEST_PATH.write_text(json.dumps(manifest, ensure_ascii=True, indent=2), encoding="utf-8")
-
-    def ensure_ready(self) -> None:
-        CHROMA_DIR.mkdir(parents=True, exist_ok=True)
-        self.client = chromadb.PersistentClient(path=str(CHROMA_DIR))
-        embedding = self._embedding_function()
-        files = self._allowed_files()
-        manifest = self._build_manifest(files)
-
-        if self._needs_reindex(manifest):
-            try:
-                self.client.delete_collection(COLLECTION_NAME)
-            except Exception:
-                pass
-            self.collection = self.client.get_or_create_collection(
-                name=COLLECTION_NAME,
-                embedding_function=embedding,
-                metadata={"hnsw:space": "cosine"},
-            )
-            ids: list[str] = []
-            docs: list[str] = []
-            metas: list[dict[str, Any]] = []
-            for file_path in files:
-                rel = str(file_path.relative_to(APP_ROOT))
-                indexed_path = self._index_path_for(file_path)
-                text = self._index_text_for(file_path)
-                for idx, chunk in enumerate(self._chunk_text(text)):
-                    ids.append(f"{rel}::chunk-{idx}")
-                    docs.append(chunk)
-                    metas.append({"path": indexed_path, "chunk_index": idx})
-            if docs:
-                self.collection.add(ids=ids, documents=docs, metadatas=metas)
-            self._write_manifest(manifest)
-        else:
-            self.collection = self.client.get_or_create_collection(
-                name=COLLECTION_NAME,
-                embedding_function=embedding,
-                metadata={"hnsw:space": "cosine"},
-            )
-
-    def search(self, query: str, top_k: int) -> list[dict[str, Any]]:
-        if not self.collection:
-            raise HTTPException(status_code=500, detail="Vector index is not initialized.")
-        raw = self.collection.query(
-            query_texts=[query],
-            n_results=top_k,
-            include=["documents", "metadatas", "distances"],
-        )
-        results: list[dict[str, Any]] = []
-        docs = raw.get("documents", [[]])[0]
-        metas = raw.get("metadatas", [[]])[0]
-        distances = raw.get("distances", [[]])[0]
-        ids = raw.get("ids", [[]])[0]
-        for i, doc in enumerate(docs):
-            meta = metas[i] if i < len(metas) else {}
-            distance = distances[i] if i < len(distances) else None
-            rid = ids[i] if i < len(ids) else None
-            snippet = doc[:260].replace("\n", " ").strip()
-            results.append(
-                {
-                    "id": rid,
-                    "path": meta.get("path"),
-                    "chunk_index": meta.get("chunk_index"),
-                    "distance": distance,
-                    "snippet": snippet,
-                }
-            )
-        return results
-
-
 SENSITIVE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"), "[redacted-email]"),
     (re.compile(r"\b(sk-[A-Za-z0-9]{20,})\b"), "[redacted-openai-key]"),
@@ -291,21 +137,28 @@ def safe_repo() -> tuple[str, str]:
     return owner, name
 
 
-index_store = IndexStore()
-
-
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     """Open the async database engine eagerly so the first request doesn't
     pay for connection setup, and dispose it cleanly on shutdown.
 
-    The methodology API endpoints (``/patterns``, ``/search``, …) do not need
-    Postgres and continue to work even if the database is unreachable; only
-    the new ``/v1`` routes will fail in that case. We therefore log and
-    swallow startup errors instead of preventing the process from booting.
+    Also kicks off the methodology-corpus reindex into ``methodology_chunks``
+    (pgvector). The reindex is best-effort: if Postgres is unreachable or
+    ``OPENAI_API_KEY`` is missing we log and continue so the catalog routes
+    (``/patterns`` / ``/tools`` / ``/collections``) keep working. ``/search``
+    will then return 412 with an explicit "configure OPENAI_API_KEY" message.
     """
     try:
         get_engine()
+    except Exception:  # pragma: no cover — best-effort startup
+        pass
+    # Reindex the methodology corpus into pgvector (E13). Idempotent: only
+    # chunks whose ``content_sha`` changed get re-embedded, so warm starts
+    # add maybe a few requests' latency, not a full corpus walk.
+    try:
+        from backend.app.services.methodology_index import reindex_if_stale
+
+        await reindex_if_stale()
     except Exception:  # pragma: no cover — best-effort startup
         pass
     try:
@@ -625,15 +478,6 @@ def _full_entry_response(entry: dict[str, Any], kind: str) -> dict[str, Any]:
     return out
 
 
-@app.on_event("startup")
-def startup() -> None:
-    # Allow API boot without OPENAI_API_KEY; /search will fail with explicit error until configured.
-    try:
-        index_store.ensure_ready()
-    except HTTPException:
-        pass
-
-
 @app.get("/patterns")
 def list_patterns(channel: str = Query(default="stable")) -> dict[str, Any]:
     data = load_patterns_manifest()
@@ -725,10 +569,22 @@ def _versions_for_kind(kind: str, item_id: str) -> dict[str, Any]:
 
 
 @app.post("/search")
-def search(req: SearchRequest) -> dict[str, Any]:
-    if not index_store.collection:
-        index_store.ensure_ready()
-    return {"query": req.query, "results": index_store.search(req.query, req.top_k)}
+async def search(req: SearchRequest) -> dict[str, Any]:
+    """Vector search over documentation, README, and artifact bodies.
+
+    Backed by ``methodology_chunks`` (pgvector). The released CLI relies
+    on this shape, so the JSON contract here matches the historical
+    Chroma-backed implementation byte-for-byte.
+    """
+    from backend.app.services.methodology_index import search as _vector_search
+
+    try:
+        results = await _vector_search(req.query, req.top_k)
+    except RuntimeError as exc:
+        # Most likely: OPENAI_API_KEY missing on the deployment. Surface
+        # a clear 412 so the operator sees configuration drift, not 500.
+        raise HTTPException(status_code=412, detail=str(exc)) from exc
+    return {"query": req.query, "results": results}
 
 
 @app.post("/fetch")

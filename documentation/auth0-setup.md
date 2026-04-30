@@ -86,6 +86,8 @@ APP_BASE_URL=https://ship.example.com   # http://localhost:3001 for laptop
 `make restart` and you're done. The `/login` page now shows a "Continue
 with Auth0" button instead of the local email/password form.
 
+**Local mode (email + password) is intended for self-hosted instances. In cloud (`SHIP_AUTH_MODE=auth0`) deployments, the form is hidden by default and accessible at `/login?mode=local` for emergency access only.**
+
 ## 6. Smoke-test the integration
 
 ```bash

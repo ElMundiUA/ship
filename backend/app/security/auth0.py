@@ -30,6 +30,7 @@ import httpx
 from fastapi import HTTPException, status
 from jose import JWTError, jwt
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.config import Settings
@@ -291,7 +292,33 @@ async def user_from_claims(
         external_subject=sub,
     )
     session.add(user)
-    await session.flush()
+    try:
+        await session.flush()
+    except IntegrityError:
+        # Lost a race with a concurrent first-login for the same identity.
+        # Two browser tabs hitting ``/v1/auth/me`` at the same time both
+        # miss the SELECTs above; the second INSERT fails on the unique
+        # ``users.external_subject`` (or ``users.email``) constraint.
+        # Roll back the failed INSERT and re-fetch — the row that won
+        # the race is now visible to the same session.
+        await session.rollback()
+        existing = (
+            await session.execute(
+                select(User).where(User.external_subject == sub)
+            )
+        ).scalar_one_or_none()
+        if existing is None:
+            existing = (
+                await session.execute(
+                    select(User).where(User.email == email)
+                )
+            ).scalar_one_or_none()
+        if existing is None:  # pragma: no cover — defensive
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="user provisioning race resolved without a row",
+            )
+        return existing
     return user
 
 

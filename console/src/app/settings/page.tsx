@@ -6,9 +6,11 @@
  * component.
  */
 
+import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 
 import { AppShell } from "@/components/app-shell";
+import { ApiUnavailable } from "@/components/api-unavailable";
 import {
   IntegrationsWorkspaceBody,
   loadIntegrationsWorkspaceMode,
@@ -19,7 +21,6 @@ import {
   Card,
   CardHeader,
   LiveBanner,
-  MockBanner,
   type BadgeTone,
 } from "@/components/ui";
 import {
@@ -40,7 +41,6 @@ import type {
   ApiWorkspace,
 } from "@/lib/api/types";
 import { getSessionToken } from "@/lib/api/session";
-import { workspaces as mockWorkspaces } from "@/lib/mock/cloud";
 import { getResolvedWorkspaceId } from "@/lib/workspace-resolve.server";
 import { pickWorkspace, toAppShellWorkspaces } from "@/lib/workspace-scope";
 
@@ -56,7 +56,7 @@ type Mode =
       repos: ApiArtifactRepo[];
       tokens: ApiTokenInfo[];
     }
-  | { source: "mock"; reason: string };
+  | { source: "unavailable"; errMsg: string };
 
 type RepoConfigStatus =
   | { kind: "ready"; label: string; detail: string }
@@ -112,20 +112,27 @@ function isTabId(value: string): value is TabId {
 async function load(
   searchParams: Record<string, string | string[] | undefined>,
 ): Promise<Mode> {
-  if (!isApiConfigured()) return { source: "mock", reason: "SHIP_API_URL not set" };
+  if (!isApiConfigured()) {
+    return { source: "unavailable", errMsg: "SHIP_API_URL is not set on this deployment." };
+  }
+
   const token = await getSessionToken();
-  if (!token) return { source: "mock", reason: "Sign in to manage real settings" };
+  if (!token) redirect("/login?next=%2Fsettings&reason=session_expired");
+
   try {
     const ws = await listWorkspaces(token);
-    if (ws.length === 0)
-      return {
-        source: "mock",
-        reason: "Create a workspace first to manage settings",
-      };
+    if (ws.length === 0) {
+      redirect("/onboarding?step=github");
+    }
+
     const resolved = await getResolvedWorkspaceId(searchParams, ws);
+    if (ws.length > 1 && !resolved) {
+      redirect("/?next=/settings");
+    }
+
     const target = pickWorkspace(ws, resolved);
     // The artifact-repos call may 404 in older deployments; treat it as
-    // empty rather than falling all the way back to mock data.
+    // empty rather than failing the whole page.
     const activatedRepos = await listActivatedRepos(target.id, token).catch(
       () => [] as ApiActivatedRepo[],
     );
@@ -162,11 +169,16 @@ async function load(
       tokens,
     };
   } catch (err) {
-    if (err instanceof ApiHttpError && err.status === 401)
-      return { source: "mock", reason: "Session expired — sign in again" };
-    if (err instanceof ApiUnavailableError)
-      return { source: "mock", reason: "Backend unreachable" };
-    return { source: "mock", reason: "Backend returned an error" };
+    if (err instanceof ApiHttpError && err.status === 401) {
+      redirect("/login?next=%2Fsettings&reason=session_expired");
+    }
+    if (err instanceof ApiUnavailableError) {
+      return { source: "unavailable", errMsg: err.message };
+    }
+    return {
+      source: "unavailable",
+      errMsg: err instanceof Error ? err.message : "Backend returned an error",
+    };
   }
 }
 
@@ -242,8 +254,12 @@ export default async function SettingsPage({
   const justMintedFlag =
     typeof params.just_minted === "string" && params.just_minted === "1";
 
-  if (data.source === "mock") {
-    return <MockView reason={data.reason} />;
+  if (data.source === "unavailable") {
+    return (
+      <AppShell kicker="settings" title="Workspace settings">
+        <ApiUnavailable scope="settings" details={data.errMsg} />
+      </AppShell>
+    );
   }
 
   // Read-and-clear the "just minted" cookie. We can't delete cookies in a
@@ -951,21 +967,3 @@ function AddRepoForm({ workspaceId }: { workspaceId: string }) {
   );
 }
 
-function MockView({ reason }: { reason: string }) {
-  const ws = mockWorkspaces[0];
-  return (
-    <AppShell kicker={`${ws.name} · settings`} title="Workspace settings">
-      <MockBanner reason={reason} />
-      <Card>
-        <CardHeader
-          title="Workspace settings"
-          subtitle="Connect the Ship API to edit workspace, members, integrations, and API keys in one place."
-        />
-        <p className="text-sm text-white/55">
-          When signed in, the side navigation stays minimal — open the gear
-          next to your name to reach this page.
-        </p>
-      </Card>
-    </AppShell>
-  );
-}
