@@ -63,6 +63,7 @@ from backend.app.services.cursor_cloud import (
     LaunchedAgent,
     launch_agent,
 )
+from backend.app.services.routine_run_token import RoutineRunClaims, mint as mint_run_token
 
 
 router = APIRouter(
@@ -183,6 +184,8 @@ def _render_prompt(
     owner: str,
     repo: str,
     issue: dict[str, Any] | None,
+    run_token: str | None = None,
+    callbacks_base: str = "",
 ) -> str:
     base_body = _read_base()
     base = (
@@ -214,28 +217,60 @@ def _render_prompt(
         f"#{issue.get('number')} on {owner}/{repo}" if issue else "(context-free run)"
     )
     issue_n = issue.get("number") if issue else None
-    gh_preamble = (
-        "## How to act on GitHub (this repo uses GitHub Issues, not Linear)\n\n"
-        f"The single human-facing channel for this run is the GitHub issue {issue_ref}.\n"
-        "Use the `gh` CLI for everything:\n\n"
+    ticket_id_for_callback = (
+        f"{owner}/{repo}#{issue_n}" if issue_n is not None else ""
     )
-    if issue_n is not None:
-        gh_preamble += (
-            f"- Read latest state: `gh issue view {issue_n} --repo {owner}/{repo} "
-            "--json title,body,labels,state,comments`\n"
-            f"- Comment: `gh issue comment {issue_n} --repo {owner}/{repo} --body \"...\"`\n"
-            f"- Label: `gh issue edit {issue_n} --repo {owner}/{repo} --add-label \"ready\"`"
-            f" / `--remove-label \"needs-info\"`\n"
-            f"- Close: `gh issue close {issue_n} --repo {owner}/{repo}` (only if this role"
-            " is the right one to close)\n\n"
+
+    # Cursor agents do not hold Linear / GitHub credentials. The Ship server
+    # owns the workspace's OAuth tokens and exposes a tiny set of callbacks the
+    # agent hits with the per-run JWT below. The token is short-lived (1h) and
+    # bound to this workspace + repo + ticket, so leaks are bounded.
+    callback_block = ""
+    if run_token and callbacks_base:
+        comment_curl = (
+            f"curl -sS -X POST '{callbacks_base}/v1/routine-callbacks/comment' \\\n"
+            f"  -H 'Authorization: Bearer {run_token}' \\\n"
+            "  -H 'Content-Type: application/json' \\\n"
+            "  -d '{\"body\":\"Your comment text here. [Ship SDLC:" + role + "]\"}'"
         )
-    gh_preamble += (
-        f"End every comment with the marker line `[Ship SDLC:{role}]` (one comment per run, "
-        "not multiple).\n\n"
-        f"If a comment with `[Ship SDLC:{role}]` already reflects the current state — "
-        "exit without re-commenting.\n\n"
-    )
-    return gh_preamble + body
+        inbox_curl = (
+            f"curl -sS -X POST '{callbacks_base}/v1/routine-callbacks/inbox-item' \\\n"
+            f"  -H 'Authorization: Bearer {run_token}' \\\n"
+            "  -H 'Content-Type: application/json' \\\n"
+            "  -d '{\"type\":\"improvement\",\"title\":\"...\",\"summary\":\"...\"}'"
+        )
+        transition_curl = (
+            f"curl -sS -X POST '{callbacks_base}/v1/routine-callbacks/transition' \\\n"
+            f"  -H 'Authorization: Bearer {run_token}' \\\n"
+            "  -H 'Content-Type: application/json' \\\n"
+            "  -d '{\"to_state\":\"in_progress\"}'"
+        )
+        ticket_line = (
+            f"This run is bound to ticket `{ticket_id_for_callback}` — the callbacks below"
+            " act on that ticket by default.\n\n"
+            if ticket_id_for_callback
+            else "This run is context-free (no specific ticket bound).\n\n"
+        )
+        callback_block = (
+            "## How to write back into Ship\n\n"
+            "You DO NOT have direct Linear / GitHub credentials. Ship server owns those.\n"
+            "Instead, hit Ship's per-run callback endpoints with the bearer token below.\n\n"
+            f"Bearer token (for this run only, expires in 1h):\n```\n{run_token}\n```\n\n"
+            f"{ticket_line}"
+            "### Comment on the bound ticket\n\n```bash\n"
+            + comment_curl + "\n```\n\n"
+            "### Drop a free-form item in the workspace inbox\n\n```bash\n"
+            + inbox_curl + "\n```\n\n"
+            "### Transition the FSM stage of the bound ticket\n\n```bash\n"
+            + transition_curl + "\n```\n\n"
+            f"End every Ship-side comment with the marker `[Ship SDLC:{role}]`.\n"
+            f"If a comment with `[Ship SDLC:{role}]` already reflects the current state, "
+            "exit without re-commenting.\n\n"
+            "Do NOT use `gh issue comment`, `linear-cli`, or any other direct API. "
+            "All tracker writes must go through the curl callbacks above so Ship server "
+            "stays the single source of audit truth.\n\n"
+        )
+    return callback_block + body
 
 
 async def _pick_issue(
@@ -398,12 +433,36 @@ async def dispatch_routine(
                 reason="no_eligible_ticket",
             )
 
+    # Mint the routine-run JWT before launching so we can embed it in
+    # the prompt the agent receives. Bound to (workspace, repo, routine,
+    # pattern, ticket) — agent_id is not in the token because we don't
+    # know it until Cursor responds (acceptable: token is short-lived
+    # and the ticket binding already scopes the blast radius).
+    ticket_id_for_token = (
+        f"{owner}/{repo_name}#{issue.get('number')}"
+        if issue and issue.get("number") is not None
+        else None
+    )
+    run_token = mint_run_token(
+        claims=RoutineRunClaims(
+            workspace_id=workspace_id,
+            repo_id=repo_id,
+            routine_id=routine_id,
+            pattern=pattern_id,
+            ticket_id=ticket_id_for_token,
+        ),
+        settings=settings,
+    )
+    callbacks_base = settings.public_url.rstrip("/") if settings.public_url else ""
+
     prompt = _render_prompt(
         pattern_body=pattern_body,
         role=role,
         owner=owner,
         repo=repo_name,
         issue=issue,
+        run_token=run_token,
+        callbacks_base=callbacks_base,
     )
 
     branch_name = payload.branch_name or _branch_name(

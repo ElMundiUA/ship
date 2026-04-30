@@ -48,6 +48,7 @@ from backend.app.api.v1.routes import (
     repo_home,
     repo_secrets,
     repos,
+    routine_callbacks,
     routines,
     tracker_binding,
     waitlist,
@@ -97,6 +98,11 @@ api_router.include_router(repos.router)
 # prompt, and hands work off to Cursor Cloud Agent. Owns the routine-run
 # loop end-to-end so the customer-side cron tick can stay a thin wake-up.
 api_router.include_router(routines.router)
+# Public callback endpoints that Cursor-Cloud-launched agents hit with
+# their per-run JWT. Comment / transition / inbox-item write back to
+# Ship using the workspace's existing OAuth, so the agent never holds a
+# Linear or GitHub credential.
+api_router.include_router(routine_callbacks.router)
 # GitHub App OAuth + webhooks (pilot WOW-onboarding flow). Webhook route
 # is public; install start/callback do their own auth.
 api_router.include_router(github_app.router)
