@@ -65,7 +65,11 @@ def upgrade() -> None:
             server_default=sa.text("gen_random_uuid()"),
         ),
         sa.Column("email", sa.Text(), nullable=False),
-        sa.Column("token_hash", sa.Text(), nullable=False, unique=True),
+        # NB: ``unique=True`` here would auto-generate a constraint with the
+        # same name as the explicit ``op.create_index`` below (because the
+        # naming convention in ``db/base.py`` produces ``uq_<table>_<col>``).
+        # Keep the column plain and own uniqueness via the named index.
+        sa.Column("token_hash", sa.Text(), nullable=False),
         sa.Column(
             "created_by_user_id",
             postgresql.UUID(as_uuid=True),
