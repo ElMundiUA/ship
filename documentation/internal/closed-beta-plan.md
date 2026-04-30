@@ -56,6 +56,7 @@ If the three projects can move work, surface decisions in the Inbox, and leave e
 | **E05** | All three adoption projects (ElMundi, Ship-on-Ship, .NET→Go) running, with one blog post per project | [E05](./closed-beta/E05-adoption-gauntlet.md) |
 | **E06** | Inbox loop proven for clarification / improvement / failure with evidence | [E06](./closed-beta/E06-inbox-loop.md) |
 | **E07** | Linear + GH Issues tracker bindings working both ways; partials hidden | [E07](./closed-beta/E07-tracker-bindings.md) |
+| **E14** | Server-side smart orchestration (CLI thin proxy; tracker FSM + adapters live in backend) — exit blocker, not post-beta cleanup | [E14](./closed-beta/E14-smart-orchestration.md) |
 
 ### P2 — Operational floor for letting strangers in
 
@@ -65,7 +66,6 @@ If the three projects can move work, surface decisions in the Inbox, and leave e
 | **E09** | SendGrid wired with 4 production templates (invite / inbox new / run failure / daily digest) | [E09](./closed-beta/E09-sendgrid.md) |
 | **E10** | Sentry context, uptime monitor, KPI dashboard, alert rules | [E10](./closed-beta/E10-observability.md) |
 | **E13** | Rip out ChromaDB; unify all vector search on pgvector | [E13](./closed-beta/E13-rip-chroma.md) |
-| **E14** | Server-side smart orchestration (CLI becomes a thin proxy; tracker FSM + adapters stay where they already live) | [E14](./closed-beta/E14-smart-orchestration.md) |
 
 ### P3 — Trust, presentation, finalization
 
@@ -80,9 +80,9 @@ This is a recommended cadence; reality will reshuffle.
 
 | Week | Focus |
 |---|---|
-| 1 | E03 (golden path audit) **+** E01 (knowledge live) **+** E02 (mock cleanup). Fix bugs found in E03 hot. |
-| 2 | E05 ElMundi adoption (track 1). Bugs found here become P0 hotfixes — not new epics. **+** E04. |
-| 3 | E05 Ship-on-Ship (track 2). **+** E06 (Inbox loop), **+** E07 (tracker cleanup). |
+| 1 | E03 (golden path audit, **legacy-model S3 walk only — baseline**) **+** E01 (knowledge live) **+** E02 (mock cleanup). Fix bugs surfaced in S3 hot. |
+| 2 | **E14** (server-side smart orchestration) — first major in-beta architecture move; the rest of the walks happen on the new model. **+** E04. |
+| 3 | E05 Ship-on-Ship + ElMundi adoption on the smart-server model. **+** E06 (Inbox loop), **+** E07 (tracker cleanup). |
 | 4 | E08 invite-only **+** E09 SendGrid **+** E10 observability **+** E13 (rip Chroma). Open soft beta to 3-5 hand-picked friends. |
 | 5 | E05 .NET→Go (track 3) — completes exit criteria. **+** E12 (landing finalization, demo, mobile). |
 | 6 | E11 (docs alignment) — last because docs lag code by design. Open public signups. |

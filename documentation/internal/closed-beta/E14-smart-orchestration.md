@@ -1,8 +1,14 @@
 # E14 — Server-side smart orchestration
 
-**Priority:** P1
-**Effort:** M (~2 days)
+**Priority:** P0 — closed-beta exit blocker
+**Effort:** M–L (~3 days)
 **Owner:** TBD
+
+> **Scope decision (2026-04-30):** E14 is **in scope for the closed beta**,
+> not a post-beta refactor. Without it, the dogfood walks demonstrate the
+> legacy "smart agent / dumb server" loop, not the product Ship is built
+> to ship. Treat this like E05 (adoption gauntlet): something the closed
+> beta cannot exit without.
 
 ## Goal
 
@@ -141,14 +147,26 @@ Context-free patterns (`flow-daily-retro`, `flow-learning-capture`, `op-workflow
 
 ## Order of operations
 
-E14 lands after closed-beta exit — this is the **post-beta architectural cleanup** that makes the platform self-consistent. Closed beta runs on the legacy "smart agent" model; E14 transitions to "smart server" once the dogfood walks finished.
+E14 lands **inside** the closed beta — the dogfood walks have to demonstrate
+the smart-server loop, not the legacy "smart agent" one, because that's the
+product the beta is meant to validate.
 
 Concrete ordering:
 
-1. E03 walks (S0 → S1 → S3 Ship-on-Ship → S2 ElMundi → S2 .NET-Go) on legacy model.
-2. Three blog posts merged.
-3. Closed beta exit declared.
-4. **THEN** E14 in a single PR (or split T01-T08 across 2 PRs).
-5. Migrate the dogfood projects to the new orchestration in-place (the patterns are server-side, so no customer-repo migration; just update the reference patterns and re-run).
+1. **S3 Ship-on-Ship walk on legacy model** (done 2026-04-30) — surfaced the
+   bug list (B1–B10) plus the open-question pinned items, all of which now
+   have answers in `E03-walk-plan.md`. We **do not** repeat the full walk on
+   every other scenario in legacy mode; the legacy run was a baseline and a
+   forcing function for finding the gaps E14 must close.
+2. **E14 in 2 PRs** (T01-T05 then T06-T08) — server endpoint + thin CLI +
+   pattern frontmatter + reference-pattern migration + tests.
+3. **Resume the walks** (S0, S1, S2 ElMundi, S2 .NET→Go) on the new model.
+   These are the walks the blog posts actually describe.
+4. Three blog posts merged.
+5. Closed beta exit declared.
 
-This avoids stalling closed beta on what is essentially a refactor.
+Treat the legacy-model S3 finding list as scaffolding: it told us where the
+seams are. The seams move with E14 — for example, B6 ("/process surfaces
+pipeline_runs not tracker tickets") and B3 ("BROKEN AUTOMATIONS counts every
+GHA run") both stop being problems once tracker is the SoT and Ship-owned
+workflow names are the only ones the dashboard scopes to.
