@@ -256,6 +256,59 @@ async def linear_install_callback(
     row.last_health_error = None
     row.updated_at = datetime.now(timezone.utc)
 
+    # E14 provisioning. Auto-pick team if exactly one (typical solo
+    # operator); leave unset and surface a banner if more — the wizard
+    # then routes the operator to a "pick a team" step before the
+    # integration is actually usable.
+    try:
+        from backend.app.integrations.linear.tracker_adapter import LinearTracker
+        from backend.app.services import linear_provisioner
+
+        live = LinearTracker(token.access_token)
+        teams = await linear_provisioner.list_teams(live)
+        merged = dict(row.config or {})
+        merged["team_options"] = [
+            {"id": t["id"], "key": t["key"], "name": t["name"]}
+            for t in teams
+        ]
+        if len(teams) == 1:
+            picked = teams[0]
+            result = await linear_provisioner.provision_team(
+                tracker=live, team_key=picked["key"]
+            )
+            merged.update(
+                {
+                    "team_id": result.team_id,
+                    "team_key": result.team_key,
+                    "state_id_by_name": result.state_id_by_name,
+                    "label_id_by_stage": result.label_id_by_stage,
+                    "fsm_provisioned": True,
+                }
+            )
+            logger.info(
+                "Linear FSM provisioned for workspace=%s team=%s "
+                "(%d labels, %d states)",
+                workspace_id,
+                picked["key"],
+                len(result.label_id_by_stage),
+                len(result.state_id_by_name),
+            )
+        else:
+            merged["fsm_provisioned"] = False
+            logger.info(
+                "Linear team picker pending for workspace=%s: %d teams visible",
+                workspace_id,
+                len(teams),
+            )
+        row.config = merged
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Linear FSM provisioning failed (workspace=%s): %s",
+            workspace_id,
+            exc,
+        )
+        row.last_health_error = f"fsm_provisioning_failed: {exc!s}"[:500]
+
     scopes = sorted({scope.strip() for scope in token.scope.split(",") if scope.strip()})
     native_stmt = select(NativeIntegrationInstallation).where(
         NativeIntegrationInstallation.workspace_id == workspace_id,
