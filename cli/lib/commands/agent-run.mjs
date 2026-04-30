@@ -38,11 +38,15 @@
 
 import path from "node:path";
 
+import fs from "node:fs";
+
 import yaml from "yaml";
 
 import { readConfig, findShipRoot } from "../config/io.mjs";
 import { resolveExecutable } from "../runtime/routines.mjs";
 import { fetchArtifact } from "../http.mjs";
+import { readArtifactFile } from "../artifacts/fs-index.mjs";
+import { resolveShipRepoRootForCatalog } from "../find-ship-root.mjs";
 import { resolveProvider, runAgent } from "../agents/index.mjs";
 
 
@@ -92,29 +96,45 @@ export async function agentRunCommand(ctx, rest) {
   }
 
   const fetchBase = methodologyBase(env, config);
-  const { content: rawPatternBody } = await fetchArtifact(fetchBase, "pattern", patternId);
-  const { frontmatter, body: patternBody } = splitFrontmatter(rawPatternBody);
-  const fsmStage = pickFsmStage(frontmatter);
+  const rawPatternBody = await loadPattern({ id: patternId, fetchBase });
+  const { frontmatter, frontmatterRaw, body: patternBody } = splitFrontmatter(rawPatternBody);
+  const fsmStage = pickFsmStage(frontmatter, frontmatterRaw);
 
   // Patterns reference ``{{BASE}}`` to splice in common-base. Fetch it
   // up-front so renderPrompt can do the substitution. ``{{SKILLS_CONTEXT}}``
   // inside common-base is left as "(no skills directory)" for the MVP —
   // skills bundling lands in a follow-up.
-  const baseBody = await fetchCommonBase(fetchBase);
+  const baseRaw = await loadPattern({ id: "common-base", fetchBase, optional: true });
+  const baseBody = baseRaw ? splitFrontmatter(baseRaw).body : "";
 
-  // 2) Resolve task
+  // 2) Resolve task. ``--dry-run`` skips the server call and uses a
+  // synthetic task so the operator can see the prompt shape without
+  // needing the new endpoints deployed.
   let task = null;
   if (fsmStage) {
-    task = await getNextTask({
-      apiBase,
-      apiToken,
-      workspaceId,
-      repoId,
-      state: fsmStage,
-    });
-    if (!task) {
-      emit(args, { status: "noop", routine: args.routine, pattern: patternId, fsm_stage: fsmStage, reason: "no_eligible_ticket" });
-      process.exit(EXIT_NO_TASK);
+    if (args.dryRun || ctx.dryRun) {
+      task = {
+        ticket_ref: "dry-run/sample#1",
+        kind: "dry-run",
+        title: "Sample ticket for dry-run prompt rendering",
+        body: "This is a synthetic ticket body. The real one comes from `GET /tracker/next` when not in dry-run.",
+        url: null,
+        labels: ["sample"],
+        state: "open",
+        fsm_stage: fsmStage,
+      };
+    } else {
+      task = await getNextTask({
+        apiBase,
+        apiToken,
+        workspaceId,
+        repoId,
+        state: fsmStage,
+      });
+      if (!task) {
+        emit(args, { status: "noop", routine: args.routine, pattern: patternId, fsm_stage: fsmStage, reason: "no_eligible_ticket" });
+        process.exit(EXIT_NO_TASK);
+      }
     }
   }
 
@@ -127,6 +147,32 @@ export async function agentRunCommand(ctx, rest) {
     task,
     fsmStage,
   });
+
+  // ``--dry-run`` exits here so the operator can eyeball the rendered
+  // prompt + resolved task without launching an agent or touching any
+  // tracker. Useful when iterating on pattern bodies.
+  if (args.dryRun || ctx.dryRun) {
+    if (args.json) {
+      console.log(JSON.stringify({
+        status: "dry-run",
+        routine: args.routine,
+        pattern: patternId,
+        fsm_stage: fsmStage,
+        task,
+        prompt,
+      }, null, 2));
+    } else {
+      console.error(`# ship: dry-run routine=${args.routine} pattern=${patternId} fsm_stage=${fsmStage || "(context-free)"}`);
+      if (task) {
+        console.error(`# ship: task ticket_ref=${task.ticket_ref} title=${JSON.stringify(task.title || "")}`);
+      } else {
+        console.error("# ship: task=(none)");
+      }
+      console.error("# ---- prompt ----");
+      console.log(prompt);
+    }
+    process.exit(EXIT_OK);
+  }
 
   // 4) Launch agent runtime
   const provider = resolveProvider(config, args.routine);
@@ -252,25 +298,36 @@ function methodologyBase(env, config) {
 
 
 function splitFrontmatter(raw) {
-  if (!raw.startsWith("---")) return { frontmatter: {}, body: raw };
+  if (!raw.startsWith("---")) return { frontmatter: {}, frontmatterRaw: "", body: raw };
   const end = raw.indexOf("\n---\n", 4);
-  if (end < 0) return { frontmatter: {}, body: raw };
-  const headRaw = raw.slice(3, end + 1).trim();
+  if (end < 0) return { frontmatter: {}, frontmatterRaw: "", body: raw };
+  const headRaw = raw.slice(3, end + 1);
   const body = raw.slice(end + 5);
   let parsed = {};
   try {
     parsed = yaml.parse(headRaw) || {};
   } catch {
+    // Some Ship patterns have unquoted ``@elmundi/ship-core`` in
+    // ``authors`` which strict YAML rejects. The CLI doesn't need the
+    // full document — ``pickFsmStage`` falls back to a regex on the
+    // raw frontmatter text in that case.
     parsed = {};
   }
-  return { frontmatter: parsed, body };
+  return { frontmatter: parsed, frontmatterRaw: headRaw, body };
 }
 
 
-function pickFsmStage(frontmatter) {
+function pickFsmStage(frontmatter, frontmatterRaw) {
   const spec = frontmatter?.spec || {};
   const v = spec.fsm_stage ?? spec.fsmStage;
   if (typeof v === "string" && v.trim()) return v.trim();
+  if (frontmatterRaw) {
+    // Strict-YAML-fallback: regex on the raw frontmatter. Matches
+    // ``fsm_stage: triage`` (with optional surrounding whitespace, with
+    // or without quotes) anywhere in the spec block.
+    const m = frontmatterRaw.match(/^\s*fsm_stage:\s*['"]?([\w.-]+)['"]?/m);
+    if (m && m[1]) return m[1].trim();
+  }
   return null;
 }
 
@@ -340,14 +397,29 @@ function renderPrompt({ patternBody, baseBody, role, routineSpec, task, fsmStage
 }
 
 
-async function fetchCommonBase(fetchBase) {
+/**
+ * Load a pattern body. Resolution order:
+ *   1) when running inside the Ship monorepo, read from
+ *      ``artifacts/patterns/<id>/ARTIFACT.md`` on disk — fast and
+ *      always reflects the working tree (good for dry-runs / local
+ *      smoke tests before the server is rebuilt).
+ *   2) otherwise hit the server's ``POST /fetch``.
+ */
+async function loadPattern({ id, fetchBase, optional = false }) {
+  const shipRepo = resolveShipRepoRootForCatalog();
+  if (shipRepo) {
+    const file = readArtifactFile(shipRepo, "pattern", id);
+    if (file && typeof file.content === "string") return file.content;
+  }
   try {
-    const { content } = await fetchArtifact(fetchBase, "pattern", "common-base");
-    return splitFrontmatter(content).body;
+    const { content } = await fetchArtifact(fetchBase, "pattern", id);
+    return content;
   } catch (err) {
-    // common-base is optional — surface a warning but keep going.
-    console.error(`warn: failed to fetch common-base pattern: ${err.message}`);
-    return "";
+    if (optional) {
+      console.error(`warn: failed to fetch pattern '${id}': ${err.message}`);
+      return "";
+    }
+    throw err;
   }
 }
 
@@ -529,12 +601,13 @@ async function applyAgentState({
 
 
 function parseArgs(rest) {
-  const out = { routine: null, cwd: null, json: false, help: false };
+  const out = { routine: null, cwd: null, json: false, help: false, dryRun: false };
   const copy = [...rest];
   while (copy.length) {
     const a = copy[0];
     if (a === "--help" || a === "-h") { out.help = true; copy.shift(); continue; }
     if (a === "--json") { out.json = true; copy.shift(); continue; }
+    if (a === "--dry-run") { out.dryRun = true; copy.shift(); continue; }
     if (a === "--routine" && copy[1] !== undefined) { out.routine = copy[1]; copy.splice(0, 2); continue; }
     if (a === "--cwd" && copy[1] !== undefined) { out.cwd = path.resolve(copy[1]); copy.splice(0, 2); continue; }
     die(EXIT_USAGE, `unknown argument: ${a}`);
