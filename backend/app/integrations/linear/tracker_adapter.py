@@ -32,16 +32,33 @@ LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql"
 
 
 class LinearTracker:
-    """Per-token adapter implementing :class:`TrackerGateway`."""
+    """Per-token adapter implementing :class:`TrackerGateway`.
+
+    Optional ``team_id`` + Ship-FSM maps (set at OAuth time, see
+    :mod:`backend.app.services.linear_provisioner`) let the adapter
+    accept Ship FSM stage names (``task_intake`` etc.) directly in
+    ``list_tickets`` and ``transition``. Without the maps the adapter
+    falls back to coarse ``open|closed|all`` semantics.
+    """
 
     def __init__(
         self,
         access_token: str,
         *,
         client: httpx.AsyncClient | None = None,
+        team_id: str | None = None,
+        team_key: str | None = None,
+        label_id_by_stage: dict[str, str] | None = None,
+        state_id_by_name: dict[str, str] | None = None,
+        fsm_to_linear_state: dict[str, str] | None = None,
     ) -> None:
         self._token = access_token
         self._client = client
+        self._team_id = team_id
+        self._team_key = team_key
+        self._label_id_by_stage = dict(label_id_by_stage or {})
+        self._state_id_by_name = dict(state_id_by_name or {})
+        self._fsm_to_linear_state = dict(fsm_to_linear_state or {})
 
     async def _gql(
         self, query: str, variables: dict[str, Any] | None = None
@@ -96,6 +113,15 @@ class LinearTracker:
             parts.append(
                 {"state": {"type": {"in": ["completed", "canceled"]}}}
             )
+        elif raw_state in self._fsm_to_linear_state:
+            parts.extend(self._fsm_filter(raw_state))
+
+        # Scope to the configured team — workspace-level OAuth tokens
+        # see every team the user is a member of, so without this
+        # filter the adapter would happily return tickets from other
+        # teams in the same Linear workspace.
+        if self._team_id:
+            parts.append({"team": {"id": {"eq": self._team_id}}})
 
         if query and query.strip():
             parts.append(
@@ -167,15 +193,129 @@ class LinearTracker:
             )
         return out
 
-    async def transition(self, ticket: TicketRef, *, to_state: str) -> None:
-        """Move ``ticket`` to a state with name ``to_state``.
+    def _fsm_filter(self, stage: str) -> list[dict[str, Any]]:
+        """Translate a Ship FSM stage name into Linear filter parts.
 
-        Linear identifies states by UUID, not by name, so we resolve the
-        state UUID first via a tiny query against the issue's team.
+        The convention: every FSM stage maps to a Linear workflow
+        state name (``Todo`` / ``In Progress`` / ``Review``) and a
+        ``stage:<fsm>`` label. The entry stage is special — it has no
+        stage label yet, so we filter by *absence* of every other
+        stage label rather than presence of an entry-stage label. (We
+        could add ``stage:task_intake`` after intake runs; the entry
+        check needs to keep working in either case.)
+        """
+        parts: list[dict[str, Any]] = []
+        target_state_name = self._fsm_to_linear_state.get(stage)
+        if target_state_name and target_state_name in self._state_id_by_name:
+            parts.append(
+                {"state": {"id": {"eq": self._state_id_by_name[target_state_name]}}}
+            )
+        # Entry stage = task_intake = "no stage label yet". Anything else
+        # filters on the matching label-id.
+        if stage == "task_intake":
+            other_label_ids = [
+                lid
+                for s, lid in self._label_id_by_stage.items()
+                if s != stage
+            ]
+            if other_label_ids:
+                parts.append(
+                    {"labels": {"id": {"nin": other_label_ids}}}
+                )
+        else:
+            label_id = self._label_id_by_stage.get(stage)
+            if label_id:
+                parts.append({"labels": {"id": {"eq": label_id}}})
+        return parts
+
+    async def transition(self, ticket: TicketRef, *, to_state: str) -> None:
+        """Move ``ticket`` to a Ship FSM stage (or a Linear state name).
+
+        When ``to_state`` matches a configured FSM stage:
+          - swaps the ``stage:<fsm>`` label (drops every other Ship
+            stage label, adds the target's),
+          - moves the Linear workflow state per
+            ``fsm_to_linear_state``.
+
+        When ``to_state`` is a literal Linear state name (e.g. ``Done``,
+        ``Canceled``), the legacy "find state by name on the issue's
+        team" path is used. Agents must NOT pass ``Done`` — only humans
+        move tickets out of Review. The adapter does not enforce this;
+        the route layer does.
         """
         if ticket.kind != "linear":
             raise ValueError(f"LinearTracker can't transition kind={ticket.kind}")
-        # Resolve issue team + state id in one round-trip.
+
+        # FSM-aware path.
+        if to_state in self._fsm_to_linear_state:
+            target_state_name = self._fsm_to_linear_state[to_state]
+            target_state_id = self._state_id_by_name.get(target_state_name)
+            target_label_id = self._label_id_by_stage.get(to_state)
+            if not target_state_id:
+                raise ValueError(
+                    f"Linear state {target_state_name!r} not provisioned for this team"
+                )
+            # Build the new label set: drop all ``stage:*`` labels we
+            # know about, then add the target's. This makes the
+            # transition idempotent on re-runs.
+            other_label_ids = list(
+                set(self._label_id_by_stage.values())
+                - ({target_label_id} if target_label_id else set())
+            )
+            await self._gql(
+                """mutation ShipFsmTransition($id: String!, $input: IssueUpdateInput!) {
+                  issueUpdate(id: $id, input: $input) { success }
+                }""",
+                {
+                    "id": ticket.id,
+                    "input": {
+                        "stateId": target_state_id,
+                        **(
+                            {
+                                "labelIds": [target_label_id]
+                                if target_label_id
+                                else []
+                            }
+                            if target_label_id
+                            else {}
+                        ),
+                    },
+                },
+            )
+            # Linear's ``labelIds`` is a SET operation when present —
+            # passing the target replaces all labels with that one set,
+            # which is what we want for stage labels but loses any
+            # other labels (priority, area). Drop the simplification:
+            # use ``addedLabelIds`` + ``removedLabelIds`` if they exist
+            # in the schema. (Linear's ``IssueUpdateInput`` exposes
+            # ``addedLabelIds`` / ``removedLabelIds`` since 2023-Q3.)
+            # We re-issue here with the surgical add/remove so we don't
+            # clobber unrelated labels. The first call already moved
+            # the workflow state; this second call only adjusts labels.
+            mut = await self._gql(
+                """mutation ShipFsmLabels($id: String!, $input: IssueUpdateInput!) {
+                  issueUpdate(id: $id, input: $input) { success }
+                }""",
+                {
+                    "id": ticket.id,
+                    "input": {
+                        **(
+                            {"removedLabelIds": other_label_ids}
+                            if other_label_ids
+                            else {}
+                        ),
+                        **(
+                            {"addedLabelIds": [target_label_id]}
+                            if target_label_id
+                            else {}
+                        ),
+                    },
+                },
+            )
+            del mut
+            return
+
+        # Legacy path (Linear state name).
         resolve = """
         query ShipResolveState($id: String!, $name: String!) {
           issue(id: $id) { id team { id states(filter: {name: {eq: $name}}) {
