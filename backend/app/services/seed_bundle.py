@@ -94,7 +94,15 @@ from backend.app.services.tracker_fsm import (
 #         of stacking at 08:00 / 09:00 / 17:00. Order: security 06:00,
 #         digest 09:00, tech-debt 12:00, test-coverage 15:00, retro
 #         18:00.
-BUNDLE_VERSION: str = "0.9"
+# ``0.10`` → Agent exit protocol moved from committing
+#         ``.ship/run-state.json`` on a branch to a
+#         ``POST /v1/workspaces/{ws}/agent-runs/finish`` HTTP call from
+#         inside the agent. Branchless agents (intake, BA, planner)
+#         no longer need to push anything. ``common-base`` pattern
+#         body rewritten to match. Linear provisioner now creates a
+#         ``needs:clarification`` signal label and ``LinearTracker``
+#         excludes tickets carrying it from FSM picks.
+BUNDLE_VERSION: str = "0.10"
 
 
 # Default knowledge starters for PR 1. Empty by design: generated knowledge is

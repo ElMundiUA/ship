@@ -94,12 +94,23 @@ _REVIEW_STATE_TYPE = "started"  # Linear's "started" bucket; Review is post-In-P
 _REVIEW_STATE_COLOR = "#F2994A"  # warm orange — matches Linear's review motif
 
 
+# Out-of-band signal labels that aren't FSM stages but the agent
+# pipeline reads/writes. Format: ``<key> -> <Linear label name>``. Keys
+# are what the ``/agent-runs/finish`` endpoint and the FSM filter use
+# to refer to these labels; the canonical Linear name is what the
+# operator sees in the Linear UI.
+SIGNAL_LABELS: dict[str, str] = {
+    "needs_clarification": "needs:clarification",
+}
+
+
 @dataclass(frozen=True)
 class ProvisionResult:
     team_id: str
     team_key: str
     state_id_by_name: dict[str, str]
     label_id_by_stage: dict[str, str]
+    signal_label_ids: dict[str, str]
 
 
 def stage_label_name(stage: str) -> str:
@@ -124,10 +135,10 @@ async def provision_team(
 
     state_id_by_name = await _ensure_review_state(tracker, team_id)
 
-    label_id_by_stage: dict[str, str] = {}
     existing_labels = await _list_team_labels(tracker, team_id)
     by_name = {l["name"]: l["id"] for l in existing_labels}
 
+    label_id_by_stage: dict[str, str] = {}
     for stage in stages:
         name = stage_label_name(stage)
         if name in by_name:
@@ -135,13 +146,25 @@ async def provision_team(
             continue
         new_id = await _create_label(tracker, team_id=team_id, name=name)
         label_id_by_stage[stage] = new_id
+        by_name[name] = new_id
         logger.info("Linear: created label %r on team %s", name, team_key)
+
+    signal_label_ids: dict[str, str] = {}
+    for key, label_name in SIGNAL_LABELS.items():
+        if label_name in by_name:
+            signal_label_ids[key] = by_name[label_name]
+            continue
+        new_id = await _create_label(tracker, team_id=team_id, name=label_name)
+        signal_label_ids[key] = new_id
+        by_name[label_name] = new_id
+        logger.info("Linear: created signal label %r on team %s", label_name, team_key)
 
     return ProvisionResult(
         team_id=team_id,
         team_key=team["key"],
         state_id_by_name=state_id_by_name,
         label_id_by_stage=label_id_by_stage,
+        signal_label_ids=signal_label_ids,
     )
 
 

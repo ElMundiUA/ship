@@ -12,36 +12,39 @@
  *      the next ticket in that FSM stage
  *      (`GET /v1/.../tracker/next?state=<stage>`). Server picks the
  *      adapter (Linear / GH Issues / etc.) — CLI doesn't care.
- *   4. Render the prompt (pattern body + ticket details + hand-off
- *      instructions for `.ship/run-state.json`).
+ *   4. Mint a `run_id` and render the prompt: pattern body + ticket
+ *      details + a finish-protocol block with `SHIP_API_BASE`,
+ *      `SHIP_API_TOKEN`, `SHIP_WORKSPACE_ID`, `RUN_ID`, `TICKET_REF`,
+ *      `FSM_STAGE` already substituted so the agent can call the
+ *      finish endpoint directly.
  *   5. Launch the configured agent runtime (`cli/lib/agents/`) — Cursor
  *      Cloud today. Block until the runtime terminates.
- *   6. Read `.ship/run-state.json` from the agent's branch
- *      (`{ state, comment?, transition_to?, payload? }`).
- *   7. Apply via Ship server endpoints:
- *
- *        - state=ready_next_step    → POST /tracker/transition
- *        - state=human_validation   → POST /tracker/comment + /inbox/items
- *        - state=blocked            → POST /inbox/items
- *
- *   8. Exit 0 / non-0 with a structured summary on stdout (`--json`).
+ *   6. The agent itself calls
+ *      `POST /v1/workspaces/{ws}/agent-runs/finish` with its outcome.
+ *      Ship's server applies tracker side-effects via the workspace
+ *      Linear OAuth — the CLI doesn't read any branch / state file.
+ *   7. CLI exits 0 on Cursor `FINISHED`, non-0 if the runtime crashed.
+ *      Whether the agent actually called `/finish` is observable via
+ *      the audit log; the smoke test for "did the right thing happen"
+ *      is the tracker label/state itself.
  *
  * Env contract (typically wired in `ship-trigger-schedule.yml`):
- *   - SHIP_API_BASE         — Ship server, e.g. https://ship.elmundi.com
- *   - SHIP_API_TOKEN        — workspace API token (admin scope)
+ *   - SHIP_API_BASE         — Ship server, e.g. https://api.ship.elmundi.com
+ *   - SHIP_API_TOKEN        — workspace API token (admin scope; rendered
+ *                             into the agent's prompt so it can call
+ *                             /agent-runs/finish from inside Cursor)
  *   - SHIP_WORKSPACE_ID     — UUID of the workspace this run belongs to
  *   - CURSOR_API_KEY        — Cursor Cloud agent API key (when provider=cursor)
  *   - GITHUB_REPOSITORY     — owner/repo (the repo the agent will check out)
- *   - GITHUB_TOKEN          — read-only repo access (to fetch run-state.json)
  *
  * Note: there is **no SHIP_REPO_ID** — a workspace is the project, so
  * the tracker is workspace-scoped. ``GITHUB_REPOSITORY`` only tells the
- * agent runtime which checkout to spawn for code work.
+ * agent runtime which checkout to spawn for code work. Branchless agents
+ * (intake, BA, planner) don't push commits at all.
  */
 
+import crypto from "node:crypto";
 import path from "node:path";
-
-import fs from "node:fs";
 
 import yaml from "yaml";
 
@@ -56,10 +59,7 @@ import { resolveProvider, runAgent } from "../agents/index.mjs";
 const EXIT_OK = 0;
 const EXIT_USAGE = 1;
 const EXIT_NO_TASK = 0; // intentional: no eligible ticket is a clean noop
-const EXIT_BLOCKED = 5;
-const EXIT_HUMAN = 6;
 const EXIT_AGENT_FAIL = 7;
-const EXIT_API_FAIL = 8;
 
 
 // ---------------------------------------------------------------------------
@@ -90,7 +90,7 @@ export async function agentRunCommand(ctx, rest) {
   }
 
   const env = readEnv();
-  const { apiBase, apiToken, workspaceId, githubRepo, githubToken } = env;
+  const { apiBase, apiToken, workspaceId, githubRepo } = env;
 
   // 1) Resolve pattern
   const patternId = resolved.executable.pattern;
@@ -140,7 +140,10 @@ export async function agentRunCommand(ctx, rest) {
     }
   }
 
-  // 3) Render prompt
+  // 3) Mint a run_id + render prompt with finish-protocol values
+  // already substituted so the agent can call /agent-runs/finish from
+  // inside Cursor without holding any extra config.
+  const runId = `run_${crypto.randomBytes(8).toString("hex")}`;
   const prompt = renderPrompt({
     patternBody,
     baseBody,
@@ -148,6 +151,15 @@ export async function agentRunCommand(ctx, rest) {
     routineSpec: resolved.executable,
     task,
     fsmStage,
+    finishCtx: {
+      apiBase,
+      apiToken,
+      workspaceId,
+      runId,
+      role: patternId,
+      ticketRef: task?.ticket_ref || null,
+      fsmStage: fsmStage || null,
+    },
   });
 
   // ``--dry-run`` exits here so the operator can eyeball the rendered
@@ -196,71 +208,30 @@ export async function agentRunCommand(ctx, rest) {
       status: "error",
       routine: args.routine,
       pattern: patternId,
+      run_id: runId,
       stage: "launch_agent",
       error: err instanceof Error ? err.message : String(err),
     });
     process.exit(EXIT_AGENT_FAIL);
   }
 
-  // 5) Read .ship/run-state.json from agent's branch
-  let stateFile;
-  try {
-    stateFile = await readBranchFile({
-      repo: githubRepo,
-      branch: runtime.branchName,
-      path: ".ship/run-state.json",
-      githubToken,
-    });
-  } catch (err) {
-    emit(args, {
-      status: "error",
-      routine: args.routine,
-      pattern: patternId,
-      stage: "read_state",
-      branch: runtime.branchName,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    process.exit(EXIT_AGENT_FAIL);
-  }
-
-  let agentState;
-  try {
-    agentState = JSON.parse(stateFile);
-  } catch (err) {
-    emit(args, {
-      status: "error",
-      routine: args.routine,
-      pattern: patternId,
-      stage: "parse_state",
-      error: `.ship/run-state.json is not valid JSON: ${err.message}`,
-    });
-    process.exit(EXIT_AGENT_FAIL);
-  }
-
-  // 6) Apply via Ship server
-  const apply = await applyAgentState({
-    apiBase,
-    apiToken,
-    workspaceId,
-    routine: args.routine,
-    pattern: patternId,
-    task,
-    state: agentState,
-    fsmStage,
-  });
-
+  // The agent calls POST /agent-runs/finish from inside Cursor with
+  // its outcome. The CLI's job ends here — Cursor's terminal status
+  // tells us the runtime didn't crash; whether the agent actually
+  // called /finish (and what outcome it reported) is observable in
+  // the audit log + the resulting tracker state.
   emit(args, {
-    status: apply.exitCode === EXIT_OK ? "completed" : apply.statusName,
+    status: "completed",
     routine: args.routine,
     pattern: patternId,
     fsm_stage: fsmStage,
     ticket_ref: task?.ticket_ref || null,
     agent_id: runtime.agentId,
     branch: runtime.branchName,
-    state: agentState.state,
-    actions: apply.actions,
+    cursor_status: runtime.status,
+    run_id: runId,
   });
-  process.exit(apply.exitCode);
+  process.exit(EXIT_OK);
 }
 
 
@@ -276,7 +247,6 @@ function readEnv() {
     workspaceId: process.env.SHIP_WORKSPACE_ID || "",
     githubRepo: process.env.GITHUB_REPOSITORY || "",
     githubRef: (process.env.GITHUB_REF_NAME || "main").trim(),
-    githubToken: process.env.GITHUB_TOKEN || "",
   };
 }
 
@@ -348,7 +318,7 @@ async function getNextTask({ apiBase, apiToken, workspaceId, state }) {
 }
 
 
-function renderPrompt({ patternBody, baseBody, role, routineSpec, task, fsmStage }) {
+function renderPrompt({ patternBody, baseBody, role, routineSpec, task, fsmStage, finishCtx }) {
   const issueRef = task?.ticket_ref ? task.ticket_ref : "(no ticket)";
   const title = task?.title || "";
   const description = task?.body || "";
@@ -392,8 +362,87 @@ function renderPrompt({ patternBody, baseBody, role, routineSpec, task, fsmStage
     }
   }
   out.push("");
-  out.push(EXIT_PROTOCOL);
+  out.push(renderExitProtocol(finishCtx));
   return out.join("\n");
+}
+
+
+function renderExitProtocol(ctx) {
+  // Substitute the run-time values directly into the example so the
+  // agent doesn't have to figure out env var hookup. The token is
+  // workspace-scoped and meant for this run; the prompt warns the
+  // agent not to echo it.
+  const apiBase = ctx?.apiBase || "$SHIP_API_BASE";
+  const apiToken = ctx?.apiToken || "$SHIP_API_TOKEN";
+  const workspaceId = ctx?.workspaceId || "$SHIP_WORKSPACE_ID";
+  const runId = ctx?.runId || "<run_id>";
+  const ticketRef = ctx?.ticketRef ?? null;
+  const fsm = ctx?.fsmStage ?? null;
+  const ticketLine = ticketRef === null
+    ? '"ticket_ref": null,'
+    : `"ticket_ref": ${JSON.stringify(ticketRef)},`;
+  const fsmLine = fsm === null
+    ? '"fsm_stage": null,'
+    : `"fsm_stage": ${JSON.stringify(fsm)},`;
+
+  return `## Required exit protocol
+
+When you finish (or determine you cannot proceed), call Ship's finish
+endpoint **once** with your outcome and stop. This is the only
+sanctioned write surface — Ship's server applies tracker side-effects
+through the workspace's existing OAuth.
+
+**Do not** create empty branches or commit placeholder files. If your
+role doesn't change code, no branch is required. If your role does
+change code, push the code on the branch Ship CLI named for you, then
+call finish.
+
+**Do not** call any Linear / Jira / GitHub MCP that writes. Reading
+via MCP is fine; writing is not. The finish endpoint is the only
+write surface.
+
+\`\`\`bash
+curl -fsS -X POST '${apiBase}/v1/workspaces/${workspaceId}/agent-runs/finish' \\
+  -H 'Authorization: Bearer ${apiToken}' \\
+  -H 'Content-Type: application/json' \\
+  --data @- <<'JSON'
+{
+  "run_id": ${JSON.stringify(runId)},
+  "outcome": "ready_next_step",
+  ${ticketLine}
+  ${fsmLine}
+  "stage_next": "<next FSM stage, e.g. ba_requirements>",
+  "comment": "Markdown summary of what you did. End with [Ship SDLC:${ctx?.role || "{{ROLE}}"}].",
+  "summary": null,
+  "payload": {}
+}
+JSON
+\`\`\`
+
+### Outcomes
+
+- **\`ready_next_step\`** — your role finished cleanly. Set
+  \`stage_next\` to the next FSM stage. Server moves the ticket and
+  posts \`comment\` if provided.
+- **\`needs_clarification\`** — you're waiting on a human. Set
+  \`comment\` with the question (server posts it) or omit it if you
+  already left the question via a separate read-only path. Server
+  tags the ticket \`needs:clarification\` so intake stops re-picking.
+  Status stays Todo. \`stage_next\` is ignored.
+- **\`blocked\`** — you cannot proceed (missing secret, broken env,
+  conflicting branch). Server drops a blocker into the workspace
+  inbox; ticket unchanged. \`stage_next\` is ignored.
+- **\`out_of_scope\`** — the ticket is invalid or shouldn't be
+  processed. Server moves it to Done with optional \`comment\`.
+  \`stage_next\` is ignored.
+
+### Security
+
+\`SHIP_API_TOKEN\` is rendered into this prompt so you can call the
+finish endpoint. **Do not echo it back into commit messages, PR
+descriptions, comments, logs, or any output you produce.** Treat it
+as a one-shot credential for this run.
+`;
 }
 
 
@@ -424,40 +473,6 @@ async function loadPattern({ id, fetchBase, optional = false }) {
 }
 
 
-const EXIT_PROTOCOL = `## Required exit protocol
-
-When you finish (or determine you cannot proceed), commit a single
-file at \`.ship/run-state.json\` on this branch and stop.
-
-The file MUST be valid JSON with this shape:
-
-\`\`\`json
-{
-  "state": "ready_next_step" | "human_validation" | "blocked",
-  "comment": "Markdown your work-product comment.",
-  "transition_to": "<next FSM stage>",
-  "payload": { "...optional structured details..." }
-}
-\`\`\`
-
-State semantics:
-
-- \`ready_next_step\` — your role is done. Set \`comment\` (what you did),
-  \`transition_to\` (next FSM stage). Ship CLI will move the ticket and
-  post the comment.
-- \`human_validation\` — you need an answer from a human. Set \`comment\`
-  with the question. Ship CLI will leave a comment on the ticket and
-  drop a clarification item in the workspace inbox.
-- \`blocked\` — you cannot proceed (missing secret, broken env). Set
-  \`comment\` with the reason. Ship CLI will drop a blocker item in the
-  inbox; the ticket stays where it is.
-
-Do NOT call any tracker API directly (no \`gh issue comment\`, no
-\`linear-cli\`, no curl to Ship). Ship CLI reads the state file after
-you finish and does the writes through the workspace's existing OAuth.
-`;
-
-
 function makeBranchName(routine, ticketRef) {
   const stamp = Date.now().toString(36);
   if (ticketRef) {
@@ -465,131 +480,6 @@ function makeBranchName(routine, ticketRef) {
     return `cursor/ship-${routine}-${safe}-${stamp}`;
   }
   return `cursor/ship-${routine}-${stamp}`;
-}
-
-
-async function readBranchFile({ repo, branch, path: filePath, githubToken }) {
-  if (!repo) throw new Error("readBranchFile: GITHUB_REPOSITORY is empty");
-  if (!githubToken) throw new Error("readBranchFile: GITHUB_TOKEN is empty");
-  const url = `https://api.github.com/repos/${repo}/contents/${encodeURIComponent(filePath)}?ref=${encodeURIComponent(branch)}`;
-  const res = await fetch(url, {
-    headers: {
-      Accept: "application/vnd.github.raw",
-      Authorization: `Bearer ${githubToken}`,
-      "X-GitHub-Api-Version": "2022-11-28",
-    },
-  });
-  if (!res.ok) {
-    throw new Error(`GET ${filePath}@${branch} ${res.status}: ${(await res.text()).slice(0, 200)}`);
-  }
-  return res.text();
-}
-
-
-async function applyAgentState({
-  apiBase,
-  apiToken,
-  workspaceId,
-  routine,
-  pattern,
-  task,
-  state,
-  fsmStage,
-}) {
-  const actions = [];
-  const headers = {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${apiToken}`,
-  };
-  const ws = encodeURIComponent(workspaceId);
-
-  async function call(method, url, body) {
-    const res = await fetch(url, { method, headers, body: body && JSON.stringify(body) });
-    if (!res.ok) {
-      throw new Error(`${method} ${url} ${res.status}: ${(await res.text()).slice(0, 300)}`);
-    }
-    return res.json().catch(() => ({}));
-  }
-
-  try {
-    if (state.state === "ready_next_step") {
-      if (!task?.ticket_ref) {
-        throw new Error("ready_next_step requires a bound ticket");
-      }
-      if (!state.transition_to) {
-        throw new Error("ready_next_step requires `transition_to`");
-      }
-      const r = await call(
-        "POST",
-        `${apiBase}/v1/workspaces/${ws}/tracker/transition`,
-        {
-          ticket_ref: task.ticket_ref,
-          to_state: state.transition_to,
-          from_state: fsmStage || undefined,
-          comment: state.comment || undefined,
-        },
-      );
-      actions.push({ kind: "transition", to_state: state.transition_to, response: r });
-      return { exitCode: EXIT_OK, statusName: "completed", actions };
-    }
-    if (state.state === "human_validation") {
-      if (task?.ticket_ref && state.comment) {
-        const c = await call(
-          "POST",
-          `${apiBase}/v1/workspaces/${ws}/tracker/comment`,
-          { ticket_ref: task.ticket_ref, body: state.comment },
-        );
-        actions.push({ kind: "comment", response: c });
-      }
-      const inbox = await call(
-        "POST",
-        `${apiBase}/v1/workspaces/${ws}/inbox/items`,
-        {
-          type: "clarification",
-          title: `[${routine}] ${task?.title || "needs human"}`.slice(0, 300),
-          summary: state.comment || null,
-          ticket_ref: task?.ticket_ref || null,
-          payload: {
-            routine,
-            pattern,
-            agent_state: state.state,
-            ...((state.payload && typeof state.payload === "object") ? state.payload : {}),
-          },
-        },
-      );
-      actions.push({ kind: "inbox", response: inbox });
-      return { exitCode: EXIT_HUMAN, statusName: "human_validation", actions };
-    }
-    if (state.state === "blocked") {
-      const inbox = await call(
-        "POST",
-        `${apiBase}/v1/workspaces/${ws}/inbox/items`,
-        {
-          type: "blocker",
-          title: `[${routine}] blocked: ${task?.title || pattern}`.slice(0, 300),
-          summary: state.comment || null,
-          ticket_ref: task?.ticket_ref || null,
-          payload: {
-            routine,
-            pattern,
-            agent_state: state.state,
-            ...((state.payload && typeof state.payload === "object") ? state.payload : {}),
-          },
-        },
-      );
-      actions.push({ kind: "inbox", response: inbox });
-      return { exitCode: EXIT_BLOCKED, statusName: "blocked", actions };
-    }
-    throw new Error(
-      `Unknown agent state '${state.state}' (expected ready_next_step | human_validation | blocked)`,
-    );
-  } catch (err) {
-    return {
-      exitCode: EXIT_API_FAIL,
-      statusName: "error",
-      actions: [...actions, { kind: "error", error: err instanceof Error ? err.message : String(err) }],
-    };
-  }
 }
 
 
@@ -618,23 +508,22 @@ function printHelp() {
   console.log(`shipctl agent-run — execute one E14 routine end-to-end.
 
 USAGE
-  shipctl agent-run --routine <id> [--json] [--cwd <dir>]
+  shipctl agent-run --routine <id> [--json] [--cwd <dir>] [--dry-run]
 
 ENV
-  SHIP_API_BASE        Ship server base URL (e.g. https://ship.elmundi.com)
-  SHIP_API_TOKEN       workspace API token (admin scope)
+  SHIP_API_BASE        Ship server base URL (e.g. https://api.ship.elmundi.com)
+  SHIP_API_TOKEN       workspace API token; rendered into the agent prompt
+                       so the agent can call /agent-runs/finish itself
   SHIP_WORKSPACE_ID    UUID of the workspace (a workspace is one project)
   GITHUB_REPOSITORY    owner/repo (which checkout the agent gets)
-  GITHUB_TOKEN         read-only repo token (to fetch .ship/run-state.json)
   CURSOR_API_KEY       Cursor Cloud API key (when agent.default.provider=cursor)
 
 EXIT
-  0  routine completed (or noop: no eligible ticket)
+  0  agent runtime reached a terminal state (FINISHED/CANCELLED/ERRORED).
+     Whether the agent actually called /agent-runs/finish is observable
+     in the audit log — this CLI no longer waits on that signal.
   1  usage / config error
-  5  agent reported state=blocked
-  6  agent reported state=human_validation
-  7  agent runtime crashed / state file missing
-  8  Ship API write failed
+  7  agent runtime failed to launch
 `);
 }
 
