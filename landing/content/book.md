@@ -364,7 +364,7 @@ Swapping is also a hedge against vendor storytelling. Markets move; models chang
 
 Reference workflows in the repo may still **name** today’s vendors in filenames and examples; that is convenience, not doctrine. Treat those names the way you treat a sample `.env`: copy the shape, replace the values, keep the invariants. The invariants are the part you defend in architecture review — not whether the HTTP POST went to host A or host B.
 
-Operational detail — reference providers, environment variables, and where honesty ends and org-specific coupling begins — lives in **[Tools](/tools)** and **[Configuration](/docs/configuration)**. Read them when you need names for today’s stack; read this chapter when someone asks whether changing a vendor means rewriting Ship. It should not — not if prompts, scripts, and board policy stayed yours, and vendors stayed **plugs**.
+Operational detail — reference providers, environment variables, and where honesty ends and org-specific coupling begins — lives in **[Configuration](/docs/configuration)** and **[Authoring](/docs/authoring)**. Read them when you need names for today’s stack; read this chapter when someone asks whether changing a vendor means rewriting Ship. It should not — not if prompts, scripts, and board policy stayed yours, and vendors stayed **plugs**.
 
 ## Artifacts as work objects {#artifacts-as-work-objects}
 
@@ -398,7 +398,7 @@ The commit is dated **2026-04-07** and titled `Add daily Linear audit roles (tec
 
 The habit worth copying is what the authors of that commit did *not* do. They did not try to cover every audit use case. They did not build a generic audit framework. They did not import abstractions from other patterns. They wrote three specific prompts, all similar, all separately versionable, and they let duplication ride — because duplication between artifacts is cheaper than premature unification, and because `shipctl feedback` gives you a mechanism to collapse them later if the patterns converge. Authoring a new artifact is not authoring a general theory. It is writing down **one instruction set you will now be accountable for**, pinning its version at `0.1.0` or `1.0.0` depending on whether you dare stand behind it in production, and letting the manifest remember it for you.
 
-One last habit deserves a sentence of its own. Before you write a new artifact, **read the existing catalog** — `artifacts/patterns/`, `artifacts/workflows/`, `artifacts/tools/`, `artifacts/collections/` (or `shipctl pattern list` / `shipctl tool list` / …) — and look for something close. Half the time there is nothing, and you proceed. A quarter of the time there is something you should extend. The remaining quarter, there is an artifact you did not know existed, whose exact purpose is the thing you were about to re-invent. That reading habit is how the ecosystem stops growing faster than any human can follow, and how the next operator does not meet your new pattern in a handover document three months from now and curse it politely.
+One last habit deserves a sentence of its own. Before you write a new artifact, **read the existing catalog** — `artifacts/patterns/`, `artifacts/tools/`, `artifacts/collections/` (or `shipctl pattern list` / `shipctl tool list` / …) — and look for something close. Half the time there is nothing, and you proceed. A quarter of the time there is something you should extend. The remaining quarter, there is an artifact you did not know existed, whose exact purpose is the thing you were about to re-invent. That reading habit is how the ecosystem stops growing faster than any human can follow, and how the next operator does not meet your new pattern in a handover document three months from now and curse it politely.
 
 ### Chapter 18.D — Versions, channels, yank
 
@@ -630,7 +630,7 @@ Trust starts with a boring map: which runtime touches the repository, which hold
 
 Optional **scanners** feed JSON into audit roles. Treat those reports as **untrusted input** until your policy says otherwise — the same posture you take toward issue descriptions written by humans. A file on disk is not truth; it is a claim waiting to be validated.
 
-This chapter deliberately stays free of password shapes and host-specific wiring. For where to put Cursor agent credentials and how teams mirror them, read **[Tools → Cursor Cloud Agent](/tools/cursor-cloud-agent)** and **[Configuration](/docs/configuration)**.
+This chapter deliberately stays free of password shapes and host-specific wiring. For where to put Cursor agent credentials and how teams mirror them, read **[Configuration](/docs/configuration)** and **[Agent matrix](/docs/agent-matrix)**.
 
 **Duplicate credential placement** is the silent killer because each side can look healthy alone. CI can run pick perfectly while the agent never posts back — or the reverse — and each team assumes the other is “the broken part.” The fix is not blame; it is **documented mirroring** and a smoke-style test that proves **both** sides can touch the tracker under the **same** identity policy. Treat that test like a deploy gate: boring, mandatory, non-negotiable.
 

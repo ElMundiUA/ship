@@ -1,7 +1,7 @@
 ---
 rfc: 0006
 title: "Cloud platform foundations — multi-tenant, git-as-truth, Postgres everywhere"
-status: Proposed
+status: Accepted
 created: 2026-04-19
 ---
 

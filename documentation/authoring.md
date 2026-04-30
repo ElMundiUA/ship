@@ -1,8 +1,8 @@
 # Authoring artifacts
 
 This page is the contributor's reference for adding a new artifact (or adapter)
-to the Ship catalog. The catalog itself is documented elsewhere — `/patterns`,
-`/tools`, `/collections` for *what exists*; this page is about
+to the Ship catalog. The catalog itself is documented elsewhere — [Patterns](/patterns)
+for *what exists*; this page is about
 *how to add a new one*. The normative shape is defined in
 [RFC-0005](/docs/protocol/rfc-0005-artifact-folder-spec-v2) (folder layout,
 front-matter, hashing) and [RFC-0004](/docs/protocol/rfc-0004-adapters)
@@ -594,7 +594,7 @@ all line up. Run both before you ask for review.
 ## Where to next
 
 If the artifact you wrote is an agent rule, read the matching
-[`agent-rules-*` collection](/collections) for the install path and the
+[`agent-rules-*` collection](/patterns) for the install path and the
 marker contract. If it needs project-specific reference material at
 render time, wire the topics through
 [Knowledge buckets](/docs/knowledge-buckets). For the normative shapes
@@ -603,5 +603,5 @@ consult [RFC-0001](/docs/protocol/rfc-0001-artifacts-protocol),
 [RFC-0005](/docs/protocol/rfc-0005-artifact-folder-spec-v2),
 [RFC-0007](/docs/protocol/rfc-0007-lanes-and-run-agent), and
 [RFC-0008](/docs/protocol/rfc-0008-catalog-reform). For the end-to-end
-command surface see the [CLI reference](/cli); for the agent launch /
+command surface see the [Configuration reference](./configuration.md#local-commands); for the agent launch /
 detection matrix see the [agent matrix](/docs/agent-matrix).

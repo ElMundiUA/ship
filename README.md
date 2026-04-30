@@ -124,6 +124,27 @@ npm run version:sync
 
 Release tags use `v<x.y.z>` and trigger the CLI publish workflow.
 
+## Tracker support matrix
+
+| Tracker | Product Owner | Developer | Delivery Lead | Security Officer |
+|---------|---------------|-----------|----------------|------------------|
+| Linear | validated | validated | validated | validated |
+| GitHub Issues | validated | validated | validated | validated |
+| Notion | planned | planned | planned | planned |
+| Jira | hidden | hidden | hidden | hidden |
+| Asana | planned | planned | planned | planned |
+| ClickUp | planned | planned | planned | planned |
+| Monday | planned | planned | planned | planned |
+| Spreadsheet | hidden | hidden | hidden | hidden |
+
+**Status definitions:**
+- **validated** — integration is tested end-to-end in closed beta; read, comment, and state sync work bidirectionally.
+- **partial** — implementation exists but integration is incomplete or feature-limited.
+- **planned** — integration is on the roadmap and not yet implemented.
+- **hidden** — implementation exists in code but is behind a feature flag (`SHIP_ENABLE_PARTIAL_TRACKERS`) and not user-selectable in production.
+
+**Closed beta scope:** Ship currently supports Linear and GitHub Issues for production use. Other trackers are behind a feature flag and will land post-beta. The matrix above describes the support we are building toward.
+
 ## Production container
 
 The root [`Dockerfile`](Dockerfile) builds the landing app and includes repo content needed by `/docs`, `/book`, and catalog pages. `docker-compose.yml` runs backend and console for the local/dev platform stack; the public landing app is not a Compose service.

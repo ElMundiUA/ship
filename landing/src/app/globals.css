@@ -47,6 +47,10 @@ body {
   @apply inline-flex items-center justify-center gap-2 rounded-full border border-white/20 bg-white/[0.06] px-6 py-3 text-sm font-semibold text-white/90 backdrop-blur transition hover:border-white/35 hover:bg-white/10;
 }
 
+.btn-ghost {
+  @apply inline-flex items-center justify-center gap-2 rounded-full border border-white/15 bg-transparent px-6 py-3 text-sm font-semibold text-white/70 transition hover:border-white/40 hover:bg-white/5 hover:text-white;
+}
+
 /* The book (/book) */
 .book-shell {
   @apply mx-auto max-w-4xl px-4 sm:px-6;

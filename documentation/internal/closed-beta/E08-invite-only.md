@@ -24,6 +24,14 @@ The backend already has `routes/invites.py` with workspace-scoped admin invite m
 - Pick (2) for simplicity and portability.
 - Document decision in this file.
 
+**Decision (2026-04-30):** Option B (backend gate at JIT-provisioning).
+- Portable across IdPs (we may move off Auth0 someday)
+- Self-hosted users keep the same gate logic without depending on Auth0 features
+- Easier to test (just hit /v1/auth/me with a token from an unwhitelisted email)
+- Audit log lives in our DB, not Auth0
+
+**Implementation tasks:** see T02–T08 below.
+
 **Acceptance:** decision recorded, ADR-style.
 
 ### T02 — Database: platform invites table **[S]**

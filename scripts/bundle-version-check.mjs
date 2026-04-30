@@ -46,7 +46,10 @@ const BUNDLE_SOURCE_PATHS = [
 ];
 
 const CONSTANT_FILE = "backend/app/services/seed_bundle.py";
-const CONSTANT_RE = /^BUNDLE_VERSION\s*:\s*int\s*=\s*(\d+)/m;
+// Accept either ``BUNDLE_VERSION: int = 7`` or ``BUNDLE_VERSION: str = "0.7"``
+// (current spelling). Comparison runs through ``Number()`` so dotted SemVer-ish
+// strings like ``"0.7"`` order correctly against the prior baseline.
+const CONSTANT_RE = /^BUNDLE_VERSION\s*:\s*\w+\s*=\s*"?([\d.]+)"?/m;
 
 function parseArgs(argv) {
   const out = { base: "origin/main" };

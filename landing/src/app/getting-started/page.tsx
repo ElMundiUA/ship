@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
+import { WaitlistSection } from "@/components/waitlist-section";
 
 export const metadata: Metadata = {
   title: "Getting started — Ship",
@@ -169,7 +170,19 @@ export default function GettingStartedPage() {
         </section>
 
         <section className="mt-16">
-          <h2 className="font-display text-2xl font-bold text-white sm:text-3xl">3 · Where to go next</h2>
+          <h2 className="font-display text-2xl font-bold text-white sm:text-3xl">
+            3 · Request closed&hyphen;beta access
+          </h2>
+          <p className="mt-3 max-w-3xl text-base text-white/65 sm:text-lg">
+            Tell us about your team and the problems you&apos;re solving. We review applications weekly.
+          </p>
+          <div className="mt-8 max-w-xl">
+            <WaitlistSection />
+          </div>
+        </section>
+
+        <section className="mt-16">
+          <h2 className="font-display text-2xl font-bold text-white sm:text-3xl">4 · Where to go next</h2>
           <div className="mt-8 grid gap-4 sm:grid-cols-2">
             {NEXT_LINKS.map((link) => (
               <Link

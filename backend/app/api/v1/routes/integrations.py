@@ -14,6 +14,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,6 +26,7 @@ from backend.app.api.v1.schemas import (
     IntegrationOut,
     IntegrationUpsert,
 )
+from backend.app.core.config import get_settings
 from backend.app.db.models.tenancy import AuditLog, Integration
 from backend.app.db.session import get_session
 from backend.app.security.encryption import decrypt, encrypt
@@ -35,6 +37,53 @@ router = APIRouter(
     prefix="/workspaces/{workspace_id}/integrations",
     tags=["integrations"],
 )
+
+# Public router for non-workspace-scoped endpoints
+public_router = APIRouter(
+    prefix="/integrations",
+    tags=["integrations"],
+)
+
+
+class AvailableTrackerOut(BaseModel):
+    """Tracker entry for the available trackers endpoint."""
+
+    kind: str
+    available: bool  # True if production-ready, False if "Coming soon"
+
+
+@public_router.get("/native/available", response_model=list[AvailableTrackerOut])
+async def list_available_native_trackers(
+    auth: AuthContext = Depends(get_current_auth),
+) -> list[AvailableTrackerOut]:
+    """List tracker integrations currently advertised to users.
+
+    Always includes: Linear, GitHub Issues
+    Conditional on enable_partial_trackers flag: Notion, Jira, Asana, ClickUp, Monday, Spreadsheet
+
+    This endpoint is public (no workspace scope) because the onboarding
+    wizard calls it before selecting a workspace. It respects the backend
+    feature flag to hide partial integrations in prod.
+    """
+    settings = get_settings()
+
+    # Always-available trackers
+    always_available = [
+        AvailableTrackerOut(kind="linear", available=True),
+        AvailableTrackerOut(kind="github", available=True),
+    ]
+
+    # Partial trackers (coming soon when flag=False)
+    partial_trackers = [
+        AvailableTrackerOut(kind="notion", available=settings.enable_partial_trackers),
+        AvailableTrackerOut(kind="jira", available=settings.enable_partial_trackers),
+        AvailableTrackerOut(kind="asana", available=settings.enable_partial_trackers),
+        AvailableTrackerOut(kind="clickup", available=settings.enable_partial_trackers),
+        AvailableTrackerOut(kind="monday", available=settings.enable_partial_trackers),
+        AvailableTrackerOut(kind="spreadsheet", available=settings.enable_partial_trackers),
+    ]
+
+    return always_available + partial_trackers
 
 
 def _row_to_out(row: Integration) -> IntegrationOut:

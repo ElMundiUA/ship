@@ -80,7 +80,9 @@ from backend.app.services.tracker_fsm import (
 # ``5`` → post-merge knowledge bootstrap workflow; PR 1 is infra-only.
 # ``0.6`` → process.routines runtime: generated config drops top-level
 #         ``lanes:`` and schedule workflow uses local due calculation.
-BUNDLE_VERSION: str = "0.6"
+# ``0.7`` → seed_default_knowledge: workspace gets a `product-knowledge`
+#         bucket + a starter article on first repo activation.
+BUNDLE_VERSION: str = "0.7"
 
 
 # Default knowledge starters for PR 1. Empty by design: generated knowledge is
@@ -418,6 +420,103 @@ def _detect_ship_version() -> str:
     return "unknown"
 
 
+async def seed_default_knowledge(
+    *,
+    session,
+    workspace_id,
+    workspace_name: str,
+    repo_names: list[str] | None = None,
+    tracker_provider: str | None = None,
+) -> dict:
+    """Seed a default knowledge bucket for a newly-created workspace.
+
+    Creates one workspace-scoped ``KnowledgeBucket`` row with slug
+    ``product-knowledge`` plus one ``BucketArticle`` describing what
+    just happened during onboarding.
+
+    Returns a summary dict with ``bucket_created`` (bool) and ``article_created``
+    (bool) flags for audit logging.
+
+    Idempotent: if a bucket with slug ``product-knowledge`` already exists
+    for the workspace, this is a no-op.
+    """
+    from datetime import datetime, timezone
+    from hashlib import sha256
+
+    from backend.app.db.models.agent_memory import (
+        BucketArticle,
+        BucketArticleStatus,
+        BucketScope,
+        BucketSource,
+        KnowledgeBucket,
+    )
+    from sqlalchemy import select
+
+    # Check if default bucket exists
+    stmt = select(KnowledgeBucket).where(
+        KnowledgeBucket.workspace_id == workspace_id,
+        KnowledgeBucket.slug == "product-knowledge",
+    )
+    existing = (await session.execute(stmt)).scalars().first()
+
+    if existing is not None:
+        return {"bucket_created": False, "article_created": False}
+
+    # Create the default bucket
+    bucket = KnowledgeBucket(
+        workspace_id=workspace_id,
+        slug="product-knowledge",
+        name="Product knowledge",
+        description="Default workspace knowledge bucket seeded on creation",
+        scope_kind=BucketScope.WORKSPACE,
+        source_kind=BucketSource.EXTERNAL_STATIC,
+    )
+    session.add(bucket)
+    await session.flush()
+
+    # Generate article body describing the workspace setup
+    repo_list = (
+        "\n".join(f"  - {name}" for name in (repo_names or []))
+        if repo_names
+        else "  (No repos selected yet)"
+    )
+    tracker_note = (
+        f"\n- **Issue Tracker**: {tracker_provider}"
+        if tracker_provider
+        else ""
+    )
+
+    article_body = (
+        f"# How this workspace was set up\n\n"
+        f"This workspace **{workspace_name}** was created on "
+        f"{datetime.now(timezone.utc).isoformat(timespec='minutes')}Z.\n\n"
+        f"## Repositories\n\n"
+        f"The following repositories are now tracked by Ship:\n\n"
+        f"{repo_list}\n\n"
+        f"## Configuration\n\n"
+        f"- **GitHub App**: Installed\n"
+        f"{tracker_note}\n"
+    )
+
+    # Compute content SHA for idempotency
+    content_sha = sha256(article_body.encode()).hexdigest()
+
+    # Create the starter article
+    article = BucketArticle(
+        bucket_id=bucket.id,
+        slug="workspace-setup",
+        title="How this workspace was set up",
+        body_md=article_body,
+        content_sha=content_sha,
+        version=1,
+        status=BucketArticleStatus.PUBLISHED,
+    )
+    session.add(article)
+    await session.flush()
+
+    return {"bucket_created": True, "article_created": True}
+
+
 __all__ = [
     "BUNDLE_VERSION",
     "CONFIG_PATH",
@@ -426,4 +525,5 @@ __all__ = [
     "SeedBundle",
     "WIZARD_SEED_MARKER_PATH",
     "compose_seed_files",
+    "seed_default_knowledge",
 ]

@@ -74,6 +74,7 @@ class User(Base):
         String(255), nullable=True, unique=True, index=True
     )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    is_platform_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
 
     created_at: Mapped[datetime] = _ts_created()
     updated_at: Mapped[datetime] = _ts_updated()
@@ -497,4 +498,99 @@ class WorkspaceInvite(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    created_at: Mapped[datetime] = _ts_created()
+
+
+# ---------------------------------------------------------------------------
+# Platform invites (E08)
+# ---------------------------------------------------------------------------
+
+
+class PlatformInvite(Base):
+    """Platform-wide invite token for closed-beta onboarding.
+
+    Each invite is a one-time-use token that creates a new ``User`` row
+    when accepted. Tokens are persisted as a **SHA-256 hash** only; the
+    plaintext value is returned exactly once to the caller that created
+    the invite.
+
+    Lifecycle:
+
+    - ``created_at`` → ``revoked_at`` — platform admin clicked revoke.
+    - ``created_at`` → ``accepted_at`` — invitee logged in and POSTed
+      ``/v1/platform/invites/{token}/accept``. A new :class:`User`
+      row is created in the same transaction, and this record is linked
+      via ``accepted_by_user_id``.
+    - ``expires_at`` is a hard wall — past it, the accept endpoint
+      returns 410 Gone.
+
+    Non-unique email index allows the same email to be re-invited after
+    expiry or revocation.
+    """
+
+    __tablename__ = "platform_invites"
+    __table_args__ = (
+        Index("ix_platform_invites_email", "email"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    email: Mapped[str] = mapped_column(String, nullable=False)
+    token_hash: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = _ts_created()
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    accepted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    accepted_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    note: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
+class WaitlistSubmission(Base):
+    """Public waitlist submission from landing site (E08 T05).
+
+    Each row represents a user who filled out the "Request closed-beta access"
+    form on the landing site. Used to build an initial list of potential
+    early-access customers; periodic admin reviews convert promising
+    submissions into ``PlatformInvite`` rows.
+
+    Columns:
+
+    - ``id`` — UUID primary key
+    - ``email`` — invitee email (required)
+    - ``role`` — user's role (nullable: "Product owner", "Engineering manager",
+      "Tech lead", "Other")
+    - ``tracker`` — current tracker in use (nullable: "Linear", "GitHub Issues",
+      "Jira", "Notion", "None/Other")
+    - ``agent`` — current code agent/IDE plugin (nullable: "Cursor", "Claude Code",
+      "Codex", "Copilot", "Other", "None")
+    - ``note`` — free-text answer to "what would Ship help with?" (nullable,
+      max 500 chars enforced at API layer)
+    - ``created_at`` — submission timestamp
+    """
+
+    __tablename__ = "waitlist_submissions"
+    __table_args__ = (
+        Index("ix_waitlist_submissions_email", "email"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    email: Mapped[str] = mapped_column(String, nullable=False)
+    role: Mapped[str | None] = mapped_column(String, nullable=True)
+    tracker: Mapped[str | None] = mapped_column(String, nullable=True)
+    agent: Mapped[str | None] = mapped_column(String, nullable=True)
+    note: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = _ts_created()

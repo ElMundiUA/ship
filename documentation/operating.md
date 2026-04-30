@@ -98,4 +98,4 @@ Avoid these operating habits:
 
 ## Where to next
 
-Use [Troubleshooting](./troubleshooting.md) when something is broken, [Knowledge](./knowledge-buckets.md) when context is missing, [Configuration](./configuration.md) for repo wiring, and [/cli](/cli) for command syntax.
+Use [Troubleshooting](./troubleshooting.md) when something is broken, [Knowledge](./knowledge-buckets.md) when context is missing, [Configuration](./configuration.md) for repo wiring, and the [CLI reference](./configuration.md#local-commands) for command syntax.

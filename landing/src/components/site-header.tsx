@@ -118,6 +118,17 @@ export function SiteHeader() {
           >
             GitHub
           </a>
+          <div className="ml-2 flex items-center gap-2 sm:ml-3">
+            <span className="inline-flex rounded-full bg-white/10 px-2.5 py-1 text-xs font-medium text-white/60">
+              Closed beta
+            </span>
+            <a
+              href="https://app.ship.elmundi.com/login"
+              className="inline-flex shrink-0 items-center rounded-full bg-gradient-to-r from-cyan-400 via-aqua to-fuchsia-500 px-3.5 py-2 text-xs font-bold uppercase tracking-wide text-zinc-950 shadow-[0_0_24px_rgba(34,211,238,0.45)] ring-2 ring-white/25 transition hover:brightness-110 hover:ring-white/40"
+            >
+              Sign in
+            </a>
+          </div>
         </nav>
       </div>
     </header>

@@ -57,7 +57,7 @@ export default async function AuthErrorPage({
           </h1>
 
           <p className="text-base text-white/75 mb-6">
-            We couldn't complete the Auth0 callback.
+            We couldn&apos;t complete the Auth0 callback.
             {reason && (
               <>
                 <br />

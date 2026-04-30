@@ -1,7 +1,7 @@
 ---
 rfc: 0005
 title: "Artifact folder spec v2 — frontmatter as single source of truth"
-status: Proposed
+status: Accepted
 created: 2026-04-19
 supersedes_in_part: [rfc-0001]
 ---
