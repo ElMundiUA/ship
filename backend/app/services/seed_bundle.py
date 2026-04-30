@@ -80,7 +80,9 @@ from backend.app.services.tracker_fsm import (
 # ``5`` → post-merge knowledge bootstrap workflow; PR 1 is infra-only.
 # ``0.6`` → process.routines runtime: generated config drops top-level
 #         ``lanes:`` and schedule workflow uses local due calculation.
-BUNDLE_VERSION: str = "0.6"
+# ``0.7`` → seed_default_knowledge: workspace gets a `product-knowledge`
+#         bucket + a starter article on first repo activation.
+BUNDLE_VERSION: str = "0.7"
 
 
 # Default knowledge starters for PR 1. Empty by design: generated knowledge is
