@@ -309,11 +309,31 @@ async def test_jit_attaches_subject_to_pre_invited_row(db_session) -> None:
 
 
 @pytest.mark.asyncio
-async def test_jit_requires_email_for_new_user(db_session) -> None:
-    with pytest.raises(HTTPException) as exc:
-        await auth0.user_from_claims({"sub": "auth0|stranger"}, db_session)
-    assert exc.value.status_code == 401
-    assert "email" in exc.value.detail.lower()
+async def test_jit_creates_user_with_sentinel_when_email_missing(db_session) -> None:
+    """When email claim is missing and userinfo lookup fails, create user with
+    pending email sentinel so /complete-profile can patch it later."""
+    from sqlalchemy import select
+
+    from backend.app.db.models.tenancy import User
+
+    user = await auth0.user_from_claims(
+        {"sub": "auth0|no-email-user", "name": "No Email User"},
+        db_session,
+    )
+
+    # User is created with sentinel email
+    assert user.email.startswith("pending+auth0|no-email-user@no-email.local")
+    assert user.external_subject == "auth0|no-email-user"
+    assert user.display_name == "No Email User"
+
+    # Verify it persists
+    found = (
+        await db_session.execute(
+            select(User).where(User.external_subject == "auth0|no-email-user")
+        )
+    ).scalar_one()
+    assert found.id == user.id
+    assert found.email == user.email
 
 
 @pytest.mark.asyncio

@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.api.v1.deps import AuthContext, get_current_auth
 from backend.app.api.v1.schemas import (
+    CompleteProfileRequest,
     LocalLoginRequest,
     LocalSignupRequest,
     SessionTokenOut,
@@ -145,6 +146,54 @@ async def local_login(
 @router.get("/me", response_model=UserOut)
 async def get_me(auth: AuthContext = Depends(get_current_auth)) -> UserOut:
     return UserOut.model_validate(auth.user)
+
+
+@router.post("/complete-profile", response_model=UserOut)
+async def complete_profile(
+    payload: CompleteProfileRequest,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> UserOut:
+    """Update user email for accounts logged in via Auth0 without email claim.
+
+    Called when a user with a pending email sentinel (pending+<sub>@no-email.local)
+    submits the /complete-profile form. Validates the new email, updates the user row,
+    and returns the updated profile.
+    """
+    user = auth.user
+    email = payload.email.lower().strip()
+
+    # Check if user has the sentinel email (email-pending state)
+    if not user.email.startswith("pending+") or not user.email.endswith("@no-email.local"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="user email is already complete",
+        )
+
+    # Check for email collision with existing users
+    existing = (
+        await session.execute(select(User).where(User.email == email))
+    ).scalar_one_or_none()
+    if existing is not None and existing.id != user.id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="email already in use",
+        )
+
+    user.email = email
+    session.add(user)
+    await session.flush()
+    session.add(
+        AuditLog(
+            actor_user_id=user.id,
+            action="auth.complete_profile",
+            target_kind="user",
+            target_id=str(user.id),
+            payload={"email": email},
+        )
+    )
+    await session.flush()
+    return UserOut.model_validate(user)
 
 
 # --- Personal access tokens ----------------------------------------------------

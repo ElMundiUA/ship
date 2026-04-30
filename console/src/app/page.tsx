@@ -16,6 +16,7 @@ import {
   type ApiOpsDashboard,
   ApiHttpError,
   ApiUnavailableError,
+  getMe,
   getOpsDashboard,
   isApiConfigured,
   listActivatedRepos,
@@ -65,6 +66,19 @@ export default async function CloudHomePage({
 
   const token = await getSessionToken();
   if (!token) redirect("/login?next=%2F&reason=session_expired");
+
+  // Check if user's email is pending (sentinel pattern from Auth0 email-less login)
+  try {
+    const user = await getMe(token);
+    if (
+      user.email.startsWith("pending+") &&
+      user.email.endsWith("@no-email.local")
+    ) {
+      redirect("/complete-profile?next=%2F");
+    }
+  } catch {
+    // Ignore errors fetching user profile; proceed to load workspaces
+  }
 
   const skipWizard = params.skipWizard === "1";
 

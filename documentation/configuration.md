@@ -104,7 +104,7 @@ When you do need the technical layer, keep these rules:
 
 ## Local commands
 
-Use [/cli](/cli) for full syntax. The most common configuration commands are:
+The most common configuration commands are:
 
 ```bash
 shipctl doctor
@@ -130,4 +130,4 @@ Before merging a configuration change, confirm:
 
 ## Where to next
 
-Read [Agent matrix](./agent-matrix.md) for supported agent ids, [Knowledge](./knowledge-buckets.md) for `.ship/knowledge`, [Automations](./automations.md) for product behavior, and [/cli](/cli) for command syntax.
+Read [Agent matrix](./agent-matrix.md) for supported agent ids, [Knowledge](./knowledge-buckets.md) for `.ship/knowledge`, [Automations](./automations.md) for product behavior, and [Configuration](./configuration.md#local-commands) for command reference.

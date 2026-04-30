@@ -265,6 +265,14 @@ class Settings(BaseSettings):
     github_token: str | None = Field(default=None, alias="GITHUB_TOKEN")
     feedback_repo: str = Field(default="ElMundiUA/ship", alias="SHIP_FEEDBACK_REPO")
 
+    # --- Feature flags -------------------------------------------------------
+    # When False (default in prod), only Linear and GitHub Issues are offered
+    # in the tracker picker. When True, partial integrations (Notion, Jira,
+    # Asana, ClickUp, Monday, Spreadsheet) also appear marked as "Coming soon".
+    enable_partial_trackers: bool = Field(
+        default=False, alias="SHIP_ENABLE_PARTIAL_TRACKERS"
+    )
+
     # --- Agent (C12) ----------------------------------------------------------
     # Pilot ships OpenAI as the default backend because ``OPENAI_API_KEY`` is
     # already wired for embeddings; Anthropic is plugged in behind the same

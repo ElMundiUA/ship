@@ -77,6 +77,14 @@ export function SiteFooter() {
                 >
                   License
                 </a>
+                <a
+                  className="text-white/70 transition hover:text-aqua"
+                  href="https://status.ship.elmundi.com"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Status
+                </a>
               </nav>
             </div>
           </div>
@@ -97,6 +105,7 @@ export function SiteFooter() {
               Protocol v1
             </Link>
           </div>
+          <p className="mt-8 text-xs uppercase tracking-widest text-white/40">Auth0 SSO · Bunny EU · pgvector</p>
         </div>
       </div>
     </footer>

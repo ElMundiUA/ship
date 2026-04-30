@@ -46,4 +46,4 @@ The Manual uses simpler words than the book, but it keeps the same spine:
 
 ## Where to next
 
-Start with [Getting started](/getting-started) for the product setup path. Then read [Concepts](./concepts.md), [Knowledge](./knowledge-buckets.md), and [Operating](./operating.md). Use [Configuration](./configuration.md), [Agent matrix](./agent-matrix.md), and [/cli](/cli) when you are implementing or debugging the repo-level wiring.
+Start with [Getting started](/getting-started) for the product setup path. Then read [Concepts](./concepts.md), [Knowledge](./knowledge-buckets.md), and [Operating](./operating.md). Use [Configuration](./configuration.md), [Agent matrix](./agent-matrix.md), and the [CLI](./configuration.md#local-commands) when you are implementing or debugging the repo-level wiring.

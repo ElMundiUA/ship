@@ -2,7 +2,7 @@
 
 Reference table for the 13 agent runtimes Ship supports out of the box. For each: the on-disk marker `shipctl doctor` looks for, the install target the rule body lands at, and the adapter artifact that owns the contract.
 
-For *how* installation works (commands, flags, ordering), see [/cli](/cli). For *why* this contract looks the way it does, see [Discovery](/docs/discovery) (the agent-side interview) and [Protocol → RFC-0001](/docs/protocol/rfc-0001-artifacts-protocol).
+For *how* installation works (commands, flags, ordering), see [Configuration](./configuration.md#local-commands). For *why* this contract looks the way it does, see [Discovery](/docs/discovery) (the agent-side interview) and [Protocol → RFC-0001](/docs/protocol/rfc-0001-artifacts-protocol).
 
 > **Where this fits in the operator picture.** The agents below are the *runtimes* that execute a [Play](/docs/concepts#plays) when an [Automation](/docs/automations) fires (or when an operator hits **Run now**). Each execution lands in [Runs](/docs/concepts#runs); anything that needs human attention — a clarification, an approval, a repeated failure — surfaces in the [Inbox](/docs/concepts#inbox), routed by handle. The agent matrix is the *who runs the prompt*; Plays / Automations / Runs / Inbox are *what the operator sees on top of it*.
 

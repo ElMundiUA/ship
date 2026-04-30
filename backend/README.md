@@ -111,6 +111,7 @@ Optional:
 - `SHIP_FEEDBACK_REPO` (default `ElMundiUA/ship`)
 - `FORCE_REINDEX=true` to rebuild the legacy Chroma vector index on startup
 - `ALEMBIC_DATABASE_URL` to override the sync URL Alembic uses
+- `SHIP_ENABLE_PARTIAL_TRACKERS` (default `false`) — when `false` (production), tracker picker shows only Linear and GitHub Issues; partial integrations (Notion, Jira, Asana, ClickUp, Monday, Spreadsheet) appear as "Coming soon" (disabled). Set to `true` or `1` to reveal all options for testing.
 
 ## Operator notes — repo-driven onboarding
 

@@ -162,24 +162,75 @@ function quietly404AsNull<T>() {
   };
 }
 
+type BucketTab = "articles" | "sources" | "runs";
+
+function parseBucketTab(value: string | string[] | undefined): BucketTab {
+  const v = Array.isArray(value) ? value[0] : value;
+  if (v === "sources") return "sources";
+  if (v === "runs") return "runs";
+  return "articles";
+}
+
 export default async function KnowledgeBucketDetailPage({
   params,
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ article?: string | string[] }>;
+  searchParams: Promise<{ article?: string | string[]; tab?: string | string[] }>;
 }) {
   const { id } = await params;
   const query = await searchParams;
   const selectedArticleId = Array.isArray(query.article)
     ? query.article[0]
     : query.article;
+  const selectedTab = parseBucketTab(query.tab);
   const data = await load(id);
   if (data === "notfound") notFound();
   return data.source === "live" ? (
-    <LiveView data={data} selectedArticleId={selectedArticleId} />
+    <LiveView data={data} selectedArticleId={selectedArticleId} selectedTab={selectedTab} />
   ) : (
     <UnavailableView data={data} />
+  );
+}
+
+function BucketTabs({
+  selected,
+  bucketSlug,
+  counts,
+}: {
+  selected: BucketTab;
+  bucketSlug: string;
+  counts: { articles: number; sources: number; runs: number };
+}) {
+  const hrefFor = (tab: BucketTab) => {
+    const qs = new URLSearchParams();
+    if (tab !== "articles") qs.set("tab", tab);
+    const suffix = qs.toString();
+    return suffix
+      ? `/knowledge/${encodeURIComponent(bucketSlug)}?${suffix}`
+      : `/knowledge/${encodeURIComponent(bucketSlug)}`;
+  };
+  const tab = (id: BucketTab, label: string, count: number) => (
+    <Link
+      key={id}
+      href={hrefFor(id)}
+      className={[
+        "inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-semibold transition",
+        selected === id
+          ? "bg-aqua/15 text-aqua border border-aqua/40"
+          : "border border-transparent text-white/55 hover:bg-white/[0.05] hover:text-white",
+      ].join(" ")}
+    >
+      {label}
+      <span className="font-mono text-[10px] text-white/40">{count}</span>
+    </Link>
+  );
+  return (
+    <div className="mb-5 flex items-center gap-1 rounded-2xl border border-white/10 bg-white/[0.035] p-2">
+      {tab("articles", "Articles", counts.articles)}
+      {tab("sources", "Sources", counts.sources)}
+      {tab("runs", "Distiller runs", counts.runs)}
+    </div>
   );
 }
 
@@ -190,9 +241,11 @@ export default async function KnowledgeBucketDetailPage({
 function LiveView({
   data,
   selectedArticleId,
+  selectedTab,
 }: {
   data: LiveData;
   selectedArticleId?: string;
+  selectedTab: BucketTab;
 }) {
   const { workspace: ws, legacy, bucket, articles, sources, runs, title } = data;
   const selectedArticle =
@@ -276,9 +329,19 @@ function LiveView({
         </p>
       )}
 
+      <BucketTabs
+        selected={selectedTab}
+        bucketSlug={bucket?.slug ?? legacy?.slug ?? ""}
+        counts={{
+          articles: articles.length,
+          sources: sources.length,
+          runs: runs.length,
+        }}
+      />
+
       <section className="grid grid-cols-1 gap-5 lg:grid-cols-3">
         <div className="space-y-5 lg:col-span-2">
-          {legacy && (
+          {legacy && selectedTab === "articles" && (
             <Card>
               <CardHeader
                 title="Document"
@@ -290,12 +353,28 @@ function LiveView({
             </Card>
           )}
 
-          <ArticlesCard
-            articles={articles}
-            bucketSlug={bucket?.slug ?? legacy?.slug ?? ""}
-            selectedArticleId={selectedArticle?.id}
-          />
-          {selectedArticle && <ArticleViewer article={selectedArticle} />}
+          {selectedTab === "articles" && (
+            <>
+              <ArticlesCard
+                articles={articles}
+                bucketSlug={bucket?.slug ?? legacy?.slug ?? ""}
+                selectedArticleId={selectedArticle?.id}
+              />
+              {selectedArticle && <ArticleViewer article={selectedArticle} />}
+            </>
+          )}
+
+          {selectedTab === "sources" && bucket && (
+            <SourcesCard sources={sources} />
+          )}
+
+          {selectedTab === "runs" && bucket && (
+            <RunsCard
+              runs={runs}
+              workspaceId={ws.id}
+              bucketSlug={bucket.slug}
+            />
+          )}
         </div>
 
         <div className="space-y-5">
@@ -313,16 +392,6 @@ function LiveView({
               workspaceId={ws.id}
               slug={bucket.slug}
               bucketName={bucket.name}
-            />
-          )}
-
-          {bucket && <SourcesCard sources={sources} />}
-
-          {bucket && (
-            <RunsCard
-              runs={runs}
-              workspaceId={ws.id}
-              bucketSlug={bucket.slug}
             />
           )}
 

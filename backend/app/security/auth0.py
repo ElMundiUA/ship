@@ -265,15 +265,9 @@ async def user_from_claims(
         return user
 
     if not email:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=(
-                "access token has no email claim and /userinfo lookup did "
-                "not return one. Either enable the 'email' scope on the "
-                "Auth0 application or add a custom rule that injects "
-                "the user's email address."
-            ),
-        )
+        # Email is missing — mark user as "email-pending" using a sentinel.
+        # The client will detect this and redirect to /complete-profile.
+        email = f"pending+{sub}@no-email.local"
 
     user = (
         await session.execute(select(User).where(User.email == email))

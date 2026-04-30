@@ -279,7 +279,10 @@ function normalizeImportSource(
     kind: source.kind,
     status: source.status,
     lastSyncedAt: source.last_synced_at,
-    nextSyncAt: null,
+    nextSyncAt: computeNextSyncAt(
+      source.last_synced_at,
+      source.sync_interval_minutes,
+    ),
     lastError: source.last_error,
     documents: asNumber(config.document_count),
     chunks: null,
@@ -289,6 +292,24 @@ function normalizeImportSource(
       asString(config.path) ??
       source.name,
   };
+}
+
+/**
+ * Compute the next-due sync timestamp from the last sync + the interval.
+ *
+ * Returns ``null`` for one-shot sources (``sync_interval_minutes === null``,
+ * e.g. ``static_upload``) and for sources that have never run yet — neither
+ * has a meaningful "next at" time. The UI surfaces "Due now" elsewhere when
+ * the result is in the past.
+ */
+function computeNextSyncAt(
+  lastSyncedAt: string | null,
+  intervalMinutes: number | null,
+): string | null {
+  if (!lastSyncedAt || !intervalMinutes || intervalMinutes <= 0) return null;
+  const last = Date.parse(lastSyncedAt);
+  if (Number.isNaN(last)) return null;
+  return new Date(last + intervalMinutes * 60_000).toISOString();
 }
 
 function bucketStatus(

@@ -68,7 +68,7 @@ Do not use the Inbox as a log stream. If no decision is needed, leave evidence o
 
 ## Technical reference
 
-Developers may see automations represented as routines, generated workflows, callback payloads, and pipeline records. That layer is intentionally technical and belongs in [Configuration](./configuration.md), [Operating](./operating.md), and [/cli](/cli).
+Developers may see automations represented as routines, generated workflows, callback payloads, and pipeline records. That layer is intentionally technical and belongs in [Configuration](./configuration.md), [Operating](./operating.md), and the [CLI reference](./configuration.md#local-commands).
 
 New user-facing examples should avoid legacy terms such as `lane`, `run`, and `pipeline_run` unless the page is explaining the implementation.
 
