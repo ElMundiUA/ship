@@ -95,9 +95,8 @@ export function rewriteDocLinks(source) {
     const map = {
       "getting-started/index.md": "/getting-started",
       /* Pre-v0.11 catalog paths that lived under documentation/ moved
-       * to top-level routes. */
-      "tools/index.md": "/tools",
-      "collections/index.md": "/collections",
+       * to top-level routes. /tools and /collections were deleted;
+       * links to them should resolve via the default slug logic below. */
       "patterns/index.md": "/patterns",
       /* Docs pages that were renamed/relocated in v0.11. */
       "adoption/index.md": "/docs",

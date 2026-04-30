@@ -75,6 +75,10 @@ class LocalLoginRequest(BaseModel):
     password: str = Field(min_length=1, max_length=200)
 
 
+class CompleteProfileRequest(BaseModel):
+    email: EmailStr
+
+
 class SessionTokenOut(BaseModel):
     access_token: str
     token_type: str = "bearer"

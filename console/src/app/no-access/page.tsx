@@ -39,7 +39,7 @@ export default function NoAccessPage() {
           </h1>
 
           <p className="text-base text-white/75 mb-6">
-            You don't have access to this resource. If you think this is wrong, ask the
+            You don&apos;t have access to this resource. If you think this is wrong, ask the
             workspace owner to invite you.
           </p>
 

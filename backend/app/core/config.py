@@ -201,6 +201,16 @@ class Settings(BaseSettings):
         default=False, alias="SHIP_ALLOW_LOCAL_AUTH0_CALLBACKS"
     )
 
+    # --- Closed-beta invite gate (RFC-0011 / E08) ---
+    # When ``True`` (production default) brand-new signups are gated through
+    # the ``platform_invites`` table: a user without an open invite hits a
+    # 403 at JIT-provisioning time. Disable in dev / self-hosted by setting
+    # ``SHIP_INVITE_ONLY=false`` so the gate is a no-op.
+    invite_only: bool = Field(default=True, alias="SHIP_INVITE_ONLY")
+    # Soft cap on accepted invites surfaced to the public landing as
+    # "X / N closed-beta seats taken". Read by ``/v1/public/beta-capacity``.
+    closed_beta_cap: int = Field(default=50, alias="CLOSED_BETA_CAP")
+
     # --- Auth0 (used when auth_mode == "auth0") ---
     auth0_domain: str | None = Field(default=None, alias="AUTH0_DOMAIN")
     auth0_audience: str | None = Field(default=None, alias="AUTH0_AUDIENCE")
@@ -264,6 +274,14 @@ class Settings(BaseSettings):
     )
     github_token: str | None = Field(default=None, alias="GITHUB_TOKEN")
     feedback_repo: str = Field(default="ElMundiUA/ship", alias="SHIP_FEEDBACK_REPO")
+
+    # --- Feature flags -------------------------------------------------------
+    # When False (default in prod), only Linear and GitHub Issues are offered
+    # in the tracker picker. When True, partial integrations (Notion, Jira,
+    # Asana, ClickUp, Monday, Spreadsheet) also appear marked as "Coming soon".
+    enable_partial_trackers: bool = Field(
+        default=False, alias="SHIP_ENABLE_PARTIAL_TRACKERS"
+    )
 
     # --- Agent (C12) ----------------------------------------------------------
     # Pilot ships OpenAI as the default backend because ``OPENAI_API_KEY`` is

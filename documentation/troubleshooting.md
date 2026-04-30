@@ -138,4 +138,4 @@ Fix in place when one clear change ends the failure class. Escalate when the sam
 
 ## Where to next
 
-Use [Operating](./operating.md) for normal review, [Knowledge](./knowledge-buckets.md) for context fixes, [Configuration](./configuration.md) for repo wiring, and [/cli](/cli) for command syntax.
+Use [Operating](./operating.md) for normal review, [Knowledge](./knowledge-buckets.md) for context fixes, [Configuration](./configuration.md) for repo wiring, and the [CLI reference](./configuration.md#local-commands) for command syntax.

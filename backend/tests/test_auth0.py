@@ -309,11 +309,31 @@ async def test_jit_attaches_subject_to_pre_invited_row(db_session) -> None:
 
 
 @pytest.mark.asyncio
-async def test_jit_requires_email_for_new_user(db_session) -> None:
-    with pytest.raises(HTTPException) as exc:
-        await auth0.user_from_claims({"sub": "auth0|stranger"}, db_session)
-    assert exc.value.status_code == 401
-    assert "email" in exc.value.detail.lower()
+async def test_jit_creates_user_with_sentinel_when_email_missing(db_session) -> None:
+    """When email claim is missing and userinfo lookup fails, create user with
+    pending email sentinel so /complete-profile can patch it later."""
+    from sqlalchemy import select
+
+    from backend.app.db.models.tenancy import User
+
+    user = await auth0.user_from_claims(
+        {"sub": "auth0|no-email-user", "name": "No Email User"},
+        db_session,
+    )
+
+    # User is created with sentinel email
+    assert user.email.startswith("pending+auth0|no-email-user@no-email.local")
+    assert user.external_subject == "auth0|no-email-user"
+    assert user.display_name == "No Email User"
+
+    # Verify it persists
+    found = (
+        await db_session.execute(
+            select(User).where(User.external_subject == "auth0|no-email-user")
+        )
+    ).scalar_one()
+    assert found.id == user.id
+    assert found.email == user.email
 
 
 @pytest.mark.asyncio
@@ -480,3 +500,174 @@ def test_accepts_valid_token(
     assert claims["email"] == "ada@example.com"
     assert claims["aud"] == "https://api.ship.test"
     assert "auth0.com" in claims["iss"]
+
+
+# ---------------------------------------------------------------------------
+# Closed-beta invite gate (E08)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_jit_rejects_user_without_invite_when_gate_on(
+    db_session, monkeypatch
+) -> None:
+    """With ``SHIP_INVITE_ONLY=true`` and no platform_invites row, a brand-new
+    Auth0 identity is rejected with 403."""
+    from backend.app.core.config import get_settings
+
+    monkeypatch.setenv("SHIP_INVITE_ONLY", "true")
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(HTTPException) as exc:
+            await auth0.user_from_claims(
+                {
+                    "sub": "auth0|stranger",
+                    "email": "stranger@example.com",
+                    "name": "Stranger",
+                },
+                db_session,
+            )
+        assert exc.value.status_code == 403
+        assert "invite" in exc.value.detail.lower()
+    finally:
+        get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_jit_admits_user_with_open_invite(db_session, monkeypatch) -> None:
+    """An open invite gates the new user through and is marked accepted."""
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import select
+
+    from backend.app.core.config import get_settings
+    from backend.app.db.models.tenancy import PlatformInvite
+
+    monkeypatch.setenv("SHIP_INVITE_ONLY", "true")
+    get_settings.cache_clear()
+    try:
+        invite = PlatformInvite(
+            email="ada@example.com",
+            token_hash="hash-not-used-by-jit",
+            expires_at=datetime.now(timezone.utc) + timedelta(days=14),
+        )
+        db_session.add(invite)
+        await db_session.flush()
+
+        user = await auth0.user_from_claims(
+            {
+                "sub": "auth0|ada-fresh",
+                "email": "ada@example.com",
+                "name": "Ada",
+            },
+            db_session,
+        )
+        await db_session.flush()
+
+        assert user.email == "ada@example.com"
+        assert user.external_subject == "auth0|ada-fresh"
+        # Invite was consumed: accepted_at populated, accepted_by_user_id bound.
+        refreshed = (
+            await db_session.execute(
+                select(PlatformInvite).where(PlatformInvite.id == invite.id)
+            )
+        ).scalar_one()
+        assert refreshed.accepted_at is not None
+        assert refreshed.accepted_by_user_id == user.id
+    finally:
+        get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_jit_rejects_with_revoked_invite(db_session, monkeypatch) -> None:
+    """A revoked invite does not satisfy the gate — user is rejected."""
+    from datetime import datetime, timedelta, timezone
+
+    from backend.app.core.config import get_settings
+    from backend.app.db.models.tenancy import PlatformInvite
+
+    monkeypatch.setenv("SHIP_INVITE_ONLY", "true")
+    get_settings.cache_clear()
+    try:
+        invite = PlatformInvite(
+            email="revoked@example.com",
+            token_hash="hash-revoked",
+            expires_at=datetime.now(timezone.utc) + timedelta(days=14),
+            revoked_at=datetime.now(timezone.utc),
+        )
+        db_session.add(invite)
+        await db_session.flush()
+
+        with pytest.raises(HTTPException) as exc:
+            await auth0.user_from_claims(
+                {
+                    "sub": "auth0|revoked",
+                    "email": "revoked@example.com",
+                },
+                db_session,
+            )
+        assert exc.value.status_code == 403
+    finally:
+        get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_jit_rejects_with_expired_invite(db_session, monkeypatch) -> None:
+    """An expired invite does not satisfy the gate."""
+    from datetime import datetime, timedelta, timezone
+
+    from backend.app.core.config import get_settings
+    from backend.app.db.models.tenancy import PlatformInvite
+
+    monkeypatch.setenv("SHIP_INVITE_ONLY", "true")
+    get_settings.cache_clear()
+    try:
+        invite = PlatformInvite(
+            email="expired@example.com",
+            token_hash="hash-expired",
+            expires_at=datetime.now(timezone.utc) - timedelta(days=1),
+        )
+        db_session.add(invite)
+        await db_session.flush()
+
+        with pytest.raises(HTTPException) as exc:
+            await auth0.user_from_claims(
+                {
+                    "sub": "auth0|expired",
+                    "email": "expired@example.com",
+                },
+                db_session,
+            )
+        assert exc.value.status_code == 403
+    finally:
+        get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_jit_skips_gate_for_returning_user(db_session, monkeypatch) -> None:
+    """Returning users (already have ``external_subject``) bypass the gate."""
+    from backend.app.core.config import get_settings
+    from backend.app.db.models.tenancy import User
+
+    seed = User(
+        email="returning@example.com",
+        external_subject="auth0|returning",
+    )
+    db_session.add(seed)
+    await db_session.flush()
+
+    monkeypatch.setenv("SHIP_INVITE_ONLY", "true")
+    get_settings.cache_clear()
+    try:
+        # No invite for this email — but the user already exists, so the
+        # gate must not fire.
+        user = await auth0.user_from_claims(
+            {
+                "sub": "auth0|returning",
+                "email": "returning@example.com",
+            },
+            db_session,
+        )
+        assert user.id == seed.id
+    finally:
+        get_settings.cache_clear()

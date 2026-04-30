@@ -38,6 +38,33 @@ def _manifest_cache_reset():
     backend_main._clear_manifest_cache()
 
 
+@pytest.fixture(autouse=True)
+def _disable_invite_gate(monkeypatch):
+    """Tests opt-in to the closed-beta invite gate.
+
+    The production default is ``SHIP_INVITE_ONLY=true`` so brand-new signups
+    must carry an open ``platform_invites`` row. Most tests pre-date this
+    gate and create users via JIT directly; flipping the gate off here keeps
+    them passing. Tests that exercise the gate itself can re-enable via
+    ``monkeypatch.setenv("SHIP_INVITE_ONLY", "true")`` and then call
+    ``get_settings.cache_clear()``.
+    """
+    monkeypatch.setenv("SHIP_INVITE_ONLY", "false")
+    try:
+        from backend.app.core.config import get_settings
+
+        get_settings.cache_clear()
+    except Exception:  # pragma: no cover — defensive
+        pass
+    yield
+    try:
+        from backend.app.core.config import get_settings
+
+        get_settings.cache_clear()
+    except Exception:  # pragma: no cover — defensive
+        pass
+
+
 @pytest.fixture
 def client():
     from fastapi.testclient import TestClient

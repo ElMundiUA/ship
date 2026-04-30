@@ -1,7 +1,7 @@
 ---
 rfc: 0008
 title: "Catalog reform — naming, modes, and expansion"
-status: Draft
+status: Accepted
 created: 2026-04-22
 supersedes_in_part: []
 ---

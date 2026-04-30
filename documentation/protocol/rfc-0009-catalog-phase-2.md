@@ -1,7 +1,7 @@
 ---
 rfc: 0009
 title: "Catalog Phase-2 — beyond web & backend"
-status: Draft
+status: Accepted
 created: 2026-04-22
 supersedes_in_part: []
 follows: 0008

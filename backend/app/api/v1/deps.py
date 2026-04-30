@@ -167,10 +167,26 @@ async def require_workspace_role(
     return membership
 
 
+async def require_platform_admin(
+    auth: AuthContext = Depends(get_current_auth),
+) -> User:
+    """Require that the authenticated user is a platform admin.
+
+    Returns the user if authorized; raises 403 otherwise.
+    """
+    if not auth.user.is_platform_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="platform admin access required",
+        )
+    return auth.user
+
+
 __all__ = [
     "AuthContext",
     "PAT_PREFIX",
     "get_current_auth",
     "get_current_user",
     "require_workspace_role",
+    "require_platform_admin",
 ]

@@ -14,6 +14,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from backend.app.api.v1.routes import (
+    admin_invites,
     agent_secrets,
     artifact_repos,
     audit,
@@ -48,6 +49,7 @@ from backend.app.api.v1.routes import (
     repo_secrets,
     repos,
     tracker_binding,
+    waitlist,
     workspaces,
 )
 
@@ -55,9 +57,13 @@ from backend.app.api.v1.routes import (
 api_router = APIRouter(prefix="/v1")
 api_router.include_router(health.router)
 api_router.include_router(auth.router)
+api_router.include_router(admin_invites.router)
+# Public waitlist submission from landing site (E08 T05). No auth required.
+api_router.include_router(waitlist.router)
 api_router.include_router(workspaces.router)
 api_router.include_router(artifact_repos.router)
 api_router.include_router(audit.router)
+api_router.include_router(integrations.public_router)
 api_router.include_router(integrations.router)
 api_router.include_router(native_integrations.router)
 api_router.include_router(knowledge_import_sources.router)
@@ -115,6 +121,11 @@ api_router.include_router(catalog.router)
 # authenticated accept at ``/invites/{token}``.
 api_router.include_router(invites.workspace_router)
 api_router.include_router(invites.invite_router)
+# Platform invites (E08 — closed-beta gating). Admin-only create/list/revoke
+# under ``/admin/invites``; public status check at ``/public/invites/{token}``
+# and capacity check at ``/public/beta-capacity``.
+api_router.include_router(admin_invites.public_router)
+api_router.include_router(admin_invites.beta_capacity_router)
 # Clarifications inbox (C9 — human-in-the-loop Q&A). Session-auth
 # admin routes under /workspaces/{ws}; run-token pipeline ingress
 # under /clarifications/pipeline.

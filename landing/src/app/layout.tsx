@@ -24,9 +24,27 @@ export const metadata: Metadata = {
     "Ship connects repos, trackers, policies, knowledge, automations, and evidence so solo founders and product owners can steer AI-assisted delivery without losing ownership.",
   metadataBase: resolveMetadataBase(),
   openGraph: {
-    title: "Ship",
-    description: "A founder workspace for policies, decisions, evidence, knowledge, and bounded agent-assisted work.",
+    title: "Ship — founder workspace for AI-assisted delivery",
+    description:
+      "Ship connects repos, trackers, policies, knowledge, automations, and evidence so solo founders and product owners can steer AI-assisted delivery without losing ownership.",
+    url: "https://ship.elmundi.com",
+    siteName: "Ship",
     type: "website",
+    images: [
+      {
+        url: "/og-default.png",
+        width: 1200,
+        height: 630,
+        alt: "Ship — product delivery workspace for AI-assisted engineering",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Ship — founder workspace for AI-assisted delivery",
+    description:
+      "Ship connects repos, trackers, policies, knowledge, automations, and evidence so solo founders and product owners can steer AI-assisted delivery without losing ownership.",
+    images: ["/og-default.png"],
   },
 };
 
