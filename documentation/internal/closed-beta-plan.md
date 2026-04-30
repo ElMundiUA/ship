@@ -65,6 +65,7 @@ If the three projects can move work, surface decisions in the Inbox, and leave e
 | **E09** | SendGrid wired with 4 production templates (invite / inbox new / run failure / daily digest) | [E09](./closed-beta/E09-sendgrid.md) |
 | **E10** | Sentry context, uptime monitor, KPI dashboard, alert rules | [E10](./closed-beta/E10-observability.md) |
 | **E13** | Rip out ChromaDB; unify all vector search on pgvector | [E13](./closed-beta/E13-rip-chroma.md) |
+| **E14** | Server-side smart orchestration (CLI becomes a thin proxy; tracker FSM + adapters stay where they already live) | [E14](./closed-beta/E14-smart-orchestration.md) |
 
 ### P3 — Trust, presentation, finalization
 

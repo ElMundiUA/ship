@@ -30,6 +30,7 @@ Every detail file follows the same shape:
 | [E11](./E11-docs-alignment.md) | Documentation alignment to code | P3 | L |
 | [E12](./E12-landing-ux-finalization.md) | Landing finalize + console UX polish + mobile + demo | P3 | M |
 | [E13](./E13-rip-chroma.md) | Rip Chroma, unify on pgvector | P2 | M |
+| [E14](./E14-smart-orchestration.md) | Server-side smart orchestration (CLI thin proxy; FSM/tracker logic stays in backend) | P1 | M |
 
 ## Convention notes
 

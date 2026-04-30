@@ -63,8 +63,6 @@ export type InboxItemRowProps = {
   /** Override "now" for tests / SSR snapshots. */
   referenceDate?: Date;
   className?: string;
-  /** Callback when the row is clicked (in addition to navigation). */
-  onSelect?: (id: string) => void;
 };
 
 export function InboxItemRow({
@@ -72,7 +70,6 @@ export function InboxItemRow({
   href,
   referenceDate,
   className,
-  onSelect,
 }: InboxItemRowProps) {
   const meta = INBOX_TYPE_META[item.type];
   const isTerminal =
@@ -160,7 +157,6 @@ export function InboxItemRow({
     <Link
       href={href}
       className="block focus:outline-none focus-visible:ring-2 focus-visible:ring-aqua/60 focus-visible:ring-offset-2 focus-visible:ring-offset-ink rounded-2xl"
-      onClick={() => onSelect?.(item.id)}
       aria-label={`${INBOX_TYPE_META[item.type].label}: ${item.title}`}
     >
       {body}
