@@ -25,18 +25,37 @@ spec:
   template: true
 ---
 
-## Global rules (Cursor Cloud Agent — GitHub SDLC)
+## Global rules (E14 routine run)
 
-- **SDLC queue:** GitHub pick scripts only take tickets in **Todo** and in the Linear project configured by **`LINEAR_SDLC_PROJECT_ID`** or **`LINEAR_SDLC_PROJECT_NAME`**. **Backlog** is for manual triage — automation does not pick it up until you move the card to Todo.
-- **Linear:** The single channel with humans is **comments on the ticket** in Linear. Do not spam: one substantive comment per pass; end with `[GitHub SDLC:{{ROLE}}]`.
-- **IDEMPOTENCY:** Before making changes, re-read the ticket (and latest comments). If work for this role is already done (required labels/description/status), **exit without changes and without a comment**.
-- **GitHub schedule:** The same ticket can re-enter pick after ~2h. If the latest comment with `[GitHub SDLC:{{ROLE}}]` already reflects the current state and there are no new inputs — **do not duplicate** updates or comments.
-- Do not merge PRs. Do not move to Done without explicit human approval.
-- **LINEAR_API_KEY:** Must be available to the agent (Cursor Cloud → Secrets / env for the repository). Update Linear via API or the official client. If the key is missing — one comment `[LINEAR-DRAFT]` with JSON/text of what to apply manually.
-- **Skills:** Context from `.cursor/skills` appears below — follow it for Bunny, deploy, self-heal, etc., when the task touches those areas.
-- **One ticket — one open PR from SDLC:** branch **`fix/{{ISSUE}}-auto`** (issue key from the ticket, e.g. `ENG-12` → `fix/ENG-12-auto`; see `runtime/scripts/cloud-agent-launch.mjs`). Do not create a parallel **`feature/…-auto`** branch for the same ticket — that duplicates work; if two PRs already exist, do not merge both: keep the current one and close the other.
-- **Dev / prod / deploy:** org-specific hosts, runbooks, and workflow names live in **repository settings** and **documentation/examples** (reference deployment). Follow your team’s documented pre-release and promote process — do not assume a particular domain or image name.
-- **Daily audit roles** (`tech-architect`, `qa-architect`, `security-officer`): do not create tickets without verifiable facts; dedupe against open issues in target Linear projects. Comment marker: `[GitHub SDLC daily-audit:…]` (see `documentation/examples` / operator docs when present).
+- **You are running inside Ship's E14 routine pipeline.** A single
+  routine slot picked you a task. When you finish (or hit a wall),
+  you commit `.ship/run-state.json` on this branch and stop. Ship
+  CLI reads that file and writes back to the tracker / inbox using
+  the workspace's existing OAuth — you never hold credentials and
+  you never call a tracker API directly.
+- **No direct tracker writes.** Do **not** run `gh issue comment`,
+  `linear-cli`, `curl https://api.linear.app/...`, or any other
+  vendor API by hand. Encode all writes into `.ship/run-state.json`.
+- **Single comment per pass.** Whatever your role decides, summarise
+  it in one substantive markdown block (the `comment` field of the
+  state file). End the comment with `[Ship SDLC:{{ROLE}}]` so we can
+  detect "already done" on a re-pick.
+- **IDEMPOTENCY.** Before doing work, re-read the ticket. If a
+  comment with `[Ship SDLC:{{ROLE}}]` already reflects the current
+  state and there are no new inputs, exit with `state=ready_next_step`
+  and an empty `comment` (or skip the comment entirely) so the run
+  doesn't double-fire.
+- **Do not merge PRs.** Do not move tickets to Done without an
+  explicit human approval signal — that's a `human_validation`
+  state, not `ready_next_step`.
+- **One ticket → one open PR.** Branch name is set by Ship CLI at
+  launch (`fix/<ticket>-auto` for developer roles); don't create
+  parallel branches for the same ticket. If two PRs already exist
+  for the same ticket, leave the older one open and exit with a
+  `blocked` state describing the conflict.
+- **Skills:** any context from `.cursor/skills` appears below.
+  Follow it where applicable; if absent, continue with what you
+  have.
 
 ## Relevant skills
 

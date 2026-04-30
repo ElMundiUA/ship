@@ -23,6 +23,9 @@ spec:
   category: role
   modes: [lane, request]
   include: [common-base]
+  # E14: tracker stage this pattern operates on. ``shipctl agent-run``
+  # uses this to pick the next eligible ticket via ``GET /tracker/next``.
+  fsm_stage: triage
   inbox:
     profile: role_reviewer
     overrides:
