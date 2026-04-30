@@ -29,12 +29,12 @@ from typing import Any
 import httpx
 from fastapi import HTTPException, status
 from jose import JWTError, jwt
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.app.core.config import Settings
-from backend.app.db.models.tenancy import User
+from backend.app.core.config import Settings, get_settings
+from backend.app.db.models.tenancy import PlatformInvite, User
 
 
 log = logging.getLogger(__name__)
@@ -280,6 +280,22 @@ async def user_from_claims(
             user.display_name = str(name)[:200]
         return user
 
+    # Closed-beta invite gate (E08). Brand-new identity → check that the
+    # email has an open ``platform_invites`` row. Email-pending sentinels
+    # skip the gate here; the real check fires after /complete-profile
+    # patches the user's email in.
+    invite: PlatformInvite | None = None
+    if not email.endswith("@no-email.local"):
+        invite = await _consume_open_invite(session, email)
+        if invite is None and get_settings().invite_only:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    "closed beta is invite-only. request access at "
+                    "https://ship.elmundi.com/getting-started"
+                ),
+            )
+
     user = User(
         email=email,
         display_name=str(name)[:200] if name else None,
@@ -313,7 +329,39 @@ async def user_from_claims(
                 detail="user provisioning race resolved without a row",
             )
         return existing
+    if invite is not None:
+        # Bind the freshly-created user back to the consumed invite so we
+        # have an audit trail of who burned which invite.
+        invite.accepted_by_user_id = user.id
     return user
+
+
+async def _consume_open_invite(
+    session: AsyncSession, email: str
+) -> PlatformInvite | None:
+    """Find an open ``platform_invites`` row for ``email`` and mark it pending-acceptance.
+
+    Returns the invite row if one exists with ``accepted_at IS NULL``,
+    ``revoked_at IS NULL`` and ``expires_at > now()``. Otherwise ``None``.
+
+    The row's ``accepted_at`` is set here. The caller is responsible for
+    setting ``accepted_by_user_id`` once the new ``User`` row has its id
+    (the User is flushed *after* this gate).
+    """
+    stmt = (
+        select(PlatformInvite)
+        .where(PlatformInvite.email == email.lower())
+        .where(PlatformInvite.accepted_at.is_(None))
+        .where(PlatformInvite.revoked_at.is_(None))
+        .where(PlatformInvite.expires_at > func.now())
+        .order_by(PlatformInvite.created_at.desc())
+        .limit(1)
+    )
+    invite = (await session.execute(stmt)).scalar_one_or_none()
+    if invite is None:
+        return None
+    invite.accepted_at = func.now()  # type: ignore[assignment]
+    return invite
 
 
 __all__ = [

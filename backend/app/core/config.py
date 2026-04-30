@@ -201,6 +201,16 @@ class Settings(BaseSettings):
         default=False, alias="SHIP_ALLOW_LOCAL_AUTH0_CALLBACKS"
     )
 
+    # --- Closed-beta invite gate (RFC-0011 / E08) ---
+    # When ``True`` (production default) brand-new signups are gated through
+    # the ``platform_invites`` table: a user without an open invite hits a
+    # 403 at JIT-provisioning time. Disable in dev / self-hosted by setting
+    # ``SHIP_INVITE_ONLY=false`` so the gate is a no-op.
+    invite_only: bool = Field(default=True, alias="SHIP_INVITE_ONLY")
+    # Soft cap on accepted invites surfaced to the public landing as
+    # "X / N closed-beta seats taken". Read by ``/v1/public/beta-capacity``.
+    closed_beta_cap: int = Field(default=50, alias="CLOSED_BETA_CAP")
+
     # --- Auth0 (used when auth_mode == "auth0") ---
     auth0_domain: str | None = Field(default=None, alias="AUTH0_DOMAIN")
     auth0_audience: str | None = Field(default=None, alias="AUTH0_AUDIENCE")

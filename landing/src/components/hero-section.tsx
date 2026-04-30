@@ -65,11 +65,11 @@ export function HeroSection() {
         </figure>
 
         <div className="mt-10 flex flex-col flex-wrap gap-4 sm:flex-row sm:items-center">
-          <Link className="btn-primary text-center sm:text-left" href="/getting-started">
-            Plan your workspace
+          <Link className="btn-primary text-center sm:text-left" href="/getting-started#waitlist">
+            Request closed-beta access
           </Link>
-          <Link className="btn-secondary text-center" href="/use-cases">
-            See product use cases
+          <Link className="btn-ghost text-center" href="#operator-loop">
+            See how it works
           </Link>
         </div>
 
