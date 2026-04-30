@@ -51,6 +51,7 @@ class LinearTracker:
         label_id_by_stage: dict[str, str] | None = None,
         state_id_by_name: dict[str, str] | None = None,
         fsm_to_linear_state: dict[str, str] | None = None,
+        signal_label_ids: dict[str, str] | None = None,
     ) -> None:
         self._token = access_token
         self._client = client
@@ -59,6 +60,7 @@ class LinearTracker:
         self._label_id_by_stage = dict(label_id_by_stage or {})
         self._state_id_by_name = dict(state_id_by_name or {})
         self._fsm_to_linear_state = dict(fsm_to_linear_state or {})
+        self._signal_label_ids = dict(signal_label_ids or {})
 
     async def _gql(
         self, query: str, variables: dict[str, Any] | None = None
@@ -235,7 +237,41 @@ class LinearTracker:
                 parts.append(
                     {"labels": {"some": {"id": {"eq": prev_label}}}}
                 )
+
+        # ``needs:clarification`` is a hold signal — the agent posted a
+        # question for a human. Skip these tickets at every stage so we
+        # don't repeatedly comment on a ticket that's waiting on a human
+        # answer. The label gets cleared by the human (Linear UI) when
+        # they reply.
+        clar = self._signal_label_ids.get("needs_clarification")
+        if clar:
+            parts.append({"labels": {"id": {"nin": [clar]}}})
         return parts
+
+    async def add_signal_label(self, ticket: TicketRef, *, key: str) -> None:
+        """Tag ``ticket`` with the signal label identified by ``key``.
+
+        ``key`` is one of :data:`SIGNAL_LABELS` (``needs_clarification``).
+        Uses ``addedLabelIds`` so unrelated labels (priority, area, the
+        FSM stage label) aren't clobbered.
+        """
+        if ticket.kind != "linear":
+            raise ValueError(f"LinearTracker can't tag kind={ticket.kind}")
+        label_id = self._signal_label_ids.get(key)
+        if not label_id:
+            raise ValueError(
+                f"Signal label {key!r} is not provisioned for this team. "
+                "Re-run OAuth or call the provisioner."
+            )
+        await self._gql(
+            """mutation ShipAddSignal($id: String!, $input: IssueUpdateInput!) {
+              issueUpdate(id: $id, input: $input) { success }
+            }""",
+            {
+                "id": ticket.id,
+                "input": {"addedLabelIds": [label_id]},
+            },
+        )
 
     async def transition(self, ticket: TicketRef, *, to_state: str) -> None:
         """Move ``ticket`` to a Ship FSM stage (or a Linear state name).

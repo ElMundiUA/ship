@@ -282,15 +282,17 @@ async def linear_install_callback(
                     "team_key": result.team_key,
                     "state_id_by_name": result.state_id_by_name,
                     "label_id_by_stage": result.label_id_by_stage,
+                    "signal_label_ids": result.signal_label_ids,
                     "fsm_provisioned": True,
                 }
             )
             logger.info(
                 "Linear FSM provisioned for workspace=%s team=%s "
-                "(%d labels, %d states)",
+                "(%d stage labels, %d signal labels, %d states)",
                 workspace_id,
                 picked["key"],
                 len(result.label_id_by_stage),
+                len(result.signal_label_ids),
                 len(result.state_id_by_name),
             )
         else:

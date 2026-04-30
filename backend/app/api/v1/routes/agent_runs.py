@@ -14,18 +14,30 @@ E14 architecture (locked 2026-04-30):
 - ``shipctl`` reads the routine's pattern, asks Ship server for a
   task (a single ticket in the routine's FSM stage, if applicable),
   hands the prompt to a Cursor Cloud agent, polls until the agent
-  finishes, reads the agent's structured state from
-  ``.ship/run-state.json``, and dispatches to the right write call:
+  finishes. Branchless agents (intake, BA, planner) do not commit
+  anything to a branch — they call ``POST /agent-runs/finish``
+  directly from inside the Cursor runtime to report their outcome.
+  Branchful agents (developer, qa) push a code branch *and* call
+  ``/agent-runs/finish``; the finish call is the canonical signal,
+  the branch is just where the code lives.
 
-  - ``ready_next_step``  → ``POST /tracker/transition``
-  - ``human_validation`` → ``POST /tracker/comment`` + ``POST /inbox/items``
-  - ``blocked``          → ``POST /inbox/items``
+  Outcomes the finish endpoint accepts:
+
+  - ``ready_next_step``    → transition ticket to ``stage_next``
+                             (and optionally leave a comment).
+  - ``needs_clarification`` → tag with ``needs:clarification`` so
+                             intake stops re-picking until the
+                             human answers; optional comment.
+  - ``blocked``             → drop a blocker into the workspace
+                             inbox; ticket unchanged.
+  - ``out_of_scope``        → close the ticket with optional
+                             comment.
 
 ``shipctl`` runs in the customer's runner with a workspace API
-token; the server uses the workspace's Linear OAuth integration
-to do the actual mutation. The CLI never holds the tracker
-credential and never has to think about per-vendor differences —
-it just passes a ``ticket_ref`` string back.
+token; the agent runtime gets the same token in its prompt so it
+can call ``/agent-runs/finish``. The server uses the workspace's
+Linear OAuth integration to do the actual mutation — the CLI and
+the agent never hold the tracker credential.
 """
 
 from __future__ import annotations
@@ -113,6 +125,39 @@ class WriteOut(BaseModel):
     ok: bool = True
     tracker_kind: str | None = None
     note: str | None = None
+
+
+class FinishIn(BaseModel):
+    """Payload the Cursor agent posts to ``/agent-runs/finish`` from
+    inside its runtime once it's done with the work.
+
+    A workspace API token is rendered into the agent's prompt, so the
+    agent can call this endpoint without holding any tracker credential.
+    The server resolves the workspace's Linear OAuth row and applies
+    the side-effects implied by ``outcome``.
+    """
+
+    run_id: str = Field(min_length=1, max_length=128)
+    outcome: Literal[
+        "ready_next_step",
+        "needs_clarification",
+        "blocked",
+        "out_of_scope",
+    ]
+    fsm_stage: str | None = Field(default=None, max_length=64)
+    stage_next: str | None = Field(default=None, max_length=64)
+    ticket_ref: str | None = Field(default=None, max_length=512)
+    comment: str | None = Field(default=None, max_length=8000)
+    summary: str | None = Field(default=None, max_length=2000)
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class FinishOut(BaseModel):
+    ok: bool = True
+    outcome: str
+    run_id: str
+    actions: list[str] = Field(default_factory=list)
+    tracker_kind: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -344,3 +389,208 @@ async def post_inbox_item(
     )
     await session.flush()
     return WriteOut(ok=True, note=f"inbox item created (type={payload.type})")
+
+
+@router.post("/agent-runs/finish", response_model=FinishOut)
+async def finish_agent_run(
+    workspace_id: uuid.UUID,
+    payload: FinishIn,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> FinishOut:
+    """One-shot terminal endpoint the Cursor agent calls when done.
+
+    Replaces the old ``.ship/run-state.json`` file contract — branchless
+    agents (intake, BA, planner) don't commit anything; they POST here
+    with the outcome they reached. ``shipctl agent-run`` no longer reads
+    a state file; the server is the single source of truth for what the
+    run did.
+
+    Idempotency: if the same ``run_id`` has already finished, this is a
+    no-op so duplicate ``finish`` calls (network retries from inside
+    the agent) don't double-write.
+    """
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+
+    # Idempotency: bail out if we've already recorded a finish for this
+    # run_id under the same workspace.
+    from sqlalchemy import select as sa_select
+    prev = (
+        await session.execute(
+            sa_select(AuditLog).where(
+                AuditLog.workspace_id == workspace_id,
+                AuditLog.action == "agent_run.finish",
+                AuditLog.target_id == payload.run_id,
+            ).limit(1)
+        )
+    ).scalar_one_or_none()
+    if prev is not None:
+        return FinishOut(
+            ok=True,
+            outcome=payload.outcome,
+            run_id=payload.run_id,
+            actions=["duplicate_ignored"],
+            tracker_kind=(prev.payload or {}).get("tracker_kind"),
+        )
+
+    actions: list[str] = []
+    resolved = await resolve_for_workspace(
+        session=session,
+        settings=settings,
+        workspace_id=workspace_id,
+    )
+    tracker_kind = resolved.kind if resolved else None
+
+    # Outcomes that need a tracker but the workspace has none → drop an
+    # inbox item so the operator notices, but still record the run.
+    if payload.outcome in {"ready_next_step", "needs_clarification", "out_of_scope"} \
+            and resolved is None:
+        session.add(
+            InboxItem(
+                workspace_id=workspace_id,
+                repo_id=None,
+                type="blocker",
+                title=f"agent finished but no tracker bound ({payload.outcome})"[:300],
+                summary=(payload.summary or payload.comment or "")[:2000] or None,
+                payload={
+                    "run_id": payload.run_id,
+                    "fsm_stage": payload.fsm_stage,
+                    "ticket_ref": payload.ticket_ref,
+                    "outcome": payload.outcome,
+                    **payload.payload,
+                },
+                status="new",
+                intake_handle=None,
+                intake_reason="agent_run_no_tracker",
+            )
+        )
+        actions.append("inbox:no_tracker_bound")
+
+    elif payload.outcome == "ready_next_step":
+        if not payload.ticket_ref:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"code": "ticket_ref_required", "outcome": payload.outcome},
+            )
+        if not payload.stage_next:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"code": "stage_next_required", "outcome": payload.outcome},
+            )
+        ref = _ticket_ref_from(resolved.kind, payload.ticket_ref)
+        if payload.comment:
+            await resolved.gateway.comment(ref, body=payload.comment)
+            actions.append("tracker:comment")
+        await resolved.gateway.transition(ref, to_state=payload.stage_next)
+        actions.append(f"tracker:transition:{payload.stage_next}")
+
+    elif payload.outcome == "needs_clarification":
+        if not payload.ticket_ref:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"code": "ticket_ref_required", "outcome": payload.outcome},
+            )
+        ref = _ticket_ref_from(resolved.kind, payload.ticket_ref)
+        if payload.comment:
+            await resolved.gateway.comment(ref, body=payload.comment)
+            actions.append("tracker:comment")
+        # Linear adapter exposes ``add_signal_label``; other adapters
+        # need to grow it before this outcome works for them.
+        adder = getattr(resolved.gateway, "add_signal_label", None)
+        if adder is None:
+            raise HTTPException(
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                detail={
+                    "code": "needs_clarification_unsupported",
+                    "tracker_kind": resolved.kind,
+                },
+            )
+        await adder(ref, key="needs_clarification")
+        actions.append("tracker:label:needs_clarification")
+        # Mirror to inbox so the operator sees it without scanning the
+        # tracker — the agent's question is the inbox row's summary.
+        session.add(
+            InboxItem(
+                workspace_id=workspace_id,
+                repo_id=None,
+                type="clarification",
+                title=f"clarification: {payload.ticket_ref}"[:300],
+                summary=(payload.summary or payload.comment or "")[:2000] or None,
+                payload={
+                    "run_id": payload.run_id,
+                    "fsm_stage": payload.fsm_stage,
+                    "ticket_ref": payload.ticket_ref,
+                    **payload.payload,
+                },
+                status="new",
+                intake_handle=None,
+                intake_reason="agent_run_clarification",
+            )
+        )
+        actions.append("inbox:clarification")
+
+    elif payload.outcome == "blocked":
+        # No ticket move — operator sees the blocker via inbox.
+        session.add(
+            InboxItem(
+                workspace_id=workspace_id,
+                repo_id=None,
+                type="blocker",
+                title=f"agent blocked: {payload.fsm_stage or 'run'}"[:300],
+                summary=(payload.summary or payload.comment or "")[:2000] or None,
+                payload={
+                    "run_id": payload.run_id,
+                    "fsm_stage": payload.fsm_stage,
+                    "ticket_ref": payload.ticket_ref,
+                    **payload.payload,
+                },
+                status="new",
+                intake_handle=None,
+                intake_reason="agent_run_blocked",
+            )
+        )
+        actions.append("inbox:blocker")
+
+    elif payload.outcome == "out_of_scope":
+        if not payload.ticket_ref:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"code": "ticket_ref_required", "outcome": payload.outcome},
+            )
+        ref = _ticket_ref_from(resolved.kind, payload.ticket_ref)
+        if payload.comment:
+            await resolved.gateway.comment(ref, body=payload.comment)
+            actions.append("tracker:comment")
+        # ``Done`` is the legacy workflow-state path in LinearTracker —
+        # it resolves the state by literal name, not via FSM map.
+        await resolved.gateway.transition(ref, to_state="Done")
+        actions.append("tracker:transition:Done")
+
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=auth.user.id,
+            actor_token_id=auth.token.id if auth.token else None,
+            action="agent_run.finish",
+            target_kind="agent_run",
+            target_id=payload.run_id,
+            payload={
+                "tracker_kind": tracker_kind,
+                "outcome": payload.outcome,
+                "fsm_stage": payload.fsm_stage,
+                "stage_next": payload.stage_next,
+                "ticket_ref": payload.ticket_ref,
+                "actions": actions,
+                "had_comment": bool(payload.comment),
+            },
+        )
+    )
+    await session.flush()
+    return FinishOut(
+        ok=True,
+        outcome=payload.outcome,
+        run_id=payload.run_id,
+        actions=actions,
+        tracker_kind=tracker_kind,
+    )

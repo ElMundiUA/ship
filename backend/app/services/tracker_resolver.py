@@ -78,6 +78,7 @@ async def resolve_for_workspace(
         team_key = cfg.get("team_key")
         label_id_by_stage = cfg.get("label_id_by_stage") or {}
         state_id_by_name = cfg.get("state_id_by_name") or {}
+        signal_label_ids = cfg.get("signal_label_ids") or {}
         from backend.app.services.linear_provisioner import FSM_TO_LINEAR_STATE
         gateway = LinearTracker(
             token,
@@ -86,6 +87,7 @@ async def resolve_for_workspace(
             label_id_by_stage=label_id_by_stage,
             state_id_by_name=state_id_by_name,
             fsm_to_linear_state=FSM_TO_LINEAR_STATE,
+            signal_label_ids=signal_label_ids,
         )
         return ResolvedTracker(kind="linear", gateway=gateway, scope_hint=team_key)
 
