@@ -7,11 +7,13 @@ operator reviews + merges exactly **one** PR to get Ship wired:
   the canonical :data:`~backend.app.services.lane_recipes.DEFAULT_BUNDLE`.
   Rendered as ``process.routines`` so shipctl owns local scheduling and
   Ship only claims schedule windows.
-* ``.github/workflows/<starter>.yml`` — one per pattern's required
-  starter workflow (deduped if multiple Plays share a starter, e.g.
-  the ``pr-and-ci-gate`` starter underpinning every PR-attached lane).
-* ``.github/workflows/ship-bootstrap.yml`` — post-merge one-shot
-  bootstrap that opens the generated knowledge PR from the merged repo.
+* ``.github/workflows/ship-trigger-schedule.yml`` — the **only**
+  workflow file the seed installs. Cron + ``workflow_dispatch``.
+  Per the closed-beta architecture lock (E03 walk plan §"Customer
+  repo gets exactly ONE workflow file"), no event-triggered second
+  file ships in the bundle: knowledge ingestion, repo analysis,
+  and self-healing all run server-side or as scheduled routines
+  on the same cron, not as separate ``on: push`` workflows.
 * ``.ship/state/wizard-seed.v2.json`` — idempotency marker that
   records the bundle hash + knowledge versions so the wizard can
   detect drift on re-run without re-walking the catalog.
@@ -23,7 +25,7 @@ The composer is pure: it takes plain inputs (bundle, knowledge slugs,
 tracker kind) and returns ``(path, content)`` tuples. The route layer
 in :mod:`backend.app.api.v1.routes.repos` wraps this with GitHub PR,
 ``SHIP_RUN_TOKEN`` mint, CI secrets, and audit logs. Repo analysis and
-generated knowledge happen after merge through ``ship-bootstrap.yml``.
+knowledge ingestion run server-side after the seed PR merges.
 
 Invariants the caller relies on:
 
@@ -82,7 +84,13 @@ from backend.app.services.tracker_fsm import (
 #         ``lanes:`` and schedule workflow uses local due calculation.
 # ``0.7`` → seed_default_knowledge: workspace gets a `product-knowledge`
 #         bucket + a starter article on first repo activation.
-BUNDLE_VERSION: str = "0.7"
+# ``0.8`` → seed installs exactly one workflow file
+#         (``ship-trigger-schedule.yml``); legacy ``ship-bootstrap.yml``
+#         push-event workflow dropped — knowledge ingestion moved
+#         server-side. ``seed_default_knowledge`` finally wired into the
+#         JIT + explicit workspace-create paths (was dead code through
+#         0.7).
+BUNDLE_VERSION: str = "0.8"
 
 
 # Default knowledge starters for PR 1. Empty by design: generated knowledge is
@@ -186,8 +194,8 @@ def compose_seed_files(
       tests inject smaller bundles to exercise edge cases.
     * ``knowledge_slugs`` — compatibility-only subset of
       :data:`catalog_service.KNOWLEDGE_STARTERS`. The wizard passes an
-      empty list because analyzed knowledge is generated post-merge by
-      ``ship-bootstrap.yml`` and opened as a separate PR.
+      empty list because analyzed knowledge is ingested server-side
+      after merge.
     * ``tracker_kind`` — ``linear`` / ``github`` / ``jira`` / ``None``.
       Drives the FSM markdown header + the v2 marker; no inline
       secrets.
@@ -266,20 +274,18 @@ def compose_seed_files(
     )
     _add(CONFIG_PATH, config_yaml)
 
-    # ── Trigger adapters ─────────────────────────────────────────
+    # ── Trigger adapter ──────────────────────────────────────────
     # v5 makes GitHub Actions a thin runner. shipctl reads .ship/config.yml,
     # computes due routines locally, then asks Ship only to claim the window.
+    # Per the closed-beta architecture lock, this is the **only** workflow
+    # the seed bundle installs — knowledge ingestion (formerly the
+    # ``ship-bootstrap.yml`` push-event workflow) runs server-side or as a
+    # scheduled routine on the same cron, not as a separate event trigger.
     trigger_entry = starter_workflows.get("ship-trigger-schedule")
     if trigger_entry is not None:
         trigger_body = trigger_entry.read_yaml()
         if trigger_body:
             _add(trigger_entry.install_target, trigger_body)
-
-    bootstrap_entry = starter_workflows.get("ship-bootstrap")
-    if bootstrap_entry is not None:
-        bootstrap_body = bootstrap_entry.read_yaml()
-        if bootstrap_body:
-            _add(bootstrap_entry.install_target, bootstrap_body)
 
     # ── Knowledge starters ───────────────────────────────────────
     for path, content in knowledge_files:

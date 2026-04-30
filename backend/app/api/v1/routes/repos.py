@@ -1175,9 +1175,11 @@ async def wizard_seed(
         f"**Bundle**: `{bundle.bundle_hash}` "
         f"({len(bundle.bundle)} Plays)\n"
         f"{tracker_line}\n"
-        "**Knowledge**: generated post-merge by `.github/workflows/ship-bootstrap.yml`\n\n"
-        "Merge once. Ship's bootstrap workflow will analyze the merged repo "
-        "and open a second PR with generated `.ship/knowledge/*.md` docs."
+        "**Knowledge**: indexed server-side after merge — Ship's webhook "
+        "consumes the new `.ship/config.yml` and updates the workspace "
+        "knowledge index out-of-band.\n\n"
+        "Merge once. The single `.github/workflows/ship-trigger-schedule.yml` "
+        "workflow drives every Ship routine on its cron tick."
     )
     try:
         result = await commit_bundle_pr(
