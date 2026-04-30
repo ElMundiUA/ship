@@ -121,11 +121,14 @@ def upgrade() -> None:
         unique=True,
     )
 
-    # Partial index for "open invites" query: (accepted_at IS NULL, expires_at).
+    # Partial index for "open invites" query — the WHERE clause already
+    # filters down to ``accepted_at IS NULL``, so we just sort by expiry.
+    # (Postgres rejects ``accepted_at IS NULL DESC`` as an index expression
+    # — that's a boolean predicate, not a sortable value.)
     op.execute(
         "CREATE INDEX ix_platform_invites_open "
-        "ON platform_invites (accepted_at IS NULL DESC, expires_at) "
-        "WHERE accepted_at IS NULL"
+        "ON platform_invites (expires_at) "
+        "WHERE accepted_at IS NULL AND revoked_at IS NULL"
     )
 
 
