@@ -97,30 +97,33 @@ operator.
 
 
 DEFAULT_SEED_LANES: Final[dict[str, dict[str, object]]] = {
-    # Daily repo-level review lanes.
-    "daily_architecture_tests_review": {
-        "kind": "schedule",
-        "cron": "0 8 * * *",
-        "pattern": "role-qa-architect",
-    },
-    "daily_technical_architecture_review": {
-        "kind": "schedule",
-        "cron": "0 8 * * *",
-        "pattern": "role-tech-architect",
-    },
+    # Daily reviews — spread every 3h across 24h UTC so the operator
+    # doesn't see 3-4 agents stacked on the same hour in the dashboard.
+    # Order: security → daily digest → tech-debt → tests-coverage →
+    # learning retro. Pre-PR-77 they all stacked at 08:00/09:00/17:00.
     "daily_security_review": {
         "kind": "schedule",
-        "cron": "0 8 * * *",
+        "cron": "0 6 * * *",   # 06:00 UTC
         "pattern": "role-security-officer",
     },
     "daily_digest": {
         "kind": "schedule",
-        "cron": "0 9 * * *",
+        "cron": "0 9 * * *",   # 09:00 UTC — morning summary
         "pattern": "flow-daily-retro",
+    },
+    "daily_technical_architecture_review": {
+        "kind": "schedule",
+        "cron": "0 12 * * *",  # 12:00 UTC — tech-debt sweep
+        "pattern": "role-tech-architect",
+    },
+    "daily_architecture_tests_review": {
+        "kind": "schedule",
+        "cron": "0 15 * * *",  # 15:00 UTC — test coverage review
+        "pattern": "role-qa-architect",
     },
     "daily_retro": {
         "kind": "schedule",
-        "cron": "0 17 * * *",
+        "cron": "0 18 * * *",  # 18:00 UTC — end-of-day retro
         "pattern": "flow-learning-capture",
     },
     # SDLC cadence lanes. GitHub only ticks the clock; Ship decides which

@@ -90,7 +90,11 @@ from backend.app.services.tracker_fsm import (
 #         server-side. ``seed_default_knowledge`` finally wired into the
 #         JIT + explicit workspace-create paths (was dead code through
 #         0.7).
-BUNDLE_VERSION: str = "0.8"
+# ``0.9`` → daily review crons spread every 3h across 24h UTC instead
+#         of stacking at 08:00 / 09:00 / 17:00. Order: security 06:00,
+#         digest 09:00, tech-debt 12:00, test-coverage 15:00, retro
+#         18:00.
+BUNDLE_VERSION: str = "0.9"
 
 
 # Default knowledge starters for PR 1. Empty by design: generated knowledge is

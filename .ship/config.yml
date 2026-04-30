@@ -82,30 +82,12 @@ process:
   - from: qa_manual
     to: pr_review
   routines:
-    daily_architecture_tests_review:
-      name: Daily Architecture Tests Review
-      enabled: true
-      trigger:
-        type: schedule
-        cron: 0 8 * * *
-        window: 30m
-        catchup: latest
-      pattern: role-qa-architect
-    daily_technical_architecture_review:
-      name: Daily Technical Architecture Review
-      enabled: true
-      trigger:
-        type: schedule
-        cron: 0 8 * * *
-        window: 30m
-        catchup: latest
-      pattern: role-tech-architect
     daily_security_review:
       name: Daily Security Review
       enabled: true
       trigger:
         type: schedule
-        cron: 0 8 * * *
+        cron: 0 6 * * *
         window: 30m
         catchup: latest
       pattern: role-security-officer
@@ -118,12 +100,30 @@ process:
         window: 30m
         catchup: latest
       pattern: flow-daily-retro
+    daily_technical_architecture_review:
+      name: Daily Technical Architecture Review
+      enabled: true
+      trigger:
+        type: schedule
+        cron: 0 12 * * *
+        window: 30m
+        catchup: latest
+      pattern: role-tech-architect
+    daily_architecture_tests_review:
+      name: Daily Architecture Tests Review
+      enabled: true
+      trigger:
+        type: schedule
+        cron: 0 15 * * *
+        window: 30m
+        catchup: latest
+      pattern: role-qa-architect
     daily_retro:
       name: Daily Retro
       enabled: true
       trigger:
         type: schedule
-        cron: 0 17 * * *
+        cron: 0 18 * * *
         window: 30m
         catchup: latest
       pattern: flow-learning-capture
