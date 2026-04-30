@@ -20,8 +20,9 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { AppShell } from "@/components/app-shell";
+import { ApiUnavailable } from "@/components/api-unavailable";
 import { StaleBadge } from "@/components/inbox/stale-badge";
-import { Badge, Card, CardHeader, MockBanner } from "@/components/ui";
+import { Badge, Card, CardHeader } from "@/components/ui";
 import {
   ApiHttpError,
   ApiUnavailableError,
@@ -227,10 +228,21 @@ async function load(
     return { source: "mock", reason: "Couldn't load item" };
   }
 
-  const [members, me] = await Promise.all([
-    listMembers(workspace.id, token).catch(() => [] as ApiMember[]),
-    getMe(token).catch(() => null as ApiUser | null),
-  ]);
+  let members: ApiMember[];
+  let me: ApiUser | null;
+  try {
+    [members, me] = await Promise.all([
+      listMembers(workspace.id, token),
+      getMe(token).catch(() => null as ApiUser | null),
+    ]);
+  } catch (err) {
+    if (err instanceof ApiUnavailableError) {
+      return { source: "mock", reason: "Backend unreachable" };
+    }
+    // If members fetch fails for other reasons, default to empty list
+    members = [];
+    me = null;
+  }
 
   return { source: "live", workspace, detail, members, me };
 }
@@ -1255,41 +1267,9 @@ function MockView({
 }) {
   const detail = mockDetail(id);
   const meta = INBOX_TYPE_META[detail.type as InboxType];
-  const mockMembers: ApiMember[] = [
-    {
-      id: "mem_dk",
-      user_id: "user_mock_dk",
-      email: "denis@helio.dev",
-      display_name: "Denis K.",
-      role: "owner",
-      pending: false,
-      created_at: MOCK_REFERENCE_ISO,
-      answer_specialist_slugs: [],
-    },
-    {
-      id: "mem_mt",
-      user_id: "user_mock_mt",
-      email: "mira@helio.dev",
-      display_name: "Mira Tan",
-      role: "admin",
-      pending: false,
-      created_at: MOCK_REFERENCE_ISO,
-      answer_specialist_slugs: [],
-    },
-    {
-      id: "mem_jl",
-      user_id: "user_mock_jl",
-      email: "jordan@helio.dev",
-      display_name: "Jordan Lee",
-      role: "maintainer",
-      pending: false,
-      created_at: MOCK_REFERENCE_ISO,
-      answer_specialist_slugs: [],
-    },
-  ];
   return (
     <AppShell kicker={meta?.label ?? detail.type} title={detail.title}>
-      <MockBanner reason={reason} />
+      <ApiUnavailable scope="inbox" details={reason} />
       {errorCode && (
         <div className="mb-5 rounded-xl border border-coral/30 bg-coral/[0.06] px-3 py-2 text-xs text-coral/95">
           {errorMessage(errorCode)}
@@ -1300,7 +1280,7 @@ function MockView({
           <HeaderCard detail={detail} />
           <DispositionCard detail={detail} workspaceId={detail.workspace_id} />
           <PayloadCard detail={detail} />
-          <EventsCard events={detail.events} members={mockMembers} />
+          <EventsCard events={detail.events} members={[]} />
           <CommentCard
             workspaceId={detail.workspace_id}
             itemId={detail.id}
@@ -1310,7 +1290,7 @@ function MockView({
           <OwnerCard
             detail={detail}
             workspaceId={detail.workspace_id}
-            members={mockMembers}
+            members={[]}
           />
           <SourceCard detail={detail} />
         </aside>

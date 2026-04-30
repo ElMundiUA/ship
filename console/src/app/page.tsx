@@ -3,11 +3,11 @@ import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { AppShell } from "@/components/app-shell";
+import { ApiUnavailable } from "@/components/api-unavailable";
 import {
   ButtonPrimary,
   Card,
   CardHeader,
-  MockBanner,
 } from "@/components/ui";
 import { WorkspaceEntryPicker } from "@/components/workspace-entry-picker";
 import { WorkspaceHome } from "@/components/workspace-home";
@@ -23,7 +23,6 @@ import {
 } from "@/lib/api/client";
 import type { ApiWorkspace } from "@/lib/api/types";
 import { getSessionToken } from "@/lib/api/session";
-import { workspaces as mockWorkspaces } from "@/lib/mock/cloud";
 import { getResolvedWorkspaceId } from "@/lib/workspace-resolve.server";
 import {
   pickWorkspace,
@@ -61,11 +60,11 @@ export default async function CloudHomePage({
   const params = (await searchParams) ?? {};
 
   if (!isApiConfigured()) {
-    return renderMock();
+    return renderDownState("SHIP_API_URL is not set on this deployment.");
   }
 
   const token = await getSessionToken();
-  if (!token) redirect("/login?next=%2F");
+  if (!token) redirect("/login?next=%2F&reason=session_expired");
 
   const skipWizard = params.skipWizard === "1";
 
@@ -76,10 +75,9 @@ export default async function CloudHomePage({
     if (err instanceof ApiHttpError && err.status === 401) {
       redirect("/login?next=%2F");
     }
-    if (err instanceof ApiUnavailableError) {
-      return renderDownState();
-    }
-    return renderDownState();
+    return renderDownState(
+      err instanceof Error ? err.message : "Could not load workspaces.",
+    );
   }
   if (list.length === 0) {
     redirect("/onboarding?step=github");
@@ -95,13 +93,11 @@ export default async function CloudHomePage({
   }
 
   const result = await loadLiveContext(token, list, wsParam);
-  if (result === "unauthorized") redirect("/login?next=%2F");
+  if (result === "unauthorized") redirect("/login?next=%2F&reason=session_expired");
   if (result === "down") return renderDownState();
 
   if (!skipWizard && isGreenfieldWorkspace(result)) {
-    redirect(
-      `/onboarding?step=github&ws=${encodeURIComponent(result.workspace.id)}`,
-    );
+    return renderGreenfieldWelcome(result);
   }
 
   return renderWorkspaceHome(result);
@@ -176,37 +172,82 @@ function renderWorkspaceHome(ctx: LiveContext) {
   );
 }
 
-function renderDownState() {
+function renderDownState(details?: string) {
   return (
     <AppShell title="Workspace home">
-      <Card>
-        <CardHeader
-          title="Backend unreachable"
-          subtitle="The workspace home couldn't load live data."
-        />
-        <p className="text-sm text-white/70">
-          Try again in a few seconds. If this keeps happening, check the
-          backend service in your hosting console.
-        </p>
-      </Card>
+      <ApiUnavailable scope="workspace" details={details} />
     </AppShell>
   );
 }
 
-function renderMock() {
-  const ws = mockWorkspaces[0];
+const SETUP_STEPS: { title: string; body: string }[] = [
+  {
+    title: "Connect GitHub",
+    body: "Install the Ship GitHub App on the org or account that owns the repos.",
+  },
+  {
+    title: "Activate a repo",
+    body: "Pick a repository so Ship can land its bundle and watch the activity.",
+  },
+  {
+    title: "Bind a tracker",
+    body: "Connect Linear or use GitHub Issues so work has a record of intent.",
+  },
+  {
+    title: "Set policies and seed knowledge",
+    body: "Define what agents may do and the context they may use.",
+  },
+  {
+    title: "Review the dashboard and Inbox",
+    body: "Watch what runs, resolve decisions, keep evidence near the work.",
+  },
+];
+
+function renderGreenfieldWelcome(ctx: LiveContext) {
+  const { workspace, allWorkspaces } = ctx;
+  const onboardingHref = `/onboarding?step=github&ws=${encodeURIComponent(workspace.id)}`;
   return (
     <AppShell
-      title="Workspace home"
-      kicker={ws.org}
+      title="Welcome"
+      kicker={workspace.slug}
+      workspace={{ id: workspace.id, name: workspace.name, slug: workspace.slug }}
+      allWorkspaces={toAppShellWorkspaces(allWorkspaces)}
       actions={
         <ButtonPrimary>
-          <Link href="/inbox">Review actions →</Link>
+          <Link href={onboardingHref}>Continue setup →</Link>
         </ButtonPrimary>
       }
     >
-      <MockBanner />
-      <WorkspaceHome summary={mockOpsDashboard} repos={[]} workspaceId="mock-workspace" />
+      <Card>
+        <CardHeader
+          title={`Welcome to ${workspace.name}`}
+          subtitle="Five quick steps to get the workspace earning its keep."
+        />
+        <ol className="mt-2 space-y-3">
+          {SETUP_STEPS.map((step, idx) => (
+            <li
+              key={step.title}
+              className="flex gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3"
+            >
+              <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-white/10 font-mono text-[11px] font-bold text-white/75">
+                {idx + 1}
+              </span>
+              <div>
+                <p className="text-sm font-semibold text-white">{step.title}</p>
+                <p className="mt-0.5 text-xs text-white/60">{step.body}</p>
+              </div>
+            </li>
+          ))}
+        </ol>
+        <div className="mt-5 flex items-center justify-between gap-2">
+          <p className="text-xs text-white/50">
+            You can leave and come back any time — your progress persists.
+          </p>
+          <ButtonPrimary>
+            <Link href={onboardingHref}>Continue setup →</Link>
+          </ButtonPrimary>
+        </div>
+      </Card>
     </AppShell>
   );
 }
@@ -250,69 +291,3 @@ function WorkspaceGateLayout({ children }: { children: ReactNode }) {
   );
 }
 
-const mockOpsDashboard: ApiOpsDashboard = {
-  system_status: {
-    overall_status: "degraded",
-    failing_pipelines_count: 1,
-    stuck_prs_count: 0,
-    broken_automations_count: 1,
-    last_deploy: null,
-  },
-  blockers: [],
-  work_in_progress: [
-    {
-      name: "ENG-2042: Add billing webhook retry",
-      status: "review",
-      repo: "helio/payments",
-      scope: null,
-      updated_at: new Date().toISOString(),
-      blocker_ref: null,
-      href: "https://github.com/helio/payments/pull/42",
-      ticket_ref: "ENG-2042",
-      tracker: "Linear",
-      board_column: "In review",
-      active_agent: null,
-      pull_request: {
-        number: 42,
-        href: "https://github.com/helio/payments/pull/42",
-      },
-    },
-    {
-      name: "Update onboarding seed bundle",
-      status: "in_progress",
-      repo: "helio/web",
-      scope: "feature",
-      updated_at: new Date().toISOString(),
-      blocker_ref: null,
-      href: "https://github.com/helio/web/pull/12",
-      ticket_ref: null,
-      tracker: "Linear",
-      board_column: "Draft",
-      pull_request: {
-        number: 12,
-        href: "https://github.com/helio/web/pull/12",
-      },
-    },
-  ],
-  shipped: {
-    features_shipped_count: 2,
-    fixes_count: 1,
-    rollbacks_count: 0,
-    items: [
-      {
-        name: "PR #39: Fix checkout retries",
-        type: "fix",
-        repo: "helio/payments",
-        href: null,
-      },
-    ],
-  },
-  bottlenecks: [],
-  automation_health: {
-    automation_coverage: null,
-    success_rate: 0.82,
-    manual_interventions_count: 3,
-    failures_count: 1,
-  },
-  suggested_actions: [],
-};

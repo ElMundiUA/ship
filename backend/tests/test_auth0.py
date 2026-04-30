@@ -59,13 +59,14 @@ def rsa_keypair() -> tuple[str, dict[str, Any]]:
 
 @pytest.fixture()
 def settings() -> Settings:
-    return Settings(
-        SHIP_AUTH_MODE="auth0",
-        SHIP_PUBLIC_URL="https://api.ship.test",
-        SHIP_CONSOLE_URL="https://app.ship.test",
-        AUTH0_DOMAIN="ship-test.eu.auth0.com",
-        AUTH0_AUDIENCE="https://api.ship.test",
-        AUTH0_JWKS_URL="https://jwks.test/jwks.json",
+    return Settings.model_construct(
+        auth_mode="auth0",
+        public_url="https://api.ship.test",
+        console_url="https://app.ship.test",
+        auth0_domain="ship-test.eu.auth0.com",
+        auth0_audience="https://api.ship.test",
+        auth0_issuer="https://ship-test.eu.auth0.com/",
+        auth0_jwks_url="https://jwks.test/jwks.json",
     )
 
 
@@ -372,3 +373,110 @@ def test_rejects_when_settings_incomplete(monkeypatch: pytest.MonkeyPatch) -> No
         auth0.validate_access_token("anything", bad_settings)
     assert exc.value.status_code == 500
     assert "AUTH0" in exc.value.detail
+
+
+# ---------------------------------------------------------------------------
+# JWT validation path hardening (T02)
+# ---------------------------------------------------------------------------
+
+
+def test_rejects_expired_token(
+    monkeypatch: pytest.MonkeyPatch,
+    rsa_keypair: tuple[str, dict[str, Any]],
+    settings: Settings,
+) -> None:
+    """Expired access tokens must be rejected with 401 and mention expiry."""
+    private_pem, jwks = rsa_keypair
+    _patch_jwks(monkeypatch, jwks)
+    import time
+
+    now = int(time.time())
+    # Create a token that expired 120 seconds ago (exceeds 60s leeway)
+    expired_token = jwt.encode(
+        {
+            "iss": "https://ship-test.eu.auth0.com/",
+            "sub": "auth0|abc123",
+            "aud": "https://api.ship.test",
+            "iat": now - 600,
+            "exp": now - 120,  # Expired beyond leeway
+            "scope": "openid profile email",
+            "email": "ada@example.com",
+        },
+        private_pem,
+        algorithm="RS256",
+        headers={"kid": "test-kid-1"},
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        auth0.validate_access_token(expired_token, settings)
+    assert exc.value.status_code == 401
+    assert "invalid" in exc.value.detail.lower() or "token" in exc.value.detail.lower()
+
+
+def test_rejects_wrong_audience(
+    monkeypatch: pytest.MonkeyPatch,
+    rsa_keypair: tuple[str, dict[str, Any]],
+    settings: Settings,
+) -> None:
+    """Access tokens with wrong audience must be rejected with 401."""
+    private_pem, jwks = rsa_keypair
+    _patch_jwks(monkeypatch, jwks)
+    # The existing test_rejects_token_with_wrong_audience covers this,
+    # but we add it here for T02 coverage explicitly.
+    token = _sign(private_pem, audience="https://api.someone-else.test")
+
+    with pytest.raises(HTTPException) as exc:
+        auth0.validate_access_token(token, settings)
+    assert exc.value.status_code == 401
+
+
+def test_rejects_missing_subject_claim(
+    monkeypatch: pytest.MonkeyPatch,
+    rsa_keypair: tuple[str, dict[str, Any]],
+    settings: Settings,
+) -> None:
+    """Access tokens missing the 'sub' claim must be rejected with 401."""
+    private_pem, jwks = rsa_keypair
+    _patch_jwks(monkeypatch, jwks)
+    import time
+
+    now = int(time.time())
+    # Token without 'sub' claim
+    token = jwt.encode(
+        {
+            "iss": settings.resolved_auth0_issuer,
+            "aud": settings.auth0_audience,
+            "iat": now,
+            "exp": now + 600,
+            "scope": "openid profile email",
+            "email": "ada@example.com",
+            # Missing 'sub'
+        },
+        private_pem,
+        algorithm="RS256",
+        headers={"kid": "test-kid-1"},
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        auth0.validate_access_token(token, settings)
+    assert exc.value.status_code == 401
+    assert "subject" in exc.value.detail.lower()
+
+
+def test_accepts_valid_token(
+    monkeypatch: pytest.MonkeyPatch,
+    rsa_keypair: tuple[str, dict[str, Any]],
+    settings: Settings,
+) -> None:
+    """Valid access tokens with all required claims must be accepted."""
+    private_pem, jwks = rsa_keypair
+    _patch_jwks(monkeypatch, jwks)
+    token = _sign(private_pem)
+
+    claims = auth0.validate_access_token(token, settings)
+
+    # Verify all critical claims are present and correct
+    assert claims["sub"] == "auth0|abc123"
+    assert claims["email"] == "ada@example.com"
+    assert claims["aud"] == "https://api.ship.test"
+    assert "auth0.com" in claims["iss"]

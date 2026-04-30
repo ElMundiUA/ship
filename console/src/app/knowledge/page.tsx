@@ -1,9 +1,13 @@
+import { redirect } from "next/navigation";
+
 import { AppShell } from "@/components/app-shell";
+import { ApiUnavailable } from "@/components/api-unavailable";
 import { ScopePill } from "@/components/scope-pill";
 import {
   type ApiActivatedRepo,
   type ApiBucket,
   type ApiKnowledgeCanonicalResponse,
+  ApiHttpError,
   getKnowledgeCanonical,
   getMe,
   isApiConfigured,
@@ -26,11 +30,6 @@ import type {
   ApiKnowledgeSource,
   ApiUser,
 } from "@/lib/api/types";
-import {
-  knowledgeBuckets as mockBuckets,
-  knowledgeDocs as mockDocs,
-  workspaces,
-} from "@/lib/mock/cloud";
 
 import {
   KnowledgeControlCenter,
@@ -41,10 +40,7 @@ import {
 
 export const dynamic = "force-dynamic";
 
-const FALLBACK_WS = workspaces[0];
-
 type LiveData = {
-  source: "live";
   workspace: { id: string; slug: string; name: string };
   allWorkspaces: Awaited<ReturnType<typeof listWorkspaces>>;
   buckets: KnowledgeControlBucket[];
@@ -55,49 +51,61 @@ type LiveData = {
   me: ApiUser | null;
 };
 
-type MockData = {
-  source: "mock";
-  workspace: { slug: string; name: string };
-  reason: string;
-  buckets: KnowledgeControlBucket[];
-  sources: KnowledgeControlSource[];
-};
-
-type Loaded = LiveData | MockData;
 type SearchParams = Promise<Record<string, string | string[] | undefined>>;
+
+type LoadResult =
+  | { status: "live"; data: LiveData }
+  | { status: "unavailable"; reason: string };
 
 async function load(
   params: Record<string, string | string[] | undefined>,
-): Promise<Loaded> {
+): Promise<LoadResult> {
   if (!isApiConfigured()) {
-    return mockData("backend not configured (SHIP_API_URL unset)");
+    return {
+      status: "unavailable",
+      reason: "SHIP_API_URL is not set on this deployment."
+    };
   }
+
   const token = await getSessionToken();
   if (!token) {
-    return mockData("not signed in — showing demo data");
+    redirect("/login?next=%2Fknowledge&reason=session_expired");
   }
 
+  let workspaceRows: Awaited<ReturnType<typeof listWorkspaces>>;
   try {
-    const workspaceRows = await listWorkspaces(token);
-    if (workspaceRows.length === 0) {
-      return mockData("no workspaces yet — finish onboarding first");
+    workspaceRows = await listWorkspaces(token);
+  } catch (err) {
+    if (err instanceof ApiHttpError && err.status === 401) {
+      redirect("/login?next=%2Fknowledge&reason=session_expired");
     }
-    const resolved = await getResolvedWorkspaceId(params, workspaceRows);
-    const workspace = pickWorkspace(workspaceRows, resolved);
+    return {
+      status: "unavailable",
+      reason: err instanceof Error ? err.message : "Could not load workspaces.",
+    };
+  }
 
+  if (workspaceRows.length === 0) {
+    redirect("/onboarding?step=github");
+  }
+
+  const resolved = await getResolvedWorkspaceId(params, workspaceRows);
+  const workspace = pickWorkspace(workspaceRows, resolved);
+
+  try {
     const [repos, integrations, me, rawBuckets, canonical, importSources] =
       await Promise.all([
-      listActivatedRepos(workspace.id, token).catch(() => [] as ApiActivatedRepo[]),
-      listIntegrations(workspace.id, token).catch(() => [] as ApiIntegration[]),
-      getMe(token).catch(() => null as ApiUser | null),
-      listBuckets(workspace.id, { token }),
-      getKnowledgeCanonical(workspace.id, token).catch(
-        () => null as ApiKnowledgeCanonicalResponse | null,
-      ),
-      listKnowledgeImportSources(workspace.id, token).catch(
-        () => [] as ApiKnowledgeImportSource[],
-      ),
-    ]);
+        listActivatedRepos(workspace.id, token).catch(() => [] as ApiActivatedRepo[]),
+        listIntegrations(workspace.id, token).catch(() => [] as ApiIntegration[]),
+        getMe(token).catch(() => null as ApiUser | null),
+        listBuckets(workspace.id, { token }),
+        getKnowledgeCanonical(workspace.id, token).catch(
+          () => null as ApiKnowledgeCanonicalResponse | null,
+        ),
+        listKnowledgeImportSources(workspace.id, token).catch(
+          () => [] as ApiKnowledgeImportSource[],
+        ),
+      ]);
 
     const sourcePairs = await Promise.all(
       rawBuckets.map(async (bucket) => ({
@@ -115,21 +123,26 @@ async function load(
     ];
 
     return {
-      source: "live",
-      workspace: { id: workspace.id, slug: workspace.slug, name: workspace.name },
-      allWorkspaces: workspaceRows,
-      buckets: sourcePairs.map(({ bucket, sources }) =>
-        normalizeBucket(bucket, sources),
-      ),
-      sources,
-      canonical,
-      repos,
-      integrations,
-      me,
+      status: "live",
+      data: {
+        workspace: { id: workspace.id, slug: workspace.slug, name: workspace.name },
+        allWorkspaces: workspaceRows,
+        buckets: sourcePairs.map(({ bucket, sources }) =>
+          normalizeBucket(bucket, sources),
+        ),
+        sources,
+        canonical,
+        repos,
+        integrations,
+        me,
+      },
     };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return mockData(`backend error: ${message}`);
+    if (err instanceof ApiHttpError && err.status === 401) {
+      redirect("/login?next=%2Fknowledge&reason=session_expired");
+    }
+    const message = err instanceof Error ? err.message : "Could not load knowledge buckets.";
+    return { status: "unavailable", reason: message };
   }
 }
 
@@ -139,57 +152,57 @@ export default async function KnowledgeIndexPage({
   searchParams?: SearchParams;
 }) {
   const params = (await (searchParams ?? Promise.resolve({}))) ?? {};
-  const data = await load(params);
-  const workspace = data.workspace;
-  const scopePill =
-    data.source === "live" ? (
-      <ScopePill
-        workspaceName={workspace.name}
-        repos={data.repos.map((repo) => ({
-          id: repo.id,
-          full_name: repo.full_name,
-        }))}
-        me={
-          data.me
-            ? {
-                id: data.me.id,
-                email: data.me.email,
-                display_name: data.me.display_name,
-              }
-            : null
-        }
-      />
-    ) : undefined;
+  const result = await load(params);
+
+  if (result.status === "unavailable") {
+    return (
+      <AppShell kicker="knowledge" title="Knowledge">
+        <ApiUnavailable scope="knowledge" details={result.reason} />
+      </AppShell>
+    );
+  }
+
+  const { workspace, allWorkspaces, buckets, sources, canonical, repos, integrations, me } = result.data;
+
+  const scopePill = (
+    <ScopePill
+      workspaceName={workspace.name}
+      repos={repos.map((repo) => ({
+        id: repo.id,
+        full_name: repo.full_name,
+      }))}
+      me={
+        me
+          ? {
+              id: me.id,
+              email: me.email,
+              display_name: me.display_name,
+            }
+          : null
+      }
+    />
+  );
 
   return (
     <AppShell
       kicker={`${workspace.name} · knowledge`}
       title="Knowledge"
-      workspace={
-        data.source === "live"
-          ? {
-              id: data.workspace.id,
-              name: data.workspace.name,
-              slug: data.workspace.slug,
-            }
-          : undefined
-      }
-      allWorkspaces={
-        data.source === "live"
-          ? toAppShellWorkspaces(data.allWorkspaces)
-          : undefined
-      }
+      workspace={{
+        id: workspace.id,
+        name: workspace.name,
+        slug: workspace.slug,
+      }}
+      allWorkspaces={toAppShellWorkspaces(allWorkspaces)}
       scopePill={scopePill}
     >
       <KnowledgeControlCenter
-        mode={data.source}
+        mode="live"
         workspace={workspace}
-        reason={data.source === "mock" ? data.reason : undefined}
-        buckets={data.buckets}
-        sources={data.sources}
-        canonical={data.source === "live" ? data.canonical : null}
-        repos={data.source === "live" ? data.repos : []}
-        integrations={data.source === "live" ? data.integrations : []}
+        buckets={buckets}
+        sources={sources}
+        canonical={canonical}
+        repos={repos}
+        integrations={integrations}
         defaultScope="workspace"
       />
     </AppShell>
@@ -278,59 +291,6 @@ function normalizeImportSource(
   };
 }
 
-function mockData(reason: string): MockData {
-  const buckets = mockBuckets.map((bucket): KnowledgeControlBucket => {
-    const docs = mockDocs.filter((doc) => doc.bucketId === bucket.id);
-    return {
-      id: bucket.id,
-      slug: bucket.id,
-      name: bucket.name,
-      description: bucket.summary,
-      bucketType: inferMockType(bucket.glyph),
-      scope: bucket.visibility === "private" ? "user" : bucket.visibility,
-      sourceKind: "static_upload",
-      authority: bucket.glyph === "security" ? "Source of truth" : "Reference",
-      accessLevel: bucket.visibility === "private" ? "Restricted" : "Workspace",
-      freshnessPolicy: "Manual refresh",
-      status:
-        bucket.status === "ready"
-          ? "Ready"
-          : bucket.status === "indexing"
-            ? "Indexing"
-            : "Failed",
-      articles: bucket.documents,
-      chunks: bucket.embeddings,
-      sourceCount: docs.length,
-      sourceNames: docs.map((doc) => doc.type),
-      lastIndexedAt: bucket.updatedAt,
-      updatedAt: bucket.updatedAt,
-    };
-  });
-
-  return {
-    source: "mock",
-    workspace: FALLBACK_WS,
-    reason,
-    buckets,
-    sources: mockDocs.map((doc) => {
-      const bucket = buckets.find((item) => item.slug === doc.bucketId);
-      return {
-        id: doc.id,
-        bucketSlug: doc.bucketId,
-        bucketName: bucket?.name ?? doc.bucketId,
-        kind: doc.type,
-        status: doc.status,
-        lastSyncedAt: doc.uploadedAt,
-        nextSyncAt: null,
-        lastError: doc.status === "failed" ? "Parser failed in demo data." : null,
-        documents: 1,
-        chunks: doc.chunks,
-        urlOrPath: doc.name,
-      };
-    }),
-  };
-}
-
 function bucketStatus(
   bucket: ApiBucket,
   sources: ApiKnowledgeSource[],
@@ -371,13 +331,6 @@ function inferBucketType(bucket: ApiBucket): string {
   if (bucket.source_kind === "repo_context" || bucket.source_kind === "repo_files") {
     return "Source Intelligence";
   }
-  return "Custom";
-}
-
-function inferMockType(glyph: string): string {
-  if (glyph === "devops") return "Runbooks";
-  if (glyph === "security") return "Security";
-  if (glyph === "design") return "Product Knowledge";
   return "Custom";
 }
 

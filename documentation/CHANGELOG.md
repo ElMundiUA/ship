@@ -3,6 +3,22 @@
 A short log of structural changes to the Manual itself — not to the
 product. For product changes, see the [/blog](/blog).
 
+## Phase 10 — Methodology index moves to pgvector (E13)
+
+* **ChromaDB removed** — the persistent vector index at `backend/.chroma/` has been removed entirely. All vector search now runs on pgvector (Postgres), which the cloud platform already uses for buckets, articles, and agent memory.
+* **`methodology_chunks` table** — replaces Chroma with a dedicated pgvector-backed table, indexing all chunks from `documentation/`, `artifacts/**/ARTIFACT.md`, and `README.md`. Same `/search` and `/fetch` JSON contract — the released CLI sees no behavioural change.
+* **Migration path for self-hosted users** — no manual data migration required. The index is a *cache* of static repo files. On first start with the new image, the backend auto-rebuilds the index in pgvector during startup (one-time embedding cost; idempotent on subsequent starts via `content_sha` tracking). Required: `OPENAI_API_KEY` set (same as before).
+* **Migration path for Bunny prod** — same as self-hosted. The new image auto-rebuilds the index on deploy. Note the one-time embedding cost (~tokens per chunk).
+* **What to delete** — `backend/.chroma/` directory on disk if it exists (already gitignored; manual cleanup optional but recommended).
+* **Verification** — `curl -X POST https://ship.elmundi.com/search -H 'Content-Type: application/json' -d '{"query": "policies"}'` should return non-empty `results`.
+
+### Required env vars
+
+* `OPENAI_API_KEY` — OpenAI API key (unchanged from before; required for embedding).
+* `OPENAI_EMBED_MODEL` — embedding model (default: `text-embedding-3-small`).
+
+**See:** [E13 — Rip out Chroma, unify on pgvector](./internal/closed-beta/E13-rip-chroma.md)
+
 ## Phase 9 — Landing page (April 2026)
 
 * **Home page** rewritten around the operator loop: hero names Plays /

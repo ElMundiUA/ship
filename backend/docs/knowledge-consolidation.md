@@ -1151,3 +1151,62 @@ parked" and the Phase that naturally lands it when scheduled.
   backend projects API ships. 2 new Playwright assertions on the
   pill's visibility + URL fallback. Console `tsc` + `next lint` +
   `next build` all green.
+
+---
+
+## Route-contract reference (E01 T01 audit, 2026-04-30)
+
+Comprehensive API reference for `/v1/workspaces/{ws}/knowledge/*` and `/v1/workspaces/{ws}/buckets/*` endpoints, grouped by capability. Extracted from `knowledge.py`, `knowledge_import_sources.py`, `distiller.py`, and `buckets_resolver.py`.
+
+### Knowledge (workspace-scoped DB buckets)
+
+Overview of workspace-level knowledge bucket operations and discovery. These endpoints manage the canonical read surface for DB-backed buckets in workspace scope.
+
+| Method | Path | Path Params | Body/Query | Response (key fields) | Auth | Description |
+|--------|------|-------------|------------|----------------------|------|-------------|
+| GET | `/v1/workspaces/{ws}/knowledge` | `ws: uuid` | none | `{version, workspace_id, buckets[]}` | member | List workspace-scoped knowledge buckets (DB-backed) |
+| POST | `/v1/workspaces/{ws}/knowledge/search` | `ws: uuid` | `{query, repo_id?, bucket_slug?, limit}` | `{query, hits[]}` | member | Vector search over workspace knowledge articles |
+| GET | `/v1/workspaces/{ws}/knowledge/canonical` | `ws: uuid` | none | `{workspace_id, canonical[], orphan_slugs[]}` | member | List workspace-canonical buckets + orphan slug candidates |
+| GET | `/v1/workspaces/{ws}/knowledge/{slug}` | `ws: uuid, slug: str` | none | `{slug, title, visibility, body, ...}` | member | Fetch detail for a workspace-scoped knowledge bucket |
+| GET | `/v1/workspaces/{ws}/knowledge/candidates` | `ws: uuid` | none | `{workspace_id, candidates[], computed_at, is_fresh}` | member | List promotion candidates (disabled in DB-only mode) |
+| POST | `/v1/workspaces/{ws}/knowledge/candidates/refresh` | `ws: uuid` | none | `{workspace_id, candidates[], computed_at, is_fresh}` | admin | Refresh promotion candidates (disabled in DB-only mode) |
+| POST | `/v1/workspaces/{ws}/knowledge/candidates/{cid}/draft` | `ws: uuid, cid: uuid` | `{article_ids?}` | `{slug, title, body, summary}` | admin | LLM-backed canonical draft for a candidate cluster |
+| POST | `/v1/workspaces/{ws}/knowledge/promote` | `ws: uuid` | `{slug, title, body, summary?, source_article_ids[], mark_sources_as_overrides}` | `{workspace_bucket_id, workspace_article_id, overridden_article_ids[]}` | admin | Persist canonical draft as workspace-scoped article |
+
+### Import sources (knowledge ingestion)
+
+Management of external knowledge sources (Notion, Confluence, docs repos) with sync scheduling and history tracking.
+
+| Method | Path | Path Params | Body/Query | Response (key fields) | Auth | Description |
+|--------|------|-------------|------------|----------------------|------|-------------|
+| GET | `/v1/workspaces/{ws}/knowledge/sources` | `ws: uuid` | none | `[{id, kind, name, config, status, last_synced_at, ...}]` | member | List import sources (triggers background sync-due) |
+| POST | `/v1/workspaces/{ws}/knowledge/sources/sync-due` | `ws: uuid` | none | `{checked, synced, skipped, errors}` | admin | Run sync for all due sources (limit 10) |
+| POST | `/v1/workspaces/{ws}/knowledge/sources` | `ws: uuid` | `{kind, name, config, integration_id?, repo_id?, sync_interval_minutes?}` | `{id, kind, name, status, created_at, ...}` | admin | Create a new import source |
+| POST | `/v1/workspaces/{ws}/knowledge/sources/{src}/sync` | `ws: uuid, src: uuid` | none | `{id, source_id, status, trigger, stats, error, ...}` | admin | Trigger manual sync of a single source |
+| GET | `/v1/workspaces/{ws}/knowledge/sources/{src}/items` | `ws: uuid, src: uuid` | none | `[{id, external_id, title, item_ref, ...}]` | member | List items ingested by a source |
+| GET | `/v1/workspaces/{ws}/knowledge/sources/{src}/runs` | `ws: uuid, src: uuid` | none | `[{id, status, trigger, stats, error, ...}]` (last 25) | member | List ingestion runs for a source |
+
+### Distiller (content ingest & classification)
+
+Endpoints for ingesting content into buckets via text, file uploads, and connector syncs. Distiller applies deterministic or LLM-based classification to decide new/update/skip.
+
+| Method | Path | Path Params | Body/Query | Response (key fields) | Auth | Description |
+|--------|------|-------------|------------|----------------------|------|-------------|
+| POST | `/v1/workspaces/{ws}/buckets/{slug}/distill` | `ws: uuid, slug: str` | `{body_md, source_kind, title_hint?, slug_hint?, classifier}` | `{run, decision, article_ids[], reason?, classifier}` | maintainer | Ingest content blob (text) into bucket |
+| POST | `/v1/workspaces/{ws}/buckets/{slug}/upload` | `ws: uuid, slug: str` | `multipart: {file, classifier}` | `{run, decision, article_ids[], reason?, classifier}` | maintainer | Ingest file upload (text/markdown, ≤1MB) into bucket |
+| POST | `/v1/workspaces/{ws}/buckets/{slug}/sync` | `ws: uuid, slug: str` | none | `{run, decision, article_ids[], reason?, classifier}` | maintainer | Sync connector-proxy bucket from external source |
+| GET | `/v1/workspaces/{ws}/buckets/{slug}/distill/runs` | `ws: uuid, slug: str` | `limit? [1-200]` | `[{id, bucket_id, status, decision, error, ...}]` | member | List Distiller runs for bucket (newest first) |
+
+### Resolver (scope-aware bucket discovery)
+
+Single unified endpoint for discovering which buckets are visible in a given context (workspace / project / repo / user), with scope-hierarchy resolution.
+
+| Method | Path | Path Params | Body/Query | Response (key fields) | Auth | Description |
+|--------|------|-------------|------------|----------------------|------|-------------|
+| GET | `/v1/workspaces/{ws}/buckets/resolved` | `ws: uuid` | `repo_id?, project_id?, include_archived?` | `{workspace_id, context, buckets[], winners_by_slug{}}` | member | Resolve visible buckets in context with scope inheritance |
+
+**Total routes surveyed:** 24 endpoints across 4 modules.
+- **knowledge.py**: 8 routes
+- **knowledge_import_sources.py**: 6 routes
+- **distiller.py**: 4 routes
+- **buckets_resolver.py**: 1 route
