@@ -73,10 +73,21 @@ async def resolve_for_workspace(
         token = await _decrypt_token(row, decrypt)
         if token is None:
             return None
-        scope = (row.config or {}).get("team_key")
-        return ResolvedTracker(
-            kind="linear", gateway=LinearTracker(token), scope_hint=scope
+        cfg = row.config or {}
+        team_id = cfg.get("team_id")
+        team_key = cfg.get("team_key")
+        label_id_by_stage = cfg.get("label_id_by_stage") or {}
+        state_id_by_name = cfg.get("state_id_by_name") or {}
+        from backend.app.services.linear_provisioner import FSM_TO_LINEAR_STATE
+        gateway = LinearTracker(
+            token,
+            team_id=team_id,
+            team_key=team_key,
+            label_id_by_stage=label_id_by_stage,
+            state_id_by_name=state_id_by_name,
+            fsm_to_linear_state=FSM_TO_LINEAR_STATE,
         )
+        return ResolvedTracker(kind="linear", gateway=gateway, scope_hint=team_key)
 
     # Jira / others — wire when needed.
     logger.warning("workspace %s has tracker kind=%s, not yet wired", workspace_id, row.kind)
