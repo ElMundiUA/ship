@@ -36,10 +36,7 @@ import type {
   ApiKnowledgeBucket,
   ApiKnowledgeSource,
 } from "@/lib/api/types";
-import {
-  formatBytes,
-  relativeTime,
-} from "@/lib/mock/cloud";
+import { formatBytes, relativeTime } from "@/lib/format";
 
 import { ConnectorCard } from "./connector-card";
 import { UploadCard } from "./upload-card";
