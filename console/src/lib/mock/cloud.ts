@@ -6,6 +6,12 @@
  * without touching the components that consume them.
  */
 
+if (typeof process !== "undefined" && process.env.NEXT_PUBLIC_USE_MOCK !== "1") {
+  throw new Error(
+    "console/src/lib/mock/cloud.ts must not be imported in production. Set NEXT_PUBLIC_USE_MOCK=1 to enable for local UI/Storybook work.",
+  );
+}
+
 /** Treat "now" as fixed at module load so SSR + client render match. */
 const NOW = new Date();
 function ago(opts: { minutes?: number; hours?: number; days?: number }): string {

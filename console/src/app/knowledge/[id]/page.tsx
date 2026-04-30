@@ -1,8 +1,12 @@
+"use server";
+
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { revalidatePath } from "next/cache";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { AppShell } from "@/components/app-shell";
+import { ApiUnavailable } from "@/components/api-unavailable";
 
 // Reads cookies + fetches per request.
 export const dynamic = "force-dynamic";
@@ -14,11 +18,11 @@ import {
   Card,
   CardHeader,
   LiveBanner,
-  MockBanner,
 } from "@/components/ui";
 import {
   type ApiBucket,
   type ApiDistillerRun,
+  distillBucket,
   getBucket,
   getKnowledgeBucket,
   isApiConfigured,
@@ -36,17 +40,36 @@ import type {
 } from "@/lib/api/types";
 import {
   formatBytes,
-  knowledgeBuckets as mockBuckets,
-  knowledgeChunks,
-  knowledgeDocs as mockDocs,
   relativeTime,
-  workspaces,
 } from "@/lib/mock/cloud";
 
 import { ConnectorCard } from "./connector-card";
 import { UploadCard } from "./upload-card";
 
-const FALLBACK_WS = workspaces[0];
+// Server action to trigger a distiller run
+async function runDistiller(workspaceId: string, slug: string) {
+  const token = await getSessionToken();
+  if (!token) {
+    throw new Error("Not authenticated");
+  }
+  try {
+    await distillBucket(
+      workspaceId,
+      slug,
+      {
+        body_md: "",
+        source_kind: "external_static",
+        classifier: "stub",
+      },
+      { token }
+    );
+    // Revalidate the page to refresh the runs list
+    revalidatePath(`/knowledge/${slug}`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to run distiller: ${msg}`);
+  }
+}
 
 type LiveData = {
   source: "live";
@@ -65,27 +88,25 @@ type LiveData = {
   title: string;
 };
 
-type MockData = {
-  source: "mock";
-  workspace: { slug: string; name: string };
+type UnavailableData = {
+  source: "unavailable";
   reason: string;
-  bucket: (typeof mockBuckets)[number];
 };
 
-type Loaded = LiveData | MockData;
+type Loaded = LiveData | UnavailableData;
 
 async function load(slug: string): Promise<Loaded | "notfound"> {
   if (!isApiConfigured()) {
-    return mockFallback(slug, "backend not configured (SHIP_API_URL unset)");
+    return { source: "unavailable", reason: "backend not configured (SHIP_API_URL unset)" };
   }
   const token = await getSessionToken();
   if (!token) {
-    return mockFallback(slug, "not signed in — showing demo data");
+    return { source: "unavailable", reason: "not signed in" };
   }
   try {
     const wss = await listWorkspaces(token);
     if (wss.length === 0) {
-      return mockFallback(slug, "no workspaces yet — finish onboarding first");
+      return { source: "unavailable", reason: "no workspaces yet — finish onboarding first" };
     }
     const ws = wss[0];
 
@@ -111,7 +132,7 @@ async function load(slug: string): Promise<Loaded | "notfound"> {
     ]);
 
     if (legacy === null && bucket === null) {
-      return mockFallback(slug, "bucket not found in backend — showing demo data");
+      return "notfound";
     }
 
     const title =
@@ -129,7 +150,7 @@ async function load(slug: string): Promise<Loaded | "notfound"> {
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return mockFallback(slug, `backend error: ${msg}`);
+    return { source: "unavailable", reason: `backend error: ${msg}` };
   }
 }
 
@@ -139,12 +160,6 @@ function quietly404AsNull<T>() {
     if (err instanceof ApiHttpError && err.status === 404) return null;
     throw err;
   };
-}
-
-function mockFallback(slug: string, reason: string): MockData | "notfound" {
-  const bucket = mockBuckets.find((b) => b.id === slug);
-  if (!bucket) return "notfound";
-  return { source: "mock", workspace: FALLBACK_WS, reason, bucket };
 }
 
 export default async function KnowledgeBucketDetailPage({
@@ -164,7 +179,7 @@ export default async function KnowledgeBucketDetailPage({
   return data.source === "live" ? (
     <LiveView data={data} selectedArticleId={selectedArticleId} />
   ) : (
-    <MockView data={data} />
+    <UnavailableView data={data} />
   );
 }
 
@@ -303,7 +318,13 @@ function LiveView({
 
           {bucket && <SourcesCard sources={sources} />}
 
-          <RunsCard runs={runs} />
+          {bucket && (
+            <RunsCard
+              runs={runs}
+              workspaceId={ws.id}
+              bucketSlug={bucket.slug}
+            />
+          )}
 
           <Card>
             <CardHeader title="CLI" />
@@ -597,14 +618,50 @@ function SourcesCard({ sources }: { sources: ApiKnowledgeSource[] }) {
   );
 }
 
-function RunsCard({ runs }: { runs: ApiDistillerRun[] }) {
+function DistillerRunButton({
+  workspaceId,
+  bucketSlug,
+}: {
+  workspaceId: string;
+  bucketSlug: string;
+}) {
+  const handleRunDistiller = async () => {
+    try {
+      await runDistiller(workspaceId, bucketSlug);
+    } catch (err) {
+      console.error("Failed to run distiller:", err);
+      alert(
+        err instanceof Error ? err.message : "Failed to run distiller"
+      );
+    }
+  };
+
+  return (
+    <ButtonPrimary onClick={handleRunDistiller} className="text-[11px] px-3 py-1">
+      Run distiller
+    </ButtonPrimary>
+  );
+}
+
+function RunsCard({
+  runs,
+  workspaceId,
+  bucketSlug,
+}: {
+  runs: ApiDistillerRun[];
+  workspaceId?: string;
+  bucketSlug?: string;
+}) {
   if (runs.length === 0) {
     return (
       <Card data-testid="bucket-runs-empty">
         <CardHeader
           title="Distiller runs"
-          subtitle="No ingest activity yet."
+          subtitle="No ingest activity yet. Click the button below to start."
         />
+        {workspaceId && bucketSlug && (
+          <DistillerRunButton workspaceId={workspaceId} bucketSlug={bucketSlug} />
+        )}
       </Card>
     );
   }
@@ -614,6 +671,11 @@ function RunsCard({ runs }: { runs: ApiDistillerRun[] }) {
         className="px-5 pt-5"
         title="Distiller runs"
         subtitle="Newest first · last 20"
+        action={
+          workspaceId && bucketSlug ? (
+            <DistillerRunButton workspaceId={workspaceId} bucketSlug={bucketSlug} />
+          ) : undefined
+        }
       />
       <ul className="divide-y divide-white/5">
         {runs.map((r) => (
@@ -652,158 +714,16 @@ function classifierLabel(run: ApiDistillerRun): string {
 }
 
 // ---------------------------------------------------------------------------
-// Mock view (unchanged — demo data for disconnected deployments)
+// Unavailable view (backend not reachable)
 // ---------------------------------------------------------------------------
 
-function MockView({ data }: { data: MockData }) {
-  const ws = data.workspace;
-  const bucket = data.bucket;
-  const docs = mockDocs.filter((d) => d.bucketId === bucket.id);
-
+function UnavailableView({ data }: { data: UnavailableData }) {
   return (
     <AppShell
-      kicker={`${ws.name} · knowledge`}
-      title={bucket.name}
-      actions={
-        <>
-          <ButtonGhost>Re-embed bucket</ButtonGhost>
-          <ButtonPrimary>+ Upload</ButtonPrimary>
-        </>
-      }
+      kicker="Knowledge"
+      title="Not available"
     >
-      <MockBanner reason={data.reason} />
-
-      <div className="mb-5 flex flex-wrap items-center gap-2 text-xs text-white/55">
-        <Link href="/knowledge" className="hover:text-white">
-          Knowledge
-        </Link>
-        <span className="text-white/25">/</span>
-        <span className="font-mono text-white/65">{bucket.id}</span>
-        <span className="text-white/25">·</span>
-        <Badge tone={bucket.visibility === "project" ? "project" : "workspace"}>
-          {bucket.visibility}
-        </Badge>
-        <Badge
-          tone={
-            bucket.status === "ready"
-              ? "ok"
-              : bucket.status === "indexing"
-                ? "warn"
-                : "err"
-          }
-          dot
-        >
-          {bucket.status}
-        </Badge>
-        <span className="ml-auto text-[10px] uppercase tracking-widest text-white/40">
-          updated {relativeTime(bucket.updatedAt)}
-        </span>
-      </div>
-
-      <p className="mb-6 max-w-3xl text-base leading-relaxed text-white/85">
-        {bucket.summary}
-      </p>
-
-      <section className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Stat label="Documents" value={bucket.documents.toString()} />
-        <Stat label="Chunks" value={bucket.embeddings.toLocaleString()} />
-        <Stat label="Total size" value={formatBytes(bucket.totalBytes)} />
-        <Stat label="Embed model" value="text-embedding-3-large" mono />
-      </section>
-
-      <section className="grid grid-cols-1 gap-5 lg:grid-cols-3">
-        <Card className="lg:col-span-2">
-          <CardHeader
-            title="Search inside this bucket"
-            subtitle="Same index your CLI hits via shipctl knowledge fetch"
-          />
-          <ul className="space-y-3">
-            {knowledgeChunks.map((c) => (
-              <li
-                key={c.id}
-                className="rounded-xl border border-white/10 bg-white/[0.025] p-3"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <div className="min-w-0 text-xs text-white/60">
-                    <span className="font-semibold text-white/80">{c.docName}</span>
-                    <span className="ml-2 text-white/40">page {c.page}</span>
-                  </div>
-                  <span className="font-mono text-[10px] text-aqua/85">
-                    score {c.score.toFixed(2)}
-                  </span>
-                </div>
-                <p className="mt-1.5 text-sm leading-snug text-white/80">{c.excerpt}</p>
-              </li>
-            ))}
-          </ul>
-        </Card>
-
-        <div className="space-y-5">
-          <Card>
-            <CardHeader title="CLI" />
-            <pre className="overflow-x-auto rounded-lg border border-white/10 bg-black/40 px-3 py-2 font-mono text-[11px] text-aqua/90">
-{`shipctl knowledge fetch ${bucket.id} \\
-  --query "on-call rotation" \\
-  --workspace ${ws.slug}`}
-            </pre>
-          </Card>
-        </div>
-      </section>
-
-      {docs.length > 0 && (
-        <Card className="mt-8" padded={false}>
-          <CardHeader
-            className="px-5 pt-5"
-            title="Documents"
-            subtitle="Source files retained alongside the parsed Markdown for re-embedding"
-          />
-          <table className="min-w-full text-sm">
-            <thead className="bg-white/[0.04] text-[10px] uppercase tracking-widest text-white/45">
-              <tr>
-                <th className="px-4 py-2 text-left font-semibold">Document</th>
-                <th className="px-4 py-2 text-left font-semibold">Type</th>
-                <th className="px-4 py-2 text-left font-semibold">Size</th>
-                <th className="px-4 py-2 text-left font-semibold">Uploaded</th>
-              </tr>
-            </thead>
-            <tbody>
-              {docs.map((d) => (
-                <tr key={d.id} className="border-t border-white/5">
-                  <td className="px-4 py-3 align-top">
-                    <div className="font-semibold text-white">{d.name}</div>
-                  </td>
-                  <td className="px-4 py-3 align-top text-[11px] uppercase tracking-widest text-white/55">
-                    {d.type}
-                  </td>
-                  <td className="px-4 py-3 align-top text-xs text-white/65">{formatBytes(d.size)}</td>
-                  <td className="px-4 py-3 align-top text-xs text-white/55">
-                    {relativeTime(d.uploadedAt)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Card>
-      )}
+      <ApiUnavailable scope="knowledge" details={data.reason} />
     </AppShell>
-  );
-}
-
-function Stat({
-  label,
-  value,
-  mono,
-}: {
-  label: string;
-  value: string;
-  mono?: boolean;
-}) {
-  return (
-    <Card>
-      <div className="text-[10px] font-bold uppercase tracking-widest text-white/45">{label}</div>
-      <div className={"mt-1 font-display text-xl font-bold text-white " + (mono ? "font-mono text-base" : "")}>
-        {value}
-      </div>
-    </Card>
   );
 }

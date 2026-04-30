@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 
 import { AppShell } from "@/components/app-shell";
+import { ApiUnavailable } from "@/components/api-unavailable";
 import {
   Badge,
   type BadgeTone,
@@ -9,7 +10,6 @@ import {
   ButtonPrimary,
   Card,
   CardHeader,
-  MockBanner,
   StatTile,
 } from "@/components/ui";
 import {
@@ -140,7 +140,7 @@ function renderMock(slug: string, tab: Tab) {
   const ownerRepo = slug;
   return (
     <AppShell title={ownerRepo} kicker="repo · mock">
-      <MockBanner />
+      <ApiUnavailable scope="repo" details="SHIP_API_URL not set" />
       <RepoHomeBody
         repo={
           {

@@ -25,14 +25,15 @@
  */
 
 import Link from "next/link";
+import { redirect } from "next/navigation";
 
 import { AppShell } from "@/components/app-shell";
+import { ApiUnavailable } from "@/components/api-unavailable";
 import {
   Badge,
   Card,
   CardHeader,
   LiveBanner,
-  MockBanner,
 } from "@/components/ui";
 import {
   ApiHttpError,
@@ -43,7 +44,6 @@ import {
 } from "@/lib/api/client";
 import type { ApiAuditEntry, ApiAuditPage, ApiWorkspace } from "@/lib/api/types";
 import { getSessionToken } from "@/lib/api/session";
-import { workspaces as mockWorkspaces } from "@/lib/mock/cloud";
 import { getResolvedWorkspaceId } from "@/lib/workspace-resolve.server";
 import {
   pickWorkspace,
@@ -121,7 +121,7 @@ type Mode =
       page: ApiAuditPage;
       filters: AuditFilters;
     }
-  | { source: "mock"; reason: string; filters: AuditFilters };
+  | { source: "error"; reason: string; redirectReason?: string };
 
 function readParam(
   params: Record<string, string | string[] | undefined>,
@@ -151,17 +151,16 @@ async function load(
   params: Record<string, string | string[] | undefined>,
 ): Promise<Mode> {
   if (!isApiConfigured())
-    return { source: "mock", reason: "SHIP_API_URL not set", filters };
+    return { source: "error", reason: "SHIP_API_URL is not set on this deployment." };
   const token = await getSessionToken();
   if (!token)
-    return { source: "mock", reason: "Sign in to view audit history", filters };
+    return { source: "error", reason: "Sign in to view audit history.", redirectReason: "session_expired" };
   try {
     const ws = await listWorkspaces(token);
     if (ws.length === 0)
       return {
-        source: "mock",
-        reason: "Create a workspace first to see audit history",
-        filters,
+        source: "error",
+        reason: "Create a workspace first to see audit history.",
       };
     const resolved = await getResolvedWorkspaceId(params, ws);
     const target = pickWorkspace(ws, resolved);
@@ -181,22 +180,20 @@ async function load(
     return { source: "live", workspace: target, allWorkspaces: ws, page, filters };
   } catch (err) {
     if (err instanceof ApiHttpError && err.status === 401)
-      return { source: "mock", reason: "Session expired — sign in again", filters };
+      return { source: "error", reason: "Session expired — sign in again.", redirectReason: "session_expired" };
     if (err instanceof ApiHttpError && err.status === 403)
       return {
-        source: "mock",
-        reason: "Audit log is owner / admin only — ask your workspace admin",
-        filters,
+        source: "error",
+        reason: "Audit log is owner / admin only — ask your workspace admin.",
       };
     if (err instanceof ApiHttpError && err.status === 422)
       return {
-        source: "mock",
+        source: "error",
         reason: `Backend rejected a filter value (${err.message}). Check date shape + categories.`,
-        filters,
       };
     if (err instanceof ApiUnavailableError)
-      return { source: "mock", reason: "Backend unreachable", filters };
-    return { source: "mock", reason: "Backend returned an error", filters };
+      return { source: "error", reason: "Backend unreachable." };
+    return { source: "error", reason: err instanceof Error ? err.message : "Backend returned an error." };
   }
 }
 
@@ -245,8 +242,15 @@ export default async function AuditPage({
   const filters = parseFilters(params);
   const data = await load(filters, params);
 
-  if (data.source === "mock") {
-    return <MockView reason={data.reason} filters={filters} />;
+  if (data.source === "error") {
+    if (data.redirectReason === "session_expired") {
+      redirect("/login?next=%2Faudit&reason=session_expired");
+    }
+    return (
+      <AppShell title="Audit">
+        <ApiUnavailable scope="audit" details={data.reason} />
+      </AppShell>
+    );
   }
 
   const { workspace, allWorkspaces, page } = data;
@@ -285,9 +289,16 @@ export default async function AuditPage({
           }
         />
         {items.length === 0 ? (
-          <div className="px-5 py-10 text-center text-sm text-white/60">
-            No audit entries match this filter yet.
-          </div>
+          <Card className="mx-5 my-5 border border-white/10 bg-white/[0.02]">
+            <div className="px-5 py-8 text-center">
+              <h4 className="font-display text-base font-bold text-white">
+                No audit events yet
+              </h4>
+              <p className="mt-2 text-sm text-white/65">
+                Audit lights up after the first action in this workspace.
+              </p>
+            </div>
+          </Card>
         ) : (
           <table className="min-w-full text-sm">
             <thead className="bg-white/[0.04] text-[10px] uppercase tracking-widest text-white/45">
@@ -474,100 +485,3 @@ function FilterCard({ filters }: { filters: AuditFilters }) {
   );
 }
 
-function MockView({
-  reason,
-  filters,
-}: {
-  reason: string;
-  filters: AuditFilters;
-}) {
-  const ws = mockWorkspaces[0];
-  const sample: ApiAuditEntry[] = [
-    {
-      id: 12,
-      action: "member.invite",
-      target_kind: "user",
-      target_id: "00000000-0000-0000-0000-000000000abc",
-      payload: { email: "asha@helio.dev", role: "maintainer", user_created: true },
-      created_at: new Date(Date.now() - 1000 * 60 * 25).toISOString(),
-      actor: {
-        user_id: null,
-        user_email: "denis@helio.dev",
-        token_id: null,
-        token_name: null,
-      },
-    },
-    {
-      id: 11,
-      action: "auth.token.mint",
-      target_kind: "api_token",
-      target_id: "00000000-0000-0000-0000-000000000123",
-      payload: { name: "ship-cli", scopes: ["workspace:read", "workspace:write"] },
-      created_at: new Date(Date.now() - 1000 * 60 * 95).toISOString(),
-      actor: {
-        user_id: null,
-        user_email: "denis@helio.dev",
-        token_id: null,
-        token_name: null,
-      },
-    },
-    {
-      id: 10,
-      action: "workspace.update",
-      target_kind: "workspace",
-      target_id: ws.id,
-      payload: { catalog_sources: { workspace: true, project: true, global: false } },
-      created_at: new Date(Date.now() - 1000 * 60 * 60 * 5).toISOString(),
-      actor: {
-        user_id: null,
-        user_email: "mira@helio.dev",
-        token_id: null,
-        token_name: null,
-      },
-    },
-  ];
-
-  return (
-    <AppShell kicker={`${ws.name} · history`} title="Audit log">
-      <MockBanner reason={reason} />
-      <FilterCard filters={filters} />
-      <Card padded={false} className="overflow-hidden">
-        <CardHeader
-          className="px-5 pt-5"
-          title="Recent mutations (sample)"
-          subtitle="Sign in as a workspace owner or admin to see the real history."
-        />
-        <table className="min-w-full text-sm">
-          <thead className="bg-white/[0.04] text-[10px] uppercase tracking-widest text-white/45">
-            <tr>
-              <th className="px-4 py-2 text-left font-semibold">When</th>
-              <th className="px-4 py-2 text-left font-semibold">Action</th>
-              <th className="px-4 py-2 text-left font-semibold">Actor</th>
-              <th className="px-4 py-2 text-left font-semibold">Payload</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sample.map((entry) => (
-              <tr key={entry.id} className="border-t border-white/5 align-top">
-                <td className="px-4 py-3 text-xs text-white/65">
-                  {new Date(entry.created_at).toUTCString()}
-                </td>
-                <td className="px-4 py-3">
-                  <Badge tone={actionTone(entry.action)} dot>
-                    {entry.action}
-                  </Badge>
-                </td>
-                <td className="px-4 py-3 text-xs text-white/85">
-                  {actorLabel(entry)}
-                </td>
-                <td className="px-4 py-3">
-                  <AuditPayloadCell payload={entry.payload} />
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </Card>
-    </AppShell>
-  );
-}
