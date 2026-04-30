@@ -158,6 +158,12 @@ try {
     process.exit(0);
   }
 
+  if (cmd === "agent-run") {
+    const { agentRunCommand } = await import("../lib/commands/agent-run.mjs");
+    await agentRunCommand(ctx, rest);
+    process.exit(0);
+  }
+
   /* `lanes` is the protocol-stable name; `automations` is the
    * operator-friendly soft alias. Both dispatch to the same handler
    * indefinitely — we are not deprecating the original. */

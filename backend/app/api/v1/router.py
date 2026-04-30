@@ -15,6 +15,7 @@ from fastapi import APIRouter
 
 from backend.app.api.v1.routes import (
     admin_invites,
+    agent_runs,
     agent_secrets,
     artifact_repos,
     audit,
@@ -91,6 +92,11 @@ api_router.include_router(inbox.router)
 # Lives next to artifact_repos but is keyed off GitHub App installations
 # instead of paste-URL clones.
 api_router.include_router(repos.router)
+# E14 — write-side surface that ``shipctl run`` calls during a routine
+# run. Workspace-scoped (admin auth), vendor-agnostic ``ticket_ref``.
+# Server resolves the right TrackerGateway adapter so the CLI doesn't
+# need per-vendor logic.
+api_router.include_router(agent_runs.router)
 # GitHub App OAuth + webhooks (pilot WOW-onboarding flow). Webhook route
 # is public; install start/callback do their own auth.
 api_router.include_router(github_app.router)
