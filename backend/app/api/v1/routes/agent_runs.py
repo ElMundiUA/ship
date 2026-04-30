@@ -3,6 +3,13 @@ during a routine run.
 
 E14 architecture (locked 2026-04-30):
 
+- A workspace **is** a project. There is exactly **one** tracker
+  per workspace (Linear team / Jira project / etc.); the workspace
+  may host several repos but they all share the same backlog. The
+  endpoints in this module are therefore workspace-scoped — repo
+  context is only needed at the agent-runtime level (which checkout
+  to spawn), not for tracker resolution.
+
 - Customer's GitHub Actions cron fires ``shipctl run --routine X``.
 - ``shipctl`` reads the routine's pattern, asks Ship server for a
   task (a single ticket in the routine's FSM stage, if applicable),
@@ -14,17 +21,11 @@ E14 architecture (locked 2026-04-30):
   - ``human_validation`` → ``POST /tracker/comment`` + ``POST /inbox/items``
   - ``blocked``          → ``POST /inbox/items``
 
-The endpoints in this module are the write side of that contract.
 ``shipctl`` runs in the customer's runner with a workspace API
-token; the server uses the workspace's existing Linear / GitHub
-OAuth integrations to do the actual mutation. The CLI never holds
-the tracker credential.
-
-These routes intentionally take a vendor-agnostic ``ticket_ref``
-string — Ship server picks the right adapter via
-:func:`backend.app.services.tracker_resolver.resolve_for_repo` and
-hands it to :class:`TrackerGateway`. CLI doesn't have to know
-whether the workspace runs Linear or GitHub Issues.
+token; the server uses the workspace's Linear OAuth integration
+to do the actual mutation. The CLI never holds the tracker
+credential and never has to think about per-vendor differences —
+it just passes a ``ticket_ref`` string back.
 """
 
 from __future__ import annotations
@@ -48,7 +49,7 @@ from backend.app.db.models.inbox import InboxItem
 from backend.app.db.models.tenancy import AuditLog
 from backend.app.db.session import get_session
 from backend.app.integrations.gateway.tracker import TicketRef
-from backend.app.services.tracker_resolver import resolve_for_repo
+from backend.app.services.tracker_resolver import resolve_for_workspace
 
 
 router = APIRouter(
@@ -154,12 +155,11 @@ def _ticket_ref_from(vendor_kind: str, raw: str) -> TicketRef:
 
 
 @router.get(
-    "/repos/{repo_id}/tracker/next",
+    "/tracker/next",
     response_model=TaskResponseOut,
 )
 async def get_next_task(
     workspace_id: uuid.UUID,
-    repo_id: uuid.UUID,
     state: str = Query(..., min_length=1, max_length=64, alias="state"),
     auth: AuthContext = Depends(get_current_auth),
     session: AsyncSession = Depends(get_session),
@@ -168,11 +168,10 @@ async def get_next_task(
     """Return the next ticket the agent should work on for ``state``."""
     await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
 
-    resolved = await resolve_for_repo(
+    resolved = await resolve_for_workspace(
         session=session,
         settings=settings,
         workspace_id=workspace_id,
-        repo_id=repo_id,
     )
     if resolved is None:
         return TaskResponseOut(ticket=None, fsm_stage=state, tracker_kind=None)
@@ -200,13 +199,9 @@ async def get_next_task(
     )
 
 
-@router.post(
-    "/repos/{repo_id}/tracker/transition",
-    response_model=WriteOut,
-)
+@router.post("/tracker/transition", response_model=WriteOut)
 async def transition_ticket(
     workspace_id: uuid.UUID,
-    repo_id: uuid.UUID,
     payload: TransitionIn,
     auth: AuthContext = Depends(get_current_auth),
     session: AsyncSession = Depends(get_session),
@@ -215,17 +210,16 @@ async def transition_ticket(
     """Move ``payload.ticket_ref`` to ``payload.to_state`` (FSM stage).
 
     The vendor adapter knows how to map the abstract Ship FSM stage
-    (``ba_requirements`` etc.) to its native state — Linear status,
-    GitHub Issues label, etc. This is the only place that mapping
-    happens, so CLI doesn't need to grow per-vendor logic.
+    (``ba_requirements`` etc.) to its native state — Linear status
+    name, etc. This is the only place that mapping happens, so CLI
+    doesn't need to grow per-vendor logic.
     """
     await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
 
-    resolved = await resolve_for_repo(
+    resolved = await resolve_for_workspace(
         session=session,
         settings=settings,
         workspace_id=workspace_id,
-        repo_id=repo_id,
     )
     if resolved is None:
         raise HTTPException(
@@ -258,13 +252,9 @@ async def transition_ticket(
     return WriteOut(ok=True, tracker_kind=resolved.kind)
 
 
-@router.post(
-    "/repos/{repo_id}/tracker/comment",
-    response_model=WriteOut,
-)
+@router.post("/tracker/comment", response_model=WriteOut)
 async def comment_ticket(
     workspace_id: uuid.UUID,
-    repo_id: uuid.UUID,
     payload: CommentIn,
     auth: AuthContext = Depends(get_current_auth),
     session: AsyncSession = Depends(get_session),
@@ -272,11 +262,10 @@ async def comment_ticket(
 ) -> WriteOut:
     await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
 
-    resolved = await resolve_for_repo(
+    resolved = await resolve_for_workspace(
         session=session,
         settings=settings,
         workspace_id=workspace_id,
-        repo_id=repo_id,
     )
     if resolved is None:
         raise HTTPException(

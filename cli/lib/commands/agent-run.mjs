@@ -30,10 +30,13 @@
  *   - SHIP_API_BASE         — Ship server, e.g. https://ship.elmundi.com
  *   - SHIP_API_TOKEN        — workspace API token (admin scope)
  *   - SHIP_WORKSPACE_ID     — UUID of the workspace this run belongs to
- *   - SHIP_REPO_ID          — UUID of the WorkspaceRepo row
  *   - CURSOR_API_KEY        — Cursor Cloud agent API key (when provider=cursor)
- *   - GITHUB_REPOSITORY     — owner/repo (used to resolve the agent's branch back)
+ *   - GITHUB_REPOSITORY     — owner/repo (the repo the agent will check out)
  *   - GITHUB_TOKEN          — read-only repo access (to fetch run-state.json)
+ *
+ * Note: there is **no SHIP_REPO_ID** — a workspace is the project, so
+ * the tracker is workspace-scoped. ``GITHUB_REPOSITORY`` only tells the
+ * agent runtime which checkout to spawn for code work.
  */
 
 import path from "node:path";
@@ -87,7 +90,7 @@ export async function agentRunCommand(ctx, rest) {
   }
 
   const env = readEnv();
-  const { apiBase, apiToken, workspaceId, repoId, githubRepo, githubToken } = env;
+  const { apiBase, apiToken, workspaceId, githubRepo, githubToken } = env;
 
   // 1) Resolve pattern
   const patternId = resolved.executable.pattern;
@@ -128,7 +131,6 @@ export async function agentRunCommand(ctx, rest) {
         apiBase,
         apiToken,
         workspaceId,
-        repoId,
         state: fsmStage,
       });
       if (!task) {
@@ -240,7 +242,6 @@ export async function agentRunCommand(ctx, rest) {
     apiBase,
     apiToken,
     workspaceId,
-    repoId,
     routine: args.routine,
     pattern: patternId,
     task,
@@ -273,7 +274,6 @@ function readEnv() {
     apiBase: stripSlash(process.env.SHIP_API_BASE || ""),
     apiToken: process.env.SHIP_API_TOKEN || "",
     workspaceId: process.env.SHIP_WORKSPACE_ID || "",
-    repoId: process.env.SHIP_REPO_ID || "",
     githubRepo: process.env.GITHUB_REPOSITORY || "",
     githubRef: (process.env.GITHUB_REF_NAME || "main").trim(),
     githubToken: process.env.GITHUB_TOKEN || "",
@@ -332,8 +332,8 @@ function pickFsmStage(frontmatter, frontmatterRaw) {
 }
 
 
-async function getNextTask({ apiBase, apiToken, workspaceId, repoId, state }) {
-  const url = `${apiBase}/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/tracker/next?state=${encodeURIComponent(state)}`;
+async function getNextTask({ apiBase, apiToken, workspaceId, state }) {
+  const url = `${apiBase}/v1/workspaces/${encodeURIComponent(workspaceId)}/tracker/next?state=${encodeURIComponent(state)}`;
   const res = await fetch(url, {
     headers: {
       Accept: "application/json",
@@ -490,7 +490,6 @@ async function applyAgentState({
   apiBase,
   apiToken,
   workspaceId,
-  repoId,
   routine,
   pattern,
   task,
@@ -503,7 +502,6 @@ async function applyAgentState({
     Authorization: `Bearer ${apiToken}`,
   };
   const ws = encodeURIComponent(workspaceId);
-  const repoSeg = encodeURIComponent(repoId);
 
   async function call(method, url, body) {
     const res = await fetch(url, { method, headers, body: body && JSON.stringify(body) });
@@ -523,7 +521,7 @@ async function applyAgentState({
       }
       const r = await call(
         "POST",
-        `${apiBase}/v1/workspaces/${ws}/repos/${repoSeg}/tracker/transition`,
+        `${apiBase}/v1/workspaces/${ws}/tracker/transition`,
         {
           ticket_ref: task.ticket_ref,
           to_state: state.transition_to,
@@ -538,7 +536,7 @@ async function applyAgentState({
       if (task?.ticket_ref && state.comment) {
         const c = await call(
           "POST",
-          `${apiBase}/v1/workspaces/${ws}/repos/${repoSeg}/tracker/comment`,
+          `${apiBase}/v1/workspaces/${ws}/tracker/comment`,
           { ticket_ref: task.ticket_ref, body: state.comment },
         );
         actions.push({ kind: "comment", response: c });
@@ -625,9 +623,8 @@ USAGE
 ENV
   SHIP_API_BASE        Ship server base URL (e.g. https://ship.elmundi.com)
   SHIP_API_TOKEN       workspace API token (admin scope)
-  SHIP_WORKSPACE_ID    UUID of the workspace
-  SHIP_REPO_ID         UUID of the WorkspaceRepo row
-  GITHUB_REPOSITORY    owner/repo (used for Cursor + state read)
+  SHIP_WORKSPACE_ID    UUID of the workspace (a workspace is one project)
+  GITHUB_REPOSITORY    owner/repo (which checkout the agent gets)
   GITHUB_TOKEN         read-only repo token (to fetch .ship/run-state.json)
   CURSOR_API_KEY       Cursor Cloud API key (when agent.default.provider=cursor)
 
