@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import time
@@ -155,12 +156,30 @@ async def lifespan(_app: FastAPI):
     # Reindex the methodology corpus into pgvector (E13). Idempotent: only
     # chunks whose ``content_sha`` changed get re-embedded, so warm starts
     # add maybe a few requests' latency, not a full corpus walk.
+    #
+    # Best-effort by design — a missing OPENAI_API_KEY or transient DB
+    # blip shouldn't take down ``/patterns``/``/tools``/etc. We do *log*
+    # the failure though (the original silent ``except`` left an empty
+    # ``methodology_chunks`` table for /search to 500 against without
+    # any surface-level signal).
     try:
         from backend.app.services.methodology_index import reindex_if_stale
 
-        await reindex_if_stale()
-    except Exception:  # pragma: no cover — best-effort startup
-        pass
+        result = await reindex_if_stale()
+        log = logging.getLogger("ship.methodology_index")
+        log.info(
+            "methodology reindex: walked=%d seen=%d new=%d unchanged=%d pruned=%d",
+            result.files_walked,
+            result.chunks_seen,
+            result.chunks_new_or_changed,
+            result.chunks_unchanged,
+            result.chunks_pruned,
+        )
+    except Exception:
+        logging.getLogger("ship.methodology_index").exception(
+            "methodology reindex failed at startup; /search will be empty until "
+            "the next successful boot"
+        )
     try:
         yield
     finally:
