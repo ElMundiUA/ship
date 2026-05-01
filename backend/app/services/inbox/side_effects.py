@@ -69,6 +69,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
+from backend.app.db.models.agent_memory import (
+    BucketArticle,
+    BucketArticleStatus,
+    KnowledgeBucket,
+)
 from backend.app.db.models.agent_surface import Clarification, Improvement
 from backend.app.db.models.inbox import (
     InboxItem,
@@ -467,6 +472,171 @@ async def _writeback_clarification_answer(
         return None
 
 
+async def _publish_knowledge_draft(
+    session: AsyncSession,
+    item: InboxItem,
+    actor_user_id: uuid.UUID,
+    *,
+    report: SideEffectReport,
+) -> uuid.UUID | None:
+    """KB-4 (ELS-38): flip a draft :class:`BucketArticle` to ``published``.
+
+    KB-3's synthesiser writes drafts and drops one InboxItem per draft
+    with ``source_table='bucket_articles'`` + ``payload.kind='auto_routed_draft'``.
+    On the operator's ``accept`` we:
+
+    - flip ``draft → published`` on the new row;
+    - if it carries a ``supersedes_id``, flip the prior published row
+      to ``superseded`` so the partial-unique index on (bucket_id,
+      slug, status='published') stays satisfied;
+    - bump ``knowledge_buckets.updated_at`` so the freshness badge
+      moves on the same tick.
+
+    Best-effort like the rest of side-effects: any failure is logged
+    and recorded in :class:`SideEffectReport`, never raised.
+    """
+    if item.source_table != "bucket_articles" or item.source_id is None:
+        return None
+    payload = item.payload or {}
+    if payload.get("kind") != "auto_routed_draft":
+        return None
+    try:
+        article = (
+            await session.execute(
+                select(BucketArticle).where(BucketArticle.id == item.source_id)
+            )
+        ).scalar_one_or_none()
+        if article is None:
+            logger.warning(
+                "inbox side-effect: draft article %s referenced by inbox "
+                "item %s no longer exists",
+                item.source_id,
+                item.id,
+            )
+            return None
+        if article.status == BucketArticleStatus.PUBLISHED:
+            # Already published (re-clicked, double-delivery, etc.) —
+            # idempotent noop. Don't re-bump bucket.updated_at; it
+            # was bumped on the first publish.
+            return article.id
+
+        if article.supersedes_id is not None:
+            prev = (
+                await session.execute(
+                    select(BucketArticle).where(
+                        BucketArticle.id == article.supersedes_id
+                    )
+                )
+            ).scalar_one_or_none()
+            if prev is not None and prev.status == BucketArticleStatus.PUBLISHED:
+                prev.status = BucketArticleStatus.SUPERSEDED
+
+        article.status = BucketArticleStatus.PUBLISHED
+
+        # Move the bucket freshness badge.
+        bucket = (
+            await session.execute(
+                select(KnowledgeBucket).where(
+                    KnowledgeBucket.id == article.bucket_id
+                )
+            )
+        ).scalar_one_or_none()
+        if bucket is not None:
+            bucket.updated_at = _now()
+
+        event_payload = {
+            "kind": "knowledge_draft_publish",
+            "article_id": str(article.id),
+            "bucket_slug": payload.get("bucket_slug"),
+            "article_slug": article.slug,
+            "version": article.version,
+            "supersedes_id": (
+                str(article.supersedes_id) if article.supersedes_id else None
+            ),
+        }
+        _add_event(
+            session,
+            item=item,
+            actor_user_id=actor_user_id,
+            action=_EVENT_LEGACY_WRITEBACK,
+            payload=event_payload,
+        )
+        _add_audit(
+            session,
+            item=item,
+            actor_user_id=actor_user_id,
+            suffix="knowledge_draft_publish",
+            payload=event_payload,
+        )
+        return article.id
+    except Exception as exc:  # noqa: BLE001 — best-effort.
+        _record_failure(
+            report, kind="knowledge_draft_publish", item=item, exc=exc
+        )
+        return None
+
+
+async def _archive_knowledge_draft(
+    session: AsyncSession,
+    item: InboxItem,
+    actor_user_id: uuid.UUID,
+    *,
+    report: SideEffectReport,
+) -> uuid.UUID | None:
+    """KB-4 dismiss path: archive the draft instead of publishing it.
+
+    The synthesised draft is dropped from the published-article view
+    by setting ``archived_at``. The source notes stay
+    ``synthesised_into_article_id=<this draft>`` — they don't go back
+    to the routing pool. If the operator wants the notes re-routed,
+    that's an explicit rerun out of scope for KB-4.
+    """
+    if item.source_table != "bucket_articles" or item.source_id is None:
+        return None
+    payload = item.payload or {}
+    if payload.get("kind") != "auto_routed_draft":
+        return None
+    try:
+        article = (
+            await session.execute(
+                select(BucketArticle).where(BucketArticle.id == item.source_id)
+            )
+        ).scalar_one_or_none()
+        if article is None or article.archived_at is not None:
+            return None
+        article.archived_at = _now()
+        # Don't change ``status``: the row stays ``draft`` so the
+        # operator can still see what they dismissed in the audit
+        # trail. archived_at hides it from the published list.
+        event_payload = {
+            "kind": "knowledge_draft_archive",
+            "article_id": str(article.id),
+            "bucket_slug": payload.get("bucket_slug"),
+            "article_slug": article.slug,
+            "version": article.version,
+        }
+        _add_event(
+            session,
+            item=item,
+            actor_user_id=actor_user_id,
+            action=_EVENT_LEGACY_WRITEBACK,
+            payload=event_payload,
+        )
+        _add_audit(
+            session,
+            item=item,
+            actor_user_id=actor_user_id,
+            suffix="knowledge_draft_archive",
+            payload=event_payload,
+        )
+        return article.id
+    except Exception as exc:  # noqa: BLE001 — best-effort.
+        _record_failure(
+            report, kind="knowledge_draft_archive", item=item, exc=exc
+        )
+        return None
+
+
 async def _writeback_improvement_accept(
     session: AsyncSession,
     item: InboxItem,
@@ -481,6 +651,12 @@ async def _writeback_improvement_accept(
     / ``decided_at``). Same direction-of-mirror caveat as
     :func:`_writeback_clarification_answer` — we patch the row
     directly rather than going through ``dual_write``.
+
+    KB-4 path: when the inbox item points at ``bucket_articles``
+    instead of ``improvements`` (the synthesiser's draft-review
+    rows), :func:`_publish_knowledge_draft` is dispatched in
+    :func:`apply_side_effects` *before* this helper, so we won't
+    even be called with that source_table.
     """
     if item.source_table != "improvements" or item.source_id is None:
         return None
@@ -654,6 +830,15 @@ async def apply_side_effects(
                         report=report,
                     )
                 )
+            # KB-4 (ELS-38): if the item is a synthesiser-emitted
+            # draft-review row, archive the draft article so it
+            # disappears from the published-article view.
+            else:
+                wb_id = await _archive_knowledge_draft(
+                    session, item, actor_user_id, report=report
+                )
+                if wb_id is not None:
+                    report.legacy_writebacks.append(wb_id)
         elif action == "answer":
             wb_id = await _writeback_clarification_answer(
                 session, item, payload, actor_user_id, report=report
@@ -661,9 +846,17 @@ async def apply_side_effects(
             if wb_id is not None:
                 report.legacy_writebacks.append(wb_id)
         elif action == "accept":
-            wb_id = await _writeback_improvement_accept(
+            # KB-4 (ELS-38): synthesiser-emitted drafts are
+            # source_table='bucket_articles'; the publish path lives
+            # in _publish_knowledge_draft. Legacy improvements still
+            # writeback to the improvements table (source_table='improvements').
+            wb_id = await _publish_knowledge_draft(
                 session, item, actor_user_id, report=report
             )
+            if wb_id is None:
+                wb_id = await _writeback_improvement_accept(
+                    session, item, actor_user_id, report=report
+                )
             if wb_id is not None:
                 report.legacy_writebacks.append(wb_id)
         elif action == "retry":

@@ -45,6 +45,7 @@ from backend.app.db.models.agent_memory import (
     KnowledgeBucket,
 )
 from backend.app.db.models.agent_surface import Improvement
+from backend.app.db.models.inbox import InboxItem
 from backend.app.db.models.tenancy import AuditLog, Workspace
 from backend.app.services.agent.client import AgentClient, ChatMessage
 from backend.app.services.agent.embedding import embed_text
@@ -274,6 +275,43 @@ async def _synthesise_bucket(
     await _mark_notes_consumed(session, pending, article.id)
     report.notes_consumed += len(pending)
     report.drafts_created += 1
+
+    # KB-4 (ELS-38): drop one InboxItem per draft so the operator
+    # review surface picks it up. The inbox-disposition side-effect
+    # handler (services/inbox/side_effects.py) reads
+    # source_table='bucket_articles' + payload.kind='auto_routed_draft'
+    # to decide between publish (accept) and archive (dismiss).
+    summary_excerpt = decision.body_md.strip().splitlines()
+    summary = " ".join(summary_excerpt[:3])[:1000] if summary_excerpt else None
+    session.add(
+        InboxItem(
+            workspace_id=workspace_id,
+            repo_id=None,
+            type="improvement",
+            title=(
+                f"Draft article: {decision.title}"
+                if decision.action == "new"
+                else f"Draft update: {decision.title}"
+            )[:300],
+            summary=summary,
+            payload={
+                "kind": "auto_routed_draft",
+                "article_id": str(article.id),
+                "bucket_id": str(bucket.id),
+                "bucket_slug": bucket.slug,
+                "article_slug": decision.slug,
+                "action": decision.action,
+                "version": new_version,
+                "source_note_count": len(pending),
+                "source_note_ids": [str(n.id) for n in pending],
+            },
+            status="new",
+            source_table="bucket_articles",
+            source_id=article.id,
+            intake_handle=None,
+            intake_reason="knowledge_draft_review",
+        )
+    )
 
     session.add(
         AuditLog(
