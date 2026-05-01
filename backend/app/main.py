@@ -180,9 +180,30 @@ async def lifespan(_app: FastAPI):
             "methodology reindex failed at startup; /search will be empty until "
             "the next successful boot"
         )
+    # In-process cron scheduler (KB-pipeline + future migrations off
+    # ARQ). Best-effort — if APScheduler fails to start, the API still
+    # serves requests; the cron worker container (where ARQ legacy
+    # crons still live) covers the existing surface meanwhile.
+    from backend.app.services.cron import stop_scheduler as _stop_scheduler
+
+    try:
+        from backend.app.services.cron import start_scheduler
+        from backend.app.services.cron_jobs import register_all
+
+        register_all()
+        start_scheduler()
+    except Exception:
+        logging.getLogger("ship.cron").exception(
+            "cron scheduler failed to start; KB-pipeline jobs will not fire "
+            "on this replica until restart"
+        )
     try:
         yield
     finally:
+        try:
+            await _stop_scheduler()
+        except Exception:  # pragma: no cover
+            pass
         try:
             await dispose_engine()
         except Exception:  # pragma: no cover

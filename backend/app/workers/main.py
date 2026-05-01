@@ -25,7 +25,6 @@ from backend.app.db.session import get_sessionmaker
 from backend.app.services.repo_intel import harvest_repo_intel
 from backend.app.workers.archive_chat_threads import archive_idle_chat_threads
 from backend.app.workers.clarifications import cron_sync_tracker_clarifications
-from backend.app.workers.knowledge_harvest import cron_harvest_knowledge_notes
 from backend.app.workers.secret_probe import cron_probe_pending_secrets
 
 
@@ -125,14 +124,11 @@ class WorkerSettings:
         # per tick (see :data:`backend.app.services.agent.chat_threads
         # .BATCH_LIMIT`); a backlog drains across multiple ticks.
         cron(archive_idle_chat_threads, minute={5}),
-        # KB-1 (ELS-34) — knowledge ingestion Phase 1a. Hourly sweep that
-        # turns each operator-resolved Clarification into a single
-        # ``Improvement`` row of kind='knowledge_note'. Identity
-        # extractor only — Phase 1b (KB-1b/ELS-35) replaces it with an
-        # LLM extractor that emits 0..N atoms per source and adds
-        # chat-pack + inbox-comment surfaces. Routing (Phase 2) and
-        # synthesis (Phase 3) read these rows downstream.
-        cron(cron_harvest_knowledge_notes, minute={20}),
+        # NB: knowledge_harvest moved to APScheduler + Postgres advisory
+        # locks (services/cron.py + cron_jobs.py) — runs in-process
+        # inside the FastAPI container, no Redis needed. The legacy
+        # ARQ entry point (workers/knowledge_harvest.py) is kept around
+        # for the rollback knob until the next cleanup PR removes it.
     ]
     keep_result = 60
     job_timeout = 300

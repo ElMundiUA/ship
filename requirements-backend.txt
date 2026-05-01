@@ -30,6 +30,11 @@ pgvector>=0.3,<1
 # --- Background jobs / cache / pubsub ---
 redis>=5.0,<6
 arq>=0.26,<1
+# In-process cron for KB-pipeline (and successor for the legacy ARQ
+# crons). Pairs with PG advisory locks (``services/cron.py``) so each
+# scheduled job runs on exactly one replica per tick — no Redis,
+# no separate worker container.
+apscheduler>=3.10,<4
 
 # --- Object storage (documents bucket source files) ---
 aioboto3>=13.1,<14
