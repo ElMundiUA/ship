@@ -15,14 +15,14 @@ export async function generateStaticParams() {
 export async function generateMetadata({ params }: { params: Promise<{ slug: string[] }> }): Promise<Metadata> {
   const { slug } = await params;
   const rel = slugToRelPath(slug);
-  if (!rel) return { title: "Docs — Ship" };
+  if (!rel) return { title: "Docs" };
   try {
     const raw = readDocumentationFile(rel);
     const first = raw.split("\n").find((l) => l.startsWith("# "));
     const title = first?.replace(/^#\s+/, "").trim() ?? slug.join("/");
-    return { title: `${title} — Ship docs` };
+    return { title: `${title} (docs)` };
   } catch {
-    return { title: "Ship docs" };
+    return { title: "Docs" };
   }
 }
 

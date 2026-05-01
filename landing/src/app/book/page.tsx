@@ -8,7 +8,7 @@ import { SiteHeader } from "@/components/site-header";
 import { preprocessBookMarkdown } from "@/lib/book-markdown";
 
 export const metadata: Metadata = {
-  title: "The book — Ship",
+  title: "The book",
   description: "Why fences, throughput, and legibility matter — long narrative in the same Ship landing UI.",
 };
 

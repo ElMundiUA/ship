@@ -4,7 +4,7 @@ import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 
 export const metadata: Metadata = {
-  title: "Roadmap — Ship",
+  title: "Roadmap",
   description:
     "From sign-up to first closed ticket: one day for SMBs, one week for enterprise. What's live now, what's next, what we're growing toward — and the things we deliberately won't build.",
 };

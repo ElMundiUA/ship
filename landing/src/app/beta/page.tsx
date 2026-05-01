@@ -5,7 +5,7 @@ import { SiteHeader } from "@/components/site-header";
 import { WaitlistSection } from "@/components/waitlist-section";
 
 export const metadata: Metadata = {
-  title: "Request closed-beta access — Ship",
+  title: "Request closed-beta access",
   description:
     "Tell us about your team and the problems you're solving. We review applications weekly and send invites within seven days. Closed beta seats are limited per cohort.",
 };

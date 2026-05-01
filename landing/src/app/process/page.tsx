@@ -4,7 +4,7 @@ import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 
 export const metadata: Metadata = {
-  title: "Process — Ship",
+  title: "Process",
   description:
     "Every product company runs on processes — not one-shot deliveries, but ongoing work and adjustments. Ship makes those processes legible: each workspace is a graph of processes, each process a sequence of states, routines that fire along the way, and specialists who own each step.",
 };

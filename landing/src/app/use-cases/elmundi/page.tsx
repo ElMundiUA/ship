@@ -12,7 +12,7 @@ import {
 } from "@/components/use-case-enterprise";
 
 export const metadata: Metadata = {
-  title: "Customer story — ElMundi (reference deployment) — Ship",
+  title: "Customer story — ElMundi (reference deployment)",
   description:
     "How ElMundi runs Ship on itself: Linear, GitHub Actions, Cursor Cloud Agent, and Playwright tied into one evidence trail.",
 };

@@ -4,7 +4,7 @@ import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 
 export const metadata: Metadata = {
-  title: "Customer stories — Ship",
+  title: "Customer stories",
   description:
     "Solo founders, product owners, and engineering teams use Ship to adopt AI-assisted delivery without losing ownership, policies, evidence, or review discipline.",
 };
