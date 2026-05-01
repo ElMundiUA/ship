@@ -134,7 +134,7 @@ export default function RoadmapPage() {
       <main>
         {/* Hero */}
         <section className="relative overflow-hidden border-b border-white/10 pb-16 pt-28 sm:pb-20 sm:pt-32">
-          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_70%_45%_at_50%_-10%,rgba(46,230,214,0.12),transparent_55%)]" />
+          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_70%_45%_at_50%_-10%,rgba(207,169,107,0.12),transparent_55%)]" />
           <div className="relative mx-auto max-w-4xl px-4 text-center sm:px-6">
             <p className="text-xs font-bold uppercase tracking-[0.2em] text-aqua/85">North star</p>
             <h1 className="font-display mt-4 text-4xl font-bold text-white sm:text-5xl lg:text-[3.25rem] lg:leading-[1.06]">

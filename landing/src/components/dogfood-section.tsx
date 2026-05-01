@@ -56,7 +56,7 @@ const STATS: Stat[] = [
 export function DogfoodSection() {
   return (
     <section className="relative overflow-hidden border-y border-white/10 bg-gradient-to-br from-aqua/[0.05] via-black/40 to-sun/[0.04] py-20 sm:py-28">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_60%_50%_at_50%_-10%,rgba(46,230,214,0.10),transparent_60%)]" />
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_60%_50%_at_50%_-10%,rgba(207,169,107,0.10),transparent_60%)]" />
       <div className="relative mx-auto max-w-[88rem] px-4 sm:px-6">
         <div className="mx-auto max-w-3xl text-center">
           <p className="text-xs font-bold uppercase tracking-[0.2em] text-aqua/85">Ship ships Ship</p>

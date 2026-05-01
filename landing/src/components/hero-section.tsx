@@ -64,7 +64,7 @@ const TONE_DOT: Record<FlowState["tone"], string> = {
 };
 
 const TONE_GLOW: Record<FlowState["tone"], string> = {
-  active: "shadow-[0_0_24px_-6px_rgba(46,230,214,0.55)] ring-1 ring-aqua/30",
+  active: "shadow-[0_0_24px_-6px_rgba(207,169,107,0.55)] ring-1 ring-aqua/30",
   queue: "ring-1 ring-sun/15",
   idle: "ring-1 ring-white/5",
 };
@@ -97,7 +97,7 @@ export function HeroSection() {
             "url(\"data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.06'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E\")",
         }}
       />
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_70%_45%_at_50%_-10%,rgba(46,230,214,0.10),transparent_60%)]" />
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_70%_45%_at_50%_-10%,rgba(207,169,107,0.10),transparent_60%)]" />
       <div className="relative mx-auto max-w-[88rem] px-4 sm:px-6">
         <Link
           href="/beta"
@@ -159,9 +159,9 @@ export function HeroSection() {
 function HeroDashboard() {
   return (
     <figure className="mt-12 sm:mt-14" aria-label="Ship workspace dashboard preview">
-      <div className="relative rounded-3xl border border-white/10 bg-gradient-to-br from-aqua/[0.07] via-white/[0.02] to-coral/[0.06] p-px shadow-[0_50px_120px_-30px_rgba(46,230,214,0.30),0_30px_80px_-40px_rgba(255,138,128,0.18)]">
+      <div className="relative rounded-3xl border border-white/10 bg-gradient-to-br from-aqua/[0.07] via-white/[0.02] to-coral/[0.06] p-px shadow-[0_50px_120px_-30px_rgba(207,169,107,0.30),0_30px_80px_-40px_rgba(255,138,128,0.18)]">
         {/* Outer glow accent */}
-        <div className="pointer-events-none absolute -inset-4 -z-10 bg-[radial-gradient(ellipse_60%_50%_at_50%_50%,rgba(46,230,214,0.10),transparent_70%)]" />
+        <div className="pointer-events-none absolute -inset-4 -z-10 bg-[radial-gradient(ellipse_60%_50%_at_50%_50%,rgba(207,169,107,0.10),transparent_70%)]" />
 
         <div className="overflow-hidden rounded-[calc(1.5rem-1px)] bg-[#05060d] ring-1 ring-black/40">
           {/* Top toolbar */}

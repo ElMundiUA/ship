@@ -17,7 +17,7 @@ export function UseCaseHero({
 }) {
   return (
     <section className="relative overflow-hidden border-b border-white/10 pb-16 pt-28 sm:pb-20 sm:pt-32">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_90%_50%_at_50%_-15%,rgba(46,230,214,0.12),transparent_50%)]" />
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_90%_50%_at_50%_-15%,rgba(207,169,107,0.12),transparent_50%)]" />
       <div className="relative mx-auto max-w-4xl px-4 sm:px-6">
         <p className="text-xs font-bold uppercase tracking-[0.2em] text-aqua/90">{eyebrow}</p>
         <h1 className="font-display mt-4 text-4xl font-bold leading-tight text-white sm:text-5xl">{title}</h1>

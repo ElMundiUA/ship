@@ -139,7 +139,7 @@ function BookCallout(props: { children?: ReactNode } & RemarkNodeProp) {
     return (
       <aside className="not-prose my-10 rounded-2xl border border-aqua/25 bg-gradient-to-br from-aqua/[0.12] via-white/[0.03] to-transparent p-5 shadow-card sm:p-6">
         <div className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-aqua">
-          <span className="inline-block h-2 w-2 rounded-full bg-aqua shadow-[0_0_12px_rgba(46,230,214,0.7)]" />
+          <span className="inline-block h-2 w-2 rounded-full bg-aqua shadow-[0_0_12px_rgba(207,169,107,0.7)]" />
           Callout
         </div>
         <div className="book-callout-inner text-[0.95rem] leading-relaxed text-white/85 [&_a]:font-semibold [&_a]:text-aqua [&_strong]:text-white">

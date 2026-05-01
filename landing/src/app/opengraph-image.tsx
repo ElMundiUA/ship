@@ -30,7 +30,7 @@ export default async function Image() {
           flexDirection: "column",
           justifyContent: "space-between",
           background:
-            "radial-gradient(ellipse 80% 50% at 50% -10%, rgba(46,230,214,0.18), transparent 55%), #05060d",
+            "radial-gradient(ellipse 80% 50% at 50% -10%, rgba(207,169,107,0.18), transparent 55%), #05060d",
           padding: "72px",
           color: "#ffffff",
           fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",
@@ -39,7 +39,7 @@ export default async function Image() {
         {/* Top — wordmark */}
         <div style={{ display: "flex", alignItems: "center", fontSize: 36, fontWeight: 700 }}>
           <span style={{ letterSpacing: "-0.02em" }}>Ship</span>
-          <span style={{ color: "#2EE6D6" }}>.</span>
+          <span style={{ color: "#cfa96b" }}>.</span>
         </div>
 
         {/* Middle — headline */}
@@ -50,7 +50,7 @@ export default async function Image() {
               fontSize: 18,
               fontWeight: 700,
               letterSpacing: "0.18em",
-              color: "rgba(46,230,214,0.85)",
+              color: "rgba(207,169,107,0.85)",
               textTransform: "uppercase",
             }}
           >
@@ -99,7 +99,7 @@ export default async function Image() {
                   width: 8,
                   height: 8,
                   borderRadius: 999,
-                  background: "#2EE6D6",
+                  background: "#cfa96b",
                 }}
               />
               Workspace

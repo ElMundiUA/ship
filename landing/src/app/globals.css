@@ -17,12 +17,12 @@ body {
       rgba(179, 136, 255, 0.35),
       transparent 55%
     ),
-    radial-gradient(ellipse 80% 50% at 100% 0%, rgba(46, 230, 214, 0.2), transparent 45%),
+    radial-gradient(ellipse 80% 50% at 100% 0%, rgba(207, 169, 107, 0.2), transparent 45%),
     radial-gradient(ellipse 60% 40% at 0% 20%, rgba(255, 92, 108, 0.18), transparent 40%);
 }
 
 ::selection {
-  background: rgba(46, 230, 214, 0.35);
+  background: rgba(207, 169, 107, 0.35);
   color: #fff;
 }
 

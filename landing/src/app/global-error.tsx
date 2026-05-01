@@ -44,7 +44,7 @@ export default function GlobalError({
               border: "none",
               cursor: "pointer",
               fontWeight: 600,
-              background: "linear-gradient(90deg,#ff5c6c,#b388ff,#2ee6d6)",
+              background: "linear-gradient(90deg,#ff5c6c,#b388ff,#cfa96b)",
               color: "#0b1020",
             }}
           >

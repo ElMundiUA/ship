@@ -115,7 +115,7 @@ function EdgesSvg<T extends string>({
     >
       <defs>
         <linearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="0%">
-          <stop offset="0%" stopColor="rgba(46,230,214,0.35)" />
+          <stop offset="0%" stopColor="rgba(207,169,107,0.35)" />
           <stop offset="50%" stopColor="rgba(179,136,255,0.55)" />
           <stop offset="100%" stopColor="rgba(255,92,108,0.35)" />
         </linearGradient>

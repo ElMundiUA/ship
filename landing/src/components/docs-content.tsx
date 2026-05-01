@@ -156,7 +156,7 @@ function Blockquote(props: { children?: ReactNode } & RemarkNodeProp) {
     return (
       <aside className="not-prose my-7 rounded-2xl border border-aqua/25 bg-gradient-to-br from-aqua/[0.10] via-white/[0.03] to-transparent p-4 sm:p-5">
         <div className="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-widest text-aqua">
-          <span className="inline-block h-1.5 w-1.5 rounded-full bg-aqua shadow-[0_0_10px_rgba(46,230,214,0.8)]" />
+          <span className="inline-block h-1.5 w-1.5 rounded-full bg-aqua shadow-[0_0_10px_rgba(207,169,107,0.8)]" />
           Tip
         </div>
         <div className="text-sm leading-relaxed text-white/82 [&_a]:font-semibold [&_a]:text-aqua [&_strong]:text-white">

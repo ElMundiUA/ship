@@ -42,7 +42,7 @@ export default function UseCasesIndexPage() {
       <SiteHeader />
       <main>
         <section className="relative overflow-hidden border-b border-white/10 pb-16 pt-28 sm:pb-20 sm:pt-32">
-          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_80%_50%_at_50%_-10%,rgba(46,230,214,0.16),transparent_55%)]" />
+          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_80%_50%_at_50%_-10%,rgba(207,169,107,0.16),transparent_55%)]" />
           <div className="relative mx-auto max-w-4xl px-4 text-center sm:px-6">
             <p className="text-xs font-bold uppercase tracking-[0.2em] text-aqua/90">Customer stories</p>
             <h1 className="font-display mt-4 text-4xl font-bold text-white sm:text-5xl">

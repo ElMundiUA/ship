@@ -38,7 +38,7 @@ export default function AppleIcon() {
             width: 28,
             height: 28,
             borderRadius: 999,
-            background: "#2EE6D6",
+            background: "#cfa96b",
           }}
         />
       </div>

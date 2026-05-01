@@ -70,7 +70,7 @@ export default function KitPage() {
       <main>
         {/* Hero */}
         <section className="relative overflow-hidden border-b border-white/10 pb-16 pt-20 sm:pb-20 sm:pt-24">
-          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_90%_60%_at_50%_-10%,rgba(46,230,214,0.18),transparent_55%)]" />
+          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_90%_60%_at_50%_-10%,rgba(207,169,107,0.18),transparent_55%)]" />
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_50%_40%_at_100%_20%,rgba(179,136,255,0.12),transparent_50%)]" />
           <div className="relative mx-auto max-w-5xl px-4 sm:px-6">
             <p className="text-sm font-bold uppercase tracking-widest text-aqua">Product surfaces</p>

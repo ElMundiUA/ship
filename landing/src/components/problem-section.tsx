@@ -96,13 +96,13 @@ function OrderInfographic() {
       <svg viewBox="0 0 320 140" className="h-full w-full" role="img" aria-label="Ordered horizontal flow of states with directional arrows">
         <defs>
           <linearGradient id="order-row" x1="0" x2="1">
-            <stop offset="0%" stopColor="rgba(46,230,214,0.06)" />
-            <stop offset="100%" stopColor="rgba(46,230,214,0)" />
+            <stop offset="0%" stopColor="rgba(207,169,107,0.06)" />
+            <stop offset="100%" stopColor="rgba(207,169,107,0)" />
           </linearGradient>
         </defs>
         <rect width="320" height="140" fill="url(#order-row)" />
         {/* Connecting line */}
-        <line x1="40" y1="70" x2="280" y2="70" stroke="rgba(46,230,214,0.4)" strokeWidth="1.5" strokeDasharray="3 4" />
+        <line x1="40" y1="70" x2="280" y2="70" stroke="rgba(207,169,107,0.4)" strokeWidth="1.5" strokeDasharray="3 4" />
         {/* State nodes */}
         {[
           { cx: 40, label: "Intake" },
@@ -112,9 +112,9 @@ function OrderInfographic() {
           { cx: 280, label: "Done" },
         ].map((node, idx, arr) => (
           <g key={node.label}>
-            <circle cx={node.cx} cy={70} r="9" fill="rgba(46,230,214,0.18)" stroke="rgba(46,230,214,0.85)" strokeWidth="1.5" />
+            <circle cx={node.cx} cy={70} r="9" fill="rgba(207,169,107,0.18)" stroke="rgba(207,169,107,0.85)" strokeWidth="1.5" />
             {idx === arr.length - 1 ? (
-              <circle cx={node.cx} cy={70} r="4" fill="rgba(46,230,214,0.85)" />
+              <circle cx={node.cx} cy={70} r="4" fill="rgba(207,169,107,0.85)" />
             ) : null}
             <text x={node.cx} y={48} textAnchor="middle" fontSize="9" fill="rgba(255,255,255,0.7)" fontWeight="600" letterSpacing="0.05em">
               {node.label.toUpperCase()}
@@ -123,7 +123,7 @@ function OrderInfographic() {
         ))}
         {/* Arrowheads */}
         {[60, 120, 180, 240].map((x) => (
-          <path key={x} d={`M ${x} 67 L ${x + 8} 70 L ${x} 73 Z`} fill="rgba(46,230,214,0.55)" />
+          <path key={x} d={`M ${x} 67 L ${x + 8} 70 L ${x} 73 Z`} fill="rgba(207,169,107,0.55)" />
         ))}
         {/* Routine ticks */}
         <g fill="rgba(255,200,87,0.7)">

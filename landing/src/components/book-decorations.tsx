@@ -20,7 +20,7 @@ export function BookSectionInsert({ id }: { id: string }) {
         <InsertShell gradient="from-coral/15 via-transparent to-lilac/10">
           <svg viewBox="0 0 400 72" className="h-full w-full" fill="none">
             <path d="M8 56 Q100 8 200 40 T392 28" stroke="currentColor" strokeWidth="2" opacity="0.5" />
-            <circle cx="60" cy="44" r="6" fill="#2ee6d6" opacity="0.5" />
+            <circle cx="60" cy="44" r="6" fill="#cfa96b" opacity="0.5" />
             <circle cx="200" cy="32" r="8" fill="#ff5c6c" opacity="0.45" />
             <circle cx="340" cy="36" r="5" fill="#b388ff" opacity="0.55" />
           </svg>
@@ -34,7 +34,7 @@ export function BookSectionInsert({ id }: { id: string }) {
             <rect x="120" y="16" width="72" height="40" rx="8" stroke="currentColor" strokeWidth="1.5" opacity="0.35" />
             <rect x="216" y="16" width="72" height="40" rx="8" stroke="currentColor" strokeWidth="1.5" opacity="0.45" />
             <rect x="312" y="16" width="64" height="40" rx="8" stroke="currentColor" strokeWidth="1.5" opacity="0.3" />
-            <path d="M96 36h16M192 36h16M288 36h16" stroke="#2ee6d6" strokeWidth="2" opacity="0.4" />
+            <path d="M96 36h16M192 36h16M288 36h16" stroke="#cfa96b" strokeWidth="2" opacity="0.4" />
           </svg>
         </InsertShell>
       );
@@ -55,7 +55,7 @@ export function BookSectionInsert({ id }: { id: string }) {
           <svg viewBox="0 0 400 72" className="h-full w-full" fill="none">
             <path d="M32 20h336v32H32z" stroke="currentColor" strokeWidth="1.5" rx="6" opacity="0.35" />
             <path d="M48 36h120M200 36h152" stroke="#b388ff" strokeWidth="2" opacity="0.4" />
-            <circle cx="180" cy="36" r="10" fill="#2ee6d6" opacity="0.25" />
+            <circle cx="180" cy="36" r="10" fill="#cfa96b" opacity="0.25" />
           </svg>
         </InsertShell>
       );
@@ -64,7 +64,7 @@ export function BookSectionInsert({ id }: { id: string }) {
         <InsertShell gradient="from-aqua/10 via-transparent to-sun/10">
           <svg viewBox="0 0 400 72" className="h-full w-full" fill="none">
             <path d="M20 52 L100 20 L180 44 L260 16 L340 48 L380 28" stroke="currentColor" strokeWidth="2" opacity="0.4" fill="none" />
-            <circle cx="100" cy="20" r="5" fill="#2ee6d6" opacity="0.5" />
+            <circle cx="100" cy="20" r="5" fill="#cfa96b" opacity="0.5" />
             <circle cx="260" cy="16" r="5" fill="#ff5c6c" opacity="0.45" />
           </svg>
         </InsertShell>
