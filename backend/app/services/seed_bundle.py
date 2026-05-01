@@ -102,7 +102,16 @@ from backend.app.services.tracker_fsm import (
 #         body rewritten to match. Linear provisioner now creates a
 #         ``needs:clarification`` signal label and ``LinearTracker``
 #         excludes tickets carrying it from FSM picks.
-BUNDLE_VERSION: str = "0.10"
+# ``0.11`` → ``shipctl agent-run`` collapsed into ``shipctl run``: a
+#         single command both prints (``--dry-run``) and launches.
+#         The old ``run`` (idempotency markers, fanout, callback,
+#         offline lockfile) is gone — none of it was load-bearing
+#         for the routines actually shipped. ``agent-run`` stays as
+#         a dispatch alias so already-seeded trigger workflows keep
+#         working until the next reseed. ``role-intake`` ARTIFACT
+#         re-stamped (frontmatter comment now references ``shipctl
+#         run`` instead of ``shipctl agent-run``).
+BUNDLE_VERSION: str = "0.11"
 
 
 # Default knowledge starters for PR 1. Empty by design: generated knowledge is
