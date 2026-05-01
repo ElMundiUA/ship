@@ -3496,6 +3496,29 @@ export function applyInboxDisposition(
   );
 }
 
+export type InboxDiscussResponse = {
+  thread_id: string;
+  inbox_item_id: string;
+};
+
+/**
+ * Open a fresh Navigator chat thread seeded with this inbox item's
+ * full context. Used by the "Discuss with Navigator" button on
+ * clarifications + blockers — the Navigator gets the source ticket
+ * snapshot + the agent's question as a system message so it can help
+ * the operator draft an answer immediately.
+ */
+export function discussInboxItemWithNavigator(
+  workspaceId: string,
+  itemId: string,
+  token?: string,
+): Promise<InboxDiscussResponse> {
+  return apiFetch<InboxDiscussResponse>(
+    `/v1/workspaces/${workspaceId}/inbox/${encodeURIComponent(itemId)}/discuss`,
+    { method: "POST", token },
+  );
+}
+
 export function snoozeInboxItem(
   workspaceId: string,
   itemId: string,

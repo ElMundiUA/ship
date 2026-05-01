@@ -670,9 +670,13 @@ function SourceTicketCard({ detail }: { detail: InboxItemDetail }) {
     typeof payload.ticket_ref === "string" && payload.ticket_ref
       ? payload.ticket_ref
       : null;
+  const canDiscuss =
+    detail.status === "new" &&
+    (detail.type === "clarification" || detail.type === "blocker");
 
-  // Nothing tying this row to a ticket — don't render anything.
-  if (!snap && !ticketRef) return null;
+  // Nothing tying this row to a ticket — don't render anything (unless
+  // it's still actionable via Navigator chat).
+  if (!snap && !ticketRef && !canDiscuss) return null;
 
   const title = typeof snap?.title === "string" ? snap.title : null;
   const description =
@@ -736,6 +740,25 @@ function SourceTicketCard({ detail }: { detail: InboxItemDetail }) {
             No ticket snapshot — older inbox row, or the tracker
             wasn&apos;t reachable when the agent finished.
           </p>
+        )}
+        {canDiscuss && (
+          <form
+            action={`/api/inbox/${encodeURIComponent(detail.id)}/discuss`}
+            method="POST"
+            className="pt-1"
+          >
+            <input type="hidden" name="ws" value={detail.workspace_id} />
+            <button
+              type="submit"
+              className="rounded-lg bg-aqua/90 px-3 py-2 text-xs font-semibold text-black shadow-sm hover:bg-aqua"
+            >
+              💬 Discuss with Navigator
+            </button>
+            <span className="ml-3 text-xs text-white/55">
+              Opens a fresh chat seeded with this ticket + the agent&apos;s
+              {detail.type === "blocker" ? " blocker" : " question"}.
+            </span>
+          </form>
         )}
       </div>
     </Card>

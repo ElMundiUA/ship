@@ -62,6 +62,7 @@ from backend.app.api.v1.routes.workspaces import (
     ROLES_READ,
     _require_membership,
 )
+from backend.app.db.models.agent_surface import ChatMessage, ChatThread
 from backend.app.db.models.inbox import (
     InboxItem,
     InboxItemEvent,
@@ -1190,6 +1191,144 @@ async def append_event(
     await session.flush()
     await session.refresh(event)
     return _to_event_out(event)
+
+
+class InboxDiscussOut(BaseModel):
+    """Response of the discuss-with-Navigator endpoint."""
+
+    thread_id: uuid.UUID
+    inbox_item_id: uuid.UUID
+
+
+@router.post("/{item_id}/discuss", response_model=InboxDiscussOut)
+async def discuss_with_navigator(
+    workspace_id: uuid.UUID,
+    item_id: uuid.UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> InboxDiscussOut:
+    """Open a fresh Navigator chat thread seeded with this inbox item's context.
+
+    Used by the "Discuss with Navigator" button on a clarification (or
+    blocker) row. Archives the user's current active thread, opens a
+    new one titled around the linked ticket, and drops a ``system``
+    message with the ticket snapshot + the agent's question so the
+    Navigator has full context from message zero. The user's first
+    message in the new thread is whatever they type — the Navigator
+    just answers from a prepared context.
+
+    Returns the new thread id; the Console redirects the browser to
+    ``/chat?from_inbox=<item_id>`` so the chat surface can render a
+    "linked clarification" banner with a back-link.
+    """
+    item = await _load_item(session, workspace_id, item_id)
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
+
+    # Archive the caller's current active thread (mirror /chat/active/new
+    # without packing into a bucket — operator chose to switch context
+    # explicitly, so the previous thread shouldn't auto-pack).
+    cur_stmt = select(ChatThread).where(
+        ChatThread.workspace_id == workspace_id,
+        ChatThread.created_by_user_id == auth.user.id,
+        ChatThread.status == "active",
+    )
+    for cur in (await session.execute(cur_stmt)).scalars().all():
+        cur.status = "archived"
+
+    # Compose the system seed message. Pulls everything we have on the
+    # source ticket + the agent's question/blocker — keeps the LLM
+    # well-grounded so it can immediately help the operator draft a
+    # response without the operator having to re-paste anything.
+    payload = dict(item.payload or {})
+    snap = payload.get("source_ticket") or {}
+    ref = (
+        snap.get("ticket_ref")
+        or payload.get("ticket_ref")
+        or "(unknown ticket)"
+    )
+    title = snap.get("title") or "(no title)"
+    description = (snap.get("description") or "").strip()
+    state = snap.get("state") or ""
+    labels = snap.get("labels") or []
+
+    seed_lines: list[str] = []
+    seed_lines.append(
+        "You are helping the operator answer an inbox item posted by a Ship "
+        f"agent. Item type: **{item.type}**. Source ticket: **{ref}**."
+    )
+    seed_lines.append("")
+    seed_lines.append(f"## Source ticket {ref}")
+    seed_lines.append(f"- **Title:** {title}")
+    if state:
+        seed_lines.append(f"- **State:** {state}")
+    if labels:
+        seed_lines.append(f"- **Labels:** {', '.join(labels)}")
+    if snap.get("url"):
+        seed_lines.append(f"- **URL:** {snap['url']}")
+    if description:
+        seed_lines.append("")
+        seed_lines.append("### Ticket description")
+        seed_lines.append(description)
+
+    if item.summary:
+        seed_lines.append("")
+        seed_lines.append(f"## Agent's {item.type}")
+        seed_lines.append(item.summary)
+
+    seed_lines.append("")
+    seed_lines.append(
+        "Help the operator draft a clear answer. When the operator confirms "
+        "the wording, summarise the agreed answer at the end of your reply "
+        "so they can copy it back into the tracker. Be concise and ask "
+        "follow-ups one at a time."
+    )
+
+    fresh = ChatThread(
+        workspace_id=workspace_id,
+        created_by_user_id=auth.user.id,
+        title=f"Re: {item.type} {ref}"[:512],
+        status="active",
+        last_user_activity_at=datetime.now(timezone.utc),
+    )
+    session.add(fresh)
+    await session.flush()
+    await session.refresh(fresh)
+
+    seed = ChatMessage(
+        thread_id=fresh.id,
+        role="system",
+        author_user_id=None,
+        body="\n".join(seed_lines),
+        meta={
+            "kind": "inbox_discuss_seed",
+            "inbox_item_id": str(item.id),
+            "inbox_type": item.type,
+            "ticket_ref": payload.get("ticket_ref"),
+        },
+    )
+    session.add(seed)
+    await session.flush()
+
+    # Audit row so operators can trace which inbox items spawned which
+    # navigator threads (paired with the eventual close-from-navigator
+    # action that resolves the inbox row from inside the chat surface).
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=auth.user.id,
+            actor_token_id=auth.token.id if auth.token else None,
+            action="inbox.discuss_with_navigator",
+            target_kind="inbox_item",
+            target_id=str(item.id),
+            payload={
+                "thread_id": str(fresh.id),
+                "inbox_type": item.type,
+                "ticket_ref": payload.get("ticket_ref"),
+            },
+        )
+    )
+
+    return InboxDiscussOut(thread_id=fresh.id, inbox_item_id=item.id)
 
 
 __all__ = ["router"]
