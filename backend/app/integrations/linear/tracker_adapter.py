@@ -422,6 +422,7 @@ class LinearTracker:
         body: str,
         labels: list[str] | None = None,
         project_hint: str | None = None,
+        project_id: str | None = None,
     ) -> CreatedTicket:
         """Create a Linear issue under the requested team.
 
@@ -437,6 +438,10 @@ class LinearTracker:
         set. Unknown labels are dropped (not auto-created) — we
         don't want the agent polluting a customer's Linear with
         freshly-invented tag names.
+
+        ``project_id`` (Linear project UUID) attaches the new ticket
+        to an epic so child tickets can stay short and pull motivation
+        / scope / decisions from the project body.
         """
         team_id = await self._resolve_team_id(project_hint)
         label_ids = (
@@ -458,6 +463,8 @@ class LinearTracker:
         }
         if label_ids:
             input_payload["labelIds"] = label_ids
+        if project_id:
+            input_payload["projectId"] = project_id
 
         data = await self._gql(mutation, {"input": input_payload})
         issue = ((data.get("issueCreate") or {}).get("issue")) or {}
@@ -473,6 +480,199 @@ class LinearTracker:
             url=str(issue.get("url") or ""),
             display_id=str(issue.get("identifier") or issue["id"]),
         )
+
+    # -----------------------------------------------------------------
+    # Project surface (epics)
+    #
+    # PO ideas / scope / motivation / decisions live in the project
+    # body so child tickets stay short and pull context from the epic.
+    # Linear's ``projectCreate`` returns ``description`` capped at 255
+    # chars; the markdown body lives on ``content``.
+    # -----------------------------------------------------------------
+
+    async def list_projects(
+        self,
+        *,
+        limit: int = 50,
+        state: str | None = None,
+        query: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Active projects on the connected team.
+
+        ``state`` filters Linear's project state (``backlog``,
+        ``planned``, ``started``, ``paused``, ``completed``,
+        ``canceled``). ``query`` matches project name (case-insensitive
+        contains). Returns ``{"id", "name", "slug", "state", "url",
+        "updated_at", "lead_name"}`` per project.
+        """
+        team_id = await self._resolve_team_id(None)
+        filter_clauses: dict[str, Any] = {
+            "accessibleTeams": {"some": {"id": {"eq": team_id}}},
+        }
+        if state:
+            filter_clauses["state"] = {"eq": state}
+        if query:
+            filter_clauses["name"] = {"containsIgnoreCase": query}
+
+        gql_query = """
+        query ShipListProjects($filter: ProjectFilter, $first: Int!) {
+          projects(filter: $filter, first: $first, orderBy: updatedAt) {
+            nodes {
+              id
+              name
+              slugId
+              state
+              url
+              updatedAt
+              lead { name }
+            }
+          }
+        }
+        """
+        data = await self._gql(
+            gql_query, {"filter": filter_clauses, "first": min(limit, 100)}
+        )
+        nodes = ((data.get("projects") or {}).get("nodes")) or []
+        return [
+            {
+                "id": str(node.get("id") or ""),
+                "name": str(node.get("name") or ""),
+                "slug": str(node.get("slugId") or ""),
+                "state": str(node.get("state") or ""),
+                "url": str(node.get("url") or ""),
+                "updated_at": node.get("updatedAt"),
+                "lead_name": ((node.get("lead") or {}).get("name")) or None,
+            }
+            for node in nodes
+        ]
+
+    async def get_project(
+        self, project_id: str, *, issues_limit: int = 25
+    ) -> dict[str, Any]:
+        """Project body + linked tickets.
+
+        Returns ``{"id", "name", "slug", "state", "url", "description"
+        (short blurb), "content" (markdown body), "lead_name",
+        "issues": [{...display_id, title, state, url}]}``. Use this
+        when filing a child ticket so the agent can verify the project
+        is the right epic before linking.
+        """
+        gql_query = """
+        query ShipGetProject($id: String!, $issuesFirst: Int!) {
+          project(id: $id) {
+            id
+            name
+            slugId
+            state
+            url
+            description
+            content
+            lead { name }
+            issues(first: $issuesFirst, orderBy: updatedAt) {
+              nodes {
+                id
+                identifier
+                title
+                url
+                state { name }
+              }
+            }
+          }
+        }
+        """
+        data = await self._gql(
+            gql_query, {"id": project_id, "issuesFirst": min(issues_limit, 50)}
+        )
+        node = data.get("project") or {}
+        if not node:
+            raise ValueError(f"Linear project not found: {project_id}")
+        issues = [
+            {
+                "id": str(issue.get("id") or ""),
+                "display_id": str(issue.get("identifier") or ""),
+                "title": str(issue.get("title") or ""),
+                "url": str(issue.get("url") or ""),
+                "state": ((issue.get("state") or {}).get("name")) or "",
+            }
+            for issue in ((node.get("issues") or {}).get("nodes") or [])
+        ]
+        return {
+            "id": str(node.get("id") or ""),
+            "name": str(node.get("name") or ""),
+            "slug": str(node.get("slugId") or ""),
+            "state": str(node.get("state") or ""),
+            "url": str(node.get("url") or ""),
+            "description": str(node.get("description") or ""),
+            "content": str(node.get("content") or ""),
+            "lead_name": ((node.get("lead") or {}).get("name")) or None,
+            "issues": issues,
+        }
+
+    async def create_project(
+        self,
+        *,
+        name: str,
+        body: str,
+        description: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a Linear project (epic) under the connected team.
+
+        ``body`` is the markdown content (full epic body). Linear's
+        ``description`` field is a 255-char one-liner — we derive it
+        from the first body line when the caller omits it. Returns
+        ``{"id", "url", "name", "slug"}``.
+        """
+        team_id = await self._resolve_team_id(None)
+        short = (description or body.splitlines()[0] if body else "")[:240]
+        mutation = """
+        mutation ShipCreateProject($input: ProjectCreateInput!) {
+          projectCreate(input: $input) {
+            success
+            project { id name slugId url }
+          }
+        }
+        """
+        data = await self._gql(
+            mutation,
+            {
+                "input": {
+                    "name": name,
+                    "teamIds": [team_id],
+                    "description": short,
+                    "content": body,
+                }
+            },
+        )
+        result = data.get("projectCreate") or {}
+        project = result.get("project") or {}
+        if not result.get("success") or not project:
+            raise ValueError("Linear refused projectCreate (no project returned).")
+        return {
+            "id": str(project.get("id") or ""),
+            "name": str(project.get("name") or name),
+            "slug": str(project.get("slugId") or ""),
+            "url": str(project.get("url") or ""),
+        }
+
+    async def append_project_description(
+        self, project_id: str, *, body: str
+    ) -> None:
+        """Append ``body`` to the project's markdown content.
+
+        We fetch the current content first so each append accumulates
+        instead of replacing — PO ideas should pile up over the life
+        of the epic, not overwrite each other. Empty current body
+        becomes ``body`` verbatim; otherwise we add a blank line and
+        then ``body``.
+        """
+        existing = (await self.get_project(project_id)).get("content") or ""
+        new_content = (existing + "\n\n" + body).lstrip() if existing else body
+        mutation = """
+        mutation ShipUpdateProject($id: String!, $content: String!) {
+          projectUpdate(id: $id, input: { content: $content }) { success }
+        }
+        """
+        await self._gql(mutation, {"id": project_id, "content": new_content})
 
     # -----------------------------------------------------------------
     # Clarifications projection surface (D13)

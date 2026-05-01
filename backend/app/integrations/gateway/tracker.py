@@ -124,6 +124,7 @@ class TrackerGateway(Protocol):
         body: str,
         labels: list[str] | None = None,
         project_hint: str | None = None,
+        project_id: str | None = None,
     ) -> CreatedTicket:
         """Create a new ticket/issue/page on the connected tracker.
 
@@ -141,11 +142,80 @@ class TrackerGateway(Protocol):
         (Linear teams, Notion databases, GitHub repos). When the
         connection has exactly one, ``None`` is fine.
 
+        ``project_id`` attaches the new ticket to a tracker-native
+        project / epic (Linear project, Jira epic, GitHub Project
+        v2 item). Pulled from :meth:`list_projects`. Vendors that
+        don't model epics ignore it.
+
         Raises :class:`ValueError` on vendor-side validation errors
         (e.g. "no GitHub repo configured") so the agent can bubble
         the reason up to the user rather than a generic 500.
         """
         ...
+
+    # -----------------------------------------------------------------
+    # Project surface (epics)
+    #
+    # PO ideas / scope / motivation / decisions live in a project body
+    # so child tickets stay short and pull context from the epic.
+    # Optional surface — vendors that don't model epics raise
+    # NotImplementedError; the agent surfaces a clean "this tracker
+    # doesn't support projects" rather than a 500.
+    # -----------------------------------------------------------------
+
+    async def list_projects(
+        self,
+        *,
+        limit: int = 50,
+        state: str | None = None,
+        query: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Active projects/epics on the connected workspace.
+
+        Adapters return ``{"id", "name", "slug", "state", "url",
+        "updated_at", "lead_name"}`` per project.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not model projects/epics"
+        )
+
+    async def get_project(
+        self, project_id: str, *, issues_limit: int = 25
+    ) -> dict[str, Any]:
+        """Project body + linked tickets.
+
+        Returns ``{"id", "name", "slug", "state", "url", "description"
+        (short), "content" (markdown body), "lead_name", "issues":
+        [{"id", "display_id", "title", "url", "state"}]}``.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not model projects/epics"
+        )
+
+    async def create_project(
+        self,
+        *,
+        name: str,
+        body: str,
+        description: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a project / epic. Returns ``{"id", "url", "name",
+        "slug"}``."""
+        raise NotImplementedError(
+            f"{type(self).__name__} does not model projects/epics"
+        )
+
+    async def append_project_description(
+        self, project_id: str, *, body: str
+    ) -> None:
+        """Append ``body`` to the project's markdown content.
+
+        Accumulates rather than replaces — PO ideas should pile up
+        across planning sessions, not overwrite the epic.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not model projects/epics"
+        )
 
     # -----------------------------------------------------------------
     # Clarifications projection (D13)

@@ -127,11 +127,9 @@ from typing import Any, Awaitable, Callable
 from fastapi import HTTPException
 from sqlalchemy import desc, func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import aliased
 
 from backend.app.core.config import Settings
 from backend.app.db.models.agent_memory import (
-    ArtifactFeedback,
     BucketArticle,
     BucketArticleStatus,
     BucketScope,
@@ -166,13 +164,11 @@ from backend.app.db.models.pipelines import (
     WorkflowRun,
 )
 from backend.app.db.models.tenancy import (
-    ApiToken,
     ArtifactRepo,
     AuditLog,
     Integration,
     User as TenancyUser,
     Workspace,
-    WorkspaceInvite,
     WorkspaceMember,
 )
 from backend.app.integrations.gateway.code_host import PullRequestRef, RepoRef
@@ -224,19 +220,7 @@ _MAX_PRS_LISTED = 50
 _MAX_ARTIFACT_BODY_CHARS = 32 * 1024
 _MAX_KB_FULL_CHUNK = 12_000
 _MAX_CODE_SEARCH = 20
-_MAX_AUDIT_EVENTS = 50
-_MAX_ARTIFACT_FEEDBACK_LIST = 50
 _MAX_BUCKET_SUMMARIES = 40
-# Hard ceiling on the navigator's ``send_email_to_self`` tool. Even
-# though the destination is fixed to the caller's own address, a
-# misbehaving model could fan out dozens of emails in a single chat
-# turn — this cap keeps the worst case to one digest per ~12 minutes.
-# Tracked in-process; resets on restart, which is the right "soft
-# eventual reset" behaviour for an abuse guardrail.
-_NAVIGATOR_EMAIL_HOURLY_CAP = 5
-_NAVIGATOR_EMAIL_MAX_SUBJECT = 120
-_NAVIGATOR_EMAIL_MAX_BODY = 16_000
-_navigator_email_history: dict[uuid.UUID, list[float]] = {}
 _KB_GLOB_PREFETCH_CAP = 80
 # PR-7C: hard cap on the workspace-knowledge tool's hit list. The LLM
 # rarely benefits from more than a handful of results and the 400-char
@@ -418,7 +402,10 @@ class ToolBox:
                     "Open a ticket on the workspace's connected tracker "
                     "(Linear, Notion, Jira, or GitHub Issues). Only call when "
                     "the user has explicitly asked to track work or you "
-                    "have their confirmation — never autofile."
+                    "have their confirmation — never autofile. Pass "
+                    "``project_id`` to attach the new ticket to an epic so "
+                    "child tickets stay short and pull motivation / scope "
+                    "from the project body."
                 ),
                 parameters={
                     "type": "object",
@@ -449,42 +436,148 @@ class ToolBox:
                                 "workspaces."
                             ),
                         },
+                        "project_id": {
+                            "type": "string",
+                            "description": (
+                                "Tracker-native project (epic) UUID. From "
+                                "``list_projects``. Omit for standalone "
+                                "tickets not part of an epic."
+                            ),
+                        },
                     },
                     "required": ["title", "body"],
                     "additionalProperties": False,
                 },
             ),
             ToolSpec(
-                name="create_artifact_feedback",
+                name="list_projects",
                 description=(
-                    "File feedback against a Ship catalog artifact "
-                    "(pattern/tool/collection). Visible in the console "
-                    "'Feedback' tab; used to drive catalog improvements."
+                    "List active projects (epics) on the workspace's "
+                    "connected tracker. Use this BEFORE creating an epic "
+                    "to check whether one already exists, and BEFORE "
+                    "creating a child ticket to find the right epic to "
+                    "attach to. Filter with ``state`` (e.g. ``backlog``, "
+                    "``started``, ``planned``) or ``query`` (case-"
+                    "insensitive name match)."
                 ),
                 parameters={
                     "type": "object",
                     "properties": {
-                        "artifact_id": {
+                        "limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 100,
+                            "default": 20,
+                        },
+                        "state": {
                             "type": "string",
                             "description": (
-                                "Artifact identifier, e.g. "
-                                "'pattern/common-base' or 'tool/methodology-api'."
+                                "Linear project state filter: ``backlog`` / "
+                                "``planned`` / ``started`` / ``paused`` / "
+                                "``completed`` / ``canceled``."
                             ),
+                        },
+                        "query": {
+                            "type": "string",
+                            "description": "Case-insensitive name contains.",
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="get_project",
+                description=(
+                    "Fetch one project's body (markdown content), short "
+                    "description, lead, and recently-updated linked "
+                    "tickets. Use to (a) read the epic before drafting "
+                    "child tickets so you don't repeat motivation already "
+                    "captured, or (b) verify the right epic before "
+                    "appending PO ideas to its body."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "project_id": {
+                            "type": "string",
+                            "description": "Project UUID from ``list_projects``.",
+                        },
+                        "issues_limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 50,
+                            "default": 25,
+                        },
+                    },
+                    "required": ["project_id"],
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="create_project",
+                description=(
+                    "Create a new project (epic) on the workspace's "
+                    "connected tracker. ``body`` is the markdown epic "
+                    "body — put motivation / scope / decisions / "
+                    "constraints here so future tickets can pull "
+                    "context from it. Only call when the user has "
+                    "asked to start a new initiative; never autofile."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Project name.",
                         },
                         "body": {
                             "type": "string",
-                            "description": "Markdown feedback body.",
-                        },
-                        "context": {
-                            "type": "object",
                             "description": (
-                                "Optional JSON hints (related repo, lane, "
-                                "link the feedback was filed from)."
+                                "Markdown content (full epic body). PO "
+                                "ideas / scope / motivation / decisions go "
+                                "here, not in chat."
                             ),
-                            "additionalProperties": True,
+                        },
+                        "description": {
+                            "type": "string",
+                            "description": (
+                                "Optional one-liner blurb (Linear caps at "
+                                "240 chars). When omitted, derived from "
+                                "the first body line."
+                            ),
                         },
                     },
-                    "required": ["artifact_id", "body"],
+                    "required": ["name", "body"],
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="append_project_description",
+                description=(
+                    "Append markdown to an existing project's body. Use "
+                    "to accumulate PO ideas / decisions / constraints "
+                    "across planning sessions — appends, not replaces, "
+                    "so the epic body grows over time. Read the project "
+                    "first via ``get_project`` if you need to avoid "
+                    "duplicating an existing section."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "project_id": {
+                            "type": "string",
+                            "description": "Project UUID.",
+                        },
+                        "body": {
+                            "type": "string",
+                            "description": (
+                                "Markdown to append. A blank line is "
+                                "inserted between existing content and "
+                                "the new block."
+                            ),
+                        },
+                    },
+                    "required": ["project_id", "body"],
                     "additionalProperties": False,
                 },
             ),
@@ -1112,78 +1205,10 @@ class ToolBox:
                 },
             ),
             ToolSpec(
-                name="list_audit_events",
-                description=(
-                    "Read workspace audit log entries (who changed what). "
-                    "Requires admin or owner role. Supports the same filters "
-                    "as the console audit page."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "action": {
-                            "type": "string",
-                            "description": (
-                                "Prefix or full action key, e.g. ``member`` "
-                                "or ``pipeline.run``."
-                            ),
-                        },
-                        "actor": {
-                            "type": "string",
-                            "description": (
-                                "Case-insensitive substring on actor email "
-                                "or API token name."
-                            ),
-                        },
-                        "target_kind": {
-                            "type": "string",
-                            "description": (
-                                "Exact ``target_kind`` e.g. ``user``, "
-                                "``pipeline``."
-                            ),
-                        },
-                        "since": {
-                            "type": "string",
-                            "description": "ISO-8601 inclusive lower bound.",
-                        },
-                        "until": {
-                            "type": "string",
-                            "description": "ISO-8601 exclusive upper bound.",
-                        },
-                        "before_id": {
-                            "type": "integer",
-                            "description": (
-                                "Pagination cursor: return rows with id < "
-                                "this value."
-                            ),
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": _MAX_AUDIT_EVENTS,
-                            "default": 30,
-                        },
-                    },
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
                 name="list_workspace_members",
                 description=(
                     "List workspace members with roles and emails (same as "
                     "the team page). Any member can call."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
-                name="list_workspace_invites",
-                description=(
-                    "List workspace invites (pending and historical). "
-                    "Admin or owner only."
                 ),
                 parameters={
                     "type": "object",
@@ -1241,72 +1266,6 @@ class ToolBox:
                         },
                     },
                     "required": ["slug"],
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
-                name="list_artifact_feedback",
-                description=(
-                    "List catalog artifact feedback filed from the console. "
-                    "Use before creating duplicate feedback on the same "
-                    "pattern/tool."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "status": {
-                            "type": "string",
-                            "enum": ["open", "triaged", "merged", "closed"],
-                        },
-                        "artifact_id": {
-                            "type": "string",
-                            "description": (
-                                "Optional filter on ``pattern/foo`` id."
-                            ),
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": _MAX_ARTIFACT_FEEDBACK_LIST,
-                            "default": 25,
-                        },
-                    },
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
-                name="send_email_to_self",
-                description=(
-                    "Email the signed-in user a Markdown summary of the "
-                    "current conversation (or any text you've drafted "
-                    "with them). Use ONLY when they explicitly ask you "
-                    "to email it — never autosend. The address is fixed "
-                    "to the caller's account email; you cannot pick a "
-                    "recipient. Subject + body are yours; keep the body "
-                    "Markdown-light (headings, lists, fenced code, "
-                    "links). Hard-rate-limited per user per hour."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "subject": {
-                            "type": "string",
-                            "description": (
-                                "Email subject line. Aim for <=120 "
-                                "characters; longer values are clipped."
-                            ),
-                        },
-                        "body_markdown": {
-                            "type": "string",
-                            "description": (
-                                "Markdown body. Supported subset: "
-                                "headings, ordered/unordered lists, "
-                                "fenced code blocks, **bold**, "
-                                "*italic*, `code`, [links](https://...)."
-                            ),
-                        },
-                    },
-                    "required": ["subject", "body_markdown"],
                     "additionalProperties": False,
                 },
             ),
@@ -2031,24 +1990,6 @@ class ToolBox:
                 },
             ),
             ToolSpec(
-                name="intel_harvest_trigger",
-                description=(
-                    "Schedule a fresh ``repo_intel`` harvest for one "
-                    "repo. Admin-only. Rate limit: at most one "
-                    "trigger per repo per workspace per hour "
-                    "(rate-limited denials do NOT audit; successes "
-                    "do)."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "repo_id": {"type": "string"},
-                    },
-                    "required": ["repo_id"],
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
                 name="inbox_routing_upsert",
                 description=(
                     "Insert or update one inbox routing rule. "
@@ -2153,7 +2094,10 @@ class ToolBox:
             "list_activated_repos": self._tool_list_activated_repos,
             "create_ticket": self._tool_create_ticket,
             "list_tickets": self._tool_list_tickets,
-            "create_artifact_feedback": self._tool_create_artifact_feedback,
+            "list_projects": self._tool_list_projects,
+            "get_project": self._tool_get_project,
+            "create_project": self._tool_create_project,
+            "append_project_description": self._tool_append_project_description,
             "list_catalog_artifacts": self._tool_list_catalog_artifacts,
             "list_recent_activity": self._tool_list_recent_activity,
             "get_pull_request": self._tool_get_pull_request,
@@ -2169,14 +2113,10 @@ class ToolBox:
             "list_clarifications": self._tool_list_clarifications,
             "list_improvements": self._tool_list_improvements,
             "search_code": self._tool_search_code,
-            "list_audit_events": self._tool_list_audit_events,
             "list_workspace_members": self._tool_list_workspace_members,
-            "list_workspace_invites": self._tool_list_workspace_invites,
             "get_workspace_settings": self._tool_get_workspace_settings,
             "list_workspace_artifact_repos": self._tool_list_workspace_artifact_repos,
             "get_knowledge_bucket": self._tool_get_knowledge_bucket,
-            "list_artifact_feedback": self._tool_list_artifact_feedback,
-            "send_email_to_self": self._tool_send_email_to_self,
             # Phase 6 — new IA tools (Inbox, Plays, Runs, Coverage, Intel)
             "inbox_list": self._tool_inbox_list,
             "inbox_counts": self._tool_inbox_counts,
@@ -2198,7 +2138,6 @@ class ToolBox:
             "play_run_now": self._tool_play_run_now,
             "play_automate": self._tool_play_automate,
             "automation_toggle": self._tool_automation_toggle,
-            "intel_harvest_trigger": self._tool_intel_harvest_trigger,
             "inbox_routing_upsert": self._tool_inbox_routing_upsert,
         }
 
@@ -2401,6 +2340,9 @@ class ToolBox:
         labels_raw = args.get("labels") or []
         labels = [str(l) for l in labels_raw if isinstance(l, str)] or None
         project_hint = args.get("project_hint")
+        project_id = args.get("project_id")
+        if project_id is not None and not isinstance(project_id, str):
+            raise ToolInvocationError("project_id must be a string")
         tracker_kind = args.get("tracker")
 
         tracker = await self._resolve_tracker(tracker_kind, project_hint)
@@ -2410,6 +2352,7 @@ class ToolBox:
                 body=body,
                 labels=labels,
                 project_hint=project_hint,
+                project_id=project_id,
             )
         except ValueError as exc:
             raise ToolInvocationError(str(exc)) from exc
@@ -2424,30 +2367,77 @@ class ToolBox:
             }
         )
 
-    async def _tool_create_artifact_feedback(self, args: dict[str, Any]) -> str:
-        artifact_id = _require_str(args, "artifact_id")
-        body = _require_str(args, "body")
-        context = args.get("context") or {}
-        if not isinstance(context, dict):
-            raise ToolInvocationError("context must be an object")
+    async def _tool_list_projects(self, args: dict[str, Any]) -> str:
+        limit = _clamp_int(args.get("limit"), default=20, low=1, high=100)
+        state = args.get("state")
+        if state is not None and not isinstance(state, str):
+            raise ToolInvocationError("state must be a string")
+        query = args.get("query")
+        if query is not None and not isinstance(query, str):
+            raise ToolInvocationError("query must be a string")
 
-        row = ArtifactFeedback(
-            workspace_id=self._workspace_id,
-            artifact_id=artifact_id,
-            created_by_user_id=self._user_id,
-            body=body,
-            status="open",
-            context=context,
+        tracker = await self._resolve_tracker(None, None)
+        try:
+            projects = await tracker.list_projects(
+                limit=limit, state=state, query=query
+            )
+        except NotImplementedError as exc:
+            raise ToolInvocationError(str(exc)) from exc
+        except ValueError as exc:
+            raise ToolInvocationError(str(exc)) from exc
+
+        return _json_result({"projects": projects})
+
+    async def _tool_get_project(self, args: dict[str, Any]) -> str:
+        project_id = _require_str(args, "project_id")
+        issues_limit = _clamp_int(
+            args.get("issues_limit"), default=25, low=1, high=50
         )
-        self._session.add(row)
-        await self._session.flush()
-        return _json_result(
-            {
-                "id": str(row.id),
-                "artifact_id": row.artifact_id,
-                "status": row.status,
-            }
-        )
+
+        tracker = await self._resolve_tracker(None, None)
+        try:
+            project = await tracker.get_project(
+                project_id, issues_limit=issues_limit
+            )
+        except NotImplementedError as exc:
+            raise ToolInvocationError(str(exc)) from exc
+        except ValueError as exc:
+            raise ToolInvocationError(str(exc)) from exc
+
+        return _json_result(project)
+
+    async def _tool_create_project(self, args: dict[str, Any]) -> str:
+        name = _require_str(args, "name")
+        body = _require_str(args, "body")
+        description = args.get("description")
+        if description is not None and not isinstance(description, str):
+            raise ToolInvocationError("description must be a string")
+
+        tracker = await self._resolve_tracker(None, None)
+        try:
+            project = await tracker.create_project(
+                name=name, body=body, description=description
+            )
+        except NotImplementedError as exc:
+            raise ToolInvocationError(str(exc)) from exc
+        except ValueError as exc:
+            raise ToolInvocationError(str(exc)) from exc
+
+        return _json_result(project)
+
+    async def _tool_append_project_description(self, args: dict[str, Any]) -> str:
+        project_id = _require_str(args, "project_id")
+        body = _require_str(args, "body")
+
+        tracker = await self._resolve_tracker(None, None)
+        try:
+            await tracker.append_project_description(project_id, body=body)
+        except NotImplementedError as exc:
+            raise ToolInvocationError(str(exc)) from exc
+        except ValueError as exc:
+            raise ToolInvocationError(str(exc)) from exc
+
+        return _json_result({"ok": True, "project_id": project_id})
 
     async def _tool_list_recent_activity(self, args: dict[str, Any]) -> str:
         limit = _clamp_int(
@@ -3281,107 +3271,6 @@ class ToolBox:
             }
         )
 
-    async def _tool_list_audit_events(self, args: dict[str, Any]) -> str:
-        from backend.app.api.v1.routes import audit as audit_routes
-        from backend.app.api.v1.routes.workspaces import ROLES_ADMIN
-
-        await self._require_workspace_role(ROLES_ADMIN)
-        limit = _clamp_int(
-            args.get("limit"), default=30, low=1, high=_MAX_AUDIT_EVENTS
-        )
-        before_raw = args.get("before_id")
-        before: int | None = None
-        if before_raw is not None:
-            try:
-                before = int(before_raw)
-            except (TypeError, ValueError) as exc:
-                raise ToolInvocationError("before_id must be an integer") from exc
-            if before < 1:
-                raise ToolInvocationError("before_id must be >= 1")
-
-        def _audit_call(fn: Any, *fn_args: Any) -> Any:
-            try:
-                return fn(*fn_args)
-            except HTTPException as exc:
-                detail = exc.detail
-                msg = detail if isinstance(detail, str) else str(detail)
-                raise ToolInvocationError(msg) from exc
-
-        action_f = _audit_call(
-            audit_routes._validate_action_filter, args.get("action")
-        )
-        target_f = _audit_call(
-            audit_routes._validate_target_kind, args.get("target_kind")
-        )
-        actor_f = audit_routes._coerce_actor_filter(args.get("actor"))
-        since_dt = _audit_call(
-            audit_routes._coerce_datetime, args.get("since"), "since"
-        )
-        until_dt = _audit_call(
-            audit_routes._coerce_datetime, args.get("until"), "until"
-        )
-        if since_dt is not None and until_dt is not None and since_dt > until_dt:
-            raise ToolInvocationError("since must be <= until")
-
-        actor_user = aliased(TenancyUser)
-        actor_token = aliased(ApiToken)
-        stmt = (
-            select(AuditLog, actor_user, actor_token)
-            .outerjoin(actor_user, actor_user.id == AuditLog.actor_user_id)
-            .outerjoin(actor_token, actor_token.id == AuditLog.actor_token_id)
-            .where(AuditLog.workspace_id == self._workspace_id)
-            .order_by(AuditLog.id.desc())
-            .limit(limit + 1)
-        )
-        if before is not None:
-            stmt = stmt.where(AuditLog.id < before)
-        if action_f is not None:
-            stmt = stmt.where(
-                (AuditLog.action == action_f)
-                | AuditLog.action.like(f"{action_f}.%")
-                | AuditLog.action.like(f"{action_f}%")
-            )
-        if target_f is not None:
-            stmt = stmt.where(AuditLog.target_kind == target_f)
-        if actor_f is not None:
-            needle = f"%{actor_f}%"
-            stmt = stmt.where(
-                func.lower(actor_user.email).like(needle)
-                | func.lower(actor_token.name).like(needle)
-            )
-        if since_dt is not None:
-            stmt = stmt.where(AuditLog.created_at >= since_dt)
-        if until_dt is not None:
-            stmt = stmt.where(AuditLog.created_at < until_dt)
-
-        rows = (await self._session.execute(stmt)).all()
-        has_more = len(rows) > limit
-        visible = rows[:limit]
-        items = []
-        for entry, user, token in visible:
-            items.append(
-                {
-                    "id": entry.id,
-                    "action": entry.action,
-                    "target_kind": entry.target_kind,
-                    "target_id": entry.target_id,
-                    "payload": entry.payload or {},
-                    "created_at": entry.created_at.isoformat()
-                    if entry.created_at
-                    else None,
-                    "actor": {
-                        "user_id": str(user.id) if user is not None else None,
-                        "user_email": user.email if user is not None else None,
-                        "token_id": str(token.id) if token is not None else None,
-                        "token_name": token.name if token is not None else None,
-                    },
-                }
-            )
-        next_cursor = items[-1]["id"] if has_more and items else None
-        return _json_result(
-            {"events": items, "count": len(items), "next_before_id": next_cursor}
-        )
-
     async def _tool_list_workspace_members(self, args: dict[str, Any]) -> str:
         from backend.app.api.v1.routes.workspaces import ROLES_READ
 
@@ -3407,46 +3296,6 @@ class ToolBox:
             for m, u in rows
         ]
         return _json_result({"members": items, "count": len(items)})
-
-    async def _tool_list_workspace_invites(self, args: dict[str, Any]) -> str:
-        from backend.app.api.v1.routes.workspaces import ROLES_ADMIN
-
-        del args
-        await self._require_workspace_role(ROLES_ADMIN)
-        rows = (
-            await self._session.execute(
-                select(WorkspaceInvite)
-                .where(WorkspaceInvite.workspace_id == self._workspace_id)
-                .order_by(WorkspaceInvite.created_at.desc())
-            )
-        ).scalars().all()
-        inviter_ids = [r.invited_by_user_id for r in rows if r.invited_by_user_id]
-        inviter_map: dict[uuid.UUID, str] = {}
-        if inviter_ids:
-            urows = (
-                await self._session.execute(
-                    select(TenancyUser).where(
-                        TenancyUser.id.in_({*inviter_ids})
-                    )
-                )
-            ).scalars().all()
-            inviter_map = {u.id: u.email for u in urows}
-        items = [
-            {
-                "id": str(r.id),
-                "email": r.email,
-                "role": r.role,
-                "invited_by_email": inviter_map.get(r.invited_by_user_id)
-                if r.invited_by_user_id
-                else None,
-                "expires_at": r.expires_at.isoformat() if r.expires_at else None,
-                "accepted_at": r.accepted_at.isoformat() if r.accepted_at else None,
-                "revoked_at": r.revoked_at.isoformat() if r.revoked_at else None,
-                "created_at": r.created_at.isoformat() if r.created_at else None,
-            }
-            for r in rows
-        ]
-        return _json_result({"invites": items, "count": len(items)})
 
     async def _tool_get_workspace_settings(self, args: dict[str, Any]) -> str:
         from backend.app.api.v1.routes.workspaces import ROLES_READ
@@ -3564,188 +3413,6 @@ class ToolBox:
             out["summaries"] = payload
             out["articles"] = payload
         return _json_result(out)
-
-    async def _tool_list_artifact_feedback(self, args: dict[str, Any]) -> str:
-        limit = _clamp_int(
-            args.get("limit"), default=25, low=1, high=_MAX_ARTIFACT_FEEDBACK_LIST
-        )
-        status_filter = args.get("status")
-        artifact_id = args.get("artifact_id")
-        stmt = (
-            select(ArtifactFeedback)
-            .where(ArtifactFeedback.workspace_id == self._workspace_id)
-            .order_by(desc(ArtifactFeedback.created_at))
-            .limit(limit)
-        )
-        if isinstance(status_filter, str) and status_filter:
-            stmt = stmt.where(ArtifactFeedback.status == status_filter)
-        if isinstance(artifact_id, str) and artifact_id.strip():
-            stmt = stmt.where(ArtifactFeedback.artifact_id == artifact_id.strip())
-        rows = (await self._session.execute(stmt)).scalars().all()
-        items = [
-            {
-                "id": str(r.id),
-                "artifact_id": r.artifact_id,
-                "status": r.status,
-                "body": _truncate(r.body, 600),
-                "linked_pr_url": r.linked_pr_url,
-                "created_at": r.created_at.isoformat() if r.created_at else None,
-            }
-            for r in rows
-        ]
-        return _json_result({"feedback": items, "count": len(items)})
-
-    async def _tool_send_email_to_self(self, args: dict[str, Any]) -> str:
-        """Email the caller a Markdown summary they explicitly asked for.
-
-        The recipient is hard-coded to the authenticated user's
-        account email — the LLM cannot pick a target. This is the
-        primary abuse guardrail: even a model that hallucinates
-        recipients can only spam its own user.
-
-        Other guards:
-
-        - In-process per-user rate limit
-          (:data:`_NAVIGATOR_EMAIL_HOURLY_CAP`).
-        - Subject + body are truncated to fixed caps so a runaway
-          completion can't ship 1MB of model output to inbox.
-        - We require the user row to have a verified-looking email
-          (``user.email`` is the source of truth for invites and
-          login; we reject blanks defensively).
-        - All sends are logged via :class:`AuditLog` (``navigator.email.sent``
-          / ``navigator.email.failed``) so the operator can trace
-          abuse or transport issues post-hoc.
-        """
-        import time
-
-        from backend.app.services.email import (
-            EmailAddress,
-            EmailMessage,
-            get_email_sender,
-            render_navigator_summary_email,
-        )
-
-        subject = _require_str(args, "subject").strip()
-        body = _require_str(args, "body_markdown")
-        if len(subject) > _NAVIGATOR_EMAIL_MAX_SUBJECT:
-            subject = subject[: _NAVIGATOR_EMAIL_MAX_SUBJECT - 1] + "…"
-        if len(body) > _NAVIGATOR_EMAIL_MAX_BODY:
-            body = body[:_NAVIGATOR_EMAIL_MAX_BODY] + "\n\n…(truncated)"
-
-        provider = (
-            (self._settings.email_provider or "log").lower().strip()
-        )
-        if provider == "none":
-            raise ToolInvocationError(
-                "Email transport is disabled (EMAIL_PROVIDER=none); "
-                "the operator has to enable SendGrid before this tool works."
-            )
-
-        user = await self._session.get(TenancyUser, self._user_id)
-        if user is None or not (user.email or "").strip():
-            raise ToolInvocationError(
-                "Could not resolve a destination email for the signed-in user."
-            )
-        recipient_email = user.email.strip()
-        recipient_name = user.display_name or None
-
-        # Per-user rate limit. Trim entries older than the rolling
-        # 1-hour window first so the cap is genuinely "last hour".
-        now = time.monotonic()
-        window = 3600.0
-        history = _navigator_email_history.setdefault(self._user_id, [])
-        history[:] = [t for t in history if now - t < window]
-        if len(history) >= _NAVIGATOR_EMAIL_HOURLY_CAP:
-            wait_seconds = int(window - (now - history[0]))
-            raise ToolInvocationError(
-                f"Hourly email cap reached ({_NAVIGATOR_EMAIL_HOURLY_CAP}). "
-                f"Try again in ~{max(60, wait_seconds) // 60} minute(s)."
-            )
-
-        rendered = render_navigator_summary_email(
-            subject=subject,
-            body_markdown=body,
-            conversation_url=None,
-        )
-        message = EmailMessage(
-            to=EmailAddress(email=recipient_email, name=recipient_name),
-            subject=rendered.subject,
-            html=rendered.html,
-            text=rendered.text,
-            tags={
-                "kind": "navigator_summary",
-                "workspace_id": str(self._workspace_id),
-                "user_id": str(self._user_id),
-            },
-        )
-
-        sender = get_email_sender(self._settings)
-        try:
-            result = await sender.send(message)
-        except Exception as exc:  # noqa: BLE001 — defensive
-            logger.exception(
-                "navigator email send raised user=%s", self._user_id
-            )
-            self._session.add(
-                AuditLog(
-                    workspace_id=self._workspace_id,
-                    actor_user_id=self._user_id,
-                    actor_token_id=None,
-                    action="navigator.email.failed",
-                    target_kind="user",
-                    target_id=str(self._user_id),
-                    payload={
-                        "subject": subject,
-                        "provider": sender.provider,
-                        "detail": f"unhandled: {exc}",
-                    },
-                )
-            )
-            raise ToolInvocationError(
-                f"send_email_to_self failed: {exc}"
-            ) from exc
-
-        history.append(now)
-
-        self._session.add(
-            AuditLog(
-                workspace_id=self._workspace_id,
-                actor_user_id=self._user_id,
-                actor_token_id=None,
-                action=(
-                    "navigator.email.sent"
-                    if result.sent
-                    else "navigator.email.failed"
-                ),
-                target_kind="user",
-                target_id=str(self._user_id),
-                payload={
-                    "subject": subject,
-                    "provider": result.provider,
-                    "detail": result.detail,
-                    "message_id": result.message_id,
-                },
-            )
-        )
-
-        if not result.sent:
-            return _json_result(
-                {
-                    "sent": False,
-                    "to": recipient_email,
-                    "provider": result.provider,
-                    "detail": result.detail,
-                }
-            )
-        return _json_result(
-            {
-                "sent": True,
-                "to": recipient_email,
-                "provider": result.provider,
-                "subject": subject,
-                "message_id": result.message_id,
-            }
-        )
 
     async def _tool_search_buckets(self, args: dict[str, Any]) -> str:
         # Phase 5d: ranks over ``bucket_articles`` instead of
@@ -6930,103 +6597,6 @@ class ToolBox:
                 "pipeline_id": str(pipeline.id),
                 "enabled": enabled,
                 "prior_enabled": prior_enabled,
-            }
-        )
-
-    async def _tool_intel_harvest_trigger(self, args: dict[str, Any]) -> str:
-        gate_err = await self._require_admin_or_error(
-            tool_name="intel_harvest_trigger"
-        )
-        if gate_err is not None:
-            return _json_result(gate_err)
-
-        try:
-            repo_id = _parse_uuid(args, "repo_id")
-        except ToolInvocationError as exc:
-            return _json_result({
-                "error": "validation_failed",
-                "message": str(exc),
-            })
-        if not await self._verify_repo_in_workspace(repo_id):
-            return _json_result({
-                "error": "not_found",
-                "message": (
-                    f"repo {repo_id} is not activated for this workspace"
-                ),
-            })
-
-        # Per-repo per-workspace 1/hour rate limit. We encode it as a
-        # lookup against our own audit rows so the limit survives a
-        # process restart and is observable in the audit timeline
-        # (rate-limit denials themselves do NOT audit, per spec).
-        from datetime import timedelta, timezone as _tz
-
-        now = datetime.now(_tz.utc)
-        cutoff = now - timedelta(hours=1)
-        recent = (
-            await self._session.execute(
-                select(AuditLog)
-                .where(
-                    AuditLog.workspace_id == self._workspace_id,
-                    AuditLog.action
-                    == "navigator.tool.intel_harvest_trigger",
-                    AuditLog.target_id == str(repo_id),
-                    AuditLog.created_at >= cutoff,
-                )
-                .order_by(AuditLog.created_at.desc())
-                .limit(1)
-            )
-        ).scalar_one_or_none()
-        if recent is not None:
-            elapsed = now - recent.created_at
-            retry_after = max(
-                1, int(timedelta(hours=1).total_seconds() - elapsed.total_seconds())
-            )
-            return _json_result(
-                {
-                    "error": "rate_limited",
-                    "message": (
-                        "harvest already triggered in the last hour"
-                    ),
-                    "retry_after_seconds": retry_after,
-                }
-            )
-
-        from backend.app.db.models.repo_intel import RepoIntelTriggeredBy
-        from backend.app.services.repo_intel import enqueue_harvest
-
-        # Settings carries the redis pool reference in the production
-        # path; fall back to ``None`` (inline asyncio.create_task) if
-        # the attribute isn't wired up — see ``enqueue_harvest`` for
-        # the documented inline-fallback contract.
-        redis_pool = getattr(self._settings, "redis_pool", None)
-        try:
-            await enqueue_harvest(
-                redis_pool,
-                self._workspace_id,
-                repo_id,
-                triggered_by=RepoIntelTriggeredBy.MANUAL_REFRESH,
-            )
-        except Exception as exc:  # noqa: BLE001 — surface as tool error
-            logger.exception(
-                "intel_harvest_trigger: enqueue failed (repo=%s)", repo_id
-            )
-            return _json_result({
-                "error": "internal",
-                "message": f"enqueue failed: {exc}",
-            })
-
-        await self._audit_navigator_tool(
-            tool_name="intel_harvest_trigger",
-            payload={"repo_id": str(repo_id)},
-            target={"kind": "workspace_repo", "id": str(repo_id)},
-        )
-
-        return _json_result(
-            {
-                "repo_id": str(repo_id),
-                "status": "queued",
-                "triggered_by": "navigator",
             }
         )
 
