@@ -421,20 +421,36 @@ JSON
 
 ### Outcomes
 
-- **\`ready_next_step\`** — your role finished cleanly. Set
-  \`stage_next\` to the next FSM stage. Server moves the ticket and
-  posts \`comment\` if provided.
+- **\`ready_next_step\`** — your role finished cleanly. Two shapes:
+
+  1. **You worked on a ticket.** Set \`ticket_ref\` and \`stage_next\`
+     to the next FSM stage; server moves the ticket and posts
+     \`comment\` if provided.
+  2. **There was nothing to do.** Pass \`ticket_ref: null\` and omit
+     \`stage_next\`. The server records the run in the audit log and
+     does **nothing** else — no inbox row, no tracker mutation. This
+     is the right outcome when a context-free routine (daily audit,
+     security sweep, retro) found no findings, OR when an FSM-stage
+     agent picked up no eligible ticket. **No work is not a blocker.**
+
 - **\`needs_clarification\`** — you're waiting on a human. Set
   \`comment\` with the question (server posts it) or omit it if you
   already left the question via a separate read-only path. Server
   tags the ticket \`needs:clarification\` so intake stops re-picking.
-  Status stays Todo. \`stage_next\` is ignored.
-- **\`blocked\`** — you cannot proceed (missing secret, broken env,
-  conflicting branch). Server drops a blocker into the workspace
-  inbox; ticket unchanged. \`stage_next\` is ignored.
+  Status stays Todo. \`stage_next\` is ignored. Requires a
+  \`ticket_ref\`.
+
+- **\`blocked\`** — **the environment is broken.** Use this only when
+  something on the runner side prevents the work from running:
+  missing secret, dead adapter, conflicting branch, tracker
+  unreachable, snyk/probe binary not installed, etc. Server drops a
+  blocker row into the inbox so an operator can fix the plumbing.
+  **Do not use \`blocked\` to mean "no findings" or "queue empty"**
+  — those are \`ready_next_step\` with \`ticket_ref: null\`.
+
 - **\`out_of_scope\`** — the ticket is invalid or shouldn't be
   processed. Server moves it to Done with optional \`comment\`.
-  \`stage_next\` is ignored.
+  \`stage_next\` is ignored. Requires a \`ticket_ref\`.
 
 ### Security
 

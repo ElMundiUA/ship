@@ -468,22 +468,26 @@ async def finish_agent_run(
         actions.append("inbox:no_tracker_bound")
 
     elif payload.outcome == "ready_next_step":
+        # Context-free routines (daily_*, audits with no findings, intake
+        # on an empty queue) finish with ``ready_next_step`` + no ticket
+        # — there's no work to transition. We accept this as a tracker
+        # no-op: only the audit row at the bottom of this handler runs.
+        # No inbox row, because "agent did its job and nothing was due"
+        # is not a thing that needs human attention.
         if not payload.ticket_ref:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail={"code": "ticket_ref_required", "outcome": payload.outcome},
-            )
-        if not payload.stage_next:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail={"code": "stage_next_required", "outcome": payload.outcome},
-            )
-        ref = _ticket_ref_from(resolved.kind, payload.ticket_ref)
-        if payload.comment:
-            await resolved.gateway.comment(ref, body=payload.comment)
-            actions.append("tracker:comment")
-        await resolved.gateway.transition(ref, to_state=payload.stage_next)
-        actions.append(f"tracker:transition:{payload.stage_next}")
+            actions.append("noop:no_ticket")
+        else:
+            if not payload.stage_next:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={"code": "stage_next_required", "outcome": payload.outcome},
+                )
+            ref = _ticket_ref_from(resolved.kind, payload.ticket_ref)
+            if payload.comment:
+                await resolved.gateway.comment(ref, body=payload.comment)
+                actions.append("tracker:comment")
+            await resolved.gateway.transition(ref, to_state=payload.stage_next)
+            actions.append(f"tracker:transition:{payload.stage_next}")
 
     elif payload.outcome == "needs_clarification":
         if not payload.ticket_ref:
