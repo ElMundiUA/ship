@@ -135,19 +135,19 @@ export function HeroSection() {
           aria-label="Key product routes"
           className="mt-8 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm font-semibold text-white/55"
         >
-          <Link className="text-aqua transition hover:text-white" href="/docs">
+          <Link className="text-sun transition hover:text-white" href="/docs">
             Docs
           </Link>
           <span className="text-white/25" aria-hidden>·</span>
-          <Link className="text-aqua transition hover:text-white" href="/use-cases">
+          <Link className="text-sun transition hover:text-white" href="/use-cases">
             Use cases
           </Link>
           <span className="text-white/25" aria-hidden>·</span>
-          <Link className="text-aqua transition hover:text-white" href="/process">
+          <Link className="text-sun transition hover:text-white" href="/process">
             Process &amp; specialists
           </Link>
           <span className="text-white/25" aria-hidden>·</span>
-          <Link className="text-aqua transition hover:text-white" href="/roadmap">
+          <Link className="text-sun transition hover:text-white" href="/roadmap">
             Roadmap
           </Link>
         </nav>

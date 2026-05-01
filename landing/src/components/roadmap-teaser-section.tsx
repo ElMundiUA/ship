@@ -18,7 +18,7 @@ export function RoadmapTeaserSection() {
           </h2>
           <p className="mt-5 text-base leading-relaxed text-white/65 sm:text-lg">
             The north star drives the roadmap. Below — three lines, three time horizons. The full version lives at{" "}
-            <Link href="/roadmap" className="text-aqua hover:text-white">/roadmap</Link>.
+            <Link href="/roadmap" className="text-sun hover:text-white">/roadmap</Link>.
           </p>
         </div>
 

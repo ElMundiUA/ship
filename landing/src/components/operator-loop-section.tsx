@@ -131,7 +131,7 @@ export function OperatorLoopSection() {
             </p>
             <Link
               href="/docs/orientation/what-is-ship"
-              className="mt-5 inline-flex items-center text-xs font-semibold text-aqua hover:text-white"
+              className="mt-5 inline-flex items-center text-xs font-semibold text-sun hover:text-white"
             >
               How the workspace assistant works →
             </Link>

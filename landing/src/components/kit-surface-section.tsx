@@ -71,7 +71,7 @@ export function KitSurfaceSection() {
             </p>
             <p className="mt-4 text-xs text-white/45">
               Shipped today; documented under{" "}
-              <Link className="text-aqua hover:text-white" href="/docs/orientation/vocabulary">
+              <Link className="text-sun hover:text-white" href="/docs/orientation/vocabulary">
                 Concepts
               </Link>
               .

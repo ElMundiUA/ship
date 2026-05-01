@@ -19,7 +19,7 @@ export function SiteFooter() {
             <p className="mt-5 max-w-md text-base leading-relaxed text-white/60">
               Apache-2.0 product delivery workspace for solo founders, product owners, and engineers: one place for
               policies, decisions, knowledge, and evidence you can audit. The public vocabulary is documented under{" "}
-              <Link className="text-aqua hover:text-white" href="/docs/orientation/vocabulary">Concepts</Link>.
+              <Link className="text-sun hover:text-white" href="/docs/orientation/vocabulary">Concepts</Link>.
             </p>
           </div>
 

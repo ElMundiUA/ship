@@ -78,8 +78,8 @@ export default async function BetaPage() {
           <div className="mx-auto max-w-2xl px-4 text-center sm:px-6">
             <p className="text-sm leading-relaxed text-white/55">
               Ship is in closed beta because we are still tuning the process model with real teams. Each cohort is small on
-              purpose. Reading the <Link href="/book" className="text-aqua hover:text-white transition">book</Link> and the{" "}
-              <Link href="/roadmap" className="text-aqua hover:text-white transition">roadmap</Link> is the right way to
+              purpose. Reading the <Link href="/book" className="text-sun hover:text-white transition">book</Link> and the{" "}
+              <Link href="/roadmap" className="text-sun hover:text-white transition">roadmap</Link> is the right way to
               decide whether you want in.
             </p>
           </div>
