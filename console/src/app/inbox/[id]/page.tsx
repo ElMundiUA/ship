@@ -22,6 +22,7 @@ import { notFound } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { ApiUnavailable } from "@/components/api-unavailable";
 import { StaleBadge } from "@/components/inbox/stale-badge";
+import { MarkdownBlock } from "@/components/markdown-block";
 import { Badge, Card, CardHeader } from "@/components/ui";
 import {
   ApiHttpError,
@@ -347,7 +348,9 @@ function HeaderCard({ detail }: { detail: InboxItemDetail }) {
         {detail.title}
       </h1>
       {detail.summary ? (
-        <p className="mt-2 text-sm text-white/75">{detail.summary}</p>
+        <div className="mt-3">
+          <MarkdownBlock>{detail.summary}</MarkdownBlock>
+        </div>
       ) : null}
       <dl className="mt-4 grid grid-cols-1 gap-2 text-xs text-white/65 sm:grid-cols-2">
         <Row label="Created">{absolute(detail.created_at)}</Row>
