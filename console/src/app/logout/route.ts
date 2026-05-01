@@ -19,14 +19,15 @@ export async function POST(request: Request) {
     // cookie *and* redirects through Auth0's RP-initiated logout endpoint
     // so the IdP-side session goes away too.
     //
-    // ``returnTo=/login`` lands the user on the sign-in page after Auth0
-    // confirms the logout instead of the bare app root. The SDK joins this
-    // with ``appBaseUrl`` and forwards as ``post_logout_redirect_uri`` —
-    // the absolute URL must be in the application's "Allowed Logout URLs"
-    // in the Auth0 dashboard, otherwise Auth0 returns 400 and the user
-    // stays signed in.
-    const url = new URL("/auth/logout", resolveOrigin(request));
-    url.searchParams.set("returnTo", "/login");
+    // The SDK forwards ``returnTo`` as ``post_logout_redirect_uri`` *as
+    // posted* — it does not prefix the value with ``appBaseUrl``. So we
+    // pass the absolute URL here (origin from the request); Auth0
+    // validates that exact string against the application's
+    // "Allowed Logout URLs" in the dashboard. A relative ``/login``
+    // alone would be sent verbatim and 400.
+    const origin = resolveOrigin(request);
+    const url = new URL("/auth/logout", origin);
+    url.searchParams.set("returnTo", `${origin}/login`);
     return NextResponse.redirect(url, 303);
   }
   await clearSessionCookie();
