@@ -47,6 +47,7 @@ export default async function ChatPage({
     repo_id?: string;
     project_id?: string;
     ws?: string;
+    from_inbox?: string;
   }>;
 }) {
   const params = (await searchParams) as Record<
@@ -183,6 +184,24 @@ export default async function ChatPage({
       }
     >
       <div className="mx-auto w-full max-w-3xl">
+        {typeof params.from_inbox === "string" && params.from_inbox && (
+          <div className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-aqua/30 bg-aqua/[0.06] px-4 py-3 text-xs text-white/85">
+            <div>
+              <span className="font-semibold text-aqua">📩 Linked inbox item</span>
+              <span className="ml-2 text-white/65">
+                Navigator was seeded with the ticket + the agent&apos;s
+                question. Once you&apos;ve agreed on an answer, head back
+                to the inbox row and use “Answer” to record it.
+              </span>
+            </div>
+            <Link
+              href={`/inbox/${encodeURIComponent(String(params.from_inbox))}`}
+              className="shrink-0 rounded-lg border border-aqua/40 px-3 py-1.5 font-semibold text-aqua hover:bg-aqua/10"
+            >
+              Open inbox row →
+            </Link>
+          </div>
+        )}
         <SingleWindowChat
           workspaceId={workspace.id}
           hasArchivedChats={hasArchivedChats}
