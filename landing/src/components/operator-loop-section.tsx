@@ -5,7 +5,7 @@ const nouns = [
     title: "Workspace",
     blurb:
       "The owner, repos, policies, and integrations that define where Ship is allowed to observe and assist.",
-    href: "/getting-started",
+    href: "/beta",
     cta: "Plan the setup",
     accent: "aqua",
   },
@@ -13,7 +13,7 @@ const nouns = [
     title: "Inbox",
     blurb:
       "Clarifications, improvements, approvals, and failures that need an owner instead of another hidden chat thread.",
-    href: "/docs/concepts#inbox",
+    href: "/docs/inbox/overview",
     cta: "How decisions flow",
     accent: "lilac",
   },
@@ -21,7 +21,7 @@ const nouns = [
     title: "Knowledge",
     blurb:
       "Repo facts, product context, policies, and standing rules that agents can use without guessing from stale Slack threads.",
-    href: "/docs/knowledge-buckets",
+    href: "/docs/knowledge/overview",
     cta: "Seed knowledge",
     accent: "sun",
   },
@@ -29,7 +29,7 @@ const nouns = [
     title: "Evidence",
     blurb:
       "A readable trail across tickets, pull requests, checks, comments, and dashboard summaries so reviews do not rely on memory.",
-    href: "/docs/operating",
+    href: "/docs/operating/morning-loop",
     cta: "Operate the trail",
     accent: "coral",
   },
@@ -130,7 +130,7 @@ export function OperatorLoopSection() {
               admins can change configuration and close decisions.
             </p>
             <Link
-              href="/docs/concepts#navigator"
+              href="/docs/orientation/what-is-ship"
               className="mt-5 inline-flex items-center text-xs font-semibold text-aqua hover:text-white"
             >
               How the workspace assistant works →

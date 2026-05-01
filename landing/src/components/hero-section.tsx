@@ -1,13 +1,10 @@
 import Link from "next/link";
-import pkg from "../../package.json";
 
 const HERO_CHECKLIST = [
   "Connect the repo and tracker",
   "Set policies before agents act",
   "Keep decisions tied to evidence",
 ];
-
-const KIT_VERSION = `v${pkg.version}`;
 
 export function HeroSection() {
   return (
@@ -20,11 +17,15 @@ export function HeroSection() {
         }}
       />
       <div className="relative mx-auto max-w-6xl px-4 sm:px-6">
-        <p className="mb-3 inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/[0.06] px-4 py-1.5 text-xs font-semibold uppercase tracking-widest text-aqua">
-          <span>Founder workspace · {KIT_VERSION}</span>
+        <Link
+          href="/beta"
+          className="mb-3 inline-flex items-center gap-2 rounded-full border border-aqua/30 bg-aqua/[0.08] px-4 py-1.5 text-xs font-semibold uppercase tracking-widest text-aqua transition hover:border-aqua/55 hover:bg-aqua/[0.14]"
+        >
+          <span className="inline-block h-1.5 w-1.5 rounded-full bg-aqua" aria-hidden />
+          <span>Closed beta</span>
           <span aria-hidden className="text-white/30">·</span>
-          <span className="text-white/75">console + evidence trail</span>
-        </p>
+          <span className="text-aqua/85">Request access →</span>
+        </Link>
         <h1 className="font-display max-w-5xl text-[2.125rem] font-bold leading-[1.08] tracking-normal text-white sm:text-5xl sm:leading-[1.06] md:text-6xl md:leading-[1.05] lg:text-[3.45rem] lg:leading-[1.03]">
           Give solo founders and product owners a{" "}
           <span className="bg-gradient-to-r from-coral via-sun to-aqua bg-clip-text text-transparent">
@@ -65,7 +66,7 @@ export function HeroSection() {
         </figure>
 
         <div className="mt-10 flex flex-col flex-wrap gap-4 sm:flex-row sm:items-center">
-          <Link className="btn-primary text-center sm:text-left" href="/getting-started#waitlist">
+          <Link className="btn-primary text-center sm:text-left" href="/beta">
             Request closed-beta access
           </Link>
           <Link className="btn-ghost text-center" href="#operator-loop">
@@ -85,8 +86,8 @@ export function HeroSection() {
             Use cases
           </Link>
           <span className="text-white/25" aria-hidden>·</span>
-          <Link className="text-aqua transition hover:text-white" href="/patterns">
-            Policies & procedures
+          <Link className="text-aqua transition hover:text-white" href="/process">
+            Process & specialists
           </Link>
         </nav>
 

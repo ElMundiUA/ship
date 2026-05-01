@@ -31,7 +31,7 @@ export function BackendStrip() {
               Product owners stay in the console; automation reads bounded context and reports evidence back into the
               same record.
             </p>
-            <Link href="/docs/automations" className="btn-secondary mt-8 inline-flex">
+            <Link href="/docs/process/overview" className="btn-secondary mt-8 inline-flex">
               Technical reference
             </Link>
           </div>

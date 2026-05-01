@@ -19,7 +19,7 @@ export function SiteFooter() {
             <p className="mt-5 max-w-md text-base leading-relaxed text-white/60">
               Apache-2.0 product delivery workspace for solo founders, product owners, and engineers: one place for
               policies, decisions, knowledge, and evidence you can audit. The public vocabulary is documented under{" "}
-              <Link className="text-aqua hover:text-white" href="/docs/concepts">Concepts</Link>.
+              <Link className="text-aqua hover:text-white" href="/docs/orientation/vocabulary">Concepts</Link>.
             </p>
           </div>
 
@@ -33,8 +33,8 @@ export function SiteFooter() {
                 <Link className="text-white/70 transition hover:text-aqua" href="/docs">
                   Get started
                 </Link>
-                <Link className="text-white/70 transition hover:text-aqua" href="/getting-started">
-                  Workspace setup
+                <Link className="text-white/70 transition hover:text-aqua" href="/beta">
+                  Request beta access
                 </Link>
                 <Link className="text-white/70 transition hover:text-aqua" href="/#team">
                   Team
@@ -48,10 +48,10 @@ export function SiteFooter() {
                 <Link className="text-white/70 transition hover:text-aqua" href="/kit">
                   Product surfaces
                 </Link>
-                <Link className="text-white/70 transition hover:text-aqua" href="/patterns">
-                  Policies
+                <Link className="text-white/70 transition hover:text-aqua" href="/process">
+                  Process & specialists
                 </Link>
-                <Link className="text-white/70 transition hover:text-aqua" href="/docs/knowledge-buckets">
+                <Link className="text-white/70 transition hover:text-aqua" href="/docs/knowledge/overview">
                   Knowledge
                 </Link>
               </nav>

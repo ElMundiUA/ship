@@ -3,7 +3,6 @@ import path from "node:path";
 import type { MetadataRoute } from "next";
 import { listBlogPosts } from "@/lib/blog";
 import { listDocumentationPages } from "@/lib/documentation-fs";
-import { loadPatternsManifest } from "@/lib/patterns";
 import { repoRoot } from "@/lib/repo-path";
 import { resolveMetadataBase } from "@/lib/site-url";
 
@@ -42,14 +41,14 @@ export default function sitemap(): MetadataRoute.Sitemap {
 
   const staticRoutes: { path: string; priority: Priority; changeFrequency: ChangeFreq }[] = [
     { path: "/", priority: 1.0, changeFrequency: "weekly" },
-    { path: "/getting-started", priority: 0.9, changeFrequency: "weekly" },
     { path: "/kit", priority: 0.8, changeFrequency: "weekly" },
-    { path: "/patterns", priority: 0.8, changeFrequency: "weekly" },
     { path: "/use-cases", priority: 0.7, changeFrequency: "monthly" },
     { path: "/use-cases/elmundi", priority: 0.6, changeFrequency: "monthly" },
     { path: "/blog", priority: 0.7, changeFrequency: "weekly" },
     { path: "/book", priority: 0.7, changeFrequency: "monthly" },
     { path: "/docs", priority: 0.8, changeFrequency: "weekly" },
+    { path: "/beta", priority: 0.9, changeFrequency: "weekly" },
+    { path: "/process", priority: 0.9, changeFrequency: "weekly" },
   ];
 
   const out: MetadataRoute.Sitemap = staticRoutes.map((r) => ({
@@ -82,15 +81,5 @@ export default function sitemap(): MetadataRoute.Sitemap {
     });
   }
 
-  /* Policy/procedure detail pages. updated_at on the artifact frontmatter where
-   * present, otherwise the source file mtime. */
-  for (const p of loadPatternsManifest().patterns) {
-    out.push({
-      url: url(`/patterns/${p.id}`),
-      lastModified: p.updated_at ? parseISO(p.updated_at) : safeMtime(path.join(root, p.path)),
-      changeFrequency: "monthly",
-      priority: 0.6,
-    });
-  }
   return out;
 }

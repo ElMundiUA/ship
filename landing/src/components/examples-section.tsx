@@ -27,7 +27,7 @@ const previewShots: Preview[] = [
   },
   {
     kind: "internal",
-    href: "/getting-started",
+    href: "/beta",
     src: "/use-cases/ship-home.png",
     alt: "Ship workspace setup page",
     caption: "Workspace setup",

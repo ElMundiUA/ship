@@ -2,25 +2,25 @@ import Link from "next/link";
 
 const tiles = [
   {
-    href: "/getting-started",
+    href: "/beta",
     kicker: "Control",
     title: "Workspace",
     body: "The owner, repos, tracker, members, and integrations that make the product delivery loop visible.",
   },
   {
-    href: "/patterns",
+    href: "/process",
     kicker: "Boundaries",
     title: "Policies",
     body: "Short standing rules for what agents may do, when a human must decide, and which evidence is required.",
   },
   {
-    href: "/docs/knowledge-buckets",
+    href: "/docs/knowledge/overview",
     kicker: "Context",
     title: "Knowledge",
     body: "Product facts, repo context, constraints, and review notes agents can use without guessing.",
   },
   {
-    href: "/docs/operating",
+    href: "/docs/operating/morning-loop",
     kicker: "Trust",
     title: "Evidence",
     body: "Tickets, pull requests, checks, comments, and Inbox decisions tied together for review.",
@@ -71,7 +71,7 @@ export function KitSurfaceSection() {
             </p>
             <p className="mt-4 text-xs text-white/45">
               Shipped today; documented under{" "}
-              <Link className="text-aqua hover:text-white" href="/docs/concepts">
+              <Link className="text-aqua hover:text-white" href="/docs/orientation/vocabulary">
                 Concepts
               </Link>
               .

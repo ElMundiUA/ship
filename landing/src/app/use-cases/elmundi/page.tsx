@@ -202,7 +202,7 @@ export default function ElmundiUseCasePage() {
 
         <UseCaseCtaRow
           links={[
-            { href: "/getting-started", label: "Adopt the same loop", variant: "primary" },
+            { href: "/beta", label: "Adopt the same loop", variant: "primary" },
             { href: "/use-cases/elmundi", label: "Read the engineering chapter", variant: "secondary" },
             { href: "/use-cases", label: "All customer stories", variant: "secondary" },
           ]}

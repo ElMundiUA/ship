@@ -6,38 +6,25 @@ import { repoUrl } from "@/lib/config";
 
 /**
  * Top nav, left → right after the logo:
- *   Use cases  — buyer-facing proof / reference deployments
- *   Get started — workspace setup and docs entry
- *   Docs        — product and technical documentation
- *   The book    — long-form rationale (loud accent CTA)
- *   GitHub      — repo
- *
- * The "Get started" slot intentionally points at /docs (not /getting-started).
- * The standalone wizard URL still works and is reachable from the docs sidebar
- * + the docs landing CTA + the home hero. The header surfaces the section
- * because that is what most users actually want when they click "Get started"
- * — orientation first, wizard one click in.
+ *   Use cases — buyer-facing proof / reference deployments
+ *   Process   — process + specialists marketing page (replaces the old patterns/policies slot)
+ *   Docs      — product and technical documentation
+ *   Blog      — engineering and product blog
+ *   The book  — long-form rationale (accent CTA)
+ *   GitHub    — repo
+ *   Closed beta pill → /beta (request access)
+ *   Sign in   → console
  */
 type NavItem = {
   href: string;
   label: string;
   className: string;
-  /**
-   * Extra path prefixes that should also light up this nav item. Lets us
-   * highlight "Get started" while the user is on /getting-started.
-   */
   alsoActiveOn?: string[];
 };
 
 const NAV: NavItem[] = [
   { href: "/use-cases", label: "Use cases", className: "" },
-  {
-    href: "/getting-started",
-    label: "Get started",
-    className: "",
-    alsoActiveOn: ["/docs"],
-  },
-  { href: "/patterns", label: "Policies", className: "" },
+  { href: "/process", label: "Process", className: "" },
   { href: "/docs", label: "Docs", className: "" },
   { href: "/blog", label: "Blog", className: "" },
 ];
@@ -106,7 +93,7 @@ export function SiteHeader() {
           })}
           <Link
             href="/book"
-            className="ml-1 inline-flex shrink-0 items-center rounded-full bg-gradient-to-r from-amber-400 via-orange-500 to-fuchsia-600 px-3 py-2 text-xs font-bold uppercase tracking-wide text-zinc-950 shadow-[0_0_24px_rgba(249,115,22,0.45)] ring-2 ring-white/25 transition hover:brightness-110 hover:ring-white/40 sm:ml-2 sm:px-3.5 sm:text-[0.8rem]"
+            className="ml-1 inline-flex shrink-0 items-center rounded-full bg-gradient-to-r from-sun via-sun to-aqua px-3 py-2 text-xs font-bold uppercase tracking-wide text-zinc-950 shadow-[0_0_18px_rgba(255,200,87,0.28)] ring-1 ring-white/15 transition hover:brightness-110 hover:ring-white/30 sm:ml-2 sm:px-3.5 sm:text-[0.8rem]"
           >
             The book
           </Link>
@@ -119,12 +106,15 @@ export function SiteHeader() {
             GitHub
           </a>
           <div className="ml-2 flex items-center gap-2 sm:ml-3">
-            <span className="inline-flex rounded-full bg-white/10 px-2.5 py-1 text-xs font-medium text-white/60">
+            <Link
+              href="/beta"
+              className="inline-flex rounded-full bg-white/10 px-2.5 py-1 text-xs font-medium text-white/60 transition hover:bg-white/15"
+            >
               Closed beta
-            </span>
+            </Link>
             <a
               href="https://app.ship.elmundi.com/login"
-              className="inline-flex shrink-0 items-center rounded-full bg-gradient-to-r from-cyan-400 via-aqua to-fuchsia-500 px-3.5 py-2 text-xs font-bold uppercase tracking-wide text-zinc-950 shadow-[0_0_24px_rgba(34,211,238,0.45)] ring-2 ring-white/25 transition hover:brightness-110 hover:ring-white/40"
+              className="inline-flex shrink-0 items-center rounded-full bg-gradient-to-r from-aqua via-aqua to-sun px-3.5 py-2 text-xs font-bold uppercase tracking-wide text-zinc-950 shadow-[0_0_18px_rgba(46,230,214,0.32)] ring-1 ring-white/15 transition hover:brightness-110 hover:ring-white/30"
             >
               Sign in
             </a>

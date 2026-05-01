@@ -1,0 +1,19 @@
+# What Ship is
+
+We have all sat in the room where the demo wins. Someone shows a model that opens pull requests, posts cheerful summaries, and navigates code as if it were reading a familiar hallway. The lights are bright. The narrative is heroic. The room applauds motion. Then Monday arrives, and the same system quietly becomes a tax: duplicate PRs against the same file, labels that mean one thing in the morning and another by afternoon, commits with messages so abstract that no one will merge them without rewrites. The demo was loud. Production is a whisper you still have to hear.
+
+Ship is built to be quiet on purpose—and to make that quiet audible.
+
+Ship is a workspace for product delivery where AI agents work inside explicit fences and every action leaves a trail you can read without forensics. It sits between the people who own the product and the machines who execute: a web console for humans to set intent and review evidence, a small command-line tool (shipctl) for local work, and a GitHub App that watches repos and runs routines. The heart of the system is four connected boxes. A **Tracker** (Linear, Jira, GitHub Issues, or similar) holds the work record—what is intended, who owns it, what is blocked, what is done. An **Inbox** catches the decisions machines cannot make alone: clarification requests from agents, improvements to standing rules, approvals before irreversible action, reports of failures that break the fence. A **Scheduler** manages when agents run, how long they get, what they can touch, and what happens when they exceed their bounds. An **Audit log** records every meaningful action—who asked for it, what the agent did, what evidence it left, whether it succeeded.
+
+This is not a chatbot with repository access. Agents in Ship do not decide priority or which tickets matter. They cannot open their own issues or change the tracker without evidence that something outside has changed. A policy, set by a human, decides what matters and what the machine is allowed to do in response. The policies are explicit: if this ticket says it is blocked, do not change it to ready unless this other ticket is closed. If this pull request has this label, ask before merging. If this check fails three times, page someone instead of retrying. The machine follows the fence. The human owns the intent.
+
+This is not autonomy entertainment. The goal is not to watch an agent work. The goal is velocity you can explain—and defend—to the rest of the team. When a pull request gets opened, it should be possible to point to the ticket, the knowledge article that informed the code, the check that passed, and the human who approved the step. When something goes sideways, the failure should be boring: an invariant the agent was asked to preserve was violated, a contract unmet, a step that refused to advance because the proof was missing. Boring failures are fixable failures. Surprising failures mean you did not have a fence.
+
+## What we mean by quiet
+
+Quiet is not modesty. Quiet is legibility. A quiet system does fewer surprising things. It leaves traces you can follow without a séance. When an agent posts a comment, it is not performing a summary—it is linking evidence to a decision: *this check passed, so the gate opens*. When a routine blocks, it is not mysterious—it is waiting for a human to answer a question posed in the Inbox. When the work moves, someone with authority chose to move it, and the proof lives in a pull request or a policy change you can read on screen. The alternative—a system that explains itself in real time—requires you to trust both the machine and the interpreter. Quiet systems let you verify.
+
+The promise is auditable velocity. Movement you can explain. Reproduction paths you can sketch. Defenses you can stand behind when someone asks, why did we do this, and who decided? Evidence beats opinion. Quiet beats loud.
+
+The next chapter is the vocabulary you will meet on every screen.

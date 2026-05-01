@@ -1,4 +1,5 @@
 import Image from "next/image";
+import Link from "next/link";
 
 type TeamMember = {
   name: string;
@@ -156,19 +157,26 @@ function CompactMember({ member }: { member: TeamMember }) {
   );
 }
 
+const COMPANY_FACTS: { kicker: string; value: string; note: string }[] = [
+  { kicker: "Headquarters", value: "Kyiv & remote", note: "Distributed across CET / EET timezones." },
+  { kicker: "Reference deployment", value: "ElMundi", note: "Ship was built and pressure-tested running ElMundi's own delivery." },
+  { kicker: "Stage", value: "Closed beta", note: "Onboarding founder workspaces by invite, cohort by cohort." },
+];
+
 export function TeamSection() {
   return (
-    <section id="team" className="border-y border-white/10 bg-gradient-to-br from-aqua/[0.06] via-black/20 to-lilac/[0.06] py-20 sm:py-24">
+    <section id="team" className="border-y border-white/10 bg-gradient-to-br from-aqua/[0.05] via-black/30 to-sun/[0.04] py-20 sm:py-24">
       <div className="mx-auto max-w-6xl px-4 sm:px-6">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <p className="text-sm font-bold uppercase tracking-widest text-aqua/90">Team</p>
-            <h2 className="font-display mt-2 text-3xl font-bold text-white sm:text-4xl">
-              The people behind Ship
+            <p className="text-xs font-bold uppercase tracking-[0.2em] text-aqua/85">Team &amp; company</p>
+            <h2 className="font-display mt-3 text-3xl font-bold text-white sm:text-4xl">
+              The people building Ship
             </h2>
-            <p className="mt-4 max-w-3xl text-lg text-white/65">
-              Ship is built in public by a small product and engineering team, with advisory help for enterprise clients
-              and go-to-market work.
+            <p className="mt-4 max-w-2xl text-base leading-relaxed text-white/70 sm:text-lg">
+              Ship is shipped by a small leadership and engineering team operating from Europe. The product was built and
+              pressure-tested running our own delivery — every routine, specialist, and process you see has been used in
+              anger before it left the workspace.
             </p>
           </div>
           <a
@@ -181,21 +189,51 @@ export function TeamSection() {
           </a>
         </div>
 
-        <div className="mt-10 grid gap-4 lg:grid-cols-3">
-          {leadership.map((member) => (
-            <MemberCard key={member.name} member={member} />
+        <div className="mt-10 grid gap-3 sm:grid-cols-3">
+          {COMPANY_FACTS.map((fact) => (
+            <div
+              key={fact.kicker}
+              className="rounded-2xl border border-white/10 bg-white/[0.025] p-5"
+            >
+              <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-white/45">{fact.kicker}</p>
+              <p className="font-display mt-2 text-lg font-bold text-white">{fact.value}</p>
+              <p className="mt-2 text-xs leading-relaxed text-white/55">{fact.note}</p>
+            </div>
           ))}
         </div>
 
-        <div className="mt-8">
-          <p className="mb-4 text-xs font-bold uppercase tracking-[0.18em] text-white/40">
-            Core team
-          </p>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="mt-12">
+          <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-aqua/85">Leadership &amp; advisors</p>
+          <div className="mt-4 grid gap-4 lg:grid-cols-3">
+            {leadership.map((member) => (
+              <MemberCard key={member.name} member={member} />
+            ))}
+          </div>
+        </div>
+
+        <div className="mt-10">
+          <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-white/45">Engineering team</p>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             {team.map((member) => (
               <CompactMember key={member.handle} member={member} />
             ))}
           </div>
+        </div>
+
+        <div className="mt-12 rounded-2xl border border-white/10 bg-black/20 p-6 sm:p-8">
+          <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-aqua/85">For investors</p>
+          <p className="mt-3 max-w-3xl text-sm leading-relaxed text-white/70 sm:text-base">
+            We are open to conversations with strategic investors who back operator-grade developer tools. Brief deck and a
+            walkthrough of the reference deployment available on request — reach out via the closed-beta form and select
+            the appropriate role.
+          </p>
+          <Link
+            href="/beta"
+            className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-aqua hover:text-white"
+          >
+            Open the contact form
+            <span aria-hidden>→</span>
+          </Link>
         </div>
       </div>
     </section>

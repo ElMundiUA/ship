@@ -54,13 +54,13 @@ export default function UseCasesIndexPage() {
             </p>
             <p className="mx-auto mt-4 max-w-2xl text-sm text-white/55">
               If the product vocabulary is new to you, start here →{" "}
-              <Link href="/docs/concepts" className="font-semibold text-aqua underline-offset-2 hover:underline">
-                /docs/concepts
+              <Link href="/docs/orientation/vocabulary" className="font-semibold text-aqua underline-offset-2 hover:underline">
+                /docs/orientation/vocabulary
               </Link>
               .
             </p>
             <div className="mt-10 flex flex-wrap justify-center gap-3">
-              <Link href="/getting-started" className="btn-primary inline-flex">
+              <Link href="/beta" className="btn-primary inline-flex">
                 Plan a workspace
               </Link>
               <Link href="#stories" className="btn-secondary inline-flex">
@@ -153,13 +153,13 @@ export default function UseCasesIndexPage() {
               tracker, set policies, seed knowledge, and keep evidence attached to every automated step.
             </p>
             <div className="mt-8 flex flex-wrap justify-center gap-3">
-              <Link href="/getting-started" className="btn-primary inline-flex">
+              <Link href="/beta" className="btn-primary inline-flex">
                 Get started
               </Link>
               <Link href="/book" className="btn-secondary inline-flex">
                 Read the book
               </Link>
-              <Link href="/patterns" className="btn-secondary inline-flex">
+              <Link href="/process" className="btn-secondary inline-flex">
                 Browse policies
               </Link>
             </div>

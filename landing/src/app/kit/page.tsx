@@ -26,7 +26,7 @@ type Tile = {
 
 const TILES: Tile[] = [
   {
-    href: "/getting-started",
+    href: "/beta",
     kicker: "Control",
     title: "Workspace",
     body: "Connect the product repo, tracker, owner, members, and integrations before automation starts moving work.",
@@ -35,7 +35,7 @@ const TILES: Tile[] = [
     accentDot: "bg-aqua",
   },
   {
-    href: "/patterns",
+    href: "/process",
     kicker: "Boundaries",
     title: "Policies",
     body: "Standing rules for allowed actions, review gates, required evidence, and the moments where a human must decide.",
@@ -44,7 +44,7 @@ const TILES: Tile[] = [
     accentDot: "bg-sun",
   },
   {
-    href: "/docs/knowledge-buckets",
+    href: "/docs/knowledge/overview",
     kicker: "Context",
     title: "Knowledge",
     body: "Repo facts, product constraints, customer context, and review notes agents can use without stale chat archaeology.",
@@ -53,7 +53,7 @@ const TILES: Tile[] = [
     accentDot: "bg-coral",
   },
   {
-    href: "/docs/operating",
+    href: "/docs/operating/morning-loop",
     kicker: "Proof",
     title: "Evidence",
     body: "Tickets, pull requests, checks, comments, and Inbox decisions connected into a story a buyer or reviewer can follow.",
@@ -89,7 +89,7 @@ export default function KitPage() {
               <Link href="#kinds" className="btn-primary inline-flex">
                 Browse the surfaces
               </Link>
-              <Link href="/docs/concepts" className="btn-secondary inline-flex">
+              <Link href="/docs/orientation/vocabulary" className="btn-secondary inline-flex">
                 Product concepts →
               </Link>
             </div>
@@ -179,10 +179,10 @@ export default function KitPage() {
               ))}
             </div>
             <div className="mt-10 flex flex-wrap gap-3">
-              <Link href="/getting-started" className="btn-secondary inline-flex">
+              <Link href="/beta" className="btn-secondary inline-flex">
                 Workspace setup →
               </Link>
-              <Link href="/patterns" className="btn-primary inline-flex">
+              <Link href="/process" className="btn-primary inline-flex">
                 Policy library →
               </Link>
             </div>
@@ -203,8 +203,8 @@ export default function KitPage() {
                 { href: "/use-cases", label: "Reference deployments & customer stories" },
                 { href: "/docs", label: "Product docs and technical reference" },
                 { href: "/book", label: "The book — long-form rationale" },
-                { href: "/getting-started", label: "Workspace setup guide" },
-                { href: "/docs/automations", label: "Bounded automations" },
+                { href: "/beta", label: "Workspace setup guide" },
+                { href: "/docs/process/overview", label: "Bounded automations" },
               ].map((row) => (
                 <li key={row.href}>
                   <Link

@@ -1,0 +1,11 @@
+# OAuth vs API key vs personal access token (PAT): what's the difference?
+
+**OAuth** is a flow where you click a button, you're redirected to the provider's website, you log in there, you see a screen asking you to approve a list of permissions, and the provider hands a token back to Ship behind the scenes. You never copy a value yourself—the provider and Ship exchange it securely. The advantage: the token can be revoked by you or the provider at any time, it carries a defined scope (the provider won't give it permissions you didn't approve), and it's tied to your user account so audit logs are clear. Examples: Linear OAuth, Notion OAuth (when offered), GitHub App install (which is an OAuth-like flow).
+
+**An API key** is a long string the provider generates when you ask for one. You copy it, paste it into Ship's form, and you're done. It usually doesn't expire unless you manually revoke it, and it often isn't tied to a specific user—it's usually workspace-wide or project-wide. Easier to set up, harder to audit precisely (you won't know which person is using it). Examples: OpenAI API key, Anthropic API key, Stripe API key.
+
+**A personal access token (PAT)** is an API key tied to a specific user account. The user generates it themselves, names it (for example, "Ship on macOS"), optionally sets an expiration date, copies the value, and pastes it into Ship. Because it's tied to a user, anyone with that PAT can do anything the user can do. If the user leaves the company, the PAT becomes a security liability because it still carries the user's identity and permissions. The solution: set short expirations (30 days, 90 days, not "never") and rotate them when team members rotate. Examples: GitHub PAT, GitLab PAT, Azure DevOps PAT, Jira PAT.
+
+In practice, Ship prefers OAuth or App-based authentication where it's available. These approaches require less manual work (no copying values), they're easier to audit (clear user attribution), and they're easier to revoke (one click on the provider's side). API keys and PATs are the fallback when a provider doesn't offer OAuth—they're not worse, just less convenient and requiring more discipline to manage safely.
+
+Back to [Appendix index](/docs/appendix)

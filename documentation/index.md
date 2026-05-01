@@ -1,41 +1,29 @@
-# Manual
+# The Ship manual
 
-The Manual explains how to set up and operate Ship as a product delivery workspace. It starts from the work a product owner, lead, or platform team actually needs to see: connected repos, tracker-backed intent, decisions that need attention, knowledge agents can use, and evidence that survives review.
+This is the user manual: how to set up and operate Ship as a product delivery workspace, written in human language. It covers everything the product does today — from a non-technical product owner who needs a friendly explainer of what an "OpenAI key" is, to an engineer wiring `shipctl` into CI.
 
-It is not the book, the catalog, or the CLI flag list. The book explains why the method exists. The catalog lists reusable procedures and integrations. The CLI page is the developer workbench.
+The manual is one of three reading surfaces. The [book](/book) is the long argument for why the method exists. [Use cases](/use-cases) show the public deployments. This manual is the operator's reference for the product as it works today.
 
-## The public vocabulary
+## How the manual is laid out
 
-Use these words in user-facing docs and landing copy:
+The chapters read in order, and each chapter is one short essay on one idea — three to six minutes at a normal pace. You can read straight through, or jump to whichever part matches the current question.
 
-- **Workspace** — the team or product area Ship operates inside.
-- **Connected repo** — a repository Ship can observe and help keep wired.
-- **Tracker** — the system of record for product intent, ownership, blockers, and done.
-- **Inbox** — the place for clarifications, improvements, approvals, failures, and exceptions that need a human decision.
-- **Knowledge** — product facts, repo context, policies, and standing rules available to agents and reviewers.
-- **Automation** — a repeatable check or agent-assisted action that runs under explicit rules.
-- **Evidence** — links, comments, pull requests, checks, and knowledge updates that explain what happened.
+- **[Orientation](/docs/orientation/what-is-ship)** — what Ship is, the seven words you'll meet on every screen, what a normal morning looks like.
+- **[Setup](/docs/setup/onboarding-wizard)** — the onboarding wizard, the GitHub App, binding the tracker, members and roles, integrations beyond the tracker.
+- **[Knowledge](/docs/knowledge/overview)** — what knowledge is for, buckets, importing, the distiller and review path, chat as a knowledge tool.
+- **[Inbox](/docs/inbox/overview)** — decision work, the five item types, routing rules, the disposition vocabulary.
+- **[Process](/docs/process/overview)** — the model (process / states / routines / specialists), the editor, the routine catalogue, tracker mapping, healthy vs unhealthy routines.
+- **[Operating](/docs/operating/morning-loop)** — the morning loop, the audit log, the discipline of reading silent failures.
+- **[Policies, secrets, evidence](/docs/policies/policies)** — workspace-wide rules, where secrets live, the evidence checklist.
+- **[Local repo](/docs/developer/ship-folder)** — `.ship/`, `shipctl`, authoring custom artefacts, applying bundle updates.
+- **[Reference](/docs/reference/cli)** — `shipctl` command catalogue, troubleshooting (symptom → cause → fix), glossary.
+- **[Appendix](/docs/appendix)** — friendly per-entry explainers for non-technical readers. The wizard cross-links straight to the relevant entry; you can also browse the page directly.
 
-Keep protocol terms such as `lanes`, `pipeline_runs`, `RFC-*`, `shipctl init`, and `.ship/config.yml` out of first-read pages unless the page is technical reference.
-
-## What you will find here
-
-- **[Product concepts](./concepts.md)** — workspace, repo, tracker, Inbox, knowledge, automations, evidence, and the book postulates behind them.
-- **[Automations](./automations.md)** — how repeatable work stays bounded, human-owned, and auditable.
-- **[Knowledge](./knowledge-buckets.md)** — how product and repo context reaches agents without turning prompts into a private wiki.
-- **[Operating](./operating.md)** — how to review blockers, shipped work, decisions, and evidence after setup.
-- **[Configuration](./configuration.md)** — the technical reference for `.ship/`, `shipctl`, config fields, and versioned artifacts.
-- **[Agent matrix](./agent-matrix.md)** — supported agent ids and on-disk rule targets.
-- **[Authoring artifacts](./authoring.md)** — how to write a pattern, tool, collection, preset, or adapter.
-- **[Discovery contract](./discovery.md)** — the structured interview agents use before their first meaningful change.
-- **[Protocol](./protocol/index.md)** — implementation specs and RFCs.
-- **[Troubleshooting](./troubleshooting.md)** — symptom-first fixes for console, repo setup, knowledge, and CLI failures.
-- **[Legal](./legal.md)** — license and versioning policy.
-- **[Changelog](./CHANGELOG.md)** — changes to the Manual itself.
+The [implementation spec](/docs/discovery), the [protocol RFCs](/docs/protocol), and the [authoring reference](/docs/authoring) are kept separately for engineers maintaining the catalogue. The [roadmap](/roadmap) describes what Ship ships at production depth today and what we are growing toward — that page lives on the marketing site, not in `/docs`.
 
 ## What stays true from the book
 
-The Manual uses simpler words than the book, but it keeps the same spine:
+The manual uses simpler words than the book, but it keeps the same spine:
 
 - Humans own intent. Ship can move work, but it does not own the product decision.
 - Legibility is kindness. A future reviewer should understand what ran, why, and where the proof lives.
@@ -44,6 +32,12 @@ The Manual uses simpler words than the book, but it keeps the same spine:
 - Fences beat exhortations. Machines need clear allowed scopes, states, owners, and secrets.
 - Vendors are plugs, not gods. Tracker, CI, model, and agent host can change while the story stays stable.
 
-## Where to next
+## Where to start
 
-Start with [Getting started](/getting-started) for the product setup path. Then read [Concepts](./concepts.md), [Knowledge](./knowledge-buckets.md), and [Operating](./operating.md). Use [Configuration](./configuration.md), [Agent matrix](./agent-matrix.md), and the [CLI](./configuration.md#local-commands) when you are implementing or debugging the repo-level wiring.
+A new reader: open [What Ship is](/docs/orientation/what-is-ship) and read Orientation in order, then [Setup](/docs/setup/onboarding-wizard).
+
+An operator already running Ship: skim [Vocabulary](/docs/orientation/vocabulary) for the terms, then jump to whichever part matches your current question — most often [Inbox](/docs/inbox/overview), [Process](/docs/process/overview), or [Operating](/docs/operating/morning-loop).
+
+An engineer wiring a repo: start at [the `.ship/` folder](/docs/developer/ship-folder) and [shipctl](/docs/developer/shipctl). The reference and CLI catalogue are next door.
+
+A non-technical product owner stuck on a wizard step: follow the link the wizard gives you — it deep-links straight into the [Appendix](/docs/appendix).

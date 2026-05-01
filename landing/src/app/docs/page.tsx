@@ -26,10 +26,10 @@ export default function DocsHomePage() {
           first path is about founder ownership, product decisions, and evidence.
         </p>
         <div className="mt-7 flex flex-wrap gap-3">
-          <Link href="/getting-started" className="btn-primary inline-flex">
+          <Link href="/docs" className="btn-primary inline-flex">
             Plan workspace setup
           </Link>
-          <Link href="/docs/concepts" className="btn-secondary inline-flex">
+          <Link href="/docs/orientation/vocabulary" className="btn-secondary inline-flex">
             Browse product concepts
           </Link>
         </div>

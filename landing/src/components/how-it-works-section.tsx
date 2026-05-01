@@ -74,13 +74,13 @@ export function HowItWorksSection() {
         <div className="mt-10 flex flex-wrap items-center gap-3 text-sm">
           <Link
             className="inline-flex items-center rounded-full border border-aqua/30 bg-aqua/[0.08] px-4 py-1.5 font-semibold text-aqua hover:border-aqua/60"
-            href="/getting-started"
+            href="/beta"
           >
             Start with the workspace guide
           </Link>
           <Link
             className="inline-flex items-center rounded-full border border-white/15 bg-white/[0.04] px-4 py-1.5 font-semibold text-white/80 hover:border-white/30"
-            href="/docs/concepts"
+            href="/docs/orientation/vocabulary"
           >
             Read the product concepts
           </Link>

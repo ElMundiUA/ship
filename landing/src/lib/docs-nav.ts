@@ -1,6 +1,6 @@
 /**
- * Docs sidebar nav, grouped by purpose. Used by docs/layout.tsx and the
- * /docs landing page card grid so labels and groupings can never drift.
+ * Docs sidebar nav, grouped by part of the user manual. Used by docs/layout.tsx
+ * and the /docs landing page card grid so labels and groupings can never drift.
  */
 
 export type DocsNavItem = {
@@ -17,78 +17,255 @@ export type DocsNavGroup = {
 
 export const DOCS_NAV: DocsNavGroup[] = [
   {
-    label: "Start here",
+    label: "Orientation",
     accent: "aqua",
     items: [
       {
-        href: "/getting-started",
-        label: "Workspace setup",
+        href: "/docs/orientation/what-is-ship",
+        label: "What Ship is",
         blurb:
-          "Create a workspace, connect repos, bind the tracker, set policies, seed knowledge, and review the first Inbox items.",
+          "A workspace for AI-assisted product delivery — humans own intent, machines act inside fences, every action leaves a trail.",
       },
       {
-        href: "/docs/concepts",
-        label: "Product concepts",
+        href: "/docs/orientation/vocabulary",
+        label: "Vocabulary",
         blurb:
-          "Plain-language vocabulary for workspace, repo, tracker, Inbox, knowledge, evidence, and automation.",
+          "The seven words you'll meet on every screen: workspace, connected repo, tracker, Inbox, knowledge, process, evidence.",
+      },
+      {
+        href: "/docs/orientation/a-day-in-ship",
+        label: "A day in Ship",
+        blurb: "What a normal morning looks like — open the console, drain the Inbox, glance at shipped, top up knowledge.",
       },
     ],
   },
   {
-    label: "Workspace guides",
+    label: "Setup",
     accent: "lilac",
     items: [
       {
-        href: "/docs/automations",
-        label: "Automations",
-        blurb: "Repeatable product and engineering actions that stay bounded, reviewable, and tied to evidence.",
+        href: "/getting-started",
+        label: "Quick checklist",
+        blurb: "Short setup checklist for the operator who has done this before. Cross-links into the chapters below.",
       },
       {
-        href: "/docs/concepts#inbox",
-        label: "Inbox",
-        blurb: "The attention surface for clarifications, improvements, approvals, failures, and exceptions.",
+        href: "/docs/setup/onboarding-wizard",
+        label: "The onboarding wizard",
+        blurb: "Walk the four wizard steps end-to-end: Install GitHub App → Pick repos → Workspace tracker → Confirm.",
       },
       {
-        href: "/docs/knowledge-buckets",
-        label: "Knowledge",
-        blurb: "How product facts, repo context, and standing rules reach agents and reviewers.",
+        href: "/docs/setup/github-app",
+        label: "GitHub App and repo activation",
+        blurb: "Why an App and not a token; what the App can see; the two-layer model of install scope and activation.",
+      },
+      {
+        href: "/docs/setup/tracker-binding",
+        label: "Binding the tracker",
+        blurb: "One tracker per workspace. Linear, Jira, GitHub Issues, GitLab, Azure DevOps — credentials and trade-offs.",
+      },
+      {
+        href: "/docs/setup/members-and-roles",
+        label: "Members and roles",
+        blurb: "Three roles — owner, admin, member — and the last-owner protection that saves you a support ticket.",
+      },
+      {
+        href: "/docs/setup/integrations",
+        label: "Integrations beyond the tracker",
+        blurb: "Notion, Slack, Teams, OpenTelemetry, S3 export, custom webhook — what each is for and how to wire it.",
       },
     ],
   },
   {
-    label: "Technical reference",
+    label: "Knowledge",
     accent: "sun",
     items: [
       {
-        href: "/docs/configuration",
-        label: "Configuration",
-        blurb: "The .ship/ layout and config fields for developers and platform teams.",
+        href: "/docs/knowledge/overview",
+        label: "What knowledge is for",
+        blurb: "Why short articles age better than handbooks; what belongs in knowledge and what doesn't.",
       },
       {
-        href: "/docs/agent-matrix",
-        label: "Agent matrix",
-        blurb: "Supported agent ids, on-disk markers, install targets, adapter artifact for each.",
+        href: "/docs/knowledge/buckets",
+        label: "Buckets",
+        blurb: "Buckets as the unit of grouping. Workspace / project / repo / user scopes. When to split, when to merge.",
       },
       {
-        href: "/docs/operating",
-        label: "Operating",
-        blurb: "Review blockers, decisions, shipped work, and evidence after setup.",
+        href: "/docs/knowledge/importing",
+        label: "Importing knowledge",
+        blurb: "Sources — repo `.ship/knowledge`, website (Firecrawl), Notion, Confluence, docs repo, uploaded files.",
       },
       {
-        href: "/docs/troubleshooting",
+        href: "/docs/knowledge/distiller-and-review",
+        label: "The distiller and the review path",
+        blurb: "Nothing publishes silently — every imported note flows through routing, synthesis, and human review.",
+      },
+      {
+        href: "/docs/knowledge/chat-as-knowledge",
+        label: "Chat as a knowledge tool",
+        blurb: "What the workspace chat is for, and how to save a clean thread as a knowledge article.",
+      },
+    ],
+  },
+  {
+    label: "Inbox",
+    accent: "coral",
+    items: [
+      {
+        href: "/docs/inbox/overview",
+        label: "Decision work, not notifications",
+        blurb: "What the Inbox is, what it carries, and the rule that anything without a decision belongs elsewhere.",
+      },
+      {
+        href: "/docs/inbox/item-types",
+        label: "The five item types",
+        blurb: "Clarification, improvement, approval, failure, exception — with the canonical action for each.",
+      },
+      {
+        href: "/docs/inbox/routing-rules",
+        label: "Routing rules",
+        blurb: "Handles → user, group, or strategy. Configuration health: bound, used, orphaned, unbound.",
+      },
+      {
+        href: "/docs/inbox/disposition",
+        label: "Disposition",
+        blurb: "The action vocabulary: answer, accept, approve, reject, retry, acknowledge, snooze, dismiss, reassign.",
+      },
+    ],
+  },
+  {
+    label: "Process",
+    accent: "aqua",
+    items: [
+      {
+        href: "/docs/process/overview",
+        label: "The model",
+        blurb: "Process, states, routines, specialists — the three named pieces and how they fit together.",
+      },
+      {
+        href: "/docs/process/editor",
+        label: "Reading the process editor",
+        blurb: "States, transitions, routines panel, tracker mapping, flow schedule — the panels of `/process/<id>`.",
+      },
+      {
+        href: "/docs/process/routines",
+        label: "Routines",
+        blurb: "The shipped catalogue, schedule shapes (cron / event / manual), standalone vs in-process routines.",
+      },
+      {
+        href: "/docs/process/tracker-mapping-and-specialists",
+        label: "Tracker mapping and specialists",
+        blurb: "Which tickets are eligible, what role the routine plays — the two questions every routine answers at runtime.",
+      },
+      {
+        href: "/docs/process/health",
+        label: "Healthy and unhealthy routines",
+        blurb: "Empty runs, hero agents, vanity throughput, drifted prompts, quiet failures — and the cures.",
+      },
+    ],
+  },
+  {
+    label: "Operating",
+    accent: "lilac",
+    items: [
+      {
+        href: "/docs/operating/morning-loop",
+        label: "The morning loop",
+        blurb: "Workspace health → Inbox → shipped and in-progress → knowledge drift → audit. The order of moves.",
+      },
+      {
+        href: "/docs/operating/audit-log",
+        label: "The audit log",
+        blurb: "What the log records, how to filter, who can see it, when to open it.",
+      },
+      {
+        href: "/docs/operating/quiet-systems",
+        label: "When the system quietly does nothing",
+        blurb: "How to detect silent failures: read absence on a cadence, cross-check with the tracker, name the expectation.",
+      },
+    ],
+  },
+  {
+    label: "Policies, secrets, evidence",
+    accent: "sun",
+    items: [
+      {
+        href: "/docs/policies/policies",
+        label: "Policies",
+        blurb: "Admin-authored standing rules injected into every agent's system prompt. Title, body, sort order, enabled.",
+      },
+      {
+        href: "/docs/policies/secrets",
+        label: "Secrets",
+        blurb: "Workspace integration secrets, repo secrets, agent secrets, API tokens — four stores, four blast radii.",
+      },
+      {
+        href: "/docs/policies/evidence",
+        label: "The evidence checklist",
+        blurb: "Tracker, PR, CI, comment, knowledge, audit — the five questions that test whether a trail is solid.",
+      },
+    ],
+  },
+  {
+    label: "Local repo",
+    accent: "coral",
+    items: [
+      {
+        href: "/docs/developer/ship-folder",
+        label: "The `.ship/` folder",
+        blurb: "What's tracked vs ignored. Agent rule files outside the folder. What never belongs in `.ship/`.",
+      },
+      {
+        href: "/docs/developer/shipctl",
+        label: "shipctl — the local workbench",
+        blurb: "Daily-use commands: doctor, verify, sync, config. The CLI is for engineers; the console is for operators.",
+      },
+      {
+        href: "/docs/developer/authoring",
+        label: "Authoring patterns and policies",
+        blurb: "When to author. The small loop. Pattern vs knowledge vs policy. Where the deep schema reference lives.",
+      },
+      {
+        href: "/docs/developer/bundle-updates",
+        label: "Bundle updates",
+        blurb: "What the 'Ship template update needed' banner means. Pins for slowing rollouts. When to skip an update.",
+      },
+    ],
+  },
+  {
+    label: "Reference",
+    accent: "aqua",
+    items: [
+      {
+        href: "/docs/reference/cli",
+        label: "shipctl command reference",
+        blurb: "Every shipctl command, grouped by purpose, with one-line descriptions.",
+      },
+      {
+        href: "/docs/reference/troubleshooting",
         label: "Troubleshooting",
-        blurb: "Symptom → cause → fix for common workspace, console, automation, and evidence issues.",
+        blurb: "Symptom → cause → fix for common console, GitHub App, tracker, knowledge, routine, and CLI issues.",
       },
       {
-        href: "/docs/authoring",
-        label: "Authoring",
-        blurb: "Write your own policy or procedure so repeated work stays reviewable.",
+        href: "/docs/reference/glossary",
+        label: "Glossary",
+        blurb: "Every term in the manual, alphabetised, with a one-line definition and a chapter link.",
+      },
+    ],
+  },
+  {
+    label: "Appendix",
+    accent: "lilac",
+    items: [
+      {
+        href: "/docs/appendix",
+        label: "Friendly explainers",
+        blurb: "Per-entry pages for non-technical readers — what GitHub is, where to get an OpenAI key, what a webhook is, etc. The wizard cross-links straight to the relevant entry.",
       },
     ],
   },
   {
     label: "Implementation spec",
-    accent: "coral",
+    accent: "sun",
     items: [
       {
         href: "/docs/discovery",
@@ -100,11 +277,16 @@ export const DOCS_NAV: DocsNavGroup[] = [
         label: "Protocol (RFCs)",
         blurb: "Artifacts protocol, config schema, telemetry, adapters, folder layout.",
       },
+      {
+        href: "/docs/authoring",
+        label: "Authoring (full reference)",
+        blurb: "Schema-heavy contributor reference — folder layout, frontmatter, hashing. The friendly version is in Local repo.",
+      },
     ],
   },
   {
     label: "Other",
-    accent: "lilac",
+    accent: "coral",
     items: [
       {
         href: "/docs/legal",
