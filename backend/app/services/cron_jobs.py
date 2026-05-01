@@ -28,6 +28,7 @@ from backend.app.services.cron import (
 )
 from backend.app.services.knowledge_harvest import harvest_all_workspaces
 from backend.app.services.knowledge_router import route_all_workspaces
+from backend.app.services.knowledge_synth import synthesise_all_workspaces
 
 
 log = logging.getLogger(__name__)
@@ -128,6 +129,56 @@ async def _knowledge_route_tick() -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# KB-3 / ELS-37 — daily synthesiser
+# ---------------------------------------------------------------------------
+
+
+@cron_with_lock(lock=CronLockId.KNOWLEDGE_SYNTH, name="knowledge_synth")
+async def _knowledge_synth_tick() -> None:
+    """Hourly draft-article producer.
+
+    Per workspace, per bucket: collect every routed-but-not-
+    synthesised note (capped), feed the LLM, write a single
+    BucketArticle status='draft'. Embedding + bucket.updated_at
+    bump are baked in (per the ELS-37 acceptance addendum).
+    Without an LLM client the cron skips silently — notes stay
+    pending until a tick with creds picks them up.
+    """
+    try:
+        llm_client = pick_default_client(get_settings())
+    except Exception:
+        log.info(
+            "knowledge_synth tick: no LLM client configured; "
+            "synthesis skipped this tick"
+        )
+        llm_client = None
+
+    sm = get_sessionmaker()
+    async with sm() as session:
+        try:
+            reports = await synthesise_all_workspaces(
+                session, llm_client=llm_client
+            )
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+
+    drafts = sum(r.drafts_created for r in reports)
+    notes = sum(r.notes_consumed for r in reports)
+    no_llm = sum(r.drafts_skipped_no_llm for r in reports)
+    if drafts or notes or no_llm or any(r.errors for r in reports):
+        log.info(
+            "knowledge_synth tick: workspaces=%d drafts=%d notes_consumed=%d "
+            "skipped_no_llm=%d",
+            len(reports),
+            drafts,
+            notes,
+            no_llm,
+        )
+
+
 def register_all() -> None:
     """Wire every cron defined in this module into the scheduler.
 
@@ -149,6 +200,11 @@ def register_all() -> None:
         fn=_knowledge_route_tick,
         cron_expr="30 * * * *",  # every hour at :30
         job_id="knowledge_route",
+    )
+    register_cron(
+        fn=_knowledge_synth_tick,
+        cron_expr="40 * * * *",  # every hour at :40
+        job_id="knowledge_synth",
     )
 
 
