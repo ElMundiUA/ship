@@ -137,6 +137,68 @@ type ToolSegment = {
 type Segment = UserSegment | AssistantTextSegment | ToolSegment;
 
 /**
+ * Render-time row produced by :func:`buildRenderRows`. The chat
+ * timeline iterates these instead of raw :data:`Segment` because
+ * tool segments are not rendered inline — they fold into the
+ * *last* ``assistant_text`` of their turn, accessible through a
+ * `Show details` disclosure attached to that assistant row.
+ *
+ * ``userIndex`` is the running 0-based count of user rows seen so
+ * far; the consumer compares it to ``lastUserIndex`` to decide
+ * which user message gets the scroll anchor.
+ */
+type AssistantRenderRow = {
+  kind: "assistant_text";
+  segment: AssistantTextSegment;
+  tools: ToolSegment[];
+};
+type UserRenderRow = {
+  kind: "user";
+  segment: UserSegment;
+  userIndex: number;
+};
+type RenderRow = UserRenderRow | AssistantRenderRow;
+
+function buildRenderRows(segments: Segment[]): RenderRow[] {
+  const rows: RenderRow[] = [];
+  let pendingAssistants: AssistantTextSegment[] = [];
+  let pendingTools: ToolSegment[] = [];
+  let userIndex = 0;
+
+  // Tools accumulate across every assistant_text in the same turn,
+  // then attach to the LAST one when the turn ends (next user msg
+  // arrives) or the timeline runs out. Earlier assistant_text rows
+  // in the same turn render without a disclosure — they're just
+  // intermediate prose chunks the model emitted between tool calls.
+  const flushPending = () => {
+    for (let i = 0; i < pendingAssistants.length; i++) {
+      const isLast = i === pendingAssistants.length - 1;
+      rows.push({
+        kind: "assistant_text",
+        segment: pendingAssistants[i],
+        tools: isLast ? pendingTools : [],
+      });
+    }
+    pendingAssistants = [];
+    pendingTools = [];
+  };
+
+  for (const seg of segments) {
+    if (seg.kind === "user") {
+      flushPending();
+      rows.push({ kind: "user", segment: seg, userIndex });
+      userIndex += 1;
+    } else if (seg.kind === "assistant_text") {
+      pendingAssistants.push(seg);
+    } else {
+      pendingTools.push(seg);
+    }
+  }
+  flushPending();
+  return rows;
+}
+
+/**
  * Frontend-side topic-shift snapshot.
  *
  * Backend emits ``{ type: "topic_shift", decision: { shifted, reason,
@@ -911,16 +973,37 @@ export function SingleWindowChat({
     [streaming, workspaceId],
   );
 
+  const userSegmentCount = useMemo(
+    () => segments.reduce((n, s) => (s.kind === "user" ? n + 1 : n), 0),
+    [segments],
+  );
+  /**
+   * Slice :data:`segments` into render-ready rows. Tool segments get
+   * folded into the **last** ``assistant_text`` of the same turn — a
+   * "turn" being everything between two user messages. The render
+   * loop maps these directly; the disclosure on the assistant row
+   * surfaces tool details on demand.
+   */
+  const renderRows = useMemo(() => buildRenderRows(segments), [segments]);
   const lastUserIndex = useMemo(() => {
+    for (let i = renderRows.length - 1; i >= 0; i--) {
+      const row = renderRows[i];
+      if (row.kind === "user") return row.userIndex;
+    }
+    return -1;
+  }, [renderRows]);
+  /**
+   * Backwards-compat for :data:`currentTurnLastTool` below: the
+   * indicator-state machine still derives "active tool" off the raw
+   * segment array. Find the index of the last user *segment* (not
+   * row) so the existing scan logic keeps working without churn.
+   */
+  const lastUserSegmentIndex = useMemo(() => {
     for (let i = segments.length - 1; i >= 0; i--) {
       if (segments[i].kind === "user") return i;
     }
     return -1;
   }, [segments]);
-  const userSegmentCount = useMemo(
-    () => segments.reduce((n, s) => (s.kind === "user" ? n + 1 : n), 0),
-    [segments],
-  );
   const hasStreamingAssistant = useMemo(
     () =>
       segments.some(
@@ -934,12 +1017,12 @@ export function SingleWindowChat({
   // derive it positionally so historical tools from earlier turns
   // never leak into the live status line.
   const currentTurnLastTool = useMemo<ToolSegment | null>(() => {
-    for (let i = segments.length - 1; i > lastUserIndex; i--) {
+    for (let i = segments.length - 1; i > lastUserSegmentIndex; i--) {
       const s = segments[i];
       if (s.kind === "tool") return s;
     }
     return null;
-  }, [segments, lastUserIndex]);
+  }, [segments, lastUserSegmentIndex]);
   // Single-line status that sits at the *end* of the turn (below
   // whatever the agent has streamed so far, or below the user
   // prompt if the agent hasn't started talking yet). It replaces
@@ -1072,34 +1155,40 @@ export function SingleWindowChat({
               <EmptyHint hasArchivedChats={hasArchivedChats} />
             ) : (
               <div className="space-y-6">
-                {/* Single ordered timeline. user / assistant_text /
-                    tool segments render in arrival order — when a
-                    ``tool_call`` interleaves between deltas, the
-                    next prose segment naturally lands *below* the
-                    tool card, eliminating the dual-array clumping
-                    that pre-Wave-B pinned all tools at the bottom. */}
-                {segments.map((seg, i) => {
-                  if (seg.kind === "user") {
+                {/* Single ordered timeline. Tool segments are NOT
+                    rendered inline — tool activity surfaces through
+                    the single-line ``TurnStatusSlot`` while running,
+                    and through a per-turn ``Show details`` disclosure
+                    attached to the last assistant_text once the
+                    turn settles. Per-turn grouping = "everything
+                    between two user messages": all tools that fired
+                    inside a turn collapse under that turn's final
+                    prose segment, so reading flow stays clean.
+                    See :func:`buildRenderRows` for the slicing. */}
+                {renderRows.map((row) => {
+                  if (row.kind === "user") {
                     return (
                       <UserRow
-                        key={seg.id}
-                        segment={seg}
+                        key={row.segment.id}
+                        segment={row.segment}
                         anchorRef={
-                          i === lastUserIndex ? lastUserAnchorRef : null
+                          row.userIndex === lastUserIndex
+                            ? lastUserAnchorRef
+                            : null
                         }
                       />
                     );
                   }
-                  if (seg.kind === "assistant_text") {
-                    return (
-                      <AssistantTextRow
-                        key={seg.id}
-                        segment={seg}
-                        revealLen={revealMap.get(seg.id) ?? seg.body.length}
-                      />
-                    );
-                  }
-                  return <ToolSegmentRow key={seg.id} segment={seg} />;
+                  return (
+                    <AssistantTextRow
+                      key={row.segment.id}
+                      segment={row.segment}
+                      revealLen={
+                        revealMap.get(row.segment.id) ?? row.segment.body.length
+                      }
+                      tools={row.tools}
+                    />
+                  );
                 })}
                 {canRegenerate ? (
                   <div className="-mt-2">
@@ -1259,24 +1348,62 @@ function UserRow({
 function AssistantTextRow({
   segment,
   revealLen,
+  tools,
 }: {
   segment: AssistantTextSegment;
   revealLen: number;
+  tools: ToolSegment[];
 }) {
   const displayBody = segment.body.slice(
     0,
     Math.max(0, Math.min(revealLen, segment.body.length)),
   );
+  // Disclosure is hidden while the assistant is still streaming —
+  // the single-line ``TurnStatusSlot`` is the live progress signal,
+  // and showing tool details mid-stream would distract from the
+  // prose flow. Once the turn settles we surface the count + a
+  // ``<details>`` toggle so curious users can see what ran.
+  const showTools = !segment.streaming && tools.length > 0;
   return (
     <div className="group relative text-[14px] leading-relaxed">
       <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-lilac/80">
         Ship
       </div>
       <ChatMarkdown text={displayBody} animate={segment.animate} />
+      {showTools ? <TurnToolsDisclosure tools={tools} /> : null}
       {segment.streaming ? null : (
         <CopyMessageButton text={segment.body} />
       )}
     </div>
+  );
+}
+
+/**
+ * Per-turn `<details>` summary that hides the tool calls behind a
+ * single line so the conversation stays clean. Renders nothing when
+ * the turn had no tools. Uses the existing :func:`renderToolResult`
+ * registry so individual tool cards keep their rich payloads, just
+ * tucked away by default.
+ */
+function TurnToolsDisclosure({ tools }: { tools: ToolSegment[] }) {
+  if (tools.length === 0) return null;
+  const label = tools.length === 1 ? "1 tool call" : `${tools.length} tool calls`;
+  return (
+    <details className="mt-3 group/disc">
+      <summary className="cursor-pointer text-[11px] text-white/35 transition hover:text-white/70 list-none [&::-webkit-details-marker]:hidden">
+        <span className="inline-flex items-center gap-1">
+          <span aria-hidden className="transition-transform group-open/disc:rotate-90">
+            ▸
+          </span>
+          <span>Show details · {label}</span>
+        </span>
+      </summary>
+      <div className="mt-3 space-y-3">
+        {tools.map((t) => (
+          <ToolSegmentRow key={t.id} segment={t} />
+        ))}
+      </div>
+    </details>
   );
 }
 
