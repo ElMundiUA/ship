@@ -4,9 +4,9 @@ import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 
 export const metadata: Metadata = {
-  title: "Process & specialists — Ship",
+  title: "Process — Ship",
   description:
-    "How a team's work flows through Ship: a process is a graph of states, routines that fire along the way, and the specialists that own each step. The Development SDLC ships at production depth today; Marketing, Customer Success, Compliance, and Data/ML use the same building blocks and are growing toward production depth.",
+    "Every product company runs on processes — not one-shot deliveries, but ongoing work and adjustments. Ship makes those processes legible: each workspace is a graph of processes, each process a sequence of states, routines that fire along the way, and specialists who own each step.",
 };
 
 type Specialist = { id: string; name: string; role: string };
@@ -62,7 +62,7 @@ type Routine = { id: string; name: string; description: string; cron: string };
 
 const DEV_ROUTINES: Routine[] = [
   { id: "daily_security_review", name: "Security review", description: "Scans dependencies and secrets policy on a daily cron.", cron: "06:00 daily" },
-  { id: "daily_standup", name: "Daily standup", description: "Asynchronous standup nudge with lane status.", cron: "09:00 weekdays" },
+  { id: "daily_standup", name: "Daily standup", description: "Asynchronous standup nudge with state and blocker summary.", cron: "09:00 weekdays" },
   { id: "daily_digest", name: "Daily digest", description: "Consolidated summary of in-flight work and blockers.", cron: "08:00 weekdays" },
   { id: "daily_architecture_tests_review", name: "Architecture tests review", description: "Recurring check on test architecture and coverage.", cron: "08:00 weekdays" },
   { id: "daily_technical_architecture_review", name: "Architecture review", description: "Architecture drift and design consistency review.", cron: "10:00 Mondays" },
@@ -88,7 +88,7 @@ const ASPIRATIONAL: AspirationalProcess[] = [
     slug: "marketing",
     name: "Marketing operations",
     kicker: "Marketing",
-    blurb: "Briefs, creative, review, ship, measure — using marketing_operator, designer, technical_writer, devops_platform, and data_ml_engineer specialists.",
+    blurb: "Briefs, creative, review, ship, measure — using the marketing_operator, designer, technical_writer, devops_platform, and data_ml_engineer specialists already in the catalogue.",
     states: [
       { name: "Brief intake", specialistId: "intake" },
       { name: "Research", specialistId: "marketing_operator" },
@@ -109,7 +109,7 @@ const ASPIRATIONAL: AspirationalProcess[] = [
     slug: "customer-success",
     name: "Customer success",
     kicker: "Support",
-    blurb: "Triage, reproduce, fix, validate, loop back to product — using support_success, developer, qa_engineer, and product_manager specialists.",
+    blurb: "Triage, reproduce, fix, validate, loop back to product — using support_success, developer, qa_engineer, and product_manager.",
     states: [
       { name: "Ticket intake", specialistId: "intake" },
       { name: "Triage", specialistId: "support_success" },
@@ -187,97 +187,144 @@ export default function ProcessPage() {
     <>
       <SiteHeader />
       <main>
-        {/* Hero */}
+        {/* 1. Hero — universal premise */}
         <section className="relative overflow-hidden border-b border-white/10 pb-16 pt-28 sm:pb-20 sm:pt-32">
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_80%_50%_at_50%_-10%,rgba(46,230,214,0.18),transparent_55%)]" />
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_60%_40%_at_85%_30%,rgba(255,200,87,0.10),transparent_60%)]" />
           <div className="relative mx-auto max-w-4xl px-4 text-center sm:px-6">
-            <p className="text-xs font-bold uppercase tracking-[0.2em] text-aqua/90">How Ship runs work</p>
-            <h1 className="font-display mt-4 text-4xl font-bold text-white sm:text-5xl lg:text-6xl">
-              Process on specialists
+            <p className="text-xs font-bold uppercase tracking-[0.2em] text-aqua/90">Process</p>
+            <h1 className="font-display mt-4 text-4xl font-bold text-white sm:text-5xl lg:text-[3.25rem] lg:leading-[1.06]">
+              Every product company runs on processes.
             </h1>
             <p className="mx-auto mt-6 max-w-2xl text-lg text-white/70">
-              Every team in Ship has a <span className="text-white">process</span> — a graph of states work passes through.
-              At each state a <span className="text-white">specialist</span> owns the work; along the way{" "}
-              <span className="text-white">routines</span> fire on a schedule. Three named pieces; everything else is
-              configuration.
+              Building a product is not a one-shot delivery. It is a continuous flow of work and adjustments — features
+              get scoped, shipped, reviewed, and refined; bugs get triaged, fixed, regressed; releases get planned and
+              rolled back. The processes already exist in your team. Ship makes them legible.
             </p>
-            <div className="mt-10 flex flex-wrap justify-center gap-3">
-              <Link href="#development" className="btn-primary inline-flex">
-                See the SDLC
-              </Link>
-              <Link href="#aspirational" className="btn-secondary inline-flex">
-                What&apos;s coming next
-              </Link>
+          </div>
+        </section>
+
+        {/* 2. Why processes */}
+        <section className="border-b border-white/10 py-16 sm:py-20">
+          <div className="mx-auto grid max-w-5xl gap-10 px-4 sm:px-6 md:grid-cols-2">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.2em] text-white/55">The problem</p>
+              <h2 className="font-display mt-3 text-2xl font-bold text-white sm:text-3xl">
+                Invisible processes drift.
+              </h2>
+              <p className="mt-4 text-base leading-relaxed text-white/70">
+                Most teams know how their work moves — but the knowledge lives in heads, in Slack threads, in the muscle
+                memory of three senior engineers. When those heads change roles, the process drifts. When two people
+                disagree, neither version wins. The process becomes folklore: real, but unreviewable.
+              </p>
+            </div>
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.2em] text-aqua/85">What changes</p>
+              <h2 className="font-display mt-3 text-2xl font-bold text-white sm:text-3xl">
+                Written-down processes can be improved.
+              </h2>
+              <p className="mt-4 text-base leading-relaxed text-white/70">
+                A process you can read is a process you can argue about — and improve. Ship gives every workspace a place
+                to write its processes down: the states, the order, the conditions, the people responsible. Once they
+                are written, the work that follows them is trackable, and the work that breaks them is visible.
+              </p>
             </div>
           </div>
         </section>
 
-        {/* Specialists */}
+        {/* 3. Workspace = a graph of processes — show the graph FIRST */}
         <section className="border-b border-white/10 py-16 sm:py-20">
-          <div className="mx-auto max-w-[88rem] px-4 sm:px-6">
-            <p className="text-xs font-bold uppercase tracking-[0.2em] text-aqua/85">The cast</p>
+          <div className="mx-auto max-w-5xl px-4 sm:px-6">
+            <p className="text-xs font-bold uppercase tracking-[0.2em] text-aqua/85">Step one</p>
             <h2 className="font-display mt-2 text-3xl font-bold text-white sm:text-4xl">
-              Fifteen specialists, three groups
+              A workspace is a graph of processes.
             </h2>
             <p className="mt-4 max-w-3xl text-base leading-relaxed text-white/65">
-              A specialist is a versioned role definition — a persona with a job description that a routine takes on for the
-              duration of its run. The catalogue ships fifteen of them today, grouped by the part of the org they serve.
+              Every Ship workspace holds a graph. The root node is the workspace itself; below it sit the processes the
+              team runs. Today, every workspace ships with one live process — Development — and four drafted ones
+              attaching to the same root. As more processes graduate from draft to production depth, the graph fills out.
             </p>
-
-            <SpecialistGroup label="Engineering" accent="aqua" specialists={ENGINEERING_SPECIALISTS} />
-            <SpecialistGroup label="Product" accent="lilac" specialists={PRODUCT_SPECIALISTS} />
-            <SpecialistGroup label="Operations" accent="sun" specialists={OPERATIONS_SPECIALISTS} />
+            <WorkspaceGraph />
+            <p className="mt-6 text-center text-xs text-white/45">
+              Solid edge: live, running today. Dashed edges: drafted shapes attaching to the same workspace root.
+            </p>
           </div>
         </section>
 
-        {/* Development process */}
+        {/* 4. Inside one process — states → routines → specialists */}
+        <section className="border-b border-white/10 py-16 sm:py-20">
+          <div className="mx-auto max-w-5xl px-4 sm:px-6">
+            <p className="text-xs font-bold uppercase tracking-[0.2em] text-aqua/85">Step two</p>
+            <h2 className="font-display mt-2 text-3xl font-bold text-white sm:text-4xl">
+              Inside a process: states, routines, specialists.
+            </h2>
+            <p className="mt-4 max-w-3xl text-base leading-relaxed text-white/65">
+              Open one process and three named pieces do the work. They build on each other in this order — states first,
+              then the routines that fire along the way, then the specialists who play roles inside both.
+            </p>
+
+            <div className="mt-12 space-y-10">
+              <BuildingBlock
+                index="01"
+                title="States are the columns work moves through."
+                body="A state is a stage of progress. Intake. Analysis. Implementation. Review. Done. Each state has a name, an owner, a capacity (how many items belong there at once), and a set of allowed transitions to other states. The state machine is the contract: work cannot skip review, cannot return to analysis from done, cannot stay in 'in progress' for ninety days without flagging."
+              />
+              <BuildingBlock
+                index="02"
+                title="Routines fire on schedule or events."
+                body="A routine is a named, recurring job. Daily security review. Architecture sweep. Daily digest. Each routine has a prompt, a default cadence (cron or event trigger), and a defined output — a comment, an Inbox item, a draft article, a tracker update. Routines run inside the process so they always have the right context: which state work is in, which specialist owns it, what evidence has already been gathered."
+              />
+              <BuildingBlock
+                index="03"
+                title="Specialists are the roles that run the work."
+                body="A specialist is a versioned role definition — intake, business analyst, product manager, developer, technical architect, designer, code reviewer, QA, devops, security, data/ML, support, technical writer, marketing operator. When a routine fires, it takes on a specialist for the duration of the run. Same routine + different specialist = different output. The specialist is the role; the executor (the AI agent — Cursor, Claude Code, Codex, Copilot) is who actually reads the prompt and writes the diff."
+              />
+            </div>
+
+            <p className="mt-12 max-w-3xl text-sm text-white/50">
+              States define <em className="not-italic text-white/70">where</em> work is. Routines define{" "}
+              <em className="not-italic text-white/70">when</em> the system acts. Specialists define{" "}
+              <em className="not-italic text-white/70">in what role</em>. Get those three right and the rest is
+              configuration.
+            </p>
+          </div>
+        </section>
+
+        {/* 5. The Development SDLC fully drawn */}
         <section id="development" className="scroll-mt-24 border-b border-white/10 py-16 sm:py-20">
-          <div className="mx-auto max-w-[88rem] px-4 sm:px-6">
+          <div className="mx-auto max-w-6xl px-4 sm:px-6">
             <div className="flex flex-wrap items-center gap-3">
-              <p className="text-xs font-bold uppercase tracking-[0.2em] text-aqua/85">Today, production depth</p>
+              <p className="text-xs font-bold uppercase tracking-[0.2em] text-aqua/85">Step three — the canonical example</p>
               <span className="rounded-full border border-aqua/40 bg-aqua/15 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-aqua">
                 Live
               </span>
             </div>
             <h2 className="font-display mt-2 text-3xl font-bold text-white sm:text-4xl">
-              Development — the SDLC, fully drawn
+              Development — the SDLC, fully drawn.
             </h2>
             <p className="mt-4 max-w-3xl text-base leading-relaxed text-white/65">
-              The Development process is the only top-level process Ship ships at production depth today. Eight states,
-              specialists owning each step, three nested sub-processes (Requirements, Implementation, Quality review), and
-              eight routines that fire along the way.
+              The Development process is what every workspace gets at activation, and it is the only top-level process
+              Ship ships at production depth today. Eight states from intake to PR review, three nested sub-processes
+              (Requirements, Implementation, Quality review), eight scheduled routines, owners on every step.
             </p>
 
             <DevelopmentFlow />
 
             <div className="mt-12 grid gap-6 lg:grid-cols-3">
-              <SubProcessCard
-                title="Requirements"
-                states={DEV_STATES.filter((s) => s.subProcess === "requirements")}
-              />
-              <SubProcessCard
-                title="Implementation"
-                states={DEV_STATES.filter((s) => s.subProcess === "implementation")}
-              />
-              <SubProcessCard
-                title="Quality review"
-                states={DEV_STATES.filter((s) => s.subProcess === "qa")}
-              />
+              <SubProcessCard title="Requirements" states={DEV_STATES.filter((s) => s.subProcess === "requirements")} />
+              <SubProcessCard title="Implementation" states={DEV_STATES.filter((s) => s.subProcess === "implementation")} />
+              <SubProcessCard title="Quality review" states={DEV_STATES.filter((s) => s.subProcess === "qa")} />
             </div>
 
             <div className="mt-12">
-              <h3 className="font-display text-xl font-bold text-white">Routines firing inside the process</h3>
+              <h3 className="font-display text-xl font-bold text-white">Eight routines firing inside the process</h3>
               <p className="mt-2 max-w-3xl text-sm leading-relaxed text-white/60">
-                Eight shipped routines — most run on a cron, two on event triggers. Each one takes on a specialist, reads the
-                relevant tracker context and knowledge, produces evidence (a comment, an Inbox item, a draft article).
+                Each routine takes on a specialist for its run, reads the relevant tracker context and knowledge,
+                produces evidence (a comment, an Inbox item, a draft). Cron-driven by default; some are event-triggered.
               </p>
               <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 {DEV_ROUTINES.map((routine) => (
-                  <div
-                    key={routine.id}
-                    className="rounded-xl border border-white/10 bg-white/[0.025] p-4"
-                  >
+                  <div key={routine.id} className="rounded-xl border border-white/10 bg-white/[0.025] p-4">
                     <p className="font-display text-sm font-bold text-white">{routine.name}</p>
                     <p className="mt-2 text-xs leading-relaxed text-white/55">{routine.description}</p>
                     <code className="mt-3 inline-block rounded-md bg-black/40 px-2 py-1 font-mono text-[10px] text-aqua/85">
@@ -290,9 +337,9 @@ export default function ProcessPage() {
           </div>
         </section>
 
-        {/* Aspirational processes */}
-        <section id="aspirational" className="scroll-mt-24 border-b border-white/10 py-16 sm:py-20">
-          <div className="mx-auto max-w-[88rem] px-4 sm:px-6">
+        {/* 6. Same model, other shapes */}
+        <section id="other" className="scroll-mt-24 border-b border-white/10 py-16 sm:py-20">
+          <div className="mx-auto max-w-6xl px-4 sm:px-6">
             <div className="flex flex-wrap items-center gap-3">
               <p className="text-xs font-bold uppercase tracking-[0.2em] text-white/55">Same model, growing depth</p>
               <span className="rounded-full border border-white/20 bg-white/5 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-white/65">
@@ -300,12 +347,13 @@ export default function ProcessPage() {
               </span>
             </div>
             <h2 className="font-display mt-2 text-3xl font-bold text-white sm:text-4xl">
-              Four other processes the catalogue can already express
+              Four other processes the catalogue can already express.
             </h2>
             <p className="mt-4 max-w-3xl text-base leading-relaxed text-white/65">
-              The specialists you saw above ship today. The processes below — Marketing operations, Customer success,
-              Compliance, Data &amp; ML release — are drafted with the same building blocks. Roles are real; the process
-              shapes are forming. Watch this page as each one moves from draft to production depth.
+              The model — states + routines + specialists — is general. Below are four processes drafted with the same
+              building blocks: Marketing operations, Customer success, Compliance &amp; security, Data &amp; ML release.
+              The roles already ship in the catalogue; the process shapes are forming. Each one moves from draft to
+              production depth as we run it ourselves first.
             </p>
 
             <div className="mt-10 grid gap-6 md:grid-cols-2">
@@ -316,34 +364,37 @@ export default function ProcessPage() {
           </div>
         </section>
 
-        {/* Workspace process graph */}
+        {/* 7. The cast — specialists catalogue (now contextual, not the opening) */}
         <section className="border-b border-white/10 py-16 sm:py-20">
-          <div className="mx-auto max-w-5xl px-4 sm:px-6">
-            <p className="text-xs font-bold uppercase tracking-[0.2em] text-coral/85">The workspace graph</p>
+          <div className="mx-auto max-w-6xl px-4 sm:px-6">
+            <p className="text-xs font-bold uppercase tracking-[0.2em] text-aqua/85">The cast</p>
             <h2 className="font-display mt-2 text-3xl font-bold text-white sm:text-4xl">
-              How processes connect inside one workspace
+              Fifteen specialists ship in the catalogue today.
             </h2>
             <p className="mt-4 max-w-3xl text-base leading-relaxed text-white/65">
-              A workspace is the root. Today one process, Development, sits live underneath it. The four drafted processes
-              attach to the same root with dashed edges — they are part of the picture, just not yet at production depth.
+              Every process you saw above pulls from the same pool. Engineering, Product, and Operations roles versioned
+              like code — bump the role definition once and every routine that runs as that specialist gets the new
+              context.
             </p>
 
-            <WorkspaceGraph />
+            <SpecialistGroup label="Engineering" accent="aqua" specialists={ENGINEERING_SPECIALISTS} />
+            <SpecialistGroup label="Product" accent="lilac" specialists={PRODUCT_SPECIALISTS} />
+            <SpecialistGroup label="Operations" accent="sun" specialists={OPERATIONS_SPECIALISTS} />
           </div>
         </section>
 
-        {/* Why this beats hardcoded workflows */}
+        {/* 8. Why this beats hardcoded workflows */}
         <section className="border-b border-white/10 py-16 sm:py-20">
           <div className="mx-auto max-w-5xl px-4 sm:px-6">
             <p className="text-xs font-bold uppercase tracking-[0.2em] text-white/55">Why this model</p>
             <h2 className="font-display mt-2 text-3xl font-bold text-white sm:text-4xl">
-              Why processes on specialists beats hardcoded workflows
+              Why processes on specialists beats hardcoded workflows.
             </h2>
             <div className="mt-10 grid gap-5 md:grid-cols-3">
               {[
                 {
                   title: "Specialists are versioned roles",
-                  body: "Not just 'use the developer agent on this ticket'. Ship records which specialist version ran each step, so a regression in role behaviour traces to a specific role bump, not a vibe shift.",
+                  body: "Not 'use the developer agent on this ticket' as a one-line prompt. Specialists are versioned role definitions; Ship records which version ran each step, so a regression in role behaviour traces to a specific role bump, not a vibe shift.",
                 },
                 {
                   title: "Routines are reviewable jobs",
@@ -351,7 +402,7 @@ export default function ProcessPage() {
                 },
                 {
                   title: "States carry the contract",
-                  body: "The process declares which state allows which transition, what evidence is required, and which specialist owns each step. The tracker mirrors it; routines respect it.",
+                  body: "The process declares which state allows which transition, what evidence is required, and which specialist owns each step. The tracker mirrors it; routines respect it; humans review it like code.",
                 },
               ].map((item) => (
                 <div key={item.title} className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
@@ -363,12 +414,12 @@ export default function ProcessPage() {
           </div>
         </section>
 
-        {/* CTA */}
+        {/* 9. CTA */}
         <section className="bg-black/30 py-16 sm:py-20">
           <div className="mx-auto max-w-3xl px-4 text-center sm:px-6">
             <p className="text-xs font-bold uppercase tracking-[0.2em] text-aqua/85">Next</p>
             <h2 className="font-display mt-2 text-3xl font-bold text-white sm:text-4xl">
-              Map your team&apos;s first process
+              Map your team&apos;s first process.
             </h2>
             <p className="mt-4 text-base leading-relaxed text-white/70">
               The Development process is what most teams adopt first. Once it is running, the same specialists carry over
@@ -391,6 +442,20 @@ export default function ProcessPage() {
       </main>
       <SiteFooter />
     </>
+  );
+}
+
+function BuildingBlock({ index, title, body }: { index: string; title: string; body: string }) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6 sm:p-8">
+      <div className="flex items-start gap-5">
+        <span className="font-display shrink-0 text-3xl font-bold text-aqua/70">{index}</span>
+        <div className="min-w-0 flex-1">
+          <h3 className="font-display text-xl font-bold text-white sm:text-2xl">{title}</h3>
+          <p className="mt-3 text-base leading-relaxed text-white/70">{body}</p>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -530,18 +595,14 @@ function WorkspaceGraph() {
   return (
     <div className="mt-10 overflow-x-auto rounded-2xl border border-white/10 bg-black/20 p-6 sm:p-8">
       <svg viewBox="0 0 720 340" className="mx-auto block w-full max-w-3xl" role="img" aria-label="Workspace process graph">
-        {/* Edges */}
         <g stroke="currentColor" fill="none" strokeLinecap="round">
-          {/* Solid edge to Development */}
           <line x1="360" y1="62" x2="360" y2="138" className="text-aqua/60" strokeWidth="2" />
-          {/* Dashed edges to aspirational */}
           <line x1="360" y1="62" x2="120" y2="248" className="text-white/25" strokeWidth="1.5" strokeDasharray="4 4" />
           <line x1="360" y1="62" x2="280" y2="248" className="text-white/25" strokeWidth="1.5" strokeDasharray="4 4" />
           <line x1="360" y1="62" x2="440" y2="248" className="text-white/25" strokeWidth="1.5" strokeDasharray="4 4" />
           <line x1="360" y1="62" x2="600" y2="248" className="text-white/25" strokeWidth="1.5" strokeDasharray="4 4" />
         </g>
 
-        {/* Workspace root */}
         <g>
           <rect x="280" y="20" width="160" height="44" rx="22" className="fill-aqua/10 stroke-aqua/60" strokeWidth="1.5" />
           <text x="360" y="48" textAnchor="middle" className="fill-aqua font-display text-[14px] font-bold">
@@ -549,7 +610,6 @@ function WorkspaceGraph() {
           </text>
         </g>
 
-        {/* Development (live) */}
         <g>
           <rect x="280" y="138" width="160" height="56" rx="14" className="fill-aqua/15 stroke-aqua" strokeWidth="2" />
           <text x="360" y="164" textAnchor="middle" className="fill-white font-display text-[13px] font-bold">
@@ -560,7 +620,6 @@ function WorkspaceGraph() {
           </text>
         </g>
 
-        {/* Aspirational nodes — class strings spelled in full so Tailwind JIT keeps them */}
         {[
           { x: 40, y: 248, label: "Marketing", strokeClass: "stroke-lilac/40" },
           { x: 200, y: 248, label: "Customer success", strokeClass: "stroke-sun/40" },
@@ -587,9 +646,6 @@ function WorkspaceGraph() {
           </g>
         ))}
       </svg>
-      <p className="mt-4 text-center text-xs text-white/45">
-        Solid edges are live. Dashed edges are drafted processes attaching to the workspace root.
-      </p>
     </div>
   );
 }
