@@ -149,6 +149,15 @@ class FinishIn(BaseModel):
     ticket_ref: str | None = Field(default=None, max_length=512)
     comment: str | None = Field(default=None, max_length=8000)
     summary: str | None = Field(default=None, max_length=2000)
+    # Shape-the-ticket-itself surface for stages that should rewrite
+    # the issue body (intake, BA, planner). When set on a
+    # ``ready_next_step`` finish, the server replaces the tracker
+    # description with this markdown — comments are reserved for
+    # auditable narration ("what I did and why"), the description
+    # carries the structured shape (Problem / Goal / AC / Scope /
+    # Risks / etc.). Linear keeps prior bodies in the issue activity
+    # feed so the operator can always see what changed.
+    description: str | None = Field(default=None, max_length=20_000)
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -501,6 +510,23 @@ async def finish_agent_run(
                     detail={"code": "stage_next_required", "outcome": payload.outcome},
                 )
             ref = _ticket_ref_from(resolved.kind, payload.ticket_ref)
+            # Description rewrite goes first so a downstream comment can
+            # reference "see updated description above" without the
+            # comment being older than the body it points at. Adapter
+            # may not implement the verb yet (jira / github_issues /
+            # notion in the pilot) — best-effort, log and continue.
+            if payload.description:
+                setter = getattr(resolved.gateway, "set_description", None)
+                if setter is None:
+                    logger.warning(
+                        "agent_run.finish: set_description not implemented "
+                        "for tracker_kind=%s; ticket=%s — description ignored",
+                        resolved.kind,
+                        payload.ticket_ref,
+                    )
+                else:
+                    await setter(ref, body=payload.description)
+                    actions.append("tracker:set_description")
             if payload.comment:
                 await resolved.gateway.comment(ref, body=payload.comment)
                 actions.append("tracker:comment")
