@@ -30,8 +30,8 @@ export function BookHero() {
       <div className="pointer-events-none absolute -right-24 top-0 h-72 w-72 rounded-full bg-gradient-to-br from-coral/25 via-transparent to-transparent blur-3xl" />
       <div className="pointer-events-none absolute -left-20 bottom-0 h-64 w-64 rounded-full bg-gradient-to-tr from-aqua/20 via-transparent to-transparent blur-3xl" />
 
-      <div className="relative mx-auto max-w-5xl px-4 sm:px-6">
-        <div className="grid items-start gap-10 lg:grid-cols-[minmax(200px,280px)_1fr] lg:gap-12">
+      <div className="relative mx-auto max-w-[88rem] px-4 sm:px-6">
+        <div className="mx-auto grid max-w-5xl items-start gap-10 lg:grid-cols-[minmax(200px,280px)_1fr] lg:gap-12">
           <div className="mx-auto w-full max-w-[260px] lg:mx-0 lg:max-w-none">
             <div className="relative aspect-[2/3] overflow-hidden rounded-2xl border border-white/20 bg-black/40 shadow-[0_24px_80px_-12px_rgba(46,230,214,0.25),0_12px_40px_-8px_rgba(255,92,108,0.2)]">
               <Image

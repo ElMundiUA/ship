@@ -187,14 +187,14 @@ function RegionFrame({
   children: ReactNode;
 }) {
   const ring = {
-    human: "border-fuchsia-400/35 bg-fuchsia-500/[0.08]",
+    human: "border-lilac/35 bg-lilac/[0.08]",
     gha: "border-sky-400/35 bg-sky-500/[0.08]",
     cursor: "border-amber-400/40 bg-amber-500/[0.1]",
     linear: "border-indigo-400/35 bg-indigo-500/[0.1]",
     neutral: "border-white/15 bg-white/[0.04]",
   }[accent];
   const titleColor = {
-    human: "text-fuchsia-200/90",
+    human: "text-lilac/90",
     gha: "text-sky-200/90",
     cursor: "text-amber-100/90",
     linear: "text-indigo-100/90",
@@ -278,7 +278,7 @@ export function SystemArchitectureDiagram({ caption }: { caption?: string }) {
                   id="human-backlog"
                   highlightSet={archGlow}
                   onHover={setActive}
-                  className="border-fuchsia-400/25 bg-fuchsia-950/30"
+                  className="border-lilac/25 bg-lilac/[0.06]"
                 >
                   Backlog (manual triage)
                 </DiagramNode>
@@ -286,7 +286,7 @@ export function SystemArchitectureDiagram({ caption }: { caption?: string }) {
                   id="human-todo"
                   highlightSet={archGlow}
                   onHover={setActive}
-                  className="border-fuchsia-400/35 bg-fuchsia-900/25"
+                  className="border-lilac/35 bg-lilac/[0.10]"
                 >
                   Ready column + board filters
                 </DiagramNode>
@@ -450,10 +450,10 @@ export function SdlcLaneDiagram({ caption }: { caption?: string }) {
                 id="h-bl"
                 highlightSet={sdlcGlow}
                 onHover={setActive}
-                className="border-fuchsia-400/30 bg-fuchsia-950/30"
+                className="border-lilac/30 bg-lilac/[0.06]"
               >
                 Backlog
-                <div className="mt-1 text-[10px] font-normal text-fuchsia-200/70">No pick — triage only</div>
+                <div className="mt-1 text-[10px] font-normal text-lilac/70">No pick — triage only</div>
               </DiagramNode>
             </RegionFrame>
 

@@ -295,7 +295,8 @@ function HeroDashboard() {
         </div>
       </div>
       <figcaption className="mt-4 text-center text-xs text-white/45">
-        The Development process — 8 states, 15 specialists, 8 scheduled routines. Live workspace view, not a marketing diagram.
+        Illustration of the Development process — eight states, fifteen specialists, eight scheduled routines. The
+        actual product is at <a href="/process" className="text-sun hover:text-white">/process</a>.
       </figcaption>
     </figure>
   );
