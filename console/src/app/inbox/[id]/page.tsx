@@ -302,6 +302,7 @@ export default async function InboxItemPage({
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
         <div className="space-y-4">
           <HeaderCard detail={detail} />
+          <SourceTicketCard detail={detail} />
           <DispositionCard
             detail={detail}
             workspaceId={workspace.id}
@@ -644,6 +645,100 @@ function SnoozeForm({
         Snooze
       </button>
     </form>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Source ticket card
+// ---------------------------------------------------------------------------
+
+/**
+ * Render a snapshot of the tracker ticket the agent's question/blocker
+ * refers to. The backend stamps this onto ``payload.source_ticket`` at
+ * agent-finish time (clarifications + blockers carrying a ticket_ref);
+ * if the snapshot is missing — older items, no tracker bound, fetch
+ * failed — fall back to a minimal "ref only" pill so the operator at
+ * least sees which ticket is meant.
+ */
+function SourceTicketCard({ detail }: { detail: InboxItemDetail }) {
+  const payload = (detail.payload ?? {}) as Record<string, unknown>;
+  const snap =
+    payload.source_ticket && typeof payload.source_ticket === "object"
+      ? (payload.source_ticket as Record<string, unknown>)
+      : null;
+  const ticketRef =
+    typeof payload.ticket_ref === "string" && payload.ticket_ref
+      ? payload.ticket_ref
+      : null;
+
+  // Nothing tying this row to a ticket — don't render anything.
+  if (!snap && !ticketRef) return null;
+
+  const title = typeof snap?.title === "string" ? snap.title : null;
+  const description =
+    typeof snap?.description === "string" ? snap.description : null;
+  const url = typeof snap?.url === "string" ? snap.url : null;
+  const state = typeof snap?.state === "string" ? snap.state : null;
+  const labels = Array.isArray(snap?.labels)
+    ? (snap?.labels as unknown[]).filter(
+        (l): l is string => typeof l === "string",
+      )
+    : [];
+  const refDisplay =
+    (typeof snap?.ticket_ref === "string" && snap.ticket_ref) ||
+    ticketRef ||
+    "";
+
+  return (
+    <Card>
+      <CardHeader
+        title="Source ticket"
+        subtitle={`The ticket the agent's ${detail.type === "blocker" ? "blocker" : "question"} refers to.`}
+      />
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <code className="rounded bg-white/[0.08] px-2 py-1 font-mono text-aqua/95">
+            {refDisplay}
+          </code>
+          {state && (
+            <span className="rounded-full border border-white/15 px-2 py-0.5 text-white/75">
+              {state}
+            </span>
+          )}
+          {labels.map((lbl) => (
+            <span
+              key={lbl}
+              className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-white/65"
+            >
+              {lbl}
+            </span>
+          ))}
+          {url && (
+            <a
+              href={url}
+              target="_blank"
+              rel="noreferrer"
+              className="ml-auto text-aqua hover:underline"
+            >
+              Open in tracker ↗
+            </a>
+          )}
+        </div>
+        {title && (
+          <h2 className="font-display text-base font-bold text-white">
+            {title}
+          </h2>
+        )}
+        {description ? (
+          <MarkdownBlock>{description}</MarkdownBlock>
+        ) : title || snap ? null : (
+          <p className="text-xs text-white/55">
+            No ticket snapshot — older inbox row, or the tracker
+            wasn&apos;t reachable when the agent finished.
+          </p>
+        )}
+      </div>
+    </Card>
   );
 }
 
@@ -1281,6 +1376,7 @@ function MockView({
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
         <div className="space-y-4">
           <HeaderCard detail={detail} />
+          <SourceTicketCard detail={detail} />
           <DispositionCard detail={detail} workspaceId={detail.workspace_id} />
           <PayloadCard detail={detail} />
           <EventsCard events={detail.events} members={[]} />
