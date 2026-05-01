@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from dataclasses import dataclass
 from typing import Sequence
@@ -237,11 +238,58 @@ class TopicShiftDecision:
     user can see *why* the agent thinks they're on a new topic,
     and ``new_title`` is a proposed one-line label for the new
     conversation thread.
+
+    ``explicit_phrase`` is True when the user said something like
+    "let's switch" / "теперь другое" — a high-confidence signal that
+    short-circuits the LLM classifier. The UI uses it to elevate the
+    banner copy from a soft "looks like you moved on" into a direct
+    "switching now" pill the user can undo.
     """
 
     shifted: bool
     reason: str
     new_title: str | None
+    explicit_phrase: bool = False
+
+
+# Canonical RU + EN phrases that mean "I'm changing the topic". Keep
+# the list short and high-precision — every entry is a regex anchored
+# at a word boundary so we don't false-trigger on substrings ("switch
+# to dark mode" must not match "switch"). When the user says these,
+# we skip the LLM classifier entirely and surface the shift banner
+# with ``explicit_phrase=True`` so the UI can act decisively.
+_EXPLICIT_SHIFT_PHRASES: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        # English
+        r"\b(let'?s|let us)\s+(switch|move on|change topics?|talk about something else)\b",
+        r"\bnew topic\b",
+        r"\bchange (the\s+)?(topic|subject)\b",
+        r"\bdifferent (topic|subject|question)\b",
+        r"\bswitch(ing)?\s+(topics?|gears|subjects?)\b",
+        r"\bforget (about )?(this|that|it|all that)\b",
+        r"\bnever mind( that)?\b",
+        r"\bmoving on\b",
+        # Russian
+        r"\b(давай|давайте)\s+(переключимся|сменим тему|о другом|про другое)\b",
+        r"\bтеперь (другое|другая тема|про другое|совсем другое)\b",
+        r"\bновая тема\b",
+        r"\bсменим тему\b",
+        r"\b(забудь|забей)( это| про это| об этом)?\b",
+        r"\bпереключимся\b",
+        r"\bдругой вопрос\b",
+    )
+)
+
+
+def detect_explicit_shift(message: str) -> bool:
+    """Return True when ``message`` matches a canonical "I'm switching
+    topics" phrase. Cheap regex pre-filter — runs before the LLM
+    classifier so the obvious cases short-circuit.
+    """
+    if not message:
+        return False
+    return any(p.search(message) for p in _EXPLICIT_SHIFT_PHRASES)
 
 
 @dataclass(slots=True)
@@ -306,6 +354,17 @@ class TopicService:
         prior_user_turns = [m for m in recent_messages if m.role == "user"]
         if len(prior_user_turns) < 1:
             return TopicShiftDecision(shifted=False, reason="", new_title=None)
+
+        # Cheap regex pre-filter: explicit "let's switch" / "теперь
+        # другое" short-circuits the LLM classifier. Trades a tiny bit
+        # of latency for a more decisive UX on the obvious cases.
+        if detect_explicit_shift(new_user_message):
+            return TopicShiftDecision(
+                shifted=True,
+                reason="You said you're switching topics.",
+                new_title=None,
+                explicit_phrase=True,
+            )
 
         # Keep the payload small — we only need the last few turns
         # plus the running summary. The fast model doesn't need the

@@ -213,6 +213,29 @@ function buildRenderRows(segments: Segment[]): RenderRow[] {
 type TopicShift = {
   reason: string | null;
   new_title: string | null;
+  /**
+   * True when the user said something canonical like "let's switch"
+   * / "теперь другое" — the backend's regex pre-filter caught it
+   * directly so we elevate the banner copy from "looks like you
+   * moved on" to a more decisive "switching now". The UX still
+   * confirms before packing — auto-action with undo is a follow-up.
+   */
+  explicitPhrase: boolean;
+};
+
+/**
+ * One bucket-article hit returned by the backend's per-turn
+ * retrieval. We render these inside a small "Using N prior
+ * memories" disclosure under the user message so the user can see
+ * what the agent is leaning on without forcing the panel open.
+ */
+type RetrievedContext = {
+  hits: Array<{
+    bucket_slug: string;
+    bucket_name: string;
+    title: string;
+    similarity: number;
+  }>;
 };
 
 /**
@@ -224,12 +247,22 @@ type TopicShiftDecision = {
   shifted?: boolean;
   reason?: string | null;
   new_title?: string | null;
+  explicit_phrase?: boolean;
 };
 
 type StreamEvent =
   | { type: "thread"; thread: Thread }
   | { type: "user_message"; message: Message }
   | { type: "topic_shift"; decision?: TopicShiftDecision; shift?: unknown }
+  | {
+      type: "retrieved_context";
+      hits?: Array<{
+        bucket_slug?: string;
+        bucket_name?: string;
+        title?: string;
+        similarity?: number;
+      }>;
+    }
   | { type: "delta"; text: string }
   | {
       type: "tool_call";
@@ -375,6 +408,21 @@ export function SingleWindowChat({
     hydrateSegments(thread.messages),
   );
   const [shift, setShift] = useState<TopicShift | null>(null);
+  // Per-user-message ``retrieved_context`` payload, keyed by user
+  // message id. Each turn's retrieval lookup lands here once the
+  // backend emits the SSE event; the matching user row renders the
+  // "Using N prior memories" disclosure inline. Keyed-by-id (not
+  // reset on each turn) because past disclosures stay visible as
+  // historical breadcrumbs.
+  const [retrievedByUserId, setRetrievedByUserId] = useState<
+    Record<string, RetrievedContext>
+  >({});
+  // Tracks the most-recent **persisted** user message id so the
+  // ``retrieved_context`` handler can attach hits to it. The
+  // optimistic ``c_<rand>`` id from ``send`` is replaced by a
+  // server-assigned UUID via the ``user_message`` event before
+  // retrieval fires, so we always store the canonical id here.
+  const lastUserIdRef = useRef<string | null>(null);
   const [streaming, setStreaming] = useState(false);
   // Distinguish "user submitted, nothing back yet" from "agent
   // started streaming text". Drives the Thinking card.
@@ -581,6 +629,9 @@ export function SingleWindowChat({
         // Fresh turn — any in-flight assistant reveal is done; the
         // streaming slot is free until the first delta lands.
         streamingIdRef.current = null;
+        // Remember the canonical user id so the upcoming
+        // ``retrieved_context`` event can be attached to this row.
+        lastUserIdRef.current = evt.message.id;
         return;
       }
       case "topic_shift": {
@@ -602,6 +653,7 @@ export function SingleWindowChat({
               typeof decision.new_title === "string"
                 ? decision.new_title
                 : null,
+            explicitPhrase: decision.explicit_phrase === true,
           });
         } else {
           warnOnce(
@@ -609,6 +661,31 @@ export function SingleWindowChat({
             evt as unknown,
           );
         }
+        return;
+      }
+      case "retrieved_context": {
+        // Backend emits this once per turn AFTER it's pulled the
+        // top-K bucket articles for the new user message. Stash on
+        // the most-recent user segment (via the controlled key) so
+        // the disclosure renders right under the message that
+        // triggered the lookup. Empty hits aren't sent, but defend
+        // against contract drift by skipping when the array's empty.
+        const hits = Array.isArray(evt.hits) ? evt.hits : [];
+        const cleaned = hits
+          .map((h) => ({
+            bucket_slug: typeof h.bucket_slug === "string" ? h.bucket_slug : "",
+            bucket_name: typeof h.bucket_name === "string" ? h.bucket_name : "",
+            title: typeof h.title === "string" ? h.title : "",
+            similarity: typeof h.similarity === "number" ? h.similarity : 0,
+          }))
+          .filter((h) => h.title || h.bucket_slug);
+        if (cleaned.length === 0) return;
+        const userId = lastUserIdRef.current;
+        if (!userId) return;
+        setRetrievedByUserId((m) => ({
+          ...m,
+          [userId]: { hits: cleaned },
+        }));
         return;
       }
       case "delta": {
@@ -966,6 +1043,8 @@ export function SingleWindowChat({
       setCurrent(fresh);
       setSegments(hydrateSegments(fresh.messages ?? []));
       setShift(null);
+      setRetrievedByUserId({});
+      lastUserIdRef.current = null;
       streamingIdRef.current = null;
       setRevealed({});
       setBottomSpacerPx(0);
@@ -1176,6 +1255,7 @@ export function SingleWindowChat({
                             ? lastUserAnchorRef
                             : null
                         }
+                        retrieved={retrievedByUserId[row.segment.id] ?? null}
                       />
                     );
                   }
@@ -1331,9 +1411,11 @@ function EmptyHint({ hasArchivedChats }: { hasArchivedChats: boolean }) {
 function UserRow({
   segment,
   anchorRef,
+  retrieved,
 }: {
   segment: UserSegment;
   anchorRef: React.RefObject<HTMLDivElement | null> | null;
+  retrieved: RetrievedContext | null;
 }) {
   return (
     <div ref={anchorRef ?? undefined} className="text-[14px] leading-relaxed">
@@ -1341,7 +1423,58 @@ function UserRow({
         You
       </div>
       <ChatMarkdown text={segment.body} animate={false} />
+      {retrieved && retrieved.hits.length > 0 ? (
+        <RetrievedContextDisclosure retrieved={retrieved} />
+      ) : null}
     </div>
+  );
+}
+
+/**
+ * Soft "Using N prior memories" disclosure rendered below a user
+ * message when the backend's per-turn retrieval pulled in any
+ * packed-conversation summaries. Collapsed by default — power
+ * users can expand to see which buckets the agent leaned on. Each
+ * row deeplinks into the bucket page for follow-up.
+ */
+function RetrievedContextDisclosure({
+  retrieved,
+}: {
+  retrieved: RetrievedContext;
+}) {
+  const n = retrieved.hits.length;
+  const label = n === 1 ? "1 prior memory" : `${n} prior memories`;
+  return (
+    <details className="mt-2 group/ret">
+      <summary className="cursor-pointer text-[10px] uppercase tracking-[0.14em] text-white/30 transition hover:text-white/60 list-none [&::-webkit-details-marker]:hidden">
+        <span className="inline-flex items-center gap-1">
+          <span aria-hidden className="transition-transform group-open/ret:rotate-90">
+            ▸
+          </span>
+          <span>Using {label}</span>
+        </span>
+      </summary>
+      <ul className="mt-1.5 space-y-1 pl-4 text-[11px] text-white/55">
+        {retrieved.hits.map((h, i) => (
+          <li key={`${h.bucket_slug}-${i}`} className="flex items-start gap-2">
+            <span className="mt-0.5 text-white/30">·</span>
+            <span className="flex-1">
+              {h.bucket_slug ? (
+                <Link
+                  href={`/knowledge/${encodeURIComponent(h.bucket_slug)}`}
+                  className="text-white/65 hover:text-white"
+                >
+                  {h.bucket_name || h.bucket_slug}
+                </Link>
+              ) : (
+                <span className="text-white/65">{h.bucket_name}</span>
+              )}{" "}
+              <span className="text-white/35">— {h.title}</span>
+            </span>
+          </li>
+        ))}
+      </ul>
+    </details>
   );
 }
 
@@ -1615,19 +1748,28 @@ function TopicShiftBanner({
   onDismiss: () => void;
 }) {
   const bucketName = shift.new_title;
+  // Explicit phrase ("let's switch" / "теперь другое") → confident,
+  // direct copy + "switch now" CTA. Otherwise the LLM classifier
+  // hedges, so we phrase the banner as a soft suggestion the user
+  // can dismiss without feeling pushed.
+  const headline = shift.explicitPhrase ? "Switching topics." : "Topic shift.";
+  const reason = shift.explicitPhrase
+    ? "Got it — let's pack the current thread before we move on."
+    : (shift.reason ?? "Looks like you moved on.");
+  const cta = shift.explicitPhrase ? "switch now" : "pack & start fresh";
   return (
     <div className="flex items-start gap-3 py-2 text-[12px] text-amber-200/90">
       <span className="mt-0.5 h-1 w-1 shrink-0 rounded-full bg-amber-300" />
       <div className="flex-1">
-        <strong className="font-semibold">Topic shift.</strong>{" "}
-        {shift.reason ?? "Looks like you moved on."} Pack this thread into{" "}
+        <strong className="font-semibold">{headline}</strong> {reason} Pack this
+        thread into{" "}
         <code className="text-amber-100">{bucketName ?? "a new bucket"}</code>?
         <button
           type="button"
           onClick={onPack}
           className="ml-2 font-semibold text-amber-100 underline-offset-2 hover:underline"
         >
-          pack & start fresh
+          {cta}
         </button>
         <button
           type="button"

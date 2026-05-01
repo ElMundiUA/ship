@@ -752,6 +752,7 @@ async def _run_agent_turn(
                             "shifted": True,
                             "reason": decision.reason,
                             "new_title": decision.new_title,
+                            "explicit_phrase": decision.explicit_phrase,
                         },
                     }
                 )
@@ -767,6 +768,26 @@ async def _run_agent_turn(
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("bucket retrieval failed: %s", exc)
+
+    # Surface what we pulled in so the UI can render the soft
+    # "Using N prior memories" disclosure. Skip when retrieval was
+    # empty — the disclosure would be a visual no-op.
+    if retrieved_buckets:
+        yield _sse(
+            {
+                "type": "retrieved_context",
+                "hits": [
+                    {
+                        "bucket_slug": h.bucket_slug,
+                        "bucket_name": h.bucket_name,
+                        "article_id": str(h.article_id),
+                        "title": h.title,
+                        "similarity": round(float(h.similarity), 3),
+                    }
+                    for h in retrieved_buckets
+                ],
+            }
+        )
 
     assembled = await topic_service.assemble_messages(
         thread=thread,
