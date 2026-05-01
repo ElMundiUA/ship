@@ -1,119 +1,72 @@
 /**
- * `shipctl run` — single entry-point for executing a Ship routine.
+ * `shipctl run` — E14 routine entry-point.
  *
- * Today's scope (Phase 1):
- *   - `kind=once` routines run with local idempotency markers.
- *   - `kind=event` and `kind=schedule` routines execute when `shipctl trigger`
- *     says they are due; Ship only claims the schedule window.
+ * Customer's GH Actions cron fires this once per routine slot. The
+ * pipeline:
  *
- * The command intentionally does not fork an agent subprocess. The
- * reusable workflow pipes shipctl's stdout into the customer's agent
- * (Cursor Cloud, Claude Code, Codex, …) the same way `shipctl kickoff`
- * does today. That keeps the CLI agnostic about which agent runtime is
- * in use.
+ *   1. Read the routine from `.ship/config.yml` (pattern_id, optional
+ *      user-authored prompt).
+ *   2. Fetch the pattern body+frontmatter from Ship server
+ *      (`POST /fetch kind=pattern id=<pattern_id>`).
+ *   3. If the pattern declares `spec.fsm_stage`, ask Ship server for
+ *      the next ticket in that FSM stage
+ *      (`GET /v1/.../tracker/next?state=<stage>`). Server picks the
+ *      adapter (Linear / GH Issues / etc.) — CLI doesn't care.
+ *   4. Mint a `run_id` and render the prompt: pattern body + ticket
+ *      details + a finish-protocol block with `SHIP_API_BASE`,
+ *      `SHIP_API_TOKEN`, `SHIP_WORKSPACE_ID`, `RUN_ID`, `TICKET_REF`,
+ *      `FSM_STAGE` already substituted so the agent can call the
+ *      finish endpoint directly.
+ *   5. Launch the configured agent runtime (`cli/lib/agents/`) — Cursor
+ *      Cloud today. Block until the runtime terminates.
+ *   6. The agent itself calls
+ *      `POST /v1/workspaces/{ws}/agent-runs/finish` with its outcome.
+ *      Ship's server applies tracker side-effects via the workspace
+ *      Linear OAuth — the CLI doesn't read any branch / state file.
+ *   7. CLI exits 0 on Cursor `FINISHED`, non-0 if the runtime crashed.
+ *      Whether the agent actually called `/finish` is observable via
+ *      the audit log; the smoke test for "did the right thing happen"
+ *      is the tracker label/state itself.
  *
- * Callback behaviour: if a callback URL is available via flags or env,
- * `shipctl run` reports `status=ok` on success and `status=fail` on any
- * failure path. Callback errors do not override the primary exit code
- * (a successful routine with a flaky callback still exits 0, but prints a
- * warning to stderr).
+ * Env contract (typically wired in `ship-trigger-schedule.yml`):
+ *   - SHIP_API_BASE         — Ship server, e.g. https://api.ship.elmundi.com
+ *   - SHIP_API_TOKEN        — workspace API token (admin scope; rendered
+ *                             into the agent's prompt so it can call
+ *                             /agent-runs/finish from inside Cursor)
+ *   - SHIP_WORKSPACE_ID     — UUID of the workspace this run belongs to
+ *   - CURSOR_API_KEY        — Cursor Cloud agent API key (when provider=cursor)
+ *   - GITHUB_REPOSITORY     — owner/repo (the repo the agent will check out)
+ *
+ * Note: there is **no SHIP_REPO_ID** — a workspace is the project, so
+ * the tracker is workspace-scoped. ``GITHUB_REPOSITORY`` only tells the
+ * agent runtime which checkout to spawn for code work. Branchless agents
+ * (intake, BA, planner) don't push commits at all.
  */
 
-import fs from "node:fs";
+import crypto from "node:crypto";
 import path from "node:path";
 
+import yaml from "yaml";
+
 import { readConfig, findShipRoot } from "../config/io.mjs";
-import {
-  validateConfig,
-  CONFIG_SCHEMA_VERSION,
-  LANE_FANOUT_MODES,
-} from "../config/schema.mjs";
-import {
-  executableFanout,
-  executableIds,
-  executablePatterns,
-  resolveExecutable,
-} from "../runtime/routines.mjs";
+import { resolveExecutable } from "../runtime/routines.mjs";
 import { fetchArtifact } from "../http.mjs";
-import { resolveShipRepoRootForCatalog } from "../find-ship-root.mjs";
 import { readArtifactFile } from "../artifacts/fs-index.mjs";
-import { decideRun, readMarker, writeMarker, sha256 } from "../state/idempotency.mjs";
-import { readLockfile, lookupLock, verifyBody } from "../state/lockfile.mjs";
+import { resolveShipRepoRootForCatalog } from "../find-ship-root.mjs";
+import { resolveProvider, runAgent } from "../agents/index.mjs";
+
 
 const EXIT_OK = 0;
 const EXIT_USAGE = 1;
-const EXIT_V1_CONFIG = 2;
-const EXIT_CALLBACK = 3;
-const EXIT_IDEMPOTENCY = 4;
+const EXIT_NO_TASK = 0; // intentional: no eligible ticket is a clean noop
+const EXIT_AGENT_FAIL = 7;
 
-const VALID_TRIGGERS = new Set(["event", "schedule", "manual", "once"]);
 
-function printHelp() {
-  console.log(`shipctl run — execute a Ship routine.
+// ---------------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------------
 
-WHAT THIS COMMAND IS FOR
-  shipctl run is the **Run** dispatch entry point. It resolves a
-  routine from .ship/config.yml, fetches its pattern body, checks
-  idempotency, and emits the prompt for an agent to consume. Behaviour
-  by routine trigger:
-    - kind: once             — executed fully here, locally.
-    - kind: event / schedule — recognised but NOT executed locally;
-                               those run via the workspace's GitHub
-                               Actions runner using the reusable
-                               .github/workflows/run-agent.yml. shipctl
-                               run exits 0 with a no-op summary so CI
-                               wrappers can wire them safely.
 
-USAGE
-  shipctl run --routine <id> [--pattern <id>] [--fanout <matrix|sequential|concurrent>]
-              [--trigger <event|schedule|manual|once>]
-              [--dry-run] [--offline]
-              [--ship-run-id <uuid>] [--ship-callback-url <url>] [--ship-run-token <jwt>]
-              [--cwd <dir>] [--json]
-
-FLAGS
-  --routine <id>            Routine id declared in process.routines. Required.
-  --lane <id>               Back-compat alias for --routine.
-  --pattern <id>            For multi-pattern routines: run only this pattern. This
-                            is the per-entry call issued by the matrix workflow
-                            (one matrix job per pattern). Must be one of the
-                            routine's declared patterns.
-  --fanout <mode>           Override the routine's configured fan-out for this run
-                            (matrix|sequential|concurrent). Meaningful only
-                            when the routine has ≥2 patterns and --pattern is not
-                            set. Matrix mode without --pattern is rejected;
-                            it requires a driving workflow.
-  --trigger <kind>          Force the trigger context (event|schedule|manual|once).
-                            If omitted, inferred from GITHUB_EVENT_NAME / SHIP_RUN_TRIGGER.
-  --dry-run                 Print the plan without touching idempotency markers or callback.
-  --offline                 Resolve patterns exclusively via .ship/shipctl.lock.json
-                            and .ship/cache/ — never talks to the methodology API.
-                            Fails if the lockfile or a cached body is missing.
-                            Generate one with 'shipctl sync --lock'.
-  --ship-run-id <uuid>      Pipeline run id. Falls back to SHIP_RUN_ID env.
-  --ship-callback-url <url> Full callback URL. Falls back to SHIP_CALLBACK_URL env.
-  --ship-run-token <jwt>    Short-lived bearer. Falls back to SHIP_RUN_TOKEN env.
-  --cwd <dir>               Repo root. Default: search upward for .ship/config.yml.
-  --json                    Emit a structured summary on stdout.
-  --help                    Show this help.
-
-EXIT
-  0  routine executed or no-op
-  1  usage / config error
-  2  config is v1 — run 'shipctl migrate' first
-  3  callback failed (routine itself may have succeeded)
-  4  idempotency marker read/write failure
- 10  missing SHIP_RUN_TOKEN when a callback URL is configured
-
-EXAMPLE (CI step emitted by the reusable workflow)
-  shipctl run --routine daily_digest | feed-to-agent
-`);
-}
-
-/**
- * @param {{json?: boolean, dryRun?: boolean, baseUrl?: string}} ctx
- * @param {string[]} rest
- */
 export async function runCommand(ctx, rest) {
   const args = parseArgs(rest);
   if (args.help) {
@@ -121,759 +74,475 @@ export async function runCommand(ctx, rest) {
     process.exit(EXIT_OK);
   }
   if (!args.routine) {
-    die(EXIT_USAGE, "`--routine <id>` is required (legacy alias: `--lane <id>`).\nRun: shipctl run --help");
+    die(EXIT_USAGE, "`--routine <id>` is required.\nRun: shipctl run --help");
   }
 
   const cwd = args.cwd || process.cwd();
   const root = findShipRoot(cwd);
   if (!root) {
-    die(
-      EXIT_USAGE,
-      `.ship/config.yml not found (searched from ${path.resolve(cwd)} upward). Run 'shipctl init' first.`,
-    );
+    die(EXIT_USAGE, `.ship/config.yml not found (searched from ${path.resolve(cwd)} upward).`);
   }
 
-  let config;
-  try {
-    const read = readConfig(cwd);
-    config = read.config;
-  } catch (err) {
-    die(EXIT_USAGE, err instanceof Error ? err.message : String(err));
-  }
-
-  if (config.version !== CONFIG_SCHEMA_VERSION) {
-    die(
-      EXIT_V1_CONFIG,
-      `.ship/config.yml is at v${config.version}; shipctl run requires v${CONFIG_SCHEMA_VERSION}.\nRun 'shipctl migrate' to upgrade.`,
-    );
-  }
-
-  const validation = validateConfig(config);
-  if (!validation.ok) {
-    const msg = [
-      "config is invalid:",
-      ...validation.errors.map((e) => `  - ${e}`),
-    ].join("\n");
-    die(EXIT_USAGE, msg);
-  }
-
+  const { config } = readConfig(cwd);
   const resolved = resolveExecutable(config, args.routine);
   if (!resolved) {
-    const known = executableIds(config);
-    const joined = [...known.routines, ...known.lanes].sort();
-    die(
-      EXIT_USAGE,
-      `unknown routine '${args.routine}'. Known routines: ${joined.length ? joined.join(", ") : "(none)"}`,
-    );
-  }
-  const executable = resolved.executable;
-
-  const effectiveTrigger = resolveTrigger(args.trigger, executable.kind);
-  if (!effectiveTrigger.fits) {
-    /* Not an error — scheduler fired us but the routine doesn't want this
-     * trigger. Exit 0 so parallel routines in the same workflow don't all
-     * fail just because one didn't match. */
-    const summary = {
-      routine: args.routine,
-      lane: resolved.kind === "lane" ? args.routine : undefined,
-      kind: executable.kind,
-      trigger: effectiveTrigger.trigger,
-      status: "noop",
-      reason: `routine.kind=${executable.kind} does not accept trigger=${effectiveTrigger.trigger}`,
-    };
-    emitSummary(ctx, args, summary);
-    process.exit(EXIT_OK);
+    die(EXIT_USAGE, `unknown routine '${args.routine}' in .ship/config.yml`);
   }
 
-  // RFC-0008 C3.1/C3.2: resolve the list of patterns that this invocation
-  // should execute.
-  //
-  //   --pattern <id>     → run only that pattern (the per-entry call
-  //                         issued by the matrix workflow). The pattern
-  //                         must be one of the routine's declared patterns,
-  //                         otherwise we refuse so typos don't silently
-  //                         execute an unrelated pattern.
-  //   (none)             → run every pattern the routine declares, using
-  //                         the routine's fan-out mode. Matrix mode without
-  //                         --pattern is rejected because it requires a
-  //                         driving workflow (see run-agent.yml).
-  const allPatterns = executablePatterns(executable);
-  const promptBody = executable.prompt;
-  if (allPatterns.length === 0 && !promptBody) {
-    die(EXIT_USAGE, `routine ${JSON.stringify(args.routine)} declares no patterns or prompt.`);
+  const env = readEnv();
+  const { apiBase, apiToken, workspaceId, githubRepo } = env;
+
+  // 1) Resolve pattern
+  const patternId = resolved.executable.pattern;
+  if (!patternId) {
+    die(EXIT_USAGE, `routine '${args.routine}' has no pattern set`);
   }
 
-  const effectiveFanout = args.fanout || executableFanout(executable);
-  let patternsToRun;
-  let runMode; // ``single`` | ``sequential`` | ``concurrent``
-  if (args.pattern) {
-    if (!allPatterns.includes(args.pattern)) {
-      die(
-        EXIT_USAGE,
-        `--pattern=${JSON.stringify(args.pattern)} is not declared on routine ${JSON.stringify(args.routine)}. ` +
-          `Known patterns: ${allPatterns.join(", ")}.`,
-      );
-    }
-    patternsToRun = [args.pattern];
-    runMode = "single";
-  } else if (allPatterns.length === 0 && promptBody) {
-    patternsToRun = [];
-    runMode = "single";
-  } else if (allPatterns.length === 1) {
-    patternsToRun = allPatterns;
-    runMode = "single";
-  } else if (effectiveFanout === "matrix") {
-    die(
-      EXIT_USAGE,
-      `routine ${JSON.stringify(args.routine)} has fanout=matrix and ${allPatterns.length} patterns ` +
-        `but no --pattern was provided. Matrix mode dispatches one 'shipctl run --pattern <id>' per ` +
-        `pattern via the workflow (see run-agent.yml). To run them in-process instead, pass ` +
-        `--fanout sequential or --fanout concurrent.`,
-    );
-  } else {
-    patternsToRun = allPatterns;
-    runMode = effectiveFanout;
-  }
+  const fetchBase = methodologyBase(env, config);
+  const rawPatternBody = await loadPattern({ id: patternId, fetchBase });
+  const { frontmatter, frontmatterRaw, body: patternBody } = splitFrontmatter(rawPatternBody);
+  const fsmStage = pickFsmStage(frontmatter, frontmatterRaw);
 
-  // Idempotency markers are routine-scoped (not per-pattern) so we read
-  // once up front; per-pattern decisions are derived from the
-  // concatenated pattern SHA set below so a change to any member of
-  // the list re-triggers the run (expected behaviour for audit routines).
-  const idem = executable.kind === "once" ? executable.idempotency : null;
-  let marker = null;
-  if (idem) {
-    try {
-      marker = readMarker(cwd, idem.key);
-    } catch (err) {
-      await tryCallback(args, "fail", `idempotency read failed: ${err.message}`);
-      die(EXIT_IDEMPOTENCY, err instanceof Error ? err.message : String(err));
-    }
-  }
+  // Patterns reference ``{{BASE}}`` to splice in common-base. Fetch it
+  // up-front so renderPrompt can do the substitution. ``{{SKILLS_CONTEXT}}``
+  // inside common-base is left as "(no skills directory)" for the MVP —
+  // skills bundling lands in a follow-up.
+  const baseRaw = await loadPattern({ id: "common-base", fetchBase, optional: true });
+  const baseBody = baseRaw ? splitFrontmatter(baseRaw).body : "";
 
-  // Fetch every pattern body first so we can reject the whole run
-  // atomically if any one is unavailable — partial success is worse
-  // than a hard failure here (the caller can retry once the fetch
-  // error is cleared).
-  const fetchJobs = patternsToRun.map((patternId) =>
-    fetchPatternBody({
-      patternId,
-      patternVersion: executable.pattern_version || null,
-      offline: args.offline,
-      root,
-      ctx,
-      config,
-    }).then((result) => ({ patternId, result })),
-  );
-  // `sequential` vs `concurrent` only differ for future in-process agent
-  // invocation; today's CLI just emits the pattern bodies to stdout, so
-  // both modes fetch in parallel and print in declared order. We still
-  // record the requested mode on the summary so downstream consumers
-  // (and future work) can see the intent.
-  const fetched = await Promise.all(fetchJobs);
-  for (const { patternId, result } of fetched) {
-    if (!result.ok) {
-      die(EXIT_USAGE, `pattern ${patternId}: ${result.error}`);
-    }
-  }
-  const runs = promptBody && patternsToRun.length === 0
-    ? [{
-        patternId: `${args.routine}:prompt`,
-        body: promptBody,
-        source: "routine",
-        sha256: sha256(promptBody),
-      }]
-    : fetched.map(({ patternId, result }) => ({
-    patternId,
-    body: result.body,
-    source: result.source,
-    sha256: sha256(result.body),
-  }));
-
-  // Composite SHA over all pattern bodies. ``reset_on=version-change``
-  // fires when any member's body drifts — which is the correct
-  // semantics for a multi-pattern audit routine: if one role's playbook
-  // updates, we want the whole routine to re-run.
-  const compositeBody = runs.map((r) => `#${r.patternId}\n${r.body}`).join("\n---\n");
-  const decision = idem
-    ? decideRun(marker, compositeBody, idem.reset_on || "version-change")
-    : { run: true, reason: "trigger-router-due", marker: null };
-  if (!decision.run) {
-    const summary = {
-      routine: args.routine,
-      lane: resolved.kind === "lane" ? args.routine : undefined,
-      kind: executable.kind,
-      trigger: effectiveTrigger.trigger,
-      status: "noop",
-      reason: "already-done",
-      marker: decision.marker,
-      patterns: runs.map((r) => ({ id: r.patternId, sha256: r.sha256 })),
-    };
-    await tryCallback(
-      args,
-      "ok",
-      `routine ${args.routine}: already completed, no-op.`,
-      runMode === "single"
-        ? { pattern_id: runs[0].patternId, pattern_sha256: runs[0].sha256, noop: true }
-        : { patterns: runs.map((r) => r.patternId), noop: true },
-    );
-    emitSummary(ctx, args, summary);
-    process.exit(EXIT_OK);
-  }
-
-  /* Dry-run stops here — no marker write, no callback, just print the
-   * plan. We still emit the pattern bodies to stdout so operators can
-   * eyeball what the agent would receive. Multi-pattern runs print
-   * each body preceded by a ``# ship: pattern=<id>`` banner so the
-   * agent-side (or a human) can split them back apart. */
-  if (args.dryRun || ctx.dryRun) {
-    const summary = {
-      routine: args.routine,
-      lane: resolved.kind === "lane" ? args.routine : undefined,
-      kind: executable.kind,
-      trigger: effectiveTrigger.trigger,
-      status: "dry-run",
-      reason: decision.reason,
-      mode: runMode,
-      patterns: runs.map((r) => ({ id: r.patternId, sha256: r.sha256, source: r.source })),
-    };
-    if (runs.length === 1) {
-      summary.pattern = { id: runs[0].patternId, sha256: runs[0].sha256, source: runs[0].source };
-    }
-    if (ctx.json || args.json) {
-      console.log(
-        JSON.stringify(
-          { ...summary, pattern_bodies: Object.fromEntries(runs.map((r) => [r.patternId, r.body])) },
-          null,
-          2,
-        ),
-      );
-    } else {
-      console.error(
-        `# ship: routine=${args.routine} kind=${executable.kind} trigger=${effectiveTrigger.trigger} mode=${runMode} (dry-run)`,
-      );
-      emitPatternBodies(runs, { json: false });
-    }
-    process.exit(EXIT_OK);
-  }
-
-  /* Emit the prompt(s) for the agent to consume (same contract as
-   * `shipctl kickoff`). The reusable workflow pipes stdout into the
-   * configured agent runtime; multi-pattern output is delimited by a
-   * banner line per pattern so consumers can split on it.
-   *
-   * Workspace policy injection (RFC-Workspace-policy): before any
-   * pattern body, fetch the workspace's prose-rule policies from the
-   * backend and prepend them as a markdown block. This makes the
-   * agent treat the policies as hard preamble — the same shape the
-   * Navigator chat injects into ``TopicService.assemble_messages``.
-   * Best-effort: a missing token, missing callback URL, or a network
-   * failure quietly skips the prepend so local / offline runs still
-   * work. */
-  if (!(ctx.json || args.json)) {
-    const provider = resolveAgentProvider(config, args.routine);
-    if (provider) console.error(`# ship: routine=${args.routine} agent.provider=${provider} mode=${runMode}`);
-    const preamble = await fetchPoliciesPreamble(args);
-    if (preamble) emitPoliciesPreamble(preamble);
-    emitPatternBodies(runs, { json: false });
-  }
-
-  if (idem) {
-    try {
-      writeMarker(cwd, idem.key, {
-        routine: args.routine,
-        lane: resolved.kind === "lane" ? args.routine : undefined,
-        pattern_id: runs[0].patternId,
-        pattern_sha256: sha256(compositeBody),
-        pattern_version: executable.pattern_version || null,
-        patterns: runs.map((r) => ({ id: r.patternId, sha256: r.sha256 })),
-      });
-    } catch (err) {
-      await tryCallback(args, "fail", `idempotency write failed: ${err.message}`);
-      die(EXIT_IDEMPOTENCY, err instanceof Error ? err.message : String(err));
-    }
-  }
-
-  const callbackMetrics = runMode === "single"
-    ? { pattern_id: runs[0].patternId, pattern_sha256: runs[0].sha256 }
-    : {
-        pattern_id: runs[0].patternId,
-        pattern_sha256: runs[0].sha256,
-        patterns: runs.map((r) => r.patternId).join(","),
+  // 2) Resolve task. ``--dry-run`` skips the server call and uses a
+  // synthetic task so the operator can see the prompt shape without
+  // needing the new endpoints deployed.
+  let task = null;
+  if (fsmStage) {
+    if (args.dryRun || ctx.dryRun) {
+      task = {
+        ticket_ref: "dry-run/sample#1",
+        kind: "dry-run",
+        title: "Sample ticket for dry-run prompt rendering",
+        body: "This is a synthetic ticket body. The real one comes from `GET /tracker/next` when not in dry-run.",
+        url: null,
+        labels: ["sample"],
+        state: "open",
+        fsm_stage: fsmStage,
       };
-  const callbackSummary = runMode === "single"
-    ? `routine ${args.routine} completed (pattern ${runs[0].patternId}@${runs[0].sha256.slice(0, 8)}).`
-    : `routine ${args.routine} completed (${runs.length} patterns, mode=${runMode}).`;
-  const callbackResult = await tryCallback(args, "ok", callbackSummary, callbackMetrics);
-
-  if (ctx.json || args.json) {
-    // For single-pattern runs we keep the legacy ``pattern: {…}`` key
-    // alongside the new ``patterns: […]`` list so existing consumers
-    // (and tests) don't break when they upgrade shipctl before
-    // starting to declare multi-pattern routines.
-    const summaryPayload = {
-      routine: args.routine,
-      lane: resolved.kind === "lane" ? args.routine : undefined,
-      kind: executable.kind,
-      trigger: effectiveTrigger.trigger,
-      status: "completed",
-      mode: runMode,
-      patterns: runs.map((r) => ({ id: r.patternId, sha256: r.sha256, source: r.source })),
-      callback: callbackResult,
-    };
-    if (runs.length === 1) {
-      summaryPayload.pattern = { id: runs[0].patternId, sha256: runs[0].sha256, source: runs[0].source };
+    } else {
+      task = await getNextTask({
+        apiBase,
+        apiToken,
+        workspaceId,
+        state: fsmStage,
+      });
+      if (!task) {
+        emit(args, { status: "noop", routine: args.routine, pattern: patternId, fsm_stage: fsmStage, reason: "no_eligible_ticket" });
+        process.exit(EXIT_NO_TASK);
+      }
     }
-    console.log(JSON.stringify(summaryPayload, null, 2));
   }
 
-  process.exit(callbackResult.ok === false ? EXIT_CALLBACK : EXIT_OK);
-}
+  // 3) Mint a run_id + render prompt with finish-protocol values
+  // already substituted so the agent can call /agent-runs/finish from
+  // inside Cursor without holding any extra config.
+  const runId = `run_${crypto.randomBytes(8).toString("hex")}`;
+  const prompt = renderPrompt({
+    patternBody,
+    baseBody,
+    role: patternId,
+    routineSpec: resolved.executable,
+    task,
+    fsmStage,
+    finishCtx: {
+      apiBase,
+      apiToken,
+      workspaceId,
+      runId,
+      role: patternId,
+      ticketRef: task?.ticket_ref || null,
+      fsmStage: fsmStage || null,
+    },
+  });
 
-/**
- * Stream pattern bodies to stdout. For single-pattern runs we write
- * the body as-is (identical byte output to the pre-multi-pattern
- * behaviour, keeping the test harness stable). For multi-pattern
- * runs we precede each body with a ``# ship: pattern=<id>`` banner so
- * downstream consumers can re-split the stream.
- */
-function emitPatternBodies(runs, _opts) {
-  if (runs.length === 1) {
-    const body = runs[0].body;
-    process.stdout.write(body.endsWith("\n") ? body : `${body}\n`);
-    return;
+  // ``--dry-run`` exits here so the operator can eyeball the rendered
+  // prompt + resolved task without launching an agent or touching any
+  // tracker. Useful when iterating on pattern bodies.
+  if (args.dryRun || ctx.dryRun) {
+    if (args.json) {
+      console.log(JSON.stringify({
+        status: "dry-run",
+        routine: args.routine,
+        pattern: patternId,
+        fsm_stage: fsmStage,
+        task,
+        prompt,
+      }, null, 2));
+    } else {
+      console.error(`# ship: dry-run routine=${args.routine} pattern=${patternId} fsm_stage=${fsmStage || "(context-free)"}`);
+      if (task) {
+        console.error(`# ship: task ticket_ref=${task.ticket_ref} title=${JSON.stringify(task.title || "")}`);
+      } else {
+        console.error("# ship: task=(none)");
+      }
+      console.error("# ---- prompt ----");
+      console.log(prompt);
+    }
+    process.exit(EXIT_OK);
   }
-  for (const r of runs) {
-    process.stdout.write(`# ship: pattern=${r.patternId} sha256=${r.sha256}\n`);
-    const body = r.body;
-    process.stdout.write(body.endsWith("\n") ? body : `${body}\n`);
-  }
-}
 
-/**
- * Print the workspace-policies preamble once at the top of stdout,
- * before the first pattern body. Trailing ``---`` separator visually
- * distinguishes the preamble from the pattern markdown the agent is
- * about to consume; an extra blank line above the separator keeps
- * the markdown well-formed if the preamble already ends with one.
- */
-function emitPoliciesPreamble(preamble) {
-  const trimmed = preamble.endsWith("\n") ? preamble : `${preamble}\n`;
-  process.stdout.write(trimmed);
-  process.stdout.write("\n---\n");
-}
+  // 4) Launch agent runtime
+  const provider = resolveProvider(config, args.routine);
+  const branchName = makeBranchName(args.routine, task?.ticket_ref);
+  const repoUrl = githubRepo ? `https://github.com/${githubRepo}` : null;
+  if (!repoUrl) die(EXIT_USAGE, "GITHUB_REPOSITORY env var is required to launch agent");
 
-/**
- * Fetch the workspace prose-rule policies for the current run from
- * the Ship backend. The endpoint URL is derived from the callback
- * URL by swapping the trailing ``/result`` segment for
- * ``/policies-preamble`` — both share the same auth dependency
- * (per-run JWT or long-lived ``SHIP_RUN_TOKEN``), so we can reuse
- * the same bearer.
- *
- * Returns the preamble markdown or ``null`` when:
- *  - there's no callback URL / token (local invocation),
- *  - the URL doesn't end in ``/result`` (someone overrode the
- *    callback endpoint to a non-canonical path — too risky to
- *    guess),
- *  - the backend has no enabled policies (``preamble: null``),
- *  - or the request fails for any reason.
- *
- * Failures are surfaced as ``warn:`` lines on stderr so an operator
- * can debug them without breaking the routine execution.
- */
-async function fetchPoliciesPreamble(args) {
-  const callbackUrl = args.callbackUrl || process.env.SHIP_CALLBACK_URL;
-  if (!callbackUrl) return null;
-  const token = args.runToken || process.env.SHIP_RUN_TOKEN;
-  if (!token) return null;
-  if (!callbackUrl.endsWith("/result")) {
-    console.error(
-      `warn: SHIP_CALLBACK_URL does not end in /result; skipping policies-preamble fetch (got ${callbackUrl}).`,
-    );
-    return null;
-  }
-  const url = `${callbackUrl.slice(0, -"/result".length)}/policies-preamble`;
+  let runtime;
   try {
-    const res = await fetch(url, {
-      method: "GET",
-      headers: {
-        Accept: "application/json",
-        Authorization: `Bearer ${token}`,
-      },
+    runtime = await runAgent(provider, {
+      repoUrl,
+      ref: env.githubRef || "main",
+      branchName,
+      prompt,
+      autoCreatePr: false,
     });
-    if (!res.ok) {
-      console.error(
-        `warn: policies-preamble fetch returned HTTP ${res.status} ${res.statusText}; continuing without policies.`,
-      );
-      return null;
-    }
-    const body = await res.json().catch(() => null);
-    if (!body || typeof body !== "object") return null;
-    const preamble = body.preamble;
-    if (typeof preamble !== "string" || !preamble.trim()) return null;
-    return preamble;
   } catch (err) {
-    console.error(
-      `warn: policies-preamble fetch failed: ${err instanceof Error ? err.message : err}`,
-    );
-    return null;
+    emit(args, {
+      status: "error",
+      routine: args.routine,
+      pattern: patternId,
+      run_id: runId,
+      stage: "launch_agent",
+      error: err instanceof Error ? err.message : String(err),
+    });
+    process.exit(EXIT_AGENT_FAIL);
   }
+
+  // The agent calls POST /agent-runs/finish from inside Cursor with
+  // its outcome. The CLI's job ends here — Cursor's terminal status
+  // tells us the runtime didn't crash; whether the agent actually
+  // called /finish (and what outcome it reported) is observable in
+  // the audit log + the resulting tracker state.
+  emit(args, {
+    status: "completed",
+    routine: args.routine,
+    pattern: patternId,
+    fsm_stage: fsmStage,
+    ticket_ref: task?.ticket_ref || null,
+    agent_id: runtime.agentId,
+    branch: runtime.branchName,
+    cursor_status: runtime.status,
+    run_id: runId,
+  });
+  process.exit(EXIT_OK);
 }
 
 
-/* ------------------------------------------------------------------ */
-/* Helpers                                                             */
-/* ------------------------------------------------------------------ */
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
-function parseArgs(rest) {
-  const out = {
-    routine: null,
-    pattern: null,
-    fanout: null,
-    trigger: null,
-    dryRun: false,
-    offline: false,
-    runId: null,
-    callbackUrl: null,
-    runToken: null,
-    cwd: null,
-    json: false,
-    help: false,
+
+function readEnv() {
+  return {
+    apiBase: stripSlash(process.env.SHIP_API_BASE || ""),
+    apiToken: process.env.SHIP_API_TOKEN || "",
+    workspaceId: process.env.SHIP_WORKSPACE_ID || "",
+    githubRepo: process.env.GITHUB_REPOSITORY || "",
+    githubRef: (process.env.GITHUB_REF_NAME || "main").trim(),
   };
-  const copy = [...rest];
-  const str = (flag, key) => {
-    if (copy[0] === flag && copy[1] !== undefined) {
-      copy.shift();
-      out[key] = String(copy.shift());
-      return true;
-    }
-    const p = `${flag}=`;
-    if (copy[0] && copy[0].startsWith(p)) {
-      out[key] = copy[0].slice(p.length);
-      copy.shift();
-      return true;
-    }
-    return false;
-  };
-  while (copy.length) {
-    const a = copy[0];
-    if (a === "--help" || a === "-h") {
-      out.help = true;
-      copy.shift();
-      continue;
-    }
-    if (a === "--dry-run") {
-      out.dryRun = true;
-      copy.shift();
-      continue;
-    }
-    if (a === "--offline") {
-      out.offline = true;
-      copy.shift();
-      continue;
-    }
-    if (a === "--json") {
-      out.json = true;
-      copy.shift();
-      continue;
-    }
-    if (str("--routine", "routine")) continue;
-    if (str("--lane", "routine")) continue;
-    if (str("--pattern", "pattern")) continue;
-    if (str("--fanout", "fanout")) continue;
-    if (str("--trigger", "trigger")) continue;
-    if (str("--ship-run-id", "runId")) continue;
-    if (str("--ship-callback-url", "callbackUrl")) continue;
-    if (str("--ship-run-token", "runToken")) continue;
-    if (str("--cwd", "cwd")) {
-      out.cwd = path.resolve(out.cwd);
-      continue;
-    }
-    die(EXIT_USAGE, `unknown argument: ${a}\nRun: shipctl run --help`);
-  }
-  if (out.trigger && !VALID_TRIGGERS.has(out.trigger)) {
-    die(
-      EXIT_USAGE,
-      `--trigger must be one of ${[...VALID_TRIGGERS].join("|")}; got ${out.trigger}`,
-    );
-  }
-  if (out.fanout && !LANE_FANOUT_MODES.includes(out.fanout)) {
-    die(
-      EXIT_USAGE,
-      `--fanout must be one of ${LANE_FANOUT_MODES.join("|")}; got ${out.fanout}`,
-    );
-  }
-  if (out.pattern !== null && (typeof out.pattern !== "string" || !out.pattern.trim())) {
-    die(EXIT_USAGE, "--pattern: must be a non-empty pattern id");
-  }
-  return out;
 }
 
-function resolveTrigger(explicit, laneKind) {
-  const raw =
-    explicit ||
-    (process.env.SHIP_RUN_TRIGGER && process.env.SHIP_RUN_TRIGGER.trim()) ||
-    inferFromEnv();
-  const trigger = raw || "manual";
 
-  /* `once` routines only run under `manual` or `once` triggers. Scheduler
-   * or event triggers must not accidentally repeat seeding because the
-   * cron happens to tick. */
-  if (laneKind === "once") {
-    return { fits: trigger === "manual" || trigger === "once", trigger };
-  }
-  if (laneKind === "schedule") {
-    return { fits: trigger === "schedule" || trigger === "manual", trigger };
-  }
-  if (laneKind === "event") {
-    return { fits: trigger === "event" || trigger === "manual", trigger };
-  }
-  return { fits: false, trigger };
+function stripSlash(s) {
+  return s.replace(/\/+$/, "");
 }
 
-function inferFromEnv() {
-  if (process.env.GITHUB_EVENT_NAME === "schedule") return "schedule";
-  if (process.env.GITHUB_EVENT_NAME === "workflow_dispatch") return "manual";
-  if (process.env.GITHUB_EVENT_NAME) return "event";
+
+function methodologyBase(env, config) {
+  // Server's POST /fetch lives next to /v1, not under /api/methodology.
+  if (env.apiBase) return env.apiBase;
+  const fromConfig = config?.api?.base_url;
+  if (typeof fromConfig === "string" && fromConfig.trim()) {
+    return stripSlash(fromConfig);
+  }
+  throw new Error("SHIP_API_BASE not set and no api.base_url in .ship/config.yml");
+}
+
+
+function splitFrontmatter(raw) {
+  if (!raw.startsWith("---")) return { frontmatter: {}, frontmatterRaw: "", body: raw };
+  const end = raw.indexOf("\n---\n", 4);
+  if (end < 0) return { frontmatter: {}, frontmatterRaw: "", body: raw };
+  const headRaw = raw.slice(3, end + 1);
+  const body = raw.slice(end + 5);
+  let parsed = {};
+  try {
+    parsed = yaml.parse(headRaw) || {};
+  } catch {
+    // Some Ship patterns have unquoted ``@elmundi/ship-core`` in
+    // ``authors`` which strict YAML rejects. The CLI doesn't need the
+    // full document — ``pickFsmStage`` falls back to a regex on the
+    // raw frontmatter text in that case.
+    parsed = {};
+  }
+  return { frontmatter: parsed, frontmatterRaw: headRaw, body };
+}
+
+
+function pickFsmStage(frontmatter, frontmatterRaw) {
+  const spec = frontmatter?.spec || {};
+  const v = spec.fsm_stage ?? spec.fsmStage;
+  if (typeof v === "string" && v.trim()) return v.trim();
+  if (frontmatterRaw) {
+    // Strict-YAML-fallback: regex on the raw frontmatter. Matches
+    // ``fsm_stage: triage`` (with optional surrounding whitespace, with
+    // or without quotes) anywhere in the spec block.
+    const m = frontmatterRaw.match(/^\s*fsm_stage:\s*['"]?([\w.-]+)['"]?/m);
+    if (m && m[1]) return m[1].trim();
+  }
   return null;
 }
 
-function resolveAgentProvider(config, laneId) {
-  const override = config.agent?.overrides?.[laneId]?.provider;
-  if (override) return override;
-  return config.agent?.default?.provider || null;
+
+async function getNextTask({ apiBase, apiToken, workspaceId, state }) {
+  const url = `${apiBase}/v1/workspaces/${encodeURIComponent(workspaceId)}/tracker/next?state=${encodeURIComponent(state)}`;
+  const res = await fetch(url, {
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${apiToken}`,
+    },
+  });
+  if (!res.ok) {
+    throw new Error(`tracker/next ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  }
+  const body = await res.json();
+  return body.ticket || null;
 }
 
-async function fetchPatternBody({ patternId, patternVersion, offline, root, ctx, config }) {
-  /* --offline takes precedence when requested: we MUST NOT hit the
-   * network or fall through to another source. The lockfile is the
-   * single source of truth. This makes CI runs reproducible and keeps
-   * air-gapped installs honest. */
-  if (offline) return fetchFromLockfile({ patternId, root, strict: true });
 
-  /* 1) Running inside the Ship monorepo — read from disk. */
+function renderPrompt({ patternBody, baseBody, role, routineSpec, task, fsmStage, finishCtx }) {
+  const issueRef = task?.ticket_ref ? task.ticket_ref : "(no ticket)";
+  const title = task?.title || "";
+  const description = task?.body || "";
+
+  // Pattern-template substitution. Order matters: expand {{BASE}} first
+  // so any further {{ROLE}} / {{SKILLS_CONTEXT}} placeholders inside
+  // common-base also get resolved.
+  const baseExpanded = (baseBody || "")
+    .replace(/\{\{ROLE\}\}/g, role)
+    .replace(/\{\{ISSUE\}\}/g, issueRef)
+    .replace(/\{\{SKILLS_CONTEXT\}\}/g, "(no skills directory bundled in this run)");
+
+  const expanded = patternBody
+    .replace(/\{\{BASE\}\}/g, baseExpanded)
+    .replace(/\{\{ROLE\}\}/g, role)
+    .replace(/\{\{ISSUE\}\}/g, issueRef)
+    .replace(/\{\{TITLE\}\}/g, title.slice(0, 500))
+    .replace(/\{\{DESCRIPTION\}\}/g, description.slice(0, 8000));
+
+  const out = [];
+  if (routineSpec.prompt) {
+    out.push("## Routine instructions");
+    out.push(routineSpec.prompt.trim());
+    out.push("");
+  }
+  out.push(expanded.trim());
+  if (task) {
+    out.push("");
+    out.push("## Task");
+    out.push(`- **Ticket:** \`${task.ticket_ref}\` (${task.kind})`);
+    if (task.url) out.push(`- **URL:** ${task.url}`);
+    if (task.title) out.push(`- **Title:** ${task.title}`);
+    if (task.fsm_stage || fsmStage) out.push(`- **FSM stage:** \`${task.fsm_stage || fsmStage}\``);
+    if (Array.isArray(task.labels) && task.labels.length) {
+      out.push(`- **Labels:** ${task.labels.join(", ")}`);
+    }
+    if (task.body) {
+      out.push("");
+      out.push("### Description");
+      out.push(task.body);
+    }
+  }
+  out.push("");
+  out.push(renderExitProtocol(finishCtx));
+  return out.join("\n");
+}
+
+
+function renderExitProtocol(ctx) {
+  // Substitute the run-time values directly into the example so the
+  // agent doesn't have to figure out env var hookup. The token is
+  // workspace-scoped and meant for this run; the prompt warns the
+  // agent not to echo it.
+  const apiBase = ctx?.apiBase || "$SHIP_API_BASE";
+  const apiToken = ctx?.apiToken || "$SHIP_API_TOKEN";
+  const workspaceId = ctx?.workspaceId || "$SHIP_WORKSPACE_ID";
+  const runId = ctx?.runId || "<run_id>";
+  const ticketRef = ctx?.ticketRef ?? null;
+  const fsm = ctx?.fsmStage ?? null;
+  const ticketLine = ticketRef === null
+    ? '"ticket_ref": null,'
+    : `"ticket_ref": ${JSON.stringify(ticketRef)},`;
+  const fsmLine = fsm === null
+    ? '"fsm_stage": null,'
+    : `"fsm_stage": ${JSON.stringify(fsm)},`;
+
+  return `## Required exit protocol
+
+When you finish (or determine you cannot proceed), call Ship's finish
+endpoint **once** with your outcome and stop. This is the only
+sanctioned write surface — Ship's server applies tracker side-effects
+through the workspace's existing OAuth.
+
+**Do not** create empty branches or commit placeholder files. If your
+role doesn't change code, no branch is required. If your role does
+change code, push the code on the branch Ship CLI named for you, then
+call finish.
+
+**Do not** call any Linear / Jira / GitHub MCP that writes. Reading
+via MCP is fine; writing is not. The finish endpoint is the only
+write surface.
+
+\`\`\`bash
+curl -fsS -X POST '${apiBase}/v1/workspaces/${workspaceId}/agent-runs/finish' \\
+  -H 'Authorization: Bearer ${apiToken}' \\
+  -H 'Content-Type: application/json' \\
+  --data @- <<'JSON'
+{
+  "run_id": ${JSON.stringify(runId)},
+  "outcome": "ready_next_step",
+  ${ticketLine}
+  ${fsmLine}
+  "stage_next": "<next FSM stage, e.g. ba_requirements>",
+  "comment": "Markdown summary of what you did. End with [Ship SDLC:${ctx?.role || "{{ROLE}}"}].",
+  "summary": null,
+  "payload": {}
+}
+JSON
+\`\`\`
+
+### Outcomes
+
+- **\`ready_next_step\`** — your role finished cleanly. Set
+  \`stage_next\` to the next FSM stage. Server moves the ticket and
+  posts \`comment\` if provided.
+- **\`needs_clarification\`** — you're waiting on a human. Set
+  \`comment\` with the question (server posts it) or omit it if you
+  already left the question via a separate read-only path. Server
+  tags the ticket \`needs:clarification\` so intake stops re-picking.
+  Status stays Todo. \`stage_next\` is ignored.
+- **\`blocked\`** — you cannot proceed (missing secret, broken env,
+  conflicting branch). Server drops a blocker into the workspace
+  inbox; ticket unchanged. \`stage_next\` is ignored.
+- **\`out_of_scope\`** — the ticket is invalid or shouldn't be
+  processed. Server moves it to Done with optional \`comment\`.
+  \`stage_next\` is ignored.
+
+### Security
+
+\`SHIP_API_TOKEN\` is rendered into this prompt so you can call the
+finish endpoint. **Do not echo it back into commit messages, PR
+descriptions, comments, logs, or any output you produce.** Treat it
+as a one-shot credential for this run.
+`;
+}
+
+
+/**
+ * Load a pattern body. Resolution order:
+ *   1) when running inside the Ship monorepo, read from
+ *      ``artifacts/patterns/<id>/ARTIFACT.md`` on disk — fast and
+ *      always reflects the working tree (good for dry-runs / local
+ *      smoke tests before the server is rebuilt).
+ *   2) otherwise hit the server's ``POST /fetch``.
+ */
+async function loadPattern({ id, fetchBase, optional = false }) {
   const shipRepo = resolveShipRepoRootForCatalog();
   if (shipRepo) {
-    const file = readArtifactFile(shipRepo, "pattern", patternId);
-    if (file) {
-      const verification = verifyAgainstLockfile({
-        root,
-        patternId,
-        body: file.content,
-      });
-      if (verification.warning) console.error(`warn: ${verification.warning}`);
-      return { ok: true, body: file.content, source: "monorepo", lock: verification };
+    const file = readArtifactFile(shipRepo, "pattern", id);
+    if (file && typeof file.content === "string") return file.content;
+  }
+  try {
+    const { content } = await fetchArtifact(fetchBase, "pattern", id);
+    return content;
+  } catch (err) {
+    if (optional) {
+      console.error(`warn: failed to fetch pattern '${id}': ${err.message}`);
+      return "";
     }
-  }
-
-  /* 2) Network: same resolver `shipctl kickoff` uses. */
-  const base = resolveMethodologyBase(ctx, config);
-  try {
-    const { content } = await fetchArtifact(base, "pattern", patternId, patternVersion || undefined);
-    const verification = verifyAgainstLockfile({ root, patternId, body: content });
-    if (verification.warning) console.error(`warn: ${verification.warning}`);
-    return { ok: true, body: content, source: "http", lock: verification };
-  } catch (err) {
-    /* If the network call failed but we have a locked copy on disk, let
-     * the operator fall back with a clear warning. This mirrors the
-     * `npm install --offline` escape hatch when the registry is down. */
-    const fallback = fetchFromLockfile({ patternId, root, strict: false });
-    if (fallback.ok) {
-      console.error(
-        `warn: network fetch failed for pattern/${patternId}; using locked copy (${fallback.source}).`,
-      );
-      return fallback;
-    }
-    return {
-      ok: false,
-      error: `failed to fetch pattern ${patternId}: ${err instanceof Error ? err.message : err}`,
-    };
+    throw err;
   }
 }
 
-function verifyAgainstLockfile({ root, patternId, body }) {
-  let lock;
-  try {
-    lock = readLockfile(root);
-  } catch (err) {
-    return { present: false, ok: null, warning: `lockfile unreadable: ${err.message}` };
+
+function makeBranchName(routine, ticketRef) {
+  const stamp = Date.now().toString(36);
+  if (ticketRef) {
+    const safe = String(ticketRef).replace(/[^a-zA-Z0-9_-]/g, "-");
+    return `cursor/ship-${routine}-${safe}-${stamp}`;
   }
-  if (!lock) return { present: false, ok: null };
-  const entry = lookupLock(lock, "pattern", patternId);
-  if (!entry) {
-    return {
-      present: true,
-      ok: null,
-      warning: `lockfile present but has no entry for pattern/${patternId}; run 'shipctl sync --lock'.`,
-    };
-  }
-  const result = verifyBody(entry, body);
-  if (!result.ok) {
-    return {
-      present: true,
-      ok: false,
-      reason: result.reason,
-      expected: result.expected,
-      actual: result.actual,
-      warning: `pattern/${patternId} sha256 drift vs lockfile (${result.reason}; expected ${result.expected?.slice(0, 8)} got ${result.actual?.slice(0, 8)})`,
-    };
-  }
-  return { present: true, ok: true, version: entry.version };
+  return `cursor/ship-${routine}-${stamp}`;
 }
 
-function fetchFromLockfile({ patternId, root, strict }) {
-  let lock;
-  try {
-    lock = readLockfile(root);
-  } catch (err) {
-    return {
-      ok: false,
-      error: `lockfile unreadable: ${err.message}. Run 'shipctl sync --lock' to rebuild.`,
-    };
-  }
-  if (!lock) {
-    if (!strict) return { ok: false, error: "lockfile missing" };
-    return {
-      ok: false,
-      error:
-        "--offline requires .ship/shipctl.lock.json. Run 'shipctl sync --lock' in an online environment first.",
-    };
-  }
-  const entry = lookupLock(lock, "pattern", patternId);
-  if (!entry) {
-    return {
-      ok: false,
-      error:
-        strict
-          ? `--offline: pattern/${patternId} missing from .ship/shipctl.lock.json. Run 'shipctl sync --lock' to re-resolve.`
-          : `pattern/${patternId} not in lockfile`,
-    };
-  }
-  const abs = path.join(root, entry.cached_path);
-  let body;
-  try {
-    body = fs.readFileSync(abs, "utf8");
-  } catch (err) {
-    return {
-      ok: false,
-      error: `--offline: cached pattern body unreadable at ${entry.cached_path} (${err instanceof Error ? err.message : err}). Run 'shipctl sync --lock'.`,
-    };
-  }
-  const verification = verifyBody(entry, body);
-  if (!verification.ok) {
-    return {
-      ok: false,
-      error: `--offline: sha256 mismatch for pattern/${patternId} (expected ${verification.expected?.slice(0, 8)}, got ${verification.actual?.slice(0, 8)}). Re-run 'shipctl sync --lock'.`,
-    };
-  }
-  return {
-    ok: true,
-    body,
-    source: "lockfile",
-    lock: { present: true, ok: true, version: entry.version },
-  };
-}
 
-function resolveMethodologyBase(ctx, config) {
-  const fromFlag = ctx.baseUrl;
-  const fromEnv =
-    typeof process.env.SHIP_API_BASE === "string" && process.env.SHIP_API_BASE.trim()
-      ? process.env.SHIP_API_BASE.trim().replace(/\/$/, "")
-      : null;
-  /* Wizard-seeded Actions secret: exact Ship API origin (``POST /fetch`` lives
-   * at the root next to ``/v1``). Do not append ``/api/methodology`` here. */
-  if (fromEnv) {
-    return fromEnv;
-  }
-  const raw = config?.api?.base_url;
-  if (typeof raw === "string" && raw.trim()) {
-    const u = raw.replace(/\/$/, "");
-    return u.includes("/api/methodology") ? u : `${u}/api/methodology`;
-  }
-  return fromFlag;
-}
+// ---------------------------------------------------------------------------
+// Argument plumbing
+// ---------------------------------------------------------------------------
 
-/*
- * Assemble the callback `metrics` bag so Ship's backend can tie each
- * run back to its routine + GitHub Actions run without re-parsing logs.
- *
- * Always-on breadcrumbs (iff we have the data):
- *   - lane_id             — id from `.ship/config.yml`; also recoverable
- *                           from the ship-<lane_id>.yml workflow path,
- *                           but duplicating here costs us nothing and
- *                           makes non-GitHub adapters (RFC-0007 Phase 8)
- *                           cheaper because they won't have that URL.
- *   - gh_workflow_run_id  — GITHUB_RUN_ID env (empty outside Actions).
- *   - gh_html_url         — constructed from GITHUB_SERVER_URL / _REPOSITORY
- *                           / _RUN_ID so the Console can deep-link the
- *                           GH UI from a Lane detail view.
- *   - gh_event            — GITHUB_EVENT_NAME (push / schedule / PR /…).
- *
- * Caller-supplied extras (pattern id / sha) stack on top. Nothing here
- * is required; the backend treats unknown keys as opaque forward-compat
- * payload.
- */
-function collectCallbackMetrics(args, extra = {}) {
-  const env = process.env;
-  const out = { ...(extra || {}) };
-  if (args && args.routine && !out.routine_id) out.routine_id = args.routine;
-  if (args && args.routine && !out.lane_id) out.lane_id = args.routine;
-  if (env.GITHUB_RUN_ID && !out.gh_workflow_run_id) {
-    out.gh_workflow_run_id = env.GITHUB_RUN_ID;
+
+function parseArgs(rest) {
+  const out = { routine: null, cwd: null, json: false, help: false, dryRun: false };
+  const copy = [...rest];
+  while (copy.length) {
+    const a = copy[0];
+    if (a === "--help" || a === "-h") { out.help = true; copy.shift(); continue; }
+    if (a === "--json") { out.json = true; copy.shift(); continue; }
+    if (a === "--dry-run") { out.dryRun = true; copy.shift(); continue; }
+    if (a === "--routine" && copy[1] !== undefined) { out.routine = copy[1]; copy.splice(0, 2); continue; }
+    if (a === "--cwd" && copy[1] !== undefined) { out.cwd = path.resolve(copy[1]); copy.splice(0, 2); continue; }
+    // Soft-ignore legacy flags that older trigger workflows still pass —
+    // the new pipeline doesn't need them and refusing would break repos
+    // that haven't re-seeded yet. ``--lane`` is the back-compat spelling
+    // of ``--routine`` from before the rename.
+    if (a === "--trigger" && copy[1] !== undefined) { copy.splice(0, 2); continue; }
+    if (a === "--lane" && copy[1] !== undefined) { out.routine = copy[1]; copy.splice(0, 2); continue; }
+    die(EXIT_USAGE, `unknown argument: ${a}`);
   }
-  if (env.GITHUB_SERVER_URL && env.GITHUB_REPOSITORY && env.GITHUB_RUN_ID && !out.gh_html_url) {
-    out.gh_html_url = `${env.GITHUB_SERVER_URL}/${env.GITHUB_REPOSITORY}/actions/runs/${env.GITHUB_RUN_ID}`;
-  }
-  if (env.GITHUB_EVENT_NAME && !out.gh_event) out.gh_event = env.GITHUB_EVENT_NAME;
   return out;
 }
 
-async function tryCallback(args, status, summary, extraMetrics = {}) {
-  const url = args.callbackUrl || process.env.SHIP_CALLBACK_URL;
-  if (!url) return { ok: null, skipped: "no-callback-url" };
-  const token = args.runToken || process.env.SHIP_RUN_TOKEN;
-  if (!token) {
-    console.error(
-      "warn: SHIP_RUN_TOKEN missing; skipping callback. (Set via --ship-run-token or env.)",
-    );
-    return { ok: false, skipped: "no-token" };
-  }
-  const body = { status: status === "ok" ? "succeeded" : status === "fail" ? "failed" : status };
-  if (summary) body.summary = String(summary).slice(0, 1024);
-  const metrics = collectCallbackMetrics(args, extraMetrics);
-  if (Object.keys(metrics).length > 0) body.metrics = metrics;
 
-  try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      console.error(`warn: callback returned HTTP ${res.status} ${res.statusText}\n${text}`);
-      return { ok: false, status: res.status };
-    }
-    return { ok: true, status: res.status };
-  } catch (err) {
-    console.error(`warn: callback POST failed: ${err instanceof Error ? err.message : err}`);
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
-  }
+function printHelp() {
+  console.log(`shipctl run — execute one E14 routine end-to-end.
+
+Run
+  shipctl run --routine <id> [--json] [--cwd <dir>] [--dry-run]
+
+ENV
+  SHIP_API_BASE        Ship server base URL (e.g. https://api.ship.elmundi.com)
+  SHIP_API_TOKEN       workspace API token; rendered into the agent prompt
+                       so the agent can call /agent-runs/finish itself
+  SHIP_WORKSPACE_ID    UUID of the workspace (a workspace is one project)
+  GITHUB_REPOSITORY    owner/repo (which checkout the agent gets)
+  CURSOR_API_KEY       Cursor Cloud API key (when agent.default.provider=cursor)
+
+EXIT
+  0  agent runtime reached a terminal state (FINISHED/CANCELLED/ERRORED).
+     Whether the agent actually called /agent-runs/finish is observable
+     in the audit log — this CLI no longer waits on that signal.
+  1  usage / config error
+  7  agent runtime failed to launch
+`);
 }
 
-function emitSummary(ctx, args, summary) {
-  if (ctx.json || args.json) {
-    console.log(JSON.stringify(summary, null, 2));
+
+function emit(args, payload) {
+  if (args.json) {
+    console.log(JSON.stringify(payload, null, 2));
   } else {
-    console.error(
-      `# ship: routine=${summary.routine || summary.lane} status=${summary.status}${summary.reason ? ` reason="${summary.reason}"` : ""}`,
-    );
+    console.error(`# ship: ${payload.status}${payload.reason ? ` reason=${payload.reason}` : ""}${payload.routine ? ` routine=${payload.routine}` : ""}`);
+    if (payload.error) console.error(`#   error: ${payload.error}`);
   }
 }
+
 
 function die(code, msg) {
   console.error(msg);

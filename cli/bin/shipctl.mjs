@@ -152,15 +152,11 @@ try {
     process.exit(0);
   }
 
-  if (cmd === "run") {
+  if (cmd === "run" || cmd === "agent-run") {
+    // ``agent-run`` is a back-compat alias for ``run`` — older trigger
+    // workflows still spell it that way until they re-seed.
     const { runCommand } = await import("../lib/commands/run.mjs");
     await runCommand(ctx, rest);
-    process.exit(0);
-  }
-
-  if (cmd === "agent-run") {
-    const { agentRunCommand } = await import("../lib/commands/agent-run.mjs");
-    await agentRunCommand(ctx, rest);
     process.exit(0);
   }
 

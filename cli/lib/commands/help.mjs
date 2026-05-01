@@ -72,12 +72,13 @@ COMMANDS
     shipctl trigger --event schedule --repo <id|owner/name> [--workspace <id>] [--json]
                                        — compute due routines locally, then claim
                                          the schedule window in Ship.
-    shipctl run --routine <id> [--pattern <id>] [--fanout matrix|sequential|concurrent]
-                [--trigger event|schedule|manual|once]
-                [--dry-run] [--offline] [--json] [--cwd <dir>]
-                [--ship-run-id <uuid>] [--ship-callback-url <url>] [--ship-run-token <jwt>]
-                                       — one-shot routine dispatch entry point.
-                                         Use --lane as a legacy alias.
+    shipctl run --routine <id> [--dry-run] [--json] [--cwd <dir>]
+                                       — execute one routine end-to-end:
+                                         resolve pattern, fetch a ticket
+                                         (if FSM-staged), launch the agent
+                                         runtime, exit on terminal status.
+                                         'shipctl agent-run' is a back-compat
+                                         alias.
     shipctl lanes install [--only <csv>] [--ref <git-ref>] [--owner <gh>] [--repo <name>]
                           [--shipctl-version <v>] [--dry-run] [--force] [--json] [--cwd <dir>]
     shipctl lanes list   [--json] [--cwd <dir>]

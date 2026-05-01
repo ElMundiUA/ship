@@ -8,8 +8,10 @@
  *   1. Launch an agent against ``repo`` at ``ref`` with ``prompt``.
  *   2. Poll until the agent's status is one of the terminal values
  *      (``FINISHED`` / ``ERRORED`` / ``CANCELLED``).
- *   3. Return the branch name + final status so ``shipctl agent-run``
- *      can read ``.ship/run-state.json`` back from that branch.
+ *   3. Return the branch name + final status to ``shipctl run``. Side
+ *      effects (tracker writes / inbox rows) happen via the agent's
+ *      own ``POST /agent-runs/finish`` call from inside Cursor — the
+ *      CLI no longer reads a state file off the branch.
  *
  * Auth: ``CURSOR_API_KEY`` env var, sent as Basic ``<key>:`` per Cursor's
  * docs.
