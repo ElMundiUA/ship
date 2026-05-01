@@ -68,24 +68,29 @@ EMBED_DIM = 1536
 class BucketScope:
     """Visibility layer a bucket belongs to.
 
-    Phase 1 ships with four scopes; ``global`` (cross-workspace, platform
-    policies) will be introduced in a later migration once the platform
-    admin surfaces exist and ``knowledge_buckets.workspace_id`` is made
-    nullable. Until then, any cross-workspace sharing is a resolver
-    concern rather than a storage one.
+    KB-5 (ELS-39, 2026-05-01): ``REPO`` is **deprecated**. Knowledge
+    binds to projects, not to specific repos — repo-scoped rows
+    polluted the centroid set the routing pipeline (KB-2) reads from.
+    The constant stays so legacy reads don't crash, but new writes
+    must use ``WORKSPACE`` / ``PROJECT`` / ``USER``. ``ALLOWED_FOR_WRITE``
+    is what creation paths should reference; ``ALL`` is read-only
+    historical coverage.
 
     Inheritance / resolution order (low → high priority — later wins):
-    ``workspace → project → repo`` for team buckets, plus ``user`` as a
-    parallel private layer that can overlay any of those for the
-    signed-in user only.
+    ``workspace → project`` for team buckets, plus ``user`` as a
+    parallel private layer that can overlay either for the signed-in
+    user only.
     """
 
     WORKSPACE = "workspace"
     PROJECT = "project"
-    REPO = "repo"
+    REPO = "repo"  # deprecated; preserved for legacy read paths only
     USER = "user"
 
+    # Read-side coverage — every value the column has ever held.
     ALL: tuple[str, ...] = (WORKSPACE, PROJECT, REPO, USER)
+    # Write-side gate — what new bucket creations are allowed to set.
+    ALLOWED_FOR_WRITE: tuple[str, ...] = (WORKSPACE, PROJECT, USER)
 
 
 class BucketSource:

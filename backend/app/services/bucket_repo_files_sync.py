@@ -140,18 +140,27 @@ async def sync_repo_files(
     gateway: CodeHostGateway | None = None,
     http_client: httpx.AsyncClient | None = None,
 ) -> SyncReport:
-    """Mirror ``.ship/knowledge/*.md`` in ``repo`` into bucket rows.
+    """**Deprecated (KB-5 / ELS-39).** No-op: returns an empty report.
 
-    Parameters mirror :func:`reindex_repo_kb` so the call sites
-    (webhook, manual reindex, activation) can invoke both without a
-    second settings / gateway hop.
-
-    Returns a :class:`SyncReport`. Does not raise for per-file errors;
-    they land in ``report.errors`` so the caller decides whether to
-    log or surface them. Raises for infrastructure problems (no
-    gateway, auth failed) because those aren't recoverable inside a
-    single run.
+    Repo-scoped ``repo_files`` buckets are gone. Production callers
+    were removed in the same change; this stub stays for one release
+    so any out-of-tree caller (or test harness) gets a clean empty
+    response instead of an ImportError. The body below is kept for
+    historical reference until the next cleanup PR deletes the file.
     """
+    return SyncReport()
+
+
+async def _sync_repo_files_legacy(
+    session: AsyncSession,
+    repo: WorkspaceRepo,
+    install: GitHubInstallation,
+    *,
+    settings: Settings | None = None,
+    gateway: CodeHostGateway | None = None,
+    http_client: httpx.AsyncClient | None = None,
+) -> SyncReport:
+    """Pre-KB-5 implementation, retained for reference. Not exported."""
     s = settings or get_settings()
     gw = gateway or GitHubCodeHost(
         install.installation_id, settings=s, client=http_client
