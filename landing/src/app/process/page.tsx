@@ -310,7 +310,7 @@ export default function ProcessPage() {
 
             <DevelopmentFlow />
 
-            <div className="mt-12 grid gap-6 lg:grid-cols-3">
+            <div className="mt-12 grid gap-6 items-stretch lg:grid-cols-3">
               <SubProcessCard title="Requirements" states={DEV_STATES.filter((s) => s.subProcess === "requirements")} />
               <SubProcessCard title="Implementation" states={DEV_STATES.filter((s) => s.subProcess === "implementation")} />
               <SubProcessCard title="Quality review" states={DEV_STATES.filter((s) => s.subProcess === "qa")} />
@@ -322,12 +322,12 @@ export default function ProcessPage() {
                 Each routine takes on a specialist for its run, reads the relevant tracker context and knowledge,
                 produces evidence (a comment, an Inbox item, a draft). Cron-driven by default; some are event-triggered.
               </p>
-              <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="mt-6 grid gap-3 items-stretch sm:grid-cols-2 lg:grid-cols-4">
                 {DEV_ROUTINES.map((routine) => (
-                  <div key={routine.id} className="rounded-xl border border-white/10 bg-white/[0.025] p-4">
+                  <div key={routine.id} className="h-full flex flex-col rounded-xl border border-white/10 bg-white/[0.025] p-4">
                     <p className="font-display text-sm font-bold text-white">{routine.name}</p>
                     <p className="mt-2 text-xs leading-relaxed text-white/55">{routine.description}</p>
-                    <code className="mt-3 inline-block rounded-md bg-black/40 px-2 py-1 font-mono text-[10px] text-aqua/85">
+                    <code className="mt-auto mt-3 inline-block rounded-md bg-black/40 px-2 py-1 font-mono text-[10px] text-aqua/85">
                       {routine.cron}
                     </code>
                   </div>
@@ -356,7 +356,7 @@ export default function ProcessPage() {
               production depth as we run it ourselves first.
             </p>
 
-            <div className="mt-10 grid gap-6 md:grid-cols-2">
+            <div className="mt-10 grid gap-6 items-stretch md:grid-cols-2">
               {ASPIRATIONAL.map((process) => (
                 <AspirationalCard key={process.slug} process={process} />
               ))}
@@ -390,7 +390,7 @@ export default function ProcessPage() {
             <h2 className="font-display mt-2 text-3xl font-bold text-white sm:text-4xl">
               Why processes on specialists beats hardcoded workflows.
             </h2>
-            <div className="mt-10 grid gap-5 md:grid-cols-3">
+            <div className="mt-10 grid gap-5 items-stretch md:grid-cols-3">
               {[
                 {
                   title: "Specialists are versioned roles",
@@ -405,7 +405,7 @@ export default function ProcessPage() {
                   body: "The process declares which state allows which transition, what evidence is required, and which specialist owns each step. The tracker mirrors it; routines respect it; humans review it like code.",
                 },
               ].map((item) => (
-                <div key={item.title} className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
+                <div key={item.title} className="h-full flex flex-col rounded-2xl border border-white/10 bg-white/[0.02] p-6">
                   <h3 className="font-display text-lg font-bold text-white">{item.title}</h3>
                   <p className="mt-3 text-sm leading-relaxed text-white/65">{item.body}</p>
                 </div>
@@ -473,9 +473,9 @@ function SpecialistGroup({
   return (
     <div className="mt-10">
       <p className={`text-[11px] font-bold uppercase tracking-[0.18em] ${kicker}`}>{label}</p>
-      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="mt-4 grid gap-3 items-stretch sm:grid-cols-2 lg:grid-cols-4">
         {specialists.map((s) => (
-          <div key={s.id} className="rounded-xl border border-white/10 bg-white/[0.025] p-4">
+          <div key={s.id} className="h-full flex flex-col rounded-xl border border-white/10 bg-white/[0.025] p-4">
             <div className="flex items-center gap-2">
               <span className={`inline-block h-1.5 w-1.5 rounded-full ${dot}`} aria-hidden />
               <code className="font-mono text-[11px] text-white/55">{s.id}</code>
@@ -521,7 +521,7 @@ function DevelopmentFlow() {
 
 function SubProcessCard({ title, states }: { title: string; states: DevState[] }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-5">
+    <div className="h-full flex flex-col rounded-2xl border border-white/10 bg-white/[0.02] p-5">
       <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-aqua/75">{title}</p>
       <p className="font-display mt-2 text-base font-bold text-white">
         {states.length} {states.length === 1 ? "state" : "states"}
@@ -541,7 +541,7 @@ function SubProcessCard({ title, states }: { title: string; states: DevState[] }
 function AspirationalCard({ process }: { process: AspirationalProcess }) {
   return (
     <div
-      className={`relative rounded-2xl border ${ACCENT_BORDER[process.accent]} bg-white/[0.02] p-6`}
+      className={`relative h-full flex flex-col rounded-2xl border ${ACCENT_BORDER[process.accent]} bg-white/[0.02] p-6`}
       style={{ borderStyle: "dashed" }}
     >
       <div className="flex items-start justify-between gap-3">

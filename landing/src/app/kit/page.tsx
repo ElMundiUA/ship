@@ -105,12 +105,12 @@ export default function KitPage() {
                 Owner-readable · engineer-auditable
               </span>
             </div>
-            <div className="grid gap-5 lg:grid-cols-2">
+            <div className="grid gap-5 items-stretch lg:grid-cols-2">
               {TILES.map((t) => (
                 <Link
                   key={t.href}
                   href={t.href}
-                  className={`group relative flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-br from-white/[0.05] via-white/[0.02] to-transparent p-6 shadow-card transition hover:bg-white/[0.04] sm:p-8 ${t.accentBorderHover}`}
+                  className={`group relative h-full flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-br from-white/[0.05] via-white/[0.02] to-transparent p-6 shadow-card transition hover:bg-white/[0.04] sm:p-8 ${t.accentBorderHover}`}
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div>
@@ -127,8 +127,8 @@ export default function KitPage() {
                       →
                     </span>
                   </div>
-                  <p className="mt-4 text-sm leading-relaxed text-white/70 sm:text-base">{t.body}</p>
-                  <div className="mt-6 flex items-center gap-3 text-xs text-white/45">
+                  <p className="mt-4 flex-1 text-sm leading-relaxed text-white/70 sm:text-base">{t.body}</p>
+                  <div className="mt-auto mt-6 flex items-center gap-3 text-xs text-white/45">
                     <span className="font-mono">{t.href}</span>
                     <span className="h-px flex-1 bg-white/10" aria-hidden />
                     <span className={`font-semibold ${t.accentText}`}>Explore →</span>
@@ -150,7 +150,7 @@ export default function KitPage() {
               A policy says what an agent may do, what evidence it must leave, and when it must stop for a human. That is
               how Ship keeps founder speed without turning the repo into an unsupervised experiment.
             </p>
-            <div className="mt-10 grid gap-4 sm:grid-cols-2">
+            <div className="mt-10 grid gap-4 items-stretch sm:grid-cols-2">
               {[
                 {
                   cmd: "Allowed scope",
@@ -171,7 +171,7 @@ export default function KitPage() {
               ].map((row) => (
                 <div
                   key={row.cmd}
-                  className="rounded-2xl border border-white/10 bg-white/[0.03] p-5"
+                  className="h-full flex flex-col rounded-2xl border border-white/10 bg-white/[0.03] p-5"
                 >
                   <code className="block font-mono text-sm font-semibold text-aqua/95">{row.cmd}</code>
                   <p className="mt-3 text-sm leading-relaxed text-white/65">{row.body}</p>

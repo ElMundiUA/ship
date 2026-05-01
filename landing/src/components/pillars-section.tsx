@@ -25,11 +25,11 @@ export function PillarsSection() {
           Ship keeps autonomy bounded: humans own intent, automation leaves evidence, and vendors stay replaceable.
           The console makes that discipline visible without hiding the contracts engineers need to review.
         </p>
-        <div className="mt-12 grid gap-6 md:grid-cols-3">
+        <div className="mt-12 grid gap-6 items-stretch md:grid-cols-3">
           {pillars.map((p) => (
             <article
               key={p.title}
-              className="group relative overflow-hidden rounded-3xl border border-white/10 bg-gradient-to-br from-white/[0.07] to-transparent p-8 shadow-card"
+              className="group relative h-full overflow-hidden rounded-3xl border border-white/10 bg-gradient-to-br from-white/[0.07] to-transparent p-8 shadow-card flex flex-col"
             >
               <div
                 className={`pointer-events-none absolute -right-8 -top-8 h-40 w-40 rounded-full bg-gradient-to-br ${p.accent} blur-2xl`}

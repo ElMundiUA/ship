@@ -189,11 +189,11 @@ export function TeamSection() {
           </a>
         </div>
 
-        <div className="mt-10 grid gap-3 sm:grid-cols-3">
+        <div className="mt-10 grid gap-3 items-stretch sm:grid-cols-3">
           {COMPANY_FACTS.map((fact) => (
             <div
               key={fact.kicker}
-              className="rounded-2xl border border-white/10 bg-white/[0.025] p-5"
+              className="h-full flex flex-col rounded-2xl border border-white/10 bg-white/[0.025] p-5"
             >
               <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-white/45">{fact.kicker}</p>
               <p className="font-display mt-2 text-lg font-bold text-white">{fact.value}</p>

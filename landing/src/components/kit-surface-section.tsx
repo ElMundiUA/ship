@@ -37,17 +37,17 @@ export function KitSurfaceSection() {
           Solo founders and product owners get the product view first. Engineering can still inspect the underlying
           contracts, but the public surface is about ownership, boundaries, and proof.
         </p>
-        <div className="mt-12 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="mt-12 grid gap-5 items-stretch sm:grid-cols-2 lg:grid-cols-4">
           {tiles.map((t) => (
             <Link
               key={t.href}
               href={t.href}
-              className="group flex flex-col rounded-2xl border border-white/10 bg-gradient-to-br from-white/[0.06] to-transparent p-6 shadow-card transition hover:border-aqua/35 hover:shadow-glow"
+              className="group h-full flex flex-col rounded-2xl border border-white/10 bg-gradient-to-br from-white/[0.06] to-transparent p-6 shadow-card transition hover:border-aqua/35 hover:shadow-glow"
             >
               <p className="text-[10px] font-bold uppercase tracking-widest text-white/40">{t.kicker}</p>
               <h3 className="font-display mt-2 text-lg font-bold text-white group-hover:text-aqua">{t.title}</h3>
               <p className="mt-3 flex-1 text-sm leading-relaxed text-white/60">{t.body}</p>
-              <span className="mt-4 text-xs font-semibold text-aqua">Explore →</span>
+              <span className="mt-auto text-xs font-semibold text-aqua">Explore →</span>
             </Link>
           ))}
         </div>

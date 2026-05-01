@@ -77,9 +77,9 @@ export default function UseCasesIndexPage() {
             <h2 className="font-display mt-2 text-2xl font-bold text-white sm:text-3xl">
               The delivery problem Ship actually solves
             </h2>
-            <div className="mt-10 grid gap-6 md:grid-cols-3">
+            <div className="mt-10 grid gap-6 items-stretch md:grid-cols-3">
               {WHY.map((w) => (
-                <div key={w.title} className="rounded-2xl border border-white/10 bg-white/[0.03] p-6">
+                <div key={w.title} className="h-full flex flex-col rounded-2xl border border-white/10 bg-white/[0.03] p-6">
                   <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-aqua/85">{w.kicker}</p>
                   <h3 className="mt-3 font-display text-lg font-bold text-white">{w.title}</h3>
                   <p className="mt-3 text-sm leading-relaxed text-white/65">{w.body}</p>

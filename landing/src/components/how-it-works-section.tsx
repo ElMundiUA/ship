@@ -49,11 +49,11 @@ export function HowItWorksSection() {
           which repo it touched, what evidence it left, and who owns the next decision.
         </p>
 
-        <ol className="mt-12 grid gap-5 md:grid-cols-2 lg:grid-cols-5">
+        <ol className="mt-12 grid gap-5 items-stretch md:grid-cols-2 lg:grid-cols-5">
           {steps.map((s) => (
             <li
               key={s.n}
-              className="group relative flex flex-col rounded-2xl border border-white/10 bg-gradient-to-br from-white/[0.06] to-transparent p-6 shadow-card transition hover:border-aqua/35"
+              className="group relative h-full flex flex-col rounded-2xl border border-white/10 bg-gradient-to-br from-white/[0.06] to-transparent p-6 shadow-card transition hover:border-aqua/35"
             >
               <div className="flex items-center gap-3">
                 <span className="font-display text-2xl font-bold text-aqua/90">{s.n}</span>
@@ -64,7 +64,7 @@ export function HowItWorksSection() {
               </div>
               <h3 className="font-display mt-3 text-xl font-bold text-white">{s.title}</h3>
               <p className="mt-3 text-sm leading-relaxed text-white/65">{s.body}</p>
-              <pre className="mt-4 overflow-x-auto rounded-lg border border-white/10 bg-black/50 p-3 font-mono text-[12px] leading-relaxed text-aqua/90">
+              <pre className="mt-4 mt-auto overflow-x-auto rounded-lg border border-white/10 bg-black/50 p-3 font-mono text-[12px] leading-relaxed text-aqua/90">
 {s.code}
               </pre>
             </li>

@@ -186,9 +186,9 @@ export default function RoadmapPage() {
               Saying yes to everything is how a tool ages into a vendor demo. Saying no in writing is how the contract
               stays defendable when budget and quarter both close at the same time.
             </p>
-            <div className="mt-10 grid gap-5 md:grid-cols-2">
+            <div className="mt-10 grid gap-5 items-stretch md:grid-cols-2">
               {WONT_BUILD.map((item) => (
-                <div key={item.title} className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
+                <div key={item.title} className="h-full flex flex-col rounded-2xl border border-white/10 bg-white/[0.02] p-6">
                   <h3 className="font-display text-lg font-bold text-white">{item.title}</h3>
                   <p className="mt-3 text-sm leading-relaxed text-white/65">{item.body}</p>
                 </div>

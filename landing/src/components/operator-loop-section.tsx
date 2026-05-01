@@ -65,19 +65,19 @@ export function OperatorLoopSection() {
           the evidence.
         </p>
 
-        <div className="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="mt-10 grid gap-5 items-stretch sm:grid-cols-2 lg:grid-cols-4">
           {nouns.map((n) => (
             <Link
               key={n.title}
               href={n.href}
-              className={`group flex flex-col rounded-2xl border bg-gradient-to-br from-white/[0.06] to-transparent p-6 shadow-card transition ${accentRing[n.accent as keyof typeof accentRing]}`}
+              className={`group h-full flex flex-col rounded-2xl border bg-gradient-to-br from-white/[0.06] to-transparent p-6 shadow-card transition ${accentRing[n.accent as keyof typeof accentRing]}`}
             >
               <p className={`text-xs font-bold uppercase tracking-widest ${accentText[n.accent as keyof typeof accentText]}`}>
                 Surface
               </p>
               <h3 className="font-display mt-2 text-2xl font-bold text-white">{n.title}</h3>
               <p className="mt-3 flex-1 text-sm leading-relaxed text-white/65">{n.blurb}</p>
-              <span className="mt-4 text-xs font-semibold text-aqua group-hover:text-white">
+              <span className="mt-auto text-xs font-semibold text-aqua group-hover:text-white">
                 {n.cta} →
               </span>
             </Link>
