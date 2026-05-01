@@ -20,8 +20,10 @@ import { repoUrl } from "@/lib/config";
  *
  * Right cluster:
  *   - GitHub repo link, icon-only ghost button.
- *   - One unified pill: muted "Closed beta" half (→ /beta) joined to a
- *     solid "Sign in" half (→ console). Reads as a single component.
+ *   - One unified pill: muted "Request access" half (→ /beta) joined to
+ *     a solid "Sign in" half (→ console). Reads as a single component
+ *     with two purposes — apply if you don't have a workspace yet, sign
+ *     in if you do.
  */
 type NavItem = {
   href: string;
@@ -113,9 +115,9 @@ export function SiteHeader() {
           <div className="flex items-center rounded-full bg-white/[0.06] p-0.5">
             <Link
               href="/beta"
-              className="inline-flex shrink-0 items-center rounded-full px-3 py-1 text-xs font-medium text-white/65 transition hover:text-white"
+              className="inline-flex shrink-0 items-center rounded-full px-3 py-1 text-xs font-medium text-white/70 transition hover:text-white"
             >
-              Closed beta
+              Request access
             </Link>
             <a
               href="https://app.ship.elmundi.com/login"

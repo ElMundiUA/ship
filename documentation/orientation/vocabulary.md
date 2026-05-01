@@ -1,6 +1,6 @@
 # The vocabulary you'll meet on every screen
 
-This manual leans on seven words. They appear in every corner of the console, in settings, in logs, in team conversations about processes. If they're fuzzy—if Workspace means one thing Monday and another by Friday—your team will stop trusting Ship's decisions. The point of naming things carefully is not philosophy; it's practical. Labels that drift are how organizations lose grip on their own processes. This chapter defines each word plainly, explains why it earned its place, and shows you where to find it on screen.
+This manual leans on eight words. They appear in every corner of the console, in settings, in logs, in team conversations about processes. If they're fuzzy — if Workspace means one thing Monday and another by Friday — your team will stop trusting Ship's decisions. The point of naming things carefully is not philosophy; it's practical. Labels that drift are how organizations lose grip on their own processes. This chapter defines each word plainly, explains why it earned its place, and shows you where to find it on screen.
 
 ## Workspace
 
@@ -27,6 +27,10 @@ Knowledge is product and repo context that agents can use without guessing. It i
 ## Process
 
 A process is the per-repo workflow Ship runs against: the states a piece of work passes through (intake → analysis → in progress → review → done, in some shape), the transitions between those states, the capacity for each state, and the **routines** that fire along the way. One connected repo, one process. The word "process" is what you'll see in the console (`/process`) and what the team talks about in standups; the legacy term `lanes` still appears in some configuration. Inside a process, two more named pieces do the actual work. A **routine** is a named job — a security review, an architecture sweep, a daily digest — with a prompt and a default schedule; some routines live inside a process, some run standalone at the workspace level. A **specialist** is the agent profile a routine takes on for the duration of a run: intake, business analyst, product manager, developer, technical architect, designer, and so on. The team talks about "the daily security review"; the engine sees "the `daily_security_review` routine, run by the developer specialist, inside the process attached to the backend repo." Both descriptions are true.
+
+## Executor
+
+An executor is the runtime that actually runs a routine — in plain language, the AI agent. Cursor, Claude Code, Codex, GitHub Copilot, Gemini, and the rest of the supported runtimes are all executors. The word matters because the layers stack cleanly: a **routine** says *what* to do, a **specialist** says *which role* to play, an **executor** is *who actually reads the prompt and produces the diff*. Swap Cursor for Codex tomorrow and the routine, specialist, and process don't change — only the executor does. Every executed step records which executor ran it (and at which version), so a regression in agent behaviour traces to a specific runtime bump rather than a vibe shift. You'll pick executors per repo in `.ship/config.yml` (`agents:` field); the supported runtimes and their install targets live on the [roadmap page](/roadmap). "Agent" is the everyday word, "executor" is the formal one — both refer to the same layer.
 
 ## Evidence
 
