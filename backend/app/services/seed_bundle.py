@@ -115,7 +115,14 @@ from backend.app.services.tracker_fsm import (
 #         in ``run.mjs`` rewrites ``blocked`` to mean ONLY a broken
 #         environment (missing secret / dead adapter / conflicting
 #         branch). Inbox blocker noise should drop near-zero.
-BUNDLE_VERSION: str = "0.12"
+# ``0.13`` → Inbox clarifications/blockers now snapshot the source
+#         ticket (title/description/labels/state/url) into the
+#         payload at finish time, so the operator can read the
+#         original ask without flipping to Linear. New
+#         ``LinearTracker.get_ticket_snapshot`` + best-effort
+#         hook in ``finish_agent_run``; missing snapshot is
+#         tolerated for older rows / non-Linear adapters.
+BUNDLE_VERSION: str = "0.13"
 
 # Default knowledge starters for PR 1. Empty by design: generated knowledge is
 # analyzed post-merge and proposed in a second PR. Historical callers can still

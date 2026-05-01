@@ -177,6 +177,24 @@ def _vendor_kind_to_ticket_kind(vendor_kind: str) -> Literal[
     return "github_issues"  # safe default for the pilot
 
 
+async def _try_ticket_snapshot(gateway: Any, ref: TicketRef) -> dict[str, Any] | None:
+    """Best-effort source-ticket fetch for inbox payloads.
+
+    Adapter is allowed to either expose ``get_ticket_snapshot`` (Linear
+    today) or not — and the call itself can fail (Linear timeout,
+    deleted ticket). Either way we just return ``None``; the inbox row
+    still gets created without a snapshot so the operator at least
+    sees the agent's question.
+    """
+    fn = getattr(gateway, "get_ticket_snapshot", None)
+    if fn is None:
+        return None
+    try:
+        return await fn(ref)
+    except Exception:
+        return None
+
+
 def _ticket_ref_from(vendor_kind: str, raw: str) -> TicketRef:
     """Hydrate a vendor-agnostic ``ticket_ref`` string into a typed
     :class:`TicketRef` for adapter calls.
@@ -512,6 +530,11 @@ async def finish_agent_run(
             )
         await adder(ref, key="needs_clarification")
         actions.append("tracker:label:needs_clarification")
+        # Snapshot the source ticket onto the inbox row so the
+        # operator can read the original ask without flipping to
+        # Linear — without it, the clarification card is just the
+        # agent's question with no context for what it's about.
+        ticket_snapshot = await _try_ticket_snapshot(resolved.gateway, ref)
         # Mirror to inbox so the operator sees it without scanning the
         # tracker — the agent's question is the inbox row's summary.
         session.add(
@@ -525,6 +548,7 @@ async def finish_agent_run(
                     "run_id": payload.run_id,
                     "fsm_stage": payload.fsm_stage,
                     "ticket_ref": payload.ticket_ref,
+                    **({"source_ticket": ticket_snapshot} if ticket_snapshot else {}),
                     **payload.payload,
                 },
                 status="new",
@@ -535,7 +559,13 @@ async def finish_agent_run(
         actions.append("inbox:clarification")
 
     elif payload.outcome == "blocked":
-        # No ticket move — operator sees the blocker via inbox.
+        # No ticket move — operator sees the blocker via inbox. Snapshot
+        # the source ticket if there was one (blockers tied to a
+        # specific ticket get the same context as clarifications).
+        ticket_snapshot = None
+        if payload.ticket_ref and resolved is not None:
+            ref = _ticket_ref_from(resolved.kind, payload.ticket_ref)
+            ticket_snapshot = await _try_ticket_snapshot(resolved.gateway, ref)
         session.add(
             InboxItem(
                 workspace_id=workspace_id,
@@ -547,6 +577,7 @@ async def finish_agent_run(
                     "run_id": payload.run_id,
                     "fsm_stage": payload.fsm_stage,
                     "ticket_ref": payload.ticket_ref,
+                    **({"source_ticket": ticket_snapshot} if ticket_snapshot else {}),
                     **payload.payload,
                 },
                 status="new",

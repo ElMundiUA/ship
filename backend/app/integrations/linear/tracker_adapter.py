@@ -511,6 +511,52 @@ class LinearTracker:
             )
         return out
 
+    async def get_ticket_snapshot(
+        self, ticket: TicketRef
+    ) -> dict[str, Any] | None:
+        """Cheap snapshot of an issue's display fields.
+
+        Used by the agent-finish handler to attach a source-ticket
+        preview to inbox rows (clarifications, blockers) so the
+        operator doesn't have to flip to Linear to remember which
+        ticket the agent's question is about. Returns ``None`` if
+        the issue can't be resolved.
+        """
+        if ticket.kind != "linear":
+            return None
+        query = """
+        query ShipTicketSnapshot($id: String!) {
+          issue(id: $id) {
+            id
+            identifier
+            title
+            description
+            url
+            state { name }
+            labels { nodes { name } }
+          }
+        }
+        """
+        try:
+            data = await self._gql(query, {"id": ticket.id})
+        except Exception:
+            return None
+        issue = data.get("issue") or None
+        if not issue:
+            return None
+        return {
+            "ticket_ref": issue.get("identifier") or ticket.id,
+            "title": issue.get("title"),
+            "description": issue.get("description"),
+            "url": issue.get("url"),
+            "state": (issue.get("state") or {}).get("name"),
+            "labels": [
+                lbl.get("name")
+                for lbl in (issue.get("labels") or {}).get("nodes") or []
+                if lbl.get("name")
+            ],
+        }
+
     async def list_comments(self, ticket: TicketRef) -> list[CommentRef]:
         """All comments on the issue, oldest first.
 
