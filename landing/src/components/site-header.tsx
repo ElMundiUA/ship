@@ -5,51 +5,46 @@ import { usePathname } from "next/navigation";
 import { repoUrl } from "@/lib/config";
 
 /**
- * Top nav, left → right after the logo:
- *   Use cases — buyer-facing proof / reference deployments
- *   Process   — process + specialists marketing page
- *   Docs      — product and technical documentation
- *   Blog      — engineering and product blog
- *   Roadmap   — north-star + Now/Next/Later milestones
+ * Top nav layout (desktop): three columns with the nav items locked to the
+ * horizontal centre.
  *
- * Right cluster after nav:
- *   Closed beta pill → /beta (request access)
- *   Sign in          → console (sole primary CTA, solid aqua)
+ *   ┌────────────────────────────────────────────────────────────────┐
+ *   │ [ logo ]                  [ NAV ]            [ GH ] [ pill ]   │
+ *   └────────────────────────────────────────────────────────────────┘
  *
- * Book and GitHub are intentionally NOT in the navbar — they're available
- * via the hero, footer, and content cross-links. The right cluster is two
- * items by design (one muted, one primary) so the navbar reads quiet.
+ * Logo on the left and the right cluster (GitHub icon + combined
+ * Closed-beta / Sign-in pill) both sit inside ``flex-1`` flex containers
+ * so they balance the centre nav. Below ``md`` the nav hides and the
+ * left/right anchors stay; we treat that as acceptable mobile UX until
+ * a hamburger gets added.
+ *
+ * Right cluster:
+ *   - GitHub repo link, icon-only ghost button.
+ *   - One unified pill: muted "Closed beta" half (→ /beta) joined to a
+ *     solid "Sign in" half (→ console). Reads as a single component.
  */
 type NavItem = {
   href: string;
   label: string;
-  className: string;
   alsoActiveOn?: string[];
 };
 
 const NAV: NavItem[] = [
-  { href: "/use-cases", label: "Use cases", className: "" },
-  { href: "/process", label: "Process", className: "" },
-  { href: "/docs", label: "Docs", className: "" },
-  { href: "/blog", label: "Blog", className: "" },
-  { href: "/roadmap", label: "Roadmap", className: "" },
+  { href: "/use-cases", label: "Use cases" },
+  { href: "/process", label: "Process" },
+  { href: "/docs", label: "Docs" },
+  { href: "/blog", label: "Blog" },
+  { href: "/roadmap", label: "Roadmap" },
 ];
 
 /**
  * Pick the active nav item by longest matching prefix across both `href`
- * and any `alsoActiveOn` aliases. Returns the canonical href to compare
- * against in the render loop.
+ * and any `alsoActiveOn` aliases.
  */
 function activeHrefFor(pathname: string | null): string | null {
   if (!pathname) return null;
-  // Store state behind a ref-like holder so TypeScript can't narrow
-  // the mutation through a closure. Without this wrapper, the
-  // `let best: T | null = null` pattern gets narrowed to `never`
-  // after the `consider` closure, which blocks the final
-  // `best?.href` access (known TS narrowing limitation).
-  const state: { best: { href: string; len: number } | null } = {
-    best: null,
-  };
+  // Boxed mutation so TS doesn't narrow the closure assignment to ``never``.
+  const state: { best: { href: string; len: number } | null } = { best: null };
   const consider = (matchPath: string, canonicalHref: string) => {
     if (pathname === matchPath || pathname.startsWith(matchPath + "/")) {
       if (!state.best || matchPath.length > state.best.len) {
@@ -71,11 +66,19 @@ export function SiteHeader() {
   const active = activeHrefFor(pathname);
   return (
     <header className="fixed inset-x-0 top-0 z-50 border-b border-white/10 bg-ink/70 backdrop-blur-xl">
-      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-3 px-4 sm:px-6">
-        <Link href="/" className="shrink-0 font-display text-lg font-bold tracking-normal text-white">
-          Ship<span className="text-aqua">.</span>
-        </Link>
-        <nav className="flex min-w-0 flex-1 items-center justify-end gap-0.5 text-sm sm:gap-1 md:gap-2">
+      <div className="mx-auto flex h-16 max-w-6xl items-center px-4 sm:px-6">
+        {/* Left — logo, takes leftover space so the centre stays centred */}
+        <div className="flex flex-1 justify-start">
+          <Link
+            href="/"
+            className="shrink-0 font-display text-lg font-bold tracking-normal text-white"
+          >
+            Ship<span className="text-aqua">.</span>
+          </Link>
+        </div>
+
+        {/* Centre — main nav (hidden on small viewports) */}
+        <nav className="hidden items-center gap-1 text-sm md:flex md:gap-2">
           {NAV.map((item) => {
             const isActive = item.href === active;
             return (
@@ -88,31 +91,56 @@ export function SiteHeader() {
                   isActive
                     ? "bg-white/[0.12] font-semibold text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]"
                     : "text-white/75 hover:bg-white/[0.06] hover:text-white",
-                  item.className,
-                ]
-                  .filter(Boolean)
-                  .join(" ")}
+                ].join(" ")}
               >
                 {item.label}
               </Link>
             );
           })}
-          <div className="ml-2 flex items-center gap-2 sm:ml-3">
+        </nav>
+
+        {/* Right — GitHub icon + combined Closed beta / Sign in pill */}
+        <div className="flex flex-1 items-center justify-end gap-2 sm:gap-3">
+          <a
+            href={repoUrl}
+            target="_blank"
+            rel="noreferrer"
+            aria-label="Ship on GitHub"
+            className="inline-flex h-9 w-9 items-center justify-center rounded-full text-white/60 transition hover:bg-white/[0.06] hover:text-white"
+          >
+            <GitHubIcon className="h-[18px] w-[18px]" />
+          </a>
+          <div className="flex items-center rounded-full bg-white/[0.06] p-0.5">
             <Link
               href="/beta"
-              className="inline-flex rounded-full bg-white/[0.06] px-2.5 py-1 text-xs font-medium text-white/60 transition hover:bg-white/[0.10] hover:text-white/80"
+              className="inline-flex shrink-0 items-center rounded-full px-3 py-1 text-xs font-medium text-white/65 transition hover:text-white"
             >
               Closed beta
             </Link>
             <a
               href="https://app.ship.elmundi.com/login"
-              className="inline-flex shrink-0 items-center rounded-full bg-aqua px-3.5 py-2 text-xs font-bold uppercase tracking-wide text-zinc-950 transition hover:bg-aqua/90"
+              className="inline-flex shrink-0 items-center rounded-full bg-aqua px-3.5 py-1.5 text-xs font-bold uppercase tracking-wide text-zinc-950 transition hover:bg-aqua/90"
             >
               Sign in
             </a>
           </div>
-        </nav>
+        </div>
       </div>
     </header>
+  );
+}
+
+function GitHubIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      role="img"
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      xmlns="http://www.w3.org/2000/svg"
+      className={className}
+    >
+      <path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12" />
+    </svg>
   );
 }

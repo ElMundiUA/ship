@@ -12,7 +12,9 @@ A connected repo is a GitHub repository you've activated in your workspace. The 
 
 ## Tracker
 
-A tracker is your system of record for product intent. It might be Linear, Jira, GitHub Issues, GitLab, or Azure DevOps; Ship adapts to each one. The key is that it's *your* single tracker—one per workspace—where the team decides what matters and in what order. The reason we use the word "tracker" instead of "issue system" or "backlog" is that Ship needs to speak about the *function* (the source of truth for priorities), not the vendor. A process can never invent priority; it can only read what the tracker says. You'll set up your tracker connection in Settings under Integrations, and during onboarding you'll point Ship to the URL and credentials.
+A tracker is your system of record for product intent — Linear, Jira, Notion, and the like. One per workspace; that one is where the team decides what matters and in what order. The reason we use the word "tracker" instead of "issue system" or "backlog" is that Ship needs to speak about the *function* (the source of truth for priorities), not the vendor. A process can never invent priority; it can only read what the tracker says. You'll set up your tracker connection in Settings under Integrations, and during onboarding you'll point Ship to the URL and credentials.
+
+Trackers are not orchestrators. GitHub, GitLab, and Azure DevOps are orchestrators in our vocabulary — they run pipelines, host code, and execute workflows. Their built-in issue surfaces (GitHub Issues, GitLab Issues, Azure Boards) can stand in for a tracker in a pinch, but the philosophy is to keep priority where the product team already lives, and to keep the orchestrator focused on running work — not on deciding which work to run.
 
 ## Inbox
 
