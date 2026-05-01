@@ -19,7 +19,7 @@ const pillars = [
 export function PillarsSection() {
   return (
     <section id="method" className="border-y border-white/10 bg-black/20 py-20 sm:py-24">
-      <div className="mx-auto max-w-6xl px-4 sm:px-6">
+      <div className="mx-auto max-w-[88rem] px-4 sm:px-6">
         <h2 className="font-display text-3xl font-bold text-white sm:text-4xl">Why teams buy control, not another AI demo</h2>
         <p className="mt-4 max-w-2xl text-white/65">
           Ship keeps autonomy bounded: humans own intent, automation leaves evidence, and vendors stay replaceable.

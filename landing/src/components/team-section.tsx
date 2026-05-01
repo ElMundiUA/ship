@@ -166,7 +166,7 @@ const COMPANY_FACTS: { kicker: string; value: string; note: string }[] = [
 export function TeamSection() {
   return (
     <section id="team" className="border-y border-white/10 bg-gradient-to-br from-aqua/[0.05] via-black/30 to-sun/[0.04] py-20 sm:py-24">
-      <div className="mx-auto max-w-6xl px-4 sm:px-6">
+      <div className="mx-auto max-w-[88rem] px-4 sm:px-6">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <p className="text-xs font-bold uppercase tracking-[0.2em] text-aqua/85">Team &amp; company</p>

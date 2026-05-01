@@ -36,7 +36,7 @@ const steps = [
 export function HowItWorksSection() {
   return (
     <section id="how-it-works" className="border-y border-white/10 bg-black/25 py-20 sm:py-24">
-      <div className="mx-auto max-w-6xl px-4 sm:px-6">
+      <div className="mx-auto max-w-[88rem] px-4 sm:px-6">
         <p className="text-sm font-bold uppercase tracking-widest text-aqua/90">
           How it works · from workspace to evidence
         </p>

@@ -98,7 +98,7 @@ export default function KitPage() {
 
         {/* Four surfaces */}
         <section id="kinds" className="py-16 sm:py-20">
-          <div className="mx-auto max-w-6xl px-4 sm:px-6">
+          <div className="mx-auto max-w-[88rem] px-4 sm:px-6">
             <div className="mb-10 flex items-baseline justify-between">
               <h2 className="font-display text-2xl font-bold text-white sm:text-3xl">The workspace surfaces</h2>
               <span className="hidden text-xs font-semibold uppercase tracking-[0.2em] text-white/35 sm:inline">
@@ -141,7 +141,7 @@ export default function KitPage() {
 
         {/* How to operate */}
         <section className="border-t border-white/10 bg-black/30 py-16 sm:py-20">
-          <div className="mx-auto max-w-6xl px-4 sm:px-6">
+          <div className="mx-auto max-w-[88rem] px-4 sm:px-6">
             <p className="text-xs font-bold uppercase tracking-[0.22em] text-white/45">Two words on policies</p>
             <h2 className="font-display mt-2 text-2xl font-bold text-white sm:text-3xl">
               Policies are the guardrails, not the bureaucracy.
@@ -191,7 +191,7 @@ export default function KitPage() {
 
         {/* Where the product surfaces fit in the rest of the site */}
         <section className="py-16 sm:py-20">
-          <div className="mx-auto max-w-6xl px-4 sm:px-6">
+          <div className="mx-auto max-w-[88rem] px-4 sm:px-6">
             <p className="text-xs font-bold uppercase tracking-[0.22em] text-white/45">Looking for something else?</p>
             <h2 className="font-display mt-2 text-2xl font-bold text-white sm:text-3xl">Related surfaces</h2>
             <p className="mt-3 max-w-2xl text-sm text-white/65">

@@ -80,7 +80,7 @@ function PreviewCard({ p }: { p: Preview }) {
 export function ExamplesSection() {
   return (
     <section id="use-cases" className="border-y border-white/10 bg-black/25 py-20 sm:py-24">
-      <div className="mx-auto max-w-6xl px-4 sm:px-6">
+      <div className="mx-auto max-w-[88rem] px-4 sm:px-6">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <p className="text-sm font-bold uppercase tracking-widest text-coral">Use cases</p>

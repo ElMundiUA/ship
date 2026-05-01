@@ -162,7 +162,7 @@ export function UseCaseEvidenceGrid({
   if (!items.length) return null;
   return (
     <section id="evidence" className="scroll-mt-24 py-14 sm:py-20">
-      <div className="mx-auto max-w-6xl px-4 sm:px-6">
+      <div className="mx-auto max-w-[88rem] px-4 sm:px-6">
         <p className="text-center text-xs font-bold uppercase tracking-widest text-sun/90">Evidence</p>
         <h2 className="font-display mt-2 text-center text-2xl font-bold text-white sm:text-3xl">Screens from the live site</h2>
         <p className="mx-auto mt-3 max-w-2xl text-center text-sm text-white/55">

@@ -3,7 +3,7 @@ import Link from "next/link";
 export function BookSection() {
   return (
     <section id="book" className="py-20 sm:py-28">
-      <div className="mx-auto max-w-6xl px-4 sm:px-6">
+      <div className="mx-auto max-w-[88rem] px-4 sm:px-6">
         <div className="grid items-center gap-12 lg:grid-cols-2">
           <div>
             <p className="text-sm font-bold uppercase tracking-widest text-sun">The book</p>

@@ -215,7 +215,7 @@ export default function ProcessPage() {
 
         {/* Specialists */}
         <section className="border-b border-white/10 py-16 sm:py-20">
-          <div className="mx-auto max-w-6xl px-4 sm:px-6">
+          <div className="mx-auto max-w-[88rem] px-4 sm:px-6">
             <p className="text-xs font-bold uppercase tracking-[0.2em] text-aqua/85">The cast</p>
             <h2 className="font-display mt-2 text-3xl font-bold text-white sm:text-4xl">
               Fifteen specialists, three groups
@@ -233,7 +233,7 @@ export default function ProcessPage() {
 
         {/* Development process */}
         <section id="development" className="scroll-mt-24 border-b border-white/10 py-16 sm:py-20">
-          <div className="mx-auto max-w-6xl px-4 sm:px-6">
+          <div className="mx-auto max-w-[88rem] px-4 sm:px-6">
             <div className="flex flex-wrap items-center gap-3">
               <p className="text-xs font-bold uppercase tracking-[0.2em] text-aqua/85">Today, production depth</p>
               <span className="rounded-full border border-aqua/40 bg-aqua/15 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-aqua">
@@ -292,7 +292,7 @@ export default function ProcessPage() {
 
         {/* Aspirational processes */}
         <section id="aspirational" className="scroll-mt-24 border-b border-white/10 py-16 sm:py-20">
-          <div className="mx-auto max-w-6xl px-4 sm:px-6">
+          <div className="mx-auto max-w-[88rem] px-4 sm:px-6">
             <div className="flex flex-wrap items-center gap-3">
               <p className="text-xs font-bold uppercase tracking-[0.2em] text-white/55">Same model, growing depth</p>
               <span className="rounded-full border border-white/20 bg-white/5 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-white/65">

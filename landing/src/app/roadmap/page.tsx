@@ -157,7 +157,7 @@ export default function RoadmapPage() {
 
         {/* Now / Next / Later columns */}
         <section className="border-b border-white/10 py-14 sm:py-20">
-          <div className="mx-auto max-w-6xl px-4 sm:px-6">
+          <div className="mx-auto max-w-[88rem] px-4 sm:px-6">
             <div id="now" className="scroll-mt-24">
               <ColumnHeader kicker="Live now · Q2 2026" title="Production depth" accent="aqua" />
               <ItemGrid items={NOW} accent="aqua" />
@@ -199,7 +199,7 @@ export default function RoadmapPage() {
 
         {/* Technical appendix — agent matrix */}
         <section className="border-b border-white/10 bg-black/20 py-14 sm:py-20">
-          <div className="mx-auto max-w-6xl px-4 sm:px-6">
+          <div className="mx-auto max-w-[88rem] px-4 sm:px-6">
             <p className="text-xs font-bold uppercase tracking-[0.2em] text-white/45">Technical appendix</p>
             <h2 className="font-display mt-2 text-2xl font-bold text-white sm:text-3xl">
               Agent runtime support matrix

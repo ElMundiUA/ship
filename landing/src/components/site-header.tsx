@@ -68,7 +68,7 @@ export function SiteHeader() {
   const active = activeHrefFor(pathname);
   return (
     <header className="fixed inset-x-0 top-0 z-50 border-b border-white/10 bg-ink/70 backdrop-blur-xl">
-      <div className="mx-auto flex h-16 max-w-6xl items-center px-4 sm:px-6">
+      <div className="mx-auto flex h-16 max-w-[88rem] items-center px-4 sm:px-6">
         {/* Left — logo, takes leftover space so the centre stays centred */}
         <div className="flex flex-1 justify-start">
           <Link
