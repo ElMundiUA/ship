@@ -27,6 +27,7 @@ from backend.app.services.cron import (
     register_cron,
 )
 from backend.app.services.knowledge_harvest import harvest_all_workspaces
+from backend.app.services.knowledge_router import route_all_workspaces
 
 
 log = logging.getLogger(__name__)
@@ -78,6 +79,55 @@ async def _knowledge_harvest_tick() -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# KB-2 / ELS-36 — embed/centroid + LLM tiebreaker router
+# ---------------------------------------------------------------------------
+
+
+@cron_with_lock(lock=CronLockId.KNOWLEDGE_ROUTE, name="knowledge_route")
+async def _knowledge_route_tick() -> None:
+    """Hourly routing pass: pin every unrouted knowledge_note to a bucket.
+
+    Centroid match → bucket_hint fallback → LLM tiebreaker. Notes
+    that hit ``no_fit`` exit the pending pool with confidence=0 and
+    KB-4 (operator review) handles them by hand.
+    """
+    try:
+        llm_client = pick_default_client(get_settings())
+    except Exception:
+        log.info(
+            "knowledge_route tick: no LLM client configured; "
+            "centroid + bucket_hint only (no LLM tiebreaker)"
+        )
+        llm_client = None
+
+    sm = get_sessionmaker()
+    async with sm() as session:
+        try:
+            reports = await route_all_workspaces(session, llm_client=llm_client)
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+
+    auto = sum(r.auto_pinned for r in reports)
+    hint = sum(r.routed_via_hint for r in reports)
+    llm_routed = sum(r.routed_via_llm for r in reports)
+    no_fit = sum(r.no_fit for r in reports)
+    embed_failed = sum(r.skipped_embed_failed for r in reports)
+    if auto or hint or llm_routed or no_fit or any(r.errors for r in reports):
+        log.info(
+            "knowledge_route tick: workspaces=%d auto=%d hint=%d llm=%d "
+            "no_fit=%d embed_failed=%d",
+            len(reports),
+            auto,
+            hint,
+            llm_routed,
+            no_fit,
+            embed_failed,
+        )
+
+
 def register_all() -> None:
     """Wire every cron defined in this module into the scheduler.
 
@@ -90,6 +140,15 @@ def register_all() -> None:
         fn=_knowledge_harvest_tick,
         cron_expr="20 * * * *",  # every hour at :20
         job_id="knowledge_harvest",
+    )
+    # Routing runs ten minutes after harvest so the cron-tick chain is
+    # harvest → route → (KB-3 synthesise at :40 once it lands). One
+    # workspace's tick rarely takes more than a few seconds, but the
+    # offset gives breathing room.
+    register_cron(
+        fn=_knowledge_route_tick,
+        cron_expr="30 * * * *",  # every hour at :30
+        job_id="knowledge_route",
     )
 
 

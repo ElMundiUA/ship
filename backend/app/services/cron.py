@@ -81,7 +81,7 @@ class CronLockId(IntEnum):
     """
 
     KNOWLEDGE_HARVEST = 1001
-    # Reserved: 1002 — KB-2 routing cron (ELS-36).
+    KNOWLEDGE_ROUTE = 1002
     # Reserved: 1003 — KB-3 synthesise cron (ELS-37).
 
 
