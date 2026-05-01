@@ -6,6 +6,7 @@ import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 import { formatBlogDate, getBlogPost, listBlogPosts } from "@/lib/blog";
 import { preprocessBlogMarkdown } from "@/lib/blog-markdown";
+import { resolveMetadataBase } from "@/lib/site-url";
 
 type Params = { slug: string };
 
@@ -42,9 +43,36 @@ export default async function BlogPostPage({ params }: { params: Promise<Params>
 
   const body = preprocessBlogMarkdown(post.body);
 
+  // BlogPosting JSON-LD — Google indexes this and shows the article in
+  // rich-result carousels. Keys map to schema.org BlogPosting fields.
+  const siteUrl = resolveMetadataBase().toString().replace(/\/$/, "");
+  const blogPosting = {
+    "@context": "https://schema.org",
+    "@type": "BlogPosting",
+    mainEntityOfPage: {
+      "@type": "WebPage",
+      "@id": `${siteUrl}/blog/${slug}`,
+    },
+    headline: post.title,
+    description: post.description,
+    datePublished: post.date,
+    dateModified: post.date,
+    author: { "@type": "Person", name: post.author },
+    publisher: {
+      "@type": "Organization",
+      name: "Ship",
+      logo: { "@type": "ImageObject", url: `${siteUrl}/icon` },
+    },
+    keywords: post.tags.join(", "),
+  };
+
   return (
     <>
       <SiteHeader />
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(blogPosting) }}
+      />
       <main className="pt-24 sm:pt-28">
         <article>
           {/* Masthead */}
