@@ -18,7 +18,16 @@ export async function POST(request: Request) {
     // Hand off to the SDK-mounted route — it clears the encrypted session
     // cookie *and* redirects through Auth0's RP-initiated logout endpoint
     // so the IdP-side session goes away too.
-    return NextResponse.redirect(new URL("/auth/logout", resolveOrigin(request)), 303);
+    //
+    // ``returnTo=/login`` lands the user on the sign-in page after Auth0
+    // confirms the logout instead of the bare app root. The SDK joins this
+    // with ``appBaseUrl`` and forwards as ``post_logout_redirect_uri`` —
+    // the absolute URL must be in the application's "Allowed Logout URLs"
+    // in the Auth0 dashboard, otherwise Auth0 returns 400 and the user
+    // stays signed in.
+    const url = new URL("/auth/logout", resolveOrigin(request));
+    url.searchParams.set("returnTo", "/login");
+    return NextResponse.redirect(url, 303);
   }
   await clearSessionCookie();
   return NextResponse.redirect(new URL("/login", resolveOrigin(request)), 303);
