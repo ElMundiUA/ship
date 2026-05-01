@@ -46,9 +46,9 @@ const STATS: Stat[] = [
     accent: "lilac",
   },
   {
-    value: "1",
-    label: "Founder typing nothing",
-    body: "One person reviewing diffs, naming routines, setting policy. Not a typing pool. The product proves the workflow scales.",
+    value: "7",
+    label: "Team members, none typing code",
+    body: "Leadership, engineering, advisors — the whole team reviews diffs, names routines, sets policy. Not a typing pool. The product proves the workflow scales.",
     accent: "coral",
   },
 ];
