@@ -47,6 +47,14 @@ _NOTIFY_RECIPIENTS: tuple[str, ...] = (
     "abondar@bodyman.io",
 )
 
+# Additional recipients for investor leads. We CC the board advisor on every
+# submission with role=="Investor" so investor-relations work has the same
+# receipt the founding team sees, without manual forwarding.
+_INVESTOR_NOTIFY_RECIPIENTS: tuple[str, ...] = (
+    "Nikolai.Chesalin@gmail.com",
+)
+_INVESTOR_ROLE = "investor"
+
 
 # NB: no rate limiter on this public endpoint yet — sized for the closed-beta
 # trickle. ``backend/app/security/rate_limit.py`` exposes LOGIN/SIGNUP/
@@ -179,8 +187,10 @@ async def _notify_operators(
         return
 
     sender = get_email_sender(settings)
+    is_investor = (role or "").strip().lower() == _INVESTOR_ROLE
+    subject_prefix = "Ship beta · investor" if is_investor else "Ship beta"
     subject = (
-        f"[Ship beta] {'New' if is_new else 'Updated'} waitlist submission: {email}"
+        f"[{subject_prefix}] {'New' if is_new else 'Updated'} waitlist submission: {email}"
     )
     rendered_html = _render_notification_html(
         email=email,
@@ -199,7 +209,13 @@ async def _notify_operators(
         is_new=is_new,
     )
 
-    for recipient in _NOTIFY_RECIPIENTS:
+    # Investor leads CC the board advisor; preserve order so primary
+    # recipients see the notification first when MTAs deliver in series.
+    recipients: tuple[str, ...] = (
+        _NOTIFY_RECIPIENTS + _INVESTOR_NOTIFY_RECIPIENTS if is_investor else _NOTIFY_RECIPIENTS
+    )
+
+    for recipient in recipients:
         message = EmailMessage(
             to=EmailAddress(email=recipient),
             subject=subject,
@@ -209,6 +225,7 @@ async def _notify_operators(
                 "kind": "waitlist_notify",
                 "applicant_email": email,
                 "is_new": str(is_new).lower(),
+                "is_investor": str(is_investor).lower(),
             },
         )
         try:

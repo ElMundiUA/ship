@@ -7,13 +7,18 @@ import { repoUrl } from "@/lib/config";
 /**
  * Top nav, left → right after the logo:
  *   Use cases — buyer-facing proof / reference deployments
- *   Process   — process + specialists marketing page (replaces the old patterns/policies slot)
+ *   Process   — process + specialists marketing page
  *   Docs      — product and technical documentation
  *   Blog      — engineering and product blog
- *   The book  — long-form rationale (accent CTA)
- *   GitHub    — repo
+ *   Roadmap   — north-star + Now/Next/Later milestones
+ *
+ * Right cluster after nav:
  *   Closed beta pill → /beta (request access)
- *   Sign in   → console
+ *   Sign in          → console (sole primary CTA, solid aqua)
+ *
+ * Book and GitHub are intentionally NOT in the navbar — they're available
+ * via the hero, footer, and content cross-links. The right cluster is two
+ * items by design (one muted, one primary) so the navbar reads quiet.
  */
 type NavItem = {
   href: string;
@@ -27,6 +32,7 @@ const NAV: NavItem[] = [
   { href: "/process", label: "Process", className: "" },
   { href: "/docs", label: "Docs", className: "" },
   { href: "/blog", label: "Blog", className: "" },
+  { href: "/roadmap", label: "Roadmap", className: "" },
 ];
 
 /**
@@ -91,30 +97,16 @@ export function SiteHeader() {
               </Link>
             );
           })}
-          <Link
-            href="/book"
-            className="ml-1 inline-flex shrink-0 items-center rounded-full bg-gradient-to-r from-sun via-sun to-aqua px-3 py-2 text-xs font-bold uppercase tracking-wide text-zinc-950 shadow-[0_0_18px_rgba(255,200,87,0.28)] ring-1 ring-white/15 transition hover:brightness-110 hover:ring-white/30 sm:ml-2 sm:px-3.5 sm:text-[0.8rem]"
-          >
-            The book
-          </Link>
-          <a
-            href={repoUrl}
-            className="btn-secondary ml-1 shrink-0 !py-2 !text-xs sm:ml-2 sm:!text-sm"
-            target="_blank"
-            rel="noreferrer"
-          >
-            GitHub
-          </a>
           <div className="ml-2 flex items-center gap-2 sm:ml-3">
             <Link
               href="/beta"
-              className="inline-flex rounded-full bg-white/10 px-2.5 py-1 text-xs font-medium text-white/60 transition hover:bg-white/15"
+              className="inline-flex rounded-full bg-white/[0.06] px-2.5 py-1 text-xs font-medium text-white/60 transition hover:bg-white/[0.10] hover:text-white/80"
             >
               Closed beta
             </Link>
             <a
               href="https://app.ship.elmundi.com/login"
-              className="inline-flex shrink-0 items-center rounded-full bg-gradient-to-r from-aqua via-aqua to-sun px-3.5 py-2 text-xs font-bold uppercase tracking-wide text-zinc-950 shadow-[0_0_18px_rgba(46,230,214,0.32)] ring-1 ring-white/15 transition hover:brightness-110 hover:ring-white/30"
+              className="inline-flex shrink-0 items-center rounded-full bg-aqua px-3.5 py-2 text-xs font-bold uppercase tracking-wide text-zinc-950 transition hover:bg-aqua/90"
             >
               Sign in
             </a>

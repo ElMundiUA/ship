@@ -43,16 +43,19 @@ export function SiteFooter() {
             </div>
 
             <div className="space-y-4">
-              <p className="text-xs font-bold uppercase tracking-[0.18em] text-white/40">Workspace</p>
+              <p className="text-xs font-bold uppercase tracking-[0.18em] text-white/40">Product</p>
               <nav className="flex flex-col gap-3 text-base">
-                <Link className="text-white/70 transition hover:text-aqua" href="/kit">
-                  Product surfaces
-                </Link>
                 <Link className="text-white/70 transition hover:text-aqua" href="/process">
-                  Process & specialists
+                  Process &amp; specialists
+                </Link>
+                <Link className="text-white/70 transition hover:text-aqua" href="/roadmap">
+                  Roadmap
                 </Link>
                 <Link className="text-white/70 transition hover:text-aqua" href="/docs/knowledge/overview">
                   Knowledge
+                </Link>
+                <Link className="text-white/70 transition hover:text-aqua" href="/kit">
+                  Product surfaces
                 </Link>
               </nav>
             </div>

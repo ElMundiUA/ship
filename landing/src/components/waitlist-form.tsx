@@ -20,6 +20,7 @@ const ROLE_OPTIONS = [
   { value: "Product Owner", label: "Product Owner" },
   { value: "Engineering Manager", label: "Engineering Manager" },
   { value: "Tech Lead", label: "Tech Lead" },
+  { value: "Investor", label: "Investor" },
   { value: "Other", label: "Other" },
 ];
 

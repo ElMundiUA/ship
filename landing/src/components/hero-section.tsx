@@ -1,10 +1,26 @@
 import Link from "next/link";
 
-const HERO_CHECKLIST = [
-  "Connect the repo and tracker",
-  "Set policies before agents act",
-  "Keep decisions tied to evidence",
+type FlowState = { name: string; specialist: string; count: number; tone: "active" | "queue" | "idle" };
+
+const HERO_FLOW: FlowState[] = [
+  { name: "Intake", specialist: "Intake", count: 3, tone: "queue" },
+  { name: "Analysis", specialist: "Business analyst", count: 2, tone: "active" },
+  { name: "Build", specialist: "Developer", count: 4, tone: "active" },
+  { name: "Review", specialist: "Code reviewer", count: 1, tone: "queue" },
+  { name: "Done", specialist: "—", count: 12, tone: "idle" },
 ];
+
+const HERO_ROUTINES: { time: string; name: string }[] = [
+  { time: "06:00", name: "Security review" },
+  { time: "08:00", name: "Daily digest" },
+  { time: "10:00", name: "Architecture review" },
+];
+
+const TONE_DOT: Record<FlowState["tone"], string> = {
+  active: "bg-aqua",
+  queue: "bg-sun/80",
+  idle: "bg-white/30",
+};
 
 export function HeroSection() {
   return (
@@ -38,30 +54,68 @@ export function HeroSection() {
           what is moving, what is blocked, who decided, and which rules bound the work before an agent touches the repo.
         </p>
 
-        <figure className="mt-10 max-w-4xl" aria-label="Ship workspace checklist">
-          <div className="relative rounded-2xl border border-aqua/30 bg-gradient-to-br from-aqua/[0.10] via-white/[0.02] to-coral/10 p-px shadow-[0_28px_90px_-40px_rgba(46,230,214,0.45)]">
-            <div className="overflow-hidden rounded-[calc(1rem-1px)] bg-[#05060d] ring-1 ring-black/50">
-              <div className="flex items-center justify-between border-b border-white/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-widest text-white/50">
-                <span className="flex items-center gap-2">
-                  <span className="inline-block h-2 w-2 rounded-full bg-coral/80" aria-hidden />
-                  <span className="inline-block h-2 w-2 rounded-full bg-sun/80" aria-hidden />
-                  <span className="inline-block h-2 w-2 rounded-full bg-aqua/80" aria-hidden />
-                  <span className="ml-2">Workspace control</span>
-                </span>
-                <span className="hidden sm:inline text-white/40">Product owner view</span>
+        <figure className="mt-10 max-w-4xl" aria-label="Development process — Ship workspace preview">
+          <div className="relative rounded-2xl border border-white/10 bg-gradient-to-br from-aqua/[0.06] via-white/[0.02] to-transparent p-px shadow-[0_28px_90px_-40px_rgba(46,230,214,0.25)]">
+            <div className="overflow-hidden rounded-[calc(1rem-1px)] bg-[#05060d] ring-1 ring-black/40">
+              {/* Top bar */}
+              <div className="flex items-center justify-between gap-3 border-b border-white/10 bg-white/[0.02] px-4 py-2.5">
+                <div className="flex items-center gap-2">
+                  <span className="inline-block h-2 w-2 rounded-full bg-white/15" aria-hidden />
+                  <span className="inline-block h-2 w-2 rounded-full bg-white/15" aria-hidden />
+                  <span className="inline-block h-2 w-2 rounded-full bg-white/15" aria-hidden />
+                  <span className="ml-2 font-display text-xs font-bold text-white">Development</span>
+                  <span className="hidden rounded-full border border-aqua/40 bg-aqua/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.18em] text-aqua sm:inline">
+                    Live
+                  </span>
+                </div>
+                <span className="font-mono text-[10px] text-white/40">8 specialists · 8 routines</span>
               </div>
-              <div className="grid gap-3 px-4 py-5 sm:grid-cols-3">
-                {HERO_CHECKLIST.map((item) => (
-                  <div key={item} className="rounded-xl border border-white/10 bg-white/[0.04] p-4">
-                    <div className="mb-3 h-2 w-2 rounded-full bg-aqua" aria-hidden />
-                    <p className="text-sm font-semibold text-white">{item}</p>
-                  </div>
-                ))}
+
+              {/* States row */}
+              <div className="px-4 py-5 sm:px-5">
+                <div className="flex items-stretch gap-1.5 overflow-x-auto sm:gap-2">
+                  {HERO_FLOW.map((state, i) => (
+                    <div key={state.name} className="flex flex-1 items-stretch">
+                      <div className="flex w-full min-w-[110px] flex-col rounded-lg border border-white/[0.08] bg-white/[0.02] px-3 py-2.5 sm:min-w-0">
+                        <div className="flex items-center justify-between">
+                          <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-white/55">
+                            {state.name}
+                          </p>
+                          <span className={`inline-block h-1.5 w-1.5 rounded-full ${TONE_DOT[state.tone]}`} aria-hidden />
+                        </div>
+                        <p className="mt-2 text-[11px] font-semibold text-white/85">{state.specialist}</p>
+                        <p className="mt-2 font-mono text-[9px] text-white/40">{state.count} active</p>
+                      </div>
+                      {i < HERO_FLOW.length - 1 && (
+                        <div className="flex w-3 items-center justify-center text-white/15" aria-hidden>
+                          <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                            <path d="M2 5h6M6 2l3 3-3 3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Routines strip */}
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-t border-white/[0.06] bg-white/[0.015] px-4 py-2.5">
+                <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-white/40">Today&apos;s routines</p>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[10px] text-white/55">
+                  {HERO_ROUTINES.map((routine, i) => (
+                    <span key={routine.name} className="flex items-center gap-1.5">
+                      <span className="text-aqua/70">{routine.time}</span>
+                      <span>{routine.name}</span>
+                      {i < HERO_ROUTINES.length - 1 && <span className="text-white/15" aria-hidden>·</span>}
+                    </span>
+                  ))}
+                </div>
               </div>
             </div>
           </div>
           <figcaption className="mt-3 text-xs text-white/45">
-            The first screen is for ownership, policies, decisions, and evidence. No terminal setup is required to start.
+            The Development process — eight states, fifteen specialists, eight scheduled routines. This is the workspace
+            view, not a marketing diagram.
           </figcaption>
         </figure>
 

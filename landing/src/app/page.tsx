@@ -1,4 +1,3 @@
-import { BackendStrip } from "@/components/backend-strip";
 import { BookSection } from "@/components/book-section";
 import { FounderQuoteSection } from "@/components/founder-quote-section";
 import { HeroSection } from "@/components/hero-section";
@@ -21,7 +20,6 @@ export default function Home() {
         <KitSurfaceSection />
         <BookSection />
         <TeamSection />
-        <BackendStrip />
       </main>
       <SiteFooter />
     </>
