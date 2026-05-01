@@ -386,6 +386,25 @@ class LinearTracker:
         """
         await self._gql(mutation, {"id": ticket.id, "stateId": state_id})
 
+    async def set_description(self, ticket: TicketRef, *, body: str) -> None:
+        """Replace the issue's description (markdown body).
+
+        Used by stage agents that *shape the ticket itself* (intake,
+        BA) instead of appending comments. The previous body is not
+        preserved here — Linear keeps issue history server-side, so
+        the operator can always see what changed via the activity feed.
+        """
+        if ticket.kind != "linear":
+            raise ValueError(
+                f"LinearTracker can't set_description for kind={ticket.kind}"
+            )
+        await self._gql(
+            """mutation ShipSetDescription($id: String!, $body: String!) {
+              issueUpdate(id: $id, input: { description: $body }) { success }
+            }""",
+            {"id": ticket.id, "body": body},
+        )
+
     async def comment(self, ticket: TicketRef, *, body: str) -> None:
         if ticket.kind != "linear":
             raise ValueError(f"LinearTracker can't comment on kind={ticket.kind}")

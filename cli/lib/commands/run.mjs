@@ -412,7 +412,8 @@ curl -fsS -X POST '${apiBase}/v1/workspaces/${workspaceId}/agent-runs/finish' \\
   ${ticketLine}
   ${fsmLine}
   "stage_next": "<next FSM stage, e.g. ba_requirements>",
-  "comment": "Markdown summary of what you did. End with [Ship SDLC:${ctx?.role || "{{ROLE}}"}].",
+  "description": "<Full rewritten ticket body in Markdown — Problem / Goal / Acceptance criteria / Scope / Non-goals / Risks / etc. — when your role's job is to shape the ticket itself (intake, BA, planner). Omit (null) when your role is not supposed to rewrite the body.>",
+  "comment": "<One-paragraph audit narration of what you changed and why, ending with [Ship SDLC:${ctx?.role || "{{ROLE}}"}]. Do NOT paste the new description here — that's what the description field is for.>",
   "summary": null,
   "payload": {}
 }
@@ -424,8 +425,15 @@ JSON
 - **\`ready_next_step\`** — your role finished cleanly. Two shapes:
 
   1. **You worked on a ticket.** Set \`ticket_ref\` and \`stage_next\`
-     to the next FSM stage; server moves the ticket and posts
-     \`comment\` if provided.
+     to the next FSM stage; server moves the ticket. If your role's
+     job is to shape the ticket (intake / BA / planner), set
+     \`description\` to the **full rewritten body** — the server
+     replaces the tracker description (Linear keeps the prior body
+     in the activity feed, so nothing is lost). Use \`comment\` for
+     a short audit narration of what changed and why; **do not put
+     the new spec text in a comment**, otherwise the ticket
+     description rots while comments accumulate. Pure-narration
+     roles (security-officer, retro) skip \`description\` entirely.
   2. **There was nothing to do.** Pass \`ticket_ref: null\` and omit
      \`stage_next\`. The server records the run in the audit log and
      does **nothing** else — no inbox row, no tracker mutation. This

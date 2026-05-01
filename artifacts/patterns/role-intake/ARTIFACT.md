@@ -6,7 +6,7 @@ version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
 updated_at: "2026-04-07T20:41:22+03:00"
-content_sha256: e7b13f66c7eb1fce4e1240926e6be114d30a8b8df713acff920d9d150a811d2a
+content_sha256: 5aa31a6668412eb43417b374657fdbc3825f77e8baeed5fc5326079d411482f8
 deprecated: false
 replaced_by: null
 yanked: false
@@ -67,7 +67,7 @@ The ticket is already in **Todo** and in the pre-release project — that means 
 
 1. Classify: feature / bug / refactor / infra / improvement.
 2. Check completeness: goal, problem, expectation, AC, constraints.
-3. **If information is missing:** one comment with numbered questions, label `needs:clarification`, keep status **Todo** (the ticket is already in the working column for automation).
-4. **If enough:** shape the description (Problem, Goal, Expected Behaviour, Scope, AC, Non-goals, Risks), label `stage:intake`, status **Todo** (next — BA).
+3. **If information is missing:** finish with `outcome=needs_clarification`. The `comment` carries the numbered questions; the server applies `needs:clarification` automatically.
+4. **If enough to shape:** finish with `outcome=ready_next_step`, `stage_next=ba_requirements`. **Rewrite the ticket body** by setting the `description` field on the finish payload — the server replaces the tracker description (Linear keeps the prior body in history). Sections, in order: **Problem**, **Goal**, **Expected behaviour**, **Scope**, **Acceptance criteria**, **Non-goals**, **Risks**. Use the operator's original wording where it's already clear; tighten/restructure where it isn't. Do not paste the rewritten spec into the `comment` — that's what `description` is for.
 
-Brief comment on what you did. End with: `[GitHub SDLC:intake]`
+The `comment` field on this stage carries a one-paragraph audit narration of *what you changed and why* (for the activity feed). End it with: `[Ship SDLC:role-intake]`

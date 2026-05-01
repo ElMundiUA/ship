@@ -1,6 +1,6 @@
 {
   "name": "ship-console",
-  "version": "0.14.1",
+  "version": "0.14.2",
   "private": true,
   "description": "Operator console for the Ship cloud platform — workspace catalog, knowledge buckets, daily/retro, telemetry. Runs as a separate Next.js app from the marketing landing.",
   "scripts": {
