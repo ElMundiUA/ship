@@ -18,7 +18,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from backend.app.core.config import get_settings
 from backend.app.db.session import get_sessionmaker
+from backend.app.services.agent.client import pick_default_client
 from backend.app.services.knowledge_harvest import harvest_all_workspaces
 
 
@@ -37,9 +39,20 @@ async def cron_harvest_knowledge_notes(ctx: dict[str, Any]) -> dict[str, int]:
     total_skipped_dup = 0
     total_errors = 0
 
+    # Best-effort LLM client. If neither OPENAI nor ANTHROPIC keys are
+    # configured for this deploy, the harvester transparently runs the
+    # identity extractor on every source and never makes a model call.
+    try:
+        llm_client = pick_default_client(get_settings())
+    except Exception:
+        log.info(
+            "knowledge_harvest: no LLM client configured; identity extractor only"
+        )
+        llm_client = None
+
     async with sm() as session:
         try:
-            reports = await harvest_all_workspaces(session)
+            reports = await harvest_all_workspaces(session, llm_client=llm_client)
             await session.commit()
         except Exception:
             await session.rollback()

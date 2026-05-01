@@ -41,6 +41,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.db.models.agent_surface import Clarification, Improvement
 from backend.app.db.models.tenancy import AuditLog, Workspace
+from backend.app.services.agent.client import AgentClient
+from backend.app.services.knowledge_extractor import (
+    ClarificationSource,
+    KnowledgeAtom,
+    extract_clarification_atoms,
+)
 
 
 log = logging.getLogger(__name__)
@@ -84,12 +90,22 @@ async def harvest_workspace(
     workspace_id: uuid.UUID,
     since: datetime | None = None,
     limit: int = 200,
+    llm_client: AgentClient | None = None,
 ) -> HarvestReport:
-    """Drop one knowledge-note Improvement per resolved clarification.
+    """Drop one or more knowledge-note Improvement rows per resolved clarification.
 
     ``since`` lets a backfill caller widen the window beyond the
     cron's "everything answered, ever" baseline (the existence query
     handles dedup either way). The cron passes ``since=None``.
+
+    ``llm_client`` switches the extractor strategy:
+      * non-None → KB-1b LLM extractor; the model emits 0..N atoms
+        per source, each becomes one Improvement row tagged with
+        ``extractor='llm_v1'`` + ``atom_idx``.
+      * None → KB-1a identity extractor (one row per source, full
+        answer text passthrough, ``extractor='identity_v1'``).
+    LLM failures auto-fall-back to identity for that source so the
+    cron never stalls on a flaky model.
 
     The function commits nothing — caller owns the transaction
     boundary so a partial failure mid-loop rolls back cleanly.
@@ -127,33 +143,51 @@ async def harvest_workspace(
 
         question_excerpt = (clar.question or "").strip()[:QUESTION_EXCERPT_CAP]
         ticket_ref = clar.ticket_ref
-        title = _make_note_title(ticket_ref=ticket_ref, question=question_excerpt)
-
-        improvement = Improvement(
+        atoms, extractor = await _atoms_for_clarification(
+            session,
             workspace_id=workspace_id,
-            repo_id=clar.repo_id,
-            pipeline_run_id=None,
-            kind=NOTE_KIND,
-            title=title,
-            body=answer[:ANSWER_BODY_CAP],
-            impact=None,
-            effort=None,
-            context={
-                "source_kind": SOURCE_KIND_CLARIFICATION,
-                "source_id": str(clar.id),
-                "source_excerpt": question_excerpt,
-                "ticket_ref": ticket_ref,
-                # Phase-2 fields — populated by the routing cron.
-                "routed_bucket_id": None,
-                "route_confidence": None,
-                # Phase-1a marker so we can tell identity-extracted
-                # rows from LLM-extracted ones (Phase 1b) without
-                # re-deriving from history.
-                "extractor": "identity_v1",
-                "harvested_at": datetime.now(timezone.utc).isoformat(),
-            },
+            clar_question=clar.question or "",
+            clar_answer=answer,
+            ticket_ref=ticket_ref,
+            llm_client=llm_client,
         )
-        session.add(improvement)
+
+        # Empty atoms-list (LLM said "no reusable knowledge") is a
+        # valid outcome — count as inspected, not as created. Don't
+        # fall back to identity in that case; the model decided it
+        # wasn't useful, respect that signal.
+        if not atoms:
+            continue
+
+        for atom_idx, atom in enumerate(atoms):
+            improvement = Improvement(
+                workspace_id=workspace_id,
+                repo_id=clar.repo_id,
+                pipeline_run_id=None,
+                kind=NOTE_KIND,
+                title=atom.title,
+                body=atom.body,
+                impact=None,
+                effort=None,
+                context={
+                    "source_kind": SOURCE_KIND_CLARIFICATION,
+                    "source_id": str(clar.id),
+                    "source_excerpt": question_excerpt,
+                    "ticket_ref": ticket_ref,
+                    # Phase-2 fields — populated by the routing cron.
+                    "routed_bucket_id": None,
+                    "route_confidence": None,
+                    # Phase-1b: LLM may suggest a bucket; KB-2 takes it
+                    # as a tiebreaker when centroid score is ambiguous.
+                    "bucket_hint": atom.bucket_hint,
+                    # Multi-atom dedup key inside one source.
+                    "atom_idx": atom_idx,
+                    "extractor": extractor,
+                    "harvested_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            session.add(improvement)
+            report.created += 1
 
         session.add(
             AuditLog(
@@ -164,14 +198,12 @@ async def harvest_workspace(
                 target_kind=SOURCE_KIND_CLARIFICATION,
                 target_id=str(clar.id),
                 payload={
-                    "extractor": "identity_v1",
+                    "extractor": extractor,
                     "ticket_ref": ticket_ref,
-                    "title": title,
+                    "atoms": len(atoms),
                 },
             )
         )
-
-        report.created += 1
 
     await session.flush()
     return report
@@ -181,8 +213,15 @@ async def harvest_all_workspaces(
     session: AsyncSession,
     *,
     limit_per_workspace: int = 200,
+    llm_client: AgentClient | None = None,
 ) -> list[HarvestReport]:
-    """Cron entry point — sweep every workspace once."""
+    """Cron entry point — sweep every workspace once.
+
+    ``llm_client`` is optional; when ``None`` the harvester falls back
+    to the KB-1a identity extractor for every source. The cron worker
+    constructs the client once via :func:`pick_default_client` and
+    passes it in so every workspace shares one connection pool.
+    """
     workspace_ids = (
         await session.execute(select(Workspace.id))
     ).scalars().all()
@@ -194,12 +233,58 @@ async def harvest_all_workspaces(
                 session,
                 workspace_id=ws_id,
                 limit=limit_per_workspace,
+                llm_client=llm_client,
             )
         except Exception as exc:
             log.exception("knowledge_harvest workspace=%s failed", ws_id)
             report = HarvestReport(workspace_id=ws_id, errors=[str(exc)])
         reports.append(report)
     return reports
+
+
+async def _atoms_for_clarification(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    clar_question: str,
+    clar_answer: str,
+    ticket_ref: str | None,
+    llm_client: AgentClient | None,
+) -> tuple[list[KnowledgeAtom], str]:
+    """LLM extractor first, identity fallback. Returns ``(atoms, extractor_label)``.
+
+    The LLM may legitimately return an empty list (no reusable knowledge
+    here) — that's distinct from "LLM failed / not configured": we let
+    empty propagate so the harvester records "inspected, no atoms" and
+    moves on. Failures (None) trigger the identity extractor so we
+    never lose signal entirely.
+    """
+    if llm_client is not None:
+        atoms = await extract_clarification_atoms(
+            session,
+            workspace_id=workspace_id,
+            source=ClarificationSource(
+                question=clar_question,
+                answer=clar_answer,
+                ticket_ref=ticket_ref,
+            ),
+            client=llm_client,
+        )
+        if atoms is not None:
+            return atoms, "llm_v1"
+
+    # Identity fallback: one atom carrying the answer verbatim. Title
+    # is the same shape Phase 1a used so dashboards comparing the two
+    # extractors stay readable.
+    excerpt = clar_question.strip()[:QUESTION_EXCERPT_CAP]
+    title = _make_note_title(ticket_ref=ticket_ref, question=excerpt)
+    return [
+        KnowledgeAtom(
+            title=title,
+            body=clar_answer[:ANSWER_BODY_CAP],
+            bucket_hint=None,
+        )
+    ], "identity_v1"
 
 
 async def _already_harvested(

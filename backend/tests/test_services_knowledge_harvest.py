@@ -16,6 +16,7 @@ import pytest_asyncio
 from sqlalchemy import select
 
 from backend.app.db.models.agent_surface import Clarification, Improvement
+from backend.app.services.knowledge_extractor import KnowledgeAtom
 from backend.app.services.knowledge_harvest import (
     NOTE_KIND,
     SOURCE_KIND_CLARIFICATION,
@@ -156,6 +157,139 @@ async def test_harvest_scopes_to_workspace(
     report_a = await harvest_workspace(db_session, workspace_id=workspace_a.id)
     assert report_a.inspected == 1
     assert report_a.created == 1
+
+
+class _StubLLMClient:
+    """Test double for AgentClient — returns whatever JSON the test queues.
+
+    Calls go through ``acomplete`` only (the extractor doesn't stream).
+    Tests pass either a string (single response) or a list (queue).
+    """
+
+    vendor = "stub"
+
+    def __init__(self, responses):
+        if isinstance(responses, str):
+            responses = [responses]
+        self._responses = list(responses)
+        self.calls: list[dict] = []
+
+    async def acomplete(self, messages, **kwargs):
+        self.calls.append({"messages": list(messages), **kwargs})
+        if not self._responses:
+            raise RuntimeError("stub LLM ran out of queued responses")
+        return self._responses.pop(0)
+
+    async def astream(self, messages, tools=(), **kwargs):  # pragma: no cover
+        raise NotImplementedError
+
+
+@pytest.mark.asyncio
+async def test_harvest_with_llm_extractor_emits_one_row_per_atom(
+    db_session, answered_clarification
+):
+    workspace, clar = answered_clarification
+    stub = _StubLLMClient(
+        '{"atoms": ['
+        '{"title":"ready:* is a namespace, not an allowlist",'
+        ' "body":"Workspace treats every label matching `ready:*` as one open namespace.",'
+        ' "bucket_hint":"architecture-decisions"},'
+        '{"title":"Tracker writes go through the finish endpoint only",'
+        ' "body":"Agents never call Linear MCP for writes; the only sanctioned write is /agent-runs/finish.",'
+        ' "bucket_hint":"engineering-standards"}'
+        "]}"
+    )
+
+    report = await harvest_workspace(
+        db_session, workspace_id=workspace.id, llm_client=stub
+    )
+    assert report.created == 2
+
+    rows = (
+        await db_session.execute(
+            select(Improvement)
+            .where(Improvement.workspace_id == workspace.id)
+            .order_by(Improvement.created_at.asc())
+        )
+    ).scalars().all()
+    assert len(rows) == 2
+    titles = {r.title for r in rows}
+    assert "ready:* is a namespace, not an allowlist" in titles
+    extras = [r.context for r in rows]
+    assert all(c["extractor"] == "llm_v1" for c in extras)
+    assert all(c["source_id"] == str(clar.id) for c in extras)
+    assert {c["atom_idx"] for c in extras} == {0, 1}
+    assert len(stub.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_harvest_llm_empty_atoms_creates_nothing(
+    db_session, answered_clarification
+):
+    """Model says 'no reusable knowledge here' → silent skip, no row."""
+    workspace, _ = answered_clarification
+    stub = _StubLLMClient('{"atoms": []}')
+
+    report = await harvest_workspace(
+        db_session, workspace_id=workspace.id, llm_client=stub
+    )
+    assert report.inspected == 1
+    assert report.created == 0
+
+    rows = (
+        await db_session.execute(
+            select(Improvement).where(Improvement.kind == NOTE_KIND)
+        )
+    ).scalars().all()
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_harvest_llm_failure_falls_back_to_identity(
+    db_session, answered_clarification
+):
+    """LLM raises → identity extractor picks up; one row, extractor='identity_v1'."""
+    workspace, clar = answered_clarification
+
+    class _BoomClient(_StubLLMClient):
+        async def acomplete(self, messages, **kwargs):
+            raise RuntimeError("simulated rate limit")
+
+    report = await harvest_workspace(
+        db_session, workspace_id=workspace.id, llm_client=_BoomClient([])
+    )
+    assert report.created == 1
+
+    note = (
+        await db_session.execute(
+            select(Improvement).where(Improvement.workspace_id == workspace.id)
+        )
+    ).scalar_one()
+    assert note.context["extractor"] == "identity_v1"
+    assert note.body == clar.answer
+
+
+@pytest.mark.asyncio
+async def test_harvest_llm_invalid_bucket_hint_dropped(
+    db_session, answered_clarification
+):
+    """LLM-suggested bucket_hint that isn't in the workspace catalogue → null."""
+    workspace, _ = answered_clarification
+    stub = _StubLLMClient(
+        '{"atoms": [{"title":"X","body":"Y","bucket_hint":"made-up-slug-not-in-workspace"}]}'
+    )
+
+    report = await harvest_workspace(
+        db_session, workspace_id=workspace.id, llm_client=stub
+    )
+    assert report.created == 1
+
+    note = (
+        await db_session.execute(
+            select(Improvement).where(Improvement.workspace_id == workspace.id)
+        )
+    ).scalar_one()
+    assert note.context["bucket_hint"] is None
 
 
 @pytest_asyncio.fixture
