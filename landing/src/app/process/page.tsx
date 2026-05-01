@@ -292,7 +292,7 @@ export default function ProcessPage() {
 
         {/* 5. The Development SDLC fully drawn */}
         <section id="development" className="scroll-mt-24 border-b border-white/10 py-16 sm:py-20">
-          <div className="mx-auto max-w-6xl px-4 sm:px-6">
+          <div className="mx-auto max-w-[88rem] px-4 sm:px-6">
             <div className="flex flex-wrap items-center gap-3">
               <p className="text-xs font-bold uppercase tracking-[0.2em] text-aqua/85">Step three — the canonical example</p>
               <span className="rounded-full border border-aqua/40 bg-aqua/15 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-aqua">
@@ -337,9 +337,99 @@ export default function ProcessPage() {
           </div>
         </section>
 
-        {/* 6. Same model, other shapes */}
+        {/* 6. Policies — workspace-wide guardrails */}
+        <section id="policies" className="scroll-mt-24 border-b border-white/10 py-16 sm:py-20">
+          <div className="mx-auto max-w-[88rem] px-4 sm:px-6">
+            <p className="text-xs font-bold uppercase tracking-[0.2em] text-coral/85">Above every process</p>
+            <h2 className="font-display mt-2 text-3xl font-bold text-white sm:text-4xl">
+              Policies are guardrails that apply everywhere.
+            </h2>
+            <p className="mt-4 max-w-3xl text-base leading-relaxed text-white/65">
+              Processes describe <em className="not-italic text-white/85">how</em> work flows. Policies describe what is
+              never allowed regardless of which process is running. They sit one layer above and get injected into
+              every agent&apos;s system prompt — so a routine can&apos;t accidentally violate a rule the team has
+              agreed on, no matter which specialist is on the keyboard.
+            </p>
+
+            <div className="mt-12 grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
+              <PoliciesShell />
+              <div className="flex flex-col gap-4">
+                <PolicyExample
+                  title="No force-push to main"
+                  body="Every executor refuses force-push regardless of which routine asked, which branch they are on, or what the prompt says."
+                />
+                <PolicyExample
+                  title="Cite the source"
+                  body="Any summary that quotes knowledge or a tracker item must include a clickable reference. Routines that try to ship without one fail closed."
+                />
+                <PolicyExample
+                  title="Never share customer data"
+                  body="Policy guards the data classes the workspace marks as sensitive — they cannot leave designated processes, even in chat."
+                />
+                <PolicyExample
+                  title="Respect on-call"
+                  body="No deploy routines fire on the on-call's off hours. The policy reads the on-call schedule integration and gates the execution."
+                />
+              </div>
+            </div>
+
+            <p className="mt-10 max-w-3xl text-sm leading-relaxed text-white/55">
+              Policies are versioned the same way specialists are. When the team agrees on a new rule, it lands as a
+              diff, gets reviewed, and starts applying on the next routine run — no per-process retrofit needed.
+            </p>
+          </div>
+        </section>
+
+        {/* 7. Knowledge & feedback loop */}
+        <section id="knowledge-loop" className="scroll-mt-24 border-b border-white/10 py-16 sm:py-20">
+          <div className="mx-auto max-w-[88rem] px-4 sm:px-6">
+            <p className="text-xs font-bold uppercase tracking-[0.2em] text-lilac/85">Continuous learning</p>
+            <h2 className="font-display mt-2 text-3xl font-bold text-white sm:text-4xl">
+              The system gets smarter with every interaction.
+            </h2>
+            <p className="mt-4 max-w-3xl text-base leading-relaxed text-white/65">
+              Every clarification answered, every approval recorded, every retro logged, every casual chat that turns
+              into a decision — Ship captures the signal, distills it, and stores it as knowledge. Over time the
+              workspace builds an honest model of <em className="not-italic text-white/85">your team&apos;s</em> working
+              style: which routines are noisy, which states stall, which specialists need more context, which policies
+              need refinement. Then it suggests improvements — for your team, in your voice.
+            </p>
+
+            <div className="mt-12 grid items-stretch gap-6 lg:grid-cols-12">
+              <div className="lg:col-span-5">
+                <FeedbackLoop />
+              </div>
+              <div className="lg:col-span-7">
+                <div className="grid h-full gap-4">
+                  <LoopStep
+                    n="01"
+                    title="Capture"
+                    body="Every interaction lands in the audit log: a clarification, an approval, a retro note, a chat thread. Nothing is silently discarded."
+                  />
+                  <LoopStep
+                    n="02"
+                    title="Distill"
+                    body="The distiller routes raw signal into the right knowledge bucket. Recurring questions become articles. Repeated objections become policy candidates."
+                  />
+                  <LoopStep
+                    n="03"
+                    title="Propose"
+                    body="The system reads the patterns and proposes improvements: tighten this routine's prompt, split that bucket, move standup an hour later, retire the routine that has produced nothing for three weeks."
+                  />
+                  <LoopStep
+                    n="04"
+                    title="Apply"
+                    body="A human reviews the proposal and accepts, declines, or defers it — same Inbox, same disposition vocabulary. The accepted change ships and starts producing better signal on the next loop."
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* 8. Same model, other shapes */}
         <section id="other" className="scroll-mt-24 border-b border-white/10 py-16 sm:py-20">
-          <div className="mx-auto max-w-6xl px-4 sm:px-6">
+          <div className="mx-auto max-w-[88rem] px-4 sm:px-6">
             <div className="flex flex-wrap items-center gap-3">
               <p className="text-xs font-bold uppercase tracking-[0.2em] text-white/55">Same model, growing depth</p>
               <span className="rounded-full border border-white/20 bg-white/5 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-white/65">
@@ -366,7 +456,7 @@ export default function ProcessPage() {
 
         {/* 7. The cast — specialists catalogue (now contextual, not the opening) */}
         <section className="border-b border-white/10 py-16 sm:py-20">
-          <div className="mx-auto max-w-6xl px-4 sm:px-6">
+          <div className="mx-auto max-w-[88rem] px-4 sm:px-6">
             <p className="text-xs font-bold uppercase tracking-[0.2em] text-aqua/85">The cast</p>
             <h2 className="font-display mt-2 text-3xl font-bold text-white sm:text-4xl">
               Fifteen specialists ship in the catalogue today.
@@ -646,6 +736,132 @@ function WorkspaceGraph() {
           </g>
         ))}
       </svg>
+    </div>
+  );
+}
+
+function PoliciesShell() {
+  return (
+    <div className="relative h-full overflow-hidden rounded-2xl border border-coral/25 bg-gradient-to-br from-coral/[0.06] via-white/[0.02] to-transparent p-6 sm:p-8">
+      {/* Decorative shell — concentric rings labelled "POLICIES" */}
+      <div className="pointer-events-none absolute -right-8 -top-8 h-40 w-40 rounded-full border border-coral/15" aria-hidden />
+      <div className="pointer-events-none absolute -left-8 -bottom-8 h-40 w-40 rounded-full border border-coral/10" aria-hidden />
+
+      <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-coral/85">Workspace policies</p>
+      <p className="font-display mt-2 text-lg font-bold text-white sm:text-xl">
+        Injected into every agent&apos;s system prompt.
+      </p>
+      <p className="mt-3 text-sm leading-relaxed text-white/65">
+        Below are the processes — Development, Marketing, Support, Compliance, Data &amp; ML. Above them sits the
+        policy layer. A policy added today applies to every routine that fires tomorrow, in every process, on
+        every executor.
+      </p>
+
+      <div className="relative mt-6 rounded-xl border border-white/10 bg-black/30 p-4">
+        <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-coral/85">Policy layer · 6 active</p>
+        <div className="mt-3 grid grid-cols-3 gap-1.5">
+          {["Development", "Marketing", "Customer success", "Compliance", "Data & ML", "Release"].map((p, i) => (
+            <div
+              key={p}
+              className={`rounded-md border border-white/[0.08] px-2 py-2 text-center text-[10px] font-semibold ${i === 0 ? "bg-aqua/10 text-aqua" : "bg-white/[0.02] text-white/55"}`}
+            >
+              {p}
+            </div>
+          ))}
+        </div>
+        <div className="mt-3 flex items-center justify-between text-[9px] font-mono uppercase tracking-[0.16em] text-white/40">
+          <span>↑ policies apply to all</span>
+          <span className="text-coral/75">workspace-wide</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PolicyExample({ title, body }: { title: string; body: string }) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/[0.025] p-5">
+      <div className="flex items-start gap-3">
+        <span className="mt-1.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-coral" aria-hidden />
+        <div className="min-w-0 flex-1">
+          <p className="font-display text-sm font-bold text-white sm:text-base">{title}</p>
+          <p className="mt-2 text-xs leading-relaxed text-white/60 sm:text-sm">{body}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FeedbackLoop() {
+  return (
+    <div className="relative h-full overflow-hidden rounded-2xl border border-lilac/25 bg-gradient-to-br from-lilac/[0.06] via-white/[0.02] to-transparent p-6 sm:p-8">
+      <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-lilac/85">The loop</p>
+      <p className="font-display mt-2 text-lg font-bold text-white sm:text-xl">
+        Capture → distill → propose → apply.
+      </p>
+      <p className="mt-3 text-sm leading-relaxed text-white/65">
+        Improvements come from your team&apos;s actual behaviour, not from a generic playbook.
+      </p>
+
+      <svg viewBox="0 0 320 280" className="mt-5 h-auto w-full" role="img" aria-label="Feedback loop diagram">
+        <defs>
+          <radialGradient id="loop-glow" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor="rgba(209,167,255,0.18)" />
+            <stop offset="100%" stopColor="rgba(209,167,255,0)" />
+          </radialGradient>
+          <marker id="arrow-lilac" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M0,0 L8,5 L0,10 z" fill="rgba(209,167,255,0.85)" />
+          </marker>
+        </defs>
+        <rect x="0" y="0" width="320" height="280" fill="url(#loop-glow)" />
+
+        {/* Four circular nodes around the loop */}
+        {[
+          { x: 160, y: 38, label: "Capture", sub: "audit log" },
+          { x: 280, y: 140, label: "Distill", sub: "knowledge" },
+          { x: 160, y: 242, label: "Propose", sub: "Inbox item" },
+          { x: 40, y: 140, label: "Apply", sub: "ship the diff" },
+        ].map((node) => (
+          <g key={node.label}>
+            <circle cx={node.x} cy={node.y} r="42" fill="rgba(15,15,25,0.95)" stroke="rgba(209,167,255,0.5)" strokeWidth="1.5" />
+            <circle cx={node.x} cy={node.y} r="42" fill="rgba(209,167,255,0.06)" />
+            <text x={node.x} y={node.y - 2} textAnchor="middle" className="fill-white font-display text-[12px] font-bold">
+              {node.label}
+            </text>
+            <text x={node.x} y={node.y + 14} textAnchor="middle" className="fill-lilac/70 text-[9px] font-bold uppercase tracking-[0.14em]">
+              {node.sub}
+            </text>
+          </g>
+        ))}
+
+        {/* Arc arrows between nodes */}
+        <g fill="none" stroke="rgba(209,167,255,0.55)" strokeWidth="1.5" strokeLinecap="round">
+          <path d="M 200 56 A 110 110 0 0 1 264 100" markerEnd="url(#arrow-lilac)" />
+          <path d="M 264 180 A 110 110 0 0 1 200 224" markerEnd="url(#arrow-lilac)" />
+          <path d="M 120 224 A 110 110 0 0 1 56 180" markerEnd="url(#arrow-lilac)" />
+          <path d="M 56 100 A 110 110 0 0 1 120 56" markerEnd="url(#arrow-lilac)" />
+        </g>
+
+        {/* Center label */}
+        <text x="160" y="138" textAnchor="middle" className="fill-white/45 text-[9px] font-bold uppercase tracking-[0.18em]">
+          continuous
+        </text>
+        <text x="160" y="152" textAnchor="middle" className="fill-white/45 text-[9px] font-bold uppercase tracking-[0.18em]">
+          improvement
+        </text>
+      </svg>
+    </div>
+  );
+}
+
+function LoopStep({ n, title, body }: { n: string; title: string; body: string }) {
+  return (
+    <div className="flex h-full items-start gap-4 rounded-2xl border border-white/10 bg-white/[0.02] p-5 sm:p-6">
+      <span className="font-display shrink-0 text-2xl font-bold text-lilac/70 sm:text-3xl">{n}</span>
+      <div className="min-w-0 flex-1">
+        <p className="font-display text-base font-bold text-white sm:text-lg">{title}</p>
+        <p className="mt-2 text-sm leading-relaxed text-white/65">{body}</p>
+      </div>
     </div>
   );
 }
