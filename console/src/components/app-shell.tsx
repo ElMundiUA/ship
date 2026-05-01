@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
-import { type ReactNode, Suspense, useState } from "react";
+import { type ReactNode, Suspense, useEffect, useState } from "react";
 import { cn } from "@/lib/cn";
 import { NavigatorLauncher } from "@/components/navigator-launcher";
 
@@ -233,7 +233,45 @@ export function AppShell({
     u.searchParams.set("ws", workspace.id);
     return u.pathname + u.search;
   };
-  const userInfo = me ?? {
+  // Pages that haven't threaded ``me`` down from server-side fall back
+  // to a client-side fetch so the sidebar still shows the real signed-
+  // in operator instead of the placeholder. The fallback is gated on
+  // ``me === undefined`` so callers that explicitly pass ``null`` (no
+  // session) keep showing the mock without an extra request.
+  const [fetchedMe, setFetchedMe] = useState<AppShellUser | null>(null);
+  useEffect(() => {
+    if (me !== undefined) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/me", {
+          headers: { accept: "application/json" },
+          cache: "no-store",
+        });
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          email?: string;
+          display_name?: string | null;
+        };
+        if (cancelled) return;
+        const display = (data.display_name ?? "").trim();
+        const email = (data.email ?? "").trim();
+        const name = display || email || "User";
+        setFetchedMe({
+          name,
+          email,
+          initials: initialsFromMe(display, email),
+        });
+      } catch {
+        // Best-effort — fallback placeholder is fine if the call fails.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [me]);
+
+  const userInfo = me ?? fetchedMe ?? {
     name: "User",
     email: "user@example.com",
     initials: "U",
@@ -570,4 +608,11 @@ function initialsOf(name: string): string {
     .slice(0, 2)
     .map((w) => w[0]?.toUpperCase() ?? "")
     .join("") || "?";
+}
+
+function initialsFromMe(displayName: string | null, email: string): string {
+  const source = (displayName ?? "").trim() || email;
+  const parts = source.split(/[\s@.]+/).filter(Boolean);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return (parts[0]?.slice(0, 2) ?? "??").toUpperCase();
 }
