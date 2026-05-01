@@ -1,5 +1,4 @@
 import Image from "next/image";
-import Link from "next/link";
 
 type TeamMember = {
   name: string;
@@ -220,21 +219,6 @@ export function TeamSection() {
           </div>
         </div>
 
-        <div className="mt-12 rounded-2xl border border-white/10 bg-black/20 p-6 sm:p-8">
-          <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-aqua/85">For investors</p>
-          <p className="mt-3 max-w-3xl text-sm leading-relaxed text-white/70 sm:text-base">
-            We are open to conversations with strategic investors who back operator-grade developer tools. Brief deck and a
-            walkthrough of the reference deployment available on request — reach out via the closed-beta form and select
-            the appropriate role.
-          </p>
-          <Link
-            href="/beta"
-            className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-aqua hover:text-white"
-          >
-            Open the contact form
-            <span aria-hidden>→</span>
-          </Link>
-        </div>
       </div>
     </section>
   );
