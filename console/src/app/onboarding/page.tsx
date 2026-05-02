@@ -43,6 +43,7 @@ import {
   isApiConfigured,
   listActivatedRepos,
   listAvailableRepos,
+  listIntegrations,
   listWorkspaces,
   type ApiActivatedRepo,
   type ApiAgentSecretStatus,
@@ -53,13 +54,15 @@ import { getSessionToken } from "@/lib/api/session";
 
 import { ConfirmStep } from "./confirm-step";
 import { DoneStep } from "./done-step";
+import { OnboardingHub } from "./hub";
 import { type RepoCardInitial } from "./repo-card";
+import { type WorkspaceDefaultsPanelInitial } from "./workspace-defaults-panel";
 
 export const dynamic = "force-dynamic";
 
-type StepId = "github" | "repos" | "tracker" | "confirm" | "done";
+type StepId = "hub" | "github" | "repos" | "tracker" | "confirm" | "done";
 
-const STEPS: { id: StepId; label: string }[] = [
+const STEPS: { id: Exclude<StepId, "hub" | "done">; label: string }[] = [
   { id: "github", label: "Install GitHub App" },
   { id: "repos", label: "Pick repos" },
   { id: "tracker", label: "Workspace tracker" },
@@ -135,6 +138,7 @@ function pick(raw: string | string[] | undefined): string | undefined {
 function hasExplicitStep(raw: string | string[] | undefined): boolean {
   const v = Array.isArray(raw) ? raw[0] : raw;
   return (
+    v === "hub" ||
     v === "github" ||
     v === "repos" ||
     v === "tracker" ||
@@ -151,6 +155,7 @@ function hasExplicitStep(raw: string | string[] | undefined): boolean {
 function pickStep(raw: string | string[] | undefined): StepId {
   const v = Array.isArray(raw) ? raw[0] : raw;
   if (
+    v === "hub" ||
     v === "repos" ||
     v === "tracker" ||
     v === "confirm" ||
@@ -201,12 +206,21 @@ async function resumeStep(
 ): Promise<StepId> {
   try {
     const activated = await listActivatedRepos(wsId, token);
-    // Activated at least one repo → user is past the linear prefix
-    // and wants to confirm + bootstrap them. The confirm step is its
-    // own landing pad (per-repo cards), and tracker/step-3 is a
-    // sibling they can click back to from the stepper if they want
-    // to re-do OAuth.
-    if (activated.length > 0) return "confirm";
+    if (activated.length > 0) {
+      // Once the workspace has at least one repo with a seed PR
+      // recorded (``installed_bundle_version != null``) we treat
+      // setup as "done enough" and land the operator on the hub.
+      // The hub gives them per-section drill-in instead of a forced
+      // tunnel through every step. Setup-tunnel resume kicks back in
+      // only when no repo has been seeded yet.
+      const anySeeded = activated.some(
+        (r) => r.installed_bundle_version !== null,
+      );
+      if (anySeeded) return "hub";
+      // Activated repos but none seeded yet → tunnel them through
+      // confirm so they finish bootstrapping.
+      return "confirm";
+    }
   } catch {
     /* fall through — treat as unknown */
   }
@@ -355,6 +369,43 @@ export default async function OnboardingPage({
     }
   }
 
+  // Hub step: gather the workspace-level snapshot the cards render
+  // (repo list, default agent profile, tracker integrations). All
+  // failures are non-fatal — empty arrays / null defaults still
+  // render a usable "what's missing" view.
+  let hubRepos: ApiActivatedRepo[] = [];
+  let hubDefaults: WorkspaceDefaultsPanelInitial | null = null;
+  if (step === "hub" && wsId && apiConfigured) {
+    try {
+      const [activated, workspaces, integrations] = await Promise.all([
+        listActivatedRepos(wsId, sessionToken ?? undefined),
+        listWorkspaces(sessionToken ?? undefined),
+        listIntegrations(wsId, sessionToken ?? undefined),
+      ]);
+      hubRepos = activated;
+      const ws = workspaces.find((w) => w.id === wsId);
+      const trackerKinds = integrations
+        .filter((i) =>
+          ["linear", "github", "jira"].includes(i.kind as string),
+        )
+        .filter((i) => i.kind === "github" || i.has_secret)
+        .map((i) => i.kind as string);
+      hubDefaults = {
+        workspaceId: wsId,
+        defaultAgentProfile: ws?.default_agent_profile ?? null,
+        trackerKinds,
+        // Reaching the hub means at least one repo is seeded, which
+        // requires the App install — safe assumption.
+        githubAppInstalled: true,
+      };
+    } catch (err) {
+      if (err instanceof ApiHttpError && err.status === 401) {
+        redirect("/login?next=%2Fonboarding");
+      }
+      console.error("[onboarding] hub load failed", err);
+    }
+  }
+
   return (
     <div className="relative min-h-screen overflow-hidden bg-ink text-white">
       <div
@@ -381,7 +432,9 @@ export default async function OnboardingPage({
       </header>
 
       <main className="mx-auto w-full max-w-5xl px-6 pb-20">
-        {step !== "done" && <Stepper current={step} />}
+        {step !== "done" &&
+          step !== "hub" &&
+          wsId && <Stepper current={step} wsId={wsId} />}
 
         {!apiConfigured && (
           <div className="mb-6 rounded-xl border border-coral/40 bg-coral/10 px-4 py-3 text-xs text-white/85">
@@ -391,6 +444,14 @@ export default async function OnboardingPage({
           </div>
         )}
 
+        {step === "hub" && wsId && hubDefaults && (
+          <OnboardingHub
+            workspaceId={wsId}
+            repos={hubRepos}
+            githubAppInstalled={true}
+            workspaceDefaults={hubDefaults}
+          />
+        )}
         {step === "github" && wsId && (
           <GitHubStep
             wsId={wsId}
@@ -446,38 +507,74 @@ export default async function OnboardingPage({
 // Stepper
 // ---------------------------------------------------------------------------
 
-function Stepper({ current }: { current: StepId }) {
+function Stepper({
+  current,
+  wsId,
+}: {
+  current: Exclude<StepId, "hub" | "done">;
+  wsId: string;
+}) {
+  // Each non-current cell is a link so the operator can hop between
+  // steps after the initial setup tunnel finished. Pre-fix the
+  // stepper was visual-only and operators got stranded on
+  // ``?step=confirm`` with no way back to tracker / repos / github.
   const idx = STEPS.findIndex((s) => s.id === current);
   return (
     <ol className="mb-10 flex flex-wrap items-center gap-x-2 gap-y-3">
       {STEPS.map((s, i) => {
         const state: "done" | "current" | "next" =
           i < idx ? "done" : i === idx ? "current" : "next";
-        return (
-          <li
-            key={s.id}
-            className="flex flex-1 min-w-[7rem] items-center gap-2"
-          >
+        const cellHref =
+          state === "current"
+            ? null
+            : `/onboarding?step=${s.id}&ws=${encodeURIComponent(wsId)}`;
+        const Body = (
+          <>
             <span
               className={
-                "grid h-7 w-7 shrink-0 place-items-center rounded-full border text-[11px] font-bold " +
+                "grid h-7 w-7 shrink-0 place-items-center rounded-full border text-[11px] font-bold transition " +
                 (state === "current"
                   ? "border-aqua/70 bg-aqua/15 text-aqua"
                   : state === "done"
-                  ? "border-aqua/40 bg-aqua/30 text-ink"
-                  : "border-white/15 bg-white/[0.03] text-white/55")
+                  ? "border-aqua/40 bg-aqua/30 text-ink group-hover:border-aqua/70"
+                  : "border-white/15 bg-white/[0.03] text-white/55 group-hover:border-white/35 group-hover:text-white/85")
               }
             >
               {state === "done" ? "✓" : i + 1}
             </span>
             <span
               className={
-                "truncate text-[11px] uppercase tracking-widest " +
-                (state === "current" ? "text-white" : "text-white/40")
+                "truncate text-[11px] uppercase tracking-widest transition " +
+                (state === "current"
+                  ? "text-white"
+                  : "text-white/40 group-hover:text-white/85")
               }
             >
               {s.label}
             </span>
+          </>
+        );
+        return (
+          <li
+            key={s.id}
+            className="flex flex-1 min-w-[7rem] items-center gap-2"
+          >
+            {cellHref ? (
+              <Link
+                href={cellHref}
+                className="group flex min-w-0 items-center gap-2"
+                aria-label={`Go to step: ${s.label}`}
+              >
+                {Body}
+              </Link>
+            ) : (
+              <div
+                className="flex min-w-0 items-center gap-2"
+                aria-current="step"
+              >
+                {Body}
+              </div>
+            )}
             {i < STEPS.length - 1 && (
               <span
                 className="hidden h-px flex-1 bg-white/10 sm:block"
