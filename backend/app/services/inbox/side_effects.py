@@ -530,6 +530,17 @@ async def _publish_knowledge_draft(
             ).scalar_one_or_none()
             if prev is not None and prev.status == BucketArticleStatus.PUBLISHED:
                 prev.status = BucketArticleStatus.SUPERSEDED
+                # Force the supersede UPDATE out before we flip the
+                # incoming row to PUBLISHED. The partial unique index
+                # ``WHERE status='published'`` is non-deferrable, so
+                # if the autoflush ordering happens to emit the new
+                # row's UPDATE first, both rows briefly hold
+                # (bucket_id, slug, status='published') and Postgres
+                # rejects the batch. SQLAlchemy 2.0 orders updates by
+                # PK and our PKs are random UUIDs, so the bug surfaces
+                # whenever the new draft's UUID sorts ahead of the
+                # prior's. One explicit flush kills that flakiness.
+                await session.flush()
 
         article.status = BucketArticleStatus.PUBLISHED
 
@@ -572,6 +583,91 @@ async def _publish_knowledge_draft(
     except Exception as exc:  # noqa: BLE001 — best-effort.
         _record_failure(
             report, kind="knowledge_draft_publish", item=item, exc=exc
+        )
+        return None
+
+
+async def _accept_archive_proposal(
+    session: AsyncSession,
+    item: InboxItem,
+    actor_user_id: uuid.UUID,
+    *,
+    report: SideEffectReport,
+) -> uuid.UUID | None:
+    """Operator accepted a synthesiser-emitted "this article is stale"
+    proposal. Mirror the operator-archive route's dual-flip
+    (``status='archived'`` AND ``archived_at=NOW``) so reader filters
+    treat the row identically to a manual archive. Idempotent.
+
+    Source contract: ``source_table='bucket_articles'`` +
+    ``payload.kind='auto_routed_archive_proposal'``. Anything else is
+    a no-op so the dispatcher can safely call us before falling
+    through to the legacy improvement-accept path.
+    """
+    if item.source_table != "bucket_articles" or item.source_id is None:
+        return None
+    payload = item.payload or {}
+    if payload.get("kind") != "auto_routed_archive_proposal":
+        return None
+    try:
+        article = (
+            await session.execute(
+                select(BucketArticle).where(BucketArticle.id == item.source_id)
+            )
+        ).scalar_one_or_none()
+        if article is None:
+            logger.warning(
+                "inbox side-effect: archive proposal target %s no longer exists",
+                item.source_id,
+            )
+            return None
+        if article.archived_at is not None:
+            # Idempotent: someone (operator route, prior accept) got
+            # there first.
+            return article.id
+        prior_status = article.status
+        article.status = BucketArticleStatus.ARCHIVED
+        article.archived_at = _now()
+        bucket = (
+            await session.execute(
+                select(KnowledgeBucket).where(
+                    KnowledgeBucket.id == article.bucket_id
+                )
+            )
+        ).scalar_one_or_none()
+        if bucket is not None:
+            bucket.updated_at = _now()
+
+        event_payload = {
+            "kind": "knowledge_archive_proposal_accept",
+            "article_id": str(article.id),
+            "bucket_slug": payload.get("bucket_slug"),
+            "article_slug": article.slug,
+            "version": article.version,
+            "prior_status": prior_status,
+            "reason": payload.get("reason") or "",
+        }
+        _add_event(
+            session,
+            item=item,
+            actor_user_id=actor_user_id,
+            action=_EVENT_LEGACY_WRITEBACK,
+            payload=event_payload,
+        )
+        _add_audit(
+            session,
+            item=item,
+            actor_user_id=actor_user_id,
+            suffix="knowledge_archive_proposal_accept",
+            payload=event_payload,
+        )
+        return article.id
+    except Exception as exc:  # noqa: BLE001 — best-effort.
+        _record_failure(
+            report,
+            kind="knowledge_archive_proposal_accept",
+            item=item,
+            exc=exc,
         )
         return None
 
@@ -846,13 +942,20 @@ async def apply_side_effects(
             if wb_id is not None:
                 report.legacy_writebacks.append(wb_id)
         elif action == "accept":
-            # KB-4 (ELS-38): synthesiser-emitted drafts are
-            # source_table='bucket_articles'; the publish path lives
-            # in _publish_knowledge_draft. Legacy improvements still
-            # writeback to the improvements table (source_table='improvements').
-            wb_id = await _publish_knowledge_draft(
+            # KB-4 (ELS-38): synthesiser-emitted drafts and stale-
+            # article proposals are source_table='bucket_articles'.
+            # The two payload kinds want different writebacks, so we
+            # try the proposal-accept first (it bails on the wrong
+            # ``payload.kind``) before falling through to the draft-
+            # publish path. Legacy improvements still writeback to
+            # the improvements table (source_table='improvements').
+            wb_id = await _accept_archive_proposal(
                 session, item, actor_user_id, report=report
             )
+            if wb_id is None:
+                wb_id = await _publish_knowledge_draft(
+                    session, item, actor_user_id, report=report
+                )
             if wb_id is None:
                 wb_id = await _writeback_improvement_accept(
                     session, item, actor_user_id, report=report

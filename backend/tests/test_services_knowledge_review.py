@@ -213,3 +213,132 @@ async def test_legacy_improvement_accept_unaffected(db_session, seed_workspace):
     assert legacy.id in report.legacy_writebacks
     refreshed = await db_session.get(Improvement, legacy.id)
     assert refreshed.decision == "accepted"
+
+
+# ---------------------------------------------------------------------------
+# Archive proposal — the fourth verdict shape
+# ---------------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture
+async def workspace_with_archive_proposal(db_session, seed_workspace):
+    """Workspace + bucket + one PUBLISHED article + matching
+    ``auto_routed_archive_proposal`` InboxItem."""
+    user, _, workspace = seed_workspace
+    bucket = KnowledgeBucket(
+        workspace_id=workspace.id,
+        scope_kind=BucketScope.WORKSPACE,
+        source_kind=BucketSource.EXTERNAL_STATIC,
+        slug="architecture-decisions",
+        name="Architecture Decisions",
+        description=None,
+    )
+    db_session.add(bucket)
+    await db_session.flush()
+
+    article = BucketArticle(
+        bucket_id=bucket.id,
+        slug="workspace-equals-project-tracker-scope",
+        title="ADR: tracker is workspace-scoped",
+        body_md="## Decision\n\nOne tracker per workspace.",
+        content_sha="e" * 64,
+        version=1,
+        status=BucketArticleStatus.PUBLISHED,
+    )
+    db_session.add(article)
+    await db_session.flush()
+
+    item = InboxItem(
+        workspace_id=workspace.id,
+        repo_id=None,
+        type="improvement",
+        title=f"Stale article? {article.title}",
+        summary="Integration.repo_id contradicts the decision",
+        payload={
+            "kind": "auto_routed_archive_proposal",
+            "article_id": str(article.id),
+            "bucket_id": str(bucket.id),
+            "bucket_slug": bucket.slug,
+            "article_slug": article.slug,
+            "version": article.version,
+            "reason": "Integration.repo_id added in cf9f983.",
+            "source_note_count": 2,
+        },
+        status="resolved",  # the disposition route flips this before side-effects run
+        source_table="bucket_articles",
+        source_id=article.id,
+    )
+    db_session.add(item)
+    await db_session.flush()
+    return user, workspace, bucket, article, item
+
+
+@pytest.mark.asyncio
+async def test_accept_archive_proposal_flips_article(
+    db_session, workspace_with_archive_proposal
+):
+    """``accept`` on a synth-emitted archive proposal mirrors the
+    operator-archive route: dual-flip ``status='archived'`` AND
+    ``archived_at`` set."""
+    user, _ws, bucket, article, item = workspace_with_archive_proposal
+    bucket_updated_before = bucket.updated_at
+
+    report = await apply_side_effects(
+        db_session,
+        item=item,
+        action="accept",
+        payload={},
+        actor_user_id=user.id,
+    )
+    assert article.id in report.legacy_writebacks
+    assert report.failures == []
+
+    refreshed = await db_session.get(BucketArticle, article.id)
+    assert refreshed.status == BucketArticleStatus.ARCHIVED
+    assert refreshed.archived_at is not None
+
+    refreshed_bucket = await db_session.get(KnowledgeBucket, bucket.id)
+    assert refreshed_bucket.updated_at > bucket_updated_before
+
+
+@pytest.mark.asyncio
+async def test_accept_archive_proposal_idempotent(
+    db_session, workspace_with_archive_proposal
+):
+    """Re-accepting an already-archived proposal is a no-op."""
+    user, _ws, _bucket, article, item = workspace_with_archive_proposal
+
+    await apply_side_effects(
+        db_session, item=item, action="accept", payload={}, actor_user_id=user.id
+    )
+    first_archived_at = (await db_session.get(BucketArticle, article.id)).archived_at
+    assert first_archived_at is not None
+
+    report = await apply_side_effects(
+        db_session, item=item, action="accept", payload={}, actor_user_id=user.id
+    )
+    assert report.failures == []
+    second_archived_at = (await db_session.get(BucketArticle, article.id)).archived_at
+    # archived_at unchanged on the second accept (idempotent — no
+    # second mutation).
+    assert second_archived_at == first_archived_at
+
+
+@pytest.mark.asyncio
+async def test_dismiss_archive_proposal_leaves_article_alone(
+    db_session, workspace_with_archive_proposal
+):
+    """The proposal's ``dismiss`` path must NOT mutate the target —
+    the operator said "no, this article is fine". Existing
+    ``_archive_knowledge_draft`` only fires on ``payload.kind ==
+    'auto_routed_draft'``, so the dispatcher should fall through to
+    a no-op for our ``auto_routed_archive_proposal`` payload."""
+    user, _ws, _bucket, article, item = workspace_with_archive_proposal
+    pre_status = article.status
+
+    await apply_side_effects(
+        db_session, item=item, action="dismiss", payload={}, actor_user_id=user.id
+    )
+    refreshed = await db_session.get(BucketArticle, article.id)
+    assert refreshed.archived_at is None
+    assert refreshed.status == pre_status

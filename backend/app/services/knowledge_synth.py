@@ -71,11 +71,41 @@ _BODY_CAP = 20_000
 
 @dataclass(slots=True)
 class _SynthDecision:
-    action: str  # 'new' | 'update'
+    """LLM verdict on what to do with a batch of notes vs a bucket.
+
+    Four shapes:
+
+    - ``action='new'`` — notes form a fresh article. ``slug`` /
+      ``title`` / ``body_md`` are the draft.
+    - ``action='update'`` — notes rewrite an existing article.
+      ``supersedes_slug`` names the article being replaced;
+      ``slug`` / ``title`` / ``body_md`` are the new version.
+    - ``action='archive'`` — notes invalidate ``archive_slug`` (an
+      existing article) without producing a replacement (e.g. "the
+      decision was reverted, no successor"). ``slug`` / ``title`` /
+      ``body_md`` may be empty for this branch.
+    - ``action='skip'`` — notes are too thin / off-topic to act on
+      yet; consumed without writing.
+
+    Each branch produces an ``InboxItem`` so the operator approves
+    before any visible write — symmetry with the ``auto_routed_draft``
+    pattern and the same KB-4 review surface.
+    """
+
+    action: str  # 'new' | 'update' | 'archive' | 'skip'
     slug: str
     title: str
     body_md: str
-    supersedes_slug: str | None  # only set when action=='update'
+    # Only set when ``action='update'`` — slug of the article whose
+    # version chain receives the new row via ``supersedes_id``.
+    supersedes_slug: str | None
+    # Only set when ``action='archive'`` — slug of the article to
+    # mark stale once the operator accepts the proposal.
+    archive_slug: str | None = None
+    # Operator-facing rationale for the archive branch. We store it
+    # on the inbox payload so the review surface can render "why is
+    # this proposal here" without re-asking the LLM.
+    archive_reason: str | None = None
 
 
 @dataclass(slots=True)
@@ -86,6 +116,12 @@ class SynthReport:
     drafts_skipped_no_notes: int = 0
     drafts_skipped_no_llm: int = 0
     drafts_skipped_dup_content: int = 0
+    # Number of ``auto_routed_archive_proposal`` inbox rows emitted
+    # this pass. They sit alongside ``drafts_created`` in the cron
+    # log so an operator can tell at a glance whether the pipeline
+    # is producing more new content or more retire decisions.
+    archive_proposals_emitted: int = 0
+    archive_proposals_skipped_unknown_slug: int = 0
     notes_consumed: int = 0
     errors: list[str] = field(default_factory=list)
 
@@ -201,6 +237,25 @@ async def _synthesise_bucket(
     )
     if decision is None:
         report.drafts_skipped_no_llm += 1
+        return
+
+    if decision.action == "archive":
+        # Stale-article path: the LLM saw evidence in the new notes
+        # that an existing article is no longer accurate, but the
+        # notes don't form a replacement on their own. Produce an
+        # operator-facing inbox proposal (kind=auto_routed_archive_proposal)
+        # — accept flips the named article to ``archived`` via the
+        # same dual-flip the operator-archive route uses; dismiss
+        # leaves it alone.
+        await _emit_archive_proposal(
+            session,
+            workspace_id=workspace_id,
+            bucket=bucket,
+            decision=decision,
+            existing=existing,
+            pending=pending,
+            report=report,
+        )
         return
 
     body_sha = hashlib.sha256(decision.body_md.encode("utf-8")).hexdigest()
@@ -387,6 +442,94 @@ async def _mark_notes_consumed(
         n.context = ctx
 
 
+async def _emit_archive_proposal(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    bucket: KnowledgeBucket,
+    decision: _SynthDecision,
+    existing: list[BucketArticle],
+    pending: list[Improvement],
+    report: SynthReport,
+) -> None:
+    """Drop an ``auto_routed_archive_proposal`` inbox row for the
+    operator. Accept → article gets archived via the existing dual-
+    flip in the inbox-side-effects layer; dismiss → no-op.
+
+    We resolve ``decision.archive_slug`` against the ``existing``
+    snapshot the LLM was shown — that's the single source of truth
+    for what was on its desk. If the slug doesn't match any of those
+    rows we drop the proposal (the LLM hallucinated a slug); the
+    notes still get marked consumed so the next tick doesn't loop.
+    """
+    target = next(
+        (a for a in existing if a.slug == decision.archive_slug),
+        None,
+    )
+    if target is None:
+        report.archive_proposals_skipped_unknown_slug += 1
+        log.info(
+            "knowledge_synth: archive proposal for unknown slug "
+            "workspace=%s bucket=%s slug=%s",
+            workspace_id,
+            bucket.slug,
+            decision.archive_slug,
+        )
+        # Notes still consumed — without this they'd retry forever.
+        # Use a sentinel UUID so the consumed-flag is set; downstream
+        # readers ignore the article id when looking at archive rows.
+        await _mark_notes_consumed(session, pending, uuid.uuid4())
+        report.notes_consumed += len(pending)
+        return
+
+    bucket.updated_at = datetime.now(timezone.utc)
+    payload = {
+        "kind": "auto_routed_archive_proposal",
+        "article_id": str(target.id),
+        "bucket_id": str(bucket.id),
+        "bucket_slug": bucket.slug,
+        "article_slug": target.slug,
+        "version": target.version,
+        "reason": decision.archive_reason or "",
+        "source_note_count": len(pending),
+        "source_note_ids": [str(n.id) for n in pending],
+    }
+    session.add(
+        InboxItem(
+            workspace_id=workspace_id,
+            repo_id=None,
+            type="improvement",
+            title=f"Stale article? {target.title}"[:300],
+            summary=(decision.archive_reason or "")[:1000] or None,
+            payload=payload,
+            status="new",
+            source_table="bucket_articles",
+            source_id=target.id,
+            intake_handle=None,
+            intake_reason="knowledge_archive_review",
+        )
+    )
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=None,
+            actor_token_id=None,
+            action="knowledge.article.archive_proposed",
+            target_kind="bucket_article",
+            target_id=str(target.id),
+            payload={
+                "bucket_slug": bucket.slug,
+                "article_slug": target.slug,
+                "reason": decision.archive_reason or "",
+                "source_note_count": len(pending),
+            },
+        )
+    )
+    await _mark_notes_consumed(session, pending, target.id)
+    report.notes_consumed += len(pending)
+    report.archive_proposals_emitted += 1
+
+
 async def _maybe_embed(title: str, body: str) -> list[float] | None:
     text = f"{title}\n\n{body}"
     try:
@@ -403,32 +546,41 @@ async def _maybe_embed(title: str, body: str) -> list[float] | None:
 
 _SYNTH_SYSTEM_PROMPT = """You are the synthesiser stage of a knowledge pipeline.
 You receive a list of new "notes" routed into one knowledge bucket and a
-summary of the bucket's already-published articles. Decide whether the
-notes belong as a **new** article or as an **update** to an existing one,
-then produce the draft.
+summary of the bucket's already-published articles. Decide one of four
+actions:
 
-Rules:
+1. ``"update"`` — notes overlap heavily with an existing article (same
+   topic, same decision, same recipe). Rewrite that article's body to
+   incorporate the new content; do NOT append an "addendum" — the
+   operator-review surface will diff old vs new for you. Set
+   ``supersedes_slug`` to the article being replaced.
+2. ``"archive"`` — notes show that an existing article is now stale
+   (decision reverted, file removed, contract redesigned) but they
+   don't form a replacement on their own. Set ``archive_slug`` to
+   the article to retire and ``archive_reason`` to a one-sentence
+   rationale citing the superseding evidence (commit / ADR / decision
+   the notes describe). Don't pick this when the notes are merely
+   tangential — only when continued reading of the article would
+   actively mislead.
+3. ``"new"`` — notes describe content with no existing overlap. Pick
+   a fresh slug (lowercase, kebab-case, ``[a-z0-9-]``, ≤120 chars,
+   durable not date-stamped).
+4. ``"skip"`` — notes are too thin / off-topic for any draft.
 
-- If the notes overlap heavily with one of the existing articles
-  (same topic, same decision, same recipe), choose ``"update"`` and
-  set ``supersedes_slug`` to that article's slug. Rewrite the body
-  to incorporate the new content; do NOT just append "addendum" —
-  the operator-review surface will diff old vs new for you.
-- Otherwise return ``"new"`` with a fresh slug. Slugs must be
-  lowercase, kebab-case, only ``[a-z0-9-]``, ≤120 chars; pick
-  something durable, not date-stamped.
+For ``new`` and ``update`` only:
 - Title: ≤ 240 chars, declarative.
 - body_md: structured Markdown. Lead with a one-sentence summary,
   then sections as appropriate (Decision / Why / How / Constraints /
   etc.). Aim for the depth of an ADR or a runbook entry — not a
   one-liner.
 
-Return strictly one JSON object:
-{"action":"new"|"update","slug":"...","title":"...","body_md":"...",
- "supersedes_slug": "..." | null}
+Return strictly one JSON object. Allowed shapes:
 
-If the notes are too thin / off-topic for any draft, return:
-{"action":"skip"}
+  {"action":"new","slug":"...","title":"...","body_md":"..."}
+  {"action":"update","slug":"...","title":"...","body_md":"...",
+   "supersedes_slug":"..."}
+  {"action":"archive","archive_slug":"...","archive_reason":"..."}
+  {"action":"skip"}
 """
 
 
@@ -463,8 +615,34 @@ async def _ask_llm_synthesis(
         return None
 
     action = obj.get("action")
-    if action not in ("new", "update"):
+    if action not in ("new", "update", "archive"):
         return None
+
+    if action == "archive":
+        # Archive proposals only need a slug + reason; body fields
+        # are irrelevant. Bail if the slug doesn't normalise — we
+        # don't want to ship an archive proposal with no target.
+        archive_slug_raw = obj.get("archive_slug")
+        if not isinstance(archive_slug_raw, str):
+            return None
+        archive_slug = _normalise_slug(archive_slug_raw)
+        if not archive_slug:
+            return None
+        reason_raw = obj.get("archive_reason")
+        archive_reason = (
+            reason_raw.strip()
+            if isinstance(reason_raw, str) and reason_raw.strip()
+            else None
+        )
+        return _SynthDecision(
+            action="archive",
+            slug="",
+            title="",
+            body_md="",
+            supersedes_slug=None,
+            archive_slug=archive_slug,
+            archive_reason=archive_reason,
+        )
 
     slug = obj.get("slug")
     title = obj.get("title")

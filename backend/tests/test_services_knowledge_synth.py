@@ -318,3 +318,176 @@ async def test_synth_idempotent_on_dup_content(
         )
     ).scalars().all()
     assert len(arts) == 1
+
+
+# ---------------------------------------------------------------------------
+# Archive action — pin the new fourth verdict shape
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_synth_archive_emits_inbox_proposal(
+    db_session, workspace_with_routed_notes
+):
+    """LLM action='archive' on an existing slug → InboxItem with
+    payload.kind='auto_routed_archive_proposal' targeting the named
+    article. No new BucketArticle is written — the proposal is the
+    operator-review surface, not a draft."""
+    from backend.app.db.models.inbox import InboxItem
+    from backend.app.db.models.tenancy import AuditLog
+
+    workspace, bucket, notes = workspace_with_routed_notes
+
+    # Seed the article the LLM will vote to archive.
+    target = BucketArticle(
+        bucket_id=bucket.id,
+        slug="workspace-equals-project-tracker-scope",
+        title="ADR: tracker is workspace-scoped",
+        body_md="## Decision\n\nOne tracker per workspace, no per-repo override.",
+        content_sha="b" * 64,
+        version=1,
+        status=BucketArticleStatus.PUBLISHED,
+    )
+    db_session.add(target)
+    await db_session.flush()
+
+    stub = _StubLLMClient(
+        json.dumps(
+            {
+                "action": "archive",
+                "archive_slug": "workspace-equals-project-tracker-scope",
+                "archive_reason": (
+                    "Integration.repo_id was added in commit cf9f983 — "
+                    "per-repo trackers now exist."
+                ),
+            }
+        )
+    )
+
+    report = await synthesise_workspace(
+        db_session, workspace_id=workspace.id, llm_client=stub
+    )
+    assert report.archive_proposals_emitted == 1
+    assert report.drafts_created == 0
+    assert report.notes_consumed == 2
+
+    # Article is NOT yet archived — that's the operator's call.
+    fresh_target = await db_session.get(BucketArticle, target.id)
+    assert fresh_target.archived_at is None
+    assert fresh_target.status == BucketArticleStatus.PUBLISHED
+
+    # InboxItem with the new payload kind exists.
+    items = (
+        await db_session.execute(
+            select(InboxItem).where(InboxItem.workspace_id == workspace.id)
+        )
+    ).scalars().all()
+    assert len(items) == 1
+    item = items[0]
+    assert item.payload["kind"] == "auto_routed_archive_proposal"
+    assert item.payload["article_id"] == str(target.id)
+    assert item.payload["bucket_slug"] == bucket.slug
+    assert "Integration.repo_id" in item.payload["reason"]
+    assert item.source_table == "bucket_articles"
+    assert item.source_id == target.id
+    assert item.intake_reason == "knowledge_archive_review"
+
+    # Audit row mirrors the proposal so a forensic sweep can find it.
+    audit = (
+        await db_session.execute(
+            select(AuditLog).where(
+                AuditLog.action == "knowledge.article.archive_proposed",
+                AuditLog.target_id == str(target.id),
+            )
+        )
+    ).scalars().all()
+    assert len(audit) == 1
+
+    # Notes consumed against the existing target id.
+    for n in notes:
+        await db_session.refresh(n)
+        assert n.context["synthesised_into_article_id"] == str(target.id)
+
+
+@pytest.mark.asyncio
+async def test_synth_archive_skipped_for_unknown_slug(
+    db_session, workspace_with_routed_notes
+):
+    """LLM hallucinated ``archive_slug`` — slug doesn't exist in the
+    bucket. We still consume the notes (otherwise the next tick
+    would loop) but emit no inbox row and no audit row."""
+    from backend.app.db.models.inbox import InboxItem
+    from backend.app.db.models.tenancy import AuditLog
+
+    workspace, bucket, notes = workspace_with_routed_notes
+
+    stub = _StubLLMClient(
+        json.dumps(
+            {
+                "action": "archive",
+                "archive_slug": "i-do-not-exist",
+                "archive_reason": "irrelevant",
+            }
+        )
+    )
+
+    report = await synthesise_workspace(
+        db_session, workspace_id=workspace.id, llm_client=stub
+    )
+    assert report.archive_proposals_emitted == 0
+    assert report.archive_proposals_skipped_unknown_slug == 1
+    assert report.notes_consumed == 2
+
+    inbox_rows = (
+        await db_session.execute(
+            select(InboxItem).where(InboxItem.workspace_id == workspace.id)
+        )
+    ).scalars().all()
+    assert inbox_rows == []
+    audit_rows = (
+        await db_session.execute(
+            select(AuditLog).where(
+                AuditLog.action == "knowledge.article.archive_proposed"
+            )
+        )
+    ).scalars().all()
+    assert audit_rows == []
+
+    # Notes still marked consumed so the next tick doesn't redrive.
+    for n in notes:
+        await db_session.refresh(n)
+        assert n.context["synthesised_into_article_id"] is not None
+
+
+@pytest.mark.asyncio
+async def test_synth_skip_action_writes_nothing(
+    db_session, workspace_with_routed_notes
+):
+    """action='skip' is the LLM's escape hatch for thin / off-topic
+    notes. It used to be parsed via the ``action not in (new, update)``
+    fast-path; with the new ``archive`` branch we want to make sure
+    skip still writes nothing and registers as ``no_llm`` in the
+    report (matches pre-fix behaviour)."""
+    from backend.app.db.models.inbox import InboxItem
+
+    workspace, bucket, _notes = workspace_with_routed_notes
+    stub = _StubLLMClient(json.dumps({"action": "skip"}))
+
+    report = await synthesise_workspace(
+        db_session, workspace_id=workspace.id, llm_client=stub
+    )
+    assert report.drafts_created == 0
+    assert report.archive_proposals_emitted == 0
+
+    arts = (
+        await db_session.execute(
+            select(BucketArticle).where(BucketArticle.bucket_id == bucket.id)
+        )
+    ).scalars().all()
+    assert arts == []
+    inbox_rows = (
+        await db_session.execute(
+            select(InboxItem).where(InboxItem.workspace_id == workspace.id)
+        )
+    ).scalars().all()
+    assert inbox_rows == []
