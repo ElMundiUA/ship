@@ -3503,6 +3503,16 @@ class ToolBox:
         for article, slug, name, dist in rows:
             results.append(
                 {
+                    # ``article_id`` is the load-bearing handle for any
+                    # follow-up tool call (e.g. ``archive_bucket_article``).
+                    # Pre-fix the result shape was missing it, so the
+                    # agent had to round-trip through
+                    # ``get_knowledge_bucket`` just to recover an id it
+                    # had already loaded — produced a visible
+                    # search → ship-choice → not_found → re-list dance
+                    # the operator caught in 2026-05-02 dogfood.
+                    "article_id": str(article.id),
+                    "article_slug": article.slug,
                     "bucket_slug": slug,
                     "bucket_name": name,
                     "title": article.title,

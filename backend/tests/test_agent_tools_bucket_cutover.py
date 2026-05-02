@@ -152,6 +152,13 @@ async def test_search_buckets_reads_from_articles(
     assert hit["title"] == "Auth notes"
     assert "Refresh tokens" in hit["summary"]
     assert hit["similarity"] > 0.9
+    # ``article_id`` + ``article_slug`` are required so a follow-up
+    # mutation tool (archive_bucket_article, etc.) can pipe straight
+    # from search results without a second round-trip through
+    # get_knowledge_bucket.
+    assert "article_id" in hit
+    uuid.UUID(hit["article_id"])  # parses as UUID
+    assert hit["article_slug"]
 
 
 @pytest.mark.asyncio
