@@ -131,8 +131,14 @@ async function load(
     }
 
     const target = pickWorkspace(ws, resolved);
-    // The artifact-repos call may 404 in older deployments; treat it as
-    // empty rather than failing the whole page.
+    // Every secondary endpoint here is best-effort: if any single one
+    // hiccups (transient 500 during a backend rollout, stale build
+    // returning 404, API throttle), we still want to render the rest
+    // of the settings page rather than collapsing the whole shell into
+    // an "unavailable" placeholder. The pre-rollout behaviour was that
+    // listArtifactRepos returning 500 mid-deploy would tank the page,
+    // hiding the General + Default-agent cards that don't depend on
+    // that call at all.
     const activatedRepos = await listActivatedRepos(target.id, token).catch(
       () => [] as ApiActivatedRepo[],
     );
@@ -144,21 +150,10 @@ async function load(
         ]),
       ),
     );
-    let repos: ApiArtifactRepo[] = [];
-    try {
-      repos = await listArtifactRepos(target.id, token);
-    } catch (err) {
-      if (!(err instanceof ApiHttpError) || err.status !== 404) throw err;
-    }
-    let tokens: ApiTokenInfo[] = [];
-    try {
-      tokens = await listTokens(token);
-    } catch (err) {
-      // Token listing is gated behind the same auth as the rest; on a stale
-      // build /v1/auth/tokens may 404 — fall back to an empty list rather
-      // than crashing the whole page.
-      if (!(err instanceof ApiHttpError) || err.status !== 404) throw err;
-    }
+    const repos = await listArtifactRepos(target.id, token).catch(
+      () => [] as ApiArtifactRepo[],
+    );
+    const tokens = await listTokens(token).catch(() => [] as ApiTokenInfo[]);
     return {
       source: "live",
       workspace: target,
