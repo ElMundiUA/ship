@@ -13,7 +13,8 @@ import {
 import { FlowSchedulePanel } from "./flow-schedule-panel";
 import { ProcessGraphOverview } from "./process-graph-overview";
 import { ProcessEditorWorkspace } from "./process-editor-workspace";
-import { TrackerMappingPanel } from "./tracker-mapping-panel";
+// TrackerMappingPanel was killed in Block A.5; the projection table now
+// lives directly under the Flow swim-lane canvas in process-editor-workspace.
 import { RepoSelector } from "./repo-selector";
 import {
   ApiHttpError,
@@ -47,7 +48,7 @@ import { pickWorkspace, toAppShellWorkspaces } from "@/lib/workspace-scope";
 export const dynamic = "force-dynamic";
 
 type SearchParams = { [key: string]: string | string[] | undefined };
-type ProcessTab = "flow" | "schedule" | "mapping";
+type ProcessTab = "flow" | "schedule";
 
 export default async function ProcessPage({
   searchParams,
@@ -531,19 +532,17 @@ function ProcessTabs({
       <TabLink href={hrefFor("schedule")} active={selected === "schedule"}>
         Capacity
       </TabLink>
-      <TabLink href={hrefFor("mapping")} active={selected === "mapping"}>
-        Tracker
-      </TabLink>
     </div>
   );
 }
 
 function parseProcessTab(value: string | string[] | undefined): ProcessTab {
   if (value === "schedule") return "schedule";
-  // Routines tab was killed in Block 2 — old deep links land in
-  // Capacity, where the routines now live alongside specialists.
+  // Routines tab was killed in Block 2 — old deep links land in Capacity.
   if (value === "routines") return "schedule";
-  if (value === "mapping" || value === "tracker") return "mapping";
+  // Tracker tab was killed in Block A.5 — projection table now lives
+  // under the Flow canvas, so old deep links land back on Flow.
+  if (value === "mapping" || value === "tracker") return "flow";
   return "flow";
 }
 
@@ -634,15 +633,7 @@ async function EditorContent({
           locked ? "pointer-events-none select-none opacity-60" : "",
         ].join(" ")}
       >
-        {selectedTab === "flow" ? (
-          <ProcessEditorWorkspace
-            workspaceId={workspaceId}
-            process={process}
-            selectedStateId={selectedStateId}
-            repoId={repoId}
-            config={config}
-          />
-        ) : selectedTab === "schedule" ? (
+        {selectedTab === "schedule" ? (
           <FlowSchedulePanel
             workspaceId={workspaceId}
             process={process}
@@ -650,12 +641,18 @@ async function EditorContent({
             config={config}
           />
         ) : (
-          <TrackerMappingPanel
+          <ProcessEditorWorkspace
             workspaceId={workspaceId}
             process={process}
+            selectedStateId={selectedStateId}
             repoId={repoId}
             config={config}
-            trackerKind={trackerKind ?? undefined}
+            trackerKind={
+              trackerKind === "linear" || trackerKind === "jira" ||
+              trackerKind === "github" || trackerKind === "notion"
+                ? trackerKind
+                : undefined
+            }
           />
         )}
       </fieldset>

@@ -14,6 +14,7 @@ import { ProcessConfigProposalFields } from "./process-config-proposal-fields";
 import { ProcessReviewSummary, processChangeSummary } from "./process-review-summary";
 import { BASE_SPECIALIST_CATALOG } from "./specialist-catalog";
 import { StateEditor, type SpecialistOption } from "./state-editor";
+import { TrackerProjectionsTable } from "./tracker-projections-table";
 
 export function ProcessEditorWorkspace({
   workspaceId,
@@ -22,6 +23,7 @@ export function ProcessEditorWorkspace({
   repoId,
   config,
   tabs,
+  trackerKind,
 }: {
   workspaceId: string;
   process: ApiProcess;
@@ -29,6 +31,9 @@ export function ProcessEditorWorkspace({
   repoId?: string;
   config: ApiRepoConfig | null;
   tabs?: ReactNode;
+  /** Workspace's bound tracker kind (linear/jira/github/notion). Picks
+   *  which column the projection table opens on by default. */
+  trackerKind?: "linear" | "jira" | "github" | "notion";
 }) {
   const [processName, setProcessName] = useState(process.name);
   const [processPrimary, setProcessPrimary] = useState(process.primary);
@@ -335,6 +340,17 @@ export function ProcessEditorWorkspace({
           embedded
           onStateChange={updateState}
           onDeleteState={deleteState}
+        />
+      </div>
+
+      {/* Tracker projection table — replaces the dedicated Tracker tab.
+          Each row is one of the seven canonical lifecycle states; columns
+          tab between the four supported trackers. Defaults from the
+          adapter ship "all-mapped" out of the box. */}
+      <div className="border-t border-white/10 bg-black/20 p-4">
+        <TrackerProjectionsTable
+          trackerMapping={processDraft.tracker_mapping ?? {}}
+          defaultTracker={trackerKind}
         />
       </div>
     </section>
