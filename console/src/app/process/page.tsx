@@ -19,6 +19,7 @@ import {
   ApiHttpError,
   ApiUnavailableError,
   type ApiActivatedRepo,
+  type ApiNativeIntegration,
   type ApiProcess,
   type ApiProcessList,
   type ApiProcessState,
@@ -27,10 +28,17 @@ import {
   getProcess,
   isApiConfigured,
   listActivatedRepos,
+  listIntegrations,
+  listNativeIntegrations,
   listProcesses,
   listWorkspaces,
 } from "@/lib/api/client";
-import type { ApiWorkspace } from "@/lib/api/types";
+import {
+  EditorLockedBanner,
+  isEditorLocked,
+  type EditorPrereqStatus,
+} from "./editor-locked-banner";
+import type { ApiIntegration, ApiWorkspace } from "@/lib/api/types";
 import { getSessionToken } from "@/lib/api/session";
 import { getResolvedWorkspaceId } from "@/lib/workspace-resolve.server";
 import { pickWorkspace, toAppShellWorkspaces } from "@/lib/workspace-scope";
@@ -88,6 +96,7 @@ type LiveProcess = {
   selectedRepo: ApiActivatedRepo | null;
   config: ApiRepoConfig | null;
   configSource: ProcessConfigSource;
+  prereqStatus: EditorPrereqStatus;
 };
 
 type LiveProcessGraph = {
@@ -127,19 +136,31 @@ async function loadLiveProcess(
         : processList.primary_process_id || "development";
     const selectedRepo =
       repos.find((repo) => repo.id === selectedRepoId) ?? repos[0] ?? null;
-    const [projectedProcess, config] = await Promise.all([
-      getProcess(workspace.id, resolvedProcessId, token, {
-        repoId: selectedRepo?.id,
-      }),
-      selectedRepo
-        ? getRepoConfig(workspace.id, selectedRepo.id, token).catch(
-            () => null as ApiRepoConfig | null,
-          )
-        : Promise.resolve(null),
-    ]);
+    const [projectedProcess, config, integrations, nativeIntegrations] =
+      await Promise.all([
+        getProcess(workspace.id, resolvedProcessId, token, {
+          repoId: selectedRepo?.id,
+        }),
+        selectedRepo
+          ? getRepoConfig(workspace.id, selectedRepo.id, token).catch(
+              () => null as ApiRepoConfig | null,
+            )
+          : Promise.resolve(null),
+        listIntegrations(workspace.id, token).catch(
+          () => [] as ApiIntegration[],
+        ),
+        listNativeIntegrations(workspace.id, token).catch(
+          () => [] as ApiNativeIntegration[],
+        ),
+      ]);
     const repoProcess = processFromRepoConfig(config, projectedProcess);
     const process = repoProcess ?? projectedProcess;
     const configSource = selectConfigSource(config, repoProcess);
+    const prereqStatus = computePrereqStatus(
+      workspace,
+      integrations,
+      nativeIntegrations,
+    );
     return {
       workspace,
       allWorkspaces: workspaces,
@@ -148,6 +169,7 @@ async function loadLiveProcess(
       selectedRepo,
       config,
       configSource,
+      prereqStatus,
     };
   } catch (err) {
     if (err instanceof ApiHttpError && err.status === 401) return "unauthorized";
@@ -235,6 +257,7 @@ function renderProcessPage({
   selectedStateId,
   selectedTab,
   reason,
+  prereqStatus,
 }: {
   workspace: Pick<ApiWorkspace, "id" | "name" | "slug">;
   allWorkspaces?: ApiWorkspace[];
@@ -246,7 +269,10 @@ function renderProcessPage({
   selectedStateId?: string;
   selectedTab: ProcessTab;
   reason?: string;
+  prereqStatus?: EditorPrereqStatus;
 }) {
+  const locked = prereqStatus ? isEditorLocked(prereqStatus) : false;
+  const multiWs = (allWorkspaces?.length ?? 0) > 1;
   return (
     <AppShell
       title="Process"
@@ -266,41 +292,57 @@ function renderProcessPage({
         />
         <ProcessNotice reason={reason} />
         <ConfigSourceBanner config={config ?? null} source={configSource ?? "fallback"} />
+        {prereqStatus && locked && (
+          <EditorLockedBanner
+            workspaceId={workspace.id}
+            multiWorkspace={multiWs}
+            status={prereqStatus}
+          />
+        )}
         <ProcessTabs
           selected={selectedTab}
           processId={process.id}
           repoId={selectedRepo?.id}
         />
-        {selectedTab === "flow" ? (
-          <ProcessEditorWorkspace
-            workspaceId={workspace.id}
-            process={process}
-            selectedStateId={selectedStateId}
-            repoId={selectedRepo?.id}
-            config={config ?? null}
-          />
-        ) : selectedTab === "schedule" ? (
-          <FlowSchedulePanel
-            workspaceId={workspace.id}
-            process={process}
-            repoId={selectedRepo?.id}
-            config={config ?? null}
-          />
-        ) : selectedTab === "mapping" ? (
-          <TrackerMappingPanel
-            workspaceId={workspace.id}
-            process={process}
-            repoId={selectedRepo?.id}
-            config={config ?? null}
-          />
-        ) : (
-          <RoutinesPanel
-            workspaceId={workspace.id}
-            process={process}
-            repoId={selectedRepo?.id}
-            config={config ?? null}
-          />
-        )}
+        <fieldset
+          disabled={locked}
+          aria-disabled={locked}
+          className={[
+            "border-0 p-0 m-0 min-w-0",
+            locked ? "pointer-events-none select-none opacity-60" : "",
+          ].join(" ")}
+        >
+          {selectedTab === "flow" ? (
+            <ProcessEditorWorkspace
+              workspaceId={workspace.id}
+              process={process}
+              selectedStateId={selectedStateId}
+              repoId={selectedRepo?.id}
+              config={config ?? null}
+            />
+          ) : selectedTab === "schedule" ? (
+            <FlowSchedulePanel
+              workspaceId={workspace.id}
+              process={process}
+              repoId={selectedRepo?.id}
+              config={config ?? null}
+            />
+          ) : selectedTab === "mapping" ? (
+            <TrackerMappingPanel
+              workspaceId={workspace.id}
+              process={process}
+              repoId={selectedRepo?.id}
+              config={config ?? null}
+            />
+          ) : (
+            <RoutinesPanel
+              workspaceId={workspace.id}
+              process={process}
+              repoId={selectedRepo?.id}
+              config={config ?? null}
+            />
+          )}
+        </fieldset>
       </div>
     </AppShell>
   );
@@ -448,4 +490,46 @@ function renderDownState(details?: string) {
       <ApiUnavailable scope="process" details={details} />
     </AppShell>
   );
+}
+
+const TRACKER_KINDS = new Set(["linear", "jira", "github"]);
+
+function computePrereqStatus(
+  workspace: ApiWorkspace,
+  integrations: ApiIntegration[],
+  nativeIntegrations: ApiNativeIntegration[],
+): EditorPrereqStatus {
+  const trackers = integrations.filter(
+    (i) => TRACKER_KINDS.has(i.kind) && i.status === "ok",
+  );
+  const orchestrators = nativeIntegrations.filter(
+    (n) => n.capabilities.includes("orchestrator") && n.status === "ready",
+  );
+  const agent = workspace.default_agent_profile?.trim() ?? "";
+  return {
+    tracker: trackers.length > 0
+      ? {
+          ok: true,
+          detail: `Connected: ${trackers.map((t) => t.kind).join(", ")}`,
+        }
+      : {
+          ok: false,
+          detail: "No active Linear / Jira / GitHub Issues binding for this workspace.",
+        },
+    orchestrator: orchestrators.length > 0
+      ? {
+          ok: true,
+          detail: `Ready: ${orchestrators.map((o) => o.provider).join(", ")}`,
+        }
+      : {
+          ok: false,
+          detail: "No CI orchestrator (GitHub Actions / Azure DevOps) ready for this workspace.",
+        },
+    default_agent: agent
+      ? { ok: true, detail: `Workspace default: ${agent}` }
+      : {
+          ok: false,
+          detail: "Workspace hasn't picked a default agent profile yet.",
+        },
+  };
 }
