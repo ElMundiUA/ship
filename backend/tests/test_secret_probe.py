@@ -75,7 +75,16 @@ def _patch_client(
 async def test_linear_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     stub = _patch_client(
         monkeypatch,
-        _StubResponse(json_body={"data": {"viewer": {"id": "u1", "email": "a@b"}}}),
+        _StubResponse(
+            json_body={
+                "data": {
+                    "viewer": {"id": "u1", "email": "a@b"},
+                    # Probe now exercises ``Read issues`` scope too —
+                    # both branches must succeed for status=ok.
+                    "issues": {"nodes": [{"id": "iss-1"}]},
+                }
+            }
+        ),
     )
     status, message = await secret_probe.probe_one("linear", "lin_api_x", {})
     assert status == "ok"
@@ -83,6 +92,9 @@ async def test_linear_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     method, url, kwargs = stub.calls[0]
     assert (method, url) == ("POST", "https://api.linear.app/graphql")
     assert kwargs["headers"]["Authorization"] == "lin_api_x"
+    # Probe is one round-trip: viewer + issues batched in a single
+    # query string so we don't double the cron's wall-clock per row.
+    assert "issues(first: 1)" in kwargs["json"]["query"]
 
 
 @pytest.mark.asyncio
@@ -102,6 +114,64 @@ async def test_linear_graphql_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     status, message = await secret_probe.probe_one("linear", "x", {})
     assert status == "error"
     assert message is not None and "Not authenticated" in message
+
+
+@pytest.mark.asyncio
+async def test_linear_partial_scope_issues_returns_null(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Token with ``viewer`` but without ``Read issues`` scope.
+
+    Linear's GraphQL endpoint resolves ``viewer`` and returns ``null``
+    for the unauthorized field instead of a top-level ``errors``.
+    Pre-fix the probe accepted this as ``ok`` and the integrations
+    page kept lying to operators while every downstream
+    ``list_tickets`` call returned 401. The fix flips this to
+    ``error`` so the operator can see the partial-scope failure on
+    the integrations page and re-authorise.
+    """
+    _patch_client(
+        monkeypatch,
+        _StubResponse(
+            json_body={
+                "data": {
+                    "viewer": {"id": "u1", "email": "a@b"},
+                    "issues": None,
+                }
+            }
+        ),
+    )
+    status, message = await secret_probe.probe_one("linear", "x", {})
+    assert status == "error"
+    assert message is not None and "issues" in message.lower()
+
+
+@pytest.mark.asyncio
+async def test_linear_graphql_path_surfaces_in_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When Linear returns errors with a ``path`` (typical for
+    field-level scope failures), the probe surfaces both message and
+    path so the operator sees *which* field failed."""
+    _patch_client(
+        monkeypatch,
+        _StubResponse(
+            json_body={
+                "data": {"viewer": {"id": "u1", "email": "a@b"}},
+                "errors": [
+                    {
+                        "message": "You do not have access to read issues.",
+                        "path": ["issues"],
+                    }
+                ],
+            }
+        ),
+    )
+    status, message = await secret_probe.probe_one("linear", "x", {})
+    assert status == "error"
+    assert message is not None
+    assert "do not have access" in message
+    assert "issues" in message  # path leaked through
 
 
 @pytest.mark.asyncio

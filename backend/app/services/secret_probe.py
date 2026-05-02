@@ -82,7 +82,25 @@ def _short(message: str, *, limit: int = 480) -> str:
 
 
 async def _probe_linear(secret: str, _config: Mapping[str, Any]) -> ProbeResult:
-    """Linear personal API keys are sent verbatim in ``Authorization``."""
+    """Probe a Linear secret end-to-end.
+
+    Runs **two** GraphQL queries in one batch:
+
+    1. ``viewer { id email }`` — basic auth check. A token that fails
+       this is straightforwardly broken (revoked / wrong workspace).
+    2. ``issues(first: 1) { nodes { id } }`` — exercises the
+       ``Read issues`` scope, which is what every downstream Ship
+       feature actually needs (``list_tickets``, agent ``runs_query``,
+       project anchors, navigator ``list_tickets`` tool).
+
+    Without (2) a Linear OAuth token that lost the ``read`` scope or
+    a personal API key whose permissions narrowed mid-rotation can
+    silently keep ``status=ok`` while every downstream call returns
+    401. We saw this in dogfood on 2026-05-02: the integrations page
+    reported ``ok`` while the navigator ``list_tickets`` call
+    returned ``Linear API returned 401``. Sending both queries in
+    one ``_alias`` batch keeps the probe at one HTTP round-trip.
+    """
     if not secret:
         return "error", "secret is empty"
     headers = {
@@ -95,7 +113,14 @@ async def _probe_linear(secret: str, _config: Mapping[str, Any]) -> ProbeResult:
             res = await client.post(
                 "https://api.linear.app/graphql",
                 headers=headers,
-                json={"query": "query { viewer { id email } }"},
+                json={
+                    "query": (
+                        "query ShipLinearProbe { "
+                        "viewer { id email } "
+                        "issues(first: 1) { nodes { id } } "
+                        "}"
+                    )
+                },
             )
     except httpx.HTTPError as exc:
         return "error", _short(f"network: {exc!s}")
@@ -112,10 +137,30 @@ async def _probe_linear(secret: str, _config: Mapping[str, Any]) -> ProbeResult:
     errors = body.get("errors") if isinstance(body, dict) else None
     if errors:
         first = errors[0] if isinstance(errors, list) and errors else errors
-        return "error", _short(f"linear graphql error: {first!s}")
-    viewer = (body or {}).get("data", {}).get("viewer")
+        # Most informative bit Linear returns on a partial-scope token
+        # is the message + path. Surface them so the operator sees
+        # "missing read access on issues" rather than just "graphql
+        # error" — they need to know which scope to re-authorise.
+        msg = ""
+        if isinstance(first, dict):
+            msg = str(first.get("message") or first)
+            path = first.get("path")
+            if path:
+                msg = f"{msg} (path={path})"
+        else:
+            msg = str(first)
+        return "error", _short(f"linear graphql error: {msg}")
+    data = (body or {}).get("data") or {}
+    viewer = data.get("viewer")
     if not isinstance(viewer, dict) or not viewer.get("id"):
         return "error", "linear viewer query returned no id"
+    issues = data.get("issues")
+    if not isinstance(issues, dict) or "nodes" not in issues:
+        # Scope-narrowed tokens often resolve to ``data.issues = null``
+        # without a top-level ``errors`` block. Treat that the same as
+        # a partial-permission failure so downstream ``list_tickets``
+        # 401s become discoverable on the integrations page.
+        return "error", "linear issues query returned no payload (missing read scope?)"
     return "ok", None
 
 
