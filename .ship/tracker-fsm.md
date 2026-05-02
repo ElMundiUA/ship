@@ -6,7 +6,7 @@
 Every Ship-driven ticket moves through this finite-state machine. The states are intentionally short so humans and agents don't argue about wording — the transitions below are the only ones Ship triggers autonomously. Anything else (re-opening a `done` ticket, jumping from `triage` straight to `done`) requires an operator.
 
 **Repository**: `ElMundiUA/ship`
-**Tracker**: `github`
+**Tracker**: `linear`
 
 ## States
 
@@ -78,16 +78,16 @@ These are the native statuses Ship will target for each FSM state. Rename them o
 
 | Ship state | Native status |
 | --- | --- |
-| `triage` | Issue open, no labels |
-| `ready` | `ready` label |
-| `in_progress` | `in-progress` label + assignee set |
-| `in_review` | Linked PR in `review_requested` state |
-| `rework` | PR `changes_requested` review event |
-| `needs_info` | `needs-info` label |
-| `blocked` | `blocked` label |
-| `merged` | PR merged |
-| `done` | Issue closed as `completed` |
-| `cancelled` | Issue closed as `not planned` |
+| `triage` | Triage (default) |
+| `ready` | Backlog → Todo (Ready) |
+| `in_progress` | In Progress |
+| `in_review` | In Review |
+| `rework` | Changes Requested (create if missing) |
+| `needs_info` | Blocked / Awaiting Info |
+| `blocked` | Blocked |
+| `merged` | Done (auto by Linear + GitHub) |
+| `done` | Done |
+| `cancelled` | Canceled |
 
 ## Operator cheat sheet
 

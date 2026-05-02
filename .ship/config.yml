@@ -82,6 +82,15 @@ process:
   - from: qa_manual
     to: pr_review
   routines:
+    security_review:
+      name: Security Review
+      enabled: true
+      trigger:
+        type: schedule
+        cron: 0 6 * * *
+        window: 30m
+        catchup: latest
+      pattern: role-security-officer
     daily:
       name: Daily
       enabled: true
@@ -91,6 +100,24 @@ process:
         window: 30m
         catchup: latest
       pattern: flow-daily-retro
+    tech_review:
+      name: Tech Review
+      enabled: true
+      trigger:
+        type: schedule
+        cron: 0 12 * * *
+        window: 30m
+        catchup: latest
+      pattern: role-tech-architect
+    qa_review:
+      name: Qa Review
+      enabled: true
+      trigger:
+        type: schedule
+        cron: 0 15 * * *
+        window: 30m
+        catchup: latest
+      pattern: role-qa-architect
     retro:
       name: Retro
       enabled: true
@@ -109,30 +136,3 @@ process:
         window: 30m
         catchup: latest
       pattern: op-workflow-self-heal
-    tech_review:
-      name: Tech review
-      enabled: true
-      trigger:
-        type: schedule
-        cron: 0 12 * * *
-        window: 30m
-        catchup: latest
-      pattern: role-tech-architect
-    qa_review:
-      name: QA review
-      enabled: true
-      trigger:
-        type: schedule
-        cron: 0 15 * * *
-        window: 30m
-        catchup: latest
-      pattern: role-qa-architect
-    security_review:
-      name: Security review
-      enabled: true
-      trigger:
-        type: schedule
-        cron: 0 6 * * *
-        window: 30m
-        catchup: latest
-      pattern: role-security-officer
