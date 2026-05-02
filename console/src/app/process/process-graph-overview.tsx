@@ -28,6 +28,11 @@ const CREATE_NODE_ID = "node-create-process";
 type ProcessNodeData = {
   node: ApiProcessNode;
   taskCount: number;
+  /** True when the operator just clicked this tile and the camera is
+   *  flying to it; tile scales up + glows so the destination is obvious. */
+  isZoomTarget?: boolean;
+  /** True when *some other* tile is being zoomed to — this tile fades. */
+  isZoomBackdrop?: boolean;
 };
 
 type ProcessRFNode = RFNode<ProcessNodeData, "process">;
@@ -82,6 +87,8 @@ function OverviewInner({
         taskCount:
           processList.processes.find((p) => p.id === node.process_id)
             ?.task_count ?? 0,
+        isZoomTarget: zoomingTo === node.id,
+        isZoomBackdrop: zoomingTo !== null && zoomingTo !== node.id,
       },
       width: NODE_WIDTH,
       height: NODE_HEIGHT,
@@ -107,13 +114,15 @@ function OverviewInner({
           status: "ok",
         },
         taskCount: 0,
+        isZoomTarget: false,
+        isZoomBackdrop: zoomingTo !== null,
       },
       width: NODE_WIDTH,
       height: NODE_HEIGHT,
       draggable: true,
     });
     return live;
-  }, [graph.nodes, processList.processes]);
+  }, [graph.nodes, processList.processes, zoomingTo]);
 
   const edges = useMemo<RFEdge[]>(
     () =>
@@ -131,7 +140,7 @@ function OverviewInner({
   );
 
   const onNodeClick = useCallback(
-    (_event: unknown, node: RFNode) => {
+    async (_event: unknown, node: RFNode) => {
       const data = node.data as ProcessNodeData | undefined;
       if (!data) return;
       const apiNode = data.node;
@@ -140,22 +149,32 @@ function OverviewInner({
         window.alert("New workspace process — template picker coming soon.");
         return;
       }
-      // Cinematic zoom: dive the camera onto the clicked tile, then
-      // route after the tween settles. ~950ms feels like a single
-      // continuous motion rather than two staged actions.
+      // Cinematic zoom: mark the clicked tile (CSS scales it up,
+      // dims the rest), dive the camera onto it via fitView, await
+      // the tween, then route. fitView() in @xyflow/react v12 returns
+      // a Promise that resolves on animation end, which is what makes
+      // the timing feel like one continuous motion instead of two
+      // separately-fired phases (the old setTimeout could fire before
+      // or after the actual tween — visibly desynced).
+      if (zoomingTo) return;
       setZoomingTo(apiNode.id);
-      flow.fitView({
-        nodes: [{ id: apiNode.id }],
-        duration: 900,
-        padding: 0.05,
-        maxZoom: 2.5,
-      });
       const href = repoId
         ? `/process/${encodeURIComponent(apiNode.process_id)}?repo=${encodeURIComponent(repoId)}`
         : `/process/${encodeURIComponent(apiNode.process_id)}`;
-      window.setTimeout(() => router.push(href), 950);
+      try {
+        await flow.fitView({
+          nodes: [{ id: apiNode.id }],
+          duration: 1100,
+          padding: 0.02,
+          maxZoom: 3,
+        });
+      } catch {
+        // fitView may throw if the node measurement isn't ready yet —
+        // route anyway so click never feels dead.
+      }
+      router.push(href);
     },
-    [flow, repoId, router],
+    [flow, repoId, router, zoomingTo],
   );
 
   const nodeTypes = useMemo(() => ({ process: ProcessTileNode }), []);
@@ -237,15 +256,27 @@ function OverviewInner({
 }
 
 function ProcessTileNode({ data }: NodeProps<ProcessRFNode>) {
-  const { node, taskCount } = data;
+  const { node, taskCount, isZoomTarget, isZoomBackdrop } = data;
   const isWorkspace = node.type === "workspace";
   const isCreate = node.id === CREATE_NODE_ID;
   const isSubprocess = node.type === "subprocess";
   return (
     <div
-      style={{ width: NODE_WIDTH, minHeight: NODE_HEIGHT }}
+      style={{
+        width: NODE_WIDTH,
+        minHeight: NODE_HEIGHT,
+        transition: "transform 1100ms cubic-bezier(0.22, 1, 0.36, 1), opacity 600ms, box-shadow 600ms",
+        // The zoomed-to tile pushes forward — small scale-up combined with
+        // a champagne glow telegraphs "this is where the camera is going".
+        // Other tiles fade so the destination is the only thing that reads.
+        transform: isZoomTarget ? "scale(1.06)" : "scale(1)",
+        opacity: isZoomBackdrop ? 0.18 : 1,
+        boxShadow: isZoomTarget
+          ? "0 0 64px rgba(207, 169, 107, 0.55), 0 0 0 2px rgba(207, 169, 107, 0.6)"
+          : undefined,
+      }}
       className={[
-        "group cursor-pointer rounded-[1.5rem] border p-4 shadow-2xl transition",
+        "group cursor-pointer rounded-[1.5rem] border p-4 shadow-2xl",
         "hover:-translate-y-0.5 hover:border-aqua/55 hover:bg-white/[0.08]",
         isWorkspace
           ? "border-aqua/40 bg-[linear-gradient(135deg,rgba(207,169,107,0.18),rgba(207,169,107,0.06))] ring-1 ring-aqua/20"
