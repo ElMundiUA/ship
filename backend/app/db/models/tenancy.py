@@ -161,6 +161,13 @@ class Workspace(Base):
             "'{\"global\": true, \"workspace\": true, \"project\": true}'::jsonb"
         ),
     )
+    # Workspace-level default for per-state ``default_agent_profile`` —
+    # NULL means the operator hasn't picked one yet; the /process editor
+    # gates all edits on a non-NULL value here. Validated against the
+    # frozenset in ``backend.app.api.v1.routes.repos._PROCESS_AGENT_PROFILES``.
+    default_agent_profile: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
 
     created_at: Mapped[datetime] = _ts_created()
     updated_at: Mapped[datetime] = _ts_updated()

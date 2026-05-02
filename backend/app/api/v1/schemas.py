@@ -52,6 +52,7 @@ class WorkspaceOut(BaseModel):
     slug: str
     name: str
     catalog_sources: dict
+    default_agent_profile: str | None = None
     created_at: datetime
 
 
@@ -124,6 +125,11 @@ class TokenInfoOut(BaseModel):
 class WorkspaceUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     catalog_sources: dict[str, bool] | None = None
+    # Validated against repos._PROCESS_AGENT_PROFILES at the route layer
+    # so the schemas module doesn't pull a circular import.
+    default_agent_profile: str | None = Field(
+        default=None, min_length=1, max_length=64
+    )
 
 
 # --- Members ---

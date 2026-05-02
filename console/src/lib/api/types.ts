@@ -21,6 +21,12 @@ export type ApiWorkspace = {
   slug: string;
   name: string;
   catalog_sources: Record<string, boolean>;
+  /**
+   * Workspace-level default for per-state ``default_agent_profile``.
+   * NULL means the operator hasn't picked one yet — the /process editor
+   * gates all edits until this is set.
+   */
+  default_agent_profile: string | null;
   created_at: string;
 };
 

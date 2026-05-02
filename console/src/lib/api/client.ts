@@ -178,6 +178,7 @@ export function updateWorkspace(
   input: {
     name?: string;
     catalog_sources?: Record<string, boolean>;
+    default_agent_profile?: string;
   },
   token?: string,
 ): Promise<ApiWorkspace> {

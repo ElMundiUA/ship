@@ -320,6 +320,21 @@ async def update_workspace(
         merged = {**workspace.catalog_sources, **payload.catalog_sources}
         workspace.catalog_sources = merged
         changed["catalog_sources"] = merged
+    if payload.default_agent_profile is not None:
+        # Local import: schemas.py shouldn't pull a circular dep on
+        # repos.py just to share the frozenset of valid profiles.
+        from backend.app.api.v1.routes.repos import _PROCESS_AGENT_PROFILES
+
+        if payload.default_agent_profile not in _PROCESS_AGENT_PROFILES:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "default_agent_profile must be one of "
+                    f"{sorted(_PROCESS_AGENT_PROFILES)}"
+                ),
+            )
+        workspace.default_agent_profile = payload.default_agent_profile
+        changed["default_agent_profile"] = payload.default_agent_profile
 
     if changed:
         session.add(
