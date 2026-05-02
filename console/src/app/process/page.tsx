@@ -169,6 +169,7 @@ async function loadProcessShell(
       workspace,
       integrations,
       nativeIntegrations,
+      repos,
     );
     const trackerIntegration = integrations.find(
       (i) => TRACKER_KINDS.has(i.kind) && i.status === "ok",
@@ -225,6 +226,7 @@ async function loadLiveProcessGraph(
       workspace,
       integrations,
       nativeIntegrations,
+      repos,
     );
     return {
       workspace,
@@ -689,13 +691,30 @@ function computePrereqStatus(
   workspace: ApiWorkspace,
   integrations: ApiIntegration[],
   nativeIntegrations: ApiNativeIntegration[],
+  activatedRepos: ApiActivatedRepo[],
 ): EditorPrereqStatus {
   const trackers = integrations.filter(
     (i) => TRACKER_KINDS.has(i.kind) && i.status === "ok",
   );
+  // Two ways to count an orchestrator as "ready":
+  //   1. NativeIntegrationInstallation row with the "orchestrator"
+  //      capability (Azure DevOps Pipelines today).
+  //   2. At least one activated WorkspaceRepo — that's only possible
+  //      after the Ship GitHub App is installed AND the operator picked
+  //      a repo, which together imply GitHub Actions is wired as the
+  //      runner. The GitHub App lives in its own ``github_installations``
+  //      table, not native_integrations, so the capability check above
+  //      misses it; the activated-repo signal is the safe proxy.
   const orchestrators = nativeIntegrations.filter(
     (n) => n.capabilities.includes("orchestrator") && n.status === "ready",
   );
+  const githubViaActivatedRepo = activatedRepos.length > 0;
+  const orchestratorOk = orchestrators.length > 0 || githubViaActivatedRepo;
+  const orchestratorDetail = orchestratorOk
+    ? githubViaActivatedRepo && orchestrators.length === 0
+      ? `Ready: GitHub Actions (${activatedRepos.length} repo${activatedRepos.length === 1 ? "" : "s"} activated)`
+      : `Ready: ${orchestrators.map((o) => o.provider).join(", ")}`
+    : "No CI orchestrator (GitHub Actions / Azure DevOps) ready for this workspace.";
   const agent = workspace.default_agent_profile?.trim() ?? "";
   return {
     tracker: trackers.length > 0
@@ -707,15 +726,7 @@ function computePrereqStatus(
           ok: false,
           detail: "No active Linear / Jira / GitHub Issues binding for this workspace.",
         },
-    orchestrator: orchestrators.length > 0
-      ? {
-          ok: true,
-          detail: `Ready: ${orchestrators.map((o) => o.provider).join(", ")}`,
-        }
-      : {
-          ok: false,
-          detail: "No CI orchestrator (GitHub Actions / Azure DevOps) ready for this workspace.",
-        },
+    orchestrator: { ok: orchestratorOk, detail: orchestratorDetail },
     default_agent: agent
       ? { ok: true, detail: `Workspace default: ${agent}` }
       : {
