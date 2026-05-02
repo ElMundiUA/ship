@@ -24,6 +24,7 @@ import {
   type ApiProcess,
   type ApiProcessList,
   type ApiProcessState,
+  type ApiProcessSummary,
   type ApiRepoConfig,
   getRepoConfig,
   getProcess,
@@ -86,7 +87,17 @@ export default async function ProcessPage({
   if (shell === "empty") redirect("/onboarding?step=github");
   if (shell === "down") return renderDownState();
 
-  return renderProcessPage({ ...shell, selectedStateId, selectedTab, reason, token });
+  const summary = shell.processList.processes.find(
+    (p) => p.id === shell.resolvedProcessId,
+  );
+  return renderProcessPage({
+    ...shell,
+    summary: summary ?? null,
+    selectedStateId,
+    selectedTab,
+    reason,
+    token,
+  });
 }
 
 type ProcessShell = {
@@ -244,6 +255,7 @@ function renderProcessPage({
   workspace,
   allWorkspaces,
   resolvedProcessId,
+  summary,
   repos,
   selectedRepo,
   selectedStateId,
@@ -255,6 +267,7 @@ function renderProcessPage({
   workspace: ApiWorkspace;
   allWorkspaces?: ApiWorkspace[];
   resolvedProcessId: string;
+  summary: ApiProcessSummary | null;
   repos: ApiActivatedRepo[];
   selectedRepo: ApiActivatedRepo | null;
   selectedStateId?: string;
@@ -265,9 +278,10 @@ function renderProcessPage({
 }) {
   const locked = isEditorLocked(prereqStatus);
   const multiWs = (allWorkspaces?.length ?? 0) > 1;
+  const title = summary?.name?.trim() || "Process";
   return (
     <AppShell
-      title="Process"
+      title={title}
       kicker={workspace.slug}
       workspace={{ id: workspace.id, name: workspace.name, slug: workspace.slug }}
       allWorkspaces={
@@ -277,7 +291,8 @@ function renderProcessPage({
       }
     >
       <div className="space-y-3">
-        <RepoSelector
+        <ProcessHeaderCard
+          summary={summary}
           repos={repos}
           selectedRepo={selectedRepo}
           processId={resolvedProcessId}
@@ -314,19 +329,94 @@ function renderProcessPage({
   );
 }
 
+function ProcessHeaderCard({
+  summary,
+  repos,
+  selectedRepo,
+  processId,
+}: {
+  summary: ApiProcessSummary | null;
+  repos: ApiActivatedRepo[];
+  selectedRepo: ApiActivatedRepo | null;
+  processId: string;
+}) {
+  if (!summary) {
+    return (
+      <RepoSelector
+        repos={repos}
+        selectedRepo={selectedRepo}
+        processId={processId}
+      />
+    );
+  }
+  return (
+    <div className="flex flex-wrap items-start justify-between gap-3 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3">
+      <div className="min-w-0">
+        {summary.description ? (
+          <p className="max-w-2xl text-sm text-white/65">{summary.description}</p>
+        ) : (
+          <p className="text-sm italic text-white/45">
+            No description set for this process yet.
+          </p>
+        )}
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] font-bold uppercase tracking-[0.18em] text-white/45">
+          <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-1">
+            {summary.state_count} state{summary.state_count === 1 ? "" : "s"}
+          </span>
+          <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-1">
+            {summary.task_count} active task{summary.task_count === 1 ? "" : "s"}
+          </span>
+          {summary.blocked_count > 0 && (
+            <span className="rounded-full border border-coral/30 bg-coral/[0.08] px-2 py-1 text-coral/85">
+              {summary.blocked_count} blocked
+            </span>
+          )}
+          <span
+            className={[
+              "rounded-full px-2 py-1",
+              summary.health === "ok"
+                ? "border border-emerald-400/30 bg-emerald-400/10 text-emerald-300"
+                : summary.health === "degraded"
+                  ? "border border-amber-400/30 bg-amber-400/10 text-amber-200"
+                  : "border border-coral/30 bg-coral/10 text-coral",
+            ].join(" ")}
+          >
+            {summary.health}
+          </span>
+        </div>
+      </div>
+      <div className="shrink-0">
+        <RepoSelector
+          repos={repos}
+          selectedRepo={selectedRepo}
+          processId={processId}
+        />
+      </div>
+    </div>
+  );
+}
+
 function ProcessNotice({ reason }: { reason?: string }) {
   if (!reason) return null;
   const message = noticeMessage(reason);
   const isError = reason !== "pr_opened";
   return (
     <div
-      className={
+      className={[
+        "flex items-start gap-2 rounded-xl border px-3 py-2 text-xs",
         isError
-          ? "rounded-2xl border border-coral/25 bg-coral/[0.05] px-4 py-2 text-xs text-coral/90"
-          : "rounded-2xl border border-aqua/25 bg-aqua/[0.05] px-4 py-2 text-xs text-aqua/90"
-      }
+          ? "border-coral/30 bg-coral/[0.06] text-coral/90"
+          : "border-aqua/30 bg-aqua/[0.06] text-aqua/90",
+      ].join(" ")}
     >
-      {message}
+      <span
+        aria-hidden
+        className={[
+          "mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full",
+          isError ? "bg-coral" : "bg-aqua",
+        ].join(" ")}
+      />
+      <span>{message}</span>
     </div>
   );
 }
@@ -349,29 +439,29 @@ function ConfigSourceBanner({
   config: ApiRepoConfig | null;
   source: ProcessConfigSource;
 }) {
+  // One-line pill, lives above the editor body and stays out of the way.
   if (source === "repo-process") {
     return (
-      <div className="rounded-2xl border border-aqua/25 bg-aqua/[0.05] px-4 py-2 text-xs text-aqua/90">
-        Editing process from <code className="font-mono">.ship/config.yml</code>
-        {config?.sha ? ` · ${config.sha.slice(0, 7)}` : ""}.
+      <div className="inline-flex items-center gap-2 rounded-full border border-aqua/25 bg-aqua/[0.06] px-3 py-1 text-[11px] font-semibold text-aqua/90">
+        <span className="h-1.5 w-1.5 rounded-full bg-aqua" aria-hidden />
+        From <code className="font-mono">.ship/config.yml</code>
+        {config?.sha ? <span className="text-aqua/65">· {config.sha.slice(0, 7)}</span> : null}
       </div>
     );
   }
   if (source === "repo-lanes") {
     return (
-      <div className="rounded-2xl border border-amber-300/25 bg-amber-300/[0.06] px-4 py-2 text-xs text-amber-100/90">
-        This repo has the old <code className="font-mono">lanes:</code> config,
-        not a <code className="font-mono">process:</code> section yet. The canvas
-        shows Ship&apos;s development process template until this repo is reseeded or
-        migrated.
+      <div className="inline-flex items-center gap-2 rounded-full border border-amber-300/30 bg-amber-300/[0.07] px-3 py-1 text-[11px] font-semibold text-amber-200">
+        <span className="h-1.5 w-1.5 rounded-full bg-amber-300" aria-hidden />
+        Legacy <code className="font-mono">lanes:</code> config — reseed to migrate.
       </div>
     );
   }
   if (source === "missing") {
     return (
-      <div className="rounded-2xl border border-coral/25 bg-coral/[0.05] px-4 py-2 text-xs text-coral/90">
-        This repo has no <code className="font-mono">.ship/config.yml</code> on
-        its default branch yet. Reseed the repo to create one.
+      <div className="inline-flex items-center gap-2 rounded-full border border-coral/30 bg-coral/[0.07] px-3 py-1 text-[11px] font-semibold text-coral">
+        <span className="h-1.5 w-1.5 rounded-full bg-coral" aria-hidden />
+        No <code className="font-mono">.ship/config.yml</code> on default branch — reseed required.
       </div>
     );
   }
