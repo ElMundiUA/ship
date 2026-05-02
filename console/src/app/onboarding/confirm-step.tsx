@@ -229,30 +229,99 @@ export async function ConfirmStep({
         </ul>
       </div>
 
-      {/* ── Repos waiting for bootstrap ──────────────────────── */}
-      <div className="mt-7">
-        <h2 className="font-display text-lg font-bold text-white">
-          Repos waiting for bootstrap{" "}
-          <span className="text-[11px] font-normal text-white/45">
-            ({total} {total === 1 ? "repo" : "repos"})
-          </span>
-        </h2>
+      {/* ── Repos by drift state ───────────────────────────────
+          Splitting the list keeps "Repos waiting for bootstrap" honest:
+          a never-seeded repo or one stuck on an outdated bundle is the
+          actionable case; up-to-date repos go below in a folded section
+          so the operator sees green-zone repos at a glance without
+          their drift state being mixed with action items.
 
-        {cards && cards.length > 0 && (
-          <div className="mt-3 space-y-4">
-            {cards.map((c) => (
-              <RepoCard key={c.repo.id} workspaceId={workspaceId} initial={c} />
-            ))}
-          </div>
-        )}
+          ``installed_bundle_version === current_bundle_version``
+          counts as up-to-date; ``null`` (never seeded) and any drift
+          go in the actionable bucket. The drift case is the
+          load-bearing one — pre-fix the wizard rendered every
+          activated repo as actionable regardless of bundle, so a
+          repo stranded on an outdated workflow file looked
+          identical to a fresh activation. */}
+      {(() => {
+        const actionable = (cards ?? []).filter(
+          (c) =>
+            c.repo.installed_bundle_version === null ||
+            c.repo.installed_bundle_version !== c.repo.current_bundle_version,
+        );
+        const upToDate = (cards ?? []).filter(
+          (c) =>
+            c.repo.installed_bundle_version !== null &&
+            c.repo.installed_bundle_version === c.repo.current_bundle_version,
+        );
+        return (
+          <>
+            <div className="mt-7">
+              <h2 className="font-display text-lg font-bold text-white">
+                Repos waiting for bootstrap{" "}
+                <span className="text-[11px] font-normal text-white/45">
+                  ({actionable.length}{" "}
+                  {actionable.length === 1 ? "repo" : "repos"})
+                </span>
+              </h2>
 
-        {cards && cards.length === 0 && !loadError && (
-          <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-xs text-white/70">
-            No activated repos. Step back to <em>Pick repos</em> and activate
-            at least one before bootstrapping.
-          </div>
-        )}
-      </div>
+              {actionable.length > 0 && (
+                <div className="mt-3 space-y-4">
+                  {actionable.map((c) => (
+                    <RepoCard
+                      key={c.repo.id}
+                      workspaceId={workspaceId}
+                      initial={c}
+                    />
+                  ))}
+                </div>
+              )}
+
+              {actionable.length === 0 && upToDate.length === 0 && !loadError && (
+                <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-xs text-white/70">
+                  No activated repos. Step back to <em>Pick repos</em> and
+                  activate at least one before bootstrapping.
+                </div>
+              )}
+
+              {actionable.length === 0 && upToDate.length > 0 && (
+                <div className="mt-3 rounded-xl border border-aqua/30 bg-aqua/[0.06] px-4 py-3 text-xs text-aqua/90">
+                  All activated repos are on the current bundle. Nothing to
+                  do here.
+                </div>
+              )}
+            </div>
+
+            {upToDate.length > 0 && (
+              <details className="mt-6 group/uptodate">
+                <summary className="cursor-pointer text-[11px] text-white/45 transition hover:text-white/75 list-none [&::-webkit-details-marker]:hidden">
+                  <span className="inline-flex items-center gap-1">
+                    <span
+                      aria-hidden
+                      className="transition-transform group-open/uptodate:rotate-90"
+                    >
+                      ▸
+                    </span>
+                    <span>
+                      {upToDate.length} repo
+                      {upToDate.length === 1 ? "" : "s"} up to date
+                    </span>
+                  </span>
+                </summary>
+                <div className="mt-3 space-y-4">
+                  {upToDate.map((c) => (
+                    <RepoCard
+                      key={c.repo.id}
+                      workspaceId={workspaceId}
+                      initial={c}
+                    />
+                  ))}
+                </div>
+              </details>
+            )}
+          </>
+        );
+      })()}
 
       <div className="mt-8 flex items-center justify-between gap-3 border-t border-white/10 pt-5">
         <span className="text-[11px] text-white/45">

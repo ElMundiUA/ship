@@ -300,7 +300,21 @@ export function IntegrationsWorkspaceBody({ data }: { data: LiveIntegrationsMode
                     />
                     <div className="mt-2 flex flex-wrap items-center gap-3">
                       {i.kind === "notion" ? (
-                        <NotionOAuthForm workspaceId={workspace.id} compact />
+                        <NotionOAuthForm
+                          workspaceId={workspace.id}
+                          compact
+                        />
+                      ) : i.kind === "linear" ? (
+                        // Linear is OAuth-only: never expose a paste-secret
+                        // form on a connected row. ``reauth`` flips the CTA
+                        // to coral when the workspace token is broken so
+                        // the operator sees "this needs attention" at a
+                        // glance instead of a generic "Reconnect" hint.
+                        <LinearOAuthForm
+                          workspaceId={workspace.id}
+                          compact
+                          reauth={i.status === "error"}
+                        />
                       ) : (
                         <UpsertForm
                           workspaceId={workspace.id}
@@ -465,19 +479,52 @@ function isShadowedByNativeProvider(kind: string, nativeProviders: Set<string>):
   return false;
 }
 
-function LinearOAuthForm({ workspaceId }: { workspaceId: string }) {
+function LinearOAuthForm({
+  workspaceId,
+  compact,
+  reauth,
+}: {
+  workspaceId: string;
+  compact?: boolean;
+  /** True when an existing row is in ``status='error'`` and the
+   * operator should re-run the OAuth dance (revoked token, scope
+   * narrowed mid-flight, etc.). Renders the CTA in coral and
+   * leads with "Re-auth" copy so the row looks broken, not new. */
+  reauth?: boolean;
+}) {
+  const label = reauth
+    ? compact
+      ? "Re-auth"
+      : "Re-auth Linear →"
+    : compact
+      ? "Reconnect OAuth"
+      : "Connect with Linear →";
+  const compactClass = reauth
+    ? "cursor-pointer text-[10px] font-semibold text-coral hover:text-coral/80"
+    : "cursor-pointer text-[10px] font-semibold text-aqua/85 hover:text-aqua";
+  const fullClass = reauth
+    ? "inline-flex cursor-pointer items-center gap-1 rounded-full border border-coral/40 bg-coral/10 px-3 py-1 text-[11px] font-bold text-coral hover:bg-coral/20"
+    : "inline-flex cursor-pointer items-center gap-1 rounded-full border border-aqua/40 bg-aqua/10 px-3 py-1 text-[11px] font-bold text-aqua hover:bg-aqua/20";
   return (
-    <form action="/api/integrations/linear" method="POST" className="mt-3">
+    <form
+      action="/api/integrations/linear"
+      method="POST"
+      className={compact ? "" : "mt-3"}
+    >
       <input type="hidden" name="ws" value={workspaceId} suppressHydrationWarning />
       <button
         type="submit"
-        className="inline-flex cursor-pointer items-center gap-1 rounded-full border border-aqua/40 bg-aqua/10 px-3 py-1 text-[11px] font-bold text-aqua hover:bg-aqua/20"
+        className={compact ? compactClass : fullClass}
       >
-        Connect with Linear →
+        {label}
       </button>
-      <p className="mt-2 text-[10px] text-white/45">
-        Opens Linear OAuth. Ship stores the resulting workspace token encrypted.
-      </p>
+      {!compact && (
+        <p className="mt-2 text-[10px] text-white/45">
+          Opens Linear OAuth. Ship stores the resulting workspace token
+          encrypted. Linear is OAuth-only — pasting a personal API key is
+          not supported.
+        </p>
+      )}
     </form>
   );
 }

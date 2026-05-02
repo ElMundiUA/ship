@@ -47,6 +47,27 @@ export interface RepoCardInitial {
     id: string;
     full_name: string;
     default_branch: string;
+    /**
+     * Bundle version stamped on the repo at the last successful
+     * ``wizard_seed`` run. ``null`` means the repo was activated but
+     * never seeded (greenfield) OR was seeded before the column
+     * existed (legacy). The card uses this against
+     * ``current_bundle_version`` to decide ``not_seeded`` /
+     * ``up_to_date`` / ``update_available`` styling. Without it
+     * every repo looks "ready" even when it's running an outdated
+     * starter workflow against a server that's moved on — exactly
+     * the dogfood failure on 2026-05-02 (ship-canary stuck on
+     * ``v0.5`` with the new shipctl emitting routine vocabulary
+     * the legacy workflow file couldn't read).
+     */
+    installed_bundle_version: string | null;
+    /**
+     * Server's current canonical bundle version. Mirrored from
+     * :data:`backend.app.services.seed_bundle.BUNDLE_VERSION` on
+     * every ``ActivatedRepoOut`` so the FE doesn't need a separate
+     * meta endpoint.
+     */
+    current_bundle_version: string;
   };
   tracker: ApiTrackerBinding;
   agents: ApiAgentSecretStatus[];
@@ -126,6 +147,33 @@ export function RepoCard({
       !trackerSaving,
   );
 
+  // ── Bundle drift state ───────────────────────────────────────
+  // ``installed_bundle_version`` lives on every ``ActivatedRepoOut``
+  // (stamped by ``wizard_seed`` post-composer) alongside the server's
+  // canonical ``current_bundle_version``. The card derives one of
+  // four states from the pair:
+  //
+  //   - ``not_seeded``     — installed === null
+  //   - ``up_to_date``     — installed === current
+  //   - ``update_available`` — installed !== current
+  //   - ``unknown``        — fallback (shouldn't happen but kept so a
+  //                          missing field never crashes the render)
+  //
+  // ``update_available`` is the load-bearing one — the dogfood failure
+  // on 2026-05-02 (ship-canary stuck on v0.5 with the new shipctl
+  // emitting ``routine`` vocabulary the legacy workflow file
+  // couldn't read) was invisible because the card just rendered
+  // "READY". The amber banner + Re-seed CTA make the drift
+  // discoverable without an audit-log spelunk.
+  const installed = initial.repo.installed_bundle_version;
+  const current = initial.repo.current_bundle_version;
+  const seedState: "not_seeded" | "up_to_date" | "update_available" | "unknown" =
+    installed === null
+      ? "not_seeded"
+      : installed === current
+        ? "up_to_date"
+        : "update_available";
+
   return (
     <section
       className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 shadow-card"
@@ -155,14 +203,55 @@ export function RepoCard({
                 no tracker
               </span>
             )}
+            {seedState === "not_seeded" && (
+              <span className="rounded bg-coral/15 px-1.5 py-0.5 text-coral">
+                not seeded
+              </span>
+            )}
+            {seedState === "up_to_date" && (
+              <span className="rounded bg-aqua/15 px-1.5 py-0.5 text-aqua">
+                bundle v{current}
+              </span>
+            )}
+            {seedState === "update_available" && (
+              <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-amber-200">
+                v{installed} → v{current}
+              </span>
+            )}
           </div>
         </div>
         <ReadinessBadge
           ready={readyToSeed && trackerReady}
           missingSecrets={missingRequiredSecrets.length}
           trackerReady={trackerReady}
+          updateAvailable={seedState === "update_available"}
         />
       </header>
+
+      {seedState === "update_available" && (
+        // Drift banner. Re-seed is just the existing /wizard_seed
+        // POST — the same CTA at the bottom — but framed up-front
+        // as "your repo is behind the canonical bundle" rather
+        // than "let's bootstrap". The seed PR is idempotent: it
+        // overwrites the workflow file, the .ship/ config, the FSM
+        // doc, and stamps the new ``installed_bundle_version`` on
+        // commit. The customer just needs to merge it.
+        <div className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-[11px] leading-snug text-amber-200">
+          <strong className="text-amber-100">Bundle update available.</strong>{" "}
+          This repo is on{" "}
+          <code className="rounded bg-white/5 px-1 text-amber-100">
+            v{installed}
+          </code>{" "}
+          while the canonical bundle is now{" "}
+          <code className="rounded bg-white/5 px-1 text-amber-100">
+            v{current}
+          </code>
+          . Open a re-seed PR below to refresh{" "}
+          <code className="rounded bg-white/5 px-1">.ship/config.yml</code>,
+          the schedule trigger workflow, and the tracker FSM. The PR
+          is idempotent — review the diff before you merge.
+        </div>
+      )}
 
       {/* ── Tracker binding ────────────────────────────────────── */}
       <fieldset className="mt-5">
@@ -539,16 +628,22 @@ export function RepoCard({
       <footer className="mt-6 border-t border-white/10 pt-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0 text-[11px] leading-snug text-white/55">
-            {readyToSeed ? (
+            {!readyToSeed ? (
+              <>
+                <strong className="text-white/80">Not ready.</strong>{" "}
+                {missingBlockers(missingRequiredSecrets)}
+              </>
+            ) : seedState === "update_available" ? (
+              <>
+                Re-seed bumps the workflow file, schedule trigger, and
+                FSM doc to <code className="text-white/60">v{current}</code>.
+                Idempotent — review the PR diff before merging.
+              </>
+            ) : (
               <>
                 Ready to bootstrap. Opens the infra PR with canonical Plays,
                 <code className="text-white/60">.ship/config.yml</code>, the
                 tracker FSM, and the post-merge knowledge bootstrap workflow.
-              </>
-            ) : (
-              <>
-                <strong className="text-white/80">Not ready.</strong>{" "}
-                {missingBlockers(missingRequiredSecrets)}
               </>
             )}
           </div>
@@ -598,7 +693,11 @@ export function RepoCard({
             }}
             className="rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-4 py-2 text-xs font-bold text-ink shadow-glow transition hover:brightness-110 disabled:opacity-40"
           >
-            {seedSaving ? "Opening PR..." : "Open seed PR →"}
+            {seedSaving
+              ? "Opening PR..."
+              : seedState === "update_available"
+                ? "Open re-seed PR →"
+                : "Open seed PR →"}
           </button>
         </div>
         {seedError && (
@@ -616,11 +715,28 @@ function ReadinessBadge({
   ready,
   missingSecrets,
   trackerReady,
+  updateAvailable,
 }: {
   ready: boolean;
   missingSecrets: number;
   trackerReady: boolean;
+  /**
+   * True when the repo's installed bundle is older than the
+   * server's canonical bundle. Wins over plain ``ready`` because
+   * "ready" plus an out-of-date workflow file is exactly the
+   * silent-broken state the dogfood failure on 2026-05-02 hit
+   * (canary on v0.5 stuck on legacy lane vocabulary while the
+   * server emitted routines).
+   */
+  updateAvailable?: boolean;
 }) {
+  if (updateAvailable) {
+    return (
+      <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest text-amber-200">
+        update available
+      </span>
+    );
+  }
   if (ready) {
     return (
       <span className="rounded-full border border-aqua/40 bg-aqua/[0.08] px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest text-aqua">

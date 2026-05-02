@@ -1092,6 +1092,8 @@ async function loadRepoCardInitial(
       id: repo.id,
       full_name: repo.full_name,
       default_branch: repo.default_branch,
+      installed_bundle_version: repo.installed_bundle_version,
+      current_bundle_version: repo.current_bundle_version,
     },
     tracker,
     agents,
