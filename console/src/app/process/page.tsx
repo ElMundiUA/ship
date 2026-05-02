@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { Suspense } from "react";
 
 import { AppShell } from "@/components/app-shell";
 import { Card, CardHeader } from "@/components/ui";
@@ -80,22 +81,21 @@ export default async function ProcessPage({
     return renderProcessGraphPage(graphResult);
   }
 
-  const result = await loadLiveProcess(token, selectedProcessId, selectedRepoId, params);
-  if (result === "unauthorized") redirect("/login?next=%2Fprocess&reason=session_expired");
-  if (result === "empty") redirect("/onboarding?step=github");
-  if (result === "down") return renderDownState();
+  const shell = await loadProcessShell(token, selectedProcessId, selectedRepoId, params);
+  if (shell === "unauthorized") redirect("/login?next=%2Fprocess&reason=session_expired");
+  if (shell === "empty") redirect("/onboarding?step=github");
+  if (shell === "down") return renderDownState();
 
-  return renderProcessPage({ ...result, selectedStateId, selectedTab, reason });
+  return renderProcessPage({ ...shell, selectedStateId, selectedTab, reason, token });
 }
 
-type LiveProcess = {
+type ProcessShell = {
   workspace: ApiWorkspace;
   allWorkspaces: ApiWorkspace[];
-  process: ApiProcess;
+  processList: ApiProcessList;
+  resolvedProcessId: string;
   repos: ApiActivatedRepo[];
   selectedRepo: ApiActivatedRepo | null;
-  config: ApiRepoConfig | null;
-  configSource: ProcessConfigSource;
   prereqStatus: EditorPrereqStatus;
 };
 
@@ -107,12 +107,18 @@ type LiveProcessGraph = {
   selectedRepo: ApiActivatedRepo | null;
 };
 
-async function loadLiveProcess(
+/**
+ * Fast data load — workspaces, repo list, the process catalogue, and
+ * the prereq integrations. Everything here is a quick listing call;
+ * the heavy ``getProcess`` + ``getRepoConfig`` round-trips run inside
+ * the streamed ``<EditorContent>`` so the shell can paint immediately.
+ */
+async function loadProcessShell(
   token: string,
   processId: string,
   selectedRepoId: string | undefined,
   searchParams: SearchParams,
-): Promise<LiveProcess | "empty" | "unauthorized" | "down"> {
+): Promise<ProcessShell | "empty" | "unauthorized" | "down"> {
   let workspaces: ApiWorkspace[];
   try {
     workspaces = await listWorkspaces(token);
@@ -126,26 +132,12 @@ async function loadLiveProcess(
   const resolved = await getResolvedWorkspaceId(searchParams, workspaces);
   const workspace = pickWorkspace(workspaces, resolved);
   try {
-    const [processList, repos] = await Promise.all([
-      listProcesses(workspace.id, token),
-      listActivatedRepos(workspace.id, token).catch(() => [] as ApiActivatedRepo[]),
-    ]);
-    const resolvedProcessId =
-      processList.processes.some((process) => process.id === processId)
-        ? processId
-        : processList.primary_process_id || "development";
-    const selectedRepo =
-      repos.find((repo) => repo.id === selectedRepoId) ?? repos[0] ?? null;
-    const [projectedProcess, config, integrations, nativeIntegrations] =
+    const [processList, repos, integrations, nativeIntegrations] =
       await Promise.all([
-        getProcess(workspace.id, resolvedProcessId, token, {
-          repoId: selectedRepo?.id,
-        }),
-        selectedRepo
-          ? getRepoConfig(workspace.id, selectedRepo.id, token).catch(
-              () => null as ApiRepoConfig | null,
-            )
-          : Promise.resolve(null),
+        listProcesses(workspace.id, token),
+        listActivatedRepos(workspace.id, token).catch(
+          () => [] as ApiActivatedRepo[],
+        ),
         listIntegrations(workspace.id, token).catch(
           () => [] as ApiIntegration[],
         ),
@@ -153,9 +145,12 @@ async function loadLiveProcess(
           () => [] as ApiNativeIntegration[],
         ),
       ]);
-    const repoProcess = processFromRepoConfig(config, projectedProcess);
-    const process = repoProcess ?? projectedProcess;
-    const configSource = selectConfigSource(config, repoProcess);
+    const resolvedProcessId =
+      processList.processes.some((process) => process.id === processId)
+        ? processId
+        : processList.primary_process_id || "development";
+    const selectedRepo =
+      repos.find((repo) => repo.id === selectedRepoId) ?? repos[0] ?? null;
     const prereqStatus = computePrereqStatus(
       workspace,
       integrations,
@@ -164,11 +159,10 @@ async function loadLiveProcess(
     return {
       workspace,
       allWorkspaces: workspaces,
-      process,
+      processList,
+      resolvedProcessId,
       repos,
       selectedRepo,
-      config,
-      configSource,
       prereqStatus,
     };
   } catch (err) {
@@ -249,29 +243,27 @@ function renderProcessGraphPage({
 function renderProcessPage({
   workspace,
   allWorkspaces,
-  process,
+  resolvedProcessId,
   repos,
   selectedRepo,
-  config,
-  configSource,
   selectedStateId,
   selectedTab,
   reason,
   prereqStatus,
+  token,
 }: {
-  workspace: Pick<ApiWorkspace, "id" | "name" | "slug">;
+  workspace: ApiWorkspace;
   allWorkspaces?: ApiWorkspace[];
-  process: ApiProcess;
+  resolvedProcessId: string;
   repos: ApiActivatedRepo[];
   selectedRepo: ApiActivatedRepo | null;
-  config?: ApiRepoConfig | null;
-  configSource?: ProcessConfigSource;
   selectedStateId?: string;
   selectedTab: ProcessTab;
   reason?: string;
-  prereqStatus?: EditorPrereqStatus;
+  prereqStatus: EditorPrereqStatus;
+  token: string;
 }) {
-  const locked = prereqStatus ? isEditorLocked(prereqStatus) : false;
+  const locked = isEditorLocked(prereqStatus);
   const multiWs = (allWorkspaces?.length ?? 0) > 1;
   return (
     <AppShell
@@ -288,11 +280,10 @@ function renderProcessPage({
         <RepoSelector
           repos={repos}
           selectedRepo={selectedRepo}
-          processId={process.id}
+          processId={resolvedProcessId}
         />
         <ProcessNotice reason={reason} />
-        <ConfigSourceBanner config={config ?? null} source={configSource ?? "fallback"} />
-        {prereqStatus && locked && (
+        {locked && (
           <EditorLockedBanner
             workspaceId={workspace.id}
             multiWorkspace={multiWs}
@@ -301,48 +292,23 @@ function renderProcessPage({
         )}
         <ProcessTabs
           selected={selectedTab}
-          processId={process.id}
+          processId={resolvedProcessId}
           repoId={selectedRepo?.id}
         />
-        <fieldset
-          disabled={locked}
-          aria-disabled={locked}
-          className={[
-            "border-0 p-0 m-0 min-w-0",
-            locked ? "pointer-events-none select-none opacity-60" : "",
-          ].join(" ")}
+        <Suspense
+          key={`${resolvedProcessId}:${selectedRepo?.id ?? "none"}:${selectedTab}`}
+          fallback={<EditorContentSkeleton />}
         >
-          {selectedTab === "flow" ? (
-            <ProcessEditorWorkspace
-              workspaceId={workspace.id}
-              process={process}
-              selectedStateId={selectedStateId}
-              repoId={selectedRepo?.id}
-              config={config ?? null}
-            />
-          ) : selectedTab === "schedule" ? (
-            <FlowSchedulePanel
-              workspaceId={workspace.id}
-              process={process}
-              repoId={selectedRepo?.id}
-              config={config ?? null}
-            />
-          ) : selectedTab === "mapping" ? (
-            <TrackerMappingPanel
-              workspaceId={workspace.id}
-              process={process}
-              repoId={selectedRepo?.id}
-              config={config ?? null}
-            />
-          ) : (
-            <RoutinesPanel
-              workspaceId={workspace.id}
-              process={process}
-              repoId={selectedRepo?.id}
-              config={config ?? null}
-            />
-          )}
-        </fieldset>
+          <EditorContent
+            workspaceId={workspace.id}
+            processId={resolvedProcessId}
+            repoId={selectedRepo?.id}
+            selectedTab={selectedTab}
+            selectedStateId={selectedStateId}
+            locked={locked}
+            token={token}
+          />
+        </Suspense>
       </div>
     </AppShell>
   );
@@ -489,6 +455,107 @@ function renderDownState(details?: string) {
     <AppShell title="Process">
       <ApiUnavailable scope="process" details={details} />
     </AppShell>
+  );
+}
+
+/**
+ * Slow-path content: ``getProcess`` (state graph projection) and the
+ * repo's ``.ship/config.yml`` resolve here. Wrapped in <Suspense>
+ * upstream so the rest of the page paints instantly.
+ */
+async function EditorContent({
+  workspaceId,
+  processId,
+  repoId,
+  selectedTab,
+  selectedStateId,
+  locked,
+  token,
+}: {
+  workspaceId: string;
+  processId: string;
+  repoId: string | undefined;
+  selectedTab: ProcessTab;
+  selectedStateId?: string;
+  locked: boolean;
+  token: string;
+}) {
+  let projectedProcess: ApiProcess;
+  let config: ApiRepoConfig | null = null;
+  try {
+    [projectedProcess, config] = await Promise.all([
+      getProcess(workspaceId, processId, token, { repoId }),
+      repoId
+        ? getRepoConfig(workspaceId, repoId, token).catch(
+            () => null as ApiRepoConfig | null,
+          )
+        : Promise.resolve(null),
+    ]);
+  } catch (err) {
+    if (err instanceof ApiHttpError && err.status === 401) {
+      redirect("/login?next=%2Fprocess&reason=session_expired");
+    }
+    return <ApiUnavailable scope="process" />;
+  }
+  const repoProcess = processFromRepoConfig(config, projectedProcess);
+  const process = repoProcess ?? projectedProcess;
+  const configSource = selectConfigSource(config, repoProcess);
+  return (
+    <>
+      <ConfigSourceBanner config={config} source={configSource} />
+      <fieldset
+        disabled={locked}
+        aria-disabled={locked}
+        className={[
+          "border-0 p-0 m-0 min-w-0",
+          locked ? "pointer-events-none select-none opacity-60" : "",
+        ].join(" ")}
+      >
+        {selectedTab === "flow" ? (
+          <ProcessEditorWorkspace
+            workspaceId={workspaceId}
+            process={process}
+            selectedStateId={selectedStateId}
+            repoId={repoId}
+            config={config}
+          />
+        ) : selectedTab === "schedule" ? (
+          <FlowSchedulePanel
+            workspaceId={workspaceId}
+            process={process}
+            repoId={repoId}
+            config={config}
+          />
+        ) : selectedTab === "mapping" ? (
+          <TrackerMappingPanel
+            workspaceId={workspaceId}
+            process={process}
+            repoId={repoId}
+            config={config}
+          />
+        ) : (
+          <RoutinesPanel
+            workspaceId={workspaceId}
+            process={process}
+            repoId={repoId}
+            config={config}
+          />
+        )}
+      </fieldset>
+    </>
+  );
+}
+
+function EditorContentSkeleton() {
+  return (
+    <div className="space-y-3">
+      <div className="h-9 animate-pulse rounded-2xl border border-white/10 bg-white/[0.04]" />
+      <div className="h-[480px] animate-pulse rounded-3xl border border-white/10 bg-gradient-to-br from-white/[0.04] via-white/[0.02] to-transparent">
+        <div className="flex h-full items-center justify-center text-xs font-semibold uppercase tracking-widest text-white/30">
+          Loading process…
+        </div>
+      </div>
+    </div>
   );
 }
 
