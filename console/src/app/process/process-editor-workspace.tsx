@@ -208,6 +208,56 @@ export function ProcessEditorWorkspace({
     });
   }
 
+  // Inline "+ Add stage to <lane>" button in each lane header. Creates
+  // a generic stage in that lane (defaults to a developer specialist
+  // so the operator can rename + repick from the inspector). Appends
+  // to the end of the lane's existing stages.
+  function addStageInLane(lane: ApiProcessState["state"]) {
+    const baseId = `${lane}_stage`;
+    const nextId = uniqueStateId(baseId, states);
+    const defaultSpecialist = specialistOptions[0] ?? {
+      id: "owner",
+      name: "Owner",
+      role: "Responsible owner for this state.",
+    };
+    const nextStage = {
+      id: nextId,
+      name: "New stage",
+      specialist_id: defaultSpecialist.id,
+      specialist_name: defaultSpecialist.name,
+      specialist_agent_profile: "main",
+      instructions: defaultSpecialist.role,
+      state: lane,
+      triggers: defaultSdlcStateTriggers(),
+      exit_conditions: [],
+      block_conditions: [],
+      runtime: {
+        task_count: 0,
+        blocked_count: 0,
+        last_execution_time: null,
+        health: "ok" as const,
+      },
+    } as ApiProcessState;
+    setStates((current) => {
+      // Insert just after the last stage in that lane; if the lane is
+      // empty, append at the end of the array.
+      let insertAt = current.length;
+      for (let i = current.length - 1; i >= 0; i -= 1) {
+        if (current[i].state === lane) {
+          insertAt = i + 1;
+          break;
+        }
+      }
+      return [
+        ...current.slice(0, insertAt),
+        nextStage,
+        ...current.slice(insertAt),
+      ];
+    });
+    setActiveStateId(nextId);
+    setSelectedTransitionId(null);
+  }
+
   function addState(template: NodeTemplate = NODE_TEMPLATES[0]) {
     const baseId = template.baseId;
     const nextId = uniqueStateId(baseId, states);
@@ -377,6 +427,7 @@ export function ProcessEditorWorkspace({
           onSelectState={selectStateId}
           onSelectTransition={selectTransitionId}
           onAddState={() => addState()}
+          onAddStageInLane={addStageInLane}
           onPositionsChange={updatePositions}
           onStageStateChange={updateStageState}
           onReorderStages={reorderStages}

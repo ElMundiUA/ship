@@ -114,6 +114,7 @@ export function ProcessCanvasEditor({
   selectedStateId,
   onSelectState,
   onAddState,
+  onAddStageInLane,
   onPositionsChange: _onPositionsChange,
   onStageStateChange,
   onReorderStages,
@@ -124,6 +125,11 @@ export function ProcessCanvasEditor({
   onSelectState: (stateId: string) => void;
   onSelectTransition?: (transitionId: string) => void;
   onAddState: () => void;
+  /** Inline "+ Add stage to <lane>" — appends a generic stage in the
+   *  given lane. The header button uses this; the global toolbar
+   *  button keeps using onAddState for the legacy default-position
+   *  flow. */
+  onAddStageInLane?: (lane: CanonicalState) => void;
   /** Kept for backward compatibility — unused by the grid editor. */
   onPositionsChange?: (positions: Record<string, Position>) => void;
   onStageStateChange?: (stageId: string, nextState: CanonicalState) => void;
@@ -259,6 +265,7 @@ export function ProcessCanvasEditor({
               dragOverLane={dragOverLane === lane}
               dragOverStageId={dragOverStageId}
               nextByStageId={nextByStageId}
+              onAddStageInLane={onAddStageInLane}
               onDragOverLane={(event) => {
                 event.preventDefault();
                 event.dataTransfer.dropEffect = "move";
@@ -291,6 +298,7 @@ function LaneColumn({
   dragOverLane,
   dragOverStageId,
   nextByStageId,
+  onAddStageInLane,
   onDragOverLane,
   onDragLeaveLane,
   onDropOnLane,
@@ -304,6 +312,7 @@ function LaneColumn({
   dragOverLane: boolean;
   dragOverStageId: string | null;
   nextByStageId: Map<string, { stage: ApiProcessState; actor: "user" | "agent" }>;
+  onAddStageInLane?: (lane: CanonicalState) => void;
   onDragOverLane: (event: ReactDragEvent<HTMLDivElement>) => void;
   onDragLeaveLane: () => void;
   onDropOnLane: (event: ReactDragEvent<HTMLDivElement>) => void;
@@ -323,7 +332,7 @@ function LaneColumn({
       onDragLeave={onDragLeaveLane}
       onDrop={onDropOnLane}
       className={[
-        "flex min-h-[280px] flex-col gap-1.5 rounded-xl border p-1.5 transition",
+        "group/lane flex min-h-[280px] flex-col gap-1.5 rounded-xl border p-1.5 transition",
         dragOverLane
           ? "border-aqua/55 bg-aqua/[0.06] shadow-[inset_0_0_0_1px_rgba(207,169,107,0.4)]"
           : "border-white/8",
@@ -343,9 +352,23 @@ function LaneColumn({
           {LANE_LABEL[lane]}
         </span>
         {stages.length > 0 && (
-          <span className="ml-auto text-[10px] font-semibold text-white/35">
+          <span className="text-[10px] font-semibold text-white/35">
             {stages.length}
           </span>
+        )}
+        {onAddStageInLane && (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onAddStageInLane(lane);
+            }}
+            title={`Add stage to ${LANE_LABEL[lane]}`}
+            className="ml-auto h-4 w-4 shrink-0 rounded text-[12px] font-bold leading-[14px] text-white/30 opacity-0 transition group-hover/lane:opacity-100 hover:bg-aqua/20 hover:text-aqua focus:opacity-100 focus:outline-none focus-visible:ring-1 focus-visible:ring-aqua/60"
+            aria-label={`Add stage to ${LANE_LABEL[lane]}`}
+          >
+            +
+          </button>
         )}
       </div>
 
