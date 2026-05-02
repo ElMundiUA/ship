@@ -696,8 +696,8 @@ export function RepoCard({
             {seedSaving
               ? "Opening PR..."
               : seedState === "update_available"
-                ? "Open re-seed PR →"
-                : "Open seed PR →"}
+                ? "Update Ship version →"
+                : "Set up Ship →"}
           </button>
         </div>
         {seedError && (

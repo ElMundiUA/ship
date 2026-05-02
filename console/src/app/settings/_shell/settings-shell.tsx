@@ -657,7 +657,7 @@ function RepositoryRow({
             disabled={configStatus.kind === "ready"}
             className="inline-flex rounded-full border border-aqua/30 bg-aqua/10 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-aqua transition hover:bg-aqua/20 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/[0.04] disabled:text-white/30"
           >
-            Open seed PR
+            Update Ship version
           </button>
         </form>
         <a
