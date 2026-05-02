@@ -418,8 +418,7 @@ export function ProcessEditorWorkspace({
         </div>
       </div>
 
-      <div className="grid min-h-0 grid-cols-1 xl:grid-cols-[230px_minmax(0,1fr)_390px]">
-        <NodePalette onAdd={addState} />
+      <div className="grid min-h-0 grid-cols-1 xl:grid-cols-[minmax(0,1fr)_320px]">
         <ProcessCanvasEditor
           process={processDraft}
           selectedStateId={selectedState?.id}
@@ -519,89 +518,20 @@ type NodeTemplate = {
   specialistId: string;
 };
 
+// NodePalette + NODE_TEMPLATES were RF-era leftovers — drag-templates
+// onto a canvas. With H3's "+ Add stage" buttons in each lane header
+// and the global toolbar button, the operator has two cleaner ways to
+// create stages in the new model. The 230 px aside it lived in is
+// now reclaimed for the canvas.
 const NODE_TEMPLATES: NodeTemplate[] = [
   {
     id: "specialist_work",
     name: "Specialist work",
-    description: "A ticket-driven process step owned by a role template.",
-    baseId: "specialist_work",
+    description: "A generic ticket-driven process stage.",
+    baseId: "stage",
     specialistId: "business_analyst",
   },
-  {
-    id: "human_approval",
-    name: "Human approval",
-    description: "Pause the handoff until a person approves in Ship Inbox.",
-    baseId: "human_approval",
-    specialistId: "product_manager",
-  },
-  {
-    id: "clarification",
-    name: "Clarification",
-    description: "Ask for missing information and return to the flow.",
-    baseId: "clarification",
-    specialistId: "intake",
-  },
-  {
-    id: "quality_review",
-    name: "Quality review",
-    description: "Validate acceptance criteria before release.",
-    baseId: "quality_review",
-    specialistId: "qa_engineer",
-  },
 ];
-
-function NodePalette({ onAdd }: { onAdd: (template: NodeTemplate) => void }) {
-  const primaryTemplate = NODE_TEMPLATES[0] as NodeTemplate;
-  return (
-    <aside className="border-b border-white/10 bg-[radial-gradient(circle_at_top,rgba(99,245,255,0.10),transparent_34%),rgba(0,0,0,0.22)] p-4 xl:border-b-0 xl:border-r">
-      <button
-        type="button"
-        onClick={() => onAdd(primaryTemplate)}
-        className="group relative w-full overflow-hidden rounded-[1.6rem] border border-aqua/25 bg-[linear-gradient(135deg,rgba(99,245,255,0.18),rgba(168,85,247,0.10),rgba(255,255,255,0.04))] p-4 text-left shadow-2xl shadow-aqua/5 transition hover:-translate-y-1 hover:border-aqua/45"
-      >
-        <div className="absolute -right-8 -top-8 h-24 w-24 rounded-full bg-aqua/20 blur-2xl transition group-hover:bg-aqua/30" />
-        <div className="relative text-[10px] font-bold uppercase tracking-[0.26em] text-aqua/75">
-          Create subprocess
-        </div>
-        <div className="relative mt-3 font-display text-lg font-bold text-white">
-          New work block
-        </div>
-        <p className="relative mt-2 text-xs leading-relaxed text-white/55">
-          Adds a draggable process block to this development canvas.
-        </p>
-        <div className="relative mt-4 inline-flex rounded-full border border-aqua/30 bg-aqua/10 px-3 py-1 text-xs font-semibold text-aqua">
-          Add to canvas
-        </div>
-      </button>
-
-      <div className="mt-4">
-        <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.22em] text-white/35">
-          Building blocks
-        </div>
-        <div className="grid gap-2">
-        {NODE_TEMPLATES.map((template) => (
-          <button
-            key={template.id}
-            type="button"
-            onClick={() => onAdd(template)}
-            className="group w-full rounded-2xl border border-white/10 bg-black/25 px-3 py-2.5 text-left transition hover:border-aqua/25 hover:bg-aqua/[0.055]"
-          >
-            <div className="flex items-center justify-between gap-2">
-              <div className="text-xs font-semibold text-white/85">{template.name}</div>
-              <span className="grid h-5 w-5 place-items-center rounded-full border border-white/10 text-aqua/50 transition group-hover:border-aqua/30 group-hover:text-aqua">
-                +
-              </span>
-            </div>
-            <div className="mt-1 text-[11px] leading-relaxed text-white/40">
-              {template.description}
-            </div>
-          </button>
-        ))}
-        </div>
-      </div>
-    </aside>
-  );
-}
 
 function initialActiveStateId(
   states: ApiProcessState[],

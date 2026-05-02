@@ -78,110 +78,101 @@ export function StateEditor({
   }
 
   const editorContent = (
-    <div className="space-y-4">
-      <div className="rounded-3xl border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(99,245,255,0.12),transparent_32%),linear-gradient(135deg,rgba(255,255,255,0.08),rgba(255,255,255,0.03))] p-4">
-        <div className="text-[10px] font-bold uppercase tracking-[0.24em] text-aqua/70">
-          Inspector
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-aqua/70">
+          Stage settings
         </div>
-        <h2 className="mt-2 font-display text-xl font-bold text-white">
-          Step settings
-        </h2>
-        <p className="mt-1 text-xs leading-relaxed text-white/50">
-          Tune what happens, how work is picked, when it can run, and where it goes next.
-        </p>
+        <span
+          className="rounded-md border border-white/10 bg-black/30 px-2 py-0.5 text-[10px] font-semibold uppercase text-white/55"
+          title={`Lifecycle bucket: ${selectedState.state}`}
+        >
+          {selectedState.state}
+        </span>
       </div>
+
       {config?.parse_error && (
-        <div className="rounded-xl border border-coral/25 bg-coral/[0.05] px-3 py-2 text-xs text-coral/90">
+        <div className="rounded-md border border-coral/25 bg-coral/[0.05] px-2 py-1.5 text-[11px] text-coral/90">
           Config YAML parse error: {config.parse_error}
         </div>
       )}
       {!repoId && (
-        <div className="rounded-xl border border-amber-300/25 bg-amber-300/[0.06] px-3 py-2 text-xs text-amber-100/90">
-          Select a repository before saving process changes.
+        <div className="rounded-md border border-amber-300/25 bg-amber-300/[0.06] px-2 py-1.5 text-[11px] text-amber-100/90">
+          Select a repository before saving.
         </div>
       )}
-      <div className="space-y-4">
-        <Section title="What happens here?">
-          <EditorField
-            label="Step name"
-            value={selectedState.name}
-            onChange={(value) => patchState({ name: value })}
-          />
-          <RoleSelector
-            value={selectedState.specialist_id}
-            options={specialistOptions}
-            onChange={(specialist) =>
-              patchState({
-                specialist_id: specialist.id,
-                specialist_name: specialist.name,
-                instructions: specialist.role,
-              })
-            }
-          />
-          <label className="block">
-            <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/45">
-              Additional guidance
-            </span>
-            <textarea
-              value={selectedState.instructions}
-              onChange={(event) => patchState({ instructions: event.target.value })}
-              rows={3}
-              className="w-full resize-none rounded-2xl border border-white/10 bg-black/25 px-3 py-2 text-sm text-white outline-none transition focus:border-aqua/40 focus:bg-aqua/[0.04]"
-            />
-          </label>
-          <p className="text-xs leading-relaxed text-white/45">
-            {selectedRole?.name ?? selectedState.specialist_name} uses the managed
-            role template, injected ticket context, workspace policies, and this
-            additive guidance. The base role prompt is not replaced here.
-          </p>
-        </Section>
 
-        <Section title="When it can run">
+      {/* IDENTITY — name, role, instructions. The single most-edited
+          block; always open. The old 6-section panel had a verbose
+          documentation paragraph between fields ("uses the managed
+          role template, injected ticket context, …") which was
+          docs-grade copy in a UI surface; deleted. */}
+      <div className="space-y-2.5 rounded-xl border border-white/10 bg-white/[0.03] p-3">
+        <EditorField
+          label="Stage name"
+          value={selectedState.name}
+          onChange={(value) => patchState({ name: value })}
+        />
+        <RoleSelector
+          value={selectedState.specialist_id}
+          options={specialistOptions}
+          onChange={(specialist) =>
+            patchState({
+              specialist_id: specialist.id,
+              specialist_name: specialist.name,
+              instructions: specialist.role,
+            })
+          }
+        />
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/45">
+            Additional guidance
+          </span>
+          <textarea
+            value={selectedState.instructions}
+            onChange={(event) => patchState({ instructions: event.target.value })}
+            rows={3}
+            className="w-full resize-none rounded-md border border-white/10 bg-black/25 px-2 py-1.5 text-sm text-white outline-none transition focus:border-aqua/40 focus:bg-aqua/[0.04]"
+          />
+        </label>
+      </div>
+
+      {/* BEHAVIOUR — schedule + next handoff + advanced agent profile.
+          Collapsed by default. Operators rarely touch these per-stage. */}
+      <details className="rounded-xl border border-white/10 bg-white/[0.025] p-3 [&[open]>summary]:mb-3">
+        <summary className="cursor-pointer text-[10px] font-bold uppercase tracking-widest text-white/55">
+          Behaviour
+        </summary>
+        <div className="space-y-3 text-xs">
           <ScheduleSummary
             state={selectedState}
             schedule={schedule}
             processId={processId}
             repoId={repoId}
           />
-        </Section>
-
-        <Section title="What happens next">
           <NextHandoffSummary nextStates={nextStates} />
-        </Section>
-
-        <details className="rounded-2xl border border-white/10 bg-white/[0.035] p-3">
-          <summary className="cursor-pointer text-xs font-bold uppercase tracking-widest text-white/45">
-            Advanced execution
-          </summary>
-          <div className="mt-3">
-            <AgentProfileSelector
-              value={agentProfileFromState(selectedState)}
-              onChange={(value) => patchState({ specialist_agent_profile: value })}
-            />
-          </div>
-        </details>
-        <div className="rounded-2xl border border-coral/20 bg-coral/[0.04] p-3">
-          <div className="text-[10px] font-bold uppercase tracking-widest text-coral/80">
-            Danger zone
-          </div>
-          <p className="mt-1 text-xs text-white/45">
-            Removing a state also removes transitions connected to it.
-          </p>
-          <button
-            type="button"
-            disabled={states.length <= 1}
-            onClick={() => {
-              const ok = window.confirm(
-                `Remove "${selectedState.name}" from the flow? This also removes handoffs connected to it.`,
-              );
-              if (ok) onDeleteState(selectedState.id);
-            }}
-            className="mt-3 rounded-full border border-coral/30 bg-coral/10 px-3 py-1 text-xs font-semibold text-coral hover:bg-coral/15 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/[0.04] disabled:text-white/35"
-          >
-            Delete state
-          </button>
+          <AgentProfileSelector
+            value={agentProfileFromState(selectedState)}
+            onChange={(value) => patchState({ specialist_agent_profile: value })}
+          />
         </div>
-      </div>
+      </details>
+
+      {/* DELETE — single inline button, no separate "danger zone"
+          banner. Disabled when this is the last stage. */}
+      <button
+        type="button"
+        disabled={states.length <= 1}
+        onClick={() => {
+          const ok = window.confirm(
+            `Remove "${selectedState.name}" from the flow? This also removes handoffs connected to it.`,
+          );
+          if (ok) onDeleteState(selectedState.id);
+        }}
+        className="w-full rounded-md border border-coral/25 bg-coral/[0.04] px-3 py-1.5 text-[11px] font-semibold text-coral/85 transition hover:bg-coral/[0.10] disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/[0.03] disabled:text-white/30"
+      >
+        Delete this stage
+      </button>
     </div>
   );
 
