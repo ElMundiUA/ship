@@ -7,6 +7,35 @@ import type {
   ApiProcessTransition,
   ApiRepoConfig,
 } from "@/lib/api/client";
+import { CANONICAL_STATES, type CanonicalState } from "@/lib/api/types";
+
+// Mirror of backend ``_LEGACY_STAGE_TO_STATE`` — used as a safety net
+// when a stage entry in .ship/config.yml predates the ``state`` field.
+// Once every workspace has been re-seeded with the canonical stage
+// schema, this can shrink to a single "planning" default.
+const LEGACY_STAGE_STATE: Record<string, CanonicalState> = {
+  task_intake: "planning",
+  ba_requirements: "planning",
+  tech_arch_plan: "planning",
+  qa_arch_plan: "planning",
+  dev_implementation: "executing",
+  qa_manual: "executing",
+  qa_automation: "executing",
+  pr_review: "reviewing",
+};
+
+function canonicalStateFromConfigRow(
+  row: Record<string, unknown>,
+  stageId: string,
+  fallback: ApiProcessState | undefined,
+): CanonicalState {
+  const fromYaml = stringValue(row.state);
+  if (fromYaml && (CANONICAL_STATES as readonly string[]).includes(fromYaml)) {
+    return fromYaml as CanonicalState;
+  }
+  if (fallback?.state) return fallback.state;
+  return LEGACY_STAGE_STATE[stageId] ?? "planning";
+}
 
 type ProcessStateWithAgentProfile = ApiProcessState & {
   specialist_agent_profile?: string | null;
@@ -115,6 +144,7 @@ export function processConfigFromApiProcess(process: ApiProcess): Record<string,
     states: process.states.map((state) => ({
       id: state.id,
       name: state.name,
+      state: state.state,
       specialist: {
         id: state.specialist_id,
         name: state.specialist_name,
@@ -122,10 +152,15 @@ export function processConfigFromApiProcess(process: ApiProcess): Record<string,
       },
       instructions: state.instructions,
       ...(state.layout ? { layout: state.layout } : {}),
-      triggers: state.triggers,
-      exit_conditions: state.exit_conditions,
-      block_conditions: state.block_conditions,
-      ...(state.ticket_contract ? { ticket_contract: state.ticket_contract } : {}),
+      ...(state.triggers && state.triggers.length
+        ? { triggers: state.triggers }
+        : {}),
+      ...(state.exit_conditions && state.exit_conditions.length
+        ? { exit_conditions: state.exit_conditions }
+        : {}),
+      ...(state.block_conditions && state.block_conditions.length
+        ? { block_conditions: state.block_conditions }
+        : {}),
     })),
     transitions: process.transitions.map((transition) => ({
       from: transition.from_state_id,
@@ -182,6 +217,7 @@ function stateFromConfig(
   return {
     id,
     name: stringValue(row.name) ?? fallback?.name ?? titleFromId(id),
+    state: canonicalStateFromConfigRow(row, id, fallback),
     specialist_id:
       stringValue(row.specialist_id) ??
       stringValue(specialist?.id) ??
@@ -210,15 +246,11 @@ function stateFromConfig(
     exit_conditions:
       conditionsFromConfig(row.exit_conditions) ??
       fallback?.exit_conditions ??
-      [{ expression: "state_complete == true" }],
+      [],
     block_conditions:
       conditionsFromConfig(row.block_conditions) ??
       fallback?.block_conditions ??
-      [{ expression: "requires_human_input == true" }],
-    ticket_contract:
-      ticketContractFromConfig(row.ticket_contract) ??
-      fallback?.ticket_contract ??
-      defaultTicketContract(id),
+      [],
     runtime: fallback?.runtime ?? {
       task_count: 0,
       blocked_count: 0,
