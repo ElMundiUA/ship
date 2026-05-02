@@ -249,11 +249,7 @@ export function FlowSchedulePanel({
           changedAreas={dirty ? ["Flow schedule slots changed"] : []}
         />
 
-        <RoutinesSummary
-          routines={process.routines}
-          processId={process.id}
-          repoId={repoId}
-        />
+        <RoutinesSummary routines={process.routines} />
 
         <div className="rounded-2xl border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(99,245,255,0.10),transparent_28%),rgba(255,255,255,0.03)] p-3">
           <div className="grid gap-3 sm:grid-cols-[220px_minmax(0,1fr)]">
@@ -571,22 +567,14 @@ function nextAvailableTime(existing: string[]) {
 
 function RoutinesSummary({
   routines,
-  processId,
-  repoId,
 }: {
   routines: ApiProcessRoutine[];
-  processId: string;
-  repoId?: string;
 }) {
   // Show ONLY what's actually in process.routines after the hidden-id
   // filter. Pre-canonical seed ids (code_map, scan_*, daily_*) drop
   // out of view; the operator never sees fictional defaults for
   // routines that don't exist in their repo's .ship/config.yml.
   const visible = routines.filter((r) => !HIDDEN_ROUTINE_IDS.has(r.id));
-  const editHrefSuffix = repoId
-    ? `?tab=routines&repo=${encodeURIComponent(repoId)}`
-    : "?tab=routines";
-  const editHref = `/process/${encodeURIComponent(processId)}${editHrefSuffix}`;
   // Lookup display label by canonical id.
   const labelById = new Map(BUILTIN_ROUTINE_CATALOG.map((c) => [c.id, c.name] as const));
   return (
@@ -595,17 +583,15 @@ function RoutinesSummary({
         <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-white/55">
           Routines on this process
         </div>
-        <a
-          href={editHref}
-          className="rounded-full border border-aqua/30 bg-aqua/10 px-3 py-1 text-[11px] font-semibold text-aqua transition hover:bg-aqua/15"
-        >
-          Edit cron →
-        </a>
+        <span className="text-[10px] uppercase tracking-widest text-white/35">
+          Drag specialists into cells; routines fire on the cron below.
+        </span>
       </div>
       {visible.length === 0 ? (
         <p className="mt-3 text-xs text-white/55">
-          No routines configured on this process. The Routines tab seeds the
-          canonical six (Daily, Retro, Healthcheck, Tech / QA / Security review).
+          No routines configured on this process. The seed bundle ships
+          the canonical six (Daily, Retro, Healthcheck, Tech / QA / Security
+          review) — re-seed the repo to add them.
         </p>
       ) : (
         <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">

@@ -13,7 +13,6 @@ import {
 import { FlowSchedulePanel } from "./flow-schedule-panel";
 import { ProcessGraphOverview } from "./process-graph-overview";
 import { ProcessEditorWorkspace } from "./process-editor-workspace";
-import { RoutinesPanel } from "./routines-panel";
 import { TrackerMappingPanel } from "./tracker-mapping-panel";
 import { RepoSelector } from "./repo-selector";
 import {
@@ -48,7 +47,7 @@ import { pickWorkspace, toAppShellWorkspaces } from "@/lib/workspace-scope";
 export const dynamic = "force-dynamic";
 
 type SearchParams = { [key: string]: string | string[] | undefined };
-type ProcessTab = "flow" | "schedule" | "routines" | "mapping";
+type ProcessTab = "flow" | "schedule" | "mapping";
 
 export default async function ProcessPage({
   searchParams,
@@ -532,9 +531,6 @@ function ProcessTabs({
       <TabLink href={hrefFor("schedule")} active={selected === "schedule"}>
         Capacity
       </TabLink>
-      <TabLink href={hrefFor("routines")} active={selected === "routines"}>
-        Routines
-      </TabLink>
       <TabLink href={hrefFor("mapping")} active={selected === "mapping"}>
         Tracker
       </TabLink>
@@ -544,7 +540,9 @@ function ProcessTabs({
 
 function parseProcessTab(value: string | string[] | undefined): ProcessTab {
   if (value === "schedule") return "schedule";
-  if (value === "routines") return "routines";
+  // Routines tab was killed in Block 2 — old deep links land in
+  // Capacity, where the routines now live alongside specialists.
+  if (value === "routines") return "schedule";
   if (value === "mapping" || value === "tracker") return "mapping";
   return "flow";
 }
@@ -651,20 +649,13 @@ async function EditorContent({
             repoId={repoId}
             config={config}
           />
-        ) : selectedTab === "mapping" ? (
+        ) : (
           <TrackerMappingPanel
             workspaceId={workspaceId}
             process={process}
             repoId={repoId}
             config={config}
             trackerKind={trackerKind ?? undefined}
-          />
-        ) : (
-          <RoutinesPanel
-            workspaceId={workspaceId}
-            process={process}
-            repoId={repoId}
-            config={config}
           />
         )}
       </fieldset>
