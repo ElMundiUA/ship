@@ -50,6 +50,56 @@ TaskStatus = Literal["active", "blocked", "done"]
 ProcessLinkType = Literal["handoff", "dependency", "approval", "notification"]
 ProcessNodeType = Literal["workspace", "process", "subprocess", "routine", "approval"]
 
+# The seven canonical lifecycle states a stage can sit in. Every
+# stage in any process maps to exactly one of these; they are the
+# tracker-agnostic projection axis that adapters bind to native columns.
+#
+#   backlog          ticket exists, no agent picks it up
+#   planning         ticket is being scoped/designed (intake/BA/architects)
+#   executing        ticket is being built (dev/QA-manual/QA-auto)
+#   reviewing        work submitted, awaiting approval
+#   awaiting_input   frozen, waiting on a human answer (overlay via label)
+#   blocked          frozen, external blocker (overlay via label)
+#   closed           terminal
+#
+# Adding states here breaks tracker projection contracts — extend by
+# adding a new stage to a process and mapping it to one of the seven
+# instead.
+CanonicalState = Literal[
+    "backlog",
+    "planning",
+    "executing",
+    "reviewing",
+    "awaiting_input",
+    "blocked",
+    "closed",
+]
+
+CANONICAL_STATES: tuple[str, ...] = (
+    "backlog",
+    "planning",
+    "executing",
+    "reviewing",
+    "awaiting_input",
+    "blocked",
+    "closed",
+)
+
+# Legacy stage id → canonical state. Used when projecting a stage
+# from an older config (or our own current default) that doesn't yet
+# carry the explicit ``state`` field. Tables in ``.ship/config.yml``
+# stay readable; we just impute the bucket.
+_LEGACY_STAGE_TO_STATE: dict[str, CanonicalState] = {
+    "task_intake": "planning",
+    "ba_requirements": "planning",
+    "tech_arch_plan": "planning",
+    "qa_arch_plan": "planning",
+    "dev_implementation": "executing",
+    "qa_manual": "executing",
+    "qa_automation": "executing",
+    "pr_review": "reviewing",
+}
+
 PRIMARY_PROCESS_ID = "development"
 
 _SEEDED_PROCESSES: tuple[dict[str, Any], ...] = (
@@ -174,14 +224,32 @@ class ProcessStateRuntimeOut(BaseModel):
 
 
 class ProcessStateOut(BaseModel):
+    """A *stage* in a process — work step the operator sees on the canvas.
+
+    Despite the type name (kept stable for now to avoid an API rename
+    sweep), each entry is conceptually a "stage": a discrete step where
+    a specialist does something. Each stage carries a canonical
+    ``state`` field that buckets it into one of the seven lifecycle
+    phases (backlog/planning/executing/reviewing/awaiting_input/
+    blocked/closed). The tracker projection lives at the canonical
+    state level, not at the stage level — so adding a "Security Audit"
+    stage with state="reviewing" automatically inherits the existing
+    Linear "In Review" mapping.
+    """
+
     id: str
     name: str
     specialist_id: str
     specialist_name: str
     instructions: str
+    state: CanonicalState = "planning"
     triggers: list[ProcessTriggerOut] = Field(default_factory=list)
     exit_conditions: list[ProcessConditionOut] = Field(default_factory=list)
     block_conditions: list[ProcessConditionOut] = Field(default_factory=list)
+    # Deprecated: the ticket_contract surfaced internal lifecycle
+    # sub-states (input/claim/success) that operators couldn't make
+    # sense of. Replaced by the single ``state`` field above. Kept on
+    # the model as ``None`` so older clients don't crash on parse.
     ticket_contract: ProcessTicketContractOut | None = None
     runtime: ProcessStateRuntimeOut = Field(default_factory=ProcessStateRuntimeOut)
 
@@ -965,13 +1033,13 @@ async def _build_development_process(
                 specialist_id=specialist_id,
                 specialist_name=specialists[specialist_id].name,
                 instructions=_state_instructions(lane_key),
+                state=_canonical_state_for(lane_key),
                 triggers=_triggers_for(lane, pipeline),
                 # Real conditions are configured per-state via the
                 # editor; the projection no longer fabricates these
                 # synthetic placeholders.
                 exit_conditions=[],
                 block_conditions=[],
-                ticket_contract=_ticket_contract_for_state(lane_key),
                 runtime=runtime,
             )
         )
@@ -1203,10 +1271,10 @@ def _placeholder_process_states(
             specialist_id=specialist.id,
             specialist_name=specialist.name,
             instructions=instructions,
+            state=_canonical_state_for(state_id),
             triggers=[ProcessTriggerOut(type="event", event="process_graph.handoff")],
-            exit_conditions=[ProcessConditionOut(expression="review.complete == true")],
-            block_conditions=[ProcessConditionOut(expression="requires_human_input == true")],
-            ticket_contract=_ticket_contract_for_state(state_id),
+            exit_conditions=[],
+            block_conditions=[],
             runtime=ProcessStateRuntimeOut(health="ok"),
         )
     ]
@@ -1251,63 +1319,17 @@ def _specialist_for_lane(lane_id: str) -> str:
     return "devops_platform"
 
 
-def _ticket_contract_for_state(state_id: str) -> ProcessTicketContractOut:
-    known = {
-        "task_intake": ProcessTicketContractOut(
-            input_state="new",
-            claim_state="intake_in_progress",
-            success_state="ready_for_analysis",
-            blocked_state="blocked",
-            needs_info_state="needs_info",
-        ),
-        "ba_requirements": ProcessTicketContractOut(
-            input_state="ready_for_analysis",
-            claim_state="analysis_in_progress",
-            success_state="ready_for_development",
-            blocked_state="blocked",
-            needs_info_state="needs_info",
-        ),
-        "tech_arch_plan": ProcessTicketContractOut(
-            input_state="ready_for_development",
-            claim_state="architecture_in_progress",
-            success_state="ready_for_implementation",
-            blocked_state="blocked",
-            needs_info_state="needs_info",
-            approval_state="needs_human_approval",
-        ),
-        "dev_implementation": ProcessTicketContractOut(
-            input_state="ready_for_implementation",
-            claim_state="development_in_progress",
-            success_state="in_review",
-            blocked_state="blocked",
-            needs_info_state="needs_info",
-        ),
-        "qa_manual": ProcessTicketContractOut(
-            input_state="in_review",
-            claim_state="qa_in_progress",
-            success_state="ready_for_release",
-            blocked_state="blocked",
-            needs_info_state="needs_info",
-        ),
-        "pr_review": ProcessTicketContractOut(
-            input_state="ready_for_release",
-            claim_state="final_review_in_progress",
-            success_state="done",
-            blocked_state="blocked",
-            needs_info_state="needs_info",
-            approval_state="needs_human_approval",
-        ),
-    }
-    return known.get(
-        state_id,
-        ProcessTicketContractOut(
-            input_state=f"{state_id}_ready",
-            claim_state=f"{state_id}_in_progress",
-            success_state=f"{state_id}_done",
-            blocked_state="blocked",
-            needs_info_state="needs_info",
-        ),
-    )
+def _canonical_state_for(stage_id: str) -> CanonicalState:
+    """Bucket a stage id into one of the seven canonical lifecycle states.
+
+    For our seeded stage ids we use the explicit ``_LEGACY_STAGE_TO_STATE``
+    table. For anything we don't recognise (a custom stage the operator
+    added) we default to ``planning`` — the safest bucket because a
+    planning stage doesn't accidentally claim done-ness or block the
+    flow. The operator can always override the canonical state by
+    setting it explicitly in ``.ship/config.yml``.
+    """
+    return _LEGACY_STAGE_TO_STATE.get(stage_id, "planning")
 
 
 def _default_schedule(states: list[ProcessStateOut]) -> ProcessScheduleOut:
@@ -1330,135 +1352,77 @@ def _default_schedule(states: list[ProcessStateOut]) -> ProcessScheduleOut:
     )
 
 
-# Canonical Ship state → native tracker state name. Baked into the
-# adapter so the operator never has to manually map 15 canonical states
-# on first attach — the editor opens with all four trackers
-# pre-populated and the operator only intervenes when their tracker has
-# customised workflow states.
+# Canonical state → native tracker projection. Seven entries each.
+# Baked into the adapter so a fresh attach lights up with zero clicks;
+# the operator only edits a row when their team has customised workflow
+# states (Linear team renamed "In Progress" to "Doing", Jira admin
+# added an "In Review" status that didn't exist before, …).
 #
-# Conventions:
-#   - "Backlog/Todo/In Progress/In Review/Done" are the Linear defaults
-#     — they exist on every Linear team that hasn't customised states.
-#   - Jira ships "To Do/In Progress/In Review/Blocked/Done" (the
-#     Software template's default workflow).
-#   - GitHub Issues only has open/closed; the closer-grained Ship
-#     states all collapse to "open" except the success path.
-#   - Notion's "Status" property defaults to "Not started/In progress/Done".
+# overlay states (awaiting_input, blocked) project to a pseudo-column
+# with an explicit overlay marker — these don't move the ticket between
+# columns; the adapter sets a label and the ticket stays put. The
+# magic value ``__overlay__`` tells the FE renderer to show "stays in
+# current column + label" rather than a column name.
+_OVERLAY = "__overlay__"
+
 _CANONICAL_TO_LINEAR: dict[str, str] = {
-    "new": "Backlog",
-    "intake_in_progress": "Todo",
-    "ready_for_analysis": "Todo",
-    "analysis_in_progress": "In Progress",
-    "ready_for_development": "Todo",
-    "architecture_in_progress": "In Progress",
-    "ready_for_implementation": "Todo",
-    "development_in_progress": "In Progress",
-    "in_review": "In Review",
-    "qa_in_progress": "In Review",
-    "ready_for_release": "In Review",
-    "final_review_in_progress": "In Review",
-    "done": "Done",
-    "blocked": "Blocked",  # Most Linear teams add this; falls back to Todo if absent
-    "needs_info": "Todo",
-    "needs_human_approval": "In Review",
+    "backlog": "Backlog",
+    "planning": "Todo",
+    "executing": "In Progress",
+    "reviewing": "In Review",
+    "awaiting_input": _OVERLAY,
+    "blocked": "Blocked",
+    "closed": "Done",
 }
 _CANONICAL_TO_JIRA: dict[str, str] = {
-    "new": "To Do",
-    "intake_in_progress": "To Do",
-    "ready_for_analysis": "To Do",
-    "analysis_in_progress": "In Progress",
-    "ready_for_development": "To Do",
-    "architecture_in_progress": "In Progress",
-    "ready_for_implementation": "Selected for Development",
-    "development_in_progress": "In Progress",
-    "in_review": "In Review",
-    "qa_in_progress": "In Review",
-    "ready_for_release": "In Review",
-    "final_review_in_progress": "In Review",
-    "done": "Done",
+    "backlog": "To Do",
+    "planning": "To Do",  # Jira default — distinguished from backlog by stage:* labels
+    "executing": "In Progress",
+    "reviewing": "In Review",  # falls back to In Progress + label if status missing
+    "awaiting_input": _OVERLAY,
     "blocked": "Blocked",
-    "needs_info": "To Do",
-    "needs_human_approval": "In Review",
+    "closed": "Done",
 }
 _CANONICAL_TO_GITHUB: dict[str, str] = {
-    # GitHub Issues only has open/closed; everything that isn't terminal
-    # collapses to "open" with the canonical id surfacing as a label.
-    "new": "open",
-    "intake_in_progress": "open",
-    "ready_for_analysis": "open",
-    "analysis_in_progress": "open",
-    "ready_for_development": "open",
-    "architecture_in_progress": "open",
-    "ready_for_implementation": "open",
-    "development_in_progress": "open",
-    "in_review": "open",
-    "qa_in_progress": "open",
-    "ready_for_release": "open",
-    "final_review_in_progress": "open",
-    "done": "closed",
+    # GitHub Issues only has open/closed; canonical state lives in a
+    # ``state:<canonical>`` label that the provisioner creates on attach.
+    "backlog": "open",
+    "planning": "open",
+    "executing": "open",
+    "reviewing": "open",
+    "awaiting_input": _OVERLAY,
     "blocked": "open",
-    "needs_info": "open",
-    "needs_human_approval": "open",
+    "closed": "closed",
 }
 _CANONICAL_TO_NOTION: dict[str, str] = {
-    "new": "Not started",
-    "intake_in_progress": "In progress",
-    "ready_for_analysis": "Not started",
-    "analysis_in_progress": "In progress",
-    "ready_for_development": "Not started",
-    "architecture_in_progress": "In progress",
-    "ready_for_implementation": "Not started",
-    "development_in_progress": "In progress",
-    "in_review": "In progress",
-    "qa_in_progress": "In progress",
-    "ready_for_release": "In progress",
-    "final_review_in_progress": "In progress",
-    "done": "Done",
+    "backlog": "Not started",
+    "planning": "Not started",
+    "executing": "In progress",
+    "reviewing": "In progress",
+    "awaiting_input": _OVERLAY,
     "blocked": "Blocked",
-    "needs_info": "In progress",
-    "needs_human_approval": "In progress",
+    "closed": "Done",
 }
 
 
 def _default_tracker_mapping(
     states: list[ProcessStateOut],
 ) -> dict[str, dict[str, str]]:
-    """Pre-fill native tracker mappings for every canonical state.
+    """Return per-tracker projections of the seven canonical states.
 
-    Returns a dict keyed by tracker kind (``linear``/``jira``/
-    ``github``/``notion``/``ship``). Each value maps every canonical
-    state seen in the process states to a native status name that the
-    relevant tracker ships with by default. The operator only edits
-    this when their team has customised workflow states (e.g. Linear
-    team renamed "In Progress" to "Doing"); the default sets up a
-    working projection on first load with zero clicks.
-
-    The legacy ``ship`` projection (snake_case → Title Case) stays so
-    the workspace-internal FSM still has a self-consistent view when
-    no real tracker is bound yet.
+    Result is keyed by tracker kind (``linear``/``jira``/``github``/
+    ``notion``/``ship``). Each value is a 7-entry mapping from canonical
+    state to native column / label / overlay marker. ``states`` is
+    accepted for API symmetry but ignored — the canonical projection is
+    workspace-wide, not stage-specific (any custom stage the operator
+    adds inherits its bucket's projection automatically).
     """
-    canonical: set[str] = set()
-    for state in states:
-        contract = state.ticket_contract
-        if contract is None:
-            continue
-        for value in (
-            contract.input_state,
-            contract.claim_state,
-            contract.success_state,
-            contract.blocked_state,
-            contract.needs_info_state,
-            contract.approval_state,
-        ):
-            if value:
-                canonical.add(value)
-    sorted_canonical = sorted(canonical)
     return {
-        "linear": {s: _CANONICAL_TO_LINEAR.get(s, s.replace("_", " ").title()) for s in sorted_canonical},
-        "jira": {s: _CANONICAL_TO_JIRA.get(s, s.replace("_", " ").title()) for s in sorted_canonical},
-        "github": {s: _CANONICAL_TO_GITHUB.get(s, "open") for s in sorted_canonical},
-        "notion": {s: _CANONICAL_TO_NOTION.get(s, s.replace("_", " ").title()) for s in sorted_canonical},
-        "ship": {s: s.replace("_", " ").title() for s in sorted_canonical},
+        "linear": dict(_CANONICAL_TO_LINEAR),
+        "jira": dict(_CANONICAL_TO_JIRA),
+        "github": dict(_CANONICAL_TO_GITHUB),
+        "notion": dict(_CANONICAL_TO_NOTION),
+        "ship": {s: s.replace("_", " ").title() for s in CANONICAL_STATES},
     }
 
 
@@ -1617,10 +1581,10 @@ def _default_states(
             specialist_id=specialist_id,
             specialist_name=specialists[specialist_id].name,
             instructions=_state_instructions(state_id),
+            state=_canonical_state_for(state_id),
             triggers=[ProcessTriggerOut(type="manual")],
-            exit_conditions=[ProcessConditionOut(expression="state_complete == true")],
-            block_conditions=[ProcessConditionOut(expression="requires_human_input == true")],
-            ticket_contract=_ticket_contract_for_state(state_id),
+            exit_conditions=[],
+            block_conditions=[],
         )
         for state_id, specialist_id in rows
     ]

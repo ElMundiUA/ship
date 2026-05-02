@@ -155,13 +155,16 @@ export function ProcessEditorWorkspace({
       specialist_name: templateSpecialist.name,
       specialist_agent_profile: "main",
       instructions: templateSpecialist.role,
+      // New stages default to the planning bucket; operator can drag
+      // them to the right swim-lane on the canvas to change.
+      state: "planning",
       layout: {
         x: (anchor?.layout?.x ?? 72) + 266,
         y: anchor?.layout?.y ?? 170,
       },
       triggers: defaultSdlcStateTriggers(),
-      exit_conditions: [{ expression: "state_complete == true" }],
-      block_conditions: [{ expression: "requires_human_input == true" }],
+      exit_conditions: [],
+      block_conditions: [],
       ticket_contract: {
         input_state: `${nextId}_ready`,
         claim_state: `${nextId}_in_progress`,
