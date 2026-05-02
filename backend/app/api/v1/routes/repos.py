@@ -26,7 +26,7 @@ from typing import Any
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.api.v1.deps import AuthContext, get_current_auth
@@ -1022,6 +1022,77 @@ async def wizard_seed(
                 "message": (
                     "Ship's GitHub App isn't installed for the workspace. "
                     "Reconnect it before opening the wizard seed PR."
+                ),
+            },
+        )
+
+    # ── Workspace defaults gate ──────────────────────────────────
+    # Three workspace-level invariants must hold before any repo can
+    # be seeded. Each missing piece flips a stable error code so the
+    # FE can deeplink straight at the right step instead of bouncing
+    # through a generic "seed failed" banner.
+    #
+    # 1. ``Workspace.default_agent_profile`` — non-NULL. The /process
+    #    editor and shipctl agent dispatch both need it to pick which
+    #    coding agent gets invoked per state. Seeding without it
+    #    produces a config the runtime can't resolve.
+    # 2. Workspace-level tracker — at least one ``Integration`` row
+    #    of kind linear/github/jira at workspace scope. Linear/Notion
+    #    additionally need ``secret_ciphertext`` (OAuth token);
+    #    GitHub rides on the App installation token (already enforced
+    #    by the github_app_missing check above) and needs no secret.
+    # 3. Orchestrator — only ``github`` is supported today; covered
+    #    automatically by the github_app_missing check.
+    from backend.app.db.models.tenancy import (  # local import, no circular
+        Integration,
+        Workspace,
+    )
+
+    workspace_row = await session.get(Workspace, workspace_id)
+    if workspace_row is None or not workspace_row.default_agent_profile:
+        raise HTTPException(
+            status_code=status.HTTP_412_PRECONDITION_FAILED,
+            detail={
+                "code": "workspace_default_agent_required",
+                "message": (
+                    "Pick a workspace-level default_agent_profile before "
+                    "seeding. PATCH /v1/workspaces/{ws} with one of: auto / "
+                    "main / cheaper / cursor_agent / codex_cli / "
+                    "ship_cloud_agent / local_cli."
+                ),
+            },
+        )
+
+    has_workspace_tracker = (
+        await session.execute(
+            select(Integration.id)
+            .where(
+                Integration.workspace_id == workspace_id,
+                Integration.repo_id.is_(None),
+                Integration.kind.in_(("linear", "github", "jira")),
+                # GitHub trackers ride on the App installation token,
+                # so no ``secret_ciphertext`` is fine for kind=github
+                # (the github_app_missing check above already enforces
+                # a real install). Linear / Jira need a token present.
+                or_(
+                    Integration.kind == "github",
+                    Integration.secret_ciphertext.is_not(None),
+                ),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if has_workspace_tracker is None:
+        raise HTTPException(
+            status_code=status.HTTP_412_PRECONDITION_FAILED,
+            detail={
+                "code": "workspace_tracker_required",
+                "message": (
+                    "Connect a workspace-level tracker before seeding. "
+                    "Linear/Notion: POST "
+                    "/v1/integrations/{kind}/install/start; Jira: PUT "
+                    "/v1/integrations/jira; GitHub Issues: pick "
+                    "kind=github at the workspace tracker step."
                 ),
             },
         )

@@ -26,16 +26,26 @@ import {
   ApiHttpError,
   ApiUnavailableError,
   getDefaultBundle,
+  listIntegrations,
+  listWorkspaces,
   type ApiDefaultBundleEntry,
 } from "@/lib/api/client";
 import { getSessionToken } from "@/lib/api/session";
 
 import { RepoCard, type RepoCardInitial } from "./repo-card";
+import {
+  WorkspaceDefaultsPanel,
+  type WorkspaceDefaultsPanelInitial,
+} from "./workspace-defaults-panel";
 
 export interface ConfirmStepProps {
   workspaceId: string;
   cards: RepoCardInitial[] | null;
   loadError: string | null;
+  /** True when at least one ``GitHubInstallation`` for the workspace
+   *  is active (the wizard can't reach this step otherwise, but the
+   *  panel uses this for the orchestrator-status row). */
+  githubAppInstalled: boolean;
 }
 
 const CONFIGURE_ERRORS: Record<string, string> = {
@@ -47,9 +57,50 @@ export async function ConfirmStep({
   workspaceId,
   cards,
   loadError,
+  githubAppInstalled,
 }: ConfirmStepProps) {
   const message = loadError ? CONFIGURE_ERRORS[loadError] ?? loadError : null;
   const total = cards?.length ?? 0;
+
+  // ── Workspace defaults snapshot ──────────────────────────────
+  // Server-rendered so the panel hydrates with truthful state in
+  // one round-trip — the operator can see what's missing before
+  // they click anything. Failures are non-fatal: a missing list
+  // collapses to "no tracker" / "pick one" and the panel still
+  // renders. The seed CTAs further down catch the same problem
+  // with a 412 from the route, so worst case the operator sees
+  // an extra inline error.
+  const sessionToken_ws = await getSessionToken();
+  let panelInitial: WorkspaceDefaultsPanelInitial = {
+    workspaceId,
+    defaultAgentProfile: null,
+    trackerKinds: [],
+    githubAppInstalled,
+  };
+  try {
+    const [workspaces, integrations] = await Promise.all([
+      listWorkspaces(sessionToken_ws ?? undefined),
+      listIntegrations(workspaceId, sessionToken_ws ?? undefined),
+    ]);
+    const ws = workspaces.find((w) => w.id === workspaceId);
+    // Mirror the backend gate: linear/jira need a token (has_secret);
+    // github passes through without one (rides on App install).
+    const trackerKinds = integrations
+      .filter((i) =>
+        ["linear", "github", "jira"].includes(i.kind as string),
+      )
+      .filter((i) => i.kind === "github" || i.has_secret)
+      .map((i) => i.kind as string);
+    panelInitial = {
+      workspaceId,
+      defaultAgentProfile: ws?.default_agent_profile ?? null,
+      trackerKinds,
+      githubAppInstalled,
+    };
+  } catch {
+    // Keep panelInitial defaults — UI will render "missing" rows
+    // and let the operator click through to fix.
+  }
 
   // Fetch the canonical Plays bundle preview server-side. The endpoint
   // is workspace-agnostic but workspace-auth-gated; pass through the
@@ -227,6 +278,17 @@ export async function ConfirmStep({
             </span>
           </li>
         </ul>
+      </div>
+
+      {/* ── Workspace defaults gate ───────────────────────────
+          Three workspace-level invariants the seed PR depends on.
+          Pre-fix the route happily seeded against NULL defaults and
+          shipctl runtime then couldn't resolve a coding agent / find
+          a tracker — the failure was invisible until cron started
+          claiming windows that nothing answered. The panel surfaces
+          the missing pieces before the operator clicks Re-seed. */}
+      <div className="mt-7">
+        <WorkspaceDefaultsPanel initial={panelInitial} />
       </div>
 
       {/* ── Repos by drift state ───────────────────────────────

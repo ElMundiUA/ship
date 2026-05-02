@@ -423,6 +423,11 @@ export default async function OnboardingPage({
             workspaceId={wsId}
             cards={confirmCards}
             loadError={confirmLoadError}
+            // Reaching the confirm step implies the GitHub App is
+            // installed — the wizard funnels through ``step=github``
+            // first, and ``listActivatedRepos`` (which fed
+            // ``confirmCards`` above) 409s without an install.
+            githubAppInstalled={true}
           />
         )}
         {step === "done" && (

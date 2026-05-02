@@ -31,6 +31,7 @@ async def seeded_wizard_repo(db_session, seed_workspace):
         GitHubInstallation,
         WorkspaceRepo,
     )
+    from backend.app.db.models.tenancy import Integration
 
     _, raw, workspace = seed_workspace
     install = GitHubInstallation(
@@ -43,6 +44,24 @@ async def seeded_wizard_repo(db_session, seed_workspace):
     )
     db_session.add(install)
     await db_session.flush()
+
+    # Workspace defaults required by the wizard_seed gate:
+    #   - default_agent_profile non-NULL,
+    #   - at least one workspace-level tracker row (kind in linear/
+    #     github/jira); kind=github needs no secret because it rides
+    #     on the App installation token.
+    # Tests that exercise the missing-value paths reset these
+    # explicitly before calling the route.
+    workspace.default_agent_profile = "main"
+    db_session.add(
+        Integration(
+            workspace_id=workspace.id,
+            repo_id=None,
+            kind="github",
+            config={},
+            status="ok",
+        )
+    )
 
     repo = WorkspaceRepo(
         workspace_id=workspace.id,
@@ -319,6 +338,16 @@ async def test_wizard_seed_falls_back_to_workspace_default(
     raw, workspace, _install, repo = seeded_wizard_repo
     _patch_github(monkeypatch)
 
+    # Drop the fixture's default ``github`` tracker row so Linear is
+    # the only workspace tracker — otherwise the resolver's most-
+    # recently-updated tiebreaker is racy on commit timestamps.
+    await db_session.execute(
+        Integration.__table__.delete().where(
+            Integration.workspace_id == workspace.id,
+            Integration.repo_id.is_(None),
+            Integration.kind == "github",
+        )
+    )
     db_session.add(
         Integration(
             workspace_id=workspace.id,
@@ -326,6 +355,9 @@ async def test_wizard_seed_falls_back_to_workspace_default(
             kind="linear",
             config={},
             status="ok",
+            # The wizard_seed gate rejects Linear rows without an
+            # OAuth token — mirrors the tracker-bind 412 from 2d8d843.
+            secret_ciphertext=b"oauth-token",
         )
     )
     await db_session.flush()
@@ -430,6 +462,144 @@ def _patch_intel_inline_skip(monkeypatch):
         )
 
     monkeypatch.setattr(repo_intel_module, "harvest_repo_intel", _harvest)
+
+
+# ---------------------------------------------------------------------------
+# Workspace defaults gate (default_agent_profile + tracker)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_wizard_seed_412_when_default_agent_profile_missing(
+    monkeypatch, v1_client, db_session, seeded_wizard_repo
+) -> None:
+    """The wizard_seed gate insists on a workspace-level default
+    agent profile. Pre-fix the route happily seeded repos against a
+    NULL profile — shipctl agent dispatch then couldn't resolve a
+    coding agent at runtime and every routine failed silently."""
+    from backend.app.db.models.tenancy import Workspace
+
+    raw, workspace, _install, repo = seeded_wizard_repo
+    _patch_github(monkeypatch)
+
+    # Reset the fixture's default — this test exercises the missing-
+    # value path explicitly.
+    ws_row = await db_session.get(Workspace, workspace.id)
+    assert ws_row is not None
+    ws_row.default_agent_profile = None
+    await db_session.flush()
+    await db_session.commit()
+
+    resp = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/repos/{repo.id}/wizard_seed",
+        json={"presets": ["web-app"], "knowledge_slugs": []},
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert resp.status_code == 412, resp.text
+    detail = resp.json()["detail"]
+    assert isinstance(detail, dict)
+    assert detail["code"] == "workspace_default_agent_required"
+    assert "default_agent_profile" in detail["message"]
+
+
+@pytest.mark.asyncio
+async def test_wizard_seed_412_when_workspace_tracker_missing(
+    monkeypatch, v1_client, db_session, seeded_wizard_repo
+) -> None:
+    """No workspace-level tracker row → 412
+    workspace_tracker_required. Without this the seeded ``.ship/
+    tracker-fsm.md`` would point at "no tracker" forever and shipctl
+    would have nowhere to file inbox rows / clarifications."""
+    from backend.app.db.models.tenancy import Integration
+
+    raw, workspace, _install, repo = seeded_wizard_repo
+    _patch_github(monkeypatch)
+
+    # Drop the fixture's default github tracker row.
+    await db_session.execute(
+        Integration.__table__.delete().where(
+            Integration.workspace_id == workspace.id,
+            Integration.repo_id.is_(None),
+            Integration.kind.in_(("linear", "github", "jira")),
+        )
+    )
+    await db_session.flush()
+    await db_session.commit()
+
+    resp = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/repos/{repo.id}/wizard_seed",
+        json={"presets": ["web-app"], "knowledge_slugs": []},
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert resp.status_code == 412, resp.text
+    detail = resp.json()["detail"]
+    assert isinstance(detail, dict)
+    assert detail["code"] == "workspace_tracker_required"
+
+
+@pytest.mark.asyncio
+async def test_wizard_seed_412_when_linear_tracker_has_no_secret(
+    monkeypatch, v1_client, db_session, seeded_wizard_repo
+) -> None:
+    """A bare workspace-level Linear/Notion row without
+    ``secret_ciphertext`` doesn't satisfy the gate. Mirrors the
+    tracker-bind 412 from 2d8d843 — a token-less tracker is the
+    silently-broken state we shipped a 412 to prevent."""
+    from backend.app.db.models.tenancy import Integration
+
+    raw, workspace, _install, repo = seeded_wizard_repo
+    _patch_github(monkeypatch)
+
+    # Replace the fixture's github default with a token-less linear.
+    await db_session.execute(
+        Integration.__table__.delete().where(
+            Integration.workspace_id == workspace.id,
+            Integration.repo_id.is_(None),
+        )
+    )
+    db_session.add(
+        Integration(
+            workspace_id=workspace.id,
+            repo_id=None,
+            kind="linear",
+            config={},
+            status="ok",
+            secret_ciphertext=None,  # token-less — gate must reject
+        )
+    )
+    await db_session.flush()
+    await db_session.commit()
+
+    resp = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/repos/{repo.id}/wizard_seed",
+        json={"presets": ["web-app"], "knowledge_slugs": []},
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert resp.status_code == 412
+    assert resp.json()["detail"]["code"] == "workspace_tracker_required"
+
+
+@pytest.mark.asyncio
+async def test_wizard_seed_accepts_github_tracker_without_secret(
+    monkeypatch, v1_client, db_session, seeded_wizard_repo
+) -> None:
+    """``kind=github`` workspace tracker rides on the App
+    installation token, not on ``secret_ciphertext`` — the gate's
+    OR-clause must let it through. Without this exception the
+    common GitHub-Issues-only setup couldn't seed at all."""
+    raw, workspace, _install, repo = seeded_wizard_repo
+    _patch_github(monkeypatch)
+
+    # The fixture already adds a kind=github / no-secret row, so this
+    # test just exercises the happy path against it. We assert the
+    # seed PR opens cleanly to confirm github passes the secret-or-
+    # github branch in the gate.
+    resp = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/repos/{repo.id}/wizard_seed",
+        json={"presets": ["web-app"], "knowledge_slugs": []},
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert resp.status_code == 200, resp.text
 
 
 @pytest.mark.asyncio
