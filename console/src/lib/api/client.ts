@@ -1644,6 +1644,9 @@ export interface ApiProcessState {
  */
 export const TRACKER_OVERLAY = "__overlay__";
 
+/** Who fires a transition between stages. */
+export type TransitionActor = "user" | "agent" | "either";
+
 export interface ApiProcessTransition {
   id: string;
   from_state_id: string;
@@ -1651,6 +1654,13 @@ export interface ApiProcessTransition {
   conditions: ApiProcessCondition[];
   /** When true, the transition needs an explicit human action in the console before it can fire. */
   requires_human?: boolean;
+  /**
+   * Who advances the ticket along this transition. Default ``agent``
+   * (intra-bucket handoffs); ``user`` for human-gated arrows like
+   * Backlog → Todo or Review → Done; ``either`` when both paths are
+   * valid (overlay-state resume).
+   */
+  trigger_actor?: TransitionActor;
 }
 
 export interface ApiProcessSpecialist {

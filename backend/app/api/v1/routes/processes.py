@@ -254,12 +254,33 @@ class ProcessStateOut(BaseModel):
     runtime: ProcessStateRuntimeOut = Field(default_factory=ProcessStateRuntimeOut)
 
 
+TransitionActor = Literal["user", "agent", "either"]
+
+
 class ProcessTransitionOut(BaseModel):
+    """One arrow between two stages on the canvas.
+
+    ``trigger_actor`` declares who fires this transition:
+
+      - ``user``   — only a human (operator) advances the ticket. Used
+                     for backlog → planning (operator drags Backlog to
+                     Todo) and reviewing → closed (operator approves).
+      - ``agent``  — an agent stage completion advances it. The default
+                     for intra-process handoffs.
+      - ``either`` — both paths are valid. Used for awaiting_input
+                     resume and similar overlay clears.
+
+    The canvas renders different edge styles per actor so the operator
+    can scan the FSM and tell at a glance "where do I have to step in"
+    vs. "what runs by itself".
+    """
+
     id: str
     from_state_id: str
     to_state_id: str
     conditions: list[ProcessConditionOut] = Field(default_factory=list)
     requires_human: bool = False
+    trigger_actor: TransitionActor = "agent"
 
 
 class ProcessSpecialistOut(BaseModel):
@@ -1047,12 +1068,12 @@ async def _build_development_process(
     if not states:
         states = _default_states(specialists)
 
-    # Default sequential transitions get NO synthetic condition. The old
-    # ``exit_conditions_met == true`` placeholder leaked the internal
-    # field name onto every edge label in the canvas, looking like debug
-    # text. Real conditions live on each transition's ``conditions``
-    # entry once the editor is used; an empty list renders as a clean
-    # arrow.
+    # Default sequential transitions: each arrow's trigger_actor is
+    # derived from the buckets of the two stages it connects. Cross-
+    # bucket arrows where the SOURCE bucket is human-gated (``backlog``
+    # → planning, ``reviewing`` → closed) are user-only; everything
+    # else is agent-driven by default. See _transition_actor() for the
+    # full table.
     transitions = [
         ProcessTransitionOut(
             id=f"{left.id}_to_{right.id}",
@@ -1060,6 +1081,7 @@ async def _build_development_process(
             to_state_id=right.id,
             conditions=[],
             requires_human=False,
+            trigger_actor=_transition_actor(left.state, right.state),
         )
         for left, right in zip(states, states[1:])
     ]
@@ -1330,6 +1352,40 @@ def _canonical_state_for(stage_id: str) -> CanonicalState:
     setting it explicitly in ``.ship/config.yml``.
     """
     return _LEGACY_STAGE_TO_STATE.get(stage_id, "planning")
+
+
+# Cross-bucket transitions where the human is the trigger. Anything not
+# in this set defaults to ``agent`` (the agent stage's own completion
+# advances the ticket). The set covers:
+#   - (backlog → planning): operator drags Backlog → Todo to start work
+#   - (reviewing → closed): operator approves the merge / closes the issue
+#   - (reviewing → planning): operator returns the work for rework
+#   - (awaiting_input → *): operator answers the clarification, ticket
+#     resumes from where it was frozen
+#   - (blocked → *): operator clears the external blocker
+_USER_TRANSITION_PAIRS: frozenset[tuple[CanonicalState, CanonicalState]] = frozenset(
+    {
+        ("backlog", "planning"),
+        ("reviewing", "closed"),
+        ("reviewing", "planning"),
+        ("reviewing", "executing"),
+        ("awaiting_input", "planning"),
+        ("awaiting_input", "executing"),
+        ("awaiting_input", "reviewing"),
+        ("blocked", "planning"),
+        ("blocked", "executing"),
+        ("blocked", "reviewing"),
+    }
+)
+
+
+def _transition_actor(
+    from_state: CanonicalState, to_state: CanonicalState
+) -> TransitionActor:
+    """Pick the default actor for a transition between two canonical states."""
+    if (from_state, to_state) in _USER_TRANSITION_PAIRS:
+        return "user"
+    return "agent"
 
 
 def _default_schedule(states: list[ProcessStateOut]) -> ProcessScheduleOut:
