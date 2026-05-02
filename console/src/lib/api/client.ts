@@ -1580,15 +1580,6 @@ export interface ApiProcessSchedule {
   slots: ApiProcessScheduleSlot[];
 }
 
-export interface ApiProcessTicketContract {
-  input_state: string;
-  claim_state: string;
-  success_state: string;
-  blocked_state?: string | null;
-  needs_info_state?: string | null;
-  approval_state?: string | null;
-}
-
 export interface ApiProcessStateRuntime {
   task_count: number;
   blocked_count: number;
@@ -1629,10 +1620,6 @@ export interface ApiProcessState {
   triggers: ApiProcessTrigger[];
   exit_conditions: ApiProcessCondition[];
   block_conditions: ApiProcessCondition[];
-  /** @deprecated input/claim/success sub-states leaked internal jargon
-   *  into the UI. Replaced by the single ``state`` field. Kept on the
-   *  shape so legacy clients don't crash. */
-  ticket_contract?: ApiProcessTicketContract | null;
   runtime: ApiProcessStateRuntime;
 }
 // Local alias just so the field type below references the re-exported

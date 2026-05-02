@@ -64,17 +64,18 @@ export const BUILTIN_ROUTINE_CATALOG: {
 ];
 
 /**
- * Routine IDs the FE hides at render time. Two groups:
+ * Routine IDs that are SDLC cadence lanes — specialists wearing routine
+ * clothing in older configs. These never belong in the routines list;
+ * the FE filters them so the picker / summary stay clean.
  *
- *  - SDLC cadence lanes — they're *specialists*, never routines.
- *  - Pre-canonical seed ids — older repos may still carry them in
- *    ``.ship/config.yml`` until rewritten. The display layer hides
- *    them; the runtime keeps reading them so nothing breaks. Once a
- *    repo's config is rewritten to the canonical short ids, these
- *    legacy keys vanish on their own.
+ * Pre-canonical routine ids (daily_security_review / code_map /
+ * scan_*) used to be hidden too. They are no longer hidden — the
+ * operator should SEE drift from the canonical six so they can clean
+ * up DB orphans by hand. Hiding them masks "I have stale pipeline rows
+ * from an old seed" which is exactly the kind of mismatch the editor
+ * needs to surface, not paper over.
  */
 export const HIDDEN_ROUTINE_IDS: ReadonlySet<string> = new Set([
-  // SDLC cadence — specialists, not routines.
   "task_intake",
   "ba_requirements",
   "tech_arch_plan",
@@ -82,22 +83,19 @@ export const HIDDEN_ROUTINE_IDS: ReadonlySet<string> = new Set([
   "dev_implementation",
   "qa_manual",
   "qa_automation",
-  // Pre-canonical seed ids (hidden so the operator only ever sees the
-  // six new short labels). Mirrors lane_recipes.LEGACY_ROUTINE_IDS.
-  "daily_security_review",
-  "daily_digest",
-  "daily_technical_architecture_review",
-  "daily_architecture_tests_review",
-  "daily_retro",
-  "self_heal",
-  "daily_standup",
-  "tech_debt",
-  "code_map",
-  "flow_release_notes",
-  "scan_docs_freshness",
-  "scan_license_deps",
-  "scan_security_deps",
 ]);
+
+/**
+ * IDs the FE knows are routines but pre-date the canonical six. Used
+ * to paint a "legacy" pill so the operator can spot drift.
+ */
+export const CANONICAL_ROUTINE_IDS: ReadonlySet<string> = new Set(
+  BUILTIN_ROUTINE_CATALOG.map((entry) => entry.id),
+);
+
+export function isCanonicalRoutineId(id: string): boolean {
+  return CANONICAL_ROUTINE_IDS.has(id);
+}
 
 export const CRON_PRESETS: { label: string; value: string }[] = [
   { label: "Every hour (top of hour, UTC)", value: "0 * * * *" },

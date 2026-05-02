@@ -207,15 +207,6 @@ class ProcessScheduleOut(BaseModel):
     slots: list[ProcessScheduleSlotOut] = Field(default_factory=list)
 
 
-class ProcessTicketContractOut(BaseModel):
-    input_state: str
-    claim_state: str
-    success_state: str
-    blocked_state: str | None = None
-    needs_info_state: str | None = None
-    approval_state: str | None = None
-
-
 class ProcessStateRuntimeOut(BaseModel):
     task_count: int = 0
     blocked_count: int = 0
@@ -246,11 +237,6 @@ class ProcessStateOut(BaseModel):
     triggers: list[ProcessTriggerOut] = Field(default_factory=list)
     exit_conditions: list[ProcessConditionOut] = Field(default_factory=list)
     block_conditions: list[ProcessConditionOut] = Field(default_factory=list)
-    # Deprecated: the ticket_contract surfaced internal lifecycle
-    # sub-states (input/claim/success) that operators couldn't make
-    # sense of. Replaced by the single ``state`` field above. Kept on
-    # the model as ``None`` so older clients don't crash on parse.
-    ticket_contract: ProcessTicketContractOut | None = None
     runtime: ProcessStateRuntimeOut = Field(default_factory=ProcessStateRuntimeOut)
 
 
@@ -1029,17 +1015,12 @@ async def _build_development_process(
         if runtime.blocked_count > 0 and runtime.health == "ok":
             runtime.health = "degraded"
         if lane_key not in _PROCESS_STATE_ORDER or lane_key in _ROUTINE_IDS:
-            # Pre-canonical routine ids leak through whenever a workspace
-            # was seeded with the older bundle (code_map / scan_*). The
-            # ids stay in DB so runtime stays compatible, but the editor
-            # must only ever surface the canonical six — otherwise the
-            # operator sees 11 routines when their config actually lists
-            # six. lane_recipes.LEGACY_ROUTINE_IDS is the single source
-            # of truth.
-            from backend.app.services.lane_recipes import LEGACY_ROUTINE_IDS
-
-            if lane_key in LEGACY_ROUTINE_IDS:
-                continue
+            # Surface every routine id we find in DB pipelines — including
+            # legacy / orphan ones. Hiding them masks "I have stale
+            # pipeline rows from an old seed" which is exactly the kind
+            # of drift the operator needs to see and clean up. The FE
+            # paints non-canonical ids with a "legacy" pill so they're
+            # visually distinct from the canonical six.
             routine_text = _routine_instructions(lane_key)
             routines.append(
                 ProcessRoutineOut(

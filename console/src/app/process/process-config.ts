@@ -319,60 +319,6 @@ function scheduleFromConfig(value: unknown): ApiProcess["schedule"] | null {
   };
 }
 
-function ticketContractFromConfig(
-  value: unknown,
-): ApiProcessState["ticket_contract"] | null {
-  const row = asRecord(value);
-  if (!row) return null;
-  const input_state = stringValue(row.input_state);
-  const claim_state = stringValue(row.claim_state);
-  const success_state = stringValue(row.success_state);
-  if (!input_state || !claim_state || !success_state) return null;
-  return {
-    input_state,
-    claim_state,
-    success_state,
-    blocked_state: stringValue(row.blocked_state) ?? null,
-    needs_info_state: stringValue(row.needs_info_state) ?? null,
-    approval_state: stringValue(row.approval_state) ?? null,
-  };
-}
-
-function defaultTicketContract(
-  stateId: string,
-): ApiProcessState["ticket_contract"] {
-  const defaults: Record<string, NonNullable<ApiProcessState["ticket_contract"]>> = {
-    task_intake: {
-      input_state: "new",
-      claim_state: "intake_in_progress",
-      success_state: "ready_for_analysis",
-      blocked_state: "blocked",
-      needs_info_state: "needs_info",
-    },
-    ba_requirements: {
-      input_state: "ready_for_analysis",
-      claim_state: "analysis_in_progress",
-      success_state: "ready_for_development",
-      blocked_state: "blocked",
-      needs_info_state: "needs_info",
-    },
-    dev_implementation: {
-      input_state: "ready_for_development",
-      claim_state: "development_in_progress",
-      success_state: "in_review",
-      blocked_state: "blocked",
-      needs_info_state: "needs_info",
-    },
-  };
-  return defaults[stateId] ?? {
-    input_state: `${stateId}_ready`,
-    claim_state: `${stateId}_in_progress`,
-    success_state: `${stateId}_done`,
-    blocked_state: "blocked",
-    needs_info_state: "needs_info",
-  };
-}
-
 function recordOfRecordsFromConfig(
   value: unknown,
 ): Record<string, Record<string, string>> | undefined {

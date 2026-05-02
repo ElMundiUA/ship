@@ -136,10 +136,6 @@ export function StateEditor({
           </p>
         </Section>
 
-        <Section title="How work is picked">
-          <TicketContractSummary state={selectedState} />
-        </Section>
-
         <Section title="When it can run">
           <ScheduleSummary
             state={selectedState}
@@ -218,48 +214,6 @@ function Section({
       </div>
       {children}
     </section>
-  );
-}
-
-function TicketContractSummary({ state }: { state: ApiProcessState }) {
-  const contract = state.ticket_contract;
-  if (!contract) {
-    return (
-      <p className="text-xs leading-relaxed text-white/45">
-        This step has no tracker-picking contract yet. Ship will not start a
-        ticket-driven backend agent until a canonical FSM contract is configured.
-      </p>
-    );
-  }
-  return (
-    <div className="space-y-2 text-xs text-white/55">
-      <p>
-        Ship picks a ticket from <CodeLabel>{contract.input_state}</CodeLabel>, claims
-        it into <CodeLabel>{contract.claim_state}</CodeLabel>, and injects that ticket
-        into the specialist prompt. If no ticket matches, this step does not start.
-      </p>
-      <div className="grid gap-2">
-        <ContractRow label="On success" value={contract.success_state} />
-        <ContractRow label="Blocked" value={contract.blocked_state} />
-        <ContractRow label="Needs info" value={contract.needs_info_state} />
-        <ContractRow label="Human approval" value={contract.approval_state} />
-      </div>
-    </div>
-  );
-}
-
-function ContractRow({
-  label,
-  value,
-}: {
-  label: string;
-  value?: string | null;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-2 rounded-xl bg-black/20 px-2 py-1.5">
-      <span className="text-white/40">{label}</span>
-      <CodeLabel>{value ?? "not configured"}</CodeLabel>
-    </div>
   );
 }
 

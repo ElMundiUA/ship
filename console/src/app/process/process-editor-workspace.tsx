@@ -194,13 +194,6 @@ export function ProcessEditorWorkspace({
       triggers: defaultSdlcStateTriggers(),
       exit_conditions: [],
       block_conditions: [],
-      ticket_contract: {
-        input_state: `${nextId}_ready`,
-        claim_state: `${nextId}_in_progress`,
-        success_state: `${nextId}_done`,
-        blocked_state: "blocked",
-        needs_info_state: "needs_info",
-      },
       runtime: {
         task_count: 0,
         blocked_count: 0,
@@ -569,6 +562,7 @@ function stateFingerprint(state: ApiProcessState) {
   return JSON.stringify({
     id: state.id,
     name: state.name,
+    state: state.state,
     specialist_id: state.specialist_id,
     specialist_name: state.specialist_name,
     specialist_agent_profile: agentProfileFromState(state),
@@ -577,7 +571,6 @@ function stateFingerprint(state: ApiProcessState) {
     triggers: state.triggers,
     exit_conditions: state.exit_conditions,
     block_conditions: state.block_conditions,
-    ticket_contract: state.ticket_contract,
   });
 }
 

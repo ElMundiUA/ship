@@ -19,7 +19,11 @@ import { classifyCron, formatNextRun } from "@/lib/cron-next";
 import { processConfigFromApiProcess } from "./process-config";
 import { ProcessConfigProposalFields } from "./process-config-proposal-fields";
 import { ProcessReviewSummary, processChangeSummary } from "./process-review-summary";
-import { BUILTIN_ROUTINE_CATALOG, HIDDEN_ROUTINE_IDS } from "./routine-catalog";
+import {
+  BUILTIN_ROUTINE_CATALOG,
+  HIDDEN_ROUTINE_IDS,
+  isCanonicalRoutineId,
+} from "./routine-catalog";
 
 const WEEKDAYS = [
   { id: 1, label: "Mon" },
@@ -561,12 +565,11 @@ function RoutinesSummary({
 }: {
   routines: ApiProcessRoutine[];
 }) {
-  // Show ONLY what's actually in process.routines after the hidden-id
-  // filter. Pre-canonical seed ids (code_map, scan_*, daily_*) drop
-  // out of view; the operator never sees fictional defaults for
-  // routines that don't exist in their repo's .ship/config.yml.
+  // Drop SDLC cadence lanes (those are specialists, not routines) but
+  // keep legacy / orphan routine ids visible — they signal drift the
+  // operator needs to clean up. Canonical six get the champagne pill;
+  // anything else gets a "legacy" badge so it stands out.
   const visible = routines.filter((r) => !HIDDEN_ROUTINE_IDS.has(r.id));
-  // Lookup display label by canonical id.
   const labelById = new Map(BUILTIN_ROUTINE_CATALOG.map((c) => [c.id, c.name] as const));
   return (
     <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-3">
@@ -588,6 +591,7 @@ function RoutinesSummary({
         <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
           {visible.map((routine) => {
             const enabled = routine.enabled !== false;
+            const canonical = isCanonicalRoutineId(routine.id);
             const cron = routine.schedule?.trim() ?? "";
             let nextRun = "—";
             if (cron) {
@@ -603,17 +607,31 @@ function RoutinesSummary({
                 key={routine.id}
                 className={[
                   "rounded-xl border p-2.5",
-                  enabled
-                    ? "border-aqua/25 bg-aqua/[0.05]"
-                    : "border-white/10 bg-white/[0.02] opacity-65",
+                  !canonical
+                    ? "border-amber-300/35 bg-amber-300/[0.05]"
+                    : enabled
+                      ? "border-aqua/25 bg-aqua/[0.05]"
+                      : "border-white/10 bg-white/[0.02] opacity-65",
                 ].join(" ")}
               >
                 <div className="flex items-center justify-between gap-2">
-                  <div className="text-xs font-semibold text-white">{label}</div>
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className="truncate text-xs font-semibold text-white">
+                      {label}
+                    </span>
+                    {!canonical && (
+                      <span
+                        className="shrink-0 rounded-full border border-amber-300/40 bg-amber-300/[0.10] px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-widest text-amber-200"
+                        title="Pre-canonical routine id — leftover from an older seed. Clean up the DB row to remove it from this view."
+                      >
+                        legacy
+                      </span>
+                    )}
+                  </div>
                   <span
                     className={[
                       "h-1.5 w-1.5 rounded-full",
-                      enabled ? "bg-aqua" : "bg-white/30",
+                      enabled ? (canonical ? "bg-aqua" : "bg-amber-300") : "bg-white/30",
                     ].join(" ")}
                     aria-hidden
                   />
