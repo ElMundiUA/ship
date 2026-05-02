@@ -73,6 +73,7 @@ from backend.app.db.models.agent_surface import (
     ChatMessage as ChatMessageRow,
     ChatThread,
 )
+from backend.app.db.models.tenancy import AuditLog
 from backend.app.db.session import get_session
 from backend.app.services.bucket_visibility import visible_to_user_clause
 from backend.app.services.distiller_sources import ensure_user_memory_bucket
@@ -1587,6 +1588,199 @@ async def list_bucket_articles(
         )
         for a in rows
     ]
+
+
+class BucketArticleArchiveIn(BaseModel):
+    """Operator-supplied reason for archiving / restoring an article.
+
+    Required because by the time an ADR / runbook makes it to a bucket
+    it's been seen by other agents — the rationale ("superseded by
+    PR-Y", "decision reverted in commit cf9f983") matters more than
+    the act of archiving. We persist it on the audit row so a future
+    review can answer "why is this gone?" without spelunking commits.
+    """
+
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+@router.post(
+    "/buckets/{slug}/articles/{article_id}/archive",
+    response_model=BucketArticleOut,
+)
+async def archive_bucket_article(
+    workspace_id: uuid.UUID,
+    slug: str,
+    article_id: uuid.UUID,
+    payload: BucketArticleArchiveIn,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> BucketArticleOut:
+    """Flip a published article into ``archived`` so readers stop
+    seeing it.
+
+    Use case: an ADR / runbook / facts article became stale (decision
+    reversed, file deleted, contract redesigned) and the operator
+    wants it out of the agent's warmed memory without losing the
+    historical row. Archiving sets ``status='archived'`` AND
+    ``archived_at=NOW()`` — the dual flip is intentional: every
+    reader filter checks both, and we want defence-in-depth so a
+    future bug that drops one filter doesn't silently resurface
+    archived content.
+
+    Requires workspace admin. The reason is captured on
+    ``AuditLog`` (action ``knowledge.article.archive``) so the
+    rationale survives outside the article itself.
+    """
+    await _require_membership(
+        session, workspace_id, auth.user.id, ROLES_ADMIN
+    )
+    bucket = await _load_bucket(session, workspace_id, slug)
+    article = await _load_article_in_bucket(session, bucket.id, article_id)
+
+    if article.archived_at is not None:
+        # Idempotent: already archived → return current state without
+        # writing a duplicate audit row. The console retry button on
+        # a flaky network shouldn't multiply the audit trail.
+        return _serialize_article(article)
+
+    now = datetime.now(timezone.utc)
+    article.status = BucketArticleStatus.ARCHIVED
+    article.archived_at = now
+    bucket.updated_at = now
+
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=auth.user.id,
+            actor_token_id=None,
+            action="knowledge.article.archive",
+            target_kind="bucket_article",
+            target_id=str(article.id),
+            payload={
+                "bucket_slug": bucket.slug,
+                "article_slug": article.slug,
+                "version": article.version,
+                "reason": payload.reason,
+            },
+        )
+    )
+    await session.flush()
+    # Re-load so the server-side ``onupdate`` on ``updated_at`` lands
+    # on the instance — without this, the implicit lazy-load fires
+    # later (during response serialization) and asyncpg's session is
+    # no longer inside a greenlet by then.
+    await session.refresh(article)
+    return _serialize_article(article)
+
+
+@router.post(
+    "/buckets/{slug}/articles/{article_id}/restore",
+    response_model=BucketArticleOut,
+)
+async def restore_bucket_article(
+    workspace_id: uuid.UUID,
+    slug: str,
+    article_id: uuid.UUID,
+    payload: BucketArticleArchiveIn,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> BucketArticleOut:
+    """Undo :func:`archive_bucket_article`.
+
+    Restoring respects the partial unique index — if a different
+    article published under the same ``(bucket_id, slug)`` while
+    this one was archived, the restore lands as ``draft`` instead
+    of ``published`` so the operator can decide which version wins.
+    Otherwise the restored row goes straight back to ``published``.
+    """
+    await _require_membership(
+        session, workspace_id, auth.user.id, ROLES_ADMIN
+    )
+    bucket = await _load_bucket(session, workspace_id, slug)
+    article = await _load_article_in_bucket(session, bucket.id, article_id)
+
+    if article.archived_at is None:
+        return _serialize_article(article)
+
+    # Was a sibling article published under the same slug while this
+    # one was archived? If so, demote the restore to ``draft`` so the
+    # operator can compare; the partial unique index would reject a
+    # second ``published`` row anyway.
+    sibling = (
+        await session.execute(
+            select(BucketArticle.id)
+            .where(BucketArticle.bucket_id == bucket.id)
+            .where(BucketArticle.slug == article.slug)
+            .where(BucketArticle.status == BucketArticleStatus.PUBLISHED)
+            .where(BucketArticle.archived_at.is_(None))
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    now = datetime.now(timezone.utc)
+    article.archived_at = None
+    article.status = (
+        BucketArticleStatus.DRAFT
+        if sibling is not None
+        else BucketArticleStatus.PUBLISHED
+    )
+    bucket.updated_at = now
+
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=auth.user.id,
+            actor_token_id=None,
+            action="knowledge.article.restore",
+            target_kind="bucket_article",
+            target_id=str(article.id),
+            payload={
+                "bucket_slug": bucket.slug,
+                "article_slug": article.slug,
+                "version": article.version,
+                "restored_status": article.status,
+                "reason": payload.reason,
+            },
+        )
+    )
+    await session.flush()
+    await session.refresh(article)
+    return _serialize_article(article)
+
+
+async def _load_article_in_bucket(
+    session: AsyncSession,
+    bucket_id: uuid.UUID,
+    article_id: uuid.UUID,
+) -> BucketArticle:
+    row = (
+        await session.execute(
+            select(BucketArticle)
+            .where(BucketArticle.id == article_id)
+            .where(BucketArticle.bucket_id == bucket_id)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    return row
+
+
+def _serialize_article(a: BucketArticle) -> BucketArticleOut:
+    return BucketArticleOut(
+        id=a.id,
+        bucket_id=a.bucket_id,
+        slug=a.slug,
+        title=a.title,
+        body_md=a.body_md,
+        version=a.version,
+        status=a.status,
+        provenance=a.provenance or {},
+        created_at=a.created_at,
+        updated_at=a.updated_at,
+        archived_at=a.archived_at,
+        overrides_workspace_article_id=a.overrides_workspace_article_id,
+        overrides_workspace_bucket_slug=None,
+    )
 
 
 @router.get(

@@ -1990,6 +1990,48 @@ class ToolBox:
                 },
             ),
             ToolSpec(
+                name="archive_bucket_article",
+                description=(
+                    "Mark a published bucket article (ADR / runbook / "
+                    "facts page) as archived so readers and warmed "
+                    "memory stop seeing it. Use when the operator "
+                    "confirms the underlying decision was reverted, "
+                    "the source file was deleted, or the content has "
+                    "gone stale. Idempotent — calling twice on the "
+                    "same article is a no-op. Admin-only, audited; "
+                    "the ``reason`` is persisted on the audit row "
+                    "so future readers can answer 'why is this gone'. "
+                    "Always confirm via ``ship-choice`` before "
+                    "calling — this affects every agent that reads "
+                    "the bucket."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "article_id": {
+                            "type": "string",
+                            "description": (
+                                "UUID from ``get_knowledge_bucket`` / "
+                                "``search_buckets``."
+                            ),
+                        },
+                        "reason": {
+                            "type": "string",
+                            "description": (
+                                "Why this article is now stale. Cite "
+                                "the superseding ADR / commit / "
+                                "decision — \"obsolete\" alone is "
+                                "not enough."
+                            ),
+                            "minLength": 1,
+                            "maxLength": 2000,
+                        },
+                    },
+                    "required": ["article_id", "reason"],
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
                 name="inbox_routing_upsert",
                 description=(
                     "Insert or update one inbox routing rule. "
@@ -2138,6 +2180,7 @@ class ToolBox:
             "play_run_now": self._tool_play_run_now,
             "play_automate": self._tool_play_automate,
             "automation_toggle": self._tool_automation_toggle,
+            "archive_bucket_article": self._tool_archive_bucket_article,
             "inbox_routing_upsert": self._tool_inbox_routing_upsert,
         }
 
@@ -6597,6 +6640,111 @@ class ToolBox:
                 "pipeline_id": str(pipeline.id),
                 "enabled": enabled,
                 "prior_enabled": prior_enabled,
+            }
+        )
+
+    async def _tool_archive_bucket_article(self, args: dict[str, Any]) -> str:
+        """Flip a bucket article to archived. Mirrors the HTTP route
+        ``POST /buckets/{slug}/articles/{article_id}/archive`` so the
+        same audit-row shape works regardless of which surface the
+        operator used.
+        """
+        gate_err = await self._require_admin_or_error(
+            tool_name="archive_bucket_article"
+        )
+        if gate_err is not None:
+            return _json_result(gate_err)
+
+        try:
+            article_id = _parse_uuid(args, "article_id")
+        except ToolInvocationError as exc:
+            return _json_result(
+                {"error": "validation_failed", "message": str(exc)}
+            )
+        reason_raw = args.get("reason")
+        reason = (
+            reason_raw.strip()
+            if isinstance(reason_raw, str)
+            else ""
+        )
+        if not reason:
+            return _json_result(
+                {
+                    "error": "validation_failed",
+                    "message": "reason is required and must be non-empty",
+                }
+            )
+        if len(reason) > 2000:
+            reason = reason[:2000]
+
+        # Pull article + bucket together — workspace fence on the
+        # bucket protects against cross-tenant id smuggling.
+        row = (
+            await self._session.execute(
+                select(BucketArticle, KnowledgeBucket)
+                .join(
+                    KnowledgeBucket,
+                    KnowledgeBucket.id == BucketArticle.bucket_id,
+                )
+                .where(BucketArticle.id == article_id)
+                .where(KnowledgeBucket.workspace_id == self._workspace_id)
+            )
+        ).first()
+        if row is None:
+            return _json_result(
+                {
+                    "error": "not_found",
+                    "message": (
+                        f"article {article_id} not found in this workspace"
+                    ),
+                }
+            )
+        article, bucket = row
+
+        if article.archived_at is not None:
+            # Idempotent: already archived. Audit row was written on
+            # the original archive — no second one here.
+            return _json_result(
+                {
+                    "article_id": str(article.id),
+                    "bucket_slug": bucket.slug,
+                    "article_slug": article.slug,
+                    "status": article.status,
+                    "archived_at": article.archived_at.isoformat(),
+                    "already_archived": True,
+                }
+            )
+
+        from datetime import timezone as _tz
+
+        now = datetime.now(_tz.utc)
+        prior_status = article.status
+        article.status = BucketArticleStatus.ARCHIVED
+        article.archived_at = now
+        bucket.updated_at = now
+
+        await self._audit_navigator_tool(
+            tool_name="archive_bucket_article",
+            payload={
+                "article_id": str(article.id),
+                "bucket_slug": bucket.slug,
+                "article_slug": article.slug,
+                "version": article.version,
+                "prior_status": prior_status,
+                "reason": reason,
+            },
+            target={"kind": "bucket_article", "id": str(article.id)},
+        )
+        await self._session.flush()
+
+        return _json_result(
+            {
+                "article_id": str(article.id),
+                "bucket_slug": bucket.slug,
+                "article_slug": article.slug,
+                "status": article.status,
+                "archived_at": article.archived_at.isoformat(),
+                "already_archived": False,
             }
         )
 
