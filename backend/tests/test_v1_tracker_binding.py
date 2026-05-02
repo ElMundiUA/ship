@@ -62,8 +62,16 @@ async def seeded_repo(db_session, seed_workspace):
     return raw, workspace, repo
 
 
-async def _seed_workspace_tracker(db_session, workspace_id, kind, config):
-    """Helper: create a workspace-level tracker row (repo_id=NULL)."""
+async def _seed_workspace_tracker(
+    db_session, workspace_id, kind, config, *, with_secret: bool = True
+):
+    """Helper: create a workspace-level tracker row (repo_id=NULL).
+
+    ``with_secret`` defaults to True because the per-repo bind route
+    now gates Linear/Notion bindings on a workspace-level OAuth row
+    actually carrying a token. Tests that want to assert the bare
+    "no workspace OAuth" case can pass ``with_secret=False``.
+    """
     from backend.app.db.models.tenancy import Integration
 
     row = Integration(
@@ -72,6 +80,7 @@ async def _seed_workspace_tracker(db_session, workspace_id, kind, config):
         kind=kind,
         config=config,
         status="ok",
+        secret_ciphertext=b"oauth-token" if with_secret else None,
     )
     db_session.add(row)
     await db_session.flush()
@@ -119,6 +128,9 @@ async def test_put_creates_repo_binding(v1_client, db_session, seeded_repo) -> N
     from backend.app.db.models.tenancy import Integration
 
     raw, workspace, repo = seeded_repo
+    # Per-repo Linear bindings inherit auth from the workspace-level
+    # OAuth row; the route 412s without it.
+    await _seed_workspace_tracker(db_session, workspace.id, "linear", {})
 
     resp = await v1_client.put(
         f"/v1/workspaces/{workspace.id}/repos/{repo.id}/tracker",
@@ -177,6 +189,7 @@ async def test_put_changing_kind_replaces_prior_row(
     from backend.app.db.models.tenancy import Integration
 
     raw, workspace, repo = seeded_repo
+    await _seed_workspace_tracker(db_session, workspace.id, "linear", {})
 
     # Initial Linear binding.
     r1 = await v1_client.put(
@@ -256,6 +269,142 @@ async def test_delete_is_idempotent_when_no_binding(v1_client, seeded_repo) -> N
         headers={"Authorization": f"Bearer {raw}"},
     )
     assert resp.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_put_linear_412s_when_workspace_oauth_missing(
+    v1_client, seeded_repo
+) -> None:
+    """Per-repo Linear binding without a workspace OAuth row → 412.
+
+    Saving a token-less Linear binding would render every downstream
+    tracker call 401 silently — exactly the dogfood failure on
+    2026-05-02. The route blocks the write at request time and
+    surfaces a stable error code so the FE can deeplink to the
+    workspace-level OAuth start.
+    """
+    raw, workspace, repo = seeded_repo
+
+    resp = await v1_client.put(
+        f"/v1/workspaces/{workspace.id}/repos/{repo.id}/tracker",
+        json={"kind": "linear", "config": {"team_id": "T"}},
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert resp.status_code == 412, resp.text
+    detail = resp.json()["detail"]
+    assert isinstance(detail, dict)
+    assert detail["code"] == "workspace_oauth_required"
+    assert detail["kind"] == "linear"
+    assert "OAuth" in detail["message"]
+
+
+@pytest.mark.asyncio
+async def test_put_linear_412s_when_workspace_row_has_no_secret(
+    v1_client, db_session, seeded_repo
+) -> None:
+    """A workspace row that exists but carries no ``secret_ciphertext``
+    (e.g. operator created the row through some legacy path that
+    didn't run the OAuth flow) is still rejected. The gate cares
+    about a usable OAuth token, not just the existence of a
+    ``kind=linear`` row."""
+    raw, workspace, repo = seeded_repo
+    await _seed_workspace_tracker(
+        db_session, workspace.id, "linear", {}, with_secret=False
+    )
+
+    resp = await v1_client.put(
+        f"/v1/workspaces/{workspace.id}/repos/{repo.id}/tracker",
+        json={"kind": "linear", "config": {"team_id": "T"}},
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert resp.status_code == 412
+    assert resp.json()["detail"]["code"] == "workspace_oauth_required"
+
+
+@pytest.mark.asyncio
+async def test_get_surfaces_workspace_oauth_meta(
+    v1_client, db_session, seeded_repo
+) -> None:
+    """The wizard's per-repo dropdown reads ``workspace_default_config``
+    (carrying ``team_options``) and ``workspace_oauth_connected`` so
+    it can render a real team picker instead of the legacy "type a
+    Linear team key" text input. Both fields must be populated when
+    the workspace row carries an OAuth token + ``team_options``."""
+    raw, workspace, repo = seeded_repo
+    from backend.app.db.models.tenancy import Integration
+
+    db_session.add(
+        Integration(
+            workspace_id=workspace.id,
+            repo_id=None,
+            kind="linear",
+            config={
+                "team_options": [
+                    {"id": "t1", "key": "ENG", "name": "Engineering"},
+                    {"id": "t2", "key": "PLAT", "name": "Platform"},
+                ],
+                # secret-adjacent crud that must NOT leak through.
+                "scope": "read,write,issues:create",
+            },
+            status="ok",
+            secret_ciphertext=b"oauth-token",
+        )
+    )
+    await db_session.flush()
+    await db_session.commit()
+
+    resp = await v1_client.get(
+        f"/v1/workspaces/{workspace.id}/repos/{repo.id}/tracker",
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["workspace_oauth_connected"] is True
+    assert "team_options" in body["workspace_default_config"]
+    assert len(body["workspace_default_config"]["team_options"]) == 2
+    assert body["workspace_default_config"]["team_options"][0]["key"] == "ENG"
+    # ``scope`` must be stripped — only safe-to-expose fields leak.
+    assert "scope" not in body["workspace_default_config"]
+
+
+@pytest.mark.asyncio
+async def test_get_workspace_oauth_connected_false_when_no_secret(
+    v1_client, db_session, seeded_repo
+) -> None:
+    """Workspace row exists but no token (legacy / partial setup) → the
+    flag is False so the FE knows to show "Re-auth" instead of treating
+    the integration as live."""
+    raw, workspace, repo = seeded_repo
+    await _seed_workspace_tracker(
+        db_session, workspace.id, "linear", {}, with_secret=False
+    )
+
+    resp = await v1_client.get(
+        f"/v1/workspaces/{workspace.id}/repos/{repo.id}/tracker",
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["workspace_oauth_connected"] is False
+
+
+@pytest.mark.asyncio
+async def test_put_github_skips_workspace_oauth_gate(
+    v1_client, seeded_repo
+) -> None:
+    """GitHub bindings ride on the GitHub App installation token, not
+    on a workspace ``Integration`` row, so the OAuth gate doesn't
+    apply. Without this exclusion the entire wizard flow would
+    require a no-op workspace ``kind=github`` row."""
+    raw, workspace, repo = seeded_repo
+
+    resp = await v1_client.put(
+        f"/v1/workspaces/{workspace.id}/repos/{repo.id}/tracker",
+        json={"kind": "github", "config": {}},
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["kind"] == "github"
 
 
 @pytest.mark.asyncio

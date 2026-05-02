@@ -109,6 +109,21 @@ def _validate_kind(kind: str) -> None:
         )
 
 
+# Integration kinds whose ONLY supported auth path is OAuth — Linear and
+# Notion. The legacy ``PUT /integrations/{kind}`` route accepts a raw
+# ``secret`` field for any kind, which historically let an operator
+# paste a personal API key and bypass the OAuth flow. That worked but
+# stranded each tenant on a single user's token (revocation, scope
+# narrowing, on/off-boarding all break the integration). The full-app
+# OAuth round-trip — :mod:`backend.app.api.v1.routes.linear_oauth` /
+# :mod:`backend.app.api.v1.routes.notion_oauth` — is the only sanctioned
+# entry point for these vendors. Hard-block raw-secret upserts here so a
+# UI regression or a curl-from-the-shell can't recreate the legacy
+# state. The error code is stable so the FE can swap in a "Sign in with
+# {Linear,Notion}" CTA on receipt.
+_OAUTH_ONLY_KINDS: frozenset[str] = frozenset({"linear", "notion"})
+
+
 @router.get("", response_model=list[IntegrationOut])
 async def list_integrations(
     workspace_id: uuid.UUID,
@@ -164,7 +179,29 @@ async def upsert_integration(
             detail=f"path kind '{kind}' does not match payload kind '{payload.kind}'",
         )
     _validate_kind(kind)
+    # Membership FIRST so cross-tenant probing (auth'd user hitting
+    # another workspace's PUT) returns 404 — same shape every other
+    # mutation endpoint produces — instead of leaking the OAuth-only
+    # 422 message and confirming the workspace exists.
     await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+    # Hard-block raw-secret upserts for OAuth-only providers. Config-
+    # only edits (``payload.secret is None``) still pass through so
+    # operators can tune team_id / project / etc. on an existing
+    # OAuth-installed row without re-running the OAuth dance.
+    if kind in _OAUTH_ONLY_KINDS and payload.secret is not None:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "oauth_only",
+                "message": (
+                    f"{kind} requires OAuth. Use "
+                    f"POST /v1/integrations/{kind}/install/start "
+                    "to start the OAuth flow; raw API keys are not "
+                    "accepted on this path."
+                ),
+                "kind": kind,
+            },
+        )
 
     # This endpoint edits the workspace-level row only. Per-repo
     # tracker rows have their own dedicated path (wizard / repo

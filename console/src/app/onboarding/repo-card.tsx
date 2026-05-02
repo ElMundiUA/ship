@@ -179,22 +179,38 @@ export function RepoCard({
         <div className="mt-2 flex flex-wrap items-center gap-2">
           {(["linear", "github", "jira"] as TrackerKind[]).map((k) => {
             const selected = trackerDraft.kind === k;
+            // OAuth-only providers (Linear today; Notion when it lands
+            // on this surface) need a workspace-level OAuth row first.
+            // The pill is disabled with a tooltip + deeplink so the
+            // operator doesn't fight the backend 412 on save.
+            const oauthGated = k === "linear";
+            const oauthMissing =
+              oauthGated && tracker.workspace_oauth_connected === false;
+            const disabled = oauthMissing;
+            const baseClass =
+              "rounded-full border px-3 py-1 text-xs font-medium transition";
+            const stateClass = selected
+              ? "border-aqua/60 bg-aqua/[0.1] text-aqua"
+              : disabled
+                ? "border-white/10 bg-white/[0.02] text-white/30 cursor-not-allowed"
+                : "border-white/10 bg-white/[0.04] text-white/70 hover:border-aqua/30";
             return (
               <button
                 key={k}
                 type="button"
+                disabled={disabled}
+                title={
+                  oauthMissing
+                    ? "Connect Linear OAuth at the workspace level first"
+                    : undefined
+                }
                 onClick={() =>
                   setTrackerDraft((d) => ({
                     ...d,
                     kind: selected ? "" : k,
                   }))
                 }
-                className={
-                  "rounded-full border px-3 py-1 text-xs font-medium transition " +
-                  (selected
-                    ? "border-aqua/60 bg-aqua/[0.1] text-aqua"
-                    : "border-white/10 bg-white/[0.04] text-white/70 hover:border-aqua/30")
-                }
+                className={`${baseClass} ${stateClass}`}
               >
                 {k}
               </button>
@@ -213,15 +229,39 @@ export function RepoCard({
         </div>
 
         {trackerDraft.kind === "linear" && (
-          <input
-            type="text"
-            placeholder="Linear team key (optional, e.g. ENG)"
-            value={trackerDraft.team}
-            onChange={(e) =>
-              setTrackerDraft((d) => ({ ...d, team: e.target.value }))
+          (() => {
+            // Linear team picker. The legacy "type a team key" text
+            // input was misleading (sounded like an API key) and bus-
+            // factored — operators couldn't tell which team slugs
+            // were valid. The OAuth callback persists the discovered
+            // teams as ``workspace_default_config.team_options``; we
+            // surface them as a dropdown here.
+            const opts = tracker.workspace_default_config?.team_options ?? [];
+            if (opts.length === 0) {
+              return (
+                <p className="mt-2 rounded border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] leading-snug text-amber-200">
+                  No Linear teams discovered yet. Re-run the workspace
+                  Linear OAuth flow so we can fetch the team list.
+                </p>
+              );
             }
-            className="mt-2 w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs text-white placeholder-white/35"
-          />
+            return (
+              <select
+                value={trackerDraft.team}
+                onChange={(e) =>
+                  setTrackerDraft((d) => ({ ...d, team: e.target.value }))
+                }
+                className="mt-2 w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs text-white"
+              >
+                <option value="">— Pick a Linear team —</option>
+                {opts.map((opt) => (
+                  <option key={opt.id} value={opt.id}>
+                    {opt.name} ({opt.key})
+                  </option>
+                ))}
+              </select>
+            );
+          })()
         )}
         {trackerDraft.kind === "jira" && (
           <input

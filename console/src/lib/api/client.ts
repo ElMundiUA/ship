@@ -433,6 +433,12 @@ export function knowledgeSeed(
 export const TRACKER_KINDS = ["linear", "github", "jira"] as const;
 export type TrackerKind = (typeof TRACKER_KINDS)[number];
 
+export interface LinearTeamOption {
+  id: string;
+  key: string;
+  name: string;
+}
+
 export interface ApiTrackerBinding {
   repo_id: string;
   kind: TrackerKind | null;
@@ -440,6 +446,22 @@ export interface ApiTrackerBinding {
   /** ``repo`` = per-repo row. ``workspace`` = inherited default. ``none`` = nothing bound. */
   source: "repo" | "workspace" | "none";
   workspace_default_kind: TrackerKind | null;
+  /**
+   * Safe-to-expose subset of the workspace-level row's config. Today
+   * carries ``team_options`` for Linear (populated by the OAuth
+   * callback); empty for kinds without a team picker.
+   */
+  workspace_default_config?: {
+    team_options?: LinearTeamOption[];
+  };
+  /**
+   * ``true`` when the workspace-level OAuth row for the binding's
+   * kind has a usable token. The wizard disables Linear/Notion pills
+   * when ``false`` so an operator can't save a token-less binding
+   * (the backend 412s anyway, but UX-wise we want to point them at
+   * "Connect at the workspace level first" up front).
+   */
+  workspace_oauth_connected?: boolean;
 }
 
 export function getRepoTrackerBinding(

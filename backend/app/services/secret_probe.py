@@ -258,10 +258,26 @@ async def _probe_jira(secret: str, config: Mapping[str, Any]) -> ProbeResult:
 
 
 async def _probe_notion(secret: str, _config: Mapping[str, Any]) -> ProbeResult:
-    """Notion integration token (`secret_xxx` or `ntn_xxx`).
+    """Probe a Notion integration token end-to-end.
 
-    `/v1/users/me` is the cheapest auth probe — returns 401 on bad token,
-    200 with the bot user otherwise. Notion mandates an API version header.
+    Two requests in sequence:
+
+    1. ``GET /v1/users/me`` — basic auth check. 401 here means the
+       token is broken; nothing else will work.
+    2. ``POST /v1/search`` with ``page_size: 1`` — exercises the
+       integration's **Read content** capability. Notion gates content
+       reads behind a per-integration capability flag (separate from
+       the token itself), and a token whose integration was created
+       without that capability passes ``users.me`` while every
+       downstream tracker call (database query, page read) returns
+       403. Mirrors the Linear ``Read issues`` probe extension —
+       the same partial-scope failure mode the dogfood transcript on
+       2026-05-02 caught for Linear can land identically on Notion if
+       an operator picks "user-only" capabilities.
+
+    Same one-round-trip-each shape as the Linear probe; we don't fold
+    into a single batch because Notion's API doesn't compose like
+    GraphQL does.
     """
     if not secret:
         return "error", "secret is empty"
@@ -272,7 +288,9 @@ async def _probe_notion(secret: str, _config: Mapping[str, Any]) -> ProbeResult:
     }
     try:
         async with httpx.AsyncClient(timeout=PROBE_TIMEOUT_SECONDS) as client:
-            res = await client.get("https://api.notion.com/v1/users/me", headers=headers)
+            res = await client.get(
+                "https://api.notion.com/v1/users/me", headers=headers
+            )
     except httpx.HTTPError as exc:
         return "error", _short(f"network: {exc!s}")
     if res.status_code in (401, 403):
@@ -285,6 +303,36 @@ async def _probe_notion(secret: str, _config: Mapping[str, Any]) -> ProbeResult:
         return "error", "notion returned a non-JSON response"
     if not isinstance(body, dict) or body.get("object") != "user":
         return "error", "notion users.me did not return a user object"
+
+    # Read-content capability check. ``page_size=1`` keeps the
+    # response trivial; we don't care WHAT the workspace has, only
+    # that the integration is allowed to read.
+    try:
+        async with httpx.AsyncClient(timeout=PROBE_TIMEOUT_SECONDS) as client:
+            search_res = await client.post(
+                "https://api.notion.com/v1/search",
+                headers={**headers, "Content-Type": "application/json"},
+                json={"page_size": 1},
+            )
+    except httpx.HTTPError as exc:
+        return "error", _short(f"network: {exc!s}")
+    if search_res.status_code in (401, 403):
+        return "error", (
+            "notion rejected search "
+            f"(HTTP {search_res.status_code}) — integration likely "
+            "lacks the Read content capability"
+        )
+    if search_res.status_code >= 400:
+        return "error", f"notion search HTTP {search_res.status_code}"
+    try:
+        search_body = search_res.json()
+    except ValueError:
+        return "error", "notion search returned a non-JSON response"
+    if not isinstance(search_body, dict) or "results" not in search_body:
+        return "error", (
+            "notion search returned no results array — likely "
+            "missing Read content capability"
+        )
     return "ok", None
 
 

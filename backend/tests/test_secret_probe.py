@@ -34,9 +34,20 @@ class _StubResponse:
 
 
 class _StubAsyncClient:
-    """Patch shim for ``httpx.AsyncClient`` that records calls + returns canned responses."""
+    """Patch shim for ``httpx.AsyncClient`` that records calls + returns canned responses.
 
-    def __init__(self, response: _StubResponse | Exception) -> None:
+    Two response shapes:
+    - single ``_StubResponse`` / ``Exception`` — every call returns / raises it
+      (the original behaviour, kept for the single-shot probes).
+    - list of ``_StubResponse | Exception`` — popped FIFO, one per call. Used by
+      probes that issue multiple round-trips (Notion users.me + search,
+      Linear users + issues batched in one query, etc.).
+    """
+
+    def __init__(
+        self,
+        response: _StubResponse | Exception | list[_StubResponse | Exception],
+    ) -> None:
         self._response = response
         self.calls: list[tuple[str, str, dict[str, Any]]] = []
 
@@ -48,6 +59,15 @@ class _StubAsyncClient:
 
     async def _send(self, method: str, url: str, **kwargs: Any) -> _StubResponse:
         self.calls.append((method, url, kwargs))
+        if isinstance(self._response, list):
+            if not self._response:
+                raise AssertionError(
+                    f"stub ran out of queued responses at {method} {url}"
+                )
+            nxt = self._response.pop(0)
+            if isinstance(nxt, Exception):
+                raise nxt
+            return nxt
         if isinstance(self._response, Exception):
             raise self._response
         return self._response
@@ -60,7 +80,8 @@ class _StubAsyncClient:
 
 
 def _patch_client(
-    monkeypatch: pytest.MonkeyPatch, response: _StubResponse | Exception
+    monkeypatch: pytest.MonkeyPatch,
+    response: _StubResponse | Exception | list[_StubResponse | Exception],
 ) -> _StubAsyncClient:
     stub = _StubAsyncClient(response)
 
@@ -243,7 +264,13 @@ async def test_jira_uses_basic_auth_when_config_present(
 async def test_notion_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     stub = _patch_client(
         monkeypatch,
-        _StubResponse(json_body={"object": "user", "id": "bot1", "type": "bot"}),
+        [
+            _StubResponse(
+                json_body={"object": "user", "id": "bot1", "type": "bot"}
+            ),
+            # Probe now ALSO checks Read content capability via /v1/search.
+            _StubResponse(json_body={"object": "list", "results": []}),
+        ],
     )
     status, _ = await secret_probe.probe_one("notion", "secret_xyz", {})
     assert status == "ok"
@@ -251,6 +278,13 @@ async def test_notion_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     assert (method, url) == ("GET", "https://api.notion.com/v1/users/me")
     assert kwargs["headers"]["Authorization"] == "Bearer secret_xyz"
     assert kwargs["headers"]["Notion-Version"] == "2022-06-28"
+    # Second call exercises the Read-content capability.
+    second_method, second_url, second_kwargs = stub.calls[1]
+    assert (second_method, second_url) == (
+        "POST",
+        "https://api.notion.com/v1/search",
+    )
+    assert second_kwargs["json"] == {"page_size": 1}
 
 
 @pytest.mark.asyncio
@@ -267,6 +301,58 @@ async def test_notion_unexpected_payload(monkeypatch: pytest.MonkeyPatch) -> Non
     status, message = await secret_probe.probe_one("notion", "x", {})
     assert status == "error"
     assert message is not None and "users.me" in message
+
+
+@pytest.mark.asyncio
+async def test_notion_search_403_flags_missing_capability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Token that authenticates as a user but whose integration was
+    created without the **Read content** capability:
+
+    1. ``users.me`` returns 200 (auth itself is fine).
+    2. ``search`` returns 403 (capability denied).
+
+    Pre-fix the probe stopped after step 1 and reported ``ok``, while
+    every downstream tracker call returned 403 — same partial-scope
+    failure mode the Linear C1 fix closed. The error message must
+    cite "Read content capability" so an operator knows what to flip.
+    """
+    _patch_client(
+        monkeypatch,
+        [
+            _StubResponse(
+                json_body={"object": "user", "id": "bot1", "type": "bot"}
+            ),
+            _StubResponse(status_code=403, json_body={"object": "error"}),
+        ],
+    )
+    status, message = await secret_probe.probe_one("notion", "x", {})
+    assert status == "error"
+    assert message is not None
+    assert "403" in message
+    assert "Read content" in message
+
+
+@pytest.mark.asyncio
+async def test_notion_search_payload_without_results_flags_capability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Notion's other failure shape for a capability-narrowed token:
+    200 OK but the body lacks the ``results`` array entirely. Probe
+    treats that as missing Read content rather than ``ok``."""
+    _patch_client(
+        monkeypatch,
+        [
+            _StubResponse(
+                json_body={"object": "user", "id": "bot1", "type": "bot"}
+            ),
+            _StubResponse(json_body={"object": "list"}),  # no "results" key
+        ],
+    )
+    status, message = await secret_probe.probe_one("notion", "x", {})
+    assert status == "error"
+    assert message is not None and "Read content" in message
 
 
 @pytest.mark.asyncio

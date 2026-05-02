@@ -41,12 +41,15 @@ async def test_worker_picks_pending_row_and_writes_verdict(
     monkeypatch.setattr(worker, "get_sessionmaker", lambda: _MakerWrapper(db_session))
 
     # Provision via the API so we exercise the same encrypt path the
-    # workspace owner sees. After the inline probe the row is already 'ok';
-    # the worker should still re-pick stale rows on its cadence.
+    # workspace owner sees. ``slack`` here instead of ``linear``: the
+    # raw-secret PUT path is OAuth-only-rejected for Linear/Notion,
+    # and the worker probe behaviour we're verifying is not provider-
+    # specific. After the inline probe the row is already 'ok'; the
+    # worker should still re-pick stale rows on its cadence.
     response = await v1_client.put(
-        f"/v1/workspaces/{workspace.id}/integrations/linear",
+        f"/v1/workspaces/{workspace.id}/integrations/slack",
         headers=headers,
-        json={"kind": "linear", "config": {"team_id": "ENG"}, "secret": "lin_api_x"},
+        json={"kind": "slack", "config": {"channel": "#eng"}, "secret": "xoxb-x"},
     )
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
@@ -69,7 +72,7 @@ async def test_worker_picks_pending_row_and_writes_verdict(
     # The shared test database may contain leftover integrations from prior
     # smoke runs; we only assert that *our* row was processed.
     assert summary["checked"] >= 1
-    assert ("linear", "lin_api_x") in calls
+    assert ("slack", "xoxb-x") in calls
 
     row = (
         await db_session.execute(
@@ -165,10 +168,13 @@ async def test_probe_endpoint_runs_inline_and_persists(
 
     monkeypatch.setattr(routes, "probe_one", _ok)
 
+    # ``slack`` for the raw-secret PUT path. Linear/Notion are
+    # OAuth-only on that surface (returns 422 without a secret), and
+    # the probe-endpoint behaviour we're testing is provider-agnostic.
     await v1_client.put(
-        f"/v1/workspaces/{workspace.id}/integrations/linear",
+        f"/v1/workspaces/{workspace.id}/integrations/slack",
         headers=headers,
-        json={"kind": "linear", "config": {}, "secret": "lin_api_x"},
+        json={"kind": "slack", "config": {}, "secret": "xoxb-x"},
     )
 
     async def _stub(kind: str, secret: str, _config):
@@ -177,7 +183,7 @@ async def test_probe_endpoint_runs_inline_and_persists(
     monkeypatch.setattr(routes, "probe_one", _stub)
 
     response = await v1_client.post(
-        f"/v1/workspaces/{workspace.id}/integrations/linear/probe",
+        f"/v1/workspaces/{workspace.id}/integrations/slack/probe",
         headers=headers,
     )
     assert response.status_code == 200, response.text
