@@ -470,6 +470,7 @@ function ItemsTable({
         <li key={item.id}>
           <InboxItemRow
             item={item}
+            workspaceId={workspaceScope}
             href={
               workspaceScope
                 ? `/inbox/${item.id}?ws=${encodeURIComponent(workspaceScope)}`

@@ -307,7 +307,6 @@ export default async function InboxItemPage({
             detail={detail}
             workspaceId={workspace.id}
           />
-          <PayloadCard detail={detail} />
           <EventsCard
             events={detail.events}
             members={members}
@@ -333,11 +332,9 @@ export default async function InboxItemPage({
 // ---------------------------------------------------------------------------
 
 function HeaderCard({ detail }: { detail: InboxItemDetail }) {
-  const typeMeta = INBOX_TYPE_META[detail.type as InboxType];
   return (
     <Card>
       <div className="flex flex-wrap items-start gap-2">
-        <Badge tone="info">{typeMeta?.label ?? detail.type}</Badge>
         <StatusBadge status={detail.status} />
         <StaleBadge
           createdAt={detail.created_at}
@@ -345,36 +342,22 @@ function HeaderCard({ detail }: { detail: InboxItemDetail }) {
           snoozedUntil={detail.snoozed_until}
         />
       </div>
-      <h1 className="mt-3 font-display text-xl font-bold text-white">
-        {detail.title}
-      </h1>
       {detail.summary ? (
         <div className="mt-3">
           <MarkdownBlock>{detail.summary}</MarkdownBlock>
         </div>
       ) : null}
-      <dl className="mt-4 grid grid-cols-1 gap-2 text-xs text-white/65 sm:grid-cols-2">
-        <Row label="Created">{absolute(detail.created_at)}</Row>
-        {detail.due_at && <Row label="Due">{absolute(detail.due_at)}</Row>}
-        {detail.intake_handle && (
-          <Row label="Intake handle">
-            <code className="rounded bg-white/[0.06] px-1.5 py-0.5">
-              {detail.intake_handle}
-            </code>
-          </Row>
-        )}
-        {detail.intake_reason && (
-          <Row label="Intake reason">
-            <span className="text-white/75">{detail.intake_reason}</span>
-          </Row>
-        )}
-        {detail.snoozed_until && (
-          <Row label="Snoozed until">{absolute(detail.snoozed_until)}</Row>
-        )}
-        {detail.resolved_at && (
-          <Row label="Resolved at">{absolute(detail.resolved_at)}</Row>
-        )}
-      </dl>
+      {(detail.due_at || detail.snoozed_until || detail.resolved_at) && (
+        <dl className="mt-4 grid grid-cols-1 gap-2 text-xs text-white/65 sm:grid-cols-2">
+          {detail.due_at && <Row label="Due">{absolute(detail.due_at)}</Row>}
+          {detail.snoozed_until && (
+            <Row label="Snoozed until">{absolute(detail.snoozed_until)}</Row>
+          )}
+          {detail.resolved_at && (
+            <Row label="Resolved at">{absolute(detail.resolved_at)}</Row>
+          )}
+        </dl>
+      )}
     </Card>
   );
 }
@@ -766,26 +749,6 @@ function SourceTicketCard({ detail }: { detail: InboxItemDetail }) {
 }
 
 // ---------------------------------------------------------------------------
-// Payload card
-// ---------------------------------------------------------------------------
-
-function PayloadCard({ detail }: { detail: InboxItemDetail }) {
-  const json = JSON.stringify(detail.payload ?? {}, null, 2);
-  return (
-    <Card padded={false}>
-      <CardHeader
-        className="px-5 pt-5"
-        title="Payload"
-        subtitle="Raw JSON the intake stamped onto this item."
-      />
-      <pre className="overflow-x-auto px-5 pb-5 font-mono text-[11px] leading-5 text-white/80">
-        {json}
-      </pre>
-    </Card>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Events timeline
 // ---------------------------------------------------------------------------
 
@@ -796,23 +759,23 @@ function EventsCard({
   events: InboxItemEvent[];
   members: ApiMember[];
 }) {
+  // Hide the card entirely when the only event is the intake "created"
+  // heartbeat — adds noise without telling the operator anything new.
+  const meaningful = events.filter(
+    (e) => !(e.action === "created" && e.actor_kind === "system"),
+  );
+  if (meaningful.length === 0) return null;
   return (
     <Card>
       <CardHeader
         title="Activity"
         subtitle="Audit trail in chronological order."
       />
-      {events.length === 0 ? (
-        <p className="text-xs text-white/55">
-          No events recorded yet — disposition and snooze will land here.
-        </p>
-      ) : (
-        <ol className="space-y-3">
-          {events.map((event) => (
-            <EventRow key={event.id} event={event} members={members} />
-          ))}
-        </ol>
-      )}
+      <ol className="space-y-3">
+        {meaningful.map((event) => (
+          <EventRow key={event.id} event={event} members={members} />
+        ))}
+      </ol>
     </Card>
   );
 }
@@ -930,15 +893,6 @@ function OwnerCard({
         </p>
       )}
 
-      {detail.intake_handle && (
-        <p className="mb-3 text-[11px] text-white/55">
-          Original handle:{" "}
-          <code className="rounded bg-white/[0.06] px-1.5 py-0.5">
-            {detail.intake_handle}
-          </code>
-        </p>
-      )}
-
       <div className="space-y-3 border-t border-white/10 pt-3">
         <ReassignByMemberForm
           workspaceId={workspaceId}
@@ -1038,6 +992,8 @@ function ReassignByHandleForm({
 // ---------------------------------------------------------------------------
 
 function SourceCard({ detail }: { detail: InboxItemDetail }) {
+  const hasAnything = detail.play_key || detail.run_id;
+  if (!hasAnything) return null;
   return (
     <Card>
       <CardHeader title="Source" />
@@ -1056,24 +1012,9 @@ function SourceCard({ detail }: { detail: InboxItemDetail }) {
             </code>
           </Row>
         )}
-        {detail.source_table && (
-          <Row label="Source table">
-            <code className="rounded bg-white/[0.06] px-1.5 py-0.5 text-white/85">
-              {detail.source_table}
-              {detail.source_id ? ` · ${detail.source_id.slice(0, 8)}` : ""}
-            </code>
-          </Row>
-        )}
         <Row label="Created">
           <span className="text-white/85">{absolute(detail.created_at)}</span>
         </Row>
-        {!detail.play_key &&
-          !detail.run_id &&
-          !detail.source_table && (
-            <p className="text-[11px] italic text-white/45">
-              No source links recorded for this item.
-            </p>
-          )}
       </dl>
     </Card>
   );
@@ -1401,7 +1342,6 @@ function MockView({
           <HeaderCard detail={detail} />
           <SourceTicketCard detail={detail} />
           <DispositionCard detail={detail} workspaceId={detail.workspace_id} />
-          <PayloadCard detail={detail} />
           <EventsCard events={detail.events} members={[]} />
           <CommentCard
             workspaceId={detail.workspace_id}

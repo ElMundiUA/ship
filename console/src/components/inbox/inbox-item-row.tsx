@@ -4,6 +4,7 @@ import { Badge, type BadgeTone } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import { INBOX_TYPE_META, type InboxItem } from "@/lib/inbox-types";
 
+import { InboxRowActions } from "./inbox-row-actions";
 import { StaleBadge } from "./stale-badge";
 
 /**
@@ -46,6 +47,8 @@ function ownerInitials(owner: InboxItem["owner"]): string {
 export type InboxItemRowProps = {
   item: InboxItem;
   href?: string;
+  /** Workspace id — required for inline actions. When omitted, action buttons hide. */
+  workspaceId?: string;
   /** Override "now" for tests / SSR snapshots. */
   referenceDate?: Date;
   className?: string;
@@ -54,6 +57,7 @@ export type InboxItemRowProps = {
 export function InboxItemRow({
   item,
   href,
+  workspaceId,
   referenceDate,
   className,
 }: InboxItemRowProps) {
@@ -132,7 +136,7 @@ export function InboxItemRow({
         )}
       </div>
 
-      {/* Right rail: owner + play key. Compact pill instead of avatar+text-stack. */}
+      {/* Right rail: actions + owner + play key. */}
       <div
         className="flex shrink-0 items-center gap-2 self-center"
         title={item.intake_reason ?? undefined}
@@ -141,6 +145,13 @@ export function InboxItemRow({
           <code className="hidden font-mono text-[10px] text-white/35 lg:inline">
             {item.play_key}
           </code>
+        )}
+        {workspaceId && href && !isTerminal && (
+          <InboxRowActions
+            workspaceId={workspaceId}
+            item={{ id: item.id, type: item.type, status: item.status }}
+            detailHref={href}
+          />
         )}
         <span
           className={cn(
