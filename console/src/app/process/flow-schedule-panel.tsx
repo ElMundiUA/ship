@@ -471,17 +471,17 @@ function RoutinesSummary({
   processId: string;
   repoId?: string;
 }) {
-  // Filter visible routines like RoutinesPanel does, then index by id
-  // for fast lookup against the canonical six.
-  const byId = new Map(
-    routines
-      .filter((r) => !HIDDEN_ROUTINE_IDS.has(r.id))
-      .map((r) => [r.id, r] as const),
-  );
+  // Show ONLY what's actually in process.routines after the hidden-id
+  // filter. Pre-canonical seed ids (code_map, scan_*, daily_*) drop
+  // out of view; the operator never sees fictional defaults for
+  // routines that don't exist in their repo's .ship/config.yml.
+  const visible = routines.filter((r) => !HIDDEN_ROUTINE_IDS.has(r.id));
   const editHrefSuffix = repoId
     ? `?tab=routines&repo=${encodeURIComponent(repoId)}`
     : "?tab=routines";
   const editHref = `/process/${encodeURIComponent(processId)}${editHrefSuffix}`;
+  // Lookup display label by canonical id.
+  const labelById = new Map(BUILTIN_ROUTINE_CATALOG.map((c) => [c.id, c.name] as const));
   return (
     <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-3">
       <div className="flex items-center justify-between gap-2">
@@ -495,47 +495,56 @@ function RoutinesSummary({
           Edit cron →
         </a>
       </div>
-      <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-        {BUILTIN_ROUTINE_CATALOG.map((entry) => {
-          const live = byId.get(entry.id);
-          const enabled = !!live && live.enabled !== false;
-          const cron = live?.schedule?.trim() || entry.defaultCron;
-          let nextRun = "—";
-          try {
-            nextRun = formatNextRun(cron);
-          } catch {
-            nextRun = "invalid cron";
-          }
-          return (
-            <div
-              key={entry.id}
-              className={[
-                "rounded-xl border p-2.5",
-                enabled
-                  ? "border-aqua/25 bg-aqua/[0.05]"
-                  : "border-white/10 bg-white/[0.02] opacity-65",
-              ].join(" ")}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <div className="text-xs font-semibold text-white">{entry.name}</div>
-                <span
-                  className={[
-                    "h-1.5 w-1.5 rounded-full",
-                    enabled ? "bg-aqua" : "bg-white/30",
-                  ].join(" ")}
-                  aria-hidden
-                />
+      {visible.length === 0 ? (
+        <p className="mt-3 text-xs text-white/55">
+          No routines configured on this process. The Routines tab seeds the
+          canonical six (Daily, Retro, Healthcheck, Tech / QA / Security review).
+        </p>
+      ) : (
+        <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          {visible.map((routine) => {
+            const enabled = routine.enabled !== false;
+            const cron = routine.schedule?.trim() ?? "";
+            let nextRun = "—";
+            if (cron) {
+              try {
+                nextRun = formatNextRun(cron);
+              } catch {
+                nextRun = "invalid cron";
+              }
+            }
+            const label = labelById.get(routine.id) ?? routine.name ?? routine.id;
+            return (
+              <div
+                key={routine.id}
+                className={[
+                  "rounded-xl border p-2.5",
+                  enabled
+                    ? "border-aqua/25 bg-aqua/[0.05]"
+                    : "border-white/10 bg-white/[0.02] opacity-65",
+                ].join(" ")}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-xs font-semibold text-white">{label}</div>
+                  <span
+                    className={[
+                      "h-1.5 w-1.5 rounded-full",
+                      enabled ? "bg-aqua" : "bg-white/30",
+                    ].join(" ")}
+                    aria-hidden
+                  />
+                </div>
+                <div className="mt-1 truncate font-mono text-[10px] text-white/50">
+                  {cron || "no schedule"}
+                </div>
+                <div className="mt-1 text-[10px] text-white/45">
+                  {enabled ? (cron ? `Next: ${nextRun}` : "Manual trigger") : "Disabled"}
+                </div>
               </div>
-              <div className="mt-1 truncate font-mono text-[10px] text-white/50">
-                {cron}
-              </div>
-              <div className="mt-1 text-[10px] text-white/45">
-                {enabled ? `Next: ${nextRun}` : "Disabled"}
-              </div>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

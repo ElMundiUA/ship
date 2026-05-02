@@ -64,8 +64,14 @@ def test_compose_default_bundle_emits_config_yml() -> None:
     assert "name: Development Process" in config_body
     assert "type: schedule" in config_body
     assert "cron:" in config_body
-    assert "task_intake:" in config_body
-    assert "self_heal:" in config_body
+    # The canonical six routine ids land in process.routines (matches
+    # backend.app.services.lane_recipes.DEFAULT_SEED_LANES).
+    assert "daily:" in config_body
+    assert "retro:" in config_body
+    assert "healthcheck:" in config_body
+    assert "tech_review:" in config_body
+    assert "qa_review:" in config_body
+    assert "security_review:" in config_body
     # Every pattern in the bundle that contributes a routine should
     # surface as a ``process.routines.*`` mapping key — sanity-check the
     # round-trip from bundle → catalog → YAML.

@@ -100,6 +100,17 @@ _PROCESS_STATE_ORDER: tuple[str, ...] = (
 
 _ROUTINE_IDS: frozenset[str] = frozenset(
     {
+        # Canonical six (matches lane_recipes.DEFAULT_SEED_LANES).
+        "daily",
+        "retro",
+        "healthcheck",
+        "tech_review",
+        "qa_review",
+        "security_review",
+        # Legacy ids — accepted at projection time so old repos keep
+        # working until rewritten, but no longer emitted by the seed.
+        # Display layer collapses these to the canonical name where it
+        # can; otherwise they pass through as-is.
         "daily_architecture_tests_review",
         "daily_technical_architecture_review",
         "daily_security_review",
@@ -108,6 +119,11 @@ _ROUTINE_IDS: frozenset[str] = frozenset(
         "self_heal",
         "daily_standup",
         "tech_debt",
+        "code_map",
+        "flow_release_notes",
+        "scan_docs_freshness",
+        "scan_license_deps",
+        "scan_security_deps",
     }
 )
 
@@ -950,8 +966,11 @@ async def _build_development_process(
                 specialist_name=specialists[specialist_id].name,
                 instructions=_state_instructions(lane_key),
                 triggers=_triggers_for(lane, pipeline),
-                exit_conditions=[ProcessConditionOut(expression="state_complete == true")],
-                block_conditions=[ProcessConditionOut(expression="requires_human_input == true")],
+                # Real conditions are configured per-state via the
+                # editor; the projection no longer fabricates these
+                # synthetic placeholders.
+                exit_conditions=[],
+                block_conditions=[],
                 ticket_contract=_ticket_contract_for_state(lane_key),
                 runtime=runtime,
             )
@@ -960,12 +979,18 @@ async def _build_development_process(
     if not states:
         states = _default_states(specialists)
 
+    # Default sequential transitions get NO synthetic condition. The old
+    # ``exit_conditions_met == true`` placeholder leaked the internal
+    # field name onto every edge label in the canvas, looking like debug
+    # text. Real conditions live on each transition's ``conditions``
+    # entry once the editor is used; an empty list renders as a clean
+    # arrow.
     transitions = [
         ProcessTransitionOut(
             id=f"{left.id}_to_{right.id}",
             from_state_id=left.id,
             to_state_id=right.id,
-            conditions=[ProcessConditionOut(expression="exit_conditions_met == true")],
+            conditions=[],
             requires_human=False,
         )
         for left, right in zip(states, states[1:])
@@ -1538,11 +1563,20 @@ def _routine_instructions(lane_id: str) -> str:
 def _routine_description(lane_id: str) -> str:
     """Short human copy for the routine card; distinct from long-form instructions."""
     known = {
-        "daily_architecture_tests_review": "Recurring check on test architecture and coverage signals.",
+        # Canonical six.
+        "daily": "Morning digest of in-flight work, blockers, and risks.",
+        "retro": "End-of-day retro: what went well, what to improve, next actions.",
+        "healthcheck": "Reconcile CI, workflows, and guardrails after failed runs.",
+        "tech_review": "Architecture drift and design consistency review.",
+        "qa_review": "Test architecture, coverage, and flakiness signals.",
+        "security_review": "Security posture and dependency signal sweep.",
+        # Legacy ids — kept around so existing repos with stale config
+        # still get sensible copy until they're rewritten.
+        "daily_architecture_tests_review": "Test architecture, coverage, and flakiness signals.",
         "daily_technical_architecture_review": "Architecture drift and design consistency review.",
         "daily_security_review": "Security posture and dependency signal sweep.",
-        "daily_digest": "Consolidated summary of work and blockers for the team.",
-        "daily_retro": "Lightweight team retro prompts and follow-ups.",
+        "daily_digest": "Morning digest of in-flight work, blockers, and risks.",
+        "daily_retro": "End-of-day retro: what went well, what to improve, next actions.",
         "self_heal": "Reconcile CI, workflows, and guardrails after failed runs.",
         "daily_standup": "Asynchronous standup nudge with lane status.",
         "tech_debt": "Triage and size technical-debt work for upcoming cycles.",

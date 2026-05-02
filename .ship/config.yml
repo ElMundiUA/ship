@@ -82,17 +82,8 @@ process:
   - from: qa_manual
     to: pr_review
   routines:
-    daily_security_review:
-      name: Daily Security Review
-      enabled: true
-      trigger:
-        type: schedule
-        cron: 0 6 * * *
-        window: 30m
-        catchup: latest
-      pattern: role-security-officer
-    daily_digest:
-      name: Daily Digest
+    daily:
+      name: Daily
       enabled: true
       trigger:
         type: schedule
@@ -100,26 +91,8 @@ process:
         window: 30m
         catchup: latest
       pattern: flow-daily-retro
-    daily_technical_architecture_review:
-      name: Daily Technical Architecture Review
-      enabled: true
-      trigger:
-        type: schedule
-        cron: 0 12 * * *
-        window: 30m
-        catchup: latest
-      pattern: role-tech-architect
-    daily_architecture_tests_review:
-      name: Daily Architecture Tests Review
-      enabled: true
-      trigger:
-        type: schedule
-        cron: 0 15 * * *
-        window: 30m
-        catchup: latest
-      pattern: role-qa-architect
-    daily_retro:
-      name: Daily Retro
+    retro:
+      name: Retro
       enabled: true
       trigger:
         type: schedule
@@ -127,75 +100,39 @@ process:
         window: 30m
         catchup: latest
       pattern: flow-learning-capture
-    task_intake:
-      name: Task Intake
+    healthcheck:
+      name: Healthcheck
       enabled: true
       trigger:
         type: schedule
-        cron: '*/15 * * * *'
-        window: 30m
-        catchup: latest
-      pattern: role-intake
-    ba_requirements:
-      name: Ba Requirements
-      enabled: true
-      trigger:
-        type: schedule
-        cron: '*/15 * * * *'
-        window: 30m
-        catchup: latest
-      pattern: role-ba
-    tech_arch_plan:
-      name: Tech Arch Plan
-      enabled: true
-      trigger:
-        type: schedule
-        cron: '*/15 * * * *'
-        window: 30m
-        catchup: latest
-      pattern: role-tech-architect
-    qa_arch_plan:
-      name: Qa Arch Plan
-      enabled: true
-      trigger:
-        type: schedule
-        cron: '*/15 * * * *'
-        window: 30m
-        catchup: latest
-      pattern: role-qa-architect
-    dev_implementation:
-      name: Dev Implementation
-      enabled: true
-      trigger:
-        type: schedule
-        cron: '*/15 * * * *'
-        window: 30m
-        catchup: latest
-      pattern: role-developer
-    qa_manual:
-      name: Qa Manual
-      enabled: true
-      trigger:
-        type: schedule
-        cron: '*/15 * * * *'
-        window: 30m
-        catchup: latest
-      pattern: flow-qa-acceptance
-    qa_automation:
-      name: Qa Automation
-      enabled: true
-      trigger:
-        type: schedule
-        cron: '*/15 * * * *'
-        window: 30m
-        catchup: latest
-      pattern: role-qa-architect
-    self_heal:
-      name: Self Heal
-      enabled: true
-      trigger:
-        type: schedule
-        cron: 0 * * * *
+        cron: 0 */2 * * *
         window: 30m
         catchup: latest
       pattern: op-workflow-self-heal
+    tech_review:
+      name: Tech review
+      enabled: true
+      trigger:
+        type: schedule
+        cron: 0 12 * * *
+        window: 30m
+        catchup: latest
+      pattern: role-tech-architect
+    qa_review:
+      name: QA review
+      enabled: true
+      trigger:
+        type: schedule
+        cron: 0 15 * * *
+        window: 30m
+        catchup: latest
+      pattern: role-qa-architect
+    security_review:
+      name: Security review
+      enabled: true
+      trigger:
+        type: schedule
+        cron: 0 6 * * *
+        window: 30m
+        catchup: latest
+      pattern: role-security-officer

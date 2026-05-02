@@ -97,84 +97,93 @@ operator.
 
 
 DEFAULT_SEED_LANES: Final[dict[str, dict[str, object]]] = {
-    # Daily reviews — spread every 3h across 24h UTC so the operator
-    # doesn't see 3-4 agents stacked on the same hour in the dashboard.
-    # Order: security → daily digest → tech-debt → tests-coverage →
-    # learning retro. Pre-PR-77 they all stacked at 08:00/09:00/17:00.
-    "daily_security_review": {
+    # Canonical six routines — the only set the editor surfaces and the
+    # only set the seed bundle writes into a fresh ``.ship/config.yml``.
+    # IDs are byte-stable contracts: shipctl reads them out of the repo
+    # config and renames here would break already-seeded repos, so they
+    # match the short labels exactly. Times spread across UTC so the
+    # operator doesn't see four agents stacked on one hour.
+    #
+    # Specialists (intake / BA / tech-architect / QA / developer) are NOT
+    # routines — they live as ``process.specialists`` and pick tickets
+    # via the Capacity calendar, not via a 15-min cron sweep.
+    "security_review": {
         "kind": "schedule",
         "cron": "0 6 * * *",   # 06:00 UTC
         "pattern": "role-security-officer",
     },
-    "daily_digest": {
+    "daily": {
         "kind": "schedule",
-        "cron": "0 9 * * *",   # 09:00 UTC — morning summary
+        "cron": "0 9 * * *",   # 09:00 UTC — morning digest
         "pattern": "flow-daily-retro",
     },
-    "daily_technical_architecture_review": {
+    "tech_review": {
         "kind": "schedule",
-        "cron": "0 12 * * *",  # 12:00 UTC — tech-debt sweep
+        "cron": "0 12 * * *",  # 12:00 UTC
         "pattern": "role-tech-architect",
     },
-    "daily_architecture_tests_review": {
+    "qa_review": {
         "kind": "schedule",
-        "cron": "0 15 * * *",  # 15:00 UTC — test coverage review
+        "cron": "0 15 * * *",  # 15:00 UTC
         "pattern": "role-qa-architect",
     },
-    "daily_retro": {
+    "retro": {
         "kind": "schedule",
         "cron": "0 18 * * *",  # 18:00 UTC — end-of-day retro
         "pattern": "flow-learning-capture",
     },
-    # SDLC cadence lanes. GitHub only ticks the clock; Ship decides which
-    # ones have eligible work in the current window.
-    "task_intake": {
+    "healthcheck": {
         "kind": "schedule",
-        "cron": "*/15 * * * *",
-        "pattern": "role-intake",
-    },
-    "ba_requirements": {
-        "kind": "schedule",
-        "cron": "*/15 * * * *",
-        "pattern": "role-ba",
-    },
-    "tech_arch_plan": {
-        "kind": "schedule",
-        "cron": "*/15 * * * *",
-        "pattern": "role-tech-architect",
-    },
-    "qa_arch_plan": {
-        "kind": "schedule",
-        "cron": "*/15 * * * *",
-        "pattern": "role-qa-architect",
-    },
-    "dev_implementation": {
-        "kind": "schedule",
-        "cron": "*/15 * * * *",
-        "pattern": "role-developer",
-    },
-    "qa_manual": {
-        "kind": "schedule",
-        "cron": "*/15 * * * *",
-        "pattern": "flow-qa-acceptance",
-    },
-    "qa_automation": {
-        "kind": "schedule",
-        "cron": "*/15 * * * *",
-        "pattern": "role-qa-architect",
-    },
-    # Hourly operational health lane.
-    "self_heal": {
-        "kind": "schedule",
-        "cron": "0 * * * *",
+        "cron": "0 */2 * * *",  # every 2h
         "pattern": "op-workflow-self-heal",
     },
 }
-"""Default v5 lanes written into ``.ship/config.yml`` for new repos.
+"""Canonical routines written into a fresh ``.ship/config.yml``.
 
-The GitHub workflow seeded alongside this config is only a timer. These lane
-entries are the source of truth for what Ship should run or skip on each tick.
+These six are the **only** routine ids the editor surfaces and the only
+ones the seed bundle ever writes. ``shipctl`` reads them from the repo
+config and treats any other id as drift (logs a warning, still runs).
 """
+
+# Display labels keyed by the canonical routine id. Backend includes
+# this in the process projection so the FE picker can show short verbs
+# ("Daily" / "Retro" / "Healthcheck") instead of the snake-case ids.
+ROUTINE_DISPLAY_LABELS: Final[dict[str, str]] = {
+    "daily": "Daily",
+    "retro": "Retro",
+    "healthcheck": "Healthcheck",
+    "tech_review": "Tech review",
+    "qa_review": "QA review",
+    "security_review": "Security review",
+}
+
+# Legacy ids ever produced by older seed versions. Loading code logs a
+# drift warning when it sees one of these. Kept here as a single source
+# of truth so the warning text doesn't go stale.
+LEGACY_ROUTINE_IDS: Final[frozenset[str]] = frozenset(
+    {
+        "daily_security_review",
+        "daily_digest",
+        "daily_technical_architecture_review",
+        "daily_architecture_tests_review",
+        "daily_retro",
+        "self_heal",
+        "task_intake",
+        "ba_requirements",
+        "tech_arch_plan",
+        "qa_arch_plan",
+        "dev_implementation",
+        "qa_manual",
+        "qa_automation",
+        "daily_standup",
+        "tech_debt",
+        "code_map",
+        "flow_release_notes",
+        "scan_docs_freshness",
+        "scan_license_deps",
+        "scan_security_deps",
+    }
+)
 
 
 def default_seed_lanes() -> dict[str, dict[str, object]]:
@@ -578,9 +587,13 @@ async def seed_default_pipelines(
 __all__ = [
     "DEFAULT_BUNDLE",
     "DEFAULT_BUNDLE_REASONS",
+    "DEFAULT_SEED_LANES",
     "KNOWN_PRESETS",
     "LEGACY_PRESETS",
+    "LEGACY_ROUTINE_IDS",
     "LaneRecipe",
+    "ROUTINE_DISPLAY_LABELS",
+    "default_seed_lanes",
     "get_lane_recipe",
     "lane_recipes",
     "list_lane_recipes",
