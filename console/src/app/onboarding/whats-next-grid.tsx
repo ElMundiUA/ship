@@ -1,12 +1,12 @@
 /**
- * Server component — the four "what's next" CTA tiles rendered at
- * the bottom of the post-onboarding done page (P5-09).
+ * Server component — the "what's next" CTA tiles rendered at the
+ * bottom of the post-onboarding done page.
  *
- * Tiles link into the new IA the wave-8c redesign establishes:
+ * Tiles link into the IA the wave-8c redesign established:
  *
  *   - /inbox        — clarification / approval requests as they arrive
  *   - /process      — specialist workflow for the workspace
- *   - /knowledge    — generated project knowledge after bootstrap
+ *   - /knowledge    — workspace knowledge buckets
  *
  * Server-side because we don't need any interactivity; passing the
  * workspace id through the URL keeps the destination pages happy
@@ -17,22 +17,11 @@ import Link from "next/link";
 
 export function WhatsNextGrid({
   workspaceId,
-  installedCount,
 }: {
   workspaceId: string | null;
-  /**
-   * Number of Plays we installed by default for this wizard run.
-   * Surfaced verbatim on the "Browse Plays" tile so the operator
-   * knows what's already wired before they go shopping.
-   */
-  installedCount: number | null;
 }) {
   const wsQuery = workspaceId ? `?ws=${encodeURIComponent(workspaceId)}` : "";
-  const tiles: {
-    href: string;
-    title: string;
-    blurb: string;
-  }[] = [
+  const tiles: { href: string; title: string; blurb: string }[] = [
     {
       href: `/inbox${wsQuery}`,
       title: "Open Inbox →",
@@ -43,9 +32,7 @@ export function WhatsNextGrid({
       href: `/process${wsQuery}`,
       title: "Open Process →",
       blurb:
-        installedCount != null
-          ? `Review the seeded development process. The old ${installedCount}-play bundle is no longer the operator model.`
-          : "Review the seeded development process and specialist handoffs.",
+        "Review the seeded development process and specialist handoffs.",
     },
     {
       href: `/knowledge${wsQuery}`,
@@ -60,7 +47,7 @@ export function WhatsNextGrid({
       <h2 className="font-display text-lg font-bold text-white">
         What&apos;s next
       </h2>
-      <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {tiles.map((tile) => (
           <Link
             key={tile.title}

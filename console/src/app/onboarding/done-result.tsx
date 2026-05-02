@@ -138,13 +138,7 @@ export function DoneResult({
     );
   }
 
-  return (
-    <RepoResultCard
-      workspaceId={workspaceId}
-      repo={repo}
-      result={state.result}
-    />
-  );
+  return <RepoResultCard repo={repo} result={state.result} />;
 }
 
 function DoneSkeleton({ repoFullName }: { repoFullName: string }) {
@@ -176,8 +170,12 @@ function NoBootstrapYet({
   workspaceId: string | null;
   repo: ApiActivatedRepo;
 }) {
-  const configureHref = workspaceId
-    ? `/onboarding?step=configure&ws=${encodeURIComponent(workspaceId)}`
+  // Link to the current ``confirm`` step rather than the deprecated
+  // ``configure`` legacy id (the page redirects ?step=configure →
+  // ?step=confirm anyway, but pointing at the live name keeps the URL
+  // bar honest).
+  const confirmHref = workspaceId
+    ? `/onboarding?step=confirm&ws=${encodeURIComponent(workspaceId)}`
     : "/onboarding";
   return (
     <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5 backdrop-blur-xl shadow-card">
@@ -185,15 +183,14 @@ function NoBootstrapYet({
         {repo.full_name}
       </h3>
       <p className="mt-1 text-xs text-white/65">
-        No bootstrap yet for this repo. Open the configure step and
-        run the seed PR — once it lands, this page will show what was
-        wired and where to go next.
+        No bootstrap yet for this repo. Head back to Confirm and open
+        the seed PR — once it lands, this page will show the result.
       </p>
       <Link
-        href={configureHref}
+        href={confirmHref}
         className="mt-3 inline-flex rounded-full border border-aqua/40 bg-aqua/[0.08] px-3 py-1.5 text-[11px] font-bold text-aqua hover:bg-aqua/[0.16]"
       >
-        → Open seed PR
+        → Back to Confirm
       </Link>
     </div>
   );

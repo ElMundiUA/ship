@@ -1,37 +1,39 @@
 "use client";
 
 /**
- * Pure presentational "what just happened" card for one repo (P5-09).
+ * Pure presentational "what just happened" card for one repo.
  *
- * Renders the wizard_seed result: PR link, branch + file count,
- * CODEOWNERS routing summary, synthetic-lane count, and slots in the
- * intel-poll badge. No fetching here — the parent
+ * Renders the wizard_seed result: PR link, branch, bundle version,
+ * tracker kind, file count. Nothing fetches here — the parent
  * (:component:`DoneResult`) hands in everything we need so the card
  * is trivial to unit-test and reuse in fallback paths.
+ *
+ * Pre-cleanup this card also surfaced CODEOWNERS-derived routing
+ * rules and a repo-intel poll badge. Both fields became dead
+ * post-P5-06: the wizard_seed route stopped dispatching either
+ * (post-merge bootstrap/config sync owns all repo-analysis side
+ * effects now), so ``codeowners`` and ``intel`` arrive ``null`` /
+ * never. The dead UX showed operators "harvest never dispatched —
+ * Retry harvest →" buttons that wired to nothing. Cleanup keeps the
+ * card to load-bearing facts only.
  */
-
-import Link from "next/link";
 
 import type {
   ApiActivatedRepo,
   ApiWizardSeedOut,
-  ApiWizardSeedCodeownersSummary,
 } from "@/lib/api/client";
 
-import { IntelPollBadge } from "./intel-poll-badge";
-
 export function RepoResultCard({
-  workspaceId,
   repo,
   result,
 }: {
-  workspaceId: string | null;
   /** Best-effort repo metadata. ``null`` when only the wizard payload is around. */
   repo: ApiActivatedRepo | null;
   result: ApiWizardSeedOut;
 }) {
-  const fullName = repo?.full_name ?? deriveOwnerRepoFromBranch(result.branch);
+  const fullName = repo?.full_name ?? null;
   const defaultBranch = repo?.default_branch ?? "main";
+  const bundleVersion = repo?.installed_bundle_version ?? null;
   const fileCount = result.files.length;
 
   return (
@@ -46,11 +48,18 @@ export function RepoResultCard({
           <h3 className="font-display text-lg font-bold text-white">
             {fullName ?? "(repo)"}
           </h3>
-          <p className="mt-0.5 text-[11px] text-white/55">
-            Default branch:{" "}
-            <code className="rounded bg-white/5 px-1 text-aqua">
-              {defaultBranch}
-            </code>
+          <p className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-white/55">
+            <span>
+              Default branch:{" "}
+              <code className="rounded bg-white/5 px-1 text-aqua">
+                {defaultBranch}
+              </code>
+            </span>
+            {bundleVersion && (
+              <span className="rounded bg-aqua/15 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-aqua">
+                bundle v{bundleVersion}
+              </span>
+            )}
           </p>
         </div>
         {result.tracker_kind && (
@@ -62,17 +71,7 @@ export function RepoResultCard({
 
       <div className="mt-4 space-y-3">
         <PullRequestRow result={result} />
-        <CodeownersRow
-          summary={result.codeowners}
-          workspaceId={workspaceId}
-          repoId={repo?.id ?? null}
-        />
-        <IntelRow
-          workspaceId={workspaceId}
-          repoId={repo?.id ?? null}
-          handle={result.intel}
-        />
-        <FileCountRow fileCount={fileCount} />
+        <FileCountRow result={result} fileCount={fileCount} />
       </div>
     </article>
   );
@@ -111,7 +110,7 @@ function PullRequestRow({ result }: { result: ApiWizardSeedOut }) {
           data-testid="onboarding-done-pr-link"
           className="inline-flex items-center gap-1.5 rounded-full border border-aqua/40 bg-aqua/[0.08] px-3 py-1 text-[11px] font-bold text-aqua hover:bg-aqua/[0.16]"
         >
-          → #{result.pr_number} Ship: wizard seed (open in GitHub)
+          → #{result.pr_number} Ship: bootstrap (open in GitHub)
         </a>
         <span className="rounded-full border border-emerald-400/30 bg-emerald-500/[0.08] px-2 py-0.5 text-[10px] uppercase tracking-widest text-emerald-300">
           opened
@@ -127,117 +126,28 @@ function PullRequestRow({ result }: { result: ApiWizardSeedOut }) {
   );
 }
 
-function CodeownersRow({
-  summary,
-  workspaceId,
-  repoId,
+function FileCountRow({
+  result,
+  fileCount,
 }: {
-  summary: ApiWizardSeedCodeownersSummary | null;
-  workspaceId: string | null;
-  repoId: string | null;
+  result: ApiWizardSeedOut;
+  fileCount: number;
 }) {
-  // Empty-state — CODEOWNERS not present in the repo. We deliberately
-  // keep this short and link to docs rather than dropping a "wizard
-  // failed" warning: a missing CODEOWNERS is the operator's choice,
-  // not a Ship error.
-  if (summary == null || !summary.file_found) {
-    return (
-      <Section label="Routing rules" testId="onboarding-done-codeowners">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="rounded-full border border-white/15 bg-white/[0.04] px-2 py-0.5 text-[10px] uppercase tracking-widest text-white/65">
-            no CODEOWNERS yet
-          </span>
-        </div>
-        <p className="mt-2 text-[11px] leading-relaxed text-white/65">
-          We didn&apos;t find a <code className="text-white/85">CODEOWNERS</code>{" "}
-          file. Routing can be reconciled after the seed PR is merged so
-          clarification requests land on the right reviewers.
-        </p>
-      </Section>
-    );
-  }
-
-  const created = summary.routing_rules_created;
-  const rules = summary.rules_count;
-  const unresolved = summary.unresolved_owners ?? [];
-
+  // ``result.files`` is the canonical list — show it inline so the
+  // operator sees what actually committed, not just a count. Most
+  // bootstraps land 4 files (workflow + config + state + FSM) so the
+  // list is short enough to render inline.
   return (
-    <Section label="Routing rules" testId="onboarding-done-codeowners">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="rounded-full border border-emerald-400/30 bg-emerald-500/[0.08] px-2 py-0.5 text-[10px] uppercase tracking-widest text-emerald-300">
-          {created} created
-        </span>
-        <span className="text-[11px] text-white/55">
-          from {rules} CODEOWNERS rule{rules === 1 ? "" : "s"}
-        </span>
-        {workspaceId && repoId && (
-          <Link
-            href={`/inbox?ws=${encodeURIComponent(workspaceId)}&repo=${encodeURIComponent(repoId)}`}
-            className="ml-auto text-[11px] text-white/55 hover:text-white"
-          >
-            View routing →
-          </Link>
-        )}
-      </div>
-      {unresolved.length > 0 && (
-        <div className="mt-2 rounded-lg border border-sun/40 bg-sun/[0.08] px-2 py-1.5 text-[11px] text-sun">
-          <strong className="font-bold">Unresolved:</strong>{" "}
-          {unresolved.join(", ")} — not workspace member
-          {unresolved.length === 1 ? "" : "s"} yet. Invite them or update
-          CODEOWNERS to route through a workspace handle.
-        </div>
-      )}
+    <Section label={`${fileCount} file${fileCount === 1 ? "" : "s"} committed`}>
+      <ul className="space-y-1 text-[11px] text-white/70">
+        {result.files.map((path) => (
+          <li key={path}>
+            <code className="rounded bg-white/5 px-1.5 py-0.5 text-white/80">
+              {path}
+            </code>
+          </li>
+        ))}
+      </ul>
     </Section>
   );
-}
-
-function IntelRow({
-  workspaceId,
-  repoId,
-  handle,
-}: {
-  workspaceId: string | null;
-  repoId: string | null;
-  handle: ApiWizardSeedOut["intel"];
-}) {
-  return (
-    <Section label="Repo intel" testId="onboarding-done-intel-badge">
-      {repoId == null ? (
-        <p className="text-[11px] text-white/55">
-          The bootstrap workflow will harvest repo intel after the seed PR
-          lands.
-        </p>
-      ) : (
-        <IntelPollBadge
-          workspaceId={workspaceId}
-          repoId={repoId}
-          handle={handle}
-        />
-      )}
-    </Section>
-  );
-}
-
-function FileCountRow({ fileCount }: { fileCount: number }) {
-  return (
-    <p className="text-[11px] text-white/45">
-      {fileCount} file{fileCount === 1 ? "" : "s"} committed (config,
-      workflows,{" "}
-      <code className="rounded bg-white/5 px-1 text-white/65">
-        .ship/config.yml
-      </code>
-      , bootstrap state).
-    </p>
-  );
-}
-
-/**
- * Last-ditch fallback when no :type:`ApiActivatedRepo` is around — we
- * try to extract ``owner/repo`` from the seed branch label which the
- * backend mints as ``ship/<labelled>-<seed>``. Returns ``null`` if
- * nothing usable is parseable.
- */
-function deriveOwnerRepoFromBranch(branch: string): string | null {
-  void branch;
-  return null;
 }

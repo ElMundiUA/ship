@@ -109,7 +109,7 @@ export async function DoneStep({
         </div>
       )}
 
-      <WhatsNextGrid workspaceId={wsId} installedCount={null} />
+      <WhatsNextGrid workspaceId={wsId} />
 
       <footer className="mt-10 flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-5">
         <span className="text-[11px] text-white/45">

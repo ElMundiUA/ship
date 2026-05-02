@@ -196,18 +196,29 @@ export async function ConfirmStep({
         <h2 className="font-display text-lg font-bold text-white">
           How it lands
         </h2>
+        {/* Bullet list rewritten to match BUNDLE 0.13 reality:
+            - Exactly ONE workflow file installs (ship-trigger-schedule.yml).
+              ship-bootstrap.yml was retired in BUNDLE 0.8 — knowledge
+              ingestion moved server-side; nothing else lands as a
+              separate PR.
+            - The "second generated knowledge PR" claim was tied to that
+              same retired workflow and is gone.
+            - GitHub Actions secrets are still pushed by the route but
+              folded into the same step description so the operator
+              sees "one click → one PR" instead of a five-step ritual. */}
         <ul className="mt-3 space-y-2 text-[12px] leading-relaxed text-white/75">
           <li className="flex gap-2">
             <span className="mt-[2px] grid h-4 w-4 shrink-0 place-items-center rounded-full bg-aqua/20 text-[10px] text-aqua">
               1
             </span>
             <span>
-              <strong className="text-white">One pull request per repo</strong>{" "}
-              — titled{" "}
+              <strong className="text-white">One pull request per repo</strong>
+              , titled{" "}
               <code className="rounded bg-white/5 px-1 text-aqua">
                 Ship: bootstrap
               </code>
-              .
+              . Idempotent — re-running the wizard opens a fresh PR
+              with the latest bundle.
             </span>
           </li>
           <li className="flex gap-2">
@@ -215,14 +226,19 @@ export async function ConfirmStep({
               2
             </span>
             <span>
+              <strong className="text-white">Four files committed</strong>:{" "}
+              <code className="rounded bg-white/5 px-1 text-aqua">
+                .github/workflows/ship-trigger-schedule.yml
+              </code>{" "}
+              (the only workflow file we install), {" "}
               <code className="rounded bg-white/5 px-1 text-aqua">
                 .ship/config.yml
-              </code>{" "}
-              +{" "}
+              </code>
+              ,{" "}
               <code className="rounded bg-white/5 px-1 text-aqua">
-                .github/workflows
-              </code>{" "}
-              files and bootstrap workflow in one commit, ready to merge.
+                .ship/tracker-fsm.md
+              </code>
+              , and an idempotency marker.
             </span>
           </li>
           <li className="flex gap-2">
@@ -231,38 +247,9 @@ export async function ConfirmStep({
             </span>
             <span>
               <strong className="text-white">
-                Post-merge bootstrap workflow
+                GitHub Actions secrets pushed alongside the PR
               </strong>{" "}
-              runs from{" "}
-              <code className="rounded bg-white/5 px-1 text-aqua">
-                .github/workflows/ship-bootstrap.yml
-              </code>{" "}
-              after PR 1 lands, using GitHub Actions as the orchestrator.
-            </span>
-          </li>
-          <li className="flex gap-2">
-            <span className="mt-[2px] grid h-4 w-4 shrink-0 place-items-center rounded-full bg-aqua/20 text-[10px] text-aqua">
-              4
-            </span>
-            <span>
-              <strong className="text-white">
-                A second generated knowledge PR opens
-              </strong>{" "}
-              with reviewable{" "}
-              <code className="rounded bg-white/5 px-1 text-aqua">
-                .ship/knowledge/*.md
-              </code>{" "}
-              files based on the merged repository.
-            </span>
-          </li>
-          <li className="flex gap-2">
-            <span className="mt-[2px] grid h-4 w-4 shrink-0 place-items-center rounded-full bg-aqua/20 text-[10px] text-aqua">
-              5
-            </span>
-            <span>
-              <strong className="text-white">GitHub Actions secrets</strong>{" "}
-              for Ship — when you click{" "}
-              <em>Open seed PR</em>, the backend writes{" "}
+              —{" "}
               <code className="rounded bg-white/5 px-1 text-aqua">
                 SHIP_RUN_TOKEN
               </code>
@@ -270,11 +257,24 @@ export async function ConfirmStep({
               <code className="rounded bg-white/5 px-1 text-aqua">
                 SHIP_API_BASE
               </code>
-              , and (on first mint){" "}
+              , and (first mint){" "}
               <code className="rounded bg-white/5 px-1 text-aqua">
                 SHIP_API_TOKEN
-              </code>{" "}
-              so CI can reach your Ship deployment without manual copy-paste.
+              </code>
+              . CI can reach Ship without manual copy-paste.
+            </span>
+          </li>
+          <li className="flex gap-2">
+            <span className="mt-[2px] grid h-4 w-4 shrink-0 place-items-center rounded-full bg-aqua/20 text-[10px] text-aqua">
+              4
+            </span>
+            <span>
+              <strong className="text-white">Post-merge work is server-side.</strong>{" "}
+              Repo intel + knowledge ingestion run on Ship after the
+              PR merges — no second customer-side PR, no extra
+              workflow file. Watch <code className="rounded bg-white/5 px-1 text-aqua">/inbox</code>{" "}
+              and <code className="rounded bg-white/5 px-1 text-aqua">/knowledge</code>{" "}
+              once the seed PR is in.
             </span>
           </li>
         </ul>
