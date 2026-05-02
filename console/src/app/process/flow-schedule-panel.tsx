@@ -322,13 +322,23 @@ export function FlowSchedulePanel({
                   {timeRows.length} time windows · local to {schedule.time_zone || "UTC"}
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={addTimeRow}
-                className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-bold text-white/60 transition hover:border-aqua/25 hover:text-aqua"
-              >
-                Add time window
-              </button>
+              <div className="flex items-center gap-3 text-[10px] uppercase tracking-widest">
+                <span className="inline-flex items-center gap-1.5 text-aqua/85">
+                  <span className="h-2 w-2 rounded border border-aqua/40 bg-aqua/[0.10]" aria-hidden />
+                  specialist · drag
+                </span>
+                <span className="inline-flex items-center gap-1.5 text-amber-200/85">
+                  <span className="h-2 w-2 rounded border border-amber-300/40 bg-amber-300/[0.10]" aria-hidden />
+                  routine · cron
+                </span>
+                <button
+                  type="button"
+                  onClick={addTimeRow}
+                  className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[11px] font-bold text-white/60 transition hover:border-aqua/25 hover:text-aqua"
+                >
+                  + Time window
+                </button>
+              </div>
             </div>
 
             <div className="overflow-x-auto">
@@ -378,18 +388,18 @@ export function FlowSchedulePanel({
             </div>
             {routineProjection.continuous.length > 0 && (
               <div className="border-t border-white/10 bg-black/20 px-4 py-3">
-                <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.22em] text-aqua/70">
-                  Continuous routines
+                <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.22em] text-amber-200/80">
+                  Continuous routines · fire too often for the grid
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {routineProjection.continuous.map(({ routine, cadence }) => (
                     <span
                       key={routine.id}
-                      className="inline-flex items-center gap-1.5 rounded-full border border-aqua/30 bg-aqua/[0.08] px-3 py-1 text-[11px] font-semibold text-aqua/90"
+                      className="inline-flex items-center gap-1.5 rounded-full border border-amber-300/30 bg-amber-300/[0.07] px-3 py-1 text-[11px] font-semibold text-amber-200/90"
                     >
-                      <span className="h-1.5 w-1.5 rounded-full bg-aqua" aria-hidden />
+                      <span className="h-1.5 w-1.5 rounded-full bg-amber-300" aria-hidden />
                       {routineLabel.get(routine.id) ?? routine.name ?? routine.id}
-                      <span className="font-normal text-aqua/60">· {cadence}</span>
+                      <span className="font-normal text-amber-200/60">· {cadence}</span>
                     </span>
                   ))}
                 </div>
@@ -454,6 +464,27 @@ function CalendarCell({
       ].join(" ")}
     >
       <div className="flex min-h-full flex-col gap-1.5">
+        {/* Routines fire on their own cron, you can't drag them around.
+            Render as a thin amber stripe at the top so they're clearly
+            distinct from the specialist drop targets below. Empty
+            stripe is hidden entirely. */}
+        {routines.length > 0 ? (
+          <div
+            className="flex flex-wrap items-center gap-1 rounded-md border border-amber-300/25 bg-amber-300/[0.07] px-1.5 py-1"
+            title="Routines firing in this slot — fire on cron, not capacity"
+          >
+            <span className="text-[9px]" aria-hidden>⏱</span>
+            {routines.map((r, idx) => (
+              <span key={r.id} className="text-[9px] font-bold uppercase tracking-widest text-amber-200/90">
+                {routineLabel.get(r.id) ?? r.name ?? r.id}
+                {idx < routines.length - 1 ? <span className="text-amber-200/40"> · </span> : null}
+              </span>
+            ))}
+          </div>
+        ) : null}
+        {/* Specialist pills are the interactive bit — drag them in,
+            click to remove. They consume capacity (they're "available
+            in this slot"); routines don't. */}
         {specialistIds.map((id) => {
           const specialist = byId.get(id);
           return (
@@ -461,15 +492,15 @@ function CalendarCell({
               key={id}
               type="button"
               onClick={() => onRemoveSpecialist(day, localTime, id)}
-              className="group rounded-xl border border-aqua/20 bg-aqua/[0.09] px-2 py-1.5 text-left transition hover:border-coral/35 hover:bg-coral/[0.08]"
-              title="Click to remove from this slot"
+              className="group rounded-xl border border-aqua/30 bg-aqua/[0.10] px-2 py-1.5 text-left transition hover:border-coral/35 hover:bg-coral/[0.08]"
+              title="Click to remove this specialist from the slot"
             >
               <div className="flex items-center justify-between gap-2">
                 <span className="truncate text-[11px] font-semibold text-white">
                   {specialist?.name ?? id}
                 </span>
                 <span className="text-[10px] text-aqua/60 group-hover:text-coral">
-                  remove
+                  ✕
                 </span>
               </div>
             </button>
@@ -478,22 +509,6 @@ function CalendarCell({
         {specialistIds.length === 0 ? (
           <div className="grid flex-1 place-items-center rounded-xl border border-dashed border-white/10 text-center text-[11px] leading-4 text-white/25">
             Drop role
-          </div>
-        ) : null}
-        {routines.length > 0 ? (
-          <div
-            className="mt-1 flex flex-wrap gap-1 border-t border-white/5 pt-1.5"
-            title="Routines firing in this slot"
-          >
-            {routines.map((r) => (
-              <span
-                key={r.id}
-                className="inline-flex items-center gap-1 rounded-full bg-aqua/[0.12] px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-widest text-aqua/85"
-              >
-                <span className="h-1 w-1 rounded-full bg-aqua" aria-hidden />
-                {routineLabel.get(r.id) ?? r.name ?? r.id}
-              </span>
-            ))}
           </div>
         ) : null}
       </div>
