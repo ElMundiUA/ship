@@ -42,6 +42,7 @@
 
 import Link from "next/link";
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -113,7 +114,17 @@ type Thread = {
  */
 type UserSegment = {
   kind: "user";
+  /**
+   * Stable React key for the row's lifetime. For optimistic
+   * segments this is the ``c_*`` client id; we deliberately do
+   * **not** swap it for the persisted UUID when the
+   * ``user_message`` SSE frame lands — swapping would change the
+   * React key and remount the row, producing a visible blink on
+   * every send. The persisted UUID lands on ``serverId``.
+   */
   id: string;
+  /** Persisted backend UUID, populated once the SSE frame lands. */
+  serverId?: string;
   body: string;
   createdAt?: string;
   meta?: Record<string, unknown>;
@@ -612,19 +623,38 @@ export function SingleWindowChat({
       }
       case "user_message": {
         setSegments((prev) => {
-          // Drop any optimistic user segment (id starts ``c_``)
-          // and append the persisted one in its place.
-          const trimmed = prev.filter(
-            (s) => !(s.kind === "user" && s.id.startsWith("c_")),
+          // Stamp the persisted UUID onto the most recent optimistic
+          // user segment without changing its ``id`` (= React key).
+          // Swapping the React key would unmount the row → visible
+          // blink on every send. We keep the ``c_*`` id forever and
+          // park the backend uuid on ``serverId``.
+          const idx = findLastIndex(
+            prev,
+            (s) => s.kind === "user" && !(s as UserSegment).serverId,
           );
-          const incoming: UserSegment = {
-            kind: "user",
-            id: evt.message.id,
-            body: evt.message.body,
-            createdAt: evt.message.createdAt,
-            meta: evt.message.meta,
-          };
-          return [...trimmed, incoming];
+          if (idx >= 0) {
+            const next = prev.slice();
+            const opt = next[idx] as UserSegment;
+            next[idx] = {
+              ...opt,
+              serverId: evt.message.id,
+              body: evt.message.body,
+              createdAt: evt.message.createdAt,
+              meta: evt.message.meta,
+            };
+            return next;
+          }
+          return [
+            ...prev,
+            {
+              kind: "user",
+              id: evt.message.id,
+              serverId: evt.message.id,
+              body: evt.message.body,
+              createdAt: evt.message.createdAt,
+              meta: evt.message.meta,
+            },
+          ];
         });
         // Fresh turn — any in-flight assistant reveal is done; the
         // streaming slot is free until the first delta lands.
@@ -1056,6 +1086,32 @@ export function SingleWindowChat({
     () => segments.reduce((n, s) => (s.kind === "user" ? n + 1 : n), 0),
     [segments],
   );
+  // Friendly header title. The backend creates threads with the
+  // placeholder ``"New conversation"`` and never auto-renames, so
+  // we derive a short title from the first user message once
+  // there's one to look at. ``topic_summary`` (set when the agent
+  // packs an outgoing thread) wins over both because it's the
+  // canonical short description. Empty thread → keep the
+  // placeholder so the slot doesn't collapse.
+  const headerTitle = useMemo(() => {
+    if (current.topic_summary && current.topic_summary.trim()) {
+      return current.topic_summary.trim();
+    }
+    const explicit =
+      current.title && current.title !== "New conversation"
+        ? current.title.trim()
+        : "";
+    if (explicit) return explicit;
+    const firstUser = segments.find(
+      (s): s is UserSegment => s.kind === "user",
+    );
+    if (firstUser) {
+      const flat = firstUser.body.replace(/\s+/g, " ").trim();
+      if (flat.length <= 60) return flat;
+      return flat.slice(0, 57).trimEnd() + "…";
+    }
+    return current.title || "New conversation";
+  }, [current.title, current.topic_summary, segments]);
   /**
    * Slice :data:`segments` into render-ready rows. Tool segments get
    * folded into the **last** ``assistant_text`` of the same turn — a
@@ -1200,7 +1256,9 @@ export function SingleWindowChat({
       className="flex h-[calc(100vh-12rem)] min-h-[34rem] flex-col"
     >
       <div className="flex items-center gap-3 pb-2">
-        <h2 className="text-sm font-semibold text-white/90">{current.title}</h2>
+        <h2 className="truncate text-sm font-semibold text-white/90">
+          {headerTitle}
+        </h2>
         <span className="text-[11px] text-white/35">
           {current.status === "active" ? "live" : "archived"} ·{" "}
           {userSegmentCount} msg
@@ -1215,7 +1273,13 @@ export function SingleWindowChat({
         </button>
       </div>
 
-      {shift ? (
+      {/* Banner is deferred until the turn settles. Mounting it
+          mid-stream pushed the entire scroll content down by ~32px
+          and felt like a jerk. The decision still arrives over SSE
+          mid-turn — we just hold off rendering until streaming
+          ends so the user sees a clean prompt → reply → suggestion
+          sequence instead of an interruption. */}
+      {shift && !streaming ? (
         <TopicShiftBanner
           shift={shift}
           onPack={() =>
@@ -1255,7 +1319,11 @@ export function SingleWindowChat({
                             ? lastUserAnchorRef
                             : null
                         }
-                        retrieved={retrievedByUserId[row.segment.id] ?? null}
+                        retrieved={
+                          retrievedByUserId[
+                            row.segment.serverId ?? row.segment.id
+                          ] ?? null
+                        }
                       />
                     );
                   }
@@ -1408,7 +1476,7 @@ function EmptyHint({ hasArchivedChats }: { hasArchivedChats: boolean }) {
   );
 }
 
-function UserRow({
+const UserRow = memo(function UserRow({
   segment,
   anchorRef,
   retrieved,
@@ -1428,7 +1496,7 @@ function UserRow({
       ) : null}
     </div>
   );
-}
+});
 
 /**
  * Soft "Using N prior memories" disclosure rendered below a user
@@ -1478,7 +1546,7 @@ function RetrievedContextDisclosure({
   );
 }
 
-function AssistantTextRow({
+const AssistantTextRow = memo(function AssistantTextRow({
   segment,
   revealLen,
   tools,
@@ -1487,10 +1555,19 @@ function AssistantTextRow({
   revealLen: number;
   tools: ToolSegment[];
 }) {
-  const displayBody = segment.body.slice(
+  const sliced = segment.body.slice(
     0,
     Math.max(0, Math.min(revealLen, segment.body.length)),
   );
+  // While streaming, soft-close any inline emphasis / code / link
+  // delimiters that the model has opened but not yet closed. Without
+  // this, "abc *def" parses as plain text → "abc *def*" suddenly
+  // re-parses as emphasis once the closer arrives, and the user
+  // sees the trailing word visibly re-flow. Closing the delimiter
+  // optimistically keeps the structure stable as more chars arrive.
+  const displayBody = segment.streaming
+    ? balanceStreamingMarkdown(sliced)
+    : sliced;
   // Disclosure is hidden while the assistant is still streaming —
   // the single-line ``TurnStatusSlot`` is the live progress signal,
   // and showing tool details mid-stream would distract from the
@@ -1509,6 +1586,47 @@ function AssistantTextRow({
       )}
     </div>
   );
+});
+
+/**
+ * Pad a still-streaming markdown body so unclosed inline runs render
+ * with the same structure they'll have once their closer arrives.
+ *
+ * Three classes flip the AST when their closer lands and would
+ * otherwise visibly re-flow the rendered text mid-stream:
+ *
+ * 1. Fenced code blocks (``\`\`\``). If a fence is open we close it
+ *    and skip the inline rules — everything after the fence opener
+ *    is opaque code anyway.
+ * 2. Inline code spans (single `` ` ``).
+ * 3. Bold (``**`` and ``__``).
+ *
+ * Plain italic ``*foo*`` is intentionally NOT balanced — single-star
+ * heuristics are noisy ("* item" list markers, mid-word ``2*x``)
+ * and over-correcting causes its own flicker. The bold case is the
+ * one users actually feel.
+ *
+ * Heuristic, not a real parser. Bails out for bodies > 8 KB so this
+ * never becomes a CPU sink on long replies.
+ */
+function balanceStreamingMarkdown(body: string): string {
+  if (body.length === 0 || body.length > 8192) return body;
+  const fenceMatches = body.match(/(^|\n)```/g);
+  const fenceOpen = fenceMatches ? fenceMatches.length % 2 === 1 : false;
+  if (fenceOpen) {
+    return body + "\n```";
+  }
+  let codeTicks = 0;
+  for (let i = 0; i < body.length; i++) {
+    if (body[i] === "`") codeTicks++;
+  }
+  let out = body;
+  if (codeTicks % 2 === 1) out += "`";
+  const boldStar = (out.match(/\*\*/g) ?? []).length;
+  if (boldStar % 2 === 1) out += "**";
+  const boldUnder = (out.match(/__/g) ?? []).length;
+  if (boldUnder % 2 === 1) out += "__";
+  return out;
 }
 
 /**
