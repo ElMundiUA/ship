@@ -463,10 +463,23 @@ export function SingleWindowChat({
   // anchor so collapsing the spacer at end-of-stream doesn't yank
   // the page upward under the reader's eyes. Reset to ``null``
   // when no compensation is pending.
-  const spacerCompensationRef = useRef<{
-    scrollTop: number;
-    scrollHeight: number;
-  } | null>(null);
+  // Two compensation modes:
+  //
+  // - ``anchorOffset`` — px from the scroller's top edge to the
+  //   ``lastUserAnchorRef`` element's top edge, captured *before*
+  //   the spacer collapses. After collapse we re-pin the anchor to
+  //   the same offset so the conversation stays exactly where the
+  //   reader was, regardless of browser scrollTop clamping. This is
+  //   the preferred path because raw ``scrollTop`` preservation
+  //   doesn't survive a maxScroll shrink (browser clamps the value
+  //   downward, visibly jumping the viewport).
+  // - ``scrollTop`` — fallback when no anchor is mounted (e.g. the
+  //   error path before the first user message lands).
+  const spacerCompensationRef = useRef<
+    | { mode: "anchor"; anchorOffset: number }
+    | { mode: "scrollTop"; scrollTop: number }
+    | null
+  >(null);
 
   const abortRef = useRef<AbortController | null>(null);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
@@ -590,11 +603,31 @@ export function SingleWindowChat({
     spacerCompensationRef.current = null;
     const el = scrollerRef.current;
     if (!el) return;
-    // If the new content is still tall enough to honour the old
-    // ``scrollTop``, this restores the exact pre-shrink anchor.
-    // If not, the browser will re-clamp to the new max — same
-    // floor it would have hit anyway, just without our compensation
-    // hiding the gap.
+    if (comp.mode === "anchor") {
+      // Re-pin the last user message to its pre-collapse offset
+      // from the scroller's top edge. After ``setBottomSpacerPx(0)``
+      // the content above the spacer is unchanged, but the total
+      // scrollHeight has shrunk; setting raw ``scrollTop`` to the
+      // pre-collapse value gets clamped by the browser whenever the
+      // captured value exceeds the new maxScroll, and the viewport
+      // visibly drops to the bottom of the now-shorter content.
+      // Anchor-relative re-pinning side-steps that — we measure the
+      // anchor's current top, work out the delta from where it
+      // *should* be, and adjust ``scrollTop`` by exactly that delta.
+      const anchor = lastUserAnchorRef.current;
+      if (anchor) {
+        const scrollerTop = el.getBoundingClientRect().top;
+        const anchorTop = anchor.getBoundingClientRect().top;
+        const currentOffset = anchorTop - scrollerTop;
+        const delta = currentOffset - comp.anchorOffset;
+        if (delta !== 0) {
+          el.scrollTop = Math.max(0, el.scrollTop + delta);
+        }
+      }
+      return;
+    }
+    // Fallback: raw scrollTop. Browser will clamp if the new
+    // content is shorter — same floor it would have hit anyway.
     el.scrollTop = comp.scrollTop;
   }, [bottomSpacerPx]);
 
@@ -607,10 +640,20 @@ export function SingleWindowChat({
   const releaseSpacer = useCallback(() => {
     const scroller = scrollerRef.current;
     if (scroller) {
-      spacerCompensationRef.current = {
-        scrollTop: scroller.scrollTop,
-        scrollHeight: scroller.scrollHeight,
-      };
+      const anchor = lastUserAnchorRef.current;
+      if (anchor) {
+        const scrollerTop = scroller.getBoundingClientRect().top;
+        const anchorTop = anchor.getBoundingClientRect().top;
+        spacerCompensationRef.current = {
+          mode: "anchor",
+          anchorOffset: anchorTop - scrollerTop,
+        };
+      } else {
+        spacerCompensationRef.current = {
+          mode: "scrollTop",
+          scrollTop: scroller.scrollTop,
+        };
+      }
     }
     setBottomSpacerPx(0);
   }, []);
@@ -839,14 +882,26 @@ export function SingleWindowChat({
       case "end": {
         setStreaming(false);
         setAwaitingFirstDelta(false);
+        // Stop the per-word reveal tick AND force the dying
+        // segment to render its full body in the next commit.
+        // ``revealMap`` keys off ``streamingIdRef.current`` —
+        // clearing it here makes the upcoming render fall into
+        // the "not streaming" branch which serves ``body.length``
+        // verbatim. Without this, the reveal effect kept fast-
+        // forwarding for ~100ms after end, mutating content height
+        // *while* the spacer was collapsing, and the combined
+        // shrink + grow nudged the viewport downward — the jolt
+        // that made the chat feel like it was "scrolling down" at
+        // end-of-stream.
+        streamingIdRef.current = null;
         // Release the runway spacer now that the turn is over so
         // we don't leave an empty tail hanging under the reply
-        // until the next ``send``. ``releaseSpacer`` captures the
-        // scroller's ``scrollTop`` synchronously so the layout
-        // effect can snap the visible anchor back after React
-        // shrinks the spacer — without that, the browser would
-        // clamp ``scrollTop`` against the now-shorter content and
-        // the pinned user prompt would visibly jump down.
+        // until the next ``send``. ``releaseSpacer`` captures an
+        // anchor-relative offset for the last user message so the
+        // layout effect can re-pin the conversation after React
+        // shrinks the spacer — without that, browser ``scrollTop``
+        // clamping pushes the viewport to the bottom of the now-
+        // shorter content.
         releaseSpacer();
         setSegments((prev) => {
           const idx = findLastIndex(
@@ -865,10 +920,12 @@ export function SingleWindowChat({
         setErrorText(evt.detail ?? evt.error ?? "Agent error");
         setStreaming(false);
         setAwaitingFirstDelta(false);
-        // Symmetric with ``end``: free the spacer with the same
-        // scrollTop-preservation dance. Leaving it pinned here
-        // would strand an empty runway below the error message
-        // until the user sends another turn.
+        // Mirror ``end``: stop the reveal tick + release the spacer
+        // with the same anchor-relative dance. A streaming segment
+        // mid-error would otherwise keep fast-forwarding while the
+        // error card mounts, and the combined motion produced the
+        // same end-of-stream jolt the user complained about.
+        streamingIdRef.current = null;
         releaseSpacer();
         return;
       }
