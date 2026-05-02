@@ -310,50 +310,65 @@ export default async function InboxPage({
         </div>
       )}
 
-      <Card className="mt-5">
-        <CardHeader
-          title="Filters"
-          subtitle="Scope by owner, then narrow by work type. Default is everything in your workspace."
-        />
-        <InboxFiltersControlled
-          value={filters}
-          counts={{ types: typeCounts, allTypes: allTypesCount }}
+      {/* Compact filter strip — replaces the old "Filters" card.
+        * Single bordered row: ownership tabs + type chips + scope pills.
+        * Avoids the chrome (CardHeader + subtitle) that ate a quarter of
+        * the viewport before. */}
+      <section className="rounded-2xl border border-white/10 bg-white/[0.02] px-4 py-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/45">
+            Filters
+          </p>
+          <InboxFiltersControlled
+            value={filters}
+            counts={{ types: typeCounts, allTypes: allTypesCount }}
+            repo={repo}
+            play={play}
+            workspaceScope={inboxWs}
+          />
+          {(repo || play) && (
+            <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-white/55">
+              {repo && (
+                <span className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5">
+                  repo: <code className="font-mono text-white/80">{repo}</code>
+                </span>
+              )}
+              {play && (
+                <span className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5">
+                  play: <code className="font-mono text-white/80">{play}</code>
+                </span>
+              )}
+              <a
+                href={buildInboxUrl(filters, { workspaceScope: inboxWs })}
+                className="text-[11px] font-semibold text-sun hover:text-white"
+              >
+                clear scope
+              </a>
+            </div>
+          )}
+        </div>
+      </section>
+
+      {/* Counts kicker for the items list — was buried inside a CardHeader. */}
+      <div className="mt-5 flex flex-wrap items-baseline gap-3">
+        <h2 className="font-display text-lg font-bold text-white">
+          {list.items.length === 0 ? "No items" : `${list.items.length} item${list.items.length === 1 ? "" : "s"}`}
+        </h2>
+        <span className="text-[11px] text-white/45">
+          Oldest-first; resolved / dismissed rows fade out so the queue keeps reading top-down.
+        </span>
+      </div>
+
+      <div className="mt-3">
+        <ItemsTable
+          items={list.items}
+          filters={filters}
           repo={repo}
           play={play}
+          activeFilterCount={activeFilterCount}
           workspaceScope={inboxWs}
         />
-        {(repo || play) && (
-          <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-white/55">
-            {repo && (
-              <span className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5">
-                repo:{" "}
-                <code className="font-mono text-white/80">{repo}</code>
-              </span>
-            )}
-            {play && (
-              <span className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5">
-                play:{" "}
-                <code className="font-mono text-white/80">{play}</code>
-              </span>
-            )}
-            <a
-              href={buildInboxUrl(filters, { workspaceScope: inboxWs })}
-              className="text-[11px] font-semibold text-aqua/80 hover:text-aqua"
-            >
-              clear scope
-            </a>
-          </div>
-        )}
-      </Card>
-
-      <ItemsTable
-        items={list.items}
-        filters={filters}
-        repo={repo}
-        play={play}
-        activeFilterCount={activeFilterCount}
-        workspaceScope={inboxWs}
-      />
+      </div>
 
       <Pager
         nextCursor={list.next_cursor}
