@@ -3,7 +3,6 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
-import { applyInboxDisposition, discussInboxItemWithNavigator } from "@/lib/api/client";
 import type { InboxItem, InboxType } from "@/lib/inbox-types";
 
 /**
@@ -80,7 +79,7 @@ export function InboxRowActions({ workspaceId, item, detailHref }: Props) {
         router.push(detailHref);
         return;
       }
-      await applyInboxDisposition(workspaceId, item.id, { action });
+      await postDisposition(item.id, workspaceId, action);
       router.refresh();
     } catch (e) {
       setError(formatError(e));
@@ -96,7 +95,7 @@ export function InboxRowActions({ workspaceId, item, detailHref }: Props) {
     try {
       const action = primaryActionFor(item.type, "secondary");
       if (!action) return;
-      await applyInboxDisposition(workspaceId, item.id, { action });
+      await postDisposition(item.id, workspaceId, action);
       router.refresh();
     } catch (e) {
       setError(formatError(e));
@@ -110,8 +109,8 @@ export function InboxRowActions({ workspaceId, item, detailHref }: Props) {
     setBusy("discuss");
     setError(null);
     try {
-      const res = await discussInboxItemWithNavigator(workspaceId, item.id);
-      router.push(`/chat?thread=${encodeURIComponent(res.thread_id)}`);
+      const url = await postDiscuss(item.id, workspaceId);
+      router.push(url);
     } catch (e) {
       setError(formatError(e));
       setBusy(null);
@@ -207,4 +206,56 @@ function primaryActionFor(
 function formatError(e: unknown): string {
   if (e instanceof Error) return e.message;
   return "Action failed. Refresh and try again.";
+}
+
+/**
+ * Posts to the existing form-shaped route handler at
+ * `/api/inbox/[id]/disposition`. The handler 303-redirects to
+ * `/inbox/[id]` on success, or to `/inbox/[id]?error=<code>` on
+ * failure. We follow the redirect, then read the resolved URL —
+ * presence of `error` means the action failed.
+ */
+async function postDisposition(itemId: string, wsId: string, action: string) {
+  const body = new FormData();
+  body.set("ws", wsId);
+  body.set("action", action);
+  const res = await fetch(`/api/inbox/${encodeURIComponent(itemId)}/disposition`, {
+    method: "POST",
+    body,
+  });
+  if (!res.ok) throw new Error(`Disposition failed (${res.status}).`);
+  const code = new URL(res.url).searchParams.get("error");
+  if (code) throw new Error(humanizeError(code));
+}
+
+async function postDiscuss(itemId: string, wsId: string): Promise<string> {
+  const body = new FormData();
+  body.set("ws", wsId);
+  const res = await fetch(`/api/inbox/${encodeURIComponent(itemId)}/discuss`, {
+    method: "POST",
+    body,
+  });
+  if (!res.ok) throw new Error(`Could not open Navigator chat (${res.status}).`);
+  const url = new URL(res.url);
+  const code = url.searchParams.get("error");
+  if (code) throw new Error(humanizeError(code));
+  // The handler redirects to /chat?from_inbox=<id>; return the path part.
+  return `${url.pathname}${url.search}`;
+}
+
+function humanizeError(code: string): string {
+  switch (code) {
+    case "forbidden":
+      return "You don't have permission for that action.";
+    case "not_found":
+      return "Item no longer exists.";
+    case "state_invalid":
+      return "Item already resolved — refresh.";
+    case "validation_failed":
+      return "Action requires more input — open the item.";
+    case "api_unavailable":
+      return "API is unavailable.";
+    default:
+      return `Action failed (${code}).`;
+  }
 }
