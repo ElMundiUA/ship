@@ -128,7 +128,7 @@ export function SiteHeader() {
             </Link>
             <a
               href="https://app.ship.elmundi.com/login"
-              className="inline-flex shrink-0 items-center rounded-full bg-gradient-to-b from-aqua to-[#1fb8aa] px-3.5 py-1.5 text-xs font-bold uppercase tracking-wide text-ink shadow-[inset_0_1px_0_rgba(255,255,255,0.22)] ring-1 ring-aqua/30 transition hover:from-aqua/95 hover:to-[#1aa89a]"
+              className="inline-flex shrink-0 items-center rounded-full bg-gradient-to-b from-[#dcb87a] to-[#b8945a] px-3.5 py-1.5 text-xs font-bold uppercase tracking-wide text-ink shadow-[inset_0_1px_0_rgba(255,255,255,0.30)] ring-1 ring-[#cfa96b]/35 transition hover:from-[#e5c489] hover:to-[#c5a06a]"
             >
               Sign in
             </a>

@@ -1,0 +1,10 @@
+import { chromium } from "playwright";
+const b = await chromium.launch();
+const ctx = await b.newContext({ viewport: { width: 1600, height: 200 }, deviceScaleFactor: 2 });
+const p = await ctx.newPage();
+await p.goto(process.argv[2] || "http://localhost:3000/", { waitUntil: "networkidle" });
+await p.waitForTimeout(500);
+const header = p.locator("header").first();
+await header.screenshot({ path: process.argv[3] || "/tmp/navbar.png" });
+await b.close();
+console.log("ok");
