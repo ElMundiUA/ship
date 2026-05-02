@@ -251,30 +251,27 @@ export function FlowSchedulePanel({
 
         <RoutinesSummary routines={process.routines} />
 
-        <div className="rounded-2xl border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(99,245,255,0.10),transparent_28%),rgba(255,255,255,0.03)] p-3">
-          <div className="grid gap-3 sm:grid-cols-[220px_minmax(0,1fr)]">
-            <label className="block">
-              <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/45">
-                Time zone
-              </span>
-              <input
-                value={schedule.time_zone}
-                onChange={(e) =>
-                  setSchedule((current) => ({
-                    ...current,
-                    time_zone: e.target.value || "UTC",
-                  }))
-                }
-                className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none focus:border-aqua/40"
-              />
-            </label>
-            <div className="text-xs leading-relaxed text-white/50">
-              Ship already knows the available capacity slots from the process config.
-              Drag a specialist into a day/time cell to let that role pick matching
-              tickets in that window.
-            </div>
-          </div>
-        </div>
+        {/* Time zone shrunk to a tight inline control — the previous
+            220px label + full-width input + duplicate help text ate
+            ~120px of vertical space for one timezone string. */}
+        <label className="flex flex-wrap items-center gap-2 text-xs text-white/55">
+          <span className="text-[10px] font-bold uppercase tracking-widest text-white/45">
+            Time zone
+          </span>
+          <input
+            value={schedule.time_zone}
+            onChange={(e) =>
+              setSchedule((current) => ({
+                ...current,
+                time_zone: e.target.value || "UTC",
+              }))
+            }
+            className="w-32 rounded-md border border-white/10 bg-white/[0.04] px-2 py-1 font-mono text-[12px] text-white outline-none focus:border-aqua/40"
+          />
+          <span className="text-white/40">
+            · drag a specialist into a day/time cell to assign capacity
+          </span>
+        </label>
 
         {warnings.length > 0 ? (
           <div className="rounded-xl border border-coral/25 bg-coral/[0.05] px-3 py-2 text-xs text-coral/90">
@@ -282,16 +279,14 @@ export function FlowSchedulePanel({
           </div>
         ) : null}
 
-        <div className="grid gap-3 xl:grid-cols-[240px_minmax(0,1fr)]">
-          <aside className="rounded-3xl border border-white/10 bg-black/25 p-3">
-            <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-aqua/70">
-              Role palette
+        <div className="grid gap-3 xl:grid-cols-[200px_minmax(0,1fr)]">
+          <aside className="max-h-[640px] overflow-y-auto rounded-2xl border border-white/10 bg-black/25 p-3">
+            <div className="sticky top-0 -mx-3 mb-2 -mt-3 border-b border-white/5 bg-black/85 px-3 py-2 backdrop-blur">
+              <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-aqua/70">
+                Roles · drag to a cell
+              </div>
             </div>
-            <p className="mt-1 text-xs leading-relaxed text-white/45">
-              Drag roles into the calendar. Assigned roles stay highlighted so
-              it is obvious what already has coverage.
-            </p>
-            <div className="mt-3 grid gap-2">
+            <div className="grid gap-1.5">
               {process.specialists.map((specialist) => (
                 <button
                   key={specialist.id}
@@ -301,19 +296,15 @@ export function FlowSchedulePanel({
                     event.dataTransfer.setData(DRAG_SPECIALIST_MIME, specialist.id);
                     event.dataTransfer.effectAllowed = "copy";
                   }}
+                  title={specialist.role}
                   className={[
-                    "cursor-grab rounded-2xl border px-3 py-2 text-left transition active:cursor-grabbing",
+                    "cursor-grab rounded-lg border px-2.5 py-1.5 text-left text-xs font-semibold transition active:cursor-grabbing",
                     assignedSpecialistIds.has(specialist.id)
-                      ? "border-aqua/25 bg-aqua/[0.08]"
-                      : "border-white/10 bg-white/[0.035] hover:border-aqua/25",
+                      ? "border-aqua/25 bg-aqua/[0.08] text-aqua/95"
+                      : "border-white/10 bg-white/[0.035] text-white hover:border-aqua/25",
                   ].join(" ")}
                 >
-                  <div className="text-xs font-semibold text-white">
-                    {specialist.name}
-                  </div>
-                  <div className="mt-1 line-clamp-2 text-[11px] leading-4 text-white/40">
-                    {specialist.role}
-                  </div>
+                  {specialist.name}
                 </button>
               ))}
             </div>

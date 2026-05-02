@@ -1029,6 +1029,17 @@ async def _build_development_process(
         if runtime.blocked_count > 0 and runtime.health == "ok":
             runtime.health = "degraded"
         if lane_key not in _PROCESS_STATE_ORDER or lane_key in _ROUTINE_IDS:
+            # Pre-canonical routine ids leak through whenever a workspace
+            # was seeded with the older bundle (code_map / scan_*). The
+            # ids stay in DB so runtime stays compatible, but the editor
+            # must only ever surface the canonical six — otherwise the
+            # operator sees 11 routines when their config actually lists
+            # six. lane_recipes.LEGACY_ROUTINE_IDS is the single source
+            # of truth.
+            from backend.app.services.lane_recipes import LEGACY_ROUTINE_IDS
+
+            if lane_key in LEGACY_ROUTINE_IDS:
+                continue
             routine_text = _routine_instructions(lane_key)
             routines.append(
                 ProcessRoutineOut(

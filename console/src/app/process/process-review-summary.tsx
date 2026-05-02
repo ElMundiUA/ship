@@ -10,22 +10,20 @@ export function ProcessReviewSummary({
   changedAreas: string[];
 }) {
   const changes = summarizeProcessChanges(initial, draft, changedAreas);
+  // Don't render the panel at all when there are no changes — the
+  // "No process changes yet" placeholder used to eat ~80px on every
+  // tab even when the operator hadn't edited anything.
+  if (changes.length === 0) return null;
   return (
     <div className="rounded-xl border border-white/10 bg-white/[0.025] p-3">
       <div className="text-[10px] font-bold uppercase tracking-widest text-white/45">
         Review before publishing
       </div>
-      {changes.length === 0 ? (
-        <p className="mt-2 text-xs text-white/45">
-          No process changes yet. Edits will be summarized here before publishing.
-        </p>
-      ) : (
-        <ul className="mt-2 space-y-1 text-xs text-white/55">
-          {changes.map((change) => (
-            <li key={change}>- {change}</li>
-          ))}
-        </ul>
-      )}
+      <ul className="mt-2 space-y-1 text-xs text-white/55">
+        {changes.map((change) => (
+          <li key={change}>- {change}</li>
+        ))}
+      </ul>
       <p className="mt-2 text-[11px] text-white/35">
         Publishing opens a reviewable process change for this repo; technical config
         details stay in the PR.
