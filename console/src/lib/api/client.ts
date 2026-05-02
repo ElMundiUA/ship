@@ -1574,35 +1574,15 @@ export interface ApiProcessStateRuntime {
   health: ApiProcessHealth;
 }
 
-/**
- * The seven canonical lifecycle states a stage can sit in.
- *
- *   backlog          ticket exists, no agent picks it up
- *   planning         ticket is being scoped/designed (intake/BA/architects)
- *   executing        ticket is being built (dev/QA-manual/QA-auto)
- *   reviewing        work submitted, awaiting approval
- *   awaiting_input   frozen, waiting on a human answer (overlay via label)
- *   blocked          frozen, external blocker (overlay via label)
- *   closed           terminal
- */
-export type CanonicalState =
-  | "backlog"
-  | "planning"
-  | "executing"
-  | "reviewing"
-  | "awaiting_input"
-  | "blocked"
-  | "closed";
-
-export const CANONICAL_STATES: readonly CanonicalState[] = [
-  "backlog",
-  "planning",
-  "executing",
-  "reviewing",
-  "awaiting_input",
-  "blocked",
-  "closed",
-];
+// CanonicalState / CANONICAL_STATES / TRACKER_OVERLAY now live in
+// ``@/lib/api/types`` so client components can import them without
+// dragging in this server-only module. Re-exported here for backward
+// compatibility with existing import paths.
+export {
+  CANONICAL_STATES,
+  TRACKER_OVERLAY,
+  type CanonicalState,
+} from "@/lib/api/types";
 
 /**
  * A *stage* in a process — work step the operator sees on the canvas.
@@ -1619,7 +1599,7 @@ export interface ApiProcessState {
   specialist_name: string;
   instructions: string;
   /** Canonical lifecycle bucket this stage lives in. */
-  state: CanonicalState;
+  state: CanonicalStateRef;
   layout?: {
     x: number;
     y: number;
@@ -1633,19 +1613,13 @@ export interface ApiProcessState {
   ticket_contract?: ApiProcessTicketContract | null;
   runtime: ApiProcessStateRuntime;
 }
+// Local alias just so the field type below references the re-exported
+// CanonicalState without TypeScript flagging a self-reference cycle.
+type CanonicalStateRef = import("@/lib/api/types").CanonicalState;
 
-/**
- * Magic projection value used in tracker_mapping when a canonical state
- * doesn't move the ticket between native columns — the adapter keeps
- * the ticket in its current column and only flips a label
- * (``needs:clarification``, ``blocked``, etc.). FE renderers must
- * detect this and show "stays in current column + label" instead of a
- * column name.
- */
-export const TRACKER_OVERLAY = "__overlay__";
-
-/** Who fires a transition between stages. */
-export type TransitionActor = "user" | "agent" | "either";
+// Re-exported from types so client components can import from here
+// without server-only contamination.
+export { type TransitionActor } from "@/lib/api/types";
 
 export interface ApiProcessTransition {
   id: string;
@@ -1660,7 +1634,7 @@ export interface ApiProcessTransition {
    * Backlog → Todo or Review → Done; ``either`` when both paths are
    * valid (overlay-state resume).
    */
-  trigger_actor?: TransitionActor;
+  trigger_actor?: import("@/lib/api/types").TransitionActor;
 }
 
 export interface ApiProcessSpecialist {

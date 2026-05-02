@@ -132,6 +132,23 @@ export function ProcessEditorWorkspace({
     });
   }
 
+  // Fired when the operator drags a stage card across a swim-lane
+  // boundary. The canvas snaps the position to the new lane; we mirror
+  // that by setting the stage's canonical state field, which is what
+  // the publish flow writes back to .ship/config.yml.
+  function updateStageState(
+    stageId: string,
+    nextState: ApiProcessState["state"],
+  ) {
+    setStates((current) =>
+      current.map((stage) =>
+        stage.id === stageId && stage.state !== nextState
+          ? { ...stage, state: nextState }
+          : stage,
+      ),
+    );
+  }
+
   function addState(template: NodeTemplate = NODE_TEMPLATES[0]) {
     const baseId = template.baseId;
     const nextId = uniqueStateId(baseId, states);
@@ -304,6 +321,7 @@ export function ProcessEditorWorkspace({
           onSelectTransition={selectTransitionId}
           onAddState={() => addState()}
           onPositionsChange={updatePositions}
+          onStageStateChange={updateStageState}
         />
         <StateEditor
           processId={process.id}

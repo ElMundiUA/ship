@@ -1,6 +1,47 @@
 // Wire types for the Ship `/v1` API.
 // Keep in sync with backend/app/api/v1/schemas.py and backend/app/main._build_entry.
 
+/**
+ * The seven canonical lifecycle states a stage can sit in.
+ *
+ *   backlog          ticket exists, no agent picks it up
+ *   planning         intake/BA/architects scope work; ticket sits in Linear Todo
+ *   executing        dev/QA cycles run; ticket sits in Linear In Progress
+ *   reviewing        work submitted, awaiting approval
+ *   awaiting_input   frozen, waiting on a human answer (overlay via label)
+ *   blocked          frozen, external blocker (overlay via label)
+ *   closed           terminal
+ *
+ * Lives here (not in api/client.ts) so client components can import
+ * the constant without tripping the ``server-only`` guard.
+ */
+export type CanonicalState =
+  | "backlog"
+  | "planning"
+  | "executing"
+  | "reviewing"
+  | "awaiting_input"
+  | "blocked"
+  | "closed";
+
+export const CANONICAL_STATES: readonly CanonicalState[] = [
+  "backlog",
+  "planning",
+  "executing",
+  "reviewing",
+  "awaiting_input",
+  "blocked",
+  "closed",
+];
+
+/** Magic projection value for canonical states that don't move the
+ *  ticket between native columns — the adapter only flips a label
+ *  while the ticket stays in its current column. */
+export const TRACKER_OVERLAY = "__overlay__";
+
+/** Who advances the ticket along a transition. */
+export type TransitionActor = "user" | "agent" | "either";
+
 export type ApiUser = {
   id: string;
   email: string;
