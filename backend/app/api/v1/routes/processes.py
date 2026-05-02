@@ -1337,9 +1337,113 @@ def _default_schedule(states: list[ProcessStateOut]) -> ProcessScheduleOut:
     )
 
 
+# Canonical Ship state → native tracker state name. Baked into the
+# adapter so the operator never has to manually map 15 canonical states
+# on first attach — the editor opens with all four trackers
+# pre-populated and the operator only intervenes when their tracker has
+# customised workflow states.
+#
+# Conventions:
+#   - "Backlog/Todo/In Progress/In Review/Done" are the Linear defaults
+#     — they exist on every Linear team that hasn't customised states.
+#   - Jira ships "To Do/In Progress/In Review/Blocked/Done" (the
+#     Software template's default workflow).
+#   - GitHub Issues only has open/closed; the closer-grained Ship
+#     states all collapse to "open" except the success path.
+#   - Notion's "Status" property defaults to "Not started/In progress/Done".
+_CANONICAL_TO_LINEAR: dict[str, str] = {
+    "new": "Backlog",
+    "intake_in_progress": "Todo",
+    "ready_for_analysis": "Todo",
+    "analysis_in_progress": "In Progress",
+    "ready_for_development": "Todo",
+    "architecture_in_progress": "In Progress",
+    "ready_for_implementation": "Todo",
+    "development_in_progress": "In Progress",
+    "in_review": "In Review",
+    "qa_in_progress": "In Review",
+    "ready_for_release": "In Review",
+    "final_review_in_progress": "In Review",
+    "done": "Done",
+    "blocked": "Blocked",  # Most Linear teams add this; falls back to Todo if absent
+    "needs_info": "Todo",
+    "needs_human_approval": "In Review",
+}
+_CANONICAL_TO_JIRA: dict[str, str] = {
+    "new": "To Do",
+    "intake_in_progress": "To Do",
+    "ready_for_analysis": "To Do",
+    "analysis_in_progress": "In Progress",
+    "ready_for_development": "To Do",
+    "architecture_in_progress": "In Progress",
+    "ready_for_implementation": "Selected for Development",
+    "development_in_progress": "In Progress",
+    "in_review": "In Review",
+    "qa_in_progress": "In Review",
+    "ready_for_release": "In Review",
+    "final_review_in_progress": "In Review",
+    "done": "Done",
+    "blocked": "Blocked",
+    "needs_info": "To Do",
+    "needs_human_approval": "In Review",
+}
+_CANONICAL_TO_GITHUB: dict[str, str] = {
+    # GitHub Issues only has open/closed; everything that isn't terminal
+    # collapses to "open" with the canonical id surfacing as a label.
+    "new": "open",
+    "intake_in_progress": "open",
+    "ready_for_analysis": "open",
+    "analysis_in_progress": "open",
+    "ready_for_development": "open",
+    "architecture_in_progress": "open",
+    "ready_for_implementation": "open",
+    "development_in_progress": "open",
+    "in_review": "open",
+    "qa_in_progress": "open",
+    "ready_for_release": "open",
+    "final_review_in_progress": "open",
+    "done": "closed",
+    "blocked": "open",
+    "needs_info": "open",
+    "needs_human_approval": "open",
+}
+_CANONICAL_TO_NOTION: dict[str, str] = {
+    "new": "Not started",
+    "intake_in_progress": "In progress",
+    "ready_for_analysis": "Not started",
+    "analysis_in_progress": "In progress",
+    "ready_for_development": "Not started",
+    "architecture_in_progress": "In progress",
+    "ready_for_implementation": "Not started",
+    "development_in_progress": "In progress",
+    "in_review": "In progress",
+    "qa_in_progress": "In progress",
+    "ready_for_release": "In progress",
+    "final_review_in_progress": "In progress",
+    "done": "Done",
+    "blocked": "Blocked",
+    "needs_info": "In progress",
+    "needs_human_approval": "In progress",
+}
+
+
 def _default_tracker_mapping(
     states: list[ProcessStateOut],
 ) -> dict[str, dict[str, str]]:
+    """Pre-fill native tracker mappings for every canonical state.
+
+    Returns a dict keyed by tracker kind (``linear``/``jira``/
+    ``github``/``notion``/``ship``). Each value maps every canonical
+    state seen in the process states to a native status name that the
+    relevant tracker ships with by default. The operator only edits
+    this when their team has customised workflow states (e.g. Linear
+    team renamed "In Progress" to "Doing"); the default sets up a
+    working projection on first load with zero clicks.
+
+    The legacy ``ship`` projection (snake_case → Title Case) stays so
+    the workspace-internal FSM still has a self-consistent view when
+    no real tracker is bound yet.
+    """
     canonical: set[str] = set()
     for state in states:
         contract = state.ticket_contract
@@ -1355,8 +1459,13 @@ def _default_tracker_mapping(
         ):
             if value:
                 canonical.add(value)
+    sorted_canonical = sorted(canonical)
     return {
-        "ship": {state: state.replace("_", " ").title() for state in sorted(canonical)}
+        "linear": {s: _CANONICAL_TO_LINEAR.get(s, s.replace("_", " ").title()) for s in sorted_canonical},
+        "jira": {s: _CANONICAL_TO_JIRA.get(s, s.replace("_", " ").title()) for s in sorted_canonical},
+        "github": {s: _CANONICAL_TO_GITHUB.get(s, "open") for s in sorted_canonical},
+        "notion": {s: _CANONICAL_TO_NOTION.get(s, s.replace("_", " ").title()) for s in sorted_canonical},
+        "ship": {s: s.replace("_", " ").title() for s in sorted_canonical},
     }
 
 
