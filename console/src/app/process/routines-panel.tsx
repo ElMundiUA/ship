@@ -15,7 +15,7 @@ import { processConfigFromApiProcess } from "./process-config";
 import { ProcessConfigProposalFields } from "./process-config-proposal-fields";
 import { ProcessReviewSummary, processChangeSummary } from "./process-review-summary";
 import { BASE_SPECIALIST_CATALOG } from "./specialist-catalog";
-import { BUILTIN_ROUTINE_CATALOG } from "./routine-catalog";
+import { BUILTIN_ROUTINE_CATALOG, HIDDEN_ROUTINE_IDS } from "./routine-catalog";
 import { RoutineScheduleForm } from "./routine-schedule-form";
 
 const SPECIALIST_OPTIONS = BASE_SPECIALIST_CATALOG.map((s) => ({
@@ -62,6 +62,15 @@ export function RoutinesPanel({
   useEffect(() => {
     setRoutines(process.routines.map(normalizeRoutine));
   }, [process.routines]);
+
+  // Render-time filter only — hidden ids stay in state so YAML round-
+  // trip preserves them. The UI just hides SDLC cadence lanes and
+  // legacy experiments (daily_standup, tech_debt) that are deprecated
+  // but might still live in older repos' .ship/config.yml.
+  const visibleRoutines = useMemo(
+    () => routines.filter((r) => !HIDDEN_ROUTINE_IDS.has(r.id)),
+    [routines],
+  );
 
   useEffect(() => {
     try {
@@ -397,11 +406,11 @@ export function RoutinesPanel({
           </form>
         </div>
 
-        {routines.length === 0 ? (
+        {visibleRoutines.length === 0 ? (
           <p className="text-sm text-white/50">No routines in this process yet.</p>
         ) : (
           <ul className="space-y-3">
-            {routines.map((routine) => {
+            {visibleRoutines.map((routine) => {
               const desc = cardDescription(routine);
               return (
                 <li
