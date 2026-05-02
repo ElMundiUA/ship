@@ -496,24 +496,19 @@ function ProcessTabs({
       : `/process/${encodeURIComponent(processId)}`;
   };
   return (
-    <div className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/[0.035] p-2">
-      <div className="flex gap-1">
-        <TabLink href={hrefFor("flow")} active={selected === "flow"}>
-          Flow
-        </TabLink>
-        <TabLink href={hrefFor("schedule")} active={selected === "schedule"}>
-          Flow schedule
-        </TabLink>
-        <TabLink href={hrefFor("routines")} active={selected === "routines"}>
-          Routines
-        </TabLink>
-        <TabLink href={hrefFor("mapping")} active={selected === "mapping"}>
-          Tracker mapping
-        </TabLink>
-      </div>
-      <p className="hidden text-xs text-white/45 md:block">
-        One development process: flow, capacity, standalone routines, and tracker states.
-      </p>
+    <div className="flex items-center gap-1 rounded-2xl border border-white/10 bg-white/[0.035] p-2">
+      <TabLink href={hrefFor("flow")} active={selected === "flow"}>
+        Flow
+      </TabLink>
+      <TabLink href={hrefFor("schedule")} active={selected === "schedule"}>
+        Capacity
+      </TabLink>
+      <TabLink href={hrefFor("routines")} active={selected === "routines"}>
+        Routines
+      </TabLink>
+      <TabLink href={hrefFor("mapping")} active={selected === "mapping"}>
+        Tracker
+      </TabLink>
     </div>
   );
 }

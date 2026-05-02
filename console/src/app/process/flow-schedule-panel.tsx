@@ -10,13 +10,16 @@ import {
 import { Card, CardHeader } from "@/components/ui";
 import type {
   ApiProcess,
+  ApiProcessRoutine,
   ApiProcessSchedule,
   ApiProcessScheduleSlot,
   ApiRepoConfig,
 } from "@/lib/api/client";
+import { formatNextRun } from "@/lib/cron-next";
 import { processConfigFromApiProcess } from "./process-config";
 import { ProcessConfigProposalFields } from "./process-config-proposal-fields";
 import { ProcessReviewSummary, processChangeSummary } from "./process-review-summary";
+import { BUILTIN_ROUTINE_CATALOG, HIDDEN_ROUTINE_IDS } from "./routine-catalog";
 
 const WEEKDAYS = [
   { id: 1, label: "Mon" },
@@ -151,8 +154,8 @@ export function FlowSchedulePanel({
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <CardHeader
             className="p-0"
-            title="Flow schedule"
-            subtitle="Capacity windows for ticket-driven process steps. Routines have their own cadence and never pick tracker tickets."
+            title="Capacity"
+            subtitle="When specialists are free to pick up tracker work. Routines on this process — daily, retro, healthcheck, tech / qa / security review — fire on their own cron and are summarised below."
           />
           <form
             action="/api/process/config-propose"
@@ -180,6 +183,12 @@ export function FlowSchedulePanel({
           initial={initialReviewProcess}
           draft={processDraft}
           changedAreas={dirty ? ["Flow schedule slots changed"] : []}
+        />
+
+        <RoutinesSummary
+          routines={process.routines}
+          processId={process.id}
+          repoId={repoId}
         />
 
         <div className="rounded-2xl border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(99,245,255,0.10),transparent_28%),rgba(255,255,255,0.03)] p-3">
@@ -451,4 +460,82 @@ function nextAvailableTime(existing: string[]) {
     if (!existing.includes(time)) return time;
   }
   return null;
+}
+
+function RoutinesSummary({
+  routines,
+  processId,
+  repoId,
+}: {
+  routines: ApiProcessRoutine[];
+  processId: string;
+  repoId?: string;
+}) {
+  // Filter visible routines like RoutinesPanel does, then index by id
+  // for fast lookup against the canonical six.
+  const byId = new Map(
+    routines
+      .filter((r) => !HIDDEN_ROUTINE_IDS.has(r.id))
+      .map((r) => [r.id, r] as const),
+  );
+  const editHrefSuffix = repoId
+    ? `?tab=routines&repo=${encodeURIComponent(repoId)}`
+    : "?tab=routines";
+  const editHref = `/process/${encodeURIComponent(processId)}${editHrefSuffix}`;
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-white/55">
+          Routines on this process
+        </div>
+        <a
+          href={editHref}
+          className="rounded-full border border-aqua/30 bg-aqua/10 px-3 py-1 text-[11px] font-semibold text-aqua transition hover:bg-aqua/15"
+        >
+          Edit cron →
+        </a>
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        {BUILTIN_ROUTINE_CATALOG.map((entry) => {
+          const live = byId.get(entry.id);
+          const enabled = !!live && live.enabled !== false;
+          const cron = live?.schedule?.trim() || entry.defaultCron;
+          let nextRun = "—";
+          try {
+            nextRun = formatNextRun(cron);
+          } catch {
+            nextRun = "invalid cron";
+          }
+          return (
+            <div
+              key={entry.id}
+              className={[
+                "rounded-xl border p-2.5",
+                enabled
+                  ? "border-aqua/25 bg-aqua/[0.05]"
+                  : "border-white/10 bg-white/[0.02] opacity-65",
+              ].join(" ")}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-xs font-semibold text-white">{entry.name}</div>
+                <span
+                  className={[
+                    "h-1.5 w-1.5 rounded-full",
+                    enabled ? "bg-aqua" : "bg-white/30",
+                  ].join(" ")}
+                  aria-hidden
+                />
+              </div>
+              <div className="mt-1 truncate font-mono text-[10px] text-white/50">
+                {cron}
+              </div>
+              <div className="mt-1 text-[10px] text-white/45">
+                {enabled ? `Next: ${nextRun}` : "Disabled"}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
