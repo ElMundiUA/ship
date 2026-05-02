@@ -16,12 +16,15 @@ import {
   type ApiOpsDashboard,
   ApiHttpError,
   ApiUnavailableError,
+  getInboxCounts,
   getMe,
   getOpsDashboard,
   isApiConfigured,
   listActivatedRepos,
+  listInboxItems,
   listWorkspaces,
 } from "@/lib/api/client";
+import type { InboxCountsResponse, InboxListResponse } from "@/lib/inbox-types";
 import type { ApiWorkspace } from "@/lib/api/types";
 import { getSessionToken } from "@/lib/api/session";
 import { getResolvedWorkspaceId } from "@/lib/workspace-resolve.server";
@@ -122,6 +125,11 @@ type LiveContext = {
   allWorkspaces: ApiWorkspace[];
   data: ApiOpsDashboard;
   repos: ApiActivatedRepo[];
+  /** Inbox preview for "What needs you" — top items + counts. Best-effort:
+   *  if the call fails we degrade to empty arrays so the rest of the
+   *  dashboard still renders. */
+  inboxItems: InboxListResponse | null;
+  inboxCounts: InboxCountsResponse | null;
 };
 
 /**
@@ -150,11 +158,17 @@ async function loadLiveContext(
 ): Promise<LiveContext | "unauthorized" | "down"> {
   const workspace = pickWorkspace(list, wsParam);
   try {
-    const [data, repos] = await Promise.all([
+    const [data, repos, inboxItems, inboxCounts] = await Promise.all([
       getOpsDashboard(workspace.id, token),
       listActivatedRepos(workspace.id, token).catch(() => [] as ApiActivatedRepo[]),
+      listInboxItems(workspace.id, { statuses: ["new"], limit: 5 }, token).catch(
+        () => null as InboxListResponse | null,
+      ),
+      getInboxCounts(workspace.id, token).catch(
+        () => null as InboxCountsResponse | null,
+      ),
     ]);
-    return { workspace, allWorkspaces: list, data, repos };
+    return { workspace, allWorkspaces: list, data, repos, inboxItems, inboxCounts };
   } catch (err) {
     if (err instanceof ApiHttpError && err.status === 401) return "unauthorized";
     if (err instanceof ApiUnavailableError) return "down";
@@ -181,7 +195,13 @@ function renderWorkspaceHome(ctx: LiveContext) {
         </ButtonPrimary>
       }
     >
-      <WorkspaceHome summary={data} repos={ctx.repos} workspaceId={workspace.id} />
+      <WorkspaceHome
+        summary={data}
+        repos={ctx.repos}
+        workspaceId={workspace.id}
+        inboxItems={ctx.inboxItems}
+        inboxCounts={ctx.inboxCounts}
+      />
     </AppShell>
   );
 }
