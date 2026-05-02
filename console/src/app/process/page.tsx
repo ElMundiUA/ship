@@ -108,6 +108,8 @@ type ProcessShell = {
   repos: ApiActivatedRepo[];
   selectedRepo: ApiActivatedRepo | null;
   prereqStatus: EditorPrereqStatus;
+  /** First active tracker integration's kind (linear/jira/github/...). */
+  trackerKind: string | null;
 };
 
 type LiveProcessGraph = {
@@ -167,6 +169,9 @@ async function loadProcessShell(
       integrations,
       nativeIntegrations,
     );
+    const trackerIntegration = integrations.find(
+      (i) => TRACKER_KINDS.has(i.kind) && i.status === "ok",
+    );
     return {
       workspace,
       allWorkspaces: workspaces,
@@ -175,6 +180,7 @@ async function loadProcessShell(
       repos,
       selectedRepo,
       prereqStatus,
+      trackerKind: trackerIntegration?.kind ?? null,
     };
   } catch (err) {
     if (err instanceof ApiHttpError && err.status === 401) return "unauthorized";
@@ -262,6 +268,7 @@ function renderProcessPage({
   selectedTab,
   reason,
   prereqStatus,
+  trackerKind,
   token,
 }: {
   workspace: ApiWorkspace;
@@ -274,6 +281,7 @@ function renderProcessPage({
   selectedTab: ProcessTab;
   reason?: string;
   prereqStatus: EditorPrereqStatus;
+  trackerKind: string | null;
   token: string;
 }) {
   const locked = isEditorLocked(prereqStatus);
@@ -321,6 +329,7 @@ function renderProcessPage({
             selectedTab={selectedTab}
             selectedStateId={selectedStateId}
             locked={locked}
+            trackerKind={trackerKind}
             token={token}
           />
         </Suspense>
@@ -560,6 +569,7 @@ async function EditorContent({
   selectedTab,
   selectedStateId,
   locked,
+  trackerKind,
   token,
 }: {
   workspaceId: string;
@@ -568,6 +578,7 @@ async function EditorContent({
   selectedTab: ProcessTab;
   selectedStateId?: string;
   locked: boolean;
+  trackerKind: string | null;
   token: string;
 }) {
   let projectedProcess: ApiProcess;
@@ -622,6 +633,7 @@ async function EditorContent({
             process={process}
             repoId={repoId}
             config={config}
+            trackerKind={trackerKind ?? undefined}
           />
         ) : (
           <RoutinesPanel
