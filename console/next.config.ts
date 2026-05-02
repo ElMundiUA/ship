@@ -42,6 +42,21 @@ const nextConfig: NextConfig = {
         destination: "/settings/policy/:rest*",
         permanent: true,
       },
+      // ----- Sprint B: redirect-only pages collapsed -----------------
+      // /members and /integrations were 30-line page.tsx files that
+      // parsed query params and redirected into the settings mega-page.
+      // Next preserves query strings on redirects by default, so these
+      // are declarative rules now.
+      {
+        source: "/members",
+        destination: "/settings?tab=members",
+        permanent: true,
+      },
+      {
+        source: "/integrations",
+        destination: "/settings?tab=integrations",
+        permanent: true,
+      },
     ];
   },
 };

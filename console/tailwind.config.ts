@@ -14,7 +14,11 @@ const config: Config = {
         ink: "#0b1020",
         mist: "#e8f4ff",
         coral: "#ff5c6c",
-        aqua: "#2ee6d6",
+        // `aqua` keeps the brand-key name for backwards compatibility but
+        // now renders as a warm muted champagne gold — same calibration as
+        // the landing site (sprint A of the console redesign). Replaces
+        // the earlier neon teal #2ee6d6 which read as cheap on big surfaces.
+        aqua: "#cfa96b",
         lilac: "#b388ff",
         sun: "#ffd54a",
       },
@@ -29,7 +33,7 @@ const config: Config = {
         sans: ["var(--font-dm)", "ui-sans-serif", "system-ui", "sans-serif"],
       },
       boxShadow: {
-        glow: "0 0 80px -20px rgba(46, 230, 214, 0.55)",
+        glow: "0 0 80px -20px rgba(207, 169, 107, 0.40)",
         card: "0 24px 80px -32px rgba(11, 16, 32, 0.45)",
       },
     },
