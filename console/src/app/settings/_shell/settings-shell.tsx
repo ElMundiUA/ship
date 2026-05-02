@@ -666,8 +666,71 @@ function RepositoryRow({
         >
           Full setup wizard
         </a>
+        <DisconnectRepoForm workspaceId={workspaceId} repo={repo} />
       </td>
     </tr>
+  );
+}
+
+/**
+ * Inline disconnect affordance. Backend wires
+ * ``DELETE /v1/workspaces/{ws}/repos/{id}`` (deletes the row, every
+ * Pipeline bound to it, and every Run under those pipelines —
+ * cascades fire on the model side). The route handler at
+ * ``/api/dashboard/disconnect-repo`` requires a ``confirm=disconnect``
+ * field so a stray click can't nuke state, and redirects back to ``/``
+ * with a toast on success.
+ *
+ * We deliberately keep this inline (collapsed ``<details>``) rather
+ * than punting the user to ``/r/<owner>/<repo>/settings``: the
+ * per-repo settings page exists, but operators looking at the
+ * workspace repo list don't think to drill into a repo's URL just
+ * to remove it from Ship.
+ *
+ * GitHub-side cleanup (App's ``selected_repositories``, the workflow
+ * YAMLs the install PR added) stays the operator's job — Ship never
+ * touches github.com on disconnect.
+ */
+function DisconnectRepoForm({
+  workspaceId,
+  repo,
+}: {
+  workspaceId: string;
+  repo: ApiActivatedRepo;
+}) {
+  return (
+    <details className="inline-block">
+      <summary className="cursor-pointer list-none text-[10px] font-semibold uppercase tracking-widest text-coral/70 hover:text-coral [&::-webkit-details-marker]:hidden">
+        Disconnect →
+      </summary>
+      <form
+        action="/api/dashboard/disconnect-repo"
+        method="POST"
+        className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-coral/30 bg-coral/[0.05] p-2"
+      >
+        <input type="hidden" name="ws" value={workspaceId} />
+        <input type="hidden" name="repo_id" value={repo.id} />
+        <input
+          type="text"
+          name="confirm"
+          required
+          autoComplete="off"
+          pattern="disconnect"
+          placeholder='type "disconnect"'
+          className="w-32 rounded-md border border-coral/40 bg-black/30 px-2 py-1 font-mono text-[11px] text-white placeholder:text-white/35 focus:border-coral/80 focus:outline-none"
+        />
+        <button
+          type="submit"
+          className="rounded-full border border-coral/60 bg-coral/15 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-coral hover:bg-coral/25"
+        >
+          Confirm disconnect
+        </button>
+        <p className="basis-full text-[10px] leading-snug text-white/45">
+          Removes Ship&apos;s pipelines + run history for this repo. Doesn&apos;t
+          touch the repo on GitHub.
+        </p>
+      </form>
+    </details>
   );
 }
 
