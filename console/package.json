@@ -13,7 +13,6 @@
   "dependencies": {
     "@auth0/nextjs-auth0": "^4.18.0",
     "@sentry/nextjs": "^10.49.0",
-    "@xyflow/react": "^12.10.2",
     "jszip": "^3.10.1",
     "luxon": "^3.7.2",
     "next": "^15.2.4",
