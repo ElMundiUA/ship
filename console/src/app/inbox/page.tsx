@@ -461,28 +461,24 @@ function ItemsTable({
     );
   }
 
+  // Bare ul — the surrounding heading + helper text live in the page now,
+  // so the Card+CardHeader wrapper that used to live here would just
+  // duplicate the chrome.
   return (
-    <Card padded={false} className="mt-5 overflow-hidden">
-      <CardHeader
-        className="px-5 pt-5"
-        title={`Items (${items.length})`}
-        subtitle="Oldest-first ranking; resolved/dismissed rows fade out so the queue keeps reading top-down."
-      />
-      <ul className="space-y-2 px-3 pb-3">
-        {items.map((item) => (
-          <li key={item.id}>
-            <InboxItemRow
-              item={item}
-              href={
-                workspaceScope
-                  ? `/inbox/${item.id}?ws=${encodeURIComponent(workspaceScope)}`
-                  : `/inbox/${item.id}`
-              }
-            />
-          </li>
-        ))}
-      </ul>
-    </Card>
+    <ul className="space-y-1.5">
+      {items.map((item) => (
+        <li key={item.id}>
+          <InboxItemRow
+            item={item}
+            href={
+              workspaceScope
+                ? `/inbox/${item.id}?ws=${encodeURIComponent(workspaceScope)}`
+                : `/inbox/${item.id}`
+            }
+          />
+        </li>
+      ))}
+    </ul>
   );
 }
 
