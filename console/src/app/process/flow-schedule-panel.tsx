@@ -15,7 +15,7 @@ import type {
   ApiProcessScheduleSlot,
   ApiRepoConfig,
 } from "@/lib/api/client";
-import { formatNextRun } from "@/lib/cron-next";
+import { classifyCron, formatNextRun } from "@/lib/cron-next";
 import { processConfigFromApiProcess } from "./process-config";
 import { ProcessConfigProposalFields } from "./process-config-proposal-fields";
 import { ProcessReviewSummary, processChangeSummary } from "./process-review-summary";
@@ -76,12 +76,76 @@ export function FlowSchedulePanel({
   ]);
   const warnings = schedule.slots.flatMap((slot) => duplicateWarnings(slot));
 
-  const timeRows = useMemo(() => knownTimes(schedule, extraTimes), [schedule, extraTimes]);
+  // Routine cron projection: visible (non-hidden) routines that are
+  // enabled and have a parseable cron split into two buckets:
+  //   - fixed → champagne dot in the (weekday, time) cells they fire in.
+  //     We also expand their times into ``timeRows`` so a routine firing
+  //     at 06:00 doesn't get hidden just because no specialist sits in
+  //     that row.
+  //   - highfreq → live in a separate "Continuous" strip outside the
+  //     grid; one cell can't represent "every 30 min" anyway.
+  const routineProjection = useMemo(() => {
+    const fixed: Array<{
+      routine: ApiProcessRoutine;
+      weekday: number;
+      time: string;
+      cadence: string;
+    }> = [];
+    const continuous: Array<{ routine: ApiProcessRoutine; cadence: string }> = [];
+    for (const r of process.routines) {
+      if (HIDDEN_ROUTINE_IDS.has(r.id)) continue;
+      if (r.enabled === false) continue;
+      const shape = classifyCron(r.schedule ?? "");
+      if (shape.kind === "fixed") {
+        for (const slot of shape.slots) {
+          fixed.push({
+            routine: r,
+            weekday: slot.weekday,
+            time: slot.time,
+            cadence: shape.cadence,
+          });
+        }
+      } else if (shape.kind === "highfreq") {
+        continuous.push({ routine: r, cadence: shape.cadence });
+      }
+    }
+    return { fixed, continuous };
+  }, [process.routines]);
+
+  // Routine times also seed the time-row list so the calendar shows a
+  // 06:00 row when Security review fires there, even if no specialist
+  // ever sits at 06:00.
+  const routineTimeSeeds = useMemo(
+    () => routineProjection.fixed.map((r) => r.time),
+    [routineProjection.fixed],
+  );
+  const timeRows = useMemo(
+    () => knownTimes(schedule, [...extraTimes, ...routineTimeSeeds]),
+    [schedule, extraTimes, routineTimeSeeds],
+  );
   const assignments = useMemo(() => assignmentMap(schedule), [schedule]);
   const assignedSpecialistIds = useMemo(
     () => new Set(schedule.slots.flatMap((slot) => slot.specialist_ids)),
     [schedule.slots],
   );
+
+  const routineMarkers = useMemo(() => {
+    const map = new Map<string, ApiProcessRoutine[]>();
+    for (const f of routineProjection.fixed) {
+      const key = cellKey(f.weekday, f.time);
+      const list = map.get(key) ?? [];
+      list.push(f.routine);
+      map.set(key, list);
+    }
+    return map;
+  }, [routineProjection.fixed]);
+
+  // Display label per routine — short canonical label when available.
+  const routineLabel = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const c of BUILTIN_ROUTINE_CATALOG) map.set(c.id, c.name);
+    return map;
+  }, []);
 
   function addSpecialistToCell(day: number, localTime: string, specialistId: string) {
     setSchedule((current) => {
@@ -301,6 +365,8 @@ export function FlowSchedulePanel({
                     </div>
                     {WEEKDAYS.map((day) => {
                       const ids = assignments.get(cellKey(day.id, localTime)) ?? [];
+                      const routinesHere =
+                        routineMarkers.get(cellKey(day.id, localTime)) ?? [];
                       return (
                         <CalendarCell
                           key={`${day.id}-${localTime}`}
@@ -308,6 +374,8 @@ export function FlowSchedulePanel({
                           localTime={localTime}
                           specialistIds={ids}
                           process={process}
+                          routines={routinesHere}
+                          routineLabel={routineLabel}
                           onDropSpecialist={addSpecialistToCell}
                           onRemoveSpecialist={removeSpecialistFromCell}
                         />
@@ -317,6 +385,25 @@ export function FlowSchedulePanel({
                 ))}
               </div>
             </div>
+            {routineProjection.continuous.length > 0 && (
+              <div className="border-t border-white/10 bg-black/20 px-4 py-3">
+                <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.22em] text-aqua/70">
+                  Continuous routines
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {routineProjection.continuous.map(({ routine, cadence }) => (
+                    <span
+                      key={routine.id}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-aqua/30 bg-aqua/[0.08] px-3 py-1 text-[11px] font-semibold text-aqua/90"
+                    >
+                      <span className="h-1.5 w-1.5 rounded-full bg-aqua" aria-hidden />
+                      {routineLabel.get(routine.id) ?? routine.name ?? routine.id}
+                      <span className="font-normal text-aqua/60">· {cadence}</span>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
           </section>
         </div>
       </div>
@@ -329,6 +416,8 @@ function CalendarCell({
   localTime,
   specialistIds,
   process,
+  routines,
+  routineLabel,
   onDropSpecialist,
   onRemoveSpecialist,
 }: {
@@ -336,6 +425,8 @@ function CalendarCell({
   localTime: string;
   specialistIds: string[];
   process: ApiProcess;
+  routines: ApiProcessRoutine[];
+  routineLabel: Map<string, string>;
   onDropSpecialist: (day: number, localTime: string, specialistId: string) => void;
   onRemoveSpecialist: (day: number, localTime: string, specialistId: string) => void;
 }) {
@@ -396,6 +487,22 @@ function CalendarCell({
         {specialistIds.length === 0 ? (
           <div className="grid flex-1 place-items-center rounded-xl border border-dashed border-white/10 text-center text-[11px] leading-4 text-white/25">
             Drop role
+          </div>
+        ) : null}
+        {routines.length > 0 ? (
+          <div
+            className="mt-1 flex flex-wrap gap-1 border-t border-white/5 pt-1.5"
+            title="Routines firing in this slot"
+          >
+            {routines.map((r) => (
+              <span
+                key={r.id}
+                className="inline-flex items-center gap-1 rounded-full bg-aqua/[0.12] px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-widest text-aqua/85"
+              >
+                <span className="h-1 w-1 rounded-full bg-aqua" aria-hidden />
+                {routineLabel.get(r.id) ?? r.name ?? r.id}
+              </span>
+            ))}
           </div>
         ) : null}
       </div>

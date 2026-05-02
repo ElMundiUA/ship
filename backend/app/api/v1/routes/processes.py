@@ -1311,29 +1311,22 @@ def _ticket_contract_for_state(state_id: str) -> ProcessTicketContractOut:
 
 
 def _default_schedule(states: list[ProcessStateOut]) -> ProcessScheduleOut:
-    specialists = []
-    for state in states:
-        if state.specialist_id not in specialists:
-            specialists.append(state.specialist_id)
+    """Empty Capacity calendar by default.
+
+    The previous version auto-seeded every weekday × time cell with
+    the same specialist quartet, which made the calendar look like
+    "everything is already configured" — operators couldn't tell
+    template from real data, and the visual signal "no coverage" was
+    impossible to read because every cell was full.
+
+    Capacity now starts empty; operators drag specialists into cells
+    deliberately. The FE renders an explicit empty state so the
+    coverage gap is the obvious thing on the page.
+    """
     return ProcessScheduleOut(
         trigger=ProcessScheduleTriggerOut(kind="schedule"),
         time_zone="UTC",
-        slots=[
-            ProcessScheduleSlotOut(
-                id="weekday_morning",
-                label="Weekday morning",
-                local_time="09:00",
-                weekdays=[1, 2, 3, 4, 5],
-                specialist_ids=specialists[:2] or ["business_analyst", "developer"],
-            ),
-            ProcessScheduleSlotOut(
-                id="weekday_afternoon",
-                label="Weekday afternoon",
-                local_time="13:00",
-                weekdays=[1, 2, 3, 4, 5],
-                specialist_ids=specialists[2:4] or ["qa_engineer"],
-            ),
-        ],
+        slots=[],
     )
 
 

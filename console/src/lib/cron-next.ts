@@ -80,3 +80,104 @@ export function formatNextRun(cron: string | null | undefined): string {
     timeStyle: "short",
   });
 }
+
+/**
+ * Categorise a cron expression for the Capacity calendar projection.
+ *
+ * - ``fixed`` — single specific minute + hour pair (or comma-separated
+ *   list of fixed times). Renders as champagne dots on the day×time
+ *   grid for the days the dow field allows.
+ * - ``highfreq`` — minute or hour field uses a wildcard or a "every N"
+ *   step so the routine fires many times per day. Doesn't fit a single
+ *   grid cell; renders in the Continuous-routines row instead.
+ * - ``invalid`` — cron we couldn't parse at all.
+ */
+export type CronShape =
+  | { kind: "fixed"; slots: Array<{ weekday: number; time: string }>; cadence: string }
+  | { kind: "highfreq"; cadence: string }
+  | { kind: "invalid" };
+
+export function classifyCron(cron: string | null | undefined): CronShape {
+  if (!cron?.trim()) return { kind: "invalid" };
+  const fields = cron.trim().split(/\s+/);
+  if (fields.length !== 5) return { kind: "invalid" };
+  const [minuteF, hourF, , , dowF] = fields;
+  const minutes = explodeField(minuteF, 0, 59);
+  const hours = explodeField(hourF, 0, 23);
+  if (!minutes || !hours) return { kind: "invalid" };
+  // High-frequency: more than 4 firings per day. The grid only shows
+  // hourly slots; anything denser collapses into a "continuous" badge.
+  if (minutes.length * hours.length > 4) {
+    return { kind: "highfreq", cadence: humanCadence(minuteF, hourF) };
+  }
+  const weekdays = explodeField(dowF, 0, 6) ?? [0, 1, 2, 3, 4, 5, 6];
+  const slots: Array<{ weekday: number; time: string }> = [];
+  for (const w of weekdays) {
+    for (const h of hours) {
+      for (const m of minutes) {
+        slots.push({
+          weekday: w,
+          time: `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`,
+        });
+      }
+    }
+  }
+  return { kind: "fixed", slots, cadence: humanCadence(minuteF, hourF) };
+}
+
+function explodeField(s: string, lo: number, hi: number): number[] | null {
+  if (s === "*" || s === "?") {
+    const out: number[] = [];
+    for (let v = lo; v <= hi; v += 1) out.push(v);
+    return out;
+  }
+  if (s.includes(",")) {
+    const parts = s.split(",").map((x) => x.trim());
+    const out: number[] = [];
+    for (const p of parts) {
+      const sub = explodeField(p, lo, hi);
+      if (!sub) return null;
+      for (const v of sub) if (!out.includes(v)) out.push(v);
+    }
+    out.sort((a, b) => a - b);
+    return out;
+  }
+  if (s.includes("/")) {
+    const [r, st] = s.split("/");
+    const step = parseInt(st ?? "1", 10);
+    if (!Number.isFinite(step) || step < 1) return null;
+    const start = r === "*" ? lo : parseInt(r, 10);
+    if (!Number.isFinite(start)) return null;
+    const out: number[] = [];
+    for (let v = start; v <= hi; v += step) out.push(v);
+    return out;
+  }
+  if (s.includes("-")) {
+    const [a, b] = s.split("-").map((x) => parseInt(x.trim(), 10));
+    if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+    const out: number[] = [];
+    for (let v = a; v <= b; v += 1) out.push(v);
+    return out;
+  }
+  const n = parseInt(s, 10);
+  if (!Number.isFinite(n)) return null;
+  return [n];
+}
+
+function humanCadence(minuteF: string, hourF: string): string {
+  const minStep = stepOf(minuteF);
+  const hourStep = stepOf(hourF);
+  if (minuteF === "*" || (minStep && minStep < 60)) {
+    if (minStep) return `every ${minStep} min`;
+    if (minuteF === "*") return "every minute";
+  }
+  if (hourStep) return `every ${hourStep}h`;
+  if (hourF === "*") return "every hour";
+  return "fixed cadence";
+}
+
+function stepOf(field: string): number | null {
+  if (!field.includes("/")) return null;
+  const step = parseInt(field.split("/")[1] ?? "", 10);
+  return Number.isFinite(step) ? step : null;
+}
