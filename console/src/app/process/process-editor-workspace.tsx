@@ -12,6 +12,8 @@ import { ProcessCanvasEditor, type Position } from "./process-canvas-editor";
 import { processConfigFromApiProcess } from "./process-config";
 import { ProcessConfigProposalFields } from "./process-config-proposal-fields";
 import { ProcessReviewSummary, processChangeSummary } from "./process-review-summary";
+import { ProcessValidationPanel } from "./process-validation-panel";
+import { validateProcess } from "./process-validation";
 import { BASE_SPECIALIST_CATALOG } from "./specialist-catalog";
 import { StateEditor, type SpecialistOption } from "./state-editor";
 import { TrackerProjectionsTable } from "./tracker-projections-table";
@@ -84,6 +86,11 @@ export function ProcessEditorWorkspace({
     () => summarizeDraftChanges(process, processDraft, states, transitions),
     [process, processDraft, states, transitions],
   );
+  const validation = useMemo(
+    () => validateProcess({ stages: states, transitions }),
+    [states, transitions],
+  );
+  const hasErrors = validation.errors.length > 0;
   const selectedState =
     states.find((state) => state.id === activeStateId) ?? states[0];
   const specialistOptions = useMemo(
@@ -300,7 +307,12 @@ export function ProcessEditorWorkspace({
             </button>
             <button
               type="submit"
-              disabled={!repoId || !dirty}
+              disabled={!repoId || !dirty || hasErrors}
+              title={
+                hasErrors
+                  ? `Fix ${validation.errors.length} validation error${validation.errors.length === 1 ? "" : "s"} below before publishing.`
+                  : undefined
+              }
               className="rounded-full border border-aqua/35 bg-aqua/15 px-4 py-2 text-xs font-bold text-aqua shadow-lg shadow-aqua/5 transition hover:bg-aqua/20 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/[0.05] disabled:text-white/35"
             >
               Publish process changes
@@ -347,10 +359,20 @@ export function ProcessEditorWorkspace({
           Each row is one of the seven canonical lifecycle states; columns
           tab between the four supported trackers. Defaults from the
           adapter ship "all-mapped" out of the box. */}
-      <div className="border-t border-white/10 bg-black/20 p-4">
+      <div className="space-y-3 border-t border-white/10 bg-black/20 p-4">
         <TrackerProjectionsTable
           trackerMapping={processDraft.tracker_mapping ?? {}}
           defaultTracker={trackerKind}
+        />
+        {/* Validation panel — gates the Publish button. Errors block,
+            warnings inform. Anchors let the operator jump to the
+            offending stage / transition. */}
+        <ProcessValidationPanel
+          result={validation}
+          onJumpToStage={(stageId) => selectStateId(stageId)}
+          onJumpToTransition={(transitionId) =>
+            selectTransitionId(transitionId)
+          }
         />
       </div>
     </section>
