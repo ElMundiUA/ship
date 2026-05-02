@@ -1,44 +1,78 @@
 "use client";
 
 import {
-  type MouseEvent as ReactMouseEvent,
-  type PointerEvent as ReactPointerEvent,
-  useCallback,
-  useEffect,
-  useId,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+  Background,
+  BackgroundVariant,
+  Controls,
+  Handle,
+  MiniMap,
+  Position as RFPosition,
+  ReactFlow,
+  ReactFlowProvider,
+  type Edge as RFEdge,
+  type EdgeProps,
+  type Node as RFNode,
+  type NodeChange,
+  type NodeProps,
+  type OnNodesChange,
+} from "@xyflow/react";
+import "@xyflow/react/dist/style.css";
+
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { ApiProcess, ApiProcessState, ApiProcessTransition } from "@/lib/api/client";
 
-const NODE_WIDTH = 218;
-const NODE_HEIGHT = 84;
-const GAP = 56;
-const PAD = 72;
-const START_Y = 170;
-const MIN_ZOOM = 0.25;
-const MAX_ZOOM = 2;
-const ZOOM_STEP = 0.1;
-
+// Re-exported so existing import sites keep working.
 export type Position = { x: number; y: number };
-type DragState = {
-  id: string;
-  pointerId: number | null;
-  offsetX: number;
-  offsetY: number;
-  moved: boolean;
-};
-type PanState = {
-  pointerId: number;
-  startX: number;
-  startY: number;
-  originX: number;
-  originY: number;
+
+const NODE_WIDTH = 220;
+const NODE_HEIGHT = 92;
+const GRID = 16;
+const DEFAULT_GAP = 56;
+const DEFAULT_PAD = 72;
+const DEFAULT_START_Y = 170;
+
+type StateNodeData = {
+  state: ApiProcessState;
+  selected: boolean;
+  onClick: () => void;
 };
 
-export function ProcessCanvasEditor({
+type TransitionEdgeData = {
+  transition: ApiProcessTransition;
+  selected: boolean;
+  onClick: (id: string) => void;
+};
+
+type StateRFNode = RFNode<StateNodeData, "state">;
+type TransitionRFEdge = RFEdge<TransitionEdgeData, "transition">;
+
+/**
+ * State graph editor for one process — React Flow under the hood
+ * (snap-to-grid pan/zoom, animated edges, minimap, controls) with the
+ * same prop signature as the legacy canvas. Custom ``state`` node
+ * renders the existing card design; ``transition`` edge optionally
+ * shows the condition expression and the "requires human" pip.
+ */
+export function ProcessCanvasEditor(props: {
+  process: ApiProcess;
+  selectedStateId?: string;
+  selectedTransitionId?: string | null;
+  onSelectState: (stateId: string) => void;
+  onSelectTransition: (transitionId: string) => void;
+  onAddState: () => void;
+  onPositionsChange: (positions: Record<string, Position>) => void;
+}) {
+  // ReactFlow needs to live inside a Provider for fitView / instance
+  // hooks. Wrap once at the editor boundary so consumers don't have to.
+  return (
+    <ReactFlowProvider>
+      <CanvasInner {...props} />
+    </ReactFlowProvider>
+  );
+}
+
+function CanvasInner({
   process,
   selectedStateId,
   selectedTransitionId,
@@ -55,583 +89,198 @@ export function ProcessCanvasEditor({
   onAddState: () => void;
   onPositionsChange: (positions: Record<string, Position>) => void;
 }) {
-  const arrowMarkerId = `process-arrow-${useId().replaceAll(":", "")}`;
-  const viewportRef = useRef<HTMLDivElement | null>(null);
-  const dragRef = useRef<DragState | null>(null);
-  const panDragRef = useRef<PanState | null>(null);
-  const positionsRef = useRef<Record<string, Position>>({});
-  const panRef = useRef<Position>({ x: 0, y: 0 });
-  const zoomRef = useRef(1);
-  const suppressClickRef = useRef(false);
-  const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState<Position>({ x: 0, y: 0 });
-  const initialPositions = useMemo(
+  // Position seeds: prefer state.layout, otherwise lay out left-to-right.
+  const layoutSeed = useMemo<Record<string, Position>>(
     () =>
       Object.fromEntries(
         process.states.map((state, index) => [
           state.id,
-          state.layout ?? { x: PAD + index * (NODE_WIDTH + GAP), y: START_Y },
+          state.layout ?? {
+            x: DEFAULT_PAD + index * (NODE_WIDTH + DEFAULT_GAP),
+            y: DEFAULT_START_Y,
+          },
         ]),
-      ) as Record<string, Position>,
+      ),
     [process.states],
   );
-  const [positions, setPositions] = useState<Record<string, Position>>(
-    initialPositions,
-  );
 
+  const [positions, setPositions] = useState<Record<string, Position>>(layoutSeed);
+
+  // Re-seed when the upstream process changes (different process loaded
+  // or layout reset). Also reset selection-driven recomputes.
   useEffect(() => {
-    positionsRef.current = initialPositions;
-    setPositions(initialPositions);
-  }, [initialPositions]);
+    setPositions(layoutSeed);
+  }, [layoutSeed]);
 
-  const updateDraggedNode = useCallback((clientX: number, clientY: number) => {
-    const drag = dragRef.current;
-    if (!drag) return;
-    const point = canvasPointFromClient(clientX, clientY);
-    if (!point) return;
-    const next = {
-      x: Math.max(PAD / 2, point.x - drag.offsetX),
-      y: Math.max(96, point.y - drag.offsetY),
-    };
-    drag.moved = true;
-    setPositions((current) => {
-      const updated = { ...current, [drag.id]: next };
-      positionsRef.current = updated;
-      return updated;
-    });
-  }, []);
-
-  const moveDraggedNode = useCallback((event: PointerEvent) => {
-    const drag = dragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    event.preventDefault();
-    updateDraggedNode(event.clientX, event.clientY);
-  }, [updateDraggedNode]);
-
-  const moveDraggedNodeWithMouse = useCallback((event: MouseEvent) => {
-    if (!dragRef.current) return;
-    event.preventDefault();
-    updateDraggedNode(event.clientX, event.clientY);
-  }, [updateDraggedNode]);
-
-  const removeDragListeners = useCallback(() => {
-    window.removeEventListener("pointermove", moveDraggedNode);
-    window.removeEventListener("mousemove", moveDraggedNodeWithMouse);
-  }, [moveDraggedNode, moveDraggedNodeWithMouse]);
-
-  const stopDragging = useCallback((event: PointerEvent) => {
-    const drag = dragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    suppressClickRef.current = drag.moved;
-    dragRef.current = null;
-    removeDragListeners();
-    window.removeEventListener("pointerup", stopDragging);
-    window.removeEventListener("pointercancel", stopDragging);
-    if (drag.moved) onPositionsChange(positionsRef.current);
-  }, [onPositionsChange, removeDragListeners]);
-
-  const stopDraggingWithMouse = useCallback(() => {
-    const drag = dragRef.current;
-    if (!drag) return;
-    suppressClickRef.current = drag.moved;
-    dragRef.current = null;
-    removeDragListeners();
-    window.removeEventListener("mouseup", stopDraggingWithMouse);
-    if (drag.moved) onPositionsChange(positionsRef.current);
-  }, [onPositionsChange, removeDragListeners]);
-
-  useEffect(() => {
-    return () => {
-      dragRef.current = null;
-      panDragRef.current = null;
-      removeDragListeners();
-      window.removeEventListener("pointerup", stopDragging);
-      window.removeEventListener("pointercancel", stopDragging);
-      window.removeEventListener("mouseup", stopDraggingWithMouse);
-    };
-  }, [removeDragListeners, stopDragging, stopDraggingWithMouse]);
-
-  useEffect(() => {
-    const viewport = viewportRef.current;
-    if (!viewport) return undefined;
-
-    function onWheel(event: WheelEvent) {
-      event.preventDefault();
-
-      const wheelViewport = viewportRef.current;
-      if (!wheelViewport) return;
-
-      if (event.ctrlKey || event.metaKey) {
-        const rect = wheelViewport.getBoundingClientRect();
-        const currentZoom = zoomRef.current;
-        const nextZoom = clampZoom(currentZoom * Math.exp(-event.deltaY * 0.002));
-        const panPosition = panRef.current;
-        const viewportPoint = {
-          x: event.clientX - rect.left,
-          y: event.clientY - rect.top,
-        };
-        const canvasPoint = {
-          x: (viewportPoint.x - panPosition.x) / currentZoom,
-          y: (viewportPoint.y - panPosition.y) / currentZoom,
-        };
-        const nextPan = {
-          x: viewportPoint.x - canvasPoint.x * nextZoom,
-          y: viewportPoint.y - canvasPoint.y * nextZoom,
-        };
-
-        zoomRef.current = nextZoom;
-        panRef.current = nextPan;
-        setZoom(nextZoom);
-        setPan(nextPan);
-        return;
-      }
-
-      const panPosition = panRef.current;
-      const nextPan = {
-        x: panPosition.x - event.deltaX,
-        y: panPosition.y - event.deltaY,
-      };
-      panRef.current = nextPan;
-      setPan(nextPan);
-    }
-
-    viewport.addEventListener("wheel", onWheel, { passive: false });
-    return () => viewport.removeEventListener("wheel", onWheel);
-  }, []);
-
-  const maxX = Math.max(
-    ...process.states.map((state) => positions[state.id]?.x ?? PAD),
-    PAD,
+  const handleSelectState = useCallback(
+    (id: string) => onSelectState(id),
+    [onSelectState],
   );
-  const maxY = Math.max(
-    ...process.states.map((state) => positions[state.id]?.y ?? START_Y),
-    START_Y,
+  const handleSelectTransition = useCallback(
+    (id: string) => onSelectTransition(id),
+    [onSelectTransition],
   );
-  const canvasWidth = Math.max(
-    1120,
-    maxX + NODE_WIDTH + PAD,
-  );
-  const canvasHeight = Math.max(520, maxY + NODE_HEIGHT + PAD);
-  const transitionsInteractive = process.transitions.length > 0;
-  const edges: ApiProcessTransition[] = useMemo(
+
+  const nodes = useMemo<StateRFNode[]>(
     () =>
-      process.transitions.length > 0
-        ? process.transitions
-        : process.states.length > 1
-          ? process.states.slice(0, -1).map((state, index) => {
-              const to = process.states[index + 1].id;
-              return {
-                id: `${state.id}_to_${to}_chain`,
-                from_state_id: state.id,
-                to_state_id: to,
-                conditions: [] as { expression: string }[],
-              } as ApiProcessTransition;
-            })
-          : [],
-    [process.transitions, process.states],
+      process.states.map((state) => {
+        const pos = positions[state.id] ?? layoutSeed[state.id];
+        return {
+          id: state.id,
+          type: "state",
+          position: { x: pos.x, y: pos.y },
+          data: {
+            state,
+            selected: state.id === selectedStateId,
+            onClick: () => handleSelectState(state.id),
+          },
+          // Tell React Flow our node is fixed-size so its bounds + edges
+          // line up before any first measurement pass.
+          width: NODE_WIDTH,
+          height: NODE_HEIGHT,
+          draggable: true,
+        };
+      }),
+    [process.states, positions, layoutSeed, selectedStateId, handleSelectState],
   );
 
-  function onPointerDown(
-    event: ReactPointerEvent<HTMLDivElement>,
-    stateId: string,
-  ) {
-    event.stopPropagation();
-    const pos = positions[stateId] ?? initialPositions[stateId];
-    if (!pos) return;
-    const point = canvasPointFromClient(event.clientX, event.clientY);
-    if (!point) return;
-    event.preventDefault();
-    dragRef.current = {
-      id: stateId,
-      pointerId: event.pointerId,
-      offsetX: point.x - pos.x,
-      offsetY: point.y - pos.y,
-      moved: false,
-    };
-    window.addEventListener("pointermove", moveDraggedNode);
-    window.addEventListener("pointerup", stopDragging);
-    window.addEventListener("pointercancel", stopDragging);
-  }
+  const edges = useMemo<TransitionRFEdge[]>(
+    () =>
+      process.transitions.map((transition) => ({
+        id: transition.id,
+        source: transition.from_state_id,
+        target: transition.to_state_id,
+        type: "transition",
+        data: {
+          transition,
+          selected: transition.id === selectedTransitionId,
+          onClick: handleSelectTransition,
+        },
+        animated: transition.id === selectedTransitionId,
+      })),
+    [process.transitions, selectedTransitionId, handleSelectTransition],
+  );
 
-  function onMouseDown(
-    event: ReactMouseEvent<HTMLDivElement>,
-    stateId: string,
-  ) {
-    event.stopPropagation();
-    if (dragRef.current) return;
-    const pos = positions[stateId] ?? initialPositions[stateId];
-    if (!pos) return;
-    const point = canvasPointFromClient(event.clientX, event.clientY);
-    if (!point) return;
-    event.preventDefault();
-    dragRef.current = {
-      id: stateId,
-      pointerId: null,
-      offsetX: point.x - pos.x,
-      offsetY: point.y - pos.y,
-      moved: false,
-    };
-    window.addEventListener("mousemove", moveDraggedNodeWithMouse);
-    window.addEventListener("mouseup", stopDraggingWithMouse);
-  }
+  const onNodesChange: OnNodesChange = useCallback(
+    (changes) => {
+      let dirty = false;
+      const next = { ...positions };
+      for (const change of changes as NodeChange[]) {
+        if (change.type === "position" && change.position) {
+          // While dragging, change.dragging === true; commit only on
+          // settle (release) so we don't fire onPositionsChange 60×/s.
+          next[change.id] = {
+            x: Math.max(GRID, Math.round(change.position.x / GRID) * GRID),
+            y: Math.max(GRID, Math.round(change.position.y / GRID) * GRID),
+          };
+          if (!change.dragging) dirty = true;
+          else {
+            // live preview — apply but don't commit upstream yet
+            setPositions(next);
+            return;
+          }
+        }
+      }
+      if (dirty) {
+        setPositions(next);
+        onPositionsChange(next);
+      }
+    },
+    [positions, onPositionsChange],
+  );
 
-  function onNodeClick(stateId: string) {
-    if (suppressClickRef.current) {
-      suppressClickRef.current = false;
-      return;
-    }
-    onSelectState(stateId);
-  }
-
-  function setPanValue(nextPan: Position) {
-    panRef.current = nextPan;
-    setPan(nextPan);
-  }
-
-  function setZoomValue(nextZoom: number) {
-    const clamped = clampZoom(nextZoom);
-    zoomRef.current = clamped;
-    setZoom(clamped);
-  }
-
-  function canvasPointFromClient(clientX: number, clientY: number): Position | null {
-    const rect = viewportRef.current?.getBoundingClientRect();
-    if (!rect) return null;
-    const panPosition = panRef.current;
-    const currentZoom = zoomRef.current;
-    return {
-      x: (clientX - rect.left - panPosition.x) / currentZoom,
-      y: (clientY - rect.top - panPosition.y) / currentZoom,
-    };
-  }
-
-  function zoomAt(clientX: number, clientY: number, nextZoom: number) {
-    const rect = viewportRef.current?.getBoundingClientRect();
-    if (!rect) return;
-
-    const currentZoom = zoomRef.current;
-    const clampedZoom = clampZoom(nextZoom);
-    const panPosition = panRef.current;
-    const viewportPoint = {
-      x: clientX - rect.left,
-      y: clientY - rect.top,
-    };
-    const canvasPoint = {
-      x: (viewportPoint.x - panPosition.x) / currentZoom,
-      y: (viewportPoint.y - panPosition.y) / currentZoom,
-    };
-
-    setZoomValue(clampedZoom);
-    setPanValue({
-      x: viewportPoint.x - canvasPoint.x * clampedZoom,
-      y: viewportPoint.y - canvasPoint.y * clampedZoom,
-    });
-  }
-
-  function changeZoom(delta: number) {
-    const rect = viewportRef.current?.getBoundingClientRect();
-    if (!rect) {
-      setZoomValue(zoomRef.current + delta);
-      return;
-    }
-    zoomAt(
-      rect.left + rect.width / 2,
-      rect.top + rect.height / 2,
-      zoomRef.current + delta,
-    );
-  }
-
-  function resetZoom() {
-    const rect = viewportRef.current?.getBoundingClientRect();
-    if (!rect) {
-      setZoomValue(1);
-      return;
-    }
-    zoomAt(rect.left + rect.width / 2, rect.top + rect.height / 2, 1);
-  }
-
-  function onViewportPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
-    if (event.button !== 0) return;
-    if (
-      (event.target as Element).closest(
-        "[data-process-node], [data-process-control], [data-process-edge]",
-      )
-    ) {
-      return;
-    }
-
-    event.preventDefault();
-    event.currentTarget.setPointerCapture(event.pointerId);
-    const panPosition = panRef.current;
-    panDragRef.current = {
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      originX: panPosition.x,
-      originY: panPosition.y,
-    };
-  }
-
-  function onViewportPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
-    const panDrag = panDragRef.current;
-    if (!panDrag || panDrag.pointerId !== event.pointerId) return;
-    event.preventDefault();
-    setPanValue({
-      x: panDrag.originX + event.clientX - panDrag.startX,
-      y: panDrag.originY + event.clientY - panDrag.startY,
-    });
-  }
-
-  function stopViewportPan(event: ReactPointerEvent<HTMLDivElement>) {
-    const panDrag = panDragRef.current;
-    if (!panDrag || panDrag.pointerId !== event.pointerId) return;
-    panDragRef.current = null;
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-  }
+  const nodeTypes = useMemo(() => ({ state: StateNode }), []);
+  const edgeTypes = useMemo(() => ({ transition: TransitionEdge }), []);
 
   return (
-    <div
-      ref={viewportRef}
-      onPointerDown={onViewportPointerDown}
-      onPointerMove={onViewportPointerMove}
-      onPointerUp={stopViewportPan}
-      onPointerCancel={stopViewportPan}
-      className="relative min-h-[560px] cursor-grab overflow-hidden bg-[#040814] active:cursor-grabbing"
-    >
-      <div className="pointer-events-none sticky left-0 top-0 z-20 flex h-0 justify-end p-3">
-        <div className="pointer-events-auto flex items-center gap-2">
-          <div
-            data-process-control
-            className="flex items-center gap-1 rounded-full border border-white/10 bg-black/65 p-1 shadow-2xl backdrop-blur-xl"
-          >
-            <button
-              type="button"
-              onClick={() => changeZoom(-ZOOM_STEP)}
-              disabled={zoom <= MIN_ZOOM}
-              className="h-7 w-7 rounded-full text-sm font-bold text-white/65 transition hover:bg-white/[0.06] hover:text-white disabled:cursor-not-allowed disabled:text-white/25"
-              aria-label="Zoom out"
-            >
-              -
-            </button>
-            <button
-              type="button"
-              onClick={resetZoom}
-              className="min-w-12 rounded-full px-2 py-1 text-xs font-bold text-white/60 transition hover:bg-white/[0.06] hover:text-white"
-              aria-label="Reset zoom"
-            >
-              {Math.round(zoom * 100)}%
-            </button>
-            <button
-              type="button"
-              onClick={() => changeZoom(ZOOM_STEP)}
-              disabled={zoom >= MAX_ZOOM}
-              className="h-7 w-7 rounded-full text-sm font-bold text-white/65 transition hover:bg-white/[0.06] hover:text-white disabled:cursor-not-allowed disabled:text-white/25"
-              aria-label="Zoom in"
-            >
-              +
-            </button>
-          </div>
-          <button
-            type="button"
-            data-process-control
-            onClick={onAddState}
-            className="rounded-full border border-aqua/35 bg-aqua/15 px-3 py-1.5 text-xs font-semibold text-aqua shadow-lg shadow-aqua/5 transition hover:bg-aqua/20"
-          >
-            Add from palette
-          </button>
-        </div>
-      </div>
-      <div className="absolute inset-0">
-        <div
-          className="absolute left-0 top-0 bg-[radial-gradient(circle_at_1px_1px,rgba(99,245,255,0.18)_1px,transparent_0),radial-gradient(circle_at_50%_40%,rgba(99,245,255,0.10),transparent_28%)] [background-size:24px_24px,100%_100%]"
-          style={{
-            width: canvasWidth,
-            height: canvasHeight,
-            transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-            transformOrigin: "top left",
-          }}
+    <div className="relative h-[640px] min-h-[480px] overflow-hidden bg-[#040814]">
+      {/* Floating Add-state pill, top-right */}
+      <div className="pointer-events-none absolute right-3 top-3 z-10">
+        <button
+          type="button"
+          onClick={onAddState}
+          className="pointer-events-auto rounded-full border border-aqua/35 bg-aqua/15 px-3 py-1.5 text-xs font-semibold text-aqua shadow-lg shadow-aqua/5 transition hover:bg-aqua/25"
         >
-          <svg
-            aria-hidden
-            className="absolute inset-0 h-full w-full"
-            viewBox={`0 0 ${canvasWidth} ${canvasHeight}`}
-          >
-            {edges.map((edge) => {
-              const from =
-                positions[edge.from_state_id] ??
-                initialPositions[edge.from_state_id];
-              const to =
-                positions[edge.to_state_id] ?? initialPositions[edge.to_state_id];
-              if (!from || !to) return null;
-              const x1 = from.x + NODE_WIDTH;
-              const x2 = to.x;
-              const y1 = from.y + NODE_HEIGHT / 2;
-              const y2 = to.y + NODE_HEIGHT / 2;
-              const mid = (x1 + x2) / 2;
-              const d = `M ${x1} ${y1} C ${mid} ${y1}, ${mid} ${y2}, ${x2} ${y2}`;
-              const isSelected = edge.id === selectedTransitionId;
-              const cond = edge.conditions[0]?.expression;
-              const midX = (x1 + x2) / 2;
-              const midY = (y1 + y2) / 2;
-              return (
-                <g
-                  key={edge.id}
-                  data-process-edge
-                  style={{ pointerEvents: transitionsInteractive ? "auto" : "none" }}
-                >
-                  <path
-                    d={d}
-                    fill="none"
-                    stroke="transparent"
-                    strokeWidth="20"
-                    strokeLinecap="round"
-                    onPointerDown={(event) => {
-                      if (!transitionsInteractive) return;
-                      event.stopPropagation();
-                    }}
-                    onClick={(event) => {
-                      if (!transitionsInteractive) return;
-                      event.stopPropagation();
-                      onSelectTransition(edge.id);
-                    }}
-                    className={
-                      transitionsInteractive
-                        ? "cursor-pointer"
-                        : "pointer-events-none"
-                    }
-                  />
-                  <path
-                    d={d}
-                    fill="none"
-                    stroke={
-                      isSelected
-                        ? "rgba(99, 245, 255, 0.75)"
-                        : "rgba(99,245,255,0.34)"
-                    }
-                    strokeWidth={isSelected ? 3 : 2}
-                    markerEnd={`url(#${arrowMarkerId})`}
-                    pointerEvents="none"
-                  />
-                  {cond ? (
-                    <text
-                      x={midX}
-                      y={midY - 10}
-                      textAnchor="middle"
-                      className="fill-white/45"
-                      style={{ fontSize: 9, pointerEvents: "none" }}
-                    >
-                      {cond.length > 28 ? `${cond.slice(0, 28)}…` : cond}
-                    </text>
-                  ) : null}
-                  {edge.requires_human ? (
-                    <g
-                      transform={`translate(${midX - 9}, ${midY + 2})`}
-                      pointerEvents="none"
-                    >
-                      <circle
-                        cx="9"
-                        cy="8"
-                        r="8"
-                        fill="rgba(0,0,0,0.45)"
-                        stroke="rgba(255,255,255,0.25)"
-                        strokeWidth="1"
-                      />
-                      <g transform="translate(2.5, 1.5)">
-                        <circle cx="5.5" cy="4" r="2.2" fill="rgba(255,255,255,0.9)" />
-                        <path
-                          d="M2 12.5c.8-2.2 1.6-3.1 3.5-3.1s2.7.9 3.5 3.1"
-                          fill="none"
-                          stroke="rgba(255,255,255,0.9)"
-                          strokeWidth="1.1"
-                          strokeLinecap="round"
-                        />
-                      </g>
-                    </g>
-                  ) : null}
-                </g>
-              );
-            })}
-            <defs>
-              <marker
-                id={arrowMarkerId}
-                markerHeight="8"
-                markerWidth="8"
-                orient="auto"
-                refX="7"
-                refY="4"
-              >
-                <path d="M 0 0 L 8 4 L 0 8 z" fill="rgba(255,255,255,0.32)" />
-              </marker>
-            </defs>
-          </svg>
-          {process.states.map((state) => {
-            const pos = positions[state.id] ?? initialPositions[state.id];
-            return (
-              <StateNode
-                key={state.id}
-                state={state}
-                selected={state.id === selectedStateId}
-                x={pos.x}
-                y={pos.y}
-                onPointerDown={(event) => onPointerDown(event, state.id)}
-                onMouseDown={(event) => onMouseDown(event, state.id)}
-                onClick={() => onNodeClick(state.id)}
-              />
-            );
-          })}
-        </div>
+          Add from palette
+        </button>
       </div>
+      <ReactFlow
+        nodes={nodes}
+        edges={edges}
+        nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
+        onNodesChange={onNodesChange}
+        onEdgeClick={(_event, edge) => handleSelectTransition(edge.id)}
+        snapToGrid
+        snapGrid={[GRID, GRID]}
+        fitView
+        fitViewOptions={{ padding: 0.18, maxZoom: 1, minZoom: 0.4 }}
+        minZoom={0.25}
+        maxZoom={2}
+        proOptions={{ hideAttribution: true }}
+        // Gentle deceleration on pan; default is OK but slightly punchy.
+        panOnDrag
+        zoomOnScroll
+        zoomOnPinch
+        nodesConnectable={false}
+        nodesDraggable
+        elementsSelectable
+        selectNodesOnDrag={false}
+      >
+        <Background
+          variant={BackgroundVariant.Dots}
+          gap={GRID}
+          size={1}
+          color="rgba(207, 169, 107, 0.18)"
+        />
+        <Controls
+          className="!rounded-2xl !border !border-white/10 !bg-black/65 !text-white"
+          showInteractive={false}
+        />
+        <MiniMap
+          className="!rounded-xl !border !border-white/10 !bg-black/60"
+          maskColor="rgba(4, 8, 20, 0.55)"
+          nodeColor={(node) => {
+            const data = node.data as StateNodeData | undefined;
+            if (data?.selected) return "rgba(207,169,107,0.65)";
+            return "rgba(255,255,255,0.18)";
+          }}
+          pannable
+          zoomable
+        />
+      </ReactFlow>
     </div>
   );
 }
 
-function clampZoom(value: number) {
-  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Number(value.toFixed(2))));
-}
-
-function StateNode({
-  state,
-  selected,
-  x,
-  y,
-  onPointerDown,
-  onMouseDown,
-  onClick,
-}: {
-  state: ApiProcessState;
-  selected: boolean;
-  x: number;
-  y: number;
-  onPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void;
-  onMouseDown: (event: ReactMouseEvent<HTMLDivElement>) => void;
-  onClick: () => void;
-}) {
+function StateNode({ data }: NodeProps<StateRFNode>) {
+  const { state, selected, onClick } = data;
   return (
     <div
-      data-process-node
       role="button"
       tabIndex={0}
-      draggable={false}
-      onPointerDown={onPointerDown}
-      onMouseDown={onMouseDown}
-      onClick={onClick}
+      onClick={(event) => {
+        // Don't trigger selection if user is mid-drag — React Flow already
+        // suppresses click on drag-stop, but be defensive.
+        event.stopPropagation();
+        onClick();
+      }}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
           onClick();
         }
       }}
-      style={{ left: x, top: y, touchAction: "none", userSelect: "none" }}
+      style={{ width: NODE_WIDTH, height: NODE_HEIGHT }}
       className={[
-        "absolute block h-[84px] w-[218px] rounded-[1.35rem] border px-4 py-3 transition",
-        "cursor-grab select-none shadow-2xl active:cursor-grabbing",
+        "rounded-[1.35rem] border px-4 py-3 transition",
+        "cursor-grab shadow-2xl active:cursor-grabbing select-none",
         selected
-          ? "border-aqua/70 bg-[linear-gradient(135deg,rgba(99,245,255,0.18),rgba(99,245,255,0.06))] shadow-aqua/20"
+          ? "border-aqua/70 bg-[linear-gradient(135deg,rgba(207,169,107,0.18),rgba(207,169,107,0.06))] shadow-aqua/20"
           : "border-white/12 bg-[linear-gradient(135deg,rgba(255,255,255,0.09),rgba(255,255,255,0.035))] hover:border-aqua/35 hover:bg-white/[0.07]",
       ].join(" ")}
     >
+      <Handle type="target" position={RFPosition.Left} className="!h-2 !w-2 !border-aqua/40 !bg-aqua/40" />
       <div className="flex h-full min-w-0 flex-col justify-between">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
@@ -642,13 +291,108 @@ function StateNode({
               {state.specialist_name}
             </div>
           </div>
-          <span className="mt-0.5 h-2 w-2 shrink-0 rounded-full bg-aqua shadow-[0_0_18px_rgba(99,245,255,0.8)]" />
+          <span className="mt-0.5 h-2 w-2 shrink-0 rounded-full bg-aqua shadow-[0_0_18px_rgba(207,169,107,0.8)]" />
         </div>
         <div className="flex items-center justify-between text-[10px] uppercase tracking-[0.18em] text-white/35">
-          <span>Process</span>
+          <span>State</span>
           <span>{state.runtime.health}</span>
         </div>
       </div>
+      <Handle type="source" position={RFPosition.Right} className="!h-2 !w-2 !border-aqua/40 !bg-aqua/40" />
     </div>
+  );
+}
+
+function TransitionEdge({
+  id,
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  data,
+}: EdgeProps<TransitionRFEdge>) {
+  const { transition, selected, onClick } = data ?? ({} as TransitionEdgeData);
+  // Smooth bezier path for the edge.
+  const midX = (sourceX + targetX) / 2;
+  const path = `M ${sourceX} ${sourceY} C ${midX} ${sourceY}, ${midX} ${targetY}, ${targetX} ${targetY}`;
+  const labelX = (sourceX + targetX) / 2;
+  const labelY = (sourceY + targetY) / 2 - 12;
+  const cond = transition?.conditions[0]?.expression;
+  const stroke = selected
+    ? "rgba(207, 169, 107, 0.85)"
+    : "rgba(207, 169, 107, 0.32)";
+  return (
+    <g
+      onClick={(event) => {
+        event.stopPropagation();
+        if (transition) onClick(transition.id);
+      }}
+      className="cursor-pointer"
+    >
+      {/* Wide invisible hit target so clicks land on thin edges. */}
+      <path
+        d={path}
+        fill="none"
+        stroke="transparent"
+        strokeWidth={20}
+        pointerEvents="stroke"
+      />
+      <path
+        d={path}
+        fill="none"
+        stroke={stroke}
+        strokeWidth={selected ? 3 : 2}
+        markerEnd="url(#rf-arrow-champagne)"
+      />
+      {cond ? (
+        <text
+          x={labelX}
+          y={labelY}
+          textAnchor="middle"
+          className="fill-white/55"
+          style={{ fontSize: 10, pointerEvents: "none" }}
+        >
+          {cond.length > 28 ? `${cond.slice(0, 28)}…` : cond}
+        </text>
+      ) : null}
+      {transition?.requires_human ? (
+        <g
+          transform={`translate(${labelX - 9}, ${labelY + 6})`}
+          pointerEvents="none"
+        >
+          <circle
+            cx="9"
+            cy="8"
+            r="8"
+            fill="rgba(0,0,0,0.45)"
+            stroke="rgba(255,255,255,0.25)"
+            strokeWidth="1"
+          />
+          <text
+            x="9"
+            y="11"
+            textAnchor="middle"
+            style={{ fontSize: 9 }}
+            className="fill-white/85"
+          >
+            ★
+          </text>
+        </g>
+      ) : null}
+      {/* Inject one champagne arrowhead per render — id is stable so the
+       * defs collapse across all edges in the canvas. */}
+      <defs>
+        <marker
+          id="rf-arrow-champagne"
+          markerHeight="8"
+          markerWidth="8"
+          orient="auto"
+          refX="7"
+          refY="4"
+        >
+          <path d="M 0 0 L 8 4 L 0 8 z" fill="rgba(207, 169, 107, 0.7)" />
+        </marker>
+      </defs>
+    </g>
   );
 }
