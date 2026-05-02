@@ -385,18 +385,40 @@ export async function ConfirmStep({
         );
       })()}
 
-      <div className="mt-8 flex items-center justify-between gap-3 border-t border-white/10 pt-5">
+      {/* Footer cross-links. The stepper handles ordered navigation
+          between adjacent setup steps, so this row carries the two
+          escape valves that aren't on the stepper:
+
+          - ``← Hub`` returns to the post-setup landing page
+            (only meaningful for already-seeded workspaces, but
+            keeping it always-visible avoids state-checking just
+            to hide a 6-character link).
+          - ``← Dashboard`` exits the wizard entirely. Mirrors
+            "Skip to dashboard" in the page header without making
+            the operator scroll back up.
+
+          The pre-fix "← Back to repo picker" link is gone because
+          the clickable stepper above offers the same hop in the
+          same gesture, only consistent with every other cross-step
+          jump. */}
+      <div className="mt-8 flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-5">
         <span className="text-[11px] text-white/45">
           {total > 0
             ? `${total} repo${total === 1 ? "" : "s"} ready. Seed PRs don't auto-merge — you're in control.`
             : "Nothing to bootstrap yet."}
         </span>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-4 text-xs">
           <Link
-            href={`/onboarding?step=repos&ws=${encodeURIComponent(workspaceId)}`}
-            className="text-xs text-white/55 hover:text-white"
+            href={`/onboarding?step=hub&ws=${encodeURIComponent(workspaceId)}`}
+            className="text-white/55 hover:text-white"
           >
-            &larr; Back to repo picker
+            &larr; Hub
+          </Link>
+          <Link
+            href={`/?ws=${encodeURIComponent(workspaceId)}`}
+            className="text-white/55 hover:text-white"
+          >
+            &larr; Dashboard
           </Link>
         </div>
       </div>
