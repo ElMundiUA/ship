@@ -1534,10 +1534,15 @@ async def list_bucket_articles(
     if not include_superseded:
         # Default view hides supersession history to keep the UI
         # focused on "what exists now". Set ``include_superseded=true``
-        # for a version timeline.
-        stmt = stmt.where(
-            BucketArticle.status == BucketArticleStatus.PUBLISHED
-        )
+        # for a version timeline. ``include_archived=true`` also
+        # admits ``status='archived'`` rows here — without it, the
+        # archived-status filter blocks the dual-flip articles
+        # produced by the operator-archive flow even after we've
+        # opened up ``archived_at IS NOT NULL`` below.
+        allowed = [BucketArticleStatus.PUBLISHED]
+        if include_archived:
+            allowed.append(BucketArticleStatus.ARCHIVED)
+        stmt = stmt.where(BucketArticle.status.in_(allowed))
     if not include_archived:
         stmt = stmt.where(BucketArticle.archived_at.is_(None))
     rows = list((await session.execute(stmt)).scalars().all())

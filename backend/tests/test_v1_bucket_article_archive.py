@@ -296,6 +296,51 @@ async def test_restore_demotes_to_draft_on_published_sibling(
 
 
 @pytest.mark.asyncio
+async def test_archived_article_visible_via_include_archived_flag(
+    v1_client, db_session, seeded
+) -> None:
+    """After the dual-flip archive (``status=archived`` AND
+    ``archived_at`` set), ``GET /articles?include_archived=true`` must
+    still surface the row. Without the route fix we shipped alongside
+    this, the ``status='published'`` filter hid archived rows entirely
+    and operators had no way to see what they'd just removed."""
+    bucket = seeded["bucket"]
+    workspace = seeded["workspace"]
+    raw = seeded["token"]
+    article = _make_article(bucket)
+    db_session.add(article)
+    await db_session.flush()
+
+    # Archive it via the operator route — exercises the actual flip.
+    await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/buckets/{bucket.slug}"
+        f"/articles/{article.id}/archive",
+        headers={"Authorization": f"Bearer {raw}"},
+        json={"reason": "operator review"},
+    )
+
+    # Default listing hides archived rows.
+    default_resp = await v1_client.get(
+        f"/v1/workspaces/{workspace.id}/buckets/{bucket.slug}/articles",
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert default_resp.status_code == 200
+    assert default_resp.json() == []
+
+    # ``include_archived=true`` brings them back.
+    resp = await v1_client.get(
+        f"/v1/workspaces/{workspace.id}/buckets/{bucket.slug}/articles"
+        "?include_archived=true",
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert len(payload) == 1
+    assert payload[0]["id"] == str(article.id)
+    assert payload[0]["status"] == "archived"
+
+
+@pytest.mark.asyncio
 async def test_archive_404_for_other_workspaces_article(
     v1_client, db_session, seeded
 ) -> None:
