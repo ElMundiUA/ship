@@ -26,9 +26,22 @@ agent-run-*.log
 .ship/telemetry-outbox.jsonl
 .ship/feedback-drafts/
 **/__pycache__/
+**/.pytest_cache/
+**/.ruff_cache/
+**/.playwright-cli/
+.claude/
 backend/.chroma/
 
 # Local-only working trees: presentation decks, scratch outputs.
 # Commit deliberately if you want any of these published.
 presentations/
 output/
+
+# Внутренняя кухня — pricing, GTM, financials, рабочие заметки.
+# Не публиковать в git: расчёты юнит-экономики, черновики стратегий, переписки.
+_internal/
+
+# Internal planning docs, closed-beta epics, prod-config checklists.
+# Stay on disk for reference but never published. Was tracked historically;
+# untracked via `git rm -r --cached` — files remain locally.
+documentation/internal/
