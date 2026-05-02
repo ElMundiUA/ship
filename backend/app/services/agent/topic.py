@@ -42,7 +42,7 @@ import logging
 import re
 import uuid
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Final, Sequence
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -62,7 +62,7 @@ from backend.app.services.agent.client import (
     AgentClient,
     ChatMessage,
 )
-from backend.app.services.agent.embedding import embed_text
+from backend.app.services.agent.embedding import embed_text, embed_texts
 from backend.app.services.bucket_visibility import visible_to_user_clause
 from backend.app.services.bucket_summary_articles import (
     mirror_summary_to_article,
@@ -292,6 +292,74 @@ def detect_explicit_shift(message: str) -> bool:
     return any(p.search(message) for p in _EXPLICIT_SHIFT_PHRASES)
 
 
+# ELS-59 — cosine-distance soft-switch.
+#
+# Between the explicit-phrase regex and the LLM classifier we run a
+# cheap embedding compare: prior conversation context vs new user
+# message. The intuition is that a clear topic shift produces an
+# embedding far from the running thread, while continuations cluster
+# tight. Both extremes short-circuit the LLM (saves ~200ms per turn);
+# the middle band falls through to the LLM where intent + tool-domain
+# signal can break the tie.
+#
+# Thresholds are tuned for ``text-embedding-3-small``. Distances on
+# short chat messages tend to land in 0.20–0.55 for related text and
+# > 0.55 for genuinely different topics. We pin the shift gate at
+# 0.60 (matches the spec in the ELS-59 ticket) and the continue gate
+# at 0.30 — anything below that is "very obviously the same topic".
+_COSINE_SHIFT_THRESHOLD: Final[float] = 0.60
+_COSINE_CONTINUE_THRESHOLD: Final[float] = 0.30
+# Below this, the prior context is too thin to compare against (e.g.
+# the very first turn was a one-word "hi"); we'd just be embedding
+# noise. Bail to the LLM instead — it has the running summary plus
+# raw turns to work with.
+_COSINE_MIN_PRIOR_CHARS: Final[int] = 60
+
+
+def _cosine_distance(a: Sequence[float], b: Sequence[float]) -> float:
+    """Distance in the embedding space; 0 = identical, 1 = orthogonal,
+    2 = opposite. Numpy would be faster but it's a dim=1536 dot
+    product, ~5µs in pure Python — not worth the import.
+    """
+    if not a or not b or len(a) != len(b):
+        return 1.0
+    dot = 0.0
+    norm_a = 0.0
+    norm_b = 0.0
+    for x, y in zip(a, b):
+        dot += x * y
+        norm_a += x * x
+        norm_b += y * y
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 1.0
+    sim = dot / ((norm_a**0.5) * (norm_b**0.5))
+    if sim > 1.0:
+        sim = 1.0
+    elif sim < -1.0:
+        sim = -1.0
+    return 1.0 - sim
+
+
+def _build_prior_cosine_context(
+    running_summary: str | None,
+    user_turns: Sequence[ChatMessageRow],
+) -> str:
+    """Glue the running summary + last few user turns into a single
+    string for cosine compare. We include the summary first when it
+    exists (it's denser per-character than raw turns), then the last
+    three user messages — enough recency to capture a topic without
+    diluting the embedding with old chatter.
+    """
+    parts: list[str] = []
+    if running_summary and running_summary.strip():
+        parts.append(running_summary.strip())
+    for turn in user_turns[-3:]:
+        body = (turn.body or "").strip()
+        if body:
+            parts.append(body)
+    return "\n".join(parts)
+
+
 @dataclass(slots=True)
 class BucketHit:
     """One bucket-article match returned by :meth:`retrieve_buckets`.
@@ -365,6 +433,58 @@ class TopicService:
                 new_title=None,
                 explicit_phrase=True,
             )
+
+        # ELS-59 — cosine-distance soft-switch. One embedding batch
+        # (prior context + new message) decides clear continuations
+        # and clear shifts without the LLM round-trip. The middle
+        # band falls through to the LLM below where running_summary
+        # + raw turns give it more to chew on.
+        prior_text = _build_prior_cosine_context(
+            running_summary, prior_user_turns
+        )
+        if (
+            prior_text
+            and len(prior_text) >= _COSINE_MIN_PRIOR_CHARS
+            and new_user_message.strip()
+        ):
+            try:
+                vectors = await embed_texts(
+                    [prior_text, new_user_message],
+                    settings=self._settings,
+                )
+            except Exception as exc:  # noqa: BLE001
+                # Missing OPENAI_API_KEY raises here; rate limits and
+                # transient network errors too. None of those should
+                # block the turn — fall through to the LLM classifier
+                # which is the pre-cosine status quo.
+                logger.warning(
+                    "topic-shift cosine pre-filter failed: %s", exc
+                )
+            else:
+                if len(vectors) == 2:
+                    distance = _cosine_distance(vectors[0], vectors[1])
+                    logger.debug(
+                        "topic-shift cosine distance=%.3f (shift=%.2f / "
+                        "continue=%.2f)",
+                        distance,
+                        _COSINE_SHIFT_THRESHOLD,
+                        _COSINE_CONTINUE_THRESHOLD,
+                    )
+                    if distance >= _COSINE_SHIFT_THRESHOLD:
+                        return TopicShiftDecision(
+                            shifted=True,
+                            reason=(
+                                "This question reads like a different "
+                                "topic from what we've been on."
+                            ),
+                            new_title=None,
+                            explicit_phrase=False,
+                        )
+                    if distance <= _COSINE_CONTINUE_THRESHOLD:
+                        return TopicShiftDecision(
+                            shifted=False, reason="", new_title=None
+                        )
+                # else: borderline — fall through to LLM.
 
         # Keep the payload small — we only need the last few turns
         # plus the running summary. The fast model doesn't need the
