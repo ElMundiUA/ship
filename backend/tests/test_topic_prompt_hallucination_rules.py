@@ -98,6 +98,43 @@ def test_hard_rules_pushback_clause() -> None:
     )
 
 
+def test_pushback_clause_references_existing_tools() -> None:
+    """The pushback clause cites three example tools the agent should
+    re-call instead of improvising. If any of those names drift out
+    of the registry (rename, removal), the rule keeps pointing the
+    LLM at a dead tool. Pin the link both ways: the clause exists,
+    the tool names parse, every parsed name resolves in the
+    ToolBox registry.
+    """
+    from backend.app.services.agent.tools import ToolBox
+
+    block = re.search(
+        r"When the user pushes back[^.]*\.[\s\S]*?Immediately call[^(]*"
+        r"\(([^)]+)\)",
+        _AGENT_SYSTEM_PROMPT,
+    )
+    assert block is not None, (
+        "Pushback clause shape changed — update this test alongside "
+        "the prompt edit so the link to the tool registry stays "
+        "load-bearing."
+    )
+    cited = set(re.findall(r"``([a-z_]+)``", block.group(1)))
+    assert cited, "no tool names parsed from the pushback example list"
+
+    box = ToolBox(
+        session=None,  # type: ignore[arg-type]
+        settings=None,  # type: ignore[arg-type]
+        workspace_id=None,  # type: ignore[arg-type]
+        user_id=None,  # type: ignore[arg-type]
+    )
+    registry = {spec.name for spec in box.specs()}
+    drift = cited - registry
+    assert not drift, (
+        f"pushback clause cites tools that no longer exist in the "
+        f"registry: {sorted(drift)}"
+    )
+
+
 def test_hard_rules_reference_session_context() -> None:
     """The static prompt must point at the dynamic frame so the agent
     knows where to read today's date from. Renaming the frame
