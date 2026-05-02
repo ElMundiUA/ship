@@ -118,6 +118,7 @@ type LiveProcessGraph = {
   processList: ApiProcessList;
   repos: ApiActivatedRepo[];
   selectedRepo: ApiActivatedRepo | null;
+  prereqStatus: EditorPrereqStatus;
 };
 
 /**
@@ -207,16 +208,31 @@ async function loadLiveProcessGraph(
   const resolved = await getResolvedWorkspaceId(searchParams, workspaces);
   const workspace = pickWorkspace(workspaces, resolved);
   try {
-    const [processList, repos] = await Promise.all([
-      listProcesses(workspace.id, token),
-      listActivatedRepos(workspace.id, token).catch(() => [] as ApiActivatedRepo[]),
-    ]);
+    const [processList, repos, integrations, nativeIntegrations] =
+      await Promise.all([
+        listProcesses(workspace.id, token),
+        listActivatedRepos(workspace.id, token).catch(
+          () => [] as ApiActivatedRepo[],
+        ),
+        listIntegrations(workspace.id, token).catch(
+          () => [] as ApiIntegration[],
+        ),
+        listNativeIntegrations(workspace.id, token).catch(
+          () => [] as ApiNativeIntegration[],
+        ),
+      ]);
+    const prereqStatus = computePrereqStatus(
+      workspace,
+      integrations,
+      nativeIntegrations,
+    );
     return {
       workspace,
       allWorkspaces: workspaces,
       processList,
       repos,
       selectedRepo: repos.find((repo) => repo.id === selectedRepoId) ?? repos[0] ?? null,
+      prereqStatus,
     };
   } catch (err) {
     if (err instanceof ApiHttpError && err.status === 401) return "unauthorized";
@@ -231,13 +247,17 @@ function renderProcessGraphPage({
   processList,
   repos,
   selectedRepo,
+  prereqStatus,
 }: {
-  workspace: Pick<ApiWorkspace, "id" | "name" | "slug">;
+  workspace: ApiWorkspace;
   allWorkspaces?: ApiWorkspace[];
   processList: ApiProcessList;
   repos: ApiActivatedRepo[];
   selectedRepo: ApiActivatedRepo | null;
+  prereqStatus: EditorPrereqStatus;
 }) {
+  const locked = isEditorLocked(prereqStatus);
+  const multiWs = (allWorkspaces?.length ?? 0) > 1;
   return (
     <AppShell
       title="Process graph"
@@ -251,6 +271,13 @@ function renderProcessGraphPage({
     >
       <div className="space-y-3">
         <RepoSelector repos={repos} selectedRepo={selectedRepo} />
+        {locked && (
+          <EditorLockedBanner
+            workspaceId={workspace.id}
+            multiWorkspace={multiWs}
+            status={prereqStatus}
+          />
+        )}
         <ProcessGraphOverview processList={processList} repoId={selectedRepo?.id} />
       </div>
     </AppShell>
