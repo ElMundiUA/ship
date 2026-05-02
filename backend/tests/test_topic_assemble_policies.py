@@ -56,11 +56,13 @@ async def test_assemble_no_policies(db_session, seed_workspace) -> None:
         recent_messages=[],
         new_user_message="hi",
     )
-    # system prompt + final user turn, nothing in between.
-    assert len(out) == 2
+    # system prompt + session-context frame + final user turn.
+    assert len(out) == 3
     assert out[0].role == "system"
     assert "You are Ship" in out[0].content
-    assert out[1].role == "user"
+    assert out[1].role == "system"
+    assert "## Session context" in out[1].content
+    assert out[-1].role == "user"
 
 
 @pytest.mark.asyncio
@@ -111,19 +113,22 @@ async def test_assemble_injects_enabled_policies(
         new_user_message="hi",
     )
 
-    # Layering: 0=system prompt, 1=policies preamble, 2=topic summary,
-    # then the live user turn.
+    # Layering: 0=system prompt, 1=session context (date + workspace),
+    # 2=policies preamble, 3=topic summary, then the live user turn.
     assert out[0].role == "system" and "You are Ship" in out[0].content
     assert out[1].role == "system"
-    preamble = out[1].content
+    assert "## Session context" in out[1].content
+
+    assert out[2].role == "system"
+    preamble = out[2].content
     assert preamble.startswith("# Workspace policies")
     assert "## Always work via PR" in preamble
     assert "## Never commit secrets" in preamble
     assert "Disabled rule" not in preamble
     assert "Should not render." not in preamble
 
-    assert out[2].role == "system"
-    assert "Running topic summary" in out[2].content
+    assert out[3].role == "system"
+    assert "Running topic summary" in out[3].content
 
     assert out[-1].role == "user"
     assert out[-1].content == "hi"

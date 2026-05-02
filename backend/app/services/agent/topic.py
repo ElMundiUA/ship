@@ -42,6 +42,7 @@ import logging
 import re
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Final, Sequence
 
 from sqlalchemy import select
@@ -83,9 +84,34 @@ _AGENT_SYSTEM_PROMPT = (
     "chunk). When a tool can get an id / path / status, call it — "
     "don't ask the user.\n\n"
     "## Hard rules\n\n"
-    "- Never fabricate repo paths, tickets, URLs, artifact ids, "
-    "pipeline ids, or integration names. If a tool can produce one, "
-    "call it; if none can, say so.\n"
+    "- Never fabricate ANY identifier or attribution. That includes: "
+    "repo paths, tickets, URLs, artifact ids, pipeline ids, "
+    "integration names, **user names, emails, GitHub / Linear / "
+    "Slack logins, PR / commit / run authors, PR numbers, commit "
+    "SHAs, version strings, timestamps, dates, file line counts, "
+    "release notes**. If a tool can produce the value, call it. If "
+    "no tool can, say so explicitly and stop. Plausible-sounding "
+    "guesses are forbidden — they're the single biggest source of "
+    "operator-erosion and we'd rather show \"I don't know\" than a "
+    "polished lie.\n"
+    "- When a tool's response is missing a field you'd otherwise "
+    "report (e.g. PR list returned without authors), surface the "
+    "gap verbatim — \"the response doesn't include the author\". Do "
+    "**not** infer it from a username string elsewhere, from the "
+    "repo owner, or from your own training data. Names in code "
+    "comments, commits, or memory are NOT a substitute for a fresh "
+    "tool call.\n"
+    "- When the user pushes back (\"that's wrong\", \"who is this\", "
+    "\"are you sure\"), do NOT improvise a corrected answer. "
+    "Immediately call the tool that would produce the ground truth "
+    "(``list_workspace_members``, ``get_pull_request``, "
+    "``get_pipeline_run``, etc.) and answer from its result. If no "
+    "tool covers the question, say so.\n"
+    "- Today's date and the active workspace id live in the "
+    "**Session context** system message that follows. Use those for "
+    "any \"today\", \"yesterday\", \"this week\", \"last N days\" "
+    "phrasing — never assume the year or month from your training "
+    "data.\n"
     "- Propose-before-create for any tracker / inbox / automation "
     "mutation. Open a ticket / project / routing rule only on "
     "explicit confirmation.\n"
@@ -98,6 +124,21 @@ _AGENT_SYSTEM_PROMPT = (
     "``ship-choice`` widget before calling.\n"
     "- Stay inside the current topic; topic shifts are decided by "
     "the host, not the agent.\n\n"
+    "## When you don't know\n\n"
+    "\"I don't know\" / \"the data doesn't include that\" / \"no "
+    "tool can answer that\" are valid, expected, **preferred** "
+    "answers when the alternative would be guessing. Specifically:\n\n"
+    "- If a tool returned an empty result → say so. Don't paper over "
+    "it with a generic summary.\n"
+    "- If a tool returned data without the field the user asked for "
+    "→ say which field is missing rather than substituting a "
+    "different one.\n"
+    "- If no tool covers the question → say so and offer the closest "
+    "tool whose output might help. Do **not** answer from priors.\n"
+    "- If your prior turn made a claim the user is now disputing → "
+    "treat that claim as suspect, re-fetch via tools, and explicitly "
+    "retract the part that was wrong. Don't quietly substitute a "
+    "second guess for the first.\n\n"
     "## Knowledge lookup order\n\n"
     "1. Repo-specific question → ``search_repo_kb`` (narrow with "
     "``path_prefix`` / ``path_glob``; ``include_full_content`` for "
@@ -805,6 +846,10 @@ class TopicService:
         """
         out: list[ChatMessage] = [
             ChatMessage(role="system", content=_AGENT_SYSTEM_PROMPT),
+            ChatMessage(role="system", content=_render_session_context(
+                workspace_id=self._workspace_id,
+                now=datetime.now(timezone.utc),
+            )),
         ]
         # Policies preamble lives between the static system prompt and
         # the dynamic per-thread context (topic summary / buckets / kb)
@@ -863,6 +908,29 @@ class TopicService:
 # ``topic_summary`` should have absorbed the older content. 40 is
 # a pragmatic cut — the pilot sees median thread length < 15.
 _MAX_HISTORY_TURNS = 40
+
+
+def _render_session_context(
+    *, workspace_id: uuid.UUID, now: datetime
+) -> str:
+    """Dynamic frame the agent reads right after the static prompt.
+
+    Pins today's date and the active workspace id so the model can't
+    fall back on training-data assumptions ("it must be 2024 / 2025"
+    when the operator is actually in 2026). The static system prompt
+    references this frame by name in its "Today's date" hard rule —
+    if you rename the heading, update the prompt too.
+    """
+    iso_date = now.strftime("%Y-%m-%d")
+    weekday = now.strftime("%A")
+    return (
+        "## Session context\n\n"
+        f"- Today: **{iso_date} ({weekday}) UTC**.\n"
+        f"- Active workspace id: `{workspace_id}`.\n"
+        "- Use these for any \"today\" / \"yesterday\" / \"this week\" "
+        "/ \"last N days\" wording. Never assume the year or month "
+        "from your training data — when in doubt about a date, ask."
+    )
 
 
 def _trim_history(
