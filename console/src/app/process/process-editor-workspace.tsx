@@ -161,6 +161,53 @@ export function ProcessEditorWorkspace({
     );
   }
 
+  // Drag-drop reorder: place ``stageId`` immediately before
+  // ``targetStageId`` in the states array. When ``targetStageId`` is
+  // null, append to the end of the lane. The canonical state of the
+  // moved stage is set ahead of this call (via updateStageState) when
+  // the drop crossed a lane boundary, so we only manipulate order here.
+  function reorderStages(
+    stageId: string,
+    targetLane: ApiProcessState["state"],
+    targetStageId: string | null,
+  ) {
+    setStates((current) => {
+      const moving = current.find((s) => s.id === stageId);
+      if (!moving) return current;
+      // Mirror the lane change in case updateStageState hasn't landed yet
+      // — keeps the array consistent in a single render cycle.
+      const movingWithLane =
+        moving.state === targetLane ? moving : { ...moving, state: targetLane };
+      const without = current.filter((s) => s.id !== stageId);
+      if (!targetStageId) {
+        // Append at the end of the lane: insert just after the last
+        // stage whose state matches the targetLane. If the lane is
+        // empty, append at the end of the array — within-lane order
+        // is what matters for sequencing, and an empty lane has no
+        // existing order to respect.
+        let insertAt = without.length;
+        for (let i = without.length - 1; i >= 0; i -= 1) {
+          if (without[i].state === targetLane) {
+            insertAt = i + 1;
+            break;
+          }
+        }
+        return [
+          ...without.slice(0, insertAt),
+          movingWithLane,
+          ...without.slice(insertAt),
+        ];
+      }
+      const targetIdx = without.findIndex((s) => s.id === targetStageId);
+      if (targetIdx < 0) return current;
+      return [
+        ...without.slice(0, targetIdx),
+        movingWithLane,
+        ...without.slice(targetIdx),
+      ];
+    });
+  }
+
   function addState(template: NodeTemplate = NODE_TEMPLATES[0]) {
     const baseId = template.baseId;
     const nextId = uniqueStateId(baseId, states);
@@ -332,6 +379,7 @@ export function ProcessEditorWorkspace({
           onAddState={() => addState()}
           onPositionsChange={updatePositions}
           onStageStateChange={updateStageState}
+          onReorderStages={reorderStages}
         />
         <StateEditor
           processId={process.id}
