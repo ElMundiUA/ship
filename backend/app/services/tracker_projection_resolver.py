@@ -169,15 +169,24 @@ async def resolve_projection(
 
     actual_names = {s.name for s in actual_states}
     prior_errors: list[str] = []
-    last_proposal: dict[CanonicalState, str] = {}
+    accepted_so_far: dict[CanonicalState, str] = {}
+    retries_used = 0
     for attempt in range(max_llm_retries + 1):
+        # Only ask the LLM about slots we haven't accepted yet. Per-slot
+        # retry — keep the valid bits from earlier rounds instead of
+        # re-prompting the whole map and risking the model overwriting
+        # slots it already got right with worse guesses on retry.
+        slots_to_ask = [s for s in unresolved if s not in accepted_so_far]
+        if not slots_to_ask:
+            break
         try:
             llm_pick = await _resolve_with_llm(
                 client=client,
                 model=model,
-                unresolved=unresolved,
+                unresolved=slots_to_ask,
                 actual=actual_states,
                 prior_errors=prior_errors,
+                tracker_kind=tracker_kind,
             )
         except Exception:  # noqa: BLE001
             logger.warning(
@@ -185,36 +194,62 @@ async def resolve_projection(
             )
             break
 
-        last_proposal = llm_pick
-        merged: dict[CanonicalState, str] = {**deterministic, **llm_pick}
-        errors = validate_mapping(merged, actual_names)
+        retries_used = attempt
+        candidate: dict[CanonicalState, str] = {
+            **deterministic,
+            **accepted_so_far,
+            **llm_pick,
+        }
+        errors = validate_mapping(candidate, actual_names)
         if not errors:
             return ResolveResult(
-                mapping=merged,
+                mapping=candidate,
                 llm_used=True,
                 retries=attempt,
                 warnings=[],
                 deterministic_slots=list(deterministic.keys()),
             )
+
+        # Carry forward valid slots from this round so the next prompt
+        # only re-asks what failed. Empty / malformed entries (and slots
+        # that aren't in our unresolved set) are dropped.
+        for slot, value in llm_pick.items():
+            if slot in accepted_so_far:
+                continue
+            if value == TRACKER_OVERLAY and slot in {"awaiting_input", "blocked"}:
+                accepted_so_far[slot] = value
+                continue
+            if isinstance(value, str) and value in actual_names:
+                accepted_so_far[slot] = value
         prior_errors = errors
         logger.info(
-            "tracker projection LLM proposal failed validation, retrying: %s",
+            "tracker projection LLM proposal failed validation, retrying %d slot(s): %s",
+            len([s for s in unresolved if s not in accepted_so_far]),
             "; ".join(errors),
         )
 
-    fallback = _resolve_fallback_no_llm(unresolved, actual_states)
+    # Backfill any slots the LLM never settled with the name-aware
+    # heuristic, then re-validate. The heuristic always produces a
+    # best-effort guess so the merged result is always a complete map.
+    leftover = [s for s in unresolved if s not in accepted_so_far]
+    fallback = _resolve_fallback_no_llm(leftover, actual_states)
     merged_fallback: dict[CanonicalState, str] = {
         **deterministic,
+        **accepted_so_far,
         **fallback,
-        **{k: v for k, v in last_proposal.items() if v in actual_names or v == TRACKER_OVERLAY},
     }
+    fallback_warnings: list[str] = []
+    if leftover:
+        fallback_warnings.append(
+            "LLM didn't settle on a valid mapping for "
+            + ", ".join(leftover)
+            + " after retries — used heuristic fallback for those slots."
+        )
     return ResolveResult(
         mapping=merged_fallback,
         llm_used=True,
-        retries=max_llm_retries,
-        warnings=[
-            "LLM proposal didn't pass validation after retries — used heuristic fallback for the unresolved slots.",
-        ],
+        retries=retries_used,
+        warnings=fallback_warnings,
         deterministic_slots=list(deterministic.keys()),
     )
 
@@ -230,6 +265,14 @@ _STARTED_TYPES = {"started", "in_progress", "in-progress"}
 _COMPLETED_TYPES = {"completed", "canceled", "cancelled", "done"}
 
 _BLOCK_RE = re.compile(r"\b(block|blocker|blocked|hold)\b", re.IGNORECASE)
+# Words that mark a "this is the review-side state" within Linear's
+# ``started`` bucket. Teams put any of these on the column they treat
+# as the post-implementation, awaiting-approval slot. Order matters
+# only for prompt examples, not matching.
+_REVIEW_RE = re.compile(
+    r"\b(review|qa|verif|accept|approv|test(ing)?|sign[\-\s]?off)\b",
+    re.IGNORECASE,
+)
 
 
 def _resolve_deterministic(
@@ -292,27 +335,59 @@ def _resolve_fallback_no_llm(
 ) -> dict[CanonicalState, str]:
     """Last-resort heuristic when the LLM is unavailable or unhelpful.
 
-    Picks the first ``started`` state for executing, the second for
-    reviewing (or the same as executing if there's only one), and a
-    ``unstarted`` state for planning. Crude but produces a non-empty
-    proposal so the operator can react instead of staring at an empty
-    diff.
+    Name-aware: scans started states for review-shaped names ("Review",
+    "QA", "In Review", "Acceptance") and pins them to ``reviewing``;
+    everything else under ``started`` becomes the ``executing`` slot.
+    Falling back on positional order (``started[0]``, ``started[1]``)
+    was a real bug — Linear returns states in display position, not
+    workflow position, so a team whose Review column sits before
+    In Progress in the UI got executing/reviewing swapped.
+
+    Always emits a non-empty mapping for unresolved slots so the
+    overall result is a complete 7-key map. ``""`` would round-trip
+    as a YAML null which the FE misreads as "deleted entry".
     """
-    started = [s.name for s in actual if s.type.lower() in _STARTED_TYPES]
-    todo = [s.name for s in actual if s.type.lower() in _TODO_TYPES]
+    started_states = [s for s in actual if s.type.lower() in _STARTED_TYPES]
+    todo_states = [s for s in actual if s.type.lower() in _TODO_TYPES]
+
+    review_state = next(
+        (s for s in started_states if _REVIEW_RE.search(s.name)),
+        None,
+    )
+    exec_state = next(
+        (s for s in started_states if s is not review_state),
+        # If there is no non-review started state (e.g. the team only
+        # has a "Review" column under started), we'd rather collapse
+        # executing→that-state than emit an empty value.
+        review_state if review_state else (started_states[0] if started_states else None),
+    )
 
     out: dict[CanonicalState, str] = {}
     if "planning" in unresolved:
-        out["planning"] = todo[0] if todo else (started[0] if started else "")
+        out["planning"] = (
+            todo_states[0].name if todo_states
+            else exec_state.name if exec_state else TRACKER_OVERLAY
+        )
     if "executing" in unresolved:
-        out["executing"] = started[0] if started else ""
+        out["executing"] = (
+            exec_state.name if exec_state else TRACKER_OVERLAY
+        )
     if "reviewing" in unresolved:
-        out["reviewing"] = started[1] if len(started) > 1 else (started[0] if started else "")
+        out["reviewing"] = (
+            review_state.name if review_state
+            # If there's no review-shaped state name, fall back to the
+            # second started state (positional) — better a guess than
+            # empty. Adapter overlay would be wrong here because most
+            # trackers don't expose a label-based review signal.
+            else started_states[1].name if len(started_states) > 1
+            else exec_state.name if exec_state
+            else TRACKER_OVERLAY
+        )
 
-    # Fill any leftover unresolved slot with overlay so we always emit
-    # the full 7-key map. ``""`` would round-trip as a YAML empty value
-    # which the FE then misinterprets as "deleted entry"; explicit
-    # overlay is safer when the resolver genuinely can't tell.
+    # Fill any leftover slot with overlay so we always emit the full
+    # 7-key map. blocked + awaiting_input are legitimate overlay slots;
+    # the others fall back to overlay only when there are no usable
+    # tracker states at all.
     for slot in unresolved:
         out.setdefault(slot, TRACKER_OVERLAY)
 
@@ -328,11 +403,14 @@ _SYSTEM_PROMPT = (
     "You map a tracker's workflow states to Ship's seven canonical "
     "lifecycle states. You must return strict JSON. Only pick from the "
     "tracker state names provided — never invent new ones. The overlay "
-    "sentinel \"__overlay__\" is only valid for the canonical state "
-    "\"awaiting_input\"; use it when the tracker has no dedicated "
-    "column for awaiting-info and the team marks it via a label or tag "
-    "instead. Prefer states whose names or sample titles match the "
-    "canonical state's intent."
+    "sentinel \"__overlay__\" is valid for two slots: \"awaiting_input\" "
+    "and \"blocked\". Use overlay when the tracker has no dedicated "
+    "column for that lifecycle state and the team marks it via a label "
+    "or tag instead — most Linear/Jira teams ship without explicit "
+    "Awaiting/Blocked columns. Prefer states whose names or sample "
+    "titles match the canonical state's intent. Reviewing means "
+    "implementation done + waiting for a human to approve, distinct "
+    "from Executing where the agent or human is still actively working."
 )
 
 
@@ -349,7 +427,8 @@ Canonical states (intent + signals):
   (\"__overlay__\") so the adapter uses a label instead.
 - blocked: blocked on an external dependency (infra, third party,
   legal). Distinct from awaiting_input because the user hasn't been
-  asked anything.
+  asked anything. Also map to overlay (\"__overlay__\") if the
+  tracker has no dedicated Blocked column — that's the common case.
 - closed: terminal. \"Done\" / \"Cancelled\" / \"Won't Do\".
 """
 
@@ -379,8 +458,13 @@ def _build_user_prompt(
         "Unresolved canonical states (pick one tracker name per entry):",
         *[f"- {name}" for name in unresolved],
         "",
-        "Return JSON with this exact shape (one entry per unresolved canonical state):",
-        '{ "mapping": { "<canonical>": "<tracker state name OR __overlay__ for awaiting_input>" } }',
+        "Rules:",
+        "- The value MUST be a verbatim copy of one of the tracker state names listed above (case- and whitespace-exact).",
+        '- The string "__overlay__" is the ONLY allowed non-state value, and only for "awaiting_input" or "blocked" when the tracker has no dedicated column for them.',
+        "- If multiple states match a canonical, pick the one whose name or sample titles best fits the canonical's intent (Reviewing prefers names with review/qa/verify/accept/sign-off; Executing prefers names like in-progress/doing).",
+        "",
+        "Return JSON with this exact shape:",
+        '{ "mapping": { "<canonical>": "<tracker state name | __overlay__>" } }',
     ]
     if prior_errors:
         body.extend(
@@ -452,6 +536,17 @@ def _parse_json(raw: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+# Canonical slots where ``__overlay__`` is a legitimate value. Both
+# ``awaiting_input`` and ``blocked`` are typically label-driven on real
+# trackers (Linear's signal label, Jira's "needs:info" label) — teams
+# rarely add a dedicated workflow column for them. Forcing the LLM to
+# pick a column when overlay is the right answer made retries spin
+# until the model gave up.
+_OVERLAY_ALLOWED_SLOTS: frozenset[CanonicalState] = frozenset(
+    {"awaiting_input", "blocked"}
+)
+
+
 def validate_mapping(
     mapping: dict[CanonicalState, str],
     actual_state_names: Iterable[str],
@@ -461,8 +556,9 @@ def validate_mapping(
     Errors that fail the pipeline (and trigger an LLM retry):
     - Missing canonical slot.
     - Value isn't one of the actual tracker state names (and isn't the
-      overlay sentinel).
-    - Overlay sentinel used for a slot other than ``awaiting_input``.
+      overlay sentinel for an overlay-allowed slot).
+    - Overlay sentinel used for a slot other than ``awaiting_input``
+      or ``blocked``.
     """
     errors: list[str] = []
     actual = set(actual_state_names)
@@ -473,9 +569,9 @@ def validate_mapping(
             continue
         value = mapping[slot]
         if value == TRACKER_OVERLAY:
-            if slot != "awaiting_input":
+            if slot not in _OVERLAY_ALLOWED_SLOTS:
                 errors.append(
-                    f"overlay sentinel is only valid for awaiting_input, not {slot!r}"
+                    f"overlay sentinel is only valid for awaiting_input/blocked, not {slot!r}"
                 )
             continue
         if not value:
