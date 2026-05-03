@@ -22,11 +22,9 @@ import type { ApiBucketScope, ApiIntegration } from "@/lib/api/types";
 
 import {
   archiveBucketAction,
-  updateBucketMetadataAction,
-  type UpdateBucketResult,
+  type ArchiveResult,
 } from "./actions";
 import { KnowledgeImportWizard } from "./import-wizard";
-import { NewBucketDialog } from "./new-bucket-dialog";
 
 export type KnowledgeBucketStatus =
   | "Ready"
@@ -158,12 +156,6 @@ export function KnowledgeControlCenter({
             >
               Import source
             </button>
-            {mode === "live" && (
-              <NewBucketDialog
-                integrations={integrations}
-                defaultScope={defaultScope}
-              />
-            )}
           </div>
         </div>
 
@@ -334,27 +326,8 @@ function BucketCard({
 
 function BucketManageMenu({ bucket }: { bucket: KnowledgeControlBucket }) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
-  const [name, setName] = useState(bucket.name);
-  const [description, setDescription] = useState(bucket.description);
-  const [result, setResult] = useState<UpdateBucketResult | null>(null);
+  const [result, setResult] = useState<ArchiveResult | null>(null);
   const [pending, startTransition] = useTransition();
-
-  function save() {
-    setResult(null);
-    startTransition(async () => {
-      const response = await updateBucketMetadataAction({
-        slug: bucket.slug,
-        name,
-        description,
-      });
-      setResult(response);
-      if (response.ok) {
-        setOpen(false);
-        router.refresh();
-      }
-    });
-  }
 
   function archive() {
     setResult(null);
@@ -365,61 +338,19 @@ function BucketManageMenu({ bucket }: { bucket: KnowledgeControlBucket }) {
     });
   }
 
-  if (!open) {
-    return (
+  return (
+    <div className="flex flex-col items-end gap-1">
       <button
         type="button"
-        onClick={() => setOpen(true)}
-        className="rounded-full border border-white/15 px-3 py-1.5 text-xs font-semibold text-white/70 hover:border-white/30 hover:text-white"
+        disabled={pending}
+        onClick={archive}
+        className="rounded-full border border-coral/40 bg-coral/10 px-3 py-1.5 text-xs font-semibold text-coral disabled:opacity-50"
       >
-        Manage
+        {pending ? "Archiving…" : "Archive"}
       </button>
-    );
-  }
-
-  return (
-    <div className="absolute inset-x-4 bottom-4 z-10 rounded-2xl border border-white/12 bg-ink/95 p-4 shadow-card">
-      <div className="grid gap-2">
-        <input
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-          className="rounded-lg border border-white/15 bg-black/30 px-3 py-2 text-sm text-white"
-        />
-        <textarea
-          value={description}
-          onChange={(event) => setDescription(event.target.value)}
-          rows={3}
-          className="rounded-lg border border-white/15 bg-black/30 px-3 py-2 text-sm text-white"
-        />
-      </div>
       {result && !result.ok && (
-        <p className="mt-2 text-xs text-coral">{result.message}</p>
+        <p className="text-xs text-coral">{result.message}</p>
       )}
-      <div className="mt-3 flex flex-wrap justify-end gap-2">
-        <button
-          type="button"
-          onClick={() => setOpen(false)}
-          className="rounded-full border border-white/15 px-3 py-1.5 text-xs font-semibold text-white/70"
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
-          disabled={pending}
-          onClick={archive}
-          className="rounded-full border border-coral/40 bg-coral/10 px-3 py-1.5 text-xs font-semibold text-coral disabled:opacity-50"
-        >
-          Archive
-        </button>
-        <button
-          type="button"
-          disabled={pending || !name.trim()}
-          onClick={save}
-          className="rounded-full bg-aqua px-3 py-1.5 text-xs font-bold text-ink disabled:opacity-50"
-        >
-          Save
-        </button>
-      </div>
     </div>
   );
 }
