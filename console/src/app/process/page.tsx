@@ -327,13 +327,7 @@ function renderProcessPage({
           : undefined
       }
     >
-      <div className="space-y-3">
-        <ProcessHeaderCard
-          summary={summary}
-          repos={repos}
-          selectedRepo={selectedRepo}
-          processId={resolvedProcessId}
-        />
+      <div className="space-y-2">
         <ProcessNotice reason={reason} />
         {locked && (
           <EditorLockedBanner
@@ -364,61 +358,6 @@ function renderProcessPage({
         </Suspense>
       </div>
     </AppShell>
-  );
-}
-
-function ProcessHeaderCard({
-  summary,
-  repos,
-  selectedRepo,
-  processId,
-}: {
-  summary: ApiProcessSummary | null;
-  repos: ApiActivatedRepo[];
-  selectedRepo: ApiActivatedRepo | null;
-  processId: string;
-}) {
-  if (!summary) {
-    return (
-      <RepoSelector
-        repos={repos}
-        selectedRepo={selectedRepo}
-        processId={processId}
-      />
-    );
-  }
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/10 bg-white/[0.02] px-3 py-1.5">
-      <div className="flex min-w-0 items-center gap-2 text-[10px] font-bold uppercase tracking-[0.18em] text-white/45">
-        <span className="rounded border border-white/10 bg-white/[0.04] px-1.5 py-0.5">
-          {summary.task_count} active
-        </span>
-        {summary.blocked_count > 0 && (
-          <span className="rounded border border-coral/30 bg-coral/[0.08] px-1.5 py-0.5 text-coral/85">
-            {summary.blocked_count} blocked
-          </span>
-        )}
-        <span
-          className={[
-            "rounded px-1.5 py-0.5",
-            summary.health === "ok"
-              ? "border border-emerald-400/30 bg-emerald-400/10 text-emerald-300"
-              : summary.health === "degraded"
-                ? "border border-amber-400/30 bg-amber-400/10 text-amber-200"
-                : "border border-coral/30 bg-coral/10 text-coral",
-          ].join(" ")}
-        >
-          {summary.health}
-        </span>
-      </div>
-      <div className="shrink-0">
-        <RepoSelector
-          repos={repos}
-          selectedRepo={selectedRepo}
-          processId={processId}
-        />
-      </div>
-    </div>
   );
 }
 

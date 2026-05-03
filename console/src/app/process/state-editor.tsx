@@ -134,40 +134,55 @@ export function StateEditor({
           value={selectedState.specialist_id}
           options={specialistOptions}
           onChange={(specialist) =>
+            // DON'T copy specialist.role into instructions — that auto-fill
+            // made "Additional guidance" look like a duplicate of the
+            // role template instruction. Additional guidance is for
+            // operator-typed overrides only; empty by default.
             patchState({
               specialist_id: specialist.id,
               specialist_name: specialist.name,
-              instructions: specialist.role,
             })
           }
         />
         <label className="block">
           <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/45">
-            Additional guidance
+            Additional guidance{" "}
+            <span className="font-normal normal-case tracking-normal text-white/30">
+              · optional
+            </span>
           </span>
           <textarea
             value={selectedState.instructions}
             onChange={(event) => patchState({ instructions: event.target.value })}
             rows={3}
-            className="w-full resize-none rounded-md border border-white/10 bg-black/25 px-2 py-1.5 text-sm text-white outline-none transition focus:border-aqua/40 focus:bg-aqua/[0.04]"
+            placeholder="Override or extend the role template instructions for this stage. Leave blank to use the template as-is."
+            className="w-full resize-none rounded-md border border-white/10 bg-black/25 px-2 py-1.5 text-sm text-white outline-none transition placeholder:text-white/30 focus:border-aqua/40 focus:bg-aqua/[0.04]"
           />
         </label>
       </div>
 
       {/* BEHAVIOUR — schedule + next handoff + advanced agent profile.
           Collapsed by default. Operators rarely touch these per-stage. */}
+      {/* BEHAVIOUR — capacity slot link + agent backend dropdown.
+          NextHandoff dropped (the next stage is already visible at the
+          bottom of the stage card on the canvas). Operators rarely
+          touch these per-stage; collapsed by default. */}
       <details className="rounded-xl border border-white/10 bg-white/[0.025] p-3 [&[open]>summary]:mb-3">
         <summary className="cursor-pointer text-[10px] font-bold uppercase tracking-widest text-white/55">
           Behaviour
         </summary>
         <div className="space-y-3 text-xs">
-          <ScheduleSummary
-            state={selectedState}
-            schedule={schedule}
-            processId={processId}
-            repoId={repoId}
-          />
-          <NextHandoffSummary nextStates={nextStates} />
+          <div>
+            <div className="mb-1 text-[10px] font-bold uppercase tracking-widest text-white/45">
+              Capacity slot
+            </div>
+            <ScheduleSummary
+              state={selectedState}
+              schedule={schedule}
+              processId={processId}
+              repoId={repoId}
+            />
+          </div>
           <AgentProfileSelector
             value={agentProfileFromState(selectedState)}
             onChange={(value) => patchState({ specialist_agent_profile: value })}
@@ -253,14 +268,18 @@ function ScheduleSummary({
     );
   }
   return (
-    <div className="space-y-2 text-xs text-white/50">
-      <p>
-        {matchingSlots.length
-          ? `Can run in ${matchingSlots.map((slot) => `${slot.local_time} ${slot.label ?? slot.id}`).join(", ")} if matching tickets exist.`
-          : "This specialist is not included in any flow schedule slot yet."}
-      </p>
+    <div className="flex flex-wrap items-center gap-1.5 text-xs text-white/45">
+      {matchingSlots.length > 0 ? (
+        <span>
+          {matchingSlots
+            .map((slot) => `${slot.local_time} ${slot.label ?? slot.id}`)
+            .join(", ")}
+        </span>
+      ) : (
+        <span className="text-white/35">No capacity slot</span>
+      )}
       <a href={scheduleHref} className="font-semibold text-aqua hover:underline">
-        Edit flow schedule
+        Edit
       </a>
     </div>
   );
@@ -312,7 +331,11 @@ function RoleSelector({
   options: SpecialistOption[];
   onChange: (specialist: SpecialistOption) => void;
 }) {
-  const selectedOption = options.find((option) => option.id === value);
+  // Role-display + role-source + template-instruction docstrings used
+  // to live below the dropdown — they're either redundant (display
+  // name is the same as the option label) or read-only documentation
+  // (the template instruction). Dropped in the O cleanup; the
+  // dropdown alone is enough to set the role.
   return (
     <label className="block">
       <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/45">
@@ -324,7 +347,7 @@ function RoleSelector({
           const next = options.find((option) => option.id === event.target.value);
           if (next) onChange(next);
         }}
-        className="w-full rounded-2xl border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-aqua/40"
+        className="w-full rounded-md border border-white/10 bg-black/35 px-2 py-1.5 text-sm text-white outline-none transition focus:border-aqua/40"
       >
         {options.map((option) => (
           <option key={option.id} value={option.id}>
@@ -332,24 +355,6 @@ function RoleSelector({
           </option>
         ))}
       </select>
-      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
-        <span className="text-white/50">
-          Role display name:{" "}
-          <span className="text-white/80">
-            {selectedOption?.name ?? "—"}
-          </span>
-        </span>
-        {selectedOption?.source ? (
-          <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white/35">
-            {sourceLabel(selectedOption.source)}
-          </span>
-        ) : null}
-      </div>
-      {selectedOption?.role ? (
-        <p className="mt-2 text-xs leading-relaxed text-white/50">
-          Specialist instruction (from template): {selectedOption.role}
-        </p>
-      ) : null}
     </label>
   );
 }
@@ -378,7 +383,8 @@ function AgentProfileSelector({
       <select
         value={selectedOption.id}
         onChange={(event) => onChange(event.target.value)}
-        className="w-full rounded-2xl border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-aqua/40"
+        title={selectedOption.description}
+        className="w-full rounded-md border border-white/10 bg-black/35 px-2 py-1.5 text-sm text-white outline-none transition focus:border-aqua/40"
       >
         {AGENT_PROFILE_OPTIONS.map((option) => (
           <option key={option.id} value={option.id}>
@@ -386,9 +392,6 @@ function AgentProfileSelector({
           </option>
         ))}
       </select>
-      <span className="mt-1 block text-xs text-white/40">
-        {selectedOption.description}
-      </span>
     </label>
   );
 }

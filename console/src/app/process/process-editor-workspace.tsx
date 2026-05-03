@@ -37,8 +37,6 @@ export function ProcessEditorWorkspace({
    *  which column the projection table opens on by default. */
   trackerKind?: "linear" | "jira" | "github" | "notion";
 }) {
-  const [processName, setProcessName] = useState(process.name);
-  const [processPrimary, setProcessPrimary] = useState(process.primary);
   const [states, setStates] = useState(process.states);
   const [transitions, setTransitions] = useState(process.transitions);
   const [trackerMapping, setTrackerMapping] = useState(
@@ -55,8 +53,6 @@ export function ProcessEditorWorkspace({
   );
 
   useEffect(() => {
-    setProcessName(process.name);
-    setProcessPrimary(process.primary);
     setStates(process.states);
     setTransitions(process.transitions);
     setTrackerMapping(process.tracker_mapping ?? {});
@@ -67,14 +63,14 @@ export function ProcessEditorWorkspace({
   const processDraft = useMemo<ApiProcess>(
     () => ({
       ...process,
-      name: processName.trim() || process.name,
-      primary: processPrimary,
+      name: process.name,
+      primary: process.primary,
       state_count: states.length,
       states,
       transitions,
       tracker_mapping: trackerMapping,
     }),
-    [process, processName, processPrimary, states, transitions, trackerMapping],
+    [process, states, transitions, trackerMapping],
   );
   const processConfig = useMemo(
     () => processConfigFromApiProcess(processDraft),
@@ -113,10 +109,9 @@ export function ProcessEditorWorkspace({
   }
 
   function resetDraft() {
-    setProcessName(process.name);
-    setProcessPrimary(process.primary);
     setStates(process.states);
     setTransitions(process.transitions);
+    setTrackerMapping(process.tracker_mapping ?? {});
     setActiveStateId(initialActiveStateId(process.states, selectedStateId));
     setSelectedTransitionId(null);
   }
@@ -376,25 +371,11 @@ export function ProcessEditorWorkspace({
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex min-w-0 flex-1 items-center gap-2">
             {tabs}
-            <input
-              type="text"
-              value={processName}
-              onChange={(event) => setProcessName(event.target.value)}
-              placeholder={process.name}
-              aria-label="Process name"
-              className="min-w-0 flex-1 border-b border-transparent bg-transparent text-base font-bold text-white outline-none transition placeholder:text-white/35 hover:border-white/15 focus:border-aqua/40"
-            />
-            <label className="flex shrink-0 cursor-pointer items-center gap-1 text-[10px] font-medium text-white/45">
-              <input
-                type="checkbox"
-                checked={processPrimary}
-                onChange={(event) => setProcessPrimary(event.target.checked)}
-                className="h-3 w-3 rounded border-white/25 bg-white/[0.04] accent-aqua"
-              />
-              <span title="Opens by default for this repo.">default</span>
-            </label>
             {dirty && (
-              <span className="shrink-0 truncate text-[11px] text-white/45" title={draftSummary}>
+              <span
+                className="shrink-0 truncate text-[11px] text-white/45"
+                title={draftSummary}
+              >
                 · {draftSummary}
               </span>
             )}
