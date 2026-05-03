@@ -157,99 +157,33 @@ function mkrepo() {
   return dir;
 }
 
-test("init writes config, gitignore, state; installs cursor rule from cached artifact", async () => {
-  const { server, baseUrl } = await startServer([
-    {
-      kind: "collection",
-      id: "agent-rules-cursor",
-      version: "1.0.0",
-      body: agentRulesCursorBody(),
-    },
+test("init writes config, gitignore, state without copy-rules", async () => {
+  // Phase 2.5 retired ``--copy-rules``; the wizard's seed PR now
+  // installs the agent rule files. ``shipctl init`` is back to its
+  // original surface — write ``.ship/config.yml`` + ``.gitignore`` +
+  // ``.ship/state.json`` and exit.
+  const dir = mkrepo();
+  const r = await runCtlAsync([
+    "init",
+    "--yes",
+    "--agents", "cursor",
+    "--telemetry", "off",
+    "--cwd", dir,
   ]);
-  try {
-    const dir = mkrepo();
-    const r = await runCtlAsync([
-      "--base-url", baseUrl,
-      "init",
-      "--yes",
-      "--agents", "cursor",
-      "--copy-rules",
-      "--telemetry", "off",
-      "--cwd", dir,
-    ]);
-    assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.status, 0, r.stderr);
 
-    const cfgPath = path.join(dir, ".ship", "config.yml");
-    assert.ok(fs.existsSync(cfgPath), "config.yml should exist");
-    const cfg = YAML.parse(fs.readFileSync(cfgPath, "utf8"));
-    assert.equal(cfg.telemetry.share, false);
-    assert.deepEqual(cfg.stack.agents, ["cursor"]);
-    /* `shipctl init` now emits schema v2 (RFC-0007). The v2 shape adds
-     * `agent` and `lanes` at the top level but keeps everything else
-     * v1-compatible. */
-    assert.equal(cfg.version, 2);
-    assert.ok(cfg.agent && typeof cfg.agent === "object", "v2 init must seed `agent`");
-    assert.ok(cfg.lanes && typeof cfg.lanes === "object", "v2 init must seed `lanes` (empty ok)");
+  const cfgPath = path.join(dir, ".ship", "config.yml");
+  assert.ok(fs.existsSync(cfgPath), "config.yml should exist");
+  const cfg = YAML.parse(fs.readFileSync(cfgPath, "utf8"));
+  assert.equal(cfg.telemetry.share, false);
+  assert.deepEqual(cfg.stack.agents, ["cursor"]);
+  assert.equal(cfg.version, 2);
 
-    const rulePath = path.join(dir, ".cursor", "rules", "ship-artifacts-protocol.mdc");
-    assert.ok(fs.existsSync(rulePath), "cursor rule should be installed");
-    const ruleText = fs.readFileSync(rulePath, "utf8");
-    assert.match(ruleText, /ship-cli: artifacts-protocol v1/);
-    assert.match(ruleText, /ship-cli: installed-from collection\/agent-rules-cursor@1\.0\.0/);
+  const gi = fs.readFileSync(path.join(dir, ".gitignore"), "utf8");
+  assert.match(gi, /^\.ship\/cache\/$/m);
 
-    const gi = fs.readFileSync(path.join(dir, ".gitignore"), "utf8");
-    assert.match(gi, /^\.ship\/cache\/$/m);
-
-    const statePath = path.join(dir, ".ship", "state.json");
-    assert.ok(fs.existsSync(statePath), "state.json should exist");
-  } finally {
-    await new Promise((res) => server.close(res));
-  }
-});
-
-test("re-running init keeps the installed-from footer updated and preserves marker", async () => {
-  const { server, baseUrl } = await startServer([
-    {
-      kind: "collection",
-      id: "agent-rules-cursor",
-      version: "1.0.1",
-      body: agentRulesCursorBody().replace("Resolve via", "Resolve always via"),
-    },
-  ]);
-  try {
-    const dir = mkrepo();
-    // Seed an existing rule file with the marker but a different version.
-    const target = path.join(dir, ".cursor", "rules", "ship-artifacts-protocol.mdc");
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(
-      target,
-      `some preface\n\n<!-- ship-cli: artifacts-protocol v1 -->\n\nold body\n\n<!-- ship-cli:end artifacts-protocol -->\n\n<!-- ship-cli: installed-from collection/agent-rules-cursor@0.9.0 -->\n`,
-      "utf8",
-    );
-
-    const r = await runCtlAsync([
-      "--base-url", baseUrl,
-      "init",
-      "--yes",
-      "--force",
-      "--agents", "cursor",
-      "--copy-rules",
-      "--telemetry", "off",
-      "--cwd", dir,
-    ]);
-    assert.equal(r.status, 0, r.stderr);
-
-    const text = fs.readFileSync(target, "utf8");
-    assert.match(text, /some preface/, "unrelated preface preserved");
-    assert.match(text, /Resolve always via/, "body replaced");
-    assert.doesNotMatch(text, /old body/);
-    assert.match(text, /installed-from collection\/agent-rules-cursor@1\.0\.1/);
-    // Only one footer
-    const footerCount = (text.match(/ship-cli: installed-from/g) || []).length;
-    assert.equal(footerCount, 1);
-  } finally {
-    await new Promise((res) => server.close(res));
-  }
+  const statePath = path.join(dir, ".ship", "state.json");
+  assert.ok(fs.existsSync(statePath), "state.json should exist");
 });
 
 test("init --dry-run writes no files", async () => {
@@ -391,35 +325,20 @@ test("init --telemetry off writes telemetry.share=false", async () => {
 });
 
 test("init --json emits structured summary", async () => {
-  const { server, baseUrl } = await startServer([
-    {
-      kind: "collection",
-      id: "agent-rules-cursor",
-      version: "1.0.0",
-      body: agentRulesCursorBody(),
-    },
+  // Phase 2.5 — no rule install path here; the JSON summary still
+  // carries the empty ``rules: []`` slot for back-compat with
+  // existing CI consumers.
+  const dir = mkrepo();
+  const r = await runCtlAsync([
+    "--json",
+    "init",
+    "--yes",
+    "--agents", "cursor",
+    "--telemetry", "off",
+    "--cwd", dir,
   ]);
-  try {
-    const dir = mkrepo();
-    const r = await runCtlAsync([
-      "--base-url", baseUrl,
-      "--json",
-      "init",
-      "--yes",
-      "--agents", "cursor",
-      "--copy-rules",
-      "--telemetry", "off",
-      "--cwd", dir,
-    ]);
-    assert.equal(r.status, 0, r.stderr);
-    const parsed = JSON.parse(r.stdout);
-    assert.equal(parsed.telemetry, "off");
-    assert.deepEqual(parsed.stack.agents, ["cursor"]);
-    assert.ok(
-      parsed.rules.some((r) => r.path === ".cursor/rules/ship-artifacts-protocol.mdc"),
-      "rule installation recorded",
-    );
-  } finally {
-    await new Promise((res) => server.close(res));
-  }
+  assert.equal(r.status, 0, r.stderr);
+  const parsed = JSON.parse(r.stdout);
+  assert.equal(parsed.telemetry, "off");
+  assert.deepEqual(parsed.stack.agents, ["cursor"]);
 });

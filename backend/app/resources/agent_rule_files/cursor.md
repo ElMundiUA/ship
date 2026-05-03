@@ -1,36 +1,23 @@
+# Ship artifacts protocol — Cursor
+
+**Install target:** `.cursor/rules/ship-artifacts-protocol.mdc`
+
+Cursor MDC rule files accept YAML front-matter (`name`,
+`description`) before the rule body. Prepend the front-matter
+block below, then paste the marker-delimited body verbatim.
+`shipctl sync` rewrites the same target on subsequent runs.
+
+### MDC front-matter (prepend to the rule file)
+
+```yaml
 ---
-artifact_kind: collection
-id: agent-rules-copilot
-name: Agent rules — GitHub Copilot
-version: 1.0.0
-channel: stable
-min_shipctl: 0.3.0
-updated_at: "2026-04-17T21:15:32.596303+00:00"
-content_sha256: c6a180e49a47f166d948269b96b4cefc5e869e9df5233d0a4a4a4f017a2dde48
-deprecated: false
-replaced_by: null
-yanked: false
-group: agent-rules
-tags: [agent-rules, copilot]
-authors: [@elmundi/ship-core]
-license: Apache-2.0
-description: >-
-  Append the Ship artifacts protocol to GitHub Copilot custom instructions. Use when bootstrapping a Ship project that matches this agent-rules shape, when picking a starter set with `shipctl init`, or when the addendums or presets it composes need updating.
-spec:
-  subkind: agent-rules
-  install_target: documentation/collections/agent-rules-copilot.md
+name: ship-artifacts-protocol
+description: Resolve, use, and record Ship artifacts (patterns/tools/workflows/collections) via shipctl.
+alwaysApply: true
 ---
+```
 
-# Ship artifacts protocol — GitHub Copilot
-
-**Install target:** `.github/copilot-instructions.md`
-
-GitHub Copilot reads `.github/copilot-instructions.md` as
-repo-scoped custom instructions. Append the marker-delimited
-block below as a top-level section; keep both markers so
-`shipctl sync` can refresh the block in place.
-
-### Section to append (paste verbatim, keep the markers)
+### Rule body (paste verbatim, keep the markers)
 
 <!-- ship-cli: artifacts-protocol v1 -->
 
@@ -105,5 +92,5 @@ RFC-0002.
 
 ---
 
-Source of truth: `collections/agent-rules-copilot` on the Ship site.
-Fetched by: `shipctl sync` or `shipctl collection fetch agent-rules-copilot`.
+Source of truth: `collections/agent-rules-cursor` on the Ship site.
+Fetched by: `shipctl sync` or `shipctl collection fetch agent-rules-cursor`.

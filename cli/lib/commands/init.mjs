@@ -25,16 +25,9 @@ import {
   CONFIG_REL,
   STATE_REL,
 } from "../config/io.mjs";
-import { syncArtifacts } from "./sync.mjs";
 import { detectAll } from "../adapters/index.mjs";
-import { listCached, readCached } from "../cache/store.mjs";
 import { renderPlan, applyPlan } from "../bootstrap/render.mjs";
 import { KNOWN_AGENTS } from "../detect.mjs";
-
-const MARKER = "<!-- ship-cli: artifacts-protocol v1 -->";
-const END_MARKER = "<!-- ship-cli:end artifacts-protocol -->";
-const INSTALLED_FROM_RE = /<!--\s*ship-cli:\s*installed-from\s+([^\s>]+)\s*-->/g;
-const FOOTER_VERSION_RE = /@(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)\s*$/;
 
 /**
  * @typedef {{
@@ -160,12 +153,9 @@ export async function initCommand(ctx, args) {
   }
   for (const w of valid.warnings) process.stderr.write(`warn: ${w}\n`);
 
-  // ── Derived artifact list to fetch via syncArtifacts ─────────────────────
-  const derived = buildDerivedList(config, opts);
-
   // ── Dry-run short-circuit: emit plan only, write nothing ─────────────────
   if (opts.dryRun) {
-    const plan = buildPlanSummary(opts.cwd, config, opts, telemetryMode, derived);
+    const plan = buildPlanSummary(opts.cwd, config, opts, telemetryMode, []);
     if (opts.json) {
       process.stdout.write(`${JSON.stringify(plan, null, 2)}\n`);
     } else {
@@ -182,46 +172,25 @@ export async function initCommand(ctx, args) {
     throw new Error("init: failed to locate .ship/ after creation");
   }
 
-  // ── Sync relevant artifacts into .ship/cache/ ────────────────────────────
-  let syncSummary = null;
-  if (derived.length) {
-    try {
-      syncSummary = await syncArtifacts({
-        cwd: shipRoot,
-        baseUrl: ctx.baseUrl,
-        channel: opts.channel || config.api?.channel,
-        onlyKinds: ["collection"],
-        include: derived,
-        verbose: false,
-      });
-    } catch (e) {
-      const msg = e && e.message ? e.message : String(e);
-      process.stderr.write(`warn: artifact fetch partially failed (${msg})\n`);
-    }
-  }
-
-  // ── --copy-rules: materialize agent rules from cache onto disk ───────────
+  // Phase 2.5 retired the local artifact-fetch / agent-rule install
+  // path. Agent rule files (CLAUDE.md, AGENTS.md, .cursor/rules/...)
+  // are baked into the wizard's seed PR instead — no syncArtifacts
+  // call here, no installAgentRule loop, no playbook copy.
+  const syncSummary = null;
   const ruleInstallations = [];
-  if (opts.copyRules) {
-    for (const agent of config.stack.agents || []) {
-      const res = installAgentRule(shipRoot, agent, { force: opts.force });
-      if (res) ruleInstallations.push(res);
-    }
+  const playbookCopied = null;
+  if (opts.copyRules || opts.copyPlaybook) {
+    process.stderr.write(
+      "warn: --copy-rules / --copy-playbook are no-ops after Phase 2.5 — agent rule files now ship in the wizard's seed PR.\n",
+    );
   }
 
   // ── --bootstrap: render CI/tracker scaffolding ───────────────────────────
   let bootstrapSummary = null;
   if (opts.bootstrap) {
-    const presetArtifact = readPresetArtifact(shipRoot, config);
-    const plan = renderPlan(config, presetArtifact);
+    const plan = renderPlan(config, null);
     const results = applyPlan(shipRoot, plan, { dryRun: false, force: opts.force });
     bootstrapSummary = { files: plan.summary.files, notes: plan.summary.notes, results };
-  }
-
-  // ── --copy-playbook: copy cached playbook to .ship/playbooks/ ────────────
-  let playbookCopied = null;
-  if (opts.copyPlaybook) {
-    playbookCopied = copyPlaybookFromCache(shipRoot);
   }
 
   // ── Output ───────────────────────────────────────────────────────────────
@@ -433,32 +402,6 @@ function proposeStack(findings) {
 }
 
 // ── Derived artifact list ──────────────────────────────────────────────────
-/**
- * @param {object} config
- * @param {InitOptions} opts
- * @returns {Array<{kind:string,id:string}>}
- */
-function buildDerivedList(config, opts) {
-  const list = [];
-  const seen = new Set();
-  const add = (kind, id) => {
-    const key = `${kind}:${id}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    list.push({ kind, id });
-  };
-  for (const a of config.stack.agents || []) {
-    add("collection", `agent-rules-${a}`);
-  }
-  if (config.stack.preset) {
-    add("collection", `preset-${config.stack.preset}`);
-  }
-  if (opts.copyPlaybook) {
-    add("collection", "adoption-playbook");
-  }
-  return list;
-}
-
 // ── Ship layout creation ───────────────────────────────────────────────────
 function ensureShipLayout(cwd, config, configFilePath, configExisted) {
   const shipDir = path.join(cwd, SHIP_DIR);
@@ -523,178 +466,6 @@ function ensureGitignore(cwd) {
  * @param {{force:boolean}} opts
  * @returns {null | {agent:string, path:string, action:string, from:string}}
  */
-function installAgentRule(shipRoot, agent, { force }) {
-  const id = `agent-rules-${agent}`;
-  const version = latestCachedVersion(shipRoot, "collection", id);
-  if (!version) {
-    process.stderr.write(
-      `warn: --copy-rules: no cached artifact for collection/${id} (was the fetch successful?)\n`,
-    );
-    return null;
-  }
-  const cached = readCached(shipRoot, "collection", id, version);
-  if (!cached) return null;
-  const parsed = parseFrontmatter(cached.content);
-  const target = parsed.attrs.install_target || fallbackInstallTarget(agent);
-  if (!target) {
-    process.stderr.write(`warn: --copy-rules: no install_target for ${agent}; skipping\n`);
-    return null;
-  }
-  const marker = parsed.attrs.marker || MARKER;
-  const body = parsed.body.trimEnd();
-  const footer = `<!-- ship-cli: installed-from collection/${id}@${version} -->`;
-
-  const absTarget = path.isAbsolute(target) ? target : path.join(shipRoot, target);
-  const existed = fs.existsSync(absTarget);
-  const prev = existed ? fs.readFileSync(absTarget, "utf8") : "";
-
-  // If installed-from references a different version and --force is not set, skip.
-  if (existed) {
-    const existingVersion = extractInstalledVersion(prev);
-    if (existingVersion && existingVersion !== version && !force) {
-      process.stderr.write(
-        `warn: ${path.relative(shipRoot, absTarget)} has ship-cli installed-from @${existingVersion}; pass --force to replace with @${version}\n`,
-      );
-      return {
-        agent,
-        path: path.relative(shipRoot, absTarget) || absTarget,
-        action: "skipped",
-        from: `collection/${id}@${version}`,
-      };
-    }
-  }
-
-  const next = upsertMarkedBlock(prev, { marker, endMarker: END_MARKER, body, footer });
-
-  fs.mkdirSync(path.dirname(absTarget), { recursive: true });
-  fs.writeFileSync(absTarget, next, "utf8");
-
-  return {
-    agent,
-    path: path.relative(shipRoot, absTarget) || absTarget,
-    action: existed ? "updated" : "wrote",
-    from: `collection/${id}@${version}`,
-  };
-}
-
-function fallbackInstallTarget(agent) {
-  const meta = KNOWN_AGENTS[agent];
-  if (!meta) return null;
-  return path.join(...meta.targetRel);
-}
-
-/**
- * Parse a YAML front-matter block if present.
- * @param {string} text
- * @returns {{attrs:object, body:string}}
- */
-function parseFrontmatter(text) {
-  if (!text.startsWith("---\n") && !text.startsWith("---\r\n")) {
-    return { attrs: {}, body: text };
-  }
-  const rest = text.slice(4);
-  const endIdx = rest.indexOf("\n---\n");
-  const altEndIdx = rest.indexOf("\n---\r\n");
-  const end = endIdx >= 0 ? endIdx : altEndIdx >= 0 ? altEndIdx : -1;
-  if (end < 0) return { attrs: {}, body: text };
-  const fmText = rest.slice(0, end);
-  const body = rest.slice(end + (endIdx >= 0 ? 5 : 6));
-  let attrs = {};
-  try {
-    const parsed = YAML.parse(fmText);
-    if (parsed && typeof parsed === "object") attrs = parsed;
-  } catch {
-    attrs = {};
-  }
-  return { attrs, body };
-}
-
-/**
- * Idempotent upsert of a marker-delimited block + footer line.
- *   prev  : current file text (may be empty)
- *   marker, endMarker : <!-- … --> tokens
- *   body  : replacement body (should contain or wrap with the markers itself;
- *           we just splice it in verbatim)
- *   footer : single line `<!-- ship-cli: installed-from … -->`
- */
-function upsertMarkedBlock(prev, { marker, endMarker, body, footer }) {
-  // Strip every existing "installed-from" footer so we never duplicate them.
-  let stripped = prev.replace(INSTALLED_FROM_RE, "");
-  // Collapse any 3+ consecutive newlines left by the strip.
-  stripped = stripped.replace(/\n{3,}/g, "\n\n");
-
-  let out;
-  if (stripped.includes(marker) && stripped.includes(endMarker)) {
-    const start = stripped.indexOf(marker);
-    const endAt = stripped.indexOf(endMarker, start) + endMarker.length;
-    const before = stripped.slice(0, start).replace(/\s+$/, "");
-    const after = stripped.slice(endAt).replace(/^\s+/, "");
-    out = `${before}${before ? "\n\n" : ""}${body.trim()}\n${after ? `\n${after}` : ""}`;
-  } else if (stripped.trim().length === 0) {
-    out = `${body.trim()}\n`;
-  } else {
-    out = `${stripped.replace(/\s+$/, "")}\n\n${body.trim()}\n`;
-  }
-
-  // Append a single footer line.
-  out = `${out.replace(/\s+$/, "")}\n\n${footer}\n`;
-  return out;
-}
-
-function extractInstalledVersion(text) {
-  const matches = [...text.matchAll(INSTALLED_FROM_RE)];
-  if (!matches.length) return null;
-  const last = matches[matches.length - 1][1];
-  const m = last.match(FOOTER_VERSION_RE);
-  return m ? m[1] : null;
-}
-
-// ── Cache helpers ──────────────────────────────────────────────────────────
-function latestCachedVersion(shipRoot, kind, id) {
-  const all = listCached(shipRoot).filter((c) => c.kind === kind && c.id === id);
-  if (!all.length) return null;
-  all.sort((a, b) => cmpSemver(b.version, a.version));
-  return all[0].version;
-}
-
-function cmpSemver(a, b) {
-  const pa = String(a).split(/[.-]/).map((x) => (Number.isNaN(Number(x)) ? x : Number(x)));
-  const pb = String(b).split(/[.-]/).map((x) => (Number.isNaN(Number(x)) ? x : Number(x)));
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const xa = pa[i];
-    const xb = pb[i];
-    if (xa === undefined) return -1;
-    if (xb === undefined) return 1;
-    if (xa === xb) continue;
-    if (typeof xa === typeof xb) return xa < xb ? -1 : 1;
-    return typeof xa === "number" ? -1 : 1;
-  }
-  return 0;
-}
-
-function readPresetArtifact(shipRoot, config) {
-  const preset = config.stack?.preset;
-  if (!preset) return null;
-  const id = `preset-${preset}`;
-  const version = latestCachedVersion(shipRoot, "collection", id);
-  if (!version) return null;
-  const cached = readCached(shipRoot, "collection", id, version);
-  if (!cached) return null;
-  const { attrs, body } = parseFrontmatter(cached.content);
-  return { id, version, attrs, body };
-}
-
-function copyPlaybookFromCache(shipRoot) {
-  const version = latestCachedVersion(shipRoot, "collection", "adoption-playbook");
-  if (!version) return null;
-  const cached = readCached(shipRoot, "collection", "adoption-playbook", version);
-  if (!cached) return null;
-  const dest = path.join(shipRoot, ".ship", "playbooks", `adoption-playbook@${version}.md`);
-  fs.mkdirSync(path.dirname(dest), { recursive: true });
-  fs.writeFileSync(dest, cached.content, "utf8");
-  return { path: path.relative(shipRoot, dest), version };
-}
-
 // ── Telemetry prompt ───────────────────────────────────────────────────────
 async function promptTelemetry() {
   const rl = readline.createInterface({ input, output });
@@ -721,15 +492,11 @@ function buildPlanSummary(cwd, config, opts, telemetryMode, derived) {
     language: config.stack.language,
     agents: [...(config.stack.agents || [])],
   };
-  const rules = opts.copyRules
-    ? (config.stack.agents || []).map((a) => ({
-        agent: a,
-        path:
-          (KNOWN_AGENTS[a] && KNOWN_AGENTS[a].targetRel.join("/")) ||
-          `.ship/rules/${a}.md`,
-        from: `collection/agent-rules-${a}@<latest>`,
-      }))
-    : [];
+  // Phase 2.5 — agent rule files now ship in the wizard's seed PR,
+  // not in shipctl init. ``rules`` stays in the plan summary as an
+  // empty array so JSON consumers don't see the key disappear, but
+  // the human plan no longer renders a "Rules to install" section.
+  const rules = [];
   const bootstrapPreview = opts.bootstrap
     ? renderPlan(config, null).summary
     : null;

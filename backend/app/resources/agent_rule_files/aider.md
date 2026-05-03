@@ -1,34 +1,12 @@
----
-artifact_kind: collection
-id: agent-rules-gemini
-name: Agent rules — Gemini Code Assist (GEMINI.md)
-version: 1.0.0
-channel: stable
-min_shipctl: 0.3.0
-updated_at: "2026-04-17T21:15:32.596174+00:00"
-content_sha256: 08a56f4024c466223d6e3f4a9be5e055dd7229ec0e16610af4b1bf0c61df952a
-deprecated: false
-replaced_by: null
-yanked: false
-group: agent-rules
-tags: [agent-rules, gemini]
-authors: [@elmundi/ship-core]
-license: Apache-2.0
-description: >-
-  Append the Ship artifacts protocol to GEMINI.md for Gemini Code Assist. Use when bootstrapping a Ship project that matches this agent-rules shape, when picking a starter set with `shipctl init`, or when the addendums or presets it composes need updating.
-spec:
-  subkind: agent-rules
-  install_target: documentation/collections/agent-rules-gemini.md
----
+# Ship artifacts protocol — Aider
 
-# Ship artifacts protocol — Gemini Code Assist (GEMINI.md)
+**Install target:** `AIDER.md` (repo root)
 
-**Install target:** `GEMINI.md` (repo root)
-
-Gemini Code Assist reads `GEMINI.md` at repo root on every
-session. Append the marker-delimited block below as a
-top-level section; keep both markers so `shipctl sync` can
-refresh the block in place.
+Aider reads `AIDER.md` (or an equivalent file listed in
+`.aider.conf.yml`) as a system-prompt addendum. Rules belong
+in `AIDER.md`; `.aider.conf.yml` is reserved for model config
+(model name, edit format, auto-commits). Append the
+marker-delimited block below as a top-level section.
 
 ### Section to append (paste verbatim, keep the markers)
 
@@ -105,5 +83,5 @@ RFC-0002.
 
 ---
 
-Source of truth: `collections/agent-rules-gemini` on the Ship site.
-Fetched by: `shipctl sync` or `shipctl collection fetch agent-rules-gemini`.
+Source of truth: `collections/agent-rules-aider` on the Ship site.
+Fetched by: `shipctl sync` or `shipctl collection fetch agent-rules-aider`.

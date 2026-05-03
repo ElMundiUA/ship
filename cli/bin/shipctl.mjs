@@ -51,12 +51,6 @@ try {
     process.exit(0);
   }
 
-  if (cmd === "sync") {
-    const { syncCommand } = await import("../lib/commands/sync.mjs");
-    await syncCommand(ctx, rest);
-    process.exit(0);
-  }
-
   if (cmd === "verify") {
     const { verifyCommand } = await import("../lib/commands/verify.mjs");
     await verifyCommand(ctx, rest);

@@ -7,8 +7,8 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import YAML from "yaml";
 
-import { DEFAULT_CONFIG, ensureAnonymousId } from "../lib/config/io.mjs";
-import { writeCached, cachePath } from "../lib/cache/store.mjs";
+import { DEFAULT_CONFIG } from "../lib/config/schema.mjs";
+import { ensureAnonymousId } from "../lib/config/io.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const bin = path.resolve(__dirname, "..", "bin", "shipctl.mjs");
@@ -58,22 +58,10 @@ test("verify post-init fixture: all local checks pass", () => {
   writeConfigFixture(dir, {
     stack: { agents: ["cursor"], preset: "adoption-minimum" },
   });
-  writeFile(dir, ".gitignore", "# Ship\n.ship/cache/\n");
-  writeFile(
-    dir,
-    ".cursor/rules/ship-artifacts-protocol.mdc",
-    `<!-- ship-cli: artifacts-protocol v1 -->\n\nbody\n\n<!-- ship-cli:end artifacts-protocol -->\n\n<!-- ship-cli: installed-from collection/agent-rules-cursor@1.0.0 -->\n`,
-  );
-  // Seed the cached agent-rules artifact so rules-markers can resolve
-  // `install_target` from its front-matter (Bug E).
-  writeCached(
-    dir,
-    "collection",
-    "agent-rules-cursor",
-    "1.0.0",
-    `---\nartifact_kind: collection\nsubkind: agent-rules\nagent_id: cursor\ninstall_target: ".cursor/rules/ship-artifacts-protocol.mdc"\n---\n\nbody\n`,
-    { source_url: "about:test" },
-  );
+  // The seed PR (Phase 2.5) drops a Cursor rule file at this path —
+  // the agents-on-disk check uses heuristic detection, so an empty
+  // ``.cursor/`` dir is enough.
+  writeFile(dir, ".cursor/rules/ship-artifacts-protocol.mdc", "body\n");
 
   const r = runVerify(["--cwd", dir, "--no-network", "--json"]);
   assert.equal(r.status, 0, r.stderr || r.stdout);
@@ -82,65 +70,6 @@ test("verify post-init fixture: all local checks pass", () => {
     (c) => c.category === "local" && c.status === "fail",
   );
   assert.deepEqual(localFails, [], `unexpected local fails: ${JSON.stringify(localFails)}`);
-  const rules = parsed.checks.find((c) => c.id === "rules-markers");
-  assert.equal(rules.status, "pass", `expected rules-markers pass, got ${JSON.stringify(rules)}`);
-});
-
-test("rules-markers honors install_target from cached agent-rules artifact (codex→AGENTS.md)", () => {
-  const dir = mktmp();
-  writeConfigFixture(dir, {
-    stack: { agents: ["codex"], preset: "adoption-minimum" },
-  });
-  writeFile(dir, ".gitignore", ".ship/cache/\n");
-  writeFile(
-    dir,
-    "AGENTS.md",
-    `# Project\n\n<!-- ship-cli: artifacts-protocol v1 -->\n\nbody\n\n<!-- ship-cli:end artifacts-protocol -->\n\n<!-- ship-cli: installed-from collection/agent-rules-codex@1.0.0 -->\n`,
-  );
-  writeCached(
-    dir,
-    "collection",
-    "agent-rules-codex",
-    "1.0.0",
-    `---\nartifact_kind: collection\nsubkind: agent-rules\nagent_id: codex\ninstall_target: "AGENTS.md"\nmarker: "<!-- ship-cli: artifacts-protocol v1 -->"\n---\n\nbody\n`,
-    { source_url: "about:test" },
-  );
-
-  const r = runVerify(["--cwd", dir, "--no-network", "--check", "rules-markers", "--json"]);
-  assert.equal(r.status, 0, r.stderr || r.stdout);
-  const parsed = JSON.parse(r.stdout);
-  const row = parsed.checks.find((c) => c.id === "rules-markers");
-  assert.equal(row.status, "pass", `expected rules-markers pass, got ${JSON.stringify(row)}`);
-});
-
-test("rules-markers warns (not fails) when cached agent-rules artifact is missing", () => {
-  const dir = mktmp();
-  writeConfigFixture(dir, {
-    stack: { agents: ["cursor"], preset: "adoption-minimum" },
-  });
-  writeFile(dir, ".gitignore", ".ship/cache/\n");
-  const r = runVerify(["--cwd", dir, "--no-network", "--check", "rules-markers", "--json"]);
-  const parsed = JSON.parse(r.stdout);
-  const row = parsed.checks.find((c) => c.id === "rules-markers");
-  assert.equal(row.status, "warn", JSON.stringify(row));
-  assert.match(row.detail, /no cached agent-rules-cursor/);
-});
-
-test("cache-integrity: tampered body fails check", () => {
-  const dir = mktmp();
-  writeConfigFixture(dir);
-  const written = writeCached(dir, "collection", "demo", "1.0.0", "hello world", {
-    source_url: "about:test",
-  });
-  assert.ok(fs.existsSync(written.bodyPath));
-  // Tamper: overwrite body without updating meta.
-  fs.writeFileSync(cachePath(dir, "collection", "demo", "1.0.0"), "tampered contents", "utf8");
-
-  const r = runVerify(["--cwd", dir, "--no-network", "--check", "cache-integrity", "--json"]);
-  const parsed = JSON.parse(r.stdout);
-  const row = parsed.checks.find((c) => c.id === "cache-integrity");
-  assert.equal(row.status, "fail");
-  assert.equal(r.status, 1);
 });
 
 test("--no-network skips network checks (does not call them)", () => {
@@ -164,22 +93,6 @@ test("--json output is valid JSON and contains required top-level keys", () => {
   assert.ok(Array.isArray(parsed.checks));
   assert.equal(typeof parsed.summary.total, "number");
   assert.equal(typeof parsed.exit_code, "number");
-});
-
-test("--severity warn hides pass rows in human output", () => {
-  const dir = mktmp();
-  writeConfigFixture(dir, {
-    stack: { agents: ["cursor"], preset: "adoption-minimum" },
-  });
-  writeFile(dir, ".gitignore", ".ship/cache/\n");
-  writeFile(
-    dir,
-    ".cursor/rules/ship-artifacts-protocol.mdc",
-    `<!-- ship-cli: artifacts-protocol v1 -->\n\nbody\n\n<!-- ship-cli: installed-from collection/agent-rules-cursor@1.0.0 -->\n`,
-  );
-  const r = runVerify(["--cwd", dir, "--no-network", "--severity", "warn"]);
-  assert.equal(r.status, 0, r.stderr || r.stdout);
-  assert.doesNotMatch(r.stdout, /\[pass\]/);
 });
 
 test("verify help prints and lists checks", () => {

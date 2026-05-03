@@ -1,36 +1,11 @@
----
-artifact_kind: collection
-id: agent-rules-claude-md
-name: Agent rules — Generic CLAUDE.md
-version: 1.0.0
-channel: stable
-min_shipctl: 0.3.0
-updated_at: "2026-04-17T21:15:32.596519+00:00"
-content_sha256: 06a90e0657a99fb9363803f451166fbbc1e707fff2b955c956f91c31d12cf102
-deprecated: false
-replaced_by: null
-yanked: false
-group: agent-rules
-tags: [agent-rules, claude-md]
-authors: [@elmundi/ship-core]
-license: Apache-2.0
-description: >-
-  Generic CLAUDE.md treatment of the Ship artifacts protocol for Claude-family agents. Use when bootstrapping a Ship project that matches this agent-rules shape, when picking a starter set with `shipctl init`, or when the addendums or presets it composes need updating.
-spec:
-  subkind: agent-rules
-  install_target: documentation/collections/agent-rules-claude-md.md
----
+# Ship artifacts protocol — GitHub Copilot
 
-# Ship artifacts protocol — Generic CLAUDE.md
+**Install target:** `.github/copilot-instructions.md`
 
-**Install target:** `CLAUDE.md` (repo root)
-
-`CLAUDE.md` is read by Claude Code and several Claude-flavored
-wrappers. This variant is the generic drop-in when you want
-the same body across Claude surfaces. Append the
-marker-delimited block below as a top-level section; keep
-both markers so `shipctl sync` can refresh the block in
-place.
+GitHub Copilot reads `.github/copilot-instructions.md` as
+repo-scoped custom instructions. Append the marker-delimited
+block below as a top-level section; keep both markers so
+`shipctl sync` can refresh the block in place.
 
 ### Section to append (paste verbatim, keep the markers)
 
@@ -107,5 +82,5 @@ RFC-0002.
 
 ---
 
-Source of truth: `collections/agent-rules-claude-md` on the Ship site.
-Fetched by: `shipctl sync` or `shipctl collection fetch agent-rules-claude-md`.
+Source of truth: `collections/agent-rules-copilot` on the Ship site.
+Fetched by: `shipctl sync` or `shipctl collection fetch agent-rules-copilot`.

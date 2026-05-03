@@ -1,50 +1,13 @@
----
-artifact_kind: collection
-id: agent-rules-zed
-name: Agent rules — Zed
-version: 1.0.0
-channel: stable
-min_shipctl: 0.3.0
-updated_at: "2026-04-17T21:15:32.596117+00:00"
-content_sha256: 8c573cc661c923e1965fba9a3158a2c8d957ef0555d38ce549f873c0c21d0dd8
-deprecated: false
-replaced_by: null
-yanked: false
-group: agent-rules
-tags: [agent-rules, zed]
-authors: [@elmundi/ship-core]
-license: Apache-2.0
-description: >-
-  Install the Ship artifacts protocol as a Zed assistant custom-agent rule. Use when bootstrapping a Ship project that matches this agent-rules shape, when picking a starter set with `shipctl init`, or when the addendums or presets it composes need updating.
-spec:
-  subkind: agent-rules
-  install_target: documentation/collections/agent-rules-zed.md
----
+# Ship artifacts protocol — OpenCode
 
-# Ship artifacts protocol — Zed
+**Install target:** `.opencode/ship.md`
 
-**Install target:** `.zed/ship.md`
+OpenCode reads markdown rules from `.opencode/`. Write the
+marker-delimited body below into `.opencode/ship.md`; it will
+be loaded automatically on each session alongside any other
+rules in that directory.
 
-Zed reads markdown rules from `.zed/` when a custom assistant
-agent references them. Write the marker-delimited body below
-into `.zed/ship.md`, then register the custom agent in
-`.zed/settings.json`:
-
-```json
-{
-  "assistant": {
-    "custom_agents": {
-      "ship-delivery": {
-        "name": "Ship delivery",
-        "description": "Resolve, use, and record Ship artifacts via shipctl.",
-        "instructions_file": ".zed/ship.md"
-      }
-    }
-  }
-}
-```
-
-### `.zed/ship.md` contents (paste verbatim, keep the markers)
+### `.opencode/ship.md` contents (paste verbatim, keep the markers)
 
 <!-- ship-cli: artifacts-protocol v1 -->
 
@@ -119,5 +82,5 @@ RFC-0002.
 
 ---
 
-Source of truth: `collections/agent-rules-zed` on the Ship site.
-Fetched by: `shipctl sync` or `shipctl collection fetch agent-rules-zed`.
+Source of truth: `collections/agent-rules-opencode` on the Ship site.
+Fetched by: `shipctl sync` or `shipctl collection fetch agent-rules-opencode`.

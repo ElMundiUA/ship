@@ -1,37 +1,13 @@
----
-artifact_kind: collection
-id: agent-rules-cline
-name: Agent rules — Cline
-version: 1.0.0
-channel: stable
-min_shipctl: 0.3.0
-updated_at: "2026-04-17T21:15:32.595897+00:00"
-content_sha256: c4270f99936841beeb986914e5d58572ae29b45622f10eb6f9976505869b7bf7
-deprecated: false
-replaced_by: null
-yanked: false
-group: agent-rules
-tags: [agent-rules, cline]
-authors: [@elmundi/ship-core]
-license: Apache-2.0
-description: >-
-  Install the Ship artifacts protocol as a Cline system-prompt rule. Use when bootstrapping a Ship project that matches this agent-rules shape, when picking a starter set with `shipctl init`, or when the addendums or presets it composes need updating.
-spec:
-  subkind: agent-rules
-  install_target: documentation/collections/agent-rules-cline.md
----
+# Ship artifacts protocol — Codex (AGENTS.md)
 
-# Ship artifacts protocol — Cline
+**Install target:** `AGENTS.md` (repo root)
 
-**Install target:** `.clinerules` (repo root)
+Codex reads `AGENTS.md` at repo root as plain markdown.
+Append the marker-delimited block below as a top-level section;
+keep both markers so `shipctl sync` can update the block in
+place without touching the rest of the file.
 
-Cline ingests `.clinerules` as a plain-text system prompt on
-every turn, so keep the file terse. The canonical body below
-is already tight; paste the marker-delimited block verbatim
-as the whole file (or append to an existing `.clinerules` if
-you already have one).
-
-### File contents (paste verbatim, keep the markers)
+### Section to append (paste verbatim, keep the markers)
 
 <!-- ship-cli: artifacts-protocol v1 -->
 
@@ -106,5 +82,5 @@ RFC-0002.
 
 ---
 
-Source of truth: `collections/agent-rules-cline` on the Ship site.
-Fetched by: `shipctl sync` or `shipctl collection fetch agent-rules-cline`.
+Source of truth: `collections/agent-rules-codex` on the Ship site.
+Fetched by: `shipctl sync` or `shipctl collection fetch agent-rules-codex`.

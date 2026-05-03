@@ -1,55 +1,15 @@
----
-artifact_kind: collection
-id: agent-rules-cursor-cloud
-name: Agent rules — Cursor Cloud Agent
-version: 1.0.0
-channel: stable
-min_shipctl: 0.3.0
-updated_at: "2026-04-17T21:15:32.596390+00:00"
-content_sha256: 3af7f230d88f74cfb89f02ab1d9d0c623ae63dd700b9e96595a9992a4268ecb6
-deprecated: false
-replaced_by: null
-yanked: false
-group: agent-rules
-tags: [agent-rules, cursor-cloud]
-authors: [@elmundi/ship-core]
-license: Apache-2.0
-description: >-
-  Register a Cursor Cloud environment that loads the Ship artifacts protocol. Use when bootstrapping a Ship project that matches this agent-rules shape, when picking a starter set with `shipctl init`, or when the addendums or presets it composes need updating.
-spec:
-  subkind: agent-rules
-  install_target: documentation/collections/agent-rules-cursor-cloud.md
----
+# Ship artifacts protocol — Generic AGENTS.md
 
-# Ship artifacts protocol — Cursor Cloud Agent
+**Install target:** `AGENTS.md` (repo root)
 
-**Install target:** `.cursor/environments.json` (plus the
-rule file referenced below)
+`AGENTS.md` is a widely supported convention: Codex, Aider,
+and several other CLI/IDE agents pick it up. This variant is
+the generic drop-in when no agent-specific file exists.
+Append the marker-delimited block below as a top-level
+section; keep both markers so `shipctl sync` can refresh the
+block in place.
 
-Cursor Cloud Agents resolve their environment from
-`.cursor/environments.json`. Each environment entry can point
-at a markdown instructions file that the cloud agent loads
-before starting a task. First write the rule body into a
-companion file (recommended path:
-`.cursor/rules/ship-artifacts-protocol.mdc`), then add the
-JSON entry below to `.cursor/environments.json` so the cloud
-agent picks it up.
-
-### `.cursor/environments.json` snippet (merge into the `environments` array)
-
-```json
-{
-  "name": "ship-delivery-role",
-  "description": "Ship delivery role: resolve, use, and record Ship artifacts via shipctl.",
-  "instructions": ".cursor/rules/ship-artifacts-protocol.mdc",
-  "install": [
-    "npm i -g @ship/shipctl",
-    "shipctl sync"
-  ]
-}
-```
-
-### Rule body for `.cursor/rules/ship-artifacts-protocol.mdc` (paste verbatim, keep the markers)
+### Section to append (paste verbatim, keep the markers)
 
 <!-- ship-cli: artifacts-protocol v1 -->
 
@@ -124,5 +84,5 @@ RFC-0002.
 
 ---
 
-Source of truth: `collections/agent-rules-cursor-cloud` on the Ship site.
-Fetched by: `shipctl sync` or `shipctl collection fetch agent-rules-cursor-cloud`.
+Source of truth: `collections/agent-rules-agents-md` on the Ship site.
+Fetched by: `shipctl sync` or `shipctl collection fetch agent-rules-agents-md`.

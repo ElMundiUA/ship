@@ -1,7 +1,4 @@
-import fs from "node:fs";
-import path from "node:path";
 import { detectAgentTargets } from "../../detect.mjs";
-import { readCachedArtifact } from "../../cache/store.mjs";
 
 export const id = "agents-on-disk";
 export const category = "config";
@@ -17,32 +14,12 @@ export async function run(ctx) {
   if (!declared.length) {
     return { status: "skip", detail: "stack.agents is empty" };
   }
+  // Phase 2.5 retired the local artifact cache; agent-rule install
+  // paths are no longer available via cached frontmatter. Fall back
+  // to the heuristic detector only — it covers the common targets
+  // (CLAUDE.md, AGENTS.md, .cursor/rules/...) the seed PR writes.
   const detected = new Set(detectAgentTargets(ctx.cwd).map((t) => t.id));
-  const missing = [];
-  for (const agent of declared) {
-    if (detected.has(agent)) continue;
-    // Second chance: the cached agent-rules artifact may declare a custom
-    // install_target (e.g. codex -> AGENTS.md) that the heuristic detector
-    // doesn't recognise. Treat a present install_target file as "signal".
-    let fm = null;
-    try {
-      fm = readCachedArtifact(ctx.cwd, "collection", `agent-rules-${agent}`);
-    } catch {
-      fm = null;
-    }
-    const topLevel = fm && fm.fm && typeof fm.fm.install_target === "string"
-      ? fm.fm.install_target.trim()
-      : "";
-    const nested = fm && fm.spec && typeof fm.spec.install_target === "string"
-      ? fm.spec.install_target.trim()
-      : "";
-    const target = topLevel || nested;
-    if (target && fs.existsSync(path.join(ctx.cwd, target))) {
-      detected.add(agent);
-      continue;
-    }
-    missing.push(agent);
-  }
+  const missing = declared.filter((agent) => !detected.has(agent));
   if (missing.length) {
     return {
       status: "warn",

@@ -1,34 +1,11 @@
----
-artifact_kind: collection
-id: agent-rules-claude
-name: Agent rules — Claude Code (CLAUDE.md)
-version: 1.0.0
-channel: stable
-min_shipctl: 0.3.0
-updated_at: "2026-04-17T21:15:32.595749+00:00"
-content_sha256: 5e54ddc707968cd9cad8250f47755f1cf6baea2be7cffd149620977f76da6ebb
-deprecated: false
-replaced_by: null
-yanked: false
-group: agent-rules
-tags: [agent-rules, claude]
-authors: [@elmundi/ship-core]
-license: Apache-2.0
-description: >-
-  Append the Ship artifacts protocol to CLAUDE.md for Claude Code. Use when bootstrapping a Ship project that matches this agent-rules shape, when picking a starter set with `shipctl init`, or when the addendums or presets it composes need updating.
-spec:
-  subkind: agent-rules
-  install_target: documentation/collections/agent-rules-claude.md
----
+# Ship artifacts protocol — Gemini Code Assist (GEMINI.md)
 
-# Ship artifacts protocol — Claude Code (CLAUDE.md)
+**Install target:** `GEMINI.md` (repo root)
 
-**Install target:** `CLAUDE.md` (repo root)
-
-Claude Code reads `CLAUDE.md` at repo root on every session.
-Append the marker-delimited block below as a top-level section;
-keep both markers so `shipctl sync` can refresh the block in
-place.
+Gemini Code Assist reads `GEMINI.md` at repo root on every
+session. Append the marker-delimited block below as a
+top-level section; keep both markers so `shipctl sync` can
+refresh the block in place.
 
 ### Section to append (paste verbatim, keep the markers)
 
@@ -105,5 +82,5 @@ RFC-0002.
 
 ---
 
-Source of truth: `collections/agent-rules-claude` on the Ship site.
-Fetched by: `shipctl sync` or `shipctl collection fetch agent-rules-claude`.
+Source of truth: `collections/agent-rules-gemini` on the Ship site.
+Fetched by: `shipctl sync` or `shipctl collection fetch agent-rules-gemini`.

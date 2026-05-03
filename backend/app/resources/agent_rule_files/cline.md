@@ -1,36 +1,14 @@
----
-artifact_kind: collection
-id: agent-rules-codex
-name: Agent rules — Codex (AGENTS.md)
-version: 1.0.0
-channel: stable
-min_shipctl: 0.3.0
-updated_at: "2026-04-17T21:15:32.595670+00:00"
-content_sha256: a96de105b6777c26050c494bfb89153a9ac1e1ee62ea83cd4c06218a58dcee76
-deprecated: false
-replaced_by: null
-yanked: false
-group: agent-rules
-tags: [agent-rules, codex]
-authors: [@elmundi/ship-core]
-license: Apache-2.0
-description: >-
-  Append the Ship artifacts protocol to AGENTS.md for Codex-family agents. Use when bootstrapping a Ship project that matches this agent-rules shape, when picking a starter set with `shipctl init`, or when the addendums or presets it composes need updating.
-spec:
-  subkind: agent-rules
-  install_target: documentation/collections/agent-rules-codex.md
----
+# Ship artifacts protocol — Cline
 
-# Ship artifacts protocol — Codex (AGENTS.md)
+**Install target:** `.clinerules` (repo root)
 
-**Install target:** `AGENTS.md` (repo root)
+Cline ingests `.clinerules` as a plain-text system prompt on
+every turn, so keep the file terse. The canonical body below
+is already tight; paste the marker-delimited block verbatim
+as the whole file (or append to an existing `.clinerules` if
+you already have one).
 
-Codex reads `AGENTS.md` at repo root as plain markdown.
-Append the marker-delimited block below as a top-level section;
-keep both markers so `shipctl sync` can update the block in
-place without touching the rest of the file.
-
-### Section to append (paste verbatim, keep the markers)
+### File contents (paste verbatim, keep the markers)
 
 <!-- ship-cli: artifacts-protocol v1 -->
 
@@ -105,5 +83,5 @@ RFC-0002.
 
 ---
 
-Source of truth: `collections/agent-rules-codex` on the Ship site.
-Fetched by: `shipctl sync` or `shipctl collection fetch agent-rules-codex`.
+Source of truth: `collections/agent-rules-cline` on the Ship site.
+Fetched by: `shipctl sync` or `shipctl collection fetch agent-rules-cline`.

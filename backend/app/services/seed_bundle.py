@@ -134,7 +134,17 @@ from backend.app.services.tracker_fsm import (
 #         ``cli/lib/runtime/routines.mjs:pickSpecialistSlug`` keeps
 #         legacy ``pattern: role-X`` configs working until repos
 #         re-seed onto v0.14.
-BUNDLE_VERSION: str = "0.14"
+# ``0.15`` → Phase 2.5: agent rule files (CLAUDE.md, AGENTS.md,
+#         .cursor/rules/ship-artifacts-protocol.mdc, …) baked
+#         straight into the seed PR. The wizard's selected
+#         ``stack.agents`` slugs drive the include list; bodies
+#         live under ``backend/app/resources/agent_rule_files/``.
+#         Replaces the legacy ``shipctl init --copy-rules`` path
+#         that pulled bodies through ``GET /collections`` after
+#         the seed PR merged. The ``shipctl init`` / ``sync`` /
+#         ``--copy-rules`` flow + the ``/collections`` + ``/fetch``
+#         endpoints are gone in this bundle.
+BUNDLE_VERSION: str = "0.15"
 
 # Default knowledge starters for PR 1. Empty by design: generated knowledge is
 # analyzed post-merge and proposed in a second PR. Historical callers can still
@@ -224,6 +234,14 @@ def compose_seed_files(
     repo_full_name: str | None = None,
     seeded_at: datetime | None = None,
     ship_version: str | None = None,
+    # ----- Phase 2.5 — agent rule files baked into the seed PR. -----
+    # ``agents`` is a tuple of slugs from
+    # :data:`backend.app.services.agent_rule_files.SUPPORTED_AGENTS`
+    # (``cursor``, ``claude-md``, ``codex``, …). The seed bundle drops
+    # the corresponding rule file at each agent's repo-relative
+    # install path with a marker-fenced Ship-owned block. Empty / None
+    # = no rule files in this seed.
+    agents: tuple[str, ...] | list[str] | None = None,
     # ----- legacy kwargs (P5-05 deprecation; ignored, kept for ABI) -----
     presets: list[str] | None = None,  # noqa: ARG001 — see deprecation note
 ) -> SeedBundle:
@@ -333,6 +351,22 @@ def compose_seed_files(
     # ── Knowledge starters ───────────────────────────────────────
     for path, content in knowledge_files:
         _add(path, content)
+
+    # ── Agent rule files (Phase 2.5) ─────────────────────────────
+    # Drop one Markdown rule file per selected agent at the agent's
+    # repo-relative install path (CLAUDE.md, AGENTS.md, .cursor/...).
+    # Replaces the legacy ``shipctl init --copy-rules`` flow that
+    # had the customer's CLI tug the bodies through ``/collections``
+    # + ``/fetch`` after the seed PR merged. Now the seed PR itself
+    # contains the rule files so adoption is one merge instead of
+    # two — and the bodies live under
+    # ``backend/app/resources/agent_rule_files/<slug>.md`` instead
+    # of ``artifacts/collections/agent-rules-<slug>/``.
+    if agents:
+        from backend.app.services import agent_rule_files
+
+        for path, content in agent_rule_files.render_rule_files(list(agents)):
+            _add(path, content)
 
     # ── Repo-intel placeholder (gated) ───────────────────────────
     # Lives under ``.ship/knowledge/`` so the knowledge_lister sees

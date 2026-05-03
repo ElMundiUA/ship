@@ -21,7 +21,6 @@ function runCtl(args, env = {}) {
  * not because they're un-discoverable. `shipctl help` covers them. */
 const SCENARIOS = [
   { name: "init",      args: ["init", "--help"] },
-  { name: "sync",      args: ["sync", "--help"] },
   { name: "verify",    args: ["verify", "--help"] },
   { name: "config",    args: ["config", "--help"] },
   { name: "doctor",    args: ["doctor", "--help"] },

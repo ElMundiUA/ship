@@ -1,26 +1,3 @@
----
-artifact_kind: collection
-id: agent-rules-windsurf
-name: Agent rules — Windsurf
-version: 1.0.0
-channel: stable
-min_shipctl: 0.3.0
-updated_at: "2026-04-17T21:15:32.596048+00:00"
-content_sha256: 786de2c8c4679714306589735153d4559d28514c25fcedf379442ae4e84a9c1a
-deprecated: false
-replaced_by: null
-yanked: false
-group: agent-rules
-tags: [agent-rules, windsurf]
-authors: [@elmundi/ship-core]
-license: Apache-2.0
-description: >-
-  Install the Ship artifacts protocol as a Windsurf rules file. Use when bootstrapping a Ship project that matches this agent-rules shape, when picking a starter set with `shipctl init`, or when the addendums or presets it composes need updating.
-spec:
-  subkind: agent-rules
-  install_target: documentation/collections/agent-rules-windsurf.md
----
-
 # Ship artifacts protocol — Windsurf
 
 **Install target:** `.windsurfrules` (repo root)

@@ -23,32 +23,31 @@
  */
 
 import * as configPresent from "./checks/config-present.mjs";
-import * as gitignoreCache from "./checks/gitignore-cache.mjs";
-import * as rulesMarkers from "./checks/rules-markers.mjs";
-import * as cacheIntegrity from "./checks/cache-integrity.mjs";
 import * as bootstrapFiles from "./checks/bootstrap-files.mjs";
 import * as stackEnums from "./checks/stack-enums.mjs";
 import * as agentsOnDisk from "./checks/agents-on-disk.mjs";
 import * as apiReachable from "./checks/api-reachable.mjs";
-import * as artifactsUpToDate from "./checks/artifacts-up-to-date.mjs";
 import * as trackerLabels from "./checks/tracker-labels.mjs";
 import * as ciSecrets from "./checks/ci-secrets.mjs";
 
 /**
  * Ordered list of checks. Order governs how they appear in `shipctl verify`
  * output; within a category we keep a stable human-friendly grouping.
+ *
+ * Phase 2.5 retired four cache-coupled checks (``gitignore-cache``,
+ * ``rules-markers``, ``cache-integrity``, ``artifacts-up-to-date``)
+ * along with the ``shipctl sync`` flow that filled the cache. Agent
+ * rule files now live in the seed PR — there's nothing left in
+ * ``.ship/cache`` for ``verify`` to validate.
+ *
  * @type {Check[]}
  */
 const CHECKS = [
   configPresent,
-  gitignoreCache,
   stackEnums,
-  rulesMarkers,
-  cacheIntegrity,
   bootstrapFiles,
   agentsOnDisk,
   apiReachable,
-  artifactsUpToDate,
   trackerLabels,
   ciSecrets,
 ];

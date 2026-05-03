@@ -2,7 +2,7 @@ export function printHelp() {
   console.log(`shipctl — local workbench for a Ship-connected repo.
 
 The console is for the operator. The CLI is for the engineer. shipctl
-runs locally for setup, sync, validation, and diagnostics. It does not
+runs locally for setup, validation, and diagnostics. It does not
 orchestrate workflows, does not touch workspace state, and does not
 write to the audit log. The customer-side CI uses 'shipctl trigger'
 (and the trigger-spawned 'shipctl run') as a thin entry-point that
@@ -24,13 +24,8 @@ COMMANDS
                                          credentials present, network reachable.
     shipctl verify [--no-network] [--check <id,...>] [--severity warn|error|info] [--json]
                                        — heavier post-adoption checks
-                                         (artefact contract, marker drift).
-    shipctl sync [--check-only] [--only <kind:id>]... [--channel <c>]
-                 [--force-unpin] [--dry-run] [--lock] [--json] [--cwd <dir>]
-                                       — pull artefacts into .ship/cache and
-                                         re-install marker-delimited blocks
-                                         in agent rule files. With --lock,
-                                         writes .ship/shipctl.lock.json.
+                                         (config schema, agent rule presence,
+                                         tracker / CI wiring).
     shipctl config init|get|set|validate|show|path
                                        — .ship/config.yml management.
 
@@ -38,11 +33,12 @@ COMMANDS
     shipctl init [--yes] [--force] [--dry-run] [--json] [--cwd <dir>]
                  [--agents <csv>] [--tracker <name>] [--ci <name>]
                  [--preset <name>] [--language <name>] [--channel stable|edge]
-                 [--copy-rules] [--copy-playbook] [--bootstrap]
+                 [--copy-playbook] [--bootstrap]
                  [--telemetry on|off|ask]
-                                       — bootstrap .ship/, fetch artifacts,
-                                         install agent rule files in an
-                                         existing repo.
+                                       — bootstrap .ship/ in an existing repo.
+                                         Agent rule files are baked into the
+                                         wizard's seed PR — Phase 2.5 retired
+                                         the local --copy-rules + sync flow.
 
   Knowledge (read-only)
     shipctl knowledge fetch <bucket-slug> [--workspace <id>] [--json]
@@ -58,7 +54,7 @@ COMMANDS
                                          schedule window in Ship.
     shipctl run --routine <id> [--dry-run] [--json] [--cwd <dir>]
                                        — execute one routine end-to-end:
-                                         resolve pattern, fetch a ticket
+                                         resolve specialist, fetch a ticket
                                          (if FSM-staged), launch the agent
                                          runtime, exit on terminal status.
                                          Spawned per routine by 'shipctl trigger'
@@ -80,14 +76,14 @@ INIT FLAGS
   --force            Replace existing rule blocks and overwrite generated files
   --dry-run          Preview only
   --json             Emit a JSON summary suitable for CI
-  --agents <csv>     Comma-separated agent ids. See list below.
+  --agents <csv>     Comma-separated agent ids (informational; the wizard's
+                     seed PR is the install path now)
   --tracker <name>   Stack tracker: linear|jira|github-issues|azure-boards|clickup|spreadsheet|none
   --ci <name>        Stack CI: gh-actions|gitlab-ci|buildkite|circleci|azure-pipelines|jenkins|manual
   --preset <name>    Stack preset: web-app|api-backend|mobile-app|cli|monorepo|adoption-minimum
   --language <name>  Stack language: ts|js|py|go|rust|java|kotlin|swift|dart|multi
   --channel <name>   Override api.channel: stable|edge
-  --copy-rules       Install collection/agent-rules-<agent> files at their install_target
-  --copy-playbook    Fetch collection/adoption-playbook into .ship/cache/ (skipped on 404)
+  --copy-playbook    (no-op after Phase 2.5; flag retained for back-compat)
   --bootstrap        Render CI/tracker scaffolding (mobile-app+gh-actions+linear skeletons today;
                      other combos emit SHIP_BOOTSTRAP_PLAN.md)
   --telemetry        on|off|ask — override the interactive telemetry prompt

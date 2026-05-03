@@ -1,36 +1,22 @@
----
-artifact_kind: collection
-id: agent-rules-opencode
-name: Agent rules — OpenCode
-version: 1.0.0
-channel: stable
-min_shipctl: 0.3.0
-updated_at: "2026-04-17T21:15:32.596231+00:00"
-content_sha256: cf38e715fb320e3f607010b3d9b14681e16deb866bb2e2150046f21640502dbf
-deprecated: false
-replaced_by: null
-yanked: false
-group: agent-rules
-tags: [agent-rules, opencode]
-authors: [@elmundi/ship-core]
-license: Apache-2.0
-description: >-
-  Install the Ship artifacts protocol as an OpenCode rule file. Use when bootstrapping a Ship project that matches this agent-rules shape, when picking a starter set with `shipctl init`, or when the addendums or presets it composes need updating.
-spec:
-  subkind: agent-rules
-  install_target: documentation/collections/agent-rules-opencode.md
----
+# Ship artifacts protocol — Continue
 
-# Ship artifacts protocol — OpenCode
+**Install target:** `.continue/ship.md`
 
-**Install target:** `.opencode/ship.md`
+Continue reads markdown rules from `.continue/`. Write the
+marker-delimited body below into `.continue/ship.md`, then
+register it in `.continue/config.yaml` so Continue surfaces
+the rule as a custom command.
 
-OpenCode reads markdown rules from `.opencode/`. Write the
-marker-delimited body below into `.opencode/ship.md`; it will
-be loaded automatically on each session alongside any other
-rules in that directory.
+### `.continue/config.yaml` entry (merge under `customCommands`)
 
-### `.opencode/ship.md` contents (paste verbatim, keep the markers)
+```yaml
+customCommands:
+  - name: ship-artifacts
+    description: Follow the Ship artifacts protocol before applying an artifact.
+    prompt: "{{{ ./ship.md }}}"
+```
+
+### `.continue/ship.md` contents (paste verbatim, keep the markers)
 
 <!-- ship-cli: artifacts-protocol v1 -->
 
@@ -105,5 +91,5 @@ RFC-0002.
 
 ---
 
-Source of truth: `collections/agent-rules-opencode` on the Ship site.
-Fetched by: `shipctl sync` or `shipctl collection fetch agent-rules-opencode`.
+Source of truth: `collections/agent-rules-continue` on the Ship site.
+Fetched by: `shipctl sync` or `shipctl collection fetch agent-rules-continue`.

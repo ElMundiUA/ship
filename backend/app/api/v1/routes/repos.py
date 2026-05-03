@@ -1227,6 +1227,26 @@ async def wizard_seed(
     # deprecation. The bundle / knowledge counts still flow through
     # the audit log so we can tell apart "old tiny seed" from
     # "P5-06 full seed" on a wizard-replay.
+    # Phase 2.5 — agent rule files baked into the seed PR. Map the
+    # workspace's ``default_agent_profile`` (cursor_agent / codex_cli /
+    # ship_cloud_agent / …) to the rule-file slug list the seed
+    # bundle understands. ``auto`` / ``main`` / ``cheaper`` don't pin
+    # a specific runtime, so they fall back to the generic
+    # ``claude-md`` rule that Claude Code + most CLAUDE.md-aware
+    # tools recognise.
+    _seed_agents_for_profile = {
+        "cursor_agent": ("cursor",),
+        "ship_cloud_agent": ("cursor-cloud",),
+        "codex_cli": ("codex",),
+        "local_cli": ("claude-md",),
+        "auto": ("claude-md",),
+        "main": ("claude-md",),
+        "cheaper": ("claude-md",),
+    }
+    seed_agents = _seed_agents_for_profile.get(
+        workspace_row.default_agent_profile or "", ("claude-md",)
+    )
+
     bundle = compose_seed_files(
         bundle=DEFAULT_BUNDLE,
         knowledge_slugs=[],
@@ -1235,6 +1255,7 @@ async def wizard_seed(
         include_fsm=payload.include_fsm,
         repo_intel_placeholder=False,
         repo_full_name=repo_row.full_name,
+        agents=seed_agents,
     )
 
     if not bundle.files:

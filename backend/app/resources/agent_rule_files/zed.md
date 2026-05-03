@@ -1,45 +1,27 @@
----
-artifact_kind: collection
-id: agent-rules-continue
-name: Agent rules — Continue
-version: 1.0.0
-channel: stable
-min_shipctl: 0.3.0
-updated_at: "2026-04-17T21:15:32.595983+00:00"
-content_sha256: 217e55247db0927df87f743f8ab86e25dce5479afe11047bdcb78e7ec370ff63
-deprecated: false
-replaced_by: null
-yanked: false
-group: agent-rules
-tags: [agent-rules, continue]
-authors: [@elmundi/ship-core]
-license: Apache-2.0
-description: >-
-  Install the Ship artifacts protocol as a Continue reference rule. Use when bootstrapping a Ship project that matches this agent-rules shape, when picking a starter set with `shipctl init`, or when the addendums or presets it composes need updating.
-spec:
-  subkind: agent-rules
-  install_target: documentation/collections/agent-rules-continue.md
----
+# Ship artifacts protocol — Zed
 
-# Ship artifacts protocol — Continue
+**Install target:** `.zed/ship.md`
 
-**Install target:** `.continue/ship.md`
+Zed reads markdown rules from `.zed/` when a custom assistant
+agent references them. Write the marker-delimited body below
+into `.zed/ship.md`, then register the custom agent in
+`.zed/settings.json`:
 
-Continue reads markdown rules from `.continue/`. Write the
-marker-delimited body below into `.continue/ship.md`, then
-register it in `.continue/config.yaml` so Continue surfaces
-the rule as a custom command.
-
-### `.continue/config.yaml` entry (merge under `customCommands`)
-
-```yaml
-customCommands:
-  - name: ship-artifacts
-    description: Follow the Ship artifacts protocol before applying an artifact.
-    prompt: "{{{ ./ship.md }}}"
+```json
+{
+  "assistant": {
+    "custom_agents": {
+      "ship-delivery": {
+        "name": "Ship delivery",
+        "description": "Resolve, use, and record Ship artifacts via shipctl.",
+        "instructions_file": ".zed/ship.md"
+      }
+    }
+  }
+}
 ```
 
-### `.continue/ship.md` contents (paste verbatim, keep the markers)
+### `.zed/ship.md` contents (paste verbatim, keep the markers)
 
 <!-- ship-cli: artifacts-protocol v1 -->
 
@@ -114,5 +96,5 @@ RFC-0002.
 
 ---
 
-Source of truth: `collections/agent-rules-continue` on the Ship site.
-Fetched by: `shipctl sync` or `shipctl collection fetch agent-rules-continue`.
+Source of truth: `collections/agent-rules-zed` on the Ship site.
+Fetched by: `shipctl sync` or `shipctl collection fetch agent-rules-zed`.

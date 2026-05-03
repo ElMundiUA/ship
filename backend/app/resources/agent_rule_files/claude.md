@@ -1,46 +1,13 @@
----
-artifact_kind: collection
-id: agent-rules-cursor
-name: Agent rules — Cursor
-version: 1.0.0
-channel: stable
-min_shipctl: 0.3.0
-updated_at: "2026-04-17T21:15:32.595569+00:00"
-content_sha256: bd3e22bce6f2ae6d4409de18811789e70abc4480b3bed6a9da912ab540811440
-deprecated: false
-replaced_by: null
-yanked: false
-group: agent-rules
-tags: [agent-rules, cursor]
-authors: [@elmundi/ship-core]
-license: Apache-2.0
-description: >-
-  Install the Ship artifacts protocol as a Cursor MDC rule. Use when bootstrapping a Ship project that matches this agent-rules shape, when picking a starter set with `shipctl init`, or when the addendums or presets it composes need updating.
-spec:
-  subkind: agent-rules
-  install_target: documentation/collections/agent-rules-cursor.md
----
+# Ship artifacts protocol — Claude Code (CLAUDE.md)
 
-# Ship artifacts protocol — Cursor
+**Install target:** `CLAUDE.md` (repo root)
 
-**Install target:** `.cursor/rules/ship-artifacts-protocol.mdc`
+Claude Code reads `CLAUDE.md` at repo root on every session.
+Append the marker-delimited block below as a top-level section;
+keep both markers so `shipctl sync` can refresh the block in
+place.
 
-Cursor MDC rule files accept YAML front-matter (`name`,
-`description`) before the rule body. Prepend the front-matter
-block below, then paste the marker-delimited body verbatim.
-`shipctl sync` rewrites the same target on subsequent runs.
-
-### MDC front-matter (prepend to the rule file)
-
-```yaml
----
-name: ship-artifacts-protocol
-description: Resolve, use, and record Ship artifacts (patterns/tools/workflows/collections) via shipctl.
-alwaysApply: true
----
-```
-
-### Rule body (paste verbatim, keep the markers)
+### Section to append (paste verbatim, keep the markers)
 
 <!-- ship-cli: artifacts-protocol v1 -->
 
@@ -115,5 +82,5 @@ RFC-0002.
 
 ---
 
-Source of truth: `collections/agent-rules-cursor` on the Ship site.
-Fetched by: `shipctl sync` or `shipctl collection fetch agent-rules-cursor`.
+Source of truth: `collections/agent-rules-claude` on the Ship site.
+Fetched by: `shipctl sync` or `shipctl collection fetch agent-rules-claude`.
