@@ -126,3 +126,12 @@ process:
         window: 30m
         catchup: latest
       pattern: op-workflow-self-heal
+  tracker_mapping:
+    linear:
+      backlog: Backlog
+      planning: Todo
+      executing: Review
+      reviewing: In Progress
+      awaiting_input: __overlay__
+      blocked: __overlay__
+      closed: Done
