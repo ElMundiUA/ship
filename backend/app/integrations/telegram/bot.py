@@ -46,6 +46,11 @@ from backend.app.core.config import Settings, get_settings
 from backend.app.db.models.telegram import TelegramChatLink, TelegramThreadMap
 from backend.app.db.session import get_sessionmaker
 from backend.app.integrations.telegram.bind_state import build_bind_nonce
+from backend.app.integrations.telegram.render import (
+    markdown_to_telegram_html,
+    render_with_directives_inline,
+    split_markdown_into_chunks,
+)
 from backend.app.security.encryption import decrypt
 
 
@@ -56,12 +61,6 @@ logger = logging.getLogger(__name__)
 # deltas into edits at this cadence so a 30-token-per-second LLM
 # doesn't fan out into 30 edits/sec and trip 429s.
 _EDIT_INTERVAL_SECONDS: float = 1.2
-
-# Telegram caps single messages at 4096 chars. For PoC we truncate
-# rather than split — splitting complicates the thread-map (which
-# bot message is the canonical one for reply-resolution?). A future
-# pass can split + register every chunk.
-_MAX_MESSAGE_CHARS: int = 4000
 
 _PLACEHOLDER_TEXT: str = "…"
 _TOOL_PREFIX: str = "🔧 "
@@ -213,26 +212,6 @@ async def _stream_navigator_turn(
 
 
 # ---------------------------------------------------------------------------
-# Render helpers
-# ---------------------------------------------------------------------------
-
-
-def _compose_view(buf: str, active_tool: str | None) -> str:
-    """Compose the message text shown to the user for the current state.
-
-    During tool calls we append a single-line footer so the user can
-    see the bot is doing something even before any text arrives. The
-    final message (after ``end``) drops the footer.
-    """
-    body = buf or _PLACEHOLDER_TEXT
-    if active_tool:
-        body = f"{body}\n\n{_TOOL_PREFIX}{active_tool}"
-    if len(body) > _MAX_MESSAGE_CHARS:
-        body = body[: _MAX_MESSAGE_CHARS - 1] + "…"
-    return body
-
-
-# ---------------------------------------------------------------------------
 # Turn driver
 # ---------------------------------------------------------------------------
 
@@ -249,35 +228,109 @@ async def _drive_turn(
     seed_thread_id: uuid.UUID | None,
     sessionmaker,  # type: ignore[no-untyped-def]
 ) -> None:
-    """Consume the SSE stream and edit the placeholder in place.
+    """Consume the SSE stream and render Navigator's reply into the chat.
 
-    On the first ``thread`` event we know the Navigator thread id, and
-    we register the placeholder message in ``telegram_thread_map`` so
-    a fast user reply during streaming can find the same thread.
+    Splits long replies across multiple Telegram messages because the
+    platform caps a single message at 4096 chars. The first chunk
+    edits the original "…" placeholder in place; later chunks are sent
+    as fresh messages and registered in ``telegram_thread_map`` so a
+    user replying to *any* of them resolves to the same Navigator
+    thread.
+
+    Markdown coming out of Navigator is converted to Telegram's HTML
+    subset on every edit (headers→bold, bullets→``• ``, inline code,
+    fenced ``<pre>``) so the user sees rendered formatting instead of
+    raw asterisks. Choice / todo directives that Console renders as
+    interactive cards fall back to a plain-markdown summary here —
+    Stage 2 swaps that for ``InlineKeyboardMarkup``.
     """
     buf = ""
     active_tool: str | None = None
     last_edit_at = 0.0
+    thread_id: uuid.UUID | None = seed_thread_id
     thread_registered = seed_thread_id is not None
-    last_view = _PLACEHOLDER_TEXT
+
+    # ``messages`` mirrors the bot messages making up this turn, in
+    # chat order. ``rendered`` caches the last HTML we wrote per
+    # message so we can skip identical edits (Telegram 400s on
+    # ``MESSAGE_NOT_MODIFIED``).
+    messages: list[int] = [placeholder_message_id]
+    rendered: list[str] = [""]
+
+    async def _register_continuation(message_id: int) -> None:
+        if thread_id is None:
+            return
+        try:
+            async with sessionmaker() as session, session.begin():
+                await _register_bot_message(
+                    session,
+                    chat_id=chat_id,
+                    bot_message_id=message_id,
+                    ship_thread_id=thread_id,
+                )
+        except Exception:  # noqa: BLE001 — registration is best-effort
+            logger.exception(
+                "telegram thread-map registration failed (chat=%s msg=%s)",
+                chat_id,
+                message_id,
+            )
 
     async def maybe_edit(*, force: bool = False) -> None:
-        nonlocal last_edit_at, last_view
+        nonlocal last_edit_at
         now = time.monotonic()
         if not force and (now - last_edit_at) < _EDIT_INTERVAL_SECONDS:
             return
-        view = _compose_view(buf, active_tool)
-        if view == last_view:
-            return
-        try:
-            await bot.edit_message_text(
-                view, chat_id=chat_id, message_id=placeholder_message_id
-            )
-        except Exception as exc:  # noqa: BLE001 — TG can 400 on benign edits
-            logger.debug("telegram edit failed (chat=%s): %s", chat_id, exc)
-            return
+
+        cleaned_md, _directives = render_with_directives_inline(buf)
+        if active_tool:
+            tool_line = f"{_TOOL_PREFIX}{active_tool}"
+            cleaned_md = (cleaned_md + "\n\n" + tool_line).strip()
+        if not cleaned_md:
+            cleaned_md = _PLACEHOLDER_TEXT
+
+        chunks = split_markdown_into_chunks(cleaned_md) or [_PLACEHOLDER_TEXT]
+        chunk_html = [markdown_to_telegram_html(c) for c in chunks]
+
+        for i, html in enumerate(chunk_html):
+            if i < len(messages):
+                if rendered[i] == html:
+                    continue
+                try:
+                    await bot.edit_message_text(
+                        html,
+                        chat_id=chat_id,
+                        message_id=messages[i],
+                        parse_mode="HTML",
+                        disable_web_page_preview=True,
+                    )
+                    rendered[i] = html
+                except Exception as exc:  # noqa: BLE001 — TG can 400 on benign edits
+                    logger.debug(
+                        "telegram edit failed (chat=%s msg=%s): %s",
+                        chat_id,
+                        messages[i],
+                        exc,
+                    )
+            else:
+                try:
+                    sent = await bot.send_message(
+                        chat_id,
+                        html,
+                        parse_mode="HTML",
+                        disable_web_page_preview=True,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug(
+                        "telegram continuation send failed (chat=%s): %s",
+                        chat_id,
+                        exc,
+                    )
+                    break
+                messages.append(sent.message_id)
+                rendered.append(html)
+                await _register_continuation(sent.message_id)
+
         last_edit_at = now
-        last_view = view
 
     try:
         async for ev in _stream_navigator_turn(
@@ -288,6 +341,7 @@ async def _drive_turn(
             thread_id=seed_thread_id,
         ):
             if ev.kind == "thread" and not thread_registered and ev.thread_id:
+                thread_id = ev.thread_id
                 async with sessionmaker() as session, session.begin():
                     await _register_bot_message(
                         session,
