@@ -85,8 +85,15 @@ const GITHUB_ERRORS: Record<string, string> = {
 const REPOS_ERRORS: Record<string, string> = {
   api_unavailable: "Backend not reachable.",
   forbidden: "You need admin role on this workspace to activate repos.",
+  // ``no_install`` previously said "App isn't installed yet". Caused
+  // a contradiction in the UI when step 1 historically completed but
+  // the install was later suspended / revoked (org admin pulled
+  // permissions, repo selection narrowed, etc.) — the page banner
+  // would scream "not installed" while the stepper still showed
+  // step 1 with a ✓. New copy covers both first-install and
+  // post-install-suspended cases honestly.
   no_install:
-    "GitHub App isn't installed on this workspace yet. Step back to the GitHub install.",
+    "GitHub App isn't installed or has been suspended on this workspace. Reinstall →",
   bad_token:
     "GitHub rejected our installation token. Reinstall the Ship app and try again.",
   empty: "Pick at least one repo, or use Skip to come back later.",
@@ -307,6 +314,42 @@ export default async function OnboardingPage({
   }
   const error = pick(params.error);
 
+  // Live install + activated state. Drives the stepper checkmarks
+  // (so step 1 / step 2 reflect *current* truth, not tunnel order)
+  // AND the github step's copy ("Install" vs "Manage on GitHub").
+  // Both calls are cheap and we run them in parallel; failures are
+  // best-effort — falling back to "not installed" is the safer
+  // assumption than rendering a stale ✓.
+  let githubAppInstalled = false;
+  let activatedRepoCount = 0;
+  if (wsId && apiConfigured) {
+    try {
+      const installed = await listAvailableRepos(
+        wsId,
+        sessionToken ?? undefined,
+      );
+      githubAppInstalled = true;
+      // ``listAvailableRepos`` returns the live install's repos, not
+      // the workspace's activations. The activation count comes from
+      // the activated-list endpoint — same endpoint resume uses, but
+      // we don't want to double-fetch when the resume code path
+      // already loaded it. Cheap second call accepted.
+      const activated = await listActivatedRepos(
+        wsId,
+        sessionToken ?? undefined,
+      );
+      activatedRepoCount = activated.length;
+      void installed;
+    } catch (err) {
+      if (err instanceof ApiHttpError && err.status === 409) {
+        githubAppInstalled = false;
+      }
+      // Other errors silently leave the flags at false; the UI then
+      // surfaces the standard "not installed" path which is the
+      // worst-case-but-safe rendering.
+    }
+  }
+
   // Repo picker step: pull the live installation set once, server-side.
   // ``reposLoadError`` carries a short error code so the UI can show a
   // helpful banner without leaking backend internals.
@@ -434,7 +477,18 @@ export default async function OnboardingPage({
       <main className="mx-auto w-full max-w-5xl px-6 pb-20">
         {step !== "done" &&
           step !== "hub" &&
-          wsId && <Stepper current={step} wsId={wsId} />}
+          wsId && (
+            <Stepper
+              current={step}
+              wsId={wsId}
+              done={{
+                github: githubAppInstalled,
+                repos: activatedRepoCount > 0,
+                tracker: false /* tracker check is in Stepper internal */,
+                confirm: false /* never auto-checks; confirm is the action */,
+              }}
+            />
+          )}
 
         {!apiConfigured && (
           <div className="mb-6 rounded-xl border border-coral/40 bg-coral/10 px-4 py-3 text-xs text-white/85">
@@ -457,6 +511,7 @@ export default async function OnboardingPage({
             wsId={wsId}
             error={error}
             githubReason={pick(params.github)}
+            installed={githubAppInstalled}
           />
         )}
         {step === "repos" && wsId && (
@@ -510,20 +565,30 @@ export default async function OnboardingPage({
 function Stepper({
   current,
   wsId,
+  done,
 }: {
   current: Exclude<StepId, "hub" | "done">;
   wsId: string;
+  /**
+   * Truth-based "step is satisfied" map. Pre-fix the stepper marked
+   * a step ✓ purely by comparing tunnel position (cells left of
+   * current = done, cells right = next), which lied whenever the
+   * underlying state changed mid-flow — e.g. step 1 stayed ✓ after
+   * the GitHub App was suspended on the org side, while step 2 then
+   * banner-screamed "App isn't installed". Now the ✓ comes from
+   * what the backend actually reports.
+   *
+   * Keys map to ``StepId``s the stepper renders. Missing keys
+   * default to ``false`` (not done).
+   */
+  done: Partial<Record<Exclude<StepId, "hub" | "done">, boolean>>;
 }) {
-  // Each non-current cell is a link so the operator can hop between
-  // steps after the initial setup tunnel finished. Pre-fix the
-  // stepper was visual-only and operators got stranded on
-  // ``?step=confirm`` with no way back to tracker / repos / github.
-  const idx = STEPS.findIndex((s) => s.id === current);
   return (
     <ol className="mb-10 flex flex-wrap items-center gap-x-2 gap-y-3">
       {STEPS.map((s, i) => {
+        const isDone = done[s.id] === true;
         const state: "done" | "current" | "next" =
-          i < idx ? "done" : i === idx ? "current" : "next";
+          s.id === current ? "current" : isDone ? "done" : "next";
         const cellHref =
           state === "current"
             ? null
@@ -596,30 +661,50 @@ function GitHubStep({
   wsId,
   error,
   githubReason,
+  installed,
 }: {
   wsId: string;
   error?: string;
   githubReason?: string;
+  /** True when ``listAvailableRepos`` succeeded for this workspace —
+   * i.e. the App is installed and the install row exists in our DB.
+   * Drives the entire copy on this step: pre-fix the page hard-coded
+   * "Install Ship on GitHub" wording even when the App was already
+   * connected, leaving operators clicking Install on an installed
+   * workspace and confusing themselves about state. */
+  installed: boolean;
 }) {
   const message = error ? GITHUB_ERRORS[error] ?? error : null;
   // Backend redirects to `?step=repos&github=installed` after a
   // successful install; the only `github=` value we ever see on this
   // step is `request` (org-admin approval pending) or nothing at all.
   const requested = githubReason === "request";
+
   return (
     <section>
       <p className="font-mono text-[11px] uppercase tracking-[0.3em] text-aqua/85">
         Step 1 of 4 &middot; Connect your code
       </p>
       <h1 className="mt-2 font-display text-4xl font-bold leading-tight">
-        Install Ship on GitHub.
+        {installed ? "Ship is installed on GitHub." : "Install Ship on GitHub."}
       </h1>
       <p className="mt-3 max-w-2xl text-sm leading-relaxed text-white/70">
-        We use a GitHub App (not a Personal Access Token) so the
-        permission is scoped to the repos you pick, the token rotates on
-        its own, and you can revoke it any time from your org settings.
-        After you click Install, GitHub takes you through the repo
-        picker and bounces you straight back here.
+        {installed ? (
+          <>
+            Ship has scoped access to the repos you picked during install.
+            Manage permissions or revoke the App on GitHub any time —
+            nothing else on this step needs your attention unless you
+            want to add / remove repos.
+          </>
+        ) : (
+          <>
+            We use a GitHub App (not a Personal Access Token) so the
+            permission is scoped to the repos you pick, the token rotates
+            on its own, and you can revoke it any time from your org
+            settings. After you click Install, GitHub takes you through
+            the repo picker and bounces you straight back here.
+          </>
+        )}
       </p>
 
       {requested && (
@@ -636,46 +721,91 @@ function GitHubStep({
         </div>
       )}
 
-      <form
-        action="/api/onboard/github-install"
-        method="POST"
-        className="mt-7 flex flex-wrap items-center gap-3"
-        suppressHydrationWarning
-      >
-        <input type="hidden" name="ws" value={wsId} suppressHydrationWarning />
-        <button
-          type="submit"
-          data-testid="onboarding-install-github"
-          className="rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-5 py-2.5 text-sm font-bold text-ink shadow-glow transition hover:brightness-110"
-        >
-          Install Ship on GitHub &rarr;
-        </button>
-      </form>
-
-      <ul className="mt-7 grid grid-cols-1 gap-3 text-xs text-white/65 md:grid-cols-3">
-        {[
-          [
-            "Scoped install",
-            "Pick exactly the repos Ship can see. Default is selected, never all-repos.",
-          ],
-          [
-            "Per-install tokens",
-            "We mint a fresh installation token per request and cache it for ~1h.",
-          ],
-          [
-            "Webhook-armed",
-            "PR / workflow_run / installation events stream to /v1/webhooks/github.",
-          ],
-        ].map(([t, b]) => (
-          <li
-            key={t}
-            className="rounded-xl border border-white/10 bg-white/[0.03] p-3"
+      {installed ? (
+        <div className="mt-7 flex flex-wrap items-center gap-3">
+          <a
+            href="https://github.com/settings/installations"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-5 py-2.5 text-sm font-bold text-ink shadow-glow transition hover:brightness-110"
           >
-            <div className="font-semibold text-white">{t}</div>
-            <div className="mt-1 text-[11px] text-white/55">{b}</div>
-          </li>
-        ))}
-      </ul>
+            Manage on GitHub &rarr;
+          </a>
+          <form
+            action="/api/onboard/github-install"
+            method="POST"
+            className="inline"
+            suppressHydrationWarning
+          >
+            <input
+              type="hidden"
+              name="ws"
+              value={wsId}
+              suppressHydrationWarning
+            />
+            <button
+              type="submit"
+              className="text-xs text-white/55 hover:text-white"
+            >
+              Reinstall fresh →
+            </button>
+          </form>
+          <Link
+            href={`/onboarding?step=repos&ws=${encodeURIComponent(wsId)}`}
+            className="ml-auto rounded-full border border-aqua/40 bg-aqua/[0.08] px-4 py-2 text-xs font-semibold text-aqua hover:bg-aqua/[0.16]"
+          >
+            Continue to repos →
+          </Link>
+        </div>
+      ) : (
+        <form
+          action="/api/onboard/github-install"
+          method="POST"
+          className="mt-7 flex flex-wrap items-center gap-3"
+          suppressHydrationWarning
+        >
+          <input
+            type="hidden"
+            name="ws"
+            value={wsId}
+            suppressHydrationWarning
+          />
+          <button
+            type="submit"
+            data-testid="onboarding-install-github"
+            className="rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-5 py-2.5 text-sm font-bold text-ink shadow-glow transition hover:brightness-110"
+          >
+            Install Ship on GitHub &rarr;
+          </button>
+        </form>
+      )}
+
+      {!installed && (
+        <ul className="mt-7 grid grid-cols-1 gap-3 text-xs text-white/65 md:grid-cols-3">
+          {[
+            [
+              "Scoped install",
+              "Pick exactly the repos Ship can see. Default is selected, never all-repos.",
+            ],
+            [
+              "Per-install tokens",
+              "We mint a fresh installation token per request and cache it for ~1h.",
+            ],
+            [
+              "Webhook-armed",
+              "PR / workflow_run / installation events stream to /v1/webhooks/github.",
+            ],
+          ].map(([t, b]) => (
+            <li
+              key={t}
+              className="rounded-xl border border-white/10 bg-white/[0.03] p-3"
+            >
+              <div className="font-semibold text-white">{t}</div>
+              <div className="mt-1 text-[11px] text-white/55">{b}</div>
+            </li>
+          ))}
+        </ul>
+      )}
     </section>
   );
 }
