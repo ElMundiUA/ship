@@ -25,7 +25,6 @@ from backend.app.db.models.agent_memory import (
     KnowledgeBucket,
     KnowledgeSource,
 )
-from backend.app.db.models.knowledge_promotion import KnowledgePromotionCandidate
 from backend.app.db.models.tenancy import Workspace
 
 
@@ -135,7 +134,6 @@ class ReseedCounts:
     sources_deleted: int
     chunks_deleted: int
     distiller_runs_deleted: int
-    candidates_deleted: int
     buckets_created: int
 
 
@@ -214,11 +212,6 @@ async def build_backup_snapshot(
         ("bucket_articles", BucketArticle, None),
         ("kb_chunks", KbChunk, KbChunk.workspace_id),
         ("distiller_runs", DistillerRun, DistillerRun.workspace_id),
-        (
-            "knowledge_promotion_candidates",
-            KnowledgePromotionCandidate,
-            KnowledgePromotionCandidate.workspace_id,
-        ),
     ):
         stmt = select(model)
         if workspace_filter is not None:
@@ -304,11 +297,6 @@ async def preview_reseed_counts(
                 DistillerRun.workspace_id.in_(workspace_ids)
             )
         ),
-        candidates_deleted=await count(
-            select(func.count()).select_from(KnowledgePromotionCandidate).where(
-                KnowledgePromotionCandidate.workspace_id.in_(workspace_ids)
-            )
-        ),
         buckets_created=len(workspace_ids) * len(RECOMMENDED_BUCKETS),
     )
 
@@ -331,11 +319,6 @@ async def reseed_workspace_knowledge(
         .all()
     )
 
-    await session.execute(
-        delete(KnowledgePromotionCandidate).where(
-            KnowledgePromotionCandidate.workspace_id.in_(workspace_ids)
-        )
-    )
     await session.execute(
         delete(KbChunk).where(KbChunk.workspace_id.in_(workspace_ids))
     )

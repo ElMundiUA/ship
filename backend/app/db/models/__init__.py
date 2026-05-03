@@ -39,7 +39,6 @@ from backend.app.db.models.integrations import (
     NativeIntegrationSyncState,
     WorkspaceRepo,
 )
-from backend.app.db.models.knowledge_promotion import KnowledgePromotionCandidate
 from backend.app.db.models.lanes import Lane
 from backend.app.db.models.methodology import MethodologyChunk
 from backend.app.db.models.notifications import WorkspaceNotification
@@ -101,7 +100,6 @@ __all__ = [
     "KnowledgeIngestionRun",
     "KnowledgeSource",
     "KnowledgeSourceItem",
-    "KnowledgePromotionCandidate",
     "Lane",
     "MethodologyChunk",
     "MemberGroup",

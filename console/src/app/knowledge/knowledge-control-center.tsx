@@ -14,7 +14,6 @@ import {
 import { cn } from "@/lib/cn";
 import type {
   ApiActivatedRepo,
-  ApiKnowledgeCanonicalResponse,
   ApiKnowledgeSearchHit,
   ApiKnowledgeSearchResponse,
 } from "@/lib/api/client";
@@ -75,13 +74,12 @@ type Props = {
   reason?: string;
   buckets: KnowledgeControlBucket[];
   sources: KnowledgeControlSource[];
-  canonical: ApiKnowledgeCanonicalResponse | null;
   repos: ApiActivatedRepo[];
   integrations: ApiIntegration[];
   defaultScope: ApiBucketScope;
 };
 
-type Tab = "buckets" | "search" | "sources" | "canonical" | "settings";
+type Tab = "buckets" | "search" | "sources" | "settings";
 
 const STARTER_BUCKETS = [
   "Project Map",
@@ -102,7 +100,6 @@ export function KnowledgeControlCenter({
   reason,
   buckets,
   sources,
-  canonical,
   repos,
   integrations,
   defaultScope,
@@ -193,12 +190,6 @@ export function KnowledgeControlCenter({
         <TabButton active={tab === "sources"} onClick={() => setTab("sources")}>
           Sources
         </TabButton>
-        <TabButton
-          active={tab === "canonical"}
-          onClick={() => setTab("canonical")}
-        >
-          Canonical
-        </TabButton>
         <TabButton active={tab === "settings"} onClick={() => setTab("settings")}>
           Settings
         </TabButton>
@@ -216,9 +207,6 @@ export function KnowledgeControlCenter({
           repos={repos}
           defaultScope={defaultScope}
         />
-      )}
-      {tab === "canonical" && (
-        <CanonicalTab canonical={canonical} buckets={buckets} workspaceId={workspace.id} />
       )}
       {tab === "settings" && <SettingsTab buckets={buckets} />}
     </div>
@@ -888,100 +876,6 @@ function SourcesTab({
           ))}
         </div>
       </Card>
-    </div>
-  );
-}
-
-function CanonicalTab({
-  canonical,
-  buckets,
-  workspaceId,
-}: {
-  canonical: ApiKnowledgeCanonicalResponse | null;
-  buckets: KnowledgeControlBucket[];
-  workspaceId?: string;
-}) {
-  const canonicalBuckets =
-    canonical?.canonical ??
-    buckets.filter((bucket) => bucket.authority === "Source of truth");
-  return (
-    <div className="space-y-5">
-      <Card padded={false}>
-        <CardHeader
-          className="px-5 pt-5"
-          title="Canonical knowledge"
-          subtitle="A quality layer above buckets: source-of-truth articles, duplicated slugs, and promotion candidates."
-        />
-        {canonicalBuckets.length === 0 ? (
-          <p className="px-5 pb-5 text-sm text-white/60">
-            No canonical articles yet. Promote high-confidence search results or
-            seed a workspace-scope bucket.
-          </p>
-        ) : (
-          <ul className="divide-y divide-white/5">
-            {canonicalBuckets.map((bucket) => (
-              <li key={bucket.id} className="px-5 py-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <Link
-                      href={`/knowledge/${encodeURIComponent(bucket.slug)}`}
-                      className="font-semibold text-white hover:text-aqua"
-                    >
-                      {bucket.name}
-                    </Link>
-                    {"description" in bucket && bucket.description && (
-                      <p className="mt-1 line-clamp-2 text-xs text-white/60">
-                        {bucket.description}
-                      </p>
-                    )}
-                  </div>
-                  <div className="flex shrink-0 gap-2">
-                    <Badge tone="ok">source of truth</Badge>
-                    {"article_count" in bucket && (
-                      <Badge tone="neutral">{bucket.article_count} articles</Badge>
-                    )}
-                    {"override_count" in bucket && (
-                      <Badge tone={bucket.override_count > 0 ? "warn" : "neutral"}>
-                        {bucket.override_count} overrides
-                      </Badge>
-                    )}
-                  </div>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Card>
-
-      <Card padded={false}>
-        <CardHeader
-          className="px-5 pt-5"
-          title="Duplicates across repos/buckets"
-          subtitle="Repeated slugs without a workspace owner are candidates for promotion."
-        />
-        {!canonical || canonical.orphan_slugs.length === 0 ? (
-          <p className="px-5 pb-5 text-sm text-white/60">
-            No duplicate orphan slugs detected.
-          </p>
-        ) : (
-          <ul className="divide-y divide-white/5">
-            {canonical.orphan_slugs.map((orphan) => (
-              <li key={orphan.slug} className="px-5 py-3">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="font-mono text-sm text-white">{orphan.slug}</span>
-                  <Badge tone="warn">{orphan.repo_count} repos</Badge>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Card>
-
-      {!workspaceId && (
-        <p className="text-xs text-white/45">
-          Promotion actions require a live workspace.
-        </p>
-      )}
     </div>
   );
 }

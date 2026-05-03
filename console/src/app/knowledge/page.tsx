@@ -6,9 +6,7 @@ import { ScopePill } from "@/components/scope-pill";
 import {
   type ApiActivatedRepo,
   type ApiBucket,
-  type ApiKnowledgeCanonicalResponse,
   ApiHttpError,
-  getKnowledgeCanonical,
   getMe,
   isApiConfigured,
   listActivatedRepos,
@@ -45,7 +43,6 @@ type LiveData = {
   allWorkspaces: Awaited<ReturnType<typeof listWorkspaces>>;
   buckets: KnowledgeControlBucket[];
   sources: KnowledgeControlSource[];
-  canonical: ApiKnowledgeCanonicalResponse | null;
   repos: ApiActivatedRepo[];
   integrations: ApiIntegration[];
   me: ApiUser | null;
@@ -93,15 +90,12 @@ async function load(
   const workspace = pickWorkspace(workspaceRows, resolved);
 
   try {
-    const [repos, integrations, me, rawBuckets, canonical, importSources] =
+    const [repos, integrations, me, rawBuckets, importSources] =
       await Promise.all([
         listActivatedRepos(workspace.id, token).catch(() => [] as ApiActivatedRepo[]),
         listIntegrations(workspace.id, token).catch(() => [] as ApiIntegration[]),
         getMe(token).catch(() => null as ApiUser | null),
         listBuckets(workspace.id, { token }),
-        getKnowledgeCanonical(workspace.id, token).catch(
-          () => null as ApiKnowledgeCanonicalResponse | null,
-        ),
         listKnowledgeImportSources(workspace.id, token).catch(
           () => [] as ApiKnowledgeImportSource[],
         ),
@@ -131,7 +125,6 @@ async function load(
           normalizeBucket(bucket, sources),
         ),
         sources,
-        canonical,
         repos,
         integrations,
         me,
@@ -162,7 +155,7 @@ export default async function KnowledgeIndexPage({
     );
   }
 
-  const { workspace, allWorkspaces, buckets, sources, canonical, repos, integrations, me } = result.data;
+  const { workspace, allWorkspaces, buckets, sources, repos, integrations, me } = result.data;
 
   const scopePill = (
     <ScopePill
@@ -200,7 +193,6 @@ export default async function KnowledgeIndexPage({
         workspace={workspace}
         buckets={buckets}
         sources={sources}
-        canonical={canonical}
         repos={repos}
         integrations={integrations}
         defaultScope="workspace"
