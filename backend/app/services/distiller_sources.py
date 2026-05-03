@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timezone
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,12 +24,6 @@ from backend.app.db.models.agent_memory import (
     BucketScope,
     BucketSource,
     KnowledgeBucket,
-)
-from backend.app.services.distiller import (
-    Classifier,
-    DistillerInput,
-    DistillerOutcome,
-    run_distiller,
 )
 
 
@@ -206,65 +199,7 @@ async def ensure_user_memory_bucket(
     )
 
 
-# ---------------------------------------------------------------------------
-# External-static upload adapter
-# ---------------------------------------------------------------------------
-
-
-async def ingest_external_static_upload(
-    session: AsyncSession,
-    *,
-    workspace_id: uuid.UUID,
-    bucket: KnowledgeBucket,
-    actor_user_id: uuid.UUID | None,
-    filename: str,
-    content_type: str | None,
-    body_md: str,
-    classifier: Classifier | None = None,
-) -> DistillerOutcome:
-    """Turn a user-uploaded file into a bucket article.
-
-    The HTTP layer has already validated the file type + decoded
-    the bytes into a utf-8 string. This adapter records the upload
-    metadata on the article's provenance and derives a slug from
-    the filename so repeated uploads of the same file are
-    idempotent (content_sha does the final dedupe).
-    """
-    safe_filename = (filename or "upload").strip() or "upload"
-    # Strip extension for the slug hint; the distiller's slugify
-    # will camel-case-to-kebab the rest.
-    slug_hint = safe_filename.rsplit(".", 1)[0] or "upload"
-    title_hint = safe_filename
-
-    provenance = {
-        "kind": "external_static_upload",
-        "filename": safe_filename,
-        "content_type": content_type or "text/markdown",
-        "uploaded_at": datetime.now(timezone.utc).isoformat(),
-    }
-
-    return await run_distiller(
-        session,
-        workspace_id=workspace_id,
-        bucket=bucket,
-        actor_user_id=actor_user_id,
-        inp=DistillerInput(
-            body_md=body_md,
-            source_kind=BucketSource.EXTERNAL_STATIC,
-            title_hint=title_hint,
-            slug_hint=slug_hint,
-            provenance=provenance,
-            input_ref={
-                "source": "upload",
-                "filename": safe_filename,
-            },
-        ),
-        classifier=classifier,
-    )
-
-
 __all__ = [
     "ensure_bucket",
     "ensure_user_memory_bucket",
-    "ingest_external_static_upload",
 ]
