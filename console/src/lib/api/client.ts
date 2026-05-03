@@ -3704,6 +3704,14 @@ export interface ApiPolicy {
   body: string;
   enabled: boolean;
   sort_order: number;
+  /**
+   * Role slugs the policy targets. ``null`` means global (renders for
+   * every role + Navigator chat). A non-empty list scopes the rule.
+   * The backend never returns an empty array — empty is normalised
+   * to ``null`` server-side so the Console only branches on
+   * "null vs non-empty".
+   */
+  applies_to_roles: string[] | null;
   created_at: string;
   updated_at: string;
 }
@@ -3713,6 +3721,8 @@ export interface ApiPolicyCreateIn {
   body: string;
   enabled?: boolean;
   sort_order?: number;
+  /** Omit or pass ``null`` for a global rule. */
+  applies_to_roles?: string[] | null;
 }
 
 export interface ApiPolicyUpdateIn {
@@ -3720,6 +3730,11 @@ export interface ApiPolicyUpdateIn {
   body?: string;
   enabled?: boolean;
   sort_order?: number;
+  /**
+   * Omit the key to leave the scope unchanged. Pass ``null`` to clear
+   * back to global, or a list to (re)scope.
+   */
+  applies_to_roles?: string[] | null;
 }
 
 export async function listPolicies(

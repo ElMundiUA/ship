@@ -60,6 +60,7 @@ export async function POST(request: Request) {
       body: body.body,
       enabled: body.enabled,
       sort_order: body.sort_order,
+      applies_to_roles: body.applies_to_roles ?? null,
     };
     const result = await createPolicy(body.workspaceId, payload, token);
     return NextResponse.json(result, { status: 201 });

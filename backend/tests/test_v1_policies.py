@@ -113,6 +113,118 @@ def test_format_preamble_includes_title_and_body() -> None:
 
 
 @pytest.mark.asyncio
+async def test_create_with_applies_to_roles(v1_client, seed_workspace) -> None:
+    """``applies_to_roles`` round-trips through create + list. Empty
+    list normalises to ``null`` server-side so the client sees one
+    consistent shape regardless of how admins edited the
+    multi-select."""
+    _, raw, workspace = seed_workspace
+    headers = {"Authorization": f"Bearer {raw}"}
+
+    create = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/policies",
+        headers=headers,
+        json={
+            "title": "Developer-scoped rule",
+            "body": "Run lint before opening a PR.",
+            "applies_to_roles": ["developer"],
+        },
+    )
+    assert create.status_code == 201, create.text
+    body = create.json()
+    assert body["applies_to_roles"] == ["developer"]
+    policy_id = body["id"]
+
+    listing = await v1_client.get(
+        f"/v1/workspaces/{workspace.id}/policies", headers=headers
+    )
+    fetched = next(
+        p for p in listing.json()["policies"] if p["id"] == policy_id
+    )
+    assert fetched["applies_to_roles"] == ["developer"]
+
+    # Empty list — must normalise to ``null`` to keep the renderer's
+    # global semantic.
+    create_global = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/policies",
+        headers=headers,
+        json={
+            "title": "Global rule",
+            "body": "Applies to everyone.",
+            "applies_to_roles": [],
+        },
+    )
+    assert create_global.status_code == 201
+    assert create_global.json()["applies_to_roles"] is None
+
+
+@pytest.mark.asyncio
+async def test_patch_applies_to_roles_clear_to_global(
+    v1_client, seed_workspace
+) -> None:
+    """PATCH semantics: ``null`` clears the scope (back to global);
+    omitting the key leaves it untouched. Pin both branches so the
+    Console's "edit chip away" gesture never accidentally widens or
+    narrows a rule."""
+    _, raw, workspace = seed_workspace
+    headers = {"Authorization": f"Bearer {raw}"}
+
+    create = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/policies",
+        headers=headers,
+        json={
+            "title": "Scoped",
+            "body": "BA-scoped.",
+            "applies_to_roles": ["ba"],
+        },
+    )
+    policy_id = create.json()["id"]
+
+    # Omit the key — scope must remain ['ba'].
+    patch_other = await v1_client.patch(
+        f"/v1/workspaces/{workspace.id}/policies/{policy_id}",
+        headers=headers,
+        json={"sort_order": 5},
+    )
+    assert patch_other.json()["applies_to_roles"] == ["ba"]
+
+    # Send null — scope clears to global.
+    patch_clear = await v1_client.patch(
+        f"/v1/workspaces/{workspace.id}/policies/{policy_id}",
+        headers=headers,
+        json={"applies_to_roles": None},
+    )
+    assert patch_clear.json()["applies_to_roles"] is None
+
+    # Re-scope to multiple roles.
+    patch_multi = await v1_client.patch(
+        f"/v1/workspaces/{workspace.id}/policies/{policy_id}",
+        headers=headers,
+        json={"applies_to_roles": ["ba", "intake"]},
+    )
+    assert sorted(patch_multi.json()["applies_to_roles"]) == ["ba", "intake"]
+
+
+@pytest.mark.asyncio
+async def test_invalid_role_slug_is_422(v1_client, seed_workspace) -> None:
+    """A stray ``"DROP TABLE"`` or whitespace doesn't silently
+    round-trip into the policy column — server rejects with 422."""
+    _, raw, workspace = seed_workspace
+    headers = {"Authorization": f"Bearer {raw}"}
+
+    bad = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/policies",
+        headers=headers,
+        json={
+            "title": "Should fail",
+            "body": "x",
+            "applies_to_roles": ["Developer; DROP TABLE"],
+        },
+    )
+    assert bad.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_render_skips_disabled(db_session, seed_workspace) -> None:
     """Disabled rows are not in the preamble even if they sort first."""
     from backend.app.db.models.policies import WorkspacePolicy

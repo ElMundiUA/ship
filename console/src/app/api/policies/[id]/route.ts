@@ -57,6 +57,13 @@ export async function PATCH(
     if (body.body !== undefined) payload.body = body.body;
     if (body.enabled !== undefined) payload.enabled = body.enabled;
     if (body.sort_order !== undefined) payload.sort_order = body.sort_order;
+    // ``applies_to_roles`` allows three states client-side: missing
+    // (leave unchanged), null (clear to global), or an array. Use
+    // ``"applies_to_roles" in body`` to distinguish missing from null
+    // — a literal ``null`` value goes through to the backend.
+    if ("applies_to_roles" in body) {
+      payload.applies_to_roles = body.applies_to_roles ?? null;
+    }
     const result = await updatePolicy(body.workspaceId, id, payload, token);
     return NextResponse.json(result, { status: 200 });
   } catch (err) {

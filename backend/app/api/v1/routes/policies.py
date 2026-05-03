@@ -45,6 +45,9 @@ router = APIRouter(
 # ---------------------------------------------------------------------------
 
 
+_ROLE_SLUG_PATTERN = r"^[a-z0-9][a-z0-9_-]*$"
+
+
 class PolicyOut(BaseModel):
     id: uuid.UUID
     workspace_id: uuid.UUID
@@ -52,6 +55,12 @@ class PolicyOut(BaseModel):
     body: str
     enabled: bool
     sort_order: int
+    # ``None`` means global (renders for every role + Navigator chat).
+    # A non-empty list scopes the rule. The renderer also treats an
+    # empty list as global (admin edits the multi-select down to zero
+    # mustn't accidentally silence a rule), but we serialise ``[]`` as
+    # ``None`` so the Console knows to clear the chip.
+    applies_to_roles: list[str] | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -65,6 +74,14 @@ class PolicyCreateIn(BaseModel):
     body: str = Field(..., min_length=1)
     enabled: bool = True
     sort_order: int = Field(default=0, ge=-10_000, le=10_000)
+    applies_to_roles: list[str] | None = Field(
+        default=None,
+        description=(
+            "Role slugs the policy targets. ``null`` (or omitted) "
+            "means global. A non-empty list scopes the rule. Each "
+            "slug must match ``^[a-z0-9][a-z0-9_-]*$``."
+        ),
+    )
 
 
 class PolicyUpdateIn(BaseModel):
@@ -72,6 +89,49 @@ class PolicyUpdateIn(BaseModel):
     body: str | None = Field(default=None, min_length=1)
     enabled: bool | None = None
     sort_order: int | None = Field(default=None, ge=-10_000, le=10_000)
+    # PATCH semantics: omit the key to leave the scope unchanged;
+    # send ``null`` to clear the scope (back to global). The
+    # ``_PATCH_SENTINEL`` machinery below distinguishes "field
+    # missing" from "field is null".
+    applies_to_roles: list[str] | None = Field(default=None)
+
+
+def _validate_role_slugs(slugs: list[str] | None) -> list[str] | None:
+    """Normalise + validate a role-slug list. Returns ``None`` for the
+    empty / null forms so the column matches the renderer's "global"
+    semantic instead of round-tripping a stray empty array."""
+    if slugs is None:
+        return None
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    import re
+
+    for raw in slugs:
+        if not isinstance(raw, str):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_role_slug",
+                    "message": "applies_to_roles must contain strings only.",
+                },
+            )
+        slug = raw.strip()
+        if not re.match(_ROLE_SLUG_PATTERN, slug):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_role_slug",
+                    "message": (
+                        f"Role slug {slug!r} must match "
+                        f"{_ROLE_SLUG_PATTERN}."
+                    ),
+                },
+            )
+        if slug in seen:
+            continue
+        seen.add(slug)
+        cleaned.append(slug)
+    return cleaned or None
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +181,7 @@ async def create_policy(
         body=payload.body,
         enabled=payload.enabled,
         sort_order=payload.sort_order,
+        applies_to_roles=_validate_role_slugs(payload.applies_to_roles),
     )
     session.add(row)
     await session.flush()
@@ -146,6 +207,12 @@ async def update_policy(
         row.enabled = payload.enabled
     if payload.sort_order is not None:
         row.sort_order = payload.sort_order
+    # PATCH semantic for ``applies_to_roles``: presence in
+    # ``model_fields_set`` means the client explicitly sent the key
+    # (either with a list to scope, or with ``null`` to clear back to
+    # global). Absence means leave it alone.
+    if "applies_to_roles" in payload.model_fields_set:
+        row.applies_to_roles = _validate_role_slugs(payload.applies_to_roles)
     await session.flush()
     await session.refresh(row, attribute_names=["updated_at"])
     return _serialise(row)
@@ -194,6 +261,9 @@ async def _require_policy(
 
 
 def _serialise(row: WorkspacePolicy) -> PolicyOut:
+    # Empty array → ``None`` so the Console treats both forms as
+    # "global" without an extra branch on the client side.
+    scope = row.applies_to_roles if row.applies_to_roles else None
     return PolicyOut(
         id=row.id,
         workspace_id=row.workspace_id,
@@ -201,6 +271,7 @@ def _serialise(row: WorkspacePolicy) -> PolicyOut:
         body=row.body,
         enabled=row.enabled,
         sort_order=row.sort_order,
+        applies_to_roles=scope,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )

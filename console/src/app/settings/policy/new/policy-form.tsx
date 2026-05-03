@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import { ButtonGhost, ButtonPrimary, Card, CardHeader } from "@/components/ui";
+import { ROLE_SCOPE_OPTIONS } from "../role-scope-options";
 
 /**
  * Client-side "New policy" form.
@@ -19,8 +20,15 @@ export function NewPolicyForm({ workspaceId }: { workspaceId: string }) {
   const [body, setBody] = useState("");
   const [sortOrder, setSortOrder] = useState(0);
   const [enabled, setEnabled] = useState(true);
+  const [appliesToRoles, setAppliesToRoles] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  function toggleRole(slug: string) {
+    setAppliesToRoles((prev) =>
+      prev.includes(slug) ? prev.filter((s) => s !== slug) : [...prev, slug],
+    );
+  }
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -45,6 +53,9 @@ export function NewPolicyForm({ workspaceId }: { workspaceId: string }) {
           body,
           enabled,
           sort_order: sortOrder,
+          // Empty selection ⇒ global; the proxy passes ``null``.
+          applies_to_roles:
+            appliesToRoles.length > 0 ? appliesToRoles : null,
         }),
       });
       if (!res.ok) {
@@ -117,6 +128,36 @@ export function NewPolicyForm({ workspaceId }: { workspaceId: string }) {
                 className="w-20 rounded-lg border border-white/10 bg-white/[0.04] px-2 py-1 text-sm text-white outline-none focus:border-aqua/50"
               />
             </label>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/45">
+              Applies to roles
+            </span>
+            <p className="text-xs text-white/55">
+              Leave empty for a global rule (every cloud-agent role
+              and the Navigator chat). Pick one or more to scope the
+              rule to those specialists only.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {ROLE_SCOPE_OPTIONS.map((option) => {
+                const active = appliesToRoles.includes(option.slug);
+                return (
+                  <button
+                    key={option.slug}
+                    type="button"
+                    onClick={() => toggleRole(option.slug)}
+                    className={`rounded-full border px-3 py-1 text-xs transition ${
+                      active
+                        ? "border-aqua/60 bg-aqua/15 text-aqua"
+                        : "border-white/10 bg-white/[0.04] text-white/65 hover:border-white/25 hover:text-white"
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
       </Card>

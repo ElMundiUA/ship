@@ -14,6 +14,8 @@ import {
 import type { ApiPolicy } from "@/lib/api/client";
 import { cn } from "@/lib/cn";
 
+import { ROLE_SCOPE_OPTIONS, roleLabel } from "./role-scope-options";
+
 /**
  * Client island for the workspace-policies list.
  *
@@ -71,13 +73,23 @@ function PolicyCard({
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(policy.title);
   const [body, setBody] = useState(policy.body);
+  const [appliesToRoles, setAppliesToRoles] = useState<string[]>(
+    policy.applies_to_roles ?? [],
+  );
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
   function reset() {
     setTitle(policy.title);
     setBody(policy.body);
+    setAppliesToRoles(policy.applies_to_roles ?? []);
     setError(null);
+  }
+
+  function toggleRole(slug: string) {
+    setAppliesToRoles((prev) =>
+      prev.includes(slug) ? prev.filter((s) => s !== slug) : [...prev, slug],
+    );
   }
 
   async function patch(payload: Record<string, unknown>) {
@@ -100,7 +112,14 @@ function PolicyCard({
         if (!title.trim() || !body.trim()) {
           throw new Error("Title and body are required");
         }
-        const updated = await patch({ title, body });
+        const updated = await patch({
+          title,
+          body,
+          // Empty array → null (back to global). The proxy preserves
+          // the explicit ``null`` so the backend clears the column.
+          applies_to_roles:
+            appliesToRoles.length > 0 ? appliesToRoles : null,
+        });
         onReplace(updated);
         setEditing(false);
         router.refresh();
@@ -162,11 +181,27 @@ function PolicyCard({
               </span>
             }
           />
-          {!policy.enabled ? (
-            <div className="mt-2">
-              <Badge tone="warn">disabled</Badge>
-            </div>
-          ) : null}
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            {!policy.enabled ? <Badge tone="warn">disabled</Badge> : null}
+            {policy.applies_to_roles && policy.applies_to_roles.length > 0 ? (
+              policy.applies_to_roles.map((slug) => (
+                <span
+                  key={slug}
+                  className="rounded-full border border-aqua/30 bg-aqua/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-aqua"
+                  title={`Applies only to ${roleLabel(slug)}`}
+                >
+                  {roleLabel(slug)}
+                </span>
+              ))
+            ) : (
+              <span
+                className="rounded-full border border-white/15 bg-white/[0.04] px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-white/55"
+                title="Renders for every role and the Navigator chat"
+              >
+                global
+              </span>
+            )}
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <ButtonGhost onClick={toggleEnabled}>
@@ -211,6 +246,34 @@ function PolicyCard({
               className="rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 font-mono text-xs leading-relaxed text-white outline-none focus:border-aqua/50"
             />
           </label>
+          <div className="flex flex-col gap-2">
+            <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/45">
+              Applies to roles
+            </span>
+            <p className="text-xs text-white/55">
+              Empty selection ⇒ global. Pick one or more to scope the
+              rule to those specialists only.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {ROLE_SCOPE_OPTIONS.map((option) => {
+                const active = appliesToRoles.includes(option.slug);
+                return (
+                  <button
+                    key={option.slug}
+                    type="button"
+                    onClick={() => toggleRole(option.slug)}
+                    className={`rounded-full border px-3 py-1 text-xs transition ${
+                      active
+                        ? "border-aqua/60 bg-aqua/15 text-aqua"
+                        : "border-white/10 bg-white/[0.04] text-white/65 hover:border-white/25 hover:text-white"
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
           <div className="flex justify-end gap-2">
             <ButtonGhost
               onClick={() => {
