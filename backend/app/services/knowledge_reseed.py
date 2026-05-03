@@ -42,14 +42,6 @@ class RecommendedBucket:
 
 RECOMMENDED_BUCKETS: tuple[RecommendedBucket, ...] = (
     RecommendedBucket(
-        slug="project-map",
-        name="Project Map",
-        description="Repository structure, service ownership, and where important files live.",
-        bucket_type="Project Map",
-        purpose="Use for where/which repo/which folder/ownership/project structure questions.",
-        authority="High-confidence reference",
-    ),
-    RecommendedBucket(
         slug="architecture-decisions",
         name="Architecture Decisions",
         description="ADRs, design docs, trade-offs, and why the system is designed this way.",
@@ -76,35 +68,10 @@ RECOMMENDED_BUCKETS: tuple[RecommendedBucket, ...] = (
     RecommendedBucket(
         slug="product-knowledge",
         name="Product Knowledge",
-        description="Product behavior, customer-facing concepts, roadmap context, and UX decisions.",
+        description="Product behavior, customer-facing concepts, roadmap context, UX decisions, and the data/domain vocabulary the team shares.",
         bucket_type="Product Knowledge",
-        purpose="Use for product semantics, customer promises, and user-facing workflows.",
+        purpose="Use for product semantics, customer promises, user-facing workflows, and entity / metric / glossary definitions.",
         authority="High-confidence reference",
-    ),
-    RecommendedBucket(
-        slug="source-intelligence",
-        name="Source Intelligence",
-        description="Ship-generated codebase understanding, code maps, and repository analysis.",
-        bucket_type="Source Intelligence",
-        purpose="Use for generated code intelligence that Ship owns in the database.",
-        authority="Generated / low-authority",
-    ),
-    RecommendedBucket(
-        slug="generated-assets",
-        name="Generated Assets",
-        description="Agent-generated artifacts, summaries, and useful derived knowledge.",
-        bucket_type="Generated Assets",
-        purpose="Use for generated outputs that should remain discoverable but low authority.",
-        authority="Generated / low-authority",
-    ),
-    RecommendedBucket(
-        slug="security-access",
-        name="Security & Access",
-        description="Security practices, access model, secrets handling, and production permissions.",
-        bucket_type="Security",
-        purpose="Use for security controls, access decisions, secrets, and restricted operational knowledge.",
-        authority="Source of truth",
-        access_level="Restricted",
     ),
     RecommendedBucket(
         slug="integration-playbooks",
@@ -115,13 +82,29 @@ RECOMMENDED_BUCKETS: tuple[RecommendedBucket, ...] = (
         authority="High-confidence reference",
     ),
     RecommendedBucket(
-        slug="data-domain-glossary",
-        name="Data & Domain Glossary",
-        description="Domain terms, core entities, data definitions, metrics, and business vocabulary.",
-        bucket_type="Data Glossary",
-        purpose="Use for definitions, entity meaning, metrics, and shared vocabulary.",
+        slug="security-access",
+        name="Security & Access",
+        description="Security practices, access model, secrets handling, and production permissions.",
+        bucket_type="Security",
+        purpose="Use for security controls, access decisions, secrets, and restricted operational knowledge.",
         authority="Source of truth",
+        access_level="Restricted",
     ),
+)
+
+
+# Buckets retired in the 10 → 6 consolidation. Migration 0053 archives
+# any per-workspace rows under these slugs; new workspaces never seed
+# them. ``project-map`` / ``source-intelligence`` lose to the runtime
+# code-exploration tools planned for Step 7 (no static articles to
+# keep fresh). ``generated-assets`` was a sweep-bucket nobody could
+# describe, and ``data-domain-glossary`` collapses into
+# ``product-knowledge`` — vocabulary is a section, not a bucket.
+RETIRED_BUCKET_SLUGS: tuple[str, ...] = (
+    "project-map",
+    "source-intelligence",
+    "generated-assets",
+    "data-domain-glossary",
 )
 
 
