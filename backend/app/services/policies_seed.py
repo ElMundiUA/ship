@@ -550,9 +550,15 @@ async def seed_default_policies(
 
     Reads the workspace's current policy titles in one query, then
     inserts only those defaults whose title isn't already present.
-    Re-runs are no-ops; admins can delete a default and the seeder
-    will not bring it back. ``policies`` is overrideable for tests
-    and the alembic backfill that wants to pin a historical snapshot.
+    The contract is **ENSURE**: re-runs against a fully-seeded
+    workspace are no-ops, but a default an admin *deleted* will be
+    re-inserted on the next call. Admins who want to permanently
+    silence a default should toggle ``enabled=False`` instead of
+    deleting — the disabled row keeps the title slot taken so the
+    seeder leaves it alone.
+
+    ``policies`` is overrideable for tests and for the alembic
+    backfill that wants to pin a historical snapshot.
 
     Returns ``{"inserted": <int>, "skipped": <int>}`` for audit-log
     enrichment by callers.

@@ -1161,6 +1161,130 @@ async def test_policies_preamble_rejects_missing_bearer(v1_client) -> None:
     assert resp.status_code == 401
 
 
+@pytest.mark.asyncio
+async def test_policies_preamble_role_filter(
+    monkeypatch, v1_client, db_session, seed_repo_and_install
+) -> None:
+    """``?role=<slug>`` opts the run into role-scoped policies. Without
+    the param the preamble stays globals-only — backwards compatible
+    with CLIs that pre-date the role-scoping refactor."""
+    from backend.app.api.v1.routes import pipelines as pipelines_route
+    from backend.app.db.models.policies import WorkspacePolicy
+
+    raw, workspace, _install, repo = seed_repo_and_install
+    pipelines = await _seed_bound_pipelines(db_session, workspace.id, repo.id)
+    target = pipelines["pr_review"]
+
+    db_session.add_all(
+        [
+            WorkspacePolicy(
+                workspace_id=workspace.id,
+                title="Always work via PR",
+                body="Never push directly to main.",
+                enabled=True,
+                sort_order=0,
+                applies_to_roles=None,
+            ),
+            WorkspacePolicy(
+                workspace_id=workspace.id,
+                title="Run lint before PR",
+                body="Developer-scoped quality gate.",
+                enabled=True,
+                sort_order=1,
+                applies_to_roles=["developer"],
+            ),
+            WorkspacePolicy(
+                workspace_id=workspace.id,
+                title="BA rewrites description",
+                body="BA-scoped guidance.",
+                enabled=True,
+                sort_order=2,
+                applies_to_roles=["ba"],
+            ),
+        ]
+    )
+    await db_session.flush()
+
+    captured: dict[str, str] = {}
+
+    async def _probe(repo, install, *, settings, **_):
+        return frozenset({"pr-and-ci-gate.yml"})
+
+    async def _dispatch(repo, install, workflow_file, *, inputs, settings, **_):
+        captured.update(inputs)
+
+    monkeypatch.setattr(pipelines_route, "list_repo_workflows", _probe)
+    monkeypatch.setattr(pipelines_route, "dispatch_workflow", _dispatch)
+
+    dispatch_resp = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/pipelines/{target.id}/runs",
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    run_id = dispatch_resp.json()["id"]
+    token = captured["ship_run_token"]
+
+    # No role param → globals only.
+    no_role = await v1_client.get(
+        f"/v1/pipelines/runs/{run_id}/policies-preamble",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert no_role.status_code == 200
+    body_no_role = no_role.json()["preamble"]
+    assert body_no_role is not None
+    assert "Always work via PR" in body_no_role
+    assert "Run lint before PR" not in body_no_role
+    assert "BA rewrites description" not in body_no_role
+
+    # role=developer → globals ∪ developer-scoped, BA stays hidden.
+    dev = await v1_client.get(
+        f"/v1/pipelines/runs/{run_id}/policies-preamble?role=developer",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert dev.status_code == 200
+    body_dev = dev.json()["preamble"]
+    assert "Always work via PR" in body_dev
+    assert "Run lint before PR" in body_dev
+    assert "BA rewrites description" not in body_dev
+
+
+@pytest.mark.asyncio
+async def test_policies_preamble_rejects_invalid_role(
+    monkeypatch, v1_client, db_session, seed_repo_and_install
+) -> None:
+    """The ``role`` param has a strict ``^[a-z0-9][a-z0-9_-]*$`` shape
+    so a stray "; DROP TABLE" or trailing whitespace is a 422 instead
+    of silently round-tripping into the policy filter."""
+    from backend.app.api.v1.routes import pipelines as pipelines_route
+
+    raw, workspace, _install, repo = seed_repo_and_install
+    pipelines = await _seed_bound_pipelines(db_session, workspace.id, repo.id)
+    target = pipelines["pr_review"]
+
+    captured: dict[str, str] = {}
+
+    async def _probe(repo, install, *, settings, **_):
+        return frozenset({"pr-and-ci-gate.yml"})
+
+    async def _dispatch(repo, install, workflow_file, *, inputs, settings, **_):
+        captured.update(inputs)
+
+    monkeypatch.setattr(pipelines_route, "list_repo_workflows", _probe)
+    monkeypatch.setattr(pipelines_route, "dispatch_workflow", _dispatch)
+
+    dispatch_resp = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/pipelines/{target.id}/runs",
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    run_id = dispatch_resp.json()["id"]
+    token = captured["ship_run_token"]
+
+    bad = await v1_client.get(
+        f"/v1/pipelines/runs/{run_id}/policies-preamble?role=Developer%20OR%201%3D1",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert bad.status_code == 422
+
+
 # ---------------------------------------------------------------------------
 # Install endpoint
 # ---------------------------------------------------------------------------
