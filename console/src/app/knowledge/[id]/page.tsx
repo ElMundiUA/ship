@@ -251,8 +251,7 @@ function LiveView({
   // Upload is meaningful for any bucket except ``repo_files`` — those
   // mirror ``.ship/knowledge`` from git and should stay authoritative
   // in the repo. All other source kinds accept UTF-8 uploads through
-  // the same Distiller path (including ``agent_memory``, connectors,
-  // ``promoted``, etc.).
+  // the same Distiller path.
   const canUpload = bucket !== null && bucket.source_kind !== "repo_files";
 
   const scopeKind = bucket?.scope_kind ?? (legacy?.visibility ?? "workspace");
@@ -581,10 +580,12 @@ function provenanceHint(article: ApiBucketArticle): string | null {
       ? `uploaded: ${p.filename}`
       : "uploaded file";
   }
-  if (kind === "connector_proxy") {
-    const connector =
-      typeof p.connector_kind === "string" ? p.connector_kind : null;
-    return connector ? `synced from ${connector}` : "synced from connector";
+  if (kind === "knowledge_import_source") {
+    const source = typeof p.import_source_kind === "string" ? p.import_source_kind : null;
+    return source ? `harvested from ${source}` : "harvested from import source";
+  }
+  if (kind === "auto_routed_notes" || kind === "auto_routed_draft") {
+    return "synthesised from harvested notes";
   }
   if (kind === "repo_files" && typeof p.path === "string") {
     return `from ${p.path}`;

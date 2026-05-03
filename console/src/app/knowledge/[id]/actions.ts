@@ -20,7 +20,6 @@ import {
   type ApiDistillerClassifier,
   uploadToBucket,
 } from "@/lib/api/client";
-import { getSessionToken } from "@/lib/api/session";
 
 // Mirrors the backend cap in ``POST /v1/.../upload``. We double-check
 // on this side so the user gets a crisp error *before* we round-trip

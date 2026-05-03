@@ -10,10 +10,10 @@ import {
   getMe,
   isApiConfigured,
   listActivatedRepos,
-  listBucketSources,
+  listBucketArticles,
+  listIntegrations,
   listKnowledgeImportSources,
   listBuckets,
-  listIntegrations,
   listWorkspaces,
 } from "@/lib/api/client";
 import { getSessionToken } from "@/lib/api/session";
@@ -23,17 +23,17 @@ import {
   toAppShellWorkspaces,
 } from "@/lib/workspace-scope";
 import type {
+  ApiBucketArticle,
   ApiIntegration,
   ApiKnowledgeImportSource,
-  ApiKnowledgeSource,
   ApiUser,
 } from "@/lib/api/types";
 
 import {
   KnowledgeControlCenter,
-  type KnowledgeControlBucket,
-  type KnowledgeControlSource,
-  type KnowledgeBucketStatus,
+  type KnowledgeArticleRow,
+  type KnowledgeBucketRow,
+  type KnowledgeSourceRow,
 } from "./knowledge-control-center";
 
 export const dynamic = "force-dynamic";
@@ -41,8 +41,9 @@ export const dynamic = "force-dynamic";
 type LiveData = {
   workspace: { id: string; slug: string; name: string };
   allWorkspaces: Awaited<ReturnType<typeof listWorkspaces>>;
-  buckets: KnowledgeControlBucket[];
-  sources: KnowledgeControlSource[];
+  buckets: KnowledgeBucketRow[];
+  articles: KnowledgeArticleRow[];
+  sources: KnowledgeSourceRow[];
   repos: ApiActivatedRepo[];
   integrations: ApiIntegration[];
   me: ApiUser | null;
@@ -54,13 +55,14 @@ type LoadResult =
   | { status: "live"; data: LiveData }
   | { status: "unavailable"; reason: string };
 
+
 async function load(
   params: Record<string, string | string[] | undefined>,
 ): Promise<LoadResult> {
   if (!isApiConfigured()) {
     return {
       status: "unavailable",
-      reason: "SHIP_API_URL is not set on this deployment."
+      reason: "SHIP_API_URL is not set on this deployment.",
     };
   }
 
@@ -101,29 +103,44 @@ async function load(
         ),
       ]);
 
-    const sourcePairs = await Promise.all(
+    // Fetch the published-and-fresh article set for every bucket in
+    // parallel. Six fixed buckets after the consolidation, so this is
+    // a bounded fan-out — no pagination needed in the UI surface.
+    const articlePairs = await Promise.all(
       rawBuckets.map(async (bucket) => ({
         bucket,
-        sources: await listBucketSources(workspace.id, bucket.slug, token).catch(
-          () => [] as ApiKnowledgeSource[],
-        ),
+        articles: await listBucketArticles(
+          workspace.id,
+          bucket.slug,
+          {},
+          token,
+        ).catch(() => [] as ApiBucketArticle[]),
       })),
     );
-    const sources = [
-      ...importSources.map(normalizeImportSource),
-      ...sourcePairs.flatMap(({ bucket, sources }) =>
-        sources.map((source) => normalizeSource(bucket, source)),
-      ),
-    ];
+
+    const buckets: KnowledgeBucketRow[] = rawBuckets.map((bucket) =>
+      toBucketRow(bucket),
+    );
+    const articles: KnowledgeArticleRow[] = articlePairs
+      .flatMap(({ bucket, articles }) =>
+        articles.map((article) => toArticleRow(article, bucket)),
+      )
+      .sort(
+        (a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt),
+      );
+    const sources: KnowledgeSourceRow[] = importSources.map(toSourceRow);
 
     return {
       status: "live",
       data: {
-        workspace: { id: workspace.id, slug: workspace.slug, name: workspace.name },
+        workspace: {
+          id: workspace.id,
+          slug: workspace.slug,
+          name: workspace.name,
+        },
         allWorkspaces: workspaceRows,
-        buckets: sourcePairs.map(({ bucket, sources }) =>
-          normalizeBucket(bucket, sources),
-        ),
+        buckets,
+        articles,
         sources,
         repos,
         integrations,
@@ -134,10 +151,11 @@ async function load(
     if (err instanceof ApiHttpError && err.status === 401) {
       redirect("/login?next=%2Fknowledge&reason=session_expired");
     }
-    const message = err instanceof Error ? err.message : "Could not load knowledge buckets.";
+    const message = err instanceof Error ? err.message : "Could not load knowledge.";
     return { status: "unavailable", reason: message };
   }
 }
+
 
 export default async function KnowledgeIndexPage({
   searchParams,
@@ -155,7 +173,8 @@ export default async function KnowledgeIndexPage({
     );
   }
 
-  const { workspace, allWorkspaces, buckets, sources, repos, integrations, me } = result.data;
+  const { workspace, allWorkspaces, buckets, articles, sources, repos, integrations, me } =
+    result.data;
 
   const scopePill = (
     <ScopePill
@@ -189,202 +208,73 @@ export default async function KnowledgeIndexPage({
       scopePill={scopePill}
     >
       <KnowledgeControlCenter
-        mode="live"
         workspace={workspace}
         buckets={buckets}
+        articles={articles}
         sources={sources}
         repos={repos}
         integrations={integrations}
-        defaultScope="workspace"
       />
     </AppShell>
   );
 }
 
-function normalizeBucket(
-  bucket: ApiBucket,
-  sources: ApiKnowledgeSource[],
-): KnowledgeControlBucket {
-  const metadata = metadataFromRef(bucket.source_ref);
-  const lastIndexedAt =
-    maxDate(sources.map((source) => source.last_synced_at)) ?? bucket.updated_at;
-  const sourceCount =
-    sources.length > 0 ? sources.length : bucket.source_kind ? 1 : 0;
 
+// ---------------------------------------------------------------------------
+// Mappers
+// ---------------------------------------------------------------------------
+
+
+function toBucketRow(bucket: ApiBucket): KnowledgeBucketRow {
   return {
     id: bucket.id,
     slug: bucket.slug,
     name: bucket.name,
     description: bucket.description ?? "",
-    bucketType: metadata.bucketType ?? inferBucketType(bucket),
-    scope: bucket.scope_kind ?? "workspace",
-    sourceKind: bucket.source_kind ?? "agent_memory",
-    authority: metadata.authority ?? inferAuthority(bucket),
-    accessLevel: metadata.accessLevel ?? inferAccess(bucket),
-    freshnessPolicy: metadata.freshnessPolicy ?? "Manual refresh",
-    status: bucketStatus(bucket, sources),
-    articles: bucket.summary_count ?? 0,
-    chunks: inferChunks(bucket, sources),
-    sourceCount,
-    sourceNames:
-      sources.length > 0
-        ? sources.map((source) => source.kind)
-        : bucket.source_kind
-          ? [bucket.source_kind]
-          : [],
-    lastIndexedAt,
-    updatedAt: bucket.updated_at,
+    archived: Boolean(bucket.archived_at),
   };
 }
 
-function normalizeSource(
+
+function toArticleRow(
+  article: ApiBucketArticle,
   bucket: ApiBucket,
-  source: ApiKnowledgeSource,
-): KnowledgeControlSource {
+): KnowledgeArticleRow {
   return {
-    id: source.id,
+    id: article.id,
     bucketSlug: bucket.slug,
     bucketName: bucket.name,
-    kind: source.kind,
-    status: source.status,
-    lastSyncedAt: source.last_synced_at,
-    nextSyncAt: asString(source.config.next_sync_at),
-    lastError: source.last_error,
-    documents: asNumber(source.config.document_count),
-    chunks: asNumber(source.config.chunk_count),
-    urlOrPath:
-      asString(source.config.url) ??
-      asString(source.config.path) ??
-      asString(source.config.page_id) ??
-      asString(source.config.space_key),
+    slug: article.slug,
+    title: article.title || article.slug,
+    snippet: firstParagraph(article.body_md),
+    updatedAt: article.updated_at,
   };
 }
 
-function normalizeImportSource(
-  source: ApiKnowledgeImportSource,
-): KnowledgeControlSource {
-  const config = source.config ?? {};
+
+function toSourceRow(source: ApiKnowledgeImportSource): KnowledgeSourceRow {
   return {
     id: source.id,
-    bucketSlug: null,
-    bucketName: "Auto-routed",
+    name: source.name,
     kind: source.kind,
     status: source.status,
     lastSyncedAt: source.last_synced_at,
-    nextSyncAt: computeNextSyncAt(
-      source.last_synced_at,
-      source.sync_interval_minutes,
-    ),
     lastError: source.last_error,
-    documents: asNumber(config.document_count),
-    chunks: null,
-    urlOrPath:
-      asString(config.url) ??
-      asString(config.root_url) ??
-      asString(config.path) ??
-      source.name,
   };
 }
 
-/**
- * Compute the next-due sync timestamp from the last sync + the interval.
- *
- * Returns ``null`` for one-shot sources (``sync_interval_minutes === null``,
- * e.g. ``static_upload``) and for sources that have never run yet — neither
- * has a meaningful "next at" time. The UI surfaces "Due now" elsewhere when
- * the result is in the past.
- */
-function computeNextSyncAt(
-  lastSyncedAt: string | null,
-  intervalMinutes: number | null,
-): string | null {
-  if (!lastSyncedAt || !intervalMinutes || intervalMinutes <= 0) return null;
-  const last = Date.parse(lastSyncedAt);
-  if (Number.isNaN(last)) return null;
-  return new Date(last + intervalMinutes * 60_000).toISOString();
-}
 
-function bucketStatus(
-  bucket: ApiBucket,
-  sources: ApiKnowledgeSource[],
-): KnowledgeBucketStatus {
-  if (bucket.archived_at) return "Stale";
-  if (sources.some((source) => source.status === "error")) return "Failed";
-  if (sources.some((source) => source.status === "syncing")) return "Indexing";
-  if ((bucket.summary_count ?? 0) === 0 && sources.length === 0) return "Empty";
-  const lastIndexedAt = maxDate(sources.map((source) => source.last_synced_at));
-  if (lastIndexedAt && Date.now() - Date.parse(lastIndexedAt) > 30 * 86_400_000) {
-    return "Stale";
+function firstParagraph(body: string): string {
+  if (!body) return "";
+  const text = body.trim();
+  if (!text) return "";
+  for (const chunk of text.split("\n\n")) {
+    const candidate = chunk.replace(/^#+\s+/, "").trim();
+    if (candidate) {
+      return candidate.length > 220
+        ? candidate.slice(0, 219).trimEnd() + "…"
+        : candidate;
+    }
   }
-  return "Ready";
-}
-
-function metadataFromRef(sourceRef: Record<string, unknown> | null | undefined) {
-  const raw =
-    sourceRef &&
-    typeof sourceRef.knowledge_metadata === "object" &&
-    sourceRef.knowledge_metadata !== null
-      ? (sourceRef.knowledge_metadata as Record<string, unknown>)
-      : {};
-  return {
-    bucketType: asString(raw.bucket_type),
-    authority: asString(raw.authority),
-    accessLevel: asString(raw.access_level),
-    freshnessPolicy: asString(raw.freshness_policy),
-  };
-}
-
-function inferBucketType(bucket: ApiBucket): string {
-  const haystack = `${bucket.name} ${bucket.slug} ${bucket.description ?? ""}`.toLowerCase();
-  if (haystack.includes("architect")) return "Architecture";
-  if (haystack.includes("runbook") || haystack.includes("ops")) return "Runbooks";
-  if (haystack.includes("security") || haystack.includes("access")) return "Security";
-  if (haystack.includes("product")) return "Product Knowledge";
-  if (haystack.includes("glossary") || haystack.includes("data")) return "Data Glossary";
-  if (bucket.source_kind === "repo_context" || bucket.source_kind === "repo_files") {
-    return "Source Intelligence";
-  }
-  return "Custom";
-}
-
-function inferAuthority(bucket: ApiBucket): string {
-  if (bucket.scope_kind === "workspace" && bucket.source_kind === "promoted") {
-    return "Source of truth";
-  }
-  if (bucket.source_kind === "agent_memory" || bucket.source_kind === "repo_context") {
-    return "Generated / low-authority";
-  }
-  if (bucket.source_kind === "audio_transcript") return "Temporary memory";
-  return "High-confidence reference";
-}
-
-function inferAccess(bucket: ApiBucket): string {
-  if (bucket.scope_kind === "user") return "Restricted";
-  if (bucket.scope_kind === "repo") return "Repository-specific";
-  return "Workspace";
-}
-
-function inferChunks(bucket: ApiBucket, sources: ApiKnowledgeSource[]): number {
-  const sourceChunks = sources.reduce(
-    (sum, source) => sum + (asNumber(source.config.chunk_count) ?? 0),
-    0,
-  );
-  if (sourceChunks > 0) return sourceChunks;
-  return (bucket.summary_count ?? 0) * 8;
-}
-
-function maxDate(values: Array<string | null | undefined>): string | null {
-  const times = values
-    .map((value) => (value ? Date.parse(value) : Number.NaN))
-    .filter((value) => Number.isFinite(value));
-  if (times.length === 0) return null;
-  return new Date(Math.max(...times)).toISOString();
-}
-
-function asString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function asNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
+  return text.length > 220 ? text.slice(0, 219).trimEnd() + "…" : text;
 }
