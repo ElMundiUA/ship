@@ -311,6 +311,31 @@ def _build_choice_markup(
 # ---------------------------------------------------------------------------
 
 
+# Telegram's ``sendChatAction`` advertisement expires after roughly
+# 5 seconds; we re-send a bit faster so the "is typing…" indicator
+# stays continuous through tool-call pauses (Linear / Notion / fs
+# walks routinely stall text deltas for 10–30s).
+_TYPING_REFRESH_SECONDS: float = 4.0
+
+
+async def _typing_indicator(bot: Bot, chat_id: int) -> None:
+    """Keep Telegram's "is typing…" affordance lit for the active turn.
+
+    Best-effort by design — a transient ``sendChatAction`` failure
+    (rate limit, network blip) shouldn't kill the turn, just skip a
+    refresh. Cancellation lands at the ``await asyncio.sleep`` and
+    propagates cleanly so ``_drive_turn``'s ``finally`` clause
+    completes promptly.
+    """
+    while True:
+        try:
+            await bot.send_chat_action(chat_id=chat_id, action="typing")
+        except Exception:  # noqa: BLE001
+            # Don't log — too chatty for a tick that runs every 4s.
+            pass
+        await asyncio.sleep(_TYPING_REFRESH_SECONDS)
+
+
 async def _drive_turn(
     *,
     bot: Bot,
@@ -351,6 +376,16 @@ async def _drive_turn(
     # ``MESSAGE_NOT_MODIFIED``).
     messages: list[int] = [placeholder_message_id]
     rendered: list[str] = [""]
+
+    # Background "is typing…" pinger. Telegram's chat action expires
+    # after ~5s, so we refresh it every ~4s for the duration of the
+    # turn. This gives the user a continuous in-flight signal even
+    # while Navigator is mid-tool-call (which can stall text deltas
+    # for 10–30s while Linear / Notion / fs walks complete).
+    typing_task = asyncio.create_task(
+        _typing_indicator(bot, chat_id),
+        name="ship.telegram.bot.typing",
+    )
 
     async def _register_continuation(message_id: int) -> None:
         if thread_id is None:
@@ -428,72 +463,79 @@ async def _drive_turn(
         last_edit_at = now
 
     try:
-        async for ev in _stream_navigator_turn(
-            api_base=api_base,
-            workspace_id=workspace_id,
-            pat=pat,
-            body=body,
-            thread_id=seed_thread_id,
-        ):
-            if ev.kind == "thread" and not thread_registered and ev.thread_id:
-                thread_id = ev.thread_id
-                async with sessionmaker() as session, session.begin():
-                    await _register_bot_message(
-                        session,
-                        chat_id=chat_id,
-                        bot_message_id=placeholder_message_id,
-                        ship_thread_id=ev.thread_id,
-                    )
-                thread_registered = True
-            elif ev.kind == "delta":
-                buf += ev.text
-                await maybe_edit()
-            elif ev.kind == "tool_call":
-                active_tool = ev.tool_name
-                await maybe_edit(force=True)
-            elif ev.kind == "tool_result":
-                active_tool = None
-                await maybe_edit(force=True)
-            elif ev.kind == "end":
-                break
-            elif ev.kind == "error":
-                buf = (buf + "\n\n⚠️ " + ev.text).strip()
-                break
-    except httpx.HTTPError as exc:
-        buf = (buf + f"\n\n⚠️ network error: {exc}").strip()
-
-    active_tool = None
-    if not buf:
-        buf = "(navigator returned no text)"
-    await maybe_edit(force=True)
-
-    # End-of-turn: attach an InlineKeyboardMarkup to the last bot
-    # message if Navigator emitted any ship-choice directives. Buttons
-    # render as a row per option below the assistant text; clicks
-    # round-trip through ``on_choice_click`` (registered in
-    # ``_build_dispatcher``) which posts the chosen value as the next
-    # user message in the same Navigator thread.
-    _, final_directives = extract_directives(buf)
-    keyboard = _build_choice_markup(final_directives)
-    if keyboard is not None and messages:
-        markup, options = keyboard
-        target_id = messages[-1]
         try:
-            await bot.edit_message_reply_markup(
-                chat_id=chat_id,
-                message_id=target_id,
-                reply_markup=markup,
-            )
-            _cache_choice_options(
-                chat_id=chat_id, message_id=target_id, options=options
-            )
-        except Exception as exc:  # noqa: BLE001 — Telegram 400 on benign edits
-            logger.debug(
-                "telegram attach choice markup failed (chat=%s msg=%s): %s",
-                chat_id,
-                target_id,
-                exc,
-            )
+            async for ev in _stream_navigator_turn(
+                api_base=api_base,
+                workspace_id=workspace_id,
+                pat=pat,
+                body=body,
+                thread_id=seed_thread_id,
+            ):
+                if ev.kind == "thread" and not thread_registered and ev.thread_id:
+                    thread_id = ev.thread_id
+                    async with sessionmaker() as session, session.begin():
+                        await _register_bot_message(
+                            session,
+                            chat_id=chat_id,
+                            bot_message_id=placeholder_message_id,
+                            ship_thread_id=ev.thread_id,
+                        )
+                    thread_registered = True
+                elif ev.kind == "delta":
+                    buf += ev.text
+                    await maybe_edit()
+                elif ev.kind == "tool_call":
+                    active_tool = ev.tool_name
+                    await maybe_edit(force=True)
+                elif ev.kind == "tool_result":
+                    active_tool = None
+                    await maybe_edit(force=True)
+                elif ev.kind == "end":
+                    break
+                elif ev.kind == "error":
+                    buf = (buf + "\n\n⚠️ " + ev.text).strip()
+                    break
+        except httpx.HTTPError as exc:
+            buf = (buf + f"\n\n⚠️ network error: {exc}").strip()
+
+        active_tool = None
+        if not buf:
+            buf = "(navigator returned no text)"
+        await maybe_edit(force=True)
+
+        # End-of-turn: attach an InlineKeyboardMarkup to the last bot
+        # message if Navigator emitted any ship-choice directives.
+        # Buttons render as a row per option below the assistant text;
+        # clicks round-trip through ``on_choice_click`` (registered in
+        # ``_build_dispatcher``) which posts the chosen value as the
+        # next user message in the same Navigator thread.
+        _, final_directives = extract_directives(buf)
+        keyboard = _build_choice_markup(final_directives)
+        if keyboard is not None and messages:
+            markup, options = keyboard
+            target_id = messages[-1]
+            try:
+                await bot.edit_message_reply_markup(
+                    chat_id=chat_id,
+                    message_id=target_id,
+                    reply_markup=markup,
+                )
+                _cache_choice_options(
+                    chat_id=chat_id, message_id=target_id, options=options
+                )
+            except Exception as exc:  # noqa: BLE001 — Telegram 400 on benign edits
+                logger.debug(
+                    "telegram attach choice markup failed (chat=%s msg=%s): %s",
+                    chat_id,
+                    target_id,
+                    exc,
+                )
+    finally:
+        typing_task.cancel()
+        try:
+            await typing_task
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            pass
 
 
 # ---------------------------------------------------------------------------
