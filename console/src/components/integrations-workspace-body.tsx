@@ -17,6 +17,10 @@ import {
   LiveBanner,
 } from "@/components/ui";
 import {
+  LinearDefaultTeamPicker,
+  type LinearTeamOption,
+} from "@/components/linear-default-team-picker";
+import {
   ApiHttpError,
   ApiUnavailableError,
   isApiConfigured,
@@ -298,6 +302,14 @@ export function IntegrationsWorkspaceBody({ data }: { data: LiveIntegrationsMode
                       lastError={i.last_health_error}
                       status={i.status}
                     />
+                    {i.kind === "linear" && (
+                      <LinearDefaultTeamPicker
+                        workspaceId={workspace.id}
+                        currentTeamId={readString(i.config, "team_id")}
+                        currentTeamKey={readString(i.config, "team_key")}
+                        teamOptions={readTeamOptions(i.config)}
+                      />
+                    )}
                     <div className="mt-2 flex flex-wrap items-center gap-3">
                       {i.kind === "notion" ? (
                         <NotionOAuthForm
@@ -885,6 +897,30 @@ function NotionOAuthForm({
       )}
     </form>
   );
+}
+
+function readString(
+  config: Record<string, unknown> | null | undefined,
+  key: string,
+): string | null {
+  const v = config?.[key];
+  return typeof v === "string" && v.length > 0 ? v : null;
+}
+
+function readTeamOptions(
+  config: Record<string, unknown> | null | undefined,
+): LinearTeamOption[] {
+  const raw = config?.["team_options"];
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((entry): LinearTeamOption[] => {
+    if (!entry || typeof entry !== "object") return [];
+    const e = entry as Record<string, unknown>;
+    const id = typeof e.id === "string" ? e.id : null;
+    const key = typeof e.key === "string" ? e.key : null;
+    const name = typeof e.name === "string" ? e.name : null;
+    if (!id || !key) return [];
+    return [{ id, key, name: name ?? key }];
+  });
 }
 
 function summariseConfig(config: Record<string, unknown>): string {
