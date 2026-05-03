@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import func, select
@@ -16,7 +15,6 @@ from backend.app.db.models.agent_memory import (
     KnowledgeBucket,
     KnowledgeSource,
 )
-from backend.app.db.models.knowledge_promotion import KnowledgePromotionCandidate
 from backend.app.services.knowledge_reseed import (
     RECOMMENDED_BUCKETS,
     _jsonable,
@@ -74,13 +72,6 @@ async def test_reseed_deletes_old_knowledge_and_creates_recommended_buckets(
                 bucket_id=bucket.id,
                 source_kind="agent_memory",
             ),
-            KnowledgePromotionCandidate(
-                workspace_id=workspace.id,
-                fingerprint="fp",
-                article_ids=[],
-                slug_hint="old",
-                ttl_expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
-            ),
         ]
     )
     await db_session.flush()
@@ -92,7 +83,6 @@ async def test_reseed_deletes_old_knowledge_and_creates_recommended_buckets(
     assert counts.sources_deleted == 1
     assert counts.summaries_deleted == 1
     assert counts.distiller_runs_deleted == 1
-    assert counts.candidates_deleted == 1
     assert counts.buckets_created == len(RECOMMENDED_BUCKETS)
 
     backup = await build_backup_snapshot(db_session, [workspace.id])

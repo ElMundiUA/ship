@@ -2790,7 +2790,7 @@ export function getKnowledgeBucket(
   );
 }
 
-// --- PR-7A: workspace vector search + canonical inventory -----------------
+// --- Workspace vector search ---------------------------------------------
 
 export type ApiKnowledgeSearchHit = {
   id: string;
@@ -2809,28 +2809,6 @@ export type ApiKnowledgeSearchHit = {
 export type ApiKnowledgeSearchResponse = {
   query: string;
   hits: ApiKnowledgeSearchHit[];
-};
-
-export type ApiKnowledgeCanonicalBucket = {
-  id: string;
-  slug: string;
-  name: string;
-  description: string | null;
-  article_count: number;
-  override_count: number;
-};
-
-export type ApiKnowledgeOrphanSlug = {
-  slug: string;
-  repo_count: number;
-  sample_repo_id: string;
-  sample_repo_full_name: string | null;
-};
-
-export type ApiKnowledgeCanonicalResponse = {
-  workspace_id: string;
-  canonical: ApiKnowledgeCanonicalBucket[];
-  orphan_slugs: ApiKnowledgeOrphanSlug[];
 };
 
 export function searchKnowledge(
@@ -2858,139 +2836,7 @@ export function searchKnowledge(
   );
 }
 
-export function getKnowledgeCanonical(
-  workspaceId: string,
-  token?: string,
-): Promise<ApiKnowledgeCanonicalResponse> {
-  return apiFetch<ApiKnowledgeCanonicalResponse>(
-    `/v1/workspaces/${encodeURIComponent(workspaceId)}/knowledge/canonical`,
-    { token },
-  );
-}
-
-// --- PR-7B: dedup candidates + LLM promotion drafts ----------------------
-//
-// ``GET /knowledge/candidates`` returns on-demand cross-repo dedup
-// clusters with a TTL'd cache. ``POST /candidates/refresh`` forces a
-// rebuild; ``POST /candidates/{id}/draft`` asks the LLM for a
-// canonical article body; ``POST /promote`` is the persistence step
-// (creates the workspace bucket + article and optionally wires up
-// the ``overrides_workspace_article_id`` links on the source repo
-// articles).
-
-export type ApiKnowledgeCandidateMember = {
-  article_id: string;
-  bucket_id: string;
-  bucket_slug: string;
-  repo_id: string | null;
-  repo_full_name: string | null;
-  title: string | null;
-  preview: string;
-};
-
-export type ApiKnowledgeCandidate = {
-  id: string;
-  fingerprint: string;
-  slug_hint: string;
-  centroid_score: number;
-  member_count: number;
-  repo_count: number;
-  members: ApiKnowledgeCandidateMember[];
-};
-
-export type ApiKnowledgeCandidatesResponse = {
-  workspace_id: string;
-  candidates: ApiKnowledgeCandidate[];
-  computed_at: string;
-  is_fresh: boolean;
-};
-
-export type ApiKnowledgePromotionDraft = {
-  slug: string;
-  title: string;
-  body: string;
-  summary: string | null;
-  notes: string | null;
-};
-
-export type ApiKnowledgePromotionResult = {
-  workspace_bucket_id: string;
-  workspace_article_id: string;
-  overridden_article_ids: string[];
-};
-
-export function listKnowledgeCandidates(
-  workspaceId: string,
-  token?: string,
-): Promise<ApiKnowledgeCandidatesResponse> {
-  return apiFetch<ApiKnowledgeCandidatesResponse>(
-    `/v1/workspaces/${encodeURIComponent(workspaceId)}/knowledge/candidates`,
-    { token },
-  );
-}
-
-export function refreshKnowledgeCandidates(
-  workspaceId: string,
-  token?: string,
-): Promise<ApiKnowledgeCandidatesResponse> {
-  return apiFetch<ApiKnowledgeCandidatesResponse>(
-    `/v1/workspaces/${encodeURIComponent(
-      workspaceId,
-    )}/knowledge/candidates/refresh`,
-    { method: "POST", token },
-  );
-}
-
-export function draftKnowledgePromotion(
-  workspaceId: string,
-  candidateId: string,
-  payload: { articleIds?: string[] | null },
-  token?: string,
-): Promise<ApiKnowledgePromotionDraft> {
-  return apiFetch<ApiKnowledgePromotionDraft>(
-    `/v1/workspaces/${encodeURIComponent(
-      workspaceId,
-    )}/knowledge/candidates/${encodeURIComponent(candidateId)}/draft`,
-    {
-      method: "POST",
-      body: {
-        article_ids: payload.articleIds ?? null,
-      },
-      token,
-    },
-  );
-}
-
-export function promoteKnowledge(
-  workspaceId: string,
-  payload: {
-    slug: string;
-    title: string;
-    body: string;
-    summary?: string | null;
-    sourceArticleIds: string[];
-    markSourcesAsOverrides?: boolean;
-  },
-  token?: string,
-): Promise<ApiKnowledgePromotionResult> {
-  return apiFetch<ApiKnowledgePromotionResult>(
-    `/v1/workspaces/${encodeURIComponent(workspaceId)}/knowledge/promote`,
-    {
-      method: "POST",
-      body: {
-        slug: payload.slug,
-        title: payload.title,
-        body: payload.body,
-        summary: payload.summary ?? null,
-        source_article_ids: payload.sourceArticleIds,
-        mark_sources_as_overrides: payload.markSourcesAsOverrides ?? true,
-      },
-      token,
-    },
-  );
-}
-
-// --- Phase 5d: canonical article listing for a single bucket --------------
+// --- Bucket article listing ----------------------------------------------
 
 export async function listBucketArticles(
   workspaceId: string,

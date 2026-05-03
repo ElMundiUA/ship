@@ -333,12 +333,4 @@ export type ApiBucketArticle = {
   created_at: string;
   updated_at: string;
   archived_at: string | null;
-  /**
-   * PR-7A: cross-scope override link. Non-null means this article
-   * intentionally overrides a workspace-canonical article — the UI
-   * renders a divergence badge and a deep-link to the workspace copy.
-   */
-  overrides_workspace_article_id?: string | null;
-  /** Slug of the workspace bucket that owns the overridden article. */
-  overrides_workspace_bucket_slug?: string | null;
 };
