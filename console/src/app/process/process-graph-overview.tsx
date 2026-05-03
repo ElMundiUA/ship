@@ -120,13 +120,12 @@ export function ProcessGraphOverview({
 
 function HealthDot({ status }: { status: string }) {
   let bg = "bg-emerald-400";
-  let label = status;
   if (status === "warning" || status === "degraded") bg = "bg-amber-400";
   else if (status !== "ok") bg = "bg-coral";
   return (
     <span
-      className={`inline-flex items-center gap-1 rounded border border-white/10 bg-black/30 px-1.5 py-0.5 text-white/55`}
-      title={label}
+      className="inline-flex items-center gap-1 rounded border border-white/10 bg-black/30 px-1.5 py-0.5 text-white/55"
+      title={status}
     >
       <span className={`h-1.5 w-1.5 rounded-full ${bg}`} aria-hidden />
       {status}
