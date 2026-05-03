@@ -33,8 +33,8 @@ shipctl pattern list
 shipctl pattern show role-developer              # resolves latest or pin
 shipctl pattern fetch role-developer --version 1.4.2
 shipctl search "release gates and qa split" --top-k 8
-shipctl docs fetch documentation/adoption/delivery-quality-and-release-process.md
-shipctl sync                                       # reconcile .ship/cache/
+shipctl knowledge fetch repository-context           # workspace bucket
+shipctl sync                                         # reconcile .ship/cache/
 \`\`\`
 
 ## HTTP (curl, no CLI)

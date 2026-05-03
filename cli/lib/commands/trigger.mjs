@@ -69,7 +69,7 @@ USAGE
 
 ENV
   SHIP_API_TOKEN             Optional. When set, due routines are claimed in Ship.
-  SHIP_WORKSPACE_ID          Optional. Skips the ``/v1/workspaces`` lookup if set.
+  SHIP_WORKSPACE_ID          Optional. Skips the /v1/workspaces lookup if set.
   SHIP_WORKSPACE_API_BASE    Optional API base override.
   SHIP_API_BASE              Fallback API base override.
 `);

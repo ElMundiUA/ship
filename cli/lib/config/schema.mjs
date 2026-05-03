@@ -1,14 +1,14 @@
 import { KNOWN_AGENTS } from "../detect.mjs";
 
 /* Historical schema used by every released shipctl through 0.11.x. We
- * keep validating it in parallel with v2 so customers who haven't run
- * `shipctl migrate` see clear warnings instead of silent failures. */
+ * keep validating it in parallel with v2 so legacy configs surface a
+ * deprecation warning instead of failing silently. */
 export const LEGACY_CONFIG_SCHEMA_VERSION = 1;
 
 /* RFC-0007 lanes-as-config. Introduced alongside `shipctl run`. Clients
  * that understand only v1 will refuse to read v2 and print a shipctl
  * upgrade hint; clients that understand v2 accept v1 with a deprecation
- * warning and suggest `shipctl migrate`. */
+ * warning. */
 export const CONFIG_SCHEMA_VERSION = 2;
 
 export const SUPPORTED_CONFIG_VERSIONS = Object.freeze([
@@ -639,9 +639,9 @@ function validateV2Lanes(obj, errors, warnings) {
 
   const lanes = obj.lanes;
   if (lanes === undefined) {
-    /* An empty lanes map is legal — a fresh repo that has only gone
-     * through `shipctl migrate` has no automation wired yet, and that's
-     * the right default for onboarding. */
+    /* An empty lanes map is legal — a fresh repo seeded by the wizard
+     * declares automation under `process.routines:` instead, and the
+     * top-level `lanes:` key is left out. */
     return;
   }
   if (!isPlainObject(lanes)) {
@@ -863,7 +863,7 @@ export function validateConfig(obj) {
 
   if (!isV2) {
     warnings.push(
-      `version: config is at v${obj.version}; run \`shipctl migrate\` to upgrade to v${CONFIG_SCHEMA_VERSION}`,
+      `version: config is at v${obj.version}; v${CONFIG_SCHEMA_VERSION} is the current schema. Re-seed the repo from the workspace wizard to upgrade.`,
     );
   }
 

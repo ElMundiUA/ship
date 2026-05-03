@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import { extractGlobalArgv } from "../lib/config.mjs";
-import { docsCommand } from "../lib/commands/docs.mjs";
 import { searchCommand } from "../lib/commands/search.mjs";
 import { patternCommand } from "../lib/commands/patterns.mjs";
 import { resourceManifestCommand } from "../lib/commands/manifest-catalog.mjs";
@@ -41,11 +40,6 @@ try {
 
   if (cmd === "search") {
     await searchCommand(ctx, rest);
-    process.exit(0);
-  }
-
-  if (cmd === "docs") {
-    await docsCommand(ctx, rest);
     process.exit(0);
   }
 
@@ -104,33 +98,9 @@ try {
     process.exit(0);
   }
 
-  if (cmd === "new") {
-    const { newCommand } = await import("../lib/commands/new.mjs");
-    await newCommand(ctx, rest);
-    process.exit(0);
-  }
-
-  if (cmd === "bootstrap") {
-    const { bootstrapCommand } = await import("../lib/commands/bootstrap.mjs");
-    await bootstrapCommand(ctx, rest);
-    process.exit(0);
-  }
-
-  if (cmd === "callback") {
-    const { callbackCommand } = await import("../lib/commands/callback.mjs");
-    await callbackCommand(ctx, rest);
-    process.exit(0);
-  }
-
   if (cmd === "trigger") {
     const { triggerCommand } = await import("../lib/commands/trigger.mjs");
     await triggerCommand(ctx, rest);
-    process.exit(0);
-  }
-
-  if (cmd === "kickoff") {
-    const { kickoffCommand } = await import("../lib/commands/kickoff.mjs");
-    await kickoffCommand(ctx, rest);
     process.exit(0);
   }
 
@@ -140,32 +110,9 @@ try {
     process.exit(0);
   }
 
-  if (cmd === "process") {
-    const { processCommand } = await import("../lib/commands/process.mjs");
-    await processCommand(ctx, rest);
-    process.exit(0);
-  }
-
-  if (cmd === "migrate") {
-    const { migrateCommand } = await import("../lib/commands/migrate.mjs");
-    await migrateCommand(ctx, rest);
-    process.exit(0);
-  }
-
-  if (cmd === "run" || cmd === "agent-run") {
-    // ``agent-run`` is a back-compat alias for ``run`` — older trigger
-    // workflows still spell it that way until they re-seed.
+  if (cmd === "run") {
     const { runCommand } = await import("../lib/commands/run.mjs");
     await runCommand(ctx, rest);
-    process.exit(0);
-  }
-
-  /* `lanes` is the protocol-stable name; `automations` is the
-   * operator-friendly soft alias. Both dispatch to the same handler
-   * indefinitely — we are not deprecating the original. */
-  if (cmd === "lanes" || cmd === "automations") {
-    const { lanesCommand } = await import("../lib/commands/lanes.mjs");
-    await lanesCommand(ctx, rest);
     process.exit(0);
   }
 

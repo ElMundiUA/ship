@@ -63,7 +63,6 @@ test("shipctl doctor --json prints exactly one JSON payload", () => {
  * uses the actual binary name `shipctl ` and never bare `ship `
  * before a verb. */
 const SHIP_PREFIX_SCENARIOS = [
-  { name: "docs",        args: ["docs"] },
   { name: "search",      args: ["search"] },
   { name: "patterns",    args: ["pattern"] },
   { name: "tools",       args: ["tool"] },

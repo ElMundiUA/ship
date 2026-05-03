@@ -69,9 +69,3 @@ test("shipctl run errors on unknown routine", () => {
   assert.match(r.stderr, /unknown routine 'bar'/);
 });
 
-test("shipctl agent-run is a back-compat alias for run", () => {
-  const dir = mktmp();
-  const r = runCtl(dir, ["agent-run", "--help"]);
-  assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, /shipctl run — execute one E14 routine/);
-});

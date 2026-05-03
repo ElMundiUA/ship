@@ -153,7 +153,7 @@ _REPO_INTEL_TEMPLATE: str = (
     "so that automated reviews don't have to re-scan the project on\n"
     "every run.\n"
     "\n"
-    "To re-trigger: `shipctl knowledge refresh-intel`\n"
+    "Re-trigger from the workspace console (Repo → Refresh intel).\n"
 )
 
 

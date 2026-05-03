@@ -475,7 +475,7 @@ test("v1 config is accepted with a deprecation warning", () => {
   };
   const res = validateConfig(cfg);
   assert.equal(res.ok, true, JSON.stringify(res.errors || []));
-  assert.ok(res.warnings.some((w) => w.includes("shipctl migrate")));
+  assert.ok(res.warnings.some((w) => w.includes("v2 is the current schema")));
 });
 
 test("write/read preserves lane key order", () => {

@@ -1,6 +1,6 @@
 # @elmundi/ship-cli
 
-`shipctl` is the developer workbench for Ship. Product owners should start in the console and docs; use the CLI when you need local repo setup, config validation, artifact sync, agent rule installation, or reproducible diagnostics.
+`shipctl` is the developer workbench for a Ship-connected repo. The console is for the operator; the CLI is for the engineer. It runs locally for setup, sync, validation, and diagnostics — it does not orchestrate workflows, touch workspace state, or write to the audit log. The customer-side CI uses `shipctl trigger` (and the trigger-spawned `shipctl run`) as a thin entry-point that hands work to the workspace runner.
 
 Published package: `@elmundi/ship-cli`. Binary: `shipctl`.
 
@@ -25,11 +25,10 @@ Use `shipctl` to:
 - sync patterns, tools, and collections into `.ship/cache/`;
 - verify local repo wiring in CI or before a PR;
 - inspect detected stack signals with `doctor`;
-- fetch catalog or docs content for agents;
-- draft and submit feedback on artifacts;
-- run technical routines where the repo-level workflow requires it.
+- read workspace knowledge buckets from inside an agent run;
+- draft and submit feedback on catalog artifacts.
 
-Do not use the CLI as the main product onboarding story. The product setup path is workspace → repo → tracker → knowledge → dashboard/Inbox.
+The product setup path is workspace → repo → tracker → knowledge → dashboard/Inbox, all in the console wizard. The CLI does not duplicate that flow.
 
 ## First local setup
 
@@ -60,22 +59,24 @@ shipctl verify
 
 | Command | Use |
 | --- | --- |
-| `shipctl init` | Create config, infer stack, sync selected artifacts, optionally install agent rules. |
-| `shipctl doctor` | Inspect repo signals without changing files unless `--write-inventory` is passed. |
-| `shipctl verify` | Check config, cache, agent rules, generated files, and optional network/provider reachability. |
+| `shipctl doctor` | Cheap repo health checks: agent rule files installed, config valid, lock fresh, network reachable. |
+| `shipctl verify` | Heavier post-adoption checks (artefact contract, marker drift, network/provider reachability). |
 | `shipctl sync` | Refresh catalog artifacts into `.ship/cache/`; `--lock` writes a lockfile. |
-| `shipctl config` | Show, validate, get, and set `.ship/config.yml` fields. |
-| `shipctl pattern|tool|collection` | List, show, fetch, or search artifact bodies. |
-| `shipctl docs fetch` | Fetch documentation content for agent context. |
-| `shipctl knowledge init` | Seed starter `.ship/knowledge/*.md` files where supported. |
-| `shipctl feedback` | Draft and submit artifact or docs feedback. |
-| `shipctl telemetry` | Opt-in usage telemetry controls. |
+| `shipctl config` | `show / validate / get / set / init / path` for `.ship/config.yml`. |
+| `shipctl init` | Bootstrap `.ship/`, fetch artifacts, install agent rules in an existing repo. |
+| `shipctl pattern\|tool\|collection` | List, show, fetch, or search artifact bodies. |
+| `shipctl search` | Vector search over docs + prompts. |
+| `shipctl knowledge fetch` | Read a workspace bucket's articles + sync state (the agent's read path). |
+| `shipctl trigger` | CI entry-point: compute due routines and claim each schedule window in Ship. |
+| `shipctl run` | Spawned per routine by `shipctl trigger`: resolve pattern, fetch a ticket if FSM-staged, launch the agent runtime. |
+| `shipctl feedback` | Local markdown drafts; submit creates a GitHub issue against a cited artifact. |
+| `shipctl telemetry` | Opt-in usage telemetry controls (default OFF). |
 
 Run `shipctl help` and `shipctl <command> --help` for the exact flag surface.
 
 ## Configuration
 
-The CLI reads `.ship/config.yml` from the repo root. It records stack hints, API settings, artifact pins, telemetry preference, cache behavior, and technical routine wiring.
+The CLI reads `.ship/config.yml` from the repo root. It records stack hints, API settings, artifact pins, telemetry preference, cache behavior, and `process.routines` wiring.
 
 See [`../documentation/configuration.md`](../documentation/configuration.md) for the maintained field reference.
 
@@ -131,4 +132,4 @@ npm run shipctl -- help
 npm test --prefix cli
 ```
 
-Catalog commands read `artifacts/**/ARTIFACT.md` directly when run inside this repo. Search and docs fetch still use the configured HTTP API.
+Catalog commands read `artifacts/**/ARTIFACT.md` directly when run inside this repo. Search still uses the configured HTTP API.

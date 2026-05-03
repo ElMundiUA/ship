@@ -3,6 +3,41 @@
 A short log of structural changes to the Manual itself — not to the
 product. For product changes, see the [/blog](/blog).
 
+## Phase 11 — `shipctl` cleanup to canonical surface
+
+Stripped the CLI back to what `documentation/developer/shipctl.md` and
+the E14 smart-orchestration plan actually call for. The CLI is the
+local engineering workbench plus a thin CI entry-point — everything
+else moved into the wizard / console / server-side orchestrator and
+the legacy verbs have been removed.
+
+* **Removed commands** — `bootstrap` (4-line stub), `lanes` /
+  `automations` (lanes are the legacy term for `process.routines`),
+  `kickoff` (legacy CI verb superseded by `trigger` + `run`),
+  `callback` (replaced by `/agent-runs/finish` posted by the agent
+  itself; E14 ELS-32), `process` (the `process tickets` route never
+  shipped on the backend; FSM/specialist rendering is server-side
+  now), `migrate` (the v1→v2 lanes-as-config upgrade is over),
+  `docs` (duplicates `pattern fetch` + `feedback submit`), `new`
+  (greenfield onboarding goes through the wizard).
+* **Removed `knowledge` subcommands** — `init`, `bootstrap`,
+  `refresh-intel`. The wizard seeds starter docs; ingestion runs
+  server-side; intel UI was removed from the wizard. `knowledge
+  fetch` is the only remaining subcommand and is the agent's
+  read path during a routine run.
+* **Removed legacy infrastructure** — `cli/lib/vendor/run-agent.workflow.yml`
+  (vendored reusable workflow that the deleted `lanes install` used
+  to drop into customer repos), `cli/lib/process/specialist-prompt-contract.mjs`,
+  `cli/lib/config/migrate.mjs`.
+* **What's left** — `init`, `doctor`, `verify`, `sync`, `config`
+  (daily local), `pattern` / `tool` / `collection` / `search`
+  (catalog read), `knowledge fetch` (agent's read path),
+  `trigger` + `run` (CI entry-point used by `ship-trigger-schedule.yml`),
+  `feedback`, `telemetry`.
+* **Schema warning rewritten** — v1 configs no longer suggest
+  `shipctl migrate`; the right path is now to re-seed the repo from
+  the workspace wizard.
+
 ## Phase 10 — Methodology index moves to pgvector (E13)
 
 * **ChromaDB removed** — the persistent vector index at `backend/.chroma/` has been removed entirely. All vector search now runs on pgvector (Postgres), which the cloud platform already uses for buckets, articles, and agent memory.

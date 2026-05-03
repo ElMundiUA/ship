@@ -16,22 +16,19 @@ function runCtl(args, env = {}) {
   });
 }
 
-/* The eight commands we care about. Some commands don't have a
- * top-level `--help` (`config` lists subcommands when called with no
- * args; `doctor --help` works directly). The `args` field is whatever
- * tokens we pass to surface that command's help text. */
+/* `feedback` and `telemetry` print a usage error on `--help` instead
+ * of a help body — they're left out of this snapshot for that reason,
+ * not because they're un-discoverable. `shipctl help` covers them. */
 const SCENARIOS = [
-  { name: "init",     args: ["init", "--help"] },
-  { name: "sync",     args: ["sync", "--help"] },
-  { name: "verify",   args: ["verify", "--help"] },
-  { name: "config",   args: ["config", "--help"] },
-  { name: "lanes",    args: ["lanes", "--help"] },
-  { name: "run",      args: ["run", "--help"] },
-  { name: "callback", args: ["callback", "--help"] },
-  { name: "doctor",   args: ["doctor", "--help"] },
+  { name: "init",      args: ["init", "--help"] },
+  { name: "sync",      args: ["sync", "--help"] },
+  { name: "verify",    args: ["verify", "--help"] },
+  { name: "config",    args: ["config", "--help"] },
+  { name: "doctor",    args: ["doctor", "--help"] },
+  { name: "trigger",   args: ["trigger", "--help"] },
+  { name: "run",       args: ["run", "--help"] },
+  { name: "knowledge", args: ["knowledge", "--help"] },
 ];
-
-const IA_VOCAB_COMMANDS = new Set(["lanes", "run", "callback"]);
 
 for (const { name, args } of SCENARIOS) {
   test(`shipctl ${name} --help: exits 0, mentions itself, mentions shipctl`, () => {
@@ -46,22 +43,5 @@ for (const { name, args } of SCENARIOS) {
       r.stdout.includes("shipctl "),
       `${name} --help should mention 'shipctl ' (note the trailing space)`,
     );
-    if (IA_VOCAB_COMMANDS.has(name)) {
-      assert.ok(
-        /Automation|Run\b/.test(r.stdout),
-        `${name} --help should reference the operator IA vocabulary (Automation or Run)`,
-      );
-    }
   });
 }
-
-test("shipctl callback --help surfaces the new RunSummary outcome flags", () => {
-  const r = runCtl(["callback", "--help"]);
-  assert.equal(r.status, 0, r.stderr);
-  for (const flag of ["--outcome-text", "--findings-count", "--escalation"]) {
-    assert.ok(
-      r.stdout.includes(flag),
-      `callback --help should document ${flag}`,
-    );
-  }
-});

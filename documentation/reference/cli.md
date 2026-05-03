@@ -1,14 +1,12 @@
 # `shipctl` command reference
 
-`shipctl` is your local engineering workbench—a CLI for bootstrapping, diagnosing, and orchestrating Ship workflows in your repository. It runs entirely on your machine; it does not mutate workspace state on its own. The CLI ships as the `shipctl` binary and via `npx @elmundi/ship-cli <command>`. This page catalogues every command grouped by what you're trying to do, so you can scan and find the verb you need.
+`shipctl` is your local engineering workbench—a CLI for bootstrapping, diagnosing, and inspecting a Ship-connected repository. The console is for the operator; the CLI is for the engineer. It runs locally for setup, sync, validation, and diagnostics — it does not orchestrate workflows, touch workspace state, or write to the audit log. The two CI-side verbs (`trigger` and `run`) are thin entry-points the seed workflow uses to hand work to the workspace runner. The CLI ships as the `shipctl` binary and via `npx @elmundi/ship-cli <command>`.
 
 ## Setup
 
-- **`shipctl init`** — First-time bootstrap of `.ship/` configuration for a repository. Creates the config skeleton, installs agent rule files, and preps the local environment. Common flags: `--copy-rules` (install agent rule files), `--agents <list>` (comma-separated agent IDs).
+- **`shipctl init`** — First-time bootstrap of `.ship/` for an existing repository. Creates the config skeleton, installs agent rule files, and preps the local environment. Common flags: `--copy-rules` (install agent rule files), `--agents <list>` (comma-separated agent IDs).
 
-- **`shipctl bootstrap`** — Internal-leaning sibling of `init`; primarily used during CI provisioning by teams that prefer explicit control over initialization steps.
-
-- **`shipctl sync`** — Pull the latest artefact bodies and re-install marker-delimited blocks in agent rule files. Run this after `git pull` if your team has bumped artefact pins.
+- **`shipctl sync`** — Pull the latest artefact bodies and re-install marker-delimited blocks in agent rule files. Run this after `git pull` if your team has bumped artefact pins. `--lock` writes `.ship/shipctl.lock.json` for reproducible installs.
 
 ## Diagnostics
 
@@ -20,54 +18,33 @@
 
 - **`shipctl config validate`** — Validate a hand-edited config file before commit, catching schema and reference errors early.
 
-## Knowledge and docs
+## Knowledge
 
-- **`shipctl knowledge fetch`** — Pull workspace knowledge into the local cache for offline work or context priming. Other knowledge subcommands exist; use `shipctl knowledge --help` for the full list.
-
-- **`shipctl docs`** — Interact with workspace documentation. Mirrors content into and out of the local repository.
+- **`shipctl knowledge fetch <bucket-slug>`** — Read a workspace bucket's articles and source sync state. This is the agent's read path during a routine run; bucket authoring + ingestion live server-side.
 
 ## Catalogue lookups
 
-- **`shipctl patterns`** — List or inspect patterns in the current artefact catalogue, showing available templates and their metadata.
+- **`shipctl pattern`** / **`shipctl tool`** / **`shipctl collection`** — `list`, `show`, `fetch`, or `search` artifact bodies in the catalogue.
 
-- **`shipctl search <query>`** — Search the catalogue for patterns, tools, collections, and other artefacts by name or description.
+- **`shipctl search <query>`** — Vector search across docs and prompt bodies.
 
-- **`shipctl manifest-catalog`** — Print the manifest of the current cached catalogue. The right answer when you want to see "what does the workspace think it has?"
+## CI entry-point (used by the seed workflow)
 
-## Authoring
+- **`shipctl trigger --event schedule`** — Compute due routines from `.ship/config.yml` and claim each schedule window in Ship. The seed workflow (`ship-trigger-schedule.yml`) fires this on cron and pipes due ids into `shipctl run` per routine.
 
-- **`shipctl new <kind>`** — Scaffold a new artefact (a pattern, tool, collection, etc.) into `artifacts/`. Pre-fills the frontmatter and creates a starter template.
+- **`shipctl run --routine <id>`** — Resolve the pattern, fetch a ticket if the pattern declares an FSM stage, fetch the workspace policy preamble, and launch the configured agent runtime. Spawned per routine by `shipctl trigger` in the seed workflow.
 
-## Process and routines (developer-side)
+## Telemetry and feedback
 
-- **`shipctl process`** — Interact with the per-repo process model from the CLI. Most operators use `/process` in the console; the CLI version is for scripting and CI integration.
+- **`shipctl telemetry`** — Show or change telemetry opt-in state for the CLI. Default OFF.
 
-- **`shipctl lanes`** — Legacy inspector and alias. Use `process` instead in new code.
-
-- **`shipctl kickoff <routine>`** — Start a routine run from the CLI. Useful in CI hooks and automated triggers.
-
-- **`shipctl trigger <event>`** — Fire an event-driven routine manually, passing the event name as an argument.
-
-- **`shipctl run <routine>`** — Generic routine invocation with broader flag surface. Closer to `kickoff` but with more customization options.
-
-## Webhooks and callbacks
-
-- **`shipctl callback`** — Test the webhook callback path against a local listener. Use this when wiring a custom webhook integration to verify HMAC signing and payload shape.
-
-## Maintenance
-
-- **`shipctl migrate`** — Schema migration helper for `.ship/config.yml` when upgrading to a new major CLI version.
-
-- **`shipctl telemetry`** — Show or change telemetry opt-in state for the CLI.
-
-- **`shipctl feedback`** — List or submit local feedback drafts saved under `.ship/feedback-drafts/`.
+- **`shipctl feedback`** — Local markdown drafts; `submit` creates a GitHub issue against a cited catalogue artifact.
 
 ## Help and discovery
 
 - **`shipctl --help`** — Print the command list and global flags.
-
 - **`shipctl <cmd> --help`** — Print detailed flags and examples for any specific command.
 
 ---
 
-Most teams use four to six commands regularly: `init`, `doctor`, `verify`, `sync`, and `config validate` cover 90% of daily needs. The rest exist for specific moments—feedback submission, new artefact scaffolding, CI integration, and schema migration. Don't memorize the list; use `--help`. For deeper context on the CLI's design and workflow, see [the shipctl chapter](/docs/developer/shipctl) in the developer guide.
+Most engineers use five commands regularly: `init`, `doctor`, `verify`, `sync`, and `config validate` cover the daily needs. The CI verbs (`trigger`, `run`) are wired by the workspace wizard once and rarely touched after that. For deeper context on the CLI's design and workflow, see [the shipctl chapter](/docs/developer/shipctl) in the developer guide.
