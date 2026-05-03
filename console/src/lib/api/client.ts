@@ -2949,26 +2949,6 @@ export async function uploadToBucket(
   return data as ApiDistillOut;
 }
 
-/**
- * Phase 7b — trigger a manual refresh of a connector-proxy bucket.
- *
- * Currently the backend synthesizes a stub page from the stored
- * ``source_ref`` so the UI round-trip is observable even before
- * the real connector fetcher layer exists. When the fetcher lands,
- * this surface stays the same — only the body the Distiller
- * consumes changes.
- */
-export function syncConnectorBucket(
-  workspaceId: string,
-  slug: string,
-  token?: string,
-): Promise<ApiDistillOut> {
-  return apiFetch<ApiDistillOut>(
-    `/v1/workspaces/${encodeURIComponent(workspaceId)}/buckets/${encodeURIComponent(slug)}/sync`,
-    { method: "POST", token },
-  );
-}
-
 // --- API tokens ------------------------------------------------------------
 
 export function mintToken(

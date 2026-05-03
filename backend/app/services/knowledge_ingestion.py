@@ -17,9 +17,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.config import Settings, get_settings
 from backend.app.db.models.agent_memory import (
-    BucketArticleSource,
-    BucketSource,
-    KnowledgeBucket,
     KnowledgeImportSource,
     KnowledgeImportSourceKind,
     KnowledgeIngestionRun,
@@ -27,15 +24,13 @@ from backend.app.db.models.agent_memory import (
     KnowledgeSourceItem,
     KnowledgeSourceStatus,
 )
+from backend.app.db.models.agent_surface import Improvement
 from backend.app.db.models.integrations import GitHubInstallation, WorkspaceRepo
 from backend.app.db.models.tenancy import Integration
 from backend.app.db.session import get_sessionmaker
 from backend.app.integrations.gateway.code_host import RepoRef
 from backend.app.integrations.github.code_host_adapter import GitHubCodeHost
-from backend.app.services.agent.client import pick_default_client
 from backend.app.services.connectors import fetch_connector_pages
-from backend.app.services.distiller import DistillerInput, run_distiller
-from backend.app.services.distiller_llm import make_llm_classifier
 
 
 MAX_SOURCE_DOCUMENTS = 100
@@ -63,9 +58,7 @@ class IngestionStats:
     changed: int = 0
     skipped: int = 0
     sections: int = 0
-    articles_created: int = 0
-    articles_updated: int = 0
-    distiller_skipped: int = 0
+    notes_created: int = 0
     errors: int = 0
 
     def to_dict(self) -> dict[str, int]:
@@ -74,9 +67,7 @@ class IngestionStats:
             "changed": self.changed,
             "skipped": self.skipped,
             "sections": self.sections,
-            "articles_created": self.articles_created,
-            "articles_updated": self.articles_updated,
-            "distiller_skipped": self.distiller_skipped,
+            "notes_created": self.notes_created,
             "errors": self.errors,
         }
 
@@ -115,11 +106,6 @@ def _normalise_markdown(value: str) -> str:
     return "\n".join(lines).strip()
 
 
-def _slugify(value: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
-    return slug[:120] or "imported"
-
-
 def _split_sections(doc: SourceDocument) -> list[SourceDocument]:
     body = _normalise_markdown(doc.body_md)
     if not body:
@@ -153,32 +139,6 @@ def _section_doc(
         item_ref={**(doc.item_ref or {}), "section_index": index},
         cursor=doc.cursor,
     )
-
-
-def _bucket_slug_for(doc: SourceDocument, buckets: list[KnowledgeBucket]) -> str:
-    available = {bucket.slug for bucket in buckets}
-    text = f"{doc.title}\n{doc.body_md[:4000]}".lower()
-    rules = {
-        "project-map": ("repo", "folder", "structure", "ownership", "service"),
-        "architecture-decisions": ("adr", "architecture", "design", "trade-off"),
-        "engineering-standards": ("standard", "coding", "review", "test", "lint"),
-        "runbooks-operations": ("runbook", "incident", "deploy", "rollback", "on-call"),
-        "product-knowledge": ("product", "user", "customer", "ux", "roadmap"),
-        "source-intelligence": ("code", "module", "class", "function", "api"),
-        "generated-assets": ("generated", "summary", "artifact", "draft"),
-        "security-access": ("security", "secret", "permission", "access", "soc2"),
-        "integration-playbooks": ("integration", "webhook", "oauth", "api", "connector"),
-        "data-domain-glossary": ("data", "metric", "entity", "glossary", "domain"),
-    }
-    scores = [
-        (sum(text.count(keyword) for keyword in keywords), slug)
-        for slug, keywords in rules.items()
-        if slug in available
-    ]
-    scores.sort(reverse=True)
-    if scores and scores[0][0] > 0:
-        return scores[0][1]
-    return "product-knowledge" if "product-knowledge" in available else buckets[0].slug
 
 
 async def create_import_source(
@@ -570,6 +530,11 @@ async def _fetch_docs_repo_documents(
     return documents
 
 
+SOURCE_KIND_IMPORT = "import_source"
+NOTE_BODY_CAP = 12_000
+NOTE_EXCERPT_CAP = 600
+
+
 async def _ingest_documents(
     session: AsyncSession,
     *,
@@ -579,29 +544,16 @@ async def _ingest_documents(
     actor_user_id: uuid.UUID | None,
     settings: Settings,
 ) -> IngestionStats:
-    buckets = list(
-        (
-            await session.execute(
-                select(KnowledgeBucket)
-                .where(
-                    KnowledgeBucket.workspace_id == source.workspace_id,
-                    KnowledgeBucket.scope_kind == "workspace",
-                    KnowledgeBucket.archived_at.is_(None),
-                )
-                .order_by(KnowledgeBucket.slug)
-            )
-        )
-        .scalars()
-        .all()
-    )
-    if not buckets:
-        raise KnowledgeIngestionError("workspace has no active knowledge buckets")
-    try:
-        client = pick_default_client(settings)
-        classifier = make_llm_classifier(client, model=settings.agent_model_fast)
-    except Exception:
-        classifier = None
+    """Turn each changed source item into ``Improvement(kind='knowledge_note')``.
+
+    The harvester → router → synthesiser pipeline (KB-1..KB-4) picks up
+    these rows on its next tick and decides whether they become draft
+    articles in any bucket. We do *not* call the distiller here — the
+    operator is the one who curates what becomes canonical knowledge,
+    and routing is the router's job.
+    """
     mutable = IngestionStats(discovered=len(documents)).to_dict()
+    now_iso = datetime.now(timezone.utc).isoformat()
     for doc in documents:
         fingerprint = _sha256_text(_normalise_markdown(doc.body_md))
         item = await _upsert_source_item(session, source=source, doc=doc)
@@ -612,55 +564,35 @@ async def _ingest_documents(
         mutable["changed"] += 1
         sections = _split_sections(doc)
         mutable["sections"] += len(sections)
-        for section in sections:
-            bucket_slug = source.config.get("target_bucket_slug")
-            if not bucket_slug:
-                bucket_slug = _bucket_slug_for(section, buckets)
-            bucket = next(
-                (candidate for candidate in buckets if candidate.slug == bucket_slug),
-                buckets[0],
-            )
-            outcome = await run_distiller(
-                session,
+        for section_idx, section in enumerate(sections):
+            note = Improvement(
                 workspace_id=source.workspace_id,
-                bucket=bucket,
-                actor_user_id=actor_user_id,
-                inp=DistillerInput(
-                    body_md=section.body_md,
-                    source_kind=BucketSource.EXTERNAL_STATIC,
-                    title_hint=section.title,
-                    slug_hint=_slugify(section.title or section.external_id),
-                    provenance={
-                        "kind": "knowledge_import_source",
-                        "source_id": str(source.id),
-                        "source_kind": source.kind,
-                        "source_item_id": str(item.id),
-                        "external_id": doc.external_id,
-                        "external_url": doc.external_url,
-                    },
-                    input_ref={
-                        "knowledge_source_id": str(source.id),
-                        "knowledge_source_item_id": str(item.id),
-                        "external_id": section.external_id,
-                    },
-                ),
-                classifier=classifier,
+                repo_id=source.repo_id,
+                pipeline_run_id=None,
+                kind="knowledge_note",
+                title=(section.title or doc.title)[:512],
+                body=section.body_md[:NOTE_BODY_CAP],
+                impact=None,
+                effort=None,
+                context={
+                    "source_kind": SOURCE_KIND_IMPORT,
+                    "source_id": str(item.id),
+                    "source_excerpt": section.body_md[:NOTE_EXCERPT_CAP],
+                    "import_source_id": str(source.id),
+                    "import_source_kind": source.kind,
+                    "ingestion_run_id": str(run.id),
+                    "external_id": section.external_id,
+                    "external_url": doc.external_url,
+                    "section_idx": section_idx,
+                    "routed_bucket_id": None,
+                    "route_confidence": None,
+                    "bucket_hint": source.config.get("target_bucket_slug"),
+                    "extractor": "import_source_v1",
+                    "harvested_at": now_iso,
+                },
             )
-            if outcome.decision == "new":
-                mutable["articles_created"] += len(outcome.article_ids)
-            elif outcome.decision == "update":
-                mutable["articles_updated"] += len(outcome.article_ids)
-            elif outcome.decision == "skip":
-                mutable["distiller_skipped"] += 1
-            for article_id in outcome.article_ids:
-                session.add(
-                    BucketArticleSource(
-                        id=uuid.uuid4(),
-                        article_id=article_id,
-                        source_item_id=item.id,
-                        run_id=run.id,
-                    )
-                )
+            session.add(note)
+            mutable["notes_created"] += 1
     return IngestionStats(**mutable)
 
 
