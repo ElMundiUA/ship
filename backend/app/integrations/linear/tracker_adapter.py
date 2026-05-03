@@ -195,6 +195,101 @@ class LinearTracker:
             )
         return out
 
+    async def fetch_workflow_states(
+        self, *, team_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Return the team's workflow states with id/name/type/color.
+
+        Drives the canonical→native mapping resolver: pairing each of the
+        seven Ship canonical states (backlog/planning/executing/reviewing/
+        awaiting_input/blocked/closed) with whichever Linear state best
+        fits. ``type`` follows Linear's enum (``backlog``/``unstarted``/
+        ``started``/``completed``/``canceled``) — the deterministic pass
+        keys off it before falling back to the LLM resolver.
+        """
+        tid = team_id or self._team_id
+        if not tid:
+            raise ValueError("LinearTracker.fetch_workflow_states needs a team_id")
+        data = await self._gql(
+            """query ShipFetchStates($teamId: String!) {
+              team(id: $teamId) {
+                states(first: 50) {
+                  nodes { id name type color position }
+                }
+              }
+            }""",
+            {"teamId": tid},
+        )
+        nodes = (
+            (((data.get("team") or {}).get("states")) or {}).get("nodes") or []
+        )
+        return [
+            {
+                "id": str(n.get("id") or ""),
+                "name": str(n.get("name") or ""),
+                "type": str(n.get("type") or ""),
+                "color": str(n.get("color") or ""),
+                "position": n.get("position"),
+            }
+            for n in nodes
+            if n.get("id") and n.get("name")
+        ]
+
+    async def fetch_sample_titles_per_state(
+        self,
+        *,
+        team_id: str | None = None,
+        per_state_limit: int = 3,
+    ) -> dict[str, list[str]]:
+        """Pull a few recent issue titles per workflow state.
+
+        Used to disambiguate states whose ``type`` alone doesn't tell us
+        which canonical bucket they belong to (e.g. a team with multiple
+        ``started`` states like "In Progress" / "Code Review" / "QA"). The
+        LLM resolver gets the titles as evidence so it can pick the right
+        canonical match. Capped at three per state to keep the prompt
+        lean — full backlog scans aren't useful for the resolver.
+        """
+        tid = team_id or self._team_id
+        if not tid:
+            raise ValueError(
+                "LinearTracker.fetch_sample_titles_per_state needs a team_id"
+            )
+        first = max(1, min(per_state_limit, 10))
+        data = await self._gql(
+            """query ShipSampleTitles($teamId: String!, $first: Int!) {
+              team(id: $teamId) {
+                states(first: 50) {
+                  nodes {
+                    id
+                    issues(first: $first, orderBy: updatedAt) {
+                      nodes { title }
+                    }
+                  }
+                }
+              }
+            }""",
+            {"teamId": tid, "first": first},
+        )
+        nodes = (
+            (((data.get("team") or {}).get("states")) or {}).get("nodes") or []
+        )
+        out: dict[str, list[str]] = {}
+        for state in nodes:
+            sid = str(state.get("id") or "")
+            if not sid:
+                continue
+            issue_nodes = (
+                (state.get("issues") or {}).get("nodes") or []
+            )
+            titles: list[str] = []
+            for issue in issue_nodes:
+                t = (issue.get("title") or "").strip()
+                if t:
+                    titles.append(t[:200])
+            out[sid] = titles
+        return out
+
     def _fsm_filter(self, stage: str) -> list[dict[str, Any]]:
         """Translate a Ship FSM stage name into Linear filter parts.
 

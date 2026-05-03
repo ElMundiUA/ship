@@ -45,6 +45,7 @@ from backend.app.api.v1.routes import (
     notion_oauth,
     pipelines,
     processes,
+    processes_tracker_sync,
     policies,
     repo_home,
     repo_secrets,
@@ -119,6 +120,11 @@ api_router.include_router(telegram.router)
 api_router.include_router(pipelines.router)
 api_router.include_router(pipelines.public_router)
 api_router.include_router(processes.router)
+# Tracker projection sync: probe → LLM resolve → PR. Lives next to
+# ``processes.router`` because it's process-scoped, but stays in its
+# own module so the auth/probe/resolve/PR pipeline doesn't bloat
+# the read-side process router.
+api_router.include_router(processes_tracker_sync.router)
 api_router.include_router(dashboard.router)
 # Per-repo Home rollup (RFC-0008 §F — PR-4) — a single snapshot the
 # /r/<slug> page renders as Now + Trends tabs without fanning out to
