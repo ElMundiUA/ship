@@ -680,6 +680,35 @@ export function getLatestWizardSeed(
   );
 }
 
+// --- Wizard seed activation (post-seed-PR auto-merge modal) ---------------
+
+export interface ApiWizardSeedActivateResult {
+  merged: boolean;
+  pr_number: number;
+  sha: string | null;
+  message: string | null;
+}
+
+/**
+ * Merge the wizard seed PR on the operator's behalf via the App's
+ * installation token. Powers the "Activate Ship now" modal. Caller
+ * passes the ``pr_number`` returned by :func:`wizardSeed`. Branch
+ * protection / required checks come back as a 409 ``merge_blocked``;
+ * the FE falls back to "I'll merge it myself" without surfacing it
+ * as a generic error.
+ */
+export function activateWizardSeed(
+  workspaceId: string,
+  repoId: string,
+  prNumber: number,
+  token?: string,
+): Promise<ApiWizardSeedActivateResult> {
+  return apiFetch<ApiWizardSeedActivateResult>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/wizard_seed/activate`,
+    { method: "POST", body: { pr_number: prNumber }, token },
+  );
+}
+
 // --- Repo intel (P5-09 — read + manual re-harvest) -------------------------
 
 /**

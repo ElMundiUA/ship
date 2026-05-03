@@ -797,6 +797,28 @@ class WizardSeedOut(BaseModel):
     synthetic_lanes_created: int = 0
 
 
+class WizardSeedActivateIn(BaseModel):
+    """Body for ``POST .../wizard_seed/activate``.
+
+    The pre-Wave-8c "open seed PR → done step" flow asked the operator
+    to merge the PR themselves on github.com. PO-friendly Wave-8c FE
+    pops a modal right after the PR opens with a "Turn Ship on now"
+    CTA — accepting it calls this endpoint, which merges the PR via
+    the App's installation token.
+    """
+
+    pr_number: int = Field(ge=1)
+
+
+class WizardSeedActivateOut(BaseModel):
+    """Response shape for ``POST .../wizard_seed/activate``."""
+
+    merged: bool
+    pr_number: int
+    sha: str | None = None
+    message: str | None = None
+
+
 class KnowledgeBootstrapIn(BaseModel):
     force: bool = False
 
@@ -1929,6 +1951,146 @@ async def get_latest_wizard_seed(
         codeowners=codeowners,
         intel=intel,
         synthetic_lanes_created=int(payload.get("synthetic_lanes_created") or 0),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Wizard seed activation (Wave-8c "Activate Ship now" modal)
+# ---------------------------------------------------------------------------
+#
+# Merge the just-opened wizard seed PR on the operator's behalf. Admin-
+# only; uses the App's installation token (same one that opened the PR
+# so we have ``contents:write``). Branch protection / required checks
+# bubble up as a 409 so the FE can fall back to the "I'll merge it
+# myself" path without pretending it worked.
+
+
+@router.post(
+    "/{repo_id}/wizard_seed/activate",
+    response_model=WizardSeedActivateOut,
+)
+async def activate_wizard_seed(
+    workspace_id: uuid.UUID,
+    repo_id: uuid.UUID,
+    payload: WizardSeedActivateIn,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> WizardSeedActivateOut:
+    """Merge the seed PR opened by ``POST .../wizard_seed`` for ``repo_id``.
+
+    Caller passes ``pr_number`` (returned by the seed call). We resolve
+    the App installation for the repo and call GitHub's merge endpoint
+    with that token. The operator never has to leave the wizard.
+
+    Failure modes the FE has to handle:
+
+    - ``404`` — repo not in this workspace.
+    - ``412 github_app_missing`` — the App was uninstalled between
+      seed and activate (rare but possible).
+    - ``409 merge_blocked`` — branch protection / required status
+      checks aren't satisfied yet. The PR stays open for manual review.
+    - ``502 github_upstream_error`` — anything else GitHub says no to;
+      the upstream message is included so ops can triage.
+    """
+    from backend.app.integrations.github.workflows import (
+        WorkflowDispatchError,
+        merge_pull_request,
+    )
+
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+
+    repo_row = (
+        await session.execute(
+            select(WorkspaceRepo).where(
+                WorkspaceRepo.id == repo_id,
+                WorkspaceRepo.workspace_id == workspace_id,
+            )
+        )
+    ).scalars().first()
+    if repo_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Repo not found in this workspace.",
+        )
+
+    install_row = (
+        await session.execute(
+            select(GitHubInstallation).where(
+                GitHubInstallation.id == repo_row.installation_id
+            )
+        )
+    ).scalars().first()
+    if install_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_412_PRECONDITION_FAILED,
+            detail={
+                "code": "github_app_missing",
+                "message": (
+                    "Ship's GitHub App isn't installed for the workspace. "
+                    "Reinstall it and try again, or merge the PR yourself."
+                ),
+            },
+        )
+
+    try:
+        result = await merge_pull_request(
+            repo_row,
+            install_row,
+            pr_number=payload.pr_number,
+            settings=settings,
+            commit_title=f"ship: activate Ship in {repo_row.full_name}",
+        )
+    except WorkflowDispatchError as exc:
+        # Branch-protection / required-status failures come back as 405
+        # ("Method Not Allowed" — "Pull Request is not mergeable") or
+        # 409 ("Head branch was modified"). Either way the operator
+        # can still merge in the GitHub UI; we surface a stable code
+        # so the FE can render the "merge it yourself" fallback.
+        if exc.status_code in (405, 409):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "merge_blocked",
+                    "message": (
+                        "GitHub wouldn't merge the PR — branch protection or "
+                        "required status checks aren't satisfied yet. Open "
+                        "the PR on GitHub to finish merging."
+                    ),
+                    "github_message": exc.message[:200],
+                },
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "code": "github_upstream_error",
+                "message": "GitHub rejected the merge call.",
+                "github_message": exc.message[:200],
+            },
+        ) from exc
+
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=auth.user.id,
+            actor_token_id=auth.token.id if auth.token else None,
+            action="repo.wizard_seed_activate",
+            target_kind="workspace_repo",
+            target_id=str(repo_row.id),
+            payload={
+                "pr_number": payload.pr_number,
+                "merged": result.merged,
+                "sha": result.sha,
+            },
+        )
+    )
+    await session.commit()
+
+    return WizardSeedActivateOut(
+        merged=result.merged,
+        pr_number=payload.pr_number,
+        sha=result.sha,
+        message=result.message,
     )
 
 

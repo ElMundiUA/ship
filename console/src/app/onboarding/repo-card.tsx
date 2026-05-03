@@ -126,6 +126,18 @@ export function RepoCard({
 
   const [seedSaving, setSeedSaving] = useState(false);
   const [seedError, setSeedError] = useState<string | null>(null);
+  // Post-seed modal state. Pre-fix the seed POST navigated straight
+  // to ``/done`` and silently dropped the operator on a screen that
+  // told them "open the PR on GitHub and merge it" — ~30% of pilot
+  // operators never came back. The modal asks "want me to turn it on
+  // for you?" while the PR URL is still in their head; accepting it
+  // calls ``/wizard-seed/activate`` which merges via the App token.
+  const [pendingSeed, setPendingSeed] = useState<ApiWizardSeedResult | null>(
+    null,
+  );
+  const [activating, setActivating] = useState(false);
+  const [activateError, setActivateError] = useState<string | null>(null);
+  const [activateBlocked, setActivateBlocked] = useState<string | null>(null);
 
   // ── Derived ───────────────────────────────────────────────────
   const missingRequiredSecrets = useMemo(
@@ -685,11 +697,12 @@ export function RepoCard({
                 // quota is exhausted. Non-fatal — the done step has
                 // an audit-log fallback.
               }
-              const url = new URL("/onboarding", window.location.origin);
-              url.searchParams.set("step", "done");
-              url.searchParams.set("ws", workspaceId);
-              url.searchParams.set("repo_id", initial.repo.id);
-              router.push(url.pathname + url.search);
+              setSeedSaving(false);
+              // Pop the activation modal instead of jumping straight
+              // to /done. The two CTAs there decide whether we merge
+              // for the operator (calls /wizard-seed/activate) or let
+              // them merge it themselves on github.com.
+              setPendingSeed(body.result);
             }}
             className="rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-4 py-2 text-xs font-bold text-ink shadow-glow transition hover:brightness-110 disabled:opacity-40"
           >
@@ -707,8 +720,68 @@ export function RepoCard({
           </p>
         )}
       </footer>
+
+      {pendingSeed && (
+        <ActivationModal
+          repoFullName={initial.repo.full_name}
+          seed={pendingSeed}
+          activating={activating}
+          error={activateError}
+          blockedMessage={activateBlocked}
+          onActivate={async () => {
+            setActivating(true);
+            setActivateError(null);
+            setActivateBlocked(null);
+            const resp = await fetch("/api/onboard/wizard-seed-activate", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                workspace_id: workspaceId,
+                repo_id: initial.repo.id,
+                pr_number: pendingSeed.pr_number,
+              }),
+            });
+            setActivating(false);
+            if (!resp.ok) {
+              const p = await resp.json().catch(() => ({}));
+              if (resp.status === 409) {
+                // Branch protection / required checks — surface the
+                // friendly fallback instead of a red error toast.
+                setActivateBlocked(
+                  typeof p?.github_message === "string"
+                    ? p.github_message
+                    : "Branch protection or required checks are blocking the merge.",
+                );
+                return;
+              }
+              setActivateError(
+                typeof p?.error === "string" ? p.error : "unknown",
+              );
+              return;
+            }
+            navigateToDone();
+          }}
+          onSkip={() => {
+            navigateToDone();
+          }}
+          onDismiss={() => {
+            // Backdrop click / X — same as Skip; the seed PR is
+            // already open, the operator just doesn't want Ship to
+            // merge for them right now.
+            navigateToDone();
+          }}
+        />
+      )}
     </section>
   );
+
+  function navigateToDone() {
+    const url = new URL("/onboarding", window.location.origin);
+    url.searchParams.set("step", "done");
+    url.searchParams.set("ws", workspaceId);
+    url.searchParams.set("repo_id", initial.repo.id);
+    router.push(url.pathname + url.search);
+  }
 }
 
 function ReadinessBadge({
@@ -853,4 +926,119 @@ function missingBlockers(missing: ApiAgentSecretStatus[]) {
   if (missing.length === 0) return "Save pending changes.";
   const names = missing.map((a) => a.secret_name).filter(Boolean).join(", ");
   return `push ${names}.`;
+}
+
+/**
+ * ActivationModal — pops after a successful seed PR with two CTAs.
+ *
+ * Copy is deliberately PO-flavoured: the user who just clicked
+ * "Set up Ship" doesn't think of the next step as "merge a PR",
+ * they think of it as "turn the thing on". So the primary CTA is
+ * "Activate Ship now" (calls the merge endpoint via the App token);
+ * the secondary is "I'll review the PR myself" (navigates to /done
+ * which shows the PR link + status). Either path lands the operator
+ * on the same /done summary so the post-onboarding flow stays
+ * consistent regardless of choice.
+ *
+ * Rendered as a fixed-position overlay rather than a portal because
+ * the wizard is single-page; we don't have to worry about parent
+ * stacking contexts elsewhere on the route.
+ */
+function ActivationModal({
+  repoFullName,
+  seed,
+  activating,
+  error,
+  blockedMessage,
+  onActivate,
+  onSkip,
+  onDismiss,
+}: {
+  repoFullName: string;
+  seed: ApiWizardSeedResult;
+  activating: boolean;
+  error: string | null;
+  blockedMessage: string | null;
+  onActivate: () => void;
+  onSkip: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      role="dialog"
+      aria-modal="true"
+      data-testid="onboarding-activate-modal"
+    >
+      <div
+        aria-hidden
+        className="absolute inset-0 bg-ink/80 backdrop-blur-sm"
+        onClick={onDismiss}
+      />
+      <div className="relative w-full max-w-md rounded-2xl border border-white/10 bg-ink p-6 shadow-card">
+        <p className="font-mono text-[10px] uppercase tracking-[0.3em] text-aqua/85">
+          PR opened &middot; #{seed.pr_number}
+        </p>
+        <h2 className="mt-2 font-display text-2xl font-bold leading-tight text-white">
+          Want me to turn Ship on for you?
+        </h2>
+        <p className="mt-3 text-[13px] leading-relaxed text-white/75">
+          The pull request is open in{" "}
+          <code className="rounded bg-white/5 px-1 text-aqua">{repoFullName}</code>
+          . If you&apos;d rather skip the GitHub roundtrip, I can merge
+          it for you right now &mdash; same outcome, one fewer click.
+        </p>
+        <p className="mt-2 text-[11px] leading-snug text-white/45">
+          You can always review it on GitHub first. The PR is just a
+          small config folder plus the workflow file Ship needs.
+        </p>
+
+        {blockedMessage && (
+          <p
+            data-testid="onboarding-activate-blocked"
+            className="mt-4 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] leading-snug text-amber-200"
+          >
+            <strong className="text-amber-100">Branch protection blocked the merge.</strong>{" "}
+            {blockedMessage} Open the PR on GitHub to finish merging
+            once the required checks pass.
+          </p>
+        )}
+
+        {error && (
+          <p className="mt-4 rounded border border-coral/30 bg-coral/10 px-3 py-2 text-[11px] text-coral">
+            Couldn&apos;t merge ({error}). Open the PR on GitHub to
+            review and merge it manually.
+          </p>
+        )}
+
+        <div className="mt-6 flex flex-wrap items-center justify-end gap-3">
+          <a
+            href={seed.pr_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[11px] text-white/55 hover:text-white"
+          >
+            Open PR on GitHub ↗
+          </a>
+          <button
+            type="button"
+            onClick={onSkip}
+            data-testid="onboarding-activate-skip"
+            className="rounded-full border border-white/15 bg-white/[0.04] px-4 py-2 text-xs font-semibold text-white/75 transition hover:bg-white/[0.08]"
+          >
+            I&apos;ll review it myself
+          </button>
+          <button
+            type="button"
+            onClick={onActivate}
+            disabled={activating || blockedMessage !== null}
+            data-testid="onboarding-activate-confirm"
+            className="rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-4 py-2 text-xs font-bold text-ink shadow-glow transition hover:brightness-110 disabled:opacity-40"
+          >
+            {activating ? "Activating…" : "Activate Ship now →"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }

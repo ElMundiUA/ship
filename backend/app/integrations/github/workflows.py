@@ -536,7 +536,69 @@ async def commit_bundle_pr(
     )
 
 
+@dataclass(slots=True)
+class MergeResult:
+    """Result of merging a wizard seed PR via the GitHub merge API."""
+
+    merged: bool
+    sha: str | None
+    message: str | None
+
+
+async def merge_pull_request(
+    repo: WorkspaceRepo,
+    install: GitHubInstallation,
+    *,
+    pr_number: int,
+    settings: Settings,
+    commit_title: str | None = None,
+    commit_message: str | None = None,
+    merge_method: str = "squash",
+    client: httpx.AsyncClient | None = None,
+) -> MergeResult:
+    """Merge ``pr_number`` in ``repo`` via the App's installation token.
+
+    Powers the post-seed-PR "Activate Ship now" modal — the operator
+    just opened a PR through ``commit_bundle_pr`` and wants Ship to
+    flip it green without leaving the wizard. We call the same merge
+    endpoint they'd hit in the GitHub UI, attributed to the App.
+
+    Branch-protection or required-status-check failures surface as
+    a 405 / 409 from upstream; we re-raise them as
+    :class:`WorkflowDispatchError` so the API layer can map them to
+    a sensible 4xx and the FE can fall back to the "I'll merge it
+    myself" path. The endpoint is a plain idempotent PUT — calling
+    it twice on an already-merged PR returns 405, which we surface
+    so the UI can render a friendly "already merged" path instead
+    of pretending it just happened.
+    """
+    token = await fetch_installation_token(
+        install.installation_id, settings=settings, client=client
+    )
+    owner, name = _split_full_name(repo.full_name)
+    body: dict[str, Any] = {"merge_method": merge_method}
+    if commit_title:
+        body["commit_title"] = commit_title
+    if commit_message:
+        body["commit_message"] = commit_message
+    response = await _request(
+        "PUT",
+        f"/repos/{owner}/{name}/pulls/{pr_number}/merge",
+        token=token,
+        client=client,
+        json=body,
+    )
+    _raise_for(response)
+    payload = response.json()
+    return MergeResult(
+        merged=bool(payload.get("merged")),
+        sha=str(payload.get("sha")) if payload.get("sha") else None,
+        message=str(payload.get("message")) if payload.get("message") else None,
+    )
+
+
 __all__ = [
+    "MergeResult",
     "StarterWorkflowPR",
     "WorkflowDispatchError",
     "commit_bundle_pr",
@@ -544,4 +606,5 @@ __all__ = [
     "dispatch_workflow",
     "invalidate_workflow_list_cache",
     "list_repo_workflows",
+    "merge_pull_request",
 ]
