@@ -238,6 +238,73 @@ test("v2 process schema rejects invalid agent profile, trigger, and routine", ()
   assert.ok(routineResult.errors.some((e) => e.includes("routines[0].name")));
 });
 
+test("v2 routine.specialist accepts a kebab-case slug", () => {
+  const cfg = DEFAULT_CONFIG();
+  cfg.process.routines = [
+    {
+      id: "security_review",
+      name: "Security review",
+      specialist: "security-officer",
+      trigger: { type: "schedule", cron: "0 6 * * *" },
+    },
+  ];
+  const res = validateConfig(cfg);
+  assert.equal(res.ok, true, JSON.stringify(res.errors || []));
+});
+
+test("v2 routine.specialist rejects non-kebab-case slug", () => {
+  const cfg = DEFAULT_CONFIG();
+  cfg.process.routines = [
+    {
+      id: "bad",
+      name: "Bad",
+      specialist: "Security_Officer",
+      trigger: { type: "schedule", cron: "0 6 * * *" },
+    },
+  ];
+  const res = validateConfig(cfg);
+  assert.equal(res.ok, false);
+  assert.ok(res.errors.some((e) => e.includes("specialist:")));
+});
+
+test("v2 routine.pattern (legacy) emits a deprecation warning suggesting specialist:", () => {
+  const cfg = DEFAULT_CONFIG();
+  cfg.process.routines = [
+    {
+      id: "old_security",
+      name: "Old security",
+      pattern: "role-security-officer",
+      trigger: { type: "schedule", cron: "0 6 * * *" },
+    },
+  ];
+  const res = validateConfig(cfg);
+  assert.equal(res.ok, true, JSON.stringify(res.errors || []));
+  assert.ok(
+    res.warnings.some(
+      (w) =>
+        w.includes("pattern: deprecated alias") &&
+        w.includes("specialist: security-officer"),
+    ),
+    JSON.stringify(res.warnings),
+  );
+});
+
+test("v2 routine with both specialist and pattern uses specialist (no warning)", () => {
+  const cfg = DEFAULT_CONFIG();
+  cfg.process.routines = [
+    {
+      id: "double",
+      name: "Double",
+      specialist: "developer",
+      pattern: "role-developer",
+      trigger: { type: "schedule", cron: "0 6 * * *" },
+    },
+  ];
+  const res = validateConfig(cfg);
+  assert.equal(res.ok, true, JSON.stringify(res.errors || []));
+  assert.ok(!res.warnings.some((w) => w.includes("deprecated alias")));
+});
+
 test("v4 wizard seed lane shape validates cleanly", () => {
   const cfg = YAML.parse(`
 preset: default

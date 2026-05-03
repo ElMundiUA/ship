@@ -47,11 +47,16 @@ export function executableIds(config) {
 
 export function routineToExecutable(id, routine) {
   const trigger = normalizeRoutineTrigger(routine);
+  // Phase 2.4: ``specialist:`` is the canonical agent-role slug;
+  // ``pattern:`` is kept as a back-compat alias and translated to a
+  // slug below (drop the ``role-`` prefix the legacy catalog used).
+  const specialist = pickSpecialistSlug(routine);
   return {
     id,
     type: "routine",
     kind: trigger.kind,
     trigger,
+    specialist,
     pattern: stringOrNull(routine.pattern),
     patterns: Array.isArray(routine.patterns) ? routine.patterns : undefined,
     pattern_version: stringOrNull(routine.pattern_version),
@@ -60,6 +65,35 @@ export function routineToExecutable(id, routine) {
     prompt: stringOrNull(routine.prompt) || stringOrNull(routine.instructions),
     agent_profile: stringOrNull(routine.agent_profile) || stringOrNull(routine.specialist?.agent_profile),
   };
+}
+
+/**
+ * Pull the agent-role slug out of a routine, preferring the new
+ * ``specialist:`` key but falling back to the legacy ``pattern:`` and
+ * stripping the historical ``role-`` prefix when present.
+ *
+ * Object-form ``specialist`` (the process-state record with ``id`` /
+ * ``name``) is treated as a slug source via ``specialist.id`` for
+ * configs that mirror the process-stage shape into routines.
+ */
+function pickSpecialistSlug(routine) {
+  if (typeof routine.specialist === "string") {
+    const v = routine.specialist.trim();
+    if (v) return v;
+  }
+  if (
+    routine.specialist &&
+    typeof routine.specialist === "object" &&
+    typeof routine.specialist.id === "string"
+  ) {
+    const v = routine.specialist.id.trim();
+    if (v) return v;
+  }
+  if (typeof routine.pattern === "string" && routine.pattern.trim()) {
+    const p = routine.pattern.trim();
+    return p.startsWith("role-") ? p.slice("role-".length) : p;
+  }
+  return null;
 }
 
 export function laneToExecutable(id, lane) {

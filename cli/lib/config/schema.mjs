@@ -65,6 +65,12 @@ export const PROCESS_TRIGGER_TYPES = Object.freeze(["manual", "event", "schedule
  * file names (`.github/workflows/ship-<lane>.yml`), and env vars, so
  * restrict them conservatively: ASCII lowercase, digits, dash, underscore. */
 export const LANE_ID_REGEX = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+
+/* Agent role slug — kebab-case only (Phase 2.4). Mirrors the
+ * server's ``backend/app/services/agent_roles.is_valid_slug`` regex
+ * so an invalid slug fails locally before the runtime resolver
+ * round-trips to the workspace API. Used for ``routine.specialist``. */
+export const AGENT_ROLE_SLUG_REGEX = /^[a-z0-9][a-z0-9-]{0,63}$/;
 export const IDEMPOTENCY_KEY_REGEX = /^[a-z0-9][a-z0-9_.-]{0,127}$/;
 /* Coarse sanity check for 5-field crons: we're not a cron parser, but
  * anything that isn't whitespace-separated 5 tokens is almost certainly
@@ -558,6 +564,35 @@ function validateProcessRoutines(value, errors, warnings) {
     }
     requireOptionalString(routine.specialist_id, `${prefix}.specialist_id`, errors, { required: false });
     requireOptionalString(routine.specialist_name, `${prefix}.specialist_name`, errors, { required: false });
+    /* ``routine.specialist`` is the canonical Phase 2.4 form — an
+     * agent role slug ``shipctl run`` resolves through
+     * ``GET /v1/.../agent-roles/{slug}/resolve``. Two shapes are
+     * accepted: a bare string (the slug) for the new spec, and an
+     * object (with ``id`` / ``name``) for the legacy process-state
+     * specialist record. Object form is validated elsewhere; here we
+     * only police the string form's slug grammar. */
+    if (typeof routine.specialist === "string") {
+      if (!AGENT_ROLE_SLUG_REGEX.test(routine.specialist)) {
+        errors.push(
+          `${prefix}.specialist: must be an agent-role slug (kebab-case [a-z0-9-]{1,64})`,
+        );
+      }
+    }
+    /* Legacy ``pattern: <slug>`` keeps working but nudges authors
+     * toward the new vocabulary. ``specialist: <slug>`` wins when
+     * both are set. */
+    if (
+      typeof routine.pattern === "string" &&
+      routine.pattern.trim() &&
+      typeof routine.specialist !== "string"
+    ) {
+      const suggested = routine.pattern.startsWith("role-")
+        ? routine.pattern.slice("role-".length)
+        : routine.pattern;
+      warnings.push(
+        `${prefix}.pattern: deprecated alias — use \`specialist: ${suggested}\` instead`,
+      );
+    }
     validateProcessAgentProfile(routine.agent_profile, `${prefix}.agent_profile`, errors);
     validateRoutineTrigger(routine.trigger, `${prefix}.trigger`, errors);
     if (routine.schedule !== undefined && routine.schedule !== null) {

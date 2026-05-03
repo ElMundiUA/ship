@@ -69,3 +69,35 @@ test("shipctl run errors on unknown routine", () => {
   assert.match(r.stderr, /unknown routine 'bar'/);
 });
 
+test("shipctl run requires SHIP_API_BASE+TOKEN+WORKSPACE_ID for agent-role resolve", () => {
+  const dir = mktmp();
+  seedShipDir(
+    dir,
+    "version: 2\nprocess:\n  routines:\n    sec:\n      specialist: security-officer\n      trigger:\n        type: schedule\n        cron: '0 6 * * *'\n",
+  );
+  const r = runCtl(dir, ["run", "--routine", "sec"], {
+    // Wipe inherited env so the test isn't sensitive to the developer's
+    // local SHIP_API_BASE export.
+    SHIP_API_BASE: "",
+    SHIP_API_TOKEN: "",
+    SHIP_WORKSPACE_ID: "",
+  });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /SHIP_API_BASE \+ SHIP_API_TOKEN \+ SHIP_WORKSPACE_ID/);
+});
+
+test("shipctl run errors when neither specialist nor pattern is set on the routine", () => {
+  const dir = mktmp();
+  seedShipDir(
+    dir,
+    "version: 2\nprocess:\n  routines:\n    standalone:\n      prompt: 'Just an instruction'\n      trigger:\n        type: schedule\n        cron: '0 6 * * *'\n",
+  );
+  const r = runCtl(dir, ["run", "--routine", "standalone"], {
+    SHIP_API_BASE: "https://example.invalid",
+    SHIP_API_TOKEN: "fake",
+    SHIP_WORKSPACE_ID: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+  });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /no 'specialist:'/);
+});
+

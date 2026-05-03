@@ -4,19 +4,21 @@
  * Customer's GH Actions cron fires this once per routine slot. The
  * pipeline:
  *
- *   1. Read the routine from `.ship/config.yml` (pattern_id, optional
- *      user-authored prompt).
- *   2. Fetch the pattern body+frontmatter from Ship server
- *      (`POST /fetch kind=pattern id=<pattern_id>`).
- *   3. If the pattern declares `spec.fsm_stage`, ask Ship server for
- *      the next ticket in that FSM stage
+ *   1. Read the routine from `.ship/config.yml` (specialist slug +
+ *      optional inline prompt).
+ *   2. Resolve the agent role body via the workspace endpoint
+ *      `GET /v1/workspaces/{ws}/agent-roles/{slug}/resolve` —
+ *      workspace overrides win, otherwise the Ship default. Pull
+ *      the `system` (shared base) body in parallel.
+ *   3. If the resolved role declares `fsm_stage`, ask Ship server
+ *      for the next ticket in that stage
  *      (`GET /v1/.../tracker/next?state=<stage>`). Server picks the
  *      adapter (Linear / GH Issues / etc.) — CLI doesn't care.
- *   4. Mint a `run_id` and render the prompt: pattern body + ticket
- *      details + a finish-protocol block with `SHIP_API_BASE`,
- *      `SHIP_API_TOKEN`, `SHIP_WORKSPACE_ID`, `RUN_ID`, `TICKET_REF`,
- *      `FSM_STAGE` already substituted so the agent can call the
- *      finish endpoint directly.
+ *   4. Mint a `run_id` and render the prompt: system body + role
+ *      body + routine prompt + ticket details + a finish-protocol
+ *      block with `SHIP_API_BASE`, `SHIP_API_TOKEN`, `SHIP_WORKSPACE_ID`,
+ *      `RUN_ID`, `TICKET_REF`, `FSM_STAGE` already substituted so the
+ *      agent can call the finish endpoint directly.
  *   5. Launch the configured agent runtime (`cli/lib/agents/`) — Cursor
  *      Cloud today. Block until the runtime terminates.
  *   6. The agent itself calls
@@ -46,14 +48,11 @@
 import crypto from "node:crypto";
 import path from "node:path";
 
-import yaml from "yaml";
-
 import { readConfig, findShipRoot } from "../config/io.mjs";
 import { resolveExecutable } from "../runtime/routines.mjs";
-import { fetchArtifact } from "../http.mjs";
-import { readArtifactFile } from "../artifacts/fs-index.mjs";
-import { resolveShipRepoRootForCatalog } from "../find-ship-root.mjs";
 import { resolveProvider, runAgent } from "../agents/index.mjs";
+
+const SYSTEM_ROLE_SLUG = "system";
 
 
 const EXIT_OK = 0;
@@ -92,25 +91,47 @@ export async function runCommand(ctx, rest) {
   const env = readEnv();
   const { apiBase, apiToken, workspaceId, githubRepo } = env;
 
-  // 1) Resolve pattern
-  const patternId = resolved.executable.pattern;
-  if (!patternId) {
-    die(EXIT_USAGE, `routine '${args.routine}' has no pattern set`);
+  // 1) Resolve specialist slug.
+  // ``routine.specialist`` is the canonical Phase-2.4 form; the legacy
+  // ``routine.pattern`` is mapped to a slug in
+  // ``cli/lib/runtime/routines.mjs`` (drops the ``role-`` prefix).
+  const specialistSlug = resolved.executable.specialist;
+  if (!specialistSlug) {
+    die(
+      EXIT_USAGE,
+      `routine '${args.routine}' has no 'specialist:' (or legacy 'pattern:') set`,
+    );
+  }
+  if (!apiBase || !apiToken || !workspaceId) {
+    die(
+      EXIT_USAGE,
+      "agent-role resolve requires SHIP_API_BASE + SHIP_API_TOKEN + SHIP_WORKSPACE_ID",
+    );
   }
 
-  const fetchBase = methodologyBase(env, config);
-  const rawPatternBody = await loadPattern({ id: patternId, fetchBase });
-  const { frontmatter, frontmatterRaw, body: patternBody } = splitFrontmatter(rawPatternBody);
-  const fsmStage = pickFsmStage(frontmatter, frontmatterRaw);
+  // 2) Pull the resolved role + the shared system prompt in parallel.
+  // ``resolveAgentRole`` returns the workspace override when present,
+  // otherwise falls back to the Ship default. ``system`` is fetched
+  // optional — older deployments may not have it; we render without
+  // a system header in that case.
+  const [roleResolved, systemResolved] = await Promise.all([
+    resolveAgentRole({ apiBase, apiToken, workspaceId, slug: specialistSlug }),
+    resolveAgentRole({
+      apiBase,
+      apiToken,
+      workspaceId,
+      slug: SYSTEM_ROLE_SLUG,
+      optional: true,
+    }),
+  ]);
+  if (!roleResolved) {
+    die(EXIT_USAGE, `unknown agent role '${specialistSlug}' for this workspace`);
+  }
+  const fsmStage = roleResolved.fsm_stage || null;
+  const roleBody = roleResolved.prompt || "";
+  const systemBody = systemResolved?.prompt || "";
 
-  // Patterns reference ``{{BASE}}`` to splice in common-base. Fetch it
-  // up-front so renderPrompt can do the substitution. ``{{SKILLS_CONTEXT}}``
-  // inside common-base is left as "(no skills directory)" for the MVP —
-  // skills bundling lands in a follow-up.
-  const baseRaw = await loadPattern({ id: "common-base", fetchBase, optional: true });
-  const baseBody = baseRaw ? splitFrontmatter(baseRaw).body : "";
-
-  // 2) Resolve task. ``--dry-run`` skips the server call and uses a
+  // 3) Resolve task. ``--dry-run`` skips the server call and uses a
   // synthetic task so the operator can see the prompt shape without
   // needing the new endpoints deployed.
   let task = null;
@@ -134,40 +155,33 @@ export async function runCommand(ctx, rest) {
         state: fsmStage,
       });
       if (!task) {
-        emit(args, { status: "noop", routine: args.routine, pattern: patternId, fsm_stage: fsmStage, reason: "no_eligible_ticket" });
+        emit(args, { status: "noop", routine: args.routine, specialist: specialistSlug, fsm_stage: fsmStage, reason: "no_eligible_ticket" });
         process.exit(EXIT_NO_TASK);
       }
     }
   }
 
-  // 3) Fetch the workspace policy preamble so the agent prompt
+  // 4) Fetch the workspace policy preamble so the agent prompt
   // carries the same standing rules the Navigator chat does. Best-
   // effort: a missing token, missing API base, or a network failure
   // quietly skips the prepend — local / offline runs still work.
-  // The role slug comes from the pattern's ``spec.role`` (set in
-  // every ``role-*`` artifact frontmatter); falling back to the
-  // pattern id with the ``role-`` prefix stripped covers older
-  // artifacts that may not declare ``spec.role`` explicitly.
-  const roleSlug =
-    (frontmatter?.spec && typeof frontmatter.spec.role === "string"
-      ? frontmatter.spec.role
-      : null) ||
-    (patternId.startsWith("role-") ? patternId.slice("role-".length) : null);
+  // ``role`` is now the specialist slug directly (no more
+  // ``spec.role`` indirection).
   const policiesPreamble = await fetchPoliciesPreamble({
     apiBase,
     apiToken,
     workspaceId,
-    role: roleSlug,
+    role: specialistSlug,
   });
 
-  // 4) Mint a run_id + render prompt with finish-protocol values
+  // 5) Mint a run_id + render prompt with finish-protocol values
   // already substituted so the agent can call /agent-runs/finish from
   // inside Cursor without holding any extra config.
   const runId = `run_${crypto.randomBytes(8).toString("hex")}`;
   const renderedPrompt = renderPrompt({
-    patternBody,
-    baseBody,
-    role: patternId,
+    patternBody: roleBody,
+    baseBody: systemBody,
+    role: specialistSlug,
     routineSpec: resolved.executable,
     task,
     fsmStage,
@@ -176,7 +190,7 @@ export async function runCommand(ctx, rest) {
       apiToken,
       workspaceId,
       runId,
-      role: patternId,
+      role: specialistSlug,
       ticketRef: task?.ticket_ref || null,
       fsmStage: fsmStage || null,
     },
@@ -187,19 +201,20 @@ export async function runCommand(ctx, rest) {
 
   // ``--dry-run`` exits here so the operator can eyeball the rendered
   // prompt + resolved task without launching an agent or touching any
-  // tracker. Useful when iterating on pattern bodies.
+  // tracker. Useful when iterating on prompts.
   if (args.dryRun || ctx.dryRun) {
     if (args.json) {
       console.log(JSON.stringify({
         status: "dry-run",
         routine: args.routine,
-        pattern: patternId,
+        specialist: specialistSlug,
+        specialist_source: roleResolved.source,
         fsm_stage: fsmStage,
         task,
         prompt,
       }, null, 2));
     } else {
-      console.error(`# ship: dry-run routine=${args.routine} pattern=${patternId} fsm_stage=${fsmStage || "(context-free)"}`);
+      console.error(`# ship: dry-run routine=${args.routine} specialist=${specialistSlug} (${roleResolved.source}) fsm_stage=${fsmStage || "(context-free)"}`);
       if (task) {
         console.error(`# ship: task ticket_ref=${task.ticket_ref} title=${JSON.stringify(task.title || "")}`);
       } else {
@@ -230,7 +245,7 @@ export async function runCommand(ctx, rest) {
     emit(args, {
       status: "error",
       routine: args.routine,
-      pattern: patternId,
+      specialist: specialistSlug,
       run_id: runId,
       stage: "launch_agent",
       error: err instanceof Error ? err.message : String(err),
@@ -246,7 +261,7 @@ export async function runCommand(ctx, rest) {
   emit(args, {
     status: "completed",
     routine: args.routine,
-    pattern: patternId,
+    specialist: specialistSlug,
     fsm_stage: fsmStage,
     ticket_ref: task?.ticket_ref || null,
     agent_id: runtime.agentId,
@@ -279,49 +294,52 @@ function stripSlash(s) {
 }
 
 
-function methodologyBase(env, config) {
-  // Server's POST /fetch lives next to /v1, not under /api/methodology.
-  if (env.apiBase) return env.apiBase;
-  const fromConfig = config?.api?.base_url;
-  if (typeof fromConfig === "string" && fromConfig.trim()) {
-    return stripSlash(fromConfig);
-  }
-  throw new Error("SHIP_API_BASE not set and no api.base_url in .ship/config.yml");
-}
-
-
-function splitFrontmatter(raw) {
-  if (!raw.startsWith("---")) return { frontmatter: {}, frontmatterRaw: "", body: raw };
-  const end = raw.indexOf("\n---\n", 4);
-  if (end < 0) return { frontmatter: {}, frontmatterRaw: "", body: raw };
-  const headRaw = raw.slice(3, end + 1);
-  const body = raw.slice(end + 5);
-  let parsed = {};
+/**
+ * Resolve an agent role through the workspace endpoint.
+ *
+ * Returns ``{slug, name, prompt, fsm_stage, source}`` (workspace row
+ * or Ship default), ``null`` for 404, throws on auth/network errors
+ * unless ``optional`` is set (then 404 *and* errors return ``null``
+ * with a one-line warning).
+ */
+async function resolveAgentRole({
+  apiBase,
+  apiToken,
+  workspaceId,
+  slug,
+  optional = false,
+}) {
+  const url = `${apiBase}/v1/workspaces/${encodeURIComponent(workspaceId)}/agent-roles/${encodeURIComponent(slug)}/resolve`;
+  let res;
   try {
-    parsed = yaml.parse(headRaw) || {};
-  } catch {
-    // Some Ship patterns have unquoted ``@elmundi/ship-core`` in
-    // ``authors`` which strict YAML rejects. The CLI doesn't need the
-    // full document — ``pickFsmStage`` falls back to a regex on the
-    // raw frontmatter text in that case.
-    parsed = {};
+    res = await fetch(url, {
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${apiToken}`,
+      },
+    });
+  } catch (err) {
+    if (optional) {
+      console.error(
+        `warn: agent-role '${slug}' resolve failed (network): ${err instanceof Error ? err.message : err}`,
+      );
+      return null;
+    }
+    throw err;
   }
-  return { frontmatter: parsed, frontmatterRaw: headRaw, body };
-}
-
-
-function pickFsmStage(frontmatter, frontmatterRaw) {
-  const spec = frontmatter?.spec || {};
-  const v = spec.fsm_stage ?? spec.fsmStage;
-  if (typeof v === "string" && v.trim()) return v.trim();
-  if (frontmatterRaw) {
-    // Strict-YAML-fallback: regex on the raw frontmatter. Matches
-    // ``fsm_stage: triage`` (with optional surrounding whitespace, with
-    // or without quotes) anywhere in the spec block.
-    const m = frontmatterRaw.match(/^\s*fsm_stage:\s*['"]?([\w.-]+)['"]?/m);
-    if (m && m[1]) return m[1].trim();
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    if (optional) {
+      console.error(
+        `warn: agent-role '${slug}' resolve returned ${res.status}; running without it`,
+      );
+      return null;
+    }
+    throw new Error(
+      `agent-roles resolve ${res.status}: ${(await res.text()).slice(0, 300)}`,
+    );
   }
-  return null;
+  return res.json();
 }
 
 
@@ -545,33 +563,6 @@ finish endpoint. **Do not echo it back into commit messages, PR
 descriptions, comments, logs, or any output you produce.** Treat it
 as a one-shot credential for this run.
 `;
-}
-
-
-/**
- * Load a pattern body. Resolution order:
- *   1) when running inside the Ship monorepo, read from
- *      ``artifacts/patterns/<id>/ARTIFACT.md`` on disk — fast and
- *      always reflects the working tree (good for dry-runs / local
- *      smoke tests before the server is rebuilt).
- *   2) otherwise hit the server's ``POST /fetch``.
- */
-async function loadPattern({ id, fetchBase, optional = false }) {
-  const shipRepo = resolveShipRepoRootForCatalog();
-  if (shipRepo) {
-    const file = readArtifactFile(shipRepo, "pattern", id);
-    if (file && typeof file.content === "string") return file.content;
-  }
-  try {
-    const { content } = await fetchArtifact(fetchBase, "pattern", id);
-    return content;
-  } catch (err) {
-    if (optional) {
-      console.error(`warn: failed to fetch pattern '${id}': ${err.message}`);
-      return "";
-    }
-    throw err;
-  }
 }
 
 
