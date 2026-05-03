@@ -16,6 +16,7 @@ import {
   loadIntegrationsWorkspaceMode,
 } from "@/components/integrations-workspace-body";
 import { WorkspaceMembersPanelLoader } from "@/components/workspace-members-panel";
+import { AgentRolesList } from "../agent-roles/agent-roles-list";
 import {
   Badge,
   Card,
@@ -27,12 +28,16 @@ import {
   ApiHttpError,
   ApiUnavailableError,
   type ApiActivatedRepo,
+  type ApiAgentRole,
+  type ApiAgentRoleDefault,
   type ApiRepoConfig,
   getRepoConfig,
   isApiConfigured,
   listActivatedRepos,
   listArtifactRepos,
+  listShipAgentRoleDefaults,
   listTokens,
+  listWorkspaceAgentRoles,
   listWorkspaces,
 } from "@/lib/api/client";
 import type {
@@ -55,6 +60,8 @@ type Mode =
       repoConfigs: Record<string, RepoConfigStatus>;
       repos: ApiArtifactRepo[];
       tokens: ApiTokenInfo[];
+      agentRoleDefaults: ApiAgentRoleDefault[];
+      agentRoleCustoms: ApiAgentRole[];
     }
   | { source: "unavailable"; errMsg: string };
 
@@ -99,6 +106,7 @@ const TABS = [
   { id: "registries", label: "Registries" },
   { id: "members", label: "Members" },
   { id: "integrations", label: "Integrations" },
+  { id: "agent-roles", label: "Agent roles" },
   { id: "api-keys", label: "API keys" },
   { id: "danger", label: "Danger zone" },
 ] as const;
@@ -154,6 +162,14 @@ async function load(
       () => [] as ApiArtifactRepo[],
     );
     const tokens = await listTokens(token).catch(() => [] as ApiTokenInfo[]);
+    const [agentRoleDefaults, agentRoleCustoms] = await Promise.all([
+      listShipAgentRoleDefaults(token).catch(
+        () => [] as ApiAgentRoleDefault[],
+      ),
+      listWorkspaceAgentRoles(target.id, token).catch(
+        () => [] as ApiAgentRole[],
+      ),
+    ]);
     return {
       source: "live",
       workspace: target,
@@ -162,6 +178,8 @@ async function load(
       repoConfigs,
       repos,
       tokens,
+      agentRoleDefaults,
+      agentRoleCustoms,
     };
   } catch (err) {
     if (err instanceof ApiHttpError && err.status === 401) {
@@ -278,8 +296,16 @@ export async function SettingsShell({
     freshSecret = jar.get("ship_token_just_minted")?.value ?? null;
   }
 
-  const { workspace, allWorkspaces, activatedRepos, repoConfigs, repos, tokens } =
-    data;
+  const {
+    workspace,
+    allWorkspaces,
+    activatedRepos,
+    repoConfigs,
+    repos,
+    tokens,
+    agentRoleDefaults,
+    agentRoleCustoms,
+  } = data;
   const multiWs = allWorkspaces.length > 1;
   const settingsTabHref = (tabId: TabId) => {
     const qs = multiWs ? `?ws=${encodeURIComponent(workspace.id)}` : "";
@@ -398,6 +424,22 @@ export async function SettingsShell({
 
           {activeTab === "integrations" && (
             <SettingsIntegrationsTab searchParams={params} />
+          )}
+
+          {activeTab === "agent-roles" && (
+            <Card>
+              <CardHeader
+                title="Agent roles"
+                subtitle="Specialist prompts agents load when a routine fires. Ship ships read-only defaults; override one for this workspace, or clone a default into a custom slug. Most teams never touch this — defaults work."
+              />
+              <div className="mt-4">
+                <AgentRolesList
+                  workspaceId={workspace.id}
+                  defaults={agentRoleDefaults}
+                  customs={agentRoleCustoms}
+                />
+              </div>
+            </Card>
           )}
 
           {activeTab === "danger" && (
