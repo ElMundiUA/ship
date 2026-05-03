@@ -1246,84 +1246,25 @@ export function syncKnowledgeImportSource(
   );
 }
 
-export interface CreateBucketInput {
-  slug?: string | null;
-  name: string;
-  description?: string | null;
-  // Phase 7b: optional consolidation surface. Omit to get the
-  // historical workspace-scoped agent_memory default; set for new
-  // connector / external-static / repo-scoped buckets.
-  scope_kind?: import("./types").ApiBucketScope;
-  source_kind?: import("./types").ApiBucketSource;
-  source_ref?: Record<string, unknown> | null;
-  project_id?: string | null;
-  repo_id?: string | null;
-  user_id?: string | null;
-}
-
-export function createBucket(
-  workspaceId: string,
-  payload: CreateBucketInput,
-  options: { token?: string } = {},
-): Promise<ApiBucket> {
-  return apiFetch<ApiBucket>(
-    `/v1/workspaces/${encodeURIComponent(workspaceId)}/buckets`,
-    { method: "POST", body: payload, token: options.token },
-  );
-}
-
-/**
- * Phase 7b convenience — mint a connector-proxy bucket that points
- * at an existing Integration row in the same workspace. The backend
- * validates the integration id, normalizes ``source_ref`` (adds
- * ``integration_kind``), and returns the fresh row.
- */
-export function createConnectorBucket(
-  workspaceId: string,
-  payload: {
-    name: string;
-    slug?: string | null;
-    description?: string | null;
-    integrationId: string;
-    resourceRef?: Record<string, unknown>;
-    scopeKind?: import("./types").ApiBucketScope;
-    repoId?: string | null;
-    projectId?: string | null;
-  },
-  options: { token?: string } = {},
-): Promise<ApiBucket> {
-  return createBucket(
-    workspaceId,
-    {
-      name: payload.name,
-      slug: payload.slug ?? null,
-      description: payload.description ?? null,
-      scope_kind: payload.scopeKind ?? "workspace",
-      source_kind: "connector_proxy",
-      source_ref: {
-        integration_id: payload.integrationId,
-        resource_ref: payload.resourceRef ?? {},
-      },
-      repo_id: payload.repoId ?? null,
-      project_id: payload.projectId ?? null,
-    },
-    options,
-  );
-}
-
-export function updateBucket(
+export function archiveBucket(
   workspaceId: string,
   slug: string,
-  patch: {
-    name?: string | null;
-    description?: string | null;
-    archived?: boolean | null;
-  },
   options: { token?: string } = {},
 ): Promise<ApiBucket> {
   return apiFetch<ApiBucket>(
-    `/v1/workspaces/${encodeURIComponent(workspaceId)}/buckets/${encodeURIComponent(slug)}`,
-    { method: "PATCH", body: patch, token: options.token },
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/buckets/${encodeURIComponent(slug)}/archive`,
+    { method: "POST", token: options.token },
+  );
+}
+
+export function restoreBucket(
+  workspaceId: string,
+  slug: string,
+  options: { token?: string } = {},
+): Promise<ApiBucket> {
+  return apiFetch<ApiBucket>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/buckets/${encodeURIComponent(slug)}/restore`,
+    { method: "POST", token: options.token },
   );
 }
 

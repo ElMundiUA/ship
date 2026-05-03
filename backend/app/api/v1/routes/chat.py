@@ -77,7 +77,6 @@ from backend.app.db.models.tenancy import AuditLog
 from backend.app.db.session import get_session
 from backend.app.services.bucket_visibility import visible_to_user_clause
 from backend.app.services.distiller_sources import ensure_user_memory_bucket
-from backend.app.services.knowledge_sources import ensure_source_for_bucket
 from backend.app.services.agent.client import (
     AgentClient,
     ChatMessage,
@@ -241,45 +240,6 @@ class BucketArticleOut(BaseModel):
     archived_at: datetime | None
 
 
-class BucketCreateIn(BaseModel):
-    """Create-or-return payload for a new bucket.
-
-    Phase 7b extends the historical ``{slug, name, description}``
-    shape with the consolidation surface (``scope_kind`` / ``source_kind``
-    + carrier ids). Older callers that only send the three legacy
-    fields get a workspace-scoped ``agent_memory`` bucket, matching
-    the pre-Phase-1 default. New callers — the connector-bucket
-    form, the upload form, eventually ``shipctl`` — can specify
-    the full tuple to mint repo/project/user buckets or non-default
-    sources such as ``external_static`` and ``connector_proxy``.
-
-    ``source_ref`` carries the source-specific configuration:
-
-    - ``connector_proxy``: ``{"integration_id": "<uuid>",
-      "resource_ref": {...}}``. The route verifies the integration
-      exists in the same workspace before accepting the row.
-    - ``external_static``: optional, usually populated later by
-      the upload adapter rather than at create time.
-    - ``repo_files`` / ``agent_memory`` / ``audio_transcript``: unused
-      at this layer — those sources have their own mint paths.
-    """
-
-    slug: str | None = Field(default=None, max_length=120)
-    name: str = Field(min_length=1, max_length=255)
-    description: str | None = Field(default=None, max_length=2000)
-
-    scope_kind: str = Field(default=BucketScope.WORKSPACE, max_length=16)
-    source_kind: str = Field(default=BucketSource.AGENT_MEMORY, max_length=32)
-    source_ref: dict[str, Any] | None = Field(default=None)
-    project_id: uuid.UUID | None = None
-    repo_id: uuid.UUID | None = None
-    user_id: uuid.UUID | None = None
-
-
-class BucketUpdateIn(BaseModel):
-    name: str | None = Field(default=None, max_length=255)
-    description: str | None = Field(default=None, max_length=2000)
-    archived: bool | None = None
 
 
 class ArtifactFeedbackIn(BaseModel):
@@ -1226,229 +1186,6 @@ async def list_buckets(
     return out
 
 
-@router.post("/buckets", response_model=BucketOut, status_code=status.HTTP_201_CREATED)
-async def create_bucket(
-    workspace_id: uuid.UUID,
-    payload: BucketCreateIn,
-    auth: AuthContext = Depends(get_current_auth),
-    session: AsyncSession = Depends(get_session),
-) -> BucketOut:
-    """Mint a fresh bucket at the requested scope + source.
-
-    Validation happens in three layers, outermost first:
-
-    1. ``scope_kind`` / ``source_kind`` must be known enum values.
-    2. The scope carrier must line up with ``scope_kind``
-       (repo needs repo_id, project needs project_id, etc.) —
-       same contract as :func:`ensure_bucket`.
-    3. ``connector_proxy`` requires a valid ``source_ref`` with an
-       ``integration_id`` pointing at an Integration *in this
-       workspace*. Anything else would let a caller reference
-       another tenant's integration row through the bucket surface.
-
-    The historical ``(workspace, slug)`` uniqueness is kept for
-    workspace-scoped buckets so existing callers don't regress;
-    repo/project/user buckets rely on the partial unique indexes
-    defined in migration ``0014_bucket_scope_source``.
-    """
-
-    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
-    slug = (payload.slug or _slugify(payload.name)).strip()
-    if not slug:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="slug is empty"
-        )
-
-    if payload.scope_kind not in BucketScope.ALL:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"unknown scope_kind {payload.scope_kind!r}",
-        )
-    if payload.source_kind not in BucketSource.ALL:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"unknown source_kind {payload.source_kind!r}",
-        )
-    if payload.scope_kind != BucketScope.WORKSPACE:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="knowledge buckets are workspace-scoped only",
-        )
-    if payload.source_kind == BucketSource.REPO_FILES:
-        raise HTTPException(
-            status_code=status.HTTP_410_GONE,
-            detail="repo-backed .ship/knowledge buckets are deprecated",
-        )
-
-    # CHECK-constraint-friendly carrier validation.
-    if payload.scope_kind == BucketScope.WORKSPACE:
-        if payload.project_id or payload.repo_id or payload.user_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="workspace-scoped bucket cannot have a carrier id",
-            )
-    elif payload.scope_kind == BucketScope.PROJECT and not payload.project_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="project-scoped bucket requires project_id",
-        )
-    elif payload.scope_kind == BucketScope.REPO and not payload.repo_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="repo-scoped bucket requires repo_id",
-        )
-    elif payload.scope_kind == BucketScope.USER:
-        if not payload.user_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="user-scoped bucket requires user_id",
-            )
-        # Phase 8: a caller can only mint user-scoped buckets for
-        # themselves. Without this guard an admin could create a
-        # bucket attributed to another user, and that bucket's
-        # content would be invisible to the owner (visibility helper
-        # matches by ``user_id``). Instead of a silent "nobody can
-        # see this" we reject up-front.
-        if payload.user_id != auth.user.id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="scope_kind=user buckets can only be minted for yourself",
-            )
-
-    source_ref = payload.source_ref
-    if payload.source_kind == BucketSource.CONNECTOR_PROXY:
-        source_ref = await _validate_connector_source_ref(
-            session, workspace_id=workspace_id, source_ref=source_ref
-        )
-
-    # Repo/project/user scopes are unique per carrier, so scope the
-    # pre-flight lookup by the carrier column the CHECK ties them to
-    # — otherwise two repo buckets with the same slug in different
-    # repos would wrongly collide on the legacy workspace-level check.
-    conflict_stmt = select(KnowledgeBucket).where(
-        KnowledgeBucket.workspace_id == workspace_id,
-        KnowledgeBucket.slug == slug,
-    )
-    if payload.scope_kind == BucketScope.WORKSPACE:
-        conflict_stmt = conflict_stmt.where(
-            KnowledgeBucket.scope_kind == BucketScope.WORKSPACE
-        )
-    elif payload.scope_kind == BucketScope.REPO:
-        conflict_stmt = conflict_stmt.where(
-            KnowledgeBucket.scope_kind == BucketScope.REPO,
-            KnowledgeBucket.repo_id == payload.repo_id,
-        )
-    elif payload.scope_kind == BucketScope.PROJECT:
-        conflict_stmt = conflict_stmt.where(
-            KnowledgeBucket.scope_kind == BucketScope.PROJECT,
-            KnowledgeBucket.project_id == payload.project_id,
-        )
-    elif payload.scope_kind == BucketScope.USER:
-        conflict_stmt = conflict_stmt.where(
-            KnowledgeBucket.scope_kind == BucketScope.USER,
-            KnowledgeBucket.user_id == payload.user_id,
-        )
-
-    existing = (await session.execute(conflict_stmt)).scalars().first()
-    if existing is not None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"bucket {slug!r} already exists",
-        )
-
-    row = KnowledgeBucket(
-        workspace_id=workspace_id,
-        slug=slug,
-        name=payload.name,
-        description=payload.description,
-        scope_kind=payload.scope_kind,
-        source_kind=payload.source_kind,
-        source_ref=source_ref,
-        project_id=payload.project_id,
-        repo_id=payload.repo_id,
-        user_id=payload.user_id,
-    )
-    session.add(row)
-    await session.flush()
-    await ensure_source_for_bucket(session, row, config=source_ref or {})
-    # ``updated_at`` has ``onupdate=now()`` applied server-side, which
-    # expires the attribute post-flush; an explicit refresh pulls the
-    # freshly generated value without tripping the sync-IO guard.
-    await session.refresh(row)
-    return _serialize_bucket(row, summary_count=0)
-
-
-async def _validate_connector_source_ref(
-    session: AsyncSession,
-    *,
-    workspace_id: uuid.UUID,
-    source_ref: dict[str, Any] | None,
-) -> dict[str, Any]:
-    """Normalize + validate ``source_ref`` for connector-proxy buckets.
-
-    Connector buckets index into a pre-existing Integration row —
-    without one we have nothing to fetch at sync time, so we reject
-    the create call early with a 400 instead of minting an orphan
-    row that would only 400 later on sync.
-
-    ``resource_ref`` is source-specific and intentionally free-form
-    (Confluence space key, Notion database id, Linear team key, etc.)
-    so we don't enforce a schema here beyond "dict or missing" —
-    the connector fetcher layer is where shape checks will live.
-    """
-
-    if not source_ref or not isinstance(source_ref, dict):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="connector_proxy bucket requires source_ref.integration_id",
-        )
-    raw_id = source_ref.get("integration_id")
-    if not isinstance(raw_id, str) or not raw_id.strip():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="connector_proxy source_ref.integration_id must be a UUID string",
-        )
-    try:
-        integration_id = uuid.UUID(raw_id)
-    except ValueError as err:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"connector_proxy source_ref.integration_id is not a UUID: {err}",
-        ) from err
-
-    from backend.app.db.models.tenancy import Integration
-
-    integration = (
-        await session.execute(
-            select(Integration).where(
-                Integration.id == integration_id,
-                Integration.workspace_id == workspace_id,
-            )
-        )
-    ).scalar_one_or_none()
-    if integration is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"integration {integration_id} not found in this workspace",
-        )
-
-    # Normalize on the way in: store the canonical integration id
-    # (lowercase UUID), echo the integration kind so the UI doesn't
-    # need a second round-trip to render the connector card, and
-    # preserve whatever ``resource_ref`` the caller sent verbatim.
-    resource_ref = source_ref.get("resource_ref") or {}
-    if not isinstance(resource_ref, dict):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="connector_proxy source_ref.resource_ref must be an object",
-        )
-    return {
-        "integration_id": str(integration.id),
-        "integration_kind": integration.kind,
-        "resource_ref": resource_ref,
-    }
-
-
 @router.get("/buckets/{slug}", response_model=BucketOut)
 async def get_bucket(
     workspace_id: uuid.UUID,
@@ -1462,24 +1199,36 @@ async def get_bucket(
     return _serialize_bucket(row, summary_count=count)
 
 
-@router.patch("/buckets/{slug}", response_model=BucketOut)
-async def update_bucket(
+@router.post("/buckets/{slug}/archive", response_model=BucketOut)
+async def archive_bucket(
     workspace_id: uuid.UUID,
     slug: str,
-    payload: BucketUpdateIn,
     auth: AuthContext = Depends(get_current_auth),
     session: AsyncSession = Depends(get_session),
 ) -> BucketOut:
     await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
     row = await _load_bucket(session, workspace_id, slug)
-    if payload.name is not None:
-        row.name = payload.name
-    if payload.description is not None:
-        row.description = payload.description
-    if payload.archived is not None:
-        row.archived_at = datetime.now(timezone.utc) if payload.archived else None
-    await session.flush()
-    await session.refresh(row)
+    if row.archived_at is None:
+        row.archived_at = datetime.now(timezone.utc)
+        await session.flush()
+        await session.refresh(row)
+    count = await _count_articles(session, row.id)
+    return _serialize_bucket(row, summary_count=count)
+
+
+@router.post("/buckets/{slug}/restore", response_model=BucketOut)
+async def restore_bucket(
+    workspace_id: uuid.UUID,
+    slug: str,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> BucketOut:
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+    row = await _load_bucket(session, workspace_id, slug)
+    if row.archived_at is not None:
+        row.archived_at = None
+        await session.flush()
+        await session.refresh(row)
     count = await _count_articles(session, row.id)
     return _serialize_bucket(row, summary_count=count)
 
@@ -1858,17 +1607,6 @@ def _serialize_source(row: KnowledgeSource) -> KnowledgeSourceOut:
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
-
-
-def _slugify(value: str) -> str:
-    out: list[str] = []
-    for ch in value.lower().strip():
-        if ch.isalnum():
-            out.append(ch)
-        elif ch in {" ", "-", "_"}:
-            out.append("-")
-    slug = "".join(out).strip("-")
-    return slug[:120]
 
 
 # ---------------------------------------------------------------------------
