@@ -15,6 +15,7 @@ from fastapi import APIRouter
 
 from backend.app.api.v1.routes import (
     admin_invites,
+    agent_roles,
     agent_runs,
     agent_secrets,
     artifact_repos,
@@ -182,6 +183,13 @@ api_router.include_router(lanes.router)
 # runtime, both in Navigator chat and in `shipctl run` stdout.
 # See ``services.policies`` for the shared rendering helper.
 api_router.include_router(policies.router)
+# Agent role registry (Phase 2.4). Two surfaces:
+# * ``/v1/agent-roles*`` — read-only Ship defaults (file-backed).
+# * ``/v1/workspaces/{ws}/agent-roles*`` — workspace overrides + clones,
+#   plus ``/{slug}/resolve`` used by ``shipctl run`` to fetch the
+#   right body (workspace row when present, else Ship default).
+api_router.include_router(agent_roles.public_router)
+api_router.include_router(agent_roles.workspace_router)
 # Per-repo agent API-key wiring (Wizard v2 iter 3). Admin-only check
 # + push; plaintext lives only in the HTTP hop to GitHub's secrets
 # API and is never persisted by Ship.

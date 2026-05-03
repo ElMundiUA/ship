@@ -132,11 +132,12 @@ def _failed_run_payload(
 
 def _patch_workflow_probe(monkeypatch, *, installed: bool):
     """Patch ``list_repo_workflows`` so tests don't reach GitHub."""
-    # The starter YAML filename for self_heal comes from the catalog.
-    from backend.app.services import catalog as catalog_service
+    # Phase 2.2 retired the catalog-side shim; resolve the filename
+    # directly from the starter_workflows registry now.
+    from backend.app.services import starter_workflows
 
-    fname = catalog_service.workflow_install_filename("pipeline-self-heal")
-    assert fname, "self-heal catalog entry must declare an install filename"
+    fname = starter_workflows.install_filename("pipeline-self-heal")
+    assert fname, "self-heal starter workflow must declare an install filename"
     files = {fname} if installed else set()
 
     async def _fake_list(*args, **kwargs):
