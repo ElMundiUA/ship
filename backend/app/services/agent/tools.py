@@ -3775,7 +3775,13 @@ class ToolBox:
                     raise ToolInvocationError(
                         "Linear token is unreadable; reconnect Linear."
                     ) from exc
-                return LinearTracker(token)
+                # Pass through the workspace's configured default team
+                # so ``create_ticket`` without a ``project_hint`` lands
+                # in the right place. Pre-fix the Navigator dropped
+                # this config and Linear's resolver fell through to
+                # "first team", which crashed on multi-team workspaces.
+                cfg = (native_linear.config if native_linear else {}) or {}
+                return _build_linear_tracker(token, cfg)
             if chosen == "jira" and native_atlassian_credential is not None:
                 try:
                     token = decrypt(native_atlassian_credential.secret_ciphertext)
@@ -3804,7 +3810,9 @@ class ToolBox:
                     f"{chosen} token is unreadable; rotate the integration."
                 ) from exc
             if chosen == "linear":
-                return LinearTracker(token)
+                # Same default-team fix as the native-credential path
+                # above — see comment there.
+                return _build_linear_tracker(token, row.config or {})
             if chosen == "jira":
                 config = row.config or {}
                 host = str(config.get("host") or config.get("site") or "").strip()
@@ -7146,6 +7154,29 @@ def _json_result(payload: Any) -> str:
     import json
 
     return json.dumps(payload, ensure_ascii=False)
+
+
+def _build_linear_tracker(token: str, config: dict[str, Any]) -> LinearTracker:
+    """Construct a ``LinearTracker`` with the workspace's configured defaults.
+
+    The Navigator's ``create_ticket`` tool dropped through to a naked
+    ``LinearTracker(token)`` for both the native and legacy integration
+    rows, which meant a workspace with multiple Linear teams got
+    "Linear workspace has multiple teams; pass project_hint=..."
+    every time the LLM forgot to pass a hint — even though the operator
+    already configured the default team during OAuth probe. The
+    Inbox/clarifications path (``tracker_resolver.py``) already wired
+    these fields; this helper hoists the same shape so every Linear
+    construction site reads from the same config keys.
+    """
+    return LinearTracker(
+        token,
+        team_id=config.get("team_id"),
+        team_key=config.get("team_key"),
+        label_id_by_stage=config.get("label_id_by_stage") or {},
+        state_id_by_name=config.get("state_id_by_name") or {},
+        signal_label_ids=config.get("signal_label_ids") or {},
+    )
 
 
 def _tracker_kind_of(tracker: TrackerGateway) -> str:

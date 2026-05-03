@@ -867,7 +867,24 @@ class LinearTracker:
     # -----------------------------------------------------------------
 
     async def _resolve_team_id(self, hint: str | None) -> str:
-        """Accept ``None`` / UUID / team key, return a team UUID."""
+        """Accept ``None`` / UUID / team key, return a team UUID.
+
+        Resolution order when no ``hint`` is given:
+
+        1. ``self._team_id`` — workspace-level default stored on the
+           ``Integration.config`` row (set during OAuth probe). This
+           is the load-bearing case for the Navigator: the operator
+           configured Linear once, picked the team, and now expects
+           every ``create_ticket`` call to land there. Pre-fix the
+           resolver dropped through to the "first team" lookup and
+           crashed if the workspace had more than one team — even
+           though the right answer was sitting on the adapter.
+        2. ``self._team_key`` — same source, used as a fallback if
+           ``team_id`` happens to be missing but ``team_key`` is set
+           (older integration rows; cheap to keep the cushion).
+        3. "Single team" auto-pick. Only safe when the Linear
+           workspace literally has one team.
+        """
         if hint:
             # If it already looks like a UUID, trust it; Linear IDs
             # are 36-char UUIDs, team keys are uppercase short codes.
@@ -883,7 +900,21 @@ class LinearTracker:
             if not nodes:
                 raise ValueError(f"Linear team {hint!r} not found.")
             return str(nodes[0]["id"])
-        # No hint — fall back to "exactly one team" auto-pick.
+        # No hint — prefer the workspace-level default the integration
+        # row already stores.
+        if self._team_id:
+            return self._team_id
+        if self._team_key:
+            lookup = """
+            query ShipResolveTeam($key: String!) {
+              teams(filter: {key: {eq: $key}}) { nodes { id } }
+            }
+            """
+            data = await self._gql(lookup, {"key": self._team_key})
+            nodes = (data.get("teams") or {}).get("nodes") or []
+            if nodes:
+                return str(nodes[0]["id"])
+        # Last resort — single-team workspaces.
         first = """
         query ShipFirstTeam { teams(first: 2) { nodes { id key } } }
         """
@@ -891,8 +922,9 @@ class LinearTracker:
         nodes = (data.get("teams") or {}).get("nodes") or []
         if len(nodes) != 1:
             raise ValueError(
-                "Linear workspace has multiple teams; pass project_hint="
-                "<team-key or id>."
+                "Linear workspace has multiple teams and no default is "
+                "configured; pass project_hint=<team-key or id>, or set "
+                "the default team on the workspace's Linear integration."
             )
         return str(nodes[0]["id"])
 
