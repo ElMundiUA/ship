@@ -379,6 +379,20 @@ class Settings(BaseSettings):
         default=None, alias="NOTION_CLIENT_SECRET"
     )
 
+    # --- Telegram bot adapter (group ↔ workspace bridge) ------------------
+    # Both must be set for the bot worker to start; absent values keep the
+    # bot dormant so the same image can ship with or without the adapter
+    # configured. ``telegram_bot_username`` is the public ``@handle`` (no
+    # leading ``@``) — used to build the deep-link
+    # ``https://t.me/<username>?startgroup=<nonce>`` shown in the Console
+    # bind page.
+    telegram_bot_token: str | None = Field(
+        default=None, alias="TELEGRAM_BOT_TOKEN"
+    )
+    telegram_bot_username: str | None = Field(
+        default=None, alias="TELEGRAM_BOT_USERNAME"
+    )
+
     # --- Email / Twilio SendGrid -------------------------------------------
     # Email is opt-in: when ``email_provider`` is ``"log"`` (default) the
     # backend renders messages and writes them to the application log

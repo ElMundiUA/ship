@@ -54,6 +54,10 @@ from backend.app.db.models.pipelines import (
 from backend.app.db.models.policies import WorkspacePolicy
 from backend.app.db.models.repo_intel import RepoIntel, RepoIntelTriggeredBy
 from backend.app.db.models.repo_secrets import RepoSecret
+from backend.app.db.models.telegram import (
+    TelegramChatLink,
+    TelegramThreadMap,
+)
 from backend.app.db.models.tenancy import (
     ApiToken,
     ArtifactRepo,
@@ -118,6 +122,8 @@ __all__ = [
     "RepoIntelTriggeredBy",
     "RepoSecret",
     "RunEscalation",
+    "TelegramChatLink",
+    "TelegramThreadMap",
     "User",
     "Workspace",
     "WorkspaceInvite",

@@ -13,6 +13,13 @@ python-multipart>=0.0.9,<1
 # --- HTTP client (used by /search, /feedback, integrations) ---
 httpx>=0.27,<1
 
+# --- Telegram bot adapter (group ↔ workspace bridge) ---
+# Long-poll worker; only activated when TELEGRAM_BOT_TOKEN is set.
+# Pulls in `magic-filter` as the only new transitive dep — aiohttp,
+# aiofiles, pydantic, certifi, typing-extensions are already on the
+# stack at compatible versions.
+aiogram>=3.13,<4
+
 # --- LLM / embeddings ---
 openai>=1.50,<2
 # Optional Anthropic client (C12 real agent). Activated at runtime only when

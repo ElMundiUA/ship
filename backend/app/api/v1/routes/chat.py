@@ -158,6 +158,13 @@ class ChatStreamIn(BaseModel):
     # Classifier is optional — the client can disable it when the
     # user toggled "always continue" in the header affordance.
     classify_shift: bool = True
+    # Optional explicit thread target. The web UI never sets this —
+    # it relies on the per-user "active thread" model. Multi-thread
+    # callers (Telegram bot adapter: one thread per reply-chain in a
+    # group) need to address a specific thread by id without racing
+    # the ``last_user_activity_at`` ordering used by
+    # ``_find_or_create_active_thread``.
+    thread_id: uuid.UUID | None = None
 
 
 class PackThreadIn(BaseModel):
@@ -604,9 +611,25 @@ async def chat_stream(
     # tools inside the turn (those self-gate via ``_require_admin_or_error``
     # in :mod:`backend.app.services.agent.tools`).
     await _require_membership(session, workspace_id, auth.user.id, ROLES_MEMBER)
-    thread = await _find_or_create_active_thread(
-        session, workspace_id=workspace_id, user_id=auth.user.id
-    )
+    if payload.thread_id is not None:
+        thread = (
+            await session.execute(
+                select(ChatThread).where(
+                    ChatThread.id == payload.thread_id,
+                    ChatThread.workspace_id == workspace_id,
+                    ChatThread.created_by_user_id == auth.user.id,
+                )
+            )
+        ).scalar_one_or_none()
+        if thread is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="thread not found in this workspace",
+            )
+    else:
+        thread = await _find_or_create_active_thread(
+            session, workspace_id=workspace_id, user_id=auth.user.id
+        )
     if thread.status != "active":
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

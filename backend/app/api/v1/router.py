@@ -49,6 +49,7 @@ from backend.app.api.v1.routes import (
     repo_home,
     repo_secrets,
     repos,
+    telegram,
     tracker_binding,
     waitlist,
     workspaces,
@@ -105,6 +106,11 @@ api_router.include_router(github_app.router)
 api_router.include_router(linear_oauth.router)
 # Notion OAuth (pilot Day 2 — tracker WOW flow). Same shape as Linear.
 api_router.include_router(notion_oauth.router)
+# Telegram bot adapter (group ↔ workspace bridge). Console-facing
+# endpoints only — bind preview/confirm + linked-groups list/delete.
+# The bot worker process talks to ``/v1/workspaces/{ws}/chat/stream``
+# directly with the service PAT minted at bind time.
+api_router.include_router(telegram.router)
 # Pipelines API + dashboard summary (pilot Day 3 — main app surface).
 # ``pipelines.router`` is workspace-scoped (RBAC); ``pipelines.public_router``
 # hosts the ``/pipelines/runs/{id}/result`` callback that dispatched

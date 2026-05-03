@@ -3862,3 +3862,63 @@ export async function getRepoHome(
   );
 }
 
+// --- Telegram bot adapter (group ↔ workspace bridge) -----------------------
+
+export interface ApiTelegramBindPreview {
+  chat_id: number;
+  chat_title: string | null;
+  expires_at: string;
+  already_bound_workspace_id: string | null;
+}
+
+export interface ApiTelegramLink {
+  id: string;
+  telegram_chat_id: number;
+  title: string | null;
+  workspace_id: string;
+  linked_by_user_id: string;
+  has_active_pat: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export function previewTelegramBind(
+  nonce: string,
+  token?: string,
+): Promise<ApiTelegramBindPreview> {
+  return apiFetch<ApiTelegramBindPreview>(
+    `/v1/integrations/telegram/bind/preview?nonce=${encodeURIComponent(nonce)}`,
+    { token },
+  );
+}
+
+export function confirmTelegramBind(
+  input: { nonce: string; workspace_id: string },
+  token?: string,
+): Promise<ApiTelegramLink> {
+  return apiFetch<ApiTelegramLink>(
+    "/v1/integrations/telegram/bind/confirm",
+    { method: "POST", body: input, token },
+  );
+}
+
+export function listTelegramLinks(
+  workspaceId: string,
+  token?: string,
+): Promise<ApiTelegramLink[]> {
+  return apiFetch<ApiTelegramLink[]>(
+    `/v1/integrations/telegram/links?workspace_id=${encodeURIComponent(workspaceId)}`,
+    { token },
+  );
+}
+
+export function deleteTelegramLink(
+  linkId: string,
+  token?: string,
+): Promise<void> {
+  return apiFetch<void>(
+    `/v1/integrations/telegram/links/${encodeURIComponent(linkId)}`,
+    { method: "DELETE", token },
+  );
+}
+
