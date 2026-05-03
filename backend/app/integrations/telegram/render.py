@@ -312,19 +312,11 @@ def directive_fallback_text(directive: Directive) -> str:
         if not directive.payload:
             return "_(подгружаю варианты…)_"
         prompt = str(directive.payload.get("prompt") or "").strip()
-        options = directive.payload.get("options") or []
-        labels: list[str] = []
-        for opt in options:
-            if isinstance(opt, str):
-                labels.append(opt)
-            elif isinstance(opt, dict) and isinstance(opt.get("label"), str):
-                labels.append(opt["label"])
-        body_lines: list[str] = []
-        if prompt:
-            body_lines.append(f"**{prompt}**")
-        for label in labels:
-            body_lines.append(f"• {label}")
-        return "\n".join(body_lines) if body_lines else "_(нет вариантов)_"
+        # Options render as Telegram inline buttons attached to the
+        # last bot message — duplicating them as a bullet list above
+        # would be visual noise. Just the prompt here; the buttons
+        # are the option list.
+        return f"**{prompt}**" if prompt else ""
     if directive.kind == "ship-todo":
         if not directive.payload:
             return "_(готовлю план…)_"

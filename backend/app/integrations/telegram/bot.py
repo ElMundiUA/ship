@@ -31,6 +31,7 @@ import json
 import logging
 import time
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import AsyncIterator
 
@@ -38,7 +39,12 @@ import httpx
 from aiogram import Bot, Dispatcher, F
 from aiogram.enums import ChatType
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -47,6 +53,8 @@ from backend.app.db.models.telegram import TelegramChatLink, TelegramThreadMap
 from backend.app.db.session import get_sessionmaker
 from backend.app.integrations.telegram.bind_state import build_bind_nonce
 from backend.app.integrations.telegram.render import (
+    Directive,
+    extract_directives,
     markdown_to_telegram_html,
     render_with_directives_inline,
     split_markdown_into_chunks,
@@ -212,6 +220,93 @@ async def _stream_navigator_turn(
 
 
 # ---------------------------------------------------------------------------
+# Choice keyboard cache + builder (Console's ``ship-choice`` directive
+# ↔ Telegram InlineKeyboardMarkup)
+# ---------------------------------------------------------------------------
+
+
+# Bounded process-local cache: ``(chat_id, message_id) → option list``.
+# We can't pack the option value into ``callback_data`` (Telegram caps it
+# at 64 bytes) so the button payload is just the index and we resolve
+# the actual text here. LRU-evicted to bound memory; on miss the click
+# handler tells the user the choice expired and asks them to retype.
+_CHOICE_CACHE_LIMIT: int = 256
+_CHOICE_CACHE: "OrderedDict[tuple[int, int], list[dict]]" = OrderedDict()
+
+
+def _cache_choice_options(
+    *, chat_id: int, message_id: int, options: list[dict]
+) -> None:
+    key = (chat_id, message_id)
+    _CHOICE_CACHE[key] = options
+    _CHOICE_CACHE.move_to_end(key)
+    while len(_CHOICE_CACHE) > _CHOICE_CACHE_LIMIT:
+        _CHOICE_CACHE.popitem(last=False)
+
+
+def _pop_choice_options(
+    *, chat_id: int, message_id: int
+) -> list[dict] | None:
+    return _CHOICE_CACHE.pop((chat_id, message_id), None)
+
+
+def _build_choice_markup(
+    directives: list[Directive],
+) -> tuple[InlineKeyboardMarkup, list[dict]] | None:
+    """Build a Telegram inline keyboard from ship-choice directives.
+
+    All ship-choice options across one assistant turn collapse into a
+    single keyboard so a multi-choice reply doesn't fragment across
+    several attached messages. Each option is one row (cleanest layout
+    for variable-length labels). Returns ``None`` if there are no
+    valid options to render.
+    """
+    rows: list[list[InlineKeyboardButton]] = []
+    options: list[dict] = []
+    for directive in directives:
+        if directive.kind != "ship-choice" or not directive.payload:
+            continue
+        raw_options = directive.payload.get("options") or []
+        for raw_opt in raw_options:
+            if isinstance(raw_opt, str):
+                normalized = {"label": raw_opt, "value": raw_opt}
+            elif isinstance(raw_opt, dict):
+                label_raw = raw_opt.get("label")
+                value_raw = raw_opt.get("value")
+                label = (
+                    str(label_raw).strip() if isinstance(label_raw, str) else ""
+                )
+                value = (
+                    str(value_raw).strip()
+                    if isinstance(value_raw, str)
+                    else label
+                )
+                if not label:
+                    continue
+                normalized = {"label": label, "value": value or label}
+            else:
+                continue
+            idx = len(options)
+            options.append(normalized)
+            # Telegram caps the button text at 64 chars; truncate
+            # politely with an ellipsis so the original label survives
+            # in the cache for the actual chat reply.
+            display = normalized["label"]
+            if len(display) > 64:
+                display = display[:63] + "…"
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=display, callback_data=f"c|{idx}"
+                    )
+                ]
+            )
+    if not rows:
+        return None
+    return InlineKeyboardMarkup(inline_keyboard=rows), options
+
+
+# ---------------------------------------------------------------------------
 # Turn driver
 # ---------------------------------------------------------------------------
 
@@ -371,6 +466,34 @@ async def _drive_turn(
     if not buf:
         buf = "(navigator returned no text)"
     await maybe_edit(force=True)
+
+    # End-of-turn: attach an InlineKeyboardMarkup to the last bot
+    # message if Navigator emitted any ship-choice directives. Buttons
+    # render as a row per option below the assistant text; clicks
+    # round-trip through ``on_choice_click`` (registered in
+    # ``_build_dispatcher``) which posts the chosen value as the next
+    # user message in the same Navigator thread.
+    _, final_directives = extract_directives(buf)
+    keyboard = _build_choice_markup(final_directives)
+    if keyboard is not None and messages:
+        markup, options = keyboard
+        target_id = messages[-1]
+        try:
+            await bot.edit_message_reply_markup(
+                chat_id=chat_id,
+                message_id=target_id,
+                reply_markup=markup,
+            )
+            _cache_choice_options(
+                chat_id=chat_id, message_id=target_id, options=options
+            )
+        except Exception as exc:  # noqa: BLE001 — Telegram 400 on benign edits
+            logger.debug(
+                "telegram attach choice markup failed (chat=%s msg=%s): %s",
+                chat_id,
+                target_id,
+                exc,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -536,6 +659,117 @@ def _build_dispatcher(settings: Settings) -> Dispatcher:
             message,
             body=body,
             settings=settings,
+            sessionmaker=sessionmaker,
+        )
+
+    @dp.callback_query(F.data.startswith("c|"))
+    async def on_choice_click(query: CallbackQuery) -> None:
+        """Translate a ship-choice button click into a Navigator turn.
+
+        The button's ``callback_data`` is ``c|<idx>`` where ``idx``
+        points at the option list cached when the buttons were
+        attached. We strip the buttons (so the user can't double-click
+        and stack two turns), echo the chosen label as a confirmation
+        message, and run the next turn against the same Navigator
+        thread the buttons came from.
+        """
+        if (
+            query.data is None
+            or query.message is None
+            or query.message.chat is None
+            or query.message.message_id is None
+            or query.bot is None
+        ):
+            await query.answer("Invalid click", show_alert=False)
+            return
+
+        try:
+            _, idx_str = query.data.split("|", 1)
+            idx = int(idx_str)
+        except (ValueError, IndexError):
+            await query.answer("Invalid click", show_alert=False)
+            return
+
+        chat_id = query.message.chat.id
+        button_message_id = query.message.message_id
+        options = _pop_choice_options(
+            chat_id=chat_id, message_id=button_message_id
+        )
+        if options is None or idx < 0 or idx >= len(options):
+            await query.answer(
+                "Этот выбор уже не активен — напиши свой ответ текстом.",
+                show_alert=True,
+            )
+            # Strip stale buttons to avoid further misleading clicks.
+            try:
+                await query.bot.edit_message_reply_markup(
+                    chat_id=chat_id,
+                    message_id=button_message_id,
+                    reply_markup=None,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            return
+
+        chosen = options[idx]
+        label = chosen.get("label") or chosen.get("value") or ""
+        value = chosen.get("value") or label
+
+        # Acknowledge the click first so the spinner stops; then strip
+        # buttons so the same option can't fire twice.
+        await query.answer()
+        try:
+            await query.bot.edit_message_reply_markup(
+                chat_id=chat_id,
+                message_id=button_message_id,
+                reply_markup=None,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+        # Echo so the conversation reads as "user picked: …" — clicks
+        # don't otherwise produce a user-visible message in Telegram
+        # (unlike typing), and an unattributed assistant reply would
+        # leave the chat reading like a non-sequitur.
+        try:
+            await query.bot.send_message(
+                chat_id=chat_id, text=f"✅ {label}"
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+        async with sessionmaker() as session, session.begin():
+            link = await _get_link(session, chat_id)
+            if link is None:
+                return
+            # Resolve the Navigator thread from the button-bearing
+            # message — it's registered in telegram_thread_map as part
+            # of the prior turn's chunks.
+            seed_thread_id = await _resolve_thread_id(
+                session,
+                chat_id=chat_id,
+                reply_to_message_id=button_message_id,
+            )
+
+        try:
+            placeholder = await query.bot.send_message(
+                chat_id=chat_id, text=_PLACEHOLDER_TEXT
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "telegram choice placeholder send failed (chat=%s)", chat_id
+            )
+            return
+
+        await _drive_turn(
+            bot=query.bot,
+            chat_id=chat_id,
+            placeholder_message_id=placeholder.message_id,
+            api_base=settings.public_url,
+            workspace_id=link.workspace_id,
+            pat=link.pat_secret,
+            body=value,
+            seed_thread_id=seed_thread_id,
             sessionmaker=sessionmaker,
         )
 
