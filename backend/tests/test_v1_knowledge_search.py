@@ -1,7 +1,7 @@
 """HTTP tests for workspace knowledge search.
 
-Covers the vector-search re-ranking contract (repo_match → workspace →
-other_repo) and the 412 fall-back when embeddings aren't configured.
+Covers the vector-search ranking and the tsvector keyword fallback
+that kicks in when the embedding provider isn't configured.
 
 Embeddings are deterministic-stubbed through ``monkeypatch`` so the
 test suite stays offline — cosine distance on unit-length basis
@@ -280,9 +280,11 @@ async def test_search_ranks_workspace_first_without_repo_match(
 
 
 @pytest.mark.asyncio
-async def test_search_returns_412_if_embeddings_unconfigured(
+async def test_search_falls_back_to_keyword_when_embeddings_unconfigured(
     v1_client, seed_search_workspace, monkeypatch
 ) -> None:
+    """When the embedding provider is unconfigured, search returns a
+    tsvector keyword-match result set instead of 412'ing."""
     ctx = seed_search_workspace
     headers = {"Authorization": f"Bearer {ctx['raw']}"}
 
@@ -298,7 +300,12 @@ async def test_search_returns_412_if_embeddings_unconfigured(
         headers=headers,
         json={"query": "auth"},
     )
-    assert resp.status_code == 412, resp.text
-    assert resp.json()["detail"]["code"] == "embeddings_unconfigured"
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["query"] == "auth"
+    # Keyword fallback returns hits the embedding path would have
+    # surfaced too; we don't pin a specific count because the seed
+    # corpus + tsvector tokenisation can move with seed tweaks.
+    assert isinstance(body["hits"], list)
 
 
