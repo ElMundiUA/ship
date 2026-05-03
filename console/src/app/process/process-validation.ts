@@ -24,18 +24,32 @@ export type ValidationResult = {
   warnings: ValidationItem[];
 };
 
+// Lanes that can host a terminal stage. Reviewing counts because in
+// practice "human approves the review and the ticket is done" is a
+// perfectly valid terminal — Linear flips the column to Done from the
+// projection layer, no Ship stage needed in Closed.
+const TERMINAL_LANES: ReadonlySet<CanonicalState> = new Set([
+  "reviewing",
+  "closed",
+]);
+
 export function validateProcess({
   stages,
-  transitions,
+  transitions: _transitions,
 }: {
   stages: ApiProcessState[];
   transitions: ApiProcessTransition[];
 }): ValidationResult {
   const errors: ValidationItem[] = [];
   const warnings: ValidationItem[] = [];
-  const stageById = new Map(stages.map((s) => [s.id, s] as const));
 
   // ── Stage-level checks ──────────────────────────────────────────────
+  // Validity of the canonical state field; uniqueness of stage ids.
+  // These are the only structural checks that survive the move to
+  // implicit transitions — the old "Intake has no incoming" / "Final
+  // Review has no outgoing" complaints don't apply when the chain is
+  // derived from column order rather than an explicit transitions
+  // array.
   const idCounts = new Map<string, number>();
   for (const stage of stages) {
     idCounts.set(stage.id, (idCounts.get(stage.id) ?? 0) + 1);
@@ -53,118 +67,48 @@ export function validateProcess({
       errors.push({
         kind: "error",
         code: "stage.duplicate_id",
-        message: `${count} stages share id "${id}" — every stage needs a unique id so transitions resolve.`,
+        message: `${count} stages share id "${id}" — every stage needs a unique id.`,
         anchor: { kind: "stage", id },
       });
     }
   }
 
-  // ── Reachability + termination ─────────────────────────────────────
-  const incoming = new Map<string, ApiProcessTransition[]>();
-  const outgoing = new Map<string, ApiProcessTransition[]>();
-  for (const t of transitions) {
-    if (!stageById.has(t.from_state_id)) {
-      errors.push({
-        kind: "error",
-        code: "transition.dangling_from",
-        message: `Transition ${t.id} starts at non-existent stage "${t.from_state_id}".`,
-        anchor: { kind: "transition", id: t.id },
-      });
-      continue;
-    }
-    if (!stageById.has(t.to_state_id)) {
-      errors.push({
-        kind: "error",
-        code: "transition.dangling_to",
-        message: `Transition ${t.id} points to non-existent stage "${t.to_state_id}".`,
-        anchor: { kind: "transition", id: t.id },
-      });
-      continue;
-    }
-    outgoing.set(
-      t.from_state_id,
-      [...(outgoing.get(t.from_state_id) ?? []), t],
-    );
-    incoming.set(
-      t.to_state_id,
-      [...(incoming.get(t.to_state_id) ?? []), t],
-    );
+  // ── Process-level shape (warnings only) ────────────────────────────
+  // Empty processes can't run; surface as an error.
+  if (stages.length === 0) {
+    errors.push({
+      kind: "error",
+      code: "process.no_stages",
+      message:
+        "Process has no stages. Add at least one — drop a stage in any lane to start.",
+    });
+    return { errors, warnings };
   }
 
-  for (const stage of stages) {
-    const inc = incoming.get(stage.id) ?? [];
-    const out = outgoing.get(stage.id) ?? [];
-    // Backlog stages are entry points — they can have zero incoming.
-    if (stage.state !== "backlog" && inc.length === 0) {
-      errors.push({
-        kind: "error",
-        code: "stage.no_incoming",
-        message: `"${stage.name}" has no incoming transition — work can never reach it.`,
-        anchor: { kind: "stage", id: stage.id },
-      });
-    }
-    // Closed stages are terminal — they can have zero outgoing.
-    if (stage.state !== "closed" && out.length === 0) {
-      errors.push({
-        kind: "error",
-        code: "stage.no_outgoing",
-        message: `"${stage.name}" has no outgoing transition — work will get stuck here.`,
-        anchor: { kind: "stage", id: stage.id },
-      });
-    }
+  // No terminal lane = work can't finish through Ship's projection.
+  // It's a strong signal but not a blocker — some workspaces use the
+  // tracker's native "Done" without a corresponding Ship stage.
+  const hasTerminal = stages.some((s) => TERMINAL_LANES.has(s.state));
+  if (!hasTerminal) {
+    warnings.push({
+      kind: "warning",
+      code: "process.no_terminal",
+      message:
+        "No stage is in Reviewing or Closed — tickets won't have a Ship-side terminal. Tracker projection will still close them, but Ship runs won't see a finished state.",
+    });
   }
 
-  // ── Process-level shape ────────────────────────────────────────────
+  // No backlog stage = no operator-side "incoming inbox". Optional
+  // warning — for processes that pull from the tracker directly, this
+  // is actually fine.
   const hasBacklog = stages.some((s) => s.state === "backlog");
-  const hasClosed = stages.some((s) => s.state === "closed");
   if (!hasBacklog) {
     warnings.push({
       kind: "warning",
       code: "process.no_backlog",
       message:
-        "No stage is in the Backlog lane — operators won't have a clean entry point for new tickets.",
+        "No stage is in the Backlog lane — operators rely on the tracker's own backlog instead of a Ship-managed entry point.",
     });
-  }
-  if (!hasClosed) {
-    errors.push({
-      kind: "error",
-      code: "process.no_closed",
-      message:
-        "No stage is in the Closed lane — work can never finish. Add a terminal stage.",
-    });
-  }
-
-  // ── Actor / lane consistency warnings ──────────────────────────────
-  for (const t of transitions) {
-    const from = stageById.get(t.from_state_id);
-    const to = stageById.get(t.to_state_id);
-    if (!from || !to) continue;
-    // Backlog → planning is human-only by convention.
-    if (
-      from.state === "backlog" &&
-      to.state === "planning" &&
-      t.trigger_actor !== "user"
-    ) {
-      warnings.push({
-        kind: "warning",
-        code: "transition.backlog_should_be_user",
-        message: `"${from.name}" → "${to.name}" leaves the backlog — usually only the operator triggers this. Set actor = user?`,
-        anchor: { kind: "transition", id: t.id },
-      });
-    }
-    // Reviewing → closed is human-only by convention.
-    if (
-      from.state === "reviewing" &&
-      to.state === "closed" &&
-      t.trigger_actor !== "user"
-    ) {
-      warnings.push({
-        kind: "warning",
-        code: "transition.close_should_be_user",
-        message: `"${from.name}" → "${to.name}" closes the ticket — usually only a human approves. Set actor = user?`,
-        anchor: { kind: "transition", id: t.id },
-      });
-    }
   }
 
   return { errors, warnings };

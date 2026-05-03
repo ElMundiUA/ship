@@ -118,6 +118,7 @@ export function ProcessCanvasEditor({
   onPositionsChange: _onPositionsChange,
   onStageStateChange,
   onReorderStages,
+  onClearSelection,
 }: {
   process: ApiProcess;
   selectedStateId?: string;
@@ -141,6 +142,8 @@ export function ProcessCanvasEditor({
     targetLane: CanonicalState,
     targetStageId: string | null,
   ) => void;
+  /** Click on canvas blank area dismisses any selected stage. */
+  onClearSelection?: () => void;
 }) {
   const stagesByLane = useMemo(() => {
     const map = new Map<CanonicalState, ApiProcessState[]>();
@@ -239,7 +242,17 @@ export function ProcessCanvasEditor({
   );
 
   return (
-    <div className="relative h-[640px] min-h-[480px] overflow-hidden bg-[#040814]">
+    <div
+      className="relative h-[640px] min-h-[480px] overflow-hidden bg-[#040814]"
+      onClick={(event) => {
+        // Click on canvas blank area (NOT a stage card or lane interior
+        // — those handle their own clicks) dismisses the inspector.
+        // event.target === currentTarget catches the outer wrapper only.
+        if (event.target === event.currentTarget && onClearSelection) {
+          onClearSelection();
+        }
+      }}
+    >
       <div className="pointer-events-none absolute right-3 top-3 z-30">
         <button
           type="button"

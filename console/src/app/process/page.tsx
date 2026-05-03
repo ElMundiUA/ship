@@ -388,40 +388,28 @@ function ProcessHeaderCard({
     );
   }
   return (
-    <div className="flex flex-wrap items-start justify-between gap-3 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3">
-      <div className="min-w-0">
-        {summary.description ? (
-          <p className="max-w-2xl text-sm text-white/65">{summary.description}</p>
-        ) : (
-          <p className="text-sm italic text-white/45">
-            No description set for this process yet.
-          </p>
+    <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/10 bg-white/[0.02] px-3 py-1.5">
+      <div className="flex min-w-0 items-center gap-2 text-[10px] font-bold uppercase tracking-[0.18em] text-white/45">
+        <span className="rounded border border-white/10 bg-white/[0.04] px-1.5 py-0.5">
+          {summary.task_count} active
+        </span>
+        {summary.blocked_count > 0 && (
+          <span className="rounded border border-coral/30 bg-coral/[0.08] px-1.5 py-0.5 text-coral/85">
+            {summary.blocked_count} blocked
+          </span>
         )}
-        <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] font-bold uppercase tracking-[0.18em] text-white/45">
-          <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-1">
-            {summary.state_count} state{summary.state_count === 1 ? "" : "s"}
-          </span>
-          <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-1">
-            {summary.task_count} active task{summary.task_count === 1 ? "" : "s"}
-          </span>
-          {summary.blocked_count > 0 && (
-            <span className="rounded-full border border-coral/30 bg-coral/[0.08] px-2 py-1 text-coral/85">
-              {summary.blocked_count} blocked
-            </span>
-          )}
-          <span
-            className={[
-              "rounded-full px-2 py-1",
-              summary.health === "ok"
-                ? "border border-emerald-400/30 bg-emerald-400/10 text-emerald-300"
-                : summary.health === "degraded"
-                  ? "border border-amber-400/30 bg-amber-400/10 text-amber-200"
-                  : "border border-coral/30 bg-coral/10 text-coral",
-            ].join(" ")}
-          >
-            {summary.health}
-          </span>
-        </div>
+        <span
+          className={[
+            "rounded px-1.5 py-0.5",
+            summary.health === "ok"
+              ? "border border-emerald-400/30 bg-emerald-400/10 text-emerald-300"
+              : summary.health === "degraded"
+                ? "border border-amber-400/30 bg-amber-400/10 text-amber-200"
+                : "border border-coral/30 bg-coral/10 text-coral",
+          ].join(" ")}
+        >
+          {summary.health}
+        </span>
       </div>
       <div className="shrink-0">
         <RepoSelector

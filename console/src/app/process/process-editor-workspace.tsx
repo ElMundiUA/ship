@@ -41,8 +41,14 @@ export function ProcessEditorWorkspace({
   const [processPrimary, setProcessPrimary] = useState(process.primary);
   const [states, setStates] = useState(process.states);
   const [transitions, setTransitions] = useState(process.transitions);
-  const [activeStateId, setActiveStateId] = useState(
-    initialActiveStateId(process.states, selectedStateId),
+  const [trackerMapping, setTrackerMapping] = useState(
+    process.tracker_mapping ?? {},
+  );
+  // No default selection — the inspector starts hidden, click a stage
+  // to open it. selectedStateId from the URL still wins so deep-linked
+  // edits land on the right card.
+  const [activeStateId, setActiveStateId] = useState<string | undefined>(
+    selectedStateId,
   );
   const [selectedTransitionId, setSelectedTransitionId] = useState<string | null>(
     null,
@@ -53,7 +59,8 @@ export function ProcessEditorWorkspace({
     setProcessPrimary(process.primary);
     setStates(process.states);
     setTransitions(process.transitions);
-    setActiveStateId(initialActiveStateId(process.states, selectedStateId));
+    setTrackerMapping(process.tracker_mapping ?? {});
+    setActiveStateId(selectedStateId);
     setSelectedTransitionId(null);
   }, [process, selectedStateId]);
 
@@ -65,8 +72,9 @@ export function ProcessEditorWorkspace({
       state_count: states.length,
       states,
       transitions,
+      tracker_mapping: trackerMapping,
     }),
-    [process, processName, processPrimary, states, transitions],
+    [process, processName, processPrimary, states, transitions, trackerMapping],
   );
   const processConfig = useMemo(
     () => processConfigFromApiProcess(processDraft),
@@ -114,8 +122,38 @@ export function ProcessEditorWorkspace({
   }
 
   function selectStateId(stateId: string) {
-    setActiveStateId(stateId);
+    // Click the same stage again → toggle off (inspector hides). The
+    // operator usually wants the inspector to step out of the way once
+    // they're done editing, not stay parked on the stage they just
+    // looked at.
+    setActiveStateId((current) => (current === stateId ? undefined : stateId));
     setSelectedTransitionId(null);
+  }
+
+  function clearSelection() {
+    setActiveStateId(undefined);
+    setSelectedTransitionId(null);
+  }
+
+  // Tracker projection edit — operator types a new native column
+  // name for a (tracker, canonical state) pair. Empty string clears
+  // back to the default. The dirty bit picks up the change because
+  // processDraft.tracker_mapping flows from this state.
+  function updateTrackerProjection(
+    tracker: string,
+    canonicalState: string,
+    nextValue: string,
+  ) {
+    setTrackerMapping((current) => {
+      const trimmed = nextValue.trim();
+      const trackerMap = { ...(current[tracker] ?? {}) };
+      if (trimmed) {
+        trackerMap[canonicalState] = trimmed;
+      } else {
+        delete trackerMap[canonicalState];
+      }
+      return { ...current, [tracker]: trackerMap };
+    });
   }
 
   function selectTransitionId(transitionId: string) {
@@ -334,51 +372,37 @@ export function ProcessEditorWorkspace({
 
   return (
     <section className="min-h-[calc(100vh-180px)] overflow-hidden rounded-[2rem] border border-aqua/15 bg-[radial-gradient(circle_at_top_left,rgba(99,245,255,0.10),transparent_30%),linear-gradient(135deg,rgba(255,255,255,0.07),rgba(255,255,255,0.025))] shadow-2xl shadow-black/40 backdrop-blur-xl">
-      <div className="border-b border-white/10 px-5 py-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
+      <div className="border-b border-white/10 px-4 py-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex min-w-0 flex-1 items-center gap-2">
             {tabs}
-            <div className={tabs ? "mt-4" : undefined}>
-              <div className="mb-2 flex flex-wrap items-center gap-2">
-                <span className="rounded-full border border-aqua/20 bg-aqua/[0.08] px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.22em] text-aqua/80">
-                  Process editor
-                </span>
-                <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-[10px] font-semibold text-white/45">
-                  {states.length} nodes · {transitions.length || Math.max(0, states.length - 1)} handoffs
-                </span>
-              </div>
-              <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
-                <input
-                  type="text"
-                  value={processName}
-                  onChange={(event) => setProcessName(event.target.value)}
-                  placeholder={process.name}
-                  aria-label="Process name"
-                  className="min-w-0 flex-1 border-b border-transparent bg-transparent font-display text-2xl font-bold text-white outline-none transition placeholder:text-white/35 hover:border-white/15 focus:border-aqua/40"
-                />
-                <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-[11px] font-medium text-white/45">
-                  <input
-                    type="checkbox"
-                    checked={processPrimary}
-                    onChange={(event) =>
-                      setProcessPrimary(event.target.checked)
-                    }
-                    className="h-3 w-3 rounded border-white/25 bg-white/[0.04] accent-aqua"
-                  />
-                  <span title="Opens by default for this repo.">Default</span>
-                </label>
-              </div>
-              <p className="mt-1 text-xs text-white/45">
-                {dirty
-                  ? draftSummary
-                  : "Drag the flow, tune the selected node, then publish a reviewable process change."}
-              </p>
-            </div>
+            <input
+              type="text"
+              value={processName}
+              onChange={(event) => setProcessName(event.target.value)}
+              placeholder={process.name}
+              aria-label="Process name"
+              className="min-w-0 flex-1 border-b border-transparent bg-transparent text-base font-bold text-white outline-none transition placeholder:text-white/35 hover:border-white/15 focus:border-aqua/40"
+            />
+            <label className="flex shrink-0 cursor-pointer items-center gap-1 text-[10px] font-medium text-white/45">
+              <input
+                type="checkbox"
+                checked={processPrimary}
+                onChange={(event) => setProcessPrimary(event.target.checked)}
+                className="h-3 w-3 rounded border-white/25 bg-white/[0.04] accent-aqua"
+              />
+              <span title="Opens by default for this repo.">default</span>
+            </label>
+            {dirty && (
+              <span className="shrink-0 truncate text-[11px] text-white/45" title={draftSummary}>
+                · {draftSummary}
+              </span>
+            )}
           </div>
           <form
             action="/api/process/config-propose"
             method="post"
-            className="flex flex-wrap items-center gap-2"
+            className="flex shrink-0 flex-wrap items-center gap-1.5"
           >
             <ProcessConfigProposalFields
               workspaceId={workspaceId}
@@ -391,9 +415,9 @@ export function ProcessEditorWorkspace({
               type="button"
               disabled={!dirty}
               onClick={resetDraft}
-              className="rounded-full border border-white/10 bg-black/25 px-4 py-2 text-xs font-bold text-white/65 transition hover:border-white/20 hover:text-white disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/[0.03] disabled:text-white/30"
+              className="rounded-full border border-white/10 bg-black/25 px-3 py-1 text-[11px] font-bold text-white/65 transition hover:border-white/20 hover:text-white disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/[0.03] disabled:text-white/30"
             >
-              Discard changes
+              Discard
             </button>
             <button
               type="submit"
@@ -403,25 +427,31 @@ export function ProcessEditorWorkspace({
                   ? `Fix ${validation.errors.length} validation error${validation.errors.length === 1 ? "" : "s"} below before publishing.`
                   : undefined
               }
-              className="rounded-full border border-aqua/35 bg-aqua/15 px-4 py-2 text-xs font-bold text-aqua shadow-lg shadow-aqua/5 transition hover:bg-aqua/20 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/[0.05] disabled:text-white/35"
+              className="rounded-full border border-aqua/35 bg-aqua/15 px-3 py-1 text-[11px] font-bold text-aqua shadow-lg shadow-aqua/5 transition hover:bg-aqua/20 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/[0.05] disabled:text-white/35"
             >
-              Publish process changes
+              Publish
             </button>
           </form>
         </div>
-        <div className="mt-3">
-          <ProcessReviewSummary
-            initial={process}
-            draft={processDraft}
-            changedAreas={dirty ? ["Flow reviewed"] : []}
-          />
-        </div>
+        <ProcessReviewSummary
+          initial={process}
+          draft={processDraft}
+          changedAreas={dirty ? ["Flow reviewed"] : []}
+        />
       </div>
 
-      <div className="grid min-h-0 grid-cols-1 xl:grid-cols-[minmax(0,1fr)_320px]">
+      {/* Canvas + optional inspector. When no stage is selected the
+          inspector unmounts entirely so the canvas takes the whole
+          width — operators don't sit looking at an empty side panel. */}
+      <div
+        className={[
+          "grid min-h-0 grid-cols-1",
+          activeStateId ? "xl:grid-cols-[minmax(0,1fr)_320px]" : "",
+        ].join(" ")}
+      >
         <ProcessCanvasEditor
           process={processDraft}
-          selectedStateId={selectedState?.id}
+          selectedStateId={activeStateId}
           selectedTransitionId={selectedTransitionId}
           onSelectState={selectStateId}
           onSelectTransition={selectTransitionId}
@@ -430,20 +460,24 @@ export function ProcessEditorWorkspace({
           onPositionsChange={updatePositions}
           onStageStateChange={updateStageState}
           onReorderStages={reorderStages}
+          onClearSelection={clearSelection}
         />
-        <StateEditor
-          processId={process.id}
-          repoId={repoId}
-          state={selectedState}
-          states={states}
-          schedule={processDraft.schedule ?? null}
-          transitions={transitions}
-          specialistOptions={specialistOptions}
-          config={config}
-          embedded
-          onStateChange={updateState}
-          onDeleteState={deleteState}
-        />
+        {activeStateId && selectedState ? (
+          <StateEditor
+            processId={process.id}
+            repoId={repoId}
+            state={selectedState}
+            states={states}
+            schedule={processDraft.schedule ?? null}
+            transitions={transitions}
+            specialistOptions={specialistOptions}
+            config={config}
+            embedded
+            onStateChange={updateState}
+            onDeleteState={deleteState}
+            onClose={clearSelection}
+          />
+        ) : null}
       </div>
 
       {/* Tracker projection table — replaces the dedicated Tracker tab.
@@ -454,6 +488,7 @@ export function ProcessEditorWorkspace({
         <TrackerProjectionsTable
           trackerMapping={processDraft.tracker_mapping ?? {}}
           defaultTracker={trackerKind}
+          onChange={updateTrackerProjection}
         />
         {/* Validation panel — gates the Publish button. Errors block,
             warnings inform. Anchors let the operator jump to the

@@ -33,6 +33,7 @@ export function StateEditor({
   config,
   onStateChange,
   onDeleteState,
+  onClose,
   embedded = false,
 }: {
   processId?: string;
@@ -45,6 +46,9 @@ export function StateEditor({
   config: ApiRepoConfig | null;
   onStateChange: (state: ApiProcessState) => void;
   onDeleteState: (stateId: string) => void;
+  /** Optional dismiss handler — when wired, renders an X in the header
+   *  so the operator can stash the inspector away. */
+  onClose?: () => void;
   embedded?: boolean;
 }) {
   if (!state) {
@@ -83,12 +87,25 @@ export function StateEditor({
         <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-aqua/70">
           Stage settings
         </div>
-        <span
-          className="rounded-md border border-white/10 bg-black/30 px-2 py-0.5 text-[10px] font-semibold uppercase text-white/55"
-          title={`Lifecycle bucket: ${selectedState.state}`}
-        >
-          {selectedState.state}
-        </span>
+        <div className="flex items-center gap-1.5">
+          <span
+            className="rounded-md border border-white/10 bg-black/30 px-2 py-0.5 text-[10px] font-semibold uppercase text-white/55"
+            title={`Lifecycle bucket: ${selectedState.state}`}
+          >
+            {selectedState.state}
+          </span>
+          {onClose ? (
+            <button
+              type="button"
+              onClick={onClose}
+              title="Close inspector (or click the stage card again)"
+              aria-label="Close inspector"
+              className="grid h-5 w-5 place-items-center rounded-md border border-white/10 bg-white/[0.02] text-[12px] font-bold text-white/45 transition hover:border-white/25 hover:bg-white/[0.06] hover:text-white"
+            >
+              ×
+            </button>
+          ) : null}
+        </div>
       </div>
 
       {config?.parse_error && (

@@ -37,27 +37,41 @@ const STATE_HINT: Record<CanonicalState, string> = {
 /**
  * Tracker projection table — 7 canonical states × 4 tracker kinds.
  *
- * Lives under the swim-lane canvas in the Flow editor. Each row is a
- * canonical lifecycle state; each column is a tracker. Cells show the
- * native column / status name (or "stays in current column + label"
- * for overlay states like awaiting_input). Operators only edit a cell
- * when their team has customised the workflow state on the tracker
- * side; the defaults work out of the box.
+ * Click on a chip to edit the native column / status name inline. Save
+ * fires on blur or Enter; Esc cancels. Empty value clears the override
+ * and reverts to "unmapped" (which the operator should rarely want;
+ * the defaults from the backend adapter cover stock workflows).
  *
- * Read-only for now (Block A.5 part 1) — the full editable form ships
- * with the next pass once the model has settled.
+ * Overlay states (awaiting_input, blocked) project to the magic
+ * ``__overlay__`` value the FE renders as "stays in current column +
+ * label overlay" — these can be edited too if a team wants a
+ * different label namespace.
  */
 export function TrackerProjectionsTable({
   trackerMapping,
   defaultTracker,
+  onChange,
 }: {
   /** Backend's tracker_mapping field on ApiProcess. */
   trackerMapping: Record<string, Record<string, string>>;
   /** Which tracker tab opens by default — usually the workspace's bound one. */
   defaultTracker?: TrackerKind;
+  /** Fired when the operator edits a cell. Empty value = clear override. */
+  onChange?: (
+    tracker: string,
+    canonicalState: string,
+    nextValue: string,
+  ) => void;
 }) {
   const [tracker, setTracker] = useState<TrackerKind>(defaultTracker ?? "linear");
+  const [editing, setEditing] = useState<string | null>(null);
   const projection = trackerMapping[tracker] ?? {};
+
+  function commit(state: CanonicalState, value: string) {
+    if (onChange) onChange(tracker, state, value);
+    setEditing(null);
+  }
+
   return (
     <section className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -66,11 +80,10 @@ export function TrackerProjectionsTable({
             Tracker projections
           </div>
           <p className="mt-1 max-w-2xl text-xs leading-relaxed text-white/45">
-            How each canonical state maps to your tracker. Defaults work
-            for stock workflows; override only if your team renamed a
-            workflow status. ``stays + label`` means the ticket
-            doesn&apos;t move between columns — the adapter just flips a
-            label.
+            Click a value to edit. Defaults work for stock workflows;
+            override only when your team renamed a workflow status.
+            ``stays + label`` means the ticket doesn&apos;t move between
+            columns — the adapter just flips a label.
           </p>
         </div>
         <div className="flex shrink-0 gap-1 rounded-full border border-white/10 bg-white/[0.04] p-1">
@@ -78,7 +91,10 @@ export function TrackerProjectionsTable({
             <button
               key={kind}
               type="button"
-              onClick={() => setTracker(kind)}
+              onClick={() => {
+                setTracker(kind);
+                setEditing(null);
+              }}
               className={[
                 "rounded-full px-3 py-1 text-[11px] font-semibold transition",
                 tracker === kind
@@ -108,6 +124,7 @@ export function TrackerProjectionsTable({
             {CANONICAL_STATES.map((state) => {
               const value = projection[state];
               const isOverlay = value === TRACKER_OVERLAY;
+              const isEditing = editing === state;
               return (
                 <tr
                   key={state}
@@ -129,21 +146,42 @@ export function TrackerProjectionsTable({
                     </div>
                   </td>
                   <td className="px-3 py-2.5 align-top">
-                    {isOverlay ? (
-                      <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-300/30 bg-amber-300/[0.08] px-2.5 py-1 text-[11px] font-semibold text-amber-200">
+                    {isEditing ? (
+                      <ProjectionInput
+                        initialValue={isOverlay ? "" : value ?? ""}
+                        onCommit={(next) => commit(state, next)}
+                        onCancel={() => setEditing(null)}
+                      />
+                    ) : isOverlay ? (
+                      <button
+                        type="button"
+                        onClick={() => setEditing(state)}
+                        className="inline-flex items-center gap-1.5 rounded-full border border-amber-300/30 bg-amber-300/[0.08] px-2.5 py-1 text-[11px] font-semibold text-amber-200 transition hover:border-amber-300/50 hover:bg-amber-300/[0.12]"
+                        title="Click to set a native column instead of the overlay default"
+                      >
                         stays in current column
                         <span className="font-normal text-amber-200/60">
                           + label overlay
                         </span>
-                      </span>
+                      </button>
                     ) : value ? (
-                      <span className="inline-flex items-center gap-1 rounded-md border border-aqua/25 bg-aqua/[0.08] px-2 py-0.5 font-mono text-[11px] font-semibold text-aqua">
+                      <button
+                        type="button"
+                        onClick={() => setEditing(state)}
+                        className="inline-flex items-center gap-1 rounded-md border border-aqua/25 bg-aqua/[0.08] px-2 py-0.5 font-mono text-[11px] font-semibold text-aqua transition hover:border-aqua/45 hover:bg-aqua/[0.14]"
+                        title="Click to edit"
+                      >
                         {value}
-                      </span>
+                      </button>
                     ) : (
-                      <span className="text-[11px] italic text-white/35">
-                        unmapped
-                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setEditing(state)}
+                        className="text-[11px] italic text-white/35 hover:text-white/65"
+                        title="Click to set a native column"
+                      >
+                        unmapped — click to set
+                      </button>
                     )}
                   </td>
                 </tr>
@@ -153,6 +191,38 @@ export function TrackerProjectionsTable({
         </table>
       </div>
     </section>
+  );
+}
+
+function ProjectionInput({
+  initialValue,
+  onCommit,
+  onCancel,
+}: {
+  initialValue: string;
+  onCommit: (next: string) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState(initialValue);
+  return (
+    <input
+      autoFocus
+      type="text"
+      value={value}
+      onChange={(event) => setValue(event.target.value)}
+      onBlur={() => onCommit(value)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          onCommit(value);
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          onCancel();
+        }
+      }}
+      placeholder="e.g. In Progress"
+      className="w-48 rounded-md border border-aqua/40 bg-aqua/[0.04] px-2 py-1 font-mono text-[11px] font-semibold text-white outline-none focus:border-aqua/70"
+    />
   );
 }
 
