@@ -56,16 +56,25 @@ import { ConfirmStep } from "./confirm-step";
 import { DoneStep } from "./done-step";
 import { OnboardingHub } from "./hub";
 import { type RepoCardInitial } from "./repo-card";
+import { RolesStep, type RolesStepInitial } from "./roles-step";
 import { type WorkspaceDefaultsPanelInitial } from "./workspace-defaults-panel";
 
 export const dynamic = "force-dynamic";
 
-type StepId = "hub" | "github" | "repos" | "tracker" | "confirm" | "done";
+type StepId =
+  | "hub"
+  | "github"
+  | "repos"
+  | "tracker"
+  | "roles"
+  | "confirm"
+  | "done";
 
 const STEPS: { id: Exclude<StepId, "hub" | "done">; label: string }[] = [
-  { id: "github", label: "Install GitHub App" },
-  { id: "repos", label: "Pick repos" },
-  { id: "tracker", label: "Workspace tracker" },
+  { id: "github", label: "Code" },
+  { id: "repos", label: "Repos" },
+  { id: "tracker", label: "Integrations" },
+  { id: "roles", label: "Roles" },
   { id: "confirm", label: "Confirm" },
 ];
 
@@ -149,6 +158,7 @@ function hasExplicitStep(raw: string | string[] | undefined): boolean {
     v === "github" ||
     v === "repos" ||
     v === "tracker" ||
+    v === "roles" ||
     v === "confirm" ||
     // Legacy pre-Wave-8c step ids — kept so bookmarks / email links
     // still hit the new wizard. They funnel to ``confirm`` via the
@@ -165,6 +175,7 @@ function pickStep(raw: string | string[] | undefined): StepId {
     v === "hub" ||
     v === "repos" ||
     v === "tracker" ||
+    v === "roles" ||
     v === "confirm" ||
     v === "done"
   ) {
@@ -370,6 +381,99 @@ export default async function OnboardingPage({
     }
   }
 
+  // Tracker step: load workspace integrations so we can render
+  // "connected" badges on each tile. Pre-fix every tile looked
+  // identical regardless of whether the operator had already gone
+  // through the OAuth flow for that provider, so a returning user
+  // had no way to tell which integrations were live.
+  let trackerIntegrationKinds: string[] = [];
+  if (step === "tracker" && wsId && apiConfigured) {
+    try {
+      const integrations = await listIntegrations(
+        wsId,
+        sessionToken ?? undefined,
+      );
+      // ``connected`` for tracker-step UX = the integration row
+      // exists and (for non-github kinds) has a token. ``github``
+      // rides on the App installation token; the install check
+      // above already handles its prerequisite.
+      trackerIntegrationKinds = integrations
+        .filter((i) => i.kind === "github" || i.has_secret)
+        .map((i) => i.kind as string);
+    } catch {
+      // Best-effort — render the step without badges rather than
+      // failing the whole render.
+    }
+  }
+
+  // Roles step: load the workspace's current default-agent-profile,
+  // the connected tracker / docs integration kinds, and which kind
+  // is currently bound as the workspace tracker. ``RolesStep`` runs
+  // entirely client-side after this initial paint so we want it
+  // populated on first render — otherwise the operator sees an empty
+  // dropdown for half a second on a returning visit.
+  let rolesInitial: RolesStepInitial | null = null;
+  if (step === "roles" && wsId && apiConfigured) {
+    try {
+      const [workspaces, integrations] = await Promise.all([
+        listWorkspaces(sessionToken ?? undefined),
+        listIntegrations(wsId, sessionToken ?? undefined),
+      ]);
+      const ws = workspaces.find((w) => w.id === wsId);
+      // Tracker candidates = integration rows that can play the
+      // tracker role AND have a token. ``github`` is special: no
+      // Integration row, but the App install token covers it.
+      const trackerCandidates: ("linear" | "github" | "jira")[] = [];
+      if (githubAppInstalled) trackerCandidates.push("github");
+      for (const i of integrations) {
+        if (!i.has_secret) continue;
+        if (i.kind === "linear" || i.kind === "jira") {
+          if (!trackerCandidates.includes(i.kind)) trackerCandidates.push(i.kind);
+        }
+      }
+      // Current tracker = most-recently-updated tracker integration
+      // with a token. Falls back to ``github`` if the App is installed
+      // and nothing else is wired (the implicit default).
+      const trackerRows = integrations
+        .filter((i) =>
+          (i.kind === "linear" || i.kind === "jira") && i.has_secret,
+        )
+        .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
+      const currentTrackerKind: "linear" | "github" | "jira" | null =
+        trackerRows.length > 0
+          ? (trackerRows[0].kind as "linear" | "jira")
+          : githubAppInstalled
+            ? "github"
+            : null;
+      const docsCandidates: ("notion" | "confluence")[] = [];
+      for (const i of integrations) {
+        if (!i.has_secret) continue;
+        if (i.kind === "notion" || i.kind === "confluence") {
+          if (!docsCandidates.includes(i.kind)) docsCandidates.push(i.kind);
+        }
+      }
+      rolesInitial = {
+        workspaceId: wsId,
+        trackerCandidates,
+        currentTrackerKind,
+        currentAgentProfile: ws?.default_agent_profile ?? null,
+        docsCandidates,
+      };
+    } catch (err) {
+      if (err instanceof ApiHttpError && err.status === 401) {
+        redirect("/login?next=%2Fonboarding");
+      }
+      console.error("[onboarding] roles step load failed", err);
+      rolesInitial = {
+        workspaceId: wsId,
+        trackerCandidates: githubAppInstalled ? ["github"] : [],
+        currentTrackerKind: null,
+        currentAgentProfile: null,
+        docsCandidates: [],
+      };
+    }
+  }
+
   // Confirm step: load every activated repo plus the per-repo
   // tracker binding and agent-secret status, so the RepoCard client
   // components render fully populated on first paint. We parallelise
@@ -484,7 +588,21 @@ export default async function OnboardingPage({
               done={{
                 github: githubAppInstalled,
                 repos: activatedRepoCount > 0,
-                tracker: false /* tracker check is in Stepper internal */,
+                // ``tracker`` (Integrations step) is "done" when the
+                // workspace has any connected integration row OR
+                // GitHub Issues is implicitly available via the App.
+                tracker:
+                  trackerIntegrationKinds.length > 0 || githubAppInstalled,
+                // ``roles`` is "done" once the workspace has both a
+                // tracker kind chosen AND a default agent profile.
+                // We only know this when the roles step is being
+                // rendered (otherwise we don't pay for the workspace
+                // + integrations fetch on every step). On other
+                // steps the cell shows the step number, not a ✓.
+                roles:
+                  rolesInitial !== null &&
+                  rolesInitial.currentTrackerKind !== null &&
+                  rolesInitial.currentAgentProfile !== null,
                 confirm: false /* never auto-checks; confirm is the action */,
               }}
             />
@@ -532,7 +650,12 @@ export default async function OnboardingPage({
             azureDevOpsStatus={pick(params.azure_devops)}
             gitlabStatus={pick(params.gitlab)}
             reposJustWired={pick(params.repos) === "wired"}
+            connectedKinds={trackerIntegrationKinds}
+            githubAppInstalled={githubAppInstalled}
           />
+        )}
+        {step === "roles" && wsId && rolesInitial && (
+          <RolesStep initial={rolesInitial} />
         )}
         {step === "confirm" && wsId && (
           <ConfirmStep
@@ -683,7 +806,7 @@ function GitHubStep({
   return (
     <section>
       <p className="font-mono text-[11px] uppercase tracking-[0.3em] text-aqua/85">
-        Step 1 of 4 &middot; Connect your code
+        Step 1 of 5 &middot; Connect your code
       </p>
       <h1 className="mt-2 font-display text-4xl font-bold leading-tight">
         {installed ? "Ship is installed on GitHub." : "Install Ship on GitHub."}
@@ -835,7 +958,7 @@ function ReposStep({
   return (
     <section>
       <p className="font-mono text-[11px] uppercase tracking-[0.3em] text-aqua/85">
-        Step 2 of 4 &middot; Pick repos
+        Step 2 of 5 &middot; Pick repos
       </p>
       <h1 className="mt-2 font-display text-4xl font-bold leading-tight">
         Which repos should Ship watch?
@@ -976,6 +1099,8 @@ function TrackerStep({
   azureDevOpsStatus,
   gitlabStatus,
   reposJustWired,
+  connectedKinds,
+  githubAppInstalled,
 }: {
   wsId: string;
   error?: string;
@@ -985,7 +1110,25 @@ function TrackerStep({
   azureDevOpsStatus?: string;
   gitlabStatus?: string;
   reposJustWired: boolean;
+  /** Workspace-level Integration kinds that have an OAuth/PAT
+   * token on file. Drives the "connected" badge on each tile. */
+  connectedKinds: string[];
+  /** GitHub App installed on this workspace? Counts the
+   * ``github`` integration as connected (it doesn't have its own
+   * Integration row). */
+  githubAppInstalled: boolean;
 }) {
+  // Build the connected-tile lookup once. Atlassian uses the Jira
+  // kind on the backend (the form here connects to the native-
+  // integration store via /api/onboard/tracker-install), so we map
+  // ``atlassian`` ↔ ``jira`` for badge purposes.
+  const isConnected = (id: string): boolean => {
+    if (id === "github") return githubAppInstalled;
+    if (id === "atlassian") {
+      return connectedKinds.includes("jira") || connectedKinds.includes("confluence");
+    }
+    return connectedKinds.includes(id);
+  };
   const message = error ? TRACKER_ERRORS[error] ?? error : null;
   const tiles: {
     id: "linear" | "notion" | "atlassian" | "azure_devops" | "gitlab" | "github";
@@ -1056,25 +1199,17 @@ function TrackerStep({
   return (
     <section>
       <p className="font-mono text-[11px] uppercase tracking-[0.3em] text-aqua/85">
-        Step 3 of 4 &middot; Workspace tracker
+        Step 3 of 5 &middot; Integrations
       </p>
       <h1 className="mt-2 font-display text-4xl font-bold leading-tight">
-        Connect your tracker.
+        Connect your tools.
       </h1>
       <p className="mt-3 max-w-2xl text-sm leading-relaxed text-white/70">
-        This workspace-level connection is reused by <em>every</em> repo — the
-        Confirm step lets you override the tracker kind per repo (Linear,
-        GitHub Issues, Jira) and the team/project it writes to. Provider
-        tokens are encrypted with the workspace key; the API only ever
-        exposes{" "}
-        <code className="rounded bg-white/5 px-1 py-[1px] text-aqua">
-          has_secret: true
-        </code>{" "}
-        from here on. Skip and wire one up later from{" "}
-        <Link href="/integrations" className="text-aqua underline">
-          Integrations
-        </Link>{" "}
-        if you only want GitHub Issues.
+        Hook up the tools your team already uses — issue trackers, doc
+        stores, repo hosts. Each one can play more than one role
+        (Linear/Jira track tickets, Confluence/Notion hold docs); you
+        pick which integration plays which role on the next step.
+        GitHub Issues comes free with the App you installed in step 1.
       </p>
 
       {reposJustWired && (
@@ -1130,12 +1265,14 @@ function TrackerStep({
 
       <div className="mt-7 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
         {tiles.map((tile) => {
-          const connected =
-            (tile.id === "linear" && linearStatus === "connected") ||
-            (tile.id === "notion" && notionStatus === "connected") ||
-            (tile.id === "atlassian" && atlassianStatus === "connected") ||
-            (tile.id === "azure_devops" && azureDevOpsStatus === "connected") ||
-            (tile.id === "gitlab" && gitlabStatus === "connected");
+          // Connected = workspace has an Integration row with a token
+          // for this kind (or the GitHub App is installed for the
+          // ``github`` tile). Single source of truth — pre-fix this
+          // was a per-tile URL-param check that only fired on the
+          // round-trip *right after* OAuth completed, so a returning
+          // operator saw every tile rendered as "fresh / disconnected"
+          // even when half of them were already wired.
+          const connected = isConnected(tile.id);
           return (
           <form
             key={tile.id}
@@ -1198,19 +1335,26 @@ function TrackerStep({
             )}
             <button
               type="submit"
-              disabled={connected}
+              disabled={connected || tile.id === "github"}
               className="mt-4 rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-4 py-2 text-xs font-bold text-ink shadow-glow transition hover:brightness-110 disabled:cursor-default disabled:bg-none disabled:bg-aqua/15 disabled:text-aqua disabled:shadow-none"
             >
               {connected
-                ? "Connected"
-                : tile.id === "github"
-                ? "Use GitHub Issues \u2192"
+                ? tile.id === "github"
+                  ? "Built-in (GitHub App)"
+                  : "Connected \u2713"
                 : `Connect ${tile.name} \u2192`}
             </button>
           </form>
           );
         })}
       </div>
+      <p className="mt-3 text-[11px] text-white/45">
+        Need to disconnect or rotate a token? Open{" "}
+        <Link href="/integrations" className="text-aqua underline">
+          Integrations
+        </Link>{" "}
+        \u2014 same data, more knobs (re-auth, probe, manage).
+      </p>
 
       <form
         action="/api/onboard/tracker-install"
@@ -1221,8 +1365,8 @@ function TrackerStep({
         <input type="hidden" name="ws" value={wsId} suppressHydrationWarning />
         <input type="hidden" name="kind" value="skip" suppressHydrationWarning />
         <span className="text-[11px] text-white/45">
-          Already connected one? Just hit Continue — the wizard remembers across
-          refreshes.
+          Connect what you need — pick which one plays which role on
+          the next step.
         </span>
         <div className="flex items-center gap-3">
           <button

@@ -1,23 +1,21 @@
 /**
- * ConfirmStep — Wave-8c "Confirm bootstrap" wizard step.
+ * ConfirmStep — final wizard step "Activate Ship".
  *
- * Replaces the per-repo preset configure step. Shows the operator
- * what the wizard is about to do *before* they hit "Open seed PR":
+ * PO-friendly rewrite (May 2026): the previous version listed every
+ * Play in the bundle and a 4-step "how it lands" walkthrough with
+ * file paths, secret names, and bundle versions. Operators on the
+ * non-eng side bounced off it. The new layout leads with the action
+ * (seed-PR CTAs per repo) and tucks the technical detail behind a
+ * collapsible "What's actually in the PR?" disclosure for those who
+ * want it.
  *
- *   1. The canonical Plays bundle (sourced live from
- *      ``GET /v1/catalog/default-bundle`` so this UI stays in lockstep
- *      with ``backend.app.services.lane_recipes.DEFAULT_BUNDLE``).
- *   2. How the seed PR lands (infra first, then GitHub Actions opens
- *      a second generated-knowledge PR after merge).
- *   3. The list of activated repos with their tracker / secret status
- *      and the per-repo "Open seed PR" CTA (rendered by
- *      :class:`RepoCard`).
+ * Workspace-defaults panel moved to the Roles step (step 4) so the
+ * "what plays which role" decision is consolidated there.
  *
  * Server component — the bundle preview is fetched at render time
  * (no client roundtrip), and the per-repo cards hydrate from
- * ``RepoCardInitial`` rows the page collected up-front in the same
- * way the legacy configure step did. Only the seed CTA itself is
- * client-side; everything else is markup.
+ * ``RepoCardInitial`` rows the page collected up-front. Only the
+ * seed CTA itself is client-side; everything else is markup.
  */
 
 import Link from "next/link";
@@ -26,25 +24,20 @@ import {
   ApiHttpError,
   ApiUnavailableError,
   getDefaultBundle,
-  listIntegrations,
-  listWorkspaces,
   type ApiDefaultBundleEntry,
 } from "@/lib/api/client";
 import { getSessionToken } from "@/lib/api/session";
 
 import { RepoCard, type RepoCardInitial } from "./repo-card";
-import {
-  WorkspaceDefaultsPanel,
-  type WorkspaceDefaultsPanelInitial,
-} from "./workspace-defaults-panel";
 
 export interface ConfirmStepProps {
   workspaceId: string;
   cards: RepoCardInitial[] | null;
   loadError: string | null;
   /** True when at least one ``GitHubInstallation`` for the workspace
-   *  is active (the wizard can't reach this step otherwise, but the
-   *  panel uses this for the orchestrator-status row). */
+   *  is active. Currently unused on this step (Roles step owns the
+   *  workspace-defaults panel now) but kept on the props so the
+   *  caller in ``page.tsx`` doesn't have to change shape. */
   githubAppInstalled: boolean;
 }
 
@@ -57,50 +50,10 @@ export async function ConfirmStep({
   workspaceId,
   cards,
   loadError,
-  githubAppInstalled,
+  githubAppInstalled: _githubAppInstalled,
 }: ConfirmStepProps) {
   const message = loadError ? CONFIGURE_ERRORS[loadError] ?? loadError : null;
   const total = cards?.length ?? 0;
-
-  // ── Workspace defaults snapshot ──────────────────────────────
-  // Server-rendered so the panel hydrates with truthful state in
-  // one round-trip — the operator can see what's missing before
-  // they click anything. Failures are non-fatal: a missing list
-  // collapses to "no tracker" / "pick one" and the panel still
-  // renders. The seed CTAs further down catch the same problem
-  // with a 412 from the route, so worst case the operator sees
-  // an extra inline error.
-  const sessionToken_ws = await getSessionToken();
-  let panelInitial: WorkspaceDefaultsPanelInitial = {
-    workspaceId,
-    defaultAgentProfile: null,
-    trackerKinds: [],
-    githubAppInstalled,
-  };
-  try {
-    const [workspaces, integrations] = await Promise.all([
-      listWorkspaces(sessionToken_ws ?? undefined),
-      listIntegrations(workspaceId, sessionToken_ws ?? undefined),
-    ]);
-    const ws = workspaces.find((w) => w.id === workspaceId);
-    // Mirror the backend gate: linear/jira need a token (has_secret);
-    // github passes through without one (rides on App install).
-    const trackerKinds = integrations
-      .filter((i) =>
-        ["linear", "github", "jira"].includes(i.kind as string),
-      )
-      .filter((i) => i.kind === "github" || i.has_secret)
-      .map((i) => i.kind as string);
-    panelInitial = {
-      workspaceId,
-      defaultAgentProfile: ws?.default_agent_profile ?? null,
-      trackerKinds,
-      githubAppInstalled,
-    };
-  } catch {
-    // Keep panelInitial defaults — UI will render "missing" rows
-    // and let the operator click through to fix.
-  }
 
   // Fetch the canonical Plays bundle preview server-side. The endpoint
   // is workspace-agnostic but workspace-auth-gated; pass through the
@@ -126,16 +79,16 @@ export async function ConfirmStep({
   return (
     <section data-testid="onboarding-step-confirm">
       <p className="font-mono text-[11px] uppercase tracking-[0.3em] text-aqua/85">
-        Step 4 of 4 &middot; Confirm bootstrap
+        Step 5 of 5 &middot; Activate Ship
       </p>
       <h1 className="mt-2 font-display text-4xl font-bold leading-tight">
-        One PR per repo. Here&apos;s exactly what lands.
+        Turn Ship on in your repos.
       </h1>
       <p className="mt-3 max-w-2xl text-sm leading-relaxed text-white/70">
-        Ship installs the same canonical bundle of Plays in every new
-        repo — no preset menu to second-guess. Review what&apos;s in
-        the bundle and how the PR ships, then open it per-repo
-        whenever you&apos;re ready.
+        For each repo Ship opens a single pull request. It drops in a
+        small config folder and the workflow file Ship needs, and
+        pushes credentials so GitHub Actions can talk to Ship. Review
+        it like any other PR &mdash; merge when you&apos;re happy.
       </p>
 
       {message && (
@@ -143,153 +96,6 @@ export async function ConfirmStep({
           {message}
         </div>
       )}
-
-      {/* ── What gets installed ──────────────────────────────── */}
-      <div className="mt-7 rounded-2xl border border-white/10 bg-white/[0.03] p-5">
-        <div className="flex items-baseline justify-between gap-3">
-          <h2 className="font-display text-lg font-bold text-white">
-            What gets installed in each repo
-          </h2>
-          <span className="text-[11px] text-white/45">
-            {bundle.length > 0
-              ? `${bundle.length} Plays`
-              : bundleError
-                ? "preview unavailable"
-                : "loading"}
-          </span>
-        </div>
-        {bundleError && (
-          <p className="mt-2 rounded border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] leading-snug text-amber-200">
-            {bundleError} The seed PR still installs the same bundle —
-            the preview here is best-effort.
-          </p>
-        )}
-        {bundle.length > 0 && (
-          <ul className="mt-3 space-y-2">
-            {bundle.map((entry) => (
-              <li
-                key={entry.key}
-                data-testid="onboarding-confirm-bundle-item"
-                className="rounded-xl border border-white/5 bg-white/[0.02] p-3"
-              >
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-semibold text-white">
-                    {entry.title}
-                  </span>
-                  <code className="rounded bg-white/5 px-1.5 py-0.5 font-mono text-[10px] tracking-wide text-white/45">
-                    {entry.key}
-                  </code>
-                </div>
-                {entry.reason && (
-                  <p className="mt-1 text-[12px] leading-snug text-white/65">
-                    {entry.reason}
-                  </p>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-
-      {/* ── How it lands ─────────────────────────────────────── */}
-      <div className="mt-5 rounded-2xl border border-white/10 bg-white/[0.03] p-5">
-        <h2 className="font-display text-lg font-bold text-white">
-          How it lands
-        </h2>
-        {/* Bullet list rewritten to match BUNDLE 0.13 reality:
-            - Exactly ONE workflow file installs (ship-trigger-schedule.yml).
-              ship-bootstrap.yml was retired in BUNDLE 0.8 — knowledge
-              ingestion moved server-side; nothing else lands as a
-              separate PR.
-            - The "second generated knowledge PR" claim was tied to that
-              same retired workflow and is gone.
-            - GitHub Actions secrets are still pushed by the route but
-              folded into the same step description so the operator
-              sees "one click → one PR" instead of a five-step ritual. */}
-        <ul className="mt-3 space-y-2 text-[12px] leading-relaxed text-white/75">
-          <li className="flex gap-2">
-            <span className="mt-[2px] grid h-4 w-4 shrink-0 place-items-center rounded-full bg-aqua/20 text-[10px] text-aqua">
-              1
-            </span>
-            <span>
-              <strong className="text-white">One pull request per repo</strong>
-              , titled{" "}
-              <code className="rounded bg-white/5 px-1 text-aqua">
-                Ship: bootstrap
-              </code>
-              . Idempotent — re-running the wizard opens a fresh PR
-              with the latest bundle.
-            </span>
-          </li>
-          <li className="flex gap-2">
-            <span className="mt-[2px] grid h-4 w-4 shrink-0 place-items-center rounded-full bg-aqua/20 text-[10px] text-aqua">
-              2
-            </span>
-            <span>
-              <strong className="text-white">Four files committed</strong>:{" "}
-              <code className="rounded bg-white/5 px-1 text-aqua">
-                .github/workflows/ship-trigger-schedule.yml
-              </code>{" "}
-              (the only workflow file we install), {" "}
-              <code className="rounded bg-white/5 px-1 text-aqua">
-                .ship/config.yml
-              </code>
-              ,{" "}
-              <code className="rounded bg-white/5 px-1 text-aqua">
-                .ship/tracker-fsm.md
-              </code>
-              , and an idempotency marker.
-            </span>
-          </li>
-          <li className="flex gap-2">
-            <span className="mt-[2px] grid h-4 w-4 shrink-0 place-items-center rounded-full bg-aqua/20 text-[10px] text-aqua">
-              3
-            </span>
-            <span>
-              <strong className="text-white">
-                GitHub Actions secrets pushed alongside the PR
-              </strong>{" "}
-              —{" "}
-              <code className="rounded bg-white/5 px-1 text-aqua">
-                SHIP_RUN_TOKEN
-              </code>
-              ,{" "}
-              <code className="rounded bg-white/5 px-1 text-aqua">
-                SHIP_API_BASE
-              </code>
-              , and (first mint){" "}
-              <code className="rounded bg-white/5 px-1 text-aqua">
-                SHIP_API_TOKEN
-              </code>
-              . CI can reach Ship without manual copy-paste.
-            </span>
-          </li>
-          <li className="flex gap-2">
-            <span className="mt-[2px] grid h-4 w-4 shrink-0 place-items-center rounded-full bg-aqua/20 text-[10px] text-aqua">
-              4
-            </span>
-            <span>
-              <strong className="text-white">Post-merge work is server-side.</strong>{" "}
-              Repo intel + knowledge ingestion run on Ship after the
-              PR merges — no second customer-side PR, no extra
-              workflow file. Watch <code className="rounded bg-white/5 px-1 text-aqua">/inbox</code>{" "}
-              and <code className="rounded bg-white/5 px-1 text-aqua">/knowledge</code>{" "}
-              once the seed PR is in.
-            </span>
-          </li>
-        </ul>
-      </div>
-
-      {/* ── Workspace defaults gate ───────────────────────────
-          Three workspace-level invariants the seed PR depends on.
-          Pre-fix the route happily seeded against NULL defaults and
-          shipctl runtime then couldn't resolve a coding agent / find
-          a tracker — the failure was invisible until cron started
-          claiming windows that nothing answered. The panel surfaces
-          the missing pieces before the operator clicks Re-seed. */}
-      <div className="mt-7">
-        <WorkspaceDefaultsPanel initial={panelInitial} />
-      </div>
 
       {/* ── Repos by drift state ───────────────────────────────
           Splitting the list keeps "Repos waiting for bootstrap" honest:
@@ -320,7 +126,7 @@ export async function ConfirmStep({
           <>
             <div className="mt-7">
               <h2 className="font-display text-lg font-bold text-white">
-                Repos waiting for bootstrap{" "}
+                Repos to activate{" "}
                 <span className="text-[11px] font-normal text-white/45">
                   ({actionable.length}{" "}
                   {actionable.length === 1 ? "repo" : "repos"})
@@ -341,15 +147,14 @@ export async function ConfirmStep({
 
               {actionable.length === 0 && upToDate.length === 0 && !loadError && (
                 <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-xs text-white/70">
-                  No activated repos. Step back to <em>Pick repos</em> and
-                  activate at least one before bootstrapping.
+                  No repos picked yet. Go back to <em>Repos</em> and pick
+                  the ones you want Ship to work with first.
                 </div>
               )}
 
               {actionable.length === 0 && upToDate.length > 0 && (
                 <div className="mt-3 rounded-xl border border-aqua/30 bg-aqua/[0.06] px-4 py-3 text-xs text-aqua/90">
-                  All activated repos are on the current bundle. Nothing to
-                  do here.
+                  Everything&apos;s already on the latest version. Nothing to do here.
                 </div>
               )}
             </div>
@@ -385,6 +190,72 @@ export async function ConfirmStep({
         );
       })()}
 
+      {/* ── Bundle peek ───────────────────────────────────────
+          Folded by default — the average operator doesn't need to
+          read the Plays catalogue before clicking "Activate". The
+          ``<details>`` is here so power users can sanity-check what
+          actually lands in the PR without leaving the wizard. */}
+      <details className="mt-8 group/bundle rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+        <summary className="cursor-pointer list-none [&::-webkit-details-marker]:hidden">
+          <span className="inline-flex items-center gap-2 text-[12px] text-white/65 hover:text-white">
+            <span
+              aria-hidden
+              className="transition-transform group-open/bundle:rotate-90"
+            >
+              ▸
+            </span>
+            <span>What&apos;s actually in the PR?</span>
+            {bundle.length > 0 && (
+              <span className="text-[11px] text-white/40">
+                {bundle.length} Plays
+              </span>
+            )}
+          </span>
+        </summary>
+        <p className="mt-3 text-[12px] leading-relaxed text-white/65">
+          Ship installs the same standard set of automations
+          (&ldquo;Plays&rdquo;) in every repo &mdash; they&apos;re what
+          turn on inbox triage, scheduled checks, and the agent that
+          picks up tickets. Plus one tiny workflow file under{" "}
+          <code className="rounded bg-white/5 px-1 text-aqua">
+            .github/workflows/
+          </code>{" "}
+          and a <code className="rounded bg-white/5 px-1 text-aqua">.ship/</code>{" "}
+          config folder. Nothing outside those two paths is touched.
+        </p>
+        {bundleError && (
+          <p className="mt-2 rounded border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] leading-snug text-amber-200">
+            {bundleError} The PR still installs the same set &mdash; the
+            preview here is best-effort.
+          </p>
+        )}
+        {bundle.length > 0 && (
+          <ul className="mt-3 space-y-2">
+            {bundle.map((entry) => (
+              <li
+                key={entry.key}
+                data-testid="onboarding-confirm-bundle-item"
+                className="rounded-xl border border-white/5 bg-white/[0.02] p-3"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-semibold text-white">
+                    {entry.title}
+                  </span>
+                  <code className="rounded bg-white/5 px-1.5 py-0.5 font-mono text-[10px] tracking-wide text-white/45">
+                    {entry.key}
+                  </code>
+                </div>
+                {entry.reason && (
+                  <p className="mt-1 text-[12px] leading-snug text-white/65">
+                    {entry.reason}
+                  </p>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </details>
+
       {/* Footer cross-links. The stepper handles ordered navigation
           between adjacent setup steps, so this row carries the two
           escape valves that aren't on the stepper:
@@ -404,8 +275,8 @@ export async function ConfirmStep({
       <div className="mt-8 flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-5">
         <span className="text-[11px] text-white/45">
           {total > 0
-            ? `${total} repo${total === 1 ? "" : "s"} ready. Seed PRs don't auto-merge — you're in control.`
-            : "Nothing to bootstrap yet."}
+            ? `${total} repo${total === 1 ? "" : "s"} ready. You stay in control — every change goes through a PR you can review.`
+            : "Nothing to activate yet."}
         </span>
         <div className="flex flex-wrap items-center gap-4 text-xs">
           <Link

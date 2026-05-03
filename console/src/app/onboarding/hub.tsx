@@ -105,15 +105,24 @@ export function OnboardingHub({
     },
     {
       key: "tracker",
-      title: "Workspace tracker",
+      title: "Integrations",
       blurb:
-        "Where Ship files tickets, clarifications, and approvals. Linear/Notion need OAuth; GitHub Issues rides on the App.",
+        "Tools your team already uses — issue trackers, doc stores, repo hosts. Linear/Notion need OAuth; GitHub Issues rides on the App.",
       status:
         workspaceDefaults.trackerKinds.length > 0
           ? { tone: "ok", label: trackerLabel }
           : { tone: "warn", label: "not connected" },
-      cta: workspaceDefaults.trackerKinds.length > 0 ? "Reconnect →" : "Connect →",
+      cta: workspaceDefaults.trackerKinds.length > 0 ? "Manage →" : "Connect →",
       href: `/onboarding${wsQuery}tracker${wsSuffix}`,
+    },
+    {
+      key: "roles",
+      title: "Roles",
+      blurb:
+        "Pick which integration plays which role: tracker, docs, default agent, code orchestrator.",
+      status: rolesStatus(workspaceDefaults),
+      cta: "Configure →",
+      href: `/onboarding${wsQuery}roles${wsSuffix}`,
     },
     {
       key: "bootstrap",
@@ -216,6 +225,18 @@ function HubCardView({ card }: { card: HubCard }) {
       </span>
     </Link>
   );
+}
+
+function rolesStatus(d: WorkspaceDefaultsPanelInitial): {
+  tone: "ok" | "warn" | "neutral";
+  label: string;
+} {
+  const trackerSet = d.trackerKinds.length > 0;
+  const agentSet = d.defaultAgentProfile !== null;
+  if (trackerSet && agentSet) return { tone: "ok", label: "configured" };
+  if (!trackerSet && !agentSet) return { tone: "warn", label: "needs both" };
+  if (!trackerSet) return { tone: "warn", label: "tracker missing" };
+  return { tone: "warn", label: "agent missing" };
 }
 
 function bootstrapStatus(counts: {
