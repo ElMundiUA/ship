@@ -1273,14 +1273,19 @@ async def _get_workspace_bucket_for_intel_article(
     session: AsyncSession, *, repo: WorkspaceRepo, article_slug: str
 ) -> KnowledgeBucket:
     workspace_id = repo.workspace_id
+    # The 10 → 6 consolidation retired ``project-map`` and
+    # ``source-intelligence``; repo overview / generic source-intel rows
+    # fall back to ``product-knowledge`` (closest semantic neighbour for
+    # "what is this repo / what's in it"). The mapping otherwise stays
+    # tied to the per-section author intent.
     preferred = {
-        "overview": "project-map",
+        "overview": "product-knowledge",
         "dev-environment": "engineering-standards",
         "architecture": "architecture-decisions",
         "workflow": "runbooks-operations",
         "visual-style": "product-knowledge",
         "rules": "security-access",
-    }.get(article_slug, "source-intelligence")
+    }.get(article_slug, "product-knowledge")
     bucket = (
         await session.execute(
             select(KnowledgeBucket).where(
@@ -1315,9 +1320,9 @@ async def _get_workspace_bucket_for_intel_article(
         workspace_id=workspace_id,
         scope_kind=BucketScope.WORKSPACE,
         source_kind=BucketSource.REPO_CONTEXT,
-        slug="source-intelligence",
-        name="Source Intelligence",
-        description="Ship-generated source and repository intelligence.",
+        slug="product-knowledge",
+        name="Product Knowledge",
+        description="Product behavior, customer-facing concepts, roadmap context, UX decisions, and the data/domain vocabulary the team shares.",
         source_ref={
             "repo_id": str(repo.id),
             "repo_full_name": repo.full_name,

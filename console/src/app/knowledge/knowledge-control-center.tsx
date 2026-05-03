@@ -80,16 +80,12 @@ type Props = {
 type Tab = "buckets" | "search" | "sources" | "settings";
 
 const STARTER_BUCKETS = [
-  "Project Map",
   "Architecture Decisions",
   "Engineering Standards",
   "Runbooks & Operations",
   "Product Knowledge",
-  "Source Intelligence",
-  "Generated Assets",
-  "Security & Access",
   "Integration Playbooks",
-  "Data & Domain Glossary",
+  "Security & Access",
 ];
 
 export function KnowledgeControlCenter({
