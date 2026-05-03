@@ -394,6 +394,25 @@ function noticeMessage(reason: string): string {
   if (reason === "http_409") return ".ship/config.yml changed since the editor loaded. Reload before saving.";
   if (reason === "http_422") return "Process config is invalid. Check state ids, transitions, and layout values.";
   if (reason.startsWith("http_")) return `Process save failed (${reason.replace("http_", "HTTP ")}).`;
+  // Tracker-sync flow surfaces ``tracker_sync_<backend code>`` reasons.
+  if (reason === "tracker_sync_tracker_not_bound")
+    return "No tracker is connected to this workspace. Connect Linear before running tracker sync.";
+  if (reason === "tracker_sync_github_app_missing")
+    return "Ship's GitHub App isn't installed on this repo. Reconnect it before running tracker sync.";
+  if (reason === "tracker_sync_process_block_missing")
+    return ".ship/config.yml has no process block. Run the seed bundle on this repo first.";
+  if (reason === "tracker_sync_tracker_kind_unsupported_for_sync")
+    return "Tracker sync is currently Linear-only. Jira / GitHub Projects / Notion are coming.";
+  if (reason === "tracker_sync_tracker_probe_failed")
+    return "Couldn't read the tracker's workflow states. Re-auth Linear and retry.";
+  if (reason === "tracker_sync_tracker_no_states")
+    return "Tracker returned zero workflow states. Make sure the team has its default lifecycle configured.";
+  if (reason === "tracker_sync_config_yaml_unparseable")
+    return ".ship/config.yml doesn't parse as YAML. Fix it manually before running tracker sync.";
+  if (reason === "tracker_sync_tracker_sync_pr_failed")
+    return "GitHub refused the sync PR. Check the App permissions and retry.";
+  if (reason.startsWith("tracker_sync_"))
+    return "Tracker sync failed. Please retry, or open the backend logs if it persists.";
   return "Process save failed. Please retry.";
 }
 
@@ -526,13 +545,12 @@ async function EditorContent({
   selectedTab: ProcessTab;
   selectedStateId?: string;
   locked: boolean;
-  // Reserved for the upcoming tracker-sync banner — passed through but
-  // not currently consumed. Will read this when wiring drift detection +
-  // LLM remap PR (probe Linear/Jira/GitHub/Notion via the right adapter).
+  /** Workspace's bound tracker kind. Passed to ProcessEditorWorkspace
+   *  so the TrackerSyncBanner can gate on "linear" — the rest of the
+   *  editor doesn't read it. */
   trackerKind: string | null;
   token: string;
 }) {
-  void trackerKind;
   let projectedProcess: ApiProcess;
   let config: ApiRepoConfig | null = null;
   try {
@@ -578,6 +596,7 @@ async function EditorContent({
             selectedStateId={selectedStateId}
             repoId={repoId}
             config={config}
+            trackerKind={trackerKind ?? undefined}
           />
         )}
       </fieldset>

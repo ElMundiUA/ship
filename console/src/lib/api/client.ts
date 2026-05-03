@@ -2281,6 +2281,47 @@ export function proposeRepoConfig(
   );
 }
 
+export interface ApiTrackerSyncIn {
+  repo_id: string;
+  change_summary?: string;
+}
+
+export interface ApiTrackerSyncOut {
+  pr_url: string;
+  pr_number: number;
+  branch: string;
+  tracker_kind: string;
+  /** Canonical state → native column name (or "__overlay__" for awaiting_input). */
+  mapping: Record<string, string>;
+  llm_used: boolean;
+  retries: number;
+  warnings: string[];
+  deterministic_slots: string[];
+}
+
+/**
+ * Run the probe → LLM-resolve → PR pipeline that aligns
+ * ``process.tracker_mapping`` in ``.ship/config.yml`` with this
+ * workspace's bound tracker (currently Linear-only on the backend).
+ *
+ * Server-side: probes the Linear team's workflow states + a few
+ * recent issue titles per state, runs the deterministic + LLM
+ * resolver with validation+retry, patches the YAML, and opens a
+ * single-file PR via the same plumbing the regular config-propose
+ * endpoint uses. The console surfaces the PR URL on success.
+ */
+export function syncTrackerProjection(
+  workspaceId: string,
+  processId: string,
+  body: ApiTrackerSyncIn,
+  token?: string,
+): Promise<ApiTrackerSyncOut> {
+  return apiFetch<ApiTrackerSyncOut>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/processes/${encodeURIComponent(processId)}/tracker-sync`,
+    { method: "POST", token, body },
+  );
+}
+
 export function installPipelineWorkflow(
   workspaceId: string,
   pipelineId: string,
