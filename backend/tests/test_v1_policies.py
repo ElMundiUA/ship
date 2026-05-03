@@ -225,6 +225,80 @@ async def test_invalid_role_slug_is_422(v1_client, seed_workspace) -> None:
 
 
 @pytest.mark.asyncio
+async def test_workspace_scoped_preamble_endpoint(
+    v1_client, db_session, seed_workspace
+) -> None:
+    """The workspace-scoped ``/policies/preamble`` endpoint backs the
+    ``shipctl run`` flow (which mints ``run_id`` locally and can't
+    use the per-run JWT auth path). Workspace-membership token is
+    enough; ``?role=`` opts into role-scoped policies on top of the
+    globals."""
+    from backend.app.db.models.policies import WorkspacePolicy
+
+    _, raw, workspace = seed_workspace
+    headers = {"Authorization": f"Bearer {raw}"}
+
+    db_session.add_all(
+        [
+            WorkspacePolicy(
+                workspace_id=workspace.id,
+                title="Always work via PR",
+                body="Never push directly to main.",
+                enabled=True,
+                sort_order=0,
+                applies_to_roles=None,
+            ),
+            WorkspacePolicy(
+                workspace_id=workspace.id,
+                title="Run lint before PR",
+                body="Developer-only quality gate.",
+                enabled=True,
+                sort_order=1,
+                applies_to_roles=["developer"],
+            ),
+            WorkspacePolicy(
+                workspace_id=workspace.id,
+                title="BA rewrites description",
+                body="BA-only.",
+                enabled=True,
+                sort_order=2,
+                applies_to_roles=["ba"],
+            ),
+        ]
+    )
+    await db_session.flush()
+
+    # No role param → globals only.
+    no_role = await v1_client.get(
+        f"/v1/workspaces/{workspace.id}/policies/preamble",
+        headers=headers,
+    )
+    assert no_role.status_code == 200
+    body_no_role = no_role.json()["preamble"]
+    assert "Always work via PR" in body_no_role
+    assert "Run lint before PR" not in body_no_role
+    assert "BA rewrites description" not in body_no_role
+
+    # ?role=developer → globals ∪ developer-scoped.
+    dev = await v1_client.get(
+        f"/v1/workspaces/{workspace.id}/policies/preamble?role=developer",
+        headers=headers,
+    )
+    assert dev.status_code == 200
+    body_dev = dev.json()["preamble"]
+    assert "Always work via PR" in body_dev
+    assert "Run lint before PR" in body_dev
+    assert "BA rewrites description" not in body_dev
+
+    # Invalid role slug rejected with 422.
+    bad = await v1_client.get(
+        f"/v1/workspaces/{workspace.id}/policies/preamble?role=Bad%20Slug",
+        headers=headers,
+    )
+    assert bad.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_render_skips_disabled(db_session, seed_workspace) -> None:
     """Disabled rows are not in the preamble even if they sort first."""
     from backend.app.db.models.policies import WorkspacePolicy

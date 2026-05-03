@@ -140,11 +140,31 @@ export async function runCommand(ctx, rest) {
     }
   }
 
-  // 3) Mint a run_id + render prompt with finish-protocol values
+  // 3) Fetch the workspace policy preamble so the agent prompt
+  // carries the same standing rules the Navigator chat does. Best-
+  // effort: a missing token, missing API base, or a network failure
+  // quietly skips the prepend — local / offline runs still work.
+  // The role slug comes from the pattern's ``spec.role`` (set in
+  // every ``role-*`` artifact frontmatter); falling back to the
+  // pattern id with the ``role-`` prefix stripped covers older
+  // artifacts that may not declare ``spec.role`` explicitly.
+  const roleSlug =
+    (frontmatter?.spec && typeof frontmatter.spec.role === "string"
+      ? frontmatter.spec.role
+      : null) ||
+    (patternId.startsWith("role-") ? patternId.slice("role-".length) : null);
+  const policiesPreamble = await fetchPoliciesPreamble({
+    apiBase,
+    apiToken,
+    workspaceId,
+    role: roleSlug,
+  });
+
+  // 4) Mint a run_id + render prompt with finish-protocol values
   // already substituted so the agent can call /agent-runs/finish from
   // inside Cursor without holding any extra config.
   const runId = `run_${crypto.randomBytes(8).toString("hex")}`;
-  const prompt = renderPrompt({
+  const renderedPrompt = renderPrompt({
     patternBody,
     baseBody,
     role: patternId,
@@ -161,6 +181,9 @@ export async function runCommand(ctx, rest) {
       fsmStage: fsmStage || null,
     },
   });
+  const prompt = policiesPreamble
+    ? `${policiesPreamble.trim()}\n\n---\n\n${renderedPrompt}`
+    : renderedPrompt;
 
   // ``--dry-run`` exits here so the operator can eyeball the rendered
   // prompt + resolved task without launching an agent or touching any
@@ -299,6 +322,61 @@ function pickFsmStage(frontmatter, frontmatterRaw) {
     if (m && m[1]) return m[1].trim();
   }
   return null;
+}
+
+
+/**
+ * Best-effort fetch of the workspace's policy preamble. Returns the
+ * markdown block to prepend, or ``null`` when there's nothing to
+ * inject (no policies, missing token / API base, network error,
+ * non-200 response). Never throws — a broken policies path mustn't
+ * break a routine run.
+ *
+ * Auth: workspace-membership token (``SHIP_API_TOKEN`` — same one
+ * the rest of ``run.mjs`` uses). The companion run-token endpoint
+ * at ``/v1/pipelines/runs/{run_id}/policies-preamble`` doesn't fit
+ * this flow because the CLI mints ``run_id`` locally; the
+ * workspace-scoped variant takes membership instead.
+ */
+async function fetchPoliciesPreamble({ apiBase, apiToken, workspaceId, role }) {
+  if (!apiBase || !apiToken || !workspaceId) return null;
+  const qs = role ? `?role=${encodeURIComponent(role)}` : "";
+  const url = `${apiBase}/v1/workspaces/${encodeURIComponent(workspaceId)}/policies/preamble${qs}`;
+  let res;
+  try {
+    res = await fetch(url, {
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${apiToken}`,
+      },
+    });
+  } catch (err) {
+    console.error(
+      `warn: policies preamble fetch failed (network): ${err instanceof Error ? err.message : err}`,
+    );
+    return null;
+  }
+  if (!res.ok) {
+    // 404 happens against older backends that don't have the
+    // workspace-scoped endpoint yet — silent skip there. Other
+    // statuses (401, 403, 500) get a one-line warning so operators
+    // notice misconfigurations without aborting the run.
+    if (res.status !== 404) {
+      console.error(
+        `warn: policies preamble fetch returned ${res.status}; running without preamble`,
+      );
+    }
+    return null;
+  }
+  let body;
+  try {
+    body = await res.json();
+  } catch {
+    return null;
+  }
+  return typeof body?.preamble === "string" && body.preamble.trim()
+    ? body.preamble
+    : null;
 }
 
 

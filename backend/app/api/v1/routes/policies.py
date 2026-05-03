@@ -19,7 +19,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import asc, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -161,6 +161,57 @@ async def list_policies(
         .all()
     )
     return PolicyListOut(policies=[_serialise(r) for r in rows])
+
+
+class PoliciesPreambleOut(BaseModel):
+    """Workspace policies rendered as a markdown preamble.
+
+    ``preamble`` is ``None`` when the workspace has no enabled
+    policies that match the requested scope — the CLI uses that as
+    the signal to skip prepending anything to the agent prompt
+    (avoiding a stray separator).
+    """
+
+    preamble: str | None = Field(default=None)
+
+
+@router.get(
+    "/policies/preamble",
+    response_model=PoliciesPreambleOut,
+)
+async def get_workspace_policies_preamble(
+    workspace_id: uuid.UUID,
+    role: str | None = Query(
+        default=None,
+        max_length=64,
+        pattern=_ROLE_SLUG_PATTERN,
+        description=(
+            "Specialist role slug the agent run is acting as (e.g. "
+            "``developer``, ``ba``, ``intake``). When provided, the "
+            "preamble includes role-scoped policies in addition to "
+            "globals; when omitted, only globals render."
+        ),
+    ),
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> PoliciesPreambleOut:
+    """Return the workspace's policies as a ready-to-prepend preamble.
+
+    Workspace-token auth — workspace members only. Cloud-agent runs
+    via ``shipctl run`` call this with their role slug so the
+    rendered prompt carries the same policy block as the Navigator
+    chat. Auth boundary is membership, not the per-run JWT, because
+    the CLI flow mints its ``run_id`` locally and has no JWT to
+    present.
+    """
+
+    from backend.app.services.policies import render_policies_preamble
+
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
+    preamble = await render_policies_preamble(
+        session, workspace_id, role_slug=role
+    )
+    return PoliciesPreambleOut(preamble=preamble)
 
 
 @router.post(
