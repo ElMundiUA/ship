@@ -32,9 +32,14 @@ import pytest
 from backend.app.db.models.agent_surface import ChatThread
 from backend.app.services.agent.topic import (
     TopicService,
-    _AGENT_SYSTEM_PROMPT,
+    _load_navigator_prompt,
     _render_session_context,
 )
+
+
+def _navigator_prompt() -> str:
+    """Cache-friendly helper: catalog read is mtime-cached internally."""
+    return _load_navigator_prompt()
 
 
 def _thread(workspace_id: uuid.UUID, user_id: uuid.UUID) -> ChatThread:
@@ -76,15 +81,15 @@ def _thread(workspace_id: uuid.UUID, user_id: uuid.UUID) -> ChatThread:
     ],
 )
 def test_hard_rules_cover_hallucinated_classes(needle: str) -> None:
-    assert needle in _AGENT_SYSTEM_PROMPT, (
-        f"_AGENT_SYSTEM_PROMPT missing '{needle}' — A1 hardening regressed"
+    assert needle in _navigator_prompt(), (
+        f"_navigator_prompt() missing '{needle}' — A1 hardening regressed"
     )
 
 
 def test_hard_rules_have_idk_section() -> None:
     """The "When you don't know" header anchors the IDK rules; downstream
     docs reference it by name. Other prose can change freely."""
-    assert "## When you don't know" in _AGENT_SYSTEM_PROMPT
+    assert "## When you don't know" in _navigator_prompt()
 
 
 def test_hard_rules_pushback_clause() -> None:
@@ -93,7 +98,7 @@ def test_hard_rules_pushback_clause() -> None:
     # Match either 're-call' / 'recall' / 'call the tool that' patterns.
     assert re.search(
         r"(re[- ]?call|call the tool|call .*ground truth)",
-        _AGENT_SYSTEM_PROMPT,
+        _navigator_prompt(),
         flags=re.IGNORECASE,
     )
 
@@ -111,7 +116,7 @@ def test_pushback_clause_references_existing_tools() -> None:
     block = re.search(
         r"When the user pushes back[^.]*\.[\s\S]*?Immediately call[^(]*"
         r"\(([^)]+)\)",
-        _AGENT_SYSTEM_PROMPT,
+        _navigator_prompt(),
     )
     assert block is not None, (
         "Pushback clause shape changed — update this test alongside "
@@ -139,7 +144,7 @@ def test_hard_rules_reference_session_context() -> None:
     """The static prompt must point at the dynamic frame so the agent
     knows where to read today's date from. Renaming the frame
     requires updating both sides — this test enforces the link."""
-    assert "Session context" in _AGENT_SYSTEM_PROMPT
+    assert "Session context" in _navigator_prompt()
 
 
 # ---------------------------------------------------------------------------

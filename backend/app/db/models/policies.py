@@ -33,7 +33,7 @@ from sqlalchemy import (
     Text,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.app.db.base import Base
@@ -78,6 +78,15 @@ class WorkspacePolicy(Base):
     )
     sort_order: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("0")
+    )
+    # Role slugs the policy applies to. ``NULL`` (legacy default) and
+    # the empty array both mean "global" — render for every role and
+    # for the Navigator chat. A non-empty list scopes the rule, e.g.
+    # ``{"developer"}`` for the developer-quality-gates policy. The
+    # renderer's filter accepts both forms so admin edits that empty
+    # the array don't accidentally silence a rule.
+    applies_to_roles: Mapped[list[str] | None] = mapped_column(
+        ARRAY(String(64)), nullable=True
     )
 
     created_at: Mapped[datetime] = _ts_created()

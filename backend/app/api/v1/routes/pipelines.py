@@ -1627,6 +1627,18 @@ class PoliciesPreambleOut(BaseModel):
 )
 async def get_run_policies_preamble(
     run_id: uuid.UUID = Path(...),
+    role: str | None = Query(
+        default=None,
+        max_length=64,
+        pattern=r"^[a-z0-9][a-z0-9_-]*$",
+        description=(
+            "Role slug the agent picked the run with (e.g. "
+            "``developer``, ``ba``, ``intake``). When provided, the "
+            "preamble includes role-scoped policies in addition to "
+            "globals; when omitted, only globals render — that's the "
+            "safe default for older CLIs that don't know the role."
+        ),
+    ),
     ctx: RunTokenContext = Depends(get_run_or_repo_token_context),
     session: AsyncSession = Depends(get_session),
 ) -> PoliciesPreambleOut:
@@ -1638,6 +1650,11 @@ async def get_run_policies_preamble(
     ``services.policies.render_policies_preamble``) so both surfaces
     stay in lock-step on what the agent sees.
 
+    ``?role=<slug>`` opts the run into role-scoped policies (those
+    with a non-empty ``applies_to_roles`` matching the slug).
+    Without the param the response is global-only — backwards
+    compatible with CLIs that pre-date the role-scoping refactor.
+
     Auth mirrors ``POST /runs/{run_id}/result``: per-run JWT or
     long-lived ``SHIP_RUN_TOKEN``. The dependency cross-checks the
     run id against the credential, so the workspace is implicitly
@@ -1646,7 +1663,9 @@ async def get_run_policies_preamble(
 
     from backend.app.services.policies import render_policies_preamble
 
-    preamble = await render_policies_preamble(session, ctx.workspace_id)
+    preamble = await render_policies_preamble(
+        session, ctx.workspace_id, role_slug=role
+    )
     return PoliciesPreambleOut(preamble=preamble)
 
 

@@ -9,6 +9,11 @@ export type SpecialistTemplate = {
 
 const STATIC_SPECIALIST_CATALOG: SpecialistTemplate[] = [
   {
+    id: "navigator",
+    name: "Navigator",
+    role: "In-product chat agent that plans work, runs Inbox / Plays actions, and surfaces analytics.",
+  },
+  {
     id: "intake",
     name: "Intake specialist",
     role: "Clarifies incoming work, checks minimum context, and routes tasks.",

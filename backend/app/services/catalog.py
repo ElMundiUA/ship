@@ -546,6 +546,23 @@ def list_specialist_role_patterns() -> list[CatalogArtifact]:
     return [entry for entry in list_patterns() if _is_specialist_role_pattern(entry)]
 
 
+def get_pattern(pattern_id: str) -> CatalogArtifact | None:
+    """Look up a single pattern by its catalog id, or ``None``.
+
+    Backed by the same mtime-cached :func:`list_patterns` scan, so
+    repeated lookups for the same id share one filesystem walk per
+    invalidation cycle. Used by callers (e.g. the Navigator chat
+    bootstrap) that need one specific pattern's body and don't want
+    to materialise the full list at every call site.
+    """
+    if not pattern_id:
+        return None
+    for entry in list_patterns():
+        if entry.id == pattern_id:
+            return entry
+    return None
+
+
 def list_knowledge_recipe_patterns() -> list[CatalogArtifact]:
     """Procedural catalog entries exposed as seedable knowledge recipes."""
     return [entry for entry in list_patterns() if _is_knowledge_recipe_pattern(entry)]

@@ -22,14 +22,16 @@ from __future__ import annotations
 import uuid
 from typing import Sequence
 
-from sqlalchemy import asc, select
+from sqlalchemy import asc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.db.models.policies import WorkspacePolicy
 
 
 async def list_enabled_policies(
-    session: AsyncSession, workspace_id: uuid.UUID
+    session: AsyncSession,
+    workspace_id: uuid.UUID,
+    role_slug: str | None = None,
 ) -> list[WorkspacePolicy]:
     """Return enabled policies for ``workspace_id`` in render order.
 
@@ -37,7 +39,26 @@ async def list_enabled_policies(
     so re-orders are stable across requests but new rules slot to
     the bottom of their priority bucket without explicit sort_order
     edits.
+
+    ``role_slug`` filters to policies that target a specific role
+    plus all global policies (``applies_to_roles IS NULL`` or empty
+    array). When ``None``, only global policies are returned —
+    that's the safe default for callers that don't know the role
+    yet (legacy ``shipctl run`` clients pre-`?role=` query param).
+    Both NULL and ``cardinality=0`` count as global so admin edits
+    that empty the array don't accidentally silence a rule.
     """
+    is_global = or_(
+        WorkspacePolicy.applies_to_roles.is_(None),
+        func.cardinality(WorkspacePolicy.applies_to_roles) == 0,
+    )
+    if role_slug is None:
+        scope_clause = is_global
+    else:
+        scope_clause = or_(
+            is_global,
+            WorkspacePolicy.applies_to_roles.any(role_slug),
+        )
     rows = (
         (
             await session.execute(
@@ -45,6 +66,7 @@ async def list_enabled_policies(
                 .where(
                     WorkspacePolicy.workspace_id == workspace_id,
                     WorkspacePolicy.enabled.is_(True),
+                    scope_clause,
                 )
                 .order_by(
                     asc(WorkspacePolicy.sort_order),
@@ -92,10 +114,20 @@ def format_policies_preamble(
 
 
 async def render_policies_preamble(
-    session: AsyncSession, workspace_id: uuid.UUID
+    session: AsyncSession,
+    workspace_id: uuid.UUID,
+    role_slug: str | None = None,
 ) -> str | None:
-    """Convenience wrapper: load + format in one call."""
-    policies = await list_enabled_policies(session, workspace_id)
+    """Convenience wrapper: load + format in one call.
+
+    ``role_slug`` is forwarded to :func:`list_enabled_policies` —
+    pass the agent's role slug (``"developer"``, ``"navigator"``,
+    …) to include role-scoped policies in the preamble alongside
+    globals; pass ``None`` for global-only.
+    """
+    policies = await list_enabled_policies(
+        session, workspace_id, role_slug=role_slug
+    )
     return format_policies_preamble(policies)
 
 

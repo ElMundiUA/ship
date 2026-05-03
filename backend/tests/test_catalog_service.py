@@ -171,10 +171,11 @@ def test_resolve_lane_workflow_returns_none_for_common_patterns():
 def test_list_patterns_by_mode_filters_by_modes_field():
     """Post-RFC-0008: every pattern declares ``modes`` explicitly.
 
-    ``common-*`` patterns (shared fragments, ``modes: []``) are
-    non-executable and must not appear in either the lane picker or
-    the request picker. Every other pattern must declare at least one
-    of ``lane`` / ``request``.
+    Patterns with ``modes: []`` are non-executable in the lane /
+    request sense — ``common-*`` shared fragments and the
+    ``role-navigator`` chat prompt are the canonical examples — and
+    must not appear in either picker. Every pattern that declares at
+    least one mode must surface in the matching picker.
     """
     lane_patterns = catalog.list_patterns_by_mode("lane")
     request_patterns = catalog.list_patterns_by_mode("request")
@@ -183,14 +184,20 @@ def test_list_patterns_by_mode_filters_by_modes_field():
     common_ids = {p.id for p in all_patterns if p.id.startswith("common-")}
     assert common_ids, "expected at least one common-* pattern (shared fragment)"
 
+    # Non-executable patterns are those that explicitly declare an
+    # empty ``modes`` list — shared fragments + chat-only roles.
+    non_executable_ids = {p.id for p in all_patterns if not p.modes}
+
     lane_ids = {p.id for p in lane_patterns}
     request_ids = {p.id for p in request_patterns}
-    # Shared fragments must be excluded from both pickers.
-    assert common_ids.isdisjoint(lane_ids)
-    assert common_ids.isdisjoint(request_ids)
+    # Non-executable patterns must be excluded from both pickers.
+    assert non_executable_ids.isdisjoint(lane_ids)
+    assert non_executable_ids.isdisjoint(request_ids)
+    # ``common-*`` is a subset of the non-executable set by construction.
+    assert common_ids <= non_executable_ids
 
-    # Every non-common pattern must surface in at least one picker.
-    executable = {p.id for p in all_patterns} - common_ids
+    # Every executable pattern must surface in at least one picker.
+    executable = {p.id for p in all_patterns} - non_executable_ids
     assert executable <= (lane_ids | request_ids)
 
 

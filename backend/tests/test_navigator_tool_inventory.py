@@ -24,7 +24,7 @@ from __future__ import annotations
 import re
 
 from backend.app.services.agent.tools import ToolBox
-from backend.app.services.agent.topic import _AGENT_SYSTEM_PROMPT
+from backend.app.services.agent.topic import _load_navigator_prompt
 
 
 # Canonical list — keep alphabetised for diff readability. When you
@@ -150,7 +150,7 @@ def test_admin_mutating_tools_in_prompt_match_registry() -> None:
     tools list — against the actual registry."""
     block = re.search(
         r"Mutating tools \(([^)]+)\) require workspace admin",
-        _AGENT_SYSTEM_PROMPT,
+        _load_navigator_prompt(),
     )
     assert block is not None, (
         "Hard rules section no longer names the mutating tools list. "

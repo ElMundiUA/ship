@@ -25,6 +25,14 @@ class RoleTemplate:
 
 _DEFAULT_ROLE_TEMPLATES: tuple[RoleTemplate, ...] = (
     RoleTemplate(
+        id="navigator",
+        name="Navigator",
+        description="In-product chat agent that plans work, runs Inbox / Plays actions, and surfaces analytics.",
+        prompt_template="Answer concisely, call tools for any value you'd otherwise guess, propose before mutating, stay on topic.",
+        capabilities=("chat", "planning", "inbox_ops", "analytics"),
+        default_phases=(),
+    ),
+    RoleTemplate(
         id="intake",
         name="Intake specialist",
         description="Clarifies incoming work and validates minimum context.",

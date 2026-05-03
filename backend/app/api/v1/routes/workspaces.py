@@ -30,6 +30,7 @@ from backend.app.db.models.tenancy import (
     WorkspaceMember,
 )
 from backend.app.db.session import get_session
+from backend.app.services.policies_seed import seed_default_policies
 from backend.app.services.seed_bundle import seed_default_knowledge
 
 
@@ -218,6 +219,14 @@ async def _ensure_personal_workspace(
         workspace_id=workspace.id,
         workspace_name=workspace.name,
     )
+    # Seed the default policy set extracted from specialist prompts
+    # (no-fabrication, one-PR-per-ticket, role-scoped quality gates,
+    # …). Idempotent on title; admins can delete defaults and they
+    # stay deleted on re-runs.
+    await seed_default_policies(
+        session=session,
+        workspace_id=workspace.id,
+    )
     return workspace
 
 
@@ -276,6 +285,10 @@ async def create_workspace(
         session=session,
         workspace_id=workspace.id,
         workspace_name=workspace.name,
+    )
+    await seed_default_policies(
+        session=session,
+        workspace_id=workspace.id,
     )
     return WorkspaceOut.model_validate(workspace)
 

@@ -68,16 +68,39 @@ from backend.app.services.bucket_visibility import visible_to_user_clause
 from backend.app.services.bucket_summary_articles import (
     mirror_summary_to_article,
 )
+from backend.app.services.catalog import get_pattern as get_catalog_pattern
 from backend.app.services.policies import render_policies_preamble
 
 
 logger = logging.getLogger(__name__)
 
 
-# Restructured (ELS-52): small core + 4 scenario sections — Planning,
-# System management, Brainstorming, Analytics. Personality is delegated
-# to the user's knowledge buckets; we don't bake a persona.
-_AGENT_SYSTEM_PROMPT = (
+# The Navigator system prompt now lives in the catalog at
+# ``artifacts/patterns/role-navigator/ARTIFACT.md`` so prompt edits
+# and policy injection ride one update path. ``_load_navigator_prompt``
+# pulls the artifact body at call time (catalog is mtime-cached). The
+# string literal below is a defensive fallback for the rare case the
+# catalog miss happens — keeping the chat surface up even if the
+# artifact file is misplaced beats serving a 500.
+_NAVIGATOR_PATTERN_ID = "role-navigator"
+_NAVIGATOR_ROLE_SLUG = "navigator"
+
+
+def _load_navigator_prompt() -> str:
+    """Return the Navigator system prompt body from the catalog.
+
+    Falls back to ``_NAVIGATOR_FALLBACK_PROMPT`` when the
+    ``role-navigator`` pattern is missing — defensive only; the
+    artifact ships with the package, so a miss means a deployment
+    bug, not an expected branch.
+    """
+    entry = get_catalog_pattern(_NAVIGATOR_PATTERN_ID)
+    if entry is None or not entry.body.strip():
+        return _NAVIGATOR_FALLBACK_PROMPT
+    return entry.body.strip()
+
+
+_NAVIGATOR_FALLBACK_PROMPT = (
     "You are Ship Navigator, a software-engineering agent in a single "
     "chat window. Be concrete, accurate, concise. Use tools whenever "
     "they help; cite sources when quoting from KB or code (path + "
@@ -853,7 +876,7 @@ class TopicService:
         6. The new user message as the final turn.
         """
         out: list[ChatMessage] = [
-            ChatMessage(role="system", content=_AGENT_SYSTEM_PROMPT),
+            ChatMessage(role="system", content=_load_navigator_prompt()),
             ChatMessage(role="system", content=_render_session_context(
                 workspace_id=self._workspace_id,
                 now=datetime.now(timezone.utc),
@@ -864,9 +887,14 @@ class TopicService:
         # so that workspace-level invariants take precedence over the
         # warmed memory the agent might otherwise lean on. One DB read
         # per assemble — workspaces have a handful of policies at most,
-        # so this is cheap enough not to need a memo cache.
+        # so this is cheap enough not to need a memo cache. Navigator
+        # runs as its own specialist (``role-navigator``) so the
+        # role-scoped policies seeded for it (no-fabrication tooling
+        # rules, session-time-from-context, …) join the global ones.
         policies_preamble = await render_policies_preamble(
-            self._session, self._workspace_id
+            self._session,
+            self._workspace_id,
+            role_slug=_NAVIGATOR_ROLE_SLUG,
         )
         if policies_preamble:
             out.append(
