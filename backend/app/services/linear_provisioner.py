@@ -12,18 +12,32 @@ Linear:
    Ship FSM stages within Linear's Todo/In Progress states by the
    ``stage:<fsm>`` label.
 
+Plus: the canonical → native projection (the seven Ship lifecycle
+states mapped to this team's actual workflow names) is computed here
+too. It used to live in ``.ship/config.yml`` for operator editing,
+which was wrong — the runtime never read the YAML, and operators
+don't want to maintain native column names anyway. Computing it once
+at OAuth time and storing it in ``Integration.config.canonical_to_native``
+keeps the mapping adapter-internal and decouples tracker mechanics
+from process editing.
+
 The maps produced here (state-id by name, label-id by Ship FSM
-stage) get persisted in ``Integration.config`` so the per-call
-adapter doesn't have to discover them at runtime.
+stage, canonical-to-native) get persisted in ``Integration.config``
+so the per-call adapter doesn't have to discover them at runtime.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
+from backend.app.core.config import Settings
 from backend.app.integrations.linear.tracker_adapter import LinearTracker
+from backend.app.services.canonical_projection import (
+    CanonicalState,
+    default_canonical_to_native,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -111,6 +125,13 @@ class ProvisionResult:
     state_id_by_name: dict[str, str]
     label_id_by_stage: dict[str, str]
     signal_label_ids: dict[str, str]
+    # Canonical → native projection for this team's workflow. The OAuth
+    # callback persists this on ``Integration.config.canonical_to_native``
+    # so the adapter can translate "move ticket to canonical state X"
+    # into the right native column without re-probing on every call.
+    canonical_to_native: dict[str, str] = field(default_factory=dict)
+    # Telemetry — useful in logs / audit for debugging projections.
+    canonical_resolution_meta: dict[str, Any] = field(default_factory=dict)
 
 
 def stage_label_name(stage: str) -> str:
@@ -123,12 +144,19 @@ async def provision_team(
     tracker: LinearTracker,
     team_key: str,
     stages: tuple[str, ...] = SHIP_FSM_STAGES,
+    settings: Settings | None = None,
 ) -> ProvisionResult:
     """Provision states + labels on the chosen Linear team.
 
     Idempotent: re-running on an already-provisioned team is a no-op
     (skips creates that would conflict by name). Returns the maps the
-    OAuth callback persists in ``Integration.config``.
+    OAuth callback persists in ``Integration.config`` — including the
+    canonical → native projection (resolved via probe + LLM here so
+    the runtime never has to re-discover it).
+
+    ``settings`` is optional; when omitted the canonical resolver
+    falls back to the deterministic + heuristic path without burning
+    a model call. Tests + cold-deploy environments use that path.
     """
     team = await _resolve_team(tracker, team_key)
     team_id = team["id"]
@@ -159,13 +187,121 @@ async def provision_team(
         by_name[label_name] = new_id
         logger.info("Linear: created signal label %r on team %s", label_name, team_key)
 
+    canonical_to_native, canonical_meta = await _resolve_canonical_projection(
+        tracker=tracker, team_id=team_id, team_key=team_key, settings=settings
+    )
+
     return ProvisionResult(
         team_id=team_id,
         team_key=team["key"],
         state_id_by_name=state_id_by_name,
         label_id_by_stage=label_id_by_stage,
         signal_label_ids=signal_label_ids,
+        canonical_to_native=canonical_to_native,
+        canonical_resolution_meta=canonical_meta,
     )
+
+
+async def _resolve_canonical_projection(
+    *,
+    tracker: LinearTracker,
+    team_id: str,
+    team_key: str,
+    settings: Settings | None,
+) -> tuple[dict[str, str], dict[str, Any]]:
+    """Probe the live Linear workflow + run the resolver.
+
+    Failures here MUST NOT break OAuth: a deploy without an LLM key,
+    a Linear hiccup mid-probe, or a parse error inside the resolver
+    just leaves us with the baked default for the tracker. Returns
+    ``(mapping, meta)`` where ``meta`` carries telemetry the OAuth
+    audit log can show.
+    """
+    # Lazy imports — ``linear_provisioner`` is on the OAuth hot path
+    # and the resolver pulls in the agent client + JSON salvage code
+    # we don't need on every Linear write call.
+    from backend.app.services.agent.client import pick_default_client
+    from backend.app.services.tracker_projection_resolver import (
+        TrackerStateInfo,
+        resolve_projection,
+    )
+
+    fallback = default_canonical_to_native("linear")
+    fallback_str = {str(k): v for k, v in fallback.items()}
+
+    try:
+        actual_states_raw = await tracker.fetch_workflow_states(team_id=team_id)
+        sample_titles = await tracker.fetch_sample_titles_per_state(
+            team_id=team_id, per_state_limit=3
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "Linear workflow probe failed for team=%s; using baked default mapping",
+            team_key,
+            exc_info=True,
+        )
+        return fallback_str, {"source": "default", "reason": "probe_failed"}
+
+    if not actual_states_raw:
+        return fallback_str, {"source": "default", "reason": "no_states_returned"}
+
+    actual_states = [
+        TrackerStateInfo(
+            id=row["id"],
+            name=row["name"],
+            type=row.get("type") or "",
+            samples=sample_titles.get(row["id"], []),
+        )
+        for row in actual_states_raw
+    ]
+
+    client = None
+    model = None
+    if settings is not None:
+        try:
+            client = pick_default_client(settings)
+            model = settings.agent_model_fast
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "Couldn't get an LLM client for canonical projection on team=%s; "
+                "falling back to deterministic + heuristic.",
+                team_key,
+                exc_info=True,
+            )
+            client = None
+
+    try:
+        result = await resolve_projection(
+            tracker_kind="linear",
+            actual_states=actual_states,
+            client=client,
+            model=model,
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "Canonical projection resolver crashed for team=%s; using baked default",
+            team_key,
+            exc_info=True,
+        )
+        return fallback_str, {"source": "default", "reason": "resolver_crashed"}
+
+    mapping_str = {str(k): v for k, v in result.mapping.items()}
+    meta = {
+        "source": "resolver",
+        "llm_used": result.llm_used,
+        "retries": result.retries,
+        "deterministic_slots": list(result.deterministic_slots),
+        "warnings": list(result.warnings),
+    }
+    logger.info(
+        "Linear canonical projection resolved for team=%s "
+        "(deterministic=%d/7, llm_used=%s, retries=%d)",
+        team_key,
+        len(result.deterministic_slots),
+        result.llm_used,
+        result.retries,
+    )
+    return mapping_str, meta
 
 
 async def list_teams(tracker: LinearTracker) -> list[dict[str, Any]]:

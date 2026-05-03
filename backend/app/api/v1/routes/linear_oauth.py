@@ -274,7 +274,7 @@ async def linear_install_callback(
         if len(teams) == 1:
             picked = teams[0]
             result = await linear_provisioner.provision_team(
-                tracker=live, team_key=picked["key"]
+                tracker=live, team_key=picked["key"], settings=settings
             )
             merged.update(
                 {
@@ -283,17 +283,21 @@ async def linear_install_callback(
                     "state_id_by_name": result.state_id_by_name,
                     "label_id_by_stage": result.label_id_by_stage,
                     "signal_label_ids": result.signal_label_ids,
+                    "canonical_to_native": result.canonical_to_native,
+                    "canonical_resolution_meta": result.canonical_resolution_meta,
                     "fsm_provisioned": True,
                 }
             )
             logger.info(
                 "Linear FSM provisioned for workspace=%s team=%s "
-                "(%d stage labels, %d signal labels, %d states)",
+                "(%d stage labels, %d signal labels, %d states, "
+                "canonical_to_native=%d entries)",
                 workspace_id,
                 picked["key"],
                 len(result.label_id_by_stage),
                 len(result.signal_label_ids),
                 len(result.state_id_by_name),
+                len(result.canonical_to_native),
             )
         else:
             merged["fsm_provisioned"] = False
