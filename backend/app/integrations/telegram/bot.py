@@ -493,12 +493,16 @@ def _build_dispatcher(settings: Settings) -> Dispatcher:
 # ---------------------------------------------------------------------------
 
 
-async def _run() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
-    settings = get_settings()
+# Postgres advisory-lock key — "SHIPBOT\x01" packed as a bigint. Every
+# Ship-API replica races for this lock at startup; the winner runs the
+# Telegram long-poll loop, the rest skip. Telegram returns 409 Conflict
+# if more than one client polls the same bot, so single-leader matters
+# the moment Bunny scales out past one replica (autoScaling.max=5).
+_BOT_LEADER_LOCK_KEY: int = 0x5348495042_4F5401
+
+
+async def _run_polling(settings: Settings, *, handle_signals: bool) -> None:
+    """Open the bot, build the dispatcher, and long-poll until cancelled."""
     if not settings.telegram_bot_token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not set")
     bot = Bot(token=settings.telegram_bot_token)
@@ -506,13 +510,79 @@ async def _run() -> None:
     me = await bot.get_me()
     logger.info("telegram bot online as @%s", me.username)
     try:
-        await dp.start_polling(bot, handle_signals=True)
+        await dp.start_polling(bot, handle_signals=handle_signals)
     finally:
         await bot.session.close()
 
 
+async def run_with_leader_lock(settings: Settings) -> None:
+    """Acquire the bot leader advisory lock; if leader, run the polling loop.
+
+    The lock is taken inside an explicit transaction on a dedicated
+    connection so PgBouncer (Neon pooled DSN) pins the connection to one
+    backend for the whole duration. When the wrapping task is cancelled
+    or the process exits, the transaction ends and the lock is released
+    instantly — the next replica's startup attempt picks it up.
+
+    Best-effort: any startup error is logged and swallowed so the API
+    server stays up even if Telegram is misconfigured.
+    """
+    if not settings.telegram_bot_token or not settings.telegram_bot_username:
+        logger.info(
+            "telegram bot disabled "
+            "(TELEGRAM_BOT_TOKEN / TELEGRAM_BOT_USERNAME unset)"
+        )
+        return
+
+    from sqlalchemy import text
+
+    from backend.app.db.session import get_engine
+
+    try:
+        engine = get_engine()
+        async with engine.connect() as conn:
+            async with conn.begin():
+                got = (
+                    await conn.execute(
+                        text("SELECT pg_try_advisory_xact_lock(:k)"),
+                        {"k": _BOT_LEADER_LOCK_KEY},
+                    )
+                ).scalar()
+                if not got:
+                    logger.info(
+                        "telegram bot: another replica holds the leader "
+                        "lock; this replica will not poll"
+                    )
+                    return
+                logger.info("telegram bot: leader lock acquired")
+                await _run_polling(settings, handle_signals=False)
+    except asyncio.CancelledError:
+        logger.info("telegram bot: shutting down, releasing leader lock")
+        raise
+    except Exception:
+        logger.exception(
+            "telegram bot crashed; the API server stays up but no Telegram "
+            "traffic will be served by this replica until restart"
+        )
+
+
 def main() -> None:
-    asyncio.run(_run())
+    """Standalone entrypoint — kept for local dev (``python -m …``).
+
+    The cloud deployment runs the bot inside the Ship-API FastAPI
+    lifespan instead (see :mod:`backend.app.main`); this entrypoint is
+    only used by laptop dev when an operator wants to run the bot in
+    its own process against a separate API.
+    """
+
+    async def _local_main() -> None:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        )
+        await _run_polling(get_settings(), handle_signals=True)
+
+    asyncio.run(_local_main())
 
 
 if __name__ == "__main__":

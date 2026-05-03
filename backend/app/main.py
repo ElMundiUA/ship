@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -197,9 +198,32 @@ async def lifespan(_app: FastAPI):
             "cron scheduler failed to start; KB-pipeline jobs will not fire "
             "on this replica until restart"
         )
+    # Telegram bot long-poll. Lives inside the API process so the cloud
+    # deployment doesn't need a separate worker container. A Postgres
+    # advisory lock elects a single leader across replicas so Telegram
+    # never sees more than one ``getUpdates`` client per bot token.
+    bot_task: asyncio.Task[None] | None = None
+    try:
+        from backend.app.core.config import get_settings as _get_settings
+        from backend.app.integrations.telegram.bot import run_with_leader_lock
+
+        bot_task = asyncio.create_task(
+            run_with_leader_lock(_get_settings()),
+            name="ship.telegram.bot",
+        )
+    except Exception:
+        logging.getLogger("ship.telegram.bot").exception(
+            "telegram bot failed to start; API stays up"
+        )
     try:
         yield
     finally:
+        if bot_task is not None and not bot_task.done():
+            bot_task.cancel()
+            try:
+                await bot_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
         try:
             await _stop_scheduler()
         except Exception:  # pragma: no cover
