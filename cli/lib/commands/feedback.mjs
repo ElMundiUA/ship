@@ -17,7 +17,7 @@ import {
 import { postFeedback } from "../http.mjs";
 import { appendEvent } from "../telemetry/outbox.mjs";
 
-const ALLOWED_KINDS = ["pattern", "tool", "collection", "doc"];
+const ALLOWED_KINDS = ["pattern", "collection"];
 
 function parseArgs(rest) {
   const out = {

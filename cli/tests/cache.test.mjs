@@ -133,10 +133,10 @@ test("sanitize replaces slashes in id for cache folder name", () => {
 test("listCached enumerates cached entries", () => {
   const root = mktmp();
   writeCached(root, "pattern", "a", "1.0.0", "x", {});
-  writeCached(root, "tool", "b", "2.0.0", "y", {});
+  writeCached(root, "collection", "b", "2.0.0", "y", {});
   const items = listCached(root);
   const kinds = items.map((x) => `${x.kind}/${x.id}@${x.version}`).sort();
-  assert.deepEqual(kinds, ["pattern/a@1.0.0", "tool/b@2.0.0"]);
+  assert.deepEqual(kinds, ["collection/b@2.0.0", "pattern/a@1.0.0"]);
 });
 
 test("verifyCached detects tampering", () => {
@@ -253,67 +253,3 @@ test("readCachedArtifact surfaces v2 spec.install_target", () => {
   assert.match(art.body, /# Codex rules body/);
 });
 
-test("shipctl collection fetch <id> writes to .ship/cache when in a workspace (Bug C)", async () => {
-  const body = "---\nartifact_kind: collection\n---\n\n# Pharma addendum\nhello\n";
-  const kind = "collection";
-  const id = "addendum-pharma";
-  const version = "1.0.0";
-  const { server, baseUrl } = await startFetchServer({ kind, id, version, body });
-  try {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "shipctl-fetch-cache-"));
-    spawnSync("git", ["init", "-q"], { cwd: dir });
-    const init = await runCtlAsync(["config", "init", "--cwd", dir]);
-    assert.equal(init.status, 0, init.stderr);
-
-    const res = await runCtlAsync(
-      ["--base-url", baseUrl, "collection", "fetch", id],
-      { cwd: dir },
-    );
-    assert.equal(res.status, 0, res.stderr);
-    assert.match(
-      res.stdout,
-      /cached: collection\/addendum-pharma@1\.0\.0/,
-      `stdout was: ${res.stdout}`,
-    );
-    // By default the body should NOT be dumped to stdout (opt-in via --print).
-    assert.doesNotMatch(res.stdout, /# Pharma addendum/);
-
-    const bodyPath = path.join(dir, ".ship", "cache", kind, `${id}@${version}`, "ARTIFACT.md");
-    assert.ok(fs.existsSync(bodyPath), `expected cache body at ${bodyPath}`);
-    assert.equal(fs.readFileSync(bodyPath, "utf8"), body);
-
-    const metaJsonPath = path.join(dir, ".ship", "cache", kind, `${id}@${version}`, ".meta.json");
-    const meta = JSON.parse(fs.readFileSync(metaJsonPath, "utf8"));
-    assert.equal(meta.content_sha256, sha256Hex(body));
-    assert.equal(meta.kind, kind);
-    assert.equal(meta.id, id);
-    assert.equal(meta.version, version);
-    assert.equal(meta.channel, "stable");
-  } finally {
-    await new Promise((r) => server.close(r));
-  }
-});
-
-test("shipctl collection fetch <id> --print also echoes the body to stdout", async () => {
-  const body = "---\nartifact_kind: collection\n---\n\n# Body on stdout\n";
-  const { server, baseUrl } = await startFetchServer({
-    kind: "collection",
-    id: "example",
-    version: "1.0.0",
-    body,
-  });
-  try {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "shipctl-fetch-print-"));
-    spawnSync("git", ["init", "-q"], { cwd: dir });
-    await runCtlAsync(["config", "init", "--cwd", dir]);
-    const res = await runCtlAsync(
-      ["--base-url", baseUrl, "collection", "fetch", "example", "--print"],
-      { cwd: dir },
-    );
-    assert.equal(res.status, 0, res.stderr);
-    assert.match(res.stdout, /cached: collection\/example@1\.0\.0/);
-    assert.match(res.stdout, /# Body on stdout/);
-  } finally {
-    await new Promise((r) => server.close(r));
-  }
-});

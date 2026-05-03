@@ -19,7 +19,6 @@ from backend.app.db.models.agent_surface import (
     Clarification,
     Improvement,
 )
-from backend.app.db.models.custom_patterns import CustomPattern
 from backend.app.db.models.fleet_lanes import FleetLane, FleetLaneException
 from backend.app.db.models.inbox import (
     GroupAssignmentState,
@@ -84,7 +83,6 @@ __all__ = [
     "ChatMessage",
     "ChatThread",
     "Clarification",
-    "CustomPattern",
     "FleetLane",
     "FleetLaneException",
     "FleetRequest",

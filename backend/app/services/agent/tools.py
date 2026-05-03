@@ -2811,10 +2811,10 @@ class ToolBox:
 
     async def _tool_list_catalog_artifacts(self, args: dict[str, Any]) -> str:
         kind = _require_str(args, "kind").lower()
-        if kind not in {"pattern", "collection", "tool"}:
+        if kind != "pattern":
             raise ToolInvocationError(
-                f"invalid kind {kind!r}; expected one of "
-                "pattern/collection/tool"
+                f"invalid kind {kind!r}; only 'pattern' is supported "
+                "(tool/collection kinds were retired in Phase 2.2)"
             )
         group = args.get("group")
         tag = args.get("tag")
@@ -2822,11 +2822,7 @@ class ToolBox:
             args.get("limit"), default=50, low=1, high=_MAX_CATALOG_ITEMS
         )
 
-        loader = {
-            "pattern": catalog_service.list_patterns,
-            "collection": catalog_service.list_collections,
-            "tool": catalog_service.list_tools,
-        }[kind]
+        loader = catalog_service.list_patterns
         try:
             entries = loader()
         except catalog_service.CatalogError as exc:

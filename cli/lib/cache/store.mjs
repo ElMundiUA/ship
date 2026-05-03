@@ -3,7 +3,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 
 const CACHE_REL = path.join(".ship", "cache");
-const KIND_ROOTS = ["pattern", "tool", "collection", "doc"];
+const KIND_ROOTS = ["pattern", "collection"];
 
 function sanitize(id) {
   return String(id).replace(/\//g, "__");

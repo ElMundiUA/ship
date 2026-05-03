@@ -1,35 +1,22 @@
-"""Artifact catalog service — typed access to ``artifacts/**/ARTIFACT.md``.
+"""Artifact pattern service — typed access to ``artifacts/patterns/``.
 
-The catalog is the source of truth for patterns, tools and
-collections (the latter group includes presets like ``preset-web-app``).
-Until Day-4 Phase-2 the operator console and pipeline runtime only
-talked to a small hardcoded slice of it — we knew about
-``pr-and-ci-gate`` because its filename was baked into
-:mod:`backend.app.api.v1.routes.pipelines`. Everything else (the other
-four default pipelines, the presets that drive them, the tool docs)
-existed in the filesystem but was invisible to the backend.
+Phase 2.2 retired the broader catalog idea (tool/collection browse,
+workspace-private custom_patterns, presets, addendums). What's left is
+a single typed accessor for the ``artifacts/patterns/`` tree that the
+seed bundle composer and the wizard's bundle-preview endpoint share:
 
-This module closes that gap with a single typed accessor that:
+* Walks ``artifacts/patterns/<slug>/ARTIFACT.md`` once per signature
+  (``mtime + count``) and caches the parsed frontmatter — the same
+  shape :mod:`backend.app.main` already uses for the public
+  ``/patterns`` endpoint.
+* Exposes :func:`list_patterns`, :func:`list_specialist_role_patterns`,
+  :func:`list_knowledge_recipe_patterns`, and the lane-resolution
+  helpers used by :mod:`backend.app.services.lane_recipes`.
+* Raises :class:`CatalogError` on malformed frontmatter so callers can
+  decide whether to degrade (dashboard) or 500 (install endpoint).
 
-* Walks ``artifacts/<plural>/<slug>/ARTIFACT.md`` once per signature
-  (``plural + mtime + count``) and caches the parsed frontmatter — the
-  same shape :mod:`backend.app.main` already uses for the public
-  ``/patterns`` / ``/tools`` / ``/collections`` endpoints.
-* Exposes convenience look-ups for the dispatcher and the install flow:
-  ``workflow_install_filename`` / ``read_starter_yaml`` /
-  ``list_presets``. The workflow helpers are thin shims over
-  :mod:`backend.app.services.starter_workflows` — RFC-0007 Phase 6
-  retired the public ``artifact_kind=workflow`` layer but the
-  Pipeline install flow still needs to commit four baked-in starter
-  YAMLs into ``.github/workflows/``; those now live in the backend
-  ``resources/`` tree, not the public catalog.
-* Deliberately swallows no errors silently: a malformed ARTIFACT.md
-  raises :class:`CatalogError` so callers can decide whether to degrade
-  (dashboard) or 500 (install endpoint).
-
-``main.py`` still owns the HTTP surface; we just re-use its loader so
-both code paths see the same cache and we don't parse the filesystem
-twice per request.
+``main.py`` still owns the HTTP surface; we re-use its loader so both
+code paths see the same cache.
 """
 
 from __future__ import annotations
@@ -45,21 +32,11 @@ __all__ = [
     "CatalogError",
     "CatalogArtifact",
     "ARTIFACTS_ROOT",
-    "get_collection",
-    "preset_bundle_files",
-    "workflow_install_filename",
-    "read_starter_yaml",
-    "list_presets",
-    "list_collections",
     "list_patterns",
     "list_specialist_role_patterns",
     "list_knowledge_recipe_patterns",
     "list_patterns_by_mode",
-    "list_patterns_for_workspace",
-    "list_patterns_by_mode_for_workspace",
-    "custom_pattern_to_artifact",
     "resolve_lane_workflow",
-    "list_tools",
     "KNOWLEDGE_STARTERS",
     "knowledge_starter_slugs",
     "knowledge_starter_files",
@@ -141,8 +118,6 @@ ARTIFACTS_ROOT: Final[Path] = _discover_artifacts_root()
 
 _PLURAL_BY_KIND: Final[dict[str, str]] = {
     "pattern": "patterns",
-    "tool": "tools",
-    "collection": "collections",
 }
 
 _STATIC_KNOWLEDGE_STARTERS: Final[tuple[str, ...]] = ("code-style", "ui-runbook")
@@ -405,15 +380,13 @@ class CatalogArtifact:
 
     @property
     def source(self) -> str:
-        """``"builtin"`` for filesystem patterns, ``"workspace"`` for DB rows.
+        """``"builtin"`` for filesystem patterns.
 
-        Set by :func:`custom_pattern_to_artifact` when promoting a
-        :class:`~backend.app.db.models.custom_patterns.CustomPattern`;
-        baked-in patterns never populate this frontmatter key so the
-        fallback stays ``builtin``.
+        Workspace-private patterns (RFC-0008 §H / PR-6 ``custom_patterns``)
+        were retired in Phase 2.1; everything in the catalog now comes
+        from disk under ``artifacts/``.
         """
-        raw = self.raw.get("source")
-        return raw if isinstance(raw, str) and raw else "builtin"
+        return "builtin"
 
     def to_summary(self) -> dict[str, Any]:
         """Serialisation shape mirrored at ``/v1/catalog/*`` endpoints."""
@@ -568,14 +541,6 @@ def list_knowledge_recipe_patterns() -> list[CatalogArtifact]:
     return [entry for entry in list_patterns() if _is_knowledge_recipe_pattern(entry)]
 
 
-def list_tools() -> list[CatalogArtifact]:
-    return _load_kind("tool")
-
-
-def list_collections() -> list[CatalogArtifact]:
-    return _load_kind("collection")
-
-
 # ---------------------------------------------------------------------------
 # RFC-0008 mode/workflow resolution helpers
 # ---------------------------------------------------------------------------
@@ -638,40 +603,6 @@ def resolve_lane_workflow(entry: CatalogArtifact) -> str | None:
     if entry.category == "scan":
         return "parallel-audit-lanes"
     return "scheduled-sdlc-lane"
-
-
-def list_presets() -> list[CatalogArtifact]:
-    """Collections whose ``group`` is ``preset`` (e.g. ``preset-web-app``)."""
-    return [c for c in list_collections() if c.group == "preset"]
-
-
-def get_collection(collection_id: str) -> CatalogArtifact | None:
-    for entry in list_collections():
-        if entry.id == collection_id:
-            return entry
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Starter workflow shims (RFC-0007 Phase 6)
-#
-# Kept here so existing Pipeline-install callers don't have to import
-# yet another module. The helpers delegate to
-# :mod:`backend.app.services.starter_workflows`; the artifact catalog
-# itself no longer knows anything about workflow YAMLs.
-# ---------------------------------------------------------------------------
-
-
-def workflow_install_filename(workflow_id: str) -> str | None:
-    from backend.app.services import starter_workflows
-
-    return starter_workflows.install_filename(workflow_id)
-
-
-def read_starter_yaml(workflow_id: str) -> str | None:
-    from backend.app.services import starter_workflows
-
-    return starter_workflows.read_yaml(workflow_id)
 
 
 def starter_workflow_for_pattern(pattern_key: str) -> str | None:
@@ -776,13 +707,11 @@ def emit_config_yaml(
 ) -> str:
     """Serialize a ``.ship/config.yml`` body in schema v2.
 
-    Used by two write paths:
-
-    - ``preset_bundle_files`` — the wizard seed / install-bundle flow,
-      which derives ``lanes`` from :data:`lane_recipes.LaneRecipe` records.
-    - ``POST /v1/.../repos/{id}/config/propose`` — the Library editor
-      in the console, which receives an already-edited mapping from the
-      operator and opens a single-file PR.
+    Used by the wizard seed flow (composes the YAML emitted by
+    ``compose_seed_files``) and by the Library editor's
+    ``POST /v1/.../repos/{id}/config/propose`` round-trip path. Same
+    preamble / quoting / key ordering for both so the console's diff
+    view stays trustworthy when an operator edits a seeded config.
 
     Factored out so the editor path can round-trip identical YAML to
     what the seed path emits (same preamble, same quoting, same key
@@ -1033,75 +962,6 @@ def _render_yaml_scalar(value: object) -> str:
     return text
 
 
-def preset_bundle_files(
-    preset_id: str,
-    *,
-    repo_full_name: str | None = None,
-) -> list[tuple[str, str]]:
-    """Return ``(path, content)`` tuples to commit for a preset's install bundle.
-
-    Contains one workflow YAML per pipeline kind that the preset
-    enables (skipping kinds whose starter is YAML-less, i.e.
-    ``code_map``) plus a ``.ship/config.yml`` stub identifying the
-    preset so downstream ``shipctl`` / agent tooling knows which
-    shape to assume.
-
-    The caller (``install_bundle`` route) is responsible for passing
-    the list into ``commit_bundle_pr``.
-    """
-    # Lazy imports keep the module import graph flat and also avoid a
-    # cycle (lane_recipes pulls pattern catalog metadata which lives in
-    # this module).
-    from backend.app.services import starter_workflows
-    from backend.app.services.lane_recipes import (
-        list_lane_recipes,
-        resolve_enabled_lane_ids,
-    )
-
-    enabled_ids = resolve_enabled_lane_ids(preset_id)
-    files: list[tuple[str, str]] = []
-    included_recipes: list = []
-    for recipe in list_lane_recipes():
-        if recipe.lane_id not in enabled_ids:
-            continue
-        entry = starter_workflows.get(recipe.workflow_id)
-        if entry is None:
-            continue
-        content = entry.read_yaml()
-        if not content:
-            continue
-        files.append((entry.install_target, content))
-        included_recipes.append(recipe)
-
-    # .ship/config.yml — config schema v2. Emits ``process.routines``
-    # so new repos use the same local scheduling path as the wizard seed.
-    # Resolver-only recipes (``trigger is None``, e.g. ``code_map``) are
-    # skipped. The legacy ``lanes:`` renderer stays available only for
-    # existing config editor callers that explicitly pass a lanes map.
-    lanes_map: dict[str, Mapping[str, object]] = {}
-    for recipe in included_recipes:
-        if recipe.trigger is None:
-            continue
-        entry_map: dict[str, object] = dict(recipe.trigger)
-        if len(recipe.patterns) >= 2:
-            entry_map["patterns"] = list(recipe.patterns)
-            if recipe.fanout != "matrix":
-                entry_map["fanout"] = recipe.fanout
-        elif len(recipe.patterns) == 1:
-            entry_map.setdefault("pattern", recipe.patterns[0])
-        lanes_map[recipe.lane_id] = entry_map
-    yaml_body = emit_config_yaml(
-        preset_id=preset_id,
-        repo_full_name=repo_full_name,
-        lanes={},
-        process=default_development_process_config(
-            routines=bundle_routine_entries(lanes_map)
-        ),
-    )
-    files.append((".ship/config.yml", yaml_body))
-    return files
-
-
 # ---------------------------------------------------------------------------
 # Knowledge starters — one-shot seed for ``.ship/knowledge/*.md`` buckets.
 #
@@ -1283,116 +1143,3 @@ def _recommended_tools_for_recipe(entry: CatalogArtifact) -> list[str]:
     return tools
 
 
-# ---------------------------------------------------------------------------
-# Workspace-private catalog layer (RFC-0008 §H — PR-6)
-# ---------------------------------------------------------------------------
-#
-# Workspace admins can author catalog patterns at runtime via the
-# Console's AI author modal (or Navigator, or hand-crafted JSON).
-# Those rows live in ``custom_patterns`` and need to appear in every
-# pattern picker the baked-in catalog already feeds.
-#
-# The adapter below promotes a DB row to an in-memory
-# :class:`CatalogArtifact` by synthesising the frontmatter dict the
-# constructor expects. The merge helpers then overlay the workspace
-# rows on top of :func:`list_patterns` — collisions resolve in favour
-# of the workspace-private entry so operators can shadow a baked-in
-# pattern without forking Ship.
-
-
-def custom_pattern_to_artifact(row: Any) -> CatalogArtifact:
-    """Adapt a :class:`CustomPattern` DB row into a :class:`CatalogArtifact`.
-
-    Kept as a standalone function (rather than a classmethod on the
-    ORM model) so ``backend.app.services.catalog`` stays import-clean
-    for callers that only know about the filesystem catalog.
-    """
-    spec: dict[str, Any] = dict(row.spec or {})
-    # Mirror the frontmatter contract: ``modes`` and ``inputs`` always
-    # live under ``spec`` in baked-in patterns, so we fold the
-    # structured columns back in before handing the dict to the
-    # :class:`CatalogArtifact` constructor.
-    spec.setdefault("modes", list(row.modes or []))
-    spec.setdefault("inputs", list(row.inputs or []))
-    if row.category is not None:
-        spec.setdefault("category", row.category)
-    meta: dict[str, Any] = {
-        "id": row.pattern_id,
-        "name": row.name or row.pattern_id,
-        "description": row.description or "",
-        "spec": spec,
-        "updated_at": row.updated_at,
-        # Marker so downstream code can distinguish workspace-private
-        # rows from baked-in patterns (e.g. the Console surfaces a
-        # "custom" badge and exposes a delete action only on these).
-        "source": "workspace",
-    }
-    # ``source_path`` is required by the constructor but irrelevant
-    # for DB-backed rows; synthesise a sentinel so any ``str(path)``
-    # call stays safe.
-    sentinel = Path(f"<custom:{row.workspace_id}:{row.pattern_id}>")
-    return CatalogArtifact(
-        kind="pattern", meta=meta, body=row.body or "", source_path=sentinel
-    )
-
-
-def _merge_custom(
-    base: list[CatalogArtifact], custom: list[CatalogArtifact]
-) -> list[CatalogArtifact]:
-    """Overlay ``custom`` on top of ``base`` by artifact id.
-
-    Workspace-private entries win on collision — operators can shadow
-    a baked-in pattern without having to pick a different id. Order
-    is stable: base entries keep their position, collisions swap the
-    value in place, and brand-new workspace entries are appended.
-    """
-    if not custom:
-        return list(base)
-    by_id: dict[str, CatalogArtifact] = {}
-    order: list[str] = []
-    for entry in base:
-        by_id[entry.id] = entry
-        order.append(entry.id)
-    for entry in custom:
-        if entry.id not in by_id:
-            order.append(entry.id)
-        by_id[entry.id] = entry
-    return [by_id[pid] for pid in order]
-
-
-def list_patterns_for_workspace(
-    custom_rows: list[Any],
-) -> list[CatalogArtifact]:
-    """Baked-in catalog plus workspace-private rows, merged.
-
-    Callers are expected to load ``custom_rows`` via SQLAlchemy
-    (async) and pass them in — we keep this helper sync so it stays
-    callable from the same code paths that use :func:`list_patterns`.
-    """
-    custom_entries = [custom_pattern_to_artifact(r) for r in custom_rows]
-    return _merge_custom(list_patterns(), custom_entries)
-
-
-def list_patterns_by_mode_for_workspace(
-    mode: str, custom_rows: list[Any]
-) -> list[CatalogArtifact]:
-    """Mode-filtered variant of :func:`list_patterns_for_workspace`.
-
-    Mirrors the legacy-pattern fallback logic in
-    :func:`list_patterns_by_mode` — patterns without declared
-    ``modes`` *and* without a ``category`` slot are treated as
-    attachable in both modes so nothing silently disappears mid-
-    RFC-0008 transition.
-    """
-    if mode not in {"lane", "request"}:
-        raise ValueError(f"unknown pattern mode: {mode!r}")
-    merged = list_patterns_for_workspace(custom_rows)
-    out: list[CatalogArtifact] = []
-    for entry in merged:
-        declared = entry.modes
-        if not declared and entry.category is None:
-            out.append(entry)
-            continue
-        if mode in declared:
-            out.append(entry)
-    return out

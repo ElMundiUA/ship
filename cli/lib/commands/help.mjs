@@ -44,16 +44,6 @@ COMMANDS
                                          install agent rule files in an
                                          existing repo.
 
-  Catalog (read-only)
-    shipctl search <query> [--top-k N]
-                                       — vector search over docs + prompts.
-    shipctl pattern list | shipctl pattern show <id> | shipctl pattern fetch <id>
-                                     | shipctl pattern search <query> [--top-k N]
-                                       — versioned artifact bodies.
-    shipctl tool …       | shipctl collection …
-                                       — same subcommands; plural aliases:
-                                         patterns, tools, collections.
-
   Knowledge (read-only)
     shipctl knowledge fetch <bucket-slug> [--workspace <id>] [--json]
                                        — read a Ship-owned bucket's articles
@@ -85,11 +75,6 @@ COMMANDS
   Misc
     shipctl help                       — show this help.
 
-LOCAL TREE
-  pattern / tool / collection list|show|fetch scan
-  artifacts/<plural>/<id>/ARTIFACT.md on disk when cwd or SHIP_REPO is inside
-  the Ship monorepo (search always uses HTTP).
-
 INIT FLAGS
   --yes              Non-interactive apply (use --dry-run first)
   --force            Replace existing rule blocks and overwrite generated files
@@ -111,11 +96,6 @@ INIT FLAGS
 SUPPORTED AGENTS
   cursor, codex, claude, aider, cline, continue, windsurf, zed,
   gemini, opencode, copilot, cursor-cloud, agents-md, claude-md
-
-REFERENCE
-  Artifacts protocol: RFC-0001 (POST /search, POST /fetch). Every consumed
-  artifact should be recorded in the PR as \`<kind>:<id>@<version>\`.
-  HTTP schemas: artifacts/tools/methodology-api/ARTIFACT.md in the Ship repo.
 
 Package: @elmundi/ship-cli (binary: shipctl).
 `);

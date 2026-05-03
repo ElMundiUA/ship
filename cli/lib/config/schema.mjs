@@ -115,11 +115,11 @@ export const PRESETS = Object.freeze([
 
 export const CHANNELS = Object.freeze(["stable", "edge"]);
 
-export const KINDS = Object.freeze(["pattern", "tool", "collection", "doc"]);
+export const KINDS = Object.freeze(["pattern", "collection"]);
 
 export const AGENT_IDS = Object.freeze(Object.keys(KNOWN_AGENTS));
 
-export const PIN_KEY_REGEX = /^(pattern|tool|collection|doc)\/[a-zA-Z0-9_\-\.\/]+$/;
+export const PIN_KEY_REGEX = /^(pattern|collection)\/[a-zA-Z0-9_\-\.\/]+$/;
 
 export const UUID_V4_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;

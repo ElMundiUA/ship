@@ -15,7 +15,6 @@ test("shipctl help exits 0 and mentions shipctl", () => {
   const r = run(bin, ["help"]);
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /shipctl/);
-  assert.match(r.stdout, /Artifacts protocol|artifacts protocol/i);
   assert.doesNotMatch(r.stdout, /^\s*ship\s+(init|search|docs|pattern)\b/m);
 });
 
@@ -56,36 +55,4 @@ test("shipctl doctor --json prints exactly one JSON payload", () => {
     "stdout appears to contain more than one JSON object — the dispatcher may have run doctor twice",
   );
 });
-
-/* P8-04 — sweep stale `ship <verb>` strings out of catalog command
- * help text. All these surfaces print usage when invoked with no
- * args (or with `help`), so we drive each one and assert the prose
- * uses the actual binary name `shipctl ` and never bare `ship `
- * before a verb. */
-const SHIP_PREFIX_SCENARIOS = [
-  { name: "search",      args: ["search"] },
-  { name: "patterns",    args: ["pattern"] },
-  { name: "tools",       args: ["tool"] },
-  { name: "collections", args: ["collection"] },
-];
-
-for (const { name, args } of SHIP_PREFIX_SCENARIOS) {
-  test(`shipctl ${name} usage uses 'shipctl ' (not bare 'ship ') prefix`, () => {
-    const r = run(bin, args);
-    assert.equal(r.status, 0, `${name} exited ${r.status}\n${r.stderr}`);
-    assert.ok(r.stdout.includes("shipctl "), `${name} should print 'shipctl '`);
-    /* Ensure no line starts with "ship <verb>" — a bare `ship` prefix
-     * (the legacy binary name) would mis-direct adopters who already
-     * have shipctl on PATH. We allow the literal token "shipctl"
-     * anywhere because `\bship[^c]` excludes "shipctl". */
-    const offending = r.stdout
-      .split("\n")
-      .filter((line) => /^\s*ship\s+\S/.test(line));
-    assert.equal(
-      offending.length,
-      0,
-      `${name} usage contains bare 'ship <verb>' line(s):\n${offending.join("\n")}`,
-    );
-  });
-}
 

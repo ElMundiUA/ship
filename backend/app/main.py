@@ -49,7 +49,10 @@ REQUIRED_ENTRY_FIELDS = (
 
 ARTIFACT_KINDS = {
     "pattern": ("patterns", "patterns"),
-    "tool": ("tools", "tools"),
+    # ``collection`` is the only legacy multi-kind survivor: ``shipctl
+    # init --copy-rules`` still tugs ``collection/agent-rules-<agent>``
+    # bodies into the customer repo. Phase 2.5 moves agent rule
+    # distribution into the wizard seed bundle and retires this kind too.
     "collection": ("collections", "collections"),
 }
 
@@ -252,8 +255,7 @@ async def healthz() -> dict[str, str]:
 
 _KIND_DESCRIPTIONS = {
     "pattern": "Catalog of Ship patterns sourced from artifacts/patterns/<id>/ARTIFACT.md.",
-    "tool": "Catalog of Ship tools sourced from artifacts/tools/<id>/ARTIFACT.md.",
-    "collection": "Catalog of Ship collections sourced from artifacts/collections/<id>/ARTIFACT.md.",
+    "collection": "Agent rule collections sourced from artifacts/collections/agent-rules-<agent>/ARTIFACT.md.",
 }
 
 
@@ -437,17 +439,12 @@ def load_patterns_manifest() -> dict[str, Any]:
     return _load_kind("pattern")
 
 
-def load_tools_manifest() -> dict[str, Any]:
-    return _load_kind("tool")
-
-
 def load_collections_manifest() -> dict[str, Any]:
     return _load_kind("collection")
 
 
 MANIFEST_LOADERS = {
     "pattern": load_patterns_manifest,
-    "tool": load_tools_manifest,
     "collection": load_collections_manifest,
 }
 
@@ -563,29 +560,6 @@ def get_pattern(item_id: str, version: str | None = Query(default=None)) -> dict
 @app.get("/patterns/{item_id}/versions")
 def list_pattern_versions(item_id: str) -> dict[str, Any]:
     return _versions_for_kind("pattern", item_id)
-
-
-@app.get("/tools")
-def list_tools(channel: str = Query(default="stable")) -> dict[str, Any]:
-    data = load_tools_manifest()
-    entries = [e for e in data.get("tools", []) if isinstance(e, dict)]
-    filtered = _filter_entries_by_channel(entries, channel)
-    return {
-        "version": data.get("version", 1),
-        "description": data.get("description", ""),
-        "tools": [_entry_summary(e, "tool") for e in filtered],
-    }
-
-
-@app.get("/tools/{item_id}")
-def get_tool(item_id: str, version: str | None = Query(default=None)) -> dict[str, Any]:
-    entry = _resolve_entry_with_version("tool", item_id, version)
-    return _full_entry_response(entry, "tool")
-
-
-@app.get("/tools/{item_id}/versions")
-def list_tool_versions(item_id: str) -> dict[str, Any]:
-    return _versions_for_kind("tool", item_id)
 
 
 @app.get("/collections")
