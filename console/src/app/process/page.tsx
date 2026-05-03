@@ -526,9 +526,13 @@ async function EditorContent({
   selectedTab: ProcessTab;
   selectedStateId?: string;
   locked: boolean;
+  // Reserved for the upcoming tracker-sync banner — passed through but
+  // not currently consumed. Will read this when wiring drift detection +
+  // LLM remap PR (probe Linear/Jira/GitHub/Notion via the right adapter).
   trackerKind: string | null;
   token: string;
 }) {
+  void trackerKind;
   let projectedProcess: ApiProcess;
   let config: ApiRepoConfig | null = null;
   try {
@@ -574,12 +578,6 @@ async function EditorContent({
             selectedStateId={selectedStateId}
             repoId={repoId}
             config={config}
-            trackerKind={
-              trackerKind === "linear" || trackerKind === "jira" ||
-              trackerKind === "github" || trackerKind === "notion"
-                ? trackerKind
-                : undefined
-            }
           />
         )}
       </fieldset>

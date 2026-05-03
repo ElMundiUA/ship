@@ -16,7 +16,6 @@ import { ProcessValidationPanel } from "./process-validation-panel";
 import { validateProcess } from "./process-validation";
 import { BASE_SPECIALIST_CATALOG } from "./specialist-catalog";
 import { StateEditor, type SpecialistOption } from "./state-editor";
-import { TrackerProjectionsTable } from "./tracker-projections-table";
 
 export function ProcessEditorWorkspace({
   workspaceId,
@@ -25,7 +24,6 @@ export function ProcessEditorWorkspace({
   repoId,
   config,
   tabs,
-  trackerKind,
 }: {
   workspaceId: string;
   process: ApiProcess;
@@ -33,15 +31,9 @@ export function ProcessEditorWorkspace({
   repoId?: string;
   config: ApiRepoConfig | null;
   tabs?: ReactNode;
-  /** Workspace's bound tracker kind (linear/jira/github/notion). Picks
-   *  which column the projection table opens on by default. */
-  trackerKind?: "linear" | "jira" | "github" | "notion";
 }) {
   const [states, setStates] = useState(process.states);
   const [transitions, setTransitions] = useState(process.transitions);
-  const [trackerMapping, setTrackerMapping] = useState(
-    process.tracker_mapping ?? {},
-  );
   // No default selection — the inspector starts hidden, click a stage
   // to open it. selectedStateId from the URL still wins so deep-linked
   // edits land on the right card.
@@ -55,7 +47,6 @@ export function ProcessEditorWorkspace({
   useEffect(() => {
     setStates(process.states);
     setTransitions(process.transitions);
-    setTrackerMapping(process.tracker_mapping ?? {});
     setActiveStateId(selectedStateId);
     setSelectedTransitionId(null);
   }, [process, selectedStateId]);
@@ -68,9 +59,9 @@ export function ProcessEditorWorkspace({
       state_count: states.length,
       states,
       transitions,
-      tracker_mapping: trackerMapping,
+      tracker_mapping: process.tracker_mapping,
     }),
-    [process, states, transitions, trackerMapping],
+    [process, states, transitions],
   );
   const processConfig = useMemo(
     () => processConfigFromApiProcess(processDraft),
@@ -111,7 +102,6 @@ export function ProcessEditorWorkspace({
   function resetDraft() {
     setStates(process.states);
     setTransitions(process.transitions);
-    setTrackerMapping(process.tracker_mapping ?? {});
     setActiveStateId(initialActiveStateId(process.states, selectedStateId));
     setSelectedTransitionId(null);
   }
@@ -128,27 +118,6 @@ export function ProcessEditorWorkspace({
   function clearSelection() {
     setActiveStateId(undefined);
     setSelectedTransitionId(null);
-  }
-
-  // Tracker projection edit — operator types a new native column
-  // name for a (tracker, canonical state) pair. Empty string clears
-  // back to the default. The dirty bit picks up the change because
-  // processDraft.tracker_mapping flows from this state.
-  function updateTrackerProjection(
-    tracker: string,
-    canonicalState: string,
-    nextValue: string,
-  ) {
-    setTrackerMapping((current) => {
-      const trimmed = nextValue.trim();
-      const trackerMap = { ...(current[tracker] ?? {}) };
-      if (trimmed) {
-        trackerMap[canonicalState] = trimmed;
-      } else {
-        delete trackerMap[canonicalState];
-      }
-      return { ...current, [tracker]: trackerMap };
-    });
   }
 
   function selectTransitionId(transitionId: string) {
@@ -461,19 +430,15 @@ export function ProcessEditorWorkspace({
         ) : null}
       </div>
 
-      {/* Tracker projection table — replaces the dedicated Tracker tab.
-          Each row is one of the seven canonical lifecycle states; columns
-          tab between the four supported trackers. Defaults from the
-          adapter ship "all-mapped" out of the box. */}
-      <div className="space-y-3 border-t border-white/10 bg-black/20 p-4">
-        <TrackerProjectionsTable
-          trackerMapping={processDraft.tracker_mapping ?? {}}
-          defaultTracker={trackerKind}
-          onChange={updateTrackerProjection}
-        />
-        {/* Validation panel — gates the Publish button. Errors block,
-            warnings inform. Anchors let the operator jump to the
-            offending stage / transition. */}
+      {/* Validation panel — gates the Publish button. Errors block,
+          warnings inform. Anchors let the operator jump to the
+          offending stage / transition. Tracker projection mapping
+          is no longer surfaced here: the canonical FSM is the source
+          of truth, and adapters bake sane defaults. When a team's
+          actual workflow drifts from canonical, a sync flow (probe +
+          LLM resolve + PR) handles the remap end-to-end — operators
+          never edit the projection table by hand. */}
+      <div className="border-t border-white/10 bg-black/20 p-4">
         <ProcessValidationPanel
           result={validation}
           onJumpToStage={(stageId) => selectStateId(stageId)}
