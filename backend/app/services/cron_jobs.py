@@ -26,6 +26,7 @@ from backend.app.services.cron import (
     cron_with_lock,
     register_cron,
 )
+from backend.app.services.knowledge_decay import gc_all_workspaces
 from backend.app.services.knowledge_harvest import harvest_all_workspaces
 from backend.app.services.knowledge_router import route_all_workspaces
 from backend.app.services.knowledge_synth import synthesise_all_workspaces
@@ -179,6 +180,39 @@ async def _knowledge_synth_tick() -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# Step 6 — daily archive GC
+# ---------------------------------------------------------------------------
+
+
+@cron_with_lock(lock=CronLockId.KNOWLEDGE_DECAY, name="knowledge_decay")
+async def _knowledge_decay_tick() -> None:
+    """Daily sweep: hard-delete archived bucket articles past the TTL.
+
+    Operator-driven archive (``POST /buckets/{slug}/archive``) and
+    synthesiser-proposed archive both flip articles to ``status='archived'``
+    with ``archived_at=now()``. This sweep collects rows older than
+    ``ARCHIVE_TTL_DAYS`` and removes them so the table doesn't grow
+    forever. ``BucketArticleSource`` rows cascade-delete via the FK.
+    """
+    sm = get_sessionmaker()
+    async with sm() as session:
+        try:
+            reports = await gc_all_workspaces(session)
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+
+    deleted = sum(r.deleted for r in reports)
+    if deleted:
+        log.info(
+            "knowledge_decay tick: workspaces=%d deleted=%d",
+            len(reports),
+            deleted,
+        )
+
+
 def register_all() -> None:
     """Wire every cron defined in this module into the scheduler.
 
@@ -205,6 +239,14 @@ def register_all() -> None:
         fn=_knowledge_synth_tick,
         cron_expr="40 * * * *",  # every hour at :40
         job_id="knowledge_synth",
+    )
+    # GC runs once daily. Cheap query (filtered DELETE by archived_at)
+    # so an off-peak slot is fine; pick 03:15 UTC to avoid the on-the-
+    # hour pile-ups from the harvest/route/synth chain.
+    register_cron(
+        fn=_knowledge_decay_tick,
+        cron_expr="15 3 * * *",  # daily at 03:15 UTC
+        job_id="knowledge_decay",
     )
 
 
