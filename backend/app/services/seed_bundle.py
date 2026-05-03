@@ -122,7 +122,19 @@ from backend.app.services.tracker_fsm import (
 #         ``LinearTracker.get_ticket_snapshot`` + best-effort
 #         hook in ``finish_agent_run``; missing snapshot is
 #         tolerated for older rows / non-Linear adapters.
-BUNDLE_VERSION: str = "0.13"
+# ``0.14`` → Phase 2.4 Step C-2: seeded routines now emit
+#         ``specialist: <slug>`` instead of ``pattern: role-<slug>``.
+#         ``shipctl run`` resolves the slug through the new
+#         ``GET /v1/.../agent-roles/{slug}/resolve`` endpoint
+#         (workspace override → Ship default file). Three legacy
+#         routine-prompt patterns (flow-daily-retro,
+#         flow-learning-capture, op-workflow-self-heal) moved into
+#         ``backend/app/resources/agent_roles/`` as ``daily-retro``,
+#         ``learning-capture``, and ``workflow-self-heal``.
+#         ``cli/lib/runtime/routines.mjs:pickSpecialistSlug`` keeps
+#         legacy ``pattern: role-X`` configs working until repos
+#         re-seed onto v0.14.
+BUNDLE_VERSION: str = "0.14"
 
 # Default knowledge starters for PR 1. Empty by design: generated knowledge is
 # analyzed post-merge and proposed in a second PR. Historical callers can still

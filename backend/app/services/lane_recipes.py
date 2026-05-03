@@ -104,38 +104,47 @@ DEFAULT_SEED_LANES: Final[dict[str, dict[str, object]]] = {
     # match the short labels exactly. Times spread across UTC so the
     # operator doesn't see four agents stacked on one hour.
     #
-    # Specialists (intake / BA / tech-architect / QA / developer) are NOT
-    # routines — they live as ``process.specialists`` and pick tickets
-    # via the Capacity calendar, not via a 15-min cron sweep.
+    # ``specialist`` is the Phase-2.4 vocabulary: shipctl run resolves
+    # the slug through ``GET /v1/.../agent-roles/{slug}/resolve`` (workspace
+    # override → Ship default file). Slugs match
+    # ``backend/app/resources/agent_roles/<slug>.md`` exactly.
+    #
+    # Specialist roles like intake / BA / tech-architect / QA / developer
+    # also live as ``process.specialists`` for the Capacity calendar
+    # (FSM-driven ticket pickup), but that's a separate surface from the
+    # cron-driven routines below.
     "security_review": {
         "kind": "schedule",
         "cron": "0 6 * * *",   # 06:00 UTC
-        "pattern": "role-security-officer",
+        "specialist": "security-officer",
     },
     "daily": {
         "kind": "schedule",
         "cron": "0 9 * * *",   # 09:00 UTC — morning digest
-        "pattern": "flow-daily-retro",
+        # ``flow-daily-retro`` is a routine prompt (not a role); Step
+        # C-2 renames it to a top-level ``daily-retro`` agent role
+        # alongside the role-* family.
+        "specialist": "daily-retro",
     },
     "tech_review": {
         "kind": "schedule",
         "cron": "0 12 * * *",  # 12:00 UTC
-        "pattern": "role-tech-architect",
+        "specialist": "tech-architect",
     },
     "qa_review": {
         "kind": "schedule",
         "cron": "0 15 * * *",  # 15:00 UTC
-        "pattern": "role-qa-architect",
+        "specialist": "qa-architect",
     },
     "retro": {
         "kind": "schedule",
         "cron": "0 18 * * *",  # 18:00 UTC — end-of-day retro
-        "pattern": "flow-learning-capture",
+        "specialist": "learning-capture",
     },
     "healthcheck": {
         "kind": "schedule",
         "cron": "0 */2 * * *",  # every 2h
-        "pattern": "op-workflow-self-heal",
+        "specialist": "workflow-self-heal",
     },
 }
 """Canonical routines written into a fresh ``.ship/config.yml``.

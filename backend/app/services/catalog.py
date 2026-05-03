@@ -784,6 +784,15 @@ def emit_config_yaml(
 def bundle_routine_entries(
     lanes: "Mapping[str, Mapping[str, object]]",
 ) -> dict[str, dict[str, object]]:
+    """Project a recipe map into ``process.routines`` YAML entries.
+
+    Phase-2.4: emit ``specialist: <slug>`` (the agent-role registry
+    surface ``shipctl run`` resolves through
+    ``GET /v1/.../agent-roles/{slug}/resolve``). The legacy
+    ``pattern: role-<slug>`` shape is preserved when a recipe still
+    spells it that way, so older code paths stay compatible until
+    Step D drops them.
+    """
     routines: dict[str, dict[str, object]] = {}
     for routine_id, lane in lanes.items():
         trigger: dict[str, object]
@@ -807,7 +816,13 @@ def bundle_routine_entries(
             "enabled": True,
             "trigger": trigger,
         }
-        if isinstance(lane.get("pattern"), str):
+        if isinstance(lane.get("specialist"), str):
+            routine["specialist"] = str(lane["specialist"])
+        elif isinstance(lane.get("pattern"), str):
+            # Legacy recipes that still carry ``pattern: role-X``: keep
+            # writing the old key so the back-compat path in
+            # ``cli/lib/runtime/routines.mjs:pickSpecialistSlug`` still
+            # resolves the slug for older repos.
             routine["pattern"] = str(lane["pattern"])
         if isinstance(lane.get("patterns"), list):
             routine["patterns"] = list(lane["patterns"])
