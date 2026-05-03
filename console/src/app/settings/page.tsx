@@ -35,6 +35,7 @@ export default async function SettingsIndex({
     "registries",
     "members",
     "integrations",
+    "agent-roles",
     "api-keys",
     "danger",
   ]);
