@@ -3,23 +3,26 @@
 import { useRouter } from "next/navigation";
 import { useMemo } from "react";
 
-import type { ApiProcessList, ApiProcessNode } from "@/lib/api/client";
-
-const CREATE_TILE_ID = "tile-create-process";
+import type {
+  ApiProcessList,
+  ApiProcessSummary,
+} from "@/lib/api/client";
 
 /**
- * Workspace map at /process — a responsive grid of process tiles.
+ * Workspace overview at /process — flat list of editable processes.
  *
- * Replaces the previous React Flow canvas. The "cinematic zoom"
- * drill-down was nice in theory but didn't actually work in practice
- * (timing was off, fitView raced router.push, the destination flickered),
- * and a card grid is what every other workspace surface in the console
- * already uses (Repos / Knowledge / Inbox), so operators see one
- * consistent visual model.
+ * The previous implementation rendered a card grid where the workspace
+ * itself was a same-size tile (non-clickable, just visual noise) and
+ * the "+ New process" CTA had the same rank as a real process. The
+ * operator's question was "what's the difference between these
+ * boxes?" — the answer being "the workspace is the container, the
+ * processes are the things you edit, the create button is an action"
+ * needed to be encoded in the layout.
  *
- * Click on any process tile → router.push to /process/[processId]
- * with optional ?repo= preserved. Hover lift gives the visual feedback
- * the zoom-in used to provide.
+ * Now it's a flat list: one row per process with name + description +
+ * metrics + Open editor link. The "+ Add process" sits below as a
+ * small secondary action. The workspace tile is gone; the workspace
+ * is the AppShell context, no need to repeat it on the page.
  */
 export function ProcessGraphOverview({
   processList,
@@ -30,33 +33,18 @@ export function ProcessGraphOverview({
 }) {
   const router = useRouter();
 
-  // Real top-level processes from the projection. Subprocesses (with a
-  // parent_process_id) live INSIDE their parent and aren't surfaced as
-  // standalone tiles here — that's a deliberate choice; if we want
-  // subprocess hover-cards we add them as nested tiles later.
-  const tiles = useMemo<ApiProcessNode[]>(() => {
-    const graph = processList.process_graph;
-    if (!graph) return [];
-    return graph.nodes.filter((node) => node.type !== "subprocess");
-  }, [processList.process_graph]);
+  // Top-level processes only (subprocesses live inside their parent's
+  // editor, not as standalone rows here).
+  const processes = useMemo<ApiProcessSummary[]>(
+    () =>
+      processList.processes.filter((p) => !p.parent_process_id),
+    [processList.processes],
+  );
 
-  const taskCountById = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const p of processList.processes) {
-      map.set(p.id, p.task_count);
-    }
-    return map;
-  }, [processList.processes]);
-
-  const processCount = processList.processes.filter(
-    (p) => !p.parent_process_id,
-  ).length;
-
-  function openProcess(node: ApiProcessNode) {
-    if (node.type === "workspace") return;
+  function openProcess(p: ApiProcessSummary) {
     const href = repoId
-      ? `/process/${encodeURIComponent(node.process_id)}?repo=${encodeURIComponent(repoId)}`
-      : `/process/${encodeURIComponent(node.process_id)}`;
+      ? `/process/${encodeURIComponent(p.id)}?repo=${encodeURIComponent(repoId)}`
+      : `/process/${encodeURIComponent(p.id)}`;
     router.push(href);
   }
 
@@ -65,145 +53,82 @@ export function ProcessGraphOverview({
   }
 
   return (
-    <div className="space-y-4">
-      <section className="rounded-2xl border border-white/10 bg-[#090f1c]/80 px-4 py-3 shadow-xl shadow-black/20">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <h1 className="font-display text-xl font-semibold text-white">
-                Workspace Map
-              </h1>
-              <span className="rounded-full border border-aqua/20 bg-aqua/[0.07] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-aqua/75">
-                {processCount} process{processCount === 1 ? "" : "es"}
-              </span>
-            </div>
-            <p className="mt-1 max-w-2xl text-sm text-white/50">
-              Top-level automation map. Click a process to open its editor.
-            </p>
-          </div>
+    <div className="space-y-2">
+      {processes.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-white/15 bg-white/[0.02] p-6 text-center text-sm text-white/55">
+          No processes yet. Add one to start orchestrating work.
         </div>
-      </section>
-
-      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-        {tiles.map((node) => (
-          <ProcessTile
-            key={node.id}
-            node={node}
-            taskCount={taskCountById.get(node.process_id) ?? 0}
-            onOpen={() => openProcess(node)}
-          />
-        ))}
-        <CreateProcessTile onOpen={openCreatePicker} />
-      </section>
+      ) : (
+        <ul className="overflow-hidden rounded-xl border border-white/10">
+          {processes.map((p) => (
+            <li
+              key={p.id}
+              className="border-b border-white/[0.06] last:border-b-0"
+            >
+              <button
+                type="button"
+                onClick={() => openProcess(p)}
+                className="group flex w-full items-center justify-between gap-4 bg-white/[0.02] px-4 py-3 text-left transition hover:bg-white/[0.04] focus:outline-none focus-visible:bg-white/[0.04]"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="truncate text-sm font-bold text-white">
+                      {p.name}
+                    </span>
+                    {p.primary && (
+                      <span className="rounded border border-aqua/25 bg-aqua/[0.08] px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-widest text-aqua/85">
+                        default
+                      </span>
+                    )}
+                  </div>
+                  {p.description && (
+                    <p className="mt-0.5 truncate text-xs text-white/45">
+                      {p.description}
+                    </p>
+                  )}
+                </div>
+                <div className="flex shrink-0 items-center gap-2 text-[10px] font-semibold uppercase tracking-widest">
+                  <span className="rounded border border-white/10 bg-black/30 px-1.5 py-0.5 text-white/55">
+                    {p.state_count} stage{p.state_count === 1 ? "" : "s"}
+                  </span>
+                  <span className="rounded border border-white/10 bg-black/30 px-1.5 py-0.5 text-white/55">
+                    {p.task_count} active
+                  </span>
+                  {p.blocked_count > 0 && (
+                    <span className="rounded border border-coral/30 bg-coral/[0.08] px-1.5 py-0.5 text-coral/85">
+                      {p.blocked_count} blocked
+                    </span>
+                  )}
+                  <HealthDot status={p.health} />
+                  <span className="text-aqua/65 group-hover:text-aqua">→</span>
+                </div>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <button
+        type="button"
+        onClick={openCreatePicker}
+        className="w-full rounded-md border border-dashed border-white/15 bg-white/[0.015] px-3 py-2 text-xs font-semibold text-white/55 transition hover:border-aqua/40 hover:text-aqua"
+      >
+        + Add process from template
+      </button>
     </div>
   );
 }
 
-function ProcessTile({
-  node,
-  taskCount,
-  onOpen,
-}: {
-  node: ApiProcessNode;
-  taskCount: number;
-  onOpen: () => void;
-}) {
-  const isWorkspace = node.type === "workspace";
-  const isSubprocess = node.type === "subprocess";
-  const tone =
-    isWorkspace
-      ? "border-aqua/40 bg-[linear-gradient(135deg,rgba(207,169,107,0.18),rgba(207,169,107,0.04))] ring-1 ring-aqua/20"
-      : isSubprocess
-        ? "border-violet-300/25 bg-[linear-gradient(135deg,rgba(168,85,247,0.14),rgba(255,255,255,0.04))]"
-        : "border-white/15 bg-[linear-gradient(135deg,rgba(255,255,255,0.10),rgba(255,255,255,0.03))]";
+function HealthDot({ status }: { status: string }) {
+  let bg = "bg-emerald-400";
+  let label = status;
+  if (status === "warning" || status === "degraded") bg = "bg-amber-400";
+  else if (status !== "ok") bg = "bg-coral";
   return (
-    <button
-      type="button"
-      onClick={onOpen}
-      disabled={isWorkspace}
-      className={[
-        "group relative overflow-hidden rounded-2xl border p-5 text-left shadow-2xl transition",
-        "focus:outline-none focus-visible:ring-2 focus-visible:ring-aqua/60",
-        isWorkspace
-          ? "cursor-default"
-          : "hover:-translate-y-0.5 hover:border-aqua/55 hover:shadow-aqua/10",
-        tone,
-      ].join(" ")}
+    <span
+      className={`inline-flex items-center gap-1 rounded border border-white/10 bg-black/30 px-1.5 py-0.5 text-white/55`}
+      title={label}
     >
-      <div className="flex items-center justify-between gap-2">
-        <span
-          className={[
-            "rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em]",
-            isWorkspace
-              ? "border-aqua/30 text-aqua/85"
-              : "border-white/10 text-white/50",
-          ].join(" ")}
-        >
-          {isWorkspace ? "Workspace" : isSubprocess ? "Subprocess" : "Process"}
-        </span>
-        <HealthChip status={node.status} />
-      </div>
-      <p className="mt-3 text-sm font-semibold text-white">{node.name}</p>
-      <p className="mt-1 line-clamp-3 text-xs leading-5 text-white/55">
-        {node.description || "Open editor"}
-      </p>
-      {!isWorkspace && (
-        <div className="mt-3 flex items-center justify-between text-xs text-white/45">
-          <span>
-            {taskCount} active task{taskCount === 1 ? "" : "s"}
-          </span>
-          <span className="text-aqua/75 transition group-hover:text-aqua">
-            Open editor →
-          </span>
-        </div>
-      )}
-    </button>
-  );
-}
-
-function CreateProcessTile({ onOpen }: { onOpen: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className="group flex flex-col items-start rounded-2xl border border-dashed border-aqua/35 bg-aqua/[0.04] p-5 text-left transition hover:-translate-y-0.5 hover:border-aqua/60 hover:bg-aqua/[0.07] focus:outline-none focus-visible:ring-2 focus-visible:ring-aqua/60"
-    >
-      <span className="rounded-full border border-aqua/30 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-aqua/85">
-        Create
-      </span>
-      <p
-        id={CREATE_TILE_ID}
-        className="mt-3 text-sm font-semibold text-white"
-      >
-        New process
-      </p>
-      <p className="mt-1 text-xs leading-5 text-white/55">
-        Create another top-level workspace process from a template.
-      </p>
-      <span className="mt-3 inline-flex items-center text-xs font-semibold text-aqua/75 transition group-hover:text-aqua">
-        Choose template →
-      </span>
-    </button>
-  );
-}
-
-function HealthChip({ status }: { status: string }) {
-  if (status === "ok") {
-    return (
-      <span className="rounded-full bg-emerald-400/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-widest text-emerald-300">
-        ok
-      </span>
-    );
-  }
-  if (status === "warning" || status === "degraded") {
-    return (
-      <span className="rounded-full bg-amber-400/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-widest text-amber-200">
-        {status}
-      </span>
-    );
-  }
-  return (
-    <span className="rounded-full bg-coral/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-widest text-coral">
+      <span className={`h-1.5 w-1.5 rounded-full ${bg}`} aria-hidden />
       {status}
     </span>
   );

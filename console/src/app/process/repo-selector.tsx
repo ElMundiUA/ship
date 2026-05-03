@@ -25,10 +25,14 @@ export function RepoSelector({
     );
   }
 
+  // Hide the picker entirely when there's only one activated repo —
+  // the dropdown does nothing useful in that case and just adds chrome.
+  if (repos.length === 1) return null;
+
   return (
-    <label className="block rounded-2xl border border-white/10 bg-white/[0.035] px-3 py-2">
-      <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/40">
-        Repository process
+    <label className="inline-flex items-center gap-1.5 text-[11px] text-white/55">
+      <span className="text-[10px] font-bold uppercase tracking-widest text-white/40">
+        Repo
       </span>
       <select
         value={selectedRepo?.id ?? repos[0]?.id}
@@ -41,7 +45,7 @@ export function RepoSelector({
             : "/process";
           router.push(`${base}?${next.toString()}`);
         }}
-        className="w-full rounded-xl border border-white/10 bg-ink px-3 py-2 text-sm font-semibold text-white outline-none focus:border-aqua/40"
+        className="rounded-md border border-white/10 bg-ink px-2 py-1 text-[12px] font-semibold text-white outline-none focus:border-aqua/40"
       >
         {repos.map((repo) => (
           <option key={repo.id} value={repo.id}>
