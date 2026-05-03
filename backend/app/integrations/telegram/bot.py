@@ -515,17 +515,59 @@ async def _run_polling(settings: Settings, *, handle_signals: bool) -> None:
         await bot.session.close()
 
 
+# Wait between leader-lock attempts when another replica owns the lock
+# (deploy rollovers, autoscale cycles). Short enough that bot downtime
+# during a rolling restart is bounded to ~the old container's drain time
+# plus this poll interval; long enough that the loop is essentially free.
+_LEADER_RETRY_SECONDS: float = 30.0
+
+# Cadence for the no-op keepalive query that keeps the held transaction
+# from being killed by Postgres' ``idle_in_transaction_session_timeout``
+# (Neon's default is 300s). 60s leaves plenty of headroom.
+_LEADER_KEEPALIVE_SECONDS: float = 60.0
+
+# Backoff after the polling loop crashes — gives Telegram / DNS / Neon
+# time to settle before we re-acquire the lock and start fresh.
+_POLL_CRASH_BACKOFF_SECONDS: float = 15.0
+
+
+async def _leader_keepalive(conn: object) -> None:
+    """Tick ``SELECT 1`` on the leader's held connection.
+
+    Postgres terminates idle-in-transaction sessions after a timeout
+    (Neon: 5 minutes). Without traffic on the connection holding the
+    advisory lock, Postgres would kill the xact, drop the lock, and
+    silently de-elect us — the polling loop would keep running but
+    the lock would now be free for any racer to grab.
+    """
+    from sqlalchemy import text as _text
+
+    while True:
+        await asyncio.sleep(_LEADER_KEEPALIVE_SECONDS)
+        await conn.execute(_text("SELECT 1"))  # type: ignore[attr-defined]
+
+
 async def run_with_leader_lock(settings: Settings) -> None:
-    """Acquire the bot leader advisory lock; if leader, run the polling loop.
+    """Re-elect a leader and run the bot in a loop until cancelled.
 
-    The lock is taken inside an explicit transaction on a dedicated
-    connection so PgBouncer (Neon pooled DSN) pins the connection to one
-    backend for the whole duration. When the wrapping task is cancelled
-    or the process exits, the transaction ends and the lock is released
-    instantly — the next replica's startup attempt picks it up.
+    Each iteration:
+      1. Open a dedicated connection, BEGIN an explicit transaction,
+         and try ``pg_try_advisory_xact_lock``. PgBouncer (Neon pooled
+         DSN) pins the connection to one upstream backend for as long
+         as the transaction stays open.
+      2. If the lock is held by another replica, sleep for
+         ``_LEADER_RETRY_SECONDS`` and try again — this is what makes
+         a rolling deploy survive: the new replica patiently waits for
+         the old one's drain instead of giving up forever.
+      3. If we win the lock, kick off a keepalive task to keep the
+         transaction alive past Neon's idle-in-transaction timeout,
+         then run the long-poll. On exit (clean or crashed) the
+         transaction unwinds, the lock auto-releases, and the next
+         iteration of the loop tries again.
 
-    Best-effort: any startup error is logged and swallowed so the API
-    server stays up even if Telegram is misconfigured.
+    Cancellation propagates cleanly: the ``async with`` blocks
+    ROLLBACK + close on cancel, releasing the lock for the next
+    replica before we exit.
     """
     if not settings.telegram_bot_token or not settings.telegram_bot_username:
         logger.info(
@@ -538,7 +580,8 @@ async def run_with_leader_lock(settings: Settings) -> None:
 
     from backend.app.db.session import get_engine
 
-    try:
+    async def _try_lead_once() -> bool:
+        """Attempt one leadership cycle. Returns True iff we ran polling."""
         engine = get_engine()
         async with engine.connect() as conn:
             async with conn.begin():
@@ -549,21 +592,51 @@ async def run_with_leader_lock(settings: Settings) -> None:
                     )
                 ).scalar()
                 if not got:
-                    logger.info(
-                        "telegram bot: another replica holds the leader "
-                        "lock; this replica will not poll"
-                    )
-                    return
+                    return False
                 logger.info("telegram bot: leader lock acquired")
-                await _run_polling(settings, handle_signals=False)
-    except asyncio.CancelledError:
-        logger.info("telegram bot: shutting down, releasing leader lock")
-        raise
-    except Exception:
-        logger.exception(
-            "telegram bot crashed; the API server stays up but no Telegram "
-            "traffic will be served by this replica until restart"
-        )
+                keepalive = asyncio.create_task(
+                    _leader_keepalive(conn),
+                    name="ship.telegram.bot.keepalive",
+                )
+                try:
+                    await _run_polling(settings, handle_signals=False)
+                finally:
+                    keepalive.cancel()
+                    try:
+                        await keepalive
+                    except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                        pass
+        return True
+
+    while True:
+        try:
+            ran_polling = await _try_lead_once()
+        except asyncio.CancelledError:
+            logger.info("telegram bot: shutting down, releasing leader lock")
+            raise
+        except Exception:
+            logger.exception(
+                "telegram bot crashed; retrying in %.0fs",
+                _POLL_CRASH_BACKOFF_SECONDS,
+            )
+            await asyncio.sleep(_POLL_CRASH_BACKOFF_SECONDS)
+            continue
+        if ran_polling:
+            # ``start_polling`` doesn't normally return on its own — if
+            # it did, treat it like a crash and re-elect after backoff.
+            logger.info(
+                "telegram bot: polling returned without error; "
+                "re-acquiring lock after %.0fs",
+                _POLL_CRASH_BACKOFF_SECONDS,
+            )
+            await asyncio.sleep(_POLL_CRASH_BACKOFF_SECONDS)
+        else:
+            logger.debug(
+                "telegram bot: another replica holds the leader lock; "
+                "will retry in %.0fs",
+                _LEADER_RETRY_SECONDS,
+            )
+            await asyncio.sleep(_LEADER_RETRY_SECONDS)
 
 
 def main() -> None:
