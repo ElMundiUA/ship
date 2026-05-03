@@ -3569,6 +3569,147 @@ export async function deletePolicy(
 }
 
 // ---------------------------------------------------------------------------
+// Agent roles — Ship defaults + workspace overrides/clones (Phase 2.4)
+// ---------------------------------------------------------------------------
+
+/** One Ship-shipped default specialist (file-backed under
+ *  ``backend/app/resources/agent_roles/``). Read-only. */
+export interface ApiAgentRoleDefault {
+  slug: string;
+  name: string;
+  fsm_stage: string | null;
+}
+
+/** Ship default summary plus the full prompt body. */
+export interface ApiAgentRoleDefaultDetail extends ApiAgentRoleDefault {
+  prompt: string;
+}
+
+/** One workspace agent role row (override or clone). */
+export interface ApiAgentRole {
+  id: string;
+  workspace_id: string;
+  slug: string;
+  name: string;
+  /** ``null`` for an override (slug shadows a Ship default). Set to the
+   *  default slug when this row was created as a clone via the modal. */
+  base_role_slug: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Workspace row plus the full prompt body. */
+export interface ApiAgentRoleDetail extends ApiAgentRole {
+  prompt: string;
+}
+
+/** Resolution result from ``GET /agent-roles/{slug}/resolve``. */
+export interface ApiAgentRoleResolved {
+  slug: string;
+  name: string;
+  prompt: string;
+  fsm_stage: string | null;
+  source: "workspace" | "ship_default";
+}
+
+export interface ApiAgentRoleCreateIn {
+  slug: string;
+  name: string;
+  prompt: string;
+  /** Set when the row is a clone of a Ship default. Drop to create an
+   *  override (slug must equal a Ship default slug in that case). */
+  base_role_slug?: string | null;
+}
+
+export interface ApiAgentRoleUpdateIn {
+  name?: string;
+  prompt?: string;
+}
+
+export function listShipAgentRoleDefaults(
+  token?: string,
+): Promise<ApiAgentRoleDefault[]> {
+  return apiFetch<ApiAgentRoleDefault[]>(`/v1/agent-roles`, { token });
+}
+
+export function getShipAgentRoleDefault(
+  slug: string,
+  token?: string,
+): Promise<ApiAgentRoleDefaultDetail> {
+  return apiFetch<ApiAgentRoleDefaultDetail>(
+    `/v1/agent-roles/${encodeURIComponent(slug)}`,
+    { token },
+  );
+}
+
+export async function listWorkspaceAgentRoles(
+  workspaceId: string,
+  token?: string,
+): Promise<ApiAgentRole[]> {
+  const envelope = await apiFetch<{ roles: ApiAgentRole[] }>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/agent-roles`,
+    { token },
+  );
+  return envelope.roles;
+}
+
+export function getWorkspaceAgentRole(
+  workspaceId: string,
+  slug: string,
+  token?: string,
+): Promise<ApiAgentRoleDetail> {
+  return apiFetch<ApiAgentRoleDetail>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/agent-roles/${encodeURIComponent(slug)}`,
+    { token },
+  );
+}
+
+export function createWorkspaceAgentRole(
+  workspaceId: string,
+  body: ApiAgentRoleCreateIn,
+  token?: string,
+): Promise<ApiAgentRoleDetail> {
+  return apiFetch<ApiAgentRoleDetail>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/agent-roles`,
+    { method: "POST", body, token },
+  );
+}
+
+export function updateWorkspaceAgentRole(
+  workspaceId: string,
+  slug: string,
+  body: ApiAgentRoleUpdateIn,
+  token?: string,
+): Promise<ApiAgentRoleDetail> {
+  return apiFetch<ApiAgentRoleDetail>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/agent-roles/${encodeURIComponent(slug)}`,
+    { method: "PUT", body, token },
+  );
+}
+
+export async function deleteWorkspaceAgentRole(
+  workspaceId: string,
+  slug: string,
+  token?: string,
+): Promise<void> {
+  await apiFetch<void>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/agent-roles/${encodeURIComponent(slug)}`,
+    { method: "DELETE", token },
+  );
+}
+
+export function resolveWorkspaceAgentRole(
+  workspaceId: string,
+  slug: string,
+  token?: string,
+): Promise<ApiAgentRoleResolved> {
+  return apiFetch<ApiAgentRoleResolved>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/agent-roles/${encodeURIComponent(slug)}/resolve`,
+    { token },
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Repo home (RFC-0008 §F — PR-4 "Now/Trends")
 // ---------------------------------------------------------------------------
 
