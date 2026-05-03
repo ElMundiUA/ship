@@ -30,7 +30,8 @@
  *
  * Workspace + repo resolution:
  *
- *   - ``--workspace`` pins a workspace id; otherwise we fetch
+ *   - ``--workspace`` pins a workspace id; ``SHIP_WORKSPACE_ID`` env
+ *     var serves as a fallback. Without either we fetch
  *     ``GET /v1/workspaces`` and pick the only row. If there are
  *     multiple rows we abort with a helpful message so the caller
  *     either supplies ``--workspace`` or narrows their PAT.
@@ -147,7 +148,8 @@ async function knowledgeInitCommand(ctx, args) {
     }
   }
 
-  let workspaceId = opts.workspace;
+  let workspaceId =
+    opts.workspace || (process.env.SHIP_WORKSPACE_ID || "").trim() || "";
   if (!workspaceId) {
     workspaceId = await resolveSoleWorkspace(baseUrl, token);
   }
@@ -188,7 +190,8 @@ async function knowledgeFetchCommand(ctx, args) {
   const opts = parseFetchArgs(args);
   const baseUrl = resolveBaseUrl(opts.baseUrl || explicitGlobalBaseUrl(ctx));
   const token = requireToken();
-  let workspaceId = opts.workspace;
+  let workspaceId =
+    opts.workspace || (process.env.SHIP_WORKSPACE_ID || "").trim() || "";
   if (!workspaceId) {
     workspaceId = await resolveSoleWorkspace(baseUrl, token);
   }
@@ -231,7 +234,8 @@ async function knowledgeRefreshIntelCommand(ctx, args) {
   const opts = parseRefreshArgs(args);
   const baseUrl = resolveBaseUrl(opts.baseUrl || explicitGlobalBaseUrl(ctx));
   const token = requireToken();
-  let workspaceId = opts.workspace;
+  let workspaceId =
+    opts.workspace || (process.env.SHIP_WORKSPACE_ID || "").trim() || "";
   if (!workspaceId) {
     workspaceId = await resolveSoleWorkspace(baseUrl, token);
   }
@@ -259,7 +263,8 @@ async function knowledgeBootstrapCommand(ctx, args) {
   const opts = parseBootstrapArgs(args);
   const baseUrl = resolveBaseUrl(opts.baseUrl || explicitGlobalBaseUrl(ctx));
   const token = requireToken();
-  let workspaceId = opts.workspace;
+  let workspaceId =
+    opts.workspace || (process.env.SHIP_WORKSPACE_ID || "").trim() || "";
   if (!workspaceId) {
     workspaceId = await resolveSoleWorkspace(baseUrl, token);
   }

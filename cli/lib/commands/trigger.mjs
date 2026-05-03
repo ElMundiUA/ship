@@ -13,7 +13,16 @@ export async function triggerCommand(ctx, rest) {
   const token = process.env.SHIP_API_TOKEN || "";
   let claimStatus = "skipped:no-token";
   if (token && due.length > 0 && !opts.noClaim) {
-    let workspaceId = opts.workspace;
+    // ``SHIP_WORKSPACE_ID`` env var matches what ``shipctl run`` already
+    // honours (run.mjs reads it directly). Without this fallback the
+    // CLI burned a ``GET /v1/workspaces`` round-trip every tick and
+    // — if the token's user happened to have zero memberships at that
+    // moment — printed "No workspaces visible to this token" and
+    // failed the entire schedule, even though the workflow file had
+    // the workspace ID right there in env. Honour the env var so the
+    // common case skips the discovery call entirely.
+    let workspaceId =
+      opts.workspace || (process.env.SHIP_WORKSPACE_ID || "").trim() || "";
     if (!workspaceId) workspaceId = await resolveSoleWorkspace(baseUrl, token);
     const repoId = await resolveRepoId(baseUrl, token, workspaceId, opts.repo);
     const claimed = [];
@@ -60,6 +69,7 @@ USAGE
 
 ENV
   SHIP_API_TOKEN             Optional. When set, due routines are claimed in Ship.
+  SHIP_WORKSPACE_ID          Optional. Skips the ``/v1/workspaces`` lookup if set.
   SHIP_WORKSPACE_API_BASE    Optional API base override.
   SHIP_API_BASE              Fallback API base override.
 `);
