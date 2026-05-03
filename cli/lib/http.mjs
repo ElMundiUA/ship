@@ -93,7 +93,6 @@ export async function apiGet(baseUrl, path) {
  */
 export async function fetchManifest(baseUrl, { channel } = {}) {
   const KINDS = [
-    { plural: "patterns", singular: "pattern" },
     { plural: "collections", singular: "collection" },
   ];
   const responses = await Promise.all(

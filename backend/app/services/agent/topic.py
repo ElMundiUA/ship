@@ -68,7 +68,7 @@ from backend.app.services.bucket_visibility import visible_to_user_clause
 from backend.app.services.bucket_summary_articles import (
     mirror_summary_to_article,
 )
-from backend.app.services.catalog import get_pattern as get_catalog_pattern
+from backend.app.services import agent_roles as agent_roles_svc
 from backend.app.services.policies import render_policies_preamble
 
 
@@ -82,22 +82,21 @@ logger = logging.getLogger(__name__)
 # string literal below is a defensive fallback for the rare case the
 # catalog miss happens — keeping the chat surface up even if the
 # artifact file is misplaced beats serving a 500.
-_NAVIGATOR_PATTERN_ID = "role-navigator"
 _NAVIGATOR_ROLE_SLUG = "navigator"
 
 
 def _load_navigator_prompt() -> str:
-    """Return the Navigator system prompt body from the catalog.
+    """Return the Navigator system prompt body from the agent-role registry.
 
-    Falls back to ``_NAVIGATOR_FALLBACK_PROMPT`` when the
-    ``role-navigator`` pattern is missing — defensive only; the
-    artifact ships with the package, so a miss means a deployment
-    bug, not an expected branch.
+    Falls back to ``_NAVIGATOR_FALLBACK_PROMPT`` when the ``navigator``
+    Ship default is missing — defensive only; the file ships under
+    ``backend/app/resources/agent_roles/navigator.md``, so a miss
+    means a deployment bug, not an expected branch.
     """
-    entry = get_catalog_pattern(_NAVIGATOR_PATTERN_ID)
-    if entry is None or not entry.body.strip():
+    default = agent_roles_svc.get_default(_NAVIGATOR_ROLE_SLUG)
+    if default is None or not default.prompt.strip():
         return _NAVIGATOR_FALLBACK_PROMPT
-    return entry.body.strip()
+    return default.prompt.strip()
 
 
 _NAVIGATOR_FALLBACK_PROMPT = (

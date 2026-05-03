@@ -129,8 +129,8 @@ test("config get on missing key fails with exit 1", () => {
 
 test("pins validated against kind/id pattern and semver-ish value", () => {
   const cfg = DEFAULT_CONFIG();
-  cfg.artifacts.pins["pattern/role-developer"] = "1.4.2";
   cfg.artifacts.pins["collection/agent-rules-cursor"] = "~2.1";
+  cfg.artifacts.pins["collection/agent-rules-claude"] = "1.4.2";
   const ok = validateConfig(cfg);
   assert.equal(ok.ok, true, JSON.stringify(ok));
 
@@ -139,12 +139,13 @@ test("pins validated against kind/id pattern and semver-ish value", () => {
   const r = validateConfig(bad);
   assert.equal(r.ok, false);
 
-  // Phase 2.2 retired ``tool`` and ``doc`` as pinnable kinds (along
-  // with the workflow kind that left in Phase 6).
+  // Phase 2.4 Step D retired ``pattern`` as a pinnable kind too —
+  // ``collection`` is the only survivor (agent-rules transport).
   for (const retiredKey of [
     "workflow/scheduled-sdlc-lane",
     "tool/methodology-api",
     "doc/agent-vs-routine",
+    "pattern/role-developer",
   ]) {
     const retired = DEFAULT_CONFIG();
     retired.artifacts.pins[retiredKey] = "1.0.0";

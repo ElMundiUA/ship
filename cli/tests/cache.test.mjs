@@ -107,12 +107,12 @@ function mktmp() {
 test("writeCached -> readCached round-trips", () => {
   const root = mktmp();
   const content = "# Hello\nWorld\n";
-  const { meta } = writeCached(root, "pattern", "role-developer", "1.4.2", content, {
+  const { meta } = writeCached(root, "collection", "agent-rules-cursor", "1.4.2", content, {
     updated_at: "2026-04-17T09:21:08Z",
     source_url: "https://ship.example/api/fetch",
   });
   assert.ok(meta.content_sha256);
-  const got = readCached(root, "pattern", "role-developer", "1.4.2");
+  const got = readCached(root, "collection", "agent-rules-cursor", "1.4.2");
   assert.ok(got);
   assert.equal(got.content, content);
   assert.equal(got.meta.content_sha256, meta.content_sha256);
@@ -132,35 +132,35 @@ test("sanitize replaces slashes in id for cache folder name", () => {
 
 test("listCached enumerates cached entries", () => {
   const root = mktmp();
-  writeCached(root, "pattern", "a", "1.0.0", "x", {});
+  writeCached(root, "collection", "a", "1.0.0", "x", {});
   writeCached(root, "collection", "b", "2.0.0", "y", {});
   const items = listCached(root);
   const kinds = items.map((x) => `${x.kind}/${x.id}@${x.version}`).sort();
-  assert.deepEqual(kinds, ["collection/b@2.0.0", "pattern/a@1.0.0"]);
+  assert.deepEqual(kinds, ["collection/a@1.0.0", "collection/b@2.0.0"]);
 });
 
 test("verifyCached detects tampering", () => {
   const root = mktmp();
-  writeCached(root, "pattern", "x", "1.0.0", "original", {});
-  const ok = verifyCached(root, "pattern", "x", "1.0.0");
+  writeCached(root, "collection", "x", "1.0.0", "original", {});
+  const ok = verifyCached(root, "collection", "x", "1.0.0");
   assert.equal(ok.ok, true);
 
-  const body = cachePath(root, "pattern", "x", "1.0.0");
+  const body = cachePath(root, "collection", "x", "1.0.0");
   fs.writeFileSync(body, "tampered");
-  const bad = verifyCached(root, "pattern", "x", "1.0.0");
+  const bad = verifyCached(root, "collection", "x", "1.0.0");
   assert.equal(bad.ok, false);
   assert.notEqual(bad.expected, bad.actual);
 });
 
 test("removeCached removes the artifact folder (body + meta)", () => {
   const root = mktmp();
-  writeCached(root, "pattern", "x", "1.0.0", "x", {});
-  const folder = cacheFolder(root, "pattern", "x", "1.0.0");
+  writeCached(root, "collection", "x", "1.0.0", "x", {});
+  const folder = cacheFolder(root, "collection", "x", "1.0.0");
   assert.ok(fs.existsSync(folder));
-  const n = removeCached(root, "pattern", "x", "1.0.0");
+  const n = removeCached(root, "collection", "x", "1.0.0");
   assert.equal(n, 2);
   assert.equal(fs.existsSync(folder), false);
-  assert.equal(readCached(root, "pattern", "x", "1.0.0"), null);
+  assert.equal(readCached(root, "collection", "x", "1.0.0"), null);
 });
 
 test("verifyCachedOnDisk: ok for intact entry, missing_body when body deleted, drift when body mutated", () => {

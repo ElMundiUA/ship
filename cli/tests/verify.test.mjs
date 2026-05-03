@@ -129,12 +129,12 @@ test("rules-markers warns (not fails) when cached agent-rules artifact is missin
 test("cache-integrity: tampered body fails check", () => {
   const dir = mktmp();
   writeConfigFixture(dir);
-  const written = writeCached(dir, "pattern", "demo", "1.0.0", "hello world", {
+  const written = writeCached(dir, "collection", "demo", "1.0.0", "hello world", {
     source_url: "about:test",
   });
   assert.ok(fs.existsSync(written.bodyPath));
   // Tamper: overwrite body without updating meta.
-  fs.writeFileSync(cachePath(dir, "pattern", "demo", "1.0.0"), "tampered contents", "utf8");
+  fs.writeFileSync(cachePath(dir, "collection", "demo", "1.0.0"), "tampered contents", "utf8");
 
   const r = runVerify(["--cwd", dir, "--no-network", "--check", "cache-integrity", "--json"]);
   const parsed = JSON.parse(r.stdout);

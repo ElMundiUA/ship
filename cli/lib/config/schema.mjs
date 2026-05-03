@@ -121,11 +121,11 @@ export const PRESETS = Object.freeze([
 
 export const CHANNELS = Object.freeze(["stable", "edge"]);
 
-export const KINDS = Object.freeze(["pattern", "collection"]);
+export const KINDS = Object.freeze(["collection"]);
 
 export const AGENT_IDS = Object.freeze(Object.keys(KNOWN_AGENTS));
 
-export const PIN_KEY_REGEX = /^(pattern|collection)\/[a-zA-Z0-9_\-\.\/]+$/;
+export const PIN_KEY_REGEX = /^collection\/[a-zA-Z0-9_\-\.\/]+$/;
 
 export const UUID_V4_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -979,7 +979,7 @@ export function validateConfig(obj) {
           for (const [k, v] of Object.entries(artifacts.pins)) {
             if (!PIN_KEY_REGEX.test(k)) {
               errors.push(
-                `artifacts.pins[${JSON.stringify(k)}]: invalid key; expected <kind>/<id> where kind∈{pattern,tool,collection,doc}`,
+                `artifacts.pins[${JSON.stringify(k)}]: invalid key; expected collection/<id>`,
               );
             }
             if (typeof v !== "string" || !SEMVER_OR_RANGE_REGEX.test(v.trim())) {

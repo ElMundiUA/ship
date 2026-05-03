@@ -48,11 +48,12 @@ REQUIRED_ENTRY_FIELDS = (
 )
 
 ARTIFACT_KINDS = {
-    "pattern": ("patterns", "patterns"),
-    # ``collection`` is the only legacy multi-kind survivor: ``shipctl
+    # ``collection`` is the only legacy artifact kind survivor: ``shipctl
     # init --copy-rules`` still tugs ``collection/agent-rules-<agent>``
-    # bodies into the customer repo. Phase 2.5 moves agent rule
-    # distribution into the wizard seed bundle and retires this kind too.
+    # bodies into the customer repo through the unauthenticated
+    # ``/collections`` + ``/fetch`` endpoints below. Phase 2.5 moves
+    # agent rule distribution into the wizard seed bundle and retires
+    # this kind too.
     "collection": ("collections", "collections"),
 }
 
@@ -72,11 +73,6 @@ UUID4_RE = re.compile(
 )
 
 SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+(?:[.+-][0-9A-Za-z.+-]+)?$")
-
-
-class SearchRequest(BaseModel):
-    query: str = Field(min_length=3)
-    top_k: int = Field(default=8, ge=1, le=30)
 
 
 class FetchRequest(BaseModel):
@@ -147,43 +143,15 @@ async def lifespan(_app: FastAPI):
     """Open the async database engine eagerly so the first request doesn't
     pay for connection setup, and dispose it cleanly on shutdown.
 
-    Also kicks off the methodology-corpus reindex into ``methodology_chunks``
-    (pgvector). The reindex is best-effort: if Postgres is unreachable or
-    ``OPENAI_API_KEY`` is missing we log and continue so the catalog routes
-    (``/patterns`` / ``/tools`` / ``/collections``) keep working. ``/search``
-    will then return 412 with an explicit "configure OPENAI_API_KEY" message.
+    Phase 2.4 Step D retired ``/search`` and the methodology-corpus
+    reindex that fed it; this lifespan no longer warms a pgvector cache.
+    ``methodology_chunks`` rows live on as orphan data until a follow-up
+    migration drops the table.
     """
     try:
         get_engine()
     except Exception:  # pragma: no cover — best-effort startup
         pass
-    # Reindex the methodology corpus into pgvector (E13). Idempotent: only
-    # chunks whose ``content_sha`` changed get re-embedded, so warm starts
-    # add maybe a few requests' latency, not a full corpus walk.
-    #
-    # Best-effort by design — a missing OPENAI_API_KEY or transient DB
-    # blip shouldn't take down ``/patterns``/``/tools``/etc. We do *log*
-    # the failure though (the original silent ``except`` left an empty
-    # ``methodology_chunks`` table for /search to 500 against without
-    # any surface-level signal).
-    try:
-        from backend.app.services.methodology_index import reindex_if_stale
-
-        result = await reindex_if_stale()
-        log = logging.getLogger("ship.methodology_index")
-        log.info(
-            "methodology reindex: walked=%d seen=%d new=%d unchanged=%d pruned=%d",
-            result.files_walked,
-            result.chunks_seen,
-            result.chunks_new_or_changed,
-            result.chunks_unchanged,
-            result.chunks_pruned,
-        )
-    except Exception:
-        logging.getLogger("ship.methodology_index").exception(
-            "methodology reindex failed at startup; /search will be empty until "
-            "the next successful boot"
-        )
     # In-process cron scheduler (KB-pipeline + future migrations off
     # ARQ). Best-effort — if APScheduler fails to start, the API still
     # serves requests; the cron worker container (where ARQ legacy
@@ -254,7 +222,6 @@ async def healthz() -> dict[str, str]:
 
 
 _KIND_DESCRIPTIONS = {
-    "pattern": "Catalog of Ship patterns sourced from artifacts/patterns/<id>/ARTIFACT.md.",
     "collection": "Agent rule collections sourced from artifacts/collections/agent-rules-<agent>/ARTIFACT.md.",
 }
 
@@ -435,16 +402,11 @@ def _load_kind(kind: str) -> dict[str, Any]:
     return data
 
 
-def load_patterns_manifest() -> dict[str, Any]:
-    return _load_kind("pattern")
-
-
 def load_collections_manifest() -> dict[str, Any]:
     return _load_kind("collection")
 
 
 MANIFEST_LOADERS = {
-    "pattern": load_patterns_manifest,
     "collection": load_collections_manifest,
 }
 
@@ -539,29 +501,6 @@ def _full_entry_response(entry: dict[str, Any], kind: str) -> dict[str, Any]:
     return out
 
 
-@app.get("/patterns")
-def list_patterns(channel: str = Query(default="stable")) -> dict[str, Any]:
-    data = load_patterns_manifest()
-    entries = [e for e in data.get("patterns", []) if isinstance(e, dict)]
-    filtered = _filter_entries_by_channel(entries, channel)
-    return {
-        "version": data.get("version", 1),
-        "description": data.get("description", ""),
-        "patterns": [_entry_summary(e, "pattern") for e in filtered],
-    }
-
-
-@app.get("/patterns/{item_id}")
-def get_pattern(item_id: str, version: str | None = Query(default=None)) -> dict[str, Any]:
-    entry = _resolve_entry_with_version("pattern", item_id, version)
-    return _full_entry_response(entry, "pattern")
-
-
-@app.get("/patterns/{item_id}/versions")
-def list_pattern_versions(item_id: str) -> dict[str, Any]:
-    return _versions_for_kind("pattern", item_id)
-
-
 @app.get("/collections")
 def list_collections(channel: str = Query(default="stable")) -> dict[str, Any]:
     data = load_collections_manifest()
@@ -604,25 +543,6 @@ def _versions_for_kind(kind: str, item_id: str) -> dict[str, Any]:
             }
         ],
     }
-
-
-@app.post("/search")
-async def search(req: SearchRequest) -> dict[str, Any]:
-    """Vector search over documentation, README, and artifact bodies.
-
-    Backed by ``methodology_chunks`` (pgvector). The released CLI relies
-    on this shape, so the JSON contract here matches the historical
-    Chroma-backed implementation byte-for-byte.
-    """
-    from backend.app.services.methodology_index import search as _vector_search
-
-    try:
-        results = await _vector_search(req.query, req.top_k)
-    except RuntimeError as exc:
-        # Most likely: OPENAI_API_KEY missing on the deployment. Surface
-        # a clear 412 so the operator sees configuration drift, not 500.
-        raise HTTPException(status_code=412, detail=str(exc)) from exc
-    return {"query": req.query, "results": results}
 
 
 @app.post("/fetch")

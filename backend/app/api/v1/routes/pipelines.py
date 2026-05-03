@@ -66,29 +66,32 @@ from backend.app.integrations.github.workflows import (
 )
 from backend.app.services import catalog as catalog_service
 from backend.app.services import starter_workflows
-from backend.app.services.lane_recipes import list_lane_recipes
 
 
 logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Pipeline kind ↔ catalog workflow mapping
+# Pipeline kind ↔ starter workflow mapping
 # ---------------------------------------------------------------------------
 
-# ``list_lane_recipes`` is the authoritative lane → workflow_id map
-# post-RFC-0008 C3.3 (``pr_review`` → ``pr-and-ci-gate``, ``self_heal``
-# → ``pipeline-self-heal``, …). Adding a new lane = dropping a new
-# pattern ARTIFACT.md with ``lane_id`` + workflow.yml pair, no code
-# churn in this module. We compute the map lazily per-call so catalog
-# mtime changes pick up without a process restart.
+# Static map after Phase 2.4 Step D snipped the catalog-derived
+# ``list_lane_recipes`` builder. The five entries below are every
+# lane id this module ever resolved through the recipes path; new
+# lanes get a row here. ``code_map`` is resolver-only (no starter
+# YAML), so it intentionally maps to ``None`` — callers fall back to
+# the "Coming with presets" state instead of 412-ing the user.
+_LANE_WORKFLOW_MAP: dict[str, str | None] = {
+    "pr_review": "pr-and-ci-gate",
+    "daily_standup": "scheduled-sdlc-lane",
+    "code_map": None,
+    "tech_debt": "parallel-audit-lanes",
+    "self_heal": "pipeline-self-heal",
+}
 
 
 def _lane_id_to_workflow_id(lane_id: str) -> str | None:
-    for recipe in list_lane_recipes():
-        if recipe.lane_id == lane_id:
-            return recipe.workflow_id
-    return None
+    return _LANE_WORKFLOW_MAP.get(lane_id)
 
 
 def _workflow_file_for_lane_id(lane_id: str) -> str | None:

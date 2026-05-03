@@ -851,52 +851,6 @@ class ToolBox:
                 },
             ),
             ToolSpec(
-                name="list_catalog_artifacts",
-                description=(
-                    "Enumerate the Ship global catalog: patterns, "
-                    "collections (``preset-*`` included) or tools. "
-                    "Use when the user asks what Ship provides, or "
-                    "before filing feedback with "
-                    "``create_artifact_feedback`` so the id is real."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "kind": {
-                            "type": "string",
-                            "enum": [
-                                "pattern",
-                                "collection",
-                                "tool",
-                            ],
-                        },
-                        "group": {
-                            "type": "string",
-                            "description": (
-                                "Optional filter on the artifact's "
-                                "``group`` field (e.g. ``preset`` for the "
-                                "preset collections)."
-                            ),
-                        },
-                        "tag": {
-                            "type": "string",
-                            "description": (
-                                "Optional filter matching any of the "
-                                "artifact's tags."
-                            ),
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": _MAX_CATALOG_ITEMS,
-                            "default": 50,
-                        },
-                    },
-                    "required": ["kind"],
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
                 name="list_buckets",
                 description=(
                     "Enumerate the workspace's knowledge buckets (packed "
@@ -918,37 +872,6 @@ class ToolBox:
                             "default": 25,
                         },
                     },
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
-                name="get_catalog_artifact",
-                description=(
-                    "Fetch the full ARTIFACT.md body and metadata for one "
-                    "catalog entry. Call after ``list_catalog_artifacts`` "
-                    "when the user wants the actual playbook text, the "
-                    "required secrets, or the install target."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "kind": {
-                            "type": "string",
-                            "enum": [
-                                "pattern",
-                                "collection",
-                                "tool",
-                            ],
-                        },
-                        "id": {
-                            "type": "string",
-                            "description": (
-                                "Artifact id without the kind prefix, "
-                                "e.g. ``adoption-minimum`` or ``methodology-api``."
-                            ),
-                        },
-                    },
-                    "required": ["kind", "id"],
                     "additionalProperties": False,
                 },
             ),
@@ -2140,13 +2063,11 @@ class ToolBox:
             "get_project": self._tool_get_project,
             "create_project": self._tool_create_project,
             "append_project_description": self._tool_append_project_description,
-            "list_catalog_artifacts": self._tool_list_catalog_artifacts,
             "list_recent_activity": self._tool_list_recent_activity,
             "get_pull_request": self._tool_get_pull_request,
             "list_buckets": self._tool_list_buckets,
             "search_buckets": self._tool_search_buckets,
             "search_workspace_kb": self._tool_search_workspace_kb,
-            "get_catalog_artifact": self._tool_get_catalog_artifact,
             "list_integrations": self._tool_list_integrations,
             "list_pull_requests": self._tool_list_pull_requests,
             "list_pipelines": self._tool_list_pipelines,
@@ -2809,55 +2730,6 @@ class ToolBox:
 
         return _json_result(summary)
 
-    async def _tool_list_catalog_artifacts(self, args: dict[str, Any]) -> str:
-        kind = _require_str(args, "kind").lower()
-        if kind != "pattern":
-            raise ToolInvocationError(
-                f"invalid kind {kind!r}; only 'pattern' is supported "
-                "(tool/collection kinds were retired in Phase 2.2)"
-            )
-        group = args.get("group")
-        tag = args.get("tag")
-        limit = _clamp_int(
-            args.get("limit"), default=50, low=1, high=_MAX_CATALOG_ITEMS
-        )
-
-        loader = catalog_service.list_patterns
-        try:
-            entries = loader()
-        except catalog_service.CatalogError as exc:
-            raise ToolInvocationError(f"catalog unreadable: {exc}") from exc
-
-        if isinstance(group, str) and group:
-            entries = [e for e in entries if e.group == group]
-        if isinstance(tag, str) and tag:
-            entries = [e for e in entries if tag in (e.tags or [])]
-
-        items = [
-            {
-                "kind": e.kind,
-                "id": e.id,
-                "artifact_id": f"{e.kind}/{e.id}",
-                "name": e.name,
-                "version": e.version,
-                "channel": e.channel,
-                "group": e.group,
-                "tags": list(e.tags or []),
-                "description": e.description or None,
-                "deprecated": e.deprecated,
-                "replaced_by": e.replaced_by,
-            }
-            for e in entries[:limit]
-        ]
-        return _json_result(
-            {
-                "kind": kind,
-                "total": len(entries),
-                "truncated": len(entries) > limit,
-                "items": items,
-            }
-        )
-
     async def _tool_list_buckets(self, args: dict[str, Any]) -> str:
         include_archived = bool(args.get("include_archived", False))
         limit = _clamp_int(
@@ -2906,45 +2778,6 @@ class ToolBox:
                 }
             )
         return _json_result({"buckets": items, "count": len(items)})
-
-    async def _tool_get_catalog_artifact(self, args: dict[str, Any]) -> str:
-        kind = _require_str(args, "kind").lower()
-        artifact_id = _require_str(args, "id")
-        if kind not in {"pattern", "collection", "tool"}:
-            raise ToolInvocationError(
-                f"invalid kind {kind!r}; expected one of "
-                "pattern/collection/tool"
-            )
-        try:
-            entries = catalog_service._load_kind(kind)
-        except catalog_service.CatalogError as exc:
-            raise ToolInvocationError(f"catalog unreadable: {exc}") from exc
-        match = next((e for e in entries if e.id == artifact_id), None)
-        if match is None:
-            raise ToolInvocationError(
-                f"{kind}/{artifact_id} not found in catalog"
-            )
-        body = match.body or ""
-        truncated = len(body) > _MAX_ARTIFACT_BODY_CHARS
-        if truncated:
-            body = body[:_MAX_ARTIFACT_BODY_CHARS]
-        return _json_result(
-            {
-                "kind": match.kind,
-                "id": match.id,
-                "artifact_id": f"{match.kind}/{match.id}",
-                "name": match.name,
-                "version": match.version,
-                "channel": match.channel,
-                "group": match.group,
-                "tags": list(match.tags or []),
-                "description": match.description or None,
-                "deprecated": match.deprecated,
-                "replaced_by": match.replaced_by,
-                "body": body,
-                "body_truncated": truncated,
-            }
-        )
 
     async def _tool_list_integrations(self, args: dict[str, Any]) -> str:
         limit = _clamp_int(
@@ -4575,7 +4408,7 @@ class ToolBox:
             )
         elif isinstance(play_key, str) and play_key.strip():
             try:
-                patterns = catalog_service.list_patterns()
+                patterns: list = []  # Phase 2.4 Step D — pattern catalog retired
             except catalog_service.CatalogError as exc:
                 return _json_result({
                     "error": "catalog_unreadable",
@@ -4788,7 +4621,7 @@ class ToolBox:
                     lanes_by_pattern.setdefault(key, set()).add(lane.repo_id)
 
         try:
-            patterns = catalog_service.list_patterns()
+            patterns: list = []  # Phase 2.4 Step D — pattern catalog retired
         except catalog_service.CatalogError as exc:
             return _json_result({
                 "error": "catalog_unreadable",
@@ -4888,7 +4721,7 @@ class ToolBox:
         )
 
         try:
-            patterns = catalog_service.list_patterns()
+            patterns: list = []  # Phase 2.4 Step D — pattern catalog retired
         except catalog_service.CatalogError as exc:
             return _json_result({
                 "error": "catalog_unreadable",
@@ -4949,7 +4782,7 @@ class ToolBox:
             })
 
         try:
-            patterns = catalog_service.list_patterns()
+            patterns: list = []  # Phase 2.4 Step D — pattern catalog retired
         except catalog_service.CatalogError as exc:
             return _json_result({
                 "error": "catalog_unreadable",
@@ -6391,7 +6224,7 @@ class ToolBox:
         # Resolve the catalog pattern up front so we can stamp a
         # human title on the row even when the caller didn't pass one.
         try:
-            patterns = catalog_service.list_patterns()
+            patterns: list = []  # Phase 2.4 Step D — pattern catalog retired
         except catalog_service.CatalogError as exc:
             return _json_result({
                 "error": "internal",
