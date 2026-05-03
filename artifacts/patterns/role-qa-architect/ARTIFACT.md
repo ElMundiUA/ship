@@ -5,8 +5,8 @@ name: QA architect
 version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
-updated_at: "2026-04-07T20:41:22+03:00"
-content_sha256: ee57852b73a1e657da7e768df08c71f5040b7670d336390c857dc1d1585d62b3
+updated_at: "2026-05-03T15:00:00+00:00"
+content_sha256: fcb59ca872512a56096ddbe47d8a448e507474bdf62f486cd54c94c01fae09a2
 deprecated: false
 replaced_by: null
 yanked: false
@@ -65,11 +65,10 @@ Status for new issues: **Backlog**.
 
 ## Task
 
-1. Find **concrete gaps**: critical user flows without e2e, missing regression checks, brittle selectors, duplicate scenarios, missing negative cases — always with **path to file** (`website/tests/...`) or to production code that is not covered.
-2. **Before creating a ticket:** search project `{{TECH_DEBT_PROJECT_ID}}` for open issues with `source:qa-architect` or `audit:auto` for the same area (same spec/feature/route). **Do not** create duplicates.
-3. **If there are no new verifiable gaps** — **do not** create anything in Linear and do not post a “checkbox” comment.
-4. If there are gaps — one issue per meaningful unit (e.g. “add e2e for X”, not ten micro-tickets with one phrase). Description: AC as a checklist, links to files. Labels: `source:qa-architect`, `audit:auto`, and `improvement` if needed.
+Find **concrete gaps**: critical user flows without e2e, missing regression checks, brittle selectors, duplicate scenarios, missing negative cases — always with a path reference (`website/tests/...`) or to production code that is not covered.
 
-**Forbidden:** inventing spec files or CI failures that do not exist in the file tree.
+For each meaningful gap, create one issue in project `{{TECH_DEBT_PROJECT_ID}}`, status **Backlog**. Description: AC as a checklist, links to files. Labels: `source:qa-architect`, `audit:auto`, plus `improvement` if needed (don't fragment one e2e gap into ten micro-tickets).
+
+The standing rules — evidence per finding, de-dupe before creating, silence when no new verifiable findings — come from your workspace's policies.
 
 End of comment (if you wrote one): `[GitHub SDLC daily-audit:qa-architect]`

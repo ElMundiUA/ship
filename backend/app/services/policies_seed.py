@@ -451,10 +451,11 @@ _NAVIGATOR_POLICIES: tuple[SeedPolicy, ...] = (
     SeedPolicy(
         title="Never fabricate ids, names, or attribution",
         body=(
-            "Never fabricate any identifier or attribution: repo "
-            "paths, ticket / artifact / pipeline ids, user names, "
-            "emails, GitHub / Linear / Slack logins, PR / commit / "
-            "run authors, PR numbers, commit SHAs, version strings, "
+            "Never fabricate any identifier or attribution. That "
+            "includes: repo paths, tickets, URLs, artifact ids, "
+            "pipeline ids, integration names, user names, emails, "
+            "GitHub / Linear / Slack logins, PR / commit / run "
+            "authors, PR numbers, commit SHAs, version strings, "
             "timestamps, dates, file line counts, release notes. If "
             "a tool can produce the value, call it. If a tool's "
             "response is missing a field, surface the gap verbatim "

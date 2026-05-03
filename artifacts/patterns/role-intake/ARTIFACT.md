@@ -5,8 +5,8 @@ name: Intake
 version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
-updated_at: "2026-04-07T20:41:22+03:00"
-content_sha256: 5aa31a6668412eb43417b374657fdbc3825f77e8baeed5fc5326079d411482f8
+updated_at: "2026-05-03T15:00:00+00:00"
+content_sha256: 213e4a40cd994f2587165279fe5cb4b2a3a9591afb15b46b80583abd56adb3ca
 deprecated: false
 replaced_by: null
 yanked: false
@@ -63,11 +63,18 @@ spec:
 
 ## Task
 
-The ticket is already in **Todo** and in the pre-release project — that means automation may pick it up (do not touch Backlog).
+Classify the ticket: feature / bug / refactor / infra / improvement. Check completeness: goal, problem, expectation, AC, constraints.
 
-1. Classify: feature / bug / refactor / infra / improvement.
-2. Check completeness: goal, problem, expectation, AC, constraints.
-3. **If information is missing:** finish with `outcome=needs_clarification`. The `comment` carries the numbered questions; the server applies `needs:clarification` automatically.
-4. **If enough to shape:** finish with `outcome=ready_next_step`, `stage_next=ba_requirements`. **Rewrite the ticket body** by setting the `description` field on the finish payload — the server replaces the tracker description (Linear keeps the prior body in history). Sections, in order: **Problem**, **Goal**, **Expected behaviour**, **Scope**, **Acceptance criteria**, **Non-goals**, **Risks**. Use the operator's original wording where it's already clear; tighten/restructure where it isn't. Do not paste the rewritten spec into the `comment` — that's what `description` is for.
+**If enough to shape:** finish with `outcome=ready_next_step`, `stage_next=ba_requirements`, and rewrite the description (via the `description` field) using these sections in order:
 
-The `comment` field on this stage carries a one-paragraph audit narration of *what you changed and why* (for the activity feed). End it with: `[Ship SDLC:role-intake]`
+1. **Problem**
+2. **Goal**
+3. **Expected behaviour**
+4. **Scope**
+5. **Acceptance criteria**
+6. **Non-goals**
+7. **Risks**
+
+The standing rules — don't touch Backlog tickets, write the rewritten body to `description` (not `comment`), escalate as `needs_clarification` when context is missing — come from your workspace's policies.
+
+The `comment` field carries a one-paragraph audit narration of *what you changed and why*. End it with: `[Ship SDLC:role-intake]`

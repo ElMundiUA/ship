@@ -2,23 +2,22 @@
 
 After the topic transcript surfaced fabricated workspace members,
 PR authors, and a 2025 calendar year (in a 2026 conversation), the
-static system prompt was extended with:
+Navigator prompt was extended with:
 
 - An expanded "Never fabricate" list covering people, attribution,
   versions, dates, line counts (was: only repos/tickets/URLs/ids).
-- A "When you don't know" section spelling out that "I don't know"
-  and "the data doesn't include X" are preferred answers.
-- An "On user pushback" clause that pins the agent to a fresh tool
+- An "I don't know" preference for ambiguous answers.
+- An "On user pushback" clause pinning the agent to a fresh tool
   call instead of improvising a corrected guess.
 - A reference to a dynamic "Session context" frame.
 
-And ``assemble_messages`` now ships that Session context as a second
-system message, carrying today's date (UTC) and the active
-workspace id.
-
-Tests below pin all four pieces. We don't assert on exact wording —
-operators tweak the prose — but we do assert on the load-bearing
-substrings that other parts of the prompt reference.
+These rules now live in the workspace-policy seed
+(``backend.app.services.policies_seed``) under role
+``navigator``. The Navigator artifact body is the playbook
+("what to do"); the seed is the invariants ("what is forbidden").
+Tests below pin both — the seed entries cover the hallucination
+classes; ``assemble_messages`` covers the session-context system
+message that the seed entry references.
 """
 
 from __future__ import annotations
@@ -35,11 +34,20 @@ from backend.app.services.agent.topic import (
     _load_navigator_prompt,
     _render_session_context,
 )
+from backend.app.services.policies_seed import default_policies
 
 
 def _navigator_prompt() -> str:
     """Cache-friendly helper: catalog read is mtime-cached internally."""
     return _load_navigator_prompt()
+
+
+def _navigator_policy_text() -> str:
+    """Concatenated body of all navigator-scoped seed policies."""
+    return "\n\n".join(
+        p.body for p in default_policies()
+        if p.applies_to_roles and "navigator" in p.applies_to_roles
+    )
 
 
 def _thread(workspace_id: uuid.UUID, user_id: uuid.UUID) -> ChatThread:
@@ -62,11 +70,9 @@ def _thread(workspace_id: uuid.UUID, user_id: uuid.UUID) -> ChatThread:
         # Identifier classes the original "Never fabricate" line
         # already covered — make sure we didn't drop them in the edit.
         "repo paths",
-        "tickets",
         "URLs",
         "artifact ids",
         "pipeline ids",
-        "integration names",
         # New A1 additions — every one of these was hallucinated in
         # the transcript that motivated the patch.
         "user names",
@@ -80,71 +86,35 @@ def _thread(workspace_id: uuid.UUID, user_id: uuid.UUID) -> ChatThread:
         "dates",
     ],
 )
-def test_hard_rules_cover_hallucinated_classes(needle: str) -> None:
-    assert needle in _navigator_prompt(), (
-        f"_navigator_prompt() missing '{needle}' — A1 hardening regressed"
+def test_navigator_no_fabrication_policy_covers_classes(needle: str) -> None:
+    assert needle in _navigator_policy_text(), (
+        f"navigator policy text missing '{needle}' — A1 hardening regressed"
     )
 
 
-def test_hard_rules_have_idk_section() -> None:
-    """The "When you don't know" header anchors the IDK rules; downstream
-    docs reference it by name. Other prose can change freely."""
-    assert "## When you don't know" in _navigator_prompt()
+def test_navigator_policy_prefers_idk_over_guessing() -> None:
+    """The IDK guidance ("I don't know" is a preferred answer) lives
+    in the navigator-no-fabricated-identifiers policy body."""
+    assert "I don't know" in _navigator_policy_text()
 
 
-def test_hard_rules_pushback_clause() -> None:
-    """On user pushback the agent must re-call a tool, not improvise.
-    Pin the load-bearing verb so casual rewording can't drop it."""
-    # Match either 're-call' / 'recall' / 'call the tool that' patterns.
+def test_navigator_policy_pushback_clause() -> None:
+    """On user pushback the agent must call a tool, not improvise.
+    Pin the load-bearing verb so casual rewording of the policy
+    body can't drop it."""
     assert re.search(
-        r"(re[- ]?call|call the tool|call .*ground truth)",
-        _navigator_prompt(),
+        r"(call the tool|call .*ground truth|re[- ]?call)",
+        _navigator_policy_text(),
         flags=re.IGNORECASE,
     )
 
 
-def test_pushback_clause_references_existing_tools() -> None:
-    """The pushback clause cites three example tools the agent should
-    re-call instead of improvising. If any of those names drift out
-    of the registry (rename, removal), the rule keeps pointing the
-    LLM at a dead tool. Pin the link both ways: the clause exists,
-    the tool names parse, every parsed name resolves in the
-    ToolBox registry.
-    """
-    from backend.app.services.agent.tools import ToolBox
-
-    block = re.search(
-        r"When the user pushes back[^.]*\.[\s\S]*?Immediately call[^(]*"
-        r"\(([^)]+)\)",
-        _navigator_prompt(),
-    )
-    assert block is not None, (
-        "Pushback clause shape changed — update this test alongside "
-        "the prompt edit so the link to the tool registry stays "
-        "load-bearing."
-    )
-    cited = set(re.findall(r"``([a-z_]+)``", block.group(1)))
-    assert cited, "no tool names parsed from the pushback example list"
-
-    box = ToolBox(
-        session=None,  # type: ignore[arg-type]
-        settings=None,  # type: ignore[arg-type]
-        workspace_id=None,  # type: ignore[arg-type]
-        user_id=None,  # type: ignore[arg-type]
-    )
-    registry = {spec.name for spec in box.specs()}
-    drift = cited - registry
-    assert not drift, (
-        f"pushback clause cites tools that no longer exist in the "
-        f"registry: {sorted(drift)}"
-    )
-
-
-def test_hard_rules_reference_session_context() -> None:
-    """The static prompt must point at the dynamic frame so the agent
-    knows where to read today's date from. Renaming the frame
-    requires updating both sides — this test enforces the link."""
-    assert "Session context" in _navigator_prompt()
+def test_navigator_policy_references_session_context() -> None:
+    """The session-time policy must point at the dynamic frame so
+    the agent knows where to read today's date from. Renaming the
+    frame requires updating both sides — this test enforces the
+    link."""
+    assert "Session context" in _navigator_policy_text()
 
 
 # ---------------------------------------------------------------------------

@@ -5,8 +5,8 @@ name: Security officer
 version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
-updated_at: "2026-04-07T20:41:22+03:00"
-content_sha256: b12f7941149b818441f23e64374b15ca3cf1c97e737198c99af8aa037f26b024
+updated_at: "2026-05-03T15:00:00+00:00"
+content_sha256: b2bd0dad552841606e88b36419bed600b1a280514470f847235edbd1541f0783
 deprecated: false
 replaced_by: null
 yanked: false
@@ -76,9 +76,8 @@ If the report has no vulnerabilities or the array is empty — **do not** create
 
 ## Task
 
-1. Parse the Snyk JSON (if attached): for each unique **package + vulnerability (id/CVE)** combo, check there is no open issue in project `{{SECURITY_PROJECT_ID}}` with the same identifier in title or body.
-2. **Only new** findings → new issue: title with package and CVE/id; body: version, manifest path, severity, advisory link if present in JSON, recommended upgrade if Snyk suggests. Labels: `source:security-officer`, `audit:auto`, plus `Bug` or team security label if that is your convention.
-3. If the report is missing, empty, or Snyk did not run — **do not** invent vulnerabilities; you may create **no** issues. Do not generate fake JSON.
-4. Do not create duplicates for a “daily report”: if there are no new CVEs — silence in Linear.
+Parse the Snyk JSON (if attached): for each unique **package + vulnerability (id/CVE)** combo, create one issue in project `{{SECURITY_PROJECT_ID}}`. Title with package and CVE/id; body: version, manifest path, severity, advisory link if present, recommended upgrade if Snyk suggests. Labels: `source:security-officer`, `audit:auto`, plus `Bug` or team security label if that is your convention.
+
+The standing rules — issues only in the security project with the priority mapping, no fabricated CVEs / fake JSON, evidence per finding, de-dupe before creating, silence when no new findings — come from your workspace's policies.
 
 End of comment (if you wrote one): `[GitHub SDLC daily-audit:security-officer]`

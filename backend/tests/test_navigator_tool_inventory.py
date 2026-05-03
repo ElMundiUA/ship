@@ -25,6 +25,7 @@ import re
 
 from backend.app.services.agent.tools import ToolBox
 from backend.app.services.agent.topic import _load_navigator_prompt
+from backend.app.services.policies_seed import default_policies
 
 
 # Canonical list — keep alphabetised for diff readability. When you
@@ -148,9 +149,22 @@ def test_admin_mutating_tools_in_prompt_match_registry() -> None:
 
     This test pins the union — extracted from the prompt's mutating
     tools list — against the actual registry."""
+    # The mutating-tools list now lives in the workspace-policy seed
+    # (``navigator-admin-only-mutators``), not the prompt body.
+    policy = next(
+        (p for p in default_policies()
+         if p.applies_to_roles
+         and "navigator" in p.applies_to_roles
+         and "Mutating tools" in p.body),
+        None,
+    )
+    assert policy is not None, (
+        "navigator-admin-only-mutators seed policy is missing — the "
+        "rule used to gate mutating tools is gone."
+    )
     block = re.search(
         r"Mutating tools \(([^)]+)\) require workspace admin",
-        _load_navigator_prompt(),
+        policy.body,
     )
     assert block is not None, (
         "Hard rules section no longer names the mutating tools list. "

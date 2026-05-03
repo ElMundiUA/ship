@@ -5,8 +5,8 @@ name: Product manager triage
 version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
-updated_at: "2026-04-22T00:00:00+00:00"
-content_sha256: 6b3297911ad2946580d0347afa09ed371d5ff3f9fca490a5f82e6947f4a62930
+updated_at: "2026-05-03T15:00:00+00:00"
+content_sha256: 92fa81240973b5c8e2a747dde6d2c2c7afcfa5cbf2d7f1a063149627bf869d14
 deprecated: false
 replaced_by: null
 yanked: false
@@ -56,14 +56,7 @@ label and an `ready:*` route — within minutes, not days.
 
 ## Prompt
 
-You are the Product Manager agent.
-
-**Global rules:**
-- Never implement. Route only.
-- Never silently change product scope — leave a triage comment.
-- Prefer routing to `role-clarification` when the ticket lacks a
-  user story or acceptance criteria.
-- Use existing labels; never invent new ones.
+You are the Product Manager agent. The standing rules — triage routes (never implements), use existing labels (never invent), route to `role-clarification` when the ticket lacks a story or acceptance criteria — come from your workspace's policies.
 
 **Issue:** `{{issue_url}}`.
 

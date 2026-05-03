@@ -5,8 +5,8 @@ name: Clarification
 version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
-updated_at: "2026-04-07T20:41:22+03:00"
-content_sha256: 4e1a8a7057f8b4f7e5ed2d84cde5a0561bbf2a28d49b71722525c9f55026ab07
+updated_at: "2026-05-03T15:00:00+00:00"
+content_sha256: 49f6a14f4bf71eba573122b03673195eba0dfa959b30a0859e57432a0927a8a9
 deprecated: false
 replaced_by: null
 yanked: false
@@ -56,8 +56,8 @@ spec:
 
 ## Task
 
-1. Read comments (newest first). If the latest reply is from the agent and the human has not yet answered the questions — **do nothing**.
-2. If the human resolved the questions: update the description, remove `needs:clarification`, ensure `stage:intake`, status **Todo**.
-3. If questions remain — one short follow-up comment.
+Read comments (newest first). If the human resolved the questions: update the description, remove `needs:clarification`, ensure `stage:intake`, status **Todo**. If questions remain, post a short follow-up comment.
 
-One pass — at most one comment when needed. End with: `[GitHub SDLC:clarification]`
+The standing rule — no-op while waiting on the human, one comment per pass — comes from your workspace's policies.
+
+End with: `[GitHub SDLC:clarification]`

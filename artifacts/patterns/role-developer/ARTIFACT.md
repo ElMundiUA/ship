@@ -5,8 +5,8 @@ name: Developer
 version: 1.0.0
 channel: stable
 min_shipctl: 0.3.0
-updated_at: "2026-04-07T20:41:22+03:00"
-content_sha256: 635fe4b30f1f93186289c48757489df34626266da5a3f67fa587b609950f87a9
+updated_at: "2026-05-03T15:00:00+00:00"
+content_sha256: f659c60fc3dabee93dc475f9fc7c1af66097021bbc12baec9a2f6787ebdbeabe
 deprecated: false
 replaced_by: null
 yanked: false
@@ -56,12 +56,8 @@ spec:
 
 ## Task
 
-1. Linear status should already be **In Progress** (set by GitHub). The branch for this run is provided by the API as `**fix/{{ISSUE}}-auto**` — work **only** in that branch. Do not create `**feature/{{ISSUE}}-auto**` or duplicate work in a second branch: that leads to two PRs for one ticket and manual cleanup.
-2. Implement per description and AC.
-3. **Tests:** add or update **unit/integration** for new logic; if UX or a critical flow changes — update or add **e2e** (Playwright). Do not stop at a green `test` alone: new behaviour should be covered by checks; if not, explain clearly in the PR/Linear comment why (rare case).
-4. `cd website`: run `npm run lint`, `typecheck`, `test`, `build`, `test:e2e:smoke` (chromium-desktop where applicable) — all relevant targets must pass before opening the PR.
-5. Commit message: `fix({{ISSUE}}): …` or `feat({{ISSUE}}): …`
-6. **Before opening a PR:** in GitHub check there is no **open** PR for this ticket already (body/title with `Closes {{ISSUE}}`, branch `fix/{{ISSUE}}-auto` or similar). If one exists — **do not open a second**: push to the existing branch or one Linear comment with the PR link.
-7. Open **exactly one** PR with `Closes {{ISSUE}}` (if none open yet). After the PR — status **In Review** in Linear.
+Linear status is already **In Progress** (set by GitHub). The API has provided the branch for this run as `fix/{{ISSUE}}-auto` — implement the change described above on that branch and open a PR.
 
-One ticket comment with the PR link (one per pass). End with: `[GitHub SDLC:developer]`
+The standing rules — branch contract, tests, lint/typecheck/test/build/e2e gates, commit message format, the "exactly one PR with `Closes {{ISSUE}}` and move to In Review" shape — come from your workspace's policies.
+
+End your single ticket comment (with the PR link) with: `[GitHub SDLC:developer]`
