@@ -38,7 +38,6 @@ import type {
 } from "@/lib/api/types";
 import { formatBytes, relativeTime } from "@/lib/format";
 
-import { ConnectorCard } from "./connector-card";
 import { UploadCard } from "./upload-card";
 
 // Server action to trigger a distiller run
@@ -256,25 +255,6 @@ function LiveView({
   // ``promoted``, etc.).
   const canUpload = bucket !== null && bucket.source_kind !== "repo_files";
 
-  // Connector card only for connector_proxy buckets; it renders the
-  // stored integration handle + "Sync now" button.
-  const isConnector =
-    bucket !== null && bucket.source_kind === "connector_proxy";
-  const connectorRef = (bucket?.source_ref ?? null) as {
-    integration_kind?: unknown;
-    resource_ref?: unknown;
-  } | null;
-  const connectorKind =
-    typeof connectorRef?.integration_kind === "string"
-      ? connectorRef.integration_kind
-      : null;
-  const connectorResourceRef =
-    connectorRef?.resource_ref &&
-    typeof connectorRef.resource_ref === "object" &&
-    !Array.isArray(connectorRef.resource_ref)
-      ? (connectorRef.resource_ref as Record<string, unknown>)
-      : {};
-
   const scopeKind = bucket?.scope_kind ?? (legacy?.visibility ?? "workspace");
   const sourceKind = bucket?.source_kind ?? "repo_files";
 
@@ -373,15 +353,6 @@ function LiveView({
         </div>
 
         <div className="space-y-5">
-          {isConnector && bucket && connectorKind && (
-            <ConnectorCard
-              workspaceId={ws.id}
-              slug={bucket.slug}
-              integrationKind={connectorKind}
-              resourceRef={connectorResourceRef}
-            />
-          )}
-
           {canUpload && bucket && (
             <UploadCard
               workspaceId={ws.id}

@@ -18,7 +18,6 @@ import {
   ApiHttpError,
   type ApiDistillOut,
   type ApiDistillerClassifier,
-  syncConnectorBucket,
   uploadToBucket,
 } from "@/lib/api/client";
 import { getSessionToken } from "@/lib/api/session";
@@ -177,59 +176,3 @@ export async function uploadBucketFileAction(
   }
 }
 
-export type SyncActionResult =
-  | {
-      ok: true;
-      message: string;
-      decision: ApiDistillOut["decision"];
-      runId: string;
-      articleIds: string[];
-    }
-  | { ok: false; message: string; status?: number };
-
-/**
- * Phase 7b — refresh a connector-proxy bucket from its stored
- * ``source_ref``. Kicks the backend ``/sync`` route, then revalidates
- * the page so the Distiller runs + articles cards redraw with the
- * fresh row. Uses a server action (instead of a plain client fetch)
- * so the Ship PAT stays server-side.
- */
-export async function syncConnectorBucketAction(
-  workspaceId: string,
-  slug: string,
-): Promise<SyncActionResult> {
-  try {
-    const token = await getSessionToken();
-    if (!token) {
-      return { ok: false, message: "Not signed in — reload to re-auth." };
-    }
-    const result = await syncConnectorBucket(workspaceId, slug, token);
-    revalidatePath(`/knowledge/${slug}`);
-    return {
-      ok: true,
-      message:
-        result.decision === "skip"
-          ? result.reason || "Already up to date — skipped."
-          : result.decision === "update"
-            ? "Connector article updated."
-            : "Connector article created.",
-      decision: result.decision,
-      runId: result.run.id,
-      articleIds: result.article_ids,
-    };
-  } catch (err) {
-    if (err instanceof ApiHttpError) {
-      const detail =
-        typeof err.detail === "string"
-          ? err.detail
-          : err.detail && typeof err.detail === "object"
-            ? JSON.stringify(err.detail)
-            : err.message;
-      return { ok: false, message: detail, status: err.status };
-    }
-    return {
-      ok: false,
-      message: err instanceof Error ? err.message : String(err),
-    };
-  }
-}

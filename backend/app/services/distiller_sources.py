@@ -1,27 +1,15 @@
-"""Distiller inbound source adapters (Phase 6c).
+"""Distiller inbound source adapters.
 
-Each public function in this module turns some external payload
-(a PR-merged webhook, a multipart upload, a connector-proxy page)
-into a :class:`~backend.app.services.distiller.DistillerInput` and
-calls :func:`~backend.app.services.distiller.run_distiller`. The
-adapters are intentionally thin — they know *where a blob came
-from*, nothing about *what the blob means*. Meaning is the
-classifier's job (stub or LLM) and is the same code path for every
-source.
+Two responsibilities live here now:
 
-Design rules:
-
-- **No side effects outside the distiller contract.** The adapters
-  do not talk to GitHub / Notion / S3; that's the caller's job.
-  This keeps testing cheap (no network fixtures) and keeps the
-  webhook path resilient to transient upstream failures.
-- **Scope-aware bucket resolution.** Every adapter ensures a
-  :class:`KnowledgeBucket` exists for the target scope (workspace,
-  project, repo, user) before invoking the Distiller, so a first
-  write against a repo never 404s.
-- **Best-effort.** All adapters return ``None`` (not raise) on
-  trivial miss conditions (empty body, missing FK) so the caller's
-  outer loop — a webhook, a scheduled job — can keep going.
+- **Bucket resolution** (``ensure_bucket`` / ``ensure_user_memory_bucket``):
+  fetch-or-mint a :class:`KnowledgeBucket` for a given scope so the
+  user-memory + upload paths can address one without a slug collision.
+- **External-static upload adapter** (``ingest_external_static_upload``):
+  turn a multipart upload into a bucket article via the distiller.
+  Connector-proxy and PR-merged ingest were retired alongside Pipeline C
+  / user-driven bucket creation; import-source ingest now flows through
+  the harvester (``Improvement(kind='knowledge_note')``) instead.
 """
 
 from __future__ import annotations
@@ -29,9 +17,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Any
 
-from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -40,7 +26,6 @@ from backend.app.db.models.agent_memory import (
     BucketSource,
     KnowledgeBucket,
 )
-from backend.app.db.models.integrations import WorkspaceRepo
 from backend.app.services.distiller import (
     Classifier,
     DistillerInput,
@@ -97,6 +82,8 @@ async def ensure_bucket(
             raise ValueError("user-scoped bucket requires user_id")
     else:
         raise ValueError(f"unknown scope_kind: {scope_kind!r}")
+
+    from sqlalchemy import select
 
     stmt = select(KnowledgeBucket).where(
         KnowledgeBucket.workspace_id == workspace_id,
@@ -220,174 +207,6 @@ async def ensure_user_memory_bucket(
 
 
 # ---------------------------------------------------------------------------
-# PR-merged adapter
-# ---------------------------------------------------------------------------
-
-
-# Slug the adapter writes to on every merged PR. Stable so the
-# Navigator can retrieve "what merged in repo X?" by slug.
-PR_SUMMARIES_SLUG = "pr-summaries"
-PR_SUMMARIES_NAME = "Merged pull requests"
-
-
-def _format_pr_body(pr: dict[str, Any], *, repo_full_name: str) -> str:
-    """Render the merged PR as a compact markdown blob.
-
-    We intentionally keep the body short-ish (~8k chars) — the
-    classifier + embedding both degrade on huge blobs, and the PR
-    description is usually the signal we want anyway. Longer diff
-    commentary can come later through the review-summary tool.
-    """
-    number = pr.get("number") or 0
-    title = (pr.get("title") or "").strip() or f"PR #{number}"
-    body = (pr.get("body") or "").strip()
-    author = ((pr.get("user") or {}).get("login") or "unknown").strip()
-    merged_by = ((pr.get("merged_by") or {}).get("login") or "").strip()
-    merged_at = (pr.get("merged_at") or "").strip()
-    head_ref = ((pr.get("head") or {}).get("ref") or "").strip()
-    base_ref = ((pr.get("base") or {}).get("ref") or "").strip()
-    html_url = (pr.get("html_url") or "").strip()
-
-    header = [
-        f"# {title}",
-        "",
-        f"- Repo: `{repo_full_name}`",
-        f"- PR: #{number} ({html_url})" if html_url else f"- PR: #{number}",
-        f"- Author: @{author}",
-    ]
-    if merged_by:
-        header.append(f"- Merged by: @{merged_by}")
-    if merged_at:
-        header.append(f"- Merged at: {merged_at}")
-    if head_ref or base_ref:
-        header.append(f"- Branch: `{head_ref}` → `{base_ref}`")
-    header.append("")
-
-    if body:
-        header.append("## Description")
-        header.append("")
-        header.append(body[:6000])
-
-    return "\n".join(header).strip()
-
-
-def _pr_slug(pr: dict[str, Any]) -> str:
-    """Derive a deterministic article slug from the PR.
-
-    Stable across webhook replays — same PR → same slug, so repeated
-    deliveries skip via content_sha instead of creating duplicates.
-    """
-    number = pr.get("number") or 0
-    return f"pr-{int(number)}"
-
-
-async def ingest_pr_merge(
-    session: AsyncSession,
-    *,
-    workspace_id: uuid.UUID,
-    repo: WorkspaceRepo,
-    payload: dict[str, Any],
-    actor_user_id: uuid.UUID | None = None,
-    classifier: Classifier | None = None,
-) -> DistillerOutcome | None:
-    """Ingest one "PR merged" webhook delivery into knowledge.
-
-    Returns the outcome of :func:`run_distiller`, or ``None`` if
-    the payload doesn't describe a merged PR (we're tolerant of
-    replays + unrelated actions).
-    """
-    logger.debug(
-        "ingest_pr_merge: skipping repo-scoped PR knowledge for workspace_id=%s",
-        workspace_id,
-    )
-    return None
-
-    pr = payload.get("pull_request") or {}
-    if not pr:
-        return None
-    if not pr.get("merged"):
-        return None
-
-    # Skip Ship's own install PRs — they carry no knowledge the
-    # user wants in their bucket.
-    head_ref = ((pr.get("head") or {}).get("ref") or "").strip()
-    if head_ref.startswith("ship/install-"):
-        logger.debug("ingest_pr_merge: skipping install PR %s", head_ref)
-        return None
-
-    # Belt-and-braces: the repo row came from
-    # ``_resolve_workspace_repo`` in the webhook handler, so ``.id``
-    # should always be set; but we've hit a production case where the
-    # downstream ``ensure_bucket`` flush failed with the CHECK
-    # constraint fingerprinting a NULL ``repo_id``. Bail out loudly
-    # here instead of handing the adapter a blank carrier and letting
-    # Postgres tell us about it with a less actionable trace.
-    if not getattr(repo, "id", None) or not getattr(repo, "workspace_id", None):
-        logger.error(
-            "ingest_pr_merge: repo row missing identity "
-            "(repo.id=%s workspace_id=%s full_name=%s pr_number=%s) — skipping",
-            getattr(repo, "id", None),
-            getattr(repo, "workspace_id", None),
-            getattr(repo, "full_name", None),
-            pr.get("number"),
-        )
-        return None
-
-    bucket = await ensure_bucket(
-        session,
-        workspace_id=workspace_id,
-        slug=PR_SUMMARIES_SLUG,
-        name=f"{repo.full_name} — {PR_SUMMARIES_NAME}",
-        scope_kind=BucketScope.REPO,
-        source_kind=BucketSource.EXTERNAL_STATIC,
-        repo_id=repo.id,
-        description=(
-            "Auto-populated from merged pull requests. One article per "
-            "PR (slug `pr-<number>`); provenance carries the PR URL, "
-            "author, branch, and merged-at timestamp."
-        ),
-    )
-
-    body_md = _format_pr_body(pr, repo_full_name=repo.full_name)
-    slug = _pr_slug(pr)
-    title_hint = (pr.get("title") or "").strip()[:512] or None
-
-    provenance = {
-        "kind": "pr_merged",
-        "repo_full_name": repo.full_name,
-        "repo_id": str(repo.id),
-        "pr_number": int(pr.get("number") or 0),
-        "pr_id": pr.get("id"),
-        "html_url": pr.get("html_url"),
-        "author": ((pr.get("user") or {}).get("login")),
-        "merged_at": pr.get("merged_at"),
-        "head_ref": head_ref or None,
-        "base_ref": ((pr.get("base") or {}).get("ref") or None),
-    }
-
-    outcome = await run_distiller(
-        session,
-        workspace_id=workspace_id,
-        bucket=bucket,
-        actor_user_id=actor_user_id,
-        inp=DistillerInput(
-            body_md=body_md,
-            source_kind=BucketSource.EXTERNAL_STATIC,
-            title_hint=title_hint,
-            slug_hint=slug,
-            provenance=provenance,
-            input_ref={
-                "webhook_event": "pull_request",
-                "action": payload.get("action"),
-                "delivery": (payload.get("delivery") or None),
-            },
-        ),
-        classifier=classifier,
-    )
-    return outcome
-
-
-# ---------------------------------------------------------------------------
 # External-static upload adapter
 # ---------------------------------------------------------------------------
 
@@ -444,65 +263,8 @@ async def ingest_external_static_upload(
     )
 
 
-# ---------------------------------------------------------------------------
-# Connector-proxy adapter (placeholder)
-# ---------------------------------------------------------------------------
-
-
-async def ingest_connector_page(
-    session: AsyncSession,
-    *,
-    workspace_id: uuid.UUID,
-    bucket: KnowledgeBucket,
-    actor_user_id: uuid.UUID | None,
-    connector_kind: str,
-    page_ref: dict[str, Any],
-    body_md: str,
-    classifier: Classifier | None = None,
-) -> DistillerOutcome:
-    """Adapter stub for connector-proxy sources.
-
-    Kept in the module so the shape is documented and call sites
-    can import a real symbol. The actual connector fetch layer
-    (Notion/Linear/Confluence) will live in ``backend/app/services/
-    connectors/*`` in a later phase; this function only handles
-    the Distiller call once the caller has produced a markdown
-    rendering of the page.
-    """
-    slug_hint = str(page_ref.get("slug") or page_ref.get("id") or "page")
-    title_hint = str(page_ref.get("title") or slug_hint)[:512]
-
-    provenance = {
-        "kind": "connector_proxy",
-        "connector_kind": connector_kind,
-        **page_ref,
-    }
-
-    return await run_distiller(
-        session,
-        workspace_id=workspace_id,
-        bucket=bucket,
-        actor_user_id=actor_user_id,
-        inp=DistillerInput(
-            body_md=body_md,
-            source_kind=BucketSource.CONNECTOR_PROXY,
-            title_hint=title_hint,
-            slug_hint=slug_hint,
-            provenance=provenance,
-            input_ref={
-                "source": "connector_proxy",
-                "connector_kind": connector_kind,
-            },
-        ),
-        classifier=classifier,
-    )
-
-
 __all__ = [
-    "PR_SUMMARIES_NAME",
-    "PR_SUMMARIES_SLUG",
     "ensure_bucket",
-    "ingest_connector_page",
+    "ensure_user_memory_bucket",
     "ingest_external_static_upload",
-    "ingest_pr_merge",
 ]
