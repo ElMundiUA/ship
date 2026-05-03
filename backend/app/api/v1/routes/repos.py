@@ -2728,7 +2728,6 @@ def _validate_process_config(process: dict[str, Any]) -> None:
             )
 
     _validate_process_schedule(process.get("schedule"))
-    _validate_tracker_mapping(process.get("tracker_mapping"), states)
     _validate_process_routines(process.get("routines"))
 
 
@@ -2954,75 +2953,6 @@ def _validate_process_schedule(value: Any) -> None:
                     "message": (
                         f"{field} contains the same specialist more than once; "
                         "split duplicate capacity into a different slot"
-                    ),
-                },
-            )
-
-
-def _validate_tracker_mapping(value: Any, states: list[Any]) -> None:
-    if value is None:
-        return
-    if not isinstance(value, dict):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                "code": "invalid_process",
-                "message": "process.tracker_mapping must be a tracker-keyed map",
-            },
-        )
-    required_states: set[str] = set()
-    for state in states:
-        if not isinstance(state, dict):
-            continue
-        contract = state.get("ticket_contract")
-        if not isinstance(contract, dict):
-            continue
-        for key in (
-            "input_state",
-            "claim_state",
-            "success_state",
-            "blocked_state",
-            "needs_info_state",
-            "approval_state",
-        ):
-            mapped = contract.get(key)
-            if isinstance(mapped, str) and mapped.strip():
-                required_states.add(mapped)
-    for tracker, mapping in value.items():
-        if not isinstance(mapping, dict):
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail={
-                    "code": "invalid_process",
-                    "message": f"process.tracker_mapping.{tracker} must be an object",
-                },
-            )
-        for canonical, native in mapping.items():
-            if not isinstance(canonical, str) or not canonical.strip() or not isinstance(native, str) or not native.strip():
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail={
-                        "code": "invalid_process",
-                        "message": f"process.tracker_mapping.{tracker} must map non-empty strings",
-                    },
-                )
-    if required_states:
-        covered = set().union(
-            *[
-                set(mapping.keys())
-                for mapping in value.values()
-                if isinstance(mapping, dict)
-            ],
-        )
-        missing = sorted(required_states - covered)
-        if missing:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail={
-                    "code": "invalid_process",
-                    "message": (
-                        "process.tracker_mapping is missing canonical states: "
-                        + ", ".join(missing)
                     ),
                 },
             )

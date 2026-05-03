@@ -16,7 +16,6 @@ import { ProcessValidationPanel } from "./process-validation-panel";
 import { validateProcess } from "./process-validation";
 import { BASE_SPECIALIST_CATALOG } from "./specialist-catalog";
 import { StateEditor, type SpecialistOption } from "./state-editor";
-import { TrackerSyncBanner } from "./tracker-sync-banner";
 
 export function ProcessEditorWorkspace({
   workspaceId,
@@ -25,7 +24,6 @@ export function ProcessEditorWorkspace({
   repoId,
   config,
   tabs,
-  trackerKind,
 }: {
   workspaceId: string;
   process: ApiProcess;
@@ -33,9 +31,6 @@ export function ProcessEditorWorkspace({
   repoId?: string;
   config: ApiRepoConfig | null;
   tabs?: ReactNode;
-  /** Workspace's bound tracker kind. Gates the tracker-sync banner —
-   *  the rest of the editor doesn't read it. */
-  trackerKind?: string;
 }) {
   const [states, setStates] = useState(process.states);
   const [transitions, setTransitions] = useState(process.transitions);
@@ -64,7 +59,6 @@ export function ProcessEditorWorkspace({
       state_count: states.length,
       states,
       transitions,
-      tracker_mapping: process.tracker_mapping,
     }),
     [process, states, transitions],
   );
@@ -435,26 +429,17 @@ export function ProcessEditorWorkspace({
         ) : null}
       </div>
 
-      {/* Validation panel + tracker sync. Tracker projection mapping
-          is no longer surfaced as an editable table: the canonical FSM
-          is the source of truth, adapters bake sane defaults, and the
-          ``TrackerSyncBanner`` triggers a server-side probe → LLM
-          resolve → PR flow when the bound tracker has a custom
-          workflow. The banner self-hides when there's no repo or no
-          supported tracker, so it never adds noise. */}
-      <div className="space-y-3 border-t border-white/10 bg-black/20 p-4">
+      {/* Validation panel — gates Publish. Tracker projection mapping
+          deliberately doesn't live here: it's an adapter-internal
+          concern (provisioner writes ``Integration.config.canonical_to_native``
+          at OAuth time). Operators don't edit canonical→native names. */}
+      <div className="border-t border-white/10 bg-black/20 p-4">
         <ProcessValidationPanel
           result={validation}
           onJumpToStage={(stageId) => selectStateId(stageId)}
           onJumpToTransition={(transitionId) =>
             selectTransitionId(transitionId)
           }
-        />
-        <TrackerSyncBanner
-          workspaceId={workspaceId}
-          processId={process.id}
-          repoId={repoId}
-          trackerKind={trackerKind}
         />
       </div>
     </section>

@@ -130,9 +130,6 @@ export function processFromRepoConfig(
     transitions: transitionsFromConfig,
     routines,
     schedule: scheduleFromConfig(rawProcess.schedule) ?? fallback.schedule ?? null,
-    tracker_mapping:
-      recordOfRecordsFromConfig(rawProcess.tracker_mapping) ??
-      fallback.tracker_mapping,
   };
 }
 
@@ -169,7 +166,6 @@ export function processConfigFromApiProcess(process: ApiProcess): Record<string,
       ...(transition.requires_human ? { requires_human: true } : {}),
     })),
     ...(process.schedule ? { schedule: process.schedule } : {}),
-    ...(process.tracker_mapping ? { tracker_mapping: process.tracker_mapping } : {}),
     process_schema_version: 1,
     routines: Object.fromEntries(process.routines.map((routine) => {
       const row: Record<string, unknown> = {
@@ -317,24 +313,6 @@ function scheduleFromConfig(value: unknown): ApiProcess["schedule"] | null {
     time_zone: stringValue(row.time_zone) ?? "UTC",
     slots,
   };
-}
-
-function recordOfRecordsFromConfig(
-  value: unknown,
-): Record<string, Record<string, string>> | undefined {
-  const outer = asRecord(value);
-  if (!outer) return undefined;
-  const result: Record<string, Record<string, string>> = {};
-  for (const [key, nested] of Object.entries(outer)) {
-    const row = asRecord(nested);
-    if (!row) continue;
-    result[key] = Object.fromEntries(
-      Object.entries(row).filter(
-        (entry): entry is [string, string] => typeof entry[1] === "string",
-      ),
-    );
-  }
-  return Object.keys(result).length ? result : undefined;
 }
 
 function layoutFromConfig(value: unknown): ApiProcessState["layout"] | null {

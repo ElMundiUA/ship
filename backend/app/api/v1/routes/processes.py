@@ -389,7 +389,11 @@ class ProcessOut(ProcessSummaryOut):
     tasks: list[ProcessTaskOut] = Field(default_factory=list)
     routines: list[ProcessRoutineOut] = Field(default_factory=list)
     schedule: ProcessScheduleOut | None = None
-    tracker_mapping: dict[str, dict[str, str]] = Field(default_factory=dict)
+    # canonical → native tracker state mapping no longer surfaces in the
+    # process API. The runtime resolves it via the bound integration
+    # (``Integration.config.canonical_to_native``, populated by the
+    # OAuth provisioner). Adapter migration / process modification
+    # don't require operator-edited YAML mapping anymore.
     process_graph: ProcessGraphOut = Field(default_factory=ProcessGraphOut)
     adapter_diagnostics: list[ProcessAdapterDiagnosticOut] = Field(default_factory=list)
 
@@ -1116,7 +1120,6 @@ async def _build_development_process(
         tasks=scoped_tasks,
         routines=routines,
         schedule=_default_schedule(scoped_states),
-        tracker_mapping=_default_tracker_mapping(scoped_states),
         process_graph=_inner_process_graph(process_id, scoped_states, scoped_transitions),
         adapter_diagnostics=adapter_diagnostics,
     )
@@ -1199,7 +1202,7 @@ def _workspace_process_graph(summaries: list[ProcessSummaryOut]) -> ProcessGraph
                 type="handoff",
                 label="Development process",
                 conditions=[ProcessConditionOut(expression="workspace.process == 'development'")],
-                io_contract={"passes": ["workspace_policies", "tracker_mapping"]},
+                io_contract={"passes": ["workspace_policies", "canonical_state"]},
             ),
         ],
     )
@@ -1398,80 +1401,6 @@ def _default_schedule(states: list[ProcessStateOut]) -> ProcessScheduleOut:
         time_zone="UTC",
         slots=[],
     )
-
-
-# Canonical state → native tracker projection. Seven entries each.
-# Baked into the adapter so a fresh attach lights up with zero clicks;
-# the operator only edits a row when their team has customised workflow
-# states (Linear team renamed "In Progress" to "Doing", Jira admin
-# added an "In Review" status that didn't exist before, …).
-#
-# overlay states (awaiting_input, blocked) project to a pseudo-column
-# with an explicit overlay marker — these don't move the ticket between
-# columns; the adapter sets a label and the ticket stays put. The
-# magic value ``__overlay__`` tells the FE renderer to show "stays in
-# current column + label" rather than a column name.
-_OVERLAY = "__overlay__"
-
-_CANONICAL_TO_LINEAR: dict[str, str] = {
-    "backlog": "Backlog",
-    "planning": "Todo",
-    "executing": "In Progress",
-    "reviewing": "In Review",
-    "awaiting_input": _OVERLAY,
-    "blocked": "Blocked",
-    "closed": "Done",
-}
-_CANONICAL_TO_JIRA: dict[str, str] = {
-    "backlog": "To Do",
-    "planning": "To Do",  # Jira default — distinguished from backlog by stage:* labels
-    "executing": "In Progress",
-    "reviewing": "In Review",  # falls back to In Progress + label if status missing
-    "awaiting_input": _OVERLAY,
-    "blocked": "Blocked",
-    "closed": "Done",
-}
-_CANONICAL_TO_GITHUB: dict[str, str] = {
-    # GitHub Issues only has open/closed; canonical state lives in a
-    # ``state:<canonical>`` label that the provisioner creates on attach.
-    "backlog": "open",
-    "planning": "open",
-    "executing": "open",
-    "reviewing": "open",
-    "awaiting_input": _OVERLAY,
-    "blocked": "open",
-    "closed": "closed",
-}
-_CANONICAL_TO_NOTION: dict[str, str] = {
-    "backlog": "Not started",
-    "planning": "Not started",
-    "executing": "In progress",
-    "reviewing": "In progress",
-    "awaiting_input": _OVERLAY,
-    "blocked": "Blocked",
-    "closed": "Done",
-}
-
-
-def _default_tracker_mapping(
-    states: list[ProcessStateOut],
-) -> dict[str, dict[str, str]]:
-    """Return per-tracker projections of the seven canonical states.
-
-    Result is keyed by tracker kind (``linear``/``jira``/``github``/
-    ``notion``/``ship``). Each value is a 7-entry mapping from canonical
-    state to native column / label / overlay marker. ``states`` is
-    accepted for API symmetry but ignored — the canonical projection is
-    workspace-wide, not stage-specific (any custom stage the operator
-    adds inherits its bucket's projection automatically).
-    """
-    return {
-        "linear": dict(_CANONICAL_TO_LINEAR),
-        "jira": dict(_CANONICAL_TO_JIRA),
-        "github": dict(_CANONICAL_TO_GITHUB),
-        "notion": dict(_CANONICAL_TO_NOTION),
-        "ship": {s: s.replace("_", " ").title() for s in CANONICAL_STATES},
-    }
 
 
 def _runtime_by_state(

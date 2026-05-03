@@ -67,11 +67,5 @@ function summarizeProcessChanges(
   if (JSON.stringify(initial.routines) !== JSON.stringify(draft.routines)) {
     changes.add("Standalone routines changed");
   }
-  if (
-    JSON.stringify(initial.tracker_mapping ?? null) !==
-    JSON.stringify(draft.tracker_mapping ?? null)
-  ) {
-    changes.add("Tracker state mapping changed");
-  }
   return Array.from(changes);
 }
