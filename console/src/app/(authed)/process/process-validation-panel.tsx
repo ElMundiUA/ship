@@ -3,15 +3,14 @@
 import type { ValidationItem, ValidationResult } from "./process-validation";
 
 /**
- * Compact validation summary that lives under the Flow canvas. When
- * the result is clean (no errors, no warnings) the panel renders a
- * single green pill so the operator gets positive feedback that the
- * draft is good to publish; otherwise it lists each item with its
- * severity dot, message, and (when relevant) an anchor hint.
+ * Compact validation pill that lives sticky at the bottom-right of
+ * the Flow canvas. Renders a quiet ``X errors · Y warnings`` summary
+ * with an expandable list — clicking a row jumps the editor to the
+ * offending stage or transition. Hidden entirely on a clean draft so
+ * the canvas stays quiet when there's nothing to do.
  *
- * The Publish button gates on ``errors.length === 0`` — the parent
- * editor passes the result here AND consults its `errors` array
- * directly to decide whether to disable the submit.
+ * The Publish button gates on ``errors.length === 0`` directly from
+ * the parent editor, not via the panel.
  */
 export function ProcessValidationPanel({
   result,
@@ -23,42 +22,28 @@ export function ProcessValidationPanel({
   onJumpToTransition?: (transitionId: string) => void;
 }) {
   const { errors, warnings } = result;
-  const isClean = errors.length === 0 && warnings.length === 0;
-
-  if (isClean) {
-    return (
-      <div className="flex items-center gap-2 rounded-xl border border-emerald-400/30 bg-emerald-400/[0.05] px-3 py-2 text-xs">
-        <span className="h-2 w-2 rounded-full bg-emerald-400" aria-hidden />
-        <span className="font-semibold text-emerald-300">Process is valid</span>
-        <span className="text-emerald-300/60">
-          — every stage is reachable, every path terminates, all states are
-          canonical.
-        </span>
-      </div>
-    );
-  }
+  if (errors.length === 0 && warnings.length === 0) return null;
 
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-3">
-      <div className="flex items-center justify-between gap-2">
-        <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-white/55">
-          Validation
-        </div>
-        <div className="flex items-center gap-2 text-[11px] font-semibold">
+    <details className="group max-w-md rounded-lg bg-ink/95 backdrop-blur ring-1 ring-white/10 transition open:bg-ink">
+      <summary className="cursor-pointer select-none list-none px-3 py-2 text-[11px] font-semibold">
+        <span className="inline-flex items-center gap-3">
           {errors.length > 0 && (
-            <span className="rounded-full border border-coral/30 bg-coral/[0.08] px-2 py-0.5 text-coral">
+            <span className="text-coral">
               {errors.length} error{errors.length === 1 ? "" : "s"}
             </span>
           )}
           {warnings.length > 0 && (
-            <span className="rounded-full border border-amber-300/30 bg-amber-300/[0.08] px-2 py-0.5 text-amber-200">
+            <span className="text-sun">
               {warnings.length} warning{warnings.length === 1 ? "" : "s"}
             </span>
           )}
-        </div>
-      </div>
-
-      <ul className="mt-3 space-y-1.5">
+          <span className="text-white/40 transition group-open:rotate-90">
+            ›
+          </span>
+        </span>
+      </summary>
+      <ul className="space-y-1 px-3 pb-3">
         {errors.map((item) => (
           <ValidationRow
             key={`err-${item.code}-${item.anchor?.id ?? ""}`}
@@ -76,14 +61,7 @@ export function ProcessValidationPanel({
           />
         ))}
       </ul>
-
-      {errors.length > 0 && (
-        <p className="mt-3 text-[11px] italic text-white/45">
-          Publish is disabled until every error is resolved. Warnings are
-          informational — the editor will still let you save.
-        </p>
-      )}
-    </div>
+    </details>
   );
 }
 
@@ -98,22 +76,22 @@ function ValidationRow({
 }) {
   const isError = item.kind === "error";
   return (
-    <li
-      className={[
-        "flex items-start gap-2.5 rounded-lg border px-3 py-2 text-xs",
-        isError
-          ? "border-coral/25 bg-coral/[0.04] text-coral/95"
-          : "border-amber-300/25 bg-amber-300/[0.04] text-amber-100/90",
-      ].join(" ")}
-    >
+    <li className="flex items-start gap-2 py-1 text-[11px] leading-snug">
+      <span
+        aria-hidden
+        className={[
+          "mt-1 h-1.5 w-1.5 shrink-0 rounded-full",
+          isError ? "bg-coral" : "bg-sun",
+        ].join(" ")}
+      />
       <span
         className={[
-          "mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full",
-          isError ? "bg-coral" : "bg-amber-300",
+          "min-w-0 flex-1",
+          isError ? "text-coral/90" : "text-sun/90",
         ].join(" ")}
-        aria-hidden
-      />
-      <span className="min-w-0 flex-1 leading-snug">{item.message}</span>
+      >
+        {item.message}
+      </span>
       {item.anchor && (item.anchor.kind === "stage"
         ? onJumpToStage
         : onJumpToTransition) ? (
@@ -129,10 +107,10 @@ function ValidationRow({
             }
           }}
           className={[
-            "shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-widest transition",
+            "shrink-0 text-[10px] font-bold uppercase tracking-widest transition",
             isError
-              ? "border-coral/30 text-coral hover:bg-coral/[0.1]"
-              : "border-amber-300/30 text-amber-200 hover:bg-amber-300/[0.1]",
+              ? "text-coral hover:text-white"
+              : "text-sun hover:text-white",
           ].join(" ")}
         >
           Jump

@@ -334,114 +334,117 @@ export function ProcessEditorWorkspace({
   }
 
   return (
-    <section className="min-h-[calc(100vh-180px)] overflow-hidden rounded-[2rem] border border-aqua/15 bg-[radial-gradient(circle_at_top_left,rgba(99,245,255,0.10),transparent_30%),linear-gradient(135deg,rgba(255,255,255,0.07),rgba(255,255,255,0.025))] shadow-2xl shadow-black/40 backdrop-blur-xl">
-      <div className="border-b border-white/10 px-4 py-2">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex min-w-0 flex-1 items-center gap-2">
-            {tabs}
-            {dirty && (
-              <span
-                className="shrink-0 truncate text-[11px] text-white/45"
-                title={draftSummary}
-              >
-                · {draftSummary}
-              </span>
-            )}
-          </div>
-          <form
-            action="/api/process/config-propose"
-            method="post"
-            className="flex shrink-0 flex-wrap items-center gap-1.5"
-          >
-            <ProcessConfigProposalFields
-              workspaceId={workspaceId}
-              repoId={repoId}
-              config={config}
-              processConfig={processConfig}
-              changeSummary={changeSummary}
-            />
-            <button
-              type="button"
-              disabled={!dirty}
-              onClick={resetDraft}
-              className="rounded-full border border-white/10 bg-black/25 px-3 py-1 text-[11px] font-bold text-white/65 transition hover:border-white/20 hover:text-white disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/[0.03] disabled:text-white/30"
+    <section className="relative space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.06] pb-3">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-3">
+          {tabs}
+          {dirty && (
+            <span
+              className="shrink-0 truncate text-[11px] text-white/45"
+              title={draftSummary}
             >
-              Discard
-            </button>
-            <button
-              type="submit"
-              disabled={!repoId || !dirty || hasErrors}
-              title={
-                hasErrors
-                  ? `Fix ${validation.errors.length} validation error${validation.errors.length === 1 ? "" : "s"} below before publishing.`
-                  : undefined
-              }
-              className="rounded-full border border-aqua/35 bg-aqua/15 px-3 py-1 text-[11px] font-bold text-aqua shadow-lg shadow-aqua/5 transition hover:bg-aqua/20 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/[0.05] disabled:text-white/35"
-            >
-              Publish
-            </button>
-          </form>
+              · {draftSummary}
+            </span>
+          )}
         </div>
-        <ProcessReviewSummary
-          initial={process}
-          draft={processDraft}
-          changedAreas={dirty ? ["Flow reviewed"] : []}
-        />
-      </div>
-
-      {/* Canvas + optional inspector. When no stage is selected the
-          inspector unmounts entirely so the canvas takes the whole
-          width — operators don't sit looking at an empty side panel. */}
-      <div
-        className={[
-          "grid min-h-0 grid-cols-1",
-          activeStateId ? "xl:grid-cols-[minmax(0,1fr)_320px]" : "",
-        ].join(" ")}
-      >
-        <ProcessCanvasEditor
-          process={processDraft}
-          selectedStateId={activeStateId}
-          selectedTransitionId={selectedTransitionId}
-          onSelectState={selectStateId}
-          onSelectTransition={selectTransitionId}
-          onAddState={() => addState()}
-          onAddStageInLane={addStageInLane}
-          onPositionsChange={updatePositions}
-          onStageStateChange={updateStageState}
-          onReorderStages={reorderStages}
-          onClearSelection={clearSelection}
-        />
-        {activeStateId && selectedState ? (
-          <StateEditor
-            processId={process.id}
+        <form
+          action="/api/process/config-propose"
+          method="post"
+          className="flex shrink-0 flex-wrap items-center gap-3"
+        >
+          <ProcessConfigProposalFields
+            workspaceId={workspaceId}
             repoId={repoId}
-            state={selectedState}
-            states={states}
-            schedule={processDraft.schedule ?? null}
-            transitions={transitions}
-            specialistOptions={specialistOptions}
             config={config}
-            embedded
-            onStateChange={updateState}
-            onDeleteState={deleteState}
-            onClose={clearSelection}
+            processConfig={processConfig}
+            changeSummary={changeSummary}
           />
-        ) : null}
+          <button
+            type="button"
+            disabled={!dirty}
+            onClick={resetDraft}
+            className="text-[11px] font-semibold uppercase tracking-wide text-white/55 transition hover:text-white disabled:cursor-not-allowed disabled:text-white/25"
+          >
+            Discard
+          </button>
+          <button
+            type="submit"
+            disabled={!repoId || !dirty || hasErrors}
+            title={
+              hasErrors
+                ? `Fix ${validation.errors.length} validation error${validation.errors.length === 1 ? "" : "s"} before publishing.`
+                : undefined
+            }
+            className="text-[11px] font-bold uppercase tracking-wide text-aqua transition hover:text-white disabled:cursor-not-allowed disabled:text-white/25"
+          >
+            Publish →
+          </button>
+        </form>
       </div>
 
-      {/* Validation panel — gates Publish. Tracker projection mapping
-          deliberately doesn't live here: it's an adapter-internal
-          concern (provisioner writes ``Integration.config.canonical_to_native``
-          at OAuth time). Operators don't edit canonical→native names. */}
-      <div className="border-t border-white/10 bg-black/20 p-4">
-        <ProcessValidationPanel
-          result={validation}
-          onJumpToStage={(stageId) => selectStateId(stageId)}
-          onJumpToTransition={(transitionId) =>
-            selectTransitionId(transitionId)
-          }
-        />
+      <ProcessReviewSummary
+        initial={process}
+        draft={processDraft}
+        changedAreas={dirty ? ["Flow reviewed"] : []}
+      />
+
+      {/* Canvas + optional inspector — slide-in sheet on xl, stacked
+          panel below xl. When no stage is selected the inspector
+          unmounts and the canvas takes full width. */}
+      <div className="relative">
+        <div
+          className={[
+            "grid min-h-0 grid-cols-1 transition-all",
+            activeStateId ? "xl:grid-cols-[minmax(0,1fr)_380px] xl:gap-x-8" : "",
+          ].join(" ")}
+        >
+          <ProcessCanvasEditor
+            process={processDraft}
+            selectedStateId={activeStateId}
+            selectedTransitionId={selectedTransitionId}
+            onSelectState={selectStateId}
+            onSelectTransition={selectTransitionId}
+            onAddState={() => addState()}
+            onAddStageInLane={addStageInLane}
+            onPositionsChange={updatePositions}
+            onStageStateChange={updateStageState}
+            onReorderStages={reorderStages}
+            onClearSelection={clearSelection}
+          />
+          {activeStateId && selectedState ? (
+            <aside className="border-l-0 border-t border-white/[0.06] pt-6 xl:border-l xl:border-t-0 xl:pt-0 xl:pl-8">
+              <StateEditor
+                processId={process.id}
+                repoId={repoId}
+                state={selectedState}
+                states={states}
+                schedule={processDraft.schedule ?? null}
+                transitions={transitions}
+                specialistOptions={specialistOptions}
+                config={config}
+                embedded
+                onStateChange={updateState}
+                onDeleteState={deleteState}
+                onClose={clearSelection}
+              />
+            </aside>
+          ) : null}
+        </div>
       </div>
+
+      {/* Validation pill — sticky bottom-right. Hidden when no errors
+          / warnings to keep the canvas quiet on a clean draft. */}
+      {(validation.errors.length > 0 || validation.warnings.length > 0) && (
+        <div className="sticky bottom-4 z-10 flex justify-end pr-2">
+          <ProcessValidationPanel
+            result={validation}
+            onJumpToStage={(stageId) => selectStateId(stageId)}
+            onJumpToTransition={(transitionId) =>
+              selectTransitionId(transitionId)
+            }
+          />
+        </div>
+      )}
     </section>
   );
 }

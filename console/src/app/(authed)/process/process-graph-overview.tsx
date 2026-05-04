@@ -119,8 +119,8 @@ export function ProcessGraphOverview({
 }
 
 function HealthDot({ status }: { status: string }) {
-  let bg = "bg-emerald-400";
-  if (status === "warning" || status === "degraded") bg = "bg-amber-400";
+  let bg = "bg-aqua";
+  if (status === "warning" || status === "degraded") bg = "bg-sun";
   else if (status !== "ok") bg = "bg-coral";
   return (
     <span
