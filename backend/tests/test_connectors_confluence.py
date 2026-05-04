@@ -89,3 +89,80 @@ async def test_confluence_fetcher_requires_secret() -> None:
     )
     with pytest.raises(ConnectorConfigError, match="no API token"):
         await fetch_connector_pages(integration, {"page_id": "12345"})
+
+
+@pytest.mark.asyncio
+async def test_confluence_section_fetches_root_plus_descendants(integration) -> None:
+    """resource_ref={root_page_id} pulls the root + every descendant.
+
+    Each descendant becomes its own ConnectorPage so the ingestion
+    pipeline fingerprints/skips per-page on subsequent syncs.
+    """
+    fetched_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        fetched_paths.append(request.url.path)
+        if request.url.path == "/wiki/api/v2/pages/100":
+            return httpx.Response(
+                200,
+                json={
+                    "id": "100",
+                    "title": "Onboarding handbook",
+                    "spaceId": "S1",
+                    "body": {"storage": {"value": "<p>Welcome.</p>"}},
+                    "_links": {"webui": "/wiki/spaces/ENG/pages/100"},
+                },
+            )
+        if request.url.path == "/wiki/api/v2/pages/100/descendants":
+            return httpx.Response(
+                200,
+                json={
+                    "results": [{"id": "101"}, {"id": "102"}],
+                    "_links": {},
+                },
+            )
+        if request.url.path == "/wiki/api/v2/pages/101":
+            return httpx.Response(
+                200,
+                json={
+                    "id": "101",
+                    "title": "Day 1",
+                    "spaceId": "S1",
+                    "body": {"storage": {"value": "<p>Read this first.</p>"}},
+                    "_links": {"webui": "/wiki/spaces/ENG/pages/101"},
+                },
+            )
+        if request.url.path == "/wiki/api/v2/pages/102":
+            return httpx.Response(
+                200,
+                json={
+                    "id": "102",
+                    "title": "Day 2",
+                    "spaceId": "S1",
+                    "body": {"storage": {"value": "<p>Then this.</p>"}},
+                    "_links": {"webui": "/wiki/spaces/ENG/pages/102"},
+                },
+            )
+        return httpx.Response(404)
+
+    async with _make_client(handler) as client:
+        pages = await fetch_connector_pages(
+            integration,
+            {"root_page_id": "100", "space_id": "S1"},
+            http_client=client,
+        )
+
+    assert [p.title for p in pages] == ["Onboarding handbook", "Day 1", "Day 2"]
+    assert all(p.page_ref["space_id"] == "S1" for p in pages)
+    # Root + descendants list + 2 descendant body fetches = 4 calls.
+    assert "/wiki/api/v2/pages/100" in fetched_paths
+    assert "/wiki/api/v2/pages/100/descendants" in fetched_paths
+    assert fetched_paths.count("/wiki/api/v2/pages/101") == 1
+    assert fetched_paths.count("/wiki/api/v2/pages/102") == 1
+
+
+@pytest.mark.asyncio
+async def test_confluence_unknown_shape_falls_back(integration) -> None:
+    """A ref without page_id or root_page_id is unsupported (silent stub)."""
+    pages = await fetch_connector_pages(integration, {"space_id": "S1"})
+    assert pages == []
