@@ -300,6 +300,30 @@ async def _synthesise_bucket(
             supersedes_id = prev.id
             new_version = (prev.version or 0) + 1
 
+    # Defensive: regardless of LLM verdict, query the actual max
+    # version live in the DB for ``(bucket_id, decision.slug)``. The
+    # LLM occasionally returns ``action='update'`` without a
+    # ``supersedes_slug``, or ``action='new'`` with a slug that
+    # already exists in the bucket — both blow up on the
+    # ``uq_bucket_articles_bucket_slug_version`` unique index when we
+    # blindly insert ``version=1``. Looking up the live max here makes
+    # the insert correct under either LLM mistake.
+    if supersedes_id is None:
+        live_max_stmt = (
+            select(BucketArticle)
+            .where(BucketArticle.bucket_id == bucket.id)
+            .where(BucketArticle.slug == decision.slug)
+            .where(BucketArticle.archived_at.is_(None))
+            .order_by(BucketArticle.version.desc())
+            .limit(1)
+        )
+        live_prev = (
+            await session.execute(live_max_stmt)
+        ).scalar_one_or_none()
+        if live_prev is not None:
+            supersedes_id = live_prev.id
+            new_version = (live_prev.version or 0) + 1
+
     # Embedding: best-effort. Missing key → article still useful.
     embedding = await _maybe_embed(decision.title, decision.body_md)
 
