@@ -1,5 +1,5 @@
 /**
- * Canonical routine catalog — six routines, mirrored against backend
+ * Canonical routine catalog — seven routines, mirrored against backend
  * ``DEFAULT_SEED_LANES`` in ``backend/app/services/lane_recipes.py``.
  *
  * IDs are short verbs that match the backend seed exactly. They are
@@ -61,6 +61,15 @@ export const BUILTIN_ROUTINE_CATALOG: {
       "Scan dependencies and secrets policy; list actionable security follow-ups.",
     defaultCron: "0 6 * * *",
   },
+  {
+    id: "process_review",
+    name: "Process review",
+    description:
+      "Delivery patterns + SDLC suggestions to the inbox (PR previews, CI health, branch hygiene).",
+    prompt:
+      "Look at the last 7-30 days of repo activity; suggest concrete SDLC improvements as inbox items.",
+    defaultCron: "0 16 * * *",
+  },
 ];
 
 /**
@@ -68,26 +77,29 @@ export const BUILTIN_ROUTINE_CATALOG: {
  * clothing in older configs. These never belong in the routines list;
  * the FE filters them so the picker / summary stay clean.
  *
- * Pre-canonical routine ids (daily_security_review / code_map /
- * scan_*) used to be hidden too. They are no longer hidden — the
- * operator should SEE drift from the canonical six so they can clean
- * up DB orphans by hand. Hiding them masks "I have stale pipeline rows
- * from an old seed" which is exactly the kind of mismatch the editor
- * needs to surface, not paper over.
+ * The drift-orphan story changed: the backend projector now sources
+ * routines exclusively from :class:`Lane` rows (kept in lockstep with
+ * ``.ship/config.yml`` by ``lanes_sync``), so legacy ``Pipeline``
+ * orphans never reach the FE in the first place. The "show drift,
+ * clean by hand" design is gone; the page renders what's in the repo
+ * and nothing else.
  */
 export const HIDDEN_ROUTINE_IDS: ReadonlySet<string> = new Set([
   "task_intake",
+  "bug_triage",
   "ba_requirements",
   "tech_arch_plan",
   "qa_arch_plan",
   "dev_implementation",
   "qa_manual",
   "qa_automation",
+  "code_review",
 ]);
 
 /**
- * IDs the FE knows are routines but pre-date the canonical six. Used
- * to paint a "legacy" pill so the operator can spot drift.
+ * IDs the FE knows are routines but pre-date the canonical seven. Used
+ * to paint a "legacy" pill so the operator can spot drift on configs
+ * that haven't been re-seeded to the current canon yet.
  */
 export const CANONICAL_ROUTINE_IDS: ReadonlySet<string> = new Set(
   BUILTIN_ROUTINE_CATALOG.map((entry) => entry.id),

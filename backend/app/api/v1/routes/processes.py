@@ -1323,7 +1323,23 @@ def _placeholder_process_states(
 
 
 def _state_lane_ids(lanes: list[Lane], pipelines: list[Pipeline]) -> list[str]:
-    seen = {row.lane_id for row in lanes} | {row.lane_id for row in pipelines}
+    """Lane ids the canvas + routines columns project.
+
+    Source of truth is :class:`Lane` (the ``routines`` table), which
+    ``lanes_sync`` keeps in lockstep with the repo's
+    ``.ship/config.yml`` — rows for routines that disappear from the
+    config are hard-deleted on next sync. ``Pipeline`` rows are
+    deliberately ignored: they were auto-seeded on first repo
+    activation and never cleaned up, so they leak legacy ids
+    (``code_map``, ``tech_debt``, ``scan_*``, ``self_heal``, …) the
+    operator never declared. Showing them as drift was the old design;
+    the new design is "show what's actually in the repo, period".
+    The ``pipelines`` parameter stays so call sites that need
+    ``Pipeline`` for runtime data (last_run_status, run history) keep
+    working — we just don't pull lane ids from it.
+    """
+    del pipelines  # intentionally ignored; Lane is the source of truth
+    seen = {row.lane_id for row in lanes}
     ordered = list(_PROCESS_STATE_ORDER)
     extras = sorted(seen - set(ordered))
     return ordered + extras
