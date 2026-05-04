@@ -1,18 +1,15 @@
 /**
- * Knowledge bucket detail — articles list + inline viewer.
+ * Knowledge bucket detail — two modes.
  *
- * Stripped down to match the search-first index page (PR #90):
+ * - ``?article=<id>``: article reader. Just the markdown body in a
+ *   centred reading column, with a "← Back to <category>" link at
+ *   the top. No sibling article list, no metadata pills.
+ * - default: category page. Bucket title + description, then the
+ *   bucket's full article list (no inline viewer — clicks go to the
+ *   reader URL).
  *
- * - Breadcrumb header.
- * - Bucket title + one-line description.
- * - Articles table, click-through to inline viewer.
- *
- * Retired in this pass: tab row (Articles / Sources / Distiller runs),
- * "Document" markdown card, legacy ``repo_files`` mirror branch (those
- * buckets are dead post-KB-5), CLI sidebar card, "Source repo" sidebar
- * card, ``LiveBanner`` debug strip, scope/source badges in the header,
- * per-bucket Upload article (direct bucket writes are gone — content
- * flows in via import sources only).
+ * Both modes share the search-first newspaper aesthetic with the
+ * index page: no Card wrappers, no tables, ~720px reading column.
  */
 
 import Link from "next/link";
@@ -22,7 +19,6 @@ import remarkGfm from "remark-gfm";
 
 import { ApiUnavailable } from "@/components/api-unavailable";
 import { PageBody, PageHeader } from "@/components/app-shell";
-import { Badge, Card, CardHeader } from "@/components/ui";
 import {
   type ApiBucket,
   ApiHttpError,
@@ -107,218 +103,231 @@ export default async function KnowledgeBucketDetailPage({
     : query.article;
   const data = await load(id);
   if (data === "notfound") notFound();
-  return data.source === "live" ? (
-    <LiveView data={data} selectedArticleId={selectedArticleId} />
+  if (data.source !== "live") return <UnavailableView data={data} />;
+
+  const selectedArticle = selectedArticleId
+    ? data.articles.find((a) => a.id === selectedArticleId) ??
+      data.articles.find((a) => a.slug === selectedArticleId) ??
+      null
+    : null;
+
+  return selectedArticle ? (
+    <ReaderView bucket={data.bucket} article={selectedArticle} />
   ) : (
-    <UnavailableView data={data} />
+    <CategoryView bucket={data.bucket} articles={data.articles} />
   );
 }
 
 
-function LiveView({
-  data,
-  selectedArticleId,
-}: {
-  data: LiveData;
-  selectedArticleId?: string;
-}) {
-  const { workspace: ws, bucket, articles } = data;
-  const selectedArticle =
-    articles.find((article) => article.id === selectedArticleId) ??
-    articles.find((article) => article.slug === selectedArticleId) ??
-    articles[0] ??
-    null;
+// ---------------------------------------------------------------------------
+// Category page — bucket title + article list
+// ---------------------------------------------------------------------------
 
+
+function CategoryView({
+  bucket,
+  articles,
+}: {
+  bucket: ApiBucket;
+  articles: ApiBucketArticle[];
+}) {
   return (
     <>
       <PageHeader kicker="knowledge" title={bucket.name} />
       <PageBody>
-        <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-white/55">
-          <Link href="/knowledge" className="hover:text-white">
-            Knowledge
-          </Link>
-          <span className="text-white/25">/</span>
-          <span className="font-mono text-white/65">{bucket.slug}</span>
-          <span className="ml-auto text-[11px] text-white/40">
-            {articles.length} article{articles.length === 1 ? "" : "s"} · updated{" "}
-            {relativeTime(bucket.updated_at)}
-          </span>
+        <div className="mx-auto max-w-3xl space-y-8">
+          <div className="space-y-2">
+            <Link
+              href="/knowledge"
+              className="text-xs text-white/55 hover:text-white"
+            >
+              ← Knowledge
+            </Link>
+            <h1 className="font-display text-3xl font-bold text-white">
+              {bucket.name}
+            </h1>
+            {bucket.description && (
+              <p className="text-base leading-relaxed text-white/65">
+                {bucket.description}
+              </p>
+            )}
+            <p className="text-xs text-white/40">
+              {articles.length} article{articles.length === 1 ? "" : "s"}
+            </p>
+          </div>
+
+          <ArticleList articles={articles} bucketSlug={bucket.slug} />
         </div>
-
-        {bucket.description && (
-          <p className="mb-5 max-w-3xl text-sm leading-relaxed text-white/70">
-            {bucket.description}
-          </p>
-        )}
-
-        <ArticlesCard
-          articles={articles}
-          bucketSlug={bucket.slug}
-          selectedArticleId={selectedArticle?.id}
-        />
-        {selectedArticle && <ArticleViewer article={selectedArticle} />}
       </PageBody>
     </>
   );
 }
 
 
-function ArticlesCard({
+function ArticleList({
   articles,
   bucketSlug,
-  selectedArticleId,
 }: {
   articles: ApiBucketArticle[];
   bucketSlug: string;
-  selectedArticleId?: string;
 }) {
   if (articles.length === 0) {
     return (
-      <div className="rounded-2xl border border-white/10 bg-white/[0.02] px-5 py-10 text-center">
-        <p className="text-sm text-white/55">
-          No articles in this bucket yet.
-        </p>
-      </div>
+      <p className="text-sm text-white/55">No articles in this bucket yet.</p>
     );
   }
   return (
-    <Card padded={false} data-testid="bucket-articles">
-      <table className="min-w-full text-sm">
-        <thead className="bg-white/[0.04] text-[10px] uppercase tracking-widest text-white/45">
-          <tr>
-            <th className="px-4 py-2 text-left font-semibold">Title</th>
-            <th className="px-4 py-2 text-left font-semibold">Slug</th>
-            <th className="px-4 py-2 text-left font-semibold">v</th>
-            <th className="px-4 py-2 text-left font-semibold">Status</th>
-            <th className="px-4 py-2 text-left font-semibold">Updated</th>
-          </tr>
-        </thead>
-        <tbody>
-          {articles.map((a) => (
-            <tr
-              key={a.id}
-              className={
-                a.id === selectedArticleId
-                  ? "border-t border-aqua/20 bg-aqua/[0.04]"
-                  : "border-t border-white/5"
-              }
-            >
-              <td className="px-4 py-2.5 align-top">
-                <Link
-                  href={`/knowledge/${encodeURIComponent(bucketSlug)}?article=${encodeURIComponent(a.id)}#article-viewer`}
-                  className="font-semibold text-white hover:text-aqua"
-                >
-                  {a.title}
-                </Link>
-                {provenanceHint(a) && (
-                  <div className="mt-0.5 text-[10px] text-white/45">
-                    {provenanceHint(a)}
-                  </div>
-                )}
-              </td>
-              <td className="px-4 py-2.5 align-top font-mono text-[11px] text-aqua/85">
-                {a.slug}
-              </td>
-              <td className="px-4 py-2.5 align-top text-xs text-white/65">
-                {a.version}
-              </td>
-              <td className="px-4 py-2.5 align-top">
-                <Badge tone={statusTone(a.status)}>{a.status}</Badge>
-              </td>
-              <td className="px-4 py-2.5 align-top text-xs text-white/55">
-                {relativeTime(a.updated_at)}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </Card>
+    <ul className="space-y-6">
+      {articles.map((article) => (
+        <li key={article.id}>
+          <Link
+            href={`/knowledge/${encodeURIComponent(bucketSlug)}?article=${encodeURIComponent(article.id)}`}
+            className="group block"
+          >
+            <div className="text-base font-semibold text-white group-hover:text-aqua">
+              {article.title || article.slug}
+            </div>
+            {firstParagraph(article.body_md) && (
+              <p className="mt-1 line-clamp-2 text-sm leading-relaxed text-white/60">
+                {firstParagraph(article.body_md)}
+              </p>
+            )}
+            <div className="mt-1 flex items-center gap-2 text-[11px] text-white/40">
+              <span>{relativeTime(article.updated_at)}</span>
+              {article.status !== "published" && (
+                <>
+                  <span className="text-white/20">·</span>
+                  <span>{article.status}</span>
+                </>
+              )}
+              {provenanceHint(article) && (
+                <>
+                  <span className="text-white/20">·</span>
+                  <span>{provenanceHint(article)}</span>
+                </>
+              )}
+            </div>
+          </Link>
+        </li>
+      ))}
+    </ul>
   );
 }
 
 
-function ArticleViewer({ article }: { article: ApiBucketArticle }) {
+// ---------------------------------------------------------------------------
+// Article reader — Medium-style
+// ---------------------------------------------------------------------------
+
+
+function ReaderView({
+  bucket,
+  article,
+}: {
+  bucket: ApiBucket;
+  article: ApiBucketArticle;
+}) {
   return (
-    <Card id="article-viewer" data-testid="article-viewer" className="mt-5">
-      <CardHeader
-        title={article.title}
-        subtitle={
-          <span>
-            <span className="font-mono">{article.slug}</span> · v{article.version} ·{" "}
-            {article.status} · updated {relativeTime(article.updated_at)}
-          </span>
-        }
-      />
-      <article className="space-y-4 text-sm leading-relaxed text-white/80">
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          components={{
-            h1: ({ children }) => (
-              <h1 className="font-display text-2xl font-bold text-white">
-                {children}
-              </h1>
-            ),
-            h2: ({ children }) => (
-              <h2 className="font-display text-xl font-bold text-white">
-                {children}
-              </h2>
-            ),
-            h3: ({ children }) => (
-              <h3 className="font-display text-lg font-bold text-white">
-                {children}
-              </h3>
-            ),
-            p: ({ children }) => <p className="text-white/78">{children}</p>,
-            a: ({ children, href }) => (
-              <a
-                href={href}
-                target="_blank"
-                rel="noreferrer"
-                className="text-aqua hover:underline"
-              >
-                {children}
-              </a>
-            ),
-            ul: ({ children }) => (
-              <ul className="list-disc space-y-1 pl-5">{children}</ul>
-            ),
-            ol: ({ children }) => (
-              <ol className="list-decimal space-y-1 pl-5">{children}</ol>
-            ),
-            blockquote: ({ children }) => (
-              <blockquote className="border-l-2 border-aqua/50 pl-4 text-white/65">
-                {children}
-              </blockquote>
-            ),
-            code: ({ children }) => (
-              <code className="rounded bg-white/[0.08] px-1.5 py-0.5 font-mono text-[12px] text-aqua/95">
-                {children}
-              </code>
-            ),
-            pre: ({ children }) => (
-              <pre className="overflow-x-auto rounded-xl border border-white/10 bg-black/35 p-4 text-xs text-white/85">
-                {children}
-              </pre>
-            ),
-          }}
-        >
-          {article.body_md || "_Empty article._"}
-        </ReactMarkdown>
-      </article>
-    </Card>
+    <>
+      <PageHeader kicker="knowledge" title={article.title} />
+      <PageBody>
+        <article className="mx-auto max-w-3xl space-y-6">
+          <div className="space-y-2">
+            <Link
+              href={`/knowledge/${encodeURIComponent(bucket.slug)}`}
+              className="text-xs text-white/55 hover:text-white"
+            >
+              ← {bucket.name}
+            </Link>
+            <h1 className="font-display text-3xl font-bold leading-tight text-white">
+              {article.title}
+            </h1>
+            <p className="text-xs text-white/40">
+              Updated {relativeTime(article.updated_at)}
+              {article.status !== "published" && (
+                <>
+                  <span className="mx-2 text-white/20">·</span>
+                  <span>{article.status}</span>
+                </>
+              )}
+              {provenanceHint(article) && (
+                <>
+                  <span className="mx-2 text-white/20">·</span>
+                  <span>{provenanceHint(article)}</span>
+                </>
+              )}
+            </p>
+          </div>
+
+          <div className="prose-reader space-y-5 text-[15px] leading-[1.75] text-white/80">
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                h1: ({ children }) => (
+                  <h1 className="mt-10 font-display text-2xl font-bold text-white">
+                    {children}
+                  </h1>
+                ),
+                h2: ({ children }) => (
+                  <h2 className="mt-8 font-display text-xl font-bold text-white">
+                    {children}
+                  </h2>
+                ),
+                h3: ({ children }) => (
+                  <h3 className="mt-6 font-display text-lg font-bold text-white">
+                    {children}
+                  </h3>
+                ),
+                p: ({ children }) => (
+                  <p className="text-white/80">{children}</p>
+                ),
+                a: ({ children, href }) => (
+                  <a
+                    href={href}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-aqua underline-offset-4 hover:underline"
+                  >
+                    {children}
+                  </a>
+                ),
+                ul: ({ children }) => (
+                  <ul className="list-disc space-y-2 pl-6">{children}</ul>
+                ),
+                ol: ({ children }) => (
+                  <ol className="list-decimal space-y-2 pl-6">{children}</ol>
+                ),
+                blockquote: ({ children }) => (
+                  <blockquote className="border-l-2 border-aqua/50 pl-5 italic text-white/65">
+                    {children}
+                  </blockquote>
+                ),
+                code: ({ children }) => (
+                  <code className="rounded bg-white/[0.08] px-1.5 py-0.5 font-mono text-[13px] text-aqua/95">
+                    {children}
+                  </code>
+                ),
+                pre: ({ children }) => (
+                  <pre className="overflow-x-auto rounded-lg bg-black/40 p-4 font-mono text-[13px] leading-relaxed text-white/85">
+                    {children}
+                  </pre>
+                ),
+                hr: () => <hr className="border-white/10" />,
+              }}
+            >
+              {article.body_md || "_Empty article._"}
+            </ReactMarkdown>
+          </div>
+        </article>
+      </PageBody>
+    </>
   );
 }
 
 
-function statusTone(
-  status: string,
-): "ok" | "warn" | "info" | "neutral" {
-  if (status === "published") return "ok";
-  if (status === "draft") return "warn";
-  if (status === "archived") return "neutral";
-  if (status === "superseded") return "info";
-  return "neutral";
-}
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 
 function provenanceHint(article: ApiBucketArticle): string | null {
@@ -332,11 +341,6 @@ function provenanceHint(article: ApiBucketArticle): string | null {
       ? `from PR #${num ?? "?"} by @${author ?? "?"}`
       : "from merged PR";
   }
-  if (kind === "external_static_upload") {
-    return typeof p.filename === "string"
-      ? `uploaded: ${p.filename}`
-      : "uploaded file";
-  }
   if (kind === "knowledge_import_source") {
     const source = typeof p.import_source_kind === "string" ? p.import_source_kind : null;
     return source ? `harvested from ${source}` : "harvested from import source";
@@ -348,6 +352,22 @@ function provenanceHint(article: ApiBucketArticle): string | null {
     return `packed from thread ${p.thread_id.slice(0, 8)}…`;
   }
   return null;
+}
+
+
+function firstParagraph(body: string): string {
+  if (!body) return "";
+  const text = body.trim();
+  if (!text) return "";
+  for (const chunk of text.split("\n\n")) {
+    const candidate = chunk.replace(/^#+\s+/, "").trim();
+    if (candidate) {
+      return candidate.length > 200
+        ? candidate.slice(0, 199).trimEnd() + "…"
+        : candidate;
+    }
+  }
+  return text.length > 200 ? text.slice(0, 199).trimEnd() + "…" : text;
 }
 
 

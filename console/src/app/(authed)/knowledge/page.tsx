@@ -91,16 +91,21 @@ async function load(
       })),
     );
 
+    // Per-bucket counts feed the "Browse by area" list; flat
+    // top-N (sorted by updated_at) feeds the "Recent" section.
+    const articleCounts = new Map<string, number>();
+    for (const { bucket, articles } of articlePairs) {
+      articleCounts.set(bucket.slug, articles.length);
+    }
     const buckets: KnowledgeBucketRow[] = rawBuckets.map((bucket) =>
-      toBucketRow(bucket),
+      toBucketRow(bucket, articleCounts.get(bucket.slug) ?? 0),
     );
     const articles: KnowledgeArticleRow[] = articlePairs
       .flatMap(({ bucket, articles }) =>
         articles.map((article) => toArticleRow(article, bucket)),
       )
-      .sort(
-        (a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt),
-      );
+      .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+      .slice(0, 10);
     const sources: KnowledgeSourceRow[] = importSources.map(toSourceRow);
 
     return {
@@ -193,13 +198,14 @@ export default async function KnowledgeIndexPage({
 // ---------------------------------------------------------------------------
 
 
-function toBucketRow(bucket: ApiBucket): KnowledgeBucketRow {
+function toBucketRow(bucket: ApiBucket, articleCount: number): KnowledgeBucketRow {
   return {
     id: bucket.id,
     slug: bucket.slug,
     name: bucket.name,
     description: bucket.description ?? "",
     archived: Boolean(bucket.archived_at),
+    articleCount,
   };
 }
 
