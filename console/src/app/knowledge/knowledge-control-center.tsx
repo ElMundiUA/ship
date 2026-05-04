@@ -157,27 +157,7 @@ export function KnowledgeControlCenter({
   const isSearching = searchHits !== null;
 
   return (
-    <div className="space-y-5">
-      <header className="flex flex-wrap items-center gap-3">
-        <h1 className="font-display text-xl font-bold text-white">Knowledge</h1>
-        <span className="text-xs text-white/45">{workspace.name}</span>
-        <div className="ml-auto flex items-center gap-2">
-          <ExportButton workspace={workspace} />
-          <button
-            type="button"
-            onClick={() => setImportOpen((v) => !v)}
-            className={cn(
-              "rounded-full border px-3 py-1.5 text-xs font-bold transition",
-              importOpen
-                ? "border-aqua/60 bg-aqua/15 text-aqua"
-                : "border-aqua/40 bg-aqua/10 text-aqua hover:bg-aqua/20",
-            )}
-          >
-            {importOpen ? "Close import" : "Import source"}
-          </button>
-        </div>
-      </header>
-
+    <div className="space-y-4">
       <form onSubmit={runSearch}>
         <div className="relative">
           <input
@@ -201,7 +181,7 @@ export function KnowledgeControlCenter({
         </div>
       </form>
 
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <BucketChip
           active={filterSlug === null}
           label="All"
@@ -223,6 +203,21 @@ export function KnowledgeControlCenter({
             }
           />
         ))}
+        <div className="ml-auto flex items-center gap-2">
+          <ExportButton workspace={workspace} />
+          <button
+            type="button"
+            onClick={() => setImportOpen((v) => !v)}
+            className={cn(
+              "rounded-full border px-3 py-1.5 text-xs font-bold transition",
+              importOpen
+                ? "border-aqua/60 bg-aqua/15 text-aqua"
+                : "border-aqua/40 bg-aqua/10 text-aqua hover:bg-aqua/20",
+            )}
+          >
+            {importOpen ? "Close import" : "Import source"}
+          </button>
+        </div>
       </div>
 
       {importOpen && (
