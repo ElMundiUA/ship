@@ -294,10 +294,86 @@ async def test_route_no_fit_when_llm_says_null(
 
 
 @pytest.mark.asyncio
-async def test_route_skips_when_no_embedded_buckets(
+async def test_route_uses_description_when_buckets_are_empty(
     db_session, seed_workspace, monkeypatch
 ):
-    """Workspace with zero embedded articles → notes stay pending."""
+    """Brand-new workspace: bucket exists with a description but zero
+    articles. The router must still surface it to the LLM tiebreaker
+    (using the description), not silently mark every note ``no_fit``.
+
+    Pre-fix: ``_bucket_centroids`` filtered out buckets without
+    embedded articles, so the LLM caller saw ``- (no buckets)`` and
+    every note routed to ``no_fit`` forever. New workspaces never
+    progressed past the ingest step.
+    """
+    _, _, workspace = seed_workspace
+
+    arch = KnowledgeBucket(
+        workspace_id=workspace.id,
+        scope_kind=BucketScope.WORKSPACE,
+        source_kind=BucketSource.EXTERNAL_STATIC,
+        slug="architecture-decisions",
+        name="Architecture Decisions",
+        description="ADRs and architectural choices.",
+    )
+    eng = KnowledgeBucket(
+        workspace_id=workspace.id,
+        scope_kind=BucketScope.WORKSPACE,
+        source_kind=BucketSource.EXTERNAL_STATIC,
+        slug="engineering-standards",
+        name="Engineering Standards",
+        description="Conventions and standards we hold ourselves to.",
+    )
+    db_session.add_all([arch, eng])
+    await db_session.flush()
+
+    note = _make_note(workspace.id, body="proposed: adopt SemVer for the gateway")
+    db_session.add(note)
+    await db_session.flush()
+
+    async def fake_embed(text, settings=None):
+        return _vec(1.0)
+
+    monkeypatch.setattr(
+        "backend.app.services.knowledge_router.embed_text", fake_embed
+    )
+
+    stub = _StubLLMClient(
+        '{"slug": "architecture-decisions", "confidence": 0.8}'
+    )
+    report = await route_pending_notes(
+        db_session, workspace_id=workspace.id, llm_client=stub
+    )
+    assert report.routed_via_llm == 1, report
+    assert report.skipped_no_buckets == 0
+    assert len(stub.calls) == 1
+
+    # Crucial: the LLM saw BOTH buckets in its catalogue, including the
+    # description-only ones — pre-fix it saw none.
+    user_msg = stub.calls[0]["messages"][1].content
+    assert "architecture-decisions" in user_msg
+    assert "engineering-standards" in user_msg
+    assert "ADRs and architectural choices." in user_msg
+
+    refreshed = (
+        await db_session.execute(
+            select(Improvement).where(Improvement.id == note.id)
+        )
+    ).scalar_one()
+    assert refreshed.context["routed_bucket_id"] == str(arch.id)
+    assert refreshed.context["route_source"] == "llm_tiebreaker"
+
+
+@pytest.mark.asyncio
+async def test_route_skips_when_workspace_has_no_buckets_at_all(
+    db_session, seed_workspace, monkeypatch
+):
+    """Workspace with zero buckets total → notes stay pending.
+
+    Distinct from the case above: there's literally nothing to route
+    into, not even description-only buckets. Caller can use the
+    ``skipped_no_buckets`` counter to surface "create a bucket first".
+    """
     _, _, workspace = seed_workspace
     note = _make_note(workspace.id)
     db_session.add(note)
