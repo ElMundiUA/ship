@@ -144,7 +144,7 @@ export function KnowledgeControlCenter({
   const rest = articles.slice(1);
 
   return (
-    <div className="mx-auto max-w-6xl space-y-12">
+    <div className="mx-auto max-w-6xl space-y-12 2xl:max-w-screen-2xl">
       <SearchHeader
         query={query}
         onChange={setQuery}
@@ -170,8 +170,8 @@ export function KnowledgeControlCenter({
       {isSearching ? (
         <SearchResults hits={searchHits ?? []} queriedFor={searchedFor} />
       ) : (
-        <div className="grid grid-cols-1 gap-x-12 gap-y-12 lg:grid-cols-12">
-          <section className="space-y-8 lg:col-span-8">
+        <div className="grid grid-cols-1 gap-x-12 gap-y-12 lg:grid-cols-12 2xl:gap-x-16">
+          <section className="space-y-8 lg:col-span-8 2xl:col-span-7">
             <SectionKicker tone="aqua">Recent</SectionKicker>
             {lede ? (
               <>
@@ -194,13 +194,13 @@ export function KnowledgeControlCenter({
             )}
           </section>
 
-          <aside className="space-y-6 lg:col-span-4 lg:sticky lg:top-24 lg:self-start">
+          <aside className="space-y-6 lg:col-span-4 lg:sticky lg:top-24 lg:self-start 2xl:col-span-3">
             <SectionKicker tone="lilac">Browse by area</SectionKicker>
             <BucketDirectory buckets={liveBuckets} />
           </aside>
 
           {sources.length > 0 && (
-            <section className="space-y-3 lg:col-span-12">
+            <section className="space-y-3 lg:col-span-12 2xl:col-span-2 2xl:sticky 2xl:top-24 2xl:self-start">
               <SectionKicker tone="muted">Sources</SectionKicker>
               <ConnectedSources sources={sources} />
             </section>
