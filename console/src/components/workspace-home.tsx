@@ -65,9 +65,9 @@ export function WorkspaceHome({
     summary.blockers.length + reposNeedingUpdate.length;
 
   return (
-    <div className="mx-auto max-w-6xl">
-      <div className="grid grid-cols-1 gap-x-12 gap-y-10 lg:grid-cols-12">
-        <div className="space-y-10 lg:col-span-8">
+    <div className="mx-auto max-w-6xl 2xl:max-w-screen-2xl">
+      <div className="grid grid-cols-1 gap-x-12 gap-y-10 lg:grid-cols-12 2xl:gap-x-16">
+        <div className="space-y-10 lg:col-span-8 2xl:col-span-7">
           {(reposNeedingUpdate.length > 0 || summary.blockers.length > 0) && (
             <StatusAlerts
               blockers={summary.blockers}
@@ -92,11 +92,22 @@ export function WorkspaceHome({
           />
         </div>
 
-        <aside className="space-y-10 lg:col-span-4 lg:sticky lg:top-20 lg:self-start">
-          <SystemPulse summary={summary} />
-          <RecentActivity summary={summary} />
-          <RepoChannelList repos={repos} workspaceId={workspaceId} />
-        </aside>
+        {/*
+          ``2xl:contents`` dissolves this wrapper at 2xl so the two
+          inner ``<aside>`` elements become direct grid children with
+          their own col-spans. Below 2xl the wrapper acts as a normal
+          col-span-4 sticky right rail with both panels stacked
+          inside.
+        */}
+        <div className="space-y-10 lg:col-span-4 lg:sticky lg:top-20 lg:self-start 2xl:contents">
+          <aside className="space-y-10 2xl:col-span-3 2xl:sticky 2xl:top-20 2xl:self-start">
+            <SystemPulse summary={summary} />
+          </aside>
+          <aside className="space-y-10 2xl:col-span-2 2xl:sticky 2xl:top-20 2xl:self-start">
+            <RecentActivity summary={summary} />
+            <RepoChannelList repos={repos} workspaceId={workspaceId} />
+          </aside>
+        </div>
       </div>
     </div>
   );

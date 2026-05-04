@@ -37,6 +37,9 @@ import {
 } from "@/lib/api/session-cache.server";
 import type { ApiBucketArticle } from "@/lib/api/types";
 import { relativeTime } from "@/lib/format";
+import { headingIdFromChildren, parseToc } from "@/lib/article-toc";
+
+import { ArticleToc } from "../article-toc";
 
 export const dynamic = "force-dynamic";
 
@@ -160,7 +163,7 @@ function CategoryView({
     <>
       <PageHeader kicker="knowledge" title={bucket.name} />
       <PageBody>
-        <div className="mx-auto max-w-6xl">
+        <div className="mx-auto max-w-6xl xl:max-w-7xl">
           <header className="mb-12 space-y-3">
             <Link
               href="/knowledge"
@@ -183,7 +186,7 @@ function CategoryView({
             </p>
           </header>
 
-          <div className="grid grid-cols-1 gap-x-12 gap-y-12 lg:grid-cols-12">
+          <div className="grid grid-cols-1 gap-x-12 gap-y-12 lg:grid-cols-12 xl:gap-x-16">
             <section className="lg:col-span-8">
               <ArticleList articles={articles} bucketSlug={bucket.slug} />
             </section>
@@ -292,6 +295,7 @@ function ReaderView({
   article: ApiBucketArticle;
 }) {
   const provenance = provenanceHint(article);
+  const tocEntries = parseToc(article.body_md ?? "");
   return (
     <>
       <PageHeader kicker="knowledge" title={article.title} />
@@ -340,17 +344,26 @@ function ReaderView({
                   remarkPlugins={[remarkGfm]}
                   components={{
                     h1: ({ children }) => (
-                      <h2 className="mt-12 font-display text-2xl font-bold text-white">
+                      <h2
+                        id={headingIdFromChildren(children)}
+                        className="mt-12 scroll-mt-24 font-display text-2xl font-bold text-white"
+                      >
                         {children}
                       </h2>
                     ),
                     h2: ({ children }) => (
-                      <h2 className="mt-10 font-display text-xl font-bold text-white">
+                      <h2
+                        id={headingIdFromChildren(children)}
+                        className="mt-10 scroll-mt-24 font-display text-xl font-bold text-white"
+                      >
                         {children}
                       </h2>
                     ),
                     h3: ({ children }) => (
-                      <h3 className="mt-8 font-display text-lg font-bold text-white">
+                      <h3
+                        id={headingIdFromChildren(children)}
+                        className="mt-8 scroll-mt-24 font-display text-lg font-bold text-white"
+                      >
                         {children}
                       </h3>
                     ),
@@ -396,10 +409,9 @@ function ReaderView({
               </div>
             </article>
 
-            <aside
-              className="order-3 hidden lg:col-span-3 lg:block"
-              aria-hidden="true"
-            />
+            <aside className="order-3 hidden xl:col-span-3 xl:block xl:sticky xl:top-24 xl:self-start">
+              <ArticleToc entries={tocEntries} />
+            </aside>
           </div>
         </div>
       </PageBody>
