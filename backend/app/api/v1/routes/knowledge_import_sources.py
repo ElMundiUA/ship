@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+import httpx
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,12 +28,16 @@ from backend.app.db.models.agent_memory import (
 from backend.app.db.models.integrations import WorkspaceRepo
 from backend.app.db.models.tenancy import Integration
 from backend.app.db.session import get_session
+from backend.app.security.encryption import safe_decrypt
 from backend.app.services.knowledge_ingestion import (
     KnowledgeIngestionError,
     create_import_source,
     sync_due_import_sources,
     sync_import_source,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter(
@@ -333,4 +339,214 @@ def _run_out(row: KnowledgeIngestionRun) -> IngestionRunOut:
         created_by_user_id=row.created_by_user_id,
         created_at=row.created_at,
         updated_at=row.updated_at,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Connector resource discovery (wizard pickers)
+# ---------------------------------------------------------------------------
+#
+# Until ELS/closed-beta clients had to paste raw {"page_id":"…"} JSON
+# into the wizard. They didn't and got a silently-empty sync. These
+# endpoints back the picker UI: they list the pages/databases the
+# integration's token can actually see, so the wizard can render a
+# searchable checklist instead of a JSON textarea.
+
+NOTION_API_ROOT = "https://api.notion.com/v1"
+NOTION_VERSION = "2025-09-03"
+_NOTION_PAGE_SIZE = 50
+
+
+class NotionResourceItem(BaseModel):
+    id: str
+    type: Literal["page", "database"]
+    title: str
+    parent_path: str | None = None
+    url: str | None = None
+    last_edited_time: str | None = None
+    icon: str | None = None  # emoji shorthand or external icon URL
+
+
+class NotionResourceListOut(BaseModel):
+    items: list[NotionResourceItem]
+    next_cursor: str | None = None
+    has_more: bool = False
+
+
+def _notion_render_title(rich: list[dict[str, Any]] | None) -> str:
+    if not rich:
+        return ""
+    parts: list[str] = []
+    for chunk in rich:
+        text = chunk.get("plain_text") or (chunk.get("text") or {}).get("content") or ""
+        if text:
+            parts.append(text)
+    return "".join(parts).strip()
+
+
+def _notion_extract_title(obj: dict[str, Any]) -> str:
+    if obj.get("object") == "database":
+        rendered = _notion_render_title(obj.get("title"))
+        if rendered:
+            return rendered
+    props = obj.get("properties") or {}
+    for prop in props.values():
+        if (prop or {}).get("type") == "title":
+            rendered = _notion_render_title(prop.get("title"))
+            if rendered:
+                return rendered
+    return "Untitled"
+
+
+def _notion_extract_icon(obj: dict[str, Any]) -> str | None:
+    icon = obj.get("icon")
+    if not isinstance(icon, dict):
+        return None
+    if icon.get("type") == "emoji":
+        return str(icon.get("emoji") or "") or None
+    if icon.get("type") == "external":
+        return str(((icon.get("external") or {}).get("url")) or "") or None
+    if icon.get("type") == "file":
+        return str(((icon.get("file") or {}).get("url")) or "") or None
+    return None
+
+
+def _notion_extract_parent_hint(obj: dict[str, Any]) -> str | None:
+    parent = obj.get("parent") or {}
+    parent_type = parent.get("type")
+    if parent_type == "workspace":
+        return "Workspace"
+    if parent_type == "database_id":
+        return "Database"
+    if parent_type == "page_id":
+        return "Page"
+    if parent_type == "block_id":
+        return "Block"
+    return None
+
+
+async def _notion_search(
+    *, token: str, body: dict[str, Any], workspace_id: uuid.UUID
+) -> dict[str, Any]:
+    """POST to Notion /search with auth + version headers.
+
+    Extracted so tests can monkeypatch this single function (mirrors the
+    seam used by ``notion_oauth.exchange_code_for_token``) instead of
+    fighting ``httpx.MockTransport``.
+    """
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Notion-Version": NOTION_VERSION,
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+            response = await client.post(
+                f"{NOTION_API_ROOT}/search", json=body, headers=headers
+            )
+    except httpx.HTTPError as exc:
+        logger.warning("notion /search transport error for ws=%s: %s", workspace_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="notion API is unreachable — try again",
+        ) from exc
+
+    if response.status_code in (401, 403):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="notion rejected the integration token — reconnect Notion",
+        )
+    if response.status_code >= 400:
+        logger.warning(
+            "notion /search returned HTTP %s for ws=%s: %s",
+            response.status_code,
+            workspace_id,
+            response.text[:200],
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"notion returned HTTP {response.status_code}",
+        )
+
+    return response.json()
+
+
+@router.get("/notion/resources", response_model=NotionResourceListOut)
+async def list_notion_resources(
+    workspace_id: uuid.UUID,
+    integration_id: uuid.UUID = Query(..., description="Notion integration row to query"),
+    q: str = Query("", description="Free-text search query forwarded to Notion"),
+    cursor: str | None = Query(default=None, description="Notion start_cursor for pagination"),
+    type_filter: Literal["page", "database", "any"] = Query(
+        default="page", alias="type", description="Restrict results to pages, databases, or both"
+    ),
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> NotionResourceListOut:
+    """Proxy Notion's /search so the wizard can render a real picker.
+
+    Restricts ``type_filter`` to ``page`` by default because the
+    Notion connector's v1 fetcher (``backend/app/services/connectors/
+    notion.py``) only handles ``{"page_id": ...}`` refs — letting users
+    pick databases would just round-trip into ``ConnectorUnsupported``
+    fallback. ``type=any`` exists for forward compatibility once the
+    fetcher learns databases.
+    """
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+
+    integration = await session.get(Integration, integration_id)
+    if (
+        integration is None
+        or integration.workspace_id != workspace_id
+        or integration.kind != "notion"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="notion integration not found for this workspace",
+        )
+
+    token = safe_decrypt(integration.secret_ciphertext)
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="notion integration has no readable access token — reconnect it",
+        )
+
+    body: dict[str, Any] = {
+        "page_size": _NOTION_PAGE_SIZE,
+        "sort": {"direction": "descending", "timestamp": "last_edited_time"},
+    }
+    if q.strip():
+        body["query"] = q.strip()
+    if type_filter in ("page", "database"):
+        body["filter"] = {"value": type_filter, "property": "object"}
+    if cursor:
+        body["start_cursor"] = cursor
+
+    payload = await _notion_search(token=token, body=body, workspace_id=workspace_id)
+    raw_results = payload.get("results") or []
+    items: list[NotionResourceItem] = []
+    for obj in raw_results:
+        if not isinstance(obj, dict):
+            continue
+        obj_type = obj.get("object")
+        if obj_type not in ("page", "database"):
+            continue
+        items.append(
+            NotionResourceItem(
+                id=str(obj.get("id") or ""),
+                type=obj_type,
+                title=_notion_extract_title(obj),
+                parent_path=_notion_extract_parent_hint(obj),
+                url=str(obj.get("url") or "") or None,
+                last_edited_time=str(obj.get("last_edited_time") or "") or None,
+                icon=_notion_extract_icon(obj),
+            )
+        )
+
+    return NotionResourceListOut(
+        items=items,
+        next_cursor=payload.get("next_cursor"),
+        has_more=bool(payload.get("has_more")),
     )

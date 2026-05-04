@@ -8,6 +8,7 @@ import type { ApiActivatedRepo } from "@/lib/api/client";
 import type { ApiBucketScope, ApiIntegration } from "@/lib/api/types";
 
 import { createImportSourceAction, type ImportSourceResult } from "./actions";
+import { NotionResourcePicker, type NotionPageRef } from "./notion-resource-picker";
 
 type SourceKind = "website" | "notion" | "confluence" | "docs_repo" | "static_upload";
 
@@ -23,15 +24,18 @@ export function KnowledgeImportWizard({
   integrations,
   repos,
   defaultScope,
+  workspaceId,
 }: {
   integrations: ApiIntegration[];
   repos: ApiActivatedRepo[];
   defaultScope: ApiBucketScope;
+  workspaceId?: string;
 }) {
   const [kind, setKind] = useState<SourceKind>("website");
   const [name, setName] = useState("Website knowledge");
   const [url, setUrl] = useState("");
-  const [resourceRefs, setResourceRefs] = useState("[]");
+  const [notionRefs, setNotionRefs] = useState<NotionPageRef[]>([]);
+  const [confluenceRefs, setConfluenceRefs] = useState("[]");
   const [repoId, setRepoId] = useState(repos[0]?.id ?? "");
   const [repoPaths, setRepoPaths] = useState("docs\nREADME.md");
   const [uploadTitle, setUploadTitle] = useState("");
@@ -75,14 +79,32 @@ export function KnowledgeImportWizard({
       if (!url.trim()) return { ok: false, message: "Website URL is required." };
       return { ok: true, config: { url: url.trim(), limit: 25, change_tracking: true, only_main_content: true } };
     }
-    if (kind === "notion" || kind === "confluence") {
-      if (!selectedIntegrationId) return { ok: false, message: `Connect ${kind} first in integrations.` };
+    if (kind === "notion") {
+      if (!selectedIntegrationId) return { ok: false, message: "Connect Notion first in integrations." };
+      if (notionRefs.length === 0) {
+        return { ok: false, message: "Pick at least one Notion page from the list." };
+      }
+      return { ok: true, config: { resource_refs: notionRefs } };
+    }
+    if (kind === "confluence") {
+      if (!selectedIntegrationId) return { ok: false, message: "Connect Confluence first in integrations." };
+      let parsed: unknown;
       try {
-        const parsed = JSON.parse(resourceRefs || "[]") as unknown;
-        return { ok: true, config: { resource_refs: Array.isArray(parsed) ? parsed : [parsed] } };
+        parsed = JSON.parse(confluenceRefs || "[]");
       } catch {
         return { ok: false, message: "Resource refs must be valid JSON." };
       }
+      const refs = Array.isArray(parsed) ? parsed : [parsed];
+      const meaningful = refs.filter(
+        (ref) => ref && typeof ref === "object" && Object.keys(ref as object).length > 0,
+      );
+      if (meaningful.length === 0) {
+        return {
+          ok: false,
+          message: 'Add at least one Confluence page ref — e.g. {"page_id":"..."}.',
+        };
+      }
+      return { ok: true, config: { resource_refs: meaningful } };
     }
     if (kind === "docs_repo") {
       if (!repoId) return { ok: false, message: "Pick a repository." };
@@ -145,15 +167,40 @@ export function KnowledgeImportWizard({
               <input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://docs.example.com" className="w-full rounded border border-white/15 bg-black/30 px-3 py-2 text-sm text-white/90" />
             </Field>
           )}
-          {(kind === "notion" || kind === "confluence") && (
+          {kind === "notion" && (
             <>
-              <Field label={`${kind} integration`}>
+              <Field label="Notion integration">
                 <select value={selectedIntegrationId} onChange={(event) => setIntegrationId(event.target.value)} className="w-full rounded border border-white/15 bg-black/30 px-3 py-2 text-sm text-white/90">
                   {matchingIntegrations.length === 0 ? <option value="">No integration connected</option> : matchingIntegrations.map((integration) => <option key={integration.id} value={integration.id}>{integration.kind} - {integration.status}</option>)}
                 </select>
               </Field>
-              <Field label="Resource refs JSON" hint='Examples: [{"page_id":"..."}] or [{"database_id":"..."}]'>
-                <textarea value={resourceRefs} onChange={(event) => setResourceRefs(event.target.value)} rows={5} className="w-full rounded border border-white/15 bg-black/30 px-3 py-2 font-mono text-[12px] text-aqua/85" />
+              <Field label="Pages to import">
+                {workspaceId && selectedIntegrationId ? (
+                  <NotionResourcePicker
+                    workspaceId={workspaceId}
+                    integrationId={selectedIntegrationId}
+                    value={notionRefs}
+                    onChange={setNotionRefs}
+                  />
+                ) : (
+                  <p className="text-[11px] text-white/55">
+                    {workspaceId
+                      ? "Connect Notion to pick pages."
+                      : "Workspace not loaded yet — refresh the page."}
+                  </p>
+                )}
+              </Field>
+            </>
+          )}
+          {kind === "confluence" && (
+            <>
+              <Field label="Confluence integration">
+                <select value={selectedIntegrationId} onChange={(event) => setIntegrationId(event.target.value)} className="w-full rounded border border-white/15 bg-black/30 px-3 py-2 text-sm text-white/90">
+                  {matchingIntegrations.length === 0 ? <option value="">No integration connected</option> : matchingIntegrations.map((integration) => <option key={integration.id} value={integration.id}>{integration.kind} - {integration.status}</option>)}
+                </select>
+              </Field>
+              <Field label="Resource refs JSON" hint='Examples: [{"page_id":"..."}] — picker is in the next phase.'>
+                <textarea value={confluenceRefs} onChange={(event) => setConfluenceRefs(event.target.value)} rows={5} className="w-full rounded border border-white/15 bg-black/30 px-3 py-2 font-mono text-[12px] text-aqua/85" />
               </Field>
             </>
           )}
@@ -194,7 +241,31 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
 
 function ResultBox({ result }: { result: ImportSourceResult }) {
   if (!result.ok) return <div className="rounded-xl border border-coral/35 bg-coral/10 p-3 text-sm text-coral">{result.message}</div>;
-  return <div className="rounded-xl border border-aqua/30 bg-aqua/10 p-3 text-sm text-aqua">Source created{result.synced ? " and synced" : ""}.{result.syncError && <div className="mt-1 text-xs text-coral">Sync failed: {result.syncError}</div>}{result.stats && <pre className="mt-2 overflow-x-auto text-[11px] text-aqua/80">{JSON.stringify(result.stats, null, 2)}</pre>}</div>;
+  // A "synced" run with all-zero stats means we accepted the source but
+  // nothing got pulled — usually misconfigured selection. Don't dress it
+  // up as a green success: amber + a hint so the operator sees something
+  // is off instead of trusting the checkmark.
+  const stats = result.stats as { discovered?: number; notes_created?: number; errors?: number } | undefined;
+  const emptyHarvest = result.synced
+    && stats
+    && (stats.discovered ?? 0) === 0
+    && (stats.notes_created ?? 0) === 0
+    && (stats.errors ?? 0) === 0;
+  if (emptyHarvest) {
+    return (
+      <div className="rounded-xl border border-amber-300/40 bg-amber-300/10 p-3 text-sm text-amber-100">
+        Source created, but the sync discovered nothing. Double-check the resources you selected — the integration may not have access, or the picks were empty.
+        <pre className="mt-2 overflow-x-auto text-[11px] text-amber-100/80">{JSON.stringify(result.stats, null, 2)}</pre>
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-xl border border-aqua/30 bg-aqua/10 p-3 text-sm text-aqua">
+      Source created{result.synced ? " and synced" : ""}.
+      {result.syncError && <div className="mt-1 text-xs text-coral">Sync failed: {result.syncError}</div>}
+      {result.stats && <pre className="mt-2 overflow-x-auto text-[11px] text-aqua/80">{JSON.stringify(result.stats, null, 2)}</pre>}
+    </div>
+  );
 }
 
 function defaultName(kind: SourceKind): string {

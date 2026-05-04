@@ -164,6 +164,7 @@ export function KnowledgeControlCenter({
           repos={repos}
           integrations={integrations}
           sources={sources}
+          workspaceId={workspace.id}
         />
       )}
 
@@ -468,10 +469,12 @@ function ImportPanel({
   repos,
   integrations,
   sources,
+  workspaceId,
 }: {
   repos: ApiActivatedRepo[];
   integrations: ApiIntegration[];
   sources: KnowledgeSourceRow[];
+  workspaceId: string | undefined;
 }) {
   return (
     <section className="space-y-6 border-l border-aqua/30 pl-6">
@@ -479,6 +482,7 @@ function ImportPanel({
         integrations={integrations}
         repos={repos}
         defaultScope="workspace"
+        workspaceId={workspaceId}
       />
       {sources.length > 0 && <ConnectedSources sources={sources} />}
     </section>
