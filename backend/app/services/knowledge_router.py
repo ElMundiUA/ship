@@ -172,7 +172,7 @@ async def route_pending_notes(
             report.skipped_embed_failed += 1
             continue
 
-        bucket, confidence, source = decision
+        bucket, confidence, source, details = decision
 
         # Persist the route into context. Bucket-id may be None when
         # source == 'no_fit' — KB-4 picks those up as "needs human".
@@ -181,6 +181,8 @@ async def route_pending_notes(
         ctx["route_confidence"] = round(confidence, 4)
         ctx["route_source"] = source
         ctx["routed_at"] = datetime.now(timezone.utc).isoformat()
+        if source == "no_fit" and details.get("no_fit_reason"):
+            ctx["no_fit_reason"] = details["no_fit_reason"]
         note.context = ctx
 
         # Counters
@@ -205,6 +207,7 @@ async def route_pending_notes(
                     "bucket_slug": bucket.slug if bucket else None,
                     "confidence": round(confidence, 4),
                     "source": source,
+                    **details,
                 },
             )
         )
@@ -250,12 +253,14 @@ async def _route_one(
     note: Improvement,
     centroids: list[BucketCentroid],
     llm_client: AgentClient | None,
-) -> tuple[BucketCentroid | None, float, str] | None:
+) -> tuple[BucketCentroid | None, float, str, dict[str, Any]] | None:
     """Decide which bucket the note goes to.
 
-    Returns ``(bucket | None, confidence, source)`` or ``None`` when
-    the embed step failed (caller leaves the row pending so the next
-    tick retries).
+    Returns ``(bucket | None, confidence, source, details)`` or ``None``
+    when the embed step failed (caller leaves the row pending so the next
+    tick retries). ``details`` carries diagnostics that end up in the
+    audit payload — most importantly ``no_fit_reason`` when ``source``
+    lands on ``no_fit`` so prod can be debugged without log access.
     """
     text_to_embed = f"{note.title}\n\n{note.body or ''}"
     try:
@@ -271,6 +276,7 @@ async def _route_one(
         return None
 
     populated = [b for b in centroids if b.centroid is not None]
+    top_score = 0.0
     if populated:
         scored = sorted(
             ((b, _cosine(note_vec, b.centroid or [])) for b in populated),
@@ -279,7 +285,7 @@ async def _route_one(
         )
         top, top_score = scored[0]
         if top_score >= AUTO_PIN_THRESHOLD:
-            return top, top_score, "auto_pin"
+            return top, top_score, "auto_pin", {}
 
     # Centroid scoring was ambiguous (or every bucket is description-only);
     # check the LLM extractor's hint first against ALL candidates.
@@ -287,22 +293,34 @@ async def _route_one(
     if isinstance(hint, str):
         match = next((b for b in centroids if b.slug == hint), None)
         if match is not None:
-            return match, HINT_CONFIDENCE, "bucket_hint"
+            return match, HINT_CONFIDENCE, "bucket_hint", {}
 
     # Last resort: tiebreaker LLM. Sees ALL buckets (populated or not)
     # via their descriptions, so a brand-new workspace whose buckets are
     # description-only still gets a routing decision instead of stuck
     # "no_fit" forever. Falls back to "no_fit" on any failure.
-    if llm_client is not None:
-        slug, conf = await _llm_tiebreaker(
-            note=note, centroids=centroids, client=llm_client
-        )
-        if slug is not None:
-            chosen = next((b for b in centroids if b.slug == slug), None)
-            if chosen is not None:
-                return chosen, conf, "llm_tiebreaker"
+    details: dict[str, Any] = {
+        "centroid_top_score": round(top_score, 4),
+        "candidate_buckets": len(centroids),
+        "populated_buckets": len(populated),
+    }
+    if llm_client is None:
+        details["no_fit_reason"] = "no_llm_client"
+        return None, 0.0, "no_fit", details
 
-    return None, 0.0, "no_fit"
+    slug, conf, llm_reason = await _llm_tiebreaker(
+        note=note, centroids=centroids, client=llm_client
+    )
+    if slug is not None:
+        chosen = next((b for b in centroids if b.slug == slug), None)
+        if chosen is not None:
+            return chosen, conf, "llm_tiebreaker", {}
+        details["no_fit_reason"] = "llm_unknown_slug"
+        details["llm_returned_slug"] = slug
+        return None, 0.0, "no_fit", details
+
+    details["no_fit_reason"] = llm_reason
+    return None, 0.0, "no_fit", details
 
 
 # ---------------------------------------------------------------------------
@@ -416,8 +434,14 @@ async def _llm_tiebreaker(
     note: Improvement,
     centroids: list[BucketCentroid],
     client: AgentClient,
-) -> tuple[str | None, float]:
-    """Ask a fast model to pick a slug. Returns ``(slug | None, confidence)``."""
+) -> tuple[str | None, float, str]:
+    """Ask a fast model to pick a slug.
+
+    Returns ``(slug | None, confidence, reason)``. ``reason`` is one of
+    ``llm_returned_null`` / ``llm_call_failed`` / ``llm_malformed`` /
+    ``llm_unknown_slug`` when ``slug`` is ``None`` — surfaced into the
+    audit log so prod can be debugged without log access.
+    """
     catalogue = "\n".join(
         f"- `{b.slug}` — {b.name}: {(b.description or '').strip() or '(no description)'}"
         for b in centroids
@@ -441,24 +465,26 @@ async def _llm_tiebreaker(
         )
     except Exception as exc:  # noqa: BLE001 — best-effort
         log.info("knowledge_router: LLM tiebreaker call failed (%s)", exc)
-        return None, 0.0
+        return None, 0.0, "llm_call_failed"
 
     try:
         obj = _parse_route_json(raw)
     except Exception as exc:  # noqa: BLE001 — best-effort
         log.info("knowledge_router: LLM tiebreaker malformed (%s)", exc)
-        return None, 0.0
+        return None, 0.0, "llm_malformed"
 
     slug = obj.get("slug")
+    if slug is None:
+        return None, 0.0, "llm_returned_null"
     if not isinstance(slug, str) or slug not in {b.slug for b in centroids}:
-        return None, 0.0
+        return None, 0.0, "llm_unknown_slug"
     conf_raw = obj.get("confidence")
     try:
         conf = float(conf_raw)
     except (TypeError, ValueError):
         conf = 0.5
     conf = max(0.0, min(1.0, conf))
-    return slug, conf
+    return slug, conf, "llm_routed"
 
 
 def _parse_route_json(raw: str) -> dict[str, Any]:
