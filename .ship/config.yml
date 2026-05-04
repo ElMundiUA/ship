@@ -72,15 +72,6 @@ process:
   - from: qa_manual
     to: pr_review
   routines:
-    security_review:
-      name: Security Review
-      enabled: true
-      trigger:
-        type: schedule
-        cron: 0 6 * * *
-        window: 30m
-        catchup: latest
-      pattern: role-security-officer
     daily:
       name: Daily
       enabled: true
@@ -89,25 +80,7 @@ process:
         cron: 0 9 * * *
         window: 30m
         catchup: latest
-      pattern: flow-daily-retro
-    tech_review:
-      name: Tech Review
-      enabled: true
-      trigger:
-        type: schedule
-        cron: 0 12 * * *
-        window: 30m
-        catchup: latest
-      pattern: role-tech-architect
-    qa_review:
-      name: Qa Review
-      enabled: true
-      trigger:
-        type: schedule
-        cron: 0 15 * * *
-        window: 30m
-        catchup: latest
-      pattern: role-qa-architect
+      specialist: daily-retro
     retro:
       name: Retro
       enabled: true
@@ -116,7 +89,7 @@ process:
         cron: 0 18 * * *
         window: 30m
         catchup: latest
-      pattern: flow-learning-capture
+      specialist: learning-capture
     healthcheck:
       name: Healthcheck
       enabled: true
@@ -125,4 +98,40 @@ process:
         cron: 0 */2 * * *
         window: 30m
         catchup: latest
-      pattern: op-workflow-self-heal
+      specialist: workflow-self-heal
+    tech_review:
+      name: Tech Review
+      enabled: true
+      trigger:
+        type: schedule
+        cron: 0 12 * * *
+        window: 30m
+        catchup: latest
+      specialist: tech-reviewer
+    qa_review:
+      name: Qa Review
+      enabled: true
+      trigger:
+        type: schedule
+        cron: 0 15 * * *
+        window: 30m
+        catchup: latest
+      specialist: qa-reviewer
+    security_review:
+      name: Security Review
+      enabled: true
+      trigger:
+        type: schedule
+        cron: 0 6 * * *
+        window: 30m
+        catchup: latest
+      specialist: security-officer
+    process_review:
+      name: Process Review
+      enabled: true
+      trigger:
+        type: schedule
+        cron: 0 16 * * *
+        window: 30m
+        catchup: latest
+      specialist: process-reviewer

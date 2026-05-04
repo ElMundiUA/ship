@@ -1,19 +1,25 @@
 {
   "bundle": [
-    "role-qa-architect",
-    "role-tech-architect",
-    "role-security-officer",
-    "flow-daily-retro",
-    "flow-learning-capture",
-    "role-intake",
-    "role-ba",
-    "role-developer",
-    "flow-qa-acceptance",
-    "op-workflow-self-heal"
+    "daily-retro",
+    "learning-capture",
+    "workflow-self-heal",
+    "tech-reviewer",
+    "qa-reviewer",
+    "security-officer",
+    "process-reviewer",
+    "intake",
+    "bug-triage",
+    "ba",
+    "tech-architect",
+    "qa-architect",
+    "developer",
+    "qa-engineer",
+    "qa-automation",
+    "reviewer"
   ],
-  "bundle_version": "53e246822da5",
+  "bundle_version": "8371a6f8695e",
   "knowledge": [],
-  "seeded_at": "2026-05-02T22:50:31Z",
+  "seeded_at": "2026-05-04T18:28:24Z",
   "ship_version": "unknown",
   "tracker_kind": "linear"
 }
