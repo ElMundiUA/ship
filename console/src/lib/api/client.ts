@@ -1282,6 +1282,54 @@ export function listNotionResources(
   );
 }
 
+export type ApiConfluenceSpace = {
+  id: string;
+  key: string;
+  name: string;
+  type: string | null;
+  homepage_id: string | null;
+  description: string | null;
+};
+
+export type ApiConfluenceSection = {
+  id: string;
+  title: string;
+  space_id: string;
+  space_key: string | null;
+  space_name: string | null;
+  url: string | null;
+  last_edited_time: string | null;
+  has_children: boolean;
+};
+
+export function listConfluenceSpaces(
+  workspaceId: string,
+  params: { integrationId: string },
+  options: { token?: string; signal?: AbortSignal } = {},
+): Promise<{ items: ApiConfluenceSpace[] }> {
+  const search = new URLSearchParams({ integration_id: params.integrationId });
+  return apiFetch<{ items: ApiConfluenceSpace[] }>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/knowledge/sources/confluence/spaces?${search.toString()}`,
+    { token: options.token, signal: options.signal },
+  );
+}
+
+export function listConfluenceSections(
+  workspaceId: string,
+  params: { integrationId: string; spaceId: string; cursor?: string | null },
+  options: { token?: string; signal?: AbortSignal } = {},
+): Promise<{ items: ApiConfluenceSection[]; next_cursor: string | null; has_more: boolean }> {
+  const search = new URLSearchParams({
+    integration_id: params.integrationId,
+    space_id: params.spaceId,
+  });
+  if (params.cursor) search.set("cursor", params.cursor);
+  return apiFetch<{ items: ApiConfluenceSection[]; next_cursor: string | null; has_more: boolean }>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/knowledge/sources/confluence/sections?${search.toString()}`,
+    { token: options.token, signal: options.signal },
+  );
+}
+
 export function archiveBucket(
   workspaceId: string,
   slug: string,

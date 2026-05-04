@@ -550,3 +550,456 @@ async def list_notion_resources(
         next_cursor=payload.get("next_cursor"),
         has_more=bool(payload.get("has_more")),
     )
+
+
+# ---------------------------------------------------------------------------
+# Confluence picker
+# ---------------------------------------------------------------------------
+
+_CONFLUENCE_PAGE_SIZE = 25
+
+
+class ConfluenceResourceItem(BaseModel):
+    id: str
+    title: str
+    space_key: str | None = None
+    space_name: str | None = None
+    url: str | None = None
+    last_edited_time: str | None = None
+
+
+class ConfluenceResourceListOut(BaseModel):
+    items: list[ConfluenceResourceItem]
+    next_start: int | None = None  # offset for the next page
+    has_more: bool = False
+
+
+def _confluence_site_creds(integration: Integration) -> tuple[str, str, str]:
+    """Return (site_url, email, api_token) or raise HTTPException."""
+    token = safe_decrypt(integration.secret_ciphertext)
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="confluence integration has no readable API token — reconnect it",
+        )
+    config = integration.config or {}
+    site_url = str(config.get("site_url") or config.get("site") or "").strip().rstrip("/")
+    email = str(config.get("email") or config.get("user") or "").strip()
+    if not site_url or not email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="confluence integration is missing site_url/email — reconnect it",
+        )
+    if not site_url.startswith("http"):
+        site_url = f"https://{site_url}"
+    return site_url, email, token
+
+
+async def _confluence_search(
+    *,
+    site_url: str,
+    email: str,
+    token: str,
+    cql: str,
+    start: int,
+    workspace_id: uuid.UUID,
+) -> dict[str, Any]:
+    """GET /wiki/rest/api/content/search with CQL.
+
+    Confluence v2 REST has no full-text search, only paginated lists by
+    space. The v1 ``/content/search`` endpoint with CQL is the supported
+    way to do typeahead. Same Basic-auth shape as the connector fetcher.
+    """
+    params = {
+        "cql": cql,
+        "limit": _CONFLUENCE_PAGE_SIZE,
+        "start": start,
+        "expand": "space,history.lastUpdated",
+    }
+    headers = {"Accept": "application/json"}
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+            response = await client.get(
+                f"{site_url}/wiki/rest/api/content/search",
+                params=params,
+                headers=headers,
+                auth=(email, token),
+            )
+    except httpx.HTTPError as exc:
+        logger.warning(
+            "confluence /content/search transport error for ws=%s: %s",
+            workspace_id,
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="confluence is unreachable — try again",
+        ) from exc
+
+    if response.status_code in (401, 403):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="confluence rejected the API token — reconnect Confluence",
+        )
+    if response.status_code >= 400:
+        logger.warning(
+            "confluence /content/search returned HTTP %s for ws=%s: %s",
+            response.status_code,
+            workspace_id,
+            response.text[:200],
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"confluence returned HTTP {response.status_code}",
+        )
+    return response.json()
+
+
+def _build_confluence_cql(query: str, space_key: str | None) -> str:
+    """Build a CQL clause for the picker.
+
+    Always restricts to ``type = "page"`` because the connector fetcher
+    only supports page refs. ``query`` and ``space_key`` are optional
+    narrowers; both are CQL-quoted to avoid injection of operators.
+    """
+    parts = ['type = "page"']
+    if space_key:
+        parts.append(f'space.key = "{_cql_escape(space_key)}"')
+    cleaned = query.strip()
+    if cleaned:
+        parts.append(f'text ~ "{_cql_escape(cleaned)}"')
+    return " AND ".join(parts) + ' ORDER BY lastModified DESC'
+
+
+def _cql_escape(value: str) -> str:
+    # CQL strings are double-quoted; escape backslashes and quotes only.
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+# --- Space + section listing (the picker primitives) ---
+
+
+class ConfluenceSpaceItem(BaseModel):
+    id: str
+    key: str
+    name: str
+    type: str | None = None  # global, personal, etc.
+    homepage_id: str | None = None
+    description: str | None = None
+
+
+class ConfluenceSpaceListOut(BaseModel):
+    items: list[ConfluenceSpaceItem]
+
+
+class ConfluenceSectionItem(BaseModel):
+    """A top-level page in a space — the natural "section" unit operators
+    pick to ingest a chunk of docs (root + descendants) at once.
+    """
+
+    id: str
+    title: str
+    space_id: str
+    space_key: str | None = None
+    space_name: str | None = None
+    url: str | None = None
+    last_edited_time: str | None = None
+    has_children: bool = False
+
+
+class ConfluenceSectionListOut(BaseModel):
+    items: list[ConfluenceSectionItem]
+    next_cursor: str | None = None
+    has_more: bool = False
+
+
+async def _confluence_get(
+    *,
+    site_url: str,
+    email: str,
+    token: str,
+    path: str,
+    params: dict[str, Any],
+    workspace_id: uuid.UUID,
+) -> dict[str, Any]:
+    headers = {"Accept": "application/json"}
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+            response = await client.get(
+                f"{site_url}{path}",
+                params={k: v for k, v in params.items() if v is not None},
+                headers=headers,
+                auth=(email, token),
+            )
+    except httpx.HTTPError as exc:
+        logger.warning(
+            "confluence GET %s transport error for ws=%s: %s",
+            path,
+            workspace_id,
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="confluence is unreachable — try again",
+        ) from exc
+
+    if response.status_code in (401, 403):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="confluence rejected the API token — reconnect Confluence",
+        )
+    if response.status_code >= 400:
+        logger.warning(
+            "confluence GET %s returned HTTP %s for ws=%s: %s",
+            path,
+            response.status_code,
+            workspace_id,
+            response.text[:200],
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"confluence returned HTTP {response.status_code}",
+        )
+    return response.json()
+
+
+@router.get("/confluence/spaces", response_model=ConfluenceSpaceListOut)
+async def list_confluence_spaces(
+    workspace_id: uuid.UUID,
+    integration_id: uuid.UUID = Query(..., description="Confluence integration row to query"),
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> ConfluenceSpaceListOut:
+    """List Confluence spaces visible to the integration's API token."""
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+
+    integration = await session.get(Integration, integration_id)
+    if (
+        integration is None
+        or integration.workspace_id != workspace_id
+        or integration.kind != "confluence"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="confluence integration not found for this workspace",
+        )
+
+    site_url, email, token = _confluence_site_creds(integration)
+    payload = await _confluence_get(
+        site_url=site_url,
+        email=email,
+        token=token,
+        path="/wiki/api/v2/spaces",
+        params={"limit": 100, "description-format": "plain"},
+        workspace_id=workspace_id,
+    )
+
+    items: list[ConfluenceSpaceItem] = []
+    for obj in payload.get("results") or []:
+        if not isinstance(obj, dict):
+            continue
+        items.append(
+            ConfluenceSpaceItem(
+                id=str(obj.get("id") or ""),
+                key=str(obj.get("key") or ""),
+                name=str(obj.get("name") or "Untitled space"),
+                type=str(obj.get("type") or "") or None,
+                homepage_id=str(obj.get("homepageId") or "") or None,
+                description=_confluence_extract_description(obj.get("description")),
+            )
+        )
+    return ConfluenceSpaceListOut(items=items)
+
+
+def _confluence_extract_description(raw: Any) -> str | None:
+    """v2 spaces returns description as ``{plain: {value: "..."}}`` or null."""
+    if not isinstance(raw, dict):
+        return None
+    plain = raw.get("plain")
+    if isinstance(plain, dict):
+        value = str(plain.get("value") or "").strip()
+        return value or None
+    return None
+
+
+@router.get("/confluence/sections", response_model=ConfluenceSectionListOut)
+async def list_confluence_sections(
+    workspace_id: uuid.UUID,
+    integration_id: uuid.UUID = Query(..., description="Confluence integration row to query"),
+    space_id: str = Query(..., description="Confluence space id to list sections from"),
+    cursor: str | None = Query(default=None, description="Confluence pagination cursor"),
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> ConfluenceSectionListOut:
+    """Top-level pages (= sections) of a space.
+
+    A "section" is the natural ingestion unit — usually a chapter/handbook
+    rooted at a top-level page. Selecting a section ingests its root
+    page plus every descendant.
+    """
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+
+    integration = await session.get(Integration, integration_id)
+    if (
+        integration is None
+        or integration.workspace_id != workspace_id
+        or integration.kind != "confluence"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="confluence integration not found for this workspace",
+        )
+
+    site_url, email, token = _confluence_site_creds(integration)
+
+    # Resolve space metadata once so we can stamp it on each section item
+    # (saves the picker UI from a second lookup; one space = one cheap call).
+    try:
+        space_payload = await _confluence_get(
+            site_url=site_url,
+            email=email,
+            token=token,
+            path=f"/wiki/api/v2/spaces/{space_id}",
+            params={},
+            workspace_id=workspace_id,
+        )
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_502_BAD_GATEWAY:
+            space_payload = {}
+        else:
+            raise
+    space_key = str(space_payload.get("key") or "") or None
+    space_name = str(space_payload.get("name") or "") or None
+
+    payload = await _confluence_get(
+        site_url=site_url,
+        email=email,
+        token=token,
+        path="/wiki/api/v2/pages",
+        params={
+            "space-id": space_id,
+            "limit": 50,
+            "depth": "root",  # only top-level pages
+            "cursor": cursor,
+            "body-format": None,  # we don't need bodies in the picker
+        },
+        workspace_id=workspace_id,
+    )
+
+    items: list[ConfluenceSectionItem] = []
+    for obj in payload.get("results") or []:
+        if not isinstance(obj, dict):
+            continue
+        web_url = ((obj.get("_links") or {}).get("webui")) if isinstance(obj.get("_links"), dict) else None
+        absolute_url = f"{site_url}/wiki{web_url}" if isinstance(web_url, str) and web_url.startswith("/") else web_url
+        version = obj.get("version") if isinstance(obj.get("version"), dict) else {}
+        items.append(
+            ConfluenceSectionItem(
+                id=str(obj.get("id") or ""),
+                title=str(obj.get("title") or "Untitled"),
+                space_id=str(obj.get("spaceId") or space_id),
+                space_key=space_key,
+                space_name=space_name,
+                url=absolute_url,
+                last_edited_time=str(version.get("createdAt") or "") or None,
+            )
+        )
+
+    next_cursor = _extract_confluence_cursor(payload)
+    return ConfluenceSectionListOut(
+        items=items,
+        next_cursor=next_cursor,
+        has_more=next_cursor is not None,
+    )
+
+
+def _extract_confluence_cursor(payload: dict[str, Any]) -> str | None:
+    """v2 paginated responses include _links.next as a relative path with
+    cursor=… in the query string. Parse it out so callers can pass it back."""
+    links = payload.get("_links") if isinstance(payload.get("_links"), dict) else {}
+    next_link = links.get("next")
+    if not isinstance(next_link, str) or not next_link:
+        return None
+    # The link looks like "/wiki/api/v2/pages?space-id=...&cursor=eyJ..."
+    if "cursor=" not in next_link:
+        return None
+    try:
+        from urllib.parse import parse_qs, urlparse
+
+        parsed = urlparse(next_link)
+        cursor_values = parse_qs(parsed.query).get("cursor")
+        if cursor_values:
+            return cursor_values[0]
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+# --- CQL-based page search (kept as advanced-mode hook; not exposed in UI v1) ---
+
+
+@router.get("/confluence/resources", response_model=ConfluenceResourceListOut)
+async def list_confluence_resources(
+    workspace_id: uuid.UUID,
+    integration_id: uuid.UUID = Query(..., description="Confluence integration row to query"),
+    q: str = Query("", description="Free-text query forwarded to Confluence via CQL text~"),
+    space_key: str | None = Query(default=None, description="Optional space key narrower"),
+    start: int = Query(default=0, ge=0, description="Offset into the Confluence result set"),
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> ConfluenceResourceListOut:
+    """Page-level CQL search. The picker UI ships space-first; this stays
+    available for power-user / API callers who want to pick specific pages."""
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+
+    integration = await session.get(Integration, integration_id)
+    if (
+        integration is None
+        or integration.workspace_id != workspace_id
+        or integration.kind != "confluence"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="confluence integration not found for this workspace",
+        )
+
+    site_url, email, token = _confluence_site_creds(integration)
+    cql = _build_confluence_cql(q, space_key)
+    payload = await _confluence_search(
+        site_url=site_url,
+        email=email,
+        token=token,
+        cql=cql,
+        start=start,
+        workspace_id=workspace_id,
+    )
+
+    raw_results = payload.get("results") or []
+    items: list[ConfluenceResourceItem] = []
+    for obj in raw_results:
+        if not isinstance(obj, dict):
+            continue
+        space = obj.get("space") if isinstance(obj.get("space"), dict) else {}
+        history = obj.get("history") if isinstance(obj.get("history"), dict) else {}
+        last_updated = (history.get("lastUpdated") or {}).get("when") if isinstance(history.get("lastUpdated"), dict) else None
+        web_url = ((obj.get("_links") or {}).get("webui")) if isinstance(obj.get("_links"), dict) else None
+        absolute_url = f"{site_url}/wiki{web_url}" if isinstance(web_url, str) and web_url.startswith("/") else web_url
+        items.append(
+            ConfluenceResourceItem(
+                id=str(obj.get("id") or ""),
+                title=str(obj.get("title") or "Untitled"),
+                space_key=str(space.get("key") or "") or None,
+                space_name=str(space.get("name") or "") or None,
+                url=absolute_url,
+                last_edited_time=str(last_updated) if last_updated else None,
+            )
+        )
+
+    size = int(payload.get("size") or len(raw_results))
+    limit = int(payload.get("limit") or _CONFLUENCE_PAGE_SIZE)
+    next_start_value = start + size if size >= limit else None
+    return ConfluenceResourceListOut(
+        items=items,
+        next_start=next_start_value,
+        has_more=next_start_value is not None,
+    )
