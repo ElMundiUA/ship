@@ -425,6 +425,12 @@ class Settings(BaseSettings):
         default=10.0, alias="EMAIL_SEND_TIMEOUT_SECONDS", gt=0.0
     )
 
+    # --- Firecrawl (website knowledge source) ---
+    firecrawl_api_key: str | None = Field(default=None, alias="FIRECRAWL_API_KEY")
+    firecrawl_api_url: str = Field(
+        default="https://api.firecrawl.dev/v1", alias="FIRECRAWL_API_URL"
+    )
+
     @model_validator(mode="after")
     def _validate_email_provider(self) -> "Settings":
         """Refuse to start in ``email_provider=sendgrid`` without credentials.

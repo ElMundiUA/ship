@@ -1341,6 +1341,20 @@ export function listConfluenceSections(
   );
 }
 
+export function previewWebsiteCrawl(
+  workspaceId: string,
+  params: { url: string; limit?: number; includeSubdomains?: boolean },
+  options: { token?: string; signal?: AbortSignal } = {},
+): Promise<{ urls: string[]; truncated: boolean }> {
+  const search = new URLSearchParams({ url: params.url });
+  if (params.limit !== undefined) search.set("limit", String(params.limit));
+  if (params.includeSubdomains) search.set("include_subdomains", "true");
+  return apiFetch<{ urls: string[]; truncated: boolean }>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/knowledge/sources/website/preview?${search.toString()}`,
+    { token: options.token, signal: options.signal },
+  );
+}
+
 export type ApiDocsRepoTreeNode = {
   path: string;
   name: string;
