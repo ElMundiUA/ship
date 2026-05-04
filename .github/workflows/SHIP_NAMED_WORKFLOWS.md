@@ -18,7 +18,7 @@
 
 **Когда:** `*/30 * * * `* (каждые 30 минут) и `workflow_dispatch`.
 
-**Что делает:** `shipctl trigger --event schedule` → due routines → `shipctl run --routine …`.
+**Что делает:** `shipctl trigger --event schedule --pipeline-fallback` возвращает один `next_action`: либо `routine` (cron-due) → `shipctl run --routine …`, либо `pipeline_pick` (когда рутины пусты) → `shipctl run --specialist …`. Один тик — одно действие.
 
 ---
 

@@ -107,6 +107,21 @@ def test_compose_default_bundle_emits_dedup_workflows() -> None:
     assert workflow_paths
     assert ".github/workflows/ship-trigger-schedule.yml" in workflow_paths
 
+    # Phase 2 scheduler shape — the trigger workflow runs at 30-min
+    # cadence (free-tier math) and dispatches a single ``next_action``
+    # per tick (one routine OR one pipeline-pick OR noop). Pin both
+    # so a regression in the starter doesn't silently flip cadence
+    # back to 15 min or reintroduce the legacy while-loop fan-out.
+    workflow_body = next(
+        c for p, c in bundle.files if p == ".github/workflows/ship-trigger-schedule.yml"
+    )
+    assert 'cron: "*/30 * * * *"' in workflow_body
+    assert "--pipeline-fallback" in workflow_body
+    assert "next_action.kind" in workflow_body
+    assert "shipctl run --specialist" in workflow_body
+    # The legacy while-loop is gone in Phase 2.
+    assert "while IFS= read -r routine" not in workflow_body
+
 
 def test_compose_omits_generated_knowledge_by_default() -> None:
     """PR 1 installs infra only; generated knowledge lands in PR 2."""
