@@ -64,7 +64,7 @@ def test_compose_default_bundle_emits_config_yml() -> None:
     assert "name: Development Process" in config_body
     assert "type: schedule" in config_body
     assert "cron:" in config_body
-    # The canonical six routine ids land in process.routines (matches
+    # The canonical seven routine ids land in process.routines (matches
     # backend.app.services.lane_recipes.DEFAULT_SEED_LANES).
     assert "daily:" in config_body
     assert "retro:" in config_body
@@ -72,10 +72,12 @@ def test_compose_default_bundle_emits_config_yml() -> None:
     assert "tech_review:" in config_body
     assert "qa_review:" in config_body
     assert "security_review:" in config_body
-    # Every pattern in the bundle that contributes a routine should
-    # surface as a ``process.routines.*`` mapping key — sanity-check the
-    # round-trip from bundle → catalog → YAML.
-    assert "role-intake" in bundle.bundle
+    assert "process_review:" in config_body
+    # Every routine specialist + every pipeline specialist surfaces as
+    # a ``DEFAULT_BUNDLE`` entry — sanity-check the round-trip.
+    assert "intake" in bundle.bundle
+    assert "developer" in bundle.bundle
+    assert "reviewer" in bundle.bundle
 
 
 def test_compose_default_bundle_emits_dedup_workflows() -> None:

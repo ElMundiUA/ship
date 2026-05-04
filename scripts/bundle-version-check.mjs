@@ -38,7 +38,7 @@ const repoRoot = resolve(__dirname, "..");
 const BUNDLE_SOURCE_PATHS = [
   "backend/app/services/seed_bundle.py",
   "backend/app/services/catalog.py",
-  "backend/app/services/default_pipelines.py",
+  "backend/app/services/lane_recipes.py",
   "backend/app/services/tracker_fsm.py",
   "backend/app/services/starter_workflows.py",
   "backend/app/resources/starter_workflows/",

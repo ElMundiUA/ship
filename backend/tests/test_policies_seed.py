@@ -27,16 +27,16 @@ from backend.app.services.policies_seed import (
 @pytest.mark.asyncio
 async def test_default_set_shape() -> None:
     """The shape of the canonical seed set is what callers expect:
-    34 policies, 7 globals, distinctive titles, distinctive sort
+    39 policies, 7 globals, distinctive titles, distinctive sort
     orders. Drift here means the migration backfill and the
     Console list view rendered different sets — pin both axes."""
     policies = default_policies()
-    assert len(policies) == 34
+    assert len(policies) == 39
 
     globals_ = [p for p in policies if not p.applies_to_roles]
     scoped = [p for p in policies if p.applies_to_roles]
     assert len(globals_) == 7
-    assert len(scoped) == 27
+    assert len(scoped) == 32
 
     titles = [p.title for p in policies]
     assert len(set(titles)) == len(titles), "duplicate seed title"
@@ -68,7 +68,7 @@ async def test_seed_inserts_all_defaults_on_fresh_workspace(
     result = await seed_default_policies(
         session=db_session, workspace_id=workspace.id
     )
-    assert result == {"inserted": 34, "skipped": 0}
+    assert result == {"inserted": 39, "skipped": 0}
 
     rows_after = (
         await db_session.execute(
@@ -77,7 +77,7 @@ async def test_seed_inserts_all_defaults_on_fresh_workspace(
             )
         )
     ).scalars().all()
-    assert len(rows_after) == 34
+    assert len(rows_after) == 39
 
 
 @pytest.mark.asyncio
@@ -104,7 +104,7 @@ async def test_seed_is_idempotent(db_session, seed_workspace) -> None:
             )
         )
     ).scalars().all()
-    # Either the alembic backfill ran (34) or migrations skipped it
+    # Either the alembic backfill ran (39) or migrations skipped it
     # — pin the upper bound, not the exact number, since the test DB
     # may already be at head before the test starts.
     assert {p.title for p in rows} >= {p.title for p in default_policies()}
