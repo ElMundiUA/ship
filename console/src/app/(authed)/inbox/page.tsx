@@ -1,18 +1,15 @@
 /**
- * Unified Inbox list page (RFC-0010 ticket P2-12).
+ * Unified Inbox list page.
  *
- * Server component that wires the just-shipped foundation pieces
- * together: `listInboxItems` from the API client, `InboxItemRow` for
- * each row, `InboxFilters` (via the `InboxFiltersControlled` client
- * shell) for ownership + type chips. State lives in the URL so
- * admins can deep-link / share / refresh without losing context;
- * `searchParams` are parsed defensively through the type guards in
- * `inbox-types.ts` so a hostile URL can't smuggle bad enum values
- * into the API query.
+ * Editorial layout: a typographic stats ribbon (mine · unassigned ·
+ * all open) replaces the segmented control; type chips sit on a
+ * single line with no bordered container; items group into three
+ * triage tiers (Tier 1 — needs you, Tier 2 — autonomy escapes,
+ * Tier 3 — later) with section kickers and a hairline rule.
  *
- * Session + workspace resolution live in `app/(authed)/layout.tsx`.
- * This page only reads the active workspace (via the cached helper)
- * and fetches inbox items.
+ * Per design rec we drop the bordered Filters card, the
+ * "X items" header, and the per-row card chrome. Per-row colour
+ * lives on a left-edge spine inside ``InboxItemRow``.
  */
 
 import Link from "next/link";
@@ -23,7 +20,8 @@ import { PageBody, PageHeader } from "@/components/app-shell";
 import { InboxFiltersControlled } from "@/components/inbox/inbox-filters-controlled";
 import { InboxItemRow } from "@/components/inbox/inbox-item-row";
 import { buildInboxUrl, countActiveFilters } from "@/components/inbox/inbox-url";
-import { Card, CardHeader, EmptyState } from "@/components/ui";
+import { EmptyState } from "@/components/ui";
+import { cn } from "@/lib/cn";
 import {
   ApiHttpError,
   listInboxItems,
@@ -36,11 +34,14 @@ import { getResolvedWorkspaceId } from "@/lib/workspace-resolve.server";
 import {
   DEFAULT_INBOX_FILTERS,
   INBOX_LIST_DEFAULT_STATUSES,
+  INBOX_TIER_LABEL,
   INBOX_TYPES,
+  inboxTier,
   isInboxType,
   type InboxFilterState,
   type InboxItem,
   type InboxListResponse,
+  type InboxTier,
   type InboxType,
 } from "@/lib/inbox-types";
 import {
@@ -51,6 +52,13 @@ import {
 export const dynamic = "force-dynamic";
 
 const PAGE_LIMIT = 25;
+const TIERS: InboxTier[] = [1, 2, 3];
+
+const TIER_KICKER_TONE: Record<InboxTier, string> = {
+  1: "text-sun/80",
+  2: "text-coral/80",
+  3: "text-white/40",
+};
 
 type ParsedParams = {
   filters: InboxFilterState;
@@ -133,10 +141,6 @@ async function load(
   searchParams: Record<string, string | string[] | undefined>,
 ): Promise<Mode> {
   const token = await getCachedSessionToken();
-  // The layout already redirected on missing session/workspaces, so by
-  // the time this runs we are guaranteed both. Defensive token check
-  // stays so a server action that swaps the bearer mid-render still
-  // sends us back to /login instead of throwing.
   if (!token) {
     redirect("/login?next=%2Finbox&reason=session_expired");
   }
@@ -198,6 +202,14 @@ function sumInboxTypeCounts(
   return n;
 }
 
+function partitionByTier(items: InboxItem[]): Record<InboxTier, InboxItem[]> {
+  const out: Record<InboxTier, InboxItem[]> = { 1: [], 2: [], 3: [] };
+  for (const item of items) {
+    out[inboxTier(item.type)].push(item);
+  }
+  return out;
+}
+
 export default async function InboxPage({
   searchParams,
 }: {
@@ -216,7 +228,7 @@ export default async function InboxPage({
         <PageHeader kicker="attention" title="Inbox" />
         <PageBody>
           {parsed.errorCode && (
-            <div className="mb-5 rounded-xl border border-coral/30 bg-coral/[0.06] px-3 py-2 text-xs text-coral/95">
+            <div className="mb-5 text-xs text-coral/95">
               {errorMessage(parsed.errorCode)}
             </div>
           )}
@@ -231,6 +243,7 @@ export default async function InboxPage({
   const allTypesCount = sumInboxTypeCounts(typeCounts);
   const activeFilterCount = countActiveFilters(filters, { repo, play });
   const inboxWs = multiWs ? workspaceId : undefined;
+  const tiers = partitionByTier(list.items);
 
   return (
     <>
@@ -248,182 +261,279 @@ export default async function InboxPage({
         }
       />
       <PageBody>
-        {parsed.errorCode && (
-          <div className="mb-5 rounded-xl border border-coral/30 bg-coral/[0.06] px-3 py-2 text-xs text-coral/95">
-            {errorMessage(parsed.errorCode)}
-          </div>
-        )}
-
-        {/* Compact filter strip — replaces the old "Filters" card.
-          * Single bordered row: ownership tabs + type chips + scope pills.
-          * Avoids the chrome (CardHeader + subtitle) that ate a quarter of
-          * the viewport before. */}
-        <section className="rounded-2xl border border-white/10 bg-white/[0.02] px-4 py-3">
-          <div className="flex flex-wrap items-center gap-3">
-            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/45">
-              Filters
+        <div className="mx-auto max-w-5xl space-y-8">
+          {parsed.errorCode && (
+            <p className="text-xs text-coral/95">
+              {errorMessage(parsed.errorCode)}
             </p>
-            <InboxFiltersControlled
-              value={filters}
-              counts={{ types: typeCounts, allTypes: allTypesCount }}
+          )}
+
+          <OwnershipRibbon
+            current={filters.ownership}
+            filters={filters}
+            repo={repo}
+            play={play}
+            workspaceScope={inboxWs}
+          />
+
+          <InboxFiltersControlled
+            value={filters}
+            counts={{ types: typeCounts, allTypes: allTypesCount }}
+            repo={repo}
+            play={play}
+            workspaceScope={inboxWs}
+          />
+
+          {(repo || play) && (
+            <div className="flex flex-wrap items-center gap-2 text-[11px] text-white/55">
+              {repo && (
+                <span>
+                  scope:{" "}
+                  <code className="font-mono text-white/80">{repo}</code>
+                </span>
+              )}
+              {play && (
+                <span>
+                  play:{" "}
+                  <code className="font-mono text-white/80">{play}</code>
+                </span>
+              )}
+              <a
+                href={buildInboxUrl(filters, { workspaceScope: inboxWs })}
+                className="font-semibold text-sun hover:text-white"
+              >
+                clear scope
+              </a>
+            </div>
+          )}
+
+          {list.items.length === 0 ? (
+            <InboxEmpty
+              filters={filters}
+              activeFilterCount={activeFilterCount}
               repo={repo}
               play={play}
               workspaceScope={inboxWs}
             />
-            {(repo || play) && (
-              <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-white/55">
-                {repo && (
-                  <span className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5">
-                    repo: <code className="font-mono text-white/80">{repo}</code>
-                  </span>
-                )}
-                {play && (
-                  <span className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5">
-                    play: <code className="font-mono text-white/80">{play}</code>
-                  </span>
-                )}
-                <a
-                  href={buildInboxUrl(filters, { workspaceScope: inboxWs })}
-                  className="text-[11px] font-semibold text-sun hover:text-white"
-                >
-                  clear scope
-                </a>
-              </div>
-            )}
-          </div>
-        </section>
+          ) : (
+            <div className="space-y-10">
+              {TIERS.map((tier) => {
+                const items = tiers[tier];
+                if (items.length === 0) return null;
+                return (
+                  <TierSection
+                    key={tier}
+                    tier={tier}
+                    items={items}
+                    workspaceScope={inboxWs}
+                  />
+                );
+              })}
+            </div>
+          )}
 
-        {/* Counts kicker for the items list — was buried inside a CardHeader. */}
-        <div className="mt-5 flex flex-wrap items-baseline gap-3">
-          <h2 className="font-display text-lg font-bold text-white">
-            {list.items.length === 0 ? "No items" : `${list.items.length} item${list.items.length === 1 ? "" : "s"}`}
-          </h2>
-          <span className="text-[11px] text-white/45">
-            Oldest-first; resolved / dismissed rows fade out so the queue keeps reading top-down.
-          </span>
-        </div>
-
-        <div className="mt-3">
-          <ItemsTable
-            items={list.items}
+          <Pager
+            nextCursor={list.next_cursor}
+            currentCursor={cursor}
             filters={filters}
             repo={repo}
             play={play}
-            activeFilterCount={activeFilterCount}
             workspaceScope={inboxWs}
           />
         </div>
-
-        <Pager
-          nextCursor={list.next_cursor}
-          currentCursor={cursor}
-          filters={filters}
-          repo={repo}
-          play={play}
-          workspaceScope={inboxWs}
-        />
       </PageBody>
     </>
   );
 }
 
-function ItemsTable({
-  items,
+
+// ---------------------------------------------------------------------------
+// Ownership stats ribbon — typographic
+// ---------------------------------------------------------------------------
+
+
+function OwnershipRibbon({
+  current,
   filters,
   repo,
   play,
-  activeFilterCount,
   workspaceScope,
 }: {
-  items: InboxItem[];
+  current: InboxFilterState["ownership"];
   filters: InboxFilterState;
   repo: string | null;
   play: string | null;
-  activeFilterCount: number;
   workspaceScope?: string;
 }) {
-  if (items.length === 0) {
-    if (activeFilterCount > 0) {
-      return (
-        <div className="mt-5">
-          <EmptyState
-            title="No items match these filters"
-            body="Try widening the ownership tab to All, clearing the type chips, or dropping the repo/play scope."
-            action={
-              <Link
-                href={buildInboxUrl(DEFAULT_INBOX_FILTERS, {
-                  workspaceScope,
-                })}
-                className="inline-flex items-center gap-1 rounded-full border border-aqua/40 bg-aqua/10 px-3 py-1.5 text-xs font-semibold text-aqua hover:bg-aqua/20"
-              >
-                Clear all filters
-              </Link>
-            }
-          />
-        </div>
-      );
-    }
-    if (filters.ownership === "mine") {
-      return (
-        <div className="mt-5">
-          <EmptyState
-            title="Nothing on your plate"
-            body="Either you're caught up or nobody's routing things your way. Switch to All to see the workspace firehose."
-            action={
-              <a
-                href={buildInboxUrl(
-                  { ...filters, ownership: "all" },
-                  { repo, play, workspaceScope },
-                )}
-                className="inline-flex items-center gap-1 rounded-full border border-white/15 bg-white/[0.04] px-3 py-1.5 text-xs font-semibold text-white/85 hover:border-white/30 hover:bg-white/[0.08]"
-              >
-                Switch to All
-              </a>
-            }
-          />
-        </div>
-      );
-    }
-    return (
-      <div className="mt-5">
-        <EmptyState
-          title="Inbox empty"
-          body="Either nothing has fired or your team coverage needs attention — check who can answer under Settings → Members."
-            action={
-            <a
-              href={withWorkspaceQuery(
-                "/settings?tab=members",
-                workspaceScope ?? "",
-                Boolean(workspaceScope),
-              )}
-              className="inline-flex items-center gap-1 rounded-full border border-aqua/40 bg-aqua/10 px-3 py-1.5 text-xs font-semibold text-aqua hover:bg-aqua/20"
-            >
-              Open Members
-            </a>
-          }
-        />
-      </div>
-    );
-  }
-
+  const lenses: { key: InboxFilterState["ownership"]; label: string }[] = [
+    { key: "mine", label: "Mine" },
+    { key: "unassigned", label: "Unassigned" },
+    { key: "all", label: "All open" },
+  ];
   return (
-    <ul className="space-y-1.5">
-      {items.map((item) => (
-        <li key={item.id}>
-          <InboxItemRow
-            item={item}
-            workspaceId={workspaceScope}
-            href={
-              workspaceScope
-                ? `/inbox/${item.id}?ws=${encodeURIComponent(workspaceScope)}`
-                : `/inbox/${item.id}`
-            }
-          />
-        </li>
-      ))}
-    </ul>
+    <nav
+      aria-label="Inbox ownership"
+      className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-sm"
+    >
+      {lenses.map((lens, idx) => {
+        const active = current === lens.key;
+        const href = buildInboxUrl(
+          { ...filters, ownership: lens.key },
+          { repo, play, workspaceScope },
+        );
+        return (
+          <span key={lens.key} className="flex items-baseline">
+            <Link
+              href={href}
+              aria-current={active ? "page" : undefined}
+              className={cn(
+                "transition",
+                active
+                  ? "font-semibold text-white"
+                  : "text-white/45 hover:text-white",
+              )}
+            >
+              {lens.label}
+            </Link>
+            {idx < lenses.length - 1 && (
+              <span className="ml-3 text-white/15">·</span>
+            )}
+          </span>
+        );
+      })}
+    </nav>
   );
 }
+
+
+// ---------------------------------------------------------------------------
+// Tier section — kicker + divide-y rows
+// ---------------------------------------------------------------------------
+
+
+function TierSection({
+  tier,
+  items,
+  workspaceScope,
+}: {
+  tier: InboxTier;
+  items: InboxItem[];
+  workspaceScope?: string;
+}) {
+  return (
+    <section>
+      <header className="mb-3 flex items-center gap-3">
+        <h2
+          className={cn(
+            "text-[11px] font-bold uppercase tracking-[0.22em]",
+            TIER_KICKER_TONE[tier],
+          )}
+        >
+          {INBOX_TIER_LABEL[tier]}
+        </h2>
+        <div className="h-px flex-1 bg-white/[0.06]" />
+        <span className="font-mono text-[11px] text-white/35">
+          {items.length}
+        </span>
+      </header>
+      <ul className="divide-y divide-white/[0.06]">
+        {items.map((item) => (
+          <li key={item.id}>
+            <InboxItemRow
+              item={item}
+              workspaceId={workspaceScope}
+              href={
+                workspaceScope
+                  ? `/inbox/${item.id}?ws=${encodeURIComponent(workspaceScope)}`
+                  : `/inbox/${item.id}`
+              }
+            />
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// Empty states
+// ---------------------------------------------------------------------------
+
+
+function InboxEmpty({
+  filters,
+  activeFilterCount,
+  repo,
+  play,
+  workspaceScope,
+}: {
+  filters: InboxFilterState;
+  activeFilterCount: number;
+  repo: string | null;
+  play: string | null;
+  workspaceScope?: string;
+}) {
+  if (activeFilterCount > 0) {
+    return (
+      <EmptyState
+        title="No items match these filters"
+        body="Try widening the ownership lens to All, clearing the type chips, or dropping the repo/play scope."
+        action={
+          <Link
+            href={buildInboxUrl(DEFAULT_INBOX_FILTERS, { workspaceScope })}
+            className="text-xs font-semibold text-aqua hover:text-white"
+          >
+            Clear all filters
+          </Link>
+        }
+      />
+    );
+  }
+  if (filters.ownership === "mine") {
+    return (
+      <EmptyState
+        title="Nothing on your plate"
+        body="Either you're caught up or nobody's routing things your way. Switch to All open to see the workspace firehose."
+        action={
+          <a
+            href={buildInboxUrl(
+              { ...filters, ownership: "all" },
+              { repo, play, workspaceScope },
+            )}
+            className="text-xs font-semibold text-white/85 hover:text-white"
+          >
+            Switch to All open
+          </a>
+        }
+      />
+    );
+  }
+  return (
+    <EmptyState
+      title="Inbox empty"
+      body="Either nothing has fired or your team coverage needs attention — check who can answer under Settings → Members."
+      action={
+        <a
+          href={withWorkspaceQuery(
+            "/settings?tab=members",
+            workspaceScope ?? "",
+            Boolean(workspaceScope),
+          )}
+          className="text-xs font-semibold text-aqua hover:text-white"
+        >
+          Open Members
+        </a>
+      }
+    />
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// Pager + Refresh
+// ---------------------------------------------------------------------------
+
 
 function Pager({
   nextCursor,
@@ -442,11 +552,11 @@ function Pager({
 }) {
   if (!nextCursor && !currentCursor) return null;
   return (
-    <div className="mt-5 flex items-center justify-between">
+    <div className="flex items-center justify-between text-[11px]">
       {currentCursor ? (
         <a
           href={buildInboxUrl(filters, { repo, play, workspaceScope })}
-          className="text-[11px] font-semibold text-white/55 hover:text-white"
+          className="font-semibold text-white/55 hover:text-white"
         >
           ← First page
         </a>
@@ -461,7 +571,7 @@ function Pager({
             cursor: nextCursor,
             workspaceScope,
           })}
-          className="rounded-full border border-aqua/40 bg-aqua/10 px-3 py-1.5 text-xs font-semibold text-aqua hover:bg-aqua/20"
+          className="font-semibold text-white/55 hover:text-white"
         >
           Load older →
         </a>
@@ -469,6 +579,7 @@ function Pager({
     </div>
   );
 }
+
 
 function RefreshButton({
   filters,
@@ -499,7 +610,7 @@ function RefreshButton({
       )}
       <button
         type="submit"
-        className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/[0.04] px-3 py-1.5 text-xs font-semibold text-white/85 transition hover:border-white/30 hover:bg-white/[0.08]"
+        className="text-xs font-semibold text-white/55 transition hover:text-white"
         title="Reload the current view"
       >
         ↻ Refresh

@@ -136,7 +136,7 @@ export function InboxRowActions({ workspaceId, item, detailHref }: Props) {
           type="button"
           onClick={onPrimary}
           disabled={!!busy || isTerminal}
-          className="rounded-md border border-aqua/40 bg-aqua/10 px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-aqua transition hover:border-aqua/70 hover:bg-aqua/20 disabled:opacity-40"
+          className="text-[11px] font-semibold uppercase tracking-wide text-aqua transition hover:text-white disabled:opacity-40"
         >
           {busy === "primary" ? "…" : primaryLabel}
         </button>
@@ -145,7 +145,7 @@ export function InboxRowActions({ workspaceId, item, detailHref }: Props) {
           type="button"
           onClick={onPrimary}
           disabled={!!busy || isTerminal}
-          className="rounded-md border border-sun/40 bg-sun/10 px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-sun transition hover:border-sun/70 hover:bg-sun/20 disabled:opacity-40"
+          className="text-[11px] font-semibold uppercase tracking-wide text-sun transition hover:text-white disabled:opacity-40"
         >
           Answer
         </button>
@@ -156,7 +156,7 @@ export function InboxRowActions({ workspaceId, item, detailHref }: Props) {
           type="button"
           onClick={onSecondary}
           disabled={!!busy || isTerminal}
-          className="rounded-md border border-coral/40 bg-coral/10 px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-coral transition hover:border-coral/70 hover:bg-coral/20 disabled:opacity-40"
+          className="text-[11px] font-semibold uppercase tracking-wide text-coral/80 transition hover:text-coral disabled:opacity-40"
         >
           {busy === "secondary" ? "…" : secondaryLabel}
         </button>
@@ -167,7 +167,7 @@ export function InboxRowActions({ workspaceId, item, detailHref }: Props) {
           type="button"
           onClick={onDiscuss}
           disabled={!!busy || isTerminal}
-          className="rounded-md border border-lilac/40 bg-lilac/10 px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-lilac transition hover:border-lilac/70 hover:bg-lilac/20 disabled:opacity-40"
+          className="text-[11px] font-semibold uppercase tracking-wide text-lilac/80 transition hover:text-lilac disabled:opacity-40"
           title="Open Navigator chat seeded with this item's context"
         >
           {busy === "discuss" ? "…" : "Discuss"}
