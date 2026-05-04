@@ -231,15 +231,76 @@ async def test_notion_fetcher_renders_rich_page(integration) -> None:
 
 
 @pytest.mark.asyncio
-async def test_notion_rejects_database_id_shape(integration) -> None:
-    """``{database_id}`` is not wired yet and must raise Unsupported."""
+async def test_notion_database_id_fetches_entries(integration) -> None:
+    """``{database_id}`` resolves to a data source, queries it, and
+    returns one ConnectorPage per entry.
 
-    pages = await fetch_connector_pages(
-        integration, {"database_id": "xyz"}, http_client=None
-    )
-    # fetch_connector_pages catches ConnectorUnsupported internally
-    # and returns [] so the dispatcher falls back to the stub body.
-    assert pages == []
+    Exercises the v2025-09-03 split: ``/data_sources/{id}`` returns 404
+    when the id actually points at a database container, then
+    ``/databases/{id}`` returns ``data_sources[]`` and we follow the
+    first one.
+    """
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(f"{request.method} {request.url.path}")
+        if request.url.path == "/v1/data_sources/db-xyz":
+            return httpx.Response(404, json={"object": "error", "code": "object_not_found"})
+        if request.url.path == "/v1/databases/db-xyz":
+            return httpx.Response(
+                200,
+                json={
+                    "object": "database",
+                    "id": "db-xyz",
+                    "data_sources": [{"id": "ds-1", "name": "Default"}],
+                },
+            )
+        if request.url.path == "/v1/data_sources/ds-1/query" and request.method == "POST":
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {"object": "page", "id": "page-A"},
+                        {"object": "page", "id": "page-B"},
+                    ],
+                    "has_more": False,
+                    "next_cursor": None,
+                },
+            )
+        if request.url.path == "/v1/pages/page-A":
+            return httpx.Response(200, json=_page_payload("page-A", title="Entry A"))
+        if request.url.path == "/v1/pages/page-B":
+            return httpx.Response(200, json=_page_payload("page-B", title="Entry B"))
+        if request.url.path.startswith("/v1/blocks/"):
+            return httpx.Response(200, json={"results": [], "has_more": False, "next_cursor": None})
+        return httpx.Response(404)
+
+    async with _make_client(handler) as client:
+        pages = await fetch_connector_pages(
+            integration, {"database_id": "db-xyz"}, http_client=client
+        )
+
+    assert [p.title for p in pages] == ["Entry A", "Entry B"]
+    assert all(p.page_ref["page_id"] for p in pages)
+    # The /data_sources/{id}/query endpoint is the queryable surface
+    # under v2025-09-03; the test verifies we hit it after resolving
+    # the container.
+    assert "POST /v1/data_sources/ds-1/query" in calls
+
+
+@pytest.mark.asyncio
+async def test_notion_database_id_404_surfaces_config_error(integration) -> None:
+    """Database the bot can't see → ConnectorConfigError so the wizard
+    surfaces a re-share hint instead of silently 502'ing."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        # Both data_sources and databases lookups return 404
+        return httpx.Response(404, json={"object": "error", "code": "object_not_found"})
+
+    async with _make_client(handler) as client:
+        with pytest.raises(ConnectorConfigError, match="shared"):
+            await fetch_connector_pages(
+                integration, {"database_id": "unknown"}, http_client=client
+            )
 
 
 @pytest.mark.asyncio
@@ -256,15 +317,16 @@ async def test_notion_shape_check_runs_before_secret_decrypt(
 ) -> None:
     """No secret + unsupported shape must still resolve to stub fallback.
 
-    This is the invariant that protects Phase 7b buckets with
-    resource_ref shapes we haven't wired yet — the endpoint would
-    502 on secret-missing even though it should only fall back to
-    stub.
+    This invariant protects buckets with resource_ref shapes we haven't
+    wired yet — the endpoint would 502 on secret-missing even though it
+    should only fall back to stub. Both ``{page_id}`` and
+    ``{database_id}`` are now supported, so test with a genuinely
+    unknown shape.
     """
 
     pages = await fetch_connector_pages(
         integration_no_secret,
-        {"database_id": "anything"},
+        {"future_shape_id": "anything"},
         http_client=None,
     )
     assert pages == []

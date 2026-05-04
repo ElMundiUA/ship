@@ -87,7 +87,7 @@ export function KnowledgeImportWizard({
     if (kind === "notion") {
       if (!selectedIntegrationId) return { ok: false, message: "Connect Notion first in integrations." };
       if (notionRefs.length === 0) {
-        return { ok: false, message: "Pick at least one Notion page from the list." };
+        return { ok: false, message: "Pick at least one Notion page or database from the list." };
       }
       return { ok: true, config: { resource_refs: notionRefs } };
     }
