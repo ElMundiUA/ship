@@ -64,6 +64,13 @@ log = logging.getLogger(__name__)
 # without consulting the LLM. Tuned conservatively: anything closer
 # than 0.75 in cosine space is "obviously the same neighbourhood".
 AUTO_PIN_THRESHOLD = 0.75
+# Minimum cosine score for the fallback "ship to nearest centroid when
+# LLM says no_fit" path. Below this we genuinely have no signal — the
+# note's vector is roughly orthogonal to every populated bucket — and
+# emitting a low-confidence pin would mislead operator review more than
+# it helps. Above this there's at least directional overlap, which the
+# synthesiser can turn into a draft for human triage.
+CENTROID_FALLBACK_MIN = 0.30
 # When the LLM extractor's bucket_hint matches a real workspace
 # bucket but centroid was ambiguous, we still route — but at a
 # confidence band that lets KB-4 sort hint-only routes after the
@@ -103,6 +110,7 @@ class RouteReport:
     auto_pinned: int = 0
     routed_via_hint: int = 0
     routed_via_llm: int = 0
+    routed_via_centroid_fallback: int = 0
     no_fit: int = 0
     skipped_no_buckets: int = 0
     skipped_embed_failed: int = 0
@@ -183,6 +191,13 @@ async def route_pending_notes(
         ctx["routed_at"] = datetime.now(timezone.utc).isoformat()
         if source == "no_fit" and details.get("no_fit_reason"):
             ctx["no_fit_reason"] = details["no_fit_reason"]
+        else:
+            # A note can leave the no_fit pool on a later tick (e.g. once
+            # bucket descriptions improve, or when this fix loosens the
+            # tiebreaker). Drop the stale reason from a previous run so
+            # operator review doesn't see ``source=llm_tiebreaker`` next
+            # to a leftover ``no_fit_reason='llm_call_failed'``.
+            ctx.pop("no_fit_reason", None)
         note.context = ctx
 
         # Counters
@@ -192,6 +207,8 @@ async def route_pending_notes(
             report.routed_via_hint += 1
         elif source == "llm_tiebreaker":
             report.routed_via_llm += 1
+        elif source == "centroid_fallback":
+            report.routed_via_centroid_fallback += 1
         else:
             report.no_fit += 1
 
@@ -277,6 +294,7 @@ async def _route_one(
 
     populated = [b for b in centroids if b.centroid is not None]
     top_score = 0.0
+    top: BucketCentroid | None = None
     if populated:
         scored = sorted(
             ((b, _cosine(note_vec, b.centroid or [])) for b in populated),
@@ -306,20 +324,31 @@ async def _route_one(
     }
     if llm_client is None:
         details["no_fit_reason"] = "no_llm_client"
-        return None, 0.0, "no_fit", details
+        # Fall through to centroid fallback below — even cheap "looks like
+        # X" beats stalling forever in no_fit.
+    else:
+        slug, conf, llm_reason = await _llm_tiebreaker(
+            note=note, centroids=centroids, client=llm_client
+        )
+        if slug is not None:
+            chosen = next((b for b in centroids if b.slug == slug), None)
+            if chosen is not None:
+                return chosen, conf, "llm_tiebreaker", {}
+            details["no_fit_reason"] = "llm_unknown_slug"
+            details["llm_returned_slug"] = slug
+        else:
+            details["no_fit_reason"] = llm_reason
 
-    slug, conf, llm_reason = await _llm_tiebreaker(
-        note=note, centroids=centroids, client=llm_client
-    )
-    if slug is not None:
-        chosen = next((b for b in centroids if b.slug == slug), None)
-        if chosen is not None:
-            return chosen, conf, "llm_tiebreaker", {}
-        details["no_fit_reason"] = "llm_unknown_slug"
-        details["llm_returned_slug"] = slug
-        return None, 0.0, "no_fit", details
+    # Centroid fallback: if cosine had any signal at all, ship the note to
+    # the closest bucket as a low-confidence pin instead of leaving it
+    # stranded. The synthesiser will still write a draft, KB-4 review
+    # surfaces it for the operator to override — and that's strictly
+    # better than 96% of notes vanishing into a "needs human" pool that
+    # nobody reads. We label the source as ``centroid_fallback`` so the
+    # audit log and operator-review UI can sort these distinctly.
+    if top is not None and top_score >= CENTROID_FALLBACK_MIN:
+        return top, top_score, "centroid_fallback", details
 
-    details["no_fit_reason"] = llm_reason
     return None, 0.0, "no_fit", details
 
 
@@ -412,17 +441,22 @@ def _cosine(a: Sequence[float], b: Sequence[float]) -> float:
 
 
 _LLM_SYSTEM_PROMPT = """You route a knowledge note into the best-fitting bucket
-of a workspace's knowledge catalogue. Pick the slug that fits, or
-``no_fit`` if none does.
+of a workspace's knowledge catalogue. Pick the slug that overlaps the
+note's topic the most.
 
 Rules:
 - Only use slugs that appear in the bucket catalogue below. Inventing
   slugs returns ``no_fit``.
-- Prefer ``no_fit`` over a forced match; the operator-review pass
-  (KB-4) will route those by hand.
-- Confidence is a number in [0, 1]; reflect how sure you are. Below
-  0.5 still routes (the operator can override) but above 0.85 is
-  treated as a strong signal downstream.
+- Match aggressively. If the note plausibly belongs to a bucket based
+  on the bucket's description, route it. Operator review (KB-4) is the
+  safety net for misroutes — leaving notes in ``no_fit`` is worse than
+  a slightly imperfect bucket.
+- Reserve ``no_fit`` for notes that are genuinely off-topic for every
+  bucket (e.g. a billing email in a knowledge base about engineering
+  practices), not for notes that only loosely match.
+- Confidence is a number in [0, 1]; reflect how sure you are. Use 0.5–0.7
+  for "fits the bucket's topic but tangentially", 0.85+ for "central to
+  the bucket's stated purpose".
 
 Return strictly:
 {"slug": "<bucket-slug>" | null, "confidence": 0.0-1.0}
