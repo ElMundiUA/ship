@@ -345,14 +345,12 @@ function LaneColumn({
       onDragLeave={onDragLeaveLane}
       onDrop={onDropOnLane}
       className={[
-        "group/lane flex min-h-[280px] flex-col gap-1.5 rounded-xl border p-1.5 transition",
-        dragOverLane
-          ? "border-aqua/55 bg-aqua/[0.06] shadow-[inset_0_0_0_1px_rgba(207,169,107,0.4)]"
-          : "border-white/8",
+        "group/lane flex min-h-[280px] flex-col gap-1.5 p-1.5 transition",
+        dragOverLane ? "ring-1 ring-aqua/40" : "",
       ].join(" ")}
       style={{ background: dragOverLane ? undefined : LANE_TINT[lane] }}
     >
-      <div className="sticky top-0 z-10 flex items-center gap-1.5 rounded-t-xl border-b border-white/5 bg-[#040814]/95 px-2 py-1.5 backdrop-blur">
+      <div className="sticky top-0 z-10 flex items-center gap-1.5 border-b border-white/[0.06] bg-ink/90 px-2 py-1.5 backdrop-blur">
         <span
           className="h-1.5 w-1.5 rounded-full"
           style={{ background: LANE_DOT[lane] }}
@@ -447,55 +445,48 @@ function StageCard({
       }}
       data-stage-id={stage.id}
       className={[
-        "rounded-lg border px-2.5 py-2 text-left shadow transition",
-        "cursor-grab active:cursor-grabbing focus:outline-none focus-visible:ring-2 focus-visible:ring-aqua/60",
+        "relative px-3 py-2 pl-3 text-left transition cursor-grab active:cursor-grabbing focus:outline-none focus-visible:ring-1 focus-visible:ring-aqua/60",
         selected
-          ? "border-aqua/70 bg-[linear-gradient(135deg,rgba(207,169,107,0.20),rgba(207,169,107,0.05))] shadow-aqua/30"
+          ? "bg-aqua/[0.04] ring-1 ring-aqua/60"
           : isDragTarget
-            ? "border-aqua/55 bg-aqua/[0.10] ring-1 ring-aqua/40"
-            : "border-white/15 bg-[linear-gradient(135deg,rgba(255,255,255,0.10),rgba(255,255,255,0.03))] hover:border-aqua/40",
+            ? "bg-aqua/[0.06] ring-1 ring-aqua/40"
+            : "bg-white/[0.04] hover:bg-white/[0.07]",
       ].join(" ")}
+      style={{ borderRadius: 6 }}
     >
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-[13px] font-bold text-white">
-            {stage.name}
-          </div>
-          <div className="mt-0.5 truncate text-[10px] text-white/55">
-            {stage.specialist_name}
-          </div>
+      <span
+        aria-hidden
+        className="absolute inset-y-1 left-0 w-[2px] rounded-r-sm"
+        style={{ background: LANE_DOT[lane] }}
+      />
+      <div className="min-w-0">
+        <div className="truncate text-[13px] font-semibold text-white">
+          {stage.name}
         </div>
-        <span
-          className="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full"
-          style={{
-            background: LANE_DOT[lane],
-            boxShadow: `0 0 8px ${LANE_DOT[lane]}`,
-          }}
-          aria-hidden
-        />
+        <div className="mt-0.5 truncate text-[10px] text-white/55">
+          {stage.specialist_name}
+        </div>
       </div>
       {next ? (
         <div
           className={[
-            "mt-1.5 flex items-center gap-1 truncate border-t border-white/5 pt-1 text-[9px] uppercase tracking-widest",
-            next.actor === "user" ? "text-amber-200/80" : "text-white/40",
+            "mt-1.5 flex items-center gap-1 truncate text-[9px] uppercase tracking-widest",
+            next.actor === "user" ? "text-lilac/85" : "text-white/40",
           ].join(" ")}
         >
           <span aria-hidden>→</span>
           <span className="truncate">{next.stage.name}</span>
           <span
             className={[
-              "ml-auto shrink-0 rounded-sm px-1 text-[8px] font-bold",
-              next.actor === "user"
-                ? "bg-amber-300/15 text-amber-200"
-                : "bg-white/5 text-white/45",
+              "ml-auto shrink-0 text-[8px] font-bold",
+              next.actor === "user" ? "text-lilac" : "text-white/45",
             ].join(" ")}
           >
             {next.actor}
           </span>
         </div>
       ) : (
-        <div className="mt-1.5 truncate border-t border-white/5 pt-1 text-[9px] uppercase tracking-widest text-white/25">
+        <div className="mt-1.5 truncate text-[9px] uppercase tracking-widest text-white/25">
           terminal
         </div>
       )}

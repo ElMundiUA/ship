@@ -397,16 +397,16 @@ function ConfigSourceBanner({
   }
   if (source === "repo-lanes") {
     return (
-      <div className="inline-flex items-center gap-2 rounded-full border border-amber-300/30 bg-amber-300/[0.07] px-3 py-1 text-[11px] font-semibold text-amber-200">
-        <span className="h-1.5 w-1.5 rounded-full bg-amber-300" aria-hidden />
+      <div className="inline-flex items-center gap-2 rounded-full border border-sun/30 bg-sun/[0.07] px-3 py-1 text-[11px] font-semibold text-sun">
+        <span className="h-1.5 w-1.5 rounded-full bg-sun" aria-hidden />
         Legacy <code className="font-mono">lanes:</code> config — reseed to migrate.
       </div>
     );
   }
   if (source === "missing") {
     return (
-      <div className="inline-flex items-center gap-2 rounded-full border border-coral/30 bg-coral/[0.07] px-3 py-1 text-[11px] font-semibold text-coral">
-        <span className="h-1.5 w-1.5 rounded-full bg-coral" aria-hidden />
+      <div className="inline-flex items-center gap-2 rounded-full border border-sun/30 bg-sun/[0.07] px-3 py-1 text-[11px] font-semibold text-sun">
+        <span className="h-1.5 w-1.5 rounded-full bg-sun" aria-hidden />
         No <code className="font-mono">.ship/config.yml</code> on default branch — reseed required.
       </div>
     );
@@ -433,14 +433,17 @@ function ProcessTabs({
       : `/process/${encodeURIComponent(processId)}`;
   };
   return (
-    <div className="flex items-center gap-1 rounded-2xl border border-white/10 bg-white/[0.035] p-2">
+    <nav
+      aria-label="Process view"
+      className="flex items-center gap-6 border-b border-white/[0.06] pb-1"
+    >
       <TabLink href={hrefFor("flow")} active={selected === "flow"}>
         Flow
       </TabLink>
       <TabLink href={hrefFor("schedule")} active={selected === "schedule"}>
         Capacity
       </TabLink>
-    </div>
+    </nav>
   );
 }
 
@@ -466,11 +469,12 @@ function TabLink({
   return (
     <Link
       href={href}
+      aria-current={active ? "page" : undefined}
       className={[
-        "rounded-xl px-3 py-1.5 text-xs font-semibold transition",
+        "relative pb-2 text-[11px] font-bold uppercase tracking-[0.22em] transition",
         active
-          ? "bg-aqua/15 text-aqua"
-          : "text-white/55 hover:bg-white/[0.05] hover:text-white",
+          ? "text-aqua after:absolute after:inset-x-0 after:-bottom-px after:h-px after:bg-aqua"
+          : "text-white/40 hover:text-white",
       ].join(" ")}
     >
       {children}

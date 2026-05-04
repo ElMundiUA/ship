@@ -114,7 +114,7 @@ export function StateEditor({
         </div>
       )}
       {!repoId && (
-        <div className="rounded-md border border-amber-300/25 bg-amber-300/[0.06] px-2 py-1.5 text-[11px] text-amber-100/90">
+        <div className="rounded-md border border-sun/25 bg-sun/[0.06] px-2 py-1.5 text-[11px] text-sun/90">
           Select a repository before saving.
         </div>
       )}
@@ -231,7 +231,7 @@ function Section({
   children: ReactNode;
 }) {
   return (
-    <section className="space-y-3 rounded-2xl border border-white/10 bg-[linear-gradient(135deg,rgba(255,255,255,0.065),rgba(255,255,255,0.025))] p-3 shadow-lg shadow-black/10">
+    <section className="space-y-3 p-1">
       <div className="text-[10px] font-bold uppercase tracking-widest text-aqua/55">
         {title}
       </div>

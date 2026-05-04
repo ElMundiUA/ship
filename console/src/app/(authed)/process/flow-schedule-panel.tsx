@@ -284,7 +284,7 @@ export function FlowSchedulePanel({
         ) : null}
 
         <div className="grid gap-3 xl:grid-cols-[200px_minmax(0,1fr)]">
-          <aside className="max-h-[640px] overflow-y-auto rounded-2xl border border-white/10 bg-black/25 p-3">
+          <aside className="max-h-[640px] overflow-y-auto p-1">
             <div className="sticky top-0 -mx-3 mb-2 -mt-3 border-b border-white/5 bg-black/85 px-3 py-2 backdrop-blur">
               <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-aqua/70">
                 Roles · drag to a cell
@@ -314,7 +314,7 @@ export function FlowSchedulePanel({
             </div>
           </aside>
 
-          <section className="overflow-hidden rounded-3xl border border-white/10 bg-[#050a15] shadow-2xl shadow-black/30">
+          <section className="overflow-hidden">
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 bg-white/[0.035] px-4 py-3">
               <div>
                 <div className="text-sm font-semibold text-white">Capacity calendar</div>
@@ -327,8 +327,8 @@ export function FlowSchedulePanel({
                   <span className="h-2 w-2 rounded border border-aqua/40 bg-aqua/[0.10]" aria-hidden />
                   specialist · drag
                 </span>
-                <span className="inline-flex items-center gap-1.5 text-amber-200/85">
-                  <span className="h-2 w-2 rounded border border-amber-300/40 bg-amber-300/[0.10]" aria-hidden />
+                <span className="inline-flex items-center gap-1.5 text-sun/85">
+                  <span className="h-2 w-2 rounded border border-sun/40 bg-sun/[0.10]" aria-hidden />
                   routine · cron
                 </span>
                 <button
@@ -388,18 +388,18 @@ export function FlowSchedulePanel({
             </div>
             {routineProjection.continuous.length > 0 && (
               <div className="border-t border-white/10 bg-black/20 px-4 py-3">
-                <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.22em] text-amber-200/80">
+                <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.22em] text-sun/80">
                   Continuous routines · fire too often for the grid
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {routineProjection.continuous.map(({ routine, cadence }) => (
                     <span
                       key={routine.id}
-                      className="inline-flex items-center gap-1.5 rounded-full border border-amber-300/30 bg-amber-300/[0.07] px-3 py-1 text-[11px] font-semibold text-amber-200/90"
+                      className="inline-flex items-center gap-1.5 rounded-full border border-sun/30 bg-sun/[0.07] px-3 py-1 text-[11px] font-semibold text-sun/90"
                     >
-                      <span className="h-1.5 w-1.5 rounded-full bg-amber-300" aria-hidden />
+                      <span className="h-1.5 w-1.5 rounded-full bg-sun" aria-hidden />
                       {routineLabel.get(routine.id) ?? routine.name ?? routine.id}
-                      <span className="font-normal text-amber-200/60">· {cadence}</span>
+                      <span className="font-normal text-sun/60">· {cadence}</span>
                     </span>
                   ))}
                 </div>
@@ -470,14 +470,14 @@ function CalendarCell({
             stripe is hidden entirely. */}
         {routines.length > 0 ? (
           <div
-            className="flex flex-wrap items-center gap-1 rounded-md border border-amber-300/25 bg-amber-300/[0.07] px-1.5 py-1"
+            className="flex flex-wrap items-center gap-1 rounded-md border border-sun/25 bg-sun/[0.07] px-1.5 py-1"
             title="Routines firing in this slot — fire on cron, not capacity"
           >
             <span className="text-[9px]" aria-hidden>⏱</span>
             {routines.map((r, idx) => (
-              <span key={r.id} className="text-[9px] font-bold uppercase tracking-widest text-amber-200/90">
+              <span key={r.id} className="text-[9px] font-bold uppercase tracking-widest text-sun/90">
                 {routineLabel.get(r.id) ?? r.name ?? r.id}
-                {idx < routines.length - 1 ? <span className="text-amber-200/40"> · </span> : null}
+                {idx < routines.length - 1 ? <span className="text-sun/40"> · </span> : null}
               </span>
             ))}
           </div>
@@ -587,7 +587,7 @@ function RoutinesSummary({
   const visible = routines.filter((r) => !HIDDEN_ROUTINE_IDS.has(r.id));
   const labelById = new Map(BUILTIN_ROUTINE_CATALOG.map((c) => [c.id, c.name] as const));
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-3">
+    <div className="p-1">
       <div className="flex items-center justify-between gap-2">
         <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-white/55">
           Routines on this process
@@ -623,7 +623,7 @@ function RoutinesSummary({
                 className={[
                   "rounded-xl border p-2.5",
                   !canonical
-                    ? "border-amber-300/35 bg-amber-300/[0.05]"
+                    ? "border-sun/35 bg-sun/[0.05]"
                     : enabled
                       ? "border-aqua/25 bg-aqua/[0.05]"
                       : "border-white/10 bg-white/[0.02] opacity-65",
@@ -636,7 +636,7 @@ function RoutinesSummary({
                     </span>
                     {!canonical && (
                       <span
-                        className="shrink-0 rounded-full border border-amber-300/40 bg-amber-300/[0.10] px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-widest text-amber-200"
+                        className="shrink-0 rounded-full border border-sun/40 bg-sun/[0.10] px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-widest text-sun"
                         title="Pre-canonical routine id — leftover from an older seed. Clean up the DB row to remove it from this view."
                       >
                         legacy
@@ -646,7 +646,7 @@ function RoutinesSummary({
                   <span
                     className={[
                       "h-1.5 w-1.5 rounded-full",
-                      enabled ? (canonical ? "bg-aqua" : "bg-amber-300") : "bg-white/30",
+                      enabled ? (canonical ? "bg-aqua" : "bg-sun") : "bg-white/30",
                     ].join(" ")}
                     aria-hidden
                   />
