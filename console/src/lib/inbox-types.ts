@@ -201,3 +201,35 @@ export function isInboxType(value: string): value is InboxType {
 export function isInboxStatus(value: string): value is InboxStatus {
   return (INBOX_STATUSES as readonly string[]).includes(value);
 }
+
+/**
+ * Triage tier — the visual ladder operators scan top-down on the list
+ * page. Assignment is fixed by item kind; orderings inside a tier come
+ * from the existing ``created_at`` sort.
+ *
+ *   Tier 1 (needs you)         clarification, approval
+ *   Tier 2 (autonomy escapes)  failure, blocker, exception
+ *   Tier 3 (later)             improvement, stuck
+ */
+export type InboxTier = 1 | 2 | 3;
+
+export function inboxTier(type: InboxType): InboxTier {
+  switch (type) {
+    case "clarification":
+    case "approval":
+      return 1;
+    case "failure":
+    case "blocker":
+    case "exception":
+      return 2;
+    case "improvement":
+    case "stuck":
+      return 3;
+  }
+}
+
+export const INBOX_TIER_LABEL: Record<InboxTier, string> = {
+  1: "Needs you",
+  2: "Autonomy escapes",
+  3: "Later",
+};

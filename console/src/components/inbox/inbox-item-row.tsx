@@ -1,6 +1,5 @@
 import Link from "next/link";
 
-import { Badge, type BadgeTone } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import { INBOX_TYPE_META, type InboxItem } from "@/lib/inbox-types";
 
@@ -8,26 +7,35 @@ import { InboxRowActions } from "./inbox-row-actions";
 import { StaleBadge } from "./stale-badge";
 
 /**
- * One row in the unified Inbox list (RFC-0010 P2-12).
+ * One row in the unified Inbox list.
  *
- * Pure presentational — receives a fully-typed `InboxItem` from the
- * list page and renders:
- *   - type chip + age badge (escalates yellow at 2d, red at 7d)
- *   - title + summary preview (single-line truncated)
- *   - owner pill (or "Unassigned" warn pill when `owner` is null)
- *   - intake reason (debug-grade tooltip; surfaces routing path)
- *   - status side-marker for snoozed/resolved/dismissed rows
- *
- * Linking is delegated to the parent: provide `href` to make the
- * whole row a Link, or omit it for static demos. The full keyboard
- * a11y story (focus ring, aria-label) lives on the wrapping `<a>`.
+ * Per design rec: no rounded card around the row. Per-kind colour
+ * lives on a 3px left-edge **spine** (Linear's priority spine
+ * idiom). Rows sit on a ``divide-y`` rhythm provided by the
+ * parent — this component contributes zero borders / backgrounds
+ * in the resting state. Hover gets a faint ``bg-white/[0.025]``
+ * tint and reveals the inline action buttons (touch breakpoints
+ * keep the actions visible at all times).
  */
 
-const STATUS_TONE: Record<InboxItem["status"], BadgeTone> = {
-  new: "info",
-  snoozed: "warn",
-  resolved: "neutral",
-  dismissed: "neutral",
+const SPINE_TONE: Record<InboxItem["type"], string> = {
+  clarification: "bg-sun",
+  approval: "bg-aqua",
+  improvement: "bg-lilac",
+  failure: "bg-coral",
+  blocker: "bg-coral",
+  exception: "bg-coral/60",
+  stuck: "bg-white/30",
+};
+
+const SPINE_WIDTH: Record<InboxItem["type"], string> = {
+  clarification: "w-[3px]",
+  approval: "w-[3px]",
+  improvement: "w-[2px]",
+  failure: "w-[3px]",
+  blocker: "w-[4px]",
+  exception: "w-[2px]",
+  stuck: "w-px",
 };
 
 function ownerLabel(owner: InboxItem["owner"]): string {
@@ -36,10 +44,10 @@ function ownerLabel(owner: InboxItem["owner"]): string {
 }
 
 function ownerInitials(owner: InboxItem["owner"]): string {
-  if (!owner) return "?";
+  if (!owner) return "—";
   const source = owner.display_name?.trim() || owner.email;
   const tokens = source.split(/[\s@.]+/).filter(Boolean);
-  if (tokens.length === 0) return "?";
+  if (tokens.length === 0) return "—";
   if (tokens.length === 1) return tokens[0].slice(0, 2).toUpperCase();
   return (tokens[0][0] + tokens[1][0]).toUpperCase();
 }
@@ -64,52 +72,36 @@ export function InboxItemRow({
   const meta = INBOX_TYPE_META[item.type];
   const isTerminal =
     item.status === "resolved" || item.status === "dismissed";
-
-  // Dense single-row layout: type-dot · title (truncated) · meta · owner pill.
-  // Summary collapses under the title only when it adds new info beyond the
-  // title (no duplicate-text wraps). Each row is ~52px tall; the previous
-  // 3-column grid with a 36px avatar and stacked badges took ~120px.
-  const dotClass =
-    item.type === "clarification"
-      ? "bg-sun"
-      : item.type === "approval"
-        ? "bg-aqua"
-        : item.type === "improvement"
-          ? "bg-lilac"
-          : item.type === "failure" || item.type === "blocker" || item.type === "exception"
-            ? "bg-coral"
-            : item.type === "stuck"
-              ? "bg-sun/80"
-              : "bg-white/40";
-
   const showSummary =
-    item.summary && item.summary.trim().toLowerCase() !== item.title.trim().toLowerCase();
+    item.summary &&
+    item.summary.trim().toLowerCase() !== item.title.trim().toLowerCase();
 
   const body = (
     <div
       className={cn(
-        "group flex items-start gap-3 rounded-xl border px-3 py-2.5 transition",
-        isTerminal
-          ? "border-white/[0.06] bg-white/[0.015] opacity-65"
-          : "border-white/10 bg-white/[0.03] hover:border-white/25 hover:bg-white/[0.06]",
+        "group relative flex items-start gap-4 py-3 pl-4 pr-2 transition",
+        isTerminal ? "opacity-50" : "hover:bg-white/[0.025]",
         className,
       )}
     >
-      {/* Type dot */}
       <span
-        className={cn("mt-1.5 inline-block h-2 w-2 shrink-0 rounded-full", dotClass)}
-        title={meta.label}
         aria-hidden
+        title={meta.label}
+        className={cn(
+          "absolute inset-y-2 left-0 rounded-r-sm",
+          SPINE_TONE[item.type],
+          SPINE_WIDTH[item.type],
+        )}
       />
 
-      {/* Main column */}
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-white/45">
-            {meta.label.replace(/s$/, "")}
-          </span>
+        <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.16em] text-white/45">
+          <span>{meta.label.replace(/s$/, "")}</span>
           {item.status !== "new" && (
-            <Badge tone={STATUS_TONE[item.status]}>{item.status}</Badge>
+            <>
+              <span className="text-white/15">·</span>
+              <span className="text-white/55">{item.status}</span>
+            </>
           )}
           <StaleBadge
             createdAt={item.created_at}
@@ -118,51 +110,69 @@ export function InboxItemRow({
             referenceDate={referenceDate}
           />
           {item.intake_reason?.startsWith("fallback:") && (
-            <Badge tone="warn" className="!normal-case" dot={false}>
-              fallback routing
-            </Badge>
+            <>
+              <span className="text-white/15">·</span>
+              <span className="text-sun/80">fallback routing</span>
+            </>
           )}
         </div>
         <p
           className={cn(
-            "mt-1 truncate text-sm font-semibold",
+            "mt-1 truncate text-[15px] font-semibold",
             isTerminal ? "text-white/55" : "text-white",
           )}
         >
           {item.title}
         </p>
         {showSummary && (
-          <p className="mt-0.5 truncate text-xs text-white/50">{item.summary}</p>
+          <p className="mt-0.5 truncate text-xs text-white/55">{item.summary}</p>
         )}
       </div>
 
-      {/* Right rail: actions + owner + play key. */}
       <div
-        className="flex shrink-0 items-center gap-2 self-center"
+        className="flex shrink-0 items-center gap-3 self-center"
         title={item.intake_reason ?? undefined}
       >
         {item.play_key && (
-          <code className="hidden font-mono text-[10px] text-white/35 lg:inline">
+          <code className="hidden font-mono text-[10px] text-white/30 lg:inline">
             {item.play_key}
           </code>
         )}
         {workspaceId && href && !isTerminal && (
-          <InboxRowActions
-            workspaceId={workspaceId}
-            item={{ id: item.id, type: item.type, status: item.status }}
-            detailHref={href}
-          />
+          <span className="hidden lg:inline-flex lg:opacity-0 lg:transition lg:group-hover:opacity-100 lg:focus-within:opacity-100">
+            <InboxRowActions
+              workspaceId={workspaceId}
+              item={{ id: item.id, type: item.type, status: item.status }}
+              detailHref={href}
+            />
+          </span>
+        )}
+        {workspaceId && href && !isTerminal && (
+          <span className="inline-flex lg:hidden">
+            <InboxRowActions
+              workspaceId={workspaceId}
+              item={{ id: item.id, type: item.type, status: item.status }}
+              detailHref={href}
+            />
+          </span>
         )}
         <span
           className={cn(
-            "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-semibold",
-            item.owner
-              ? "border-aqua/35 bg-aqua/10 text-aqua"
-              : "border-coral/35 bg-coral/10 text-coral",
+            "inline-flex items-center gap-1.5 text-xs",
+            item.owner ? "text-white/85" : "text-coral/85",
           )}
         >
-          <span className="font-mono text-[9px]">{ownerInitials(item.owner)}</span>
-          <span>{ownerLabel(item.owner)}</span>
+          <span
+            className={cn(
+              "inline-flex h-5 w-5 items-center justify-center rounded-full font-mono text-[9px] font-bold",
+              item.owner
+                ? "bg-white/[0.08] text-white/75"
+                : "bg-coral/15 text-coral",
+            )}
+          >
+            {ownerInitials(item.owner)}
+          </span>
+          <span className="truncate">{ownerLabel(item.owner)}</span>
         </span>
       </div>
     </div>
@@ -172,7 +182,7 @@ export function InboxItemRow({
   return (
     <Link
       href={href}
-      className="block focus:outline-none focus-visible:ring-2 focus-visible:ring-aqua/60 focus-visible:ring-offset-2 focus-visible:ring-offset-ink rounded-2xl"
+      className="block focus:outline-none focus-visible:ring-1 focus-visible:ring-aqua/60 focus-visible:ring-offset-0"
       aria-label={`${INBOX_TYPE_META[item.type].label}: ${item.title}`}
     >
       {body}
