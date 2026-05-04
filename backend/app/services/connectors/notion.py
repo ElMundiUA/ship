@@ -59,6 +59,13 @@ NOTION_VERSION = "2025-09-03"
 # truncate with a trailing note rather than silently cutting off.
 _MAX_BLOCKS = 200
 
+# Cap pages pulled from one database/data_source resource_ref. Each
+# database entry costs a page fetch + a blocks fetch; without a cap
+# a 5k-row database wedges sync runs and starves other resource_refs
+# (the ingestion pipeline already caps total documents per source at
+# MAX_SOURCE_DOCUMENTS = 100, so this is the per-database ceiling).
+_MAX_PAGES_PER_DATABASE = 50
+
 
 def _headers(token: str) -> dict[str, str]:
     return {
@@ -261,67 +268,19 @@ def _normalize_page_id(raw: str) -> str:
     return cleaned
 
 
-@register("notion")
-async def fetch_notion_pages(
-    integration: Integration,
-    resource_ref: Mapping[str, Any],
-    http_client: httpx.AsyncClient | None,
-) -> list[ConnectorPage]:
-    """Fetcher entry point registered for ``Integration.kind='notion'``.
+async def _render_one_page(
+    client: httpx.AsyncClient, page_id: str, *, token: str
+) -> ConnectorPage:
+    """Fetch one Notion page + its top-level blocks → ConnectorPage.
 
-    v1 shape: ``{"page_id": "<uuid>"}`` only. Anything else raises
-    :class:`ConnectorUnsupported` which the dispatcher turns into a
-    stub-body fallback — the connector bucket keeps working, the
-    operator sees in the UI that sync succeeded, and we log a
-    warning with the unsupported shape so extensions are easy to
-    prioritize.
-
-    Shape validation runs BEFORE secret decryption so an integration
-    that's missing its secret but targets a resource_ref shape we
-    don't support (e.g. ``{database_id}``) still resolves via stub
-    fallback instead of 502'ing.
+    Lifted out of the dispatcher so database-mode can call it once per
+    entry without duplicating the markdown rendering / truncation rule.
     """
-
-    if not isinstance(resource_ref, Mapping):
-        raise ConnectorUnsupported("resource_ref must be an object")
-
-    raw_page_id = resource_ref.get("page_id")
-    if not isinstance(raw_page_id, str) or not raw_page_id.strip():
-        raise ConnectorUnsupported(
-            "notion v1 only supports resource_ref.page_id (a Notion page uuid)"
-        )
-
-    page_id = _normalize_page_id(raw_page_id)
-
-    token = safe_decrypt(integration.secret_ciphertext)
-    if not token:
-        raise ConnectorConfigError(
-            "notion integration has no readable access token — "
-            "reconnect the integration"
-        )
-
-    owns_client = http_client is None
-    client = http_client or httpx.AsyncClient(timeout=httpx.Timeout(10.0))
-    try:
-        page = await _fetch_page(client, page_id, token=token)
-        title = _extract_title(page)
-        url = page.get("url") or ""
-        last_edited = page.get("last_edited_time") or ""
-        blocks = await _fetch_blocks(client, page_id, token=token)
-    except httpx.HTTPStatusError as exc:
-        status = exc.response.status_code if exc.response is not None else 0
-        # A 404 means the bot doesn't have access to the page — raise
-        # ConnectorConfigError so the endpoint can surface a clean
-        # "re-share the page with the integration" message.
-        if status in (401, 403, 404):
-            raise ConnectorConfigError(
-                f"notion returned HTTP {status} for page {page_id} — is the "
-                "integration shared with the page?"
-            ) from exc
-        raise
-    finally:
-        if owns_client:
-            await client.aclose()
+    page = await _fetch_page(client, page_id, token=token)
+    title = _extract_title(page)
+    url = page.get("url") or ""
+    last_edited = page.get("last_edited_time") or ""
+    blocks = await _fetch_blocks(client, page_id, token=token)
 
     rendered_blocks = [_render_block(b) for b in blocks]
     rendered_blocks = [line for line in rendered_blocks if line]
@@ -341,18 +300,193 @@ async def fetch_notion_pages(
         header.append(" · ".join(meta_bits))
     body = "\n\n".join(header + rendered_blocks).strip() + "\n"
 
-    return [
-        ConnectorPage(
-            slug=page_id,
-            title=title,
-            body_md=body,
-            page_ref={
-                "page_id": page_id,
-                "url": url,
-                "last_edited_time": last_edited,
-            },
+    return ConnectorPage(
+        slug=page_id,
+        title=title,
+        body_md=body,
+        page_ref={
+            "page_id": page_id,
+            "url": url,
+            "last_edited_time": last_edited,
+        },
+    )
+
+
+async def _resolve_data_source_id(
+    client: httpx.AsyncClient, raw_id: str, *, token: str
+) -> str:
+    """Resolve a Notion ``database_id`` or ``data_source_id`` to a
+    queryable data_source id.
+
+    Notion API ``2025-09-03`` split the legacy "database" into a
+    container (``/databases/{id}``) plus 1+ data sources that own the
+    schema. Operator-facing URLs still expose database ids, so accept
+    both shapes:
+
+    1. Try ``GET /data_sources/{id}`` — succeeds if ``raw_id`` already
+       points at a data source.
+    2. On 404, fall back to ``GET /databases/{id}`` and pick the only
+       (or first) data source. We don't currently surface multi-source
+       picks in the wizard; if a closed-beta operator hits this we'll
+       extend the picker rather than guessing.
+    """
+    try:
+        await _get(client, f"/data_sources/{raw_id}", token=token)
+        return raw_id
+    except httpx.HTTPStatusError as exc:
+        if exc.response is None or exc.response.status_code != 404:
+            raise
+    db = await _get(client, f"/databases/{raw_id}", token=token)
+    sources = db.get("data_sources") or []
+    if not sources:
+        raise ConnectorConfigError(
+            f"notion database {raw_id} has no data sources — re-share it with the integration"
         )
-    ]
+    first = sources[0] if isinstance(sources[0], dict) else {}
+    data_source_id = str(first.get("id") or "")
+    if not data_source_id:
+        raise ConnectorConfigError(
+            f"notion database {raw_id} returned a malformed data source list"
+        )
+    return data_source_id
+
+
+async def _query_data_source_pages(
+    client: httpx.AsyncClient, data_source_id: str, *, token: str, limit: int
+) -> list[str]:
+    """List page ids in a data source, newest-edited first, up to ``limit``."""
+    page_ids: list[str] = []
+    cursor: str | None = None
+    while len(page_ids) < limit:
+        body: dict[str, Any] = {
+            "page_size": min(100, limit - len(page_ids)),
+            "sorts": [{"timestamp": "last_edited_time", "direction": "descending"}],
+        }
+        if cursor:
+            body["start_cursor"] = cursor
+        response = await client.post(
+            f"{NOTION_API_ROOT}/data_sources/{data_source_id}/query",
+            headers=_headers(token),
+            json=body,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        for entry in payload.get("results") or []:
+            if isinstance(entry, dict) and entry.get("object") == "page" and entry.get("id"):
+                page_ids.append(str(entry["id"]))
+                if len(page_ids) >= limit:
+                    break
+        if not payload.get("has_more") or not payload.get("next_cursor"):
+            break
+        cursor = payload.get("next_cursor")
+    return page_ids
+
+
+@register("notion")
+async def fetch_notion_pages(
+    integration: Integration,
+    resource_ref: Mapping[str, Any],
+    http_client: httpx.AsyncClient | None,
+) -> list[ConnectorPage]:
+    """Fetcher entry point registered for ``Integration.kind='notion'``.
+
+    Supported shapes:
+
+    - ``{"page_id": "<uuid>"}`` — fetch a single page.
+    - ``{"database_id": "<uuid>"}`` / ``{"data_source_id": "<uuid>"}`` —
+      treat the database (or its data source under v2025-09-03) as a
+      collection: query the entries newest-first, fetch each as a
+      ConnectorPage. Capped at ``_MAX_PAGES_PER_DATABASE`` per ref.
+
+    Shape validation runs BEFORE secret decryption so an integration
+    that's missing its secret but targets an unsupported shape still
+    resolves via stub fallback instead of 502'ing.
+    """
+
+    if not isinstance(resource_ref, Mapping):
+        raise ConnectorUnsupported("resource_ref must be an object")
+
+    raw_page_id = resource_ref.get("page_id")
+    raw_database_id = resource_ref.get("database_id") or resource_ref.get("data_source_id")
+    page_mode = isinstance(raw_page_id, str) and bool(raw_page_id.strip())
+    db_mode = isinstance(raw_database_id, str) and bool(raw_database_id.strip())
+
+    if not page_mode and not db_mode:
+        raise ConnectorUnsupported(
+            "notion resource_ref needs page_id or database_id"
+        )
+
+    token = safe_decrypt(integration.secret_ciphertext)
+    if not token:
+        raise ConnectorConfigError(
+            "notion integration has no readable access token — "
+            "reconnect the integration"
+        )
+
+    owns_client = http_client is None
+    client = http_client or httpx.AsyncClient(timeout=httpx.Timeout(10.0))
+    try:
+        if db_mode:
+            return await _fetch_database_pages(
+                client, _normalize_page_id(str(raw_database_id)), token=token
+            )
+        return [
+            await _fetch_single_page(
+                client, _normalize_page_id(str(raw_page_id)), token=token
+            )
+        ]
+    finally:
+        if owns_client:
+            await client.aclose()
+
+
+async def _fetch_single_page(
+    client: httpx.AsyncClient, page_id: str, *, token: str
+) -> ConnectorPage:
+    try:
+        return await _render_one_page(client, page_id, token=token)
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code if exc.response is not None else 0
+        if status in (401, 403, 404):
+            raise ConnectorConfigError(
+                f"notion returned HTTP {status} for page {page_id} — is the "
+                "integration shared with the page?"
+            ) from exc
+        raise
+
+
+async def _fetch_database_pages(
+    client: httpx.AsyncClient, database_id: str, *, token: str
+) -> list[ConnectorPage]:
+    try:
+        data_source_id = await _resolve_data_source_id(client, database_id, token=token)
+        page_ids = await _query_data_source_pages(
+            client, data_source_id, token=token, limit=_MAX_PAGES_PER_DATABASE
+        )
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code if exc.response is not None else 0
+        if status in (401, 403, 404):
+            raise ConnectorConfigError(
+                f"notion returned HTTP {status} for database {database_id} — is the "
+                "integration shared with it?"
+            ) from exc
+        raise
+
+    pages: list[ConnectorPage] = []
+    for page_id in page_ids:
+        try:
+            pages.append(await _render_one_page(client, page_id, token=token))
+        except httpx.HTTPStatusError as exc:
+            # One inaccessible page in a database shouldn't fail the whole
+            # ref — log and continue. The dispatcher's stub fallback isn't
+            # right here because we've already produced some valid pages.
+            logger.warning(
+                "notion database %s: skipping page %s (HTTP %s)",
+                database_id,
+                page_id,
+                exc.response.status_code if exc.response is not None else "?",
+            )
+    return pages
 
 
 __all__ = ["fetch_notion_pages"]

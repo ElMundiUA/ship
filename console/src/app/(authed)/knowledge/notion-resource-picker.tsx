@@ -80,7 +80,15 @@ export function NotionResourcePicker({
       else setState({ kind: "loading" });
 
       try {
-        const params = new URLSearchParams({ workspaceId, integrationId });
+        const params = new URLSearchParams({
+          workspaceId,
+          integrationId,
+          // The connector now supports both pages and databases — pages
+          // ingest as a single doc, databases ingest each entry as one
+          // doc (capped per source). Default to "any" so operators see
+          // both shapes in the picker.
+          type: "any",
+        });
         if (args.q) params.set("q", args.q);
         if (args.cursor) params.set("cursor", args.cursor);
         const resp = await fetch(`/api/knowledge/notion-resources?${params.toString()}`, {
@@ -152,9 +160,9 @@ export function NotionResourcePicker({
         type="text"
         value={query}
         onChange={(event) => setQuery(event.target.value)}
-        placeholder="Search Notion pages your integration can see…"
+        placeholder="Search Notion pages and databases your integration can see…"
         className="w-full rounded border border-white/15 bg-black/30 px-3 py-2 text-sm text-white/90 placeholder:text-white/35"
-        aria-label="Search Notion pages"
+        aria-label="Search Notion pages and databases"
       />
 
       {value.length > 0 && (
@@ -194,7 +202,7 @@ export function NotionResourcePicker({
         )}
         {state.kind === "ready" && state.items.length === 0 && (
           <p className="px-3 py-3 text-xs text-white/55">
-            No Notion pages match. Make sure your integration is shared with the page in Notion (Share → Connections).
+            Nothing matches. Make sure your integration is shared with the page or database in Notion (Share → Connections).
           </p>
         )}
         {state.kind === "ready" && state.items.length > 0 && (
@@ -244,7 +252,7 @@ export function NotionResourcePicker({
       </div>
 
       <p className="text-[11px] text-white/45">
-        Pick at least one page. Don&apos;t see what you need? In Notion, open the page → <em>•••</em> → Connections, and add the integration named in your Notion settings.
+        Pick a page (one doc) or a database (each entry becomes one doc, capped at 50). Don&apos;t see what you need? In Notion, open the page → <em>•••</em> → Connections and add the integration.
       </p>
     </div>
   );
