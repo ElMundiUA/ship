@@ -1221,3 +1221,72 @@ async def _docs_repo_fetch_tree(
         "trees": trees,
         "truncated": bool(payload.get("truncated")),
     }
+
+
+# ---------------------------------------------------------------------------
+# Website preview (Firecrawl /map proxy)
+# ---------------------------------------------------------------------------
+#
+# Operators creating a website source guess at what URLs Firecrawl will
+# discover. Surfacing the /map result before they hit "Create" turns the
+# guess into a confirmation and lets them tune limit/scope without a
+# create-sync-archive cycle.
+
+
+class WebsitePreviewOut(BaseModel):
+    urls: list[str]
+    truncated: bool  # we hit the requested limit; there may be more
+
+
+@router.get("/website/preview", response_model=WebsitePreviewOut)
+async def preview_website_crawl(
+    workspace_id: uuid.UUID,
+    url: str = Query(..., description="Root URL to map"),
+    limit: int = Query(default=25, ge=1, le=200),
+    include_subdomains: bool = Query(default=False),
+    auth: AuthContext = Depends(get_current_auth),
+    settings: Settings = Depends(get_settings),
+    session: AsyncSession = Depends(get_session),
+) -> WebsitePreviewOut:
+    """Run Firecrawl ``/map`` against ``url`` and return discovered links.
+
+    No persistence — purely a "what would happen" probe. Same FIRECRAWL_API_KEY
+    used by the sync path. Operator must be a workspace admin (consistent
+    with create_source) so we don't expose Firecrawl as a public probe.
+    """
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+    if not settings.firecrawl_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Firecrawl is not configured on this deployment",
+        )
+
+    from backend.app.services.knowledge_ingestion import _firecrawl_map
+
+    cleaned = url.strip()
+    if not cleaned:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="url is required",
+        )
+
+    try:
+        urls = await _firecrawl_map(
+            cleaned,
+            config={"limit": limit, "include_subdomains": include_subdomains},
+            settings=settings,
+        )
+    except httpx.HTTPError as exc:
+        logger.warning(
+            "firecrawl /map preview failed for ws=%s url=%s: %s",
+            workspace_id,
+            cleaned,
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Firecrawl could not map this URL — check that it's reachable",
+        ) from exc
+
+    truncated = len(urls) >= limit
+    return WebsitePreviewOut(urls=urls, truncated=truncated)

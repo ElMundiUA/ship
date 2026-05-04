@@ -14,6 +14,12 @@ import {
 } from "./confluence-section-picker";
 import { DocsRepoTreePicker } from "./docs-repo-tree-picker";
 import { NotionResourcePicker, type NotionPageRef } from "./notion-resource-picker";
+import { StaticUploadDropzone, type UploadedDoc } from "./static-upload-dropzone";
+import {
+  WebsiteSourceForm,
+  DEFAULT_WEBSITE_CONFIG,
+  type WebsiteConfig,
+} from "./website-source-form";
 
 type SourceKind = "website" | "notion" | "confluence" | "docs_repo" | "static_upload";
 
@@ -38,13 +44,12 @@ export function KnowledgeImportWizard({
 }) {
   const [kind, setKind] = useState<SourceKind>("website");
   const [name, setName] = useState("Website knowledge");
-  const [url, setUrl] = useState("");
+  const [websiteConfig, setWebsiteConfig] = useState<WebsiteConfig>(DEFAULT_WEBSITE_CONFIG);
   const [notionRefs, setNotionRefs] = useState<NotionPageRef[]>([]);
   const [confluenceRefs, setConfluenceRefs] = useState<ConfluenceSectionRef[]>([]);
   const [repoId, setRepoId] = useState(repos[0]?.id ?? "");
   const [repoPaths, setRepoPaths] = useState<string[]>([]);
-  const [uploadTitle, setUploadTitle] = useState("");
-  const [uploadBody, setUploadBody] = useState("");
+  const [uploadDocs, setUploadDocs] = useState<UploadedDoc[]>([]);
   const [syncNow, setSyncNow] = useState(true);
   const [result, setResult] = useState<ImportSourceResult | null>(null);
   const [pending, startTransition] = useTransition();
@@ -81,8 +86,17 @@ export function KnowledgeImportWizard({
     | { ok: true; config: Record<string, unknown> }
     | { ok: false; message: string } {
     if (kind === "website") {
-      if (!url.trim()) return { ok: false, message: "Website URL is required." };
-      return { ok: true, config: { url: url.trim(), limit: 25, change_tracking: true, only_main_content: true } };
+      if (!websiteConfig.url.trim()) return { ok: false, message: "Website URL is required." };
+      return {
+        ok: true,
+        config: {
+          url: websiteConfig.url.trim(),
+          limit: websiteConfig.limit,
+          include_subdomains: websiteConfig.include_subdomains,
+          change_tracking: websiteConfig.change_tracking,
+          only_main_content: websiteConfig.only_main_content,
+        },
+      };
     }
     if (kind === "notion") {
       if (!selectedIntegrationId) return { ok: false, message: "Connect Notion first in integrations." };
@@ -112,11 +126,17 @@ export function KnowledgeImportWizard({
         },
       };
     }
-    if (!uploadBody.trim()) return { ok: false, message: "Paste Markdown content for uploaded files." };
+    if (uploadDocs.length === 0) {
+      return { ok: false, message: "Drop at least one file (.md, .mdx, .txt, .rst, .adoc) to upload." };
+    }
     return {
       ok: true,
       config: {
-        documents: [{ title: uploadTitle.trim() || name, filename: `${slugify(uploadTitle || name)}.md`, body_md: uploadBody }],
+        documents: uploadDocs.map((doc) => ({
+          title: doc.title.trim() || stripExtension(doc.filename) || name,
+          filename: doc.filename,
+          body_md: doc.body_md,
+        })),
       },
     };
   }
@@ -158,8 +178,12 @@ export function KnowledgeImportWizard({
             <input value={name} onChange={(event) => setName(event.target.value)} className="w-full rounded border border-white/15 bg-black/30 px-3 py-2 text-sm text-white/90" />
           </Field>
           {kind === "website" && (
-            <Field label="Website URL" hint="Firecrawl will map URLs, scrape Markdown, and Ship will skip unchanged hashes.">
-              <input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://docs.example.com" className="w-full rounded border border-white/15 bg-black/30 px-3 py-2 text-sm text-white/90" />
+            <Field label="Website URL">
+              <WebsiteSourceForm
+                workspaceId={workspaceId}
+                config={websiteConfig}
+                onChange={setWebsiteConfig}
+              />
             </Field>
           )}
           {kind === "notion" && (
@@ -236,10 +260,9 @@ export function KnowledgeImportWizard({
             </>
           )}
           {kind === "static_upload" && (
-            <>
-              <Field label="Document title"><input value={uploadTitle} onChange={(event) => setUploadTitle(event.target.value)} className="w-full rounded border border-white/15 bg-black/30 px-3 py-2 text-sm text-white/90" /></Field>
-              <Field label="Markdown content" hint="This source is one-shot and has no scheduled sync."><textarea value={uploadBody} onChange={(event) => setUploadBody(event.target.value)} rows={7} className="w-full rounded border border-white/15 bg-black/30 px-3 py-2 font-mono text-[12px] text-aqua/85" /></Field>
-            </>
+            <Field label="Files to upload" hint="One-shot import — no scheduled sync. Each file becomes one knowledge note.">
+              <StaticUploadDropzone value={uploadDocs} onChange={setUploadDocs} />
+            </Field>
           )}
           <label className="flex items-center gap-2 text-xs text-white/70">
             <input type="checkbox" checked={syncNow} onChange={(event) => setSyncNow(event.target.checked)} className="accent-aqua" />
@@ -294,6 +317,8 @@ function defaultName(kind: SourceKind): string {
   return `${kind[0]?.toUpperCase() ?? ""}${kind.slice(1)} knowledge`;
 }
 
-function slugify(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "upload";
+function stripExtension(filename: string): string {
+  const dot = filename.lastIndexOf(".");
+  if (dot <= 0) return filename;
+  return filename.slice(0, dot);
 }
