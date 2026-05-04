@@ -759,6 +759,31 @@ export function RepoCard({
               );
               return;
             }
+            // Done-page badge needs to know the merge actually
+            // landed (not just that the user *intended* to merge).
+            // Stash the activation result under its own
+            // sessionStorage key — separate from
+            // ``ship.wizard_seed_result.{id}`` whose invariant is
+            // "configure step writes, done page reads, nobody
+            // mutates after". Best-effort: a swallowed write means
+            // the badge falls back to OPENED, which is honest.
+            try {
+              const body = (await resp.json().catch(() => null)) as
+                | { merged?: unknown; sha?: unknown }
+                | null;
+              if (body && body.merged === true) {
+                window.sessionStorage.setItem(
+                  `ship.wizard_seed_activated.${initial.repo.id}`,
+                  JSON.stringify({
+                    merged: true,
+                    sha: typeof body.sha === "string" ? body.sha : null,
+                  }),
+                );
+              }
+            } catch {
+              // sessionStorage disabled / private browsing —
+              // navigate anyway; the badge degrades to OPENED.
+            }
             navigateToDone();
           }}
           onSkip={() => {

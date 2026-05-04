@@ -8,6 +8,18 @@
  * (:component:`DoneResult`) hands in everything we need so the card
  * is trivial to unit-test and reuse in fallback paths.
  *
+ * The PR-state badge ("opened" vs "merged") is the one piece of
+ * state that *can* change between the wizard finishing and this
+ * card rendering: the configure step's "Activate Ship now" modal
+ * may have merged the PR via the App's installation token. The
+ * activation handler stashes the resulting ``{merged, sha}`` under
+ * ``ship.wizard_seed_activated.{repo_id}``; we read it once on
+ * mount. No GitHub round-trip — the source of truth is the
+ * activation API's response, captured at the moment the merge
+ * happened. The badge stays at "opened" when the operator picked
+ * "I'll merge it myself" (no activation key written) or when
+ * sessionStorage is unavailable (private browsing).
+ *
  * Pre-cleanup this card also surfaced CODEOWNERS-derived routing
  * rules and a repo-intel poll badge. Both fields became dead
  * post-P5-06: the wizard_seed route stopped dispatching either
@@ -17,6 +29,8 @@
  * Retry harvest →" buttons that wired to nothing. Cleanup keeps the
  * card to load-bearing facts only.
  */
+
+import { useEffect, useState } from "react";
 
 import type {
   ApiActivatedRepo,
@@ -70,7 +84,7 @@ export function RepoResultCard({
       </header>
 
       <div className="mt-4 space-y-3">
-        <PullRequestRow result={result} />
+        <PullRequestRow result={result} repoId={repo?.id ?? null} />
         <FileCountRow result={result} fileCount={fileCount} />
       </div>
     </article>
@@ -99,7 +113,15 @@ function Section({
   );
 }
 
-function PullRequestRow({ result }: { result: ApiWizardSeedOut }) {
+function PullRequestRow({
+  result,
+  repoId,
+}: {
+  result: ApiWizardSeedOut;
+  /** ``null`` when the parent only had the wizard payload, no repo row. */
+  repoId: string | null;
+}) {
+  const merged = useActivationMerged(repoId);
   return (
     <Section label="Pull request">
       <div className="flex flex-wrap items-center gap-2">
@@ -112,9 +134,21 @@ function PullRequestRow({ result }: { result: ApiWizardSeedOut }) {
         >
           → #{result.pr_number} Ship: bootstrap (open in GitHub)
         </a>
-        <span className="rounded-full border border-emerald-400/30 bg-emerald-500/[0.08] px-2 py-0.5 text-[10px] uppercase tracking-widest text-emerald-300">
-          opened
-        </span>
+        {merged ? (
+          <span
+            data-testid="onboarding-done-pr-state"
+            className="rounded-full border border-violet-400/30 bg-violet-500/[0.10] px-2 py-0.5 text-[10px] uppercase tracking-widest text-violet-300"
+          >
+            merged
+          </span>
+        ) : (
+          <span
+            data-testid="onboarding-done-pr-state"
+            className="rounded-full border border-emerald-400/30 bg-emerald-500/[0.08] px-2 py-0.5 text-[10px] uppercase tracking-widest text-emerald-300"
+          >
+            opened
+          </span>
+        )}
       </div>
       <div className="mt-2 text-[11px] text-white/55">
         Branch:{" "}
@@ -124,6 +158,44 @@ function PullRequestRow({ result }: { result: ApiWizardSeedOut }) {
       </div>
     </Section>
   );
+}
+
+
+/**
+ * Read the activation flag the configure step's "Activate Ship now"
+ * modal writes when the App's installation token successfully merged
+ * the seed PR. Returns ``true`` only on a successful merge; missing
+ * key, parse failure, ``merged !== true``, or storage error all
+ * collapse to ``false`` so the badge degrades to OPENED rather than
+ * lying.
+ *
+ * One-shot read on mount — the configure step navigates here right
+ * after writing, so there's no race window worth subscribing to.
+ */
+function useActivationMerged(repoId: string | null): boolean {
+  const [merged, setMerged] = useState(false);
+  useEffect(() => {
+    if (!repoId) return;
+    if (typeof window === "undefined") return;
+    let raw: string | null = null;
+    try {
+      raw = window.sessionStorage.getItem(
+        `ship.wizard_seed_activated.${repoId}`,
+      );
+    } catch {
+      return;
+    }
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && parsed.merged === true) {
+        setMerged(true);
+      }
+    } catch {
+      // Tampered cache — ignore; badge stays OPENED.
+    }
+  }, [repoId]);
+  return merged;
 }
 
 function FileCountRow({
