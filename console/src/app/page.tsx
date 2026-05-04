@@ -4,11 +4,7 @@ import type { ReactNode } from "react";
 
 import { AppShell } from "@/components/app-shell";
 import { ApiUnavailable } from "@/components/api-unavailable";
-import {
-  ButtonPrimary,
-  Card,
-  CardHeader,
-} from "@/components/ui";
+import { ButtonPrimary } from "@/components/ui";
 import { WorkspaceEntryPicker } from "@/components/workspace-entry-picker";
 import { WorkspaceHome } from "@/components/workspace-home";
 import {
@@ -252,36 +248,34 @@ function renderGreenfieldWelcome(ctx: LiveContext) {
         </ButtonPrimary>
       }
     >
-      <Card>
-        <CardHeader
-          title={`Welcome to ${workspace.name}`}
-          subtitle="Five quick steps to get the workspace earning its keep."
-        />
-        <ol className="mt-2 space-y-3">
+      <div className="mx-auto max-w-3xl space-y-10">
+        <header className="space-y-3">
+          <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-white/40">
+            Welcome to {workspace.name}
+          </p>
+          <h1 className="font-display text-3xl font-bold leading-tight text-white">
+            Five steps to make the workspace earn its keep.
+          </h1>
+          <p className="text-sm text-white/55">
+            You can leave and come back any time — your progress persists.
+          </p>
+        </header>
+        <ol className="space-y-6">
           {SETUP_STEPS.map((step, idx) => (
-            <li
-              key={step.title}
-              className="flex gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3"
-            >
-              <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-white/10 font-mono text-[11px] font-bold text-white/75">
+            <li key={step.title} className="flex gap-5">
+              <span className="font-display text-2xl font-bold text-aqua tabular-nums">
                 {idx + 1}
               </span>
               <div>
-                <p className="text-sm font-semibold text-white">{step.title}</p>
-                <p className="mt-0.5 text-xs text-white/60">{step.body}</p>
+                <p className="text-base font-semibold text-white">{step.title}</p>
+                <p className="mt-1 text-sm leading-relaxed text-white/55">
+                  {step.body}
+                </p>
               </div>
             </li>
           ))}
         </ol>
-        <div className="mt-5 flex items-center justify-between gap-2">
-          <p className="text-xs text-white/50">
-            You can leave and come back any time — your progress persists.
-          </p>
-          <ButtonPrimary>
-            <Link href={onboardingHref}>Continue setup →</Link>
-          </ButtonPrimary>
-        </div>
-      </Card>
+      </div>
     </AppShell>
   );
 }
