@@ -1,19 +1,28 @@
 "use client";
 
 /**
- * Knowledge — single-page newspaper.
+ * Knowledge index — editorial multi-column.
  *
- * Top of the page: a search bar + the export/import actions.
- * Below: two sections — "Recent" (top-10 articles by updated_at)
- * and "Browse by area" (the six buckets as text links).
+ * Layout (≥ lg):
  *
- * No bordered cards, no metric tiles, no chip-filter row, no fat
- * tables. Reading-column width capped so the layout feels like a
- * blog, not a control panel. Bucket → category page; article →
- * reader page.
+ *   ┌──────────────────────────────────────────────────────────┐
+ *   │  Search · Import source · Export ZIP                      │
+ *   ├──────────────────────────────────┬───────────────────────┤
+ *   │  Recent (col-span-8)             │  Browse by area (4)    │
+ *   │    Lede article                  │    Sticky bucket nav   │
+ *   │    Recent rows (divide-y)        │                        │
+ *   ├──────────────────────────────────┴───────────────────────┤
+ *   │  Sources (collapsed)                                      │
+ *   └──────────────────────────────────────────────────────────┘
  *
- * Real popularity-based ranking is a follow-up — we don't track
- * article views yet, so "Recent" is what we surface for now.
+ * Below ``lg``: collapses to a single column with the bucket nav
+ * lifted above Recent (so the IA is visible without scrolling).
+ *
+ * Style cues: Linear changelog rhythm + Stripe Press editorial ledes.
+ * No bordered cards; sections separated by whitespace + a single
+ * hairline rule. ``aqua`` (champagne gold) is reserved for editorial
+ * accents (lede hairline, link hover); ``lilac`` for bucket nav;
+ * ``coral`` for errors only.
  */
 
 import Link from "next/link";
@@ -131,60 +140,24 @@ export function KnowledgeControlCenter({
 
   const liveBuckets = buckets.filter((b) => !b.archived);
   const isSearching = searchHits !== null;
+  const lede = articles[0] ?? null;
+  const rest = articles.slice(1);
 
   return (
-    <div className="mx-auto max-w-3xl space-y-10">
-      <div className="flex flex-col gap-3">
-        <form onSubmit={runSearch} className="relative">
-          <input
-            type="search"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search workspace knowledge…"
-            className="w-full border-b border-white/15 bg-transparent px-1 pb-2 pt-1 text-base text-white placeholder:text-white/30 outline-none transition focus:border-aqua/60"
-            aria-label="Search workspace knowledge"
-          />
-          {(query || isSearching) && (
-            <button
-              type="button"
-              onClick={clearSearch}
-              aria-label="Clear search"
-              className="absolute right-1 top-1 text-xs text-white/45 hover:text-white"
-            >
-              clear
-            </button>
-          )}
-        </form>
+    <div className="mx-auto max-w-6xl space-y-12">
+      <SearchHeader
+        query={query}
+        onChange={setQuery}
+        onSubmit={runSearch}
+        onClear={clearSearch}
+        isSearching={isSearching}
+        importOpen={importOpen}
+        onToggleImport={() => setImportOpen((v) => !v)}
+        workspaceId={workspace.id}
+      />
 
-        <div className="flex items-center gap-3 text-xs">
-          <button
-            type="button"
-            onClick={() => setImportOpen((v) => !v)}
-            className={cn(
-              "transition",
-              importOpen ? "text-aqua" : "text-white/55 hover:text-white",
-            )}
-          >
-            {importOpen ? "Close import" : "Import source"}
-          </button>
-          <span className="text-white/15">·</span>
-          {workspace.id && (
-            <a
-              href={`/api/knowledge/export?workspaceId=${encodeURIComponent(workspace.id)}`}
-              className="text-white/55 transition hover:text-white"
-            >
-              Export ZIP
-            </a>
-          )}
-        </div>
-      </div>
-
-      {pending && (
-        <p className="text-xs text-white/45">Searching…</p>
-      )}
-      {searchError && (
-        <p className="text-sm text-coral">{searchError}</p>
-      )}
+      {pending && <p className="text-xs text-white/45">Searching…</p>}
+      {searchError && <p className="text-sm text-coral">{searchError}</p>}
 
       {importOpen && (
         <ImportPanel
@@ -197,10 +170,42 @@ export function KnowledgeControlCenter({
       {isSearching ? (
         <SearchResults hits={searchHits ?? []} queriedFor={searchedFor} />
       ) : (
-        <>
-          <RecentSection articles={articles} />
-          <BrowseByAreaSection buckets={liveBuckets} />
-        </>
+        <div className="grid grid-cols-1 gap-x-12 gap-y-12 lg:grid-cols-12">
+          <section className="space-y-8 lg:col-span-8">
+            <SectionKicker tone="aqua">Recent</SectionKicker>
+            {lede ? (
+              <>
+                <LedeArticle article={lede} />
+                {rest.length > 0 && (
+                  <ul className="divide-y divide-white/5">
+                    {rest.map((article) => (
+                      <li key={article.id} className="py-5 first:pt-6">
+                        <ArticleRow article={article} showBucket />
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </>
+            ) : (
+              <p className="text-sm text-white/55">
+                No articles in this workspace yet. Connect an import source or
+                wait for the harvester to surface drafts.
+              </p>
+            )}
+          </section>
+
+          <aside className="space-y-6 lg:col-span-4 lg:sticky lg:top-24 lg:self-start">
+            <SectionKicker tone="lilac">Browse by area</SectionKicker>
+            <BucketDirectory buckets={liveBuckets} />
+          </aside>
+
+          {sources.length > 0 && (
+            <section className="space-y-3 lg:col-span-12">
+              <SectionKicker tone="muted">Sources</SectionKicker>
+              <ConnectedSources sources={sources} />
+            </section>
+          )}
+        </div>
       )}
     </div>
   );
@@ -208,117 +213,103 @@ export function KnowledgeControlCenter({
 
 
 // ---------------------------------------------------------------------------
-// Sections
+// Header — search + actions
 // ---------------------------------------------------------------------------
 
 
-function RecentSection({ articles }: { articles: KnowledgeArticleRow[] }) {
-  if (articles.length === 0) {
-    return (
-      <SectionHeader
-        title="Recent"
-        empty="No articles in this workspace yet. Import a source or wait for the harvester to surface drafts."
-      />
-    );
-  }
-  return (
-    <section className="space-y-4">
-      <SectionHeader title="Recent" />
-      <ul className="space-y-5">
-        {articles.map((article) => (
-          <li key={article.id}>
-            <ArticleRow article={article} showBucket />
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
-}
-
-
-function BrowseByAreaSection({ buckets }: { buckets: KnowledgeBucketRow[] }) {
-  if (buckets.length === 0) return null;
-  return (
-    <section className="space-y-4">
-      <SectionHeader title="Browse by area" />
-      <ul className="divide-y divide-white/5">
-        {buckets.map((bucket) => (
-          <li key={bucket.slug}>
-            <Link
-              href={`/knowledge/${encodeURIComponent(bucket.slug)}`}
-              className="group flex items-baseline justify-between gap-4 py-3"
-            >
-              <div className="min-w-0">
-                <div className="text-base font-semibold text-white group-hover:text-aqua">
-                  {bucket.name}
-                </div>
-                {bucket.description && (
-                  <p className="mt-0.5 line-clamp-1 text-xs text-white/50">
-                    {bucket.description}
-                  </p>
-                )}
-              </div>
-              <span className="shrink-0 font-mono text-xs text-white/45">
-                {bucket.articleCount} article{bucket.articleCount === 1 ? "" : "s"}
-              </span>
-            </Link>
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
-}
-
-
-function SearchResults({
-  hits,
-  queriedFor,
+function SearchHeader({
+  query,
+  onChange,
+  onSubmit,
+  onClear,
+  isSearching,
+  importOpen,
+  onToggleImport,
+  workspaceId,
 }: {
-  hits: ApiKnowledgeSearchHit[];
-  queriedFor: string;
-}) {
-  if (hits.length === 0) {
-    return (
-      <SectionHeader
-        title={`Results for “${queriedFor}”`}
-        empty={queriedFor ? `Nothing matched “${queriedFor}”.` : "No matches."}
-      />
-    );
-  }
-  return (
-    <section className="space-y-4">
-      <SectionHeader title={`Results for “${queriedFor}”`} />
-      <ul className="space-y-5">
-        {hits.map((hit) => (
-          <li key={`${hit.source}:${hit.id}`}>
-            <SearchHitRow hit={hit} />
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
-}
-
-
-// ---------------------------------------------------------------------------
-// Building blocks
-// ---------------------------------------------------------------------------
-
-
-function SectionHeader({
-  title,
-  empty,
-}: {
-  title: string;
-  empty?: string;
+  query: string;
+  onChange: (v: string) => void;
+  onSubmit: (e?: React.FormEvent) => void;
+  onClear: () => void;
+  isSearching: boolean;
+  importOpen: boolean;
+  onToggleImport: () => void;
+  workspaceId?: string;
 }) {
   return (
-    <div className="space-y-2">
-      <h2 className="text-[11px] font-bold uppercase tracking-[0.2em] text-white/45">
-        {title}
-      </h2>
-      {empty && <p className="text-sm text-white/55">{empty}</p>}
+    <div className="flex flex-col gap-3">
+      <form onSubmit={onSubmit} className="relative">
+        <input
+          type="search"
+          value={query}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder="Search workspace knowledge…"
+          className="w-full border-b border-white/15 bg-transparent px-1 pb-3 pt-1 text-lg text-white placeholder:text-white/30 outline-none transition focus:border-aqua/60"
+          aria-label="Search workspace knowledge"
+        />
+        {(query || isSearching) && (
+          <button
+            type="button"
+            onClick={onClear}
+            aria-label="Clear search"
+            className="absolute right-1 top-2 text-xs text-white/45 hover:text-white"
+          >
+            clear
+          </button>
+        )}
+      </form>
+
+      <div className="flex items-center gap-3 text-xs">
+        <button
+          type="button"
+          onClick={onToggleImport}
+          className={cn(
+            "transition",
+            importOpen ? "text-aqua" : "text-white/55 hover:text-white",
+          )}
+        >
+          {importOpen ? "Close import" : "Import source"}
+        </button>
+        <span className="text-white/15">·</span>
+        {workspaceId && (
+          <a
+            href={`/api/knowledge/export?workspaceId=${encodeURIComponent(workspaceId)}`}
+            className="text-white/55 transition hover:text-white"
+          >
+            Export ZIP
+          </a>
+        )}
+      </div>
     </div>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// Recent — lede + rows
+// ---------------------------------------------------------------------------
+
+
+function LedeArticle({ article }: { article: KnowledgeArticleRow }) {
+  return (
+    <Link
+      href={`/knowledge/${encodeURIComponent(article.bucketSlug)}?article=${encodeURIComponent(article.id)}`}
+      className="group block space-y-3 border-b border-aqua/30 pb-8"
+    >
+      <h3 className="font-display text-2xl font-bold leading-tight text-white group-hover:text-aqua md:text-3xl">
+        {article.title}
+      </h3>
+      {article.snippet && (
+        <p className="line-clamp-3 text-base leading-relaxed text-white/65">
+          {article.snippet}
+        </p>
+      )}
+      <p className="flex items-center gap-2 text-[11px] uppercase tracking-widest text-white/40">
+        <span>{article.bucketName}</span>
+        <span className="text-white/20">·</span>
+        <span>{relativeDate(article.updatedAt)}</span>
+      </p>
+    </Link>
   );
 }
 
@@ -333,17 +324,17 @@ function ArticleRow({
   return (
     <Link
       href={`/knowledge/${encodeURIComponent(article.bucketSlug)}?article=${encodeURIComponent(article.id)}`}
-      className="group block"
+      className="group block space-y-1.5"
     >
       <div className="text-base font-semibold text-white group-hover:text-aqua">
         {article.title}
       </div>
       {article.snippet && (
-        <p className="mt-1 line-clamp-2 text-sm leading-relaxed text-white/60">
+        <p className="line-clamp-2 text-sm leading-relaxed text-white/55">
           {article.snippet}
         </p>
       )}
-      <div className="mt-1 text-[11px] text-white/40">
+      <div className="text-[11px] text-white/40">
         {showBucket && (
           <>
             <span>{article.bucketName}</span>
@@ -353,6 +344,77 @@ function ArticleRow({
         <span>{relativeDate(article.updatedAt)}</span>
       </div>
     </Link>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// Browse by area — bucket directory
+// ---------------------------------------------------------------------------
+
+
+function BucketDirectory({ buckets }: { buckets: KnowledgeBucketRow[] }) {
+  if (buckets.length === 0) return null;
+  return (
+    <ul className="divide-y divide-white/5">
+      {buckets.map((bucket) => (
+        <li key={bucket.slug}>
+          <Link
+            href={`/knowledge/${encodeURIComponent(bucket.slug)}`}
+            className="group flex items-baseline justify-between gap-3 py-3"
+          >
+            <div className="min-w-0 flex-1">
+              <div className="font-display text-sm font-bold uppercase tracking-wider text-white/85 group-hover:text-lilac">
+                {bucket.name}
+              </div>
+              {bucket.description && (
+                <p className="mt-1 line-clamp-1 text-xs text-white/45">
+                  {bucket.description}
+                </p>
+              )}
+            </div>
+            <span className="shrink-0 font-mono text-xs text-white/35">
+              {bucket.articleCount}
+            </span>
+          </Link>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// Search results — same shape as Recent rows, single column inside the grid
+// ---------------------------------------------------------------------------
+
+
+function SearchResults({
+  hits,
+  queriedFor,
+}: {
+  hits: ApiKnowledgeSearchHit[];
+  queriedFor: string;
+}) {
+  return (
+    <section className="space-y-6">
+      <SectionKicker tone="aqua">
+        Results for “{queriedFor}”
+      </SectionKicker>
+      {hits.length === 0 ? (
+        <p className="text-sm text-white/55">
+          {queriedFor ? `Nothing matched “${queriedFor}”.` : "No matches."}
+        </p>
+      ) : (
+        <ul className="divide-y divide-white/5">
+          {hits.map((hit) => (
+            <li key={`${hit.source}:${hit.id}`} className="py-5 first:pt-0">
+              <SearchHitRow hit={hit} />
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 
@@ -372,15 +434,15 @@ function SearchHitRow({ hit }: { hit: ApiKnowledgeSearchHit }) {
         {title}
       </div>
       {hit.snippet && (
-        <p className="mt-1 line-clamp-2 text-sm leading-relaxed text-white/60">
+        <p className="mt-1 line-clamp-2 text-sm leading-relaxed text-white/55">
           {hit.snippet}
         </p>
       )}
-      <div className="mt-1 text-[11px] text-white/40">
+      <div className="mt-1 flex items-center gap-2 text-[11px] text-white/40">
         {hit.bucket_slug && (
           <>
             <span>{hit.bucket_slug}</span>
-            <span className="mx-2 text-white/20">·</span>
+            <span className="text-white/20">·</span>
           </>
         )}
         <span className="font-mono">{hit.score.toFixed(3)}</span>
@@ -398,7 +460,7 @@ function SearchHitRow({ hit }: { hit: ApiKnowledgeSearchHit }) {
 
 
 // ---------------------------------------------------------------------------
-// Import panel — wizard + connected sources list, no Card wrappers
+// Sources — wizard + connected list, full-width footer
 // ---------------------------------------------------------------------------
 
 
@@ -418,46 +480,45 @@ function ImportPanel({
         repos={repos}
         defaultScope="workspace"
       />
-      {sources.length > 0 && (
-        <div className="space-y-3">
-          <h3 className="text-[11px] font-bold uppercase tracking-[0.2em] text-white/45">
-            Connected sources
-          </h3>
-          <ul className="divide-y divide-white/5">
-            {sources.map((source) => (
-              <li
-                key={source.id}
-                className="grid grid-cols-[1fr_auto] items-center gap-3 py-2"
-              >
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="truncate text-sm font-semibold text-white">
-                      {source.name}
-                    </span>
-                    <span className="text-[11px] uppercase tracking-widest text-white/40">
-                      {source.kind}
-                    </span>
-                  </div>
-                  {source.lastError && (
-                    <p className="mt-0.5 line-clamp-1 text-[11px] text-coral">
-                      {source.lastError}
-                    </p>
-                  )}
-                </div>
-                <div className="flex flex-col items-end text-[11px] text-white/45">
-                  <span className={statusColor(source.status)}>
-                    {source.status}
-                  </span>
-                  <span>
-                    {source.lastSyncedAt ? relativeDate(source.lastSyncedAt) : "never"}
-                  </span>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+      {sources.length > 0 && <ConnectedSources sources={sources} />}
     </section>
+  );
+}
+
+
+function ConnectedSources({ sources }: { sources: KnowledgeSourceRow[] }) {
+  if (sources.length === 0) return null;
+  return (
+    <ul className="divide-y divide-white/5">
+      {sources.map((source) => (
+        <li
+          key={source.id}
+          className="grid grid-cols-[1fr_auto] items-center gap-3 py-3"
+        >
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="truncate text-sm font-semibold text-white">
+                {source.name}
+              </span>
+              <span className="text-[11px] uppercase tracking-widest text-white/40">
+                {source.kind}
+              </span>
+            </div>
+            {source.lastError && (
+              <p className="mt-0.5 line-clamp-1 text-[11px] text-coral">
+                {source.lastError}
+              </p>
+            )}
+          </div>
+          <div className="flex flex-col items-end text-[11px] text-white/45">
+            <span className={statusColor(source.status)}>{source.status}</span>
+            <span>
+              {source.lastSyncedAt ? relativeDate(source.lastSyncedAt) : "never"}
+            </span>
+          </div>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -473,6 +534,32 @@ function statusColor(status: string): string {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+
+function SectionKicker({
+  children,
+  tone,
+}: {
+  children: React.ReactNode;
+  tone: "aqua" | "lilac" | "muted";
+}) {
+  const toneClass =
+    tone === "aqua"
+      ? "text-aqua/75"
+      : tone === "lilac"
+        ? "text-lilac/75"
+        : "text-white/40";
+  return (
+    <h2
+      className={cn(
+        "text-[11px] font-bold uppercase tracking-[0.22em]",
+        toneClass,
+      )}
+    >
+      {children}
+    </h2>
+  );
+}
 
 
 function relativeDate(value: string | null | undefined): string {
