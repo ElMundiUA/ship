@@ -228,6 +228,13 @@ def default_development_process_config(
         "id": "development",
         "name": "Development Process",
         "primary": True,
+        # Phase 3: where the operator wants to interject. ``after_pr``
+        # is the autonomous default — the agent reviewer runs the final
+        # review and the human only approves + merges. Operators who
+        # want earlier interjection points edit this in
+        # ``.ship/config.yml`` (or the process editor, when the UI
+        # lands). Allowed: ``after_ba | after_arch | after_pr``.
+        "gates": "after_pr",
         "states": [
             {
                 "id": "task_intake",

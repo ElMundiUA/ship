@@ -336,7 +336,16 @@ function validateV2Process(obj, errors, warnings) {
   }
   pushUnknownKeyWarnings(
     process,
-    new Set(["id", "name", "primary", "states", "transitions", "routines"]),
+    new Set([
+      "id",
+      "name",
+      "primary",
+      "states",
+      "transitions",
+      "routines",
+      "schedule",
+      "gates",
+    ]),
     "process",
     warnings,
   );
@@ -348,6 +357,19 @@ function validateV2Process(obj, errors, warnings) {
   }
   if (process.primary !== undefined && typeof process.primary !== "boolean") {
     errors.push("process.primary: must be boolean when set");
+  }
+  // Where the operator wants to interject (Phase 3). ``after_pr``
+  // (default) is fully autonomous through the agent reviewer;
+  // ``after_arch`` pauses for human approval after architects;
+  // ``after_ba`` pauses earlier, after BA writes the spec.
+  // Enforcement (FSM "needs review" routing) lands in Phase 3.5.
+  if (process.gates !== undefined) {
+    const allowed = new Set(["after_ba", "after_arch", "after_pr"]);
+    if (typeof process.gates !== "string" || !allowed.has(process.gates)) {
+      errors.push(
+        `process.gates: must be one of ${[...allowed].join(" | ")} when set`,
+      );
+    }
   }
 
   if (!Array.isArray(process.states) || process.states.length < 1) {
