@@ -27,8 +27,8 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
-import { AppShell } from "@/components/app-shell";
 import { ApiUnavailable } from "@/components/api-unavailable";
+import { PageBody, PageHeader } from "@/components/app-shell";
 import {
   Badge,
   Card,
@@ -38,16 +38,16 @@ import {
 import {
   ApiHttpError,
   ApiUnavailableError,
-  isApiConfigured,
   listAuditLog,
-  listWorkspaces,
 } from "@/lib/api/client";
 import type { ApiAuditEntry, ApiAuditPage, ApiWorkspace } from "@/lib/api/types";
-import { getSessionToken } from "@/lib/api/session";
+import {
+  getCachedSessionToken,
+  getCachedWorkspaces,
+} from "@/lib/api/session-cache.server";
 import { getResolvedWorkspaceId } from "@/lib/workspace-resolve.server";
 import {
   pickWorkspace,
-  toAppShellWorkspaces,
   withWorkspaceQuery,
 } from "@/lib/workspace-scope";
 
@@ -150,18 +150,11 @@ async function load(
   filters: AuditFilters,
   params: Record<string, string | string[] | undefined>,
 ): Promise<Mode> {
-  if (!isApiConfigured())
-    return { source: "error", reason: "SHIP_API_URL is not set on this deployment." };
-  const token = await getSessionToken();
+  const token = await getCachedSessionToken();
   if (!token)
     return { source: "error", reason: "Sign in to view audit history.", redirectReason: "session_expired" };
   try {
-    const ws = await listWorkspaces(token);
-    if (ws.length === 0)
-      return {
-        source: "error",
-        reason: "Create a workspace first to see audit history.",
-      };
+    const ws = await getCachedWorkspaces();
     const resolved = await getResolvedWorkspaceId(params, ws);
     const target = pickWorkspace(ws, resolved);
     const page = await listAuditLog(
@@ -247,9 +240,12 @@ export default async function AuditPage({
       redirect("/login?next=%2Faudit&reason=session_expired");
     }
     return (
-      <AppShell title="Audit">
-        <ApiUnavailable scope="audit" details={data.reason} />
-      </AppShell>
+      <>
+        <PageHeader title="Audit" />
+        <PageBody>
+          <ApiUnavailable scope="audit" details={data.reason} />
+        </PageBody>
+      </>
     );
   }
 
@@ -260,21 +256,20 @@ export default async function AuditPage({
     page.next_cursor !== null ? buildPagerUrl(filters, page.next_cursor) : null;
 
   return (
-    <AppShell
-      kicker={workspace.slug}
-      title="Audit"
-      workspace={{ id: workspace.id, name: workspace.name, slug: workspace.slug }}
-      allWorkspaces={toAppShellWorkspaces(allWorkspaces)}
-      actions={
-        <Link
-          href={withWorkspaceQuery("/audit", workspace.id, multiWorkspace)}
-          className="rounded-full border border-white/15 bg-white/[0.04] px-3 py-1.5 text-xs font-bold text-white/85 transition hover:bg-white/[0.08]"
-        >
-          Reset
-        </Link>
-      }
-    >
-      <LiveBanner workspace={workspace.slug} />
+    <>
+      <PageHeader
+        title="Audit"
+        actions={
+          <Link
+            href={withWorkspaceQuery("/audit", workspace.id, multiWorkspace)}
+            className="rounded-full border border-white/15 bg-white/[0.04] px-3 py-1.5 text-xs font-bold text-white/85 transition hover:bg-white/[0.08]"
+          >
+            Reset
+          </Link>
+        }
+      />
+      <PageBody>
+        <LiveBanner workspace={workspace.slug} />
 
       <FilterCard filters={filters} />
 
@@ -368,7 +363,8 @@ export default async function AuditPage({
           )}
         </div>
       </Card>
-    </AppShell>
+      </PageBody>
+    </>
   );
 }
 

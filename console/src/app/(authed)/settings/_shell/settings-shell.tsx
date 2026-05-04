@@ -6,10 +6,11 @@
  * component.
  */
 
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 
-import { AppShell } from "@/components/app-shell";
+import { PageBody, PageHeader } from "@/components/app-shell";
 import { ApiUnavailable } from "@/components/api-unavailable";
 import {
   IntegrationsWorkspaceBody,
@@ -38,16 +39,18 @@ import {
   listShipAgentRoleDefaults,
   listTokens,
   listWorkspaceAgentRoles,
-  listWorkspaces,
 } from "@/lib/api/client";
 import type {
   ApiArtifactRepo,
   ApiTokenInfo,
   ApiWorkspace,
 } from "@/lib/api/types";
-import { getSessionToken } from "@/lib/api/session";
+import {
+  getCachedSessionToken,
+  getCachedWorkspaces,
+} from "@/lib/api/session-cache.server";
 import { getResolvedWorkspaceId } from "@/lib/workspace-resolve.server";
-import { pickWorkspace, toAppShellWorkspaces } from "@/lib/workspace-scope";
+import { pickWorkspace } from "@/lib/workspace-scope";
 
 export const dynamic = "force-dynamic";
 
@@ -124,15 +127,11 @@ async function load(
     return { source: "unavailable", errMsg: "SHIP_API_URL is not set on this deployment." };
   }
 
-  const token = await getSessionToken();
+  const token = await getCachedSessionToken();
   if (!token) redirect("/login?next=%2Fsettings&reason=session_expired");
 
   try {
-    const ws = await listWorkspaces(token);
-    if (ws.length === 0) {
-      redirect("/onboarding?step=github");
-    }
-
+    const ws = await getCachedWorkspaces();
     const resolved = await getResolvedWorkspaceId(searchParams, ws);
     if (ws.length > 1 && !resolved) {
       redirect("/?next=/settings");
@@ -280,9 +279,12 @@ export async function SettingsShell({
 
   if (data.source === "unavailable") {
     return (
-      <AppShell kicker="settings" title="Workspace settings">
-        <ApiUnavailable scope="settings" details={data.errMsg} />
-      </AppShell>
+      <>
+        <PageHeader kicker="settings" title="Workspace settings" />
+        <PageBody>
+          <ApiUnavailable scope="settings" details={data.errMsg} />
+        </PageBody>
+      </>
     );
   }
 
@@ -313,39 +315,37 @@ export async function SettingsShell({
   };
 
   return (
-    <AppShell
-      kicker={`${workspace.name} · settings`}
-      title="Workspace settings"
-      workspace={{ id: workspace.id, name: workspace.name, slug: workspace.slug }}
-      allWorkspaces={toAppShellWorkspaces(allWorkspaces)}
-    >
-      <LiveBanner workspace={workspace.slug} />
-      {errorCode && (
-        <div className="mb-5 rounded-xl border border-coral/30 bg-coral/[0.06] px-3 py-2 text-xs text-coral/95">
-          {errorMessage(errorCode)}
-        </div>
-      )}
+    <>
+      <PageHeader kicker="settings" title="Workspace settings" />
+      <PageBody>
+        <LiveBanner workspace={workspace.slug} />
+        {errorCode && (
+          <div className="mb-5 rounded-xl border border-coral/30 bg-coral/[0.06] px-3 py-2 text-xs text-coral/95">
+            {errorMessage(errorCode)}
+          </div>
+        )}
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[16rem_minmax(0,1fr)]">
-        <nav className="space-y-1 text-sm">
-          {TABS.map((tab) => {
-            const current = tab.id === activeTab;
-            return (
-              <a
-                key={tab.id}
-                href={settingsTabHref(tab.id)}
-                className={
-                  "block rounded-md px-3 py-1.5 transition " +
-                  (current
-                    ? "bg-white/[0.06] font-semibold text-white shadow-[inset_2px_0_0_theme(colors.aqua)]"
-                    : "text-white/55 hover:bg-white/[0.04] hover:text-white")
-                }
-              >
-                {tab.label}
-              </a>
-            );
-          })}
-        </nav>
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[16rem_minmax(0,1fr)]">
+          <nav className="space-y-1 text-sm">
+            {TABS.map((tab) => {
+              const current = tab.id === activeTab;
+              return (
+                <Link
+                  key={tab.id}
+                  href={settingsTabHref(tab.id)}
+                  prefetch
+                  className={
+                    "block rounded-md px-3 py-1.5 transition " +
+                    (current
+                      ? "bg-white/[0.06] font-semibold text-white shadow-[inset_2px_0_0_theme(colors.aqua)]"
+                      : "text-white/55 hover:bg-white/[0.04] hover:text-white")
+                  }
+                >
+                  {tab.label}
+                </Link>
+              );
+            })}
+          </nav>
 
         <div className="space-y-6">
           {activeTab === "general" && (
@@ -446,8 +446,9 @@ export async function SettingsShell({
             <DangerZone workspace={workspace} />
           )}
         </div>
-      </div>
-    </AppShell>
+        </div>
+      </PageBody>
+    </>
   );
 }
 

@@ -10,37 +10,29 @@
  * `inbox-types.ts` so a hostile URL can't smuggle bad enum values
  * into the API query.
  *
- * Three outcomes:
- *   - **live**: backend reachable + session valid → real list + counts
- *     from `/v1/workspaces/{ws}/inbox`.
- *   - **redirect**: missing session → `/login`; no workspaces → `/onboarding`.
- *   - **down**: API misconfigured or unreachable → `<ApiUnavailable>`.
- *
- * The detail page (P2-13) and routing settings (P2-16) are sibling
- * tickets — this file links to `/inbox/{id}` but does not own that
- * route.
+ * Session + workspace resolution live in `app/(authed)/layout.tsx`.
+ * This page only reads the active workspace (via the cached helper)
+ * and fetches inbox items.
  */
 
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
-import { AppShell } from "@/components/app-shell";
 import { ApiUnavailable } from "@/components/api-unavailable";
+import { PageBody, PageHeader } from "@/components/app-shell";
 import { InboxFiltersControlled } from "@/components/inbox/inbox-filters-controlled";
 import { InboxItemRow } from "@/components/inbox/inbox-item-row";
 import { buildInboxUrl, countActiveFilters } from "@/components/inbox/inbox-url";
 import { Card, CardHeader, EmptyState } from "@/components/ui";
 import {
   ApiHttpError,
-  ApiUnavailableError,
-  getMe,
-  isApiConfigured,
   listInboxItems,
-  listWorkspaces,
 } from "@/lib/api/client";
-import { getSessionToken } from "@/lib/api/session";
+import {
+  getCachedSessionToken,
+  getCachedWorkspaces,
+} from "@/lib/api/session-cache.server";
 import { getResolvedWorkspaceId } from "@/lib/workspace-resolve.server";
-import type { ApiUser, ApiWorkspace } from "@/lib/api/types";
 import {
   DEFAULT_INBOX_FILTERS,
   INBOX_LIST_DEFAULT_STATUSES,
@@ -53,7 +45,6 @@ import {
 } from "@/lib/inbox-types";
 import {
   pickWorkspace,
-  toAppShellWorkspaces,
   withWorkspaceQuery,
 } from "@/lib/workspace-scope";
 
@@ -72,16 +63,14 @@ type ParsedParams = {
 type Mode =
   | {
       source: "live";
-      workspace: ApiWorkspace;
-      allWorkspaces: ApiWorkspace[];
-      me: ApiUser | null;
+      workspaceId: string;
+      multiWs: boolean;
       list: InboxListResponse;
       filters: InboxFilterState;
       cursor: string | null;
       repo: string | null;
       play: string | null;
     }
-  | { source: "redirect"; href: string }
   | { source: "down"; reason: string };
 
 function errorMessage(code: string): string {
@@ -143,61 +132,37 @@ async function load(
   parsed: ParsedParams,
   searchParams: Record<string, string | string[] | undefined>,
 ): Promise<Mode> {
-  if (!isApiConfigured()) {
-    return { source: "down", reason: "SHIP_API_URL is not set on this deployment." };
-  }
-  const token = await getSessionToken();
+  const token = await getCachedSessionToken();
+  // The layout already redirected on missing session/workspaces, so by
+  // the time this runs we are guaranteed both. Defensive token check
+  // stays so a server action that swaps the bearer mid-render still
+  // sends us back to /login instead of throwing.
   if (!token) {
-    return {
-      source: "redirect",
-      href: "/login?next=%2Finbox&reason=session_expired",
-    };
-  }
-  let workspace: ApiWorkspace;
-  let allWorkspaces: ApiWorkspace[];
-  try {
-    const ws = await listWorkspaces(token);
-    if (ws.length === 0) {
-      return { source: "redirect", href: "/onboarding?step=github" };
-    }
-    allWorkspaces = ws;
-    const resolved = await getResolvedWorkspaceId(searchParams, ws);
-    workspace = pickWorkspace(ws, resolved);
-  } catch (err) {
-    if (err instanceof ApiHttpError && err.status === 401) {
-      return {
-        source: "redirect",
-        href: "/login?next=%2Finbox&reason=session_expired",
-      };
-    }
-    return {
-      source: "down",
-      reason: err instanceof Error ? err.message : "Could not load workspaces.",
-    };
+    redirect("/login?next=%2Finbox&reason=session_expired");
   }
 
+  const ws = await getCachedWorkspaces();
+  const resolved = await getResolvedWorkspaceId(searchParams, ws);
+  const workspace = pickWorkspace(ws, resolved);
+
   try {
-    const [list, me] = await Promise.all([
-      listInboxItems(
-        workspace.id,
-        {
-          ownership: parsed.filters.ownership,
-          types: parsed.filters.types,
-          statuses: INBOX_LIST_DEFAULT_STATUSES,
-          repo_id: parsed.repo ?? undefined,
-          play_key: parsed.play ?? undefined,
-          cursor: parsed.cursor,
-          limit: PAGE_LIMIT,
-        },
-        token,
-      ),
-      getMe(token).catch(() => null as ApiUser | null),
-    ]);
+    const list = await listInboxItems(
+      workspace.id,
+      {
+        ownership: parsed.filters.ownership,
+        types: parsed.filters.types,
+        statuses: INBOX_LIST_DEFAULT_STATUSES,
+        repo_id: parsed.repo ?? undefined,
+        play_key: parsed.play ?? undefined,
+        cursor: parsed.cursor,
+        limit: PAGE_LIMIT,
+      },
+      token,
+    );
     return {
       source: "live",
-      workspace,
-      allWorkspaces,
-      me,
+      workspaceId: workspace.id,
+      multiWs: ws.length > 1,
       list,
       filters: parsed.filters,
       cursor: parsed.cursor,
@@ -206,27 +171,13 @@ async function load(
     };
   } catch (err) {
     if (err instanceof ApiHttpError && err.status === 401) {
-      return {
-        source: "redirect",
-        href: "/login?next=%2Finbox&reason=session_expired",
-      };
+      redirect("/login?next=%2Finbox&reason=session_expired");
     }
     return {
       source: "down",
       reason: err instanceof Error ? err.message : "Could not load inbox items.",
     };
   }
-}
-
-function meToShellUser(me: ApiUser | null) {
-  if (!me) return null;
-  const name = me.display_name?.trim() || me.email;
-  const parts = name.split(/[\s@.]+/).filter(Boolean);
-  const initials =
-    parts.length >= 2
-      ? (parts[0][0] + parts[1][0]).toUpperCase()
-      : (parts[0]?.slice(0, 2) ?? "??").toUpperCase();
-  return { name, email: me.email, initials };
 }
 
 function pickTypeCounts(
@@ -259,126 +210,120 @@ export default async function InboxPage({
   const parsed = parseSearchParams(params);
   const data = await load(parsed, params);
 
-  if (data.source === "redirect") {
-    redirect(data.href);
-  }
   if (data.source === "down") {
     return (
-      <AppShell kicker="attention" title="Inbox">
+      <>
+        <PageHeader kicker="attention" title="Inbox" />
+        <PageBody>
+          {parsed.errorCode && (
+            <div className="mb-5 rounded-xl border border-coral/30 bg-coral/[0.06] px-3 py-2 text-xs text-coral/95">
+              {errorMessage(parsed.errorCode)}
+            </div>
+          )}
+          <ApiUnavailable scope="inbox" details={data.reason} />
+        </PageBody>
+      </>
+    );
+  }
+
+  const { workspaceId, multiWs, list, filters, cursor, repo, play } = data;
+  const typeCounts = pickTypeCounts(list.counts_by_type);
+  const allTypesCount = sumInboxTypeCounts(typeCounts);
+  const activeFilterCount = countActiveFilters(filters, { repo, play });
+  const inboxWs = multiWs ? workspaceId : undefined;
+
+  return (
+    <>
+      <PageHeader
+        kicker="attention"
+        title="Inbox"
+        actions={
+          <RefreshButton
+            filters={filters}
+            repo={repo}
+            play={play}
+            cursor={cursor}
+            workspaceScope={inboxWs}
+          />
+        }
+      />
+      <PageBody>
         {parsed.errorCode && (
           <div className="mb-5 rounded-xl border border-coral/30 bg-coral/[0.06] px-3 py-2 text-xs text-coral/95">
             {errorMessage(parsed.errorCode)}
           </div>
         )}
-        <ApiUnavailable scope="inbox" details={data.reason} />
-      </AppShell>
-    );
-  }
 
-  const { workspace, allWorkspaces, me, list, filters, cursor, repo, play } =
-    data;
-  const typeCounts = pickTypeCounts(list.counts_by_type);
-  const allTypesCount = sumInboxTypeCounts(typeCounts);
-  const activeFilterCount = countActiveFilters(filters, { repo, play });
-  const multiWs = allWorkspaces.length > 1;
-  const inboxWs = multiWs ? workspace.id : undefined;
+        {/* Compact filter strip — replaces the old "Filters" card.
+          * Single bordered row: ownership tabs + type chips + scope pills.
+          * Avoids the chrome (CardHeader + subtitle) that ate a quarter of
+          * the viewport before. */}
+        <section className="rounded-2xl border border-white/10 bg-white/[0.02] px-4 py-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/45">
+              Filters
+            </p>
+            <InboxFiltersControlled
+              value={filters}
+              counts={{ types: typeCounts, allTypes: allTypesCount }}
+              repo={repo}
+              play={play}
+              workspaceScope={inboxWs}
+            />
+            {(repo || play) && (
+              <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-white/55">
+                {repo && (
+                  <span className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5">
+                    repo: <code className="font-mono text-white/80">{repo}</code>
+                  </span>
+                )}
+                {play && (
+                  <span className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5">
+                    play: <code className="font-mono text-white/80">{play}</code>
+                  </span>
+                )}
+                <a
+                  href={buildInboxUrl(filters, { workspaceScope: inboxWs })}
+                  className="text-[11px] font-semibold text-sun hover:text-white"
+                >
+                  clear scope
+                </a>
+              </div>
+            )}
+          </div>
+        </section>
 
-  return (
-    <AppShell
-      kicker="attention"
-      title="Inbox"
-      workspace={{
-        id: workspace.id,
-        name: workspace.name,
-        slug: workspace.slug,
-      }}
-      allWorkspaces={toAppShellWorkspaces(allWorkspaces)}
-      me={meToShellUser(me)}
-      actions={
-        <RefreshButton
-          filters={filters}
-          repo={repo}
-          play={play}
-          cursor={cursor}
-          workspaceScope={inboxWs}
-        />
-      }
-    >
-      {parsed.errorCode && (
-        <div className="mb-5 rounded-xl border border-coral/30 bg-coral/[0.06] px-3 py-2 text-xs text-coral/95">
-          {errorMessage(parsed.errorCode)}
+        {/* Counts kicker for the items list — was buried inside a CardHeader. */}
+        <div className="mt-5 flex flex-wrap items-baseline gap-3">
+          <h2 className="font-display text-lg font-bold text-white">
+            {list.items.length === 0 ? "No items" : `${list.items.length} item${list.items.length === 1 ? "" : "s"}`}
+          </h2>
+          <span className="text-[11px] text-white/45">
+            Oldest-first; resolved / dismissed rows fade out so the queue keeps reading top-down.
+          </span>
         </div>
-      )}
 
-      {/* Compact filter strip — replaces the old "Filters" card.
-        * Single bordered row: ownership tabs + type chips + scope pills.
-        * Avoids the chrome (CardHeader + subtitle) that ate a quarter of
-        * the viewport before. */}
-      <section className="rounded-2xl border border-white/10 bg-white/[0.02] px-4 py-3">
-        <div className="flex flex-wrap items-center gap-3">
-          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/45">
-            Filters
-          </p>
-          <InboxFiltersControlled
-            value={filters}
-            counts={{ types: typeCounts, allTypes: allTypesCount }}
+        <div className="mt-3">
+          <ItemsTable
+            items={list.items}
+            filters={filters}
             repo={repo}
             play={play}
+            activeFilterCount={activeFilterCount}
             workspaceScope={inboxWs}
           />
-          {(repo || play) && (
-            <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-white/55">
-              {repo && (
-                <span className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5">
-                  repo: <code className="font-mono text-white/80">{repo}</code>
-                </span>
-              )}
-              {play && (
-                <span className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5">
-                  play: <code className="font-mono text-white/80">{play}</code>
-                </span>
-              )}
-              <a
-                href={buildInboxUrl(filters, { workspaceScope: inboxWs })}
-                className="text-[11px] font-semibold text-sun hover:text-white"
-              >
-                clear scope
-              </a>
-            </div>
-          )}
         </div>
-      </section>
 
-      {/* Counts kicker for the items list — was buried inside a CardHeader. */}
-      <div className="mt-5 flex flex-wrap items-baseline gap-3">
-        <h2 className="font-display text-lg font-bold text-white">
-          {list.items.length === 0 ? "No items" : `${list.items.length} item${list.items.length === 1 ? "" : "s"}`}
-        </h2>
-        <span className="text-[11px] text-white/45">
-          Oldest-first; resolved / dismissed rows fade out so the queue keeps reading top-down.
-        </span>
-      </div>
-
-      <div className="mt-3">
-        <ItemsTable
-          items={list.items}
+        <Pager
+          nextCursor={list.next_cursor}
+          currentCursor={cursor}
           filters={filters}
           repo={repo}
           play={play}
-          activeFilterCount={activeFilterCount}
           workspaceScope={inboxWs}
         />
-      </div>
-
-      <Pager
-        nextCursor={list.next_cursor}
-        currentCursor={cursor}
-        filters={filters}
-        repo={repo}
-        play={play}
-        workspaceScope={inboxWs}
-      />
-    </AppShell>
+      </PageBody>
+    </>
   );
 }
 
@@ -461,9 +406,6 @@ function ItemsTable({
     );
   }
 
-  // Bare ul — the surrounding heading + helper text live in the page now,
-  // so the Card+CardHeader wrapper that used to live here would just
-  // duplicate the chrome.
   return (
     <ul className="space-y-1.5">
       {items.map((item) => (
@@ -565,4 +507,3 @@ function RefreshButton({
     </form>
   );
 }
-
