@@ -91,13 +91,19 @@ CANONICAL_STATES: tuple[str, ...] = (
 # stay readable; we just impute the bucket.
 _LEGACY_STAGE_TO_STATE: dict[str, CanonicalState] = {
     "task_intake": "planning",
+    "bug_triage": "planning",
     "ba_requirements": "planning",
     "tech_arch_plan": "planning",
     "qa_arch_plan": "planning",
     "dev_implementation": "executing",
     "qa_manual": "executing",
     "qa_automation": "executing",
+    # ``pr_review`` was the legacy 5-state name for the final review
+    # stage; ``code_review`` is the Phase 1.5 canonical id. Both map
+    # to ``reviewing`` so older configs that haven't been re-seeded
+    # yet still bucket correctly.
     "pr_review": "reviewing",
+    "code_review": "reviewing",
 }
 
 PRIMARY_PROCESS_ID = "development"
@@ -138,25 +144,41 @@ _SEEDED_PROCESSES: tuple[dict[str, Any], ...] = (
 )
 
 _PROCESS_STATE_ORDER: tuple[str, ...] = (
+    # Phase 1.5 canon — nine pipeline stages in execution order. The
+    # dashboard's process projector iterates this tuple to render the
+    # canvas; runtime aggregation skips lane keys not present here.
+    # ``bug_triage`` is a parallel intake (transitions converge on
+    # ``ba_requirements``); ``pr_review`` is kept as a legacy alias
+    # below in :data:`_PROCESS_STATE_ALIASES` so pre-v0.20 configs
+    # still project.
     "task_intake",
+    "bug_triage",
     "ba_requirements",
     "tech_arch_plan",
     "qa_arch_plan",
     "dev_implementation",
     "qa_manual",
     "qa_automation",
-    "pr_review",
+    "code_review",
 )
+
+# Legacy stage ids that should still count as process states for
+# pre-v0.20 configs. Kept separate from ``_PROCESS_STATE_ORDER`` so
+# the canvas only renders the canonical nine but the runtime
+# aggregator (``_runtime_by_state``) doesn't drop pipeline runs that
+# referenced the old id.
+_PROCESS_STATE_ALIASES: frozenset[str] = frozenset({"pr_review"})
 
 _ROUTINE_IDS: frozenset[str] = frozenset(
     {
-        # Canonical six (matches lane_recipes.DEFAULT_SEED_LANES).
+        # Canonical seven (matches lane_recipes.DEFAULT_SEED_LANES).
         "daily",
         "retro",
         "healthcheck",
         "tech_review",
         "qa_review",
         "security_review",
+        "process_review",
         # Legacy ids — accepted at projection time so old repos keep
         # working until rewritten, but no longer emitted by the seed.
         # Display layer collapses these to the canonical name where it
@@ -1018,7 +1040,10 @@ async def _build_development_process(
         runtime.blocked_count = blocked_by_state[lane_key]
         if runtime.blocked_count > 0 and runtime.health == "ok":
             runtime.health = "degraded"
-        if lane_key not in _PROCESS_STATE_ORDER or lane_key in _ROUTINE_IDS:
+        is_known_state = (
+            lane_key in _PROCESS_STATE_ORDER or lane_key in _PROCESS_STATE_ALIASES
+        )
+        if not is_known_state or lane_key in _ROUTINE_IDS:
             # Surface every routine id we find in DB pipelines — including
             # legacy / orphan ones. Hiding them masks "I have stale
             # pipeline rows from an old seed" which is exactly the kind
@@ -1321,7 +1346,29 @@ def _specialists() -> dict[str, ProcessSpecialistOut]:
 
 
 def _specialist_for_lane(lane_id: str) -> str:
-    if "intake" in lane_id:
+    # Direct map for the canonical nine + the legacy ``pr_review``
+    # alias. Names on the right are :data:`role_templates.py` ids
+    # (the registry the dashboard reads via :func:`_specialists`);
+    # the runtime resolver reads ``specialist:`` straight from the
+    # YAML and uses agent_roles slugs instead, so this is purely the
+    # cosmetic badge for the canvas.
+    direct: dict[str, str] = {
+        "task_intake": "intake",
+        "bug_triage": "intake",
+        "ba_requirements": "business_analyst",
+        "tech_arch_plan": "technical_architect",
+        "qa_arch_plan": "qa_engineer",
+        "dev_implementation": "developer",
+        "qa_manual": "qa_engineer",
+        "qa_automation": "qa_engineer",
+        "code_review": "code_reviewer",
+        "pr_review": "code_reviewer",
+    }
+    if lane_id in direct:
+        return direct[lane_id]
+    # Substring fallback for non-canonical / custom lane ids that
+    # operators add by hand. Order matters — narrower first.
+    if "intake" in lane_id or "triage" in lane_id:
         return "intake"
     if "ba" in lane_id or "requirements" in lane_id:
         return "business_analyst"
