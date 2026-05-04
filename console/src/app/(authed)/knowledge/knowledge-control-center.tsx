@@ -1,25 +1,24 @@
 "use client";
 
 /**
- * Knowledge — single-page control surface.
+ * Knowledge — single-page newspaper.
  *
- * Layout, top to bottom:
+ * Top of the page: a search bar + the export/import actions.
+ * Below: two sections — "Recent" (top-10 articles by updated_at)
+ * and "Browse by area" (the six buckets as text links).
  *
- *   [Title · Workspace]                       [Export ZIP] [Import source]
- *   [           Big search input                                          ]
- *   [All]  [Architecture decisions]  [Engineering]  ...  (6 buckets max)
- *   [Optional: import panel collapsed below header]
- *   [Articles list — flat, click-through to bucket detail]
+ * No bordered cards, no metric tiles, no chip-filter row, no fat
+ * tables. Reading-column width capped so the layout feels like a
+ * blog, not a control panel. Bucket → category page; article →
+ * reader page.
  *
- * No metric tiles, no per-bucket cards, no tabs. Buckets are fixed at six
- * after the consolidation, so they fit comfortably as filter chips and
- * the articles surface gets the page real estate.
+ * Real popularity-based ranking is a follow-up — we don't track
+ * article views yet, so "Recent" is what we surface for now.
  */
 
 import Link from "next/link";
-import { useMemo, useState, useTransition } from "react";
+import { useState, useTransition } from "react";
 
-import { Card, CardHeader } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import type {
   ApiActivatedRepo,
@@ -37,6 +36,7 @@ export type KnowledgeBucketRow = {
   name: string;
   description: string;
   archived: boolean;
+  articleCount: number;
 };
 
 export type KnowledgeArticleRow = {
@@ -77,31 +77,11 @@ export function KnowledgeControlCenter({
   integrations,
 }: Props) {
   const [query, setQuery] = useState("");
-  const [filterSlug, setFilterSlug] = useState<string | null>(null);
   const [searchHits, setSearchHits] = useState<ApiKnowledgeSearchHit[] | null>(null);
   const [searchedFor, setSearchedFor] = useState("");
   const [searchError, setSearchError] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [pending, startTransition] = useTransition();
-
-  const articlesByBucket = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const a of articles) {
-      map.set(a.bucketSlug, (map.get(a.bucketSlug) ?? 0) + 1);
-    }
-    return map;
-  }, [articles]);
-
-  const visibleArticles = useMemo(() => {
-    if (!filterSlug) return articles;
-    return articles.filter((a) => a.bucketSlug === filterSlug);
-  }, [articles, filterSlug]);
-
-  const visibleHits = useMemo(() => {
-    if (!searchHits) return null;
-    if (!filterSlug) return searchHits;
-    return searchHits.filter((h) => h.bucket_slug === filterSlug);
-  }, [searchHits, filterSlug]);
 
   function runSearch(event?: React.FormEvent) {
     event?.preventDefault();
@@ -118,11 +98,7 @@ export function KnowledgeControlCenter({
         const res = await fetch("/api/knowledge/search", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            workspaceId: workspace.id,
-            query: q,
-            limit: 30,
-          }),
+          body: JSON.stringify({ workspaceId: workspace.id, query: q, limit: 30 }),
         });
         const body = (await res.json()) as
           | ApiKnowledgeSearchResponse
@@ -157,15 +133,15 @@ export function KnowledgeControlCenter({
   const isSearching = searchHits !== null;
 
   return (
-    <div className="space-y-4">
-      <form onSubmit={runSearch}>
-        <div className="relative">
+    <div className="mx-auto max-w-3xl space-y-10">
+      <div className="flex flex-col gap-3">
+        <form onSubmit={runSearch} className="relative">
           <input
             type="search"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search workspace knowledge…"
-            className="w-full rounded-2xl border border-white/15 bg-white/[0.04] px-5 py-3 text-base text-white placeholder:text-white/35 outline-none transition focus:border-aqua/60"
+            className="w-full border-b border-white/15 bg-transparent px-1 pb-2 pt-1 text-base text-white placeholder:text-white/30 outline-none transition focus:border-aqua/60"
             aria-label="Search workspace knowledge"
           />
           {(query || isSearching) && (
@@ -173,52 +149,42 @@ export function KnowledgeControlCenter({
               type="button"
               onClick={clearSearch}
               aria-label="Clear search"
-              className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full border border-white/10 px-2 py-0.5 text-xs text-white/55 hover:border-white/30 hover:text-white"
+              className="absolute right-1 top-1 text-xs text-white/45 hover:text-white"
             >
               clear
             </button>
           )}
-        </div>
-      </form>
+        </form>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <BucketChip
-          active={filterSlug === null}
-          label="All"
-          count={isSearching ? (searchHits?.length ?? 0) : articles.length}
-          onClick={() => setFilterSlug(null)}
-        />
-        {liveBuckets.map((bucket) => (
-          <BucketChip
-            key={bucket.slug}
-            active={filterSlug === bucket.slug}
-            label={bucket.name}
-            count={
-              isSearching
-                ? (searchHits?.filter((h) => h.bucket_slug === bucket.slug).length ?? 0)
-                : (articlesByBucket.get(bucket.slug) ?? 0)
-            }
-            onClick={() =>
-              setFilterSlug(filterSlug === bucket.slug ? null : bucket.slug)
-            }
-          />
-        ))}
-        <div className="ml-auto flex items-center gap-2">
-          <ExportButton workspace={workspace} />
+        <div className="flex items-center gap-3 text-xs">
           <button
             type="button"
             onClick={() => setImportOpen((v) => !v)}
             className={cn(
-              "rounded-full border px-3 py-1.5 text-xs font-bold transition",
-              importOpen
-                ? "border-aqua/60 bg-aqua/15 text-aqua"
-                : "border-aqua/40 bg-aqua/10 text-aqua hover:bg-aqua/20",
+              "transition",
+              importOpen ? "text-aqua" : "text-white/55 hover:text-white",
             )}
           >
             {importOpen ? "Close import" : "Import source"}
           </button>
+          <span className="text-white/15">·</span>
+          {workspace.id && (
+            <a
+              href={`/api/knowledge/export?workspaceId=${encodeURIComponent(workspace.id)}`}
+              className="text-white/55 transition hover:text-white"
+            >
+              Export ZIP
+            </a>
+          )}
         </div>
       </div>
+
+      {pending && (
+        <p className="text-xs text-white/45">Searching…</p>
+      )}
+      {searchError && (
+        <p className="text-sm text-coral">{searchError}</p>
+      )}
 
       {importOpen && (
         <ImportPanel
@@ -228,214 +194,211 @@ export function KnowledgeControlCenter({
         />
       )}
 
-      <section>
-        {pending && (
-          <p className="mb-2 text-xs text-white/45">Searching…</p>
-        )}
-        {searchError && (
-          <Card className="mb-3 border-coral/40 bg-coral/5">
-            <p className="text-sm text-coral">{searchError}</p>
-          </Card>
-        )}
-        {isSearching ? (
-          <SearchResults
-            hits={visibleHits ?? []}
-            queriedFor={searchedFor}
-            filtered={filterSlug !== null}
-          />
-        ) : (
-          <ArticlesList
-            articles={visibleArticles}
-            filterSlug={filterSlug}
-            totalCount={articles.length}
-          />
-        )}
-      </section>
+      {isSearching ? (
+        <SearchResults hits={searchHits ?? []} queriedFor={searchedFor} />
+      ) : (
+        <>
+          <RecentSection articles={articles} />
+          <BrowseByAreaSection buckets={liveBuckets} />
+        </>
+      )}
     </div>
   );
 }
 
 
 // ---------------------------------------------------------------------------
-// Bucket filter chips
+// Sections
 // ---------------------------------------------------------------------------
 
 
-function BucketChip({
-  active,
-  label,
-  count,
-  onClick,
-}: {
-  active: boolean;
-  label: string;
-  count: number;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={cn(
-        "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold transition",
-        active
-          ? "border-aqua/60 bg-aqua/15 text-aqua"
-          : "border-white/15 bg-white/[0.04] text-white/70 hover:border-white/30 hover:text-white",
-      )}
-    >
-      <span>{label}</span>
-      <span
-        className={cn(
-          "rounded-full px-1.5 text-[10px] font-bold",
-          active ? "bg-aqua/30 text-aqua" : "bg-white/10 text-white/55",
-        )}
-      >
-        {count}
-      </span>
-    </button>
-  );
-}
-
-
-// ---------------------------------------------------------------------------
-// Article listing
-// ---------------------------------------------------------------------------
-
-
-function ArticlesList({
-  articles,
-  filterSlug,
-  totalCount,
-}: {
-  articles: KnowledgeArticleRow[];
-  filterSlug: string | null;
-  totalCount: number;
-}) {
+function RecentSection({ articles }: { articles: KnowledgeArticleRow[] }) {
   if (articles.length === 0) {
     return (
-      <div className="rounded-2xl border border-white/10 bg-white/[0.02] px-5 py-10 text-center">
-        <p className="text-sm text-white/55">
-          {totalCount === 0
-            ? "No articles in this workspace yet. Import a source or wait for the harvester to surface drafts."
-            : filterSlug
-              ? "No articles in this bucket yet."
-              : "No articles match the current filter."}
-        </p>
-      </div>
+      <SectionHeader
+        title="Recent"
+        empty="No articles in this workspace yet. Import a source or wait for the harvester to surface drafts."
+      />
     );
   }
-
   return (
-    <ul className="divide-y divide-white/5 rounded-2xl border border-white/10 bg-white/[0.02]">
-      {articles.map((article) => (
-        <li key={article.id} className="px-5 py-3">
-          <Link
-            href={`/knowledge/${encodeURIComponent(article.bucketSlug)}?article=${encodeURIComponent(article.id)}#article-viewer`}
-            className="group flex flex-col gap-1"
-          >
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-sm font-semibold text-white group-hover:text-aqua">
-                {article.title || article.slug}
-              </span>
-              <span className="rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-semibold text-white/65">
-                {article.bucketName}
-              </span>
-              <span className="ml-auto text-[11px] text-white/45">
-                {relativeDate(article.updatedAt)}
-              </span>
-            </div>
-            {article.snippet && (
-              <p className="line-clamp-2 text-xs text-white/55">
-                {article.snippet}
-              </p>
-            )}
-          </Link>
-        </li>
-      ))}
-    </ul>
+    <section className="space-y-4">
+      <SectionHeader title="Recent" />
+      <ul className="space-y-5">
+        {articles.map((article) => (
+          <li key={article.id}>
+            <ArticleRow article={article} showBucket />
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 
 
-// ---------------------------------------------------------------------------
-// Search results
-// ---------------------------------------------------------------------------
+function BrowseByAreaSection({ buckets }: { buckets: KnowledgeBucketRow[] }) {
+  if (buckets.length === 0) return null;
+  return (
+    <section className="space-y-4">
+      <SectionHeader title="Browse by area" />
+      <ul className="divide-y divide-white/5">
+        {buckets.map((bucket) => (
+          <li key={bucket.slug}>
+            <Link
+              href={`/knowledge/${encodeURIComponent(bucket.slug)}`}
+              className="group flex items-baseline justify-between gap-4 py-3"
+            >
+              <div className="min-w-0">
+                <div className="text-base font-semibold text-white group-hover:text-aqua">
+                  {bucket.name}
+                </div>
+                {bucket.description && (
+                  <p className="mt-0.5 line-clamp-1 text-xs text-white/50">
+                    {bucket.description}
+                  </p>
+                )}
+              </div>
+              <span className="shrink-0 font-mono text-xs text-white/45">
+                {bucket.articleCount} article{bucket.articleCount === 1 ? "" : "s"}
+              </span>
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
 
 
 function SearchResults({
   hits,
   queriedFor,
-  filtered,
 }: {
   hits: ApiKnowledgeSearchHit[];
   queriedFor: string;
-  filtered: boolean;
 }) {
   if (hits.length === 0) {
     return (
-      <div className="rounded-2xl border border-white/10 bg-white/[0.02] px-5 py-10 text-center">
-        <p className="text-sm text-white/55">
-          {queriedFor
-            ? filtered
-              ? `No matches for "${queriedFor}" in this bucket.`
-              : `Nothing matched "${queriedFor}".`
-            : "No matches."}
-        </p>
-      </div>
+      <SectionHeader
+        title={`Results for “${queriedFor}”`}
+        empty={queriedFor ? `Nothing matched “${queriedFor}”.` : "No matches."}
+      />
     );
   }
-
   return (
-    <ul className="divide-y divide-white/5 rounded-2xl border border-white/10 bg-white/[0.02]">
-      {hits.map((hit) => {
-        const title =
-          hit.title?.trim() ||
-          hit.bucket_slug ||
-          (hit.source === "kb_chunk" ? "Repo chunk" : "Article");
-        const href =
-          hit.source === "bucket_article" && hit.bucket_slug
-            ? `/knowledge/${encodeURIComponent(hit.bucket_slug)}?article=${encodeURIComponent(hit.id)}#article-viewer`
-            : null;
-        const RowEl = href ? Link : "div";
-        return (
-          <li key={`${hit.source}:${hit.id}`} className="px-5 py-3">
-            <RowEl
-              href={href ?? ""}
-              className="group flex flex-col gap-1"
-            >
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-sm font-semibold text-white group-hover:text-aqua">
-                  {title}
-                </span>
-                {hit.bucket_slug && (
-                  <span className="rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-semibold text-white/65">
-                    {hit.bucket_slug}
-                  </span>
-                )}
-                <span
-                  className="ml-auto font-mono text-[11px] text-aqua/80"
-                  title="match score"
-                >
-                  {hit.score.toFixed(3)}
-                </span>
-              </div>
-              {hit.snippet && (
-                <p className="line-clamp-2 text-xs text-white/55">
-                  {hit.snippet}
-                </p>
-              )}
-            </RowEl>
+    <section className="space-y-4">
+      <SectionHeader title={`Results for “${queriedFor}”`} />
+      <ul className="space-y-5">
+        {hits.map((hit) => (
+          <li key={`${hit.source}:${hit.id}`}>
+            <SearchHitRow hit={hit} />
           </li>
-        );
-      })}
-    </ul>
+        ))}
+      </ul>
+    </section>
   );
 }
 
 
 // ---------------------------------------------------------------------------
-// Import panel — collapsed unless toggled
+// Building blocks
+// ---------------------------------------------------------------------------
+
+
+function SectionHeader({
+  title,
+  empty,
+}: {
+  title: string;
+  empty?: string;
+}) {
+  return (
+    <div className="space-y-2">
+      <h2 className="text-[11px] font-bold uppercase tracking-[0.2em] text-white/45">
+        {title}
+      </h2>
+      {empty && <p className="text-sm text-white/55">{empty}</p>}
+    </div>
+  );
+}
+
+
+function ArticleRow({
+  article,
+  showBucket,
+}: {
+  article: KnowledgeArticleRow;
+  showBucket?: boolean;
+}) {
+  return (
+    <Link
+      href={`/knowledge/${encodeURIComponent(article.bucketSlug)}?article=${encodeURIComponent(article.id)}`}
+      className="group block"
+    >
+      <div className="text-base font-semibold text-white group-hover:text-aqua">
+        {article.title}
+      </div>
+      {article.snippet && (
+        <p className="mt-1 line-clamp-2 text-sm leading-relaxed text-white/60">
+          {article.snippet}
+        </p>
+      )}
+      <div className="mt-1 text-[11px] text-white/40">
+        {showBucket && (
+          <>
+            <span>{article.bucketName}</span>
+            <span className="mx-2 text-white/20">·</span>
+          </>
+        )}
+        <span>{relativeDate(article.updatedAt)}</span>
+      </div>
+    </Link>
+  );
+}
+
+
+function SearchHitRow({ hit }: { hit: ApiKnowledgeSearchHit }) {
+  const title =
+    hit.title?.trim() ||
+    hit.bucket_slug ||
+    (hit.source === "kb_chunk" ? "Repo chunk" : "Article");
+  const href =
+    hit.source === "bucket_article" && hit.bucket_slug
+      ? `/knowledge/${encodeURIComponent(hit.bucket_slug)}?article=${encodeURIComponent(hit.id)}`
+      : null;
+  const content = (
+    <>
+      <div className="text-base font-semibold text-white group-hover:text-aqua">
+        {title}
+      </div>
+      {hit.snippet && (
+        <p className="mt-1 line-clamp-2 text-sm leading-relaxed text-white/60">
+          {hit.snippet}
+        </p>
+      )}
+      <div className="mt-1 text-[11px] text-white/40">
+        {hit.bucket_slug && (
+          <>
+            <span>{hit.bucket_slug}</span>
+            <span className="mx-2 text-white/20">·</span>
+          </>
+        )}
+        <span className="font-mono">{hit.score.toFixed(3)}</span>
+      </div>
+    </>
+  );
+  return href ? (
+    <Link href={href} className="group block">
+      {content}
+    </Link>
+  ) : (
+    <div className="group block">{content}</div>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// Import panel — wizard + connected sources list, no Card wrappers
 // ---------------------------------------------------------------------------
 
 
@@ -449,55 +412,52 @@ function ImportPanel({
   sources: KnowledgeSourceRow[];
 }) {
   return (
-    <div className="space-y-3">
+    <section className="space-y-6 border-l border-aqua/30 pl-6">
       <KnowledgeImportWizard
         integrations={integrations}
         repos={repos}
         defaultScope="workspace"
       />
-      <SourcesTable sources={sources} />
-    </div>
-  );
-}
-
-
-function SourcesTable({ sources }: { sources: KnowledgeSourceRow[] }) {
-  if (sources.length === 0) {
-    return null;
-  }
-  return (
-    <Card padded={false}>
-      <CardHeader
-        className="px-5 pt-5"
-        title="Connected sources"
-        subtitle="The harvester pulls from these and routes content into buckets."
-      />
-      <ul className="divide-y divide-white/5">
-        {sources.map((source) => (
-          <li key={source.id} className="grid grid-cols-[1fr_auto] items-center gap-3 px-5 py-3">
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="truncate text-sm font-semibold text-white">
-                  {source.name}
-                </span>
-                <span className="rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-semibold text-white/65">
-                  {source.kind}
-                </span>
-              </div>
-              {source.lastError && (
-                <p className="mt-0.5 line-clamp-1 text-[11px] text-coral">
-                  {source.lastError}
-                </p>
-              )}
-            </div>
-            <div className="flex flex-col items-end text-[11px] text-white/55">
-              <span className={statusColor(source.status)}>{source.status}</span>
-              <span>{source.lastSyncedAt ? relativeDate(source.lastSyncedAt) : "never synced"}</span>
-            </div>
-          </li>
-        ))}
-      </ul>
-    </Card>
+      {sources.length > 0 && (
+        <div className="space-y-3">
+          <h3 className="text-[11px] font-bold uppercase tracking-[0.2em] text-white/45">
+            Connected sources
+          </h3>
+          <ul className="divide-y divide-white/5">
+            {sources.map((source) => (
+              <li
+                key={source.id}
+                className="grid grid-cols-[1fr_auto] items-center gap-3 py-2"
+              >
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="truncate text-sm font-semibold text-white">
+                      {source.name}
+                    </span>
+                    <span className="text-[11px] uppercase tracking-widest text-white/40">
+                      {source.kind}
+                    </span>
+                  </div>
+                  {source.lastError && (
+                    <p className="mt-0.5 line-clamp-1 text-[11px] text-coral">
+                      {source.lastError}
+                    </p>
+                  )}
+                </div>
+                <div className="flex flex-col items-end text-[11px] text-white/45">
+                  <span className={statusColor(source.status)}>
+                    {source.status}
+                  </span>
+                  <span>
+                    {source.lastSyncedAt ? relativeDate(source.lastSyncedAt) : "never"}
+                  </span>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -507,32 +467,6 @@ function statusColor(status: string): string {
   if (status === "syncing") return "text-aqua";
   if (status === "ready") return "text-emerald-400";
   return "text-white/55";
-}
-
-
-// ---------------------------------------------------------------------------
-// Compact export button (kept from the previous version, trimmed)
-// ---------------------------------------------------------------------------
-
-
-function ExportButton({
-  workspace,
-}: {
-  workspace: Props["workspace"];
-}) {
-  const href = workspace.id
-    ? `/api/knowledge/export?workspaceId=${encodeURIComponent(workspace.id)}`
-    : undefined;
-
-  return (
-    <a
-      href={href}
-      aria-disabled={!href}
-      className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/[0.04] px-3 py-1.5 text-xs font-semibold text-white/85 transition hover:border-white/30 hover:bg-white/[0.08] aria-disabled:pointer-events-none aria-disabled:opacity-50"
-    >
-      Export ZIP
-    </a>
-  );
 }
 
 
