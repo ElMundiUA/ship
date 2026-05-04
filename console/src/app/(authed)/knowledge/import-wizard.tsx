@@ -12,6 +12,7 @@ import {
   ConfluenceSectionPicker,
   type ConfluenceSectionRef,
 } from "./confluence-section-picker";
+import { DocsRepoTreePicker } from "./docs-repo-tree-picker";
 import { NotionResourcePicker, type NotionPageRef } from "./notion-resource-picker";
 
 type SourceKind = "website" | "notion" | "confluence" | "docs_repo" | "static_upload";
@@ -41,7 +42,7 @@ export function KnowledgeImportWizard({
   const [notionRefs, setNotionRefs] = useState<NotionPageRef[]>([]);
   const [confluenceRefs, setConfluenceRefs] = useState<ConfluenceSectionRef[]>([]);
   const [repoId, setRepoId] = useState(repos[0]?.id ?? "");
-  const [repoPaths, setRepoPaths] = useState("docs\nREADME.md");
+  const [repoPaths, setRepoPaths] = useState<string[]>([]);
   const [uploadTitle, setUploadTitle] = useState("");
   const [uploadBody, setUploadBody] = useState("");
   const [syncNow, setSyncNow] = useState(true);
@@ -99,11 +100,14 @@ export function KnowledgeImportWizard({
     }
     if (kind === "docs_repo") {
       if (!repoId) return { ok: false, message: "Pick a repository." };
+      if (repoPaths.length === 0) {
+        return { ok: false, message: "Pick at least one folder or file from the repo tree." };
+      }
       return {
         ok: true,
         config: {
-          paths: repoPaths.split(/\r?\n/).map((line) => line.trim()).filter(Boolean),
-          extensions: [".md", ".mdx", ".txt"],
+          paths: repoPaths,
+          extensions: [".md", ".mdx", ".rst", ".txt", ".adoc"],
           limit: 50,
         },
       };
@@ -215,8 +219,19 @@ export function KnowledgeImportWizard({
                   {repos.length === 0 ? <option value="">No activated repos</option> : repos.map((repo) => <option key={repo.id} value={repo.id}>{repo.full_name}</option>)}
                 </select>
               </Field>
-              <Field label="Docs paths" hint="One path prefix per line. Markdown files under these paths are synced by blob SHA.">
-                <textarea value={repoPaths} onChange={(event) => setRepoPaths(event.target.value)} rows={4} className="w-full rounded border border-white/15 bg-black/30 px-3 py-2 font-mono text-[12px] text-aqua/85" />
+              <Field label="Docs to import">
+                {workspaceId && repoId ? (
+                  <DocsRepoTreePicker
+                    workspaceId={workspaceId}
+                    repoId={repoId}
+                    value={repoPaths}
+                    onChange={setRepoPaths}
+                  />
+                ) : (
+                  <p className="text-[11px] text-white/55">
+                    {workspaceId ? "Pick a repository first." : "Workspace not loaded yet — refresh the page."}
+                  </p>
+                )}
               </Field>
             </>
           )}

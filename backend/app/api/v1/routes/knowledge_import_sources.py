@@ -19,13 +19,16 @@ from backend.app.api.v1.routes.workspaces import (
     ROLES_READ,
     _require_membership,
 )
+from backend.app.core.config import Settings, get_settings
+from backend.app.integrations.gateway.code_host import RepoRef
+from backend.app.integrations.github.code_host_adapter import GitHubCodeHost
 from backend.app.db.models.agent_memory import (
     KnowledgeImportSource,
     KnowledgeImportSourceKind,
     KnowledgeIngestionRun,
     KnowledgeSourceItem,
 )
-from backend.app.db.models.integrations import WorkspaceRepo
+from backend.app.db.models.integrations import GitHubInstallation, WorkspaceRepo
 from backend.app.db.models.tenancy import AuditLog, Integration
 from backend.app.db.session import get_session
 from backend.app.security.encryption import safe_decrypt
@@ -1042,3 +1045,179 @@ async def list_confluence_resources(
         next_start=next_start_value,
         has_more=next_start_value is not None,
     )
+
+
+# ---------------------------------------------------------------------------
+# Docs-repo file-tree picker
+# ---------------------------------------------------------------------------
+#
+# The wizard's docs_repo source previously asked operators to type path
+# prefixes by hand into a textarea (default: ``docs\nREADME.md``). This
+# endpoint surfaces the actual file tree so operators check folders/files
+# instead of guessing names. Resource refs end up in ``config.paths`` —
+# same shape the connector already accepts (any path that startswith
+# any prefix in ``paths`` and matches an extension is ingested), so a
+# folder pick = "include this folder recursively" without any backend
+# behaviour change.
+
+_DOCS_REPO_DEFAULT_EXTENSIONS: tuple[str, ...] = (
+    ".md",
+    ".mdx",
+    ".rst",
+    ".txt",
+    ".adoc",
+)
+
+
+class DocsRepoTreeNode(BaseModel):
+    path: str
+    name: str
+    type: Literal["tree", "blob"]
+    matches_extension: bool  # blobs only; trees pass through as True
+
+
+class DocsRepoTreeOut(BaseModel):
+    repo_id: uuid.UUID
+    ref: str
+    truncated: bool  # tree exceeded GitHub's 100k-entry / 7MB cap
+    nodes: list[DocsRepoTreeNode]
+
+
+def _node_for_blob(path: str, *, extensions: tuple[str, ...]) -> DocsRepoTreeNode:
+    return DocsRepoTreeNode(
+        path=path,
+        name=path.rsplit("/", 1)[-1],
+        type="blob",
+        matches_extension=path.lower().endswith(extensions),
+    )
+
+
+def _node_for_tree(path: str) -> DocsRepoTreeNode:
+    return DocsRepoTreeNode(
+        path=path,
+        name=path.rsplit("/", 1)[-1] if "/" in path else path,
+        type="tree",
+        matches_extension=True,
+    )
+
+
+@router.get("/docs-repo/tree", response_model=DocsRepoTreeOut)
+async def list_docs_repo_tree(
+    workspace_id: uuid.UUID,
+    repo_id: uuid.UUID = Query(..., description="Workspace repo to list"),
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> DocsRepoTreeOut:
+    """Flat tree (folders + doc files) for the wizard's docs-repo picker.
+
+    Uses GitHub's recursive Trees API so we get the whole tree in one
+    call (capped server-side at 100k entries / 7MB by GitHub itself —
+    surfaced to the client via ``truncated``). The frontend builds the
+    expandable tree view from the flat list; we don't expose per-folder
+    pagination because GitHub's recursive=1 already returns everything
+    cheaply for the repos closed-beta operators ingest.
+    """
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+
+    repo = await session.get(WorkspaceRepo, repo_id)
+    if repo is None or repo.workspace_id != workspace_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="repo not found for this workspace",
+        )
+    if repo.installation_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="repo has no GitHub installation — re-authorize Ship for this org",
+        )
+    installation = await session.get(GitHubInstallation, repo.installation_id)
+    if installation is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="GitHub installation row is missing",
+        )
+
+    owner, name = repo.full_name.split("/", 1)
+    ref = RepoRef(kind="github", owner=owner, repo=name)
+    gateway = GitHubCodeHost(installation.installation_id, settings=settings)
+
+    try:
+        tree_payload = await _docs_repo_fetch_tree(
+            gateway,
+            owner=owner,
+            repo=name,
+            ref=repo.default_branch or "HEAD",
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
+    except httpx.HTTPError as exc:
+        logger.warning(
+            "github trees fetch failed for repo=%s ws=%s: %s",
+            repo.full_name,
+            workspace_id,
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="GitHub is unreachable — try again",
+        ) from exc
+
+    extensions = tuple(s.lower() for s in _DOCS_REPO_DEFAULT_EXTENSIONS)
+    blob_paths = sorted(
+        path for path in tree_payload["blobs"] if path.lower().endswith(extensions)
+    )
+    tree_paths = sorted(
+        path
+        for path in tree_payload["trees"]
+        # Drop folders that have no doc descendants; otherwise the picker
+        # is full of empty folders the operator can never use.
+        if any(blob.startswith(f"{path}/") for blob in blob_paths)
+    )
+    nodes = [_node_for_tree(p) for p in tree_paths] + [
+        _node_for_blob(p, extensions=extensions) for p in blob_paths
+    ]
+
+    return DocsRepoTreeOut(
+        repo_id=repo.id,
+        ref=tree_payload["ref"],
+        truncated=bool(tree_payload["truncated"]),
+        nodes=nodes,
+    )
+
+
+async def _docs_repo_fetch_tree(
+    gateway: GitHubCodeHost, *, owner: str, repo: str, ref: str
+) -> dict[str, Any]:
+    """Hit GitHub's recursive trees API and split blobs/trees.
+
+    Wrapped so tests can monkeypatch the GitHub round-trip without
+    touching ``GitHubCodeHost.list_files`` (which has slightly different
+    semantics — it drops trees and only returns blob paths).
+    """
+    response = await gateway._request(  # type: ignore[attr-defined]
+        "GET",
+        f"/repos/{owner}/{repo}/git/trees/{ref}",
+        params={"recursive": "1"},
+    )
+    payload = response.json()
+    blobs: list[str] = []
+    trees: list[str] = []
+    for entry in payload.get("tree") or []:
+        path = entry.get("path")
+        kind = entry.get("type")
+        if not path or not kind:
+            continue
+        if kind == "blob":
+            blobs.append(str(path))
+        elif kind == "tree":
+            trees.append(str(path))
+    return {
+        "ref": str(payload.get("sha") or ref),
+        "blobs": blobs,
+        "trees": trees,
+        "truncated": bool(payload.get("truncated")),
+    }
