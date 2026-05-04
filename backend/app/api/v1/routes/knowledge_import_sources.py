@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Literal
 
 import httpx
@@ -26,7 +26,7 @@ from backend.app.db.models.agent_memory import (
     KnowledgeSourceItem,
 )
 from backend.app.db.models.integrations import WorkspaceRepo
-from backend.app.db.models.tenancy import Integration
+from backend.app.db.models.tenancy import AuditLog, Integration
 from backend.app.db.session import get_session
 from backend.app.security.encryption import safe_decrypt
 from backend.app.services.knowledge_ingestion import (
@@ -210,6 +210,45 @@ async def sync_source(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
         ) from exc
     return _run_out(run)
+
+
+@router.post("/{source_id}/archive", response_model=ImportSourceOut)
+async def archive_source(
+    workspace_id: uuid.UUID,
+    source_id: uuid.UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> ImportSourceOut:
+    """Soft-delete an import source.
+
+    Sets ``archived_at = now`` and stops scheduled syncs by virtue of the
+    ``list_import_sources`` filter excluding archived rows. The row itself
+    stays so an audit search by source_id still resolves; restoring is a
+    DB op for now (no closed-beta operator has asked for a restore button).
+    """
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+    source = await _load_source(session, workspace_id, source_id)
+
+    # Idempotent: a flaky-network retry shouldn't compound the audit trail.
+    if source.archived_at is None:
+        now = datetime.now(timezone.utc)
+        source.archived_at = now
+        source.updated_at = now
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=auth.user.id,
+                actor_token_id=None,
+                action="knowledge.import_source.archive",
+                target_kind="knowledge_import_source",
+                target_id=str(source.id),
+                payload={"kind": source.kind, "name": source.name},
+            )
+        )
+        await session.flush()
+        await session.refresh(source)
+
+    return _source_out(source)
 
 
 @router.get("/{source_id}/items", response_model=list[SourceItemOut])

@@ -13,6 +13,7 @@ from backend.app.db.models.agent_memory import (
     KnowledgeSourceItem,
 )
 from backend.app.db.models.agent_surface import Improvement
+from backend.app.db.models.tenancy import AuditLog
 
 
 def _auth(raw: str) -> dict[str, str]:
@@ -108,3 +109,106 @@ async def test_static_import_source_sync_emits_knowledge_note_and_skips_unchange
     stored_source = await db_session.get(KnowledgeImportSource, uuid.UUID(source_id))
     assert stored_source is not None
     assert stored_source.status == "ready"
+
+
+@pytest.mark.asyncio
+async def test_archive_import_source_hides_it_from_list_and_audits(
+    v1_client, seed_workspace, db_session
+) -> None:
+    """Archive marks ``archived_at``, drops the source from the list
+    response, and writes a ``knowledge.import_source.archive`` audit row."""
+    _, raw, workspace = seed_workspace
+
+    create_resp = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/knowledge/sources",
+        headers=_auth(raw),
+        json={
+            "kind": "static_upload",
+            "name": "To be archived",
+            "config": {
+                "documents": [
+                    {
+                        "title": "Doomed",
+                        "filename": "doomed.md",
+                        "body_md": "# Bye",
+                    }
+                ]
+            },
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    source_id = create_resp.json()["id"]
+
+    archive_resp = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/knowledge/sources/{source_id}/archive",
+        headers=_auth(raw),
+    )
+    assert archive_resp.status_code == 200, archive_resp.text
+    body = archive_resp.json()
+    assert body["archived_at"] is not None
+
+    # List excludes archived rows.
+    list_resp = await v1_client.get(
+        f"/v1/workspaces/{workspace.id}/knowledge/sources",
+        headers=_auth(raw),
+    )
+    assert list_resp.status_code == 200
+    assert all(row["id"] != source_id for row in list_resp.json())
+
+    audits = list(
+        (
+            await db_session.execute(
+                select(AuditLog).where(
+                    AuditLog.target_id == source_id,
+                    AuditLog.action == "knowledge.import_source.archive",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(audits) == 1
+    assert audits[0].payload["kind"] == "static_upload"
+
+
+@pytest.mark.asyncio
+async def test_archive_is_idempotent(v1_client, seed_workspace, db_session) -> None:
+    """Hitting archive twice doesn't double the audit row."""
+    _, raw, workspace = seed_workspace
+
+    create_resp = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/knowledge/sources",
+        headers=_auth(raw),
+        json={
+            "kind": "static_upload",
+            "name": "Idempotent target",
+            "config": {
+                "documents": [
+                    {"title": "T", "filename": "t.md", "body_md": "# T"}
+                ]
+            },
+        },
+    )
+    assert create_resp.status_code == 201
+    source_id = create_resp.json()["id"]
+
+    for _ in range(2):
+        resp = await v1_client.post(
+            f"/v1/workspaces/{workspace.id}/knowledge/sources/{source_id}/archive",
+            headers=_auth(raw),
+        )
+        assert resp.status_code == 200
+
+    audits = list(
+        (
+            await db_session.execute(
+                select(AuditLog).where(
+                    AuditLog.target_id == source_id,
+                    AuditLog.action == "knowledge.import_source.archive",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(audits) == 1

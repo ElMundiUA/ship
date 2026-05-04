@@ -36,6 +36,7 @@ import type {
 } from "@/lib/api/client";
 import type { ApiIntegration } from "@/lib/api/types";
 
+import { archiveImportSourceAction } from "./actions";
 import { KnowledgeImportWizard } from "./import-wizard";
 
 
@@ -495,34 +496,68 @@ function ConnectedSources({ sources }: { sources: KnowledgeSourceRow[] }) {
   return (
     <ul className="divide-y divide-white/5">
       {sources.map((source) => (
-        <li
-          key={source.id}
-          className="grid grid-cols-[1fr_auto] items-center gap-3 py-3"
-        >
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="truncate text-sm font-semibold text-white">
-                {source.name}
-              </span>
-              <span className="text-[11px] uppercase tracking-widest text-white/40">
-                {source.kind}
-              </span>
-            </div>
-            {source.lastError && (
-              <p className="mt-0.5 line-clamp-1 text-[11px] text-coral">
-                {source.lastError}
-              </p>
-            )}
-          </div>
-          <div className="flex flex-col items-end text-[11px] text-white/45">
-            <span className={statusColor(source.status)}>{source.status}</span>
-            <span>
-              {source.lastSyncedAt ? relativeDate(source.lastSyncedAt) : "never"}
-            </span>
-          </div>
-        </li>
+        <ConnectedSourceRow key={source.id} source={source} />
       ))}
     </ul>
+  );
+}
+
+
+function ConnectedSourceRow({ source }: { source: KnowledgeSourceRow }) {
+  const [archived, setArchived] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+
+  if (archived) return null;
+
+  function archive() {
+    if (!confirm(`Archive “${source.name}”? It will stop syncing and disappear from this list.`)) {
+      return;
+    }
+    setError(null);
+    startTransition(async () => {
+      const result = await archiveImportSourceAction(source.id);
+      if (result.ok) {
+        setArchived(true);
+      } else {
+        setError(result.message);
+      }
+    });
+  }
+
+  return (
+    <li className="grid grid-cols-[1fr_auto_auto] items-center gap-3 py-3">
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="truncate text-sm font-semibold text-white">
+            {source.name}
+          </span>
+          <span className="text-[11px] uppercase tracking-widest text-white/40">
+            {source.kind}
+          </span>
+        </div>
+        {(source.lastError || error) && (
+          <p className="mt-0.5 line-clamp-1 text-[11px] text-coral">
+            {error ?? source.lastError}
+          </p>
+        )}
+      </div>
+      <div className="flex flex-col items-end text-[11px] text-white/45">
+        <span className={statusColor(source.status)}>{source.status}</span>
+        <span>
+          {source.lastSyncedAt ? relativeDate(source.lastSyncedAt) : "never"}
+        </span>
+      </div>
+      <button
+        type="button"
+        disabled={pending}
+        onClick={archive}
+        className="rounded-full border border-white/10 px-2.5 py-1 text-[11px] text-white/55 transition hover:border-coral/40 hover:text-coral disabled:cursor-not-allowed disabled:opacity-50"
+        data-testid={`source-archive-${source.id}`}
+      >
+        {pending ? "Archiving…" : "Archive"}
+      </button>
+    </li>
   );
 }
 
