@@ -1,9 +1,9 @@
-import { LoadingShell, SkeletonRows } from "@/components/loading-shell";
+import { LoadingBody, SkeletonRows } from "@/components/loading-shell";
 
 export default function Loading() {
   return (
-    <LoadingShell>
+    <LoadingBody>
       <SkeletonRows rows={4} />
-    </LoadingShell>
+    </LoadingBody>
   );
 }

@@ -91,3 +91,33 @@ export function SkeletonRows({
     </div>
   );
 }
+
+/**
+ * Skeleton body for routes that render INSIDE the `(authed)/layout.tsx`
+ * chrome — the layout already provides the sidebar + top-bar, so
+ * `loading.tsx` here must NOT use {@link LoadingShell} (that paints a
+ * second sidebar). Renders just a sticky header placeholder and a body.
+ */
+export function LoadingBody({
+  children,
+  rows = 3,
+}: {
+  children?: ReactNode;
+  rows?: number;
+}) {
+  return (
+    <>
+      <header className="sticky top-0 z-40 border-b border-white/10 bg-ink/80 backdrop-blur-xl">
+        <div className="flex items-center gap-3 px-6 py-4 lg:px-8">
+          <div className="min-w-0 flex-1 space-y-2">
+            <div className="h-3 w-24 animate-pulse rounded bg-white/[0.06]" />
+            <div className="h-6 w-64 animate-pulse rounded bg-white/[0.08]" />
+          </div>
+        </div>
+      </header>
+      <div className="px-6 pb-16 pt-6 lg:px-8 lg:pb-20 lg:pt-8">
+        {children ?? <SkeletonRows rows={rows} />}
+      </div>
+    </>
+  );
+}

@@ -1,8 +1,8 @@
-import { LoadingShell, SkeletonRows } from "@/components/loading-shell";
+import { LoadingBody, SkeletonRows } from "@/components/loading-shell";
 
 export default function Loading() {
   return (
-    <LoadingShell>
+    <LoadingBody>
       <div className="space-y-4">
         <div className="flex flex-wrap gap-2">
           {Array.from({ length: 5 }).map((_, i) => (
@@ -14,6 +14,6 @@ export default function Loading() {
         </div>
         <SkeletonRows rows={6} />
       </div>
-    </LoadingShell>
+    </LoadingBody>
   );
 }
