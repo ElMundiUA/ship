@@ -72,8 +72,14 @@ export async function runCommand(ctx, rest) {
     printHelp();
     process.exit(EXIT_OK);
   }
-  if (!args.routine) {
-    die(EXIT_USAGE, "`--routine <id>` is required.\nRun: shipctl run --help");
+  if (!args.routine && !args.specialist) {
+    die(
+      EXIT_USAGE,
+      "either `--routine <id>` or `--specialist <slug>` is required.\nRun: shipctl run --help",
+    );
+  }
+  if (args.routine && args.specialist) {
+    die(EXIT_USAGE, "`--routine` and `--specialist` are mutually exclusive.");
   }
 
   const cwd = args.cwd || process.cwd();
@@ -83,10 +89,35 @@ export async function runCommand(ctx, rest) {
   }
 
   const { config } = readConfig(cwd);
-  const resolved = resolveExecutable(config, args.routine);
-  if (!resolved) {
-    die(EXIT_USAGE, `unknown routine '${args.routine}' in .ship/config.yml`);
+  // Routine mode: resolve from ``.ship/config.yml``. Specialist mode
+  // (used by the pipeline-pick fallback in the trigger workflow):
+  // synthesize a minimal executable so the rest of the pipeline can
+  // stay routine-shaped without inventing a ``pipeline:<slug>``
+  // routine in the YAML.
+  let resolved;
+  if (args.specialist) {
+    resolved = {
+      kind: "specialist",
+      id: args.specialist,
+      source: { specialist: args.specialist },
+      executable: {
+        id: args.specialist,
+        type: "specialist",
+        kind: "pipeline_pick",
+        specialist: args.specialist,
+        prompt: null,
+      },
+    };
+  } else {
+    resolved = resolveExecutable(config, args.routine);
+    if (!resolved) {
+      die(EXIT_USAGE, `unknown routine '${args.routine}' in .ship/config.yml`);
+    }
   }
+
+  // ``runId`` for emit/branch naming carries either the routine id or
+  // the specialist slug. Logging downstream uses ``runHandle``.
+  const runHandle = args.routine || `pipeline:${args.specialist}`;
 
   const env = readEnv();
   const { apiBase, apiToken, workspaceId, githubRepo } = env;
@@ -95,7 +126,7 @@ export async function runCommand(ctx, rest) {
   // ``routine.specialist`` is the canonical Phase-2.4 form; the legacy
   // ``routine.pattern`` is mapped to a slug in
   // ``cli/lib/runtime/routines.mjs`` (drops the ``role-`` prefix).
-  const specialistSlug = resolved.executable.specialist;
+  const specialistSlug = resolved.executable.specialist || args.specialist;
   if (!specialistSlug) {
     die(
       EXIT_USAGE,
@@ -155,7 +186,14 @@ export async function runCommand(ctx, rest) {
         state: fsmStage,
       });
       if (!task) {
-        emit(args, { status: "noop", routine: args.routine, specialist: specialistSlug, fsm_stage: fsmStage, reason: "no_eligible_ticket" });
+        emit(args, {
+          status: "noop",
+          routine: args.routine,
+          specialist: specialistSlug,
+          fsm_stage: fsmStage,
+          reason: "no_eligible_ticket",
+          run_handle: runHandle,
+        });
         process.exit(EXIT_NO_TASK);
       }
     }
@@ -214,7 +252,7 @@ export async function runCommand(ctx, rest) {
         prompt,
       }, null, 2));
     } else {
-      console.error(`# ship: dry-run routine=${args.routine} specialist=${specialistSlug} (${roleResolved.source}) fsm_stage=${fsmStage || "(context-free)"}`);
+      console.error(`# ship: dry-run handle=${runHandle} specialist=${specialistSlug} (${roleResolved.source}) fsm_stage=${fsmStage || "(context-free)"}`);
       if (task) {
         console.error(`# ship: task ticket_ref=${task.ticket_ref} title=${JSON.stringify(task.title || "")}`);
       } else {
@@ -227,8 +265,8 @@ export async function runCommand(ctx, rest) {
   }
 
   // 4) Launch agent runtime
-  const provider = resolveProvider(config, args.routine);
-  const branchName = makeBranchName(args.routine, task?.ticket_ref);
+  const provider = resolveProvider(config, args.routine || specialistSlug);
+  const branchName = makeBranchName(runHandle, task?.ticket_ref);
   const repoUrl = githubRepo ? `https://github.com/${githubRepo}` : null;
   if (!repoUrl) die(EXIT_USAGE, "GITHUB_REPOSITORY env var is required to launch agent");
 
@@ -247,6 +285,7 @@ export async function runCommand(ctx, rest) {
       routine: args.routine,
       specialist: specialistSlug,
       run_id: runId,
+      run_handle: runHandle,
       stage: "launch_agent",
       error: err instanceof Error ? err.message : String(err),
     });
@@ -268,6 +307,7 @@ export async function runCommand(ctx, rest) {
     branch: runtime.branchName,
     cursor_status: runtime.status,
     run_id: runId,
+    run_handle: runHandle,
   });
   process.exit(EXIT_OK);
 }
@@ -582,7 +622,14 @@ function makeBranchName(routine, ticketRef) {
 
 
 function parseArgs(rest) {
-  const out = { routine: null, cwd: null, json: false, help: false, dryRun: false };
+  const out = {
+    routine: null,
+    specialist: null,
+    cwd: null,
+    json: false,
+    help: false,
+    dryRun: false,
+  };
   const copy = [...rest];
   while (copy.length) {
     const a = copy[0];
@@ -590,6 +637,7 @@ function parseArgs(rest) {
     if (a === "--json") { out.json = true; copy.shift(); continue; }
     if (a === "--dry-run") { out.dryRun = true; copy.shift(); continue; }
     if (a === "--routine" && copy[1] !== undefined) { out.routine = copy[1]; copy.splice(0, 2); continue; }
+    if (a === "--specialist" && copy[1] !== undefined) { out.specialist = copy[1]; copy.splice(0, 2); continue; }
     if (a === "--cwd" && copy[1] !== undefined) { out.cwd = path.resolve(copy[1]); copy.splice(0, 2); continue; }
     // Soft-ignore legacy flags that older trigger workflows still pass —
     // the new pipeline doesn't need them and refusing would break repos
@@ -604,10 +652,14 @@ function parseArgs(rest) {
 
 
 function printHelp() {
-  console.log(`shipctl run — execute one E14 routine end-to-end.
+  console.log(`shipctl run — execute one E14 routine or pipeline-pick specialist end-to-end.
 
 Run
   shipctl run --routine <id> [--json] [--cwd <dir>] [--dry-run]
+  shipctl run --specialist <slug> [--json] [--cwd <dir>] [--dry-run]
+
+  --routine     id from process.routines in .ship/config.yml (cron-driven)
+  --specialist  agent-role slug from the Ship registry (pipeline-pick fallback)
 
 ENV
   SHIP_API_BASE        Ship server base URL (e.g. https://api.ship.elmundi.com)

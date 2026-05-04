@@ -871,6 +871,40 @@ class RoutineRunClaimOut(BaseModel):
     window_key: str
 
 
+class PipelinePickIn(BaseModel):
+    event: str = Field(default="schedule", pattern="^(schedule|manual)$")
+    github: dict[str, Any] = Field(default_factory=dict)
+
+
+class PipelinePickCandidateOut(BaseModel):
+    specialist: str
+    downstream_index: int
+    last_picked_at: str
+
+
+class PipelinePickOut(BaseModel):
+    action: str = Field(pattern="^(pipeline_pick|noop)$")
+    specialist: str | None = None
+    reason: str | None = None
+    candidates: list[PipelinePickCandidateOut] = Field(default_factory=list)
+
+
+# Downstream-first canonical order. The pick rotates through these
+# across ticks (oldest last_picked first); within ties, downstream
+# wins so WIP drains before new intake.
+_PIPELINE_SPECIALIST_ORDER: tuple[str, ...] = (
+    "reviewer",
+    "qa-automation",
+    "qa-engineer",
+    "developer",
+    "qa-architect",
+    "tech-architect",
+    "ba",
+    "bug-triage",
+    "intake",
+)
+
+
 async def _dispatch_intel_harvest(
     *,
     request: Request | None,
@@ -1724,6 +1758,105 @@ async def trigger_repo_lanes(
         status="due" if due else "noop",
         due_lanes=due,
         skipped_lanes=skipped,
+    )
+
+
+@router.post("/{repo_id}/pipeline-pick", response_model=PipelinePickOut)
+async def pipeline_pick(
+    workspace_id: uuid.UUID,
+    repo_id: uuid.UUID,
+    payload: PipelinePickIn,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> PipelinePickOut:
+    """Pick the next pipeline specialist to run.
+
+    The trigger workflow calls this *after* the routine sweep when no
+    cron routine is due — the tick spends its budget on a pipeline
+    specialist instead. One pick per tick (workflow concurrency at
+    GitHub level serialises ticks, so the picked specialist can't
+    collide with itself).
+
+    Rotation: the specialist with the oldest ``last_picked_at`` from
+    the audit log goes first; ties break downstream-first via
+    :data:`_PIPELINE_SPECIALIST_ORDER` so WIP drains before refilling
+    intake. Specialists never picked yet score as epoch and so come up
+    in the first sweep before any rotation kicks in.
+    """
+
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+    repo_row = (
+        await session.execute(
+            select(WorkspaceRepo).where(
+                WorkspaceRepo.id == repo_id,
+                WorkspaceRepo.workspace_id == workspace_id,
+            )
+        )
+    ).scalars().first()
+    if repo_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Repo not found in this workspace.",
+        )
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+
+    rows = (
+        await session.execute(
+            select(AuditLog.payload, AuditLog.created_at).where(
+                AuditLog.workspace_id == workspace_id,
+                AuditLog.action == "repo.pipeline_pick_dispatched",
+                AuditLog.target_kind == "workspace_repo",
+                AuditLog.target_id == str(repo_row.id),
+                AuditLog.created_at >= cutoff,
+            )
+        )
+    ).all()
+
+    last_picked: dict[str, datetime] = {}
+    for log_payload, created_at in rows:
+        if not isinstance(log_payload, dict):
+            continue
+        slug = log_payload.get("specialist")
+        if not isinstance(slug, str):
+            continue
+        prev = last_picked.get(slug)
+        if prev is None or created_at > prev:
+            last_picked[slug] = created_at
+
+    epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+    candidates = [
+        PipelinePickCandidateOut(
+            specialist=slug,
+            downstream_index=idx,
+            last_picked_at=last_picked.get(slug, epoch).isoformat(),
+        )
+        for idx, slug in enumerate(_PIPELINE_SPECIALIST_ORDER)
+    ]
+    candidates.sort(key=lambda c: (c.last_picked_at, c.downstream_index))
+    chosen = candidates[0].specialist
+
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=auth.user.id,
+            actor_token_id=auth.token.id if auth.token else None,
+            action="repo.pipeline_pick_dispatched",
+            target_kind="workspace_repo",
+            target_id=str(repo_row.id),
+            payload={
+                "event": payload.event,
+                "specialist": chosen,
+                "github": payload.github,
+            },
+        )
+    )
+    await session.flush()
+
+    return PipelinePickOut(
+        action="pipeline_pick",
+        specialist=chosen,
+        candidates=candidates,
     )
 
 

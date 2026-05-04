@@ -1,7 +1,7 @@
 import { readConfig } from "../config/io.mjs";
 import { dueLanesFromRoutines, dueRoutines } from "../runtime/routines.mjs";
 
-const VERSION = "v2";
+const VERSION = "v3";
 
 export async function triggerCommand(ctx, rest) {
   const opts = parseArgs(rest);
@@ -12,7 +12,9 @@ export async function triggerCommand(ctx, rest) {
   const baseUrl = resolveBaseUrl(opts.baseUrl || explicitGlobalBaseUrl(ctx));
   const token = process.env.SHIP_API_TOKEN || "";
   let claimStatus = "skipped:no-token";
-  if (token && due.length > 0 && !opts.noClaim) {
+  let workspaceId = null;
+  let repoId = null;
+  if (token && (due.length > 0 || opts.pipelineFallback) && !opts.noClaim) {
     // ``SHIP_WORKSPACE_ID`` env var matches what ``shipctl run`` already
     // honours (run.mjs reads it directly). Without this fallback the
     // CLI burned a ``GET /v1/workspaces`` round-trip every tick and
@@ -21,10 +23,12 @@ export async function triggerCommand(ctx, rest) {
     // failed the entire schedule, even though the workflow file had
     // the workspace ID right there in env. Honour the env var so the
     // common case skips the discovery call entirely.
-    let workspaceId =
+    workspaceId =
       opts.workspace || (process.env.SHIP_WORKSPACE_ID || "").trim() || "";
     if (!workspaceId) workspaceId = await resolveSoleWorkspace(baseUrl, token);
-    const repoId = await resolveRepoId(baseUrl, token, workspaceId, opts.repo);
+    repoId = await resolveRepoId(baseUrl, token, workspaceId, opts.repo);
+  }
+  if (token && due.length > 0 && !opts.noClaim) {
     const claimed = [];
     for (const routine of due) {
       const claim = await claimRoutine(baseUrl, token, workspaceId, repoId, opts.event, routine);
@@ -36,6 +40,26 @@ export async function triggerCommand(ctx, rest) {
     claimStatus = "attempted";
   }
 
+  // One-action-per-tick: if any routine is due, the workflow runs the
+  // first one and exits. The pipeline-pick fallback only fires when
+  // *no* cron routine is due AND the caller asked for it (the trigger
+  // workflow does; ad-hoc CLI invocations don't, so they keep the old
+  // behaviour).
+  let nextAction = { kind: "noop" };
+  if (due.length > 0) {
+    const first = due[0];
+    nextAction = {
+      kind: "routine",
+      routine_id: first.routine_id,
+      window_key: first.window_key,
+    };
+  } else if (opts.pipelineFallback && token) {
+    const pick = await fetchPipelinePick(baseUrl, token, workspaceId, repoId, opts.event);
+    if (pick && pick.action === "pipeline_pick" && pick.specialist) {
+      nextAction = { kind: "pipeline_pick", specialist: pick.specialist };
+    }
+  }
+
   const result = {
     event: opts.event,
     status: due.length ? "due" : "noop",
@@ -43,18 +67,22 @@ export async function triggerCommand(ctx, rest) {
     due_lanes: dueLanesFromRoutines(due),
     skipped_routines: local.skipped,
     claim_status: claimStatus,
+    next_action: nextAction,
   };
 
   if (ctx.json || opts.json) {
     console.log(JSON.stringify(result, null, 2));
     return;
   }
-  if (!due.length) {
-    console.log(`Ship trigger ${opts.event}: no routines due.`);
+  if (nextAction.kind === "noop") {
+    console.log(`Ship trigger ${opts.event}: no action this tick.`);
     return;
   }
-  console.log(`Ship trigger ${opts.event}: ${due.length} routine(s) due`);
-  for (const routine of due) console.log(`  - ${routine.routine_id}`);
+  if (nextAction.kind === "routine") {
+    console.log(`Ship trigger ${opts.event}: routine ${nextAction.routine_id}`);
+    return;
+  }
+  console.log(`Ship trigger ${opts.event}: pipeline pick → ${nextAction.specialist}`);
 }
 
 function explicitGlobalBaseUrl(ctx) {
@@ -62,10 +90,26 @@ function explicitGlobalBaseUrl(ctx) {
 }
 
 function printHelp() {
-  console.log(`shipctl trigger — compute which routines are due (${VERSION})
+  console.log(`shipctl trigger — compute the single next Ship action for this tick (${VERSION})
 
 USAGE
-  shipctl trigger --event schedule [--repo <id|owner/name>] [--workspace <id>] [--json]
+  shipctl trigger --event schedule [--repo <id|owner/name>] [--workspace <id>]
+                  [--pipeline-fallback] [--json]
+
+OUTPUT
+  'next_action' carries the chosen work for this tick:
+    {"kind": "routine", "routine_id": ...}      — a cron routine fired this tick
+    {"kind": "pipeline_pick", "specialist": ...} — no routine due; pipeline-pick chose a specialist
+    {"kind": "noop"}                            — nothing to do (and no fallback, or fallback empty)
+
+  'due_routines' keeps the legacy multi-item shape for callers that
+  parse it directly; the trigger workflow only consumes 'next_action'.
+
+FLAGS
+  --pipeline-fallback   When no routine is due, call /pipeline-pick to
+                        get a specialist to run instead. Default: off
+                        (so ad-hoc CLI invocations don't write audit
+                        log noise).
 
 ENV
   SHIP_API_TOKEN             Optional. When set, due routines are claimed in Ship.
@@ -84,6 +128,7 @@ function parseArgs(args) {
     cwd: null,
     now: null,
     noClaim: false,
+    pipelineFallback: false,
     json: false,
   };
   const copy = [...args];
@@ -114,6 +159,11 @@ function parseArgs(args) {
     }
     if (copy[0] === "--no-claim") {
       out.noClaim = true;
+      copy.shift();
+      continue;
+    }
+    if (copy[0] === "--pipeline-fallback") {
+      out.pipelineFallback = true;
       copy.shift();
       continue;
     }
@@ -185,6 +235,31 @@ async function apiGetJson(baseUrl, path, token) {
 async function apiPostJson(baseUrl, path, body, token) {
   return apiRequest(baseUrl, path, "POST", token, body);
 }
+
+async function fetchPipelinePick(baseUrl, token, workspaceId, repoId, event) {
+  try {
+    return await apiPostJson(
+      baseUrl,
+      `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/pipeline-pick`,
+      {
+        event,
+        github: {
+          event_name: process.env.SHIP_EVENT_NAME || process.env.GITHUB_EVENT_NAME || "",
+          ref: process.env.SHIP_REF || process.env.GITHUB_REF || "",
+          sha: process.env.SHIP_SHA || process.env.GITHUB_SHA || "",
+          run_id: process.env.GITHUB_RUN_ID || "",
+        },
+      },
+      token,
+    );
+  } catch (err) {
+    console.error(
+      `warn: pipeline-pick failed, no fallback this tick: ${err instanceof Error ? err.message : err}`,
+    );
+    return null;
+  }
+}
+
 
 async function claimRoutine(baseUrl, token, workspaceId, repoId, event, routine) {
   try {
