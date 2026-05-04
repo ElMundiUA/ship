@@ -453,12 +453,18 @@ async def _llm_tiebreaker(
         f"## Note body\n{body}"
     )
     try:
+        # Don't hardcode the model — pass ``None`` so the client uses its
+        # vendor-resolved fast model. ``Settings._validate_anthropic_models``
+        # already maps the OpenAI-shaped default (``gpt-4o-mini``) to the
+        # Anthropic equivalent when ``AGENT_VENDOR=anthropic``; hardcoding
+        # an OpenAI name here was sending the request to Anthropic with
+        # an unknown model id, which prod returned as a 4xx and we
+        # caught as ``llm_call_failed`` for every note.
         raw = await client.acomplete(
             messages=[
                 ChatMessage(role="system", content=_LLM_SYSTEM_PROMPT),
                 ChatMessage(role="user", content=user_msg),
             ],
-            model="gpt-4o-mini",
             max_tokens=200,
             temperature=0.0,
             response_format={"type": "json_object"},
