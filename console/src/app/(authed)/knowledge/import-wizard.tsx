@@ -8,6 +8,10 @@ import type { ApiActivatedRepo } from "@/lib/api/client";
 import type { ApiBucketScope, ApiIntegration } from "@/lib/api/types";
 
 import { createImportSourceAction, type ImportSourceResult } from "./actions";
+import {
+  ConfluenceSectionPicker,
+  type ConfluenceSectionRef,
+} from "./confluence-section-picker";
 import { NotionResourcePicker, type NotionPageRef } from "./notion-resource-picker";
 
 type SourceKind = "website" | "notion" | "confluence" | "docs_repo" | "static_upload";
@@ -35,7 +39,7 @@ export function KnowledgeImportWizard({
   const [name, setName] = useState("Website knowledge");
   const [url, setUrl] = useState("");
   const [notionRefs, setNotionRefs] = useState<NotionPageRef[]>([]);
-  const [confluenceRefs, setConfluenceRefs] = useState("[]");
+  const [confluenceRefs, setConfluenceRefs] = useState<ConfluenceSectionRef[]>([]);
   const [repoId, setRepoId] = useState(repos[0]?.id ?? "");
   const [repoPaths, setRepoPaths] = useState("docs\nREADME.md");
   const [uploadTitle, setUploadTitle] = useState("");
@@ -88,23 +92,10 @@ export function KnowledgeImportWizard({
     }
     if (kind === "confluence") {
       if (!selectedIntegrationId) return { ok: false, message: "Connect Confluence first in integrations." };
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(confluenceRefs || "[]");
-      } catch {
-        return { ok: false, message: "Resource refs must be valid JSON." };
+      if (confluenceRefs.length === 0) {
+        return { ok: false, message: "Pick at least one section from a Confluence space." };
       }
-      const refs = Array.isArray(parsed) ? parsed : [parsed];
-      const meaningful = refs.filter(
-        (ref) => ref && typeof ref === "object" && Object.keys(ref as object).length > 0,
-      );
-      if (meaningful.length === 0) {
-        return {
-          ok: false,
-          message: 'Add at least one Confluence page ref — e.g. {"page_id":"..."}.',
-        };
-      }
-      return { ok: true, config: { resource_refs: meaningful } };
+      return { ok: true, config: { resource_refs: confluenceRefs } };
     }
     if (kind === "docs_repo") {
       if (!repoId) return { ok: false, message: "Pick a repository." };
@@ -199,8 +190,21 @@ export function KnowledgeImportWizard({
                   {matchingIntegrations.length === 0 ? <option value="">No integration connected</option> : matchingIntegrations.map((integration) => <option key={integration.id} value={integration.id}>{integration.kind} - {integration.status}</option>)}
                 </select>
               </Field>
-              <Field label="Resource refs JSON" hint='Examples: [{"page_id":"..."}] — picker is in the next phase.'>
-                <textarea value={confluenceRefs} onChange={(event) => setConfluenceRefs(event.target.value)} rows={5} className="w-full rounded border border-white/15 bg-black/30 px-3 py-2 font-mono text-[12px] text-aqua/85" />
+              <Field label="Sections to import">
+                {workspaceId && selectedIntegrationId ? (
+                  <ConfluenceSectionPicker
+                    workspaceId={workspaceId}
+                    integrationId={selectedIntegrationId}
+                    value={confluenceRefs}
+                    onChange={setConfluenceRefs}
+                  />
+                ) : (
+                  <p className="text-[11px] text-white/55">
+                    {workspaceId
+                      ? "Connect Confluence (Atlassian API token) to pick sections."
+                      : "Workspace not loaded yet — refresh the page."}
+                  </p>
+                )}
               </Field>
             </>
           )}
