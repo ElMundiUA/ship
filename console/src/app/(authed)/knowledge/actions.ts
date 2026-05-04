@@ -14,6 +14,7 @@
 import {
   ApiHttpError,
   archiveBucket,
+  archiveKnowledgeImportSource,
   createKnowledgeImportSource,
   listWorkspaces,
   restoreBucket,
@@ -129,6 +130,35 @@ export async function createImportSourceAction(input: {
     } catch (err) {
       return { ok: true, sourceId: source.id, synced: false, syncError: apiErrorMessage(err) };
     }
+  } catch (err) {
+    if (err instanceof ApiHttpError) {
+      return { ok: false, message: apiErrorMessage(err), status: err.status };
+    }
+    return { ok: false, message: apiErrorMessage(err) };
+  }
+}
+
+export type ArchiveSourceResult =
+  | { ok: true; sourceId: string }
+  | { ok: false; message: string; status?: number };
+
+export async function archiveImportSourceAction(
+  sourceId: string,
+): Promise<ArchiveSourceResult> {
+  if (!sourceId) return { ok: false, message: "Source id is required." };
+
+  let token: string;
+  let workspaceId: string;
+  try {
+    token = await requireToken();
+    workspaceId = await requireWorkspaceId(token);
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : String(err) };
+  }
+
+  try {
+    await archiveKnowledgeImportSource(workspaceId, sourceId, token);
+    return { ok: true, sourceId };
   } catch (err) {
     if (err instanceof ApiHttpError) {
       return { ok: false, message: apiErrorMessage(err), status: err.status };

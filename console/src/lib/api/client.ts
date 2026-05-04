@@ -1246,6 +1246,17 @@ export function syncKnowledgeImportSource(
   );
 }
 
+export function archiveKnowledgeImportSource(
+  workspaceId: string,
+  sourceId: string,
+  token?: string,
+): Promise<ApiKnowledgeImportSource> {
+  return apiFetch<ApiKnowledgeImportSource>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/knowledge/sources/${encodeURIComponent(sourceId)}/archive`,
+    { method: "POST", token },
+  );
+}
+
 export type ApiNotionResourceItem = {
   id: string;
   type: "page" | "database";
