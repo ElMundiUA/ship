@@ -19,10 +19,12 @@ import {
   ApiUnavailableError,
   isApiConfigured,
   listTelegramLinks,
-  listWorkspaces,
   type ApiTelegramLink,
 } from "@/lib/api/client";
-import { getSessionToken } from "@/lib/api/session";
+import {
+  getCachedSessionToken,
+  getCachedWorkspaces,
+} from "@/lib/api/session-cache.server";
 import { getResolvedWorkspaceId } from "@/lib/workspace-resolve.server";
 import { pickWorkspace } from "@/lib/workspace-scope";
 
@@ -56,12 +58,10 @@ export default async function TelegramSettingsPage({
   if (!isApiConfigured()) {
     return <Frame><Empty msg="SHIP_API_URL is not set on this deployment." /></Frame>;
   }
-  const token = await getSessionToken();
+  const token = await getCachedSessionToken();
   if (!token) redirect("/login?next=%2Fsettings%2Fintegrations%2Ftelegram&reason=session_expired");
 
-  const workspaces = await listWorkspaces(token);
-  if (workspaces.length === 0) redirect("/onboarding?step=github");
-
+  const workspaces = await getCachedWorkspaces();
   const resolved = await getResolvedWorkspaceId(params, workspaces);
   if (workspaces.length > 1 && !resolved) redirect("/?next=/settings/integrations/telegram");
   const target = pickWorkspace(workspaces, resolved);

@@ -2,7 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Suspense } from "react";
 
-import { AppShell } from "@/components/app-shell";
+import { PageBody, PageHeader } from "@/components/app-shell";
 import { Card, CardHeader } from "@/components/ui";
 import { ApiUnavailable } from "@/components/api-unavailable";
 import {
@@ -33,7 +33,6 @@ import {
   listIntegrations,
   listNativeIntegrations,
   listProcesses,
-  listWorkspaces,
 } from "@/lib/api/client";
 import {
   EditorLockedBanner,
@@ -41,9 +40,12 @@ import {
   type EditorPrereqStatus,
 } from "./editor-locked-banner";
 import type { ApiIntegration, ApiWorkspace } from "@/lib/api/types";
-import { getSessionToken } from "@/lib/api/session";
+import {
+  getCachedSessionToken,
+  getCachedWorkspaces,
+} from "@/lib/api/session-cache.server";
 import { getResolvedWorkspaceId } from "@/lib/workspace-resolve.server";
-import { pickWorkspace, toAppShellWorkspaces } from "@/lib/workspace-scope";
+import { pickWorkspace } from "@/lib/workspace-scope";
 
 export const dynamic = "force-dynamic";
 
@@ -71,7 +73,7 @@ export default async function ProcessPage({
     return renderDownState("SHIP_API_URL is not set on this deployment.");
   }
 
-  const token = await getSessionToken();
+  const token = await getCachedSessionToken();
   if (!token) redirect("/login?next=%2Fprocess&reason=session_expired");
 
   if (!selectedProcessId) {
@@ -133,7 +135,7 @@ async function loadProcessShell(
 ): Promise<ProcessShell | "empty" | "unauthorized" | "down"> {
   let workspaces: ApiWorkspace[];
   try {
-    workspaces = await listWorkspaces(token);
+    workspaces = await getCachedWorkspaces();
   } catch (err) {
     if (err instanceof ApiHttpError && err.status === 401) return "unauthorized";
     if (err instanceof ApiUnavailableError) return "down";
@@ -192,7 +194,7 @@ async function loadLiveProcessGraph(
 ): Promise<LiveProcessGraph | "empty" | "unauthorized" | "down"> {
   let workspaces: ApiWorkspace[];
   try {
-    workspaces = await listWorkspaces(token);
+    workspaces = await getCachedWorkspaces();
   } catch (err) {
     if (err instanceof ApiHttpError && err.status === 401) return "unauthorized";
     if (err instanceof ApiUnavailableError) return "down";
@@ -255,28 +257,22 @@ function renderProcessGraphPage({
   const locked = isEditorLocked(prereqStatus);
   const multiWs = (allWorkspaces?.length ?? 0) > 1;
   return (
-    <AppShell
-      title="Process graph"
-      kicker={workspace.slug}
-      workspace={{ id: workspace.id, name: workspace.name, slug: workspace.slug }}
-      allWorkspaces={
-        allWorkspaces && allWorkspaces.length > 0
-          ? toAppShellWorkspaces(allWorkspaces)
-          : undefined
-      }
-    >
-      <div className="space-y-3">
-        <RepoSelector repos={repos} selectedRepo={selectedRepo} />
-        {locked && (
-          <EditorLockedBanner
-            workspaceId={workspace.id}
-            multiWorkspace={multiWs}
-            status={prereqStatus}
-          />
-        )}
-        <ProcessGraphOverview processList={processList} repoId={selectedRepo?.id} />
-      </div>
-    </AppShell>
+    <>
+      <PageHeader title="Process graph" />
+      <PageBody>
+        <div className="space-y-3">
+          <RepoSelector repos={repos} selectedRepo={selectedRepo} />
+          {locked && (
+            <EditorLockedBanner
+              workspaceId={workspace.id}
+              multiWorkspace={multiWs}
+              status={prereqStatus}
+            />
+          )}
+          <ProcessGraphOverview processList={processList} repoId={selectedRepo?.id} />
+        </div>
+      </PageBody>
+    </>
   );
 }
 
@@ -309,46 +305,40 @@ function renderProcessPage({
   const multiWs = (allWorkspaces?.length ?? 0) > 1;
   const title = summary?.name?.trim() || "Process";
   return (
-    <AppShell
-      title={title}
-      kicker={workspace.slug}
-      workspace={{ id: workspace.id, name: workspace.name, slug: workspace.slug }}
-      allWorkspaces={
-        allWorkspaces && allWorkspaces.length > 0
-          ? toAppShellWorkspaces(allWorkspaces)
-          : undefined
-      }
-    >
-      <div className="space-y-2">
-        <ProcessNotice reason={reason} />
-        {locked && (
-          <EditorLockedBanner
-            workspaceId={workspace.id}
-            multiWorkspace={multiWs}
-            status={prereqStatus}
-          />
-        )}
-        <ProcessTabs
-          selected={selectedTab}
-          processId={resolvedProcessId}
-          repoId={selectedRepo?.id}
-        />
-        <Suspense
-          key={`${resolvedProcessId}:${selectedRepo?.id ?? "none"}:${selectedTab}`}
-          fallback={<EditorContentSkeleton />}
-        >
-          <EditorContent
-            workspaceId={workspace.id}
+    <>
+      <PageHeader title={title} />
+      <PageBody>
+        <div className="space-y-2">
+          <ProcessNotice reason={reason} />
+          {locked && (
+            <EditorLockedBanner
+              workspaceId={workspace.id}
+              multiWorkspace={multiWs}
+              status={prereqStatus}
+            />
+          )}
+          <ProcessTabs
+            selected={selectedTab}
             processId={resolvedProcessId}
             repoId={selectedRepo?.id}
-            selectedTab={selectedTab}
-            selectedStateId={selectedStateId}
-            locked={locked}
-            token={token}
           />
-        </Suspense>
-      </div>
-    </AppShell>
+          <Suspense
+            key={`${resolvedProcessId}:${selectedRepo?.id ?? "none"}:${selectedTab}`}
+            fallback={<EditorContentSkeleton />}
+          >
+            <EditorContent
+              workspaceId={workspace.id}
+              processId={resolvedProcessId}
+              repoId={selectedRepo?.id}
+              selectedTab={selectedTab}
+              selectedStateId={selectedStateId}
+              locked={locked}
+              token={token}
+            />
+          </Suspense>
+        </div>
+      </PageBody>
+    </>
   );
 }
 
@@ -490,9 +480,12 @@ function TabLink({
 
 function renderDownState(details?: string) {
   return (
-    <AppShell title="Process">
-      <ApiUnavailable scope="process" details={details} />
-    </AppShell>
+    <>
+      <PageHeader title="Process" />
+      <PageBody>
+        <ApiUnavailable scope="process" details={details} />
+      </PageBody>
+    </>
   );
 }
 

@@ -20,8 +20,8 @@ import { notFound } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-import { AppShell } from "@/components/app-shell";
 import { ApiUnavailable } from "@/components/api-unavailable";
+import { PageBody, PageHeader } from "@/components/app-shell";
 import { Badge, Card, CardHeader } from "@/components/ui";
 import {
   type ApiBucket,
@@ -29,9 +29,11 @@ import {
   getBucket,
   isApiConfigured,
   listBucketArticles,
-  listWorkspaces,
 } from "@/lib/api/client";
-import { getSessionToken } from "@/lib/api/session";
+import {
+  getCachedSessionToken,
+  getCachedWorkspaces,
+} from "@/lib/api/session-cache.server";
 import type { ApiBucketArticle } from "@/lib/api/types";
 import { relativeTime } from "@/lib/format";
 
@@ -57,12 +59,12 @@ async function load(slug: string): Promise<Loaded | "notfound"> {
   if (!isApiConfigured()) {
     return { source: "unavailable", reason: "backend not configured (SHIP_API_URL unset)" };
   }
-  const token = await getSessionToken();
+  const token = await getCachedSessionToken();
   if (!token) {
     return { source: "unavailable", reason: "not signed in" };
   }
   try {
-    const wss = await listWorkspaces(token);
+    const wss = await getCachedWorkspaces();
     if (wss.length === 0) {
       return { source: "unavailable", reason: "no workspaces yet — finish onboarding first" };
     }
@@ -128,32 +130,35 @@ function LiveView({
     null;
 
   return (
-    <AppShell kicker={`${ws.name} · knowledge`} title={bucket.name}>
-      <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-white/55">
-        <Link href="/knowledge" className="hover:text-white">
-          Knowledge
-        </Link>
-        <span className="text-white/25">/</span>
-        <span className="font-mono text-white/65">{bucket.slug}</span>
-        <span className="ml-auto text-[11px] text-white/40">
-          {articles.length} article{articles.length === 1 ? "" : "s"} · updated{" "}
-          {relativeTime(bucket.updated_at)}
-        </span>
-      </div>
+    <>
+      <PageHeader kicker="knowledge" title={bucket.name} />
+      <PageBody>
+        <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-white/55">
+          <Link href="/knowledge" className="hover:text-white">
+            Knowledge
+          </Link>
+          <span className="text-white/25">/</span>
+          <span className="font-mono text-white/65">{bucket.slug}</span>
+          <span className="ml-auto text-[11px] text-white/40">
+            {articles.length} article{articles.length === 1 ? "" : "s"} · updated{" "}
+            {relativeTime(bucket.updated_at)}
+          </span>
+        </div>
 
-      {bucket.description && (
-        <p className="mb-5 max-w-3xl text-sm leading-relaxed text-white/70">
-          {bucket.description}
-        </p>
-      )}
+        {bucket.description && (
+          <p className="mb-5 max-w-3xl text-sm leading-relaxed text-white/70">
+            {bucket.description}
+          </p>
+        )}
 
-      <ArticlesCard
-        articles={articles}
-        bucketSlug={bucket.slug}
-        selectedArticleId={selectedArticle?.id}
-      />
-      {selectedArticle && <ArticleViewer article={selectedArticle} />}
-    </AppShell>
+        <ArticlesCard
+          articles={articles}
+          bucketSlug={bucket.slug}
+          selectedArticleId={selectedArticle?.id}
+        />
+        {selectedArticle && <ArticleViewer article={selectedArticle} />}
+      </PageBody>
+    </>
   );
 }
 
@@ -348,8 +353,11 @@ function provenanceHint(article: ApiBucketArticle): string | null {
 
 function UnavailableView({ data }: { data: UnavailableData }) {
   return (
-    <AppShell kicker="knowledge" title="Knowledge">
-      <ApiUnavailable scope="knowledge" details={data.reason} />
-    </AppShell>
+    <>
+      <PageHeader kicker="knowledge" title="Knowledge" />
+      <PageBody>
+        <ApiUnavailable scope="knowledge" details={data.reason} />
+      </PageBody>
+    </>
   );
 }

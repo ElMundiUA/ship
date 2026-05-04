@@ -1,32 +1,29 @@
 import { redirect } from "next/navigation";
 
-import { AppShell } from "@/components/app-shell";
 import { ApiUnavailable } from "@/components/api-unavailable";
+import { PageBody, PageHeader } from "@/components/app-shell";
 import { ScopePill } from "@/components/scope-pill";
 import {
   type ApiActivatedRepo,
   type ApiBucket,
   ApiHttpError,
-  getMe,
-  isApiConfigured,
   listActivatedRepos,
   listBucketArticles,
   listIntegrations,
   listKnowledgeImportSources,
   listBuckets,
-  listWorkspaces,
 } from "@/lib/api/client";
-import { getSessionToken } from "@/lib/api/session";
-import { getResolvedWorkspaceId } from "@/lib/workspace-resolve.server";
 import {
-  pickWorkspace,
-  toAppShellWorkspaces,
-} from "@/lib/workspace-scope";
+  getCachedMe,
+  getCachedSessionToken,
+  getCachedWorkspaces,
+} from "@/lib/api/session-cache.server";
+import { getResolvedWorkspaceId } from "@/lib/workspace-resolve.server";
+import { pickWorkspace } from "@/lib/workspace-scope";
 import type {
   ApiBucketArticle,
   ApiIntegration,
   ApiKnowledgeImportSource,
-  ApiUser,
 } from "@/lib/api/types";
 
 import {
@@ -40,13 +37,12 @@ export const dynamic = "force-dynamic";
 
 type LiveData = {
   workspace: { id: string; slug: string; name: string };
-  allWorkspaces: Awaited<ReturnType<typeof listWorkspaces>>;
   buckets: KnowledgeBucketRow[];
   articles: KnowledgeArticleRow[];
   sources: KnowledgeSourceRow[];
   repos: ApiActivatedRepo[];
   integrations: ApiIntegration[];
-  me: ApiUser | null;
+  me: Awaited<ReturnType<typeof getCachedMe>>;
 };
 
 type SearchParams = Promise<Record<string, string | string[] | undefined>>;
@@ -59,35 +55,12 @@ type LoadResult =
 async function load(
   params: Record<string, string | string[] | undefined>,
 ): Promise<LoadResult> {
-  if (!isApiConfigured()) {
-    return {
-      status: "unavailable",
-      reason: "SHIP_API_URL is not set on this deployment.",
-    };
-  }
-
-  const token = await getSessionToken();
+  const token = await getCachedSessionToken();
   if (!token) {
     redirect("/login?next=%2Fknowledge&reason=session_expired");
   }
 
-  let workspaceRows: Awaited<ReturnType<typeof listWorkspaces>>;
-  try {
-    workspaceRows = await listWorkspaces(token);
-  } catch (err) {
-    if (err instanceof ApiHttpError && err.status === 401) {
-      redirect("/login?next=%2Fknowledge&reason=session_expired");
-    }
-    return {
-      status: "unavailable",
-      reason: err instanceof Error ? err.message : "Could not load workspaces.",
-    };
-  }
-
-  if (workspaceRows.length === 0) {
-    redirect("/onboarding?step=github");
-  }
-
+  const workspaceRows = await getCachedWorkspaces();
   const resolved = await getResolvedWorkspaceId(params, workspaceRows);
   const workspace = pickWorkspace(workspaceRows, resolved);
 
@@ -96,7 +69,7 @@ async function load(
       await Promise.all([
         listActivatedRepos(workspace.id, token).catch(() => [] as ApiActivatedRepo[]),
         listIntegrations(workspace.id, token).catch(() => [] as ApiIntegration[]),
-        getMe(token).catch(() => null as ApiUser | null),
+        getCachedMe(),
         listBuckets(workspace.id, { token }),
         listKnowledgeImportSources(workspace.id, token).catch(
           () => [] as ApiKnowledgeImportSource[],
@@ -138,7 +111,6 @@ async function load(
           slug: workspace.slug,
           name: workspace.name,
         },
-        allWorkspaces: workspaceRows,
         buckets,
         articles,
         sources,
@@ -167,13 +139,16 @@ export default async function KnowledgeIndexPage({
 
   if (result.status === "unavailable") {
     return (
-      <AppShell kicker="knowledge" title="Knowledge">
-        <ApiUnavailable scope="knowledge" details={result.reason} />
-      </AppShell>
+      <>
+        <PageHeader kicker="knowledge" title="Knowledge" />
+        <PageBody>
+          <ApiUnavailable scope="knowledge" details={result.reason} />
+        </PageBody>
+      </>
     );
   }
 
-  const { workspace, allWorkspaces, buckets, articles, sources, repos, integrations, me } =
+  const { workspace, buckets, articles, sources, repos, integrations, me } =
     result.data;
 
   const scopePill = (
@@ -196,26 +171,19 @@ export default async function KnowledgeIndexPage({
   );
 
   return (
-    <AppShell
-      kicker={`${workspace.name} · knowledge`}
-      title="Knowledge"
-      workspace={{
-        id: workspace.id,
-        name: workspace.name,
-        slug: workspace.slug,
-      }}
-      allWorkspaces={toAppShellWorkspaces(allWorkspaces)}
-      scopePill={scopePill}
-    >
-      <KnowledgeControlCenter
-        workspace={workspace}
-        buckets={buckets}
-        articles={articles}
-        sources={sources}
-        repos={repos}
-        integrations={integrations}
-      />
-    </AppShell>
+    <>
+      <PageHeader title="Knowledge" scopePill={scopePill} />
+      <PageBody>
+        <KnowledgeControlCenter
+          workspace={workspace}
+          buckets={buckets}
+          articles={articles}
+          sources={sources}
+          repos={repos}
+          integrations={integrations}
+        />
+      </PageBody>
+    </>
   );
 }
 

@@ -19,7 +19,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import { AppShell } from "@/components/app-shell";
+import { PageBody, PageHeader } from "@/components/app-shell";
 import { ApiUnavailable } from "@/components/api-unavailable";
 import { StaleBadge } from "@/components/inbox/stale-badge";
 import { MarkdownBlock } from "@/components/markdown-block";
@@ -28,13 +28,14 @@ import {
   ApiHttpError,
   ApiUnavailableError,
   getInboxItem,
-  getMe,
   isApiConfigured,
   listMembers,
-  listWorkspaces,
 } from "@/lib/api/client";
 import type { ApiMember, ApiUser, ApiWorkspace } from "@/lib/api/types";
-import { getSessionToken } from "@/lib/api/session";
+import {
+  getCachedSessionToken,
+  getCachedWorkspaces,
+} from "@/lib/api/session-cache.server";
 import { getResolvedWorkspaceId } from "@/lib/workspace-resolve.server";
 import { pickWorkspace } from "@/lib/workspace-scope";
 import {
@@ -177,7 +178,6 @@ type Mode =
       workspace: ApiWorkspace;
       detail: InboxItemDetail;
       members: ApiMember[];
-      me: ApiUser | null;
     }
   | { source: "mock"; reason: string };
 
@@ -187,24 +187,11 @@ async function load(
 ): Promise<Mode> {
   if (!isApiConfigured())
     return { source: "mock", reason: "SHIP_API_URL not set" };
-  const token = await getSessionToken();
+  const token = await getCachedSessionToken();
   if (!token)
     return { source: "mock", reason: "Sign in to view real inbox items" };
 
-  let workspaces: Awaited<ReturnType<typeof listWorkspaces>>;
-  try {
-    workspaces = await listWorkspaces(token);
-  } catch (err) {
-    if (err instanceof ApiHttpError && err.status === 401) {
-      return { source: "mock", reason: "Session expired — sign in again" };
-    }
-    if (err instanceof ApiUnavailableError) {
-      return { source: "mock", reason: "Backend unreachable" };
-    }
-    return { source: "mock", reason: "Backend returned an error" };
-  }
-  if (workspaces.length === 0)
-    return { source: "mock", reason: "Create a workspace first" };
+  const workspaces = await getCachedWorkspaces();
   const resolved = await getResolvedWorkspaceId(searchParams, workspaces);
   const workspace = pickWorkspace(workspaces, resolved);
 
@@ -230,22 +217,16 @@ async function load(
   }
 
   let members: ApiMember[];
-  let me: ApiUser | null;
   try {
-    [members, me] = await Promise.all([
-      listMembers(workspace.id, token),
-      getMe(token).catch(() => null as ApiUser | null),
-    ]);
+    members = await listMembers(workspace.id, token);
   } catch (err) {
     if (err instanceof ApiUnavailableError) {
       return { source: "mock", reason: "Backend unreachable" };
     }
-    // If members fetch fails for other reasons, default to empty list
     members = [];
-    me = null;
   }
 
-  return { source: "live", workspace, detail, members, me };
+  return { source: "live", workspace, detail, members };
 }
 
 // ---------------------------------------------------------------------------
@@ -271,59 +252,56 @@ export default async function InboxItemPage({
     return <MockView reason={data.reason} errorCode={errorCode} id={id} />;
   }
 
-  const { workspace, detail, members, me } = data;
+  const { workspace, detail, members } = data;
   const meta = INBOX_TYPE_META[detail.type as InboxType];
 
   return (
-    <AppShell
-      kicker={meta?.label ?? detail.type}
-      title={detail.title}
-      workspace={{
-        id: workspace.id,
-        name: workspace.name,
-        slug: workspace.slug,
-      }}
-      me={meToShellUser(me)}
-      actions={
-        <Link
-          href="/inbox"
-          className="text-xs font-semibold text-white/65 hover:text-white"
-        >
-          ← Inbox
-        </Link>
-      }
-    >
-      {errorCode && (
-        <div className="mb-5 rounded-xl border border-coral/30 bg-coral/[0.06] px-3 py-2 text-xs text-coral/95">
-          {errorMessage(errorCode)}
-        </div>
-      )}
+    <>
+      <PageHeader
+        kicker={meta?.label ?? detail.type}
+        title={detail.title}
+        actions={
+          <Link
+            href="/inbox"
+            className="text-xs font-semibold text-white/65 hover:text-white"
+          >
+            ← Inbox
+          </Link>
+        }
+      />
+      <PageBody>
+        {errorCode && (
+          <div className="mb-5 rounded-xl border border-coral/30 bg-coral/[0.06] px-3 py-2 text-xs text-coral/95">
+            {errorMessage(errorCode)}
+          </div>
+        )}
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
-        <div className="space-y-4">
-          <HeaderCard detail={detail} />
-          <SourceTicketCard detail={detail} />
-          <DispositionCard
-            detail={detail}
-            workspaceId={workspace.id}
-          />
-          <EventsCard
-            events={detail.events}
-            members={members}
-          />
-          <CommentCard workspaceId={workspace.id} itemId={detail.id} />
-        </div>
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
+          <div className="space-y-4">
+            <HeaderCard detail={detail} />
+            <SourceTicketCard detail={detail} />
+            <DispositionCard
+              detail={detail}
+              workspaceId={workspace.id}
+            />
+            <EventsCard
+              events={detail.events}
+              members={members}
+            />
+            <CommentCard workspaceId={workspace.id} itemId={detail.id} />
+          </div>
 
-        <aside className="space-y-4">
-          <OwnerCard
-            detail={detail}
-            workspaceId={workspace.id}
-            members={members}
-          />
-          <SourceCard detail={detail} />
-        </aside>
-      </div>
-    </AppShell>
+          <aside className="space-y-4">
+            <OwnerCard
+              detail={detail}
+              workspaceId={workspace.id}
+              members={members}
+            />
+            <SourceCard detail={detail} />
+          </aside>
+        </div>
+      </PageBody>
+    </>
   );
 }
 
@@ -1204,12 +1182,6 @@ function initialsFromSource(source: string): string {
   return (parts[0]?.slice(0, 2) ?? "??").toUpperCase();
 }
 
-function meToShellUser(me: ApiUser | null) {
-  if (!me) return null;
-  const name = me.display_name?.trim() || me.email;
-  return { name, email: me.email, initials: initialsFromSource(name) };
-}
-
 function errorMessage(code: string): string {
   switch (code) {
     case "bad_input":
@@ -1330,33 +1302,36 @@ function MockView({
   const detail = mockDetail(id);
   const meta = INBOX_TYPE_META[detail.type as InboxType];
   return (
-    <AppShell kicker={meta?.label ?? detail.type} title={detail.title}>
-      <ApiUnavailable scope="inbox" details={reason} />
-      {errorCode && (
-        <div className="mb-5 rounded-xl border border-coral/30 bg-coral/[0.06] px-3 py-2 text-xs text-coral/95">
-          {errorMessage(errorCode)}
+    <>
+      <PageHeader kicker={meta?.label ?? detail.type} title={detail.title} />
+      <PageBody>
+        <ApiUnavailable scope="inbox" details={reason} />
+        {errorCode && (
+          <div className="mb-5 rounded-xl border border-coral/30 bg-coral/[0.06] px-3 py-2 text-xs text-coral/95">
+            {errorMessage(errorCode)}
+          </div>
+        )}
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
+          <div className="space-y-4">
+            <HeaderCard detail={detail} />
+            <SourceTicketCard detail={detail} />
+            <DispositionCard detail={detail} workspaceId={detail.workspace_id} />
+            <EventsCard events={detail.events} members={[]} />
+            <CommentCard
+              workspaceId={detail.workspace_id}
+              itemId={detail.id}
+            />
+          </div>
+          <aside className="space-y-4">
+            <OwnerCard
+              detail={detail}
+              workspaceId={detail.workspace_id}
+              members={[]}
+            />
+            <SourceCard detail={detail} />
+          </aside>
         </div>
-      )}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
-        <div className="space-y-4">
-          <HeaderCard detail={detail} />
-          <SourceTicketCard detail={detail} />
-          <DispositionCard detail={detail} workspaceId={detail.workspace_id} />
-          <EventsCard events={detail.events} members={[]} />
-          <CommentCard
-            workspaceId={detail.workspace_id}
-            itemId={detail.id}
-          />
-        </div>
-        <aside className="space-y-4">
-          <OwnerCard
-            detail={detail}
-            workspaceId={detail.workspace_id}
-            members={[]}
-          />
-          <SourceCard detail={detail} />
-        </aside>
-      </div>
-    </AppShell>
+      </PageBody>
+    </>
   );
 }

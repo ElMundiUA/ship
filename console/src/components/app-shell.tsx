@@ -176,6 +176,14 @@ export type AppShellUser = {
   initials: string;
 };
 
+/**
+ * Backwards-compatible single-component shell. New code should prefer
+ * rendering {@link AppShellChrome} once at the layout level and a
+ * per-page {@link PageHeader} inside the content tree — that lets
+ * sibling-route navigation skip re-fetching workspaces and re-mounting
+ * the sidebar. This wrapper is kept so older pages that still own their
+ * own `<AppShell>` block continue to render unchanged during migration.
+ */
 export function AppShell({
   children,
   title,
@@ -214,6 +222,45 @@ export function AppShell({
    * render the marketing-style preview) leave this ``undefined``
    * and the mock ``currentUser`` shows through.
    */
+  me?: AppShellUser | null;
+}) {
+  const wsKicker = workspace?.slug;
+  const dedupedKicker = kicker && kicker !== wsKicker ? kicker : undefined;
+  return (
+    <AppShellChrome
+      workspace={workspace}
+      allWorkspaces={allWorkspaces}
+      me={me}
+    >
+      <PageHeader
+        title={title}
+        kicker={dedupedKicker}
+        actions={actions}
+        scopePill={scopePill}
+      />
+      <PageBody>{children}</PageBody>
+    </AppShellChrome>
+  );
+}
+
+/**
+ * Sidebar + scrollable main column without the per-page title bar.
+ * Rendered once by `app/(authed)/layout.tsx` so navigation between
+ * sibling routes does not re-mount or re-fetch chrome data.
+ *
+ * Pages render their own {@link PageHeader} as the first child; the
+ * header sticks to the top of the scroll area via CSS so the visual
+ * result matches the legacy `<AppShell>` block.
+ */
+export function AppShellChrome({
+  children,
+  workspace,
+  allWorkspaces,
+  me,
+}: {
+  children: ReactNode;
+  workspace?: AppShellWorkspace;
+  allWorkspaces?: AppShellWorkspace[];
   me?: AppShellUser | null;
 }) {
   const pathname = usePathname();
@@ -455,30 +502,70 @@ export function AppShell({
 
         {/* main column */}
         <div className="flex min-w-0 flex-1 flex-col">
-          <header className="sticky top-0 z-40 border-b border-white/10 bg-ink/80 backdrop-blur-xl">
-            <div className="flex items-center gap-3 px-6 py-4 lg:px-8">
-              <div className="relative min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  {scopePill}
-                  {kicker && kicker !== wsKicker && (
-                    <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-aqua/80">
-                      {kicker}
-                    </div>
-                  )}
-                </div>
-                <h1 className="font-display mt-1 truncate text-xl font-bold leading-tight text-white sm:text-2xl">
-                  {title}
-                </h1>
-              </div>
-              <div className="flex shrink-0 items-center gap-2">
-                <NavigatorLauncher />
-                <div className="hidden items-center gap-2 md:flex">{actions}</div>
-              </div>
-            </div>
-          </header>
-          <main className="px-6 pb-16 pt-6 lg:px-8 lg:pb-20 lg:pt-8">{children}</main>
+          <main className="flex flex-col">{children}</main>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Per-page sticky title bar. Renders as the first child of the layout's
+ * scrollable main column so the look matches the legacy
+ * `<AppShell title kicker actions scopePill>` block, but the chrome
+ * around it is owned by the layout and persists across navigations.
+ */
+export function PageHeader({
+  title,
+  kicker,
+  actions,
+  scopePill,
+}: {
+  title: string;
+  kicker?: string;
+  actions?: ReactNode;
+  scopePill?: ReactNode;
+}) {
+  return (
+    <header className="sticky top-0 z-40 border-b border-white/10 bg-ink/80 backdrop-blur-xl">
+      <div className="flex items-center gap-3 px-6 py-4 lg:px-8">
+        <div className="relative min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            {scopePill}
+            {kicker && (
+              <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-aqua/80">
+                {kicker}
+              </div>
+            )}
+          </div>
+          <h1 className="font-display mt-1 truncate text-xl font-bold leading-tight text-white sm:text-2xl">
+            {title}
+          </h1>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <NavigatorLauncher />
+          <div className="hidden items-center gap-2 md:flex">{actions}</div>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+/**
+ * Body padding wrapper used by pages that want the legacy
+ * `<AppShell>` content padding (px-6 pb-16 pt-6 lg:px-8 lg:pb-20 lg:pt-8)
+ * around their main content. Pure CSS — no client logic.
+ */
+export function PageBody({
+  children,
+  className,
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={cn("px-6 pb-16 pt-6 lg:px-8 lg:pb-20 lg:pt-8", className)}>
+      {children}
     </div>
   );
 }

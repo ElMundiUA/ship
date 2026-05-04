@@ -20,7 +20,7 @@ import { cookies } from "next/headers";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 
-import { AppShell } from "@/components/app-shell";
+import { PageBody, PageHeader } from "@/components/app-shell";
 import { ApiUnavailable } from "@/components/api-unavailable";
 import {
   Badge,
@@ -36,13 +36,15 @@ import {
   listActivatedRepos,
   listRepoSecrets,
   listRequiredSecrets,
-  listWorkspaces,
   type ApiActivatedRepo,
   type ApiRepoSecret,
   type ApiRequiredSecret,
 } from "@/lib/api/client";
 import type { ApiWorkspace } from "@/lib/api/types";
-import { getSessionToken } from "@/lib/api/session";
+import {
+  getCachedSessionToken,
+  getCachedWorkspaces,
+} from "@/lib/api/session-cache.server";
 
 export const dynamic = "force-dynamic";
 
@@ -65,12 +67,12 @@ async function load(repoId: string): Promise<Mode> {
   if (!isApiConfigured()) {
     return { source: "mock", reason: "SHIP_API_URL not set" };
   }
-  const token = await getSessionToken();
+  const token = await getCachedSessionToken();
   if (!token) {
     return { source: "mock", reason: "Sign in to manage secrets" };
   }
   try {
-    const workspaces = await listWorkspaces(token);
+    const workspaces = await getCachedWorkspaces();
     if (workspaces.length === 0) {
       return { source: "mock", reason: "No workspace to manage secrets for" };
     }
@@ -177,16 +179,13 @@ export default async function RepoSecretsPage(props: PageProps) {
   const reason = (search.reason ?? "").toString() || null;
 
   return (
-    <AppShell
-      title="Repo secrets"
-      kicker={mode.source === "live" ? mode.repo.full_name : "Secrets"}
-      workspace={
-        mode.source === "live"
-          ? { id: mode.workspace.id, name: mode.workspace.name, slug: mode.workspace.slug }
-          : undefined
-      }
-    >
-      <div className="space-y-6">
+    <>
+      <PageHeader
+        title="Repo secrets"
+        kicker={mode.source === "live" ? mode.repo.full_name : "Secrets"}
+      />
+      <PageBody>
+        <div className="space-y-6">
         {mode.source === "mock" ? (
           <ApiUnavailable scope="repo secrets" details={mode.reason} />
         ) : (
@@ -232,8 +231,9 @@ export default async function RepoSecretsPage(props: PageProps) {
             </div>
           </Card>
         )}
-      </div>
-    </AppShell>
+        </div>
+      </PageBody>
+    </>
   );
 }
 

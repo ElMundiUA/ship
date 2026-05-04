@@ -39,3 +39,25 @@ export const getCachedMe = cache(async (): Promise<ApiUser | null> => {
     return null;
   }
 });
+
+export type AppShellMe = {
+  name: string;
+  email: string;
+  initials: string;
+};
+
+/**
+ * Shared adapter so every page derives the same {name, email, initials}
+ * shape from the raw `getMe` response. Was previously duplicated as
+ * `meToShellUser` in five page files.
+ */
+export function meToShellUser(me: ApiUser | null): AppShellMe | null {
+  if (!me) return null;
+  const name = me.display_name?.trim() || me.email;
+  const parts = name.split(/[\s@.]+/).filter(Boolean);
+  const initials =
+    parts.length >= 2
+      ? (parts[0][0] + parts[1][0]).toUpperCase()
+      : (parts[0]?.slice(0, 2) ?? "??").toUpperCase();
+  return { name, email: me.email, initials };
+}
