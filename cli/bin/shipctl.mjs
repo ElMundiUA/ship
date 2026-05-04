@@ -87,6 +87,12 @@ try {
     process.exit(0);
   }
 
+  if (cmd === "preflight") {
+    const { preflightCommand } = await import("../lib/commands/preflight.mjs");
+    await preflightCommand(ctx, rest);
+    process.exit(0);
+  }
+
   console.error(`Unknown command: ${cmd}\nRun: shipctl help`);
   process.exit(1);
 } catch (err) {

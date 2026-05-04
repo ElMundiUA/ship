@@ -77,6 +77,12 @@ class AgentRoleDefault:
     name: str
     prompt: str
     fsm_stage: str | None
+    # Phase 4 — hard-deny list the runner honours. Empty tuple for
+    # roles that don't declare any restrictions (the common case).
+    # The reviewer slug ships ``("git_commit", "git_push",
+    # "git_amend")`` so the runner refuses to invoke commit / push
+    # tools no matter how persuasive the prompt drift gets.
+    denied_tools: tuple[str, ...] = ()
 
 
 def is_valid_slug(slug: str) -> bool:
@@ -134,8 +140,25 @@ def _load_defaults() -> dict[str, AgentRoleDefault]:
             raise AgentRoleError(
                 f"{path.name}: 'fsm_stage' must be a non-empty string or omitted."
             )
+        denied_raw = meta.get("denied_tools")
+        denied_tools: tuple[str, ...]
+        if denied_raw is None:
+            denied_tools = ()
+        elif isinstance(denied_raw, list) and all(
+            isinstance(item, str) and item.strip() for item in denied_raw
+        ):
+            denied_tools = tuple(item.strip() for item in denied_raw)
+        else:
+            raise AgentRoleError(
+                f"{path.name}: 'denied_tools' must be a list of non-empty "
+                "strings or omitted."
+            )
         out[slug] = AgentRoleDefault(
-            slug=slug, name=name, prompt=body, fsm_stage=fsm_stage
+            slug=slug,
+            name=name,
+            prompt=body,
+            fsm_stage=fsm_stage,
+            denied_tools=denied_tools,
         )
     return out
 
