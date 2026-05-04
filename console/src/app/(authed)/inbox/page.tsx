@@ -325,6 +325,7 @@ export default async function InboxPage({
                     key={tier}
                     tier={tier}
                     items={items}
+                    workspaceId={workspaceId}
                     workspaceScope={inboxWs}
                   />
                 );
@@ -414,10 +415,17 @@ function OwnershipRibbon({
 function TierSection({
   tier,
   items,
+  workspaceId,
   workspaceScope,
 }: {
   tier: InboxTier;
   items: InboxItem[];
+  /** The actual workspace id — always set; passed to row actions so
+   *  POST disposition knows which workspace to act on, regardless of
+   *  whether the user happens to belong to one workspace or many. */
+  workspaceId: string;
+  /** URL-scope override — only set when the user has multiple
+   *  workspaces and we need to disambiguate via ``?ws=…`` on links. */
   workspaceScope?: string;
 }) {
   return (
@@ -441,7 +449,7 @@ function TierSection({
           <li key={item.id}>
             <InboxItemRow
               item={item}
-              workspaceId={workspaceScope}
+              workspaceId={workspaceId}
               href={
                 workspaceScope
                   ? `/inbox/${item.id}?ws=${encodeURIComponent(workspaceScope)}`
