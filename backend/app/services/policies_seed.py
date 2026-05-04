@@ -151,9 +151,10 @@ _REVIEWER_ROLES: tuple[str, ...] = (
     "game-balance-reviewer",
 )
 _AUDIT_ROLES: tuple[str, ...] = (
-    "qa-architect",
-    "tech-architect",
+    "qa-reviewer",
+    "tech-reviewer",
     "security-officer",
+    "process-reviewer",
 )
 _REVIEWER_AND_AUDIT_ROLES: tuple[str, ...] = _REVIEWER_ROLES + _AUDIT_ROLES
 
@@ -337,33 +338,35 @@ _INTAKE_POLICIES: tuple[SeedPolicy, ...] = (
             "pre-release project. Do not touch Backlog tickets — "
             "they aren't yours."
         ),
-        applies_to_roles=("intake",),
+        applies_to_roles=("intake", "bug-triage"),
         sort_order=28,
     ),
     SeedPolicy(
         title="Rewrite the body via `description`, not `comment`",
         body=(
             "When a ticket is shape-ready, rewrite the body via the "
-            "``description`` field on the finish payload. Sections, "
-            "in order: Problem, Goal, Expected behaviour, Scope, "
-            "Acceptance criteria, Non-goals, Risks. Use the "
-            "operator's original wording where it's already clear; "
-            "tighten / restructure where it isn't. Do not paste the "
-            "rewritten spec into the ``comment``."
+            "``description`` field on the finish payload. Use the "
+            "section list defined for your role (intake: Problem / "
+            "Goal / Expected / Scope / AC / Non-goals / Risks; "
+            "bug-triage: Summary / Steps / Expected / Actual / "
+            "Environment / Scope / Severity / Suspect / Workaround). "
+            "Use the operator's original wording where it's already "
+            "clear; tighten / restructure where it isn't. Do not "
+            "paste the rewritten spec into the ``comment``."
         ),
-        applies_to_roles=("intake",),
+        applies_to_roles=("intake", "bug-triage"),
         sort_order=29,
     ),
     SeedPolicy(
         title="Don't push forward when context is missing",
         body=(
             "When required context (goal / problem / expectation / "
-            "AC / constraints) is missing, finish with "
+            "AC / constraints / repro) is missing, finish with "
             "``outcome=needs_clarification`` and put numbered "
             "questions in the ``comment`` — don't push the ticket "
             "forward."
         ),
-        applies_to_roles=("intake",),
+        applies_to_roles=("intake", "bug-triage"),
         sort_order=30,
     ),
 )
@@ -434,15 +437,80 @@ _SECURITY_OFFICER_POLICIES: tuple[SeedPolicy, ...] = (
 )
 
 
-_TECH_ARCHITECT_POLICIES: tuple[SeedPolicy, ...] = (
+_TECH_REVIEWER_POLICIES: tuple[SeedPolicy, ...] = (
     SeedPolicy(
         title="Tech-debt findings only in the tech-debt project",
         body=(
             "Architecture and tech-debt findings are created only in "
             "the configured tech-debt project, status **Backlog**."
         ),
-        applies_to_roles=("tech-architect",),
+        applies_to_roles=("tech-reviewer",),
         sort_order=36,
+    ),
+)
+
+
+_REVIEWER_POLICIES: tuple[SeedPolicy, ...] = (
+    SeedPolicy(
+        title="Reviewer never pushes commits or modifies code",
+        body=(
+            "The reviewer role's only outputs are PR-line comments and "
+            "an anchor summary comment. Never push commits, amend, "
+            "rebase, force-push, or modify any file in the working "
+            "tree. If a fix is obvious, describe it in the comment so "
+            "the developer applies it on the next pass."
+        ),
+        applies_to_roles=("reviewer",),
+        sort_order=42,
+    ),
+    SeedPolicy(
+        title="Reviewer never approves; ready_next_step routes to a human",
+        body=(
+            "Approval is a human signal. Even when the diff is clean, "
+            "do not click approve on the PR. Finish with "
+            "``outcome=ready_next_step`` and ``stage_next=human_merge`` "
+            "so the human reviewer takes over."
+        ),
+        applies_to_roles=("reviewer",),
+        sort_order=43,
+    ),
+    SeedPolicy(
+        title="One anchored review comment per pass",
+        body=(
+            "Post a single anchor summary comment with the "
+            "``reviewer`` anchor; update it on subsequent passes "
+            "instead of stacking new ones. Per-finding PR-line "
+            "comments are separate and may stack with each finding."
+        ),
+        applies_to_roles=("reviewer",),
+        sort_order=44,
+    ),
+)
+
+
+_QA_PIPELINE_POLICIES: tuple[SeedPolicy, ...] = (
+    SeedPolicy(
+        title="QA engineer never fixes defects, only reports them",
+        body=(
+            "Manual QA is read-only on the codebase. When a defect is "
+            "found, finish with ``outcome=blocked`` and a structured "
+            "defect list — never push a fix yourself. The developer "
+            "owns the next pass."
+        ),
+        applies_to_roles=("qa-engineer",),
+        sort_order=45,
+    ),
+    SeedPolicy(
+        title="Automation tests anchor to the architect's plan",
+        body=(
+            "Each automated test added in the QA-automation pass "
+            "anchors to a Given/When/Then scenario from the QA "
+            "architect's test plan section. Do not invent new "
+            "scenarios at this stage; if a gap appears, finish with "
+            "``outcome=needs_clarification`` and describe it."
+        ),
+        applies_to_roles=("qa-automation",),
+        sort_order=46,
     ),
 )
 
@@ -530,7 +598,9 @@ _DEFAULT_POLICIES: tuple[SeedPolicy, ...] = (
     *_CLARIFICATION_POLICIES,
     *_PRODUCT_MANAGER_POLICIES,
     *_SECURITY_OFFICER_POLICIES,
-    *_TECH_ARCHITECT_POLICIES,
+    *_TECH_REVIEWER_POLICIES,
+    *_REVIEWER_POLICIES,
+    *_QA_PIPELINE_POLICIES,
     *_NAVIGATOR_POLICIES,
 )
 

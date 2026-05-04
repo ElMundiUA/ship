@@ -8,7 +8,7 @@ load-bearing:
 * :data:`DEFAULT_BUNDLE` / :data:`DEFAULT_BUNDLE_REASONS` — the Plays
   preview the wizard's "Confirm bootstrap" step renders.
 * :data:`DEFAULT_SEED_LANES` / :func:`default_seed_lanes` — the
-  canonical six routines the seed bundle writes into a fresh
+  canonical seven routines the seed bundle writes into a fresh
   ``.ship/config.yml``. Each entry now spells the agent role with
   ``specialist:`` (Phase 2.4 vocabulary), resolved by
   ``shipctl run`` through ``GET /v1/.../agent-roles/{slug}/resolve``.
@@ -40,34 +40,50 @@ from typing import Final
 # ---------------------------------------------------------------------------
 
 DEFAULT_BUNDLE: tuple[str, ...] = (
-    "qa-architect",
-    "tech-architect",
-    "security-officer",
+    # Routines (cron-driven sweeps; seven canonical lanes below).
     "daily-retro",
     "learning-capture",
-    "intake",
-    "ba",
-    "developer",
-    "qa-acceptance",
     "workflow-self-heal",
+    "tech-reviewer",
+    "qa-reviewer",
+    "security-officer",
+    "process-reviewer",
+    # Pipeline specialists (one ticket at a time, picked by capacity /
+    # queue depth). Order mirrors the SDLC flow:
+    # intake → BA → tech-arch → qa-arch → dev → QA → autoQA → reviewer.
+    "intake",
+    "bug-triage",
+    "ba",
+    "tech-architect",
+    "qa-architect",
+    "developer",
+    "qa-engineer",
+    "qa-automation",
+    "reviewer",
 )
 
 DEFAULT_BUNDLE_REASONS: dict[str, str] = {
-    "qa-architect": "Reviews test architecture daily and plans QA coverage for active work.",
-    "tech-architect": "Reviews architecture daily and plans implementation for ready work.",
-    "security-officer": "Runs daily security review and routes actionable findings.",
-    "daily-retro": "Reports the last 24 hours of repository and delivery activity to Ship.",
-    "learning-capture": "Reviews recent runs and suggests workflow or prompt improvements.",
-    "intake": "Checks new work for enough information before BA / architecture planning.",
-    "ba": "Writes requirements for tasks that are ready for BA.",
-    "developer": "Implements tasks that passed requirements and architecture planning.",
-    "qa-acceptance": "Covers manual QA and acceptance gaps before automation picks them up.",
-    "workflow-self-heal": "Checks hourly whether Ship workflows are healthy and reports fixes.",
+    "daily-retro": "Posts a morning summary of what shipped in the last 24 hours.",
+    "learning-capture": "Closes the day with a retro that turns recent runs into improvement notes.",
+    "workflow-self-heal": "Watches Ship workflows; opens a fix ticket or pings a human when something breaks.",
+    "tech-reviewer": "Sweeps the repo daily for tech-debt and architectural risk; files dedup tickets.",
+    "qa-reviewer": "Sweeps the repo daily for test-coverage gaps; files dedup tickets.",
+    "security-officer": "Runs the daily security review and routes actionable findings.",
+    "process-reviewer": "Suggests SDLC improvements (PR previews, CI health, branch hygiene) to the inbox.",
+    "intake": "Shapes new work into a structured ticket before BA picks it up.",
+    "bug-triage": "Structures bug reports into reproducible tickets before BA writes the fix spec.",
+    "ba": "Writes the implementation-grade specification on top of intake.",
+    "tech-architect": "Plans the architecture for one ticket; design only, no code.",
+    "qa-architect": "Plans the test coverage for one ticket; design only, no test code.",
+    "developer": "Implements tickets that cleared requirements and architecture.",
+    "qa-engineer": "Walks the manual test plan against a feature-complete PR.",
+    "qa-automation": "Adds automated tests for the change so the regression sticks.",
+    "reviewer": "Final agent-side code review; comments only, never pushes commits.",
 }
 
 
 # ---------------------------------------------------------------------------
-# Canonical six routines — the only set the editor surfaces and the only
+# Canonical seven routines — the only set the editor surfaces and the only
 # set the seed bundle writes into a fresh ``.ship/config.yml``.
 # ---------------------------------------------------------------------------
 
@@ -76,25 +92,10 @@ DEFAULT_SEED_LANES: Final[dict[str, dict[str, object]]] = {
     # the slug through ``GET /v1/.../agent-roles/{slug}/resolve`` (workspace
     # override → Ship default file). Slugs match
     # ``backend/app/resources/agent_roles/<slug>.md`` exactly.
-    "security_review": {
-        "kind": "schedule",
-        "cron": "0 6 * * *",   # 06:00 UTC
-        "specialist": "security-officer",
-    },
     "daily": {
         "kind": "schedule",
-        "cron": "0 9 * * *",   # 09:00 UTC — morning digest
+        "cron": "0 9 * * *",   # 09:00 UTC — morning summary
         "specialist": "daily-retro",
-    },
-    "tech_review": {
-        "kind": "schedule",
-        "cron": "0 12 * * *",  # 12:00 UTC
-        "specialist": "tech-architect",
-    },
-    "qa_review": {
-        "kind": "schedule",
-        "cron": "0 15 * * *",  # 15:00 UTC
-        "specialist": "qa-architect",
     },
     "retro": {
         "kind": "schedule",
@@ -106,16 +107,37 @@ DEFAULT_SEED_LANES: Final[dict[str, dict[str, object]]] = {
         "cron": "0 */2 * * *",  # every 2h
         "specialist": "workflow-self-heal",
     },
+    "tech_review": {
+        "kind": "schedule",
+        "cron": "0 12 * * *",  # 12:00 UTC
+        "specialist": "tech-reviewer",
+    },
+    "qa_review": {
+        "kind": "schedule",
+        "cron": "0 15 * * *",  # 15:00 UTC
+        "specialist": "qa-reviewer",
+    },
+    "security_review": {
+        "kind": "schedule",
+        "cron": "0 6 * * *",   # 06:00 UTC
+        "specialist": "security-officer",
+    },
+    "process_review": {
+        "kind": "schedule",
+        "cron": "0 16 * * *",  # 16:00 UTC — after the QA sweep, before retro
+        "specialist": "process-reviewer",
+    },
 }
 
 # Display labels keyed by the canonical routine id.
 ROUTINE_DISPLAY_LABELS: Final[dict[str, str]] = {
     "daily": "Daily",
     "retro": "Retro",
-    "healthcheck": "Healthcheck",
+    "healthcheck": "Self-heal",
     "tech_review": "Tech review",
     "qa_review": "QA review",
     "security_review": "Security review",
+    "process_review": "Process review",
 }
 
 # Legacy ids ever produced by older seed versions. Loading code logs a
