@@ -627,6 +627,85 @@ async def test_propose_rejects_invalid_process_routine(
     assert "routines[0].name" in detail["message"]
 
 
+@pytest.mark.asyncio
+async def test_propose_rejects_invalid_process_gates(
+    v1_client, seed_workspace_with_repo
+) -> None:
+    """Phase 3: ``process.gates`` is constrained to a small enum.
+
+    The validator catches typos (``after_review``, ``ba``, …) before
+    they round-trip through the seed bundle and surface as silently
+    ignored fields downstream.
+    """
+    raw, workspace, _install, repo = seed_workspace_with_repo
+
+    response = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/repos/{repo.id}/config/propose",
+        headers={"Authorization": f"Bearer {raw}"},
+        json={
+            "base_sha": "sha-abc",
+            "lanes": {},
+            "process": {
+                "id": "development",
+                "name": "Development Process",
+                "primary": True,
+                "states": [{"id": "implementation", "name": "Implementation"}],
+                "gates": "after_review",
+            },
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    detail = response.json()["detail"]
+    assert detail["code"] == "invalid_process"
+    assert "gates" in detail["message"]
+
+
+@pytest.mark.asyncio
+async def test_propose_accepts_known_process_gates(
+    monkeypatch, v1_client, seed_workspace_with_repo
+) -> None:
+    """All three canonical gate values round-trip through validation."""
+    raw, workspace, _install, repo = seed_workspace_with_repo
+    _patch_blob(monkeypatch, content=_SAMPLE_CONFIG, sha="sha-abc")
+
+    captured: dict = {}
+
+    async def _commit(*args, **kwargs):
+        from backend.app.integrations.github.workflows import StarterWorkflowPR
+
+        captured["files"] = list(kwargs.get("files") or [])
+        return StarterWorkflowPR(
+            pr_url="https://example/pr",
+            pr_number=42,
+            branch="ship/process-gates",
+        )
+
+    monkeypatch.setattr(
+        "backend.app.integrations.github.workflows.commit_bundle_pr", _commit
+    )
+
+    for gate in ("after_ba", "after_arch", "after_pr"):
+        response = await v1_client.post(
+            f"/v1/workspaces/{workspace.id}/repos/{repo.id}/config/propose",
+            headers={"Authorization": f"Bearer {raw}"},
+            json={
+                "base_sha": "sha-abc",
+                "lanes": {},
+                "process": {
+                    "id": "development",
+                    "name": "Development Process",
+                    "primary": True,
+                    "states": [
+                        {"id": "implementation", "name": "Implementation"}
+                    ],
+                    "gates": gate,
+                },
+            },
+        )
+        assert response.status_code == 200, response.text
+
+
 # ---------------------------------------------------------------------------
 # RFC-0008 C3.1 — ``patterns: [ids]`` on POST /config/propose
 # ---------------------------------------------------------------------------

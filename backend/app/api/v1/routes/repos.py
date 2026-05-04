@@ -21,7 +21,7 @@ import logging
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Final
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -2883,6 +2883,33 @@ def _validate_process_config(process: dict[str, Any]) -> None:
 
     _validate_process_schedule(process.get("schedule"))
     _validate_process_routines(process.get("routines"))
+    _validate_process_gates(process.get("gates"))
+
+
+# Where the operator wants to interject. ``after_pr`` (default) is
+# fully autonomous through the agent reviewer — human only approves +
+# merges. ``after_arch`` pauses for human approval after tech/qa
+# architects (catches scope/architecture mistakes early).
+# ``after_ba`` pauses earlier, after BA writes the spec — useful when
+# requirements drift is the main risk. Phase 3 lands the schema +
+# default; the FSM finish-endpoint enforcement that actually moves
+# tickets to a "needs review" state instead of straight to dev is
+# Phase 3.5.
+_PROCESS_GATES: Final[tuple[str, ...]] = ("after_ba", "after_arch", "after_pr")
+
+
+def _validate_process_gates(value: Any) -> None:
+    if value is None:
+        return
+    if not isinstance(value, str) or value not in _PROCESS_GATES:
+        allowed = "|".join(_PROCESS_GATES)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "invalid_process",
+                "message": f"process.gates must be one of {allowed}",
+            },
+        )
 
 
 def _validate_process_agent_profile(value: Any, field: str) -> None:

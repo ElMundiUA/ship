@@ -78,6 +78,10 @@ def test_compose_default_bundle_emits_config_yml() -> None:
     assert "intake" in bundle.bundle
     assert "developer" in bundle.bundle
     assert "reviewer" in bundle.bundle
+    # Phase 3: ``process.gates`` ships with the seed at the safe
+    # default — autonomous through the agent reviewer, human only at
+    # PR merge. Operators who want earlier interjection edit it.
+    assert "gates: after_pr" in config_body
 
 
 def test_compose_default_bundle_emits_dedup_workflows() -> None:
