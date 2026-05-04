@@ -618,12 +618,19 @@ async def _ask_llm_synthesis(
     """One non-streaming completion. Returns ``None`` on failure / skip."""
     user_msg = _build_user_prompt(bucket=bucket, notes=notes, existing=existing)
     try:
+        # Don't hardcode the model — let the client use its
+        # vendor-resolved fast model. Same fix as #119 applied to
+        # the router: passing ``gpt-4o-mini`` to ``AnthropicAgentClient``
+        # on prod (``AGENT_VENDOR=anthropic``) returns a 4xx for an
+        # unknown model id, which we catch as a generic exception
+        # and convert to ``None`` — silently dropping every synth
+        # call. The cron then logs zero drafts created without any
+        # other signal of why.
         raw = await client.acomplete(
             messages=[
                 ChatMessage(role="system", content=_SYNTH_SYSTEM_PROMPT),
                 ChatMessage(role="user", content=user_msg),
             ],
-            model="gpt-4o-mini",
             max_tokens=4000,
             temperature=0.2,
             response_format={"type": "json_object"},
