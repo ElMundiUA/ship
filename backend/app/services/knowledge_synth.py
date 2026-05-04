@@ -116,6 +116,7 @@ class SynthReport:
     drafts_skipped_no_notes: int = 0
     drafts_skipped_no_llm: int = 0
     drafts_skipped_dup_content: int = 0
+    drafts_skipped_llm_skip: int = 0
     # Number of ``auto_routed_archive_proposal`` inbox rows emitted
     # this pass. They sit alongside ``drafts_created`` in the cron
     # log so an operator can tell at a glance whether the pipeline
@@ -237,6 +238,17 @@ async def _synthesise_bucket(
     )
     if decision is None:
         report.drafts_skipped_no_llm += 1
+        return
+
+    if decision.action == "skip":
+        # LLM looked at the notes and decided they don't form an
+        # article. Mark them consumed so the next tick stops
+        # re-presenting the same notes (otherwise we burn one LLM
+        # call per bucket per hour forever on the same skip
+        # verdict).
+        await _mark_notes_consumed(session, pending, article_id=None)
+        report.notes_consumed += len(pending)
+        report.drafts_skipped_llm_skip += 1
         return
 
     if decision.action == "archive":
@@ -456,12 +468,23 @@ async def _existing_published_articles(
 async def _mark_notes_consumed(
     session: AsyncSession,
     notes: list[Improvement],
-    article_id: uuid.UUID,
+    article_id: uuid.UUID | None,
 ) -> None:
+    """Stamp notes with ``synthesised_into_article_id`` so the next
+    tick stops re-fetching them.
+
+    ``article_id`` may be ``None`` when the LLM decided ``skip`` — the
+    notes are still consumed (the model looked at them and chose
+    nothing), but there's no article to point at. We persist the
+    sentinel string ``"skipped"`` so the JSON path predicate
+    ``IS NULL`` in :func:`_pending_notes_for_bucket` excludes them
+    just the same.
+    """
     now = datetime.now(timezone.utc).isoformat()
+    target = str(article_id) if article_id is not None else "skipped"
     for n in notes:
         ctx = dict(n.context or {})
-        ctx["synthesised_into_article_id"] = str(article_id)
+        ctx["synthesised_into_article_id"] = target
         ctx["synthesised_at"] = now
         n.context = ctx
 
@@ -646,8 +669,23 @@ async def _ask_llm_synthesis(
         return None
 
     action = obj.get("action")
-    if action not in ("new", "update", "archive"):
+    if action not in ("new", "update", "archive", "skip"):
         return None
+
+    if action == "skip":
+        # Surface the verdict so the caller can mark notes consumed
+        # and bump the right counter — without dropping into the
+        # ``decision is None`` branch that's reserved for genuine
+        # LLM failures.
+        return _SynthDecision(
+            action="skip",
+            slug="",
+            title="",
+            body_md="",
+            supersedes_slug=None,
+            archive_slug=None,
+            archive_reason=None,
+        )
 
     if action == "archive":
         # Archive proposals only need a slug + reason; body fields
