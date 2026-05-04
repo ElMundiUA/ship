@@ -335,6 +335,15 @@ async def _fetch_connector_documents(
         refs = [refs]
     if not isinstance(refs, list):
         raise KnowledgeIngestionError("connector source config.resource_refs must be a list")
+    # Empty list silently produced a "synced 0 of nothing" success — every
+    # field was 0 in the result panel and operators (incl. closed-beta
+    # clients) thought the connection was broken. Reject early so both
+    # the wizard and direct API callers get a clear error instead.
+    if not any(isinstance(ref, dict) and ref for ref in refs):
+        raise KnowledgeIngestionError(
+            "connector source needs at least one resource_ref "
+            "(e.g. {\"page_id\": \"...\"} or {\"database_id\": \"...\"})"
+        )
     documents: list[SourceDocument] = []
     for ref in refs[:MAX_SOURCE_DOCUMENTS]:
         if not isinstance(ref, dict):

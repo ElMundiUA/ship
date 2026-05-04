@@ -1246,6 +1246,42 @@ export function syncKnowledgeImportSource(
   );
 }
 
+export type ApiNotionResourceItem = {
+  id: string;
+  type: "page" | "database";
+  title: string;
+  parent_path: string | null;
+  url: string | null;
+  last_edited_time: string | null;
+  icon: string | null;
+};
+
+export type ApiNotionResourceList = {
+  items: ApiNotionResourceItem[];
+  next_cursor: string | null;
+  has_more: boolean;
+};
+
+export function listNotionResources(
+  workspaceId: string,
+  params: {
+    integrationId: string;
+    q?: string;
+    cursor?: string | null;
+    type?: "page" | "database" | "any";
+  },
+  options: { token?: string; signal?: AbortSignal } = {},
+): Promise<ApiNotionResourceList> {
+  const search = new URLSearchParams({ integration_id: params.integrationId });
+  if (params.q) search.set("q", params.q);
+  if (params.cursor) search.set("cursor", params.cursor);
+  if (params.type) search.set("type", params.type);
+  return apiFetch<ApiNotionResourceList>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/knowledge/sources/notion/resources?${search.toString()}`,
+    { token: options.token, signal: options.signal },
+  );
+}
+
 export function archiveBucket(
   workspaceId: string,
   slug: string,
