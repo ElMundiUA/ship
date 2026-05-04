@@ -223,7 +223,20 @@ def bundle_routine_entries(
 def default_development_process_config(
     *, routines: "Mapping[str, Mapping[str, object]] | None" = None
 ) -> dict[str, object]:
-    """Return the minimal FSM process seeded into new repo configs."""
+    """Return the canonical FSM process seeded into new repo configs.
+
+    Phase 1 introduced nine pipeline specialists (intake, bug-triage,
+    ba, tech-architect, qa-architect, developer, qa-engineer,
+    qa-automation, reviewer) and Phase 3 added the gates knob; this
+    config now matches that canon. ``specialist.id`` carries the
+    kebab-case agent-role slug — the same slug the runtime resolver
+    accepts at ``/v1/.../agent-roles/{slug}/resolve``.
+
+    Bug-triage is a parallel intake stage for bugs (no transition in
+    from ``task_intake``); it converges on ``ba_requirements`` so the
+    rest of the pipeline doesn't fork. The console process editor
+    surfaces both entry stages in the planning column.
+    """
     return {
         "id": "development",
         "name": "Development Process",
@@ -240,20 +253,53 @@ def default_development_process_config(
                 "id": "task_intake",
                 "name": "Intake",
                 "state": "planning",
-                "specialist": {"id": "intake", "name": "Intake specialist"},
+                "specialist": {"id": "intake", "name": "Intake"},
                 "instructions": (
-                    "Clarify the request, collect missing context, and decide "
-                    "whether the task is ready for requirements."
+                    "Shape new feature requests into structured tickets "
+                    "before BA picks them up."
+                ),
+            },
+            {
+                "id": "bug_triage",
+                "name": "Bug triage",
+                "state": "planning",
+                "specialist": {"id": "bug-triage", "name": "Bug triage"},
+                "instructions": (
+                    "Structure bug reports into reproducible tickets "
+                    "(steps, expected, actual, env, severity) before "
+                    "BA writes the fix spec."
                 ),
             },
             {
                 "id": "ba_requirements",
                 "name": "Requirements",
                 "state": "planning",
-                "specialist": {"id": "business_analyst", "name": "Business analyst"},
+                "specialist": {"id": "ba", "name": "BA / specification"},
                 "instructions": (
-                    "Turn the request into acceptance criteria, constraints, "
-                    "risks, and open questions."
+                    "Turn the shaped ticket into acceptance criteria, "
+                    "constraints, risks, and an explicit test plan."
+                ),
+            },
+            {
+                "id": "tech_arch_plan",
+                "name": "Tech architecture",
+                "state": "planning",
+                "specialist": {"id": "tech-architect", "name": "Tech architect"},
+                "instructions": (
+                    "Plan the architecture of the change — components "
+                    "touched, contracts, risk + rollback. Design only, "
+                    "no code."
+                ),
+            },
+            {
+                "id": "qa_arch_plan",
+                "name": "Test architecture",
+                "state": "planning",
+                "specialist": {"id": "qa-architect", "name": "QA architect"},
+                "instructions": (
+                    "Design the test coverage strategy — unit / "
+                    "integration / e2e split, fixtures, edge cases. "
+                    "Design only, no test code."
                 ),
             },
             {
@@ -262,36 +308,51 @@ def default_development_process_config(
                 "state": "executing",
                 "specialist": {"id": "developer", "name": "Developer"},
                 "instructions": (
-                    "Implement the change, update tests and documentation, and "
-                    "prepare the work for review."
+                    "Implement the change against the architecture "
+                    "plan, run the relevant gates, open the PR."
                 ),
             },
             {
                 "id": "qa_manual",
-                "name": "Quality Review",
+                "name": "Manual QA",
                 "state": "executing",
-                "specialist": {"id": "qa_engineer", "name": "QA engineer"},
+                "specialist": {"id": "qa-engineer", "name": "QA engineer"},
                 "instructions": (
-                    "Validate acceptance criteria, edge cases, and user-facing "
-                    "quality before release."
+                    "Walk the manual test plan against the open PR; "
+                    "report defects without fixing them."
                 ),
             },
             {
-                "id": "pr_review",
-                "name": "Final Review",
-                "state": "reviewing",
-                "specialist": {"id": "review_owner", "name": "Review owner"},
+                "id": "qa_automation",
+                "name": "Test automation",
+                "state": "executing",
+                "specialist": {"id": "qa-automation", "name": "QA automation"},
                 "instructions": (
-                    "Review the completed work for correctness, maintainability, "
-                    "scope, and release readiness."
+                    "Add automated tests anchored to the architect's "
+                    "test plan so the regression sticks."
+                ),
+            },
+            {
+                "id": "code_review",
+                "name": "Code review",
+                "state": "reviewing",
+                "specialist": {"id": "reviewer", "name": "Reviewer"},
+                "instructions": (
+                    "Final agent-side review — comments only, never "
+                    "pushes commits, never approves. Flags blockers "
+                    "before the human merger sees the PR."
                 ),
             },
         ],
         "transitions": [
             {"from": "task_intake", "to": "ba_requirements"},
-            {"from": "ba_requirements", "to": "dev_implementation"},
+            {"from": "bug_triage", "to": "ba_requirements"},
+            {"from": "ba_requirements", "to": "tech_arch_plan"},
+            {"from": "tech_arch_plan", "to": "qa_arch_plan"},
+            {"from": "qa_arch_plan", "to": "dev_implementation"},
             {"from": "dev_implementation", "to": "qa_manual"},
-            {"from": "qa_manual", "to": "pr_review"},
+            {"from": "qa_manual", "to": "qa_automation"},
+            {"from": "qa_automation", "to": "code_review"},
         ],
         "routines": dict(routines or {}),
     }

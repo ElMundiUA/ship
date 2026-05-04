@@ -15,13 +15,18 @@ import { CANONICAL_STATES, type CanonicalState } from "@/lib/api/types";
 // schema, this can shrink to a single "planning" default.
 const LEGACY_STAGE_STATE: Record<string, CanonicalState> = {
   task_intake: "planning",
+  bug_triage: "planning",
   ba_requirements: "planning",
   tech_arch_plan: "planning",
   qa_arch_plan: "planning",
   dev_implementation: "executing",
   qa_manual: "executing",
   qa_automation: "executing",
+  // ``pr_review`` was the legacy 5-state name; ``code_review`` is the
+  // Phase 1.5 canonical id. Both map to ``reviewing`` so old configs
+  // that haven't been re-seeded yet still resolve.
   pr_review: "reviewing",
+  code_review: "reviewing",
 };
 
 function canonicalStateFromConfigRow(

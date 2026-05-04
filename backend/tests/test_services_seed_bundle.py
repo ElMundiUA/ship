@@ -82,6 +82,37 @@ def test_compose_default_bundle_emits_config_yml() -> None:
     # default — autonomous through the agent reviewer, human only at
     # PR merge. Operators who want earlier interjection edit it.
     assert "gates: after_pr" in config_body
+    # Phase 1.5: nine canonical pipeline stages, kebab-case specialist
+    # slugs matching the agent-role files. Pinned so a regression in
+    # ``default_development_process_config`` doesn't silently drop a
+    # stage from new wizard seeds.
+    for state_id in (
+        "task_intake",
+        "bug_triage",
+        "ba_requirements",
+        "tech_arch_plan",
+        "qa_arch_plan",
+        "dev_implementation",
+        "qa_manual",
+        "qa_automation",
+        "code_review",
+    ):
+        assert f"id: {state_id}" in config_body, (
+            f"missing process.states[].id={state_id} in seeded YAML"
+        )
+    for slug in (
+        "id: ba\n",
+        "id: tech-architect\n",
+        "id: qa-architect\n",
+        "id: developer\n",
+        "id: qa-engineer\n",
+        "id: qa-automation\n",
+        "id: reviewer\n",
+        "id: bug-triage\n",
+    ):
+        assert slug in config_body, (
+            f"missing specialist {slug.strip()} in seeded YAML"
+        )
 
 
 def test_compose_default_bundle_emits_dedup_workflows() -> None:
