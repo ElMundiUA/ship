@@ -79,11 +79,20 @@ _LLM_NOTE_BODY_CAP = 4000
 
 @dataclass(slots=True)
 class BucketCentroid:
+    """A workspace bucket the router can route into.
+
+    ``centroid`` is ``None`` for buckets with zero embedded published
+    articles — the bucket is description-only. Such buckets can't
+    auto-pin (we have no vector to compare against), but they're still
+    valid targets for ``bucket_hint`` matches and the LLM tiebreaker
+    (which uses ``description`` to decide fit).
+    """
+
     bucket_id: uuid.UUID
     slug: str
     name: str
     description: str | None
-    centroid: list[float]
+    centroid: list[float] | None
     sample_count: int
 
 
@@ -140,9 +149,10 @@ async def route_pending_notes(
         return report
 
     if not centroids:
-        # Nothing to route into — but this shouldn't be a hard skip;
-        # KB-1's notes still want their tick counted so the report
-        # surfaces "you have notes but no buckets" cleanly.
+        # Workspace has zero buckets at all — there's literally nothing
+        # to route into. (Buckets that exist but have no articles are
+        # NOT this branch; they're still candidates via description-only
+        # routing — see ``_bucket_centroids``.)
         report.skipped_no_buckets = len(pending)
         return report
 
@@ -260,28 +270,29 @@ async def _route_one(
     if not note_vec:
         return None
 
-    scored = sorted(
-        (
-            (b, _cosine(note_vec, b.centroid))
-            for b in centroids
-        ),
-        key=lambda x: x[1],
-        reverse=True,
-    )
-    top, top_score = scored[0]
+    populated = [b for b in centroids if b.centroid is not None]
+    if populated:
+        scored = sorted(
+            ((b, _cosine(note_vec, b.centroid or [])) for b in populated),
+            key=lambda x: x[1],
+            reverse=True,
+        )
+        top, top_score = scored[0]
+        if top_score >= AUTO_PIN_THRESHOLD:
+            return top, top_score, "auto_pin"
 
-    if top_score >= AUTO_PIN_THRESHOLD:
-        return top, top_score, "auto_pin"
-
-    # Centroid was ambiguous; check the LLM extractor's hint first.
+    # Centroid scoring was ambiguous (or every bucket is description-only);
+    # check the LLM extractor's hint first against ALL candidates.
     hint = (note.context or {}).get("bucket_hint")
     if isinstance(hint, str):
         match = next((b for b in centroids if b.slug == hint), None)
         if match is not None:
             return match, HINT_CONFIDENCE, "bucket_hint"
 
-    # Last resort: tiebreaker LLM. Falls back to "no_fit" on any
-    # failure or if the model returns null.
+    # Last resort: tiebreaker LLM. Sees ALL buckets (populated or not)
+    # via their descriptions, so a brand-new workspace whose buckets are
+    # description-only still gets a routing decision instead of stuck
+    # "no_fit" forever. Falls back to "no_fit" on any failure.
     if llm_client is not None:
         slug, conf = await _llm_tiebreaker(
             note=note, centroids=centroids, client=llm_client
@@ -302,12 +313,15 @@ async def _route_one(
 async def _bucket_centroids(
     session: AsyncSession, *, workspace_id: uuid.UUID
 ) -> list[BucketCentroid]:
-    """Pull every workspace-scoped bucket and compute its centroid.
+    """Pull every workspace-scoped bucket and (when possible) its centroid.
 
-    A bucket with zero embedded published articles produces no
-    centroid (it's invisible to the router until it has at least one
-    representative article). KB-4 review will surface notes that hit
-    a freshly-empty bucket as "no_fit".
+    Description-only buckets (zero embedded published articles) are still
+    returned, with ``centroid=None``. They can't auto-pin via cosine
+    similarity, but they're valid targets for ``bucket_hint`` matches and
+    the LLM tiebreaker (which uses ``description`` to decide fit). This
+    is what unblocks brand-new workspaces whose preset buckets ship with
+    descriptions but no seed articles — without it, every note routes to
+    ``no_fit`` forever and the synthesiser never runs.
     """
     bucket_rows = (
         await session.execute(
@@ -330,9 +344,7 @@ async def _bucket_centroids(
             )
         ).scalars().all()
         vectors = [list(v) for v in article_rows if v is not None]
-        if not vectors:
-            continue
-        centroid = _mean_vector(vectors)
+        centroid = _mean_vector(vectors) if vectors else None
         centroids.append(
             BucketCentroid(
                 bucket_id=bucket.id,
