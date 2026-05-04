@@ -644,6 +644,117 @@ async def test_jit_rejects_with_expired_invite(db_session, monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_jit_admits_user_with_open_workspace_invite(
+    db_session, monkeypatch
+) -> None:
+    """An active workspace_invite for the email satisfies the gate.
+
+    Workspace admins issuing invites is itself a vetting signal, so we
+    let the invitee through even without a separate ``platform_invites``
+    row. The workspace invite must remain unconsumed — redemption is an
+    explicit user action on ``/invite``.
+    """
+    import uuid as _uuid
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import select
+
+    from backend.app.core.config import get_settings
+    from backend.app.db.models.tenancy import Org, Workspace, WorkspaceInvite
+
+    monkeypatch.setenv("SHIP_INVITE_ONLY", "true")
+    get_settings.cache_clear()
+    try:
+        org = Org(slug=f"acme-{_uuid.uuid4().hex[:6]}", name="Acme")
+        db_session.add(org)
+        await db_session.flush()
+        workspace = Workspace(
+            org_id=org.id, slug=f"ws-{_uuid.uuid4().hex[:6]}", name="Acme"
+        )
+        db_session.add(workspace)
+        await db_session.flush()
+        ws_invite = WorkspaceInvite(
+            workspace_id=workspace.id,
+            email="invitee@example.com",
+            role="member",
+            token_hash=b"\x00" * 32,
+            expires_at=datetime.now(timezone.utc) + timedelta(days=7),
+        )
+        db_session.add(ws_invite)
+        await db_session.flush()
+
+        user = await auth0.user_from_claims(
+            {
+                "sub": "auth0|invitee-fresh",
+                "email": "invitee@example.com",
+                "name": "Invitee",
+            },
+            db_session,
+        )
+        await db_session.flush()
+
+        assert user.email == "invitee@example.com"
+        assert user.external_subject == "auth0|invitee-fresh"
+        # The workspace invite must NOT have been auto-accepted — that
+        # is the dedicated /v1/invites/{token}/accept flow's job.
+        refreshed = (
+            await db_session.execute(
+                select(WorkspaceInvite).where(WorkspaceInvite.id == ws_invite.id)
+            )
+        ).scalar_one()
+        assert refreshed.accepted_at is None
+        assert refreshed.accepted_by_user_id is None
+    finally:
+        get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_jit_rejects_with_revoked_workspace_invite(
+    db_session, monkeypatch
+) -> None:
+    """A revoked workspace invite does not satisfy the gate."""
+    import uuid as _uuid
+    from datetime import datetime, timedelta, timezone
+
+    from backend.app.core.config import get_settings
+    from backend.app.db.models.tenancy import Org, Workspace, WorkspaceInvite
+
+    monkeypatch.setenv("SHIP_INVITE_ONLY", "true")
+    get_settings.cache_clear()
+    try:
+        org = Org(slug=f"acme-{_uuid.uuid4().hex[:6]}", name="Acme")
+        db_session.add(org)
+        await db_session.flush()
+        workspace = Workspace(
+            org_id=org.id, slug=f"ws-{_uuid.uuid4().hex[:6]}", name="Acme"
+        )
+        db_session.add(workspace)
+        await db_session.flush()
+        ws_invite = WorkspaceInvite(
+            workspace_id=workspace.id,
+            email="revoked-ws@example.com",
+            role="member",
+            token_hash=b"\x01" * 32,
+            expires_at=datetime.now(timezone.utc) + timedelta(days=7),
+            revoked_at=datetime.now(timezone.utc),
+        )
+        db_session.add(ws_invite)
+        await db_session.flush()
+
+        with pytest.raises(HTTPException) as exc:
+            await auth0.user_from_claims(
+                {
+                    "sub": "auth0|revoked-ws",
+                    "email": "revoked-ws@example.com",
+                },
+                db_session,
+            )
+        assert exc.value.status_code == 403
+    finally:
+        get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
 async def test_jit_skips_gate_for_returning_user(db_session, monkeypatch) -> None:
     """Returning users (already have ``external_subject``) bypass the gate."""
     from backend.app.core.config import get_settings

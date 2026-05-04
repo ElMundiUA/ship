@@ -34,7 +34,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.config import Settings, get_settings
-from backend.app.db.models.tenancy import PlatformInvite, User
+from backend.app.db.models.tenancy import PlatformInvite, User, WorkspaceInvite
 
 
 log = logging.getLogger(__name__)
@@ -284,10 +284,22 @@ async def user_from_claims(
     # email has an open ``platform_invites`` row. Email-pending sentinels
     # skip the gate here; the real check fires after /complete-profile
     # patches the user's email in.
+    #
+    # An active ``workspace_invites`` row is also accepted as proof that a
+    # workspace admin already vetted this user. Without this fallback, an
+    # admin who invites a brand-new email gets surfaced as a misleading
+    # "wrong email" error on the accept page (the closed-beta 403 is
+    # indistinguishable from the email-mismatch 403 to the console). The
+    # workspace invite is *not* consumed here — the dedicated accept flow
+    # owns that.
     invite: PlatformInvite | None = None
     if not email.endswith("@no-email.local"):
         invite = await _consume_open_invite(session, email)
-        if invite is None and get_settings().invite_only:
+        if (
+            invite is None
+            and get_settings().invite_only
+            and not await _has_open_workspace_invite(session, email)
+        ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=(
@@ -334,6 +346,27 @@ async def user_from_claims(
         # have an audit trail of who burned which invite.
         invite.accepted_by_user_id = user.id
     return user
+
+
+async def _has_open_workspace_invite(
+    session: AsyncSession, email: str
+) -> bool:
+    """Return ``True`` if any live ``workspace_invites`` row targets ``email``.
+
+    A workspace admin issuing an invite is itself a vetting signal, so we
+    let the invitee through the closed-beta gate even without a matching
+    ``platform_invites`` row. We do not consume or mutate the invite —
+    redemption is a separate, explicit step on ``/invite``.
+    """
+    stmt = (
+        select(WorkspaceInvite.id)
+        .where(WorkspaceInvite.email == email.lower())
+        .where(WorkspaceInvite.accepted_at.is_(None))
+        .where(WorkspaceInvite.revoked_at.is_(None))
+        .where(WorkspaceInvite.expires_at > func.now())
+        .limit(1)
+    )
+    return (await session.execute(stmt)).scalar_one_or_none() is not None
 
 
 async def _consume_open_invite(
