@@ -36,6 +36,44 @@ async def test_list_ship_defaults(v1_client, seed_workspace) -> None:
     assert intake["fsm_stage"] == "task_intake"
     developer = next(row for row in rows if row["slug"] == "developer")
     assert developer["fsm_stage"] is None
+    # Phase 4: most roles ship without a deny list; reviewer ships
+    # with the hard ban on commit / push / amend / merge.
+    assert developer["denied_tools"] == []
+    reviewer = next(row for row in rows if row["slug"] == "reviewer")
+    assert "git_commit" in reviewer["denied_tools"]
+    assert "git_push" in reviewer["denied_tools"]
+
+
+@pytest.mark.asyncio
+async def test_resolve_carries_denied_tools_through_default(
+    v1_client, seed_workspace
+) -> None:
+    """``/resolve`` returns the deny list resolved from the Ship default.
+
+    Pinned because the trigger workflow's preflight reads this same
+    field to decide whether to launch a runner that can honour the
+    contract; a regression here means denied tools silently become
+    allowed for new tenants.
+    """
+    _, raw, workspace = seed_workspace
+    headers = {"Authorization": f"Bearer {raw}"}
+
+    res = await v1_client.get(
+        f"/v1/workspaces/{workspace.id}/agent-roles/reviewer/resolve",
+        headers=headers,
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["source"] == "ship_default"
+    assert body["denied_tools"] and isinstance(body["denied_tools"], list)
+    assert "git_commit" in body["denied_tools"]
+
+    res = await v1_client.get(
+        f"/v1/workspaces/{workspace.id}/agent-roles/developer/resolve",
+        headers=headers,
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["denied_tools"] == []
 
 
 @pytest.mark.asyncio

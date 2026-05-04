@@ -26,6 +26,7 @@ const SCENARIOS = [
   { name: "doctor",    args: ["doctor", "--help"] },
   { name: "trigger",   args: ["trigger", "--help"] },
   { name: "run",       args: ["run", "--help"] },
+  { name: "preflight", args: ["preflight", "--help"] },
   { name: "knowledge", args: ["knowledge", "--help"] },
 ];
 

@@ -481,6 +481,8 @@ function renderPrompt({ patternBody, baseBody, role, routineSpec, task, fsmStage
     out.push("");
   }
   out.push(expanded.trim());
+  out.push("");
+  out.push(renderLifecycleHooks());
   if (task) {
     out.push("");
     out.push("## Task");
@@ -500,6 +502,33 @@ function renderPrompt({ patternBody, baseBody, role, routineSpec, task, fsmStage
   out.push("");
   out.push(renderExitProtocol(finishCtx));
   return out.join("\n");
+}
+
+
+function renderLifecycleHooks() {
+  // Phase 4: every run is bracketed by two auditable lifecycle hooks
+  // — knowledge-fetch first, knowledge-feedback last. We render them
+  // as explicit prompt instructions so they show up in the agent's
+  // tool-use log (the runner audits the log to flag runs that
+  // skipped them). Soft for now (no run-blocking enforcement) but
+  // the prompt is the canonical contract until the runner grows
+  // tool-stream interception.
+  return [
+    "## Lifecycle hooks (Phase 4)",
+    "",
+    "**First call — knowledge fetch.** Before any other tool call,",
+    `run \`shipctl knowledge fetch <bucket>\` for at least one bucket`,
+    "relevant to your role. The audit log flags runs whose first",
+    "tool call wasn't a knowledge fetch; do not skip this to save",
+    "tokens.",
+    "",
+    "**Last call — knowledge feedback.** Before calling the finish",
+    "endpoint, leave one-line learnings via the Ship knowledge",
+    "feedback channel (`shipctl feedback draft` → `feedback submit`)",
+    "if you discovered something a future run on this codebase would",
+    "want to know. Empty findings are a valid outcome — better no",
+    "feedback than fabricated polish.",
+  ].join("\n");
 }
 
 

@@ -57,6 +57,9 @@ class AgentRoleDefaultOut(BaseModel):
     slug: str
     name: str
     fsm_stage: str | None = None
+    # Phase 4 — hard-deny tools the shipctl runner refuses to invoke
+    # for this role. Empty list when omitted in frontmatter.
+    denied_tools: list[str] = Field(default_factory=list)
 
 
 class AgentRoleDefaultDetailOut(AgentRoleDefaultOut):
@@ -110,6 +113,10 @@ class AgentRoleResolvedOut(BaseModel):
     name: str
     prompt: str
     fsm_stage: str | None = None
+    # Phase 4 — denied tools resolved from the Ship default (workspace
+    # overrides currently inherit the default's deny list verbatim;
+    # frontmatter is the source of truth).
+    denied_tools: list[str] = Field(default_factory=list)
     source: Literal["workspace", "ship_default"]
 
 
@@ -124,7 +131,12 @@ async def list_ship_defaults(
 ) -> list[AgentRoleDefaultOut]:
     """Every Ship-shipped default specialist, sorted by slug."""
     return [
-        AgentRoleDefaultOut(slug=d.slug, name=d.name, fsm_stage=d.fsm_stage)
+        AgentRoleDefaultOut(
+            slug=d.slug,
+            name=d.name,
+            fsm_stage=d.fsm_stage,
+            denied_tools=list(d.denied_tools),
+        )
         for d in agent_roles_svc.list_defaults()
     ]
 
@@ -149,6 +161,7 @@ async def get_ship_default(
         slug=default.slug,
         name=default.name,
         fsm_stage=default.fsm_stage,
+        denied_tools=list(default.denied_tools),
         prompt=default.prompt,
     )
 
@@ -385,21 +398,26 @@ async def resolve_workspace_role(
     if row is not None:
         # Workspace overrides + clones may declare a different
         # fsm_stage in the future. For now we mirror the Ship default's
-        # fsm_stage when the slug shadows a default; clones inherit it
-        # from the named base; brand-new roles get None.
+        # fsm_stage + denied_tools when the slug shadows a default;
+        # clones inherit them from the named base; brand-new roles
+        # get None / empty.
         default = agent_roles_svc.get_default(slug)
         if default is not None:
             fsm_stage = default.fsm_stage
+            denied_tools = list(default.denied_tools)
         elif row.base_role_slug:
             base = agent_roles_svc.get_default(row.base_role_slug)
             fsm_stage = base.fsm_stage if base is not None else None
+            denied_tools = list(base.denied_tools) if base is not None else []
         else:
             fsm_stage = None
+            denied_tools = []
         return AgentRoleResolvedOut(
             slug=row.slug,
             name=row.name,
             prompt=row.prompt,
             fsm_stage=fsm_stage,
+            denied_tools=denied_tools,
             source="workspace",
         )
 
@@ -414,5 +432,6 @@ async def resolve_workspace_role(
         name=default.name,
         prompt=default.prompt,
         fsm_stage=default.fsm_stage,
+        denied_tools=list(default.denied_tools),
         source="ship_default",
     )

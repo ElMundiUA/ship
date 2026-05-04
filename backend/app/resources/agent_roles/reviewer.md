@@ -1,5 +1,10 @@
 ---
 name: Reviewer
+denied_tools:
+  - git_commit
+  - git_push
+  - git_amend
+  - gh_pr_merge
 ---
 
 # Role: Reviewer ({{ISSUE}})
