@@ -3,7 +3,7 @@ name: Ship · Schedule trigger
 on:
   workflow_dispatch: {}
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "*/30 * * * *"
 
 permissions:
   contents: read
@@ -15,7 +15,7 @@ concurrency:
 jobs:
   trigger:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -28,7 +28,7 @@ jobs:
       - name: Install shipctl
         run: npm install -g @elmundi/ship-cli@latest
 
-      - name: Compute due Ship routines
+      - name: Compute next Ship action
         env:
           SHIP_API_TOKEN: ${{ secrets.SHIP_API_TOKEN }}
           SHIP_WORKSPACE_API_BASE: ${{ secrets.SHIP_API_BASE }}
@@ -41,15 +41,30 @@ jobs:
           SHIP_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          shipctl trigger --event schedule --repo "$SHIP_REPO" --json > /tmp/ship-trigger.json
-          jq -r '.due_routines[].routine_id' /tmp/ship-trigger.json > /tmp/ship-due-routines.txt
-          if [ ! -s /tmp/ship-due-routines.txt ]; then
-            echo "No Ship routines due in this tick."
-            exit 0
-          fi
-
-          while IFS= read -r routine; do
-            echo "::group::Ship routine ${routine}"
-            SHIP_REPO="" shipctl run --routine "$routine" --trigger schedule
-            echo "::endgroup::"
-          done < /tmp/ship-due-routines.txt
+          # One action per tick — drop the legacy while-loop. Trigger
+          # returns either the next due routine or, when none are due,
+          # a pipeline-pick fallback specialist. The free-tier math
+          # only works if a tick does at most one thing.
+          shipctl trigger --event schedule --repo "$SHIP_REPO" --pipeline-fallback --json > /tmp/ship-action.json
+          ACTION=$(jq -r '.next_action.kind // "noop"' /tmp/ship-action.json)
+          case "$ACTION" in
+            routine)
+              ROUTINE=$(jq -r '.next_action.routine_id' /tmp/ship-action.json)
+              echo "::group::Ship routine ${ROUTINE}"
+              SHIP_REPO="" shipctl run --routine "$ROUTINE" --trigger schedule
+              echo "::endgroup::"
+              ;;
+            pipeline_pick)
+              SPECIALIST=$(jq -r '.next_action.specialist' /tmp/ship-action.json)
+              echo "::group::Ship pipeline pick — ${SPECIALIST}"
+              SHIP_REPO="" shipctl run --specialist "$SPECIALIST" --trigger pipeline_pick
+              echo "::endgroup::"
+              ;;
+            noop)
+              echo "Ship: nothing to do this tick."
+              ;;
+            *)
+              echo "Ship: unrecognised next_action.kind '$ACTION'; check shipctl version." >&2
+              exit 1
+              ;;
+          esac

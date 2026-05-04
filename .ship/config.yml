@@ -21,6 +21,7 @@ process:
   id: development
   name: Development Process
   primary: true
+  gates: after_pr
   states:
   - id: task_intake
     name: Intake
