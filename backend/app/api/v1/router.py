@@ -38,6 +38,7 @@ from backend.app.api.v1.routes import (
     integrations,
     invites,
     knowledge,
+    knowledge_canon,
     knowledge_import_sources,
     lanes,
     linear_oauth,
@@ -71,6 +72,10 @@ api_router.include_router(integrations.public_router)
 api_router.include_router(integrations.router)
 api_router.include_router(native_integrations.router)
 api_router.include_router(knowledge_import_sources.router)
+# Canon endpoints (topic views + claims) ride before legacy knowledge
+# router so the more-specific ``/topic-views`` / ``/claims`` paths
+# don't get swallowed by ``/{slug}`` in ``knowledge.router``.
+api_router.include_router(knowledge_canon.router)
 api_router.include_router(knowledge.router)
 api_router.include_router(members.router)
 # Operational groups for inbox routing (RFC-0010 §5). Distinct from
