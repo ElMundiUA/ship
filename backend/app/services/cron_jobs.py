@@ -38,6 +38,9 @@ from backend.app.services.knowledge_reconciler import (
 )
 from backend.app.services.knowledge_router import route_all_workspaces
 from backend.app.services.knowledge_synth import synthesise_all_workspaces
+from backend.app.services.knowledge_topic_renderer import (
+    render_workspace_topics,
+)
 from sqlalchemy import select
 
 
@@ -343,6 +346,59 @@ async def _knowledge_claim_reconcile_tick() -> None:
         )
 
 
+@cron_with_lock(
+    lock=CronLockId.KNOWLEDGE_TOPIC_RENDER, name="knowledge_topic_render"
+)
+async def _knowledge_topic_render_tick() -> None:
+    """Every 30 min: render derived topic-views from active claims.
+
+    Per workspace, find topics with ≥3 active claims and render any
+    whose claim_set_sha has drifted since the last render. Cache hits
+    skip the LLM call entirely, so steady-state cost is dominated by
+    the sha computation, not by tokens.
+
+    Without an LLM client the renderer falls back to a deterministic
+    bullet-list body; the next tick that does have a client refreshes
+    the same row in place. We don't skip the tick on missing LLM —
+    operators still get a structured fallback view they can search.
+    """
+    try:
+        llm_client = pick_default_client(get_settings())
+    except Exception:
+        log.info(
+            "knowledge_topic_render tick: no LLM client; "
+            "deterministic-only render this tick"
+        )
+        llm_client = None
+
+    sm = get_sessionmaker()
+    workspace_ids = await _all_workspace_ids()
+    total_rendered = total_failed = 0
+    for ws_id in workspace_ids:
+        async with sm() as session:
+            try:
+                report = await render_workspace_topics(
+                    session, workspace_id=ws_id, llm_client=llm_client
+                )
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                log.exception(
+                    "knowledge_topic_render tick: ws=%s failed", ws_id
+                )
+                total_failed += 1
+                continue
+        total_rendered += report.rendered
+        total_failed += report.failed
+    if total_rendered or total_failed:
+        log.info(
+            "knowledge_topic_render tick: workspaces=%d rendered=%d failed=%d",
+            len(workspace_ids),
+            total_rendered,
+            total_failed,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Step 6 — daily archive GC
 # ---------------------------------------------------------------------------
@@ -427,6 +483,15 @@ def register_all() -> None:
         fn=_knowledge_claim_reconcile_tick,
         cron_expr="5,25,45 * * * *",
         job_id="knowledge_claim_reconcile",
+    )
+    # Topic-view render runs every 30 min, offset by 10 from the
+    # reconciler so a freshly-superseded claim flips out of any
+    # affected view's claim_set_sha before the next render. Cache
+    # hits make this cheap on workspaces with stable canon.
+    register_cron(
+        fn=_knowledge_topic_render_tick,
+        cron_expr="15,45 * * * *",
+        job_id="knowledge_topic_render",
     )
     # GC runs once daily. Cheap query (filtered DELETE by archived_at)
     # so an off-peak slot is fine; pick 03:15 UTC to avoid the on-the-

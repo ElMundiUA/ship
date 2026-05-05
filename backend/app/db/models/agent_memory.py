@@ -1030,6 +1030,65 @@ class KnowledgeClaim(Base):
     updated_at: Mapped[datetime] = _ts_updated()
 
 
+class KnowledgeTopicView(Base):
+    """Cached canonical markdown rendered from active claims of one topic.
+
+    Topic views are the read-side replacement for ``BucketArticle``:
+    one row per ``(workspace, topic_tag)``, regenerated when the
+    underlying active claim set changes. Claims are multi-tag, so a
+    single claim about Linear FSM appears in both the
+    ``integrations`` and the ``architecture-decisions`` views — that
+    duplication is intentional, not a bug.
+
+    Cache invalidation is via ``claim_set_sha``: the renderer hashes
+    the sorted active claim ids feeding the view, compares to the
+    stored sha, and skips the LLM call when they match. That keeps
+    the per-tick cost bounded by "topics whose claim set actually
+    drifted" rather than "every topic in the workspace".
+
+    History lives upstream in the ``knowledge_claim.supersedes_id``
+    chain, so we don't keep old views around. ``BucketArticle`` is
+    untouched; once P4 swaps the read surface to topic views, the
+    legacy article table becomes a feature flag and eventually
+    retires.
+    """
+
+    __tablename__ = "knowledge_topic_view"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id",
+            "topic_tag",
+            name="uq_knowledge_topic_view_ws_tag",
+        ),
+        Index("ix_knowledge_topic_view_workspace_id", "workspace_id"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    topic_tag: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    body_md: Mapped[str] = mapped_column(Text, nullable=False)
+    claim_set_sha: Mapped[str] = mapped_column(String(64), nullable=False)
+    claim_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    rendered_by_model: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    embedding: Mapped[list[float] | None] = mapped_column(
+        Vector(EMBED_DIM), nullable=True
+    )
+    last_rendered_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    created_at: Mapped[datetime] = _ts_created()
+    updated_at: Mapped[datetime] = _ts_updated()
+
+
 __all__ = [
     "ArtifactFeedback",
     "BucketArticle",
@@ -1053,4 +1112,5 @@ __all__ = [
     "KnowledgeIngestionStatus",
     "KnowledgeSource",
     "KnowledgeSourceItem",
+    "KnowledgeTopicView",
 ]
