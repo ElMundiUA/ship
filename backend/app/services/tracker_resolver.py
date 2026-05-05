@@ -91,16 +91,46 @@ async def resolve_for_workspace(
     del settings  # No vendor-specific knobs needed here yet.
     from backend.app.security.encryption import decrypt
 
-    native = await _resolve_native_linear(session, workspace_id, decrypt)
+    # Native carries the live token; legacy carries the FSM-provisioned
+    # config (team_id / team_key / state_id_by_name / label_id_by_stage)
+    # that ``linear_oauth.py`` writes only on the legacy row. We pull
+    # the legacy config blob up front so the native path can layer it
+    # under the native token without a second resolve pass.
+    legacy_row = await _load_legacy_linear_row(session, workspace_id)
+    legacy_config = (legacy_row.config or {}) if legacy_row else {}
+
+    native = await _resolve_native_linear(
+        session, workspace_id, decrypt, legacy_config=legacy_config
+    )
     if native is not None:
         return native
-    return await _resolve_legacy_linear(session, workspace_id, decrypt)
+    if legacy_row is None:
+        return None
+    return _resolve_from_legacy_row(legacy_row, decrypt)
+
+
+async def _load_legacy_linear_row(
+    session: AsyncSession, workspace_id: uuid.UUID
+) -> Integration | None:
+    return (
+        await session.execute(
+            select(Integration).where(
+                Integration.workspace_id == workspace_id,
+                Integration.repo_id.is_(None),
+                Integration.kind.in_(("linear", "jira")),
+            )
+            .order_by(Integration.updated_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
 
 
 async def _resolve_native_linear(
     session: AsyncSession,
     workspace_id: uuid.UUID,
     decrypt,
+    *,
+    legacy_config: dict | None = None,
 ) -> ResolvedTracker | None:
     install = (
         await session.execute(
@@ -142,34 +172,35 @@ async def _resolve_native_linear(
     if not token:
         return None
 
+    # ``linear_oauth.py`` writes the FSM-provisioned config (team_id /
+    # team_key / state_id_by_name / label_id_by_stage / signal_label_ids)
+    # to the *legacy* ``Integration.config`` row. The native row only
+    # gets ``{scope, token_type}``. Layering the legacy blob under
+    # native lets the dashboard scope ``list_projects`` to the right
+    # team and the agent transition tickets without a second lookup.
+    config = dict(install.config or {})
+    if legacy_config:
+        for key in (
+            "team_id",
+            "team_key",
+            "label_id_by_stage",
+            "state_id_by_name",
+            "signal_label_ids",
+        ):
+            if key not in config and key in legacy_config:
+                config[key] = legacy_config[key]
     return _build_linear_resolved(
         token,
-        install.config or {},
+        config,
         source="native",
         last_health_at=install.last_health_at,
         last_health_error=install.last_health_error,
     )
 
 
-async def _resolve_legacy_linear(
-    session: AsyncSession,
-    workspace_id: uuid.UUID,
-    decrypt,
+def _resolve_from_legacy_row(
+    row: Integration, decrypt
 ) -> ResolvedTracker | None:
-    row = (
-        await session.execute(
-            select(Integration).where(
-                Integration.workspace_id == workspace_id,
-                Integration.repo_id.is_(None),
-                Integration.kind.in_(("linear", "jira")),
-            )
-            .order_by(Integration.updated_at.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-    if row is None:
-        return None
-
     if row.kind == "linear":
         token = _decrypt_legacy_token(row, decrypt)
         if token is None:
@@ -184,7 +215,7 @@ async def _resolve_legacy_linear(
 
     # Jira / others — wire when needed.
     logger.warning(
-        "workspace %s has tracker kind=%s, not yet wired", workspace_id, row.kind
+        "workspace has tracker kind=%s, not yet wired", row.kind
     )
     return None
 

@@ -639,10 +639,19 @@ class LinearTracker:
         weighted). The dashboard prioritizer renders ``round(progress *
         scope) / round(scope)`` as a fraction.
         """
-        team_id = await self._resolve_team_id(None)
-        filter_clauses: dict[str, Any] = {
-            "accessibleTeams": {"some": {"id": {"eq": team_id}}},
-        }
+        # Only narrow to a specific team when one is actually
+        # configured. Calling ``_resolve_team_id(None)`` blindly used
+        # to fire a ``teams(first: 2)`` probe against Linear — fine
+        # for tokens with the ``read`` scope but a 401 with
+        # ``Authentication required`` for narrower OAuth scopes that
+        # don't grant team-listing access. The dashboard prioritizer
+        # is fine showing every project the OAuth user can see, so
+        # we drop the filter when no default team is bound.
+        filter_clauses: dict[str, Any] = {}
+        if self._team_id:
+            filter_clauses["accessibleTeams"] = {
+                "some": {"id": {"eq": self._team_id}}
+            }
         if state:
             filter_clauses["state"] = {"eq": state}
         if query:
@@ -681,7 +690,13 @@ class LinearTracker:
           }
         }
         """
-        variables = {"filter": filter_clauses, "first": min(limit, 100)}
+        variables = {
+            # GraphQL accepts a null filter when no narrowing is
+            # needed; sending ``{}`` works in current Linear builds
+            # but ``null`` is the canonical "no filter" shape.
+            "filter": filter_clauses or None,
+            "first": min(limit, 100),
+        }
         try:
             data = await self._gql(rich_query, variables)
         except RuntimeError as exc:
