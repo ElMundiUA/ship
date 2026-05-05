@@ -26,11 +26,19 @@ from backend.app.services.cron import (
     cron_with_lock,
     register_cron,
 )
+from backend.app.db.models.tenancy import Workspace
+from backend.app.services.knowledge_claim_extractor import (
+    extract_pending_workspace,
+)
 from backend.app.services.knowledge_decay import gc_all_workspaces
 from backend.app.services.knowledge_harvest import harvest_all_workspaces
 from backend.app.services.knowledge_ingestion import sync_due_import_sources
+from backend.app.services.knowledge_reconciler import (
+    reconcile_pending_workspace,
+)
 from backend.app.services.knowledge_router import route_all_workspaces
 from backend.app.services.knowledge_synth import synthesise_all_workspaces
+from sqlalchemy import select
 
 
 log = logging.getLogger(__name__)
@@ -210,6 +218,132 @@ async def _knowledge_sources_sync_tick() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Claim store — extractor + reconciler (post-0059)
+# ---------------------------------------------------------------------------
+
+
+async def _all_workspace_ids() -> list[Any]:
+    """Fetch every workspace id once per tick — both claim ticks fan
+    out per-workspace because ``extract_pending_workspace`` and
+    ``reconcile_pending_workspace`` cap their batches to a workspace's
+    own pending queue."""
+    sm = get_sessionmaker()
+    async with sm() as session:
+        rows = (
+            await session.execute(select(Workspace.id))
+        ).scalars().all()
+    return list(rows)
+
+
+@cron_with_lock(
+    lock=CronLockId.KNOWLEDGE_CLAIM_EXTRACT, name="knowledge_claim_extract"
+)
+async def _knowledge_claim_extract_tick() -> None:
+    """Every 20 min: turn un-extracted source items into claims.
+
+    Per-workspace fan-out so one big workspace's body doesn't starve
+    the rest. The extractor itself is best-effort — a malformed LLM
+    response stamps the item and moves on, and the next body change
+    queues a re-extract automatically.
+
+    Without an LLM client the tick logs once and skips: the extractor
+    can't run identity-style on document bodies (it'd dump full doc
+    text into the claim store and defeat the whole point).
+    """
+    try:
+        llm_client = pick_default_client(get_settings())
+    except Exception:
+        log.info(
+            "knowledge_claim_extract tick: no LLM client configured; "
+            "extractor skipped this tick"
+        )
+        return
+
+    sm = get_sessionmaker()
+    workspace_ids = await _all_workspace_ids()
+    total_claims = 0
+    total_failed = 0
+    for ws_id in workspace_ids:
+        async with sm() as session:
+            try:
+                report = await extract_pending_workspace(
+                    session, workspace_id=ws_id, llm_client=llm_client
+                )
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                log.exception(
+                    "knowledge_claim_extract tick: ws=%s failed", ws_id
+                )
+                total_failed += 1
+                continue
+        total_claims += report.claims_created
+        total_failed += report.failed
+    if total_claims or total_failed:
+        log.info(
+            "knowledge_claim_extract tick: workspaces=%d claims=%d failed=%d",
+            len(workspace_ids),
+            total_claims,
+            total_failed,
+        )
+
+
+@cron_with_lock(
+    lock=CronLockId.KNOWLEDGE_CLAIM_RECONCILE,
+    name="knowledge_claim_reconcile",
+)
+async def _knowledge_claim_reconcile_tick() -> None:
+    """Every 25 min: collapse near-duplicates and resolve supersedes.
+
+    Runs offset 5 min after the extractor so freshly-inserted claims
+    have time to land before the reconciler looks for neighbours.
+    The reconciler tolerates a missing LLM client — the cosine
+    fast-path (sim ≥ 0.95) still folds obvious duplicates, the
+    LLM-judge band is just left alone.
+    """
+    try:
+        llm_client = pick_default_client(get_settings())
+    except Exception:
+        log.info(
+            "knowledge_claim_reconcile tick: no LLM client configured; "
+            "running cosine-only reconciliation"
+        )
+        llm_client = None
+
+    sm = get_sessionmaker()
+    workspace_ids = await _all_workspace_ids()
+    total_dup = total_refines = total_contradict = total_failed = 0
+    for ws_id in workspace_ids:
+        async with sm() as session:
+            try:
+                report = await reconcile_pending_workspace(
+                    session, workspace_id=ws_id, llm_client=llm_client
+                )
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                log.exception(
+                    "knowledge_claim_reconcile tick: ws=%s failed", ws_id
+                )
+                total_failed += 1
+                continue
+        total_dup += report.auto_duplicates + report.llm_duplicates
+        total_refines += report.refines
+        total_contradict += report.contradicts
+        total_failed += report.failed
+    if total_dup or total_refines or total_contradict or total_failed:
+        log.info(
+            "knowledge_claim_reconcile tick: workspaces=%d duplicates=%d "
+            "refines=%d contradicts=%d failed=%d",
+            len(workspace_ids),
+            total_dup,
+            total_refines,
+            total_contradict,
+            total_failed,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Step 6 — daily archive GC
 # ---------------------------------------------------------------------------
 
@@ -277,6 +411,22 @@ def register_all() -> None:
         fn=_knowledge_sources_sync_tick,
         cron_expr="*/15 * * * *",
         job_id="knowledge_sources_sync",
+    )
+    # Claim extractor runs every 20 min — fast enough that an
+    # operator who pushed a doc edit sees claims appear within minutes,
+    # bounded enough that a full backfill of an existing workspace
+    # paces itself without saturating the LLM API. The reconciler
+    # offsets by +5 so freshly-inserted claims land before the
+    # cosine-nearest sweep looks for neighbours.
+    register_cron(
+        fn=_knowledge_claim_extract_tick,
+        cron_expr="*/20 * * * *",
+        job_id="knowledge_claim_extract",
+    )
+    register_cron(
+        fn=_knowledge_claim_reconcile_tick,
+        cron_expr="5,25,45 * * * *",
+        job_id="knowledge_claim_reconcile",
     )
     # GC runs once daily. Cheap query (filtered DELETE by archived_at)
     # so an off-peak slot is fine; pick 03:15 UTC to avoid the on-the-
