@@ -335,18 +335,3 @@ export function Switch({
   );
 }
 
-export function LiveBanner({ workspace }: { workspace: string }) {
-  return (
-    <div className="mb-5 flex items-center gap-2 rounded-xl border border-aqua/30 bg-aqua/5 px-3 py-2 text-xs text-aqua/95">
-      <span className="rounded-full bg-aqua/25 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-widest text-aqua">
-        live
-      </span>
-      <span>
-        Reading from <code className="font-mono text-aqua/90">/v1</code> ·
-        workspace <code className="font-mono text-aqua/90">{workspace}</code>.
-        Resolver merges global + workspace + project layers per your{" "}
-        <code className="font-mono text-aqua/90">catalog_sources</code> toggles.
-      </span>
-    </div>
-  );
-}

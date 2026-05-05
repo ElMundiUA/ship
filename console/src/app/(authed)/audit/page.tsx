@@ -33,7 +33,6 @@ import {
   Badge,
   Card,
   CardHeader,
-  LiveBanner,
 } from "@/components/ui";
 import {
   ApiHttpError,
@@ -269,8 +268,6 @@ export default async function AuditPage({
         }
       />
       <PageBody>
-        <LiveBanner workspace={workspace.slug} />
-
       <FilterCard filters={filters} />
 
       <Card padded={false} className="overflow-hidden">

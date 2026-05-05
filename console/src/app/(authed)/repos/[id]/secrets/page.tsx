@@ -26,7 +26,6 @@ import {
   Badge,
   Card,
   CardHeader,
-  LiveBanner,
   type BadgeTone,
 } from "@/components/ui";
 import {
@@ -186,10 +185,8 @@ export default async function RepoSecretsPage(props: PageProps) {
       />
       <PageBody>
         <div className="space-y-6">
-        {mode.source === "mock" ? (
+        {mode.source === "mock" && (
           <ApiUnavailable scope="repo secrets" details={mode.reason} />
-        ) : (
-          <LiveBanner workspace={mode.workspace.name} />
         )}
 
         {banner && reasonMessage(reason) && (

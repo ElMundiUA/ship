@@ -14,7 +14,6 @@ import {
   ButtonPrimary,
   Card,
   CardHeader,
-  LiveBanner,
 } from "@/components/ui";
 import {
   LinearDefaultTeamPicker,
@@ -252,7 +251,6 @@ export function IntegrationsWorkspaceBody({ data }: { data: LiveIntegrationsMode
       <div className="flex flex-wrap items-center justify-end gap-2">
         <ButtonPrimary type="button">+ Custom integration</ButtonPrimary>
       </div>
-      <LiveBanner workspace={workspace.slug} />
 
       <Card className="mb-8">
         <CardHeader

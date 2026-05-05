@@ -22,7 +22,6 @@ import {
   Badge,
   Card,
   CardHeader,
-  LiveBanner,
   type BadgeTone,
 } from "@/components/ui";
 import {
@@ -318,7 +317,6 @@ export async function SettingsShell({
     <>
       <PageHeader kicker="settings" title="Workspace settings" />
       <PageBody>
-        <LiveBanner workspace={workspace.slug} />
         {errorCode && (
           <div className="mb-5 rounded-xl border border-coral/30 bg-coral/[0.06] px-3 py-2 text-xs text-coral/95">
             {errorMessage(errorCode)}
