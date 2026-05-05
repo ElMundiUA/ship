@@ -5,6 +5,7 @@ import uuid
 import pytest
 from sqlalchemy import select
 
+from backend.app.api.v1.routes.knowledge_import_sources import _canonical_config
 from backend.app.db.models.agent_memory import (
     BucketScope,
     BucketSource,
@@ -18,6 +19,43 @@ from backend.app.db.models.tenancy import AuditLog
 
 def _auth(raw: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {raw}"}
+
+
+def test_canonical_config_is_order_invariant_for_resource_refs() -> None:
+    """The dedup hash treats resource_refs as a set, not a sequence.
+
+    Two wizard submissions that pick the same pages in different order
+    should be considered the same source — otherwise an operator who
+    re-sorts the list during a re-pick produces a phantom duplicate
+    that survives indefinitely.
+    """
+    a = {
+        "resource_refs": [
+            {"page_id": "p-1"},
+            {"page_id": "p-2"},
+        ],
+        "target_bucket_slug": "product-knowledge",
+    }
+    b = {
+        "resource_refs": [
+            {"page_id": "p-2"},
+            {"page_id": "p-1"},
+        ],
+        "target_bucket_slug": "product-knowledge",
+    }
+    assert _canonical_config(a) == _canonical_config(b)
+
+
+def test_canonical_config_distinguishes_distinct_ref_sets() -> None:
+    a = {"resource_refs": [{"page_id": "p-1"}]}
+    b = {"resource_refs": [{"page_id": "p-1"}, {"page_id": "p-2"}]}
+    assert _canonical_config(a) != _canonical_config(b)
+
+
+def test_canonical_config_treats_other_keys_dict_stably() -> None:
+    a = {"resource_refs": [], "limit": 25, "include_subdomains": False}
+    b = {"include_subdomains": False, "limit": 25, "resource_refs": []}
+    assert _canonical_config(a) == _canonical_config(b)
 
 
 @pytest.mark.asyncio
@@ -212,3 +250,80 @@ async def test_archive_is_idempotent(v1_client, seed_workspace, db_session) -> N
         .all()
     )
     assert len(audits) == 1
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_duplicate_active_source(
+    v1_client, seed_workspace, db_session
+) -> None:
+    """Two non-archived rows with identical config under the same
+    workspace + kind + integration would both pull the same content
+    forever. The second create must 409 and point the operator at
+    the existing row.
+    """
+    _, raw, workspace = seed_workspace
+    config = {
+        "documents": [
+            {"title": "T", "filename": "t.md", "body_md": "# T"}
+        ]
+    }
+
+    first = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/knowledge/sources",
+        headers=_auth(raw),
+        json={
+            "kind": "static_upload",
+            "name": "Original",
+            "config": config,
+        },
+    )
+    assert first.status_code == 201
+    first_id = first.json()["id"]
+
+    second = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/knowledge/sources",
+        headers=_auth(raw),
+        json={
+            "kind": "static_upload",
+            "name": "Accidental dupe",
+            "config": config,
+        },
+    )
+    assert second.status_code == 409, second.text
+    assert first_id in second.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_create_after_archive_is_allowed(
+    v1_client, seed_workspace, db_session
+) -> None:
+    """Archiving frees the slot — operators sometimes archive then
+    re-add to reset a misconfigured source after fixing share perms
+    upstream. The dedup guard scopes to ``archived_at IS NULL`` so
+    this stays open.
+    """
+    _, raw, workspace = seed_workspace
+    config = {
+        "documents": [
+            {"title": "T", "filename": "t.md", "body_md": "# T"}
+        ]
+    }
+    first = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/knowledge/sources",
+        headers=_auth(raw),
+        json={"kind": "static_upload", "name": "First", "config": config},
+    )
+    assert first.status_code == 201
+    archived = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/knowledge/sources/"
+        f"{first.json()['id']}/archive",
+        headers=_auth(raw),
+    )
+    assert archived.status_code == 200
+
+    second = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/knowledge/sources",
+        headers=_auth(raw),
+        json={"kind": "static_upload", "name": "Re-added", "config": config},
+    )
+    assert second.status_code == 201, second.text

@@ -28,6 +28,7 @@ from backend.app.services.cron import (
 )
 from backend.app.services.knowledge_decay import gc_all_workspaces
 from backend.app.services.knowledge_harvest import harvest_all_workspaces
+from backend.app.services.knowledge_ingestion import sync_due_import_sources
 from backend.app.services.knowledge_router import route_all_workspaces
 from backend.app.services.knowledge_synth import synthesise_all_workspaces
 
@@ -181,6 +182,34 @@ async def _knowledge_synth_tick() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Knowledge import sources — periodic sync
+# ---------------------------------------------------------------------------
+
+
+@cron_with_lock(
+    lock=CronLockId.KNOWLEDGE_SOURCES_SYNC, name="knowledge_sources_sync"
+)
+async def _knowledge_sources_sync_tick() -> None:
+    """Every 15 min: re-sync ``KnowledgeImportSource`` rows that are due.
+
+    Without this tick, ingestion only ran when an operator opened the
+    sources page in the console (the GET endpoint scheduled
+    ``sync_due_import_sources`` as a BackgroundTask). Operators in
+    closed beta who left the page closed for a day saw their Notion
+    / Confluence / website connectors quietly stop pulling fresh
+    content. The cron makes the schedule load-bearing instead of
+    UI-driven.
+
+    ``sync_due_import_sources`` opens its own session per workspace
+    so one bad source doesn't poison the rest, and its internal cap
+    keeps each tick bounded.
+    """
+    result = await sync_due_import_sources(limit=20)
+    if result.checked or result.errors:
+        log.info("knowledge_sources_sync tick: %s", result.to_dict())
+
+
+# ---------------------------------------------------------------------------
 # Step 6 — daily archive GC
 # ---------------------------------------------------------------------------
 
@@ -239,6 +268,15 @@ def register_all() -> None:
         fn=_knowledge_synth_tick,
         cron_expr="40 * * * *",  # every hour at :40
         job_id="knowledge_synth",
+    )
+    # External-source pull runs every 15 min so a connector that
+    # advertises ``sync_interval_minutes=60`` actually re-syncs
+    # within ~15 min of becoming due, instead of waiting for
+    # the next operator visit to the sources page.
+    register_cron(
+        fn=_knowledge_sources_sync_tick,
+        cron_expr="*/15 * * * *",
+        job_id="knowledge_sources_sync",
     )
     # GC runs once daily. Cheap query (filtered DELETE by archived_at)
     # so an off-peak slot is fine; pick 03:15 UTC to avoid the on-the-

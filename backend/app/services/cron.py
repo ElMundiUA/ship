@@ -84,6 +84,7 @@ class CronLockId(IntEnum):
     KNOWLEDGE_ROUTE = 1002
     KNOWLEDGE_SYNTH = 1003
     KNOWLEDGE_DECAY = 1004
+    KNOWLEDGE_SOURCES_SYNC = 1005
 
 
 # ---------------------------------------------------------------------------

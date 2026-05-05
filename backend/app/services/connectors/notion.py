@@ -37,6 +37,7 @@ this page missing a section?" a one-line grep.
 from __future__ import annotations
 
 import logging
+from collections import deque
 from typing import Any, Mapping
 
 import httpx
@@ -65,6 +66,13 @@ _MAX_BLOCKS = 200
 # (the ingestion pipeline already caps total documents per source at
 # MAX_SOURCE_DOCUMENTS = 100, so this is the per-database ceiling).
 _MAX_PAGES_PER_DATABASE = 50
+
+# Recursive expansion caps for hub-style pages. A single ``page_id``
+# ref can fan out into child pages and embedded child_databases; the
+# walker bounds breadth (total emitted pages per ref tree) and depth
+# (root counts as depth 0; subpages = 1; their subpages = 2; …).
+_MAX_PAGES_PER_REF = 100
+_MAX_RECURSION_DEPTH = 3
 
 
 def _headers(token: str) -> dict[str, str]:
@@ -231,6 +239,15 @@ def _render_block(block: dict[str, Any]) -> str:
         suffix = f" ({child_id})" if child_id else ""
         return f"- 📄 Subpage: {title}{suffix}"
 
+    if btype == "child_database":
+        # Notion returns the database title in the block payload; the
+        # block id IS the database id, so the operator can paste it
+        # into another resource_ref if they want to drill in further.
+        title = (payload.get("title") or "Untitled database").strip()
+        child_id = block.get("id") or ""
+        suffix = f" ({child_id})" if child_id else ""
+        return f"- 🗂 Database: {title}{suffix}"
+
     return f"<unsupported: {btype}>"
 
 
@@ -270,11 +287,18 @@ def _normalize_page_id(raw: str) -> str:
 
 async def _render_one_page(
     client: httpx.AsyncClient, page_id: str, *, token: str
-) -> ConnectorPage:
-    """Fetch one Notion page + its top-level blocks → ConnectorPage.
+) -> tuple[ConnectorPage, list[str], list[str]]:
+    """Fetch one Notion page → (rendered ConnectorPage, child_page_ids, child_database_ids).
 
     Lifted out of the dispatcher so database-mode can call it once per
     entry without duplicating the markdown rendering / truncation rule.
+
+    Hub pages on Notion are typically a thin wrapper of headings and a
+    handful of ``child_page`` and ``child_database`` blocks — the real
+    knowledge lives one or two levels deeper. We surface the child ids
+    here so the BFS walker can expand them, while keeping the parent
+    rendering intact (the operator's link structure is preserved as
+    bullet lines pointing at the indexed siblings).
     """
     page = await _fetch_page(client, page_id, token=token)
     title = _extract_title(page)
@@ -290,6 +314,18 @@ async def _render_one_page(
             f"connector if you need deeper pages)_"
         )
 
+    child_page_ids: list[str] = []
+    child_database_ids: list[str] = []
+    for block in blocks:
+        btype = block.get("type")
+        block_id = block.get("id") or ""
+        if not block_id:
+            continue
+        if btype == "child_page":
+            child_page_ids.append(block_id)
+        elif btype == "child_database":
+            child_database_ids.append(block_id)
+
     header: list[str] = [f"# {title}"]
     meta_bits: list[str] = []
     if url:
@@ -300,7 +336,7 @@ async def _render_one_page(
         header.append(" · ".join(meta_bits))
     body = "\n\n".join(header + rendered_blocks).strip() + "\n"
 
-    return ConnectorPage(
+    page_obj = ConnectorPage(
         slug=page_id,
         title=title,
         body_md=body,
@@ -310,6 +346,120 @@ async def _render_one_page(
             "last_edited_time": last_edited,
         },
     )
+    return page_obj, child_page_ids, child_database_ids
+
+
+async def _walk_page_tree(
+    client: httpx.AsyncClient,
+    seed_page_ids: list[str],
+    *,
+    token: str,
+    max_depth: int = _MAX_RECURSION_DEPTH,
+    max_pages: int = _MAX_PAGES_PER_REF,
+) -> list[ConnectorPage]:
+    """BFS over a tree rooted at ``seed_page_ids`` — emit one ConnectorPage per node.
+
+    Walks ``child_page`` blocks for hierarchical hubs and expands
+    ``child_database`` blocks by querying the embedded database (so
+    operators get the entries indexed even when they only pointed
+    Ship at the parent page).
+
+    Caps:
+
+    - ``max_depth`` — root pages are depth 0, their child_page is
+      depth 1, etc. ``child_database`` entries inherit the depth of
+      the database they came from.
+    - ``max_pages`` — total emitted ConnectorPage count across the
+      tree. Stops enqueuing once hit so nothing balloons unboundedly.
+
+    Per-page HTTP failures (``401/403/404`` on a single subpage that
+    isn't shared with the integration) are logged and skipped — one
+    locked subpage shouldn't fail the whole tree, mirroring how
+    :func:`_fetch_database_pages` already handles it.
+    """
+    visited: set[str] = set()
+    visited_databases: set[str] = set()
+    seeds: set[str] = {pid for pid in seed_page_ids if pid}
+    pages: list[ConnectorPage] = []
+    queue: deque[tuple[str, int]] = deque(
+        (pid, 0) for pid in seed_page_ids if pid
+    )
+    truncated = False
+    while queue:
+        page_id, depth = queue.popleft()
+        if page_id in visited:
+            continue
+        visited.add(page_id)
+        if len(pages) >= max_pages:
+            truncated = True
+            break
+        try:
+            page_obj, child_page_ids, child_database_ids = await _render_one_page(
+                client, page_id, token=token
+            )
+        except httpx.HTTPStatusError as exc:
+            status_code = (
+                exc.response.status_code if exc.response is not None else 0
+            )
+            if status_code in (401, 403, 404):
+                # Seed pages are operator-pointed — surfacing the
+                # share-hint loudly is the whole point of having
+                # ConfigError on the dispatcher path. Deeper pages
+                # we discovered ourselves: one being locked is normal
+                # in a tree (e.g. an HR subpage off a hub) and should
+                # not poison the rest of the walk.
+                if page_id in seeds:
+                    raise ConnectorConfigError(
+                        f"notion returned HTTP {status_code} for page {page_id} — "
+                        "is the integration shared with the page?"
+                    ) from exc
+                logger.warning(
+                    "notion walker: skipping page %s (HTTP %s — not shared?)",
+                    page_id,
+                    status_code,
+                )
+                continue
+            raise
+        pages.append(page_obj)
+        if depth >= max_depth:
+            continue
+        for cpid in child_page_ids:
+            if cpid not in visited:
+                queue.append((cpid, depth + 1))
+        for dbid in child_database_ids:
+            if dbid in visited_databases:
+                continue
+            visited_databases.add(dbid)
+            try:
+                entry_ids = await _query_data_source_pages(
+                    client,
+                    await _resolve_data_source_id(client, dbid, token=token),
+                    token=token,
+                    limit=_MAX_PAGES_PER_DATABASE,
+                )
+            except httpx.HTTPStatusError as exc:
+                status_code = (
+                    exc.response.status_code if exc.response is not None else 0
+                )
+                if status_code in (401, 403, 404):
+                    logger.warning(
+                        "notion walker: skipping embedded database %s "
+                        "(HTTP %s — not shared?)",
+                        dbid,
+                        status_code,
+                    )
+                    continue
+                raise
+            for eid in entry_ids:
+                if eid not in visited:
+                    queue.append((eid, depth + 1))
+    if truncated:
+        logger.warning(
+            "notion walker: hit max_pages=%d cap from seeds=%s — truncating tree",
+            max_pages,
+            seed_page_ids,
+        )
+    return pages
 
 
 async def _resolve_data_source_id(
@@ -427,40 +577,31 @@ async def fetch_notion_pages(
     client = http_client or httpx.AsyncClient(timeout=httpx.Timeout(10.0))
     try:
         if db_mode:
-            return await _fetch_database_pages(
+            seed_ids = await _seed_database(
                 client, _normalize_page_id(str(raw_database_id)), token=token
             )
-        return [
-            await _fetch_single_page(
-                client, _normalize_page_id(str(raw_page_id)), token=token
-            )
-        ]
+        else:
+            seed_ids = [_normalize_page_id(str(raw_page_id))]
+        return await _walk_page_tree(client, seed_ids, token=token)
     finally:
         if owns_client:
             await client.aclose()
 
 
-async def _fetch_single_page(
-    client: httpx.AsyncClient, page_id: str, *, token: str
-) -> ConnectorPage:
-    try:
-        return await _render_one_page(client, page_id, token=token)
-    except httpx.HTTPStatusError as exc:
-        status = exc.response.status_code if exc.response is not None else 0
-        if status in (401, 403, 404):
-            raise ConnectorConfigError(
-                f"notion returned HTTP {status} for page {page_id} — is the "
-                "integration shared with the page?"
-            ) from exc
-        raise
-
-
-async def _fetch_database_pages(
+async def _seed_database(
     client: httpx.AsyncClient, database_id: str, *, token: str
-) -> list[ConnectorPage]:
+) -> list[str]:
+    """Resolve a database/data_source ref to its current page_ids.
+
+    Used to seed the BFS walker so DB-mode and page-mode share the
+    exact same expansion path (recursion into nested pages, embedded
+    child_databases) once the seed list is in hand.
+    """
     try:
-        data_source_id = await _resolve_data_source_id(client, database_id, token=token)
-        page_ids = await _query_data_source_pages(
+        data_source_id = await _resolve_data_source_id(
+            client, database_id, token=token
+        )
+        return await _query_data_source_pages(
             client, data_source_id, token=token, limit=_MAX_PAGES_PER_DATABASE
         )
     except httpx.HTTPStatusError as exc:
@@ -471,22 +612,6 @@ async def _fetch_database_pages(
                 "integration shared with it?"
             ) from exc
         raise
-
-    pages: list[ConnectorPage] = []
-    for page_id in page_ids:
-        try:
-            pages.append(await _render_one_page(client, page_id, token=token))
-        except httpx.HTTPStatusError as exc:
-            # One inaccessible page in a database shouldn't fail the whole
-            # ref — log and continue. The dispatcher's stub fallback isn't
-            # right here because we've already produced some valid pages.
-            logger.warning(
-                "notion database %s: skipping page %s (HTTP %s)",
-                database_id,
-                page_id,
-                exc.response.status_code if exc.response is not None else "?",
-            )
-    return pages
 
 
 __all__ = ["fetch_notion_pages"]
