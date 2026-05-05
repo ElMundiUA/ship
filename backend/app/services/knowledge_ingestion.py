@@ -611,7 +611,18 @@ async def _upsert_source_item(
     source: KnowledgeImportSource,
     doc: SourceDocument,
 ) -> KnowledgeSourceItem:
+    """Upsert a ``KnowledgeSourceItem`` row keyed on (source, external_id).
+
+    Persists the full ``body_md`` plus ``body_md_sha`` so the claim
+    extractor (next phase) can find un-extracted items via a sha
+    mismatch and skip ones that haven't changed since the last
+    extract pass. Body diffs vs the stored sha trigger
+    ``extracted_at = NULL`` to mark the row pending again — that's
+    how a re-pulled Notion page automatically queues a re-extract.
+    """
     now = datetime.now(timezone.utc)
+    body_md = _normalise_markdown(doc.body_md)
+    body_sha = _sha256_text(body_md) if body_md else None
     existing = (
         await session.execute(
             select(KnowledgeSourceItem).where(
@@ -627,6 +638,13 @@ async def _upsert_source_item(
         existing.cursor = doc.cursor
         existing.last_seen_at = now
         existing.deleted_at = None
+        if body_md and existing.body_md_sha != body_sha:
+            existing.body_md = body_md
+            # Note: do NOT set body_md_sha here — the extractor stamps
+            # it after a successful run. Leaving the old sha alongside
+            # the new body marks the row pending without losing the
+            # "previously-extracted" timestamp until extract finishes.
+            existing.extracted_at = None
         return existing
     item = KnowledgeSourceItem(
         id=uuid.uuid4(),
@@ -639,6 +657,7 @@ async def _upsert_source_item(
         content_fingerprint=None,
         cursor=doc.cursor,
         last_seen_at=now,
+        body_md=body_md or None,
     )
     session.add(item)
     await session.flush()
