@@ -14,8 +14,10 @@ import type { DragEvent as ReactDragEvent, KeyboardEvent } from "react";
 import type {
   ApiPrioritiesResponse,
   ApiPriorityProject,
+  ApiPriorityState,
   ApiPriorityTracker,
   ApiPriorityUpNext,
+  ApiReorderRow,
 } from "@/lib/api/client";
 import { cn } from "@/lib/cn";
 
@@ -25,19 +27,21 @@ import {
 } from "./actions";
 
 /**
- * Dashboard v2 prioritizer — drag-to-reorder list of tracker projects
- * plus the workspace-level autonomy switch and tracker connection
- * hairline. Designer wireframe locks: aqua = positive editorial,
- * sun = paused/attention, coral = errors, no bordered cards.
+ * Dashboard v2 prioritizer — drag-to-reorder + drag-across-divider list of
+ * tracker projects, plus the workspace-level autonomy switch and tracker
+ * connection hairline. Designer wireframe locks: aqua = positive editorial,
+ * sun = paused/attention, lilac = planning, coral = errors, no bordered cards.
+ *
+ * The list is grouped into three buckets — ``active`` (agent picks from
+ * here), ``planning`` (operator is shaping the brief; agent-invisible),
+ * ``parked`` (explicit hold; collapsed by default). Section dividers are
+ * the state-change affordance: dropping a row across a divider moves it
+ * into that bucket. Within a bucket, drag reorders.
  *
  * Why a client component: drag, keyboard reorder, and autonomy toggle
  * all need optimistic UI that survives the network round-trip without
  * the page collapsing. Mutations route through server actions so the
  * session token never crosses the wire.
- *
- * Empty states are two distinct shapes — disconnected = single CTA
- * row; connected-but-empty = three faint scaffold rows; flipped on
- * ``tracker.status``. Conflating them was the previous draft's bug.
  */
 
 const DRAG_MIME = "application/x-ship-priority-id";
@@ -47,56 +51,104 @@ type Props = {
   initial: ApiPrioritiesResponse;
 };
 
+type DraftRow = { id: string; state: ApiPriorityState };
+
+const STATE_RANK: Record<ApiPriorityState, number> = {
+  active: 0,
+  planning: 1,
+  parked: 2,
+};
+
+const SECTION_ORDER: ApiPriorityState[] = ["active", "planning", "parked"];
+
+const SECTION_COPY: Record<
+  ApiPriorityState,
+  { label: string; sub: (n: number) => string }
+> = {
+  active: {
+    label: "Active",
+    sub: (n) => (n === 1 ? "1 pick for the agent" : `${n} picks for the agent`),
+  },
+  planning: {
+    label: "Planning",
+    sub: (n) => (n === 1 ? "1 you're shaping" : `${n} you're shaping`),
+  },
+  parked: {
+    label: "Parked",
+    sub: (n) => (n === 1 ? "1 not now" : `${n} not now`),
+  },
+};
+
+
 export function DashboardPrioritizer({ workspaceId, initial }: Props) {
   const [serverState, setServerState] = useState<ApiPrioritiesResponse>(initial);
-  // Working copy of the order — only touched while the user is
-  // dragging or in keyboard move-mode. Save flushes it through the
-  // server action, Revert restores from the last server state.
-  const [draftOrder, setDraftOrder] = useState<string[] | null>(null);
+  // Working copy of the prioritised rows — only touched while the
+  // user is dragging or in keyboard move-mode. Save flushes through
+  // the server action, Revert restores from the last server state.
+  const [draftOrder, setDraftOrder] = useState<DraftRow[] | null>(null);
   const [pending, startTransition] = useTransition();
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  // Parked section collapses by default — visible (so the operator
+  // doesn't forget what they decided not to do) but folded so the
+  // editorial single-column rhythm of Active + Planning isn't drowned.
+  const [parkedExpanded, setParkedExpanded] = useState(false);
 
   const tracker = serverState.tracker;
   const allProjects = serverState.projects;
-  const prioritisedIds = useMemo(
-    () =>
-      allProjects
-        .filter((p) => p.ordinal !== null)
-        .map((p) => p.project_native_id),
-    [allProjects],
-  );
   const projectById = useMemo(() => {
     const map = new Map<string, ApiPriorityProject>();
     for (const p of allProjects) map.set(p.project_native_id, p);
     return map;
   }, [allProjects]);
 
-  // Compose the displayed list: when the user is editing, it's the
-  // draftOrder (prioritised items in user-chosen order) followed by
-  // unprioritised tail in name order. Otherwise it's the server's
-  // own sort.
-  const displayList = useMemo(() => {
-    if (draftOrder === null) return allProjects;
-    const seen = new Set(draftOrder);
-    const head = draftOrder
-      .map((id) => projectById.get(id))
-      .filter((p): p is ApiPriorityProject => p !== undefined)
-      .map((p, idx) => ({ ...p, ordinal: idx }));
-    const tail = allProjects
-      .filter((p) => !seen.has(p.project_native_id))
-      .map((p) => ({ ...p, ordinal: null as number | null }));
-    return [...head, ...tail];
-  }, [allProjects, draftOrder, projectById]);
+  // Server-truth rows — projects that already have a saved row in the
+  // priorities table. We seed the draft from these whenever the user
+  // starts editing.
+  const serverRows: DraftRow[] = useMemo(() => {
+    return allProjects
+      .filter(
+        (p): p is ApiPriorityProject & { priority_state: ApiPriorityState } =>
+          p.priority_state !== null && p.ordinal !== null,
+      )
+      .slice()
+      .sort((a, b) => {
+        const stateDelta =
+          STATE_RANK[a.priority_state] - STATE_RANK[b.priority_state];
+        if (stateDelta !== 0) return stateDelta;
+        return (a.ordinal ?? 0) - (b.ordinal ?? 0);
+      })
+      .map((p) => ({ id: p.project_native_id, state: p.priority_state }));
+  }, [allProjects]);
 
+  const effectiveRows: DraftRow[] = draftOrder ?? serverRows;
   const dirty = draftOrder !== null;
+
+  const rowsByState: Record<ApiPriorityState, DraftRow[]> = useMemo(() => {
+    const acc: Record<ApiPriorityState, DraftRow[]> = {
+      active: [],
+      planning: [],
+      parked: [],
+    };
+    for (const row of effectiveRows) acc[row.state].push(row);
+    return acc;
+  }, [effectiveRows]);
+
+  const unprioritised = useMemo(() => {
+    const seen = new Set(effectiveRows.map((r) => r.id));
+    return allProjects.filter((p) => !seen.has(p.project_native_id));
+  }, [allProjects, effectiveRows]);
 
   // ----- mutations --------------------------------------------------
 
   const handleSave = useCallback(() => {
     if (!dirty || draftOrder === null) return;
     setErrorMessage(null);
+    const payload: ApiReorderRow[] = draftOrder.map((row) => ({
+      project_native_id: row.id,
+      state: row.state,
+    }));
     startTransition(async () => {
-      const result = await reorderPrioritiesAction(workspaceId, draftOrder);
+      const result = await reorderPrioritiesAction(workspaceId, payload);
       if (result.ok) {
         setServerState(result.payload);
         setDraftOrder(null);
@@ -127,47 +179,90 @@ export function DashboardPrioritizer({ workspaceId, initial }: Props) {
 
   // ----- reorder helpers --------------------------------------------
 
+  // Move a row by ±1 within its current section. If it sits at the
+  // section edge and is moved past it, the row crosses the divider
+  // and changes state — matches the drag-across-divider semantics so
+  // keyboard users have feature parity.
   const moveBy = useCallback(
     (id: string, delta: number) => {
-      // Use the current draftOrder; if it's null, seed from the
-      // server's prioritised order.
-      const current =
-        draftOrder ?? prioritisedIds.slice();
-      const idx = current.indexOf(id);
-      if (idx === -1) {
-        // Not yet prioritised — append, then move.
-        const seeded = [...current, id];
-        const next = moveIndex(seeded, seeded.length - 1, delta);
-        setDraftOrder(next);
-        return;
-      }
-      const next = moveIndex(current, idx, delta);
-      if (next.join("|") === current.join("|")) return;
-      setDraftOrder(next);
+      const current = draftOrder ?? serverRows.slice();
+      const seeded = current.some((r) => r.id === id)
+        ? current.slice()
+        : [
+            ...current,
+            {
+              id,
+              state: "active" as ApiPriorityState,
+            },
+          ];
+      const idx = seeded.findIndex((r) => r.id === id);
+      if (idx === -1) return;
+      const target = idx + delta;
+      if (target < 0 || target >= seeded.length) return;
+      const moved = { ...seeded[idx] };
+      seeded.splice(idx, 1);
+      // Adopt the state of whichever row we land next to so the
+      // section a row belongs to is always coherent with its
+      // neighbours.
+      const neighbour =
+        delta < 0
+          ? seeded[Math.max(0, target)]
+          : seeded[Math.min(seeded.length - 1, target - 1)];
+      if (neighbour) moved.state = neighbour.state;
+      seeded.splice(target, 0, moved);
+      if (rowsEqual(seeded, current)) return;
+      setDraftOrder(seeded);
     },
-    [draftOrder, prioritisedIds],
+    [draftOrder, serverRows],
   );
 
+  // Drop ``sourceId`` immediately above ``targetId``, adopting the
+  // target row's state. If either row isn't yet prioritised, append
+  // it first.
   const reorderTo = useCallback(
     (sourceId: string, targetId: string) => {
-      const current = draftOrder ?? prioritisedIds.slice();
+      const current = draftOrder ?? serverRows.slice();
       const working = current.slice();
-      // Drop semantics: source goes immediately *above* the target.
-      // Both rows enter the prioritised draft if they weren't there
-      // already — without this, the very first drag in a workspace
-      // with zero saved priorities (or onto a still-unprioritised
-      // tail row) silently no-op'ed because the target wasn't in
-      // the working list yet.
-      if (!working.includes(sourceId)) working.push(sourceId);
-      if (!working.includes(targetId)) working.push(targetId);
-      const fromIdx = working.indexOf(sourceId);
+      ensureRow(working, sourceId, "active");
+      ensureRow(working, targetId, "active");
+      const fromIdx = working.findIndex((r) => r.id === sourceId);
       const [moved] = working.splice(fromIdx, 1);
-      const targetIdx = working.indexOf(targetId);
+      const targetIdx = working.findIndex((r) => r.id === targetId);
+      const targetRow = working[targetIdx];
+      if (targetRow) moved.state = targetRow.state;
       working.splice(targetIdx, 0, moved);
-      if (working.join("|") === current.join("|")) return;
+      if (rowsEqual(working, current)) return;
       setDraftOrder(working);
     },
-    [draftOrder, prioritisedIds],
+    [draftOrder, serverRows],
+  );
+
+  // Drop ``sourceId`` at the bottom of ``state``'s section. Used by
+  // section-divider drops, "send to section" row menus (future), and
+  // the cross-section keyboard moves.
+  const moveToSection = useCallback(
+    (sourceId: string, state: ApiPriorityState) => {
+      const current = draftOrder ?? serverRows.slice();
+      const working = current.slice();
+      ensureRow(working, sourceId, state);
+      const idx = working.findIndex((r) => r.id === sourceId);
+      const [moved] = working.splice(idx, 1);
+      moved.state = state;
+      // Insert at the END of the section so the user's existing top-of-
+      // section ordering is preserved (parking the most-recent active
+      // shouldn't shuffle the queue).
+      let insertAt = working.length;
+      for (let i = 0; i < working.length; i++) {
+        if (STATE_RANK[working[i].state] > STATE_RANK[state]) {
+          insertAt = i;
+          break;
+        }
+      }
+      working.splice(insertAt, 0, moved);
+      if (rowsEqual(working, current)) return;
+      setDraftOrder(working);
+    },
+    [draftOrder, serverRows],
   );
 
   // ----- empty states -----------------------------------------------
@@ -177,6 +272,7 @@ export function DashboardPrioritizer({ workspaceId, initial }: Props) {
       <PrioritizerSection
         autonomyPaused={serverState.autonomy_paused}
         upNext={null}
+        activeCount={0}
         onToggleAutonomy={toggleAutonomy}
         tracker={tracker}
         pending={pending}
@@ -197,13 +293,6 @@ export function DashboardPrioritizer({ workspaceId, initial }: Props) {
   }
 
   if (allProjects.length === 0) {
-    // Two empty shapes share an empty list, but mean very different
-    // things: the tracker errored on this fetch (we can't say
-    // anything about Linear's project count) vs. the tracker
-    // connected fine and the team has no projects yet. Conflating
-    // them puts a scaffold "Add a project" line under a coral
-    // ``error · reconnect`` hairline, which reads as "the prioritizer
-    // is broken" — exactly the bug we hit in the first PR.
     if (tracker.status === "error") {
       const missingRead =
         tracker.kind === "linear" &&
@@ -213,6 +302,7 @@ export function DashboardPrioritizer({ workspaceId, initial }: Props) {
         <PrioritizerSection
           autonomyPaused={serverState.autonomy_paused}
           upNext={null}
+          activeCount={0}
           onToggleAutonomy={toggleAutonomy}
           tracker={tracker}
           pending={pending}
@@ -246,6 +336,7 @@ export function DashboardPrioritizer({ workspaceId, initial }: Props) {
       <PrioritizerSection
         autonomyPaused={serverState.autonomy_paused}
         upNext={null}
+        activeCount={0}
         onToggleAutonomy={toggleAutonomy}
         tracker={tracker}
         pending={pending}
@@ -265,39 +356,104 @@ export function DashboardPrioritizer({ workspaceId, initial }: Props) {
     );
   }
 
+  // ----- main list (state-grouped) ----------------------------------
+
+  const renderRow = (project: ApiPriorityProject, state: ApiPriorityState) => (
+    <PrioritizerRow
+      key={project.project_native_id}
+      project={project}
+      rowState={state}
+      paused={serverState.autonomy_paused}
+      onDragStart={(event) => {
+        event.dataTransfer.setData(DRAG_MIME, project.project_native_id);
+        event.dataTransfer.effectAllowed = "move";
+      }}
+      onDragOver={(event) => {
+        if (!event.dataTransfer.types.includes(DRAG_MIME)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+      }}
+      onDrop={(event) => {
+        const sourceId = event.dataTransfer.getData(DRAG_MIME);
+        if (!sourceId || sourceId === project.project_native_id) return;
+        event.preventDefault();
+        reorderTo(sourceId, project.project_native_id);
+      }}
+      onMoveUp={() => moveBy(project.project_native_id, -1)}
+      onMoveDown={() => moveBy(project.project_native_id, +1)}
+    />
+  );
+
+  const sectionDropHandlers = (state: ApiPriorityState) => ({
+    onDragOver: (event: ReactDragEvent<HTMLLIElement>) => {
+      if (!event.dataTransfer.types.includes(DRAG_MIME)) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+    },
+    onDrop: (event: ReactDragEvent<HTMLLIElement>) => {
+      const sourceId = event.dataTransfer.getData(DRAG_MIME);
+      if (!sourceId) return;
+      event.preventDefault();
+      moveToSection(sourceId, state);
+    },
+  });
+
   return (
     <PrioritizerSection
       autonomyPaused={serverState.autonomy_paused}
       upNext={serverState.up_next}
+      activeCount={rowsByState.active.length}
       onToggleAutonomy={toggleAutonomy}
       tracker={tracker}
       pending={pending}
     >
-      {displayList.map((project) => (
-        <PrioritizerRow
-          key={project.project_native_id}
-          project={project}
-          paused={serverState.autonomy_paused}
-          onDragStart={(event) => {
-            event.dataTransfer.setData(DRAG_MIME, project.project_native_id);
-            event.dataTransfer.effectAllowed = "move";
-          }}
-          onDragOver={(event) => {
-            const sourceId = event.dataTransfer.types.includes(DRAG_MIME);
-            if (!sourceId) return;
-            event.preventDefault();
-            event.dataTransfer.dropEffect = "move";
-          }}
-          onDrop={(event) => {
-            const sourceId = event.dataTransfer.getData(DRAG_MIME);
-            if (!sourceId || sourceId === project.project_native_id) return;
-            event.preventDefault();
-            reorderTo(sourceId, project.project_native_id);
-          }}
-          onMoveUp={() => moveBy(project.project_native_id, -1)}
-          onMoveDown={() => moveBy(project.project_native_id, +1)}
-        />
-      ))}
+      {SECTION_ORDER.map((state) => {
+        const rows = rowsByState[state];
+        const collapsed = state === "parked" && !parkedExpanded;
+        const showEmptyHint =
+          rows.length === 0 && state === "active" && unprioritised.length > 0;
+        return (
+          <SectionGroup
+            key={state}
+            state={state}
+            count={rows.length}
+            collapsed={collapsed}
+            onToggleCollapsed={
+              state === "parked"
+                ? () => setParkedExpanded((v) => !v)
+                : undefined
+            }
+            dropHandlers={sectionDropHandlers(state)}
+          >
+            {rows
+              .map((row) => projectById.get(row.id))
+              .filter((p): p is ApiPriorityProject => p !== undefined)
+              .map((project) => renderRow(project, state))}
+            {rows.length === 0 && !showEmptyHint && (
+              <li
+                className="py-2 pl-3 text-[11px] italic text-white/30"
+                {...sectionDropHandlers(state)}
+              >
+                drop a project here to {state === "active" ? "queue it" : state === "planning" ? "shape its brief" : "park it"}
+              </li>
+            )}
+            {showEmptyHint && (
+              <li className="py-2 pl-3 text-[11px] text-sun/80">
+                No active projects — drag one in to give the agent something to pick up.
+              </li>
+            )}
+          </SectionGroup>
+        );
+      })}
+      {unprioritised.length > 0 && (
+        <SectionGroup
+          state={null}
+          count={unprioritised.length}
+          dropHandlers={undefined}
+        >
+          {unprioritised.map((project) => renderRow(project, "active"))}
+        </SectionGroup>
+      )}
       {dirty && (
         <li className="-mx-3 mt-1 flex items-baseline justify-between bg-white/[0.04] px-3 py-2">
           <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/50">
@@ -340,6 +496,7 @@ function PrioritizerSection({
   children,
   autonomyPaused,
   upNext,
+  activeCount,
   tracker,
   pending,
   onToggleAutonomy,
@@ -347,6 +504,7 @@ function PrioritizerSection({
   children: React.ReactNode;
   autonomyPaused: boolean;
   upNext: ApiPriorityUpNext | null;
+  activeCount: number;
   tracker: ApiPriorityTracker;
   pending: boolean;
   onToggleAutonomy: () => void;
@@ -369,9 +527,11 @@ function PrioritizerSection({
           <TrackerHairline tracker={tracker} />
         </div>
       </div>
-      {upNext ? (
-        <UpNextStrip upNext={upNext} paused={autonomyPaused} />
-      ) : null}
+      <UpNextStrip
+        upNext={upNext}
+        paused={autonomyPaused}
+        activeCount={activeCount}
+      />
       <ul className="divide-y divide-white/[0.06]">{children}</ul>
     </section>
   );
@@ -450,9 +610,11 @@ function TrackerHairline({ tracker }: { tracker: ApiPriorityTracker }) {
 function UpNextStrip({
   upNext,
   paused,
+  activeCount,
 }: {
-  upNext: ApiPriorityUpNext;
+  upNext: ApiPriorityUpNext | null;
   paused: boolean;
+  activeCount: number;
 }) {
   if (paused) {
     return (
@@ -461,6 +623,19 @@ function UpNextStrip({
         <span>Up next · paused · resume to pull</span>
       </p>
     );
+  }
+  if (upNext === null) {
+    // No active projects → tell the operator the agent is idle on
+    // purpose so an empty Active list doesn't read as a server bug.
+    if (activeCount === 0) {
+      return (
+        <p className="flex items-center gap-2 text-[11px] text-sun/85">
+          <span aria-hidden>↑</span>
+          <span>Up next · nothing active — drag a project into Active to give the agent work.</span>
+        </p>
+      );
+    }
+    return null;
   }
   return (
     <p className="flex items-center gap-2 text-[11px] text-white/65">
@@ -475,12 +650,89 @@ function UpNextStrip({
 
 
 // ---------------------------------------------------------------------------
+// Section header + drop zone
+// ---------------------------------------------------------------------------
+
+
+function SectionGroup({
+  state,
+  count,
+  collapsed,
+  onToggleCollapsed,
+  dropHandlers,
+  children,
+}: {
+  state: ApiPriorityState | null;
+  count: number;
+  collapsed?: boolean;
+  onToggleCollapsed?: () => void;
+  dropHandlers?: {
+    onDragOver: (event: ReactDragEvent<HTMLLIElement>) => void;
+    onDrop: (event: ReactDragEvent<HTMLLIElement>) => void;
+  };
+  children: React.ReactNode;
+}) {
+  const headerLabel =
+    state === null ? "Unprioritised" : SECTION_COPY[state].label;
+  const headerSub =
+    state === null
+      ? count === 1
+        ? "1 in tracker · drag in to bucket"
+        : `${count} in tracker · drag in to bucket`
+      : SECTION_COPY[state].sub(count);
+
+  const headerToneByState: Record<ApiPriorityState | "none", string> = {
+    active: "text-white/55",
+    planning: "text-lilac/85",
+    parked: "text-white/40",
+    none: "text-white/35",
+  };
+  const headerTone = headerToneByState[state ?? "none"];
+
+  return (
+    <>
+      <li
+        className={cn(
+          "flex items-baseline justify-between gap-3 pt-3 pb-1",
+          state === null && "border-t border-dashed border-white/10",
+        )}
+        {...(dropHandlers ?? {})}
+      >
+        <span
+          className={cn(
+            "text-[10px] font-bold uppercase tracking-[0.22em]",
+            headerTone,
+          )}
+        >
+          {headerLabel}
+          <span className="ml-2 font-normal normal-case tracking-normal text-white/35">
+            · {headerSub}
+          </span>
+        </span>
+        {onToggleCollapsed ? (
+          <button
+            type="button"
+            onClick={onToggleCollapsed}
+            className="shrink-0 text-[10px] uppercase tracking-widest text-white/35 transition hover:text-white/70"
+          >
+            {collapsed ? "show ▾" : "hide ▴"}
+          </button>
+        ) : null}
+      </li>
+      {!collapsed && children}
+    </>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
 // Row
 // ---------------------------------------------------------------------------
 
 
 function PrioritizerRow({
   project,
+  rowState,
   paused,
   onDragStart,
   onDragOver,
@@ -489,6 +741,7 @@ function PrioritizerRow({
   onMoveDown,
 }: {
   project: ApiPriorityProject;
+  rowState: ApiPriorityState;
   paused: boolean;
   onDragStart: (event: ReactDragEvent<HTMLLIElement>) => void;
   onDragOver: (event: ReactDragEvent<HTMLLIElement>) => void;
@@ -537,12 +790,23 @@ function PrioritizerRow({
     }
   };
 
-  const fractionLabel = formatFraction(project.completed, project.total);
-  const barFraction = computeBarFraction(project.completed, project.total);
-  const colorStyle = project.color
-    ? { backgroundColor: project.color }
-    : undefined;
+  const isParked = rowState === "parked";
+  const isPlanning = rowState === "planning";
   const isPrioritised = project.ordinal !== null;
+  const fractionLabel = isPlanning
+    ? "brief"
+    : formatFraction(project.completed, project.total);
+  const showProgressBar = !isPlanning && !isParked;
+  const barFraction = computeBarFraction(project.completed, project.total);
+  const dotStyle = isPlanning
+    ? undefined
+    : project.color
+      ? { backgroundColor: project.color }
+      : undefined;
+  const dotClass = cn(
+    "h-2 w-2 shrink-0 rounded-full",
+    isPlanning ? "bg-lilac/70" : project.color ? "" : "bg-white/25",
+  );
 
   return (
     <li
@@ -557,7 +821,7 @@ function PrioritizerRow({
         "group relative flex items-center gap-3 py-2 pl-3 pr-1 outline-none transition",
         "focus-visible:before:absolute focus-visible:before:inset-y-1 focus-visible:before:left-0 focus-visible:before:w-px focus-visible:before:bg-aqua/60",
         moveMode && "before:absolute before:inset-y-1 before:left-0 before:w-0.5 before:bg-aqua",
-        paused ? "opacity-80" : "",
+        isParked ? "opacity-40 hover:opacity-70" : paused ? "opacity-80" : "",
       )}
     >
       <span
@@ -569,31 +833,28 @@ function PrioritizerRow({
       >
         {moveMode ? "↕" : "⋮"}
       </span>
-      <span
-        aria-hidden
-        className={cn(
-          "h-2 w-2 shrink-0 rounded-full",
-          project.color ? "" : "bg-white/25",
-        )}
-        style={colorStyle}
-      />
+      <span aria-hidden className={dotClass} style={dotStyle} />
       <div className="min-w-0 flex-1">
         {project.url ? (
-          // ``draggable={false}`` on the anchor stops the browser
-          // from initiating a *link* drag (which sets a URL on the
-          // dataTransfer instead of our priority MIME) and shadowing
-          // the parent ``<li draggable>`` reorder intent.
           <a
             href={project.url}
             target="_blank"
             rel="noreferrer"
             draggable={false}
-            className="truncate text-[13px] font-semibold text-white hover:text-aqua"
+            className={cn(
+              "truncate text-[13px] font-semibold hover:text-aqua",
+              isPlanning ? "italic text-white/85" : "text-white",
+            )}
           >
             {project.name}
           </a>
         ) : (
-          <p className="truncate text-[13px] font-semibold text-white">
+          <p
+            className={cn(
+              "truncate text-[13px] font-semibold",
+              isPlanning ? "italic text-white/85" : "text-white",
+            )}
+          >
             {project.name}
           </p>
         )}
@@ -603,21 +864,32 @@ function PrioritizerRow({
           </p>
         )}
       </div>
-      <span className="shrink-0 font-mono text-[11px] tabular-nums text-white/55">
+      <span
+        className={cn(
+          "shrink-0 font-mono text-[11px] tabular-nums",
+          isPlanning ? "text-lilac/70" : "text-white/55",
+        )}
+      >
         {fractionLabel}
       </span>
-      <span
-        aria-hidden
-        className="block h-1 w-20 shrink-0 rounded-sm bg-white/[0.06]"
-      >
+      {showProgressBar ? (
         <span
-          className="block h-full rounded-sm transition-all"
-          style={{
-            width: `${barFraction * 100}%`,
-            backgroundColor: project.color ?? undefined,
-          }}
-        />
-      </span>
+          aria-hidden
+          className="block h-1 w-20 shrink-0 rounded-sm bg-white/[0.06]"
+        >
+          <span
+            className="block h-full rounded-sm transition-all"
+            style={{
+              width: `${barFraction * 100}%`,
+              backgroundColor: project.color ?? undefined,
+            }}
+          />
+        </span>
+      ) : (
+        // Fixed-width spacer keeps the row gutter aligned across
+        // sections so the progress column doesn't reflow per-state.
+        <span aria-hidden className="block h-1 w-20 shrink-0" />
+      )}
     </li>
   );
 }
@@ -628,13 +900,23 @@ function PrioritizerRow({
 // ---------------------------------------------------------------------------
 
 
-function moveIndex(arr: string[], idx: number, delta: number): string[] {
-  const next = arr.slice();
-  const target = idx + delta;
-  if (target < 0 || target >= next.length) return arr;
-  const [moved] = next.splice(idx, 1);
-  next.splice(target, 0, moved);
-  return next;
+function ensureRow(
+  arr: DraftRow[],
+  id: string,
+  defaultState: ApiPriorityState,
+): void {
+  if (!arr.some((r) => r.id === id)) {
+    arr.push({ id, state: defaultState });
+  }
+}
+
+
+function rowsEqual(a: DraftRow[], b: DraftRow[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].id !== b[i].id || a[i].state !== b[i].state) return false;
+  }
+  return true;
 }
 
 
@@ -670,5 +952,3 @@ function formatRelative(value: string): string {
   if (diff < 30 * day) return `${Math.round(diff / day)}d ago`;
   return new Date(date).toLocaleDateString();
 }
-
-

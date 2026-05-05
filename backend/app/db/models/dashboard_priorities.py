@@ -24,11 +24,13 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    CheckConstraint,
     ForeignKey,
     Index,
     Integer,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -54,6 +56,10 @@ class WorkspaceProjectPriority(Base):
             "workspace_id",
             "ordinal",
         ),
+        CheckConstraint(
+            "state IN ('active', 'planning', 'parked')",
+            name="ck_workspace_project_priorities_state",
+        ),
     )
 
     id: Mapped[uuid.UUID] = _pk()
@@ -67,6 +73,16 @@ class WorkspaceProjectPriority(Base):
     # "ELS") slot in without a schema change.
     project_native_id: Mapped[str] = mapped_column(String(128), nullable=False)
     ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Bucket on the prioritizer:
+    # ``active`` (agent may pick) | ``planning`` (operator is shaping)
+    # | ``parked`` (explicitly hold). Only ``active`` is visible to the
+    # agent's project picker. Default ``active`` matches the pre-state
+    # contract where any saved row was pickable.
+    state: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        server_default=text("'active'"),
+    )
 
     created_at: Mapped[datetime] = _ts_created()
     updated_at: Mapped[datetime] = _ts_updated()

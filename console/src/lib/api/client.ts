@@ -2462,16 +2462,30 @@ export interface ApiPriorityTracker {
   scopes: string[] | null;
 }
 
+/**
+ * Operator bucket on the prioritizer:
+ * - ``active``   — agent's picker may consume.
+ * - ``planning`` — operator is shaping it (brief/scope). Agent-invisible.
+ * - ``parked``   — explicitly hold. Agent-invisible.
+ */
+export type ApiPriorityState = "active" | "planning" | "parked";
+
 export interface ApiPriorityProject {
   project_native_id: string;
   name: string;
   slug: string | null;
-  state: string | null;
+  /** Tracker-side state ("started" / "planned" / etc) — Linear's own
+   *  field. Kept distinct from ``priority_state`` (the operator
+   *  bucket) so the UI can render both signals when useful. */
+  tracker_state: string | null;
   url: string | null;
   color: string | null;
   /** Saved priority position (0 = top). NULL when the project is
    * unprioritised — the UI sorts these after prioritised rows. */
   ordinal: number | null;
+  /** Operator bucket. NULL only for unprioritised tail rows (the
+   *  project has never been dragged into a bucket). */
+  priority_state: ApiPriorityState | null;
   /** Completion magnitude. ``total`` is null when the tracker can't
    * tell us; the UI then renders ``—`` and skips the bar. */
   completed: number | null;
@@ -2512,14 +2526,35 @@ export function getPriorities(
   );
 }
 
+export interface ApiReorderRow {
+  project_native_id: string;
+  state: ApiPriorityState;
+}
+
 export function reorderPriorities(
   workspaceId: string,
-  order: string[],
+  order: ApiReorderRow[],
   token?: string,
 ): Promise<ApiPrioritiesResponse> {
   return apiFetch<ApiPrioritiesResponse>(
     `/v1/workspaces/${encodeURIComponent(workspaceId)}/priorities/reorder`,
     { method: "POST", token, body: { order } },
+  );
+}
+
+export function setPriorityState(
+  workspaceId: string,
+  projectNativeId: string,
+  state: ApiPriorityState,
+  token?: string,
+): Promise<ApiPrioritiesResponse> {
+  return apiFetch<ApiPrioritiesResponse>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/priorities/state`,
+    {
+      method: "POST",
+      token,
+      body: { project_native_id: projectNativeId, state },
+    },
   );
 }
 

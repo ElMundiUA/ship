@@ -84,7 +84,13 @@ async def test_reorder_persists_and_reads_back(
     res = await v1_client.post(
         f"/v1/workspaces/{ws.id}/priorities/reorder",
         headers=_auth(raw),
-        json={"order": ["proj-a", "proj-b", "proj-c"]},
+        json={
+            "order": [
+                {"project_native_id": "proj-a", "state": "active"},
+                {"project_native_id": "proj-b", "state": "planning"},
+                {"project_native_id": "proj-c", "state": "parked"},
+            ]
+        },
     )
     assert res.status_code == 200, res.text
 
@@ -95,7 +101,13 @@ async def test_reorder_persists_and_reads_back(
     again = await v1_client.post(
         f"/v1/workspaces/{ws.id}/priorities/reorder",
         headers=_auth(raw),
-        json={"order": ["proj-a", "proj-b", "proj-c"]},
+        json={
+            "order": [
+                {"project_native_id": "proj-a", "state": "active"},
+                {"project_native_id": "proj-b", "state": "planning"},
+                {"project_native_id": "proj-c", "state": "parked"},
+            ]
+        },
     )
     assert again.status_code == 200, again.text
 
@@ -106,9 +118,84 @@ async def test_reorder_rejects_duplicates(v1_client, seed_workspace) -> None:
     res = await v1_client.post(
         f"/v1/workspaces/{ws.id}/priorities/reorder",
         headers=_auth(raw),
-        json={"order": ["a", "a"]},
+        json={
+            "order": [
+                {"project_native_id": "a", "state": "active"},
+                {"project_native_id": "a", "state": "planning"},
+            ]
+        },
     )
     assert res.status_code == 400, res.text
+
+
+@pytest.mark.asyncio
+async def test_reorder_rejects_unknown_state(v1_client, seed_workspace) -> None:
+    """The state enum is enforced at the schema layer — a typo should
+    422 before it reaches the DB CHECK constraint."""
+    _, raw, ws = seed_workspace
+    res = await v1_client.post(
+        f"/v1/workspaces/{ws.id}/priorities/reorder",
+        headers=_auth(raw),
+        json={
+            "order": [
+                {"project_native_id": "a", "state": "banana"},
+            ]
+        },
+    )
+    assert res.status_code == 422, res.text
+
+
+@pytest.mark.asyncio
+async def test_set_state_creates_then_updates(
+    v1_client, seed_workspace, db_session
+) -> None:
+    """``POST /state`` is the single-row sugar over ``/reorder``: it
+    creates a priorities row at the bottom of the workspace's ordinal
+    range when none exists, and updates the bucket in-place when one
+    does."""
+    from sqlalchemy import select
+    from backend.app.db.models.dashboard_priorities import (
+        WorkspaceProjectPriority,
+    )
+
+    _, raw, ws = seed_workspace
+
+    # First call — row doesn't exist yet, should be created with the
+    # requested state.
+    create = await v1_client.post(
+        f"/v1/workspaces/{ws.id}/priorities/state",
+        headers=_auth(raw),
+        json={"project_native_id": "proj-x", "state": "planning"},
+    )
+    assert create.status_code == 200, create.text
+    rows = (
+        await db_session.execute(
+            select(WorkspaceProjectPriority).where(
+                WorkspaceProjectPriority.workspace_id == ws.id
+            )
+        )
+    ).scalars().all()
+    assert [r.project_native_id for r in rows] == ["proj-x"]
+    assert rows[0].state == "planning"
+
+    # Second call — same id, different state. Should update in place,
+    # NOT create a duplicate.
+    update = await v1_client.post(
+        f"/v1/workspaces/{ws.id}/priorities/state",
+        headers=_auth(raw),
+        json={"project_native_id": "proj-x", "state": "parked"},
+    )
+    assert update.status_code == 200, update.text
+    await db_session.refresh(rows[0])
+    rows_after = (
+        await db_session.execute(
+            select(WorkspaceProjectPriority).where(
+                WorkspaceProjectPriority.workspace_id == ws.id
+            )
+        )
+    ).scalars().all()
+    assert len(rows_after) == 1
+    assert rows_after[0].state == "parked"
 
 
 @pytest.mark.asyncio
@@ -153,9 +240,16 @@ async def test_viewer_can_read_but_not_mutate(
     blocked_reorder = await v1_client.post(
         f"/v1/workspaces/{ws.id}/priorities/reorder",
         headers=_auth(viewer_raw),
-        json={"order": ["x"]},
+        json={"order": [{"project_native_id": "x", "state": "active"}]},
     )
     assert blocked_reorder.status_code == 403, blocked_reorder.text
+
+    blocked_state = await v1_client.post(
+        f"/v1/workspaces/{ws.id}/priorities/state",
+        headers=_auth(viewer_raw),
+        json={"project_native_id": "x", "state": "planning"},
+    )
+    assert blocked_state.status_code == 403, blocked_state.text
 
     blocked_autonomy = await v1_client.post(
         f"/v1/workspaces/{ws.id}/priorities/autonomy",
