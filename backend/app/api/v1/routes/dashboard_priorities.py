@@ -42,7 +42,7 @@ from backend.app.api.v1.routes.workspaces import (
 from backend.app.core.config import Settings, get_settings
 from backend.app.db.models.dashboard_priorities import WorkspaceProjectPriority
 from backend.app.db.models.pipelines import PullRequest
-from backend.app.db.models.tenancy import AuditLog, Integration, Workspace
+from backend.app.db.models.tenancy import AuditLog, Workspace
 from backend.app.db.session import get_session
 from backend.app.services.tracker_resolver import resolve_for_workspace
 
@@ -165,24 +165,6 @@ async def _load_workspace(
     return workspace
 
 
-async def _load_tracker_integration(
-    session: AsyncSession, workspace_id: uuid.UUID
-) -> Integration | None:
-    row = (
-        await session.execute(
-            select(Integration)
-            .where(
-                Integration.workspace_id == workspace_id,
-                Integration.repo_id.is_(None),
-                Integration.kind.in_(("linear", "jira")),
-            )
-            .order_by(Integration.updated_at.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-    return row
-
-
 def _completion_counts(
     progress: float | None, scope: float | None
 ) -> tuple[int | None, int | None]:
@@ -276,7 +258,6 @@ async def get_priorities(
 ) -> PrioritiesOut:
     await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
     workspace = await _load_workspace(session, workspace_id)
-    integration = await _load_tracker_integration(session, workspace_id)
 
     saved_rows = (
         await session.execute(
@@ -289,25 +270,27 @@ async def get_priorities(
         row.project_native_id: row for row in saved_rows
     }
 
-    # Resolve tracker → fetch raw projects. The resolver returns None
-    # when no integration row is bound — we still answer 200 with an
-    # empty list so the UI can render the disconnected empty state.
+    # Resolve tracker via the canonical helper (native installation
+    # first, then legacy ``Integration`` row) so the dashboard reads
+    # the same token the agent's runtime authenticates with. A
+    # workspace with a fresh native install + a stale legacy row
+    # used to surface the legacy 401 here even though the agent kept
+    # working — the resolver fix flips the precedence.
     tracker = None
     fetch_error: str | None = None
-    if integration is not None:
-        try:
-            tracker = await resolve_for_workspace(
-                session=session,
-                settings=settings,
-                workspace_id=workspace_id,
-            )
-        except Exception as exc:  # noqa: BLE001 — defensive
-            logger.warning(
-                "tracker resolve failed for workspace=%s err=%s",
-                workspace_id,
-                exc,
-            )
-            fetch_error = str(exc)
+    try:
+        tracker = await resolve_for_workspace(
+            session=session,
+            settings=settings,
+            workspace_id=workspace_id,
+        )
+    except Exception as exc:  # noqa: BLE001 — defensive
+        logger.warning(
+            "tracker resolve failed for workspace=%s err=%s",
+            workspace_id,
+            exc,
+        )
+        fetch_error = str(exc)
 
     raw_projects: list[dict] = []
     supports_projects = False
@@ -360,8 +343,11 @@ async def get_priorities(
         )
     )
 
-    # Tracker connection block.
-    if integration is None:
+    # Tracker connection block. We trust the resolver: a non-None
+    # ``ResolvedTracker`` means *some* storage shape (native install
+    # or legacy Integration row) handed back a usable token, so
+    # surface ``connected`` even when no legacy row exists.
+    if tracker is None:
         tracker_out = TrackerSyncOut(
             kind=None,
             status="disconnected",
@@ -372,36 +358,27 @@ async def get_priorities(
     else:
         kind = (
             "linear"
-            if integration.kind == "linear"
+            if tracker.kind == "linear"
             else "jira"
-            if integration.kind == "jira"
+            if tracker.kind == "jira"
             else None
         )
-        if kind is None:
-            tracker_out = TrackerSyncOut(
-                kind=None,
-                status="disconnected",
-                last_health_at=integration.last_health_at,
-                last_health_error=integration.last_health_error,
-                supports_projects=False,
-            )
-        else:
-            # Status reflects the result of the *current* fetch, not
-            # whatever ``last_health_error`` happens to be sitting in
-            # the integration row. The OAuth callback and the
-            # provisioner both write to ``last_health_error`` from
-            # entirely separate code paths; mixing it with the live
-            # fetch state turns "I just resolved a stale provisioning
-            # blip" into "Linear is broken" on the dashboard. Surface
-            # the stored error in ``last_health_error`` for ops/audit,
-            # but only flip ``status`` when the live fetch failed.
-            tracker_out = TrackerSyncOut(
-                kind=kind,
-                status="error" if fetch_error else "connected",
-                last_health_at=integration.last_health_at,
-                last_health_error=fetch_error or integration.last_health_error,
-                supports_projects=supports_projects,
-            )
+        # Status reflects the result of the *current* fetch, not
+        # whatever ``last_health_error`` happens to be sitting in the
+        # source row. The OAuth callback and provisioner write to
+        # ``last_health_error`` from independent code paths; mixing
+        # them into ``status`` turned a long-resolved blip into a
+        # coral "Linear is broken" hairline. Surface the stored error
+        # in ``last_health_error`` for ops visibility but only flip
+        # ``status`` when the live fetch failed.
+        last_health_at = tracker.last_health_at  # type: ignore[assignment]
+        tracker_out = TrackerSyncOut(
+            kind=kind,
+            status="error" if fetch_error else "connected",
+            last_health_at=last_health_at,  # type: ignore[arg-type]
+            last_health_error=fetch_error or tracker.last_health_error,
+            supports_projects=supports_projects,
+        )
 
     autonomy_paused = _autonomy_paused(workspace)
 
