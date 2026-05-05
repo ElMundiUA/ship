@@ -173,7 +173,10 @@ class TrackerGateway(Protocol):
         """Active projects/epics on the connected workspace.
 
         Adapters return ``{"id", "name", "slug", "state", "url",
-        "updated_at", "lead_name"}`` per project.
+        "updated_at", "lead_name"}`` per project. Optional extras
+        consumed by the dashboard prioritizer when present:
+        ``progress`` (Float, 0-1), ``scope`` (Float, total magnitude),
+        ``color`` (hex string).
         """
         raise NotImplementedError(
             f"{type(self).__name__} does not model projects/epics"

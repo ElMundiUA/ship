@@ -2441,6 +2441,96 @@ export function getOpsDashboard(
   );
 }
 
+// --- Dashboard v2 — prioritizer surface ------------------------------------
+
+/**
+ * Tracker connection block on the prioritizer payload. ``status`` is
+ * ``connected`` when an integration row exists and the most recent
+ * health check was clean; ``error`` carries the raw vendor message;
+ * ``disconnected`` means the workspace has no tracker bound at all
+ * (the prioritizer renders a connect-Linear CTA empty state instead
+ * of the project list).
+ */
+export interface ApiPriorityTracker {
+  kind: "linear" | "jira" | null;
+  status: "connected" | "error" | "disconnected";
+  last_health_at: string | null;
+  last_health_error: string | null;
+  supports_projects: boolean;
+}
+
+export interface ApiPriorityProject {
+  project_native_id: string;
+  name: string;
+  slug: string | null;
+  state: string | null;
+  url: string | null;
+  color: string | null;
+  /** Saved priority position (0 = top). NULL when the project is
+   * unprioritised — the UI sorts these after prioritised rows. */
+  ordinal: number | null;
+  /** Completion magnitude. ``total`` is null when the tracker can't
+   * tell us; the UI then renders ``—`` and skips the bar. */
+  completed: number | null;
+  total: number | null;
+}
+
+export interface ApiPriorityUpNext {
+  project_native_id: string;
+  project_name: string;
+  color: string | null;
+}
+
+export interface ApiPriorityLastAction {
+  label: string;
+  href: string | null;
+  ts: string;
+}
+
+export interface ApiPrioritiesResponse {
+  projects: ApiPriorityProject[];
+  tracker: ApiPriorityTracker;
+  autonomy_paused: boolean;
+  up_next: ApiPriorityUpNext | null;
+  last_action: ApiPriorityLastAction | null;
+}
+
+export interface ApiAutonomyResponse {
+  autonomy_paused: boolean;
+}
+
+export function getPriorities(
+  workspaceId: string,
+  token?: string,
+): Promise<ApiPrioritiesResponse> {
+  return apiFetch<ApiPrioritiesResponse>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/priorities`,
+    { token },
+  );
+}
+
+export function reorderPriorities(
+  workspaceId: string,
+  order: string[],
+  token?: string,
+): Promise<ApiPrioritiesResponse> {
+  return apiFetch<ApiPrioritiesResponse>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/priorities/reorder`,
+    { method: "POST", token, body: { order } },
+  );
+}
+
+export function setAutonomyPaused(
+  workspaceId: string,
+  paused: boolean,
+  token?: string,
+): Promise<ApiAutonomyResponse> {
+  return apiFetch<ApiAutonomyResponse>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/priorities/autonomy`,
+    { method: "POST", token, body: { paused } },
+  );
+}
+
 export function dismissNotification(
   workspaceId: string,
   notificationId: string,

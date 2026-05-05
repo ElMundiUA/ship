@@ -3,6 +3,7 @@ so Alembic ``--autogenerate`` and `Base.metadata.create_all` see them all.
 """
 
 from backend.app.db.models.agent_roles import AgentRole
+from backend.app.db.models.dashboard_priorities import WorkspaceProjectPriority
 from backend.app.db.models.agent_memory import (
     ArtifactFeedback,
     BucketArticleSource,
@@ -128,6 +129,7 @@ __all__ = [
     "WorkspaceMember",
     "WorkspaceNotification",
     "WorkspacePolicy",
+    "WorkspaceProjectPriority",
     "WorkspaceRepo",
     "WorkflowRun",
 ]

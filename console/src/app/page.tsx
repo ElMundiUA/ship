@@ -10,11 +10,13 @@ import { WorkspaceHome } from "@/components/workspace-home";
 import {
   type ApiActivatedRepo,
   type ApiOpsDashboard,
+  type ApiPrioritiesResponse,
   ApiHttpError,
   ApiUnavailableError,
   getInboxCounts,
   getMe,
   getOpsDashboard,
+  getPriorities,
   isApiConfigured,
   listActivatedRepos,
   listInboxItems,
@@ -126,6 +128,11 @@ type LiveContext = {
    *  dashboard still renders. */
   inboxItems: InboxListResponse | null;
   inboxCounts: InboxCountsResponse | null;
+  /** Dashboard v2 prioritizer payload — projects, ordering, autonomy
+   *  state, last-action trust anchor. Best-effort: a fetch failure
+   *  hides the prioritizer block so the rest of the dashboard still
+   *  renders. */
+  priorities: ApiPrioritiesResponse | null;
 };
 
 /**
@@ -154,7 +161,7 @@ async function loadLiveContext(
 ): Promise<LiveContext | "unauthorized" | "down"> {
   const workspace = pickWorkspace(list, wsParam);
   try {
-    const [data, repos, inboxItems, inboxCounts] = await Promise.all([
+    const [data, repos, inboxItems, inboxCounts, priorities] = await Promise.all([
       getOpsDashboard(workspace.id, token),
       listActivatedRepos(workspace.id, token).catch(() => [] as ApiActivatedRepo[]),
       listInboxItems(workspace.id, { statuses: ["new"], limit: 5 }, token).catch(
@@ -163,8 +170,19 @@ async function loadLiveContext(
       getInboxCounts(workspace.id, token).catch(
         () => null as InboxCountsResponse | null,
       ),
+      getPriorities(workspace.id, token).catch(
+        () => null as ApiPrioritiesResponse | null,
+      ),
     ]);
-    return { workspace, allWorkspaces: list, data, repos, inboxItems, inboxCounts };
+    return {
+      workspace,
+      allWorkspaces: list,
+      data,
+      repos,
+      inboxItems,
+      inboxCounts,
+      priorities,
+    };
   } catch (err) {
     if (err instanceof ApiHttpError && err.status === 401) return "unauthorized";
     if (err instanceof ApiUnavailableError) return "down";
@@ -197,6 +215,7 @@ function renderWorkspaceHome(ctx: LiveContext) {
         workspaceId={workspace.id}
         inboxItems={ctx.inboxItems}
         inboxCounts={ctx.inboxCounts}
+        priorities={ctx.priorities}
       />
     </AppShell>
   );

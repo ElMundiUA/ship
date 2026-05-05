@@ -598,7 +598,13 @@ class LinearTracker:
         ``planned``, ``started``, ``paused``, ``completed``,
         ``canceled``). ``query`` matches project name (case-insensitive
         contains). Returns ``{"id", "name", "slug", "state", "url",
-        "updated_at", "lead_name"}`` per project.
+        "updated_at", "lead_name", "progress", "scope", "color"}`` per
+        project.
+
+        ``progress`` is the 0-1 fraction Linear reports; ``scope`` is the
+        total magnitude (issue count when no estimates are set, otherwise
+        weighted). The dashboard prioritizer renders ``round(progress *
+        scope) / round(scope)`` as a fraction.
         """
         team_id = await self._resolve_team_id(None)
         filter_clauses: dict[str, Any] = {
@@ -619,6 +625,9 @@ class LinearTracker:
               state
               url
               updatedAt
+              color
+              progress
+              scope
               lead { name }
             }
           }
@@ -637,6 +646,17 @@ class LinearTracker:
                 "url": str(node.get("url") or ""),
                 "updated_at": node.get("updatedAt"),
                 "lead_name": ((node.get("lead") or {}).get("name")) or None,
+                "progress": (
+                    float(node["progress"])
+                    if node.get("progress") is not None
+                    else None
+                ),
+                "scope": (
+                    float(node["scope"])
+                    if node.get("scope") is not None
+                    else None
+                ),
+                "color": str(node.get("color") or "") or None,
             }
             for node in nodes
         ]
