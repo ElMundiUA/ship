@@ -25,6 +25,30 @@ The catalog vocabulary (``pattern`` / ``tool`` / ``collection`` kinds,
 loaded by Ship is ``artifacts/knowledge-starters/``; ``agent-rules``
 collections are read by the CLI directly through the unauthenticated
 ``/collections`` endpoint that lives in :mod:`backend.app.main`.
+
+The three "planning"s — disambiguation
+======================================
+
+There are three things called "planning" in this codebase. Don't conflate
+them; if you find yourself confused by a log line, use this map:
+
+1. ``priority_state.planning`` — the **dashboard bucket** value (DB enum
+   in :mod:`backend.app.db.models.dashboard_priorities`). The UI label
+   for this bucket is **"Drafts"** — what the operator sees on the
+   dashboard. It means "the PO is shaping this; the agent's autonomous
+   picker must NOT consume it."
+
+2. ``state="planning"`` — a **kind-of-work tag** on per-stage entries in
+   :func:`default_development_process_config` below (e.g. the
+   ``task_intake`` stage carries ``state="planning"``). Classifies the
+   stage's phase (planning / executing / reviewing). Internal-only;
+   doesn't surface to the operator.
+
+3. The **decomposition process** — a separate FSM (``id="decomposition"``,
+   added in PR3 of the project-first delivery work) that runs BA →
+   Architect → QA-Architect → QA + Developer on a project's anchor
+   issue to produce coarse child tickets. Its operator-facing label is
+   "Decomposition," NOT "planning," precisely to keep these three apart.
 """
 
 from __future__ import annotations
