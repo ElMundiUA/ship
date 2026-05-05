@@ -315,6 +315,40 @@ export function DashboardPrioritizer({ workspaceId, initial }: Props) {
     [draftOrder, serverRows],
   );
 
+  // Hand off to decomposition. Records pending state per-project so
+  // double-clicks don't spawn two start runs (the endpoint is also
+  // server-side idempotent, but optimistic UI keeps the row from
+  // flashing twice). On success we mark the row "decomposing" locally
+  // so the chip swaps before the next /priorities round-trip.
+  //
+  // These hooks live ABOVE the empty-state early returns below — moving
+  // them under the returns broke ``react-hooks/rules-of-hooks`` because
+  // hooks must run in a stable order on every render and the empty
+  // branches return before reaching them. ``next build`` (lint enabled)
+  // catches it; bare ``tsc`` doesn't, which is how the regression slipped
+  // past local checks in the original PR3.
+  const [handoffPending, setHandoffPending] = useState<string | null>(null);
+  const [decomposingIds, setDecomposingIds] = useState<Set<string>>(new Set());
+  const handleHandoff = useCallback(
+    async (nativeId: string) => {
+      if (handoffPending) return;
+      setHandoffPending(nativeId);
+      setErrorMessage(null);
+      const result = await startDecompositionAction(workspaceId, nativeId);
+      setHandoffPending(null);
+      if (!result.ok) {
+        setErrorMessage(result.message);
+        return;
+      }
+      setDecomposingIds((prev) => {
+        const next = new Set(prev);
+        next.add(nativeId);
+        return next;
+      });
+    },
+    [handoffPending, workspaceId],
+  );
+
   // ----- empty states -----------------------------------------------
 
   if (tracker.status === "disconnected") {
@@ -413,33 +447,6 @@ export function DashboardPrioritizer({ workspaceId, initial }: Props) {
   }
 
   // ----- main list (state-grouped) ----------------------------------
-
-  // Hand off to decomposition. Records pending state per-project so
-  // double-clicks don't spawn two start runs (the endpoint is also
-  // server-side idempotent, but optimistic UI keeps the row from
-  // flashing twice). On success we mark the row "decomposing" locally
-  // so the chip swaps before the next /priorities round-trip.
-  const [handoffPending, setHandoffPending] = useState<string | null>(null);
-  const [decomposingIds, setDecomposingIds] = useState<Set<string>>(new Set());
-  const handleHandoff = useCallback(
-    async (nativeId: string) => {
-      if (handoffPending) return;
-      setHandoffPending(nativeId);
-      setErrorMessage(null);
-      const result = await startDecompositionAction(workspaceId, nativeId);
-      setHandoffPending(null);
-      if (!result.ok) {
-        setErrorMessage(result.message);
-        return;
-      }
-      setDecomposingIds((prev) => {
-        const next = new Set(prev);
-        next.add(nativeId);
-        return next;
-      });
-    },
-    [handoffPending, workspaceId],
-  );
 
   const renderRow = (project: ApiPriorityProject, state: ApiPriorityState) => (
     <PrioritizerRow
