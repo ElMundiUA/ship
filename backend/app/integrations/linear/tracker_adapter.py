@@ -864,6 +864,114 @@ class LinearTracker:
         await self._gql(mutation, {"id": project_id, "content": new_content})
 
     # -----------------------------------------------------------------
+    # Decomposition anchor (project-first delivery)
+    #
+    # Each project the PO drafts gets exactly one anchor issue tagged
+    # ``planning:anchor``. The decomposition FSM later runs against
+    # this issue (Linear projects don't have their own state machine,
+    # so we hang one inside). Co-locating the anchor with the project
+    # keeps the tracker UI honest: the issue tab on the project page
+    # shows the anchor first, body sections below.
+    # -----------------------------------------------------------------
+
+    PLANNING_ANCHOR_LABEL = "planning:anchor"
+
+    async def create_planning_anchor(
+        self,
+        project_id: str,
+        *,
+        title: str,
+        body: str,
+        labels: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Create the anchor issue for ``project_id``'s decomposition.
+
+        Mints the ``planning:anchor`` label on the team if it doesn't
+        exist yet — silently dropping the tag would orphan the
+        decomposition FSM's filter. Any caller-supplied ``labels`` are
+        ALSO minted-if-missing for the same reason.
+
+        Returns ``{"id", "identifier", "url"}``.
+        """
+        team_id = await self._resolve_team_id(None)
+        all_labels = [self.PLANNING_ANCHOR_LABEL]
+        for lbl in labels or []:
+            if lbl and lbl != self.PLANNING_ANCHOR_LABEL:
+                all_labels.append(lbl)
+        label_ids = await self._resolve_or_create_label_ids(
+            team_id, all_labels
+        )
+        mutation = """
+        mutation ShipCreateAnchor($input: IssueCreateInput!) {
+          issueCreate(input: $input) {
+            success
+            issue { id identifier url }
+          }
+        }
+        """
+        payload: dict[str, Any] = {
+            "teamId": team_id,
+            "projectId": project_id,
+            "title": title,
+            "description": body,
+        }
+        if label_ids:
+            payload["labelIds"] = label_ids
+        data = await self._gql(mutation, {"input": payload})
+        result = data.get("issueCreate") or {}
+        issue = result.get("issue") or {}
+        if not result.get("success") or not issue:
+            raise ValueError(
+                "Linear refused issueCreate for the planning anchor."
+            )
+        return {
+            "id": str(issue.get("id") or ""),
+            "identifier": str(issue.get("identifier") or issue.get("id") or ""),
+            "url": str(issue.get("url") or ""),
+        }
+
+    async def get_planning_anchor(
+        self, project_id: str
+    ) -> dict[str, Any] | None:
+        """Fetch the existing planning anchor for ``project_id``, if any.
+
+        Used by ``_tool_create_project`` to make the anchor-creation
+        step idempotent — a re-run of ``create_project`` against an
+        existing project must not spawn a second anchor.
+        """
+        query = """
+        query ShipFindAnchor($projectId: ID!, $label: String!) {
+          issues(
+            filter: {
+              project: { id: { eq: $projectId } },
+              labels: { name: { eq: $label } }
+            },
+            first: 1,
+            orderBy: createdAt
+          ) {
+            nodes { id identifier url state { name } }
+          }
+        }
+        """
+        data = await self._gql(
+            query,
+            {
+                "projectId": project_id,
+                "label": self.PLANNING_ANCHOR_LABEL,
+            },
+        )
+        nodes = ((data.get("issues") or {}).get("nodes")) or []
+        if not nodes:
+            return None
+        node = nodes[0]
+        return {
+            "id": str(node.get("id") or ""),
+            "identifier": str(node.get("identifier") or node.get("id") or ""),
+            "url": str(node.get("url") or ""),
+            "state": str(((node.get("state") or {}).get("name")) or ""),
+        }
+
+    # -----------------------------------------------------------------
     # Clarifications projection surface (D13)
     # -----------------------------------------------------------------
 
@@ -1133,6 +1241,61 @@ class LinearTracker:
         )
         want = {lbl.lower() for lbl in labels}
         return [str(n["id"]) for n in nodes if str(n.get("name", "")).lower() in want]
+
+    async def _resolve_or_create_label_ids(
+        self, team_id: str, labels: list[str]
+    ) -> list[str]:
+        """Like :meth:`_resolve_label_ids` but mints any missing labels.
+
+        Used by infrastructure-level callers (anchor creation) where
+        dropping a label silently would orphan a downstream filter (the
+        decomposition FSM polls ``label = 'planning:anchor'``). The
+        agent-facing ``create_ticket`` keeps the strict resolver — we
+        don't want the LLM polluting a customer's Linear with
+        freshly-invented label names.
+        """
+        if not labels:
+            return []
+        query = """
+        query ShipLabels($teamId: String!) {
+          team(id: $teamId) { labels { nodes { id name } } }
+        }
+        """
+        data = await self._gql(query, {"teamId": team_id})
+        nodes = (
+            ((data.get("team") or {}).get("labels") or {}).get("nodes") or []
+        )
+        existing = {
+            str(n.get("name", "")).lower(): str(n["id"])
+            for n in nodes
+            if n.get("id")
+        }
+        out: list[str] = []
+        mint = """
+        mutation ShipMintLabel($input: IssueLabelCreateInput!) {
+          issueLabelCreate(input: $input) {
+            success
+            issueLabel { id name }
+          }
+        }
+        """
+        for lbl in labels:
+            key = lbl.lower()
+            if key in existing:
+                out.append(existing[key])
+                continue
+            created = await self._gql(
+                mint, {"input": {"name": lbl, "teamId": team_id}}
+            )
+            new = (
+                (created.get("issueLabelCreate") or {}).get("issueLabel") or {}
+            )
+            if not new.get("id"):
+                raise RuntimeError(
+                    f"Linear refused issueLabelCreate for {lbl!r}"
+                )
+            out.append(str(new["id"]))
+        return out
 
 
 def _parse_iso8601(raw: str) -> datetime:

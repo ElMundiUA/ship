@@ -156,6 +156,7 @@ from backend.app.db.models.integrations import (
     NativeIntegrationStatus,
     WorkspaceRepo,
 )
+from backend.app.db.models.dashboard_priorities import WorkspaceProjectPriority
 from backend.app.db.models.lanes import Lane
 from backend.app.db.models.pipelines import (
     Pipeline,
@@ -2387,7 +2388,127 @@ class ToolBox:
         except ValueError as exc:
             raise ToolInvocationError(str(exc)) from exc
 
-        return _json_result(project)
+        # Project-first delivery side-effects: a freshly-created project
+        # has to land on the dashboard immediately (in the Drafts bucket
+        # — DB enum value ``planning``) AND carry exactly one anchor
+        # issue tagged ``planning:anchor``. Without the priorities row,
+        # the project is invisible to the operator until they manually
+        # drag it; without the anchor, the decomposition FSM later
+        # has nothing to attach to. Both are best-effort: a tracker
+        # that can't model anchors raises NotImplementedError and we
+        # skip cleanly. A failure on either side is non-fatal — the
+        # project itself was created successfully and we don't want to
+        # roll that back over plumbing.
+        project_native_id = str(project.get("id") or "")
+        anchor_payload: dict[str, Any] | None = None
+        if project_native_id:
+            anchor_payload = await self._ensure_planning_anchor(
+                tracker,
+                project_id=project_native_id,
+                project_name=name,
+            )
+            await self._ensure_drafts_priorities_row(
+                project_native_id=project_native_id
+            )
+
+        result = dict(project)
+        if anchor_payload is not None:
+            result["anchor"] = anchor_payload
+            # Surface the dashboard hint so the agent can phrase its
+            # confirmation reliably ("Created · drafted in Drafts ·
+            # ready for hand-off").
+            result["dashboard_bucket"] = "drafts"
+        return _json_result(result)
+
+    async def _ensure_planning_anchor(
+        self,
+        tracker: TrackerGateway,
+        *,
+        project_id: str,
+        project_name: str,
+    ) -> dict[str, Any] | None:
+        """Idempotent: return an existing anchor or create one.
+
+        Returns ``None`` when the tracker doesn't model anchors
+        (Notion, future GitHub Issues), so the caller can skip the
+        confirmation block in the tool result rather than lying to
+        the agent about an artefact that wasn't created.
+        """
+        try:
+            existing = await tracker.get_planning_anchor(project_id)
+        except NotImplementedError:
+            return None
+        except Exception as exc:  # noqa: BLE001 — don't fail create over a probe
+            logger.warning(
+                "planning anchor probe failed for project=%s err=%s",
+                project_id,
+                exc,
+            )
+            existing = None
+        if existing:
+            return existing
+        anchor_body = (
+            f"Decomposition anchor for **{project_name}**.\n\n"
+            "This issue tracks the planning pipeline (BA → Architect → "
+            "QA-Architect → QA + Developer). Stage transitions on this "
+            "anchor drive what specialists run; the project body grows "
+            "section-by-section as each stage emits its artefact."
+        )
+        try:
+            return await tracker.create_planning_anchor(
+                project_id,
+                title=f"Anchor: {project_name}",
+                body=anchor_body,
+                labels=None,
+            )
+        except NotImplementedError:
+            return None
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "planning anchor creation failed for project=%s err=%s",
+                project_id,
+                exc,
+            )
+            return None
+
+    async def _ensure_drafts_priorities_row(
+        self, *, project_native_id: str
+    ) -> None:
+        """Insert (or no-op) a Drafts-bucket priorities row.
+
+        Idempotent on (workspace_id, project_native_id) — a re-run of
+        ``create_project`` for the same Linear project doesn't double-
+        insert. Ordinal goes to MAX+1 across the whole workspace so
+        the row sorts after everything currently saved; the operator
+        can drag it up if the project is high-priority.
+        """
+        existing = await self._session.scalar(
+            select(WorkspaceProjectPriority.id).where(
+                WorkspaceProjectPriority.workspace_id == self._workspace_id,
+                WorkspaceProjectPriority.project_native_id
+                == project_native_id,
+            )
+        )
+        if existing is not None:
+            return
+        max_ord = await self._session.scalar(
+            select(WorkspaceProjectPriority.ordinal)
+            .where(
+                WorkspaceProjectPriority.workspace_id == self._workspace_id
+            )
+            .order_by(WorkspaceProjectPriority.ordinal.desc())
+            .limit(1)
+        )
+        next_ord = 0 if max_ord is None else int(max_ord) + 1
+        self._session.add(
+            WorkspaceProjectPriority(
+                workspace_id=self._workspace_id,
+                project_native_id=project_native_id,
+                ordinal=next_ord,
+                state="planning",
+            )
+        )
+        await self._session.flush()
 
     async def _tool_append_project_description(self, args: dict[str, Any]) -> str:
         project_id = _require_str(args, "project_id")

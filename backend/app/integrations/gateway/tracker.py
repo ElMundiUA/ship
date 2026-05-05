@@ -221,6 +221,57 @@ class TrackerGateway(Protocol):
         )
 
     # -----------------------------------------------------------------
+    # Decomposition anchor surface (project-first delivery, ELS-73)
+    #
+    # Each project the PO drafts gets exactly one *anchor* issue tagged
+    # ``planning:anchor``. The anchor is what the decomposition FSM runs
+    # against — Linear projects don't carry their own state machine, so
+    # we hang one inside. Adapters that don't model projects raise
+    # NotImplementedError on both methods and the orchestrator skips them.
+    # -----------------------------------------------------------------
+
+    async def create_planning_anchor(
+        self,
+        project_id: str,
+        *,
+        title: str,
+        body: str,
+        labels: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Create the anchor issue for a project's decomposition pipeline.
+
+        Implementations must place the issue *inside* ``project_id``
+        (so the anchor and the project body are co-located in the
+        tracker UI) and tag it with ``planning:anchor`` plus any
+        additional ``labels`` passed in. If the label isn't
+        provisioned on the team yet, the adapter mints it — the
+        decomposition FSM later filters issues by this label, so
+        silently dropping the tag would orphan the run.
+
+        Returns ``{"id", "identifier", "url"}``. ``identifier`` is
+        the human-readable shorthand (``ELS-83``).
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not model planning anchors"
+        )
+
+    async def get_planning_anchor(
+        self, project_id: str
+    ) -> dict[str, Any] | None:
+        """Fetch the existing planning anchor for ``project_id``.
+
+        Used by the create-side idempotency check (don't double-create
+        an anchor if the project already has one) and later by the
+        decomposition FSM to read anchor state. Returns ``None`` when
+        the project has no anchor yet (the canonical pre-creation
+        state). Returns ``{"id", "identifier", "url", "state"}`` when
+        present — ``state`` is the tracker-native state name.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not model planning anchors"
+        )
+
+    # -----------------------------------------------------------------
     # Clarifications projection (D13)
     #
     # Optional surface — only trackers that participate in the

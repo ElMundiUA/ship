@@ -61,6 +61,12 @@ const STATE_RANK: Record<ApiPriorityState, number> = {
 
 const SECTION_ORDER: ApiPriorityState[] = ["active", "planning", "parked"];
 
+// UI labels for ``priority_state`` enum values. The DB enum stays
+// ``planning`` (renaming would force an audit-log + JSONB churn for
+// what is, at the dashboard, just a label). "Drafts" is the operator
+// word — what's actually in the bucket is a one-line title + a brief
+// the PO is shaping in the Navigator. Don't rename in the API client
+// or the server; only here.
 const SECTION_COPY: Record<
   ApiPriorityState,
   { label: string; sub: (n: number) => string }
@@ -70,7 +76,7 @@ const SECTION_COPY: Record<
     sub: (n) => (n === 1 ? "1 pick for the agent" : `${n} picks for the agent`),
   },
   planning: {
-    label: "Planning",
+    label: "Drafts",
     sub: (n) => (n === 1 ? "1 you're shaping" : `${n} you're shaping`),
   },
   parked: {
@@ -434,7 +440,7 @@ export function DashboardPrioritizer({ workspaceId, initial }: Props) {
                 className="py-2 pl-3 text-[11px] italic text-white/30"
                 {...sectionDropHandlers(state)}
               >
-                drop a project here to {state === "active" ? "queue it" : state === "planning" ? "shape its brief" : "park it"}
+                drop a project here to {state === "active" ? "queue it" : state === "planning" ? "draft it" : "park it"}
               </li>
             )}
             {showEmptyHint && (
