@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -203,6 +204,9 @@ async def create_source(
 ) -> ImportSourceOut:
     await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
     await _validate_source_refs(session, workspace_id, payload)
+    await _reject_duplicate_source(
+        session, workspace_id=workspace_id, payload=payload
+    )
     try:
         row = await create_import_source(
             session,
@@ -329,6 +333,75 @@ async def list_source_runs(
         )
     ).scalars().all()
     return [_run_out(row) for row in rows]
+
+
+def _canonical_config(config: dict[str, Any] | None) -> str:
+    """Order-insensitive JSON form used to detect duplicate sources.
+
+    Two sources are "the same" when they target identical resource_refs
+    (and any other config keys) under the same workspace + kind +
+    integration + repo. ``resource_refs`` is sorted because operators
+    sometimes pick the same pages in a different order in the wizard,
+    and that's still a duplicate — there's nothing for the second row
+    to do that the first doesn't already cover.
+
+    Other config keys are kept dict-stable via ``sort_keys=True``.
+    Non-dict configs collapse to ``{}`` so the check stays defensive.
+    """
+    if not isinstance(config, dict):
+        return "{}"
+    refs = config.get("resource_refs")
+    other = {k: v for k, v in config.items() if k != "resource_refs"}
+    refs_sorted: list[str] = []
+    if isinstance(refs, list):
+        refs_sorted = sorted(
+            json.dumps(r, sort_keys=True, default=str)
+            for r in refs
+            if isinstance(r, dict)
+        )
+    return json.dumps(
+        {"refs": refs_sorted, "other": other}, sort_keys=True, default=str
+    )
+
+
+async def _reject_duplicate_source(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    payload: ImportSourceCreateIn,
+) -> None:
+    """409 if a non-archived source with the same canonical config already exists.
+
+    Without this guard a double-click on "Connect" in the wizard creates
+    two identical rows; both then sync the same content forever, doubling
+    the load on the upstream API and the harvester output, with no upside.
+    The check is scoped to ``(workspace, kind, integration, repo)`` plus
+    ``archived_at IS NULL`` so re-creating a previously-archived source
+    is still allowed (operators sometimes archive then re-add to "reset"
+    a source after fixing share permissions upstream).
+    """
+    target = _canonical_config(payload.config)
+    rows = (
+        await session.execute(
+            select(KnowledgeImportSource).where(
+                KnowledgeImportSource.workspace_id == workspace_id,
+                KnowledgeImportSource.kind == payload.kind,
+                KnowledgeImportSource.integration_id == payload.integration_id,
+                KnowledgeImportSource.repo_id == payload.repo_id,
+                KnowledgeImportSource.archived_at.is_(None),
+            )
+        )
+    ).scalars().all()
+    for row in rows:
+        if _canonical_config(row.config) == target:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"a non-archived {payload.kind} source with the same "
+                    f"configuration already exists (id={row.id}); archive "
+                    "it first or update it instead of creating a duplicate"
+                ),
+            )
 
 
 async def _validate_source_refs(
