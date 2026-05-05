@@ -202,6 +202,10 @@ export function DashboardPrioritizer({ workspaceId, initial }: Props) {
     // ``error · reconnect`` hairline, which reads as "the prioritizer
     // is broken" — exactly the bug we hit in the first PR.
     if (tracker.status === "error") {
+      const missingRead =
+        tracker.kind === "linear" &&
+        tracker.scopes !== null &&
+        !tracker.scopes.includes("read");
       return (
         <PrioritizerSection
           autonomyPaused={serverState.autonomy_paused}
@@ -215,6 +219,17 @@ export function DashboardPrioritizer({ workspaceId, initial }: Props) {
               Couldn&apos;t fetch projects from{" "}
               {tracker.kind === "linear" ? "Linear" : "the tracker"}.
             </p>
+            {missingRead ? (
+              <p className="text-[11px] text-sun/85">
+                Token scopes don&apos;t include <span className="font-mono">read</span> — re-authorize Linear with{" "}
+                <span className="font-mono">read,write,issues:create,comments:create</span>.
+              </p>
+            ) : null}
+            {tracker.scopes && tracker.scopes.length > 0 ? (
+              <p className="text-[10.5px] text-white/45">
+                scopes: {tracker.scopes.join(", ")}
+              </p>
+            ) : null}
             {tracker.last_health_error ? (
               <p className="font-mono text-[10.5px] text-coral/60">
                 {tracker.last_health_error}

@@ -2457,6 +2457,9 @@ export interface ApiPriorityTracker {
   last_health_at: string | null;
   last_health_error: string | null;
   supports_projects: boolean;
+  /** OAuth scopes the stored token was issued with. Useful in the
+   *  error empty state to confirm whether ``read`` is granted. */
+  scopes: string[] | null;
 }
 
 export interface ApiPriorityProject {

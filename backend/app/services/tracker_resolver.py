@@ -69,6 +69,10 @@ class ResolvedTracker:
     source: Literal["native", "legacy"] | None = None
     last_health_at: object | None = None
     last_health_error: str | None = None
+    # OAuth scopes the stored token was issued with. Surfaced into
+    # the dashboard so an admin can eyeball whether ``read`` is
+    # actually granted before chasing 401 ghosts.
+    scopes: tuple[str, ...] = ()
 
 
 async def resolve_for_workspace(
@@ -195,6 +199,7 @@ async def _resolve_native_linear(
         source="native",
         last_health_at=install.last_health_at,
         last_health_error=install.last_health_error,
+        scopes=tuple(install.scopes or ()),
     )
 
 
@@ -205,12 +210,17 @@ def _resolve_from_legacy_row(
         token = _decrypt_legacy_token(row, decrypt)
         if token is None:
             return None
+        scope_raw = (row.config or {}).get("scope")
+        scopes = tuple(
+            s.strip() for s in str(scope_raw or "").split(",") if s.strip()
+        )
         return _build_linear_resolved(
             token,
             row.config or {},
             source="legacy",
             last_health_at=row.last_health_at,
             last_health_error=row.last_health_error,
+            scopes=scopes,
         )
 
     # Jira / others — wire when needed.
@@ -227,6 +237,7 @@ def _build_linear_resolved(
     source: Literal["native", "legacy"],
     last_health_at: object | None,
     last_health_error: str | None,
+    scopes: tuple[str, ...] = (),
 ) -> ResolvedTracker:
     """Hydrate a ``ResolvedTracker`` from a Linear token + config blob.
 
@@ -254,6 +265,7 @@ def _build_linear_resolved(
         source=source,
         last_health_at=last_health_at,
         last_health_error=last_health_error,
+        scopes=scopes,
     )
 
 

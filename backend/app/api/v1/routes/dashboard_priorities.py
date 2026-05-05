@@ -81,6 +81,12 @@ class TrackerSyncOut(BaseModel):
     last_health_at: datetime | None
     last_health_error: str | None
     supports_projects: bool
+    # OAuth scopes the stored token was issued with. We render them in
+    # the error empty-state so an admin can eyeball whether ``read``
+    # is actually granted (a 401 from ``projects`` without ``read`` is
+    # the same Linear error string as a revoked token, but a different
+    # fix — re-OAuth with a wider scope set vs. reconnect).
+    scopes: list[str] | None
 
 
 class PriorityProjectOut(BaseModel):
@@ -359,6 +365,7 @@ async def get_priorities(
             last_health_at=None,
             last_health_error=None,
             supports_projects=False,
+            scopes=None,
         )
     else:
         kind = (
@@ -383,6 +390,7 @@ async def get_priorities(
             last_health_at=last_health_at,  # type: ignore[arg-type]
             last_health_error=fetch_error or tracker.last_health_error,
             supports_projects=supports_projects,
+            scopes=list(tracker.scopes) if tracker.scopes else [],
         )
 
     autonomy_paused = _autonomy_paused(workspace)
