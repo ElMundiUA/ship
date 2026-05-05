@@ -297,6 +297,17 @@ async def _persist_claim(
         # Stamp last_seen_at so decay knows the source still confirms
         # this claim, even though we didn't insert a new row.
         existing.last_seen_at = extracted_at
+        # Auto-revive a previously-stale claim: a doc that came back
+        # online (or got re-shared with the integration after being
+        # broken) re-asserts the fact, so it returns to canon. We
+        # deliberately don't auto-revive ``superseded`` rows — those
+        # were replaced by a newer claim, and the supersedes graph
+        # is the operator-visible record of the rewrite. ``disputed``
+        # also stays as-is until an operator explicitly resolves the
+        # conflict, since two sources can both reassert two
+        # mutually-incompatible claims.
+        if existing.status == ClaimStatus.STALE:
+            existing.status = ClaimStatus.ACTIVE
         return False
 
     embedding: list[float] | None
