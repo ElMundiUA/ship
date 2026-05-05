@@ -152,11 +152,14 @@ export function DashboardPrioritizer({ workspaceId, initial }: Props) {
     (sourceId: string, targetId: string) => {
       const current = draftOrder ?? prioritisedIds.slice();
       const working = current.slice();
-      // If the source row is unprioritised, append it before reorder
-      // — dropping onto a prioritised row should pin it into the
-      // list. If the target is unprioritised, leave the list alone.
+      // Drop semantics: source goes immediately *above* the target.
+      // Both rows enter the prioritised draft if they weren't there
+      // already — without this, the very first drag in a workspace
+      // with zero saved priorities (or onto a still-unprioritised
+      // tail row) silently no-op'ed because the target wasn't in
+      // the working list yet.
       if (!working.includes(sourceId)) working.push(sourceId);
-      if (!working.includes(targetId)) return;
+      if (!working.includes(targetId)) working.push(targetId);
       const fromIdx = working.indexOf(sourceId);
       const [moved] = working.splice(fromIdx, 1);
       const targetIdx = working.indexOf(targetId);
@@ -576,10 +579,15 @@ function PrioritizerRow({
       />
       <div className="min-w-0 flex-1">
         {project.url ? (
+          // ``draggable={false}`` on the anchor stops the browser
+          // from initiating a *link* drag (which sets a URL on the
+          // dataTransfer instead of our priority MIME) and shadowing
+          // the parent ``<li draggable>`` reorder intent.
           <a
             href={project.url}
             target="_blank"
             rel="noreferrer"
+            draggable={false}
             className="truncate text-[13px] font-semibold text-white hover:text-aqua"
           >
             {project.name}

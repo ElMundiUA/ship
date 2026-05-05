@@ -325,6 +325,15 @@ async def get_priorities(
         native_id = str(raw.get("id") or "")
         if not native_id or native_id in seen_ids:
             continue
+        # Don't surface terminal projects in the prioritizer — Linear
+        # exposes ``completed`` / ``canceled`` as project states, and
+        # showing them under "Priorities" with no marker reads as a
+        # bug ("why is the bot still working on this?"). The "Done
+        # · last 14d" group the designer parked for v2 will absorb
+        # the completed list later; for now they're hidden.
+        state_raw = str(raw.get("state") or "").lower()
+        if state_raw in {"completed", "canceled", "cancelled"}:
+            continue
         seen_ids.add(native_id)
         completed, total = _completion_counts(
             raw.get("progress"), raw.get("scope")
