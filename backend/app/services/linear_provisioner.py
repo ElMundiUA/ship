@@ -47,6 +47,7 @@ logger = logging.getLogger(__name__)
 # when patterns declare them in ``spec.fsm_stage``. Order matters —
 # the adapter uses adjacency to compute "previous stage done" filters.
 SHIP_FSM_STAGES: tuple[str, ...] = (
+    # Per-ticket SDLC (the "development" process)
     "task_intake",
     "ba_requirements",
     "tech_arch_plan",
@@ -54,6 +55,16 @@ SHIP_FSM_STAGES: tuple[str, ...] = (
     "qa_manual",
     "pr_review",
     "self_heal",
+    # Per-project decomposition (the "decomposition" process — runs on
+    # the planning anchor of each new project, ELS-75). Specialists
+    # reuse the development-process slugs (BA / tech-architect / QA-
+    # architect / QA-engineer / developer); these labels live on the
+    # anchor issue and drive what specialist picks the run.
+    "wbs",
+    "architecture",
+    "test_architecture",
+    "tasks",
+    "planning_done",
 )
 
 
@@ -69,16 +80,37 @@ FSM_STAGE_ORDER: tuple[str, ...] = (
 )
 
 
+# Linear order of the decomposition pipeline (ELS-75). Sequential —
+# BA → Architect → QA-Architect → QA-Engineer + Developer — culminates
+# in ``planning_done`` which the finish hook reads to flip the
+# project's dashboard row from Drafts to Active.
+DECOMPOSITION_STAGE_ORDER: tuple[str, ...] = (
+    "wbs",
+    "architecture",
+    "test_architecture",
+    "tasks",
+    "planning_done",
+)
+
+
 def previous_stage(stage: str) -> str | None:
-    """Return the SDLC stage immediately before ``stage``, or ``None``
-    when ``stage`` is the entry / runs out-of-band.
+    """Return the stage immediately before ``stage``, or ``None`` when
+    ``stage`` is the entry of its chain / runs out-of-band.
+
+    Walks both the development-process order (``FSM_STAGE_ORDER``) and
+    the decomposition-process order (``DECOMPOSITION_STAGE_ORDER``).
+    Each chain is independent — there is no transition from the last
+    decomposition stage into the first SDLC stage; child tickets that
+    decomposition emits enter SDLC at ``task_intake`` as their own
+    entry, not as a continuation of the anchor's chain.
     """
-    if stage not in FSM_STAGE_ORDER:
-        return None
-    idx = FSM_STAGE_ORDER.index(stage)
-    if idx == 0:
-        return None
-    return FSM_STAGE_ORDER[idx - 1]
+    for chain in (FSM_STAGE_ORDER, DECOMPOSITION_STAGE_ORDER):
+        if stage in chain:
+            idx = chain.index(stage)
+            if idx == 0:
+                return None
+            return chain[idx - 1]
+    return None
 
 
 # Ship FSM stage → Linear workflow state name. Keys here drive label
@@ -97,6 +129,17 @@ FSM_TO_LINEAR_STATE: dict[str, str] = {
     # Self-heal runs out-of-band against any open ticket; no specific
     # Linear state.
     "self_heal": "Todo",
+    # Decomposition stages live on the planning anchor (one issue per
+    # project). The anchor sits in ``In Progress`` while the chain
+    # runs and ``Done`` once ``planning_done`` lands. The project body
+    # carries the artefacts (WBS / Architecture / Test architecture /
+    # Tasks); the finish hook flips the dashboard row Drafts → Active
+    # when ``planning_done`` arrives.
+    "wbs": "In Progress",
+    "architecture": "In Progress",
+    "test_architecture": "In Progress",
+    "tasks": "In Progress",
+    "planning_done": "Done",
 }
 
 

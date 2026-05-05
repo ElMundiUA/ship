@@ -146,6 +146,83 @@ async def test_reorder_rejects_unknown_state(v1_client, seed_workspace) -> None:
 
 
 @pytest.mark.asyncio
+async def test_start_decomposition_404s_when_project_not_on_priorities(
+    v1_client, seed_workspace
+) -> None:
+    """The PO can't hand off a project that has no priorities row —
+    create_project (or a manual reorder) has to run first."""
+    _, raw, ws = seed_workspace
+    res = await v1_client.post(
+        f"/v1/workspaces/{ws.id}/priorities/missing-id/start_decomposition",
+        headers=_auth(raw),
+        json={},
+    )
+    assert res.status_code == 404, res.text
+    assert res.json()["detail"]["code"] == "project_not_on_priorities"
+
+
+@pytest.mark.asyncio
+async def test_start_decomposition_409s_when_not_in_drafts(
+    v1_client, seed_workspace, db_session
+) -> None:
+    """Hand-off must come from the Drafts bucket. Active and Parked are
+    explicit signals about state — refusing politely with the current
+    state lets the UI render a "this project is already X" hint."""
+    from backend.app.db.models.dashboard_priorities import (
+        WorkspaceProjectPriority,
+    )
+
+    _, raw, ws = seed_workspace
+    db_session.add(
+        WorkspaceProjectPriority(
+            workspace_id=ws.id,
+            project_native_id="proj-active",
+            ordinal=0,
+            state="active",
+        )
+    )
+    await db_session.commit()
+    res = await v1_client.post(
+        f"/v1/workspaces/{ws.id}/priorities/proj-active/start_decomposition",
+        headers=_auth(raw),
+        json={},
+    )
+    assert res.status_code == 409, res.text
+    assert res.json()["detail"]["code"] == "project_not_in_drafts"
+    assert res.json()["detail"]["current_state"] == "active"
+
+
+@pytest.mark.asyncio
+async def test_start_decomposition_409s_when_no_tracker(
+    v1_client, seed_workspace, db_session
+) -> None:
+    """If the workspace has no tracker bound (the test seed has none),
+    we can't fetch the anchor — refuse with a clean code so the UI can
+    nudge the operator to connect Linear."""
+    from backend.app.db.models.dashboard_priorities import (
+        WorkspaceProjectPriority,
+    )
+
+    _, raw, ws = seed_workspace
+    db_session.add(
+        WorkspaceProjectPriority(
+            workspace_id=ws.id,
+            project_native_id="proj-x",
+            ordinal=0,
+            state="planning",
+        )
+    )
+    await db_session.commit()
+    res = await v1_client.post(
+        f"/v1/workspaces/{ws.id}/priorities/proj-x/start_decomposition",
+        headers=_auth(raw),
+        json={},
+    )
+    assert res.status_code == 409, res.text
+    assert res.json()["detail"]["code"] == "tracker_not_bound"
+
+
+@pytest.mark.asyncio
 async def test_set_state_creates_then_updates(
     v1_client, seed_workspace, db_session
 ) -> None:

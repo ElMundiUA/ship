@@ -2575,6 +2575,24 @@ export function setPriorityState(
   );
 }
 
+export interface ApiStartDecompositionResponse {
+  project_native_id: string;
+  anchor_issue_id: string;
+  anchor_identifier: string;
+  process: "decomposition";
+}
+
+export function startDecomposition(
+  workspaceId: string,
+  projectNativeId: string,
+  token?: string,
+): Promise<ApiStartDecompositionResponse> {
+  return apiFetch<ApiStartDecompositionResponse>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/priorities/${encodeURIComponent(projectNativeId)}/start_decomposition`,
+    { method: "POST", token },
+  );
+}
+
 export function setAutonomyPaused(
   workspaceId: string,
   paused: boolean,

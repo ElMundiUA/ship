@@ -551,6 +551,170 @@ async def reorder_priorities(
     )
 
 
+class StartDecompositionOut(BaseModel):
+    """Response for ``POST /priorities/{native_id}/start_decomposition``."""
+
+    project_native_id: str
+    anchor_issue_id: str
+    anchor_identifier: str
+    process: Literal["decomposition"] = "decomposition"
+
+
+@router.post(
+    "/{project_native_id}/start_decomposition",
+    response_model=StartDecompositionOut,
+)
+async def start_decomposition(
+    workspace_id: uuid.UUID,
+    project_native_id: str,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> StartDecompositionOut:
+    """Hand a Drafts-bucket project off to the decomposition pipeline.
+
+    The PO drafted the brief in Navigator (PR2); ``create_project``
+    landed an anchor issue tagged ``planning:anchor`` and a priorities
+    row in ``state='planning'`` (PR1). This endpoint walks the anchor
+    into the first decomposition stage (``stage:wbs``) — the per-tick
+    shipctl scheduler then picks up BA, who emits the WBS section,
+    transitions to ``stage:architecture``, and so on through to
+    ``stage:planning_done`` (the finish hook flips Drafts → Active
+    when that lands).
+
+    Idempotent on the anchor: re-running when the anchor already
+    carries a non-entry decomposition stage label is a no-op (we
+    don't reset progress). The Linear-side write — adding the
+    ``decomposition: in progress`` line to the project body — lives
+    inside the FSM run's first step, NOT this handler, so a Linear
+    5xx fails the run rather than the handoff.
+    """
+    await _require_membership(
+        session, workspace_id, auth.user.id, ROLES_ADMIN
+    )
+    await _load_workspace(session, workspace_id)
+
+    row = (
+        await session.execute(
+            select(WorkspaceProjectPriority).where(
+                WorkspaceProjectPriority.workspace_id == workspace_id,
+                WorkspaceProjectPriority.project_native_id
+                == project_native_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "project_not_on_priorities",
+                "project_native_id": project_native_id,
+            },
+        )
+    if row.state != "planning":
+        # The PO can hand off ONLY from Drafts. Active = decomposition
+        # already done; Parked = explicitly held. Refuse politely with
+        # the current state so the UI can render a hint.
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "project_not_in_drafts",
+                "current_state": row.state,
+            },
+        )
+
+    tracker = await resolve_for_workspace(
+        session=session,
+        settings=settings,
+        workspace_id=workspace_id,
+    )
+    if tracker is None:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "tracker_not_bound"},
+        )
+
+    try:
+        anchor = await tracker.gateway.get_planning_anchor(
+            project_native_id
+        )
+    except NotImplementedError:
+        raise HTTPException(
+            status_code=501,
+            detail={"code": "tracker_no_planning_anchor"},
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "start_decomposition: anchor probe failed workspace=%s project=%s err=%s",
+            workspace_id,
+            project_native_id,
+            exc,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "anchor_probe_failed", "message": str(exc)},
+        )
+    if anchor is None:
+        # Project predates the drafting flow (no anchor was minted on
+        # create) or the anchor was deleted out-of-band. The operator
+        # has to recreate the project to get a clean anchor.
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "anchor_missing"},
+        )
+
+    # Move the anchor into ``stage:wbs``. The Linear adapter's
+    # ``transition`` handles the label swap (drops other stage labels,
+    # adds this one) and the workflow-state move per
+    # FSM_TO_LINEAR_STATE. Idempotent on Linear's side because
+    # ``transition`` is a label set + state set, not an append.
+    from backend.app.integrations.gateway.tracker import (
+        TicketRef as _TicketRef,
+    )
+
+    anchor_ref = _TicketRef(
+        kind=tracker.kind,
+        workspace_hint=None,
+        id=str(anchor["id"]),
+    )
+    try:
+        await tracker.gateway.transition(anchor_ref, to_state="wbs")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "start_decomposition: transition to wbs failed workspace=%s anchor=%s err=%s",
+            workspace_id,
+            anchor.get("identifier"),
+            exc,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "anchor_transition_failed", "message": str(exc)},
+        )
+
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=auth.user.id,
+            actor_token_id=auth.token.id if auth.token else None,
+            action="dashboard.priorities.start_decomposition",
+            target_kind="workspace",
+            target_id=str(workspace_id),
+            payload={
+                "project_native_id": project_native_id,
+                "anchor_issue_id": str(anchor["id"]),
+                "anchor_identifier": str(anchor.get("identifier") or ""),
+            },
+        )
+    )
+    await session.flush()
+
+    return StartDecompositionOut(
+        project_native_id=project_native_id,
+        anchor_issue_id=str(anchor["id"]),
+        anchor_identifier=str(anchor.get("identifier") or ""),
+    )
+
+
 @router.post("/state", response_model=PrioritiesOut)
 async def set_priority_state(
     workspace_id: uuid.UUID,

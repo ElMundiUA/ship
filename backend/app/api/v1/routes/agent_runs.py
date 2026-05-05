@@ -158,6 +158,12 @@ class FinishIn(BaseModel):
     # Risks / etc.). Linear keeps prior bodies in the issue activity
     # feed so the operator can always see what changed.
     description: str | None = Field(default=None, max_length=20_000)
+    # Which process the run executed under. Defaults to the per-ticket
+    # SDLC (``development``); ``decomposition`` (ELS-75) is the
+    # project-anchor pipeline. The finish hook reads this to know
+    # whether ``stage_next='planning_done'`` should flip the project's
+    # dashboard row from Drafts → Active.
+    process: Literal["development", "decomposition"] = "development"
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -418,6 +424,86 @@ async def post_inbox_item(
     return WriteOut(ok=True, note=f"inbox item created (type={payload.type})")
 
 
+async def _flip_drafts_row_to_active(
+    session: AsyncSession,
+    workspace_id: uuid.UUID,
+    ticket_ref: str,
+    resolved,  # ResolvedTracker; avoid circular type import
+) -> bool:
+    """Flip the project's priorities row from ``planning`` → ``active``.
+
+    Called when a decomposition run reaches the terminal stage. Walks:
+    ticket_ref → planning anchor's project_id → priorities row → state.
+    Best-effort: a missing priorities row, a deleted project, or an
+    adapter that can't tell us the project all log + return False
+    instead of failing the finish handler.
+    """
+    from sqlalchemy import select
+
+    from backend.app.db.models.dashboard_priorities import (
+        WorkspaceProjectPriority,
+    )
+
+    # The ticket_ref the agent passes is the anchor's identifier
+    # (e.g. ``ELS-83``). Snapshot the issue to read its project_id,
+    # then look up the priorities row by the project's native id
+    # (Linear UUID / Jira project key — the same id we stamped on
+    # the row in PR1's ``_tool_create_project``).
+    ref = _ticket_ref_from(resolved.kind, ticket_ref)
+    snapshot_fn = getattr(resolved.gateway, "get_ticket_snapshot", None)
+    if snapshot_fn is None:
+        logger.warning(
+            "decomposition completion: tracker_kind=%s lacks "
+            "get_ticket_snapshot — cannot resolve project for "
+            "ticket=%s; row not flipped",
+            resolved.kind,
+            ticket_ref,
+        )
+        return False
+    try:
+        snapshot = await snapshot_fn(ref)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "decomposition completion: get_ticket_snapshot failed "
+            "ticket=%s err=%s",
+            ticket_ref,
+            exc,
+        )
+        return False
+    if not snapshot:
+        return False
+    project_id = snapshot.get("project_id")
+    if not project_id:
+        logger.warning(
+            "decomposition completion: anchor ticket=%s has no project_id; "
+            "row not flipped",
+            ticket_ref,
+        )
+        return False
+
+    row = (
+        await session.execute(
+            select(WorkspaceProjectPriority).where(
+                WorkspaceProjectPriority.workspace_id == workspace_id,
+                WorkspaceProjectPriority.project_native_id == str(project_id),
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        logger.warning(
+            "decomposition completion: no priorities row for "
+            "workspace=%s project=%s; row not flipped",
+            workspace_id,
+            project_id,
+        )
+        return False
+    if row.state == "active":
+        return False
+    row.state = "active"
+    await session.flush()
+    return True
+
+
 @router.post("/agent-runs/finish", response_model=FinishOut)
 async def finish_agent_run(
     workspace_id: uuid.UUID,
@@ -532,6 +618,26 @@ async def finish_agent_run(
                 actions.append("tracker:comment")
             await resolved.gateway.transition(ref, to_state=payload.stage_next)
             actions.append(f"tracker:transition:{payload.stage_next}")
+
+            # Decomposition completion hook (ELS-75). When the planning
+            # anchor reaches the terminal stage, flip the project's
+            # dashboard row Drafts → Active so the agent's autonomous
+            # picker takes over from here. We key on the explicit
+            # ``process='decomposition'`` flag rather than sniffing
+            # labels — the runtime that's executing the run knows
+            # which process it's under, the server should not have to
+            # re-derive that. Best-effort: a missing priorities row
+            # logs and continues; the audit trail at the bottom of
+            # this handler still records what happened.
+            if (
+                payload.process == "decomposition"
+                and payload.stage_next == "planning_done"
+            ):
+                flipped = await _flip_drafts_row_to_active(
+                    session, workspace_id, payload.ticket_ref, resolved
+                )
+                if flipped:
+                    actions.append("priorities:active")
 
     elif payload.outcome == "needs_clarification":
         if not payload.ticket_ref:
