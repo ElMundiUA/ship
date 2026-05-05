@@ -31,6 +31,7 @@ from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     CheckConstraint,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -39,7 +40,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.app.db.base import Base
@@ -395,6 +396,14 @@ class KnowledgeSourceItem(Base):
         DateTime(timezone=True), nullable=True
     )
     deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Lifted out of ``Improvement.body`` (which is an event queue, not a
+    # corpus) so the claim extractor can re-run idempotently keyed on
+    # ``body_md_sha``. NULL for legacy rows synced before migration 0059.
+    body_md: Mapped[str | None] = mapped_column(Text, nullable=True)
+    body_md_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    extracted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     created_at: Mapped[datetime] = _ts_created()
@@ -874,6 +883,147 @@ class DistillerRun(Base):
     updated_at: Mapped[datetime] = _ts_updated()
 
 
+class ClaimStatus:
+    """Lifecycle status of a :class:`KnowledgeClaim` row.
+
+    Mirrors the CHECK constraint in migration 0059. Plain string
+    constants (not ``enum.Enum``) match the rest of this module's
+    convention so ``psql`` and ``grep`` show the wire value verbatim.
+
+    - ``ACTIVE`` — current canon. The claim hasn't been replaced and
+      at least one source has confirmed it within the decay window.
+    - ``SUPERSEDED`` — replaced by a newer claim via
+      ``superseded_by_id``. Kept for the history graph; not returned
+      from default search.
+    - ``STALE`` — no source has confirmed this claim for N decay-cron
+      ticks. Operator can revive (flip back to active) if it was a
+      false positive.
+    - ``DISPUTED`` — reconciliation engine flagged a conflict that
+      needs operator review (hits the inbox).
+    - ``ARCHIVED`` — operator-killed, terminal.
+    """
+
+    ACTIVE = "active"
+    SUPERSEDED = "superseded"
+    STALE = "stale"
+    DISPUTED = "disputed"
+    ARCHIVED = "archived"
+
+    ALL = frozenset({ACTIVE, SUPERSEDED, STALE, DISPUTED, ARCHIVED})
+
+
+class ClaimKind:
+    """Coarse type tag on a claim — drives nothing critical, but makes
+    operator review and search filters readable.
+
+    Mirrors the CHECK constraint in migration 0059. The extractor
+    picks one per claim; mismatches don't poison anything (we'd
+    prefer ``other`` over forcing a wrong bucket).
+    """
+
+    FACT = "fact"
+    RULE = "rule"
+    DECISION = "decision"
+    EXAMPLE = "example"
+    GLOSSARY = "glossary"
+    OTHER = "other"
+
+    ALL = frozenset({FACT, RULE, DECISION, EXAMPLE, GLOSSARY, OTHER})
+
+
+class KnowledgeClaim(Base):
+    """One atomic, verifiable assertion extracted from sources.
+
+    The unit of canonical truth in the post-0059 knowledge model.
+    Articles (``BucketArticle``) become a derived view rendered on
+    top of the active claim set per topic; reconciliation operates
+    here, at the fact level, so a stale architecture decision can
+    be marked ``superseded`` without rewriting an entire article.
+
+    Multi-tag is on purpose: a claim about Linear FSM is legitimately
+    both ``integrations`` and ``architecture-decisions``. The single-
+    bucket model forced a false choice and pushed the synth engine
+    toward "skip" decisions.
+
+    Idempotency on re-extract is the ``(workspace_id, claim_md_sha)``
+    unique index — a second run that produces the same exact text
+    no-ops at the DB level. The reconciliation engine handles
+    near-duplicates with different wording via embedding cosine.
+    """
+
+    __tablename__ = "knowledge_claim"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id",
+            "claim_md_sha",
+            name="uq_knowledge_claim_workspace_sha",
+        ),
+        Index("ix_knowledge_claim_workspace_id", "workspace_id"),
+        Index("ix_knowledge_claim_status", "status"),
+        Index("ix_knowledge_claim_supersedes_id", "supersedes_id"),
+        Index("ix_knowledge_claim_superseded_by_id", "superseded_by_id"),
+        CheckConstraint(
+            "status IN ('active', 'superseded', 'stale', 'disputed', 'archived')",
+            name="ck_knowledge_claim_status",
+        ),
+        CheckConstraint(
+            "kind IN ('fact', 'rule', 'decision', 'example', 'glossary', 'other')",
+            name="ck_knowledge_claim_kind",
+        ),
+        CheckConstraint(
+            "confidence >= 0.0 AND confidence <= 1.0",
+            name="ck_knowledge_claim_confidence_range",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    claim_md: Mapped[str] = mapped_column(Text, nullable=False)
+    claim_md_sha: Mapped[str] = mapped_column(String(64), nullable=False)
+    embedding: Mapped[list[float] | None] = mapped_column(
+        Vector(EMBED_DIM), nullable=True
+    )
+    topic_tags: Mapped[list[str]] = mapped_column(
+        ARRAY(Text),
+        nullable=False,
+        server_default=text("ARRAY[]::text[]"),
+    )
+    kind: Mapped[str] = mapped_column(
+        String(24), nullable=False, server_default=text("'fact'")
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'active'")
+    )
+    supersedes_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("knowledge_claim.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    superseded_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("knowledge_claim.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    confidence: Mapped[float] = mapped_column(
+        Float, nullable=False, server_default=text("1.0")
+    )
+    source_links: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    first_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    created_at: Mapped[datetime] = _ts_created()
+    updated_at: Mapped[datetime] = _ts_updated()
+
+
 __all__ = [
     "ArtifactFeedback",
     "BucketArticle",
@@ -882,12 +1032,15 @@ __all__ = [
     "BucketScope",
     "BucketSource",
     "BucketSummary",
+    "ClaimKind",
+    "ClaimStatus",
     "DistillerRun",
     "DistillerRunDecision",
     "DistillerRunStatus",
     "EMBED_DIM",
     "KbChunk",
     "KnowledgeBucket",
+    "KnowledgeClaim",
     "KnowledgeImportSource",
     "KnowledgeImportSourceKind",
     "KnowledgeIngestionRun",
