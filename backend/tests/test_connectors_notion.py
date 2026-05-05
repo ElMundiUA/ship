@@ -107,10 +107,12 @@ def _rt(text: str, **ann) -> dict[str, Any]:
     }
 
 
-def _block(btype: str, payload: dict[str, Any]) -> dict[str, Any]:
+def _block(
+    btype: str, payload: dict[str, Any], *, block_id: str | None = None
+) -> dict[str, Any]:
     return {
         "object": "block",
-        "id": uuid.uuid4().hex,
+        "id": block_id or uuid.uuid4().hex,
         "type": btype,
         btype: payload,
     }
@@ -418,3 +420,275 @@ async def test_notion_follows_pagination_cursor(integration) -> None:
     # First call with no cursor, second with ``c-2`` — exactly two
     # block-listing requests.
     assert call_log == [None, "c-2"]
+
+
+# ---------------------------------------------------------------------------
+# Recursive tree expansion
+# ---------------------------------------------------------------------------
+
+
+def _hub_handler(
+    *,
+    pages: dict[str, dict[str, Any]],
+    blocks: dict[str, list[dict[str, Any]]],
+    databases: dict[str, list[str]] | None = None,
+    locked: set[str] | None = None,
+) -> Callable[[httpx.Request], httpx.Response]:
+    """Build a handler that maps ``page_id``/``database_id`` to canned payloads.
+
+    ``pages`` maps page_id → /v1/pages payload.
+    ``blocks`` maps page_id → /v1/blocks/{id}/children results.
+    ``databases`` maps database_id → list of page_ids returned from
+    /v1/data_sources/{id}/query.
+    ``locked`` is a set of page_ids that should respond with HTTP 404
+    (simulating "integration not shared with this subpage").
+    """
+    databases = databases or {}
+    locked = locked or set()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.startswith("/v1/pages/"):
+            page_id = path.rsplit("/", 1)[-1]
+            if page_id in locked:
+                return httpx.Response(
+                    404, json={"object": "error", "code": "object_not_found"}
+                )
+            if page_id in pages:
+                return httpx.Response(200, json=pages[page_id])
+            return httpx.Response(404)
+        if path.startswith("/v1/blocks/") and path.endswith("/children"):
+            block_id = path.split("/")[3]
+            return httpx.Response(
+                200, json=_blocks_payload(blocks.get(block_id, []))
+            )
+        if path.startswith("/v1/data_sources/") and path.endswith("/query"):
+            ds_id = path.split("/")[3]
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {"object": "page", "id": pid}
+                        for pid in databases.get(ds_id, [])
+                    ],
+                    "has_more": False,
+                    "next_cursor": None,
+                },
+            )
+        if path.startswith("/v1/data_sources/"):
+            ds_id = path.rsplit("/", 1)[-1]
+            if ds_id in databases:
+                return httpx.Response(
+                    200, json={"object": "data_source", "id": ds_id}
+                )
+            return httpx.Response(
+                404, json={"object": "error", "code": "object_not_found"}
+            )
+        return httpx.Response(404)
+
+    return handler
+
+
+@pytest.mark.asyncio
+async def test_notion_walker_expands_child_pages(integration) -> None:
+    """A hub page with two ``child_page`` blocks should yield three
+    ConnectorPages: the hub itself + each subpage. The hub's body
+    keeps the bullet links so the operator can navigate the tree."""
+
+    hub_id = "hub-1"
+    sub_a = "sub-a"
+    sub_b = "sub-b"
+
+    handler = _hub_handler(
+        pages={
+            hub_id: _page_payload(hub_id, title="Hub"),
+            sub_a: _page_payload(sub_a, title="Subpage A"),
+            sub_b: _page_payload(sub_b, title="Subpage B"),
+        },
+        blocks={
+            hub_id: [
+                _block(
+                    "child_page",
+                    {"title": "Subpage A"},
+                    block_id=sub_a,
+                ),
+                _block(
+                    "child_page",
+                    {"title": "Subpage B"},
+                    block_id=sub_b,
+                ),
+            ],
+            sub_a: [
+                _block("paragraph", {"rich_text": [_rt("Real content A")]}),
+            ],
+            sub_b: [
+                _block("paragraph", {"rich_text": [_rt("Real content B")]}),
+            ],
+        },
+    )
+
+    async with _make_client(handler) as client:
+        pages = await fetch_connector_pages(
+            integration, {"page_id": hub_id}, http_client=client
+        )
+
+    titles = [p.title for p in pages]
+    assert titles == ["Hub", "Subpage A", "Subpage B"]
+    assert "Real content A" in pages[1].body_md
+    assert "Real content B" in pages[2].body_md
+    assert "📄 Subpage: Subpage A" in pages[0].body_md
+
+
+@pytest.mark.asyncio
+async def test_notion_walker_expands_child_database(integration) -> None:
+    """A page that embeds a ``child_database`` should fetch the database
+    entries and emit them as ConnectorPages — the hub no longer drops
+    the content as ``<unsupported>``."""
+
+    hub_id = "hub-2"
+    db_id = "db-embedded"
+    entry_a = "entry-a"
+    entry_b = "entry-b"
+
+    handler = _hub_handler(
+        pages={
+            hub_id: _page_payload(hub_id, title="Hub with DB"),
+            entry_a: _page_payload(entry_a, title="Entry A"),
+            entry_b: _page_payload(entry_b, title="Entry B"),
+        },
+        blocks={
+            hub_id: [
+                _block(
+                    "child_database",
+                    {"title": "Embedded specs"},
+                    block_id=db_id,
+                ),
+            ],
+            entry_a: [],
+            entry_b: [],
+        },
+        databases={db_id: [entry_a, entry_b]},
+    )
+
+    async with _make_client(handler) as client:
+        pages = await fetch_connector_pages(
+            integration, {"page_id": hub_id}, http_client=client
+        )
+
+    titles = [p.title for p in pages]
+    assert titles == ["Hub with DB", "Entry A", "Entry B"]
+    # The hub body now mentions the embedded database explicitly,
+    # not the legacy <unsupported> marker.
+    assert "<unsupported: child_database>" not in pages[0].body_md
+    assert "🗂 Database: Embedded specs" in pages[0].body_md
+
+
+@pytest.mark.asyncio
+async def test_notion_walker_handles_nested_hubs(integration) -> None:
+    """Two-level nesting: hub → subpage that is itself a hub → leaf.
+    Default depth cap is 3, so a 2-level tree should fully expand
+    (root=0, mid=1, leaf=2)."""
+
+    root = "n-root"
+    mid = "n-mid"
+    leaf = "n-leaf"
+
+    handler = _hub_handler(
+        pages={
+            root: _page_payload(root, title="Root"),
+            mid: _page_payload(mid, title="Mid"),
+            leaf: _page_payload(leaf, title="Leaf"),
+        },
+        blocks={
+            root: [_block("child_page", {"title": "Mid"}, block_id=mid)],
+            mid: [_block("child_page", {"title": "Leaf"}, block_id=leaf)],
+            leaf: [_block("paragraph", {"rich_text": [_rt("deepest content")]})],
+        },
+    )
+
+    async with _make_client(handler) as client:
+        pages = await fetch_connector_pages(
+            integration, {"page_id": root}, http_client=client
+        )
+
+    assert [p.title for p in pages] == ["Root", "Mid", "Leaf"]
+    assert "deepest content" in pages[2].body_md
+
+
+@pytest.mark.asyncio
+async def test_notion_walker_dedupes_repeated_child_ids(integration) -> None:
+    """A page that links the same subpage twice (e.g. cross-referenced
+    runbook) must only be fetched and emitted once."""
+
+    hub_id = "hub-d"
+    sub = "sub-once"
+
+    handler = _hub_handler(
+        pages={
+            hub_id: _page_payload(hub_id, title="Hub"),
+            sub: _page_payload(sub, title="Sub"),
+        },
+        blocks={
+            hub_id: [
+                _block("child_page", {"title": "Sub"}, block_id=sub),
+                _block("child_page", {"title": "Sub"}, block_id=sub),
+            ],
+            sub: [],
+        },
+    )
+
+    async with _make_client(handler) as client:
+        pages = await fetch_connector_pages(
+            integration, {"page_id": hub_id}, http_client=client
+        )
+
+    titles = [p.title for p in pages]
+    assert titles == ["Hub", "Sub"]
+
+
+@pytest.mark.asyncio
+async def test_notion_walker_skips_locked_subpages_but_fails_locked_seeds(
+    integration,
+) -> None:
+    """A subpage the bot can't see (HTTP 404) is logged + skipped so
+    the rest of the tree still indexes. A SEED page returning 404 is
+    still surfaced as ConnectorConfigError — that's how the wizard
+    teaches operators to share the page."""
+
+    hub_id = "hub-l"
+    visible = "sub-vis"
+    hidden = "sub-hid"
+
+    handler = _hub_handler(
+        pages={
+            hub_id: _page_payload(hub_id, title="Hub"),
+            visible: _page_payload(visible, title="Visible"),
+        },
+        blocks={
+            hub_id: [
+                _block("child_page", {"title": "Visible"}, block_id=visible),
+                _block("child_page", {"title": "Hidden"}, block_id=hidden),
+            ],
+            visible: [],
+        },
+        locked={hidden},
+    )
+
+    async with _make_client(handler) as client:
+        pages = await fetch_connector_pages(
+            integration, {"page_id": hub_id}, http_client=client
+        )
+
+    assert [p.title for p in pages] == ["Hub", "Visible"]
+
+    # Same handler, but seed itself is locked → ConfigError surfaces.
+    seed_locked = _hub_handler(
+        pages={},
+        blocks={},
+        locked={hub_id},
+    )
+    async with _make_client(seed_locked) as client:
+        with pytest.raises(ConnectorConfigError, match="shared"):
+            await fetch_connector_pages(
+                integration, {"page_id": hub_id}, http_client=client
+            )
