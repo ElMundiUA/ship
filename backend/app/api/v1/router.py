@@ -26,6 +26,7 @@ from backend.app.api.v1.routes import (
     chat,
     clarifications,
     dashboard,
+    dashboard_priorities,
     distiller,
     github_app,
     health,
@@ -120,6 +121,10 @@ api_router.include_router(pipelines.router)
 api_router.include_router(pipelines.public_router)
 api_router.include_router(processes.router)
 api_router.include_router(dashboard.router)
+# Dashboard v2 prioritizer surface (PR-1). GET / POST under
+# ``/v1/workspaces/{ws}/priorities`` — list+reorder of tracker
+# projects, plus the workspace-level autonomy pause toggle.
+api_router.include_router(dashboard_priorities.router)
 # Per-repo Home rollup (RFC-0008 §F — PR-4) — a single snapshot the
 # /r/<slug> page renders as Now + Trends tabs without fanning out to
 # the four source endpoints client-side.

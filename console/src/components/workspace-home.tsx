@@ -1,11 +1,13 @@
 import Link from "next/link";
 
+import { DashboardPrioritizer } from "@/components/dashboard/prioritizer";
 import type {
   ApiActivatedRepo,
   ApiOpsBlocker,
   ApiOpsDashboard,
   ApiOpsShippedItem,
-  ApiOpsWorkItem,
+  ApiPrioritiesResponse,
+  ApiPriorityLastAction,
 } from "@/lib/api/client";
 import { cn } from "@/lib/cn";
 import type {
@@ -16,26 +18,27 @@ import type {
 } from "@/lib/inbox-types";
 
 /**
- * Workspace home — editorial two-column dashboard.
+ * Workspace home — Dashboard v2 (PR-1).
  *
- * Layout (≥ lg): 12-col grid.
- *   - Left rail (col-span-8): status alerts → "Needs you" lede with
- *     inline pulse counts → Decisions tier → Ready-to-merge tier →
- *     Work in flight 3-up (column-color spine, no per-column card).
- *   - Right rail (col-span-4, sticky): System pulse (single block of
- *     real KV from ``automation_health`` + ``system_status``), Recent
- *     activity timeline, Repo channel list.
+ * Layout (≥ 2xl): 12-col grid with three editorial columns at 7/3/2.
+ *   - Left col (7): Status alerts → "Needs you" lede → Project
+ *     prioritizer (drag-to-reorder, autonomy switch, Linear hairline,
+ *     Up-next strip, Save/Revert hairline) → Active-tickets summary
+ *     strip.
+ *   - Middle col (3): Live System block — populated by PR-2; for now
+ *     a quiet ``Live system · loading…`` placeholder so the column
+ *     reads intentionally idle, not broken.
+ *   - Right col (2): Last-action pinned strip → Recent activity
+ *     timeline → Repo channel list.
  *
- * Mobile collapses to single column with the rail moving below.
+ * Below 2xl the middle and right columns collapse into a single
+ * sticky right rail (col-span-4 at lg) so dense layouts on smaller
+ * displays don't force a third tier of vertical scroll.
  *
- * No ``Card`` wrappers. Section breaks come from
- * ``border-t border-white/10 mt-8 pt-8`` + tinted kickers.
- *
- * Data discipline (per design pass): every number rendered here maps
- * 1:1 to a real ApiOpsDashboard / InboxCounts field. Fake placeholders
- * (``Routines coming up = —``, ``Routines completed today = success_rate
- * * (failures + 1)``) are gone. If a field isn't real yet, the row
- * doesn't render rather than showing a synthetic value.
+ * Color discipline: ``aqua`` is the editorial-positive accent,
+ * ``lilac`` human handoff, ``coral`` errors, ``sun`` paused/blocked,
+ * ``white/40`` muted kickers. No bordered cards. Section breaks come
+ * from whitespace + tinted kickers, never from box-shadow rectangles.
  */
 
 export type WorkspaceHomeProps = {
@@ -44,6 +47,7 @@ export type WorkspaceHomeProps = {
   workspaceId: string;
   inboxItems: InboxListResponse | null;
   inboxCounts: InboxCountsResponse | null;
+  priorities: ApiPrioritiesResponse | null;
 };
 
 export function WorkspaceHome({
@@ -52,6 +56,7 @@ export function WorkspaceHome({
   workspaceId,
   inboxItems,
   inboxCounts,
+  priorities,
 }: WorkspaceHomeProps) {
   const reposNeedingUpdate = repos.filter(needsShipTemplateUpdate);
   const decisions = (inboxItems?.items ?? []).slice(0, 4);
@@ -63,6 +68,10 @@ export function WorkspaceHome({
     summary.shipped.rollbacks_count;
   const blockerCount =
     summary.blockers.length + reposNeedingUpdate.length;
+  const inFlight = summary.work_in_progress.length;
+  const inProgress = summary.work_in_progress.filter(
+    (it) => it.status === "in_progress",
+  ).length;
 
   return (
     <div className="mx-auto max-w-6xl 2xl:max-w-screen-2xl">
@@ -86,8 +95,16 @@ export function WorkspaceHome({
             workspaceId={workspaceId}
           />
 
-          <WorkInFlightSection
-            items={summary.work_in_progress}
+          {priorities ? (
+            <DashboardPrioritizer
+              workspaceId={workspaceId}
+              initial={priorities}
+            />
+          ) : null}
+
+          <ActiveTicketsStrip
+            inFlight={inFlight}
+            inProgress={inProgress}
             workspaceId={workspaceId}
           />
         </div>
@@ -100,10 +117,11 @@ export function WorkspaceHome({
           inside.
         */}
         <div className="space-y-10 lg:col-span-4 lg:sticky lg:top-20 lg:self-start 2xl:contents">
-          <aside className="space-y-10 2xl:col-span-3 2xl:sticky 2xl:top-20 2xl:self-start">
-            <SystemPulse summary={summary} />
+          <aside className="space-y-6 2xl:col-span-3 2xl:sticky 2xl:top-20 2xl:self-start">
+            <LiveSystemPlaceholder />
           </aside>
-          <aside className="space-y-10 2xl:col-span-2 2xl:sticky 2xl:top-20 2xl:self-start">
+          <aside className="space-y-8 2xl:col-span-2 2xl:sticky 2xl:top-20 2xl:self-start">
+            <LastActionStrip lastAction={priorities?.last_action ?? null} />
             <RecentActivity summary={summary} />
             <RepoChannelList repos={repos} workspaceId={workspaceId} />
           </aside>
@@ -475,249 +493,93 @@ function derivePrsReadyToMerge(summary: ApiOpsDashboard): ReadyToMergePr[] {
 
 
 // ---------------------------------------------------------------------------
-// Work in flight — 3-col grid with column spine
+// Active-tickets summary strip (replaces the 3-col Work-in-flight grid)
 // ---------------------------------------------------------------------------
 
 
-const FLIGHT_COLUMNS: {
-  id: ApiOpsWorkItem["status"];
-  label: string;
-  spine: string;
-  kicker: string;
-}[] = [
-  {
-    id: "in_progress",
-    label: "In progress",
-    spine: "bg-white/15",
-    kicker: "text-white/55",
-  },
-  {
-    id: "review",
-    label: "Review",
-    spine: "bg-aqua/30",
-    kicker: "text-aqua/75",
-  },
-  {
-    id: "blocked",
-    label: "Blocked",
-    spine: "bg-sun/40",
-    kicker: "text-sun/80",
-  },
-];
-
-
-function WorkInFlightSection({
-  items,
+function ActiveTicketsStrip({
+  inFlight,
+  inProgress,
   workspaceId,
 }: {
-  items: ApiOpsWorkItem[];
+  inFlight: number;
+  inProgress: number;
   workspaceId: string;
 }) {
-  if (items.length === 0) return null;
-  const grouped = new Map<string, ApiOpsWorkItem[]>();
-  for (const c of FLIGHT_COLUMNS) grouped.set(c.id, []);
-  for (const item of items) {
-    if (grouped.has(item.status)) grouped.get(item.status)!.push(item);
-  }
-  const tracker = primaryTrackerLabel(items);
+  if (inFlight === 0) return null;
   return (
-    <section className="space-y-4">
-      <header className="flex items-baseline justify-between gap-3">
-        <div>
-          <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-white/40">
-            Work in flight
-          </p>
-          <p className="mt-1 text-xs text-white/55">
-            Live tickets · {tracker ?? "auto-detected"}
-          </p>
-        </div>
-        <Link
-          href={`/process?ws=${encodeURIComponent(workspaceId)}`}
-          className="shrink-0 text-xs font-semibold text-white/55 hover:text-white"
-        >
-          Open process →
-        </Link>
-      </header>
-      <div className="grid grid-cols-1 gap-y-6 sm:grid-cols-3 sm:divide-x sm:divide-white/[0.06]">
-        {FLIGHT_COLUMNS.map((col, idx) => {
-          const colItems = grouped.get(col.id) ?? [];
-          return (
-            <div
-              key={col.id}
-              className={cn("min-w-0 space-y-3", idx > 0 && "sm:pl-4")}
-            >
-              <div className="flex items-baseline justify-between">
-                <h3
-                  className={cn(
-                    "text-[10px] font-bold uppercase tracking-[0.22em]",
-                    col.kicker,
-                  )}
-                >
-                  {col.label}
-                </h3>
-                <span className="font-mono text-[11px] text-white/35">
-                  {colItems.length}
-                </span>
-              </div>
-              {colItems.length === 0 ? (
-                <p className="text-[11px] italic text-white/30">empty</p>
-              ) : (
-                <ul className="divide-y divide-white/[0.06]">
-                  {colItems.slice(0, 4).map((item) => (
-                    <li key={`${item.name}-${item.updated_at}`}>
-                      <FlightRow item={item} spineClass={col.spine} />
-                    </li>
-                  ))}
-                  {colItems.length > 4 && (
-                    <li className="pt-2 text-[10px] uppercase tracking-[0.14em] text-white/30">
-                      +{colItems.length - 4} more
-                    </li>
-                  )}
-                </ul>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </section>
-  );
-}
-
-
-function FlightRow({
-  item,
-  spineClass,
-}: {
-  item: ApiOpsWorkItem;
-  spineClass: string;
-}) {
-  const href = item.href;
-  const isExternal =
-    href != null && (href.startsWith("http://") || href.startsWith("https://"));
-  const inner = (
-    <div className="group relative flex items-baseline justify-between gap-2 py-2 pl-3">
-      <span
-        aria-hidden
-        className={cn(
-          "absolute inset-y-2 left-0 w-px rounded-r-sm",
-          spineClass,
-        )}
-      />
-      <div className="min-w-0">
-        <p className="truncate text-[12.5px] font-semibold text-white group-hover:text-aqua">
-          {item.ticket_ref && (
-            <span className="mr-1.5 font-mono text-aqua/85">
-              {item.ticket_ref}
-            </span>
-          )}
-          {stripTicketPrefix(item.name, item.ticket_ref)}
-        </p>
-        <p className="mt-0.5 truncate text-[10px] text-white/40">
-          {[item.repo, item.board_column, formatRelative(item.updated_at)]
-            .filter(Boolean)
-            .join(" · ")}
-        </p>
-      </div>
-    </div>
-  );
-  if (!href) return inner;
-  return isExternal ? (
-    <a href={href} target="_blank" rel="noreferrer">
-      {inner}
-    </a>
-  ) : (
-    <Link href={href}>{inner}</Link>
+    <p className="flex items-baseline justify-between gap-4 border-t border-white/[0.06] pt-4 text-[12px] text-white/55">
+      <span>
+        <span className="font-display font-bold text-white">{inFlight}</span>{" "}
+        active ticket{inFlight === 1 ? "" : "s"}
+        <span className="mx-2 text-white/20">·</span>
+        <span>{inProgress} in flight</span>
+      </span>
+      <Link
+        href={`/process?ws=${encodeURIComponent(workspaceId)}`}
+        className="shrink-0 text-[11px] font-semibold uppercase tracking-widest text-white/45 hover:text-white"
+      >
+        Open process →
+      </Link>
+    </p>
   );
 }
 
 
 // ---------------------------------------------------------------------------
-// Right rail — System pulse · Recent activity · Repos
+// Live System placeholder (PR-2 will populate)
 // ---------------------------------------------------------------------------
 
 
-function SystemPulse({ summary }: { summary: ApiOpsDashboard }) {
-  const h = summary.automation_health;
-  const stuck = summary.work_in_progress.filter((it) => it.status === "blocked").length;
-  const lastDeploy = summary.system_status.last_deploy?.time ?? null;
-
+function LiveSystemPlaceholder() {
   return (
-    <section className="space-y-3">
+    <section className="space-y-2">
       <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-white/40">
-        Today
+        Live system · loading…
       </p>
-      <dl className="space-y-2 text-sm">
-        <PulseRow
-          label="Success rate"
-          value={h.success_rate === null ? null : formatPercent(h.success_rate)}
-          tone={
-            h.success_rate === null
-              ? "muted"
-              : h.success_rate < 0.8
-                ? "warn"
-                : "ok"
-          }
-        />
-        <PulseRow
-          label="Failures"
-          value={String(h.failures_count)}
-          tone={h.failures_count > 0 ? "err" : "ok"}
-        />
-        <PulseRow
-          label="Stuck"
-          value={String(stuck)}
-          tone={stuck > 0 ? "warn" : "ok"}
-        />
-        <PulseRow
-          label="Manual asks"
-          value={String(h.manual_interventions_count)}
-          tone={h.manual_interventions_count > 0 ? "warn" : "ok"}
-        />
-        {h.automation_coverage !== null && (
-          <PulseRow
-            label="Automation coverage"
-            value={formatPercent(h.automation_coverage)}
-            tone="muted"
-          />
-        )}
-        {lastDeploy && (
-          <PulseRow
-            label="Last deploy"
-            value={formatRelative(lastDeploy)}
-            tone="muted"
-          />
-        )}
-      </dl>
+      <p className="text-[11px] italic text-white/30">
+        Routines, daily digest, and specialist health land next.
+      </p>
     </section>
   );
 }
 
 
-function PulseRow({
-  label,
-  value,
-  tone,
+// ---------------------------------------------------------------------------
+// Right rail — Last-action · Recent activity · Repos
+// ---------------------------------------------------------------------------
+
+
+function LastActionStrip({
+  lastAction,
 }: {
-  label: string;
-  value: string | null;
-  tone: "ok" | "warn" | "err" | "muted";
+  lastAction: ApiPriorityLastAction | null;
 }) {
-  const valueColor =
-    tone === "err"
-      ? "text-coral"
-      : tone === "warn"
-        ? "text-sun"
-        : tone === "ok"
-          ? "text-white/85"
-          : "text-white/45";
-  return (
-    <div className="flex items-baseline justify-between gap-3">
-      <dt className="text-xs text-white/55">{label}</dt>
-      <dd className={cn("font-mono text-sm tabular-nums", valueColor)}>
-        {value ?? "—"}
-      </dd>
-    </div>
+  if (!lastAction) return null;
+  const time = formatTime(lastAction.ts);
+  const inner = (
+    <p className="flex items-baseline gap-2 text-[11px] text-white/65">
+      <span aria-hidden className="text-aqua">·</span>
+      <span className="truncate">
+        {lastAction.label}
+        <span className="mx-2 text-white/20">·</span>
+        <span className="text-white/45">{time}</span>
+      </span>
+    </p>
   );
+  if (lastAction.href) {
+    return (
+      <a
+        href={lastAction.href}
+        target="_blank"
+        rel="noreferrer"
+        className="block hover:text-aqua"
+      >
+        {inner}
+      </a>
+    );
+  }
+  return inner;
 }
 
 
@@ -917,21 +779,6 @@ function shippedTypeLabel(type: ApiOpsShippedItem["type"]): string {
 }
 
 
-function primaryTrackerLabel(items: ApiOpsWorkItem[]): string | null {
-  const counts = new Map<string, number>();
-  for (const it of items) {
-    if (!it.tracker) continue;
-    counts.set(it.tracker, (counts.get(it.tracker) ?? 0) + 1);
-  }
-  if (counts.size === 0) return null;
-  let best: [string, number] | null = null;
-  for (const entry of counts) {
-    if (!best || entry[1] > best[1]) best = entry;
-  }
-  return best ? best[0] : null;
-}
-
-
 function stripTicketPrefix(name: string, ref: string | null | undefined): string {
   if (!ref) return name;
   if (name.startsWith(`${ref}: `)) return name.slice(ref.length + 2);
@@ -960,28 +807,19 @@ function compareBundleVersions(left: string, right: string): number {
 }
 
 
-function formatPercent(value: number): string {
-  return `${Math.round(value * 100)}%`;
-}
-
-
-function formatRelative(value: string): string {
-  const date = Date.parse(value);
-  if (Number.isNaN(date)) return "—";
-  const diff = Date.now() - date;
-  const minute = 60_000;
-  const hour = 60 * minute;
-  const day = 24 * hour;
-  if (diff < hour) return `${Math.max(1, Math.round(diff / minute))}m`;
-  if (diff < day) return `${Math.round(diff / hour)}h`;
-  if (diff < 30 * day) return `${Math.round(diff / day)}d`;
-  return new Date(date).toLocaleDateString();
-}
-
-
 function formatAge(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
   if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
   if (seconds < 86_400) return `${Math.round(seconds / 3600)}h`;
   return `${Math.round(seconds / 86_400)}d`;
+}
+
+
+function formatTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return date.toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
