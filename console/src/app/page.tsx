@@ -9,11 +9,13 @@ import { WorkspaceEntryPicker } from "@/components/workspace-entry-picker";
 import { WorkspaceHome } from "@/components/workspace-home";
 import {
   type ApiActivatedRepo,
+  type ApiLiveSystem,
   type ApiOpsDashboard,
   type ApiPrioritiesResponse,
   ApiHttpError,
   ApiUnavailableError,
   getInboxCounts,
+  getLiveSystem,
   getMe,
   getOpsDashboard,
   getPriorities,
@@ -133,6 +135,11 @@ type LiveContext = {
    *  hides the prioritizer block so the rest of the dashboard still
    *  renders. */
   priorities: ApiPrioritiesResponse | null;
+  /** Dashboard v2 Live System aggregator — masthead glyphs, knowledge,
+   *  routines, daily, specialists. ``null`` on a fetch failure → the
+   *  middle column renders the loading placeholder rather than reading
+   *  broken. */
+  liveSystem: ApiLiveSystem | null;
 };
 
 /**
@@ -161,19 +168,25 @@ async function loadLiveContext(
 ): Promise<LiveContext | "unauthorized" | "down"> {
   const workspace = pickWorkspace(list, wsParam);
   try {
-    const [data, repos, inboxItems, inboxCounts, priorities] = await Promise.all([
-      getOpsDashboard(workspace.id, token),
-      listActivatedRepos(workspace.id, token).catch(() => [] as ApiActivatedRepo[]),
-      listInboxItems(workspace.id, { statuses: ["new"], limit: 5 }, token).catch(
-        () => null as InboxListResponse | null,
-      ),
-      getInboxCounts(workspace.id, token).catch(
-        () => null as InboxCountsResponse | null,
-      ),
-      getPriorities(workspace.id, token).catch(
-        () => null as ApiPrioritiesResponse | null,
-      ),
-    ]);
+    const [data, repos, inboxItems, inboxCounts, priorities, liveSystem] =
+      await Promise.all([
+        getOpsDashboard(workspace.id, token),
+        listActivatedRepos(workspace.id, token).catch(
+          () => [] as ApiActivatedRepo[],
+        ),
+        listInboxItems(workspace.id, { statuses: ["new"], limit: 5 }, token).catch(
+          () => null as InboxListResponse | null,
+        ),
+        getInboxCounts(workspace.id, token).catch(
+          () => null as InboxCountsResponse | null,
+        ),
+        getPriorities(workspace.id, token).catch(
+          () => null as ApiPrioritiesResponse | null,
+        ),
+        getLiveSystem(workspace.id, token).catch(
+          () => null as ApiLiveSystem | null,
+        ),
+      ]);
     return {
       workspace,
       allWorkspaces: list,
@@ -182,6 +195,7 @@ async function loadLiveContext(
       inboxItems,
       inboxCounts,
       priorities,
+      liveSystem,
     };
   } catch (err) {
     if (err instanceof ApiHttpError && err.status === 401) return "unauthorized";
@@ -216,6 +230,7 @@ function renderWorkspaceHome(ctx: LiveContext) {
         inboxItems={ctx.inboxItems}
         inboxCounts={ctx.inboxCounts}
         priorities={ctx.priorities}
+        liveSystem={ctx.liveSystem}
       />
     </AppShell>
   );

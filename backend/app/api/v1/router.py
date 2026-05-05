@@ -26,6 +26,7 @@ from backend.app.api.v1.routes import (
     chat,
     clarifications,
     dashboard,
+    dashboard_live_system,
     dashboard_priorities,
     distiller,
     github_app,
@@ -125,6 +126,12 @@ api_router.include_router(dashboard.router)
 # ``/v1/workspaces/{ws}/priorities`` — list+reorder of tracker
 # projects, plus the workspace-level autonomy pause toggle.
 api_router.include_router(dashboard_priorities.router)
+# Dashboard v2 Live System aggregator (PR-2). One denormalised
+# endpoint feeds the middle column of the home dashboard
+# (masthead glyphs, knowledge, routines, daily-digest, specialist
+# health) so the Console doesn't fan out to half a dozen routes
+# on every render.
+api_router.include_router(dashboard_live_system.router)
 # Per-repo Home rollup (RFC-0008 §F — PR-4) — a single snapshot the
 # /r/<slug> page renders as Now + Trends tabs without fanning out to
 # the four source endpoints client-side.
