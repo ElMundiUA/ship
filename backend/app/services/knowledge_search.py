@@ -48,7 +48,10 @@ from backend.app.db.models.agent_memory import (
     BucketArticle,
     BucketArticleStatus,
     BucketSource,
+    ClaimStatus,
     KnowledgeBucket,
+    KnowledgeClaim,
+    KnowledgeTopicView,
 )
 from backend.app.db.models.integrations import WorkspaceRepo
 from backend.app.services.agent.embedding import embed_text
@@ -228,6 +231,108 @@ async def _keyword_search(
     ]
 
 
+async def _vector_search_topic_views(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    query_vec: list[float],
+    limit: int,
+) -> list[tuple[KnowledgeTopicView, float]]:
+    stmt = (
+        select(
+            KnowledgeTopicView,
+            KnowledgeTopicView.embedding.cosine_distance(query_vec).label(
+                "dist"
+            ),
+        )
+        .where(KnowledgeTopicView.workspace_id == workspace_id)
+        .where(KnowledgeTopicView.embedding.is_not(None))
+        .order_by("dist")
+        .limit(limit)
+    )
+    rows = (await session.execute(stmt)).all()
+    return [(view, 1.0 - float(dist)) for view, dist in rows]
+
+
+async def _vector_search_claims(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    query_vec: list[float],
+    limit: int,
+) -> list[tuple[KnowledgeClaim, float]]:
+    stmt = (
+        select(
+            KnowledgeClaim,
+            KnowledgeClaim.embedding.cosine_distance(query_vec).label("dist"),
+        )
+        .where(KnowledgeClaim.workspace_id == workspace_id)
+        .where(KnowledgeClaim.status == ClaimStatus.ACTIVE)
+        .where(KnowledgeClaim.embedding.is_not(None))
+        .order_by("dist")
+        .limit(limit)
+    )
+    rows = (await session.execute(stmt)).all()
+    return [(claim, 1.0 - float(dist)) for claim, dist in rows]
+
+
+def _topic_view_hit(
+    view: KnowledgeTopicView, score: float
+) -> KnowledgeSearchHit:
+    """Adapter — fit a topic-view onto the legacy ``KnowledgeSearchHit``
+    shape so the Console / CLI keep one parser. ``source='topic_view'``
+    tells the consumer to show the rendered body and a "view N
+    underlying claims" link. ``rank_bucket='canon'`` distinguishes the
+    new tier from legacy ``'workspace'`` bucket articles."""
+    return KnowledgeSearchHit(
+        id=view.id,
+        source="topic_view",
+        bucket_slug=view.topic_tag,
+        bucket_id=None,
+        repo_id=None,
+        scope_kind="topic_view",
+        score=round(score, 4),
+        rank_bucket="canon",
+        snippet=_first_paragraph(view.body_md),
+        title=view.title,
+        repo_full_name=None,
+    )
+
+
+def _claim_hit(claim: KnowledgeClaim, score: float) -> KnowledgeSearchHit:
+    """Adapter — atomic claim → search hit. Title is the first 80 chars
+    of the claim text (claims don't have a discrete title field). The
+    snippet is the first source_link's excerpt when present so the
+    consumer immediately sees provenance, falling back to the claim
+    text itself."""
+    excerpt: str | None = None
+    if isinstance(claim.source_links, list) and claim.source_links:
+        first = claim.source_links[0]
+        if isinstance(first, dict):
+            raw = first.get("excerpt")
+            if isinstance(raw, str) and raw.strip():
+                excerpt = raw.strip()
+    snippet = excerpt or claim.claim_md
+    if len(snippet) > _SNIPPET_MAX_CHARS:
+        snippet = snippet[: _SNIPPET_MAX_CHARS - 1].rstrip() + "…"
+    title = claim.claim_md
+    if len(title) > 120:
+        title = title[:119].rstrip() + "…"
+    return KnowledgeSearchHit(
+        id=claim.id,
+        source="claim",
+        bucket_slug=(claim.topic_tags[0] if claim.topic_tags else None),
+        bucket_id=None,
+        repo_id=None,
+        scope_kind="claim",
+        score=round(score, 4),
+        rank_bucket="canon",
+        snippet=snippet,
+        title=title,
+        repo_full_name=None,
+    )
+
+
 async def search_workspace_knowledge(
     session: AsyncSession,
     *,
@@ -245,15 +350,34 @@ async def search_workspace_knowledge(
     that every bucket is workspace-scoped. ``EmbeddingsUnavailable``
     is no longer raised — callers see a keyword-fallback result set
     instead.
+
+    Three sources are unioned into the response:
+
+    - ``source='topic_view'`` — rendered canonical articles per
+      ``topic_tag`` (the post-claim-store retrieval target).
+    - ``source='claim'`` — atomic active claims, useful when the
+      agent wants to cite specific facts.
+    - ``source='bucket_article'`` — legacy synth-driven articles,
+      retained while clients migrate.
+
+    All three are scored on the same cosine-similarity scale so a
+    cross-source merge by ``score`` produces a sensible ranking.
+    Topic-view + claim retrieval is skipped on the keyword-fallback
+    path (no embedding present in those tables yet means TS-vector
+    ranking would mix awkwardly with cosine — easier to keep keyword
+    mode pinned to the legacy article surface for now).
     """
     safe_query = (query or "").strip()
     if not safe_query:
         return []
     safe_limit = max(1, min(int(limit), 100))
 
+    canon_hits: list[KnowledgeSearchHit] = []
+    keyword_fallback = False
     try:
         qvec = await _embed_query(safe_query, settings=settings)
     except EmbeddingsUnavailable:
+        keyword_fallback = True
         rows = await _keyword_search(
             session,
             workspace_id=workspace_id,
@@ -269,11 +393,39 @@ async def search_workspace_knowledge(
             bucket_slug=bucket_slug,
             limit=safe_limit,
         )
+        # Topic views + claims only ride along when ``bucket_slug`` is
+        # not pinned — that filter is a legacy article-only knob, the
+        # canon doesn't carry the same shape.
+        if bucket_slug is None:
+            view_rows = await _vector_search_topic_views(
+                session,
+                workspace_id=workspace_id,
+                query_vec=qvec,
+                limit=safe_limit,
+            )
+            claim_rows = await _vector_search_claims(
+                session,
+                workspace_id=workspace_id,
+                query_vec=qvec,
+                limit=safe_limit,
+            )
+            canon_hits = [_topic_view_hit(v, s) for v, s in view_rows] + [
+                _claim_hit(c, s) for c, s in claim_rows
+            ]
 
-    repo_ids = {bucket.repo_id for _, bucket, _ in rows if bucket.repo_id is not None}
+    repo_ids = {
+        bucket.repo_id for _, bucket, _ in rows if bucket.repo_id is not None
+    }
     repo_full_names = await _resolve_repo_full_names(session, repo_ids)
 
-    return [_hit_from_row(article, bucket, score, repo_full_names) for article, bucket, score in rows]
+    article_hits = [
+        _hit_from_row(article, bucket, score, repo_full_names)
+        for article, bucket, score in rows
+    ]
+
+    merged = article_hits + canon_hits
+    merged.sort(key=lambda hit: hit.score, reverse=True)
+    return merged[:safe_limit] if not keyword_fallback else article_hits
 
 
 __all__: list[Any] = [
