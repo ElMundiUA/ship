@@ -220,6 +220,27 @@ class TrackerGateway(Protocol):
             f"{type(self).__name__} does not model projects/epics"
         )
 
+    async def upsert_project_section(
+        self, project_id: str, *, section: str, body: str
+    ) -> None:
+        """Replace-or-append a named ``## <section>`` block in the body.
+
+        Used by the decomposition pipeline (ELS-75): each specialist
+        owns one section (``WBS``, ``Architecture``, ``Test
+        architecture``, ``Tasks``) and patches just its own slice. A
+        re-run of any stage replaces that stage's section instead of
+        stacking duplicates; sections owned by other stages stay
+        untouched. Lock-in semantics: section heading is the contract
+        — adapters must match by ``## {section}`` (case-sensitive)
+        on a markdown line, not by best-effort fuzzy matching.
+
+        Adapters that don't model projects raise
+        :class:`NotImplementedError`; the orchestrator skips cleanly.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not model projects/epics"
+        )
+
     # -----------------------------------------------------------------
     # Decomposition anchor surface (project-first delivery, ELS-73)
     #

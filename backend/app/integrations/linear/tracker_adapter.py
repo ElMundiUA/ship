@@ -863,6 +863,64 @@ class LinearTracker:
         """
         await self._gql(mutation, {"id": project_id, "content": new_content})
 
+    async def upsert_project_section(
+        self, project_id: str, *, section: str, body: str
+    ) -> None:
+        """Replace-or-append a ``## <section>`` block in the project body.
+
+        Section ownership pins one chunk of the body to one specialist
+        (BA owns ``## WBS``, Tech-architect owns ``## Architecture``,
+        etc., per the decomposition process). Re-running a stage
+        replaces just its section; sections owned by other stages
+        stay verbatim.
+
+        Match is case-sensitive on the literal ``## <section>`` line
+        — fuzzy matching would let a typo'd heading silently double a
+        section, which is harder to debug than a clean append. New
+        sections land at the bottom of the body separated by a blank
+        line, preserving the chain order naturally (WBS first because
+        BA runs first, etc.).
+        """
+        existing = (await self.get_project(project_id)).get("content") or ""
+        heading = f"## {section}"
+        block = f"{heading}\n\n{body.strip()}\n"
+
+        if heading not in existing:
+            new_content = (
+                existing.rstrip() + "\n\n" + block if existing else block
+            )
+        else:
+            # Find the heading line, then walk forward until the next
+            # ``## `` heading (or EOF). Replace that range with the new
+            # block. Splitting on the heading-prefix is cheaper than a
+            # full regex parse and gives us deterministic boundaries.
+            lines = existing.splitlines(keepends=False)
+            new_lines: list[str] = []
+            i = 0
+            replaced = False
+            while i < len(lines):
+                if not replaced and lines[i].rstrip() == heading:
+                    new_lines.extend(block.splitlines())
+                    i += 1
+                    while i < len(lines) and not (
+                        lines[i].startswith("## ") and not lines[i].startswith("### ")
+                    ):
+                        i += 1
+                    replaced = True
+                    continue
+                new_lines.append(lines[i])
+                i += 1
+            new_content = "\n".join(new_lines).rstrip() + "\n"
+
+        mutation = """
+        mutation ShipUpdateProject($id: String!, $content: String!) {
+          projectUpdate(id: $id, input: { content: $content }) { success }
+        }
+        """
+        await self._gql(
+            mutation, {"id": project_id, "content": new_content}
+        )
+
     # -----------------------------------------------------------------
     # Decomposition anchor (project-first delivery)
     #
@@ -1050,6 +1108,7 @@ class LinearTracker:
             url
             state { name }
             labels { nodes { name } }
+            project { id }
           }
         }
         """
@@ -1071,6 +1130,11 @@ class LinearTracker:
                 for lbl in (issue.get("labels") or {}).get("nodes") or []
                 if lbl.get("name")
             ],
+            # Project containment — read by the decomposition completion
+            # hook to find the priorities row keyed on the Linear
+            # project's UUID. ``None`` for issues that aren't inside a
+            # project (regular standalone tickets).
+            "project_id": ((issue.get("project") or {}).get("id")) or None,
         }
 
     async def list_comments(self, ticket: TicketRef) -> list[CommentRef]:

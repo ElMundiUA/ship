@@ -18,9 +18,11 @@ import {
   type ApiPrioritiesResponse,
   type ApiPriorityState,
   type ApiReorderRow,
+  type ApiStartDecompositionResponse,
   reorderPriorities,
   setAutonomyPaused,
   setPriorityState,
+  startDecomposition,
 } from "@/lib/api/client";
 import { getSessionToken } from "@/lib/api/session";
 
@@ -67,6 +69,37 @@ export async function reorderPrioritiesAction(
   }
   try {
     const payload = await reorderPriorities(workspaceId, order, token);
+    revalidatePath("/");
+    return { ok: true, payload };
+  } catch (err) {
+    return toError(err);
+  }
+}
+
+
+export type StartDecompositionResult =
+  | { ok: true; payload: ApiStartDecompositionResponse }
+  | { ok: false; message: string; status?: number };
+
+
+export async function startDecompositionAction(
+  workspaceId: string,
+  projectNativeId: string,
+): Promise<StartDecompositionResult> {
+  if (!workspaceId) {
+    return { ok: false, message: "workspaceId is required" };
+  }
+  if (!projectNativeId) {
+    return { ok: false, message: "projectNativeId is required" };
+  }
+  let token: string;
+  try {
+    token = await requireToken();
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : String(err) };
+  }
+  try {
+    const payload = await startDecomposition(workspaceId, projectNativeId, token);
     revalidatePath("/");
     return { ok: true, payload };
   } catch (err) {

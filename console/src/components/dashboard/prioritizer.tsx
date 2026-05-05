@@ -25,6 +25,7 @@ import { cn } from "@/lib/cn";
 import {
   reorderPrioritiesAction,
   setAutonomyPausedAction,
+  startDecompositionAction,
 } from "./actions";
 
 /**
@@ -413,12 +414,42 @@ export function DashboardPrioritizer({ workspaceId, initial }: Props) {
 
   // ----- main list (state-grouped) ----------------------------------
 
+  // Hand off to decomposition. Records pending state per-project so
+  // double-clicks don't spawn two start runs (the endpoint is also
+  // server-side idempotent, but optimistic UI keeps the row from
+  // flashing twice). On success we mark the row "decomposing" locally
+  // so the chip swaps before the next /priorities round-trip.
+  const [handoffPending, setHandoffPending] = useState<string | null>(null);
+  const [decomposingIds, setDecomposingIds] = useState<Set<string>>(new Set());
+  const handleHandoff = useCallback(
+    async (nativeId: string) => {
+      if (handoffPending) return;
+      setHandoffPending(nativeId);
+      setErrorMessage(null);
+      const result = await startDecompositionAction(workspaceId, nativeId);
+      setHandoffPending(null);
+      if (!result.ok) {
+        setErrorMessage(result.message);
+        return;
+      }
+      setDecomposingIds((prev) => {
+        const next = new Set(prev);
+        next.add(nativeId);
+        return next;
+      });
+    },
+    [handoffPending, workspaceId],
+  );
+
   const renderRow = (project: ApiPriorityProject, state: ApiPriorityState) => (
     <PrioritizerRow
       key={project.project_native_id}
       project={project}
       rowState={state}
       paused={serverState.autonomy_paused}
+      decomposing={decomposingIds.has(project.project_native_id)}
+      handoffPending={handoffPending === project.project_native_id}
+      onHandoff={() => handleHandoff(project.project_native_id)}
       onDragStart={(event) => {
         event.dataTransfer.setData(DRAG_MIME, project.project_native_id);
         event.dataTransfer.effectAllowed = "move";
@@ -803,6 +834,9 @@ function PrioritizerRow({
   project,
   rowState,
   paused,
+  decomposing,
+  handoffPending,
+  onHandoff,
   onDragStart,
   onDragOver,
   onDrop,
@@ -812,6 +846,9 @@ function PrioritizerRow({
   project: ApiPriorityProject;
   rowState: ApiPriorityState;
   paused: boolean;
+  decomposing: boolean;
+  handoffPending: boolean;
+  onHandoff: () => void;
   onDragStart: (event: ReactDragEvent<HTMLLIElement>) => void;
   onDragOver: (event: ReactDragEvent<HTMLLIElement>) => void;
   onDrop: (event: ReactDragEvent<HTMLLIElement>) => void;
@@ -824,6 +861,11 @@ function PrioritizerRow({
   // doesn't benefit from "shaping" affordance.
   const showContinueShaping =
     rowState === "planning" && Boolean(project.originating_thread_id);
+  // Hand-off button — only on Drafts rows that haven't been handed
+  // off yet. When ``decomposing`` flips on (post-handoff) the row
+  // shows a quiet "Decomposing…" hint instead so the operator knows
+  // the chain is running.
+  const showHandoff = rowState === "planning" && !decomposing;
   const [moveMode, setMoveMode] = useState(false);
   const rowRef = useRef<HTMLLIElement | null>(null);
 
@@ -960,19 +1002,38 @@ function PrioritizerRow({
             }}
           />
         </span>
-      ) : showContinueShaping ? (
-        // The Drafts row gets a "continue shaping" deep-link in the
-        // slot the progress bar would otherwise occupy. Same width so
-        // the row gutter stays aligned with rows in other sections.
-        <Link
-          href="/chat"
-          className="block w-20 shrink-0 text-right text-[10px] font-bold uppercase tracking-widest text-lilac/85 transition hover:text-white"
-          // ``draggable={false}`` prevents the anchor from claiming the
-          // drag intent and shadowing the parent <li draggable> reorder.
-          draggable={false}
-        >
-          Continue →
-        </Link>
+      ) : decomposing ? (
+        // Post-handoff: decomposition pipeline is running on the anchor.
+        // Quiet hint so the operator knows the chain started without
+        // overwhelming the row.
+        <span className="block w-20 shrink-0 text-right text-[10px] font-bold uppercase tracking-widest text-lilac/70">
+          Decomposing…
+        </span>
+      ) : showHandoff ? (
+        // The Drafts row gets BOTH the Continue-shaping link (above
+        // the row, conditional on originating_thread_id) and a
+        // **Hand off** button here in the progress slot. Clicking
+        // posts to the start_decomposition endpoint; on success the
+        // row swaps to the "Decomposing…" hint above.
+        <span className="flex w-20 shrink-0 flex-col items-end gap-0.5">
+          {showContinueShaping ? (
+            <Link
+              href="/chat"
+              className="text-[10px] font-bold uppercase tracking-widest text-lilac/85 transition hover:text-white"
+              draggable={false}
+            >
+              Continue →
+            </Link>
+          ) : null}
+          <button
+            type="button"
+            onClick={onHandoff}
+            disabled={handoffPending}
+            className="text-[10px] font-bold uppercase tracking-widest text-aqua transition hover:text-white disabled:opacity-50"
+          >
+            {handoffPending ? "…" : "Hand off →"}
+          </button>
+        </span>
       ) : (
         // Fixed-width spacer keeps the row gutter aligned across
         // sections so the progress column doesn't reflow per-state.

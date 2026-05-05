@@ -73,6 +73,7 @@ __all__ = [
     "bundle_routine_entries",
     "bundle_lane_entries",
     "default_development_process_config",
+    "default_planning_process_config",
 ]
 
 
@@ -379,6 +380,131 @@ def default_development_process_config(
             {"from": "qa_automation", "to": "code_review"},
         ],
         "routines": dict(routines or {}),
+    }
+
+
+def default_planning_process_config() -> dict[str, object]:
+    """Return the canonical decomposition FSM (project-first delivery).
+
+    Runs against the *planning anchor* of each new project (one issue
+    per Linear project, tagged ``planning:anchor``). Sequential chain:
+    BA produces a WBS, Tech-architect lays out the architecture, QA-
+    architect designs test coverage, then QA-engineer + Developer
+    slice the WBS into coarse child tickets. Each specialist patches
+    its own named section of the project body so re-running a stage
+    replaces just that section instead of the whole blob.
+
+    Coarse-tasks contract: child tickets emitted by the ``tasks``
+    stage are deliberately rough — their bodies are 2-3 lines and the
+    per-ticket SDLC at ``task_intake`` refines further. Decomposition's
+    BA and SDLC's BA are different invocations of the same role
+    template; the mode-switch lives in the role file's prompt and is
+    keyed on the FSM context's ``process`` field.
+
+    Specialist reuse note: this config does NOT introduce a new
+    ``decomposer`` role. The product call (ELS-75) is "make a chain
+    out of existing specialists, don't grow the role corpus." The
+    role files (``ba.md``, ``tech-architect.md``, …) handle the mode
+    distinction; ``catalog.py`` carries the orchestration shape.
+
+    Naming hazard: this is the **decomposition process**, distinct
+    from (1) the dashboard's ``priority_state.planning`` bucket
+    (UI label ``Drafts``) and (2) the kind-of-work tag
+    ``state="planning"`` on the development process's task_intake
+    stage. See the module-level docstring for the full disambiguation.
+    """
+    return {
+        "id": "decomposition",
+        "name": "Decomposition",
+        "primary": False,
+        # No human gates today — the operator's gate is the manual
+        # **Hand off to decomposition** click on the dashboard. Once
+        # they hit it, the chain runs autonomously through to
+        # ``planning_done`` and the project flips Drafts → Active.
+        "gates": "after_pr",
+        "states": [
+            {
+                "id": "wbs",
+                "name": "Work breakdown structure",
+                "state": "planning",
+                "specialist": {"id": "ba", "name": "BA / specification"},
+                "instructions": (
+                    "Read the project brief and emit a coarse WBS — a "
+                    "list of child-ticket stubs (name + 2-3 line scope). "
+                    "Patch ONLY the ``## WBS`` section of the project "
+                    "body; do not touch the brief or the architecture "
+                    "below it. Do NOT create child tickets yourself; "
+                    "the ``tasks`` stage at the end of this pipeline "
+                    "creates them."
+                ),
+            },
+            {
+                "id": "architecture",
+                "name": "Architecture",
+                "state": "planning",
+                "specialist": {"id": "tech-architect", "name": "Tech architect"},
+                "instructions": (
+                    "Read the brief + WBS and write the system "
+                    "architecture — components touched, contracts, "
+                    "risk + rollback. Patch ONLY the ``## Architecture`` "
+                    "section. Design only, no code."
+                ),
+            },
+            {
+                "id": "test_architecture",
+                "name": "Test architecture",
+                "state": "planning",
+                "specialist": {"id": "qa-architect", "name": "QA architect"},
+                "instructions": (
+                    "Read the brief + WBS + architecture and design "
+                    "the test coverage strategy — unit / integration / "
+                    "e2e split, fixtures, edge cases. Patch ONLY the "
+                    "``## Test architecture`` section. Design only, no "
+                    "test code."
+                ),
+            },
+            {
+                "id": "tasks",
+                "name": "Task slicing",
+                "state": "executing",
+                "specialist": {"id": "developer", "name": "Developer"},
+                "instructions": (
+                    "Read the WBS + architecture + test architecture "
+                    "and create child tickets — one per WBS line, "
+                    "coarse (3-5 line bodies). Each child enters the "
+                    "per-ticket SDLC at ``task_intake`` and refines "
+                    "further; do NOT write detailed acceptance criteria "
+                    "or test plans here, the SDLC's BA does that. "
+                    "Patch the ``## Tasks`` section with a list of the "
+                    "ticket identifiers + names you created."
+                ),
+            },
+            {
+                "id": "planning_done",
+                "name": "Decomposition done",
+                "state": "reviewing",
+                # Terminal stage — no specialist runs here. ``ready_next_step``
+                # with ``stage_next='planning_done'`` from the ``tasks`` stage
+                # signals decomposition complete; the finish hook flips the
+                # dashboard row from Drafts → Active.
+                "specialist": {"id": "developer", "name": "Developer"},
+                "instructions": (
+                    "Terminal — no work. Reaching this stage flips the "
+                    "project from Drafts to Active on the dashboard."
+                ),
+            },
+        ],
+        "transitions": [
+            {"from": "wbs", "to": "architecture"},
+            {"from": "architecture", "to": "test_architecture"},
+            {"from": "test_architecture", "to": "tasks"},
+            {"from": "tasks", "to": "planning_done"},
+        ],
+        # No routines — decomposition is anchor-driven, not cron-
+        # driven. The handoff endpoint sets the first stage label;
+        # subsequent stages move via ``/agent-runs/finish`` like any
+        # other FSM run.
+        "routines": {},
     }
 
 
