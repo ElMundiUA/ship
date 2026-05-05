@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   useCallback,
   useEffect,
@@ -87,17 +88,59 @@ const SECTION_COPY: Record<
 
 
 export function DashboardPrioritizer({ workspaceId, initial }: Props) {
+  const router = useRouter();
   const [serverState, setServerState] = useState<ApiPrioritiesResponse>(initial);
   // Working copy of the prioritised rows — only touched while the
   // user is dragging or in keyboard move-mode. Save flushes through
   // the server action, Revert restores from the last server state.
   const [draftOrder, setDraftOrder] = useState<DraftRow[] | null>(null);
   const [pending, startTransition] = useTransition();
+  const [draftingPending, setDraftingPending] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   // Parked section collapses by default — visible (so the operator
   // doesn't forget what they decided not to do) but folded so the
   // editorial single-column rhythm of Active + Planning isn't drowned.
   const [parkedExpanded, setParkedExpanded] = useState(false);
+
+  // ELS-74: dashboard "+ New project" CTA. Opens a fresh Navigator
+  // thread tagged ``intent=shape_project`` and navigates the user
+  // there. The drafting-mode system prompt then biases the agent
+  // toward shaping a brief and waiting for explicit confirmation
+  // before ``create_project`` fires. Errors fall through to the
+  // existing errorMessage band — there's no separate failure surface
+  // for this CTA because failure means "the API is down," which the
+  // tracker hairline already conveys.
+  const startProjectDrafting = useCallback(async () => {
+    if (draftingPending) return;
+    setDraftingPending(true);
+    setErrorMessage(null);
+    try {
+      const res = await fetch("/api/chat/new-thread", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          workspace_id: workspaceId,
+          intent: "shape_project",
+          title: "Drafting a project",
+        }),
+      });
+      if (!res.ok) {
+        setErrorMessage(
+          res.status === 401
+            ? "Session expired — reload to sign in again."
+            : `Couldn't start drafting (HTTP ${res.status}).`,
+        );
+        return;
+      }
+      router.push("/chat");
+    } catch (err) {
+      setErrorMessage(
+        err instanceof Error ? err.message : "Couldn't start drafting.",
+      );
+    } finally {
+      setDraftingPending(false);
+    }
+  }, [draftingPending, router, workspaceId]);
 
   const tracker = serverState.tracker;
   const allProjects = serverState.projects;
@@ -282,6 +325,8 @@ export function DashboardPrioritizer({ workspaceId, initial }: Props) {
         onToggleAutonomy={toggleAutonomy}
         tracker={tracker}
         pending={pending}
+        onStartDrafting={startProjectDrafting}
+        draftingPending={draftingPending}
       >
         <li className="flex items-baseline justify-between gap-4 py-3">
           <p className="text-sm text-white/65">
@@ -312,6 +357,8 @@ export function DashboardPrioritizer({ workspaceId, initial }: Props) {
           onToggleAutonomy={toggleAutonomy}
           tracker={tracker}
           pending={pending}
+          onStartDrafting={startProjectDrafting}
+          draftingPending={draftingPending}
         >
           <li className="space-y-1 py-3 text-[12px]">
             <p className="text-coral/85">
@@ -346,6 +393,8 @@ export function DashboardPrioritizer({ workspaceId, initial }: Props) {
         onToggleAutonomy={toggleAutonomy}
         tracker={tracker}
         pending={pending}
+        onStartDrafting={startProjectDrafting}
+        draftingPending={draftingPending}
       >
         {[0, 1, 2].map((i) => (
           <li
@@ -412,6 +461,8 @@ export function DashboardPrioritizer({ workspaceId, initial }: Props) {
       onToggleAutonomy={toggleAutonomy}
       tracker={tracker}
       pending={pending}
+      onStartDrafting={startProjectDrafting}
+      draftingPending={draftingPending}
     >
       {SECTION_ORDER.map((state) => {
         const rows = rowsByState[state];
@@ -506,6 +557,8 @@ function PrioritizerSection({
   tracker,
   pending,
   onToggleAutonomy,
+  onStartDrafting,
+  draftingPending,
 }: {
   children: React.ReactNode;
   autonomyPaused: boolean;
@@ -514,6 +567,8 @@ function PrioritizerSection({
   tracker: ApiPriorityTracker;
   pending: boolean;
   onToggleAutonomy: () => void;
+  onStartDrafting: () => void;
+  draftingPending: boolean;
 }) {
   return (
     <section className="space-y-3">
@@ -525,6 +580,14 @@ function PrioritizerSection({
           )}
         </h3>
         <div className="flex items-center gap-4 text-[11px]">
+          <button
+            type="button"
+            onClick={onStartDrafting}
+            disabled={draftingPending}
+            className="font-bold uppercase tracking-widest text-aqua transition hover:text-white disabled:opacity-50"
+          >
+            {draftingPending ? "Opening…" : "+ New project"}
+          </button>
           <AutonomyToggle
             paused={autonomyPaused}
             disabled={pending}
@@ -755,6 +818,12 @@ function PrioritizerRow({
   onMoveUp: () => void;
   onMoveDown: () => void;
 }) {
+  // Continue shaping → re-open the originating Navigator thread when
+  // the project was drafted in chat. Only surface on Drafts rows
+  // (rowState=='planning'); a project that's already Active/Parked
+  // doesn't benefit from "shaping" affordance.
+  const showContinueShaping =
+    rowState === "planning" && Boolean(project.originating_thread_id);
   const [moveMode, setMoveMode] = useState(false);
   const rowRef = useRef<HTMLLIElement | null>(null);
 
@@ -891,6 +960,19 @@ function PrioritizerRow({
             }}
           />
         </span>
+      ) : showContinueShaping ? (
+        // The Drafts row gets a "continue shaping" deep-link in the
+        // slot the progress bar would otherwise occupy. Same width so
+        // the row gutter stays aligned with rows in other sections.
+        <Link
+          href="/chat"
+          className="block w-20 shrink-0 text-right text-[10px] font-bold uppercase tracking-widest text-lilac/85 transition hover:text-white"
+          // ``draggable={false}`` prevents the anchor from claiming the
+          // drag intent and shadowing the parent <li draggable> reorder.
+          draggable={false}
+        >
+          Continue →
+        </Link>
       ) : (
         // Fixed-width spacer keeps the row gutter aligned across
         // sections so the progress column doesn't reflow per-state.

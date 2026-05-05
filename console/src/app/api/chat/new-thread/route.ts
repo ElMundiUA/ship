@@ -32,14 +32,20 @@ export async function POST(req: Request): Promise<Response> {
     title?: string | null;
     pack_into_bucket_slug?: string | null;
     pack_into_bucket_name?: string | null;
+    intent?: "shape_project" | null;
   } = {};
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "bad_json" }, { status: 400 });
   }
-  const { workspace_id, title, pack_into_bucket_slug, pack_into_bucket_name } =
-    body;
+  const {
+    workspace_id,
+    title,
+    pack_into_bucket_slug,
+    pack_into_bucket_name,
+    intent,
+  } = body;
   if (!workspace_id || typeof workspace_id !== "string") {
     return NextResponse.json(
       { error: "workspace_id_required" },
@@ -59,6 +65,7 @@ export async function POST(req: Request): Promise<Response> {
         title: title ?? null,
         pack_into_bucket_slug: pack_into_bucket_slug ?? null,
         pack_into_bucket_name: pack_into_bucket_name ?? null,
+        intent: intent ?? null,
       }),
       cache: "no-store",
     },
