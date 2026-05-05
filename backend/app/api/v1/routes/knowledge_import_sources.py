@@ -135,18 +135,28 @@ async def _load_source(
 async def _kick_initial_sync(
     *, workspace_id: uuid.UUID, source_id: uuid.UUID
 ) -> None:
-    """Run a single ``sync_import_source`` for a freshly-created row.
+    """Run a single ``sync_import_source`` + downstream cascade.
 
-    Lives outside the request session so it can run after the response
-    is sent (FastAPI ``BackgroundTasks`` semantics). Failures are
-    swallowed because the source row already records ``last_error``
-    via ``sync_import_source``'s own except-branch — the operator
-    sees the error in the UI on the next list refresh, and the cron
-    will retry on the next due tick.
+    Lives outside the request session so it runs after the response
+    is sent (FastAPI ``BackgroundTasks`` semantics). The cascade step
+    (``cascade_workspace_pipeline``) closes the cold-start latency:
+    without it, the operator who just connected Notion would wait
+    ~30 min for the ``:30`` route tick + ~10 min for the ``:40``
+    synth tick before any draft article shows up.
+
+    Failures in either step are swallowed because:
+
+    - sync errors are already persisted on ``source.last_error``;
+    - cascade is best-effort — the regular cron tick handles whatever
+      the fast-path didn't.
     """
     from backend.app.db.session import get_sessionmaker
+    from backend.app.services.knowledge_cascade import (
+        cascade_workspace_pipeline,
+    )
 
     sessionmaker = get_sessionmaker()
+    sync_ok = False
     async with sessionmaker() as session:
         source = await session.get(KnowledgeImportSource, source_id)
         if source is None or source.workspace_id != workspace_id:
@@ -154,11 +164,14 @@ async def _kick_initial_sync(
         try:
             await sync_import_source(session, source=source, trigger="create")
             await session.commit()
+            sync_ok = True
         except Exception:  # noqa: BLE001 — already persisted on the row
             await session.rollback()
             logger.warning(
                 "initial sync failed for source %s — see last_error", source_id
             )
+    if sync_ok:
+        await cascade_workspace_pipeline(workspace_id=workspace_id)
 
 
 @router.get("", response_model=list[ImportSourceOut])
@@ -238,6 +251,7 @@ async def create_source(
 async def sync_source(
     workspace_id: uuid.UUID,
     source_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
     auth: AuthContext = Depends(get_current_auth),
     session: AsyncSession = Depends(get_session),
 ) -> IngestionRunOut:
@@ -254,6 +268,13 @@ async def sync_source(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
         ) from exc
+    # Run route + synth right after the sync commits so a "Sync now"
+    # press surfaces a draft article in seconds, not after the next
+    # :30/:40 cron tick. Cascade is idempotent + lock-aware so
+    # overlapping with the regular tick is safe.
+    from backend.app.services.knowledge_cascade import cascade_workspace_pipeline
+
+    background_tasks.add_task(cascade_workspace_pipeline, workspace_id=workspace_id)
     return _run_out(run)
 
 
