@@ -66,6 +66,21 @@ class LinearTracker:
         self._fsm_to_linear_state = dict(fsm_to_linear_state or {})
         self._signal_label_ids = dict(signal_label_ids or {})
 
+    def _auth_header(self) -> str:
+        """Linear accepts two token shapes with different header
+        prefixes: OAuth2 access tokens use ``Bearer <token>``, while
+        Personal API keys (``lin_api_*``) ship raw without the
+        ``Bearer`` prefix. Sending the wrong shape always 401s — and
+        is invisible to legacy callers because the OAuth callback
+        writes proper bearer tokens, but a manual / migrated row can
+        end up with a PAT and surprise the dashboard. Pick the format
+        based on the token's own prefix.
+        """
+        token = self._token or ""
+        if token.startswith("lin_api_"):
+            return token
+        return f"Bearer {token}"
+
     async def _gql(
         self, query: str, variables: dict[str, Any] | None = None
     ) -> dict[str, Any]:
@@ -76,7 +91,7 @@ class LinearTracker:
                 LINEAR_GRAPHQL_URL,
                 json={"query": query, "variables": variables or {}},
                 headers={
-                    "Authorization": f"Bearer {self._token}",
+                    "Authorization": self._auth_header(),
                     "Content-Type": "application/json",
                     "Accept": "application/json",
                 },
@@ -84,7 +99,16 @@ class LinearTracker:
         finally:
             if owns_client:
                 await http.aclose()
-        response.raise_for_status()
+        if response.status_code >= 400:
+            # ``response.raise_for_status()`` swallows the body, which
+            # is exactly where Linear puts the *reason* on a 401
+            # ("token revoked", "scope insufficient", "expired"). Pull
+            # the body in so the operator-facing error explains what
+            # to do instead of just "401 Unauthorized".
+            snippet = response.text[:300] if response.text else ""
+            raise RuntimeError(
+                f"Linear HTTP {response.status_code}: {snippet}".strip()
+            )
         body = response.json()
         if body.get("errors"):
             # Surface the first GraphQL error verbatim — the route

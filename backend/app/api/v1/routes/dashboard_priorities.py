@@ -41,8 +41,13 @@ from backend.app.api.v1.routes.workspaces import (
 )
 from backend.app.core.config import Settings, get_settings
 from backend.app.db.models.dashboard_priorities import WorkspaceProjectPriority
+from backend.app.db.models.integrations import (
+    NativeIntegrationCredential,
+    NativeIntegrationInstallation,
+    NativeIntegrationProvider,
+)
 from backend.app.db.models.pipelines import PullRequest
-from backend.app.db.models.tenancy import AuditLog, Workspace
+from backend.app.db.models.tenancy import AuditLog, Integration, Workspace
 from backend.app.db.session import get_session
 from backend.app.services.tracker_resolver import resolve_for_workspace
 
@@ -509,6 +514,205 @@ async def set_autonomy(
         await session.flush()
 
     return AutonomyOut(autonomy_paused=bool(payload.paused))
+
+
+# ---------------------------------------------------------------------------
+# Debug — admin-only inspection of the workspace's tracker storage.
+# ---------------------------------------------------------------------------
+
+
+class _DebugSourceOut(BaseModel):
+    """One storage row's user-visible state.
+
+    No secret material leaks: we expose token prefixes (first 8
+    chars) so the admin can tell ``lin_oauth`` from ``lin_api`` and
+    diff against what they expect.
+    """
+
+    exists: bool
+    status: str | None
+    last_health_at: datetime | None
+    last_health_error: str | None
+    scopes: list[str] | None
+    token_prefix: str | None
+    token_decryptable: bool
+
+
+class TrackerDebugOut(BaseModel):
+    workspace_id: uuid.UUID
+    native_linear: _DebugSourceOut
+    legacy_linear: _DebugSourceOut
+    resolver_picked_source: Literal["native", "legacy"] | None
+    viewer_probe_ok: bool | None
+    viewer_probe_error: str | None
+
+
+@router.get("/_debug-tracker", response_model=TrackerDebugOut)
+async def debug_tracker(
+    workspace_id: uuid.UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> TrackerDebugOut:
+    """Admin-only diagnostic dump for the workspace's Linear storage.
+
+    Surfaces what's actually persisted (native installation, legacy
+    integration row), whether the stored ciphertext can be decrypted
+    under the running encryption key, the token's leading prefix
+    (so an admin can tell apart OAuth tokens from PATs), and the
+    result of a tiny ``viewer { id }`` probe against Linear with
+    the resolved token. Lets us answer "the dashboard says 401, why?"
+    without shelling into the DB.
+    """
+    from backend.app.security.encryption import decrypt as _decrypt
+
+    await _require_membership(
+        session, workspace_id, auth.user.id, ROLES_ADMIN
+    )
+    await _load_workspace(session, workspace_id)
+
+    native_install = (
+        await session.execute(
+            select(NativeIntegrationInstallation)
+            .where(
+                NativeIntegrationInstallation.workspace_id == workspace_id,
+                NativeIntegrationInstallation.provider
+                == NativeIntegrationProvider.LINEAR,
+            )
+            .order_by(NativeIntegrationInstallation.updated_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    native_credential: NativeIntegrationCredential | None = None
+    if native_install is not None:
+        native_credential = (
+            await session.execute(
+                select(NativeIntegrationCredential).where(
+                    NativeIntegrationCredential.installation_id
+                    == native_install.id,
+                    NativeIntegrationCredential.kind == "access_token",
+                )
+            )
+        ).scalar_one_or_none()
+
+    native_out = _DebugSourceOut(
+        exists=native_install is not None,
+        status=native_install.status if native_install else None,
+        last_health_at=native_install.last_health_at if native_install else None,
+        last_health_error=(
+            native_install.last_health_error if native_install else None
+        ),
+        scopes=(
+            list(native_install.scopes or [])
+            if native_install
+            else None
+        ),
+        token_prefix=_token_prefix(native_credential, _decrypt),
+        token_decryptable=_token_decryptable(native_credential, _decrypt),
+    )
+
+    legacy = (
+        await session.execute(
+            select(Integration)
+            .where(
+                Integration.workspace_id == workspace_id,
+                Integration.repo_id.is_(None),
+                Integration.kind == "linear",
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    legacy_out = _DebugSourceOut(
+        exists=legacy is not None,
+        status=legacy.status if legacy else None,
+        last_health_at=legacy.last_health_at if legacy else None,
+        last_health_error=legacy.last_health_error if legacy else None,
+        scopes=_legacy_scopes(legacy),
+        token_prefix=_legacy_token_prefix(legacy, _decrypt),
+        token_decryptable=_legacy_token_decryptable(legacy, _decrypt),
+    )
+
+    resolved = await resolve_for_workspace(
+        session=session,
+        settings=settings,
+        workspace_id=workspace_id,
+    )
+    picked: Literal["native", "legacy"] | None = None
+    probe_ok: bool | None = None
+    probe_error: str | None = None
+    if resolved is not None:
+        picked = resolved.source  # type: ignore[assignment]
+        try:
+            await resolved.gateway._gql(  # type: ignore[attr-defined]
+                "query ShipViewerProbe { viewer { id } }", {}
+            )
+            probe_ok = True
+        except Exception as exc:  # noqa: BLE001 — defensive
+            probe_ok = False
+            probe_error = str(exc)[:500]
+
+    return TrackerDebugOut(
+        workspace_id=workspace_id,
+        native_linear=native_out,
+        legacy_linear=legacy_out,
+        resolver_picked_source=picked,
+        viewer_probe_ok=probe_ok,
+        viewer_probe_error=probe_error,
+    )
+
+
+def _token_prefix(
+    credential: NativeIntegrationCredential | None, decrypt
+) -> str | None:
+    if credential is None or not credential.secret_ciphertext:
+        return None
+    try:
+        token = decrypt(credential.secret_ciphertext)
+    except Exception:  # noqa: BLE001
+        return None
+    return (token or "")[:8] or None
+
+
+def _token_decryptable(
+    credential: NativeIntegrationCredential | None, decrypt
+) -> bool:
+    if credential is None or not credential.secret_ciphertext:
+        return False
+    try:
+        decrypt(credential.secret_ciphertext)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _legacy_scopes(row: Integration | None) -> list[str] | None:
+    if row is None:
+        return None
+    raw = (row.config or {}).get("scope")
+    if not raw or not isinstance(raw, str):
+        return []
+    return [s.strip() for s in raw.split(",") if s.strip()]
+
+
+def _legacy_token_prefix(row: Integration | None, decrypt) -> str | None:
+    if row is None or not row.secret_ciphertext:
+        return None
+    try:
+        token = decrypt(row.secret_ciphertext)
+    except Exception:  # noqa: BLE001
+        return None
+    return (token or "")[:8] or None
+
+
+def _legacy_token_decryptable(row: Integration | None, decrypt) -> bool:
+    if row is None or not row.secret_ciphertext:
+        return False
+    try:
+        decrypt(row.secret_ciphertext)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
 
 
 __all__ = ["router"]
