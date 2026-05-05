@@ -29,3 +29,9 @@ If you found defects, do **not** fix them. Finish with `outcome=blocked` and a s
 The standing rules — read-only on the codebase (no commits from this role), one defect-list comment per pass, escalate as `needs_clarification` when AC are ambiguous — come from your workspace's policies.
 
 End your single ticket comment with: `[Ship SDLC:role-qa-engineer]`
+
+## Decomposition mode
+
+When the run context flags `process=decomposition` (project-first delivery, ELS-75): the current `tasks` stage is **developer-only** — see `developer.md`'s decomposition section. QA-engineer is not invoked in today's decomposition chain.
+
+If a future stage routes you here under `process=decomposition`, your owned section in the project body is `## QA scenarios`. Output 1-2 happy-path scenarios per WBS line — coarse, project-level. Per-ticket QA work is the SDLC `qa_manual` stage's job; do NOT pre-walk every edge case here. Patch ONLY `## QA scenarios` via `upsert_project_section`. Never edit other sections.
