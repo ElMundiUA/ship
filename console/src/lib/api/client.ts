@@ -2531,6 +2531,71 @@ export function setAutonomyPaused(
   );
 }
 
+// --- Dashboard v2 — Live System aggregator ---------------------------------
+
+/**
+ * 7-day system-health glyphs rendered in the Live System block kicker.
+ * ``success_rate_7d`` is null when no runs finished in the window — the
+ * UI renders ``—``. ``last_run_status`` is the run-class of the most
+ * recent finished run, ``ok`` or ``error``.
+ */
+export interface ApiLiveSystemMasthead {
+  success_rate_7d: number | null;
+  failures_7d: number;
+  last_run_at: string | null;
+  last_run_status: "ok" | "error" | null;
+}
+
+export interface ApiLiveSystemKnowledge {
+  last_run_at: string | null;
+  last_status: "pending" | "running" | "done" | "error" | null;
+  ingested_today: number;
+  state_label: "idle" | "running" | "errored";
+}
+
+export interface ApiLiveSystemRoutine {
+  name: string;
+  last_run_at: string | null;
+  last_run_status: string | null;
+}
+
+export interface ApiLiveSystemDaily {
+  last_sent_at: string | null;
+  last_run_status: string | null;
+  queue_wins: number;
+  queue_blockers: number;
+}
+
+export interface ApiLiveSystemSpecialists {
+  idle_count: number;
+  working_count: number;
+  errored_count: number;
+  /** Specialist slugs that errored on their most recent finished run. */
+  errored_names: string[];
+  /** When exactly one specialist is currently running, its slug; null
+   * when zero or more-than-one are running so the UI collapses to a
+   * generic count. */
+  working_name: string | null;
+}
+
+export interface ApiLiveSystem {
+  masthead: ApiLiveSystemMasthead;
+  knowledge: ApiLiveSystemKnowledge;
+  routines: ApiLiveSystemRoutine[];
+  daily: ApiLiveSystemDaily;
+  specialists: ApiLiveSystemSpecialists;
+}
+
+export function getLiveSystem(
+  workspaceId: string,
+  token?: string,
+): Promise<ApiLiveSystem> {
+  return apiFetch<ApiLiveSystem>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/dashboard/live-system`,
+    { token },
+  );
+}
+
 export function dismissNotification(
   workspaceId: string,
   notificationId: string,

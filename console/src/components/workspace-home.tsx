@@ -1,8 +1,10 @@
 import Link from "next/link";
 
+import { DashboardLiveSystem } from "@/components/dashboard/live-system";
 import { DashboardPrioritizer } from "@/components/dashboard/prioritizer";
 import type {
   ApiActivatedRepo,
+  ApiLiveSystem,
   ApiOpsBlocker,
   ApiOpsDashboard,
   ApiOpsShippedItem,
@@ -48,6 +50,7 @@ export type WorkspaceHomeProps = {
   inboxItems: InboxListResponse | null;
   inboxCounts: InboxCountsResponse | null;
   priorities: ApiPrioritiesResponse | null;
+  liveSystem: ApiLiveSystem | null;
 };
 
 export function WorkspaceHome({
@@ -57,6 +60,7 @@ export function WorkspaceHome({
   inboxItems,
   inboxCounts,
   priorities,
+  liveSystem,
 }: WorkspaceHomeProps) {
   const reposNeedingUpdate = repos.filter(needsShipTemplateUpdate);
   const decisions = (inboxItems?.items ?? []).slice(0, 4);
@@ -118,7 +122,7 @@ export function WorkspaceHome({
         */}
         <div className="space-y-10 lg:col-span-4 lg:sticky lg:top-20 lg:self-start 2xl:contents">
           <aside className="space-y-6 2xl:col-span-3 2xl:sticky 2xl:top-20 2xl:self-start">
-            <LiveSystemPlaceholder />
+            <DashboardLiveSystem data={liveSystem} />
           </aside>
           <aside className="space-y-8 2xl:col-span-2 2xl:sticky 2xl:top-20 2xl:self-start">
             <LastActionStrip lastAction={priorities?.last_action ?? null} />
@@ -522,25 +526,6 @@ function ActiveTicketsStrip({
         Open process →
       </Link>
     </p>
-  );
-}
-
-
-// ---------------------------------------------------------------------------
-// Live System placeholder (PR-2 will populate)
-// ---------------------------------------------------------------------------
-
-
-function LiveSystemPlaceholder() {
-  return (
-    <section className="space-y-2">
-      <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-white/40">
-        Live system · loading…
-      </p>
-      <p className="text-[11px] italic text-white/30">
-        Routines, daily digest, and specialist health land next.
-      </p>
-    </section>
   );
 }
 
