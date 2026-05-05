@@ -1020,6 +1020,12 @@ class KnowledgeClaim(Base):
     last_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )
+    # NULL = pending reconciliation. Stamped by the reconciler tick
+    # after the claim has been compared against its nearest neighbours
+    # and any duplicate / refines / contradicts decisions applied.
+    reconciled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = _ts_created()
     updated_at: Mapped[datetime] = _ts_updated()
 
