@@ -276,6 +276,8 @@ class ToolBox:
         workspace_id: uuid.UUID,
         user_id: uuid.UUID,
         active_repo_id: uuid.UUID | None = None,
+        thread_id: uuid.UUID | None = None,
+        thread_intent: str | None = None,
     ) -> None:
         self._session = session
         self._settings = settings
@@ -288,6 +290,16 @@ class ToolBox:
         # tool call. ``None`` means "workspace-wide, no preferred
         # repo" which is the pre-7C behaviour of every existing tool.
         self._active_repo_id = active_repo_id
+        # ELS-74 (drafting mode): ``_tool_create_project`` writes
+        # ``originating_thread_id`` onto the priorities row when these
+        # are set, so the dashboard can later render a "Continue
+        # shaping" link that re-opens the originating Navigator thread
+        # instead of fragmenting the conversation. ``thread_intent``
+        # is exposed so individual tools could specialise their copy
+        # in drafting mode (e.g. confirmation strings) — today only
+        # ``_tool_create_project`` reads it.
+        self._thread_id = thread_id
+        self._thread_intent = thread_intent
 
     # ------------------------------------------------------------------
     # Tool specs — the "what the LLM sees" side of the surface
@@ -2481,15 +2493,28 @@ class ToolBox:
         insert. Ordinal goes to MAX+1 across the whole workspace so
         the row sorts after everything currently saved; the operator
         can drag it up if the project is high-priority.
+
+        When the toolbox knows the thread that drove this call (i.e.
+        the Navigator was in drafting mode) we stamp it onto the row
+        as ``originating_thread_id`` so the dashboard can render a
+        **Continue shaping** link straight back to that conversation.
         """
         existing = await self._session.scalar(
-            select(WorkspaceProjectPriority.id).where(
+            select(WorkspaceProjectPriority).where(
                 WorkspaceProjectPriority.workspace_id == self._workspace_id,
                 WorkspaceProjectPriority.project_native_id
                 == project_native_id,
             )
         )
         if existing is not None:
+            # Backfill the thread link if the row was created earlier
+            # without one (e.g. the agent created the project in a
+            # default thread, then later re-created in a drafting
+            # thread). Don't overwrite an existing link — first thread
+            # wins so the deep-link doesn't drift.
+            if existing.originating_thread_id is None and self._thread_id is not None:
+                existing.originating_thread_id = self._thread_id
+                await self._session.flush()
             return
         max_ord = await self._session.scalar(
             select(WorkspaceProjectPriority.ordinal)
@@ -2506,6 +2531,7 @@ class ToolBox:
                 project_native_id=project_native_id,
                 ordinal=next_ord,
                 state="planning",
+                originating_thread_id=self._thread_id,
             )
         )
         await self._session.flush()

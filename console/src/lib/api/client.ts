@@ -1072,6 +1072,16 @@ export interface ApiChatMessage {
   created_at: string;
 }
 
+/**
+ * Conversation purpose tag on a chat thread:
+ * - ``shape_project`` — the dashboard's "+ New project" CTA opened
+ *   this thread; Navigator runs in drafting mode (system prompt biases
+ *   toward shaping a brief, waits for explicit confirmation before
+ *   ``create_project`` fires).
+ * Null = default Navigator chat.
+ */
+export type ApiChatThreadIntent = "shape_project";
+
 export interface ApiChatThread {
   id: string;
   title: string;
@@ -1084,6 +1094,7 @@ export interface ApiChatThread {
   updated_at: string;
   message_count: number;
   messages: ApiChatMessage[];
+  intent: ApiChatThreadIntent | null;
 }
 
 // Trimmed shape returned by ``GET /v1/workspaces/{ws}/chat/threads``;
@@ -1134,6 +1145,7 @@ export function newActiveChatThread(
     title?: string | null;
     pack_into_bucket_slug?: string | null;
     pack_into_bucket_name?: string | null;
+    intent?: ApiChatThreadIntent | null;
   } = {},
   options: { token?: string } = {},
 ): Promise<ApiChatThread> {
@@ -2486,6 +2498,11 @@ export interface ApiPriorityProject {
   /** Operator bucket. NULL only for unprioritised tail rows (the
    *  project has never been dragged into a bucket). */
   priority_state: ApiPriorityState | null;
+  /** Backref to the Navigator thread the project was drafted in.
+   *  Powers the "Continue shaping" link on Drafts rows; null for
+   *  projects that pre-date the drafting flow or were created
+   *  outside Navigator. */
+  originating_thread_id: string | null;
   /** Completion magnitude. ``total`` is null when the tracker can't
    * tell us; the UI then renders ``—`` and skips the bar. */
   completed: number | null;

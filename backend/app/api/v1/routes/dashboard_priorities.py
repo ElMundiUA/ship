@@ -118,6 +118,11 @@ class PriorityProjectOut(BaseModel):
     # Null only for unprioritised tail rows that don't have a saved
     # priorities row yet — the UI treats those as "drag in to bucket".
     priority_state: PriorityState | None
+    # Backref to the Navigator thread the project was drafted in. The
+    # dashboard renders a "Continue shaping" link on Drafts rows when
+    # this is set; null for projects created outside Navigator or
+    # before the drafting flow shipped.
+    originating_thread_id: uuid.UUID | None
     # Completion magnitude. ``total`` is None when the tracker can't
     # tell us — the UI renders ``—`` and skips the bar.
     completed: int | None
@@ -392,6 +397,7 @@ async def get_priorities(
                 color=str(raw.get("color") or "") or None,
                 ordinal=saved.ordinal if saved else None,
                 priority_state=priority_state,
+                originating_thread_id=saved.originating_thread_id if saved else None,
                 completed=completed,
                 total=total,
             )

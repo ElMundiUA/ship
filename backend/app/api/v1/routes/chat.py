@@ -124,6 +124,10 @@ class ChatThreadOut(BaseModel):
     updated_at: datetime
     message_count: int
     messages: list[ChatMessageOut]
+    # Conversation purpose tag (``shape_project`` for drafting mode,
+    # null otherwise). Surfaced so the client can render mode-specific
+    # UI hints (e.g. a subtle "Drafting a project" banner).
+    intent: str | None = None
 
 
 class ChatThreadSummaryOut(BaseModel):
@@ -150,6 +154,12 @@ class ChatActiveNewIn(BaseModel):
     title: str | None = Field(default=None, max_length=512)
     pack_into_bucket_slug: str | None = Field(default=None, max_length=120)
     pack_into_bucket_name: str | None = Field(default=None, max_length=255)
+    # Conversation purpose. ``shape_project`` flips Navigator into
+    # drafting mode (system prompt biases toward shaping a brief and
+    # waiting for explicit confirmation before calling create_project).
+    # NULL = default chat. The dashboard's "+ New project" CTA passes
+    # ``shape_project``; everything else leaves it null.
+    intent: Literal["shape_project"] | None = None
 
 
 class ChatStreamIn(BaseModel):
@@ -309,6 +319,7 @@ def _thread_to_out(
         updated_at=thread.updated_at,
         message_count=len(messages),
         messages=[_msg_to_out(m) for m in messages],
+        intent=thread.intent,
     )
 
 
@@ -455,9 +466,11 @@ async def new_active_thread(
     fresh = ChatThread(
         workspace_id=workspace_id,
         created_by_user_id=auth.user.id,
-        title=payload.title or "New conversation",
+        title=payload.title
+        or ("Drafting a project" if payload.intent == "shape_project" else "New conversation"),
         status="active",
         last_user_activity_at=datetime.now(timezone.utc),
+        intent=payload.intent,
     )
     session.add(fresh)
     await session.flush()
@@ -702,6 +715,11 @@ async def _run_agent_turn(
         # so the tool can promote hits from the repo the user is
         # browsing into the top rank band even on a zero-arg tool call.
         active_repo_id=thread.repo_id,
+        # ELS-74 (drafting mode): pass the active thread context so
+        # ``create_project`` can stamp ``originating_thread_id`` on
+        # the priorities row for a future "Continue shaping" deep-link.
+        thread_id=thread.id,
+        thread_intent=thread.intent,
     )
 
     messages = await _thread_messages(session, thread.id)

@@ -99,6 +99,39 @@ def _load_navigator_prompt() -> str:
     return default.prompt.strip()
 
 
+_PROJECT_DRAFTING_MODE_PROMPT = (
+    "## Mode: Project drafting\n"
+    "\n"
+    "This thread was opened from the dashboard's **+ New project** "
+    "CTA. The user is here to shape ONE feature vision into a "
+    "Linear project (or Jira epic). Run the conversation like this:\n"
+    "\n"
+    "1. **Reflect** the user's idea back in 3 short bullets — who it's "
+    "for, why it matters, what's explicitly out of scope. Don't pad.\n"
+    "2. **Ask the single sharpest open question** that closes the "
+    "biggest ambiguity. ONE question per turn — not a checklist.\n"
+    "3. As the brief firms up, **draft the project body inline as a "
+    "preview** (a markdown block titled `## Project draft`). Sections: "
+    "**Goal**, **Scope**, **Non-goals**, **Open questions**. Edit the "
+    "preview across turns; don't rewrite the whole thing each time.\n"
+    "4. **Do NOT call `create_project` until the user explicitly "
+    "confirms** ('save it', 'looks good', 'ship it', equivalent). "
+    "Premature commit is the failure mode this mode exists to "
+    "prevent — the project ends up on the dashboard before the brief "
+    "is ready, then sits there as noise.\n"
+    "5. After `create_project` lands, **prefer "
+    "`append_project_description`** over chatter for any further body "
+    "edits. NEVER spawn a second `create_project` for the same idea — "
+    "that produces ghost projects on the dashboard.\n"
+    "\n"
+    "The dashboard places the new project in the **Drafts** bucket "
+    "(internal enum value `priority_state='planning'`). The agent's "
+    "autonomous picker does not consume Drafts — the user has to "
+    "explicitly hand the project off to decomposition before any "
+    "specialist runs. You don't need to tell the user this; just "
+    "don't promise immediate work."
+)
+
 _NAVIGATOR_FALLBACK_PROMPT = (
     "You are Ship Navigator, a software-engineering agent in a single "
     "chat window. Be concrete, accurate, concise. Use tools whenever "
@@ -898,6 +931,21 @@ class TopicService:
         if policies_preamble:
             out.append(
                 ChatMessage(role="system", content=policies_preamble)
+            )
+        # ELS-74: drafting mode. When the thread carries
+        # ``intent='shape_project'`` the dashboard's "+ New project" CTA
+        # opened it; bias Navigator toward shaping a brief and waiting
+        # for explicit confirmation before calling ``create_project``.
+        # The block lives here (after policies, before per-thread
+        # warmed memory) so workspace-level rules still take precedence
+        # but the mode override beats the topic summary, which can
+        # drift across turns.
+        if thread.intent == "shape_project":
+            out.append(
+                ChatMessage(
+                    role="system",
+                    content=_PROJECT_DRAFTING_MODE_PROMPT,
+                )
             )
         if thread.topic_summary:
             out.append(

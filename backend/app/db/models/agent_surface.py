@@ -299,6 +299,14 @@ class ChatThread(Base):
     )
     resolved_ticket_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
+    # Conversation purpose tag. NULL means "default Navigator chat";
+    # ``shape_project`` flips the system prompt into drafting mode (the
+    # agent reflects scope, asks the sharpest open question, drafts the
+    # body inline, and waits for explicit confirmation before calling
+    # ``create_project``). Set once on creation by the dashboard's
+    # "+ New project" CTA; never mutated.
+    intent: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
     # --- C12 single-window UX ---
     # Natural-language recap rendered as a sentinel "Packed → bucket X"
     # message in the chat UI when the thread is packed into a bucket.

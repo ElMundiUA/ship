@@ -78,7 +78,14 @@ class _StubTracker:
         }
 
 
-def _toolbox(db_session, workspace, user):
+def _toolbox(
+    db_session,
+    workspace,
+    user,
+    *,
+    thread_id=None,
+    thread_intent=None,
+):
     from backend.app.core.config import get_settings
     from backend.app.services.agent.tools import ToolBox
 
@@ -87,6 +94,8 @@ def _toolbox(db_session, workspace, user):
         settings=get_settings(),
         workspace_id=workspace.id,
         user_id=user.id,
+        thread_id=thread_id,
+        thread_intent=thread_intent,
     )
 
 
@@ -248,6 +257,137 @@ async def test_planning_anchor_returns_none_for_unsupported_tracker(
     # Did NOT proceed to create — get_planning_anchor's
     # NotImplementedError is the "this tracker can't" signal.
     assert tracker.create_calls == []
+
+
+@pytest.mark.asyncio
+async def test_drafts_row_stamps_originating_thread_when_provided(
+    db_session, seed_workspace
+) -> None:
+    """When the toolbox knows the active thread (drafting mode) the new
+    priorities row carries ``originating_thread_id`` so the dashboard
+    can deep-link a "Continue shaping" affordance back to the
+    conversation."""
+    import uuid as _uuid
+    from datetime import datetime, timezone
+
+    from backend.app.db.models.agent_surface import ChatThread
+    from backend.app.db.models.dashboard_priorities import (
+        WorkspaceProjectPriority,
+    )
+
+    user, _, workspace = seed_workspace
+    thread = ChatThread(
+        workspace_id=workspace.id,
+        created_by_user_id=user.id,
+        title="Drafting a project",
+        status="active",
+        intent="shape_project",
+        last_user_activity_at=datetime.now(timezone.utc),
+    )
+    db_session.add(thread)
+    await db_session.flush()
+
+    toolbox = _toolbox(
+        db_session,
+        workspace,
+        user,
+        thread_id=thread.id,
+        thread_intent="shape_project",
+    )
+    await toolbox._ensure_drafts_priorities_row(
+        project_native_id="proj-drafted"
+    )
+
+    row = (
+        await db_session.execute(
+            select(WorkspaceProjectPriority).where(
+                WorkspaceProjectPriority.workspace_id == workspace.id,
+                WorkspaceProjectPriority.project_native_id == "proj-drafted",
+            )
+        )
+    ).scalar_one()
+    assert row.originating_thread_id == thread.id
+    assert row.state == "planning"
+
+
+@pytest.mark.asyncio
+async def test_drafts_row_backfills_thread_link_on_existing_row(
+    db_session, seed_workspace
+) -> None:
+    """A project that already has a priorities row but no thread link
+    (e.g. created from a default chat first) gets backfilled when the
+    same project is touched from a drafting thread. The reverse path —
+    overwriting an existing thread link — is rejected so deep-links
+    don't drift."""
+    from datetime import datetime, timezone
+
+    from backend.app.db.models.agent_surface import ChatThread
+    from backend.app.db.models.dashboard_priorities import (
+        WorkspaceProjectPriority,
+    )
+
+    user, _, workspace = seed_workspace
+
+    # Pre-existing priorities row (no thread link).
+    db_session.add(
+        WorkspaceProjectPriority(
+            workspace_id=workspace.id,
+            project_native_id="proj-x",
+            ordinal=0,
+            state="planning",
+        )
+    )
+    await db_session.flush()
+
+    thread = ChatThread(
+        workspace_id=workspace.id,
+        created_by_user_id=user.id,
+        title="Drafting a project",
+        status="active",
+        intent="shape_project",
+        last_user_activity_at=datetime.now(timezone.utc),
+    )
+    db_session.add(thread)
+    await db_session.flush()
+
+    toolbox = _toolbox(
+        db_session, workspace, user, thread_id=thread.id
+    )
+    await toolbox._ensure_drafts_priorities_row(
+        project_native_id="proj-x"
+    )
+
+    row = (
+        await db_session.execute(
+            select(WorkspaceProjectPriority).where(
+                WorkspaceProjectPriority.workspace_id == workspace.id,
+                WorkspaceProjectPriority.project_native_id == "proj-x",
+            )
+        )
+    ).scalar_one()
+    assert row.originating_thread_id == thread.id
+
+    # Second drafting thread — the link must NOT change. First
+    # thread wins so the deep-link doesn't drift.
+    second_thread = ChatThread(
+        workspace_id=workspace.id,
+        created_by_user_id=user.id,
+        title="Different drafting",
+        status="active",
+        intent="shape_project",
+        last_user_activity_at=datetime.now(timezone.utc),
+    )
+    db_session.add(second_thread)
+    await db_session.flush()
+
+    toolbox2 = _toolbox(
+        db_session, workspace, user, thread_id=second_thread.id
+    )
+    await toolbox2._ensure_drafts_priorities_row(
+        project_native_id="proj-x"
+    )
+    await db_session.refresh(row)
+    assert row.originating_thread_id == thread.id
 
 
 @pytest.mark.asyncio

@@ -83,6 +83,17 @@ class WorkspaceProjectPriority(Base):
         nullable=False,
         server_default=text("'active'"),
     )
+    # Backref to the Navigator thread this project was drafted in.
+    # Powers the "Continue shaping" link on Drafts-bucket rows: clicking
+    # re-opens the originating conversation rather than spawning a new
+    # one (the agent then prefers ``append_project_description`` over
+    # creating a duplicate). Null for projects that predate the drafting
+    # flow or were created outside Navigator (e.g. directly in Linear).
+    originating_thread_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("chat_threads.id", ondelete="SET NULL"),
+        nullable=True,
+    )
 
     created_at: Mapped[datetime] = _ts_created()
     updated_at: Mapped[datetime] = _ts_updated()
