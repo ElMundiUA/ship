@@ -16,8 +16,11 @@ import { revalidatePath } from "next/cache";
 import {
   ApiHttpError,
   type ApiPrioritiesResponse,
+  type ApiPriorityState,
+  type ApiReorderRow,
   reorderPriorities,
   setAutonomyPaused,
+  setPriorityState,
 } from "@/lib/api/client";
 import { getSessionToken } from "@/lib/api/session";
 
@@ -51,7 +54,7 @@ function toError<T extends { ok: false; message: string; status?: number }>(
 
 export async function reorderPrioritiesAction(
   workspaceId: string,
-  order: string[],
+  order: ApiReorderRow[],
 ): Promise<PriorityActionResult> {
   if (!workspaceId) {
     return { ok: false, message: "workspaceId is required" };
@@ -64,6 +67,38 @@ export async function reorderPrioritiesAction(
   }
   try {
     const payload = await reorderPriorities(workspaceId, order, token);
+    revalidatePath("/");
+    return { ok: true, payload };
+  } catch (err) {
+    return toError(err);
+  }
+}
+
+
+export async function setProjectStateAction(
+  workspaceId: string,
+  projectNativeId: string,
+  state: ApiPriorityState,
+): Promise<PriorityActionResult> {
+  if (!workspaceId) {
+    return { ok: false, message: "workspaceId is required" };
+  }
+  if (!projectNativeId) {
+    return { ok: false, message: "projectNativeId is required" };
+  }
+  let token: string;
+  try {
+    token = await requireToken();
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : String(err) };
+  }
+  try {
+    const payload = await setPriorityState(
+      workspaceId,
+      projectNativeId,
+      state,
+      token,
+    );
     revalidatePath("/");
     return { ok: true, payload };
   } catch (err) {

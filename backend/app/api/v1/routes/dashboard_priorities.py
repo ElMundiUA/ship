@@ -89,13 +89,23 @@ class TrackerSyncOut(BaseModel):
     scopes: list[str] | None
 
 
+# Workspace-side bucket on the prioritizer. ``active`` projects are
+# the ones the agent's picker may consume; ``planning`` and ``parked``
+# are operator-private. Default ``active`` for any saved row that
+# pre-dates the column (server_default backfill).
+PriorityState = Literal["active", "planning", "parked"]
+
+
 class PriorityProjectOut(BaseModel):
     """One row in the prioritizer list."""
 
     project_native_id: str
     name: str
     slug: str | None
-    state: str | None
+    # Tracker-side state (``started`` / ``planned`` / etc) — Linear's
+    # own field. Distinct from ``priority_state`` below, which is the
+    # operator's bucket on the dashboard.
+    tracker_state: str | None
     url: str | None
     color: str | None
     # Saved priority position (0 = top). NULL when the project hasn't
@@ -103,6 +113,11 @@ class PriorityProjectOut(BaseModel):
     # rows by ``updated_at`` and renders the drag handle in the
     # "fresh" affordance.
     ordinal: int | None
+    # Operator bucket: ``active`` (agent picks from here), ``planning``
+    # (operator is shaping it, agent invisible), ``parked`` (hold).
+    # Null only for unprioritised tail rows that don't have a saved
+    # priorities row yet — the UI treats those as "drag in to bucket".
+    priority_state: PriorityState | None
     # Completion magnitude. ``total`` is None when the tracker can't
     # tell us — the UI renders ``—`` and skips the bar.
     completed: int | None
@@ -133,15 +148,40 @@ class PrioritiesOut(BaseModel):
     last_action: LastActionOut | None
 
 
-class ReorderIn(BaseModel):
-    """Body for ``POST /reorder`` — canonical order of project ids.
+class ReorderRowIn(BaseModel):
+    """One row in a ``POST /reorder`` body.
 
-    The list is the new full ordering: any project_native_id missing
-    from the list is unprioritised (its row is deleted). Duplicates
-    are rejected with 400.
+    The client emits the canonical post-edit order of every saved
+    project — both its bucket (``state``) and position (implicit from
+    the array index). Server bulk-replaces; rows missing from the list
+    are unprioritised (their row is deleted).
     """
 
-    order: list[str] = Field(min_length=0, max_length=200)
+    project_native_id: str = Field(min_length=1, max_length=128)
+    state: PriorityState = "active"
+
+
+class ReorderIn(BaseModel):
+    """Body for ``POST /reorder`` — canonical (state, order) of project ids.
+
+    Each entry pairs a project id with the bucket it should land in.
+    The list as a whole defines both ordering (array index → ordinal)
+    and bucket (per-row ``state``). Any project_native_id missing from
+    the list is unprioritised — its row is deleted. Duplicates are
+    rejected with 400.
+    """
+
+    order: list[ReorderRowIn] = Field(min_length=0, max_length=200)
+
+
+class SetStateIn(BaseModel):
+    """Body for ``POST /state`` — quick atomic state change for a single
+    row. Convenience over ``/reorder`` for keyboard / row-menu callers
+    that don't want to reconstruct the full canonical list.
+    """
+
+    project_native_id: str = Field(min_length=1, max_length=128)
+    state: PriorityState
 
 
 class AutonomyIn(BaseModel):
@@ -339,15 +379,19 @@ async def get_priorities(
             raw.get("progress"), raw.get("scope")
         )
         saved = saved_by_id.get(native_id)
+        priority_state: PriorityState | None = (
+            saved.state if saved else None  # type: ignore[assignment]
+        )
         projects.append(
             PriorityProjectOut(
                 project_native_id=native_id,
                 name=str(raw.get("name") or ""),
                 slug=str(raw.get("slug") or "") or None,
-                state=str(raw.get("state") or "") or None,
+                tracker_state=str(raw.get("state") or "") or None,
                 url=str(raw.get("url") or "") or None,
                 color=str(raw.get("color") or "") or None,
                 ordinal=saved.ordinal if saved else None,
+                priority_state=priority_state,
                 completed=completed,
                 total=total,
             )
@@ -404,13 +448,16 @@ async def get_priorities(
 
     autonomy_paused = _autonomy_paused(workspace)
 
-    # Up-next strip pulls from the top of the prioritizer list. We
-    # render it even when paused (the UI dims the strip and swaps the
-    # copy to "paused · resume to pull").
+    # Up-next strip pulls from the top of the *Active* bucket. The
+    # picker contract: planning + parked rows are operator-private and
+    # must never surface as "what the agent is about to do". We render
+    # the strip even when paused (the UI dims it + swaps the copy).
     up_next: UpNextOut | None = None
     for project in projects:
         if project.ordinal is None:
             break
+        if project.priority_state != "active":
+            continue
         up_next = UpNextOut(
             project_native_id=project.project_native_id,
             project_name=project.name,
@@ -442,9 +489,10 @@ async def reorder_priorities(
     )
     await _load_workspace(session, workspace_id)
 
+    native_ids = [row.project_native_id for row in payload.order]
     # Reject duplicates so a buggy client can't end up with two rows
     # claiming the same project under conflicting ordinals.
-    if len(payload.order) != len(set(payload.order)):
+    if len(native_ids) != len(set(native_ids)):
         raise HTTPException(
             status_code=400,
             detail="reorder.order contains duplicate project_native_id",
@@ -458,12 +506,13 @@ async def reorder_priorities(
             WorkspaceProjectPriority.workspace_id == workspace_id
         )
     )
-    for ordinal, native_id in enumerate(payload.order):
+    for ordinal, row in enumerate(payload.order):
         session.add(
             WorkspaceProjectPriority(
                 workspace_id=workspace_id,
-                project_native_id=native_id,
+                project_native_id=row.project_native_id,
                 ordinal=ordinal,
+                state=row.state,
             )
         )
 
@@ -475,7 +524,94 @@ async def reorder_priorities(
             action="dashboard.priorities.reorder",
             target_kind="workspace",
             target_id=str(workspace_id),
-            payload={"order": payload.order},
+            payload={
+                "order": [
+                    {
+                        "project_native_id": row.project_native_id,
+                        "state": row.state,
+                    }
+                    for row in payload.order
+                ]
+            },
+        )
+    )
+    await session.flush()
+
+    return await get_priorities(
+        workspace_id=workspace_id,
+        auth=auth,
+        session=session,
+        settings=settings,
+    )
+
+
+@router.post("/state", response_model=PrioritiesOut)
+async def set_priority_state(
+    workspace_id: uuid.UUID,
+    payload: SetStateIn,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> PrioritiesOut:
+    """Set the bucket (active/planning/parked) for one prioritised
+    project without rewriting the whole ordering.
+
+    Used by keyboard / row-menu callers. Drag-and-drop in the UI goes
+    through ``/reorder`` because dropping across a section divider
+    changes both bucket and position in one user gesture.
+
+    If the project doesn't have a saved priorities row yet (it's been
+    sitting unprioritised in the tracker tail), we create one at the
+    bottom of the workspace's ordinal range so it shows up in the
+    requested bucket without disturbing existing ordinals.
+    """
+    await _require_membership(
+        session, workspace_id, auth.user.id, ROLES_ADMIN
+    )
+    await _load_workspace(session, workspace_id)
+
+    existing = (
+        await session.execute(
+            select(WorkspaceProjectPriority).where(
+                WorkspaceProjectPriority.workspace_id == workspace_id,
+                WorkspaceProjectPriority.project_native_id
+                == payload.project_native_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is None:
+        max_ord = (
+            await session.execute(
+                select(WorkspaceProjectPriority.ordinal)
+                .where(WorkspaceProjectPriority.workspace_id == workspace_id)
+                .order_by(WorkspaceProjectPriority.ordinal.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        next_ord = 0 if max_ord is None else int(max_ord) + 1
+        session.add(
+            WorkspaceProjectPriority(
+                workspace_id=workspace_id,
+                project_native_id=payload.project_native_id,
+                ordinal=next_ord,
+                state=payload.state,
+            )
+        )
+    elif existing.state != payload.state:
+        existing.state = payload.state
+
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=auth.user.id,
+            actor_token_id=auth.token.id if auth.token else None,
+            action="dashboard.priorities.set_state",
+            target_kind="workspace",
+            target_id=str(workspace_id),
+            payload={
+                "project_native_id": payload.project_native_id,
+                "state": payload.state,
+            },
         )
     )
     await session.flush()
