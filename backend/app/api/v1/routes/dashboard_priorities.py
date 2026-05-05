@@ -386,12 +386,20 @@ async def get_priorities(
                 supports_projects=False,
             )
         else:
-            err = integration.last_health_error or fetch_error
+            # Status reflects the result of the *current* fetch, not
+            # whatever ``last_health_error`` happens to be sitting in
+            # the integration row. The OAuth callback and the
+            # provisioner both write to ``last_health_error`` from
+            # entirely separate code paths; mixing it with the live
+            # fetch state turns "I just resolved a stale provisioning
+            # blip" into "Linear is broken" on the dashboard. Surface
+            # the stored error in ``last_health_error`` for ops/audit,
+            # but only flip ``status`` when the live fetch failed.
             tracker_out = TrackerSyncOut(
                 kind=kind,
-                status="error" if err else "connected",
+                status="error" if fetch_error else "connected",
                 last_health_at=integration.last_health_at,
-                last_health_error=err,
+                last_health_error=fetch_error or integration.last_health_error,
                 supports_projects=supports_projects,
             )
 

@@ -194,6 +194,36 @@ export function DashboardPrioritizer({ workspaceId, initial }: Props) {
   }
 
   if (allProjects.length === 0) {
+    // Two empty shapes share an empty list, but mean very different
+    // things: the tracker errored on this fetch (we can't say
+    // anything about Linear's project count) vs. the tracker
+    // connected fine and the team has no projects yet. Conflating
+    // them puts a scaffold "Add a project" line under a coral
+    // ``error · reconnect`` hairline, which reads as "the prioritizer
+    // is broken" — exactly the bug we hit in the first PR.
+    if (tracker.status === "error") {
+      return (
+        <PrioritizerSection
+          autonomyPaused={serverState.autonomy_paused}
+          upNext={null}
+          onToggleAutonomy={toggleAutonomy}
+          tracker={tracker}
+          pending={pending}
+        >
+          <li className="space-y-1 py-3 text-[12px]">
+            <p className="text-coral/85">
+              Couldn&apos;t fetch projects from{" "}
+              {tracker.kind === "linear" ? "Linear" : "the tracker"}.
+            </p>
+            {tracker.last_health_error ? (
+              <p className="font-mono text-[10.5px] text-coral/60">
+                {tracker.last_health_error}
+              </p>
+            ) : null}
+          </li>
+        </PrioritizerSection>
+      );
+    }
     return (
       <PrioritizerSection
         autonomyPaused={serverState.autonomy_paused}

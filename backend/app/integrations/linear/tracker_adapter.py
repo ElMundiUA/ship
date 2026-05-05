@@ -15,8 +15,12 @@ enough that re-fetching the token costs nothing.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Any
+
+
+logger = logging.getLogger(__name__)
 
 import httpx
 
@@ -599,7 +603,12 @@ class LinearTracker:
         ``canceled``). ``query`` matches project name (case-insensitive
         contains). Returns ``{"id", "name", "slug", "state", "url",
         "updated_at", "lead_name", "progress", "scope", "color"}`` per
-        project.
+        project — the last three are dashboard-only enrichment that
+        Linear may reject on certain workspace tiers; we fall back to
+        the basic shape (``progress``/``scope``/``color`` = ``None``)
+        rather than fail the call when they error out, so a connected
+        Linear that can't serve the rich fields still renders the
+        prioritizer list.
 
         ``progress`` is the 0-1 fraction Linear reports; ``scope`` is the
         total magnitude (issue count when no estimates are set, otherwise
@@ -615,7 +624,7 @@ class LinearTracker:
         if query:
             filter_clauses["name"] = {"containsIgnoreCase": query}
 
-        gql_query = """
+        rich_query = """
         query ShipListProjects($filter: ProjectFilter, $first: Int!) {
           projects(filter: $filter, first: $first, orderBy: updatedAt) {
             nodes {
@@ -633,9 +642,35 @@ class LinearTracker:
           }
         }
         """
-        data = await self._gql(
-            gql_query, {"filter": filter_clauses, "first": min(limit, 100)}
-        )
+        basic_query = """
+        query ShipListProjects($filter: ProjectFilter, $first: Int!) {
+          projects(filter: $filter, first: $first, orderBy: updatedAt) {
+            nodes {
+              id
+              name
+              slugId
+              state
+              url
+              updatedAt
+              lead { name }
+            }
+          }
+        }
+        """
+        variables = {"filter": filter_clauses, "first": min(limit, 100)}
+        try:
+            data = await self._gql(rich_query, variables)
+        except RuntimeError as exc:
+            # Linear rejected one of the enrichment fields (the only
+            # way ``_gql`` raises here is a ``errors[0].message`` from
+            # the GraphQL response). Re-issue the call with the basic
+            # shape and let the dashboard render without bars.
+            logger.warning(
+                "linear list_projects rich query rejected, falling back: %s",
+                exc,
+            )
+            data = await self._gql(basic_query, variables)
+
         nodes = ((data.get("projects") or {}).get("nodes")) or []
         return [
             {
