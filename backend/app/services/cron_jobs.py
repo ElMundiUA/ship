@@ -38,6 +38,7 @@ from backend.app.services.knowledge_reconciler import (
 )
 from backend.app.services.knowledge_router import route_all_workspaces
 from backend.app.services.knowledge_synth import synthesise_all_workspaces
+from backend.app.services.knowledge_claim_decay import decay_workspace_claims
 from backend.app.services.knowledge_topic_renderer import (
     render_workspace_topics,
 )
@@ -399,6 +400,54 @@ async def _knowledge_topic_render_tick() -> None:
         )
 
 
+@cron_with_lock(
+    lock=CronLockId.KNOWLEDGE_CLAIM_DECAY, name="knowledge_claim_decay"
+)
+async def _knowledge_claim_decay_tick() -> None:
+    """Daily soft-stale of unconfirmed active claims.
+
+    Per workspace: bulk-flip active claims whose ``last_seen_at``
+    fell outside the decay window. The flip is non-destructive
+    (``status='stale'``); operator review or a fresh source
+    re-asserting the same text auto-revives the row through the
+    extractor's dedup short-circuit.
+
+    Excluded by construction:
+    - ``superseded`` rows — already non-active via the supersedes
+      graph; flipping them again would muddy the audit trail.
+    - ``disputed`` rows — operator owes a decision; decay shouldn't
+      sneak around the inbox review.
+
+    Bulk UPDATE keeps the per-workspace cost O(1) round trips.
+    Topic-view cache invalidation rides for free: any view whose
+    active-claim set just lost a member computes a different
+    ``claim_set_sha`` on the next renderer tick and regenerates.
+    """
+    sm = get_sessionmaker()
+    workspace_ids = await _all_workspace_ids()
+    total_flipped = 0
+    for ws_id in workspace_ids:
+        async with sm() as session:
+            try:
+                report = await decay_workspace_claims(
+                    session, workspace_id=ws_id
+                )
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                log.exception(
+                    "knowledge_claim_decay tick: ws=%s failed", ws_id
+                )
+                continue
+        total_flipped += report.flipped_stale
+    if total_flipped:
+        log.info(
+            "knowledge_claim_decay tick: workspaces=%d flipped_stale=%d",
+            len(workspace_ids),
+            total_flipped,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Step 6 — daily archive GC
 # ---------------------------------------------------------------------------
@@ -500,6 +549,17 @@ def register_all() -> None:
         fn=_knowledge_decay_tick,
         cron_expr="15 3 * * *",  # daily at 03:15 UTC
         job_id="knowledge_decay",
+    )
+    # Claim decay also runs once a day, offset 15 min from the
+    # bucket-article GC so log lines don't interleave during the
+    # 03:00-04:00 quiet window. The bulk-UPDATE shape keeps even
+    # large-canon workspaces cheap; running daily is a deliberate
+    # de-noise — operator-visible status flips shouldn't churn at
+    # cron-tick cadence.
+    register_cron(
+        fn=_knowledge_claim_decay_tick,
+        cron_expr="30 3 * * *",  # daily at 03:30 UTC
+        job_id="knowledge_claim_decay",
     )
 
 

@@ -88,6 +88,7 @@ class CronLockId(IntEnum):
     KNOWLEDGE_CLAIM_EXTRACT = 1006
     KNOWLEDGE_CLAIM_RECONCILE = 1007
     KNOWLEDGE_TOPIC_RENDER = 1008
+    KNOWLEDGE_CLAIM_DECAY = 1009
 
 
 # ---------------------------------------------------------------------------
