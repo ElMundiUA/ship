@@ -693,9 +693,25 @@ function RepositoryRow({
         <form action="/api/settings/repositories/reseed" method="post">
           <input type="hidden" name="workspaceId" value={workspaceId} />
           <input type="hidden" name="repoId" value={repo.id} />
+          {/*
+            ``include_fsm`` keys off the *config* status, not the bundle
+            staleness. When the repo already has a ``process:`` block
+            (FSM ready), the reseed PR refreshes the bundle (knowledge
+            starters, agent rule files, scheduled-trigger workflow) but
+            **leaves the existing process block alone** — otherwise an
+            "update Ship version" click would silently rewrite the
+            operator's tailored FSM. Repos that have no FSM block yet
+            (missing / legacy config) get the full seed including the
+            process template, same as the Full setup wizard.
+          */}
+          <input
+            type="hidden"
+            name="include_fsm"
+            value={configStatus.kind === "ready" ? "false" : "true"}
+          />
           <button
             type="submit"
-            disabled={configStatus.kind === "ready"}
+            disabled={!stale}
             className="inline-flex rounded-full border border-aqua/30 bg-aqua/10 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-aqua transition hover:bg-aqua/20 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/[0.04] disabled:text-white/30"
           >
             Update Ship version

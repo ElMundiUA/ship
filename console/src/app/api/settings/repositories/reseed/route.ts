@@ -12,6 +12,13 @@ export async function POST(request: Request) {
   const form = await request.formData();
   const workspaceId = stringField(form, "workspaceId");
   const repoId = stringField(form, "repoId");
+  // ``include_fsm`` is sent by the table row based on the repo's
+  // current ``process:`` config state. ``"false"`` for FSM-ready
+  // repos so a bundle bump doesn't silently rewrite the operator's
+  // tailored process block; ``"true"`` for repos without a process
+  // block yet (full seed mirrors first-time-setup wizard behaviour).
+  // Defaults to ``true`` if the field is absent (legacy callers).
+  const includeFsm = stringField(form, "include_fsm") !== "false";
 
   if (!workspaceId || !repoId) {
     return redirectToSettings(request, "bad_input");
@@ -25,7 +32,7 @@ export async function POST(request: Request) {
     const result = await wizardSeed(
       workspaceId,
       repoId,
-      { include_fsm: true, rotate_run_token: false },
+      { include_fsm: includeFsm, rotate_run_token: false },
       token,
     );
     return NextResponse.redirect(result.pr_url, 303);
