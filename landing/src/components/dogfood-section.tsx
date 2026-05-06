@@ -9,12 +9,16 @@ import Link from "next/link";
  * Ship's process model — Cursor, Claude Code, Codex — with humans
  * reviewing, deciding priority, and merging.
  *
+ * Numbers refreshed 2026-05-07 (30 days post-extraction).
+ *
  * If the numbers below get stale, regenerate from the repo:
  *   - Lines of code: cloc-style sweep over backend/, console/, landing/,
  *     cli/, e2e/, documentation/ — excluding node_modules/.venv/dist.
  *   - Commits: `git log --oneline | wc -l`.
  *   - Days: subtract the first commit date from today.
  *   - Authors: `git shortlog -sn --all`.
+ *   - Knowledge canon (Ship workspace): claims + topic_views from
+ *     ``GET /v1/workspaces/{ship}/knowledge/topic-views``.
  */
 
 type Stat = {
@@ -33,15 +37,15 @@ const STATS: Stat[] = [
     accent: "aqua",
   },
   {
-    value: "234",
+    value: "236",
     unit: "k+",
     label: "Lines of code shipped",
-    body: "119k Python (backend, CLI), 79k TypeScript (console + landing + e2e), 36k Markdown (docs, blog, book). All of it AI-authored.",
+    body: "137k Python (backend, workers), 73k TypeScript (console, landing, CLI, e2e), 26k Markdown (docs, blog, book). All AI-authored.",
     accent: "sun",
   },
   {
-    value: "501",
-    label: "Commits in 25 days",
+    value: "608",
+    label: "Commits in 30 days",
     body: "From extraction on 2026-04-07 to today. Every commit on main, public, with the AI executor named in the trail.",
     accent: "lilac",
   },
@@ -78,19 +82,19 @@ export function DogfoodSection() {
 
         <div className="mt-14 grid items-stretch gap-6 lg:grid-cols-3">
           <Quote
-            kicker="From the blog"
-            line="189 commits. 16 days. One repo."
-            cite="ship-the-first-two-weeks"
+            kicker="From the canon"
+            line="496 docs ingested → 708 atomic claims → 98 auto-rendered topics. Same workflow."
+            cite="/knowledge — the workspace's own knowledge base"
           />
           <Quote
             kicker="From the catalogue"
-            line="15 specialists, 8 routines, 1 production process — running on themselves."
-            cite="catalogue v0.14.2"
+            line="25 specialists, 9 routines, 1 production process — running on themselves."
+            cite="catalogue v0.13"
           />
           <Quote
             kicker="From the changelog"
-            line="Phase 8 → 10 shipped in three weeks. Same workspace built it."
-            cite="phases 8–10"
+            line="Claim-graph P0 → P5 shipped in 36 hours. The same agents wrote, reviewed, and merged it."
+            cite="2026-05-05 → 2026-05-06"
           />
         </div>
 
