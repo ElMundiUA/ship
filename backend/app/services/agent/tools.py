@@ -21,6 +21,9 @@ Tool inventory (C12 Phase 2.2):
   source.
 - :meth:`list_code_map` — flat file list of an activated repo (what
   the Code Map page already renders, but as a tool call).
+- :meth:`repo_symbols` — on-demand tree-sitter symbol extraction
+  (Python / TypeScript / TSX / Go). Resolves a name → file/line/
+  signature without a preindex. ELS-72.
 - :meth:`list_activated_repos` — enumerate the workspace's activated
   repos with their UUIDs, so the LLM can call ``get_repo_file`` /
   ``list_code_map`` without having to ask the user for an id.
@@ -404,6 +407,85 @@ class ToolBox:
                                 "set; otherwise the next segment below "
                                 "the prefix). Useful for exploring a "
                                 "repo layout."
+                            ),
+                        },
+                    },
+                    "required": ["repo_id"],
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="repo_symbols",
+                description=(
+                    "Resolve symbol names → file/line/signature without a "
+                    "preindex. On-demand tree-sitter parse of the requested "
+                    "files (Python / TypeScript / TSX / Go in v1). Two modes:\n"
+                    "  • ``paths``: pass a list of repo-relative files, get "
+                    "every symbol in those files.\n"
+                    "  • ``query``: pass a symbol name (e.g. ``UserRepo``); "
+                    "GitHub code search narrows down to candidate files, "
+                    "then the parser filters per-file results to symbols "
+                    "whose name matches (case-insensitive substring).\n\n"
+                    "Use this when you need to *find* a symbol by name "
+                    "(``where is class Foo defined?``) or *enumerate* the "
+                    "symbols in a known file. For full file contents, fall "
+                    "back to ``get_repo_file``. Output rows: ``{file, "
+                    "symbol, kind, line, signature}`` with ``kind`` ∈ "
+                    "``function|class|method|interface|type|struct|enum|"
+                    "var|const``."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "repo_id": {
+                            "type": "string",
+                            "description": "UUID of the activated repo.",
+                        },
+                        "query": {
+                            "type": "string",
+                            "description": (
+                                "Symbol name (case-insensitive substring) "
+                                "to search for. Required when ``paths`` is "
+                                "omitted."
+                            ),
+                        },
+                        "paths": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": (
+                                "Repo-relative file paths to parse. Use "
+                                "instead of ``query`` when you already know "
+                                "which files to inspect (faster, deterministic)."
+                            ),
+                        },
+                        "kinds": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": (
+                                "Optional filter on symbol kind, e.g. "
+                                "``[\"function\", \"method\"]`` to skip "
+                                "classes / vars."
+                            ),
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 200,
+                            "default": 50,
+                            "description": (
+                                "Max symbols to return across all parsed "
+                                "files."
+                            ),
+                        },
+                        "max_files": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 50,
+                            "default": 25,
+                            "description": (
+                                "Max files to fetch + parse per call. "
+                                "Keeps latency bounded; reduce when only a "
+                                "few hits are needed."
                             ),
                         },
                     },
@@ -2168,6 +2250,7 @@ class ToolBox:
         return {
             "get_repo_file": self._tool_get_repo_file,
             "list_code_map": self._tool_list_code_map,
+            "repo_symbols": self._tool_repo_symbols,
             "list_activated_repos": self._tool_list_activated_repos,
             "create_ticket": self._tool_create_ticket,
             "list_tickets": self._tool_list_tickets,
@@ -2422,6 +2505,158 @@ class ToolBox:
                 "matched": len(files),
                 "truncated": truncated,
                 "files": files[:_MAX_CODE_MAP_ENTRIES],
+            }
+        )
+
+    async def _tool_repo_symbols(self, args: dict[str, Any]) -> str:
+        """On-demand symbol extraction (ELS-72).
+
+        Resolves a symbol name → ``[{file, symbol, kind, line, signature}]``
+        by parsing the requested files with tree-sitter on the fly. The
+        agent points this tool at a known file (``paths=["backend/app/main.py"]``)
+        OR a free-text ``query`` — the latter pre-filters with GitHub
+        code search to find candidate files, then parses only those.
+
+        No preindex, no DB writes — same fetch path
+        ``_tool_get_repo_file`` already uses. Languages in v1: Python,
+        TypeScript / TSX, Go.
+        """
+        from backend.app.services.agent.symbol_parser import (
+            LANGUAGE_BY_EXTENSION,
+            extract_symbols,
+            language_for_path,
+        )
+
+        repo_id = _parse_uuid(args, "repo_id")
+        query = args.get("query")
+        if query is not None and not isinstance(query, str):
+            raise ToolInvocationError("query must be a string when provided")
+        query_str = query.strip() if isinstance(query, str) else ""
+        paths_arg = args.get("paths")
+        paths: list[str] = []
+        if isinstance(paths_arg, list):
+            for raw in paths_arg:
+                if isinstance(raw, str) and raw.strip():
+                    paths.append(raw.strip())
+        kinds_arg = args.get("kinds")
+        kinds: set[str] | None = None
+        if isinstance(kinds_arg, list):
+            picked = {
+                str(k).strip().lower() for k in kinds_arg if isinstance(k, str)
+            }
+            kinds = picked or None
+        # Hard cap on rows so a giant file doesn't blow the response
+        # budget. Default 50 keeps the agent's context tight; the tool
+        # caller can ask for up to 200 explicitly.
+        limit = _clamp_int(args.get("limit"), default=50, low=1, high=200)
+        # Hard cap on files we'll parse per call. Tree-sitter is fast
+        # but each file is one GitHub fetch, so per-call latency scales
+        # linearly. 25 files is enough for "find me the Foo class"
+        # without becoming a denial-of-service against ourselves.
+        max_files = _clamp_int(
+            args.get("max_files"), default=25, low=1, high=50
+        )
+
+        if not paths and not query_str:
+            raise ToolInvocationError(
+                "repo_symbols needs either ``paths`` (list of repo-relative "
+                "files to parse) or ``query`` (symbol name; we'll find the "
+                "candidate files via code search before parsing)"
+            )
+
+        repo, install = await self._resolve_repo_with_install(repo_id)
+        gateway = GitHubCodeHost(install.installation_id, settings=self._settings)
+        owner, _, name = repo.full_name.partition("/")
+        ref = RepoRef(kind="github", owner=owner, repo=name)
+
+        # Build the list of files to parse. Explicit ``paths`` win;
+        # otherwise GitHub code search narrows down by ``query``.
+        selected: list[str] = []
+        skipped_unsupported: list[str] = []
+        if paths:
+            for p in paths:
+                if language_for_path(p) is None:
+                    skipped_unsupported.append(p)
+                    continue
+                selected.append(p)
+        elif query_str:
+            # Pull candidates from GitHub code search, then filter to the
+            # extensions we actually parse. Code search returns up to 100
+            # rows; we cap at ``max_files`` after filtering.
+            try:
+                candidates = await gateway.search_code(
+                    ref, query=query_str, limit=max_files * 4
+                )
+            except Exception as exc:  # noqa: BLE001
+                raise ToolInvocationError(
+                    f"code search failed: {exc}"
+                ) from exc
+            for hit in candidates:
+                path = (
+                    hit.get("path") if isinstance(hit, dict) else None
+                ) or ""
+                if not path or language_for_path(path) is None:
+                    continue
+                if path not in selected:
+                    selected.append(path)
+                if len(selected) >= max_files:
+                    break
+
+        selected = selected[:max_files]
+
+        rows: list[dict[str, Any]] = []
+        files_parsed: list[str] = []
+        files_failed: list[dict[str, Any]] = []
+        for path in selected:
+            try:
+                blob = await gateway.get_blob(ref, path=path)
+            except FileNotFoundError:
+                files_failed.append({"path": path, "reason": "not_found"})
+                continue
+            except IsADirectoryError:
+                files_failed.append({"path": path, "reason": "directory"})
+                continue
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(
+                    "repo_symbols: fetch failed path=%s err=%s", path, exc
+                )
+                files_failed.append({"path": path, "reason": "fetch_error"})
+                continue
+            if blob.encoding != "utf-8":
+                files_failed.append({"path": path, "reason": "binary"})
+                continue
+            files_parsed.append(path)
+            for sym in extract_symbols(file=path, content=blob.content):
+                if kinds and sym.kind not in kinds:
+                    continue
+                if query_str and query_str.lower() not in sym.symbol.lower():
+                    # When the agent asked by name, filter the per-file
+                    # results down to ones whose symbol matches —
+                    # otherwise a "find Foo" query that picks 25 files
+                    # via code-search returns *every* symbol in those
+                    # files, which is the wrong shape.
+                    continue
+                rows.append(sym.as_dict())
+                if len(rows) >= limit:
+                    break
+            if len(rows) >= limit:
+                break
+
+        truncated = len(rows) >= limit
+        return _json_result(
+            {
+                "repo_id": str(repo.id),
+                "full_name": repo.full_name,
+                "query": query_str or None,
+                "kinds": sorted(kinds) if kinds else None,
+                "supported_extensions": sorted(LANGUAGE_BY_EXTENSION.keys()),
+                "files_requested": len(selected),
+                "files_parsed": len(files_parsed),
+                "matched": len(rows),
+                "truncated": truncated,
+                "skipped_unsupported": skipped_unsupported or None,
+                "files_failed": files_failed or None,
+                "symbols": rows,
             }
         )
 
