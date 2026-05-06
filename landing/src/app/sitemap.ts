@@ -45,6 +45,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
     { path: "/use-cases", priority: 0.7, changeFrequency: "monthly" },
     { path: "/use-cases/elmundi", priority: 0.6, changeFrequency: "monthly" },
     { path: "/blog", priority: 0.7, changeFrequency: "weekly" },
+    { path: "/changelog", priority: 0.6, changeFrequency: "weekly" },
     { path: "/book", priority: 0.7, changeFrequency: "monthly" },
     { path: "/docs", priority: 0.8, changeFrequency: "weekly" },
     { path: "/beta", priority: 0.9, changeFrequency: "weekly" },
