@@ -300,6 +300,12 @@ class ToolBox:
         # ``_tool_create_project`` reads it.
         self._thread_id = thread_id
         self._thread_intent = thread_intent
+        # Navigator overhaul PR3: re-entry guard for ``consult_specialist``.
+        # A subagent calling ``consult_specialist`` is filtered out at
+        # the tool-spec layer so the LLM literally can't emit the name,
+        # but we belt-and-suspender it here for hallucinations: the
+        # handler refuses when this flag is True.
+        self._subagent_active = False
 
     # ------------------------------------------------------------------
     # Tool specs — the "what the LLM sees" side of the surface
@@ -2020,6 +2026,71 @@ class ToolBox:
                     "additionalProperties": False,
                 },
             ),
+            ToolSpec(
+                name="consult_specialist",
+                description=(
+                    "Hand a focused task off to a specialist subagent. "
+                    "The specialist runs as an isolated agent loop with "
+                    "its own role prompt and the same workspace tool "
+                    "surface (minus this tool, to prevent recursion) "
+                    "and returns a single final report. Use when the "
+                    "problem fits a role's expertise: UX / information "
+                    "architecture → ``designer``; system shape, "
+                    "contracts, tradeoffs → ``tech-architect``; test "
+                    "strategy + coverage → ``qa-architect``; ticket "
+                    "shape / acceptance criteria → ``ba``; prod-fault "
+                    "triage → ``bug-triage``; codebase exploration "
+                    "(read-only) → ``developer``. The subagent has no "
+                    "memory of this conversation — your ``task`` + "
+                    "``context_hint`` is everything it sees, so brief "
+                    "it like a smart colleague who just walked in."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "specialist": {
+                            "type": "string",
+                            "enum": [
+                                "designer",
+                                "tech-architect",
+                                "qa-architect",
+                                "ba",
+                                "bug-triage",
+                                "developer",
+                            ],
+                            "description": (
+                                "Which role to delegate to. The slug "
+                                "matches a file in ``agent_roles/`` "
+                                "whose prompt becomes the subagent's "
+                                "system message."
+                            ),
+                        },
+                        "task": {
+                            "type": "string",
+                            "description": (
+                                "Concrete task / question for the "
+                                "specialist. State scope, constraints, "
+                                "and what 'done' looks like — the "
+                                "subagent won't have your conversation "
+                                "history."
+                            ),
+                            "minLength": 8,
+                            "maxLength": 8000,
+                        },
+                        "context_hint": {
+                            "type": "string",
+                            "description": (
+                                "Optional extra context (file paths, "
+                                "ticket ids, decisions already made) "
+                                "to forward verbatim to the subagent."
+                            ),
+                            "maxLength": 12000,
+                        },
+                    },
+                    "required": ["specialist", "task"],
+                    "additionalProperties": False,
+                },
+            ),
         ]
 
     # ------------------------------------------------------------------
@@ -2099,6 +2170,7 @@ class ToolBox:
             "automation_toggle": self._tool_automation_toggle,
             "archive_bucket_article": self._tool_archive_bucket_article,
             "inbox_routing_upsert": self._tool_inbox_routing_upsert,
+            "consult_specialist": self._tool_consult_specialist,
         }
 
     # ------------------------------------------------------------------
@@ -7027,6 +7099,304 @@ class ToolBox:
                 "enabled": enabled,
             }
         )
+
+    # ------------------------------------------------------------------
+    # consult_specialist — subagent loop (Navigator overhaul PR3, ELS-74).
+    # Hands a focused task off to a role-prompted subagent that runs
+    # against the same workspace tool surface (minus this tool, to
+    # prevent recursion) and returns a single final report.
+    # ------------------------------------------------------------------
+
+    _SUBAGENT_ALLOWED_SPECIALISTS: tuple[str, ...] = (
+        "designer",
+        "tech-architect",
+        "qa-architect",
+        "ba",
+        "bug-triage",
+        "developer",
+    )
+    _SUBAGENT_MAX_TOOL_CALLS: int = 25
+    _SUBAGENT_MAX_SECONDS: float = 300.0
+
+    async def _tool_consult_specialist(self, args: dict[str, Any]) -> str:
+        if self._subagent_active:
+            # Defensive: tool spec is filtered out of the subagent's
+            # tool list so the LLM literally can't emit this name, but
+            # belt-and-suspender for hallucinations.
+            raise ToolInvocationError(
+                "nested consult_specialist is not allowed (already running "
+                "inside a subagent)"
+            )
+        specialist = _require_str(args, "specialist").strip()
+        task = _require_str(args, "task").strip()
+        context_hint_raw = args.get("context_hint")
+        context_hint = (
+            context_hint_raw.strip()
+            if isinstance(context_hint_raw, str) and context_hint_raw.strip()
+            else None
+        )
+        if specialist not in self._SUBAGENT_ALLOWED_SPECIALISTS:
+            raise ToolInvocationError(
+                f"unknown specialist {specialist!r}; allowed: "
+                + ", ".join(self._SUBAGENT_ALLOWED_SPECIALISTS)
+            )
+
+        # Load the role file's prompt body. ``agent_roles_svc.get_default``
+        # reads the seeded markdown corpus we ship under
+        # ``backend/app/resources/agent_roles/``.
+        from backend.app.services import agent_roles as agent_roles_svc
+
+        role = agent_roles_svc.get_default(specialist)
+        if role is None or not role.prompt.strip():
+            raise ToolInvocationError(
+                f"specialist {specialist!r} is not registered as a default "
+                f"agent role"
+            )
+
+        # Subagent system prompt = role prompt + a short framing block.
+        # We don't try to render ``{{ISSUE}}`` / ``{{BASE}}`` substitutions
+        # here — the role files use those for SDLC ticket invocation
+        # context that doesn't apply to a Navigator-spawned consultation.
+        # Leaving the placeholders raw is fine; the LLM treats them as
+        # template fragments and the framing tells it to ignore.
+        framing = (
+            "## You are running as a subagent\n\n"
+            "A parent Navigator agent invoked you for one focused task. "
+            "Rules:\n\n"
+            "- You will NOT be re-invoked. Produce one final report at "
+            "the end of this run; the parent receives only your last "
+            "message.\n"
+            "- Tool surface: same as the parent (workspace context, KB, "
+            "tracker, repos) MINUS ``consult_specialist`` itself. Use "
+            "tools to gather evidence — don't guess.\n"
+            "- Template placeholders in the role prompt below "
+            "(``{{ISSUE}}``, ``{{BASE}}``, ``{{TITLE}}``, "
+            "``{{DESCRIPTION}}``) are SDLC fixtures from the role's "
+            "ticket-mode invocation; they don't apply to this "
+            "consultation. Read past them.\n"
+            "- Stop when you've answered the parent's task. End your "
+            "final message with: ``[Ship subagent:" + specialist + "]``.\n\n"
+            "## Role prompt\n\n"
+        )
+        system_prompt = framing + role.prompt.strip()
+
+        user_message_parts = [
+            "## Task from the parent agent",
+            "",
+            task,
+        ]
+        if context_hint:
+            user_message_parts.extend(
+                ["", "## Context the parent passed", "", context_hint]
+            )
+        user_message = "\n".join(user_message_parts)
+
+        # Filter out ``consult_specialist`` from the tool spec list the
+        # subagent sees. Recursion guard #1 (the LLM can't emit a name
+        # it doesn't know about); the ``_subagent_active`` flag is
+        # guard #2.
+        all_specs = self.specs()
+        sub_specs = [s for s in all_specs if s.name != "consult_specialist"]
+
+        self._subagent_active = True
+        try:
+            outcome = await self._run_subagent_loop(
+                system_prompt=system_prompt,
+                user_message=user_message,
+                tool_specs=sub_specs,
+            )
+        finally:
+            self._subagent_active = False
+
+        # Audit row: subagent runs are operator-visible work and must
+        # be debuggable from the audit log without grepping LLM logs.
+        try:
+            self._session.add(
+                AuditLog(
+                    workspace_id=self._workspace_id,
+                    actor_user_id=self._user_id,
+                    actor_token_id=None,
+                    action="navigator.consult_specialist",
+                    target_kind="agent_role",
+                    target_id=specialist,
+                    payload={
+                        "specialist": specialist,
+                        "task_preview": task[:300],
+                        "tool_calls_used": outcome["tool_calls_used"],
+                        "finish_reason": outcome["finish_reason"],
+                        "had_error": bool(outcome.get("error")),
+                    },
+                )
+            )
+            await self._session.flush()
+        except Exception as exc:  # noqa: BLE001 — audit failure must not sink the result
+            logger.warning(
+                "consult_specialist: audit insert failed specialist=%s err=%s",
+                specialist,
+                exc,
+            )
+
+        return _json_result(
+            {
+                "specialist": specialist,
+                "report": outcome["text"],
+                "tool_calls_used": outcome["tool_calls_used"],
+                "finish_reason": outcome["finish_reason"],
+                **({"error": outcome["error"]} if outcome.get("error") else {}),
+            }
+        )
+
+    async def _run_subagent_loop(
+        self,
+        *,
+        system_prompt: str,
+        user_message: str,
+        tool_specs: list[ToolSpec],
+    ) -> dict[str, Any]:
+        """Drive the subagent's astream→tool→astream cycle to completion.
+
+        Mirrors the chat-stream tool loop in
+        ``backend/app/api/v1/routes/chat.py`` but synchronously: no SSE
+        streaming, no per-event yield, just collect text + run tools
+        until the model stops or the budget runs out. Returns a dict
+        with ``text``, ``tool_calls_used``, ``finish_reason``, and an
+        optional ``error`` key when the loop bailed for non-success
+        reasons.
+
+        Budgets:
+
+        - ``_SUBAGENT_MAX_TOOL_CALLS`` (25) — caps the chain so a
+          runaway specialist can't burn the whole context window.
+        - ``_SUBAGENT_MAX_SECONDS`` (300s) — wall-clock cap so a
+          Navigator request waiting on a stuck subagent surfaces the
+          timeout instead of hanging indefinitely.
+        """
+        import time as _time
+
+        from backend.app.services.agent.client import (
+            ChatMessage as _CM,
+            End,
+            TextDelta,
+            ToolCall,
+            pick_default_client,
+        )
+
+        try:
+            client = pick_default_client(self._settings)
+        except RuntimeError as exc:
+            return {
+                "text": "",
+                "tool_calls_used": 0,
+                "finish_reason": "agent_unavailable",
+                "error": f"agent client unavailable: {exc}",
+            }
+
+        messages: list[_CM] = [
+            _CM(role="system", content=system_prompt),
+            _CM(role="user", content=user_message),
+        ]
+
+        text_chunks: list[str] = []
+        tool_calls_used = 0
+        deadline = _time.monotonic() + self._SUBAGENT_MAX_SECONDS
+
+        while True:
+            if _time.monotonic() > deadline:
+                return {
+                    "text": ("".join(text_chunks)).strip(),
+                    "tool_calls_used": tool_calls_used,
+                    "finish_reason": "deadline_exceeded",
+                    "error": (
+                        f"subagent ran past {int(self._SUBAGENT_MAX_SECONDS)}s"
+                    ),
+                }
+            if tool_calls_used >= self._SUBAGENT_MAX_TOOL_CALLS:
+                return {
+                    "text": ("".join(text_chunks)).strip(),
+                    "tool_calls_used": tool_calls_used,
+                    "finish_reason": "tool_loop_exceeded",
+                    "error": (
+                        f"subagent hit the {self._SUBAGENT_MAX_TOOL_CALLS}-"
+                        "tool-call cap"
+                    ),
+                }
+
+            turn_text: list[str] = []
+            turn_tool_calls: list[ToolCall] = []
+            try:
+                stream = await client.astream(messages, tools=tool_specs)
+                async for ev in stream:
+                    if isinstance(ev, TextDelta):
+                        turn_text.append(ev.text)
+                    elif isinstance(ev, ToolCall):
+                        turn_tool_calls.append(ev)
+                    elif isinstance(ev, End):
+                        # We don't surface ``finish_reason`` from End
+                        # directly — the loop's own counters give the
+                        # parent a stable contract regardless of which
+                        # vendor's SDK we're behind.
+                        pass
+            except Exception as exc:  # noqa: BLE001 — vendor + transport errors
+                logger.warning("subagent astream failed: %s", exc)
+                return {
+                    "text": ("".join(text_chunks + turn_text)).strip(),
+                    "tool_calls_used": tool_calls_used,
+                    "finish_reason": "llm_error",
+                    "error": str(exc),
+                }
+
+            text_chunks.extend(turn_text)
+
+            if not turn_tool_calls:
+                # Model produced text and no tool calls → final answer.
+                return {
+                    "text": ("".join(text_chunks)).strip(),
+                    "tool_calls_used": tool_calls_used,
+                    "finish_reason": "stop",
+                }
+
+            # Append the assistant turn (with the tool_calls in
+            # OpenAI-style envelope) and run each tool, then loop.
+            openai_style = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.name,
+                        "arguments": json.dumps(tc.arguments, ensure_ascii=False),
+                    },
+                }
+                for tc in turn_tool_calls
+            ]
+            messages.append(
+                _CM(
+                    role="assistant",
+                    content="".join(turn_text),
+                    tool_calls=openai_style,
+                )
+            )
+            for tc in turn_tool_calls:
+                tool_calls_used += 1
+                try:
+                    result = await self.invoke(tc.name, tc.arguments)
+                except ToolInvocationError as exc:
+                    result = json.dumps({"error": str(exc)}, ensure_ascii=False)
+                except Exception as exc:  # noqa: BLE001 — defensive
+                    logger.exception(
+                        "subagent tool %s failed", tc.name
+                    )
+                    result = json.dumps(
+                        {"error": f"{tc.name} failed: {exc}"},
+                        ensure_ascii=False,
+                    )
+                messages.append(
+                    _CM(
+                        role="tool",
+                        name=tc.name,
+                        tool_call_id=tc.id,
+                        content=result,
+                    )
+                )
 
 
 # ---------------------------------------------------------------------------
