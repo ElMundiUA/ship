@@ -187,6 +187,29 @@ async def sync_import_source(
     trigger: str = "manual",
     settings: Settings | None = None,
 ) -> KnowledgeIngestionRun:
+    """Sync one import source through the connector + persist documents.
+
+    The work is split into three transactions so the underlying DB
+    connection isn't held idle during the connector's HTTP fan-out:
+
+    1. **Mark SYNCING** — insert a ``RUNNING`` ingestion run row, flip
+       the source's status to ``SYNCING``, commit. The connection
+       returns to the pool while the walker hits the upstream API.
+    2. **Fetch documents** — pure HTTP, no DB. For Notion hub pages
+       with hundreds of embedded child_databases this can take
+       several minutes; that's exactly the window where Neon's
+       pooler used to kill the idle connection mid-transaction
+       (PendingRollbackError on the next flush).
+    3. **Persist + mark DONE/ERROR** — re-acquire a connection,
+       upsert source items + write claims, then commit final state.
+
+    Caller doesn't see the staging — it gets back a
+    ``KnowledgeIngestionRun`` with the final ``status`` either way.
+    On failure between (1) and (3) the source/row are explicitly
+    flipped to ``ERROR`` in their own transaction so the cron tick's
+    filter (``status NOT IN (DISABLED, SYNCING)``) doesn't keep
+    skipping a source that's actually stuck.
+    """
     settings = settings or get_settings()
     run = KnowledgeIngestionRun(
         id=uuid.uuid4(),
@@ -201,9 +224,17 @@ async def sync_import_source(
     session.add(run)
     source.status = KnowledgeSourceStatus.SYNCING
     source.last_error = None
-    await session.flush()
+    # Stage 1: commit the SYNCING marker so the connection releases
+    # back to the pool while the connector fans out over HTTP.
+    await session.commit()
     try:
+        # Stage 2: HTTP-only. The session is in autobegin state; no
+        # transaction is open while we wait on Notion / Confluence /
+        # GitHub.
         documents = await fetch_source_documents(session, source, settings=settings)
+        # Stage 3: a fresh transaction implicitly begins on the next
+        # session-level statement. Any DB writes from here on land
+        # together.
         stats = await _ingest_documents(
             session,
             source=source,
@@ -227,16 +258,36 @@ async def sync_import_source(
         run.status = KnowledgeIngestionStatus.DONE
         run.stats = stats.to_dict()
         run.finished_at = datetime.now(timezone.utc)
-        await session.flush()
+        await session.commit()
         await session.refresh(run)
         return run
     except Exception as exc:
+        # Roll back any half-flushed Stage-3 writes, then commit the
+        # ERROR marker in its own transaction. Without this explicit
+        # commit a connection-pool failure would leave the source
+        # stuck in SYNCING (cron filter skips that status forever).
+        try:
+            await session.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            await session.refresh(source)
+            await session.refresh(run)
+        except Exception:  # noqa: BLE001
+            # Refresh can fail if the connection is wedged; we'll
+            # still try the UPDATE — SQLAlchemy will recover from a
+            # dropped connection on the next statement now that the
+            # transaction has been rolled back.
+            pass
         source.status = KnowledgeSourceStatus.ERROR
         source.last_error = f"{type(exc).__name__}: {exc}"[:4000]
         run.status = KnowledgeIngestionStatus.ERROR
         run.error = source.last_error
         run.finished_at = datetime.now(timezone.utc)
-        await session.flush()
+        try:
+            await session.commit()
+        except Exception:  # noqa: BLE001
+            await session.rollback()
         raise
 
 
@@ -352,6 +403,17 @@ async def _fetch_connector_documents(
             "connector source needs at least one resource_ref "
             "(e.g. {\"page_id\": \"...\"} or {\"database_id\": \"...\"})"
         )
+    # Release the DB connection before we go on a multi-minute HTTP
+    # walk. ``session.get(Integration, …)`` above auto-began a new
+    # transaction; the Notion / Confluence walker can take 5+ minutes
+    # on a hub page with hundreds of embedded child_databases, and
+    # Neon's pgbouncer-style pooler kills any backend that's idle in
+    # an open transaction past its grace window. Committing here
+    # ends the transaction; the connection returns to the pool and
+    # the walker runs with no DB at all. Stage 3 of
+    # ``sync_import_source`` will reopen a fresh transaction when
+    # ``_ingest_documents`` does its first SELECT/INSERT.
+    await session.commit()
     documents: list[SourceDocument] = []
     for ref in refs[:MAX_SOURCE_DOCUMENTS]:
         if not isinstance(ref, dict):
@@ -516,9 +578,19 @@ async def _fetch_docs_repo_documents(
     if installation is None:
         raise KnowledgeIngestionError("GitHub installation is not available")
     owner, name = repo.full_name.split("/", 1)
+    default_branch = repo.default_branch
+    html_url = repo.html_url
+    repo_id_str = str(repo.id)
+    installation_id = installation.installation_id
+    # Same reason as in ``_fetch_connector_documents``: release the
+    # connection before walking the repo. ``list_files`` + per-blob
+    # ``get_blob`` for a Ship-sized doc tree is fast (~10s), but a
+    # 5000-doc monorepo could trip the same Neon idle-cutoff. Cheap
+    # to commit eagerly; the ingest stage reopens a transaction.
+    await session.commit()
     ref = RepoRef(kind="github", owner=owner, repo=name)
-    gateway = GitHubCodeHost(installation.installation_id, settings=settings)
-    all_paths = await gateway.list_files(ref, ref_sha=repo.default_branch)
+    gateway = GitHubCodeHost(installation_id, settings=settings)
+    all_paths = await gateway.list_files(ref, ref_sha=default_branch)
     prefixes = source.config.get("paths") or source.config.get("path_prefixes") or ["docs"]
     if isinstance(prefixes, str):
         prefixes = [prefixes]
@@ -538,7 +610,7 @@ async def _fetch_docs_repo_documents(
     ][: int(source.config.get("limit") or MAX_SOURCE_DOCUMENTS)]
     documents: list[SourceDocument] = []
     for path in paths:
-        blob = await gateway.get_blob(ref, path=path, ref_sha=repo.default_branch)
+        blob = await gateway.get_blob(ref, path=path, ref_sha=default_branch)
         if blob.encoding != "utf-8" or not blob.content.strip():
             continue
         documents.append(
@@ -546,8 +618,8 @@ async def _fetch_docs_repo_documents(
                 external_id=path,
                 title=path.rsplit("/", 1)[-1],
                 body_md=blob.content,
-                external_url=f"{repo.html_url}/blob/{repo.default_branch}/{path}",
-                item_ref={"path": path, "sha": blob.sha, "repo_id": str(repo.id)},
+                external_url=f"{html_url}/blob/{default_branch}/{path}",
+                item_ref={"path": path, "sha": blob.sha, "repo_id": repo_id_str},
                 cursor={"path": path, "sha": blob.sha, "ref": blob.ref},
             )
         )

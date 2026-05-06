@@ -95,13 +95,44 @@ async def _get(
     token: str,
     params: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    response = await client.get(
-        f"{NOTION_API_ROOT}{path}",
-        headers=_headers(token),
-        params=params,
-    )
-    response.raise_for_status()
-    return response.json()
+    # One retry on transient upstream blips. Notion regularly emits
+    # 502 / 503 / 504 / 429 mid-flight on long walks (a hub page with
+    # 200+ embedded child_databases hammers ``/blocks/{id}/children``
+    # back-to-back, and any one of those returning a transient error
+    # used to abort the entire sync). The retry-once policy gets us
+    # past single-request hiccups; persistent upstream outages still
+    # surface to the walker for soft-skip.
+    last_exc: httpx.HTTPStatusError | None = None
+    for attempt in range(2):
+        response = await client.get(
+            f"{NOTION_API_ROOT}{path}",
+            headers=_headers(token),
+            params=params,
+        )
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            status_code = (
+                exc.response.status_code if exc.response is not None else 0
+            )
+            if status_code in (429, 500, 502, 503, 504) and attempt == 0:
+                # Tiny backoff so we don't hammer a degraded backend
+                # in tight loop. asyncio.sleep is fine inside an
+                # async http call.
+                import asyncio
+
+                await asyncio.sleep(0.5)
+                last_exc = exc
+                continue
+            raise
+        return response.json()
+    # Defensive — ``raise`` inside the loop should re-raise on the
+    # second attempt; this branch only triggers if both attempts hit
+    # the retry path (logically impossible because attempt == 0
+    # gates retry).
+    if last_exc is not None:  # pragma: no cover
+        raise last_exc
+    return {}  # pragma: no cover
 
 
 async def _fetch_page(
@@ -406,20 +437,21 @@ async def _walk_page_tree(
             status_code = (
                 exc.response.status_code if exc.response is not None else 0
             )
-            if status_code in (401, 403, 404):
-                # Seed pages are operator-pointed — surfacing the
-                # share-hint loudly is the whole point of having
-                # ConfigError on the dispatcher path. Deeper pages
-                # we discovered ourselves: one being locked is normal
-                # in a tree (e.g. an HR subpage off a hub) and should
-                # not poison the rest of the walk.
-                if page_id in seeds:
-                    raise ConnectorConfigError(
-                        f"notion returned HTTP {status_code} for page {page_id} — "
-                        "is the integration shared with the page?"
-                    ) from exc
+            # Seed pages are operator-pointed: 401/403/404 mean the
+            # integration isn't shared and the wizard needs to teach
+            # that loudly. 5xx / 429 on a seed is also worth surfacing
+            # as a real error, since the operator can't proceed.
+            if page_id in seeds and status_code in (401, 403, 404):
+                raise ConnectorConfigError(
+                    f"notion returned HTTP {status_code} for page {page_id} — "
+                    "is the integration shared with the page?"
+                ) from exc
+            # Non-seed pages: any HTTP error is a soft-skip. One
+            # locked HR subpage, one transient 502, one 429 from
+            # rate-limit shouldn't take down a 100-page walk.
+            if page_id not in seeds:
                 logger.warning(
-                    "notion walker: skipping page %s (HTTP %s — not shared?)",
+                    "notion walker: skipping page %s (HTTP %s)",
                     page_id,
                     status_code,
                 )
@@ -446,15 +478,18 @@ async def _walk_page_tree(
                 status_code = (
                     exc.response.status_code if exc.response is not None else 0
                 )
-                if status_code in (401, 403, 404):
-                    logger.warning(
-                        "notion walker: skipping embedded database %s "
-                        "(HTTP %s — not shared?)",
-                        dbid,
-                        status_code,
-                    )
-                    continue
-                raise
+                # Any HTTP error on a child_database we discovered
+                # mid-walk is a soft-skip. One legacy un-migrated DB
+                # (404), one rate-limit (429), one transient 502
+                # shouldn't kill the whole tree. The walker still
+                # logs so operators can grep for systemic share
+                # issues if a workspace's canon stays sparse.
+                logger.warning(
+                    "notion walker: skipping embedded database %s (HTTP %s)",
+                    dbid,
+                    status_code,
+                )
+                continue
             except ConnectorConfigError as exc:
                 # ``_resolve_data_source_id`` raises this when a database
                 # we discovered via a ``child_database`` block has no

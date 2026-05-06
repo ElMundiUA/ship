@@ -96,6 +96,17 @@ def _engine_kwargs(database_url: str, original_url: str) -> dict[str, Any]:
         # sent to create_engine()`` that SQLAlchemy 2.0 raises when the
         # option is passed as a top-level engine kwarg with NullPool.
         connect_args["statement_cache_size"] = 0
+        # ``server_settings`` runs ``SET <k> = <v>`` immediately after
+        # connect on every backend asyncpg checks out. Pinning
+        # ``default_transaction_read_only=off`` defends against a
+        # PgBouncer-multiplexed backend whose previous tenant left
+        # the GUC at ``on`` (Neon has been observed to recycle
+        # backends in read-only mode after a scale event; without
+        # this pin we'd see ``cannot execute UPDATE in a read-only
+        # transaction`` on the first write of the next tenant).
+        connect_args["server_settings"] = {
+            "default_transaction_read_only": "off",
+        }
     if connect_args:
         kwargs["connect_args"] = connect_args
     return kwargs
