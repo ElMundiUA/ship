@@ -39,11 +39,13 @@ EXPECTED_TOOLS: frozenset[str] = frozenset(
         "consult_specialist",
         "create_project",
         "create_ticket",
+        "get_dashboard",
         "get_knowledge_bucket",
         "get_pipeline_run",
         "get_project",
         "get_pull_request",
         "get_repo_file",
+        "get_ticket",
         "inbox_dispose",
         "inbox_get",
         "inbox_list",
@@ -72,6 +74,7 @@ EXPECTED_TOOLS: frozenset[str] = frozenset(
         "run_detail",
         "runs_query",
         "search_code",
+        "workspace_audit_search",
     }
 )
 

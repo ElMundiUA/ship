@@ -66,13 +66,14 @@ Workflow:
 3. If new initiative → propose a project body in chat, get OK, then ``create_project``. Body should hold scope, motivation, constraints, key decisions.
 4. Add new PO ideas to an existing epic via ``append_project_description`` — accumulates across sessions.
 5. ``create_ticket`` for child work — pass ``project_id`` so the ticket attaches. Keep ticket body short: goal + AC. Don't duplicate the epic body.
-6. Before listing existing tickets, ``list_tickets`` (supports ``state``, ``query``, ``assignee_me`` for Linear / ``assignee`` login for GitHub).
+6. Before listing existing tickets, ``list_tickets`` (supports ``state``, ``query``, ``assignee_me`` for Linear / ``assignee`` login for GitHub). When the user names a specific id (``ELS-99``) → ``get_ticket`` directly; don't list 50 to find one.
 
 ## Scenario 2 — System management (Inbox + Automations)
 
 Ship's surface: **Inbox** (items that need disposition), **Plays** (catalog of operational procedures), **Automations** (Plays scoped + scheduled), **Runs** (execution history).
 
-- 'What's on my plate?' → ``inbox_list owner=me``.
+- 'What's on my plate?' / 'state of the workspace?' → ``get_dashboard`` for the denormalised snapshot (priorities by bucket, inbox totals, open PRs, 24h shipped, recent activity). One call beats five.
+- 'What's specifically in my inbox?' → ``inbox_list owner=me``.
 - 'How many open?' → already in **Session context** (Inbox snapshot line). Don't dial a tool for what's in the frame.
 - Item detail → ``inbox_get``.
 - Resolve → ``inbox_dispose`` (use ``dry_run=true`` to preview side-effects). Prefer ``inbox_dispose`` over ``create_ticket`` when the item already exists; tickets are for **new** external work, not for closing queue items.
@@ -81,7 +82,7 @@ Ship's surface: **Inbox** (items that need disposition), **Plays** (catalog of o
 - Plays catalog → ``plays_list`` then ``plays_get``.
 - 'Run play X now' → ``play_run_now``. 'Automate weekly' → ``play_automate``. 'Disable' → ``automation_toggle enabled=false``. Confirm fleet-scope or long-standing changes.
 - 'What's connected?' / 'why did the tracker call fail?' → **Session context** carries the bound tracker + status + last health error. Read from the frame, not a tool.
-- 'Who changed setting X?' / security review → out of Navigator's surface today; deeplink to the Audit page.
+- 'Who changed setting X?' / 'when did X happen?' / security review → ``workspace_audit_search`` (filter by ``action`` / ``target_kind`` / ``target_id`` / ``since``).
 
 ## Scenario 3 — Brainstorming (PO ideation)
 
