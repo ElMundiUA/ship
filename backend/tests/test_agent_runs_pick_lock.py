@@ -58,19 +58,31 @@ def test_lock_key_components_fit_in_int4() -> None:
         assert -(2**31) <= stage_key < 2**31, (stage_key, stage)
 
 
-def test_lock_key_is_not_python_hash_seeded() -> None:
-    """If we ever switched to Python's built-in ``hash``, this catches it.
+def test_lock_key_is_process_stable_pinned_bytes() -> None:
+    """Pin literal byte values so a switch to a non-deterministic
+    hash function (e.g. Python's built-in ``hash`` which is seeded
+    per-process via PEP 456) fails the test loudly.
 
-    Python hashes string-like inputs through a per-process random seed
-    (PEP 456), so the same call on two replicas would produce
-    different keys and the lock would silently stop working.
-    BLAKE2b is process-stable; we pin the bytes so a regression here
-    breaks the test loudly.
+    The two replicas serving picker requests must compute **identical**
+    keys for the same ``(workspace, fsm_stage)`` — otherwise the
+    advisory lock doesn't actually serialise across replicas and
+    the race-protection guarantee silently disappears. A previous
+    iteration of this test only round-tripped the function with
+    itself in the same process; that passes for both BLAKE2b AND
+    Python's seeded hash, which is exactly the regression we want
+    to catch.
+
+    Expected values are BLAKE2b digests of the inputs; if you
+    intentionally change the hashing scheme, regenerate them
+    locally — that's the trade-off for catching the regression.
     """
-    ws = uuid.UUID("00000000-0000-0000-0000-000000000000")
-    # Pin a specific byte sequence so a switch to a non-deterministic
-    # hash function fails this test (any change to the hashing scheme
-    # also fails it — that's intentional, regenerate locally then).
-    ws_key, stage_key = _pickup_lock_key(ws, "task_intake")
-    expected_ws, expected_stage = _pickup_lock_key(ws, "task_intake")
-    assert (ws_key, stage_key) == (expected_ws, expected_stage)
+    nil_ws = uuid.UUID("00000000-0000-0000-0000-000000000000")
+    assert _pickup_lock_key(nil_ws, "task_intake") == (
+        1_222_067_678,
+        -845_439_783,
+    )
+    ship_on_ship = uuid.UUID("d591af28-225e-477e-8448-7a4b9b06fbfc")
+    assert _pickup_lock_key(ship_on_ship, "wbs") == (
+        670_875_352,
+        -1_080_360_883,
+    )
