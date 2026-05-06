@@ -52,12 +52,13 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.config import Settings, get_settings
@@ -210,12 +211,21 @@ async def _call_extractor_llm(
     return _parse_extractor_json(raw)
 
 
+_JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+
 def _parse_extractor_json(raw: str) -> list[_ExtractedClaim]:
     """Tolerant parser for the extractor's JSON envelope.
 
-    Handles the two common LLM misbehaviours:
-    - wrapping the JSON in a markdown code fence
-    - producing a top-level array instead of ``{"claims": [...]}``.
+    Handles three common LLM misbehaviours:
+
+    - wrapping the JSON in a markdown code fence;
+    - producing a top-level array instead of ``{"claims": [...]}``;
+    - prefixing the JSON object with a "Sure, here's the JSON:"-style
+      preamble. OpenAI honours ``response_format={"type":"json_object"}``
+      and avoids this; Anthropic ignores the parameter, so the salvage
+      step is what kept prod returning zero claims for ~24 hours
+      after the P1 deploy.
     """
     cleaned = (raw or "").strip()
     if cleaned.startswith("```"):
@@ -226,7 +236,16 @@ def _parse_extractor_json(raw: str) -> list[_ExtractedClaim]:
     try:
         obj: Any = json.loads(cleaned)
     except json.JSONDecodeError:
-        return []
+        # Fallback: pull the first ``{...}`` substring out of any
+        # surrounding prose. ``re.DOTALL`` lets the match span
+        # newlines so multi-line JSON still works.
+        match = _JSON_OBJECT_RE.search(cleaned)
+        if not match:
+            return []
+        try:
+            obj = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return []
     raw_items = obj.get("claims") if isinstance(obj, dict) else obj
     if not isinstance(raw_items, list):
         return []
@@ -453,6 +472,23 @@ async def extract_pending_workspace(
             .where(KnowledgeSourceItem.workspace_id == workspace_id)
             .where(KnowledgeSourceItem.body_md.isnot(None))
             .where(KnowledgeSourceItem.deleted_at.is_(None))
+            # Pending = never extracted, OR body changed since last
+            # extract (sha mismatch). Without this, the per-tick
+            # ``_MAX_BATCH=25`` window kept re-pulling the same top-25
+            # by ``last_seen_at`` forever — the ``skipped_unchanged``
+            # path inside ``extract_claims_for_item`` correctly
+            # short-circuited, but the remaining N>25 items in the
+            # workspace never made it into the batch and stayed
+            # un-extracted indefinitely. The per-row check stays as
+            # a defense in depth so a pre-batch race that flips
+            # ``extracted_at`` between the SELECT and the per-row
+            # call still no-ops cheaply.
+            .where(
+                or_(
+                    KnowledgeSourceItem.extracted_at.is_(None),
+                    KnowledgeSourceItem.body_md_sha.is_(None),
+                )
+            )
             .order_by(KnowledgeSourceItem.last_seen_at.desc().nullslast())
             .limit(limit)
         )

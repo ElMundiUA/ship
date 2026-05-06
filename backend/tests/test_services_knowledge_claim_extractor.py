@@ -164,6 +164,36 @@ def test_parser_returns_empty_on_garbage():
     )
 
 
+def test_parser_salvages_json_from_anthropic_preamble():
+    """Anthropic ignores ``response_format`` and frequently wraps the
+    JSON object in chatty preamble. The salvage step pulls the
+    ``{...}`` substring out so prod doesn't get zero claims for
+    every doc the way it did between P1 deploy and this fix."""
+    raw = (
+        "Sure, here are the atomic claims I extracted:\n\n"
+        '{"claims":[{"text":"X is Y","kind":"fact","topic_tags":["a"]}]}'
+        "\n\nLet me know if you want me to refine any of these."
+    )
+    out = ext._parse_extractor_json(raw)
+    assert len(out) == 1
+    assert out[0].text == "X is Y"
+
+
+def test_parser_salvages_multiline_object_with_preamble():
+    raw = (
+        "Here is the JSON output:\n"
+        "{\n"
+        '  "claims": [\n'
+        '    {"text": "claim 1", "kind": "fact", "topic_tags": []},\n'
+        '    {"text": "claim 2", "kind": "rule", "topic_tags": ["x"]}\n'
+        "  ]\n"
+        "}\n"
+    )
+    out = ext._parse_extractor_json(raw)
+    assert [c.text for c in out] == ["claim 1", "claim 2"]
+    assert out[1].kind == "rule"
+
+
 def test_parser_caps_claim_count():
     items = [
         {"text": f"c{i}", "kind": "fact", "topic_tags": []}
