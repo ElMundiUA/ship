@@ -306,15 +306,6 @@ function SearchHeader({
         >
           {importOpen ? "Close import" : "Import source"}
         </button>
-        <span className="text-white/15">·</span>
-        {workspaceId && (
-          <a
-            href={`/api/knowledge/export?workspaceId=${encodeURIComponent(workspaceId)}`}
-            className="text-white/55 transition hover:text-white"
-          >
-            Export ZIP
-          </a>
-        )}
       </div>
     </div>
   );

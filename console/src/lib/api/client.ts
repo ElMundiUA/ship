@@ -1186,28 +1186,6 @@ export interface ApiBucketSummary {
   created_at: string;
 }
 
-export function listBuckets(
-  workspaceId: string,
-  opts: { includeArchived?: boolean; token?: string } = {},
-): Promise<ApiBucket[]> {
-  const qs = opts.includeArchived ? "?include_archived=true" : "";
-  return apiFetch<ApiBucket[]>(
-    `/v1/workspaces/${encodeURIComponent(workspaceId)}/buckets${qs}`,
-    { token: opts.token },
-  );
-}
-
-export function getBucket(
-  workspaceId: string,
-  slug: string,
-  token?: string,
-): Promise<ApiBucket> {
-  return apiFetch<ApiBucket>(
-    `/v1/workspaces/${encodeURIComponent(workspaceId)}/buckets/${encodeURIComponent(slug)}`,
-    { token },
-  );
-}
-
 export function listBucketSources(
   workspaceId: string,
   slug: string,
@@ -3135,26 +3113,6 @@ export function searchKnowledge(
 
 // --- Bucket article listing ----------------------------------------------
 
-export async function listBucketArticles(
-  workspaceId: string,
-  slug: string,
-  opts: {
-    includeSuperseded?: boolean;
-    includeArchived?: boolean;
-  } = {},
-  token?: string,
-): Promise<import("./types").ApiBucketArticle[]> {
-  const qs = new URLSearchParams();
-  if (opts.includeSuperseded) qs.set("include_superseded", "true");
-  if (opts.includeArchived) qs.set("include_archived", "true");
-  const suffix = qs.size ? `?${qs.toString()}` : "";
-  const payload = await apiFetch<import("./types").ApiBucketArticle[]>(
-    `/v1/workspaces/${workspaceId}/buckets/${encodeURIComponent(slug)}/articles${suffix}`,
-    { token },
-  );
-  return Array.isArray(payload) ? payload : [];
-}
-
 // --- Topic views (claim-graph canon, P3+P4) -------------------------------
 
 export type ApiTopicViewSummary = {
@@ -3179,6 +3137,49 @@ export async function listTopicViews(
     { token },
   );
   return Array.isArray(payload) ? payload : [];
+}
+
+export type ApiClaimSourceLink = {
+  source_item_id: string | null;
+  external_url: string | null;
+  title: string | null;
+  excerpt: string | null;
+  extracted_at: string | null;
+};
+
+export type ApiClaimSummary = {
+  id: string;
+  claim_md: string;
+  kind: string;
+  status: string;
+  topic_tags: string[];
+  confidence: number;
+  source_links: ApiClaimSourceLink[];
+  supersedes_id: string | null;
+  superseded_by_id: string | null;
+  first_seen_at: string;
+  last_seen_at: string;
+};
+
+export type ApiTopicViewDetail = {
+  topic_tag: string;
+  title: string;
+  body_md: string;
+  claim_count: number;
+  rendered_by_model: string | null;
+  last_rendered_at: string;
+  claims: ApiClaimSummary[];
+};
+
+export async function getTopicView(
+  workspaceId: string,
+  topicTag: string,
+  token?: string,
+): Promise<ApiTopicViewDetail> {
+  return apiFetch<ApiTopicViewDetail>(
+    `/v1/workspaces/${workspaceId}/knowledge/topic-views/${encodeURIComponent(topicTag)}`,
+    { token },
+  );
 }
 
 // --- API tokens ------------------------------------------------------------
