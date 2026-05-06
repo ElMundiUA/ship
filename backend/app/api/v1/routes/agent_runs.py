@@ -61,6 +61,9 @@ from backend.app.db.models.inbox import InboxItem
 from backend.app.db.models.tenancy import AuditLog
 from backend.app.db.session import get_session
 from backend.app.integrations.gateway.tracker import TicketRef
+from backend.app.services.linear_provisioner import (
+    OVERLAY_FREEZE_LABEL_PREFIXES,
+)
 from backend.app.services.tracker_resolver import resolve_for_workspace
 
 
@@ -245,11 +248,18 @@ async def get_next_task(
 ) -> TaskResponseOut:
     """Return the next ticket the agent should work on for ``state``.
 
-    Picker filters (ELS-83): tickets without a tracker ``project_id``
-    are orphans — created outside the dashboard's project flow.
-    They're skipped here and a one-shot inbox item plus an
-    ``agent_run.orphan_skipped`` audit row land so an operator can see
-    them and re-home the work or close it.
+    Picker filters:
+
+    * **ELS-83 — orphans.** Tickets without a tracker ``project_id``
+      are skipped. A one-shot inbox item plus
+      ``agent_run.orphan_skipped`` audit rows land so an operator can
+      re-home or close them.
+    * **ELS-84 — overlay-frozen.** Tickets carrying a label whose
+      prefix is in :data:`OVERLAY_FREEZE_LABEL_PREFIXES`
+      (``needs:clarification`` / ``blocked`` / ``blocked-on-…``) are
+      skipped silently with an ``agent_run.overlay_frozen_skipped``
+      audit row — the operator already owes a reply on these and
+      doesn't need an inbox notification telling them so.
     """
     await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
 
@@ -272,6 +282,7 @@ async def get_next_task(
 
     pick: dict[str, Any] | None = None
     skipped_orphans: list[dict[str, Any]] = []
+    skipped_overlay: list[tuple[dict[str, Any], list[str]]] = []
     for row in rows:
         # ``project_id`` is surfaced by adapters that can populate it
         # (Linear today). Adapters that can't (Notion / Jira / GitHub
@@ -281,6 +292,15 @@ async def get_next_task(
         project_id = row.get("project_id")
         if "project_id" in row and project_id is None:
             skipped_orphans.append(row)
+            continue
+        # ELS-84: overlay-frozen tickets — anything carrying a
+        # ``needs:clarification`` or ``blocked*`` label means the
+        # operator owes a reply. Skip silently; reviving happens when
+        # the operator clears the label (then the ticket flows through
+        # the picker again on the next tick).
+        matched_overlays = _matched_overlay_labels(row.get("labels") or [])
+        if matched_overlays:
+            skipped_overlay.append((row, matched_overlays))
             continue
         pick = row
         break
@@ -293,6 +313,15 @@ async def get_next_task(
             tracker_kind=resolved.kind,
             fsm_stage=state,
             orphans=skipped_orphans,
+        )
+    if skipped_overlay:
+        await _record_overlay_skips(
+            session,
+            workspace_id=workspace_id,
+            auth=auth,
+            tracker_kind=resolved.kind,
+            fsm_stage=state,
+            skipped=skipped_overlay,
         )
 
     if pick is None:
@@ -313,6 +342,75 @@ async def get_next_task(
             fsm_stage=state,
         ),
     )
+
+
+def _matched_overlay_labels(labels: list[str]) -> list[str]:
+    """Return labels on ``labels`` that match an overlay-freeze prefix.
+
+    Match is case-insensitive — for each prefix ``p`` in
+    :data:`OVERLAY_FREEZE_LABEL_PREFIXES`, a label ``l`` is a hit if
+    ``l == p`` (exact), ``l.startswith(p + "-")`` (operator-friendly
+    suffix like ``blocked-on-acme``), or ``l.startswith(p + ":")``
+    (label-namespace suffix like ``blocked:foo``). Returns the
+    *original* label strings (not lowercased) so the audit row
+    surfaces what the operator actually sees in Linear.
+    """
+    matched: list[str] = []
+    for raw in labels:
+        if not isinstance(raw, str):
+            continue
+        candidate = raw.strip().lower()
+        if not candidate:
+            continue
+        for prefix in OVERLAY_FREEZE_LABEL_PREFIXES:
+            if (
+                candidate == prefix
+                or candidate.startswith(prefix + "-")
+                or candidate.startswith(prefix + ":")
+            ):
+                matched.append(raw)
+                break
+    return matched
+
+
+async def _record_overlay_skips(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    auth: AuthContext,
+    tracker_kind: str,
+    fsm_stage: str,
+    skipped: list[tuple[dict[str, Any], list[str]]],
+) -> None:
+    """Audit rows for tickets the overlay-label gate dropped (ELS-84).
+
+    No inbox spam — the operator already owes a reply on these
+    (``needs:clarification`` is *their* TODO, ``blocked`` is theirs to
+    unblock). The audit log keeps the breadcrumb so debugging "why
+    didn't the agent pick X" stays tractable.
+    """
+    for row, matched in skipped:
+        ticket_ref = str(row.get("id") or "")
+        if not ticket_ref:
+            continue
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=auth.user.id,
+                actor_token_id=auth.token.id if auth.token else None,
+                action="agent_run.overlay_frozen_skipped",
+                target_kind="ticket",
+                target_id=ticket_ref,
+                payload={
+                    "tracker_kind": tracker_kind,
+                    "fsm_stage": fsm_stage,
+                    "matched_labels": matched,
+                    "title": str(row.get("title") or "")[:200],
+                    "url": str(row.get("url") or "") or None,
+                },
+            )
+        )
+    await session.flush()
 
 
 async def _record_orphan_skips(
