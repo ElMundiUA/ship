@@ -423,15 +423,6 @@ class ToolBox:
                 parameters={
                     "type": "object",
                     "properties": {
-                        "tracker": {
-                            "type": "string",
-                            "enum": ["linear", "notion", "jira", "github_issues"],
-                            "description": (
-                                "Which tracker to post to. If the workspace "
-                                "has only one configured tracker, omit and "
-                                "the server picks."
-                            ),
-                        },
                         "title": {"type": "string"},
                         "body": {
                             "type": "string",
@@ -740,14 +731,6 @@ class ToolBox:
                 parameters={
                     "type": "object",
                     "properties": {
-                        "tracker": {
-                            "type": "string",
-                            "enum": ["linear", "notion", "jira", "github_issues"],
-                            "description": (
-                                "Which tracker to query. Omit when the "
-                                "workspace only has one configured."
-                            ),
-                        },
                         "project_hint": {
                             "type": "string",
                             "description": (

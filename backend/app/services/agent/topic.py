@@ -45,7 +45,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Final, Sequence
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.config import Settings
@@ -907,11 +907,32 @@ class TopicService:
            so a long-running thread doesn't chew the context window).
         6. The new user message as the final turn.
         """
+        # Collect dynamic identity / surface facts BEFORE rendering the
+        # session-context frame so the agent reads workspace name +
+        # bound tracker + activated repos + inbox snapshot at the top
+        # of every turn. Best-effort: if collection itself raises, fall
+        # back to the bare frame so a transient DB hiccup doesn't sink
+        # the chat — this is observability, not correctness.
+        try:
+            facts = await _collect_session_facts(
+                self._session,
+                workspace_id=self._workspace_id,
+                user_id=self._user_id,
+                settings=self._settings,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "session-facts: collection failed workspace=%s err=%s",
+                self._workspace_id,
+                exc,
+            )
+            facts = None
         out: list[ChatMessage] = [
             ChatMessage(role="system", content=_load_navigator_prompt()),
             ChatMessage(role="system", content=_render_session_context(
                 workspace_id=self._workspace_id,
                 now=datetime.now(timezone.utc),
+                facts=facts,
             )),
         ]
         # Policies preamble lives between the static system prompt and
@@ -993,27 +1014,222 @@ class TopicService:
 _MAX_HISTORY_TURNS = 40
 
 
+@dataclass(frozen=True)
+class _SessionFacts:
+    """Pre-fetched context the renderer formats into the system frame.
+
+    Decoupled from the async fetch so ``_render_session_context`` stays
+    a pure function — the test surface is then "given these facts,
+    does the markdown look right?", not "given these mocks, do these
+    DB calls fire in this order?".
+    """
+
+    workspace_name: str | None
+    workspace_slug: str | None
+    user_name: str | None
+    user_email: str | None
+    tracker_kind: str | None  # "linear" / "jira" / "github_issues" / etc; None if unbound
+    tracker_scope_hint: str | None  # Linear team key, Jira project key, etc.
+    tracker_status: str  # "connected" / "error" / "disconnected"
+    tracker_health_error: str | None
+    activated_repos: list[str]  # full_names; cap'd to keep the frame compact
+    inbox_open_total: int
+    inbox_by_type: dict[str, int]
+
+
+_INBOX_OPEN_STATES: tuple[str, ...] = ("new", "snoozed")
+_REPOS_PREVIEW_CAP = 6  # ``+N more`` past this — frame stays under ~250 tokens
+
+
+async def _collect_session_facts(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    user_id: uuid.UUID,
+    settings: Settings,
+) -> _SessionFacts:
+    """Fetch the dynamic facts the agent should see at the top of every turn.
+
+    Two-three lightweight DB hits + one tracker resolve. We trade a
+    handful of milliseconds per turn for the agent NOT having to dial
+    ``list_integrations`` / ``list_activated_repos`` / ``inbox_counts``
+    just to know where it lives. Anything that fails (tracker probe
+    raised, inbox query timed out) degrades to a polite null in the
+    rendered frame — never blocks the LLM call.
+    """
+    from sqlalchemy import select as _select  # local: avoid topping the file
+
+    from backend.app.db.models.tenancy import User, Workspace
+    from backend.app.db.models.integrations import WorkspaceRepo
+    from backend.app.db.models.inbox import InboxItem
+    from backend.app.services.tracker_resolver import resolve_for_workspace
+
+    workspace = await session.get(Workspace, workspace_id)
+    user = await session.get(User, user_id)
+
+    repos = (
+        await session.execute(
+            _select(WorkspaceRepo.full_name)
+            .where(WorkspaceRepo.workspace_id == workspace_id)
+            .order_by(WorkspaceRepo.full_name)
+        )
+    ).scalars().all()
+
+    inbox_total = (
+        await session.execute(
+            _select(func.count(InboxItem.id)).where(
+                InboxItem.workspace_id == workspace_id,
+                InboxItem.status.in_(_INBOX_OPEN_STATES),
+            )
+        )
+    ).scalar_one() or 0
+
+    inbox_by_type_rows = (
+        await session.execute(
+            _select(InboxItem.type, func.count(InboxItem.id))
+            .where(
+                InboxItem.workspace_id == workspace_id,
+                InboxItem.status.in_(_INBOX_OPEN_STATES),
+            )
+            .group_by(InboxItem.type)
+        )
+    ).all()
+    inbox_by_type: dict[str, int] = {
+        str(row[0]): int(row[1]) for row in inbox_by_type_rows if row[0]
+    }
+
+    tracker_kind: str | None = None
+    tracker_scope_hint: str | None = None
+    tracker_status = "disconnected"
+    tracker_health_error: str | None = None
+    try:
+        resolved = await resolve_for_workspace(
+            session=session,
+            settings=settings,
+            workspace_id=workspace_id,
+        )
+    except Exception as exc:  # noqa: BLE001 — defensive, don't block the turn
+        logger.warning(
+            "session-facts: tracker resolve failed workspace=%s err=%s",
+            workspace_id,
+            exc,
+        )
+        resolved = None
+        tracker_status = "error"
+        tracker_health_error = str(exc)
+    if resolved is not None:
+        tracker_kind = resolved.kind
+        tracker_scope_hint = resolved.scope_hint
+        tracker_status = "error" if resolved.last_health_error else "connected"
+        tracker_health_error = resolved.last_health_error
+
+    return _SessionFacts(
+        workspace_name=workspace.name if workspace else None,
+        workspace_slug=workspace.slug if workspace else None,
+        user_name=user.display_name if user else None,
+        user_email=user.email if user else None,
+        tracker_kind=tracker_kind,
+        tracker_scope_hint=tracker_scope_hint,
+        tracker_status=tracker_status,
+        tracker_health_error=tracker_health_error,
+        activated_repos=[str(r) for r in repos],
+        inbox_open_total=int(inbox_total),
+        inbox_by_type=inbox_by_type,
+    )
+
+
 def _render_session_context(
-    *, workspace_id: uuid.UUID, now: datetime
+    *, workspace_id: uuid.UUID, now: datetime, facts: _SessionFacts | None = None
 ) -> str:
     """Dynamic frame the agent reads right after the static prompt.
 
-    Pins today's date and the active workspace id so the model can't
-    fall back on training-data assumptions ("it must be 2024 / 2025"
-    when the operator is actually in 2026). The static system prompt
-    references this frame by name in its "Today's date" hard rule —
-    if you rename the heading, update the prompt too.
+    Pins today's date, the active workspace + user identity, the
+    bound tracker, the activated repo set, and the open inbox counts
+    so the model can't fall back on training-data assumptions ("it
+    must be 2024 / 2025") and doesn't have to dial three discovery
+    tools every turn just to learn where it lives.
+
+    Keep the frame under ~250 tokens — every turn's prefix counts.
+    Repo list is capped at ``_REPOS_PREVIEW_CAP`` with a "+N more"
+    tail; the agent calls ``list_activated_repos`` if it needs the
+    rest. Tracker line is single-line per-state so a degraded
+    workspace still surfaces the failure mode (``status=error`` +
+    last health error) rather than vanishing into a polite default.
+
+    The static system prompt references the **Session context**
+    heading by name in its "Today's date" rule and in the
+    don't-re-ask-context rule — if you rename the heading, update
+    the prompt too.
     """
     iso_date = now.strftime("%Y-%m-%d")
     weekday = now.strftime("%A")
-    return (
-        "## Session context\n\n"
-        f"- Today: **{iso_date} ({weekday}) UTC**.\n"
-        f"- Active workspace id: `{workspace_id}`.\n"
-        "- Use these for any \"today\" / \"yesterday\" / \"this week\" "
-        "/ \"last N days\" wording. Never assume the year or month "
-        "from your training data — when in doubt about a date, ask."
+    lines: list[str] = [
+        "## Session context",
+        "",
+        f"- Today: **{iso_date} ({weekday}) UTC**.",
+    ]
+    if facts is None:
+        lines.append(f"- Active workspace id: `{workspace_id}`.")
+    else:
+        if facts.workspace_name and facts.workspace_slug:
+            lines.append(
+                f"- Workspace: **{facts.workspace_name}** "
+                f"(`{facts.workspace_slug}`, id `{workspace_id}`)."
+            )
+        else:
+            lines.append(f"- Active workspace id: `{workspace_id}`.")
+        if facts.user_name and facts.user_email:
+            lines.append(
+                f"- You're talking to: **{facts.user_name}** <{facts.user_email}>."
+            )
+        elif facts.user_email:
+            lines.append(f"- You're talking to: <{facts.user_email}>.")
+        if facts.tracker_kind:
+            scope = (
+                f" scope `{facts.tracker_scope_hint}`"
+                if facts.tracker_scope_hint
+                else ""
+            )
+            tracker_line = (
+                f"- Bound tracker: **{facts.tracker_kind}**"
+                f"{scope} · status={facts.tracker_status}"
+            )
+            if facts.tracker_status == "error" and facts.tracker_health_error:
+                tracker_line += f" ({facts.tracker_health_error[:120]})"
+            lines.append(tracker_line + ".")
+        else:
+            lines.append("- Bound tracker: **none** — `create_ticket` / `list_tickets` will refuse until one is bound.")
+        if facts.activated_repos:
+            preview = facts.activated_repos[:_REPOS_PREVIEW_CAP]
+            tail = (
+                f" + {len(facts.activated_repos) - _REPOS_PREVIEW_CAP} more"
+                if len(facts.activated_repos) > _REPOS_PREVIEW_CAP
+                else ""
+            )
+            joined = ", ".join(f"`{r}`" for r in preview)
+            lines.append(
+                f"- Activated repos ({len(facts.activated_repos)}): {joined}{tail}."
+            )
+        else:
+            lines.append("- Activated repos: **none** — point the operator at `/onboarding` if they want to ship code.")
+        if facts.inbox_open_total > 0:
+            by_type = ", ".join(
+                f"{k}={v}" for k, v in sorted(facts.inbox_by_type.items())
+            )
+            lines.append(
+                f"- Inbox: **{facts.inbox_open_total} open**"
+                + (f" ({by_type})" if by_type else "")
+                + "."
+            )
+        else:
+            lines.append("- Inbox: **0 open**.")
+    lines.append(
+        "- Use these for \"today\" / \"yesterday\" / \"this week\" "
+        "wording AND for routing decisions. Never re-ask the user for "
+        "anything already on this list; never assume year/month from "
+        "your training data."
     )
+    return "\n".join(lines)
 
 
 def _trim_history(
