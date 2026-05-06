@@ -20,7 +20,7 @@
  */
 
 import { redirect } from "next/navigation";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { ApiUnavailable } from "@/components/api-unavailable";
@@ -152,9 +152,12 @@ export default async function TopicViewPage({
           </header>
 
           <div className="grid grid-cols-1 gap-x-12 gap-y-12 lg:grid-cols-12 2xl:gap-x-16">
-            <article className="prose prose-invert max-w-none lg:col-span-8 2xl:col-span-9">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                {view.body_md}
+            <article className="max-w-3xl lg:col-span-8 2xl:col-span-9">
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={MARKDOWN_COMPONENTS}
+              >
+                {stripLeadingH1(view.body_md)}
               </ReactMarkdown>
             </article>
 
@@ -176,6 +179,131 @@ export default async function TopicViewPage({
     </>
   );
 }
+
+
+// ---------------------------------------------------------------------------
+// Markdown rendering — explicit component map.
+//
+// Tailwind Typography (the ``prose`` class) isn't installed in the
+// console build, so the default ReactMarkdown output rendered every
+// element with browser-default styling and the body looked like an
+// undifferentiated wall. We map each tag to a styled element instead;
+// keeps the bundle slim and matches the editorial dark theme exactly.
+// ---------------------------------------------------------------------------
+
+
+function stripLeadingH1(body: string): string {
+  // Renderer prompt instructs the LLM to lead with ``# <Title>``;
+  // the page header already shows that title, so duplicating it
+  // inside the body adds visual noise. Strip the first H1 + any
+  // blank lines that immediately follow it. Subsequent headings
+  // (``# Section``) — rare but possible — survive untouched.
+  const lines = (body || "").split("\n");
+  let cursor = 0;
+  while (cursor < lines.length && lines[cursor].trim() === "") cursor++;
+  if (cursor < lines.length && /^#\s+/.test(lines[cursor])) {
+    cursor++;
+    while (cursor < lines.length && lines[cursor].trim() === "") cursor++;
+  }
+  return lines.slice(cursor).join("\n");
+}
+
+
+const MARKDOWN_COMPONENTS: Components = {
+  h1: ({ children }) => (
+    <h1 className="mt-10 mb-4 font-display text-2xl font-bold leading-tight text-white first:mt-0 md:text-3xl">
+      {children}
+    </h1>
+  ),
+  h2: ({ children }) => (
+    <h2 className="mt-10 mb-3 font-display text-xl font-bold leading-tight text-white first:mt-0">
+      {children}
+    </h2>
+  ),
+  h3: ({ children }) => (
+    <h3 className="mt-8 mb-2 font-display text-base font-semibold uppercase tracking-wider text-white/85 first:mt-0">
+      {children}
+    </h3>
+  ),
+  h4: ({ children }) => (
+    <h4 className="mt-6 mb-2 text-sm font-semibold uppercase tracking-wider text-white/70 first:mt-0">
+      {children}
+    </h4>
+  ),
+  p: ({ children }) => (
+    <p className="my-4 text-base leading-relaxed text-white/75">{children}</p>
+  ),
+  ul: ({ children }) => (
+    <ul className="my-4 list-disc space-y-2 pl-6 text-base leading-relaxed text-white/75 marker:text-white/30">
+      {children}
+    </ul>
+  ),
+  ol: ({ children }) => (
+    <ol className="my-4 list-decimal space-y-2 pl-6 text-base leading-relaxed text-white/75 marker:text-white/30">
+      {children}
+    </ol>
+  ),
+  li: ({ children }) => <li className="pl-1">{children}</li>,
+  a: ({ children, href }) => (
+    <a
+      href={href}
+      className="text-aqua underline-offset-4 transition hover:underline"
+      target={href?.startsWith("http") ? "_blank" : undefined}
+      rel={href?.startsWith("http") ? "noopener noreferrer" : undefined}
+    >
+      {children}
+    </a>
+  ),
+  code: ({ children, className }) => {
+    // ReactMarkdown gives ``code`` both for inline ``code`` and for
+    // fenced blocks (the parent wraps in ``pre``). The className
+    // ``language-foo`` is only attached to fenced ones, so we route
+    // on its presence.
+    if (className) {
+      return (
+        <code className={`${className} block`}>{children}</code>
+      );
+    }
+    return (
+      <code className="rounded bg-white/[0.07] px-1.5 py-0.5 font-mono text-[0.92em] text-mist">
+        {children}
+      </code>
+    );
+  },
+  pre: ({ children }) => (
+    <pre className="my-5 overflow-x-auto rounded-md bg-white/[0.04] p-4 font-mono text-sm leading-relaxed text-mist">
+      {children}
+    </pre>
+  ),
+  blockquote: ({ children }) => (
+    <blockquote className="my-5 border-l-2 border-aqua/40 pl-4 text-base italic leading-relaxed text-white/65">
+      {children}
+    </blockquote>
+  ),
+  hr: () => <hr className="my-8 border-white/10" />,
+  strong: ({ children }) => (
+    <strong className="font-semibold text-white">{children}</strong>
+  ),
+  em: ({ children }) => (
+    <em className="italic text-white/80">{children}</em>
+  ),
+  table: ({ children }) => (
+    <div className="my-5 overflow-x-auto">
+      <table className="w-full border-collapse text-sm">{children}</table>
+    </div>
+  ),
+  thead: ({ children }) => (
+    <thead className="border-b border-white/15 text-left text-xs uppercase tracking-wider text-white/55">
+      {children}
+    </thead>
+  ),
+  th: ({ children }) => <th className="px-3 py-2 font-semibold">{children}</th>,
+  td: ({ children }) => (
+    <td className="border-b border-white/5 px-3 py-2 align-top text-white/75">
+      {children}
+    </td>
+  ),
+};
 
 
 function ClaimEntry({ claim }: { claim: ApiClaimSummary }) {
