@@ -243,7 +243,14 @@ async def get_next_task(
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> TaskResponseOut:
-    """Return the next ticket the agent should work on for ``state``."""
+    """Return the next ticket the agent should work on for ``state``.
+
+    Picker filters (ELS-83): tickets without a tracker ``project_id``
+    are orphans — created outside the dashboard's project flow.
+    They're skipped here and a one-shot inbox item plus an
+    ``agent_run.orphan_skipped`` audit row land so an operator can see
+    them and re-home the work or close it.
+    """
     await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
 
     resolved = await resolve_for_workspace(
@@ -254,13 +261,44 @@ async def get_next_task(
     if resolved is None:
         return TaskResponseOut(ticket=None, fsm_stage=state, tracker_kind=None)
 
+    # Pull a few extra rows so an orphan at the head of the list
+    # doesn't starve the picker — we drop the orphans and pick the
+    # first non-orphan that remains.
     rows = await resolved.gateway.list_tickets(state=state, limit=10)
     if not rows:
         return TaskResponseOut(
             ticket=None, fsm_stage=state, tracker_kind=resolved.kind
         )
 
-    pick = rows[0]
+    pick: dict[str, Any] | None = None
+    skipped_orphans: list[dict[str, Any]] = []
+    for row in rows:
+        # ``project_id`` is surfaced by adapters that can populate it
+        # (Linear today). Adapters that can't (Notion / Jira / GitHub
+        # Issues) return ``None``; we accept those rows for backward
+        # compatibility — orphan filtering only kicks in when the
+        # adapter actually distinguishes "no project" from "unknown".
+        project_id = row.get("project_id")
+        if "project_id" in row and project_id is None:
+            skipped_orphans.append(row)
+            continue
+        pick = row
+        break
+
+    if skipped_orphans:
+        await _record_orphan_skips(
+            session,
+            workspace_id=workspace_id,
+            auth=auth,
+            tracker_kind=resolved.kind,
+            fsm_stage=state,
+            orphans=skipped_orphans,
+        )
+
+    if pick is None:
+        return TaskResponseOut(
+            ticket=None, fsm_stage=state, tracker_kind=resolved.kind
+        )
     return TaskResponseOut(
         fsm_stage=state,
         tracker_kind=resolved.kind,
@@ -275,6 +313,69 @@ async def get_next_task(
             fsm_stage=state,
         ),
     )
+
+
+async def _record_orphan_skips(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    auth: AuthContext,
+    tracker_kind: str,
+    fsm_stage: str,
+    orphans: list[dict[str, Any]],
+) -> None:
+    """Audit + inbox notification for tickets the picker dropped.
+
+    One inbox row total per pick (not per orphan) so a single bad day
+    doesn't flood the operator's inbox; the row's payload carries the
+    list of skipped ticket refs so they can re-home them in bulk. The
+    audit log gets one row per orphan for traceability.
+    """
+    refs = [
+        str(row.get("id") or "")
+        for row in orphans
+        if row.get("id")
+    ]
+    refs = [r for r in refs if r]
+    if not refs:
+        return
+    for row in orphans:
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=auth.user.id,
+                actor_token_id=auth.token.id if auth.token else None,
+                action="agent_run.orphan_skipped",
+                target_kind="ticket",
+                target_id=str(row.get("id") or ""),
+                payload={
+                    "tracker_kind": tracker_kind,
+                    "fsm_stage": fsm_stage,
+                    "title": str(row.get("title") or "")[:200],
+                    "url": str(row.get("url") or "") or None,
+                    "reason": "no_project_id",
+                },
+            )
+        )
+    session.add(
+        InboxItem(
+            workspace_id=workspace_id,
+            type="improvement",
+            title=f"Orphan tickets skipped at stage {fsm_stage}"[:300],
+            summary=(
+                f"{len(refs)} ticket(s) at FSM stage {fsm_stage!r} have no "
+                "tracker project attached and were skipped by the agent "
+                "picker. Re-home them under a project (or close)."
+            )[:2000],
+            payload={
+                "kind": "orphan_skipped",
+                "tracker_kind": tracker_kind,
+                "fsm_stage": fsm_stage,
+                "ticket_refs": refs,
+            },
+        )
+    )
+    await session.flush()
 
 
 @router.post("/tracker/transition", response_model=WriteOut)

@@ -182,6 +182,8 @@ class LinearTracker:
                   title
                   url
                   state { name type }
+                  project { id }
+                  labels { nodes { name } }
                   updatedAt
                 }
               }
@@ -199,6 +201,8 @@ class LinearTracker:
                   title
                   url
                   state { name type }
+                  project { id }
+                  labels { nodes { name } }
                   updatedAt
                 }
               }
@@ -208,10 +212,15 @@ class LinearTracker:
                 gql, {"first": first, "filter": issue_filter}
             )
             nodes = (data.get("issues") or {}).get("nodes") or []
-        nodes = (data.get("issues") or {}).get("nodes") or []
         out: list[dict[str, Any]] = []
         for n in nodes:
             state_name = (n.get("state") or {}).get("name")
+            project_id = (n.get("project") or {}).get("id")
+            label_nodes = (n.get("labels") or {}).get("nodes") or []
+            labels = [
+                str(item.get("name") or "") for item in label_nodes
+                if isinstance(item, dict) and item.get("name")
+            ]
             out.append(
                 {
                     "id": n.get("identifier") or n.get("id"),
@@ -219,6 +228,16 @@ class LinearTracker:
                     "url": n.get("url"),
                     "status": state_name,
                     "updated_at": n.get("updatedAt"),
+                    # ELS-83: surface ``project_id`` so the agent picker
+                    # can reject orphans (tickets created outside the
+                    # dashboard flow that have no project attached).
+                    # ``None`` when the issue isn't part of any Linear
+                    # project — the picker treats that as "skip".
+                    "project_id": project_id,
+                    # Labels surface ELS-84 (clarification/blocked overlays)
+                    # filtering one layer up; see ``signal_labels`` keys
+                    # in linear_provisioner.py.
+                    "labels": labels,
                 }
             )
         return out

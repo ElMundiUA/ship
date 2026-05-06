@@ -99,7 +99,13 @@ class TrackerGateway(Protocol):
 
         Used by the dashboard and the daily-standup pipeline. Vendor
         adapters normalise to ``{"id", "title", "url", "status",
-        "updated_at"}`` at minimum.
+        "updated_at"}`` at minimum, plus the optional fields
+        ``project_id`` (tracker-native project UUID; ELS-83 — the
+        agent picker rejects orphan tickets that have no project)
+        and ``labels`` (a list of strings; ELS-84 — the picker drops
+        tickets carrying signal-label overlays such as
+        ``needs:clarification`` / ``blocked``). Adapters that can't
+        produce a field set it to ``None`` / ``[]``.
 
         ``state`` is a coarse hint: ``open`` / ``closed`` / ``all``
         (interpretation is vendor-specific). ``assignee_me`` limits to
