@@ -74,6 +74,9 @@ EXPECTED_TOOLS: frozenset[str] = frozenset(
         "run_detail",
         "runs_query",
         "search_code",
+        "set_priority_state",
+        "start_decomposition",
+        "update_ticket",
         "workspace_audit_search",
     }
 )

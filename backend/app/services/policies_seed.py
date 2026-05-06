@@ -569,10 +569,11 @@ _NAVIGATOR_POLICIES: tuple[SeedPolicy, ...] = (
             "Mutating tools (``inbox_dispose``, ``inbox_snooze``, "
             "``inbox_reassign``, ``play_run_now``, "
             "``play_automate``, ``automation_toggle``, "
-            "``inbox_routing_upsert``, ``archive_bucket_article``) "
-            "require workspace admin. If a call returns "
-            "``{\"error\": \"forbidden\"}``, explain that admin is "
-            "required; don't retry."
+            "``inbox_routing_upsert``, ``archive_bucket_article``, "
+            "``update_ticket``, ``set_priority_state``, "
+            "``start_decomposition``) require workspace admin. If a "
+            "call returns ``{\"error\": \"forbidden\"}``, explain "
+            "that admin is required; don't retry."
         ),
         applies_to_roles=("navigator",),
         sort_order=40,
