@@ -165,7 +165,6 @@ from backend.app.db.models.pipelines import (
     WorkflowRun,
 )
 from backend.app.db.models.tenancy import (
-    ArtifactRepo,
     AuditLog,
     Integration,
     User as TenancyUser,
@@ -216,7 +215,6 @@ _MAX_PIPELINES = 50
 _MAX_PIPELINE_RUNS = 50
 _MAX_CLARIFICATIONS = 50
 _MAX_IMPROVEMENTS = 50
-_MAX_INTEGRATIONS = 30
 _MAX_PRS_LISTED = 50
 _MAX_ARTIFACT_BODY_CHARS = 32 * 1024
 _MAX_KB_FULL_CHUNK = 12_000
@@ -878,28 +876,6 @@ class ToolBox:
                 },
             ),
             ToolSpec(
-                name="list_integrations",
-                description=(
-                    "Return the workspace's configured integrations "
-                    "(Linear, Notion, Slack, OTLP exporter, GitHub App, "
-                    "…) with their status and last-health timestamps. "
-                    "Use to answer 'what's connected?' or to check why "
-                    "a tracker call might fail. Never returns secrets."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "limit": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": _MAX_INTEGRATIONS,
-                            "default": _MAX_INTEGRATIONS,
-                        },
-                    },
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
                 name="list_pull_requests",
                 description=(
                     "List pull requests known to Ship (cached from "
@@ -1142,30 +1118,6 @@ class ToolBox:
                 },
             ),
             ToolSpec(
-                name="get_workspace_settings",
-                description=(
-                    "Return workspace metadata: slug, name, org id, "
-                    "catalog_sources map. Read-only."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
-                name="list_workspace_artifact_repos",
-                description=(
-                    "Custom artifact source repos registered for this "
-                    "workspace (catalog mirrors)."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
                 name="get_knowledge_bucket",
                 description=(
                     "Fetch one knowledge bucket by slug with optional "
@@ -1270,26 +1222,6 @@ class ToolBox:
                             "description": (
                                 "Opaque pagination cursor returned as "
                                 "``next_cursor`` from a prior call."
-                            ),
-                        },
-                    },
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
-                name="inbox_counts",
-                description=(
-                    "Aggregate inbox counts grouped by status and type. "
-                    "Use to render badges or to decide whether to call "
-                    "``inbox_list`` at all (skip when ``total == 0``)."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "owner": {
-                            "type": "string",
-                            "description": (
-                                "``me`` (default) or ``all``."
                             ),
                         },
                     },
@@ -2135,7 +2067,6 @@ class ToolBox:
             "list_buckets": self._tool_list_buckets,
             "search_buckets": self._tool_search_buckets,
             "search_workspace_kb": self._tool_search_workspace_kb,
-            "list_integrations": self._tool_list_integrations,
             "list_pull_requests": self._tool_list_pull_requests,
             "list_pipelines": self._tool_list_pipelines,
             "list_pipeline_runs": self._tool_list_pipeline_runs,
@@ -2144,12 +2075,9 @@ class ToolBox:
             "list_improvements": self._tool_list_improvements,
             "search_code": self._tool_search_code,
             "list_workspace_members": self._tool_list_workspace_members,
-            "get_workspace_settings": self._tool_get_workspace_settings,
-            "list_workspace_artifact_repos": self._tool_list_workspace_artifact_repos,
             "get_knowledge_bucket": self._tool_get_knowledge_bucket,
             # Phase 6 — new IA tools (Inbox, Plays, Runs, Coverage, Intel)
             "inbox_list": self._tool_inbox_list,
-            "inbox_counts": self._tool_inbox_counts,
             "inbox_get": self._tool_inbox_get,
             "inbox_routing_list": self._tool_inbox_routing_list,
             "inbox_routing_preview": self._tool_inbox_routing_preview,
@@ -2981,64 +2909,6 @@ class ToolBox:
             )
         return _json_result({"buckets": items, "count": len(items)})
 
-    async def _tool_list_integrations(self, args: dict[str, Any]) -> str:
-        limit = _clamp_int(
-            args.get("limit"),
-            default=_MAX_INTEGRATIONS,
-            low=1,
-            high=_MAX_INTEGRATIONS,
-        )
-        rows = (
-            await self._session.execute(
-                select(Integration)
-                .where(Integration.workspace_id == self._workspace_id)
-                .order_by(Integration.kind)
-                .limit(limit)
-            )
-        ).scalars().all()
-        items: list[dict[str, Any]] = []
-        for row in rows:
-            items.append(
-                {
-                    "kind": row.kind,
-                    "status": row.status,
-                    "has_secret": row.secret_ciphertext is not None,
-                    "last_health_at": row.last_health_at.isoformat()
-                    if row.last_health_at
-                    else None,
-                    "last_health_error": row.last_health_error,
-                    "config_keys": sorted((row.config or {}).keys()),
-                }
-            )
-
-        has_github_install = (
-            await self._session.execute(
-                select(WorkspaceRepo.id)
-                .where(
-                    WorkspaceRepo.workspace_id == self._workspace_id,
-                    WorkspaceRepo.installation_id.is_not(None),
-                )
-                .limit(1)
-            )
-        ).scalar_one_or_none() is not None
-        if has_github_install and not any(i["kind"] == "github_app" for i in items):
-            items.append(
-                {
-                    "kind": "github_app",
-                    "status": "active",
-                    "has_secret": True,
-                    "last_health_at": None,
-                    "last_health_error": None,
-                    "config_keys": [],
-                    "note": (
-                        "Derived from activated repos; GitHub App "
-                        "credentials come from the installation "
-                        "token."
-                    ),
-                }
-            )
-        return _json_result({"integrations": items, "count": len(items)})
-
     async def _tool_list_pull_requests(self, args: dict[str, Any]) -> str:
         limit = _clamp_int(
             args.get("limit"), default=20, low=1, high=_MAX_PRS_LISTED
@@ -3370,53 +3240,6 @@ class ToolBox:
             for m, u in rows
         ]
         return _json_result({"members": items, "count": len(items)})
-
-    async def _tool_get_workspace_settings(self, args: dict[str, Any]) -> str:
-        from backend.app.api.v1.routes.workspaces import ROLES_READ
-
-        del args
-        await self._require_workspace_role(ROLES_READ)
-        ws = await self._session.get(Workspace, self._workspace_id)
-        if ws is None:
-            raise ToolInvocationError("workspace not found")
-        return _json_result(
-            {
-                "id": str(ws.id),
-                "org_id": str(ws.org_id),
-                "slug": ws.slug,
-                "name": ws.name,
-                "catalog_sources": dict(ws.catalog_sources or {}),
-                "created_at": ws.created_at.isoformat() if ws.created_at else None,
-            }
-        )
-
-    async def _tool_list_workspace_artifact_repos(self, args: dict[str, Any]) -> str:
-        from backend.app.api.v1.routes.workspaces import ROLES_READ
-
-        del args
-        await self._require_workspace_role(ROLES_READ)
-        rows = (
-            await self._session.execute(
-                select(ArtifactRepo)
-                .where(ArtifactRepo.workspace_id == self._workspace_id)
-                .order_by(ArtifactRepo.created_at.asc())
-            )
-        ).scalars().all()
-        items = [
-            {
-                "id": str(r.id),
-                "kind": r.kind,
-                "url": r.url,
-                "default_branch": r.default_branch,
-                "last_sync_at": r.last_sync_at.isoformat()
-                if r.last_sync_at
-                else None,
-                "last_sync_sha": r.last_sync_sha,
-                "last_sync_error": r.last_sync_error,
-            }
-            for r in rows
-        ]
-        return _json_result({"artifact_repos": items, "count": len(items)})
 
     async def _tool_get_knowledge_bucket(self, args: dict[str, Any]) -> str:
         # Phase 5d: serves articles from ``bucket_articles``, keeping the
@@ -4183,68 +4006,6 @@ class ToolBox:
                 "items": items,
                 "next_cursor": next_cursor,
                 "total_estimate": total_estimate,
-            }
-        )
-
-    async def _tool_inbox_counts(self, args: dict[str, Any]) -> str:
-        owner_arg = args.get("owner", "me")
-        if owner_arg not in (None, "me", "all"):
-            return _json_result({
-                "error": "invalid_owner",
-                "message": (
-                    "owner must be 'me' or 'all' for inbox_counts (got "
-                    f"{owner_arg!r})"
-                ),
-            })
-        scope_mine = owner_arg in (None, "me")
-
-        from backend.app.services.inbox.profiles import INBOX_TYPES
-
-        statuses = ("new", "snoozed", "resolved", "dismissed")
-
-        base_filter = [InboxItem.workspace_id == self._workspace_id]
-        if scope_mine:
-            base_filter.append(InboxItem.owner_user_id == self._user_id)
-
-        by_status_stmt = (
-            select(InboxItem.status, func.count(InboxItem.id))
-            .where(*base_filter)
-            .group_by(InboxItem.status)
-        )
-        by_status: dict[str, int] = {s: 0 for s in statuses}
-        for status_value, count in (
-            await self._session.execute(by_status_stmt)
-        ).all():
-            if status_value in by_status:
-                by_status[status_value] = int(count)
-        by_status["open"] = by_status["new"] + by_status["snoozed"]
-
-        by_type_stmt = (
-            select(InboxItem.type, func.count(InboxItem.id))
-            .where(*base_filter, InboxItem.status.in_(("new", "snoozed")))
-            .group_by(InboxItem.type)
-        )
-        by_type: dict[str, int] = {t: 0 for t in INBOX_TYPES}
-        for type_value, count in (
-            await self._session.execute(by_type_stmt)
-        ).all():
-            if type_value in by_type:
-                by_type[type_value] = int(count)
-
-        total = int(
-            (
-                await self._session.execute(
-                    select(func.count(InboxItem.id)).where(*base_filter)
-                )
-            ).scalar_one()
-        )
-
-        return _json_result(
-            {
-                "owner": "me" if scope_mine else "all",
-                "by_status": by_status,
-                "by_type": by_type,
-                "total": total,
             }
         )
 
