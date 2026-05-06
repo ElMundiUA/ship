@@ -52,14 +52,12 @@ EXPECTED_TOOLS: frozenset[str] = frozenset(
         "inbox_routing_preview",
         "inbox_routing_upsert",
         "inbox_snooze",
-        "knowledge_search_v2",
+        "knowledge_search",
         "list_activated_repos",
         "list_buckets",
         "list_clarifications",
         "list_code_map",
         "list_improvements",
-        "list_pipeline_runs",
-        "list_pipelines",
         "list_projects",
         "list_pull_requests",
         "list_recent_activity",
@@ -73,9 +71,7 @@ EXPECTED_TOOLS: frozenset[str] = frozenset(
         "repo_intel_get",
         "run_detail",
         "runs_query",
-        "search_buckets",
         "search_code",
-        "search_workspace_kb",
     }
 )
 

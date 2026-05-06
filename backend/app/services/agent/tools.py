@@ -211,8 +211,6 @@ _MAX_PATCH_CHARS = 4000
 _MAX_PR_REVIEWS = 30
 _MAX_PR_COMMITS = 50
 _MAX_PR_COMMENTS = 30
-_MAX_PIPELINES = 50
-_MAX_PIPELINE_RUNS = 50
 _MAX_CLARIFICATIONS = 50
 _MAX_IMPROVEMENTS = 50
 _MAX_PRS_LISTED = 50
@@ -638,72 +636,6 @@ class ToolBox:
                 },
             ),
             ToolSpec(
-                name="search_buckets",
-                description=(
-                    "Semantic search over the workspace's knowledge "
-                    "buckets (prior conversations, packed summaries). "
-                    "Use to recall what was discussed before in a "
-                    "related topic."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "Natural-language query.",
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": _MAX_BUCKET_RESULTS,
-                            "default": 4,
-                        },
-                    },
-                    "required": ["query"],
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
-                name="search_workspace_kb",
-                description=(
-                    "Search published knowledge articles across the entire "
-                    "workspace (repo, workspace, and user-visible buckets). "
-                    "Use this for platform/organisation-wide questions. "
-                    "Ranks current-repo matches first, then workspace "
-                    "canonical, then other repos as hints."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "Natural-language query.",
-                        },
-                        "repo_id": {
-                            "type": "string",
-                            "description": (
-                                "Optional repo UUID to prioritise hits "
-                                "from. When omitted, the agent runtime "
-                                "fills in the chat's active repo if "
-                                "known."
-                            ),
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "description": (
-                                "Max hits to return "
-                                "(default 10, max 25)."
-                            ),
-                            "default": 10,
-                            "minimum": 1,
-                            "maximum": _MAX_WORKSPACE_KB_RESULTS,
-                        },
-                    },
-                    "required": ["query"],
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
                 name="list_activated_repos",
                 description=(
                     "List the repositories the workspace has activated for "
@@ -910,67 +842,6 @@ class ToolBox:
                             "minimum": 1,
                             "maximum": _MAX_PRS_LISTED,
                             "default": 20,
-                        },
-                    },
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
-                name="list_pipelines",
-                description=(
-                    "Enumerate the workspace's configured pipelines "
-                    "(automation lanes): PR gate, daily standup, code "
-                    "map, tech-debt, self-heal etc. Each entry carries "
-                    "the workflow id, enabled flag, last-run status."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "enabled_only": {
-                            "type": "boolean",
-                            "default": False,
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": _MAX_PIPELINES,
-                            "default": _MAX_PIPELINES,
-                        },
-                    },
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
-                name="list_pipeline_runs",
-                description=(
-                    "List recent pipeline runs, newest first. Filter by "
-                    "pipeline UUID or status (``running`` / ``succeeded`` "
-                    "/ ``failed`` / ``cancelled``). Use to answer "
-                    "'did the PR gate run after my last push?' kinds "
-                    "of questions."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "pipeline_id": {
-                            "type": "string",
-                            "description": (
-                                "Optional pipeline UUID from "
-                                "``list_pipelines``."
-                            ),
-                        },
-                        "status": {
-                            "type": "string",
-                            "description": (
-                                "Optional run status filter "
-                                "(e.g. ``failed``)."
-                            ),
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": _MAX_PIPELINE_RUNS,
-                            "default": 15,
                         },
                     },
                     "additionalProperties": False,
@@ -1594,14 +1465,17 @@ class ToolBox:
                 },
             ),
             ToolSpec(
-                name="knowledge_search_v2",
+                name="knowledge_search",
                 description=(
                     "Workspace knowledge search with explicit filters "
                     "(``repo_id``, ``bucket_slug``) and an optional "
                     "``intel_facts`` flag that prepends hits from the "
-                    "``repository-context`` bucket to the results. Use "
-                    "this over ``search_workspace_kb`` when you need "
-                    "filtered results or want intel context inline."
+                    "``repository-context`` bucket. Single search "
+                    "surface — covers published articles, packed "
+                    "buckets (`source='bucket_article'` in results), "
+                    "and topic views in one call. When ``repo_id`` is "
+                    "omitted the runtime fills in the chat's active "
+                    "repo so current-repo hits rank first."
                 ),
                 parameters={
                     "type": "object",
@@ -2065,11 +1939,16 @@ class ToolBox:
             "list_recent_activity": self._tool_list_recent_activity,
             "get_pull_request": self._tool_get_pull_request,
             "list_buckets": self._tool_list_buckets,
+            # ELS-77: ``search_buckets`` + ``search_workspace_kb`` are
+            # no longer in :meth:`specs` (consolidated into
+            # ``knowledge_search``) but stay in dispatch as private
+            # hooks for ``test_agent_tools_bucket_cutover`` /
+            # ``test_navigator_knowledge_tool`` — the LLM never sees
+            # them, but ``box.invoke("search_buckets", ...)`` still
+            # works for direct test calls.
             "search_buckets": self._tool_search_buckets,
             "search_workspace_kb": self._tool_search_workspace_kb,
             "list_pull_requests": self._tool_list_pull_requests,
-            "list_pipelines": self._tool_list_pipelines,
-            "list_pipeline_runs": self._tool_list_pipeline_runs,
             "get_pipeline_run": self._tool_get_pipeline_run,
             "list_clarifications": self._tool_list_clarifications,
             "list_improvements": self._tool_list_improvements,
@@ -2088,6 +1967,13 @@ class ToolBox:
             "run_detail": self._tool_run_detail,
             "automations_list": self._tool_automations_list,
             "repo_intel_get": self._tool_repo_intel_get,
+            # ELS-77: ``knowledge_search`` is the canonical spec name
+            # (PR-B consolidation). ``knowledge_search_v2`` stays as a
+            # private dispatch alias so existing test surfaces and any
+            # in-flight role files referencing the old name keep
+            # working — the LLM only sees ``knowledge_search`` because
+            # that's the name in :meth:`specs`.
+            "knowledge_search": self._tool_knowledge_search_v2,
             "knowledge_search_v2": self._tool_knowledge_search_v2,
             # Phase 6 Wave B — mutating tools (admin-gated, audited)
             "inbox_dispose": self._tool_inbox_dispose,
@@ -2968,88 +2854,6 @@ class ToolBox:
             for r in rows
         ]
         return _json_result({"pull_requests": items, "count": len(items)})
-
-    async def _tool_list_pipelines(self, args: dict[str, Any]) -> str:
-        enabled_only = bool(args.get("enabled_only", False))
-        limit = _clamp_int(
-            args.get("limit"),
-            default=_MAX_PIPELINES,
-            low=1,
-            high=_MAX_PIPELINES,
-        )
-        stmt = (
-            select(Pipeline)
-            .where(Pipeline.workspace_id == self._workspace_id)
-            .order_by(Pipeline.lane_id, Pipeline.name)
-            .limit(limit)
-        )
-        if enabled_only:
-            stmt = stmt.where(Pipeline.enabled.is_(True))
-        rows = (await self._session.execute(stmt)).scalars().all()
-        items = [
-            {
-                "id": str(r.id),
-                "kind": r.lane_id,
-                "name": r.name,
-                "workflow_id": r.workflow_id,
-                "enabled": r.enabled,
-                "repo_id": str(r.repo_id) if r.repo_id else None,
-                "last_run_at": r.last_run_at.isoformat() if r.last_run_at else None,
-                "last_run_status": r.last_run_status,
-            }
-            for r in rows
-        ]
-        return _json_result({"pipelines": items, "count": len(items)})
-
-    async def _tool_list_pipeline_runs(self, args: dict[str, Any]) -> str:
-        limit = _clamp_int(
-            args.get("limit"),
-            default=15,
-            low=1,
-            high=_MAX_PIPELINE_RUNS,
-        )
-        pipeline_id_arg = args.get("pipeline_id")
-        pipeline_id: uuid.UUID | None = None
-        if pipeline_id_arg:
-            try:
-                pipeline_id = uuid.UUID(str(pipeline_id_arg))
-            except ValueError as exc:
-                raise ToolInvocationError(
-                    f"invalid pipeline_id: {pipeline_id_arg!r}"
-                ) from exc
-        status_filter = args.get("status")
-
-        stmt = (
-            select(PipelineRun)
-            .where(PipelineRun.workspace_id == self._workspace_id)
-            .order_by(desc(PipelineRun.created_at))
-            .limit(limit)
-        )
-        if pipeline_id is not None:
-            stmt = stmt.where(PipelineRun.pipeline_id == pipeline_id)
-        if isinstance(status_filter, str) and status_filter:
-            stmt = stmt.where(PipelineRun.status == status_filter)
-
-        rows = (await self._session.execute(stmt)).scalars().all()
-        items = [
-            {
-                "id": str(r.id),
-                "pipeline_id": str(r.pipeline_id),
-                "status": r.status,
-                "trigger": r.trigger,
-                "started_at": r.started_at.isoformat() if r.started_at else None,
-                "finished_at": r.finished_at.isoformat() if r.finished_at else None,
-                "duration_seconds": (
-                    int((r.finished_at - r.started_at).total_seconds())
-                    if r.started_at and r.finished_at
-                    else None
-                ),
-                "summary": r.summary,
-                "created_at": r.created_at.isoformat() if r.created_at else None,
-            }
-            for r in rows
-        ]
-        return _json_result({"runs": items, "count": len(items)})
 
     async def _tool_get_pipeline_run(self, args: dict[str, Any]) -> str:
         run_id = _parse_uuid(args, "run_id")
