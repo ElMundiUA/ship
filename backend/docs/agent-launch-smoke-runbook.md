@@ -17,7 +17,15 @@ The smoke is run against a controlled Ship-on-Ship workspace, NOT a customer's p
 - **Tracker:** the bound elship Linear team (`854ffe38-...`).
 - **Customer-side runner:** a sandbox GitHub Actions cron, NOT prod. The repo's `.ship/config.yml` should already include the decomposition routines after re-running `shipctl init` (ELS-79).
 
-**Kill-switch starting state:** `SHIP_AGENT_PICKUP_ENABLED=false` (set in deploy env). This means **no** customer cron actually picks up work until §3 says otherwise.
+**Kill-switch posture for the smoke pass:** keep prod's
+`SHIP_AGENT_PICKUP_ENABLED=false` until §3. The smoke uses a
+**separate test deployment** with `SHIP_AGENT_PICKUP_ENABLED=true`
+(prod and test deployments are independent — flipping the test
+flag never gates prod). The H8 scenario specifically toggles the
+flag on the *test* deployment to verify the kill-switch actually
+gates pickup; that toggle is local to the test instance and is
+restored to `true` afterwards. Prod's flag flips to `true` only at
+§3 once all H scenarios pass.
 
 ---
 
@@ -29,13 +37,28 @@ Each scenario walks the picker through one specific code path. Run in order; lat
 
 **Goal:** One full pass through `task_intake → ba_requirements → tech_arch_plan → dev_implementation → qa_manual → qa_automation → code_review`.
 
+**Pre-condition:** test deployment has `SHIP_AGENT_PICKUP_ENABLED=true` (set in §1).
+
 1. Create a tiny test ticket in Linear under an `active` project (state = `state:active`). Body: "Add a one-line comment to backend/app/main.py explaining the FastAPI router prefix." Title: "Smoke: comment on main.py router."
-2. With `SHIP_AGENT_PICKUP_ENABLED=true` on the test deployment only, manually trigger `shipctl run --routine task_intake` from the sandbox runner.
+2. Manually trigger `shipctl run --routine task_intake` from the sandbox runner.
 3. Watch the audit log for `agent_run.transition` rows; each FSM stage should produce one.
 4. **Pass:** ticket reaches `code_review` with a PR opened against the test repo, no `agent_run.orphan_skipped` / `priority_skipped` / `overlay_frozen_skipped` rows for it.
 5. **Fail modes to look for:**
    - Ticket gets stuck mid-chain → check the agent's `outcome` payload.
    - Two PRs opened for the same ticket → ELS-85 (race) is not protecting; investigate the lock key.
+
+### H1-bis — Linear-native intake (no `stage:*` label, no priorities row)
+
+**Goal:** Linear-native flow works end-to-end without operator touching Ship's UI. Covers Linear ELS-90 (intake filter `none.id.eq` shape fix) + Linear ELS-92 (auto-onboard).
+
+1. In Linear, create a fresh project DIRECTLY (do not click anything in Ship's dashboard). Create one Todo ticket under that project. Do NOT add any labels — fresh ticket, zero `stage:*`.
+2. From sandbox: `shipctl run --routine task_intake`.
+3. **Pass criteria:**
+   - The ticket comes back from `GET /tracker/next?state=task_intake` (despite zero labels — verifies ELS-90's `none` operator).
+   - A new `WorkspaceProjectPriority` row appears for the project in `state='active'` — verifies ELS-92 auto-onboard.
+   - Audit log has `agent_run.project_auto_onboarded` with the project_id + ticket_ref.
+   - Intake agent runs and rewrites the description.
+4. **Fail mode:** call returns `ticket: null` despite the ticket existing in Todo → ELS-90 fix didn't land or `_fsm_filter` reverted to bare-`nin` shape.
 
 ### H2 — Parked-project ticket NOT picked
 
@@ -83,26 +106,50 @@ Each scenario walks the picker through one specific code path. Run in order; lat
 1. From the Navigator chat in the test workspace: ask it to `create_project` for a small initiative ("Refactor health endpoints to share a base class"). Confirm. Project lands in **Drafts**, anchor created tagged `planning:anchor`.
 2. From the dashboard, click **Hand off to decomposition**. Anchor moves to `stage:wbs`.
 3. Wait for sandbox cron ticks to pick up `wbs → architecture → test_architecture → tasks → planning_done`. (Or fire each routine manually for speed.)
-4. **Pass:** anchor reaches `planning_done`. Project body has `## Brief / ## WBS / ## Architecture / ## Test architecture / ## Tasks` sections. Dashboard shows the project in the **Parked** bucket — NOT Active. Each child ticket created by the `tasks` stage lives in the same Linear project.
+4. **Pass:**
+   - Anchor reaches `planning_done`.
+   - Project body has `## Brief / ## WBS / ## Architecture / ## Test architecture / ## Tasks` sections.
+   - **Audit log contains a row with action ending in `priorities:parked`** (added to `actions[]` on the `agent_run.finish` audit row when the post-decomposition flip fires) — confirms `_flip_drafts_row_to_parked` actually ran.
+   - Dashboard shows the project in the **Parked** bucket — NOT Active.
+   - Each child ticket created by the `tasks` stage lives in the same Linear project.
 5. Pick one of the child tickets, run `shipctl run --routine task_intake`. The intake's prompt should include a `## Project context` block lifted from the parent project body (ELS-86).
+6. **Fail modes:**
+   - Anchor flips to **Active** instead of **Parked** → ELS-81 fix didn't land or the `_flip_drafts_row_to_parked` rename was reverted.
+   - No `priorities:parked` action on the finish audit row → check the `process="decomposition"` flag was passed and the audit chain captured `flipped`.
+
+### H6-bis — Project state ↔ child ticket state sync (Linear ELS-91)
+
+**Goal:** parking / promoting a project moves children's Linear states.
+
+1. Take the project from H6 (now in Parked, with 3-5 child tickets in Todo from the `tasks` stage of decomposition).
+2. From the dashboard, drag the project to **Active** (or `POST /priorities/{native_id}/state` with `state=active`).
+3. **Pass:** all child tickets in `Backlog` move to `Todo` within the same request. Audit log has one `priorities.synced_ticket_state` row per moved ticket with `from_linear_state="Backlog"`, `to_linear_state="Todo"`.
+4. Drag the project back to **Parked**. Children that are still in `Todo` (i.e. agents haven't promoted them past intake yet) move to `Backlog`. **In-flight tickets** (in `In Progress` / `Review`) stay put — verify with `git log` of the audit table that no `priorities.synced_ticket_state` row touches an `In Progress` ticket.
+5. **Fail modes:**
+   - Children stay in their original state → sync helper not wired into the trigger site, OR the Linear adapter's `list_project_tickets_in_state` is missing.
+   - In-flight ticket got yanked back → the carve-out (`In Progress` / `Review` not moved) was reverted; restore it.
 
 ### H7 — Orphan ticket → skipped + inbox notification
 
-**Goal:** ELS-83 orphan filter.
+**Goal:** ELS-83 orphan filter (truly project-less tickets).
 
-1. Create a ticket in Linear directly (NOT via Navigator's `create_project`/`create_ticket`) — leave it without a project link.
+1. Create a ticket in Linear directly with NO project attached (NOT via Navigator's `create_project`/`create_ticket`, AND don't pick a project in Linear's UI).
 2. Stage it at `task_intake`.
 3. Run the routine.
 4. **Pass:** picker returns `null` (or the next non-orphan ticket if any). Audit log: `agent_run.orphan_skipped`. Inbox: one new "Orphan tickets skipped at stage task_intake" item naming the ref.
+
+> Distinction from H1-bis: H1-bis tests Linear-native flow with a project (ticket has `project_id`, no priorities row → auto-onboard). H7 tests the truly project-less case (ticket has NO `project_id` → orphan, skip).
 
 ### H8 — Kill-switch fully gates pickup
 
 **Goal:** ELS-88 env flag.
 
-1. Set `SHIP_AGENT_PICKUP_ENABLED=false` and restart API replicas.
-2. Run any `shipctl run --routine X`.
-3. **Pass:** call returns `ticket: null`. Audit log: `agent_run.pickup_disabled`. No tracker call made (Linear request count flat).
-4. Flip back to `true`, restart, repeat — normal behaviour returns.
+**Posture during smoke:** test deployment defaults to `SHIP_AGENT_PICKUP_ENABLED=true`; this scenario flips it to `false` *only* on the test deployment, verifies, flips back. Prod stays `false` throughout the smoke.
+
+1. On the test deployment ONLY: set `SHIP_AGENT_PICKUP_ENABLED=false`. Restart API replicas (Settings is a request dep, but the env var is read at config load, so a restart is the cleanest way).
+2. Run any `shipctl run --routine X` against the test workspace.
+3. **Pass:** call returns `ticket: null`. Audit log: `agent_run.pickup_disabled`. No tracker call made (Linear request count flat in the same window).
+4. Flip the test deployment back to `true`, restart, repeat the same routine — normal behaviour returns and the picker takes a ticket again.
 
 ---
 
@@ -124,6 +171,8 @@ If any scenario fails, file a Linear ticket against the responsible PR and pause
 | H | Covers | PR |
 |---|---|---|
 | H1 | end-to-end SDLC | (system) |
+| H1-bis | Linear-native intake (no labels, no priorities row) | #180 (Linear ELS-90) + #182 (Linear ELS-92) |
+| H6-bis | project-state ↔ ticket-state sync | #181 (Linear ELS-91) |
 | H2 | priority gate | #170 (ELS-80) + #172 (ELS-82) |
 | H3 | pick race | #177 (ELS-85) |
 | H4 | KB-empty → clarification | (existing role prompts) |
