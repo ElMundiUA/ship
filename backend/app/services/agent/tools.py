@@ -7596,11 +7596,30 @@ class ToolBox:
         )
         await self._session.flush()
 
+        # ELS-91: bring child tickets into line with the new state.
+        # Best-effort — tracker errors log + audit but do not roll back
+        # the operator's flip.
+        from backend.app.services.agent.project_state_sync import (
+            sync_project_tickets_for_state,
+        )
+
+        gateway = await self._resolve_tracker(None, None)
+        sync_report = await sync_project_tickets_for_state(
+            self._session,
+            workspace_id=self._workspace_id,
+            project_id=project_native_id,
+            new_state=state,
+            gateway=gateway,
+            actor_user_id=self._user_id,
+            actor_token_id=None,
+        )
+
         return _json_result(
             {
                 "project_native_id": project_native_id,
                 "state": state,
                 "prior_state": prior_state,
+                "synced_tickets": sync_report.as_dict(),
             }
         )
 
