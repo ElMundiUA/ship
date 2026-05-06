@@ -92,6 +92,28 @@ function toMeta(slug: string, data: Record<string, string | number | string[]>):
   };
 }
 
+// Today's date in UTC, recomputed on every call so a long-lived
+// server eventually serves a post once its date arrives without a
+// redeploy. (Static builds still need a fresh build to add new
+// statically-generated routes; see generateStaticParams in
+// app/blog/[slug]/page.tsx.)
+function todayIsoUtc(): string {
+  const d = new Date();
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+// Future-dated posts (drafts staged for later) should not appear in
+// production index, sitemap, or single-post routes. In development
+// they remain visible so authors can preview their work.
+function isPublishable(date: string): boolean {
+  if (process.env.NODE_ENV !== "production") return true;
+  if (!date) return false;
+  return date <= todayIsoUtc();
+}
+
 export function listBlogPosts(): BlogMeta[] {
   if (!fs.existsSync(BLOG_DIR)) return [];
   return fs
@@ -103,6 +125,7 @@ export function listBlogPosts(): BlogMeta[] {
       const { data } = parseFrontmatter(raw);
       return toMeta(slug, data);
     })
+    .filter((meta) => isPublishable(meta.date))
     .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
 }
 
@@ -111,7 +134,9 @@ export function getBlogPost(slug: string): BlogPost | null {
   if (!fs.existsSync(fp)) return null;
   const raw = fs.readFileSync(fp, "utf-8");
   const { data, body } = parseFrontmatter(raw);
-  return { ...toMeta(slug, data), body };
+  const meta = toMeta(slug, data);
+  if (!isPublishable(meta.date)) return null;
+  return { ...meta, body };
 }
 
 export function formatBlogDate(iso: string): string {
