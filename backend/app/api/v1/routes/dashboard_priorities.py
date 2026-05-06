@@ -579,7 +579,7 @@ async def start_decomposition(
     into the first decomposition stage (``stage:wbs``) — the per-tick
     shipctl scheduler then picks up BA, who emits the WBS section,
     transitions to ``stage:architecture``, and so on through to
-    ``stage:planning_done`` (the finish hook flips Drafts → Active
+    ``stage:planning_done`` (the finish hook flips Drafts → Parked (the PO promotes Parked → Active manually; ELS-81)
     when that lands).
 
     Idempotent on the anchor: re-running when the anchor already

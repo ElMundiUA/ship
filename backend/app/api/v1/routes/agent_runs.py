@@ -176,7 +176,8 @@ class FinishIn(BaseModel):
     # SDLC (``development``); ``decomposition`` (ELS-75) is the
     # project-anchor pipeline. The finish hook reads this to know
     # whether ``stage_next='planning_done'`` should flip the project's
-    # dashboard row from Drafts → Active.
+    # dashboard row from Drafts → Parked (the PO promotes Parked →
+    # Active manually when ready to ship; ELS-81).
     process: Literal["development", "decomposition"] = "development"
     payload: dict[str, Any] = Field(default_factory=dict)
 
@@ -946,7 +947,7 @@ async def post_inbox_item(
     return WriteOut(ok=True, note=f"inbox item created (type={payload.type})")
 
 
-async def _flip_drafts_row_to_active(
+async def _flip_drafts_row_to_parked(
     session: AsyncSession,
     workspace_id: uuid.UUID,
     ticket_ref: str,
@@ -955,12 +956,18 @@ async def _flip_drafts_row_to_active(
     actor_user_id: uuid.UUID | None = None,
     actor_token_id: uuid.UUID | None = None,
 ) -> bool:
-    """Flip the project's priorities row from ``planning`` → ``active``.
+    """Flip the project's priorities row from ``planning`` → ``parked``.
 
-    Called when a decomposition run reaches the terminal stage. Walks:
-    ticket_ref → planning anchor's project_id → priorities row → state.
-    Best-effort: a missing priorities row, a deleted project, or an
-    adapter that can't tell us the project all log + return False
+    Called when a decomposition run reaches the terminal stage. The PO
+    explicitly promotes ``parked`` → ``active`` from the dashboard
+    when ready to ship — Ship doesn't auto-activate. (ELS-81; previous
+    behaviour was to auto-flip to ``active``, which combined with
+    ELS-80's picker gate would let agents start chewing on every
+    project the moment its decomposition finished.)
+
+    Walks: ticket_ref → planning anchor's project_id → priorities row
+    → state. Best-effort: a missing priorities row, a deleted project,
+    or an adapter that can't tell us the project all log + return False
     instead of failing the finish handler.
     """
     from sqlalchemy import select
@@ -1022,16 +1029,18 @@ async def _flip_drafts_row_to_active(
             project_id,
         )
         return False
-    if row.state == "active":
+    if row.state == "parked":
         return False
-    row.state = "active"
+    row.state = "parked"
     await session.flush()
 
-    # ELS-91: sync child tickets to match the new state (Backlog →
-    # Todo for active). Best-effort — tracker errors log but do NOT
-    # roll back the priorities-row flip. ``actor_user_id`` is the
-    # operator who triggered the agent finish (threaded through from
-    # the route handler) so audit-row FKs stay valid.
+    # ELS-91: sync child tickets to match the new state. For
+    # ``parked`` the helper moves Todo → Backlog; in-flight tickets
+    # in ``In Progress`` / ``Review`` are left alone. Best-effort —
+    # tracker errors log but do NOT roll back the priorities-row
+    # flip. ``actor_user_id`` is the operator who triggered the
+    # agent finish (threaded through from the route handler) so
+    # audit-row FKs stay valid.
     if actor_user_id is not None:
         from backend.app.services.agent.project_state_sync import (
             sync_project_tickets_for_state,
@@ -1042,7 +1051,7 @@ async def _flip_drafts_row_to_active(
                 session,
                 workspace_id=workspace_id,
                 project_id=str(project_id),
-                new_state="active",
+                new_state="parked",
                 gateway=resolved.gateway,
                 tracker_kind=resolved.kind,
                 actor_user_id=actor_user_id,
@@ -1173,21 +1182,23 @@ async def finish_agent_run(
             await resolved.gateway.transition(ref, to_state=payload.stage_next)
             actions.append(f"tracker:transition:{payload.stage_next}")
 
-            # Decomposition completion hook (ELS-75). When the planning
-            # anchor reaches the terminal stage, flip the project's
-            # dashboard row Drafts → Active so the agent's autonomous
-            # picker takes over from here. We key on the explicit
-            # ``process='decomposition'`` flag rather than sniffing
-            # labels — the runtime that's executing the run knows
-            # which process it's under, the server should not have to
-            # re-derive that. Best-effort: a missing priorities row
-            # logs and continues; the audit trail at the bottom of
-            # this handler still records what happened.
+            # Decomposition completion hook (ELS-75 + ELS-81). When
+            # the planning anchor reaches the terminal stage, flip
+            # the project's dashboard row Drafts → Parked. The PO
+            # then promotes Parked → Active manually when ready to
+            # ship — Ship doesn't auto-activate, otherwise the
+            # ELS-80 picker gate would let agents start chewing on
+            # every project the moment its decomposition finished.
+            # We key on the explicit ``process='decomposition'``
+            # flag rather than sniffing labels — the runtime that's
+            # executing the run knows which process it's under, the
+            # server should not have to re-derive that. Best-effort:
+            # a missing priorities row logs and continues.
             if (
                 payload.process == "decomposition"
                 and payload.stage_next == "planning_done"
             ):
-                flipped = await _flip_drafts_row_to_active(
+                flipped = await _flip_drafts_row_to_parked(
                     session,
                     workspace_id,
                     payload.ticket_ref,
@@ -1196,7 +1207,7 @@ async def finish_agent_run(
                     actor_token_id=auth.token.id if auth.token else None,
                 )
                 if flipped:
-                    actions.append("priorities:active")
+                    actions.append("priorities:parked")
 
     elif payload.outcome == "needs_clarification":
         if not payload.ticket_ref:

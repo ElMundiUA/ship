@@ -494,7 +494,7 @@ def default_planning_process_config() -> dict[str, object]:
                 # Terminal stage — no specialist runs here. ``ready_next_step``
                 # with ``stage_next='planning_done'`` from the ``tasks`` stage
                 # signals decomposition complete; the finish hook flips the
-                # dashboard row from Drafts → Active.
+                # dashboard row from Drafts → Parked (the PO promotes Parked → Active manually; ELS-81).
                 "specialist": {"id": "developer", "name": "Developer"},
                 "instructions": (
                     "Terminal — no work. Reaching this stage flips the "
