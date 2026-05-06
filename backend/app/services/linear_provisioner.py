@@ -161,6 +161,24 @@ SIGNAL_LABELS: dict[str, str] = {
 }
 
 
+# Overlay labels that freeze a ticket — the agent picker drops any
+# row carrying one of these (ELS-84). Distinct from ``SIGNAL_LABELS``
+# (what the agent emits): freeze-overlay labels include both Ship-
+# emitted ones and operator-friendly aliases (``blocked`` /
+# ``blocker``) so a hand-tagged ticket is also respected.
+#
+# Match is case-insensitive — for each prefix ``p``, label ``l``
+# matches if ``l == p``, ``l.startswith(p + "-")``, or
+# ``l.startswith(p + ":")``. Covers ``needs:clarification`` exactly,
+# ``blocked``, ``blocked-on-acme``, ``blocked:foo``, etc.
+OVERLAY_FREEZE_LABEL_PREFIXES: frozenset[str] = frozenset(
+    {
+        "needs:clarification",
+        "blocked",
+    }
+)
+
+
 @dataclass(frozen=True)
 class ProvisionResult:
     team_id: str
