@@ -75,16 +75,19 @@ from backend.app.services.agent.embedding import embed_text
 log = logging.getLogger(__name__)
 
 
-# Trim very long source bodies. Long-tail Notion / Confluence runbooks
-# would otherwise blow the per-call token budget without improving
-# extraction quality much (LLMs hit diminishing returns past ~10k
-# chars of mixed-purpose prose).
-_MAX_BODY_CHARS = 24_000
+# Trim very long source bodies. Bumped 24k → 80k once the canon
+# pipeline went live: Anthropic Haiku 4.5 has a 200k context, and
+# truncating a 38k-char ops runbook at 24k was dropping legitimate
+# claims past the cutoff. 80k catches all but the most monstrous
+# docs without risking token-budget surprises.
+_MAX_BODY_CHARS = 80_000
 
-# Per-document fan-out cap. Pages with 200 bullet items would flood
-# the store with low-signal "Bob said X" claims and starve the
-# reconciliation engine.
-_MAX_CLAIMS_PER_ITEM = 30
+# Per-document fan-out cap. Bumped 30 → 100 — a long technical doc
+# legitimately produces 50-80 atomic claims, and the lower cap was
+# silently dropping content past the first ~third of the file.
+# Reconciliation downstream collapses near-duplicates, so over-
+# extraction here doesn't poison the canon.
+_MAX_CLAIMS_PER_ITEM = 100
 
 # Per-cron-tick batch — how many un-extracted items the worker pulls
 # per workspace. Bounded so a 5000-doc backfill doesn't single-thread
