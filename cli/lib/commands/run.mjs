@@ -658,11 +658,19 @@ as a one-shot credential for this run.
 
 function makeBranchName(routine, ticketRef) {
   const stamp = Date.now().toString(36);
+  // Sanitize ``routine`` too — for pipeline-pick runs ``runHandle`` is
+  // ``pipeline:<specialist>`` and the bare ``:`` is in git's reserved
+  // character set, which Cursor's ``/v0/agents`` validator rejects
+  // with HTTP 400 ("Invalid branch name. Branch names cannot start
+  // with '-', contain invalid characters (spaces, ~, ^, :, ?, *, [,
+  // ], \\, .., @{, //), end with '/', '.lock', or '.', or be named
+  // 'HEAD'."). Same regex as the ticketRef path.
+  const safeRoutine = String(routine).replace(/[^a-zA-Z0-9_-]/g, "-");
   if (ticketRef) {
     const safe = String(ticketRef).replace(/[^a-zA-Z0-9_-]/g, "-");
-    return `cursor/ship-${routine}-${safe}-${stamp}`;
+    return `cursor/ship-${safeRoutine}-${safe}-${stamp}`;
   }
-  return `cursor/ship-${routine}-${stamp}`;
+  return `cursor/ship-${safeRoutine}-${stamp}`;
 }
 
 
