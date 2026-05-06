@@ -56,23 +56,28 @@ NOTION_VERSION = "2025-09-03"
 
 # Cap the number of blocks we render per page. Each block is one
 # API call's worth of rich_text work; Notion's default page_size is
-# 100 so ~200 blocks is already two round-trips. Very long pages
-# truncate with a trailing note rather than silently cutting off.
-_MAX_BLOCKS = 200
+# 100. Bumped 200 → 2000 so a long ops runbook doesn't silently
+# truncate; per-page cost is dominated by token spend on the
+# extractor downstream, not by Notion-API round trips, so the
+# bigger ceiling is fine.
+_MAX_BLOCKS = 2000
 
-# Cap pages pulled from one database/data_source resource_ref. Each
-# database entry costs a page fetch + a blocks fetch; without a cap
-# a 5k-row database wedges sync runs and starves other resource_refs
-# (the ingestion pipeline already caps total documents per source at
-# MAX_SOURCE_DOCUMENTS = 100, so this is the per-database ceiling).
-_MAX_PAGES_PER_DATABASE = 50
+# Cap pages pulled from one database/data_source resource_ref.
+# Bumped 50 → 1000 so a real-world team Notion DB (project list,
+# decision log, vendor catalog) ingests in full. The ingestion
+# pipeline's ``MAX_SOURCE_DOCUMENTS`` (5000) is still the hard
+# ceiling per source.
+_MAX_PAGES_PER_DATABASE = 1000
 
 # Recursive expansion caps for hub-style pages. A single ``page_id``
 # ref can fan out into child pages and embedded child_databases; the
 # walker bounds breadth (total emitted pages per ref tree) and depth
 # (root counts as depth 0; subpages = 1; their subpages = 2; …).
-_MAX_PAGES_PER_REF = 100
-_MAX_RECURSION_DEPTH = 3
+# Bumped 100 → 2000 / 3 → 5 to cover deep ops trees (e.g. a
+# top-level "Engineering Wiki" hub three levels deep with 1k+ leaf
+# pages) without forcing operators to chunk.
+_MAX_PAGES_PER_REF = 2000
+_MAX_RECURSION_DEPTH = 5
 
 
 def _headers(token: str) -> dict[str, str]:

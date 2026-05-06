@@ -33,7 +33,15 @@ from backend.app.integrations.github.code_host_adapter import GitHubCodeHost
 from backend.app.services.connectors import fetch_connector_pages
 
 
-MAX_SOURCE_DOCUMENTS = 100
+# Bumped from 100 → 5000 with the claim-graph pipeline. The legacy
+# cap was sized to the old synth shape where 100 docs already
+# pushed an LLM batch hard; the new pipeline batches at the
+# extractor tick (25 items / 20 min) so the per-source ceiling can
+# sit far above realistic doc counts (Ship's repo: ~150-300
+# markdown, Notion workspaces typically <2000 pages). 5000 still
+# catches pathological cases without forcing operators to manually
+# chunk their sources.
+MAX_SOURCE_DOCUMENTS = 5000
 MAX_SECTION_CHARS = 18_000
 SYNC_DUE_LIMIT = 5
 
@@ -515,12 +523,19 @@ async def _fetch_docs_repo_documents(
     if isinstance(prefixes, str):
         prefixes = [prefixes]
     suffixes = tuple(source.config.get("extensions") or [".md", ".mdx", ".txt"])
+    # ``config.limit`` falls back to ``MAX_SOURCE_DOCUMENTS`` (5000)
+    # so the ingest pulls every matching doc by default. Operators
+    # who want to chunk a giant repo can still pin a smaller value
+    # via ``config.limit``; the hardcoded 50 default we used to ship
+    # silently truncated even modest doc trees (Ship's own
+    # documentation/ tree is ~150 files) and was the reason the
+    # canonical workspace was capping at "first 50 alphabetical".
     paths = [
         path
         for path in all_paths
         if any(path.startswith(str(prefix).strip("/")) for prefix in prefixes)
         and path.lower().endswith(suffixes)
-    ][: int(source.config.get("limit") or 50)]
+    ][: int(source.config.get("limit") or MAX_SOURCE_DOCUMENTS)]
     documents: list[SourceDocument] = []
     for path in paths:
         blob = await gateway.get_blob(ref, path=path, ref_sha=repo.default_branch)

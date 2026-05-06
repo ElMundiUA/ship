@@ -29,11 +29,13 @@ from backend.app.security.encryption import safe_decrypt
 from . import ConnectorConfigError, ConnectorPage, ConnectorUnsupported, register
 
 
-# Cap descendants per section so a runaway 5000-page space doesn't wedge
-# a sync. The ingestion pipeline already caps total source documents at
-# ``MAX_SOURCE_DOCUMENTS`` (100); this is the per-section ceiling so a
-# single section can't starve the rest of a multi-section source.
-_MAX_DESCENDANTS_PER_SECTION = 200
+# Cap descendants per section so a runaway 50k-page space doesn't
+# wedge a sync. Bumped 200 → 2000 with the canon pipeline going
+# live — a real-world Confluence section often has thousands of
+# leaf pages and the old cap forced operators to pick narrow
+# subsections. The ingestion pipeline's ``MAX_SOURCE_DOCUMENTS``
+# (5000) is still the hard ceiling per source.
+_MAX_DESCENDANTS_PER_SECTION = 2000
 
 
 class _HtmlToMarkdown(HTMLParser):
