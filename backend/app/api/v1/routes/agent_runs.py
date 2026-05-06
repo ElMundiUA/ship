@@ -530,6 +530,9 @@ async def _flip_drafts_row_to_active(
     workspace_id: uuid.UUID,
     ticket_ref: str,
     resolved,  # ResolvedTracker; avoid circular type import
+    *,
+    actor_user_id: uuid.UUID | None = None,
+    actor_token_id: uuid.UUID | None = None,
 ) -> bool:
     """Flip the project's priorities row from ``planning`` → ``active``.
 
@@ -602,6 +605,36 @@ async def _flip_drafts_row_to_active(
         return False
     row.state = "active"
     await session.flush()
+
+    # ELS-91: sync child tickets to match the new state (Backlog →
+    # Todo for active). Best-effort — tracker errors log but do NOT
+    # roll back the priorities-row flip. ``actor_user_id`` is the
+    # operator who triggered the agent finish (threaded through from
+    # the route handler) so audit-row FKs stay valid.
+    if actor_user_id is not None:
+        from backend.app.services.agent.project_state_sync import (
+            sync_project_tickets_for_state,
+        )
+
+        try:
+            await sync_project_tickets_for_state(
+                session,
+                workspace_id=workspace_id,
+                project_id=str(project_id),
+                new_state="active",
+                gateway=resolved.gateway,
+                tracker_kind=resolved.kind,
+                actor_user_id=actor_user_id,
+                actor_token_id=actor_token_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "decomposition completion: ticket-state sync failed "
+                "workspace=%s project=%s err=%s",
+                workspace_id,
+                project_id,
+                exc,
+            )
     return True
 
 
@@ -735,7 +768,12 @@ async def finish_agent_run(
                 and payload.stage_next == "planning_done"
             ):
                 flipped = await _flip_drafts_row_to_active(
-                    session, workspace_id, payload.ticket_ref, resolved
+                    session,
+                    workspace_id,
+                    payload.ticket_ref,
+                    resolved,
+                    actor_user_id=auth.user.id,
+                    actor_token_id=auth.token.id if auth.token else None,
                 )
                 if flipped:
                     actions.append("priorities:active")

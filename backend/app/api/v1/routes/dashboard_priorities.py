@@ -786,6 +786,29 @@ async def set_priority_state(
     )
     await session.flush()
 
+    # ELS-91: bring the project's child tickets into line with the
+    # new state — Active → Todo, Parked / Drafts → Backlog. Best-
+    # effort: tracker errors log + audit but DON'T roll back the
+    # state flip the operator just made.
+    from backend.app.services.tracker_resolver import resolve_for_workspace
+    from backend.app.services.agent.project_state_sync import (
+        sync_project_tickets_for_state,
+    )
+
+    resolved = await resolve_for_workspace(
+        session=session, settings=settings, workspace_id=workspace_id
+    )
+    await sync_project_tickets_for_state(
+        session,
+        workspace_id=workspace_id,
+        project_id=payload.project_native_id,
+        new_state=payload.state,
+        gateway=resolved.gateway if resolved is not None else None,
+        tracker_kind=resolved.kind if resolved is not None else None,
+        actor_user_id=auth.user.id,
+        actor_token_id=auth.token.id if auth.token else None,
+    )
+
     return await get_priorities(
         workspace_id=workspace_id,
         auth=auth,

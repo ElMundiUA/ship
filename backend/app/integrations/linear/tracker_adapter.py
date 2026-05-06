@@ -242,6 +242,79 @@ class LinearTracker:
             )
         return out
 
+    async def list_project_tickets_in_state(
+        self,
+        *,
+        project_id: str,
+        linear_state_name: str,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """List tickets attached to ``project_id`` whose Linear workflow
+        state matches ``linear_state_name`` (case-sensitive match against
+        the team's state names — ``Backlog`` / ``Todo`` / ``In Progress`` /
+        ``Review`` / ``Done`` / etc.).
+
+        Used by the project-state ↔ ticket-state sync helper (Linear
+        ELS-91) to bulk-move children when a project flips Active ↔
+        Parked. We deliberately enumerate by **Linear state name**
+        instead of FSM stage, because the sync moves between Backlog
+        and Todo regardless of which FSM stage the ticket is in
+        (any stage assigned to ``Todo`` should park together).
+
+        Returns a flat list of ``{"id", "identifier", "title", "url",
+        "state_name"}`` dicts. ``id`` is the Linear UUID (suitable for
+        ``transition``); ``identifier`` is the human ref (``ELS-99``).
+
+        Hard-capped at ``limit`` (default 100). Pagination not exposed
+        — projects with >100 children in a single Linear state would be
+        unusual; if it ever comes up we add a cursor loop.
+        """
+        if not project_id:
+            return []
+        target_state_id = self._state_id_by_name.get(linear_state_name)
+        if not target_state_id:
+            # The team may not have provisioned this state name; bail
+            # quietly so the sync degrades to a no-op rather than 5xx.
+            return []
+        gql = """
+        query ShipProjectTicketsInState(
+            $first: Int!,
+            $filter: IssueFilter
+        ) {
+          issues(first: $first, orderBy: updatedAt, filter: $filter) {
+            nodes {
+              id
+              identifier
+              title
+              url
+              state { name }
+            }
+          }
+        }
+        """
+        issue_filter: dict[str, Any] = {
+            "and": [
+                {"project": {"id": {"eq": project_id}}},
+                {"state": {"id": {"eq": target_state_id}}},
+            ]
+        }
+        if self._team_id:
+            issue_filter["and"].append({"team": {"id": {"eq": self._team_id}}})
+        first = max(1, min(limit, 250))
+        data = await self._gql(gql, {"first": first, "filter": issue_filter})
+        out: list[dict[str, Any]] = []
+        for n in (data.get("issues") or {}).get("nodes") or []:
+            out.append(
+                {
+                    "id": str(n.get("id") or ""),
+                    "identifier": str(n.get("identifier") or ""),
+                    "title": str(n.get("title") or ""),
+                    "url": str(n.get("url") or ""),
+                    "state_name": str((n.get("state") or {}).get("name") or ""),
+                }
+            )
+        return out
+
     async def fetch_workflow_states(
         self, *, team_id: str | None = None
     ) -> list[dict[str, Any]]:
