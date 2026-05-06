@@ -166,6 +166,61 @@ def test_compose_default_bundle_emits_decomposition_routines() -> None:
     assert "specialist: developer" in config_body
 
 
+def test_compose_default_bundle_emits_sdlc_routines() -> None:
+    """SDLC routines land in ``process.routines`` so customer cron has
+    a ticket-driven dispatch path for every per-ticket FSM stage.
+
+    Without these the agent-side autonomy doesn't actually exist —
+    cron's pipeline-pick fallback would dispatch a context-free
+    specialist (no ``fsm_stage`` → no ticket pickup → 3 minute
+    no-op run). Each SDLC routine carries an explicit ``fsm_stage``
+    and a specialist slug so ``shipctl run --routine intake`` polls
+    ``GET /tracker/next?state=task_intake`` and feeds ``intake``
+    role a real ticket.
+    """
+
+    from backend.app.services.lane_recipes import DEFAULT_BUNDLE
+    from backend.app.services.seed_bundle import (
+        CONFIG_PATH,
+        compose_seed_files,
+    )
+
+    bundle = compose_seed_files(
+        bundle=DEFAULT_BUNDLE,
+        knowledge_slugs=[],
+        tracker_kind=None,
+        repo_full_name="acme/widgets",
+        seeded_at=_seeded_at(),
+    )
+
+    config_body = next(c for p, c in bundle.files if p == CONFIG_PATH)
+
+    sdlc_routines = {
+        "intake": ("intake", "task_intake"),
+        "bug_triage": ("bug-triage", "bug_triage"),
+        "ba_requirements": ("ba", "ba_requirements"),
+        "tech_arch_plan": ("tech-architect", "tech_arch_plan"),
+        "qa_arch_plan": ("qa-architect", "qa_arch_plan"),
+        "dev_implementation": ("developer", "dev_implementation"),
+        "qa_manual": ("qa-engineer", "qa_manual"),
+        "qa_automation": ("qa-automation", "qa_automation"),
+        "code_review": ("reviewer", "code_review"),
+    }
+    for routine_id, (specialist, fsm_stage) in sdlc_routines.items():
+        assert f"    {routine_id}:" in config_body, (
+            f"missing SDLC routine {routine_id} in seeded YAML"
+        )
+        assert f"fsm_stage: {fsm_stage}" in config_body, (
+            f"missing fsm_stage: {fsm_stage} on SDLC routine {routine_id}"
+        )
+        # Specialist may be referenced by multiple routines (e.g.
+        # ``ba`` covers ``ba_requirements`` SDLC + ``wbs``
+        # decomposition); just assert presence.
+        assert f"specialist: {specialist}" in config_body, (
+            f"missing specialist {specialist} on SDLC routine {routine_id}"
+        )
+
+
 def test_compose_default_bundle_emits_dedup_workflows() -> None:
     """Multiple patterns sharing a starter workflow collapse to one
     YAML on disk (path uniqueness is the tree builder's invariant)."""

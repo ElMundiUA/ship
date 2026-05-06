@@ -92,6 +92,10 @@ DEFAULT_SEED_LANES: Final[dict[str, dict[str, object]]] = {
     # the slug through ``GET /v1/.../agent-roles/{slug}/resolve`` (workspace
     # override → Ship default file). Slugs match
     # ``backend/app/resources/agent_roles/<slug>.md`` exactly.
+    #
+    # ----- Supporting / context-free routines -------------------
+    # These don't carry an ``fsm_stage`` — they run free-form (no
+    # ticket pickup), produce digests / sweeps / inbox items.
     "daily": {
         "kind": "schedule",
         "cron": "0 9 * * *",   # 09:00 UTC — morning summary
@@ -127,10 +131,79 @@ DEFAULT_SEED_LANES: Final[dict[str, dict[str, object]]] = {
         "cron": "0 16 * * *",  # 16:00 UTC — after the QA sweep, before retro
         "specialist": "process-reviewer",
     },
+    # ----- SDLC routines (the missing piece) --------------------
+    # One routine per ticket-driven SDLC stage. Each carries an
+    # explicit ``fsm_stage`` so ``shipctl run --routine X`` polls
+    # ``GET /tracker/next?state=<stage>`` and feeds the matching
+    # specialist a real ticket. Without these, agents had no
+    # autonomous way to pick up SDLC work — the cron's pipeline-
+    # pick fallback would dispatch a context-free specialist that
+    # finished in 3 minutes without doing anything useful.
+    #
+    # 30-min cadence is the safe free-tier default (matches the
+    # trigger workflow's own */30 cron). The trigger workflow
+    # picks at most ONE due routine per tick, so adding 9 stages
+    # doesn't multiply the budget — picker scans them in order
+    # and dispatches the first eligible one.
+    "intake": {
+        "kind": "schedule",
+        "cron": "*/30 * * * *",
+        "specialist": "intake",
+        "fsm_stage": "task_intake",
+    },
+    "bug_triage": {
+        "kind": "schedule",
+        "cron": "*/30 * * * *",
+        "specialist": "bug-triage",
+        "fsm_stage": "bug_triage",
+    },
+    "ba_requirements": {
+        "kind": "schedule",
+        "cron": "*/30 * * * *",
+        "specialist": "ba",
+        "fsm_stage": "ba_requirements",
+    },
+    "tech_arch_plan": {
+        "kind": "schedule",
+        "cron": "*/30 * * * *",
+        "specialist": "tech-architect",
+        "fsm_stage": "tech_arch_plan",
+    },
+    "qa_arch_plan": {
+        "kind": "schedule",
+        "cron": "*/30 * * * *",
+        "specialist": "qa-architect",
+        "fsm_stage": "qa_arch_plan",
+    },
+    "dev_implementation": {
+        "kind": "schedule",
+        "cron": "*/30 * * * *",
+        "specialist": "developer",
+        "fsm_stage": "dev_implementation",
+    },
+    "qa_manual": {
+        "kind": "schedule",
+        "cron": "*/30 * * * *",
+        "specialist": "qa-engineer",
+        "fsm_stage": "qa_manual",
+    },
+    "qa_automation": {
+        "kind": "schedule",
+        "cron": "*/30 * * * *",
+        "specialist": "qa-automation",
+        "fsm_stage": "qa_automation",
+    },
+    "code_review": {
+        "kind": "schedule",
+        "cron": "*/30 * * * *",
+        "specialist": "reviewer",
+        "fsm_stage": "code_review",
+    },
 }
 
 # Display labels keyed by the canonical routine id.
 ROUTINE_DISPLAY_LABELS: Final[dict[str, str]] = {
+    # Supporting routines.
     "daily": "Daily",
     "retro": "Retro",
     "healthcheck": "Self-heal",
@@ -138,6 +211,16 @@ ROUTINE_DISPLAY_LABELS: Final[dict[str, str]] = {
     "qa_review": "QA review",
     "security_review": "Security review",
     "process_review": "Process review",
+    # SDLC routines (per-stage ticket pickup).
+    "intake": "Intake",
+    "bug_triage": "Bug triage",
+    "ba_requirements": "Requirements",
+    "tech_arch_plan": "Tech architecture",
+    "qa_arch_plan": "Test architecture",
+    "dev_implementation": "Implementation",
+    "qa_manual": "Manual QA",
+    "qa_automation": "Test automation",
+    "code_review": "Code review",
 }
 
 # Legacy ids ever produced by older seed versions. Loading code logs a
