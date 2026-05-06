@@ -15,9 +15,20 @@ should keep flowing; an operator who wants to gate an in-flight
 project parks it explicitly. Backfilling everyone to ``planning``
 would freeze workspaces overnight without warning.
 
-Revision ID: 0062_priority_state_default_planning
+Revision ID: 0062_priority_default_planning
 Revises: 0061_knowledge_topic_views
 Create Date: 2026-05-06
+
+NOTE: revision id kept ≤ 32 chars on purpose — Alembic's
+``alembic_version.version_num`` column is ``VARCHAR(32)`` by default
+and a longer id (the original draft was 36 chars,
+``0062_priority_state_default_planning``) raises
+``StringDataRightTruncation`` during the post-upgrade
+``UPDATE alembic_version`` step. The DDL itself runs fine but the
+transaction can't commit, alembic raises, ``alembic upgrade head``
+exits non-zero, ``deploy/backend/entrypoint.sh`` fails, and the
+container crash-loops. Cost us ~40 minutes of prod outage before
+the rename. Future migrations: keep revision ids short.
 """
 
 from __future__ import annotations
@@ -28,7 +39,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = "0062_priority_state_default_planning"
+revision: str = "0062_priority_default_planning"
 down_revision: Union[str, None] = "0061_knowledge_topic_views"
 branch_labels: Union[str, tuple[str, ...], None] = None
 depends_on: Union[str, tuple[str, ...], None] = None
