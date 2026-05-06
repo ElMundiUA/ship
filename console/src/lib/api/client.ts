@@ -3118,6 +3118,7 @@ export function searchKnowledge(
 export type ApiTopicViewSummary = {
   topic_tag: string;
   title: string;
+  snippet: string | null;
   claim_count: number;
   rendered_by_model: string | null;
   last_rendered_at: string;
