@@ -1833,6 +1833,109 @@ class ToolBox:
                 },
             ),
             ToolSpec(
+                name="get_ticket",
+                description=(
+                    "Fetch one ticket's current state from the workspace's "
+                    "bound tracker. Use when the user names an id (``ELS-99``) "
+                    "or you've resolved one from ``list_tickets`` and need "
+                    "the body / labels / state to act. Read-only; cheaper "
+                    "than ``list_tickets`` when you already know which "
+                    "ticket. Returns ``{ticket_ref, title, description, "
+                    "url, state, labels, project_id?}``."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "ticket_ref": {
+                            "type": "string",
+                            "description": (
+                                "Tracker-native identifier — Linear's "
+                                "``ELS-99`` form or the issue's UUID. "
+                                "Other adapters use their native "
+                                "identifier (Jira ``ENG-42``, GitHub "
+                                "Issues ``owner/repo#42``)."
+                            ),
+                        },
+                    },
+                    "required": ["ticket_ref"],
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="get_dashboard",
+                description=(
+                    "One-call denormalised snapshot of the workspace's "
+                    "current state — priorities (active / drafts / parked "
+                    "buckets), inbox totals + by-type, recent activity "
+                    "(top 5 mixed: pipeline runs, PRs, workflow runs), "
+                    "open PR count, and 24h shipped count. Use to answer "
+                    "'what's on my plate?' / 'what's the state of the "
+                    "workspace?' without dialing five separate tools. "
+                    "Read-only."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="workspace_audit_search",
+                description=(
+                    "Search the workspace audit log. Use to answer 'who "
+                    "changed setting X?' / 'when did the priorities row "
+                    "for project Y land?' / 'has anyone run the daily "
+                    "play this week?'. Returns rows ``{action, "
+                    "target_kind, target_id, actor_user_id, payload, "
+                    "created_at}`` newest first. Read-only."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "description": (
+                                "Optional exact-match filter on the "
+                                "audit ``action`` (e.g. "
+                                "``dashboard.priorities.reorder``, "
+                                "``navigator.consult_specialist``). "
+                                "Omit for any action."
+                            ),
+                        },
+                        "target_kind": {
+                            "type": "string",
+                            "description": (
+                                "Optional filter on ``target_kind`` "
+                                "(e.g. ``workspace``, ``inbox_item``, "
+                                "``agent_run``)."
+                            ),
+                        },
+                        "target_id": {
+                            "type": "string",
+                            "description": (
+                                "Optional filter on ``target_id`` — "
+                                "the audited entity's id as a string."
+                            ),
+                        },
+                        "since": {
+                            "type": "string",
+                            "description": (
+                                "ISO-8601 timestamp lower bound "
+                                "(``2026-05-01T00:00:00Z``). Omit to "
+                                "scan the last 30 days by default."
+                            ),
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 100,
+                            "default": 25,
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
                 name="consult_specialist",
                 description=(
                     "Hand a focused task off to a specialist subagent. "
@@ -1984,6 +2087,9 @@ class ToolBox:
             "automation_toggle": self._tool_automation_toggle,
             "archive_bucket_article": self._tool_archive_bucket_article,
             "inbox_routing_upsert": self._tool_inbox_routing_upsert,
+            "get_ticket": self._tool_get_ticket,
+            "get_dashboard": self._tool_get_dashboard,
+            "workspace_audit_search": self._tool_workspace_audit_search,
             "consult_specialist": self._tool_consult_specialist,
         }
 
@@ -6664,6 +6770,287 @@ class ToolBox:
                 "enabled": enabled,
             }
         )
+
+    # ------------------------------------------------------------------
+    # Read-only tools (Navigator tool review PR-C1, ELS-78):
+    # ``get_ticket``, ``get_dashboard``, ``workspace_audit_search``.
+    # ------------------------------------------------------------------
+
+    async def _tool_get_ticket(self, args: dict[str, Any]) -> str:
+        ticket_ref = _require_str(args, "ticket_ref").strip()
+        tracker = await self._resolve_tracker(None, None)
+        ref = _ticket_ref_from(_tracker_kind_of(tracker), ticket_ref)
+        snapshot_fn = getattr(tracker, "get_ticket_snapshot", None)
+        if snapshot_fn is None:
+            raise ToolInvocationError(
+                "this tracker does not implement single-ticket lookup"
+            )
+        snapshot = await snapshot_fn(ref)
+        if snapshot is None:
+            return _json_result(
+                {
+                    "error": "ticket_not_found",
+                    "ticket_ref": ticket_ref,
+                    "message": (
+                        f"the bound tracker has no ticket matching "
+                        f"{ticket_ref!r}"
+                    ),
+                }
+            )
+        return _json_result(snapshot)
+
+    async def _tool_get_dashboard(self, args: dict[str, Any]) -> str:
+        """Stitch the workspace's headline state into one payload.
+
+        Composes cheap queries against ``WorkspaceProjectPriority``,
+        ``InboxItem``, ``PullRequest``, ``PipelineRun``, and
+        ``WorkflowRun``. The shape is deliberately slim — the agent
+        gets enough to answer "what's on my plate?" without a five-
+        tool fan-out, but not the full ``/dashboard/ops`` payload
+        (which is route-only, requires HTTP auth context, and carries
+        per-repo enrichment the agent rarely needs in chat).
+        """
+        del args  # no parameters
+
+        from datetime import datetime as _dt, timedelta, timezone
+
+        from backend.app.db.models.dashboard_priorities import (
+            WorkspaceProjectPriority,
+        )
+
+        now = _dt.now(timezone.utc)
+        cutoff_24h = now - timedelta(days=1)
+        cutoff_recent = now - timedelta(days=7)
+
+        # Priorities — group by state, ordered.
+        priority_rows = (
+            await self._session.execute(
+                select(WorkspaceProjectPriority)
+                .where(
+                    WorkspaceProjectPriority.workspace_id
+                    == self._workspace_id
+                )
+                .order_by(
+                    WorkspaceProjectPriority.state,
+                    WorkspaceProjectPriority.ordinal.asc(),
+                )
+            )
+        ).scalars().all()
+        by_state: dict[str, list[dict[str, Any]]] = {
+            "active": [],
+            "planning": [],
+            "parked": [],
+        }
+        for row in priority_rows:
+            bucket = by_state.setdefault(row.state, [])
+            bucket.append(
+                {
+                    "project_native_id": row.project_native_id,
+                    "ordinal": row.ordinal,
+                    "originating_thread_id": (
+                        str(row.originating_thread_id)
+                        if row.originating_thread_id
+                        else None
+                    ),
+                }
+            )
+
+        # Inbox snapshot. We intentionally include this even though
+        # the session-context frame already has it — when the user
+        # asks "what's on my plate?" they want a structured
+        # response that doesn't depend on the agent regurgitating
+        # the frame back. The detail here also exposes a 24-hour
+        # arrival count the frame doesn't carry.
+        inbox_total = (
+            await self._session.execute(
+                select(func.count(InboxItem.id)).where(
+                    InboxItem.workspace_id == self._workspace_id,
+                    InboxItem.status.in_(("new", "snoozed")),
+                )
+            )
+        ).scalar_one() or 0
+        inbox_by_type_rows = (
+            await self._session.execute(
+                select(InboxItem.type, func.count(InboxItem.id))
+                .where(
+                    InboxItem.workspace_id == self._workspace_id,
+                    InboxItem.status.in_(("new", "snoozed")),
+                )
+                .group_by(InboxItem.type)
+            )
+        ).all()
+        inbox_by_type = {
+            str(row[0]): int(row[1])
+            for row in inbox_by_type_rows
+            if row[0]
+        }
+        inbox_arrived_24h = (
+            await self._session.execute(
+                select(func.count(InboxItem.id)).where(
+                    InboxItem.workspace_id == self._workspace_id,
+                    InboxItem.created_at >= cutoff_24h,
+                )
+            )
+        ).scalar_one() or 0
+
+        # Open PRs + recent merged.
+        open_pr_count = (
+            await self._session.execute(
+                select(func.count(PullRequest.id)).where(
+                    PullRequest.workspace_id == self._workspace_id,
+                    PullRequest.state == "open",
+                )
+            )
+        ).scalar_one() or 0
+        shipped_24h = (
+            await self._session.execute(
+                select(func.count(PullRequest.id)).where(
+                    PullRequest.workspace_id == self._workspace_id,
+                    PullRequest.merged.is_(True),
+                    PullRequest.merged_at >= cutoff_24h,
+                )
+            )
+        ).scalar_one() or 0
+
+        # Recent activity — top 5 mixed across pipeline runs + PRs +
+        # workflow runs in the last week. Cheap unioned listing; the
+        # agent calls ``runs_query`` / ``list_pull_requests`` if it
+        # needs detail beyond the headline.
+        recent: list[dict[str, Any]] = []
+        recent_runs = (
+            await self._session.execute(
+                select(PipelineRun)
+                .where(
+                    PipelineRun.workspace_id == self._workspace_id,
+                    PipelineRun.created_at >= cutoff_recent,
+                )
+                .order_by(desc(PipelineRun.created_at))
+                .limit(5)
+            )
+        ).scalars().all()
+        for r in recent_runs:
+            recent.append(
+                {
+                    "kind": "pipeline_run",
+                    "id": str(r.id),
+                    "status": r.status,
+                    "trigger": r.trigger,
+                    "created_at": r.created_at.isoformat()
+                    if r.created_at
+                    else None,
+                }
+            )
+        recent_prs = (
+            await self._session.execute(
+                select(PullRequest)
+                .where(
+                    PullRequest.workspace_id == self._workspace_id,
+                    PullRequest.updated_at_external >= cutoff_recent,
+                )
+                .order_by(desc(PullRequest.updated_at_external))
+                .limit(5)
+            )
+        ).scalars().all()
+        for pr in recent_prs:
+            recent.append(
+                {
+                    "kind": "pull_request",
+                    "repo_full_name": pr.repo_full_name,
+                    "number": pr.number,
+                    "title": pr.title,
+                    "state": pr.state,
+                    "merged": pr.merged,
+                    "url": pr.html_url,
+                    "updated_at": (
+                        pr.updated_at_external.isoformat()
+                        if pr.updated_at_external
+                        else None
+                    ),
+                }
+            )
+        # Sort merged stream by timestamp desc; trim to top 5.
+        recent.sort(
+            key=lambda x: x.get("updated_at") or x.get("created_at") or "",
+            reverse=True,
+        )
+        recent = recent[:5]
+
+        return _json_result(
+            {
+                "now": now.isoformat(),
+                "priorities": by_state,
+                "inbox": {
+                    "open_total": int(inbox_total),
+                    "by_type": inbox_by_type,
+                    "arrived_24h": int(inbox_arrived_24h),
+                },
+                "pull_requests": {
+                    "open_total": int(open_pr_count),
+                    "shipped_24h": int(shipped_24h),
+                },
+                "recent_activity": recent,
+            }
+        )
+
+    async def _tool_workspace_audit_search(
+        self, args: dict[str, Any]
+    ) -> str:
+        from datetime import datetime as _dt, timedelta, timezone
+
+        action = args.get("action")
+        if action is not None and not isinstance(action, str):
+            raise ToolInvocationError("action must be a string when provided")
+        target_kind = args.get("target_kind")
+        if target_kind is not None and not isinstance(target_kind, str):
+            raise ToolInvocationError(
+                "target_kind must be a string when provided"
+            )
+        target_id = args.get("target_id")
+        if target_id is not None and not isinstance(target_id, str):
+            raise ToolInvocationError(
+                "target_id must be a string when provided"
+            )
+        since_dt = _parse_iso_datetime(args.get("since"), "since")
+        if since_dt is None:
+            since_dt = _dt.now(timezone.utc) - timedelta(days=30)
+        limit = _clamp_int(
+            args.get("limit"), default=25, low=1, high=100
+        )
+
+        stmt = (
+            select(AuditLog)
+            .where(
+                AuditLog.workspace_id == self._workspace_id,
+                AuditLog.created_at >= since_dt,
+            )
+            .order_by(desc(AuditLog.created_at))
+            .limit(limit)
+        )
+        if action:
+            stmt = stmt.where(AuditLog.action == action)
+        if target_kind:
+            stmt = stmt.where(AuditLog.target_kind == target_kind)
+        if target_id:
+            stmt = stmt.where(AuditLog.target_id == target_id)
+
+        rows = (await self._session.execute(stmt)).scalars().all()
+        items = [
+            {
+                "id": int(r.id),
+                "action": r.action,
+                "target_kind": r.target_kind,
+                "target_id": r.target_id,
+                "actor_user_id": (
+                    str(r.actor_user_id) if r.actor_user_id else None
+                ),
+                "payload": r.payload or {},
+                "created_at": r.created_at.isoformat()
+                if r.created_at
+                else None,
+            }
+            for r in rows
+        ]
+        return _json_result({"audit_log": items, "count": len(items)})
 
     # ------------------------------------------------------------------
     # consult_specialist — subagent loop (Navigator overhaul PR3, ELS-74).
