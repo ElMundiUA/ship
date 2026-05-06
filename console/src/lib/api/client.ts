@@ -3155,6 +3155,32 @@ export async function listBucketArticles(
   return Array.isArray(payload) ? payload : [];
 }
 
+// --- Topic views (claim-graph canon, P3+P4) -------------------------------
+
+export type ApiTopicViewSummary = {
+  topic_tag: string;
+  title: string;
+  claim_count: number;
+  rendered_by_model: string | null;
+  last_rendered_at: string;
+  updated_at: string;
+};
+
+export async function listTopicViews(
+  workspaceId: string,
+  opts: { limit?: number } = {},
+  token?: string,
+): Promise<ApiTopicViewSummary[]> {
+  const qs = new URLSearchParams();
+  if (opts.limit) qs.set("limit", String(opts.limit));
+  const suffix = qs.size ? `?${qs.toString()}` : "";
+  const payload = await apiFetch<ApiTopicViewSummary[]>(
+    `/v1/workspaces/${workspaceId}/knowledge/topic-views${suffix}`,
+    { token },
+  );
+  return Array.isArray(payload) ? payload : [];
+}
+
 // --- API tokens ------------------------------------------------------------
 
 export function mintToken(

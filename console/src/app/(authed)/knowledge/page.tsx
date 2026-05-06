@@ -5,13 +5,11 @@ import { PageBody, PageHeader } from "@/components/app-shell";
 import { ScopePill } from "@/components/scope-pill";
 import {
   type ApiActivatedRepo,
-  type ApiBucket,
   ApiHttpError,
   listActivatedRepos,
-  listBucketArticles,
   listIntegrations,
   listKnowledgeImportSources,
-  listBuckets,
+  listTopicViews,
 } from "@/lib/api/client";
 import {
   getCachedMe,
@@ -21,24 +19,21 @@ import {
 import { getResolvedWorkspaceId } from "@/lib/workspace-resolve.server";
 import { pickWorkspace } from "@/lib/workspace-scope";
 import type {
-  ApiBucketArticle,
   ApiIntegration,
   ApiKnowledgeImportSource,
 } from "@/lib/api/types";
 
 import {
   KnowledgeControlCenter,
-  type KnowledgeArticleRow,
-  type KnowledgeBucketRow,
   type KnowledgeSourceRow,
+  type KnowledgeTopicViewRow,
 } from "./knowledge-control-center";
 
 export const dynamic = "force-dynamic";
 
 type LiveData = {
   workspace: { id: string; slug: string; name: string };
-  buckets: KnowledgeBucketRow[];
-  articles: KnowledgeArticleRow[];
+  topicViews: KnowledgeTopicViewRow[];
   sources: KnowledgeSourceRow[];
   repos: ApiActivatedRepo[];
   integrations: ApiIntegration[];
@@ -65,47 +60,26 @@ async function load(
   const workspace = pickWorkspace(workspaceRows, resolved);
 
   try {
-    const [repos, integrations, me, rawBuckets, importSources] =
+    // Knowledge index reads the claim-graph canon directly. Legacy
+    // ``bucket_articles`` are intentionally NOT fetched here: keeping
+    // them on the page masks pipeline failures (operator sees stale
+    // articles from days ago and assumes the system is fine while
+    // the new extractor / reconciler / renderer chain has been
+    // silently broken). If the canon is empty, the page should look
+    // empty — that's the signal that something upstream needs
+    // attention.
+    const [repos, integrations, me, rawTopicViews, importSources] =
       await Promise.all([
         listActivatedRepos(workspace.id, token).catch(() => [] as ApiActivatedRepo[]),
         listIntegrations(workspace.id, token).catch(() => [] as ApiIntegration[]),
         getCachedMe(),
-        listBuckets(workspace.id, { token }),
+        listTopicViews(workspace.id, { limit: 200 }, token),
         listKnowledgeImportSources(workspace.id, token).catch(
           () => [] as ApiKnowledgeImportSource[],
         ),
       ]);
 
-    // Fetch the published-and-fresh article set for every bucket in
-    // parallel. Six fixed buckets after the consolidation, so this is
-    // a bounded fan-out — no pagination needed in the UI surface.
-    const articlePairs = await Promise.all(
-      rawBuckets.map(async (bucket) => ({
-        bucket,
-        articles: await listBucketArticles(
-          workspace.id,
-          bucket.slug,
-          {},
-          token,
-        ).catch(() => [] as ApiBucketArticle[]),
-      })),
-    );
-
-    // Per-bucket counts feed the "Browse by area" list; flat
-    // top-N (sorted by updated_at) feeds the "Recent" section.
-    const articleCounts = new Map<string, number>();
-    for (const { bucket, articles } of articlePairs) {
-      articleCounts.set(bucket.slug, articles.length);
-    }
-    const buckets: KnowledgeBucketRow[] = rawBuckets.map((bucket) =>
-      toBucketRow(bucket, articleCounts.get(bucket.slug) ?? 0),
-    );
-    const articles: KnowledgeArticleRow[] = articlePairs
-      .flatMap(({ bucket, articles }) =>
-        articles.map((article) => toArticleRow(article, bucket)),
-      )
-      .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
-      .slice(0, 10);
+    const topicViews: KnowledgeTopicViewRow[] = rawTopicViews.map(toTopicViewRow);
     const sources: KnowledgeSourceRow[] = importSources.map(toSourceRow);
 
     return {
@@ -116,8 +90,7 @@ async function load(
           slug: workspace.slug,
           name: workspace.name,
         },
-        buckets,
-        articles,
+        topicViews,
         sources,
         repos,
         integrations,
@@ -153,7 +126,7 @@ export default async function KnowledgeIndexPage({
     );
   }
 
-  const { workspace, buckets, articles, sources, repos, integrations, me } =
+  const { workspace, topicViews, sources, repos, integrations, me } =
     result.data;
 
   const scopePill = (
@@ -181,8 +154,7 @@ export default async function KnowledgeIndexPage({
       <PageBody>
         <KnowledgeControlCenter
           workspace={workspace}
-          buckets={buckets}
-          articles={articles}
+          topicViews={topicViews}
           sources={sources}
           repos={repos}
           integrations={integrations}
@@ -198,30 +170,15 @@ export default async function KnowledgeIndexPage({
 // ---------------------------------------------------------------------------
 
 
-function toBucketRow(bucket: ApiBucket, articleCount: number): KnowledgeBucketRow {
+function toTopicViewRow(
+  view: import("@/lib/api/client").ApiTopicViewSummary,
+): KnowledgeTopicViewRow {
   return {
-    id: bucket.id,
-    slug: bucket.slug,
-    name: bucket.name,
-    description: bucket.description ?? "",
-    archived: Boolean(bucket.archived_at),
-    articleCount,
-  };
-}
-
-
-function toArticleRow(
-  article: ApiBucketArticle,
-  bucket: ApiBucket,
-): KnowledgeArticleRow {
-  return {
-    id: article.id,
-    bucketSlug: bucket.slug,
-    bucketName: bucket.name,
-    slug: article.slug,
-    title: article.title || article.slug,
-    snippet: firstParagraph(article.body_md),
-    updatedAt: article.updated_at,
+    topicTag: view.topic_tag,
+    title: view.title || view.topic_tag,
+    claimCount: view.claim_count,
+    renderedByModel: view.rendered_by_model,
+    lastRenderedAt: view.last_rendered_at,
   };
 }
 
@@ -238,17 +195,3 @@ function toSourceRow(source: ApiKnowledgeImportSource): KnowledgeSourceRow {
 }
 
 
-function firstParagraph(body: string): string {
-  if (!body) return "";
-  const text = body.trim();
-  if (!text) return "";
-  for (const chunk of text.split("\n\n")) {
-    const candidate = chunk.replace(/^#+\s+/, "").trim();
-    if (candidate) {
-      return candidate.length > 220
-        ? candidate.slice(0, 219).trimEnd() + "…"
-        : candidate;
-    }
-  }
-  return text.length > 220 ? text.slice(0, 219).trimEnd() + "…" : text;
-}

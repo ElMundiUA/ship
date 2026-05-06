@@ -40,23 +40,12 @@ import { archiveImportSourceAction } from "./actions";
 import { KnowledgeImportWizard } from "./import-wizard";
 
 
-export type KnowledgeBucketRow = {
-  id: string;
-  slug: string;
-  name: string;
-  description: string;
-  archived: boolean;
-  articleCount: number;
-};
-
-export type KnowledgeArticleRow = {
-  id: string;
-  bucketSlug: string;
-  bucketName: string;
-  slug: string;
+export type KnowledgeTopicViewRow = {
+  topicTag: string;
   title: string;
-  snippet: string;
-  updatedAt: string;
+  claimCount: number;
+  renderedByModel: string | null;
+  lastRenderedAt: string;
 };
 
 export type KnowledgeSourceRow = {
@@ -70,8 +59,7 @@ export type KnowledgeSourceRow = {
 
 type Props = {
   workspace: { id?: string; slug: string; name: string };
-  buckets: KnowledgeBucketRow[];
-  articles: KnowledgeArticleRow[];
+  topicViews: KnowledgeTopicViewRow[];
   sources: KnowledgeSourceRow[];
   repos: ApiActivatedRepo[];
   integrations: ApiIntegration[];
@@ -80,8 +68,7 @@ type Props = {
 
 export function KnowledgeControlCenter({
   workspace,
-  buckets,
-  articles,
+  topicViews,
   sources,
   repos,
   integrations,
@@ -139,10 +126,7 @@ export function KnowledgeControlCenter({
     setSearchError(null);
   }
 
-  const liveBuckets = buckets.filter((b) => !b.archived);
   const isSearching = searchHits !== null;
-  const lede = articles[0] ?? null;
-  const rest = articles.slice(1);
 
   return (
     <div className="mx-auto max-w-6xl space-y-12 2xl:max-w-screen-2xl">
@@ -173,41 +157,91 @@ export function KnowledgeControlCenter({
         <SearchResults hits={searchHits ?? []} queriedFor={searchedFor} />
       ) : (
         <div className="grid grid-cols-1 gap-x-12 gap-y-12 lg:grid-cols-12 2xl:gap-x-16">
-          <section className="space-y-8 lg:col-span-8 2xl:col-span-7">
-            <SectionKicker tone="aqua">Recent</SectionKicker>
-            {lede ? (
-              <>
-                <LedeArticle article={lede} />
-                {rest.length > 0 && (
-                  <ul className="divide-y divide-white/5">
-                    {rest.map((article) => (
-                      <li key={article.id} className="py-5 first:pt-6">
-                        <ArticleRow article={article} showBucket />
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </>
+          <section className="space-y-8 lg:col-span-8 2xl:col-span-9">
+            <SectionKicker tone="aqua">
+              Topics
+              {topicViews.length > 0 && (
+                <span className="ml-2 text-white/40">
+                  · {topicViews.length}
+                </span>
+              )}
+            </SectionKicker>
+            {topicViews.length === 0 ? (
+              <EmptyTopics hasSources={sources.length > 0} />
             ) : (
-              <p className="text-sm text-white/55">
-                No articles in this workspace yet. Connect an import source or
-                wait for the harvester to surface drafts.
-              </p>
+              <ul className="divide-y divide-white/5">
+                {topicViews.map((view) => (
+                  <li key={view.topicTag} className="py-5 first:pt-6">
+                    <TopicViewRow view={view} />
+                  </li>
+                ))}
+              </ul>
             )}
           </section>
 
-          <aside className="space-y-6 lg:col-span-4 lg:sticky lg:top-24 lg:self-start 2xl:col-span-3">
-            <SectionKicker tone="lilac">Browse by area</SectionKicker>
-            <BucketDirectory buckets={liveBuckets} />
-          </aside>
-
           {sources.length > 0 && (
-            <section className="space-y-3 lg:col-span-12 2xl:col-span-2 2xl:sticky 2xl:top-24 2xl:self-start">
+            <aside className="space-y-3 lg:col-span-4 lg:sticky lg:top-24 lg:self-start 2xl:col-span-3">
               <SectionKicker tone="muted">Sources</SectionKicker>
               <ConnectedSources sources={sources} />
-            </section>
+            </aside>
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+
+function TopicViewRow({ view }: { view: KnowledgeTopicViewRow }) {
+  const isAuto = view.renderedByModel && view.renderedByModel !== "deterministic";
+  return (
+    <Link
+      href={`/knowledge/topics/${encodeURIComponent(view.topicTag)}`}
+      className="group block"
+    >
+      <h3 className="text-base font-medium text-white transition-colors group-hover:text-aqua">
+        {view.title}
+      </h3>
+      <p className="mt-1 text-xs text-white/45">
+        <span className="font-mono">{view.topicTag}</span>
+        <span className="mx-2">·</span>
+        <span>
+          {view.claimCount} claim{view.claimCount === 1 ? "" : "s"}
+        </span>
+        <span className="mx-2">·</span>
+        <span>{relativeDate(view.lastRenderedAt)}</span>
+        {!isAuto && (
+          <>
+            <span className="mx-2">·</span>
+            <span className="text-coral/70">deterministic fallback</span>
+          </>
+        )}
+      </p>
+    </Link>
+  );
+}
+
+
+function EmptyTopics({ hasSources }: { hasSources: boolean }) {
+  return (
+    <div className="space-y-3 text-sm text-white/55">
+      <p>
+        No topics rendered yet. The claim-graph pipeline groups extracted
+        atomic facts by ``topic_tag`` once at least three claims land per
+        topic.
+      </p>
+      {!hasSources ? (
+        <p>
+          Connect an import source (top right) so the extractor has
+          something to read.
+        </p>
+      ) : (
+        <p>
+          Sources are connected — wait for the next ``*/20`` extractor tick
+          and the ``15,45`` topic-render tick. If nothing appears within
+          an hour, the pipeline is broken upstream and you should ping
+          ops.
+        </p>
       )}
     </div>
   );
@@ -283,105 +317,6 @@ function SearchHeader({
         )}
       </div>
     </div>
-  );
-}
-
-
-// ---------------------------------------------------------------------------
-// Recent — lede + rows
-// ---------------------------------------------------------------------------
-
-
-function LedeArticle({ article }: { article: KnowledgeArticleRow }) {
-  return (
-    <Link
-      href={`/knowledge/${encodeURIComponent(article.bucketSlug)}?article=${encodeURIComponent(article.id)}`}
-      className="group block space-y-3 border-b border-aqua/30 pb-8"
-    >
-      <h3 className="font-display text-2xl font-bold leading-tight text-white group-hover:text-aqua md:text-3xl">
-        {article.title}
-      </h3>
-      {article.snippet && (
-        <p className="line-clamp-3 text-base leading-relaxed text-white/65">
-          {article.snippet}
-        </p>
-      )}
-      <p className="flex items-center gap-2 text-[11px] uppercase tracking-widest text-white/40">
-        <span>{article.bucketName}</span>
-        <span className="text-white/20">·</span>
-        <span>{relativeDate(article.updatedAt)}</span>
-      </p>
-    </Link>
-  );
-}
-
-
-function ArticleRow({
-  article,
-  showBucket,
-}: {
-  article: KnowledgeArticleRow;
-  showBucket?: boolean;
-}) {
-  return (
-    <Link
-      href={`/knowledge/${encodeURIComponent(article.bucketSlug)}?article=${encodeURIComponent(article.id)}`}
-      className="group block space-y-1.5"
-    >
-      <div className="text-base font-semibold text-white group-hover:text-aqua">
-        {article.title}
-      </div>
-      {article.snippet && (
-        <p className="line-clamp-2 text-sm leading-relaxed text-white/55">
-          {article.snippet}
-        </p>
-      )}
-      <div className="text-[11px] text-white/40">
-        {showBucket && (
-          <>
-            <span>{article.bucketName}</span>
-            <span className="mx-2 text-white/20">·</span>
-          </>
-        )}
-        <span>{relativeDate(article.updatedAt)}</span>
-      </div>
-    </Link>
-  );
-}
-
-
-// ---------------------------------------------------------------------------
-// Browse by area — bucket directory
-// ---------------------------------------------------------------------------
-
-
-function BucketDirectory({ buckets }: { buckets: KnowledgeBucketRow[] }) {
-  if (buckets.length === 0) return null;
-  return (
-    <ul className="divide-y divide-white/5">
-      {buckets.map((bucket) => (
-        <li key={bucket.slug}>
-          <Link
-            href={`/knowledge/${encodeURIComponent(bucket.slug)}`}
-            className="group flex items-baseline justify-between gap-3 py-3"
-          >
-            <div className="min-w-0 flex-1">
-              <div className="font-display text-sm font-bold uppercase tracking-wider text-white/85 group-hover:text-lilac">
-                {bucket.name}
-              </div>
-              {bucket.description && (
-                <p className="mt-1 line-clamp-1 text-xs text-white/45">
-                  {bucket.description}
-                </p>
-              )}
-            </div>
-            <span className="shrink-0 font-mono text-xs text-white/35">
-              {bucket.articleCount}
-            </span>
-          </Link>
-        </li>
-      ))}
-    </ul>
   );
 }
 
