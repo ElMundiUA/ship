@@ -79,8 +79,16 @@ _LIBPQ_ONLY_KEYS = frozenset({"sslmode", "channel_binding", "sslrootcert", "sslc
 # When ``AGENT_VENDOR=anthropic`` but operators only flip the vendor switch
 # and leave ``AGENT_MODEL_*`` at the OpenAI defaults, Anthropic returns 404
 # ("model: gpt-4o"). These ids match ``documentation/internal/agent-setup.md``.
+#
+# 2026-05-06: bumped fast model from ``-20250929`` → ``-20251001``. The
+# ``-20250929`` snapshot was the Haiku 4.5 preview id; Anthropic retired it
+# when the stable release shipped under ``-20251001``. Prod was returning
+# 404 on every Haiku call — the router + claim extractor caught the
+# exception and stamped ``no_fit`` / empty-claims accordingly, which is
+# why the overnight reindex on Ship + Askslayer produced zero claims
+# despite ``extracted_at`` being set on 50 source items.
 _DEFAULT_ANTHROPIC_MODEL_MAIN = "claude-sonnet-4-5-20250929"
-_DEFAULT_ANTHROPIC_MODEL_FAST = "claude-haiku-4-5-20250929"
+_DEFAULT_ANTHROPIC_MODEL_FAST = "claude-haiku-4-5-20251001"
 
 
 def _looks_like_openai_chat_model_id(model: str) -> bool:
