@@ -40,7 +40,11 @@ export type ChangelogEntry = {
 };
 
 const REPO_ROOT = path.resolve(process.cwd(), "..");
-const MAX_ENTRIES = 200;
+
+// Date bound for the changelog. Commits older than this are dropped
+// before parsing — keeps the page bounded as the project ages. Uses
+// git's relative-date syntax.
+const SINCE = "6.months.ago";
 
 // `` is ASCII unit separator — safe between fields, won't collide
 // with anything humans put in commit messages.
@@ -56,12 +60,12 @@ function readGitLog(): string[] {
       "git",
       [
         "log",
-        `-n${MAX_ENTRIES}`,
+        `--since=${SINCE}`,
         `--pretty=format:${FORMAT}`,
         "--no-merges",
         "main",
       ],
-      { cwd: REPO_ROOT, encoding: "utf-8", maxBuffer: 8 * 1024 * 1024 },
+      { cwd: REPO_ROOT, encoding: "utf-8", maxBuffer: 16 * 1024 * 1024 },
     );
     return stdout.split("\n").filter(Boolean);
   } catch {
