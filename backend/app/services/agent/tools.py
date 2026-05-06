@@ -2049,8 +2049,10 @@ class ToolBox:
                     "BA, who emits the WBS section, transitions to "
                     "``stage:architecture``, and so on through "
                     "``stage:planning_done`` — at which point the "
-                    "project flips Drafts → Active and the agent's "
-                    "autonomous picker takes over."
+                    "project flips Drafts → Parked. The PO then "
+                    "promotes Parked → Active from the dashboard "
+                    "when ready to ship; agents do not auto-pick "
+                    "from Parked."
                 ),
                 parameters={
                     "type": "object",

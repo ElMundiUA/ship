@@ -29,5 +29,5 @@ When the run context flags `process=decomposition` (project-first delivery, ELS-
   - **Body**: 3-5 lines pulling Goal + Scope from the WBS line + 1-2 architecture pointers from `## Architecture`. Do NOT write detailed acceptance criteria, test plans, or implementation notes — SDLC's BA, tech architect, and QA architect refine those when the child enters `task_intake`.
 - After all child tickets exist, patch `## Tasks` via `upsert_project_section(project_id=<from anchor's project>, section="Tasks", body=<list of identifiers + names>)` — one bullet per child ticket created.
 - NEVER touch `## Brief`, `## WBS`, `## Architecture`, or `## Test architecture`. Those are owned by upstream stages.
-- Finish with `outcome=ready_next_step`, `stage_next=planning_done`, `process=decomposition`. The server's completion hook then flips the project's dashboard row from Drafts → Active and the agent's autonomous picker takes over from there.
+- Finish with `outcome=ready_next_step`, `stage_next=planning_done`, `process=decomposition`. The server's completion hook then flips the project's dashboard row from Drafts → Parked so the project sits ready for the PO to promote (Parked → Active) when they decide it's worth the capacity. Agents do not auto-pick from Parked.
 - End your audit `comment` with: `[Ship decomposition:role-developer]`

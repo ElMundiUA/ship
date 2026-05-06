@@ -83,7 +83,8 @@ FSM_STAGE_ORDER: tuple[str, ...] = (
 # Linear order of the decomposition pipeline (ELS-75). Sequential —
 # BA → Architect → QA-Architect → QA-Engineer + Developer — culminates
 # in ``planning_done`` which the finish hook reads to flip the
-# project's dashboard row from Drafts to Active.
+# project's dashboard row from Drafts to Parked (the PO promotes
+# Parked → Active manually when ready to ship; ELS-81).
 DECOMPOSITION_STAGE_ORDER: tuple[str, ...] = (
     "wbs",
     "architecture",
@@ -133,8 +134,9 @@ FSM_TO_LINEAR_STATE: dict[str, str] = {
     # project). The anchor sits in ``In Progress`` while the chain
     # runs and ``Done`` once ``planning_done`` lands. The project body
     # carries the artefacts (WBS / Architecture / Test architecture /
-    # Tasks); the finish hook flips the dashboard row Drafts → Active
-    # when ``planning_done`` arrives.
+    # Tasks); the finish hook flips the dashboard row Drafts → Parked
+    # when ``planning_done`` arrives (the PO promotes Parked → Active
+    # manually; ELS-81).
     "wbs": "In Progress",
     "architecture": "In Progress",
     "test_architecture": "In Progress",

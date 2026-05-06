@@ -420,7 +420,9 @@ def default_planning_process_config() -> dict[str, object]:
         # No human gates today — the operator's gate is the manual
         # **Hand off to decomposition** click on the dashboard. Once
         # they hit it, the chain runs autonomously through to
-        # ``planning_done`` and the project flips Drafts → Active.
+        # ``planning_done`` and the project flips Drafts → Parked
+        # (the PO promotes Parked → Active manually when ready to
+        # ship; ELS-81).
         "gates": "after_pr",
         "states": [
             {
@@ -486,11 +488,14 @@ def default_planning_process_config() -> dict[str, object]:
                 # Terminal stage — no specialist runs here. ``ready_next_step``
                 # with ``stage_next='planning_done'`` from the ``tasks`` stage
                 # signals decomposition complete; the finish hook flips the
-                # dashboard row from Drafts → Active.
+                # dashboard row from Drafts → Parked (ELS-81; the PO
+                # then promotes Parked → Active manually).
                 "specialist": {"id": "developer", "name": "Developer"},
                 "instructions": (
                     "Terminal — no work. Reaching this stage flips the "
-                    "project from Drafts to Active on the dashboard."
+                    "project from Drafts to Parked on the dashboard "
+                    "(the PO promotes Parked → Active when ready to "
+                    "ship)."
                 ),
             },
         ],

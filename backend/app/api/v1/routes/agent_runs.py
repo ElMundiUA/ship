@@ -162,7 +162,8 @@ class FinishIn(BaseModel):
     # SDLC (``development``); ``decomposition`` (ELS-75) is the
     # project-anchor pipeline. The finish hook reads this to know
     # whether ``stage_next='planning_done'`` should flip the project's
-    # dashboard row from Drafts → Active.
+    # dashboard row from Drafts → Parked (the PO promotes Parked →
+    # Active manually when ready to ship; ELS-81).
     process: Literal["development", "decomposition"] = "development"
     payload: dict[str, Any] = Field(default_factory=dict)
 
@@ -424,18 +425,22 @@ async def post_inbox_item(
     return WriteOut(ok=True, note=f"inbox item created (type={payload.type})")
 
 
-async def _flip_drafts_row_to_active(
+async def _flip_drafts_row_to_parked(
     session: AsyncSession,
     workspace_id: uuid.UUID,
     ticket_ref: str,
     resolved,  # ResolvedTracker; avoid circular type import
 ) -> bool:
-    """Flip the project's priorities row from ``planning`` → ``active``.
+    """Flip the project's priorities row from ``planning`` → ``parked``.
 
-    Called when a decomposition run reaches the terminal stage. Walks:
-    ticket_ref → planning anchor's project_id → priorities row → state.
-    Best-effort: a missing priorities row, a deleted project, or an
-    adapter that can't tell us the project all log + return False
+    Called when a decomposition run reaches the terminal stage. The PO
+    explicitly promotes ``parked`` → ``active`` from the dashboard
+    when ready to ship — Ship doesn't auto-activate. (ELS-81; previous
+    behaviour was to auto-flip to ``active``.)
+
+    Walks: ticket_ref → planning anchor's project_id → priorities row
+    → state. Best-effort: a missing priorities row, a deleted project,
+    or an adapter that can't tell us the project all log + return False
     instead of failing the finish handler.
     """
     from sqlalchemy import select
@@ -497,9 +502,9 @@ async def _flip_drafts_row_to_active(
             project_id,
         )
         return False
-    if row.state == "active":
+    if row.state == "parked":
         return False
-    row.state = "active"
+    row.state = "parked"
     await session.flush()
     return True
 
@@ -621,23 +626,26 @@ async def finish_agent_run(
 
             # Decomposition completion hook (ELS-75). When the planning
             # anchor reaches the terminal stage, flip the project's
-            # dashboard row Drafts → Active so the agent's autonomous
-            # picker takes over from here. We key on the explicit
-            # ``process='decomposition'`` flag rather than sniffing
-            # labels — the runtime that's executing the run knows
-            # which process it's under, the server should not have to
-            # re-derive that. Best-effort: a missing priorities row
-            # logs and continues; the audit trail at the bottom of
+            # dashboard row Drafts → Parked so the project sits ready
+            # for the PO to promote when they decide it's worth the
+            # capacity (ELS-81; the previous behaviour auto-activated,
+            # which let agents start chewing on every project the
+            # moment its decomposition finished). We key on the
+            # explicit ``process='decomposition'`` flag rather than
+            # sniffing labels — the runtime that's executing the run
+            # knows which process it's under, the server should not
+            # have to re-derive that. Best-effort: a missing priorities
+            # row logs and continues; the audit trail at the bottom of
             # this handler still records what happened.
             if (
                 payload.process == "decomposition"
                 and payload.stage_next == "planning_done"
             ):
-                flipped = await _flip_drafts_row_to_active(
+                flipped = await _flip_drafts_row_to_parked(
                     session, workspace_id, payload.ticket_ref, resolved
                 )
                 if flipped:
-                    actions.append("priorities:active")
+                    actions.append("priorities:parked")
 
     elif payload.outcome == "needs_clarification":
         if not payload.ticket_ref:
