@@ -69,6 +69,9 @@ export function SiteFooter() {
                 <Link className="text-white/70 transition hover:text-aqua" href="/blog">
                   Ship Log (blog)
                 </Link>
+                <Link className="text-white/70 transition hover:text-aqua" href="/changelog">
+                  Changelog
+                </Link>
                 <a className="text-white/70 transition hover:text-aqua" href={repoUrl} target="_blank" rel="noreferrer">
                   GitHub
                 </a>
