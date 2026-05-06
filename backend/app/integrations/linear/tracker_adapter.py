@@ -348,10 +348,31 @@ class LinearTracker:
         * To pick a ticket for stage X:
             - Linear state matches ``FSM_TO_LINEAR_STATE[X]``.
             - The ``stage:<previous>`` label is present (previous role
-              has produced its output) — except for the entry stage,
-              which has no previous.
+              has produced its output) — except for the entry stages
+              (``task_intake`` / ``bug_triage``), which have no
+              previous.
             - The ``stage:<X>`` label is **not** present (this role
               hasn't run on this ticket yet) — guarantees idempotency.
+
+        Entry-stage asymmetry (ELS-90 follow-up): ``task_intake`` is
+        the **default** entry — it picks any Todo ticket that hasn't
+        been classified yet, including Linear-native tickets the
+        operator filed directly with no Ship labels at all. The
+        previous-stage check is skipped for entry stages, so the
+        filter becomes purely "Todo + own-stage label not present".
+        ``bug_triage`` is the **explicit** entry — operator labels a
+        ticket ``stage:bug_triage`` themselves to route it through bug
+        intake; the standard idempotency rule applies.
+
+        Empty-collection trap (also ELS-90): Linear's
+        ``IssueLabelCollectionFilter`` interprets a bare
+        ``{"labels": {"id": {"nin": [...]}}}`` as ``some`` semantics —
+        a label exists whose id is not in the list. On a ticket with
+        **no labels at all**, that's vacuously false, so the
+        unlabeled ticket is excluded. We use the explicit ``none``
+        operator (``"labels": {"none": {"id": {"eq": id}}}``) so an
+        empty label collection is vacuously a match for "doesn't
+        have this label" — which is the obvious intent.
 
         ``self_heal`` is intentionally not in ``FSM_STAGE_ORDER``; it
         runs out-of-band against any open ticket and falls back to the
@@ -369,7 +390,7 @@ class LinearTracker:
         # "this role hasn't finished yet" — never re-pick.
         own_label = self._label_id_by_stage.get(stage)
         if own_label:
-            parts.append({"labels": {"id": {"nin": [own_label]}}})
+            parts.append({"labels": {"none": {"id": {"eq": own_label}}}})
 
         # "previous role is done" — for non-entry stages.
         prev = previous_stage(stage)
@@ -384,10 +405,11 @@ class LinearTracker:
         # question for a human. Skip these tickets at every stage so we
         # don't repeatedly comment on a ticket that's waiting on a human
         # answer. The label gets cleared by the human (Linear UI) when
-        # they reply.
+        # they reply. ``none`` (not bare ``nin``) for the same
+        # empty-collection reason as the own-label check above.
         clar = self._signal_label_ids.get("needs_clarification")
         if clar:
-            parts.append({"labels": {"id": {"nin": [clar]}}})
+            parts.append({"labels": {"none": {"id": {"eq": clar}}}})
         return parts
 
     async def add_signal_label(self, ticket: TicketRef, *, key: str) -> None:
