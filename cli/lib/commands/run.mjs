@@ -484,6 +484,24 @@ function renderPrompt({ patternBody, baseBody, role, routineSpec, task, fsmStage
   out.push("");
   out.push(renderLifecycleHooks());
   if (task) {
+    // ELS-86: parent project context (Brief / WBS / Architecture /
+    // Test architecture / Tasks). The server lifts and caps it; we
+    // render it BEFORE the per-ticket block so the agent sees the
+    // surrounding plan first, then narrows to its own scope. Only
+    // present when the ticket is part of a decomposed project — the
+    // server returns ``project_context: null`` otherwise and we
+    // skip the block silently.
+    if (typeof task.project_context === "string" && task.project_context.trim()) {
+      out.push("");
+      out.push("## Project context");
+      out.push("");
+      out.push(
+        "_Excerpt of the parent project body. Read for surrounding plan;",
+        "your scope is the per-task block below, not the whole project._",
+      );
+      out.push("");
+      out.push(task.project_context.trim());
+    }
     out.push("");
     out.push("## Task");
     out.push(`- **Ticket:** \`${task.ticket_ref}\` (${task.kind})`);

@@ -87,6 +87,14 @@ class TaskTicketOut(BaseModel):
     labels: list[str] = Field(default_factory=list)
     state: str | None = None
     fsm_stage: str | None = None  # echo of the requested stage
+    # ELS-86 — markdown excerpt of the parent project body (Brief /
+    # WBS / Architecture / Test architecture / Tasks sections),
+    # capped at 8KB. ``None`` when the ticket isn't associated with a
+    # project, when the tracker can't surface project bodies, or when
+    # the fetch failed (best-effort: a runaway 5xx must not block the
+    # agent run, the per-ticket ``body`` already carries the
+    # immediate task brief).
+    project_context: str | None = None
 
 
 class TaskResponseOut(BaseModel):
@@ -299,11 +307,26 @@ async def get_next_task(
         return TaskResponseOut(
             ticket=None, fsm_stage=state, tracker_kind=resolved.kind
         )
+
+    ticket_ref = str(pick.get("id") or "")
+    # ELS-86: stitch the parent project's body sections onto the task
+    # so the SDLC agent sees the surrounding plan (Brief / WBS /
+    # Architecture / Test architecture / Tasks). Best-effort —
+    # tracker errors / projects without a body / tickets without a
+    # project all degrade silently to ``project_context=None``; the
+    # immediate ticket body in ``body`` already carries the
+    # per-task brief. We pass ``project_id`` directly from the
+    # ``list_tickets`` row (ELS-83 already projected it) so we don't
+    # round-trip Linear a second time per pick.
+    project_context = await _build_project_context_for_ticket(
+        resolved=resolved,
+        project_id=pick.get("project_id"),
+    )
     return TaskResponseOut(
         fsm_stage=state,
         tracker_kind=resolved.kind,
         ticket=TaskTicketOut(
-            ticket_ref=str(pick.get("id") or ""),
+            ticket_ref=ticket_ref,
             kind=resolved.kind,
             title=str(pick.get("title") or ""),
             body=pick.get("body") if isinstance(pick.get("body"), str) else None,
@@ -311,6 +334,7 @@ async def get_next_task(
             labels=list(pick.get("labels") or []),
             state=str(pick.get("status") or "") or None,
             fsm_stage=state,
+            project_context=project_context,
         ),
     )
 
@@ -376,6 +400,203 @@ async def _record_orphan_skips(
         )
     )
     await session.flush()
+
+
+# ---------------------------------------------------------------------------
+# Parent-project context (ELS-86)
+# ---------------------------------------------------------------------------
+
+
+# Project body sections the SDLC startup context lifts from the
+# planning anchor. Order matches the decomposition chain
+# (BA → Tech-arch → QA-arch → Developer); rendering preserves it
+# even when sections appear out of order in the body. ``Tasks`` is
+# the WBS-children list — useful for sibling awareness.
+_PROJECT_CONTEXT_SECTIONS: tuple[str, ...] = (
+    "Brief",
+    "WBS",
+    "Architecture",
+    "Test architecture",
+    "Tasks",
+)
+
+# Per-section caps (architect review): a global 8KB cap clipped the
+# last canonical section first (``Tasks`` — sibling awareness, the
+# most useful for a child-ticket agent). Per-section caps make the
+# truncation hit each block uniformly so no single section is
+# starved when the body is large.
+_PROJECT_CONTEXT_SECTION_CAPS: dict[str, int] = {
+    "Brief": 2048,
+    "WBS": 2048,
+    "Architecture": 2048,
+    "Test architecture": 1024,
+    "Tasks": 2048,
+}
+
+# Hard outer cap as a defensive belt + suspenders. The sum of the
+# per-section caps above is 9216; we round up to 10KB so a slightly-
+# over-budget section doesn't push the total past the cap.
+_PROJECT_CONTEXT_CAP_BYTES: int = 10 * 1024
+
+
+def _truncate_section(lines: list[str], cap_bytes: int) -> list[str]:
+    """Truncate a section body to ``cap_bytes`` UTF-8 bytes, line-aligned.
+
+    We prefer dropping whole trailing lines rather than mid-line
+    cuts so the markdown stays valid. If the *first* line alone
+    exceeds the cap we hard-cut it and append a marker. Returns the
+    possibly-shorter list of lines, with a ``…(truncated)`` line
+    appended when truncation actually happened.
+    """
+    if cap_bytes <= 0:
+        return lines
+    out: list[str] = []
+    used = 0
+    for line in lines:
+        line_bytes = len(line.encode("utf-8")) + 1  # +1 for the join newline
+        if used + line_bytes > cap_bytes:
+            break
+        out.append(line)
+        used += line_bytes
+    if len(out) < len(lines):
+        out.append("…(truncated)")
+    return out
+
+
+def _extract_project_sections(
+    content: str,
+    *,
+    section_caps: dict[str, int] | None = None,
+    overall_cap_bytes: int = _PROJECT_CONTEXT_CAP_BYTES,
+) -> str | None:
+    """Pull the canonical sections out of a project body.
+
+    ``content`` is the project's markdown ``content`` field as
+    returned by ``LinearTracker.get_project``. We pick lines that
+    start with ``## <name>`` and emit each named block in canonical
+    order. Heading match is **case-insensitive** so a role file that
+    drifts to ``## brief`` (lowercase) doesn't silently drop the
+    section — the canonical names in :data:`_PROJECT_CONTEXT_SECTIONS`
+    are the recovery target.
+
+    Returns ``None`` when no canonical section is present (either
+    the project has no decomposition body or a stale layout uses
+    different heading names) — callers fall back to the per-ticket
+    body alone.
+
+    Each section is independently capped per :data:`_PROJECT_CONTEXT_SECTION_CAPS`
+    so a runaway WBS doesn't starve the Tasks list (which is what a
+    sibling-aware child-ticket agent most needs). The whole
+    response is then capped at ``overall_cap_bytes`` as a defensive
+    belt-and-suspenders limit.
+    """
+    if not content:
+        return None
+    caps = section_caps or _PROJECT_CONTEXT_SECTION_CAPS
+    lines = content.splitlines()
+    # Map case-insensitive heading → canonical name so a drifted
+    # ``## wbs`` recovers to the canonical ``WBS`` slot.
+    canon_by_lower = {
+        s.lower(): s for s in _PROJECT_CONTEXT_SECTIONS
+    }
+    found: dict[str, list[str]] = {}
+    current: str | None = None
+    buffer: list[str] = []
+    for line in lines:
+        if line.startswith("## "):
+            heading = line[3:].strip()
+            if current is not None and buffer:
+                found[current] = buffer
+            buffer = []
+            current = canon_by_lower.get(heading.lower())
+            continue
+        if current is not None:
+            buffer.append(line)
+    if current is not None and buffer:
+        found[current] = buffer
+    if not found:
+        return None
+
+    parts: list[str] = []
+    for section in _PROJECT_CONTEXT_SECTIONS:
+        if section not in found:
+            continue
+        body_lines = found[section]
+        # Drop trailing whitespace-only lines.
+        while body_lines and not body_lines[-1].strip():
+            body_lines.pop()
+        if not body_lines:
+            continue
+        body_lines = _truncate_section(body_lines, caps.get(section, 2048))
+        parts.append(f"## {section}")
+        parts.append("")
+        parts.extend(body_lines)
+        parts.append("")
+    text = "\n".join(parts).rstrip()
+    if not text:
+        return None
+
+    encoded = text.encode("utf-8")
+    if len(encoded) <= overall_cap_bytes:
+        return text
+    truncated = encoded[:overall_cap_bytes].decode("utf-8", errors="ignore").rstrip()
+    return truncated + "\n\n…(truncated)"
+
+
+async def _build_project_context_for_ticket(
+    *,
+    resolved,  # ResolvedTracker — avoid circular import
+    project_id: str | None,
+    overall_cap_bytes: int = _PROJECT_CONTEXT_CAP_BYTES,
+) -> str | None:
+    """Fetch the project body and return its canonical-section excerpt.
+
+    ``project_id`` comes straight from the ``list_tickets`` row
+    (ELS-83 already projects it), so we do **not** round-trip Linear
+    a second time via ``get_ticket_snapshot`` — that was the
+    architect's blocker on the original ELS-86 design. ``None``
+    here (orphan ticket / non-Linear adapter that doesn't surface
+    project_id) skips the lookup cleanly.
+
+    All steps are best-effort: any failure (tracker that can't model
+    projects, unauthenticated, network 5xx, project deleted) returns
+    ``None`` so the picker can still hand the agent a task. Errors
+    are debug-logged so an operator chasing a missing context block
+    can find the trace.
+    """
+    if not project_id:
+        return None
+    get_project_fn = getattr(resolved.gateway, "get_project", None)
+    if get_project_fn is None:
+        return None
+    pid = str(project_id)
+    try:
+        project = await get_project_fn(pid, issues_limit=10)
+    except TypeError:
+        # Adapters whose ``get_project`` doesn't take ``issues_limit``
+        # — fall back to a positional-only call.
+        try:
+            project = await get_project_fn(pid)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "project_context: get_project failed pid=%s err=%s",
+                pid,
+                exc,
+            )
+            return None
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(
+            "project_context: get_project failed pid=%s err=%s",
+            pid,
+            exc,
+        )
+        return None
+    content = project.get("content") if isinstance(project, dict) else None
+    if not isinstance(content, str):
+        return None
+    return _extract_project_sections(
+        content, overall_cap_bytes=overall_cap_bytes
+    )
 
 
 @router.post("/tracker/transition", response_model=WriteOut)
