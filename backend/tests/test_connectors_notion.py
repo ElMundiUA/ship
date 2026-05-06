@@ -692,3 +692,68 @@ async def test_notion_walker_skips_locked_subpages_but_fails_locked_seeds(
             await fetch_connector_pages(
                 integration, {"page_id": hub_id}, http_client=client
             )
+
+
+@pytest.mark.asyncio
+async def test_notion_walker_skips_child_db_with_empty_datasources(integration) -> None:
+    """A ``child_database`` block whose database resolves to
+    ``data_sources=[]`` (legacy un-migrated DB or revoked share since
+    the parent was indexed) used to raise ``ConnectorConfigError``,
+    bringing the whole walk down. Hub pages with one such block were
+    silently failing every cron sync. The walker now logs + skips
+    that database and keeps walking the rest of the tree, mirroring
+    the 401/403/404 soft-skip path."""
+
+    hub_id = "hub-cdb-empty"
+    db_id = "db-empty"
+    sub_visible = "sub-vis"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == f"/v1/pages/{hub_id}":
+            return httpx.Response(200, json=_page_payload(hub_id, title="Hub"))
+        if path == f"/v1/pages/{sub_visible}":
+            return httpx.Response(
+                200, json=_page_payload(sub_visible, title="Visible Sub")
+            )
+        if path == f"/v1/blocks/{hub_id}/children":
+            return httpx.Response(
+                200,
+                json=_blocks_payload(
+                    [
+                        _block(
+                            "child_database",
+                            {"title": "Empty DB"},
+                            block_id=db_id,
+                        ),
+                        _block(
+                            "child_page",
+                            {"title": "Visible Sub"},
+                            block_id=sub_visible,
+                        ),
+                    ]
+                ),
+            )
+        if path.startswith("/v1/blocks/") and path.endswith("/children"):
+            return httpx.Response(200, json=_blocks_payload([]))
+        # /data_sources/{db_id} → 404 forces the fallback through
+        # /databases/{db_id}, which returns an empty data_sources
+        # list — exactly the shape that used to crash the walker.
+        if path == f"/v1/data_sources/{db_id}":
+            return httpx.Response(404, json={"object": "error"})
+        if path == f"/v1/databases/{db_id}":
+            return httpx.Response(
+                200,
+                json={"object": "database", "id": db_id, "data_sources": []},
+            )
+        return httpx.Response(404)
+
+    async with _make_client(handler) as client:
+        pages = await fetch_connector_pages(
+            integration, {"page_id": hub_id}, http_client=client
+        )
+
+    titles = [p.title for p in pages]
+    # Empty-DB block was skipped; the rest of the tree (hub + visible
+    # sibling subpage) still made it into the result.
+    assert titles == ["Hub", "Visible Sub"]

@@ -455,6 +455,22 @@ async def _walk_page_tree(
                     )
                     continue
                 raise
+            except ConnectorConfigError as exc:
+                # ``_resolve_data_source_id`` raises this when a database
+                # we discovered via a ``child_database`` block has no
+                # accessible data sources (legacy un-migrated DB, or the
+                # workspace bot lost share access since the parent page
+                # was indexed). For an *explicit* ``database_id`` ref the
+                # operator wants this loud — they pointed at it on
+                # purpose — but during a recursive walk one missing
+                # child_database shouldn't take down the whole sync. Log
+                # + skip mirrors the 401/403/404 handling above.
+                logger.warning(
+                    "notion walker: skipping embedded database %s — %s",
+                    dbid,
+                    exc,
+                )
+                continue
             for eid in entry_ids:
                 if eid not in visited:
                     queue.append((eid, depth + 1))
