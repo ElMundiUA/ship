@@ -51,12 +51,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sqlalchemy import select as sa_select
+
 from backend.app.api.v1.deps import AuthContext, get_current_auth
 from backend.app.api.v1.routes.workspaces import (
     ROLES_ADMIN,
     _require_membership,
 )
 from backend.app.core.config import Settings, get_settings
+from backend.app.db.models.dashboard_priorities import WorkspaceProjectPriority
 from backend.app.db.models.inbox import InboxItem
 from backend.app.db.models.tenancy import AuditLog
 from backend.app.db.session import get_session
@@ -245,11 +248,18 @@ async def get_next_task(
 ) -> TaskResponseOut:
     """Return the next ticket the agent should work on for ``state``.
 
-    Picker filters (ELS-83): tickets without a tracker ``project_id``
-    are orphans — created outside the dashboard's project flow.
-    They're skipped here and a one-shot inbox item plus an
-    ``agent_run.orphan_skipped`` audit row land so an operator can see
-    them and re-home the work or close it.
+    Picker filters:
+
+    * **ELS-83 — orphans.** Tickets without a tracker ``project_id``
+      are skipped. A one-shot inbox item and ``agent_run.orphan_skipped``
+      audit rows land so an operator can re-home or close them.
+    * **ELS-80 — project priority.** Only tickets whose project has
+      ``WorkspaceProjectPriority.state == 'active'`` come through.
+      Projects in ``planning`` (Drafts) or ``parked`` are gated by
+      the PO; tickets there get an ``agent_run.priority_skipped``
+      audit row but no inbox spam (operator's choice to hold them).
+      Projects with no priority row are treated as not-yet-onboarded
+      and skipped too.
     """
     await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
 
@@ -261,9 +271,9 @@ async def get_next_task(
     if resolved is None:
         return TaskResponseOut(ticket=None, fsm_stage=state, tracker_kind=None)
 
-    # Pull a few extra rows so an orphan at the head of the list
-    # doesn't starve the picker — we drop the orphans and pick the
-    # first non-orphan that remains.
+    # Pull extra rows so a head-of-list orphan / parked-project row
+    # doesn't starve the picker — we drop the skips and pick the first
+    # eligible row that remains.
     rows = await resolved.gateway.list_tickets(state=state, limit=10)
     if not rows:
         return TaskResponseOut(
@@ -272,6 +282,7 @@ async def get_next_task(
 
     pick: dict[str, Any] | None = None
     skipped_orphans: list[dict[str, Any]] = []
+    skipped_priority: list[tuple[dict[str, Any], str | None]] = []
     for row in rows:
         # ``project_id`` is surfaced by adapters that can populate it
         # (Linear today). Adapters that can't (Notion / Jira / GitHub
@@ -282,6 +293,18 @@ async def get_next_task(
         if "project_id" in row and project_id is None:
             skipped_orphans.append(row)
             continue
+        # ELS-80: WorkspaceProjectPriority gate — only ``active``
+        # projects feed the picker. ``planning`` (Drafts) means PO is
+        # still shaping; ``parked`` means the PO is intentionally
+        # holding the project; no row at all means a project that was
+        # never onboarded through ``_tool_create_project``.
+        if project_id is not None:
+            priority_state = await _project_priority_state(
+                session, workspace_id=workspace_id, project_id=str(project_id)
+            )
+            if priority_state != "active":
+                skipped_priority.append((row, priority_state))
+                continue
         pick = row
         break
 
@@ -293,6 +316,15 @@ async def get_next_task(
             tracker_kind=resolved.kind,
             fsm_stage=state,
             orphans=skipped_orphans,
+        )
+    if skipped_priority:
+        await _record_priority_skips(
+            session,
+            workspace_id=workspace_id,
+            auth=auth,
+            tracker_kind=resolved.kind,
+            fsm_stage=state,
+            skipped=skipped_priority,
         )
 
     if pick is None:
@@ -313,6 +345,79 @@ async def get_next_task(
             fsm_stage=state,
         ),
     )
+
+
+async def _project_priority_state(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    project_id: str,
+) -> str | None:
+    """Return the ``state`` of the workspace's priority row for
+    ``project_id``, or ``None`` when no row exists (project hasn't
+    been onboarded through ``_tool_create_project``).
+
+    The picker reads this to gate which projects feed agents — only
+    ``'active'`` projects do; ``'planning'`` (Drafts) and ``'parked'``
+    are operator holds.
+    """
+    row = (
+        await session.execute(
+            sa_select(WorkspaceProjectPriority.state).where(
+                WorkspaceProjectPriority.workspace_id == workspace_id,
+                WorkspaceProjectPriority.project_native_id == project_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        return None
+    return str(row)
+
+
+async def _record_priority_skips(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    auth: AuthContext,
+    tracker_kind: str,
+    fsm_stage: str,
+    skipped: list[tuple[dict[str, Any], str | None]],
+) -> None:
+    """Audit rows for tickets the priority gate dropped.
+
+    No inbox spam here — ``planning`` / ``parked`` are deliberate
+    operator holds, and a one-row-per-pick inbox would flood when a
+    workspace has dozens of held projects. The audit log keeps the
+    why-was-this-skipped breadcrumb so debugging is still tractable.
+    """
+    for row, priority_state in skipped:
+        ticket_ref = str(row.get("id") or "")
+        if not ticket_ref:
+            continue
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=auth.user.id,
+                actor_token_id=auth.token.id if auth.token else None,
+                action="agent_run.priority_skipped",
+                target_kind="ticket",
+                target_id=ticket_ref,
+                payload={
+                    "tracker_kind": tracker_kind,
+                    "fsm_stage": fsm_stage,
+                    "project_id": str(row.get("project_id") or ""),
+                    "priority_state": priority_state,
+                    "title": str(row.get("title") or "")[:200],
+                    "url": str(row.get("url") or "") or None,
+                    "reason": (
+                        "no_priority_row"
+                        if priority_state is None
+                        else f"priority_state={priority_state}"
+                    ),
+                },
+            )
+        )
+    await session.flush()
 
 
 async def _record_orphan_skips(
@@ -629,7 +734,6 @@ async def finish_agent_run(
 
     # Idempotency: bail out if we've already recorded a finish for this
     # run_id under the same workspace.
-    from sqlalchemy import select as sa_select
     prev = (
         await session.execute(
             sa_select(AuditLog).where(
