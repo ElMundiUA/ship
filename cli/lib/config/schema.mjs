@@ -558,6 +558,10 @@ function validateProcessRoutines(value, errors, warnings) {
         "schedule",
         "window",
         "event",
+        // ``fsm_stage`` overrides the role's default stage so one role
+        // can drive multiple processes (BA serves both
+        // ``ba_requirements`` for SDLC and ``wbs`` for decomposition).
+        "fsm_stage",
       ]),
       prefix,
       warnings,
@@ -616,6 +620,7 @@ function validateProcessRoutines(value, errors, warnings) {
       );
     }
     validateProcessAgentProfile(routine.agent_profile, `${prefix}.agent_profile`, errors);
+    requireOptionalString(routine.fsm_stage, `${prefix}.fsm_stage`, errors, { required: false });
     validateRoutineTrigger(routine.trigger, `${prefix}.trigger`, errors);
     if (routine.schedule !== undefined && routine.schedule !== null) {
       if (typeof routine.schedule !== "string" && !isPlainObject(routine.schedule)) {

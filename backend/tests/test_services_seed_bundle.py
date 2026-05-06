@@ -115,6 +115,57 @@ def test_compose_default_bundle_emits_config_yml() -> None:
         )
 
 
+def test_compose_default_bundle_emits_decomposition_routines() -> None:
+    """Decomposition routines (ELS-79) land in ``process.routines``
+    so customer-side ``shipctl run --routine wbs|architecture|...``
+    drives the decomposition chain through customer cron.
+
+    Each decomposition routine carries an explicit ``fsm_stage`` that
+    overrides the role's default — that's how one role (``ba``) serves
+    both ``ba_requirements`` for SDLC and ``wbs`` for decomposition
+    without needing per-process role clones.
+    """
+
+    from backend.app.services.lane_recipes import DEFAULT_BUNDLE
+    from backend.app.services.seed_bundle import (
+        CONFIG_PATH,
+        compose_seed_files,
+    )
+
+    bundle = compose_seed_files(
+        bundle=DEFAULT_BUNDLE,
+        knowledge_slugs=[],
+        tracker_kind=None,
+        repo_full_name="acme/widgets",
+        seeded_at=_seeded_at(),
+    )
+
+    config_body = next(c for p, c in bundle.files if p == CONFIG_PATH)
+
+    # The four non-terminal decomposition stages each get a routine.
+    # ``planning_done`` is terminal — no routine — and the finish hook
+    # on the ``tasks`` stage flips Drafts → Parked.
+    for routine_id in ("wbs", "architecture", "test_architecture", "tasks"):
+        assert f"    {routine_id}:" in config_body, (
+            f"missing decomposition routine {routine_id} in seeded YAML"
+        )
+
+    # Each decomposition routine carries an ``fsm_stage`` so the CLI
+    # can override the role's default stage — this is the key wire that
+    # makes ``shipctl run --routine wbs`` poll ``stage:wbs`` instead of
+    # the BA role's SDLC default ``ba_requirements``.
+    for fsm_stage in ("wbs", "architecture", "test_architecture", "tasks"):
+        assert f"fsm_stage: {fsm_stage}" in config_body, (
+            f"missing fsm_stage: {fsm_stage} on decomposition routine"
+        )
+
+    # Specialists are reused from the SDLC role corpus.
+    assert "specialist: ba" in config_body
+    assert "specialist: tech-architect" in config_body
+    assert "specialist: qa-architect" in config_body
+    assert "specialist: developer" in config_body
+
+
 def test_compose_default_bundle_emits_dedup_workflows() -> None:
     """Multiple patterns sharing a starter workflow collapse to one
     YAML on disk (path uniqueness is the tree builder's invariant)."""

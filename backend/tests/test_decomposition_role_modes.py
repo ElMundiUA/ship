@@ -66,3 +66,49 @@ def test_role_carries_decomposition_block(slug: str, section: str | None) -> Non
             f'``section="{section}"`` so the prompt and the tracker '
             f"helper agree on the heading"
         )
+
+
+def test_planning_process_config_emits_routines_with_fsm_stage() -> None:
+    """ELS-79 — decomposition is now cron-driven (symmetric to SDLC).
+
+    Each non-terminal stage gets a routine in
+    ``default_planning_process_config()['routines']`` carrying an
+    explicit ``fsm_stage``. ``shipctl run --routine wbs`` reads
+    ``fsm_stage: wbs`` and queries ``GET /tracker/next?state=wbs``,
+    overriding the BA role's SDLC-default ``ba_requirements``.
+
+    ``planning_done`` is terminal and gets no routine — the finish
+    hook on ``tasks`` flips Drafts → Parked.
+    """
+    from backend.app.services.catalog import default_planning_process_config
+
+    cfg = default_planning_process_config()
+    routines = cfg.get("routines") or {}
+    assert isinstance(routines, dict)
+
+    expected = {
+        "wbs": ("ba", "wbs"),
+        "architecture": ("tech-architect", "architecture"),
+        "test_architecture": ("qa-architect", "test_architecture"),
+        "tasks": ("developer", "tasks"),
+    }
+    for routine_id, (specialist, fsm_stage) in expected.items():
+        routine = routines.get(routine_id)
+        assert isinstance(routine, dict), (
+            f"missing decomposition routine: {routine_id}"
+        )
+        assert routine.get("specialist") == specialist, (
+            f"{routine_id}.specialist should be {specialist!r}, "
+            f"got {routine.get('specialist')!r}"
+        )
+        assert routine.get("fsm_stage") == fsm_stage, (
+            f"{routine_id}.fsm_stage should be {fsm_stage!r}, "
+            f"got {routine.get('fsm_stage')!r}"
+        )
+
+    # ``planning_done`` is terminal — explicitly NOT a routine.
+    assert "planning_done" not in routines, (
+        "``planning_done`` is the terminal stage; it must not have a "
+        "routine — the finish hook on ``tasks`` triggers the Drafts "
+        "→ Parked flip without an extra agent run."
+    )

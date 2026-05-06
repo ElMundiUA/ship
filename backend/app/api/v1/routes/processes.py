@@ -104,9 +104,19 @@ _LEGACY_STAGE_TO_STATE: dict[str, CanonicalState] = {
     # yet still bucket correctly.
     "pr_review": "reviewing",
     "code_review": "reviewing",
+    # Decomposition stages (ELS-75 / ELS-79). One specialist per stage
+    # patches its own section of the project body on the planning
+    # anchor; ``planning_done`` is terminal and triggers Drafts →
+    # Parked on the dashboard.
+    "wbs": "planning",
+    "architecture": "planning",
+    "test_architecture": "planning",
+    "tasks": "executing",
+    "planning_done": "reviewing",
 }
 
 PRIMARY_PROCESS_ID = "development"
+DECOMPOSITION_PROCESS_ID = "decomposition"
 
 _SEEDED_PROCESSES: tuple[dict[str, Any], ...] = (
     {
@@ -141,6 +151,35 @@ _SEEDED_PROCESSES: tuple[dict[str, Any], ...] = (
         "node_type": "subprocess",
         "template_id": "subprocess-qa",
     },
+    # Decomposition is a peer top-level process (ELS-79), distinct
+    # from the per-ticket SDLC. It runs against the planning anchor
+    # of each new project: BA → Tech-arch → QA-arch → Developer slice
+    # the brief into a coarse WBS + child tickets. Customer cron
+    # drives it via ``shipctl run --routine wbs|architecture|...``;
+    # ``planning_done`` flips Drafts → Parked.
+    {
+        "id": "decomposition",
+        "name": "Decomposition",
+        "description": (
+            "Project-first delivery: BA, Tech-architect, QA-architect "
+            "and Developer turn a project brief into a WBS and child "
+            "tickets on the planning anchor. Drafts → Parked when done."
+        ),
+        "parent_process_id": None,
+        "node_type": "process",
+        "template_id": "process-decomposition",
+    },
+)
+
+# Decomposition stage order (ELS-79). Mirrors
+# ``DECOMPOSITION_STAGE_ORDER`` in ``linear_provisioner.py`` and the
+# stage list in ``catalog.default_planning_process_config``.
+_DECOMPOSITION_STATE_ORDER: tuple[str, ...] = (
+    "wbs",
+    "architecture",
+    "test_architecture",
+    "tasks",
+    "planning_done",
 )
 
 _PROCESS_STATE_ORDER: tuple[str, ...] = (
@@ -468,7 +507,8 @@ async def list_processes(
 ) -> ProcessListOut:
     await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
     process = await _build_development_process(session, workspace_id)
-    summaries = _seeded_process_summaries(process)
+    decomposition = await _build_decomposition_process(session, workspace_id)
+    summaries = _seeded_process_summaries(process, decomposition)
     return ProcessListOut(
         primary_process_id=PRIMARY_PROCESS_ID,
         processes=summaries,
@@ -524,6 +564,8 @@ async def get_process(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="process not found",
         )
+    if process_id == DECOMPOSITION_PROCESS_ID:
+        return await _build_decomposition_process(session, workspace_id)
     return await _build_development_process(
         session,
         workspace_id,
@@ -942,6 +984,132 @@ def _add_process_audit(
     )
 
 
+async def _build_decomposition_process(
+    session: AsyncSession,
+    workspace_id: uuid.UUID,
+) -> ProcessOut:
+    """Project the decomposition FSM as a peer top-level process.
+
+    Source of truth is :func:`catalog.default_planning_process_config`.
+    Today decomposition has no separate ``Lane`` / ``Pipeline`` rows
+    (the planning anchor is a tracker concept, not a workspace
+    pipeline), so this projection is static — runtime aggregation is
+    intentionally omitted until decomposition picks up its own runs
+    table. The dashboard renders the canvas + routine cards from the
+    static states + the four routines defined in the catalog.
+    """
+    from backend.app.services.catalog import default_planning_process_config
+
+    config = default_planning_process_config()
+    specialists = _specialists()
+    raw_states = config.get("states") or []
+    states: list[ProcessStateOut] = []
+    for entry in raw_states:
+        if not isinstance(entry, dict):
+            continue
+        stage_id = str(entry.get("id") or "")
+        if not stage_id:
+            continue
+        spec = entry.get("specialist") or {}
+        specialist_id = str(spec.get("id") or "developer")
+        # ``_specialists`` is keyed by role-template id (``business_analyst``
+        # etc.), not the kebab-case agent-role slug, so a direct lookup
+        # often misses for decomposition specialists. Fall back to the
+        # SDLC stage's specialist when the kebab-case slug is unknown.
+        if specialist_id not in specialists:
+            specialist_id = _specialist_for_lane(stage_id)
+        states.append(
+            ProcessStateOut(
+                id=stage_id,
+                name=str(entry.get("name") or _titleize(stage_id)),
+                specialist_id=specialist_id,
+                specialist_name=specialists[specialist_id].name,
+                instructions=str(entry.get("instructions") or ""),
+                state=_canonical_state_for(stage_id),
+                triggers=[ProcessTriggerOut(type="event", event="anchor_handoff")],
+                exit_conditions=[],
+                block_conditions=[],
+                runtime=ProcessStateRuntimeOut(health="ok"),
+            )
+        )
+
+    transitions: list[ProcessTransitionOut] = []
+    for left, right in zip(states, states[1:]):
+        transitions.append(
+            ProcessTransitionOut(
+                id=f"{left.id}_to_{right.id}",
+                from_state_id=left.id,
+                to_state_id=right.id,
+                conditions=[],
+                requires_human=False,
+                trigger_actor=_transition_actor(left.state, right.state),
+            )
+        )
+
+    routines: list[ProcessRoutineOut] = []
+    raw_routines = config.get("routines") or {}
+    if isinstance(raw_routines, dict):
+        for routine_id, routine in raw_routines.items():
+            if not isinstance(routine, dict):
+                continue
+            specialist_slug = str(routine.get("specialist") or "")
+            specialist_template_id = _specialist_for_lane(routine_id)
+            specialist_template = specialists.get(specialist_template_id)
+            specialist_name = (
+                specialist_template.name
+                if specialist_template
+                else specialist_slug or routine_id
+            )
+            trigger = routine.get("trigger") or {}
+            cron = (
+                str(trigger.get("cron"))
+                if isinstance(trigger, dict) and trigger.get("cron")
+                else None
+            )
+            routines.append(
+                ProcessRoutineOut(
+                    id=str(routine_id),
+                    name=str(routine.get("name") or _titleize(str(routine_id))),
+                    specialist_id=specialist_template_id,
+                    specialist_name=specialist_name,
+                    schedule=cron,
+                    prompt="",
+                    instructions=str(routine.get("description") or ""),
+                    last_run=None,
+                    status=None,
+                    enabled=bool(routine.get("enabled", True)),
+                    description=str(routine.get("description") or ""),
+                    trigger=trigger if isinstance(trigger, dict) else None,
+                )
+            )
+
+    process_meta = _seeded_process_meta(DECOMPOSITION_PROCESS_ID)
+    adapter_diagnostics = await _adapter_diagnostics(session, workspace_id)
+    return ProcessOut(
+        id=DECOMPOSITION_PROCESS_ID,
+        name=str(process_meta["name"]),
+        primary=False,
+        state_count=len(states),
+        task_count=0,
+        blocked_count=0,
+        health="ok",
+        description=str(process_meta["description"]),
+        parent_process_id=process_meta["parent_process_id"],
+        node_type=process_meta["node_type"],
+        template_id=process_meta["template_id"],
+        specialists=list(specialists.values()),
+        states=states,
+        transitions=transitions,
+        tasks=[],
+        routines=routines,
+        schedule=_default_schedule(states),
+        process_graph=_inner_process_graph(
+            DECOMPOSITION_PROCESS_ID, states, transitions
+        ),
+        adapter_diagnostics=adapter_diagnostics,
+    )
+
+
 async def _build_development_process(
     session: AsyncSession,
     workspace_id: uuid.UUID,
@@ -1157,19 +1325,38 @@ def _seeded_process_meta(process_id: str) -> dict[str, Any]:
     )
 
 
-def _seeded_process_summaries(process: ProcessOut) -> list[ProcessSummaryOut]:
+def _seeded_process_summaries(
+    process: ProcessOut,
+    decomposition: ProcessOut | None = None,
+) -> list[ProcessSummaryOut]:
     summaries: list[ProcessSummaryOut] = []
     for row in _SEEDED_PROCESSES:
         is_primary = row["id"] == PRIMARY_PROCESS_ID
+        is_decomp = row["id"] == DECOMPOSITION_PROCESS_ID
+        if is_primary:
+            state_count = process.state_count
+            task_count = process.task_count
+            blocked_count = process.blocked_count
+            health = process.health
+        elif is_decomp and decomposition is not None:
+            state_count = decomposition.state_count
+            task_count = decomposition.task_count
+            blocked_count = decomposition.blocked_count
+            health = decomposition.health
+        else:
+            state_count = 0
+            task_count = 0
+            blocked_count = 0
+            health = "ok"
         summaries.append(
             ProcessSummaryOut(
                 id=str(row["id"]),
                 name=str(row["name"]),
                 primary=is_primary,
-                state_count=process.state_count if is_primary else 0,
-                task_count=process.task_count if is_primary else 0,
-                blocked_count=process.blocked_count if is_primary else 0,
-                health=process.health if is_primary else "ok",
+                state_count=state_count,
+                task_count=task_count,
+                blocked_count=blocked_count,
+                health=health,
                 description=str(row["description"]),
                 parent_process_id=row["parent_process_id"],
                 node_type=row["node_type"],
@@ -1186,6 +1373,7 @@ def _workspace_process_graph(summaries: list[ProcessSummaryOut]) -> ProcessGraph
     positions = {
         "workspace": (340, 270),
         "development": (340, 42),
+        "decomposition": (620, 42),
     }
     nodes = [
         ProcessNodeOut(
@@ -1228,6 +1416,21 @@ def _workspace_process_graph(summaries: list[ProcessSummaryOut]) -> ProcessGraph
                 label="Development process",
                 conditions=[ProcessConditionOut(expression="workspace.process == 'development'")],
                 io_contract={"passes": ["workspace_policies", "canonical_state"]},
+            ),
+            ProcessLinkOut(
+                id="workspace-to-decomposition",
+                from_process_id="workspace",
+                from_node_id="node-workspace",
+                to_process_id="decomposition",
+                to_node_id="node-decomposition",
+                type="handoff",
+                label="Decomposition process",
+                conditions=[
+                    ProcessConditionOut(
+                        expression="workspace.process == 'decomposition'"
+                    )
+                ],
+                io_contract={"passes": ["project_brief", "planning_anchor"]},
             ),
         ],
     )

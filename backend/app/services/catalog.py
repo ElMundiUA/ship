@@ -241,6 +241,13 @@ def bundle_routine_entries(
             routine["patterns"] = list(lane["patterns"])
         if isinstance(lane.get("fanout"), str):
             routine["fanout"] = str(lane["fanout"])
+        # ``fsm_stage`` overrides the role's default stage when set —
+        # lets one role drive multiple processes (e.g. ``ba`` runs at
+        # ``ba_requirements`` for SDLC and ``wbs`` for decomposition).
+        if isinstance(lane.get("fsm_stage"), str):
+            routine["fsm_stage"] = str(lane["fsm_stage"])
+        if isinstance(lane.get("description"), str):
+            routine["description"] = str(lane["description"])
         routines[str(routine_id)] = routine
     return routines
 
@@ -420,7 +427,8 @@ def default_planning_process_config() -> dict[str, object]:
         # No human gates today — the operator's gate is the manual
         # **Hand off to decomposition** click on the dashboard. Once
         # they hit it, the chain runs autonomously through to
-        # ``planning_done`` and the project flips Drafts → Active.
+        # ``planning_done`` and the project flips Drafts → Parked
+        # (the PO promotes Parked → Active when ready to ship).
         "gates": "after_pr",
         "states": [
             {
@@ -490,7 +498,8 @@ def default_planning_process_config() -> dict[str, object]:
                 "specialist": {"id": "developer", "name": "Developer"},
                 "instructions": (
                     "Terminal — no work. Reaching this stage flips the "
-                    "project from Drafts to Active on the dashboard."
+                    "project from Drafts to Parked on the dashboard "
+                    "(the PO then promotes Parked → Active when ready)."
                 ),
             },
         ],
@@ -500,11 +509,82 @@ def default_planning_process_config() -> dict[str, object]:
             {"from": "test_architecture", "to": "tasks"},
             {"from": "tasks", "to": "planning_done"},
         ],
-        # No routines — decomposition is anchor-driven, not cron-
-        # driven. The handoff endpoint sets the first stage label;
-        # subsequent stages move via ``/agent-runs/finish`` like any
-        # other FSM run.
-        "routines": {},
+        # Cron-driven, symmetric to the development process. Each
+        # non-terminal stage gets a routine that the customer-side
+        # GitHub Actions cron polls via ``shipctl run --routine X``;
+        # the routine carries an explicit ``fsm_stage`` so one role
+        # (``ba``) can serve both decomposition (``stage:wbs``) and
+        # SDLC (``ba_requirements``) without per-process role clones.
+        # ``planning_done`` is terminal — no routine — and the finish
+        # hook on the ``tasks`` stage flips the dashboard row Drafts →
+        # Parked.
+        "routines": {
+            "wbs": {
+                "name": "Decomposition WBS",
+                "enabled": True,
+                "specialist": "ba",
+                "fsm_stage": "wbs",
+                "trigger": {
+                    "type": "schedule",
+                    "cron": "*/30 * * * *",
+                    "window": "30m",
+                    "catchup": "latest",
+                },
+                "description": (
+                    "Customer cron polls planning anchors in stage:wbs "
+                    "and dispatches BA to produce the WBS section."
+                ),
+            },
+            "architecture": {
+                "name": "Decomposition Architecture",
+                "enabled": True,
+                "specialist": "tech-architect",
+                "fsm_stage": "architecture",
+                "trigger": {
+                    "type": "schedule",
+                    "cron": "*/30 * * * *",
+                    "window": "30m",
+                    "catchup": "latest",
+                },
+                "description": (
+                    "Customer cron polls anchors in stage:architecture "
+                    "and dispatches Tech-architect."
+                ),
+            },
+            "test_architecture": {
+                "name": "Decomposition Test architecture",
+                "enabled": True,
+                "specialist": "qa-architect",
+                "fsm_stage": "test_architecture",
+                "trigger": {
+                    "type": "schedule",
+                    "cron": "*/30 * * * *",
+                    "window": "30m",
+                    "catchup": "latest",
+                },
+                "description": (
+                    "Customer cron polls anchors in "
+                    "stage:test_architecture and dispatches QA-architect."
+                ),
+            },
+            "tasks": {
+                "name": "Decomposition Task slicing",
+                "enabled": True,
+                "specialist": "developer",
+                "fsm_stage": "tasks",
+                "trigger": {
+                    "type": "schedule",
+                    "cron": "*/30 * * * *",
+                    "window": "30m",
+                    "catchup": "latest",
+                },
+                "description": (
+                    "Customer cron polls anchors in stage:tasks and "
+                    "dispatches Developer to slice the WBS into child "
+                    "tickets. On finish the project flips Drafts to Parked."
+                ),
+            },
+        },
     }
 
 
