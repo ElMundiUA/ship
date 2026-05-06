@@ -171,17 +171,6 @@ _SEEDED_PROCESSES: tuple[dict[str, Any], ...] = (
     },
 )
 
-# Decomposition stage order (ELS-79). Mirrors
-# ``DECOMPOSITION_STAGE_ORDER`` in ``linear_provisioner.py`` and the
-# stage list in ``catalog.default_planning_process_config``.
-_DECOMPOSITION_STATE_ORDER: tuple[str, ...] = (
-    "wbs",
-    "architecture",
-    "test_architecture",
-    "tasks",
-    "planning_done",
-)
-
 _PROCESS_STATE_ORDER: tuple[str, ...] = (
     # Phase 1.5 canon — nine pipeline stages in execution order. The
     # dashboard's process projector iterates this tuple to render the
@@ -1582,6 +1571,18 @@ def _specialist_for_lane(lane_id: str) -> str:
         "qa_automation": "qa_engineer",
         "code_review": "code_reviewer",
         "pr_review": "code_reviewer",
+        # Decomposition stages (ELS-79). Without these the substring
+        # fallback below maps ``wbs`` / ``tasks`` / ``planning_done``
+        # to the default ``devops_platform`` (or fails entirely),
+        # which mis-renders the canvas badge AND raises a KeyError
+        # when ``_build_decomposition_process`` looks up the
+        # specialist by id. Pin them explicitly so the canvas shows
+        # the right role and the projection never blows up.
+        "wbs": "business_analyst",
+        "architecture": "technical_architect",
+        "test_architecture": "qa_engineer",
+        "tasks": "developer",
+        "planning_done": "developer",
     }
     if lane_id in direct:
         return direct[lane_id]
