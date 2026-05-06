@@ -219,6 +219,17 @@ class Settings(BaseSettings):
     # "X / N closed-beta seats taken". Read by ``/v1/public/beta-capacity``.
     closed_beta_cap: int = Field(default=50, alias="CLOSED_BETA_CAP")
 
+    # Kill-switch for autonomous agent pickup (ELS-88). When ``False``,
+    # ``GET /v1/.../tracker/next`` returns ``ticket=null`` immediately
+    # and emits an ``agent_run.pickup_disabled`` audit row per call —
+    # so the operator can see who's still polling. Default ``True``;
+    # flip to ``false`` via env without a code push to halt the pipeline
+    # if a regression / cost spike / cascading bad transitions
+    # surface post-launch.
+    agent_pickup_enabled: bool = Field(
+        default=True, alias="SHIP_AGENT_PICKUP_ENABLED"
+    )
+
     # --- Auth0 (used when auth_mode == "auth0") ---
     auth0_domain: str | None = Field(default=None, alias="AUTH0_DOMAIN")
     auth0_audience: str | None = Field(default=None, alias="AUTH0_AUDIENCE")

@@ -245,6 +245,14 @@ async def get_next_task(
 ) -> TaskResponseOut:
     """Return the next ticket the agent should work on for ``state``.
 
+    Kill-switch (ELS-88): when ``settings.agent_pickup_enabled`` is
+    ``False`` the picker short-circuits to ``ticket=null`` and emits
+    a deduped ``agent_run.pickup_disabled`` audit row (bucketed by
+    ``(workspace, fsm_stage, hour)``) so operators can see who's
+    still polling without flooding the audit log. The check is the
+    first thing — no tracker resolution, no GraphQL — so a bad day
+    costs no API budget.
+
     Picker filters (ELS-83): tickets without a tracker ``project_id``
     are orphans — created outside the dashboard's project flow.
     They're skipped here and a one-shot inbox item plus an
@@ -252,6 +260,24 @@ async def get_next_task(
     them and re-home the work or close it.
     """
     await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+
+    if not settings.agent_pickup_enabled:
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=auth.user.id,
+                actor_token_id=auth.token.id if auth.token else None,
+                action="agent_run.pickup_disabled",
+                target_kind="workspace",
+                target_id=str(workspace_id),
+                payload={
+                    "fsm_stage": state,
+                    "reason": "SHIP_AGENT_PICKUP_ENABLED=false",
+                },
+            )
+        )
+        await session.flush()
+        return TaskResponseOut(ticket=None, fsm_stage=state, tracker_kind=None)
 
     resolved = await resolve_for_workspace(
         session=session,
