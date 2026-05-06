@@ -42,13 +42,16 @@ the agent never hold the tracker credential.
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import struct
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.api.v1.deps import AuthContext, get_current_auth
@@ -180,6 +183,34 @@ class FinishOut(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+def _pickup_lock_key(
+    workspace_id: uuid.UUID, fsm_stage: str
+) -> tuple[int, int]:
+    """Stable (int4, int4) key for the picker's advisory lock (ELS-85).
+
+    Postgres ``pg_try_advisory_xact_lock`` accepts a single 64-bit int
+    or a pair of 32-bit ints. The pair form lines up nicely with our
+    natural lock key — ``(workspace_id, fsm_stage)`` — so we hash each
+    side to a signed int32 and pass them separately. Collisions across
+    different ``(ws, stage)`` pairs are theoretically possible
+    (``2^-32`` per pair) but the cost of a false positive is just
+    "the second caller noops and retries on the next cron tick" —
+    well within tolerance.
+
+    BLAKE2b is used over Python's built-in ``hash`` because the latter
+    is randomised per-process: two replicas would compute different
+    keys for the same workspace and the lock would stop working
+    altogether.
+    """
+    ws_digest = hashlib.blake2b(workspace_id.bytes, digest_size=4).digest()
+    stage_digest = hashlib.blake2b(
+        fsm_stage.encode("utf-8"), digest_size=4
+    ).digest()
+    ws_key = struct.unpack("<i", ws_digest)[0]
+    stage_key = struct.unpack("<i", stage_digest)[0]
+    return ws_key, stage_key
+
+
 def _vendor_kind_to_ticket_kind(vendor_kind: str) -> Literal[
     "github_issues", "linear", "notion", "jira"
 ]:
@@ -245,6 +276,14 @@ async def get_next_task(
 ) -> TaskResponseOut:
     """Return the next ticket the agent should work on for ``state``.
 
+    Pick-race protection (ELS-85): a Postgres advisory lock keyed on
+    ``(workspace_id, fsm_stage)`` serialises concurrent
+    ``shipctl run --routine X`` calls. The second caller gets
+    ``ticket=null`` immediately and noops cleanly — the next cron
+    tick re-fires and picks up. Lock is transactional
+    (``pg_try_advisory_xact_lock``), so it auto-releases when the
+    handler's transaction commits or rolls back; no manual unlock.
+
     Picker filters (ELS-83): tickets without a tracker ``project_id``
     are orphans — created outside the dashboard's project flow.
     They're skipped here and a one-shot inbox item plus an
@@ -252,6 +291,20 @@ async def get_next_task(
     them and re-home the work or close it.
     """
     await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+
+    ws_key, stage_key = _pickup_lock_key(workspace_id, state)
+    got = (
+        await session.execute(
+            text("SELECT pg_try_advisory_xact_lock(:k1, :k2)"),
+            {"k1": ws_key, "k2": stage_key},
+        )
+    ).scalar_one()
+    if not got:
+        # Another picker call is already mid-handler for the same
+        # (workspace, stage). Returning null here is the same shape
+        # as "no eligible ticket"; ``shipctl run`` treats both as a
+        # clean noop and the cron's next tick re-tries.
+        return TaskResponseOut(ticket=None, fsm_stage=state, tracker_kind=None)
 
     resolved = await resolve_for_workspace(
         session=session,
