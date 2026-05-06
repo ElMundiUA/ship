@@ -66,6 +66,15 @@ PyNaCl>=1.5,<2
 # --- YAML for artifact frontmatter ---
 pyyaml>=6.0
 
+# --- Code symbol extraction (ELS-72) ---
+# tree-sitter binding + a single-wheel grammar pack so the
+# ``repo_symbols`` agent tool can parse Python / TypeScript / Go on
+# demand without preindexing repos. Activated only when the tool is
+# called; importing the language pack is gated to first use so module
+# load stays cheap.
+tree-sitter>=0.23,<1
+tree-sitter-language-pack>=0.6,<1
+
 # --- Observability (RFC-0006 / phase 2) ---
 # `fastapi` extra wires the Sentry FastAPI middleware (request spans + error
 # capture); `arq` keeps the background-worker integration on the same SDK.
