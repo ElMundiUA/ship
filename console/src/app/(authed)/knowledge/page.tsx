@@ -176,6 +176,7 @@ function toTopicViewRow(
   return {
     topicTag: view.topic_tag,
     title: view.title || view.topic_tag,
+    snippet: view.snippet,
     claimCount: view.claim_count,
     renderedByModel: view.rendered_by_model,
     lastRenderedAt: view.last_rendered_at,

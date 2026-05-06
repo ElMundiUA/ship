@@ -43,6 +43,7 @@ import { KnowledgeImportWizard } from "./import-wizard";
 export type KnowledgeTopicViewRow = {
   topicTag: string;
   title: string;
+  snippet: string | null;
   claimCount: number;
   renderedByModel: string | null;
   lastRenderedAt: string;
@@ -155,69 +156,241 @@ export function KnowledgeControlCenter({
 
       {isSearching ? (
         <SearchResults hits={searchHits ?? []} queriedFor={searchedFor} />
+      ) : topicViews.length === 0 ? (
+        <EmptyTopics hasSources={sources.length > 0} />
       ) : (
-        <div className="grid grid-cols-1 gap-x-12 gap-y-12 lg:grid-cols-12 2xl:gap-x-16">
-          <section className="space-y-8 lg:col-span-8 2xl:col-span-9">
-            <SectionKicker tone="aqua">
-              Topics
-              {topicViews.length > 0 && (
-                <span className="ml-2 text-white/40">
-                  · {topicViews.length}
-                </span>
-              )}
-            </SectionKicker>
-            {topicViews.length === 0 ? (
-              <EmptyTopics hasSources={sources.length > 0} />
-            ) : (
-              <ul className="divide-y divide-white/5">
-                {topicViews.map((view) => (
-                  <li key={view.topicTag} className="py-5 first:pt-6">
-                    <TopicViewRow view={view} />
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-
-          {sources.length > 0 && (
-            <aside className="space-y-3 lg:col-span-4 lg:sticky lg:top-24 lg:self-start 2xl:col-span-3">
-              <SectionKicker tone="muted">Sources</SectionKicker>
-              <ConnectedSources sources={sources} />
-            </aside>
-          )}
-        </div>
+        <EditorialLayout topicViews={topicViews} sources={sources} />
       )}
     </div>
   );
 }
 
 
-function TopicViewRow({ view }: { view: KnowledgeTopicViewRow }) {
-  const isAuto = view.renderedByModel && view.renderedByModel !== "deterministic";
+// ---------------------------------------------------------------------------
+// Editorial layout — Lede + Recent rows + Browse-by-area sidebar
+// ---------------------------------------------------------------------------
+
+
+function EditorialLayout({
+  topicViews,
+  sources,
+}: {
+  topicViews: KnowledgeTopicViewRow[];
+  sources: KnowledgeSourceRow[];
+}) {
+  // Topic views arrive sorted by claim_count desc from the API. The
+  // first row is the lede (deepest topic = most-attested area in the
+  // workspace canon); the next ~12 are the recent stack. Anything
+  // past that lives only in the sidebar so the main column stays
+  // scannable on a laptop screen.
+  const lede = topicViews[0];
+  const rest = topicViews.slice(1, 13);
+  const areas = clusterTopicsByPrefix(topicViews);
+
+  return (
+    <div className="grid grid-cols-1 gap-x-12 gap-y-12 lg:grid-cols-12 2xl:gap-x-16">
+      <section className="space-y-8 lg:col-span-8 2xl:col-span-7">
+        <SectionKicker tone="aqua">
+          Recent
+          <span className="ml-2 text-white/40">· {topicViews.length}</span>
+        </SectionKicker>
+        <LedeTopic view={lede} />
+        {rest.length > 0 && (
+          <ul className="divide-y divide-white/5">
+            {rest.map((view) => (
+              <li key={view.topicTag} className="py-5 first:pt-6">
+                <TopicRow view={view} />
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <aside className="space-y-6 lg:col-span-4 lg:sticky lg:top-24 lg:self-start 2xl:col-span-3">
+        <SectionKicker tone="lilac">Browse by area</SectionKicker>
+        <AreaDirectory areas={areas} />
+      </aside>
+
+      {sources.length > 0 && (
+        <section className="space-y-3 lg:col-span-12 2xl:col-span-2 2xl:sticky 2xl:top-24 2xl:self-start">
+          <SectionKicker tone="muted">Sources</SectionKicker>
+          <ConnectedSources sources={sources} />
+        </section>
+      )}
+    </div>
+  );
+}
+
+
+function LedeTopic({ view }: { view: KnowledgeTopicViewRow }) {
+  const isAuto =
+    view.renderedByModel && view.renderedByModel !== "deterministic";
   return (
     <Link
       href={`/knowledge/topics/${encodeURIComponent(view.topicTag)}`}
-      className="group block"
+      className="group block space-y-3 border-b border-aqua/30 pb-8"
     >
-      <h3 className="text-base font-medium text-white transition-colors group-hover:text-aqua">
+      <h3 className="font-display text-2xl font-bold leading-tight text-white group-hover:text-aqua md:text-3xl">
         {view.title}
       </h3>
-      <p className="mt-1 text-xs text-white/45">
-        <span className="font-mono">{view.topicTag}</span>
-        <span className="mx-2">·</span>
+      {view.snippet && (
+        <p className="line-clamp-3 text-base leading-relaxed text-white/65">
+          {view.snippet}
+        </p>
+      )}
+      <p className="flex flex-wrap items-center gap-x-2 text-[11px] uppercase tracking-widest text-white/40">
         <span>
           {view.claimCount} claim{view.claimCount === 1 ? "" : "s"}
         </span>
-        <span className="mx-2">·</span>
+        <span className="text-white/20">·</span>
         <span>{relativeDate(view.lastRenderedAt)}</span>
         {!isAuto && (
           <>
-            <span className="mx-2">·</span>
+            <span className="text-white/20">·</span>
             <span className="text-coral/70">deterministic fallback</span>
           </>
         )}
       </p>
     </Link>
+  );
+}
+
+
+function TopicRow({ view }: { view: KnowledgeTopicViewRow }) {
+  const isAuto =
+    view.renderedByModel && view.renderedByModel !== "deterministic";
+  return (
+    <Link
+      href={`/knowledge/topics/${encodeURIComponent(view.topicTag)}`}
+      className="group block space-y-1.5"
+    >
+      <div className="text-base font-semibold text-white group-hover:text-aqua">
+        {view.title}
+      </div>
+      {view.snippet && (
+        <p className="line-clamp-2 text-sm leading-relaxed text-white/55">
+          {view.snippet}
+        </p>
+      )}
+      <div className="text-[11px] text-white/40">
+        <span>
+          {view.claimCount} claim{view.claimCount === 1 ? "" : "s"}
+        </span>
+        <span className="mx-2 text-white/20">·</span>
+        <span>{relativeDate(view.lastRenderedAt)}</span>
+        {!isAuto && (
+          <>
+            <span className="mx-2 text-white/20">·</span>
+            <span className="text-coral/70">deterministic</span>
+          </>
+        )}
+      </div>
+    </Link>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// Browse by area — auto-clustered topics
+// ---------------------------------------------------------------------------
+
+
+type Area = {
+  key: string;
+  label: string;
+  topics: KnowledgeTopicViewRow[];
+};
+
+
+function clusterTopicsByPrefix(views: KnowledgeTopicViewRow[]): Area[] {
+  // Heuristic: cluster on the first ``-``-separated token of the
+  // topic_tag. ``inbox-disposition`` + ``inbox-routing`` group under
+  // ``inbox``; standalone tags whose token has no other members go
+  // into a synthetic ``Other`` bucket so the sidebar stays compact.
+  const buckets = new Map<string, KnowledgeTopicViewRow[]>();
+  for (const view of views) {
+    const token = view.topicTag.split("-", 1)[0] || view.topicTag;
+    const list = buckets.get(token) ?? [];
+    list.push(view);
+    buckets.set(token, list);
+  }
+  const areas: Area[] = [];
+  const orphans: KnowledgeTopicViewRow[] = [];
+  for (const [key, topics] of buckets) {
+    if (topics.length === 1) {
+      orphans.push(topics[0]);
+      continue;
+    }
+    areas.push({
+      key,
+      label: humaniseTag(key),
+      topics: topics.sort((a, b) => b.claimCount - a.claimCount),
+    });
+  }
+  if (orphans.length > 0) {
+    areas.push({
+      key: "_other",
+      label: "Other",
+      topics: orphans.sort((a, b) => b.claimCount - a.claimCount),
+    });
+  }
+  return areas.sort((a, b) => {
+    // Bigger clusters first, "_other" pinned to the bottom.
+    if (a.key === "_other") return 1;
+    if (b.key === "_other") return -1;
+    const aTotal = a.topics.reduce((sum, t) => sum + t.claimCount, 0);
+    const bTotal = b.topics.reduce((sum, t) => sum + t.claimCount, 0);
+    return bTotal - aTotal;
+  });
+}
+
+
+function humaniseTag(tag: string): string {
+  return tag
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((part) => part[0].toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+
+function AreaDirectory({ areas }: { areas: Area[] }) {
+  if (areas.length === 0) return null;
+  return (
+    <ul className="divide-y divide-white/5">
+      {areas.map((area) => (
+        <li key={area.key} className="py-3 first:pt-0">
+          <div className="flex items-baseline justify-between gap-3">
+            <div className="font-display text-sm font-bold uppercase tracking-wider text-white/85">
+              {area.label}
+            </div>
+            <span className="shrink-0 font-mono text-xs text-white/35">
+              {area.topics.length}
+            </span>
+          </div>
+          <ul className="mt-2 space-y-1.5">
+            {area.topics.slice(0, 5).map((topic) => (
+              <li key={topic.topicTag}>
+                <Link
+                  href={`/knowledge/topics/${encodeURIComponent(topic.topicTag)}`}
+                  className="group flex items-baseline justify-between gap-3 text-xs text-white/55 hover:text-lilac"
+                >
+                  <span className="truncate">{topic.title}</span>
+                  <span className="shrink-0 font-mono text-white/30">
+                    {topic.claimCount}
+                  </span>
+                </Link>
+              </li>
+            ))}
+            {area.topics.length > 5 && (
+              <li className="text-[11px] text-white/30">
+                + {area.topics.length - 5} more
+              </li>
+            )}
+          </ul>
+        </li>
+      ))}
+    </ul>
   );
 }
 

@@ -71,10 +71,18 @@ router = APIRouter(
 class TopicViewSummary(BaseModel):
     """List-view shape — body_md is intentionally omitted to keep the
     list response small. Operators paginate this; the agent's RAG
-    flow only ever wants the bodies of the topics it ranks first."""
+    flow only ever wants the bodies of the topics it ranks first.
+
+    A short ``snippet`` is included so the index UI can render an
+    editorial-style preview (lede + rows) without a follow-up
+    ``getTopicView`` per visible card. Truncated server-side to
+    ``_SNIPPET_MAX_CHARS`` so the JSON payload stays small even
+    when a workspace has hundreds of topics.
+    """
 
     topic_tag: str
     title: str
+    snippet: str | None
     claim_count: int
     rendered_by_model: str | None
     last_rendered_at: datetime
@@ -240,6 +248,7 @@ async def list_topic_views(
         TopicViewSummary(
             topic_tag=row.topic_tag,
             title=row.title,
+            snippet=_extract_snippet(row.body_md),
             claim_count=row.claim_count,
             rendered_by_model=row.rendered_by_model,
             last_rendered_at=row.last_rendered_at,
@@ -247,6 +256,43 @@ async def list_topic_views(
         )
         for row in rows
     ]
+
+
+_SNIPPET_MAX_CHARS = 220
+
+
+def _extract_snippet(body_md: str) -> str | None:
+    """First non-heading paragraph of the rendered body, capped at 220 chars.
+
+    The renderer's output starts with ``# <Title>``; we skip that and any
+    immediate ``##`` section headers, then return the first paragraph of
+    actual prose. Mirrors the Console's old ``firstParagraph`` helper so
+    the editorial layout has a consistent excerpt across topics rendered
+    by Haiku and topics rendered by the deterministic fallback.
+    """
+    if not body_md:
+        return None
+    for chunk in body_md.split("\n\n"):
+        stripped = chunk.strip()
+        if not stripped:
+            continue
+        # Skip headings (``# Title`` / ``## Section``) — we want prose.
+        if stripped.startswith("#"):
+            # Check if the chunk is heading-only (i.e. a single line)
+            # or heading + body collapsed. Headings on their own line
+            # have no following content in this chunk, so they get
+            # skipped. Mixed chunks fall through.
+            non_heading = "\n".join(
+                line for line in stripped.splitlines()
+                if not line.lstrip().startswith("#")
+            ).strip()
+            if not non_heading:
+                continue
+            stripped = non_heading
+        if len(stripped) > _SNIPPET_MAX_CHARS:
+            return stripped[: _SNIPPET_MAX_CHARS - 1].rstrip() + "…"
+        return stripped
+    return None
 
 
 @router.get("/topic-views/{topic_tag}", response_model=TopicViewDetail)
