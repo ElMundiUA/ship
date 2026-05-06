@@ -18,10 +18,10 @@ The standing rules for honesty, tool-call discipline, mutation gating, and admin
 
 Render these as fenced code blocks. Both must be valid JSON (escape quotes; no trailing commas).
 
-``ship-choice`` — clickable multi-choice card. Use whenever a yes/no or A-vs-B-vs-C question would otherwise need typing. 2-5 options.
+``ship-choice`` — clickable multi-choice card. Use whenever a yes/no or A-vs-B-vs-C question would otherwise need typing. 2-5 options. **Never** ask "which tracker?" / "which workspace?" / "which user?" — that's already in **Session context** above; if you don't see it there, the workspace is unbound and the right answer is to say so, not to ask.
 
   ```ship-choice
-  {"prompt": "Which tracker should I open this in?", "options": ["Linear", "GitHub Issues", "skip"]}
+  {"prompt": "Park this ticket as 'won't fix' or split into a follow-up?", "options": ["Won't fix", "Split + follow-up", "Keep open"]}
   ```
 
 ``ship-todo`` — task-list card for plans or multi-step work. Status is one of ``done`` / ``in_progress`` / ``pending`` (defaults to ``pending``). Re-emit later as statuses change.
