@@ -210,6 +210,68 @@ async def _try_ticket_snapshot(gateway: Any, ref: TicketRef) -> dict[str, Any] |
         return None
 
 
+async def _record_pickup_disabled(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    auth: AuthContext,
+    fsm_stage: str,
+) -> None:
+    """Audit ``agent_run.pickup_disabled`` deduped by hour bucket.
+
+    Avoids the per-call rowcount problem (~24K/day during a held
+    pre-launch). The bucket key is
+    ``(workspace_id, fsm_stage, hour-truncated UTC timestamp)`` —
+    same workspace polling the same stage in the same hour gets
+    one row total. Crossing an hour boundary or polling a
+    different stage opens a new bucket. Operator can still grep
+    ``pickup_disabled`` to see exactly which buckets have traffic.
+
+    Implementation: probe AuditLog for an existing row with the
+    bucket key in the payload; INSERT only if absent. Two callers
+    racing at the bucket boundary may double-write — acceptable
+    given the row count target is "low" not "exact".
+    """
+    from sqlalchemy import select as sa_select
+
+    bucket_hour = (
+        datetime.now(timezone.utc)
+        .replace(minute=0, second=0, microsecond=0)
+        .isoformat()
+    )
+    bucket_key = f"{workspace_id}|{fsm_stage}|{bucket_hour}"
+    existing = (
+        await session.execute(
+            sa_select(AuditLog.id)
+            .where(
+                AuditLog.workspace_id == workspace_id,
+                AuditLog.action == "agent_run.pickup_disabled",
+                AuditLog.payload["bucket_key"].astext == bucket_key,
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=auth.user.id,
+            actor_token_id=auth.token.id if auth.token else None,
+            action="agent_run.pickup_disabled",
+            target_kind="workspace",
+            target_id=str(workspace_id),
+            payload={
+                "fsm_stage": fsm_stage,
+                "reason": "SHIP_AGENT_PICKUP_ENABLED=false",
+                "bucket_hour": bucket_hour,
+                "bucket_key": bucket_key,
+            },
+        )
+    )
+    await session.flush()
+
+
 def _ticket_ref_from(vendor_kind: str, raw: str) -> TicketRef:
     """Hydrate a vendor-agnostic ``ticket_ref`` string into a typed
     :class:`TicketRef` for adapter calls.
@@ -247,11 +309,17 @@ async def get_next_task(
 
     Kill-switch (ELS-88): when ``settings.agent_pickup_enabled`` is
     ``False`` the picker short-circuits to ``ticket=null`` and emits
-    a deduped ``agent_run.pickup_disabled`` audit row (bucketed by
-    ``(workspace, fsm_stage, hour)``) so operators can see who's
-    still polling without flooding the audit log. The check is the
-    first thing — no tracker resolution, no GraphQL — so a bad day
-    costs no API budget.
+    a *deduped* ``agent_run.pickup_disabled`` audit row so operators
+    can see who's still polling. The check is the first thing — no
+    tracker resolution, no GraphQL — so a bad day costs no API
+    budget.
+
+    Audit bucket: original implementation wrote one audit row per
+    call; 50 workspaces × 12 stages × 30 min = ~24K rows/day during
+    a pre-launch hold. Bucket by ``(workspace_id, fsm_stage, hour)``
+    so a held workspace produces ~12 rows/day total. Operator can
+    still grep ``pickup_disabled`` and see exactly which (workspace,
+    stage, hour) buckets had traffic.
 
     Picker filters (ELS-83): tickets without a tracker ``project_id``
     are orphans — created outside the dashboard's project flow.
@@ -262,21 +330,12 @@ async def get_next_task(
     await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
 
     if not settings.agent_pickup_enabled:
-        session.add(
-            AuditLog(
-                workspace_id=workspace_id,
-                actor_user_id=auth.user.id,
-                actor_token_id=auth.token.id if auth.token else None,
-                action="agent_run.pickup_disabled",
-                target_kind="workspace",
-                target_id=str(workspace_id),
-                payload={
-                    "fsm_stage": state,
-                    "reason": "SHIP_AGENT_PICKUP_ENABLED=false",
-                },
-            )
+        await _record_pickup_disabled(
+            session,
+            workspace_id=workspace_id,
+            auth=auth,
+            fsm_stage=state,
         )
-        await session.flush()
         return TaskResponseOut(ticket=None, fsm_stage=state, tracker_kind=None)
 
     resolved = await resolve_for_workspace(
