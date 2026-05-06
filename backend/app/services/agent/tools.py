@@ -1936,6 +1936,142 @@ class ToolBox:
                 },
             ),
             ToolSpec(
+                name="update_ticket",
+                description=(
+                    "Edit an existing ticket in the workspace's bound "
+                    "tracker — title, body, labels, and/or workflow "
+                    "state in one call. **Mutating; admin-only**. "
+                    "Verify-before-mutate: describe the change and "
+                    "wait for explicit OK unless the user gave a "
+                    "direct command (\"rename to X\", \"close it\", "
+                    "etc.). ``labels`` is a FULL replacement set — "
+                    "the existing label list is overwritten. State "
+                    "accepts a Ship FSM stage (``ba_requirements``, "
+                    "``dev_implementation``, …) or a Linear workflow "
+                    "state name (``Done``, ``In Progress``)."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "ticket_ref": {
+                            "type": "string",
+                            "description": (
+                                "Tracker-native identifier "
+                                "(``ELS-99`` for Linear)."
+                            ),
+                        },
+                        "title": {
+                            "type": "string",
+                            "description": "New title. Omit to leave as-is.",
+                        },
+                        "body": {
+                            "type": "string",
+                            "description": (
+                                "New markdown description. Replaces "
+                                "the previous body verbatim — Linear "
+                                "keeps history server-side, so the "
+                                "activity feed shows what changed."
+                            ),
+                        },
+                        "labels": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": (
+                                "FULL replacement set of label names. "
+                                "The existing label list is "
+                                "overwritten. Unknown labels are "
+                                "silently dropped."
+                            ),
+                        },
+                        "state": {
+                            "type": "string",
+                            "description": (
+                                "Optional state transition. Accepts "
+                                "a Ship FSM stage or a Linear "
+                                "workflow state name. Triggers a "
+                                "label swap + state move."
+                            ),
+                        },
+                    },
+                    "required": ["ticket_ref"],
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="set_priority_state",
+                description=(
+                    "Move a project on the dashboard between buckets: "
+                    "``active`` (agent's autonomous picker may "
+                    "consume), ``planning`` (UI label: **Drafts** — "
+                    "operator is shaping; agent-invisible), "
+                    "``parked`` (explicit hold). **Mutating; "
+                    "admin-only**. Verify-before-mutate: describe "
+                    "the move and wait for explicit OK unless the "
+                    "user gave a direct command (\"park this\", "
+                    "\"promote it\"). Creates a priorities row at "
+                    "MAX+1 ordinal if none exists yet."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "project_native_id": {
+                            "type": "string",
+                            "description": (
+                                "Tracker-native project id (Linear "
+                                "project UUID, Jira project key)."
+                            ),
+                        },
+                        "state": {
+                            "type": "string",
+                            "enum": ["active", "planning", "parked"],
+                            "description": (
+                                "Target bucket. ``planning`` is the "
+                                "internal name for the **Drafts** UI "
+                                "label."
+                            ),
+                        },
+                    },
+                    "required": ["project_native_id", "state"],
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="start_decomposition",
+                description=(
+                    "Hand a Drafts-bucket project off to the "
+                    "decomposition pipeline. **Mutating; admin-"
+                    "only; strict verify-before-mutate** — the chain "
+                    "(BA → Architect → QA-Architect → Developer) "
+                    "runs autonomously after this and you can't "
+                    "easily undo. Always confirm with the user "
+                    "before calling. Walks the planning anchor into "
+                    "``stage:wbs``; the per-tick scheduler picks up "
+                    "BA, who emits the WBS section, transitions to "
+                    "``stage:architecture``, and so on through "
+                    "``stage:planning_done`` — at which point the "
+                    "project flips Drafts → Active and the agent's "
+                    "autonomous picker takes over."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "project_native_id": {
+                            "type": "string",
+                            "description": (
+                                "Tracker-native project id. Must "
+                                "already be on the dashboard in the "
+                                "Drafts bucket "
+                                "(``priority_state='planning'``); "
+                                "the tool refuses for ``active`` / "
+                                "``parked`` states."
+                            ),
+                        },
+                    },
+                    "required": ["project_native_id"],
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
                 name="consult_specialist",
                 description=(
                     "Hand a focused task off to a specialist subagent. "
@@ -2090,6 +2226,9 @@ class ToolBox:
             "get_ticket": self._tool_get_ticket,
             "get_dashboard": self._tool_get_dashboard,
             "workspace_audit_search": self._tool_workspace_audit_search,
+            "update_ticket": self._tool_update_ticket,
+            "set_priority_state": self._tool_set_priority_state,
+            "start_decomposition": self._tool_start_decomposition,
             "consult_specialist": self._tool_consult_specialist,
         }
 
@@ -7051,6 +7190,273 @@ class ToolBox:
             for r in rows
         ]
         return _json_result({"audit_log": items, "count": len(items)})
+
+    # ------------------------------------------------------------------
+    # Mutating tools (Navigator tool review PR-C2, ELS-78):
+    # ``update_ticket``, ``set_priority_state``, ``start_decomposition``.
+    # All admin-gated and audited. The agentic prompt's
+    # ``Verify before mutate`` rule (PR2 of the overhaul, navigator.md)
+    # tells the agent to confirm before calling these unless the user
+    # gave a direct command — the tools execute when called; the
+    # gating lives in the prompt.
+    # ------------------------------------------------------------------
+
+    async def _tool_update_ticket(self, args: dict[str, Any]) -> str:
+        from backend.app.api.v1.routes.workspaces import ROLES_ADMIN
+
+        await self._require_workspace_role(ROLES_ADMIN)
+
+        ticket_ref = _require_str(args, "ticket_ref").strip()
+        title = args.get("title")
+        body = args.get("body")
+        labels = args.get("labels")
+        state = args.get("state")
+        if title is not None and not isinstance(title, str):
+            raise ToolInvocationError("title must be a string")
+        if body is not None and not isinstance(body, str):
+            raise ToolInvocationError("body must be a string")
+        if labels is not None:
+            if not isinstance(labels, list) or not all(
+                isinstance(x, str) for x in labels
+            ):
+                raise ToolInvocationError(
+                    "labels must be a list of strings"
+                )
+        if state is not None and not isinstance(state, str):
+            raise ToolInvocationError("state must be a string")
+        if title is None and body is None and labels is None and state is None:
+            raise ToolInvocationError(
+                "update_ticket needs at least one of title, body, labels, "
+                "or state to update"
+            )
+
+        tracker = await self._resolve_tracker(None, None)
+        ref = _ticket_ref_from(_tracker_kind_of(tracker), ticket_ref)
+        actions: list[str] = []
+
+        # Single ``issueUpdate`` call covers title/body/labels.
+        if title is not None or body is not None or labels is not None:
+            update_fn = getattr(tracker, "update_ticket", None)
+            if update_fn is None:
+                raise ToolInvocationError(
+                    "this tracker does not implement ticket updates"
+                )
+            try:
+                await update_fn(
+                    ref, title=title, body=body, labels=labels
+                )
+            except Exception as exc:  # noqa: BLE001 — surface vendor errors
+                raise ToolInvocationError(
+                    f"tracker rejected update: {exc}"
+                ) from exc
+            if title is not None:
+                actions.append("title")
+            if body is not None:
+                actions.append("body")
+            if labels is not None:
+                actions.append(f"labels:{len(labels)}")
+
+        # State transitions go through ``transition`` (label swap +
+        # workflow state move per FSM_TO_LINEAR_STATE).
+        if state is not None:
+            try:
+                await tracker.transition(ref, to_state=state)
+            except Exception as exc:  # noqa: BLE001
+                raise ToolInvocationError(
+                    f"tracker rejected transition to {state!r}: {exc}"
+                ) from exc
+            actions.append(f"state:{state}")
+
+        self._session.add(
+            AuditLog(
+                workspace_id=self._workspace_id,
+                actor_user_id=self._user_id,
+                actor_token_id=None,
+                action="navigator.update_ticket",
+                target_kind="ticket",
+                target_id=ticket_ref,
+                payload={
+                    "ticket_ref": ticket_ref,
+                    "actions": actions,
+                    "had_title": title is not None,
+                    "had_body": body is not None,
+                    "labels_count": (
+                        len(labels) if isinstance(labels, list) else None
+                    ),
+                    "state_target": state,
+                },
+            )
+        )
+        await self._session.flush()
+
+        return _json_result(
+            {"ticket_ref": ticket_ref, "actions": actions}
+        )
+
+    async def _tool_set_priority_state(self, args: dict[str, Any]) -> str:
+        from backend.app.api.v1.routes.workspaces import ROLES_ADMIN
+
+        from backend.app.db.models.dashboard_priorities import (
+            WorkspaceProjectPriority,
+        )
+
+        await self._require_workspace_role(ROLES_ADMIN)
+
+        project_native_id = _require_str(args, "project_native_id").strip()
+        state = _require_str(args, "state").strip()
+        if state not in ("active", "planning", "parked"):
+            raise ToolInvocationError(
+                f"state must be one of active|planning|parked (got {state!r})"
+            )
+
+        existing = (
+            await self._session.execute(
+                select(WorkspaceProjectPriority).where(
+                    WorkspaceProjectPriority.workspace_id == self._workspace_id,
+                    WorkspaceProjectPriority.project_native_id
+                    == project_native_id,
+                )
+            )
+        ).scalar_one_or_none()
+        prior_state: str | None = None
+        if existing is None:
+            # Create new row at MAX+1 ordinal so the project shows up
+            # without disturbing existing ordering.
+            max_ord = await self._session.scalar(
+                select(WorkspaceProjectPriority.ordinal)
+                .where(
+                    WorkspaceProjectPriority.workspace_id == self._workspace_id
+                )
+                .order_by(WorkspaceProjectPriority.ordinal.desc())
+                .limit(1)
+            )
+            next_ord = 0 if max_ord is None else int(max_ord) + 1
+            self._session.add(
+                WorkspaceProjectPriority(
+                    workspace_id=self._workspace_id,
+                    project_native_id=project_native_id,
+                    ordinal=next_ord,
+                    state=state,
+                )
+            )
+        else:
+            prior_state = existing.state
+            existing.state = state
+
+        self._session.add(
+            AuditLog(
+                workspace_id=self._workspace_id,
+                actor_user_id=self._user_id,
+                actor_token_id=None,
+                action="navigator.set_priority_state",
+                target_kind="workspace_project_priority",
+                target_id=project_native_id,
+                payload={
+                    "project_native_id": project_native_id,
+                    "state": state,
+                    "prior_state": prior_state,
+                    "created_row": existing is None,
+                },
+            )
+        )
+        await self._session.flush()
+
+        return _json_result(
+            {
+                "project_native_id": project_native_id,
+                "state": state,
+                "prior_state": prior_state,
+            }
+        )
+
+    async def _tool_start_decomposition(self, args: dict[str, Any]) -> str:
+        from backend.app.api.v1.routes.workspaces import ROLES_ADMIN
+
+        from backend.app.db.models.dashboard_priorities import (
+            WorkspaceProjectPriority,
+        )
+
+        await self._require_workspace_role(ROLES_ADMIN)
+
+        project_native_id = _require_str(args, "project_native_id").strip()
+
+        row = (
+            await self._session.execute(
+                select(WorkspaceProjectPriority).where(
+                    WorkspaceProjectPriority.workspace_id == self._workspace_id,
+                    WorkspaceProjectPriority.project_native_id
+                    == project_native_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            raise ToolInvocationError(
+                f"project {project_native_id!r} is not on the dashboard "
+                f"priorities; create_project (or drag-in via the UI) "
+                f"first"
+            )
+        if row.state != "planning":
+            raise ToolInvocationError(
+                f"project is in state={row.state!r} — only Drafts "
+                f"(state='planning') projects can hand off to "
+                f"decomposition"
+            )
+
+        tracker = await self._resolve_tracker(None, None)
+        get_anchor_fn = getattr(tracker, "get_planning_anchor", None)
+        if get_anchor_fn is None:
+            raise ToolInvocationError(
+                "this tracker does not model planning anchors"
+            )
+        anchor = await get_anchor_fn(project_native_id)
+        if anchor is None:
+            raise ToolInvocationError(
+                f"project has no planning anchor — was it created via the "
+                f"drafting flow (`create_project` from Navigator)?"
+            )
+
+        anchor_id = str(anchor.get("id") or "")
+        anchor_identifier = str(
+            anchor.get("identifier") or anchor.get("id") or ""
+        )
+        if not anchor_id:
+            raise ToolInvocationError(
+                "planning anchor has no id; tracker returned malformed shape"
+            )
+
+        ref = _ticket_ref_from(_tracker_kind_of(tracker), anchor_id)
+        try:
+            await tracker.transition(ref, to_state="wbs")
+        except Exception as exc:  # noqa: BLE001
+            raise ToolInvocationError(
+                f"tracker rejected transition to stage:wbs: {exc}"
+            ) from exc
+
+        self._session.add(
+            AuditLog(
+                workspace_id=self._workspace_id,
+                actor_user_id=self._user_id,
+                actor_token_id=None,
+                action="navigator.start_decomposition",
+                target_kind="workspace_project_priority",
+                target_id=project_native_id,
+                payload={
+                    "project_native_id": project_native_id,
+                    "anchor_issue_id": anchor_id,
+                    "anchor_identifier": anchor_identifier,
+                },
+            )
+        )
+        await self._session.flush()
+
+        return _json_result(
+            {
+                "project_native_id": project_native_id,
+                "anchor_issue_id": anchor_id,
+                "anchor_identifier": anchor_identifier,
+                "process": "decomposition",
+            }
+        )
 
     # ------------------------------------------------------------------
     # consult_specialist — subagent loop (Navigator overhaul PR3, ELS-74).

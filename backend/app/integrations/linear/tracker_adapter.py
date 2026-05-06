@@ -528,6 +528,52 @@ class LinearTracker:
             {"id": ticket.id, "body": body},
         )
 
+    async def update_ticket(
+        self,
+        ticket: TicketRef,
+        *,
+        title: str | None = None,
+        body: str | None = None,
+        labels: list[str] | None = None,
+    ) -> None:
+        """Update title / body / labels in one ``issueUpdate`` call.
+
+        ``None`` arguments leave the field as-is — pass ``""`` to clear
+        a string field, an empty list to clear all labels.
+
+        ``labels`` is a **full replacement set** — Linear's
+        ``issueUpdate`` with ``labelIds`` replaces the entire label
+        list, so partial add/remove must happen at the caller layer.
+        Unknown labels are silently dropped (same strict policy as
+        ``create_ticket`` — we don't want the LLM polluting a
+        customer's Linear with freshly invented label names).
+
+        Used by Navigator's ``update_ticket`` tool. State transitions
+        are NOT in scope here — call :meth:`transition` separately.
+        """
+        if ticket.kind != "linear":
+            raise ValueError(
+                f"LinearTracker can't update_ticket for kind={ticket.kind}"
+            )
+        input_payload: dict[str, Any] = {}
+        if title is not None:
+            input_payload["title"] = title
+        if body is not None:
+            input_payload["description"] = body
+        if labels is not None:
+            team_id = await self._resolve_team_id(None)
+            input_payload["labelIds"] = await self._resolve_label_ids(
+                team_id, labels
+            )
+        if not input_payload:
+            return
+        await self._gql(
+            """mutation ShipUpdateIssue($id: String!, $input: IssueUpdateInput!) {
+              issueUpdate(id: $id, input: $input) { success }
+            }""",
+            {"id": ticket.id, "input": input_payload},
+        )
+
     async def comment(self, ticket: TicketRef, *, body: str) -> None:
         if ticket.kind != "linear":
             raise ValueError(f"LinearTracker can't comment on kind={ticket.kind}")

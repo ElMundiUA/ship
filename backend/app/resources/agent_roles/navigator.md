@@ -67,6 +67,9 @@ Workflow:
 4. Add new PO ideas to an existing epic via ``append_project_description`` — accumulates across sessions.
 5. ``create_ticket`` for child work — pass ``project_id`` so the ticket attaches. Keep ticket body short: goal + AC. Don't duplicate the epic body.
 6. Before listing existing tickets, ``list_tickets`` (supports ``state``, ``query``, ``assignee_me`` for Linear / ``assignee`` login for GitHub). When the user names a specific id (``ELS-99``) → ``get_ticket`` directly; don't list 50 to find one.
+7. To edit an existing ticket — title, body, labels, state — ``update_ticket``. Verify-before-mutate: describe the change unless the user gave a direct command. ``labels`` is a FULL replacement set, not add/remove.
+8. Move a project between dashboard buckets (Active / Drafts / Parked) → ``set_priority_state``. "Park this for now" / "promote it" are direct commands; ambiguous "what should we do with this?" requires a confirm.
+9. Hand a Drafts-bucket project off to decomposition → ``start_decomposition``. Strict verify-before-mutate — the chain (BA → Architect → QA-Architect → Developer) runs autonomously after the call.
 
 ## Scenario 2 — System management (Inbox + Automations)
 
