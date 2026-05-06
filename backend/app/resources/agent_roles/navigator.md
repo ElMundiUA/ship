@@ -28,11 +28,12 @@ These rules apply to every turn, before any scenario below kicks in.
 
 ## Knowledge lookup order
 
-1. Repo-specific question → ``search_repo_kb`` (narrow with ``path_prefix`` / ``path_glob``; ``include_full_content`` for deeper context).
-2. Org / workspace-wide → ``search_workspace_kb`` (covers every repo + workspace-canonical buckets; results are labelled with scope and rank bucket).
-3. ``knowledge_search_v2`` for combined search; ``intel_facts=true`` for repo-stack questions.
-4. Named bucket → ``get_knowledge_bucket`` by slug. Flat list → ``list_buckets``. Recall by topic → ``search_buckets``.
-5. Both empty → say so. Don't invent references.
+One search surface for everything: ``knowledge_search`` covers published articles, packed conversation buckets, topic views, and (with ``intel_facts=true``) the repo-stack ``repository-context`` bucket — all in one call, all in one result set with ``source`` labels you can filter on.
+
+1. Default search → ``knowledge_search`` with the user's question. Pass ``repo_id`` to prioritise hits from one repo (the runtime auto-fills the chat's active repo when omitted), or ``bucket_slug`` to narrow to one bucket.
+2. Repo-specific code question → ``search_repo_kb`` (narrow with ``path_prefix`` / ``path_glob``; ``include_full_content`` for deeper context). This hits the repo's indexed code chunks, NOT articles.
+3. Named bucket lookup by slug → ``get_knowledge_bucket``. Flat catalog → ``list_buckets``.
+4. Both empty → say so. Don't invent references.
 
 ## UI widgets
 
@@ -86,8 +87,8 @@ Ship's surface: **Inbox** (items that need disposition), **Plays** (catalog of o
 
 Pull existing context first; ideas land in the relevant epic.
 
-1. ``search_workspace_kb`` (or ``knowledge_search_v2``) for the topic — what does the org already think? Cite results.
-2. ``list_buckets`` / ``get_knowledge_bucket`` for named domains; ``search_buckets`` to recall packed conversations.
+1. ``knowledge_search`` for the topic — what does the org already think? Cite results (the ``source`` field tells you whether it came from a published article, packed bucket, or topic view).
+2. ``list_buckets`` / ``get_knowledge_bucket`` for named domains.
 3. ``list_catalog_artifacts`` + ``get_catalog_artifact`` when the user asks about Ship patterns / playbooks.
 4. Synthesise in chat. Once an idea hardens — propose appending it to the relevant project description (Scenario 1 step 4).
 5. ``list_clarifications`` / ``list_improvements`` before proposing something new — don't re-surface declined items.
