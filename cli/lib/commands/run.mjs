@@ -158,7 +158,10 @@ export async function runCommand(ctx, rest) {
   if (!roleResolved) {
     die(EXIT_USAGE, `unknown agent role '${specialistSlug}' for this workspace`);
   }
-  const fsmStage = roleResolved.fsm_stage || null;
+  // Per-routine FSM stage override takes precedence over the role's
+  // default. Lets one role (``ba``) drive both ``ba_requirements`` for
+  // SDLC and ``wbs`` for decomposition without per-process role clones.
+  const fsmStage = resolved.executable?.fsm_stage || roleResolved.fsm_stage || null;
   const roleBody = roleResolved.prompt || "";
   const systemBody = systemResolved?.prompt || "";
 

@@ -64,6 +64,11 @@ export function routineToExecutable(id, routine) {
     idempotency: routine.idempotency || null,
     prompt: stringOrNull(routine.prompt) || stringOrNull(routine.instructions),
     agent_profile: stringOrNull(routine.agent_profile) || stringOrNull(routine.specialist?.agent_profile),
+    // Per-routine FSM stage override. When set, ``shipctl run`` uses
+    // it instead of the role's default ``fsm_stage`` — that's how a
+    // single role (e.g. ``ba``) serves both SDLC (``ba_requirements``)
+    // and decomposition (``wbs``) without per-process role clones.
+    fsm_stage: stringOrNull(routine.fsm_stage),
   };
 }
 
