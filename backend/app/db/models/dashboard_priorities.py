@@ -74,14 +74,20 @@ class WorkspaceProjectPriority(Base):
     project_native_id: Mapped[str] = mapped_column(String(128), nullable=False)
     ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
     # Bucket on the prioritizer:
-    # ``active`` (agent may pick) | ``planning`` (operator is shaping)
-    # | ``parked`` (explicitly hold). Only ``active`` is visible to the
-    # agent's project picker. Default ``active`` matches the pre-state
-    # contract where any saved row was pickable.
+    # ``active`` (agent may pick) | ``planning`` (operator is shaping —
+    # UI label "Drafts") | ``parked`` (explicitly hold). Only
+    # ``active`` is visible to the agent's project picker.
+    #
+    # Default is ``planning`` (ELS-82): newly created projects need to
+    # go through the dashboard's drafting + decomposition flow before
+    # the agent picks them up. Decomposition completion flips the row
+    # to ``parked`` (ELS-81), and the PO promotes ``parked`` → ``active``
+    # manually when ready to ship. The previous default of ``active``
+    # let any new project bypass the gate.
     state: Mapped[str] = mapped_column(
         String(16),
         nullable=False,
-        server_default=text("'active'"),
+        server_default=text("'planning'"),
     )
     # Backref to the Navigator thread this project was drafted in.
     # Powers the "Continue shaping" link on Drafts-bucket rows: clicking
