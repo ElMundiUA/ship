@@ -368,14 +368,34 @@ async def get_next_task(
             skipped_overlay.append((row, matched_overlays))
             continue
         # ELS-80: WorkspaceProjectPriority gate — only ``active``
-        # projects feed the picker. ``planning`` (Drafts) means PO is
-        # still shaping; ``parked`` means the PO is intentionally
-        # holding the project; no row at all means a project that was
-        # never onboarded through ``_tool_create_project``.
+        # projects feed the picker.
+        # ELS-92: when a ticket has a ``project_id`` but no priorities
+        # row exists, **auto-onboard** the project as ``active`` and
+        # let the picker take the ticket. The ticket is already
+        # flowing through FSM stages — that's evidence enough of
+        # operator intent (they made the project in Linear, made the
+        # ticket, and the ticket reached an FSM stage). Forcing the
+        # operator to also click "promote" in Ship's dashboard before
+        # the agent picks up would defeat the "wraps your existing
+        # tracker" promise. Navigator's drafting flow stays separate:
+        # ``_tool_create_project`` writes the row explicitly with
+        # ``state='planning'``, so this auto-onboard never overrides
+        # an in-progress draft.
         if project_id is not None:
             priority_state = await _project_priority_state(
                 session, workspace_id=workspace_id, project_id=str(project_id)
             )
+            if priority_state is None:
+                await _auto_onboard_linear_native_project(
+                    session,
+                    workspace_id=workspace_id,
+                    auth=auth,
+                    tracker_kind=resolved.kind,
+                    fsm_stage=state,
+                    project_id=str(project_id),
+                    ticket_ref=str(row.get("id") or ""),
+                )
+                priority_state = "active"
             if priority_state != "active":
                 skipped_priority.append((row, priority_state))
                 continue
@@ -512,6 +532,76 @@ async def _record_overlay_skips(
                 },
             )
         )
+    await session.flush()
+
+
+async def _auto_onboard_linear_native_project(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    auth: AuthContext,
+    tracker_kind: str,
+    fsm_stage: str,
+    project_id: str,
+    ticket_ref: str,
+) -> None:
+    """Insert a ``WorkspaceProjectPriority`` row for a project the
+    picker has just encountered (ELS-92).
+
+    Default state is ``'active'`` — the auto-onboard is a separate
+    code path from ``_tool_create_project`` (which sets ``planning``
+    for Drafts). Justification: the ticket is already flowing through
+    FSM stages, which is evidence the operator intended this project
+    to be live work; forcing them to click promote in Ship's
+    dashboard before the agent picks up would defeat the
+    "wraps your existing tracker" promise.
+
+    Ordinal goes to MAX+1 so the auto-onboarded project sorts after
+    everything saved without disturbing existing positions.
+
+    Idempotent: callers must check ``_project_priority_state`` first
+    and only invoke this when the lookup returned ``None``. If a row
+    appears between the check and this insert (concurrent writer),
+    the unique constraint
+    ``uq_workspace_project_priorities_ws_native`` will fire — we let
+    it propagate (the picker call returns 5xx and the cron retries).
+    """
+    max_ord = (
+        await session.execute(
+            sa_select(WorkspaceProjectPriority.ordinal)
+            .where(WorkspaceProjectPriority.workspace_id == workspace_id)
+            .order_by(WorkspaceProjectPriority.ordinal.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    next_ord = 0 if max_ord is None else int(max_ord) + 1
+    session.add(
+        WorkspaceProjectPriority(
+            workspace_id=workspace_id,
+            project_native_id=project_id,
+            ordinal=next_ord,
+            state="active",
+        )
+    )
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=auth.user.id,
+            actor_token_id=auth.token.id if auth.token else None,
+            action="agent_run.project_auto_onboarded",
+            target_kind="workspace_project_priority",
+            target_id=project_id,
+            payload={
+                "tracker_kind": tracker_kind,
+                "fsm_stage": fsm_stage,
+                "project_id": project_id,
+                "ticket_ref": ticket_ref,
+                "ordinal": next_ord,
+                "state": "active",
+                "reason": "linear_native_first_encounter",
+            },
+        )
+    )
     await session.flush()
 
 
