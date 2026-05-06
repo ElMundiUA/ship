@@ -59,7 +59,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select, text
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.config import Settings, get_settings
@@ -188,34 +188,40 @@ async def _nearest_active_claims(
     distance``. We compute it inline so the caller compares against
     intuitive thresholds without re-deriving the algebra.
     """
-    rows = (
-        await session.execute(
-            text(
-                """
-                SELECT id, claim_md, 1 - (embedding <=> :q) AS similarity
-                FROM knowledge_claim
-                WHERE workspace_id = :ws
-                  AND status = :active
-                  AND embedding IS NOT NULL
-                  AND id <> :self_id
-                ORDER BY embedding <=> :q
-                LIMIT :k
-                """
-            ),
-            {
-                "q": str(embedding),
-                "ws": str(workspace_id),
-                "self_id": str(self_claim_id),
-                "active": ClaimStatus.ACTIVE,
-                "k": k,
-            },
+    # Going through SQLAlchemy ORM so the pgvector dialect serialises
+    # the query embedding properly. The previous raw-SQL form
+    # interpolated ``str(embedding)`` into ``:q`` — pgvector returns
+    # the column as ``numpy.ndarray``, whose ``__str__`` produces
+    # space-separated values (``[-0.0045 0.0942 …]``), which pgvector's
+    # text input parser rejects (``invalid input syntax for type
+    # vector``). The ORM path uses the proper binary ``Vector`` codec.
+    query_vec = (
+        embedding.tolist() if hasattr(embedding, "tolist") else list(embedding)
+    )
+    distance = KnowledgeClaim.embedding.cosine_distance(query_vec).label("dist")
+    stmt = (
+        select(
+            KnowledgeClaim.id,
+            KnowledgeClaim.claim_md,
+            distance,
         )
-    ).all()
+        .where(
+            and_(
+                KnowledgeClaim.workspace_id == workspace_id,
+                KnowledgeClaim.status == ClaimStatus.ACTIVE,
+                KnowledgeClaim.embedding.is_not(None),
+                KnowledgeClaim.id != self_claim_id,
+            )
+        )
+        .order_by("dist")
+        .limit(k)
+    )
+    rows = (await session.execute(stmt)).all()
     return [
         _NearestRow(
             claim_id=row[0],
             claim_md=row[1],
-            similarity=float(row[2]),
+            similarity=1.0 - float(row[2]),
         )
         for row in rows
     ]
@@ -385,12 +391,21 @@ async def reconcile_claim(
     report = ReconcileReport(claim_id=claim.id)
     now = datetime.now(timezone.utc)
 
-    if not claim.embedding:
+    if claim.embedding is None:
         # Embedding step in P1 was best-effort. A claim without one
         # can't participate in nearest-neighbour search, so we mark
         # it reconciled (no near-match) and move on. The next
         # extractor pass on a re-pulled doc will get another shot
         # at the embedding service.
+        #
+        # Note: must be ``is None``, not ``not claim.embedding`` —
+        # pgvector returns the column as a numpy ``ndarray`` and
+        # ``bool(ndarray)`` raises ``ValueError`` on multi-element
+        # arrays. The unit-test fakes used Python lists, which is why
+        # this slipped through review for half a day in prod (every
+        # reconciler tick crashed on the first claim and rolled back
+        # the whole batch — silent, because the per-workspace ``try``
+        # in the cron tick swallowed it).
         claim.reconciled_at = now
         report.decision = "no_match"
         return report
@@ -505,7 +520,7 @@ async def reconcile_pending_workspace(
     report.inspected = len(rows)
 
     for claim in rows:
-        if not claim.embedding:
+        if claim.embedding is None:
             claim.reconciled_at = datetime.now(timezone.utc)
             report.skipped_no_embedding += 1
             continue

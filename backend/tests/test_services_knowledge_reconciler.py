@@ -270,6 +270,46 @@ async def test_no_embedding_marks_no_match_without_query(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_numpy_array_embedding_does_not_short_circuit(monkeypatch):
+    """pgvector returns the column as a ``numpy.ndarray``; ``not arr``
+    raises ``ValueError: ambiguous truth value`` on multi-element
+    arrays. The reconciler must use ``is None`` instead of truthiness
+    so prod claims (real ndarray) reach the nearest-neighbour path
+    instead of crashing the whole batch.
+
+    Prod incident 2026-05-06: every reconciler tick after the first
+    extractor flush silently rolled back on the first claim because
+    the truthiness check tripped this; 488 claims sat unreconciled
+    for an hour. Test guards against the regression.
+    """
+    import numpy as np
+
+    new = _FakeClaim(embedding=np.array([0.1] * 8))
+    ws = new.workspace_id
+    existing = _seed_claim(workspace_id=ws)
+    _patch_nearest(
+        monkeypatch,
+        [
+            recon._NearestRow(
+                claim_id=existing.id,
+                similarity=0.97,
+                claim_md=existing.claim_md,
+            )
+        ],
+    )
+    session = _FakeSession(claim_by_id={existing.id: existing})
+
+    # If the truthiness check still fires, this raises ValueError
+    # before we get to the assertion.
+    report = await recon.reconcile_claim(
+        session, claim=new, llm_client=None
+    )
+
+    assert report.decision == "duplicate"
+    assert new.reconciled_at is not None
+
+
+@pytest.mark.asyncio
 async def test_below_judge_threshold_is_no_match(monkeypatch):
     """sim < 0.85 means no near-match — leave the claim alone."""
     ws = uuid.uuid4()
