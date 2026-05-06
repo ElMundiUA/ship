@@ -1,216 +1,129 @@
-import { execFileSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 
 /**
- * Build-time git log → changelog entries.
+ * Filesystem-backed changelog loader.
  *
- * The Ship workflow squash-merges PRs into `main` with subjects like:
+ * Each release / weekly entry is one Markdown file under
+ * ``landing/content/changelog/*.md`` with a frontmatter block:
  *
- *     navigator: consult_specialist subagent tool (PR3 of 3) (#155)
- *     fix: bump default Anthropic Haiku model to the post-preview stable id (#156)
- *     knowledge: extractor batch + Anthropic-preamble parse fix (#152)
+ *   ---
+ *   slug: 2026-05-07-navigator-goes-agentic
+ *   date: 2026-05-07                  # ISO yyyy-mm-dd; sort key.
+ *   title: Navigator goes agentic
+ *   summary: One-line lead used in the hero.
+ *   kicker: Release                   # small label above the title.
+ *   hero_image: /changelog/2026-05/navigator-agentic.webp   # optional
+ *   hero_alt: Description of the image (a11y).               # required if hero_image
+ *   hero_video: https://www.loom.com/embed/...               # optional
+ *   ---
  *
- * We pull the most recent commits from `main`, filter to those that look
- * like merged PRs (have a trailing `(#NNN)`), and extract a small,
- * stable shape that the changelog page renders. Commits without the
- * PR suffix (direct-to-main, very rare) are skipped — the page is the
- * "what shipped via the PR flow" log, not a raw `git log`.
+ *   (markdown body — `## Highlights`, `## Improvements`, `## Fixes`)
  *
- * Runs once at build time. If git history isn't available (shallow
- * clone in CI without `fetch-depth: 0`, or a Docker layer without `.git`),
- * we return an empty list so the page renders with a soft-empty state
- * rather than failing the build.
+ * The body uses the same react-markdown pipeline as the blog
+ * (see ``BlogMarkdown`` + ``preprocessBlogMarkdown``). PR references
+ * in body text written as bare ``#155`` are auto-linked.
+ *
+ * The page renders entries sorted by ``date`` desc. No future-publish
+ * gating — the changelog is meant to be edited as releases ship; if
+ * you want to stage a draft, keep it on a branch.
  */
 
-export type ChangelogEntry = {
-  /** 7-char commit hash. */
-  shortSha: string;
-  /** ISO 8601 commit-author date, e.g. `2026-05-06T22:18:43+02:00`. */
+export type ChangelogMeta = {
+  slug: string;
   date: string;
-  /** ISO date only, e.g. `2026-05-06`. Used for grouping. */
-  day: string;
-  /** Conventional-commit scope prefix, e.g. `navigator`, `fix`, `landing`. Empty when absent. */
-  scope: string;
-  /** Subject minus scope prefix and `(#NNN)` suffix. */
   title: string;
-  /** PR number parsed from the trailing `(#NNN)`. */
-  prNumber: number;
-  /** Author name from `git log`. */
-  author: string;
+  summary: string;
+  kicker: string;
+  heroImage: string;
+  heroAlt: string;
+  heroVideo: string;
+  prs: number[];
 };
 
-const REPO_ROOT = path.resolve(process.cwd(), "..");
+export type ChangelogEntry = ChangelogMeta & {
+  body: string;
+};
 
-// Date bound for the changelog. Commits older than this are dropped
-// before parsing — keeps the page bounded as the project ages. Uses
-// git's relative-date syntax.
-const SINCE = "6.months.ago";
+const CHANGELOG_DIR = path.join(process.cwd(), "content", "changelog");
 
-// `` is ASCII unit separator — safe between fields, won't collide
-// with anything humans put in commit messages.
-const SEP = "";
-const FORMAT = ["%h", "%aI", "%an", "%s"].join(SEP);
-
-const PR_RE = /\s*\(#(\d+)\)\s*$/;
-const SCOPE_RE = /^([a-z][a-z0-9_-]*(?:\([a-z0-9._-]+\))?):\s*/i;
-
-function readGitLog(): string[] {
-  try {
-    const stdout = execFileSync(
-      "git",
-      [
-        "log",
-        `--since=${SINCE}`,
-        `--pretty=format:${FORMAT}`,
-        "--no-merges",
-        "main",
-      ],
-      { cwd: REPO_ROOT, encoding: "utf-8", maxBuffer: 16 * 1024 * 1024 },
-    );
-    return stdout.split("\n").filter(Boolean);
-  } catch {
-    // Shallow clone, no .git, or git not on PATH.
-    return [];
+function parseFrontmatter(raw: string): {
+  data: Record<string, string | number | string[]>;
+  body: string;
+} {
+  if (!raw.startsWith("---\n")) return { data: {}, body: raw };
+  const end = raw.indexOf("\n---", 4);
+  if (end === -1) return { data: {}, body: raw };
+  const block = raw.slice(4, end);
+  const rest = raw.slice(end + 4).replace(/^\n/, "");
+  const data: Record<string, string | number | string[]> = {};
+  for (const line of block.split("\n")) {
+    const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$/);
+    if (!m) continue;
+    const key = m[1];
+    const rawValue = m[2].trim();
+    if (!rawValue) continue;
+    if (rawValue.startsWith("[") && rawValue.endsWith("]")) {
+      data[key] = rawValue
+        .slice(1, -1)
+        .split(",")
+        .map((s) => s.trim().replace(/^['"]|['"]$/g, ""))
+        .filter(Boolean);
+      continue;
+    }
+    const unquoted = rawValue.replace(/^['"]|['"]$/g, "");
+    data[key] = unquoted;
   }
+  return { data, body: rest };
 }
 
-function parseLine(line: string): ChangelogEntry | null {
-  const parts = line.split(SEP);
-  if (parts.length < 4) return null;
-  const [shortSha, date, author, subjectRaw] = parts;
-  const prMatch = PR_RE.exec(subjectRaw);
-  if (!prMatch) return null;
-  const prNumber = Number(prMatch[1]);
-  let subject = subjectRaw.replace(PR_RE, "");
-  let scope = "";
-  const scopeMatch = SCOPE_RE.exec(subject);
-  if (scopeMatch) {
-    scope = scopeMatch[1].toLowerCase();
-    subject = subject.slice(scopeMatch[0].length);
-  }
-  const title = subject.trim();
-  if (!title) return null;
+function asString(v: unknown, fallback = ""): string {
+  return typeof v === "string" ? v : fallback;
+}
+
+function asNumberArray(v: unknown): number[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .map((s) => (typeof s === "string" ? Number(s) : typeof s === "number" ? s : NaN))
+    .filter((n) => Number.isFinite(n) && n > 0);
+}
+
+function toMeta(slug: string, data: Record<string, string | number | string[]>): ChangelogMeta {
   return {
-    shortSha,
-    date,
-    day: date.slice(0, 10),
-    scope,
-    title,
-    prNumber,
-    author,
+    slug: asString(data.slug, slug),
+    date: asString(data.date, ""),
+    title: asString(data.title, slug),
+    summary: asString(data.summary),
+    kicker: asString(data.kicker, "Release"),
+    heroImage: asString(data.hero_image),
+    heroAlt: asString(data.hero_alt),
+    heroVideo: asString(data.hero_video),
+    prs: asNumberArray(data.prs),
   };
 }
 
 export function listChangelogEntries(): ChangelogEntry[] {
-  return readGitLog()
-    .map(parseLine)
-    .filter((entry): entry is ChangelogEntry => entry !== null);
+  if (!fs.existsSync(CHANGELOG_DIR)) return [];
+  const files = fs.readdirSync(CHANGELOG_DIR).filter((f) => f.endsWith(".md"));
+  return files
+    .map((file) => {
+      const fileSlug = file.replace(/\.md$/, "");
+      const raw = fs.readFileSync(path.join(CHANGELOG_DIR, file), "utf-8");
+      const { data, body } = parseFrontmatter(raw);
+      const meta = toMeta(fileSlug, data);
+      return { ...meta, body };
+    })
+    .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
 }
 
-// ---------------------------------------------------------------------------
-// Week grouping
-// ---------------------------------------------------------------------------
-
-export type ChangelogGroup = {
-  /** Group label, e.g. ``Navigator``, ``Fixes``, ``Other``. */
-  label: string;
-  entries: ChangelogEntry[];
-};
-
-export type ChangelogWeek = {
-  /** Monday of the week, ISO date (yyyy-mm-dd). */
-  weekStart: string;
-  /** Sunday of the week, ISO date. */
-  weekEnd: string;
-  /** Human-friendly week range, e.g. ``May 5–11, 2026``. */
-  rangeLabel: string;
-  /** Entries grouped by scope-family. Order: product areas alpha, then
-   *  Improvements, Fixes, Other at the bottom. */
-  groups: ChangelogGroup[];
-};
-
-const FIXES_SCOPES = new Set(["fix", "fixes", "bug", "bugfix"]);
-const IMPROVEMENTS_SCOPES = new Set(["chore", "refactor", "perf", "build", "ci", "test", "tests"]);
-
-function startOfWeek(iso: string): Date {
+export function formatChangelogDate(iso: string): string {
+  if (!iso) return "";
   const d = new Date(`${iso}T00:00:00Z`);
-  // 0 = Sun, 1 = Mon, … We want Monday as the start.
-  const dow = d.getUTCDay();
-  const offset = dow === 0 ? -6 : 1 - dow;
-  d.setUTCDate(d.getUTCDate() + offset);
-  return d;
-}
-
-function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
-
-function formatWeekRange(start: Date, end: Date): string {
-  const opts: Intl.DateTimeFormatOptions = { month: "short", day: "numeric" };
-  const startStr = start.toLocaleDateString("en-US", { ...opts, timeZone: "UTC" });
-  const endStr = end.toLocaleDateString("en-US", { ...opts, timeZone: "UTC" });
-  const year = end.getUTCFullYear();
-  if (start.getUTCMonth() === end.getUTCMonth()) {
-    // "May 5–11, 2026"
-    return `${startStr.split(" ")[0]} ${start.getUTCDate()}–${end.getUTCDate()}, ${year}`;
-  }
-  // "Apr 28 – May 4, 2026"
-  return `${startStr} – ${endStr}, ${year}`;
-}
-
-function prettyScope(scope: string): string {
-  if (!scope) return "Other";
-  if (FIXES_SCOPES.has(scope)) return "Fixes";
-  if (IMPROVEMENTS_SCOPES.has(scope)) return "Improvements";
-  // Title-case the scope: "navigator" → "Navigator", "agent_runs" → "Agent runs",
-  // "linear" → "Linear", "knowledge" → "Knowledge".
-  const words = scope.replace(/[_-]/g, " ").split(/\s+/);
-  return words
-    .map((w, i) => (i === 0 ? w[0].toUpperCase() + w.slice(1) : w))
-    .join(" ");
-}
-
-function compareGroupLabels(a: string, b: string): number {
-  // Sort: product areas (alpha), then Improvements, Fixes, Other.
-  const tail = ["Improvements", "Fixes", "Other"];
-  const ai = tail.indexOf(a);
-  const bi = tail.indexOf(b);
-  if (ai === -1 && bi === -1) return a.localeCompare(b);
-  if (ai === -1) return -1;
-  if (bi === -1) return 1;
-  return ai - bi;
-}
-
-export function listChangelogWeeks(): ChangelogWeek[] {
-  const entries = listChangelogEntries();
-  const buckets = new Map<string, ChangelogEntry[]>();
-  for (const e of entries) {
-    const start = isoDate(startOfWeek(e.day));
-    if (!buckets.has(start)) buckets.set(start, []);
-    buckets.get(start)!.push(e);
-  }
-  const weeks: ChangelogWeek[] = [];
-  for (const [weekStart, weekEntries] of buckets) {
-    const start = new Date(`${weekStart}T00:00:00Z`);
-    const end = new Date(start);
-    end.setUTCDate(end.getUTCDate() + 6);
-    // Group by pretty scope.
-    const groupMap = new Map<string, ChangelogEntry[]>();
-    for (const e of weekEntries) {
-      const label = prettyScope(e.scope);
-      if (!groupMap.has(label)) groupMap.set(label, []);
-      groupMap.get(label)!.push(e);
-    }
-    const groups: ChangelogGroup[] = Array.from(groupMap.entries())
-      .map(([label, items]) => ({ label, entries: items }))
-      .sort((a, b) => compareGroupLabels(a.label, b.label));
-    weeks.push({
-      weekStart,
-      weekEnd: isoDate(end),
-      rangeLabel: formatWeekRange(start, end),
-      groups,
-    });
-  }
-  weeks.sort((a, b) => (a.weekStart < b.weekStart ? 1 : -1));
-  return weeks;
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    timeZone: "UTC",
+  });
 }
