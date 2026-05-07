@@ -561,9 +561,21 @@ async def get_next_task(
     # per-task brief. We pass ``project_id`` directly from the
     # ``list_tickets`` row (ELS-83 already projected it) so we don't
     # round-trip Linear a second time per pick.
+    #
+    # Decomposition exception: when the picked ticket IS the planning
+    # anchor itself, the role's *job* is to read upstream sections in
+    # full and produce the next one — a child-ticket-style 2KB-per-
+    # section cap starves the developer stage in particular (it has
+    # to enumerate every WBS slice into one child ticket per slice).
+    # An anchor read returns the full canonical excerpt without per-
+    # section caps; the overall body is bounded by Linear's project
+    # body size in practice, and clipping that mid-WBS is exactly the
+    # blocker we just observed.
+    is_anchor_pick = _is_planning_anchor(pick.get("labels") or [])
     project_context = await _build_project_context_for_ticket(
         resolved=resolved,
         project_id=pick.get("project_id"),
+        full=is_anchor_pick,
     )
     return TaskResponseOut(
         fsm_stage=state,
@@ -1056,6 +1068,7 @@ async def _build_project_context_for_ticket(
     resolved,  # ResolvedTracker — avoid circular import
     project_id: str | None,
     overall_cap_bytes: int = _PROJECT_CONTEXT_CAP_BYTES,
+    full: bool = False,
 ) -> str | None:
     """Fetch the project body and return its canonical-section excerpt.
 
@@ -1065,6 +1078,14 @@ async def _build_project_context_for_ticket(
     architect's blocker on the original ELS-86 design. ``None``
     here (orphan ticket / non-Linear adapter that doesn't surface
     project_id) skips the lookup cleanly.
+
+    ``full=True`` is the anchor read path: caps are lifted both per-
+    section and overall, so the role that owns slicing the WBS into
+    children sees every slice rather than the first ~5 (the tasks
+    routine's developer was hitting that exact cliff). For SDLC
+    child-ticket picks ``full=False`` is the safe default — the
+    section caps preserve sibling-Tasks visibility against a runaway
+    upstream section.
 
     All steps are best-effort: any failure (tracker that can't model
     projects, unauthenticated, network 5xx, project deleted) returns
@@ -1102,6 +1123,20 @@ async def _build_project_context_for_ticket(
     content = project.get("content") if isinstance(project, dict) else None
     if not isinstance(content, str):
         return None
+    if full:
+        # Anchor read: skip the per-section caps. Pass an open-ended
+        # overall cap (max signed int range from the validator's view
+        # is more than enough) and per-section caps that all clear the
+        # body's actual length so ``_truncate_section`` becomes a
+        # no-op. The canonical extraction still happens — heading
+        # ordering + non-canonical-section drop — so the agent doesn't
+        # have to scan a 50KB body to find ``## WBS``.
+        big_caps = {s: 1 << 20 for s in _PROJECT_CONTEXT_SECTIONS}
+        return _extract_project_sections(
+            content,
+            section_caps=big_caps,
+            overall_cap_bytes=1 << 20,
+        )
     return _extract_project_sections(
         content, overall_cap_bytes=overall_cap_bytes
     )

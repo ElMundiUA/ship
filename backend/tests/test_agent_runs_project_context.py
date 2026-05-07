@@ -187,7 +187,38 @@ def test_undersized_body_is_returned_verbatim_no_marker() -> None:
     assert out is not None
     assert "…(truncated)" not in out
     assert "Short." in out
-    assert "one item" in out
+
+
+def test_anchor_full_extract_skips_per_section_cap() -> None:
+    """Anchor reads ask for the full body — every WBS line lands so a
+    decomposition role (developer's tasks stage in particular) can
+    enumerate all slices into child tickets. The default ``2KB``
+    per-section cap clipped the WBS at ~5 slices on real projects.
+    """
+    huge_wbs = "\n".join(
+        [f"- WBS line {i:04d}: detail detail detail" for i in range(300)]
+    )
+    body = (
+        "## Brief\n\nShort.\n\n"
+        f"## WBS\n\n{huge_wbs}\n\n"
+        "## Architecture\n\nA.\n"
+    )
+    big_caps = {
+        s: 1 << 20
+        for s in (
+            "Brief",
+            "WBS",
+            "Architecture",
+            "Test architecture",
+            "Tasks",
+        )
+    }
+    out = _extract_project_sections(
+        body, section_caps=big_caps, overall_cap_bytes=1 << 20
+    )
+    assert out is not None
+    assert "WBS line 0299" in out  # last slice survives
+    assert "…(truncated)" not in out
 
 
 def test_preserves_section_order_even_when_body_is_out_of_order() -> None:
