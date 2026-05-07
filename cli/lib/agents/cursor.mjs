@@ -1,143 +1,78 @@
 /**
- * Cursor Cloud Agent runtime adapter.
+ * Cursor Agent local-CLI adapter.
  *
- * Wraps the public ``POST https://api.cursor.com/v0/agents`` API the
- * ElMundi sibling repo uses (``tools/linear-agent/scripts/cloud-agent-launch.mjs``).
- * The shape Ship needs:
+ * Runs the official ``cursor-agent`` binary on the GHA runner. The
+ * runner prepares the working tree and switches to the target branch
+ * *before* this adapter is invoked; we just execute the CLI in
+ * ``workdir`` and let it make commits in place. Push + PR creation
+ * happen in the workflow step after the adapter returns.
  *
- *   1. Launch an agent against ``repo`` at ``ref`` with ``prompt``.
- *   2. Poll until the agent's status is one of the terminal values
- *      (``FINISHED`` / ``ERRORED`` / ``CANCELLED``).
- *   3. Return the branch name + final status to ``shipctl run``. Side
- *      effects (tracker writes / inbox rows) happen via the agent's
- *      own ``POST /agent-runs/finish`` call from inside Cursor — the
- *      CLI no longer reads a state file off the branch.
+ * Headless flags ('cursor-agent --help'):
+ *   -p / --print              non-interactive mode (no TTY)
+ *   --output-format text|stream-json
+ *   --force / --yolo          allow write/shell tools without prompts
+ *   --trust                   skip workspace-trust dialog
+ *   --workspace <path>        cwd override (we set it explicitly)
  *
- * Auth: ``CURSOR_API_KEY`` env var, sent as Basic ``<key>:`` per Cursor's
- * docs.
+ * Auth: ``CURSOR_API_KEY`` env var (same key used by the cloud API).
  */
 
-import { Buffer } from "node:buffer";
-
-const BASE = "https://api.cursor.com";
-const TERMINAL_STATUSES = new Set(["FINISHED", "ERRORED", "CANCELLED"]);
-
-
-function authHeader() {
-  const key = (process.env.CURSOR_API_KEY || "").trim();
-  if (!key) {
-    throw new Error("CURSOR_API_KEY is not set");
-  }
-  return "Basic " + Buffer.from(`${key}:`).toString("base64");
-}
-
-
-async function postJson(path, body) {
-  const res = await fetch(`${BASE}${path}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: authHeader(),
-    },
-    body: JSON.stringify(body),
-  });
-  const text = await res.text();
-  if (!res.ok) {
-    throw new Error(`Cursor API ${path} ${res.status}: ${text.slice(0, 500)}`);
-  }
-  return text ? JSON.parse(text) : {};
-}
-
-
-async function getJson(path) {
-  const res = await fetch(`${BASE}${path}`, {
-    headers: { Authorization: authHeader() },
-  });
-  const text = await res.text();
-  if (!res.ok) {
-    throw new Error(`Cursor API ${path} ${res.status}: ${text.slice(0, 500)}`);
-  }
-  return text ? JSON.parse(text) : {};
-}
+import { spawn } from "node:child_process";
 
 
 /**
- * Launch a single Cursor agent and poll until it terminates.
- *
  * @param {object} opts
- * @param {string} opts.repoUrl       e.g. ``https://github.com/owner/repo``
- * @param {string} opts.ref           branch the agent checks out (default ``main``)
- * @param {string} opts.branchName    branch the agent commits onto
+ * @param {string} opts.workdir       repo checkout dir; defaults to process.cwd()
+ * @param {string} opts.branchName    branch the agent commits onto (already checked out)
  * @param {string} opts.prompt        full prompt body
- * @param {boolean} [opts.autoCreatePr] open a PR when done (default false)
- * @param {number} [opts.pollIntervalMs]   poll cadence (default 15s)
- * @param {number} [opts.timeoutMs]   total deadline (default 30 min)
+ * @param {Record<string,string>} [opts.env]  extra env vars merged onto process.env
  * @param {(line: string) => void} [opts.onLog] streaming log hook
- * @returns {Promise<{ agentId: string, branchName: string, status: string, raw: object }>}
+ * @returns {Promise<{ agentId: string, branchName: string, status: string, exitCode: number }>}
  */
 export async function runCursorAgent({
-  repoUrl,
-  ref = "main",
+  workdir = process.cwd(),
   branchName,
   prompt,
-  autoCreatePr = false,
-  pollIntervalMs = 15_000,
-  timeoutMs = 30 * 60 * 1000,
-  onLog = (l) => console.error(`[cursor] ${l}`),
+  env = {},
+  onLog = (l) => process.stderr.write(`[cursor] ${l}\n`),
 } = {}) {
-  if (!repoUrl) throw new Error("runCursorAgent: repoUrl required");
   if (!branchName) throw new Error("runCursorAgent: branchName required");
   if (!prompt || typeof prompt !== "string") {
     throw new Error("runCursorAgent: prompt required");
   }
+  if (!(process.env.CURSOR_API_KEY || env.CURSOR_API_KEY)) {
+    throw new Error("CURSOR_API_KEY is not set");
+  }
 
-  const launch = await postJson("/v0/agents", {
-    prompt: { text: prompt },
-    source: { repository: repoUrl, ref },
-    target: {
-      branchName,
-      autoCreatePr,
-      openAsCursorGithubApp: false,
-    },
+  // ``--print`` keeps stdout clean enough to surface in the workflow
+  // log, ``--force`` + ``--trust`` are required for non-interactive
+  // write/shell operations on a fresh runner without prior workspace
+  // trust history. ``--workspace`` pins cwd explicitly so the agent
+  // doesn't drift when the parent shell's cwd is mutated.
+  const args = [
+    "--print",
+    "--force",
+    "--trust",
+    "--workspace",
+    workdir,
+    "--output-format",
+    "text",
+    prompt,
+  ];
+
+  onLog(`launch cursor-agent branch=${branchName} cwd=${workdir} prompt=${prompt.length}b`);
+  const child = spawn("cursor-agent", args, {
+    cwd: workdir,
+    env: { ...process.env, ...env },
+    stdio: ["ignore", "inherit", "inherit"],
   });
-  const agentId = launch.id || launch.agentId || launch.agent_id;
-  if (!agentId) {
-    throw new Error(`Cursor launch returned no agent id: ${JSON.stringify(launch).slice(0, 300)}`);
-  }
-  onLog(`launched agent=${agentId} branch=${branchName} ref=${ref}`);
 
-  const deadline = Date.now() + timeoutMs;
-  let lastStatus = launch.status || "CREATING";
-  while (Date.now() < deadline) {
-    if (TERMINAL_STATUSES.has(String(lastStatus).toUpperCase())) {
-      onLog(`agent terminal: status=${lastStatus}`);
-      return { agentId, branchName, status: lastStatus, raw: launch };
-    }
-    await sleep(pollIntervalMs);
-    let snapshot;
-    try {
-      snapshot = await getJson(`/v0/agents/${encodeURIComponent(agentId)}`);
-    } catch (err) {
-      onLog(`poll error (continuing): ${err.message}`);
-      continue;
-    }
-    const next = (snapshot.status || "").toString();
-    if (next && next !== lastStatus) {
-      onLog(`status: ${lastStatus} → ${next}`);
-      lastStatus = next;
-    }
-    if (TERMINAL_STATUSES.has(next.toUpperCase())) {
-      return { agentId, branchName, status: next, raw: snapshot };
-    }
-  }
-  throw new Error(
-    `Cursor agent ${agentId} did not reach a terminal state within ${Math.round(
-      timeoutMs / 1000,
-    )}s (last status: ${lastStatus})`,
-  );
-}
+  const exitCode = await new Promise((resolve, reject) => {
+    child.on("error", reject);
+    child.on("exit", (code) => resolve(code ?? 1));
+  });
 
-
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
+  const status = exitCode === 0 ? "FINISHED" : "ERRORED";
+  onLog(`cursor-agent terminal: status=${status} exit=${exitCode}`);
+  return { agentId: `cursor-agent-${branchName}`, branchName, status, exitCode };
 }
