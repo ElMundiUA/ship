@@ -14,19 +14,21 @@ without it polluting the active SDLC pipeline.
 ## Where findings go
 
 Resolve the tech-debt project once per run, before filing any
-ticket:
+ticket. Use `shipctl`:
 
-```
-find_or_create_project_by_name(
-    name="Tech Debt",
-    body="Holding pen for tech-debt findings filed by the daily tech-reviewer routine. Operator works through these as bandwidth allows; nothing here is an active SDLC item until promoted.",
-)
+```bash
+PROJECT_LINE=$(shipctl project find-or-create \
+  --name "Tech Debt" \
+  --body "Holding pen for tech-debt findings filed by the daily tech-reviewer routine. Operator works through these as bandwidth allows; nothing here is an active SDLC item until promoted.")
+
+# Output is tab-separated: <project_id>\t<name>\t<created|existing>
+PROJECT_ID=$(printf '%s' "$PROJECT_LINE" | cut -f1)
 ```
 
-The tool returns `{ id, created, ... }`. Use that `id` as the
-`project_id` argument when you call `create_ticket`. The first run
-in a fresh workspace creates the project; every subsequent run
-reuses it (case-insensitive name match, idempotent on repeat).
+`PROJECT_ID` is the tracker-native project id you pass to your
+ticket-creation step. The first run in a fresh workspace creates
+the project; every subsequent run short-circuits on the
+case-insensitive name match (idempotent).
 
 ## What counts as a finding
 
@@ -45,8 +47,9 @@ size, coupling). No path = no finding.
 
 ## Filing a ticket
 
-For each finding, call `create_ticket(project_id=<from above>, ...)`
-with:
+For each finding, create one ticket on the tracker against
+`$PROJECT_ID` (use your tracker MCP / API surface — Linear's
+`issueCreate` mutation, etc.) with:
 
 - **Title** — specific (`backend/app/services/agent: 2.4k-line
   module mixing tracker, intake, knowledge`), not vague (`Refactor

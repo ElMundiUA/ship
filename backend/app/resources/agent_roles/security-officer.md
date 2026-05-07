@@ -13,17 +13,19 @@ project named **"Security"**.
 
 ## Where findings go
 
-Resolve the security project once per run:
+Resolve the security project once per run via `shipctl`:
 
-```
-find_or_create_project_by_name(
-    name="Security",
-    body="Daily security-officer findings: dependency CVEs, misconfigurations, secret exposure, auth-gate gaps. One ticket per unique package + vulnerability combo, mapped from Snyk severity to Linear priority.",
-)
+```bash
+PROJECT_LINE=$(shipctl project find-or-create \
+  --name "Security" \
+  --body "Daily security-officer findings: dependency CVEs, misconfigurations, secret exposure, auth-gate gaps. One ticket per unique package + vulnerability combo, mapped from Snyk severity to Linear priority.")
+
+PROJECT_ID=$(printf '%s' "$PROJECT_LINE" | cut -f1)
 ```
 
-Use the returned `id` as `project_id`. First run creates, every
-subsequent run reuses (idempotent on name match).
+Use `$PROJECT_ID` as the tracker-native project id when filing
+tickets. First run creates, every subsequent run short-circuits
+on case-insensitive name match.
 
 ## Priority mapping (Snyk → Linear)
 
@@ -39,8 +41,9 @@ not** create tickets. Silence is the correct signal for a clean run.
 
 ## Filing a ticket
 
-For each unique **package + vulnerability (id/CVE)** combo, call
-`create_ticket(project_id=<from above>, priority=<mapped>, ...)`:
+For each unique **package + vulnerability (id/CVE)** combo, create
+one ticket on the tracker against `$PROJECT_ID` (use your tracker
+MCP / API surface — set `priority` per the table above):
 
 - **Title** — `<package>@<version>: <CVE-or-id> — <one-line summary>`.
 - **Body** — installed version, manifest path, severity (Snyk

@@ -3006,6 +3006,11 @@ class ToolBox:
     async def _tool_find_or_create_project_by_name(
         self, args: dict[str, Any]
     ) -> str:
+        from backend.app.services.projects_lookup import (
+            ProjectsLookupError,
+            find_or_create_project_by_name,
+        )
+
         name = _require_str(args, "name")
         body = _require_str(args, "body")
         description = args.get("description")
@@ -3014,34 +3019,20 @@ class ToolBox:
 
         tracker = await self._resolve_tracker(None, None)
         try:
-            existing = await tracker.list_projects(limit=100)
-        except NotImplementedError as exc:
-            raise ToolInvocationError(str(exc)) from exc
-        except ValueError as exc:
-            raise ToolInvocationError(str(exc)) from exc
-
-        wanted = name.strip().casefold()
-        for project in existing:
-            project_name = project.get("name") or ""
-            if isinstance(project_name, str) and project_name.casefold() == wanted:
-                return _json_result({**dict(project), "created": False})
-
-        try:
-            created = await tracker.create_project(
-                name=name, body=body, description=description
+            outcome = await find_or_create_project_by_name(
+                session=self._session,
+                settings=self._settings,
+                workspace_id=self._workspace_id,
+                name=name,
+                body=body,
+                description=description,
+                originating_thread_id=self._thread_id,
+                tracker=tracker,
             )
-        except NotImplementedError as exc:
-            raise ToolInvocationError(str(exc)) from exc
-        except ValueError as exc:
+        except ProjectsLookupError as exc:
             raise ToolInvocationError(str(exc)) from exc
 
-        project_native_id = str(created.get("id") or "")
-        if project_native_id:
-            await self._ensure_drafts_priorities_row(
-                project_native_id=project_native_id
-            )
-
-        return _json_result({**dict(created), "created": True})
+        return _json_result({**outcome.project, "created": outcome.created})
 
     async def _tool_inbox_create(self, args: dict[str, Any]) -> str:
         type_ = _require_str(args, "type")

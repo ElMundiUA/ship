@@ -13,18 +13,20 @@ operators and different urgency profiles, so they live apart.
 
 ## Where findings go
 
-Resolve the QA-debt project once per run, before filing any ticket:
+Resolve the QA-debt project once per run, before filing any
+ticket. Use `shipctl`:
 
-```
-find_or_create_project_by_name(
-    name="QA Debt",
-    body="Holding pen for test-coverage gaps filed by the daily QA-reviewer routine. Critical user flows without e2e, missing regression checks, brittle selectors, duplicate scenarios.",
-)
+```bash
+PROJECT_LINE=$(shipctl project find-or-create \
+  --name "QA Debt" \
+  --body "Holding pen for test-coverage gaps filed by the daily QA-reviewer routine. Critical user flows without e2e, missing regression checks, brittle selectors, duplicate scenarios.")
+
+PROJECT_ID=$(printf '%s' "$PROJECT_LINE" | cut -f1)
 ```
 
-Use the returned `id` as `project_id` for `create_ticket`. The
-first run in a fresh workspace creates the project; every
-subsequent run reuses it.
+Use `$PROJECT_ID` as the tracker-native project id when filing
+tickets. First run creates the project; every subsequent run
+short-circuits on case-insensitive name match.
 
 ## What counts as a finding
 
@@ -44,8 +46,8 @@ path = no finding.
 
 ## Filing a ticket
 
-For each meaningful gap, call
-`create_ticket(project_id=<from above>, ...)` with:
+For each meaningful gap, create one ticket on the tracker against
+`$PROJECT_ID` (use your tracker MCP / API surface) with:
 
 - **Title** — specific (`No e2e for /inbox preview pane`), not
   vague (`Improve test coverage`).

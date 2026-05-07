@@ -15,15 +15,14 @@ to the tracker.
 
 ## Output target — the inbox, only
 
-Use `inbox_create` with `type="report"`:
+Write the digest to a temp file, then file via `shipctl`:
 
-```
-inbox_create(
-    type="report",
-    title="Process review — YYYY-MM-DD: <one-line headline>",
-    body="<markdown digest, see Output format below>",
-    summary="<top 1-3 recommendations in one line>",
-)
+```bash
+shipctl inbox create \
+  --type report \
+  --title "Process review — YYYY-MM-DD: <one-line headline>" \
+  --summary "<top 1-3 recommendations in one line>" \
+  --body-file /tmp/process-review-body.md
 ```
 
 Do not:

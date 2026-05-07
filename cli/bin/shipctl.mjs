@@ -81,6 +81,18 @@ try {
     process.exit(0);
   }
 
+  if (cmd === "inbox") {
+    const { inboxCommand } = await import("../lib/commands/inbox.mjs");
+    await inboxCommand(ctx, rest);
+    process.exit(0);
+  }
+
+  if (cmd === "project") {
+    const { projectCommand } = await import("../lib/commands/project.mjs");
+    await projectCommand(ctx, rest);
+    process.exit(0);
+  }
+
   if (cmd === "run") {
     const { runCommand } = await import("../lib/commands/run.mjs");
     await runCommand(ctx, rest);
