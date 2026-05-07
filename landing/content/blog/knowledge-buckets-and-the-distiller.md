@@ -1,7 +1,7 @@
 ---
 title: Knowledge buckets and the Distiller
 slug: knowledge-buckets-and-the-distiller
-date: 2026-04-21
+date: 2026-04-22
 kicker: Case study
 description: Eight phases in one day — a scope ladder, a dual-written articles table, an LLM-backed ingest classifier, Notion and Linear connectors, and a per-user memory bucket that the agent can actually cite. The knowledge layer Ship needed before it could grow a second brain.
 reading_time: 11

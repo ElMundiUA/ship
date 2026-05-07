@@ -1,7 +1,7 @@
 ---
 title: Clarification is not failure
 slug: clarification-is-not-failure
-date: 2026-05-01
+date: 2026-04-30
 kicker: Best practice
 description: Most agent loops treat "I have a question" as the same outcome as "I crashed." Both stop the pipeline. Both look red on a dashboard. They are completely different things, and conflating them teaches agents to invent rather than ask.
 reading_time: 5

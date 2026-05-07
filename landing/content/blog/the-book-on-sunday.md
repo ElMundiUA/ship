@@ -1,7 +1,7 @@
 ---
 title: The book was written on Sunday
 slug: the-book-on-sunday
-date: 2026-04-19
+date: 2026-04-26
 kicker: Field note
 description: Prologue, manifesto, nine lettered sub-chapters, eight field notes. Every new passage anchored to a specific commit SHA from a real reference org. All of it keyed in between commits to the cloud console, on one Sunday, in a single session that started after midnight.
 reading_time: 5

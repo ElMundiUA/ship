@@ -1,7 +1,7 @@
 ---
 title: Boring failures are good failures
 slug: boring-failures-are-good-failures
-date: 2026-05-08
+date: 2026-05-06
 kicker: Best practice
 description: The worst failure mode for an agent isn't a crash — it's silence. The pipeline keeps running, the dashboard stays green, and the work that was supposed to happen quietly didn't. The cure is to make failure modes mundane and named, before the agent ever runs.
 reading_time: 4

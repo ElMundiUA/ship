@@ -1,7 +1,7 @@
 ---
 title: Wizard v2 — the art of saying no
 slug: wizard-v2-the-art-of-saying-no
-date: 2026-04-21
+date: 2026-04-24
 kicker: Case study
 description: Ten steps became three, then stayed three across seven backend rewrites in one day. A case study in keeping a flow honest while the mechanism under it moves.
 reading_time: 8

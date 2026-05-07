@@ -1,7 +1,7 @@
 ---
 title: Ship — the first two weeks
 slug: ship-the-first-two-weeks
-date: 2026-04-22
+date: 2026-04-18
 kicker: Build in public
 description: 189 commits. 16 days. One repo. The story of how Ship, shipctl, and the Ship Console went from an extracted folder to a running cloud platform — read off the actual git log.
 reading_time: 11

@@ -1,7 +1,7 @@
 ---
 title: Champagne over teal
 slug: champagne-over-teal
-date: 2026-05-11
+date: 2026-05-07
 kicker: Brand
 description: We swapped the accent colour from teal to muted champagne gold this week. Small change in the diff. Bigger change in how the product reads. Notes on why colour is a positioning lever, not a vibe choice.
 reading_time: 3

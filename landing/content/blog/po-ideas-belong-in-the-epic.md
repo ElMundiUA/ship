@@ -1,7 +1,7 @@
 ---
 title: PO ideas belong in the epic, not the ticket
 slug: po-ideas-belong-in-the-epic
-date: 2026-05-02
+date: 2026-05-03
 kicker: Best practice
 description: When the agent that writes the ticket and the agent that builds it are different processes, scope and motivation have to live somewhere both of them can read. We tried chat. We tried fat tickets. The thing that actually works is putting it in the project description and keeping the tickets thin.
 reading_time: 6

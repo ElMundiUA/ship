@@ -1,7 +1,7 @@
 ---
 title: The mapping table the runtime never read
 slug: the-mapping-table-the-runtime-never-read
-date: 2026-05-06
+date: 2026-05-05
 kicker: Autopsy
 description: We shipped an editor surface, an LLM resolver, and a PR-write flow for a config field. Twenty-four hours later we walked all of it back. The runtime didn't read the field. The story is about where config belongs.
 reading_time: 5
