@@ -81,6 +81,17 @@ router = APIRouter(
 logger = logging.getLogger(__name__)
 
 
+# Planning-anchor identification. Set by the tracker adapter when the
+# anchor is minted (Linear: ``LinearTracker.PLANNING_ANCHOR_LABEL``).
+# The picker uses it to bypass the project-priority gate for anchors
+# whose project is still in Drafts (``state='planning'``) — without
+# this exempt the decomposition routines (wbs / architecture /
+# qa_plan / planning_done) can never run, because their anchor lives
+# in a Drafts project by definition and ``planning_done`` is what
+# graduates Drafts → Parked.
+_PLANNING_ANCHOR_LABEL: str = "planning:anchor"
+
+
 # ---------------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------------
@@ -330,6 +341,13 @@ async def get_next_task(
       audit row but no inbox spam (operator's choice to hold them).
       Projects with no priority row are treated as not-yet-onboarded
       and skipped too.
+    * **Planning-anchor exempt.** Tickets carrying the
+      ``planning:anchor`` label bypass the priority gate. Anchors
+      live in Drafts projects (``state='planning'``) by design, and
+      the decomposition routines (wbs / architecture / qa_plan /
+      planning_done) running against them are what *graduates* the
+      project to Parked. Without the exempt, decomposition would
+      deadlock on its own gate.
     """
     await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
 
@@ -430,6 +448,15 @@ async def get_next_task(
         if matched_overlays:
             skipped_overlay.append((row, matched_overlays))
             continue
+        # Planning-anchor exempt: anchors live in Drafts projects
+        # (``state='planning'``) by construction. The decomposition
+        # FSM (wbs / architecture / qa_plan / planning_done) is what
+        # *moves* a project out of Drafts (``planning_done`` flips
+        # it to Parked); gating those routines on
+        # ``priority_state='active'`` would deadlock the funnel.
+        # Auto-onboard + the priority gate below still apply to
+        # regular tickets.
+        is_anchor = _is_planning_anchor(row.get("labels") or [])
         # ELS-80: WorkspaceProjectPriority gate — only ``active``
         # projects feed the picker.
         # ELS-92: when a ticket has a ``project_id`` but no priorities
@@ -444,7 +471,7 @@ async def get_next_task(
         # ``_tool_create_project`` writes the row explicitly with
         # ``state='planning'``, so this auto-onboard never overrides
         # an in-progress draft.
-        if project_id is not None:
+        if project_id is not None and not is_anchor:
             priority_state = await _project_priority_state(
                 session, workspace_id=workspace_id, project_id=str(project_id)
             )
@@ -526,6 +553,21 @@ async def get_next_task(
             fsm_stage=state,
             project_context=project_context,
         ),
+    )
+
+
+def _is_planning_anchor(labels: list[Any]) -> bool:
+    """Return True if ``labels`` contains the planning-anchor marker.
+
+    Match is exact + case-sensitive — Linear adapter mints the label
+    as the literal string :data:`_PLANNING_ANCHOR_LABEL`, and any
+    other casing or near-match is the operator's hand-edit, not the
+    minted anchor. Non-string entries skip silently so tracker rows
+    with weird label shapes never crash the picker.
+    """
+    return any(
+        isinstance(lbl, str) and lbl == _PLANNING_ANCHOR_LABEL
+        for lbl in labels
     )
 
 
