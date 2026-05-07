@@ -68,6 +68,41 @@ const EXIT_AGENT_FAIL = 7;
 
 
 export async function runCommand(ctx, rest) {
+  // Outer wrapper: any persistent edge 5xx after retries on the
+  // preflight metadata calls (agent-role resolve, policies preamble,
+  // tracker/next) noops cleanly with exit 0 instead of red-flagging
+  // the whole cron tick. Same logic as ``shipctl trigger`` — the
+  // ``*/30`` cron will retry from a (possibly different) runner with
+  // a different network path. Real run errors (4xx, agent crash,
+  // dispatch failures) still surface.
+  try {
+    return await _runCommandImpl(ctx, rest);
+  } catch (err) {
+    if (_isTransientHttpError(err)) {
+      console.error(
+        `warn: edge transient (${err instanceof Error ? err.message.split("\n")[0] : err}); skipping this run`,
+      );
+      console.log("Ship: nothing to do this run (edge unavailable).");
+      process.exit(EXIT_OK);
+    }
+    throw err;
+  }
+}
+
+
+function _isTransientHttpError(err) {
+  if (!err) return false;
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    /\b50[234]\b/.test(msg)
+    || /exhausted retries/.test(msg)
+    || /agent-roles resolve 50[234]/.test(msg)
+    || /tracker\/next 50[234]/.test(msg)
+  );
+}
+
+
+async function _runCommandImpl(ctx, rest) {
   const args = parseArgs(rest);
   if (args.help) {
     printHelp();
