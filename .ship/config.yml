@@ -176,3 +176,141 @@ process:
         window: 30m
         catchup: latest
       specialist: process-reviewer
+    intake:
+      name: Intake
+      enabled: true
+      trigger:
+        type: schedule
+        cron: '*/30 * * * *'
+        window: 30m
+        catchup: latest
+      specialist: intake
+      fsm_stage: task_intake
+    bug_triage:
+      name: Bug Triage
+      enabled: true
+      trigger:
+        type: schedule
+        cron: '*/30 * * * *'
+        window: 30m
+        catchup: latest
+      specialist: bug-triage
+      fsm_stage: bug_triage
+    ba_requirements:
+      name: Ba Requirements
+      enabled: true
+      trigger:
+        type: schedule
+        cron: '*/30 * * * *'
+        window: 30m
+        catchup: latest
+      specialist: ba
+      fsm_stage: ba_requirements
+    tech_arch_plan:
+      name: Tech Arch Plan
+      enabled: true
+      trigger:
+        type: schedule
+        cron: '*/30 * * * *'
+        window: 30m
+        catchup: latest
+      specialist: tech-architect
+      fsm_stage: tech_arch_plan
+    qa_arch_plan:
+      name: Qa Arch Plan
+      enabled: true
+      trigger:
+        type: schedule
+        cron: '*/30 * * * *'
+        window: 30m
+        catchup: latest
+      specialist: qa-architect
+      fsm_stage: qa_arch_plan
+    dev_implementation:
+      name: Dev Implementation
+      enabled: true
+      trigger:
+        type: schedule
+        cron: '*/30 * * * *'
+        window: 30m
+        catchup: latest
+      specialist: developer
+      fsm_stage: dev_implementation
+    qa_manual:
+      name: Qa Manual
+      enabled: true
+      trigger:
+        type: schedule
+        cron: '*/30 * * * *'
+        window: 30m
+        catchup: latest
+      specialist: qa-engineer
+      fsm_stage: qa_manual
+    qa_automation:
+      name: Qa Automation
+      enabled: true
+      trigger:
+        type: schedule
+        cron: '*/30 * * * *'
+        window: 30m
+        catchup: latest
+      specialist: qa-automation
+      fsm_stage: qa_automation
+    code_review:
+      name: Code Review
+      enabled: true
+      trigger:
+        type: schedule
+        cron: '*/30 * * * *'
+        window: 30m
+        catchup: latest
+      specialist: reviewer
+      fsm_stage: code_review
+    wbs:
+      name: Decomposition WBS
+      enabled: true
+      specialist: ba
+      fsm_stage: wbs
+      trigger:
+        type: schedule
+        cron: '*/30 * * * *'
+        window: 30m
+        catchup: latest
+      description: Customer cron polls planning anchors in stage:wbs and dispatches
+        BA to produce the WBS section.
+    architecture:
+      name: Decomposition Architecture
+      enabled: true
+      specialist: tech-architect
+      fsm_stage: architecture
+      trigger:
+        type: schedule
+        cron: '*/30 * * * *'
+        window: 30m
+        catchup: latest
+      description: Customer cron polls anchors in stage:architecture and dispatches
+        Tech-architect.
+    test_architecture:
+      name: Decomposition Test architecture
+      enabled: true
+      specialist: qa-architect
+      fsm_stage: test_architecture
+      trigger:
+        type: schedule
+        cron: '*/30 * * * *'
+        window: 30m
+        catchup: latest
+      description: Customer cron polls anchors in stage:test_architecture and dispatches
+        QA-architect.
+    tasks:
+      name: Decomposition Task slicing
+      enabled: true
+      specialist: developer
+      fsm_stage: tasks
+      trigger:
+        type: schedule
+        cron: '*/30 * * * *'
+        window: 30m
+        catchup: latest
+      description: Customer cron polls anchors in stage:tasks and dispatches Developer
+        to slice the WBS into child tickets. On finish the project flips Drafts to Parked.
