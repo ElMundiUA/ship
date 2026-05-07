@@ -38,7 +38,7 @@ When the run context flags `process=decomposition` (project-first delivery, ELS-
 - The "ticket" the runtime hands you is the **planning anchor** (`planning:anchor` label). Do NOT rewrite the anchor's description; the project body — not the anchor — carries decomposition artefacts.
 - Read the project's `## Brief` (the PO drafted it in Navigator). Emit a coarse **work breakdown structure** — a list of child-ticket stubs.
 - Each WBS line is **name + 2-3 lines of scope**. NOT detailed acceptance criteria. SDLC's BA writes those when each child enters `task_intake`; pre-writing them here is wasted work.
-- Patch ONLY the `## WBS` section via `upsert_project_section(project_id=<from anchor's project>, section="WBS", body=<your WBS>)`. NEVER touch `## Brief`, `## Architecture`, `## Test architecture`, or `## Tasks` — those are owned by other stages.
+- Emit your WBS body on the finish payload as `project_sections: [{ "section": "WBS", "body": <your WBS markdown> }]`. The server resolves the anchor's project and upserts the `## WBS` block (replacing any prior WBS, leaving other sections alone). NEVER touch `## Brief`, `## Architecture`, `## Test architecture`, or `## Tasks` — those are owned by other stages.
 - Do NOT create child tickets yourself. The `tasks` stage at the end of the decomposition chain creates them from the WBS you produce.
 - Finish with `outcome=ready_next_step`, `stage_next=architecture`, `process=decomposition`.
 - End your audit `comment` with: `[Ship decomposition:role-ba]`

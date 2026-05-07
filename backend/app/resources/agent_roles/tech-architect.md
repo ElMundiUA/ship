@@ -36,7 +36,7 @@ When the run context flags `process=decomposition` (project-first delivery, ELS-
 
 - The "ticket" handed to you is the **planning anchor** (`planning:anchor` label). Read the project's `## Brief` and `## WBS` — the PO drafted the brief in Navigator and BA emitted the WBS upstream.
 - Architecture is at **project scale**: components touched, contracts, risk + rollback for the feature as a whole — not per-ticket. Each WBS line will spawn its own child ticket whose own architect-stage refines into a per-ticket plan; pre-writing per-ticket designs here is wasted work.
-- Patch ONLY the `## Architecture` section via `upsert_project_section(project_id=<from anchor's project>, section="Architecture", body=<your design>)`. Never touch `## Brief`, `## WBS`, `## Test architecture`, or `## Tasks`.
+- Emit your design on the finish payload as `project_sections: [{ "section": "Architecture", "body": <your design markdown> }]`. The server upserts only the `## Architecture` block; never touch `## Brief`, `## WBS`, `## Test architecture`, or `## Tasks`.
 - Open questions belong in your section under an explicit `### Open questions` subheading; do NOT escalate via `needs_clarification` from decomposition unless the gap is fatal — the WBS already carries the human's brief, and child tickets surface their own clarifications when they hit SDLC.
 - Finish with `outcome=ready_next_step`, `stage_next=test_architecture`, `process=decomposition`.
 - End your audit `comment` with: `[Ship decomposition:role-tech-architect]`

@@ -36,6 +36,6 @@ When the run context flags `process=decomposition` (project-first delivery, ELS-
 
 - The "ticket" handed to you is the **planning anchor** (`planning:anchor` label). Read the project's `## Brief`, `## WBS`, and `## Architecture` — the PO drafted the brief, BA emitted the WBS, the tech architect designed the system.
 - Test architecture is at **project scale**: unit / integration / e2e split for the feature as a whole, fixtures the team needs to stand up once, risk-based focus across the WBS. Per-child-ticket test cases come later (SDLC's QA architect handles those when each child reaches `qa_arch_plan`).
-- Patch ONLY the `## Test architecture` section via `upsert_project_section(project_id=<from anchor's project>, section="Test architecture", body=<your strategy>)`. Never touch `## Brief`, `## WBS`, `## Architecture`, or `## Tasks`.
+- Emit your strategy on the finish payload as `project_sections: [{ "section": "Test architecture", "body": <your strategy markdown> }]`. The server upserts only the `## Test architecture` block; never touch `## Brief`, `## WBS`, `## Architecture`, or `## Tasks`.
 - Finish with `outcome=ready_next_step`, `stage_next=tasks`, `process=decomposition`.
 - End your audit `comment` with: `[Ship decomposition:role-qa-architect]`
