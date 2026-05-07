@@ -25,8 +25,41 @@ export async function triggerCommand(ctx, rest) {
     // common case skips the discovery call entirely.
     workspaceId =
       opts.workspace || (process.env.SHIP_WORKSPACE_ID || "").trim() || "";
-    if (!workspaceId) workspaceId = await resolveSoleWorkspace(baseUrl, token);
-    repoId = await resolveRepoId(baseUrl, token, workspaceId, opts.repo);
+    try {
+      if (!workspaceId) workspaceId = await resolveSoleWorkspace(baseUrl, token);
+      repoId = await resolveRepoId(baseUrl, token, workspaceId, opts.repo);
+    } catch (err) {
+      // Bunny edge sometimes 5xx's persistently for a single GH-Actions
+      // runner region while origin stays healthy from elsewhere. The
+      // CLI already retried 3x via fetchWithRetry; by the time we get
+      // here that's been exhausted. Don't kill the workflow — the
+      // ``*/30`` cron will re-tick from a (possibly different) runner
+      // with a different network path. Emit a noop so ``set -e`` in
+      // the workflow doesn't go red over a transient infra blip.
+      if (_isTransientHttpError(err)) {
+        console.error(
+          `warn: edge transient (${err instanceof Error ? err.message.split("\n")[0] : err}); skipping this tick`,
+        );
+        const result = {
+          event: opts.event,
+          status: "edge_unavailable",
+          due_routines: [],
+          due_lanes: [],
+          skipped_routines: local.skipped,
+          claim_status: "skipped:edge_unavailable",
+          next_action: { kind: "noop" },
+        };
+        if (ctx.json || opts.json) {
+          console.log(JSON.stringify(result, null, 2));
+        } else {
+          console.log(
+            `Ship trigger ${opts.event}: edge unavailable; skipping this tick.`,
+          );
+        }
+        return;
+      }
+      throw err;
+    }
   }
   if (token && due.length > 0 && !opts.noClaim) {
     const claimed = [];
@@ -84,6 +117,16 @@ export async function triggerCommand(ctx, rest) {
   }
   console.log(`Ship trigger ${opts.event}: pipeline pick → ${nextAction.specialist}`);
 }
+
+function _isTransientHttpError(err) {
+  if (!err) return false;
+  const msg = err instanceof Error ? err.message : String(err);
+  // ``apiRequest`` formats persistent 5xx as
+  // ``HTTP 502 Bad Gateway on GET ...`` after exhausting retries.
+  // Match the codes we actually treat as transient at the retry layer.
+  return /\bHTTP 50[234]\b/.test(msg) || /exhausted retries/.test(msg);
+}
+
 
 function explicitGlobalBaseUrl(ctx) {
   return ctx?.baseUrlSource === "flag" ? ctx.baseUrl : null;
