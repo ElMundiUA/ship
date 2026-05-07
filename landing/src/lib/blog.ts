@@ -92,17 +92,20 @@ function toMeta(slug: string, data: Record<string, string | number | string[]>):
   };
 }
 
-// Today's date in UTC, recomputed on every call so a long-lived
-// server eventually serves a post once its date arrives without a
-// redeploy. (Static builds still need a fresh build to add new
-// statically-generated routes; see generateStaticParams in
+// Today's date in the author timezone (Europe/Kyiv), recomputed on
+// every call so a long-lived server eventually serves a post once its
+// date arrives without a redeploy. We compare against the author's
+// local day rather than UTC so a post dated 2026-05-08 publishes when
+// it is May 8 *for the author*, not when UTC catches up — the latter
+// would lag by up to three hours and surprise the writer.
+//
+// (Static builds still need a fresh build to add new statically-
+// generated routes; see generateStaticParams in
 // app/blog/[slug]/page.tsx.)
-function todayIsoUtc(): string {
-  const d = new Date();
-  const y = d.getUTCFullYear();
-  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(d.getUTCDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+function todayIsoLocal(): string {
+  // en-CA returns YYYY-MM-DD, which sorts lexically the same way as
+  // the post-date strings we compare against.
+  return new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
 }
 
 // Future-dated posts (drafts staged for later) should not appear in
@@ -111,7 +114,7 @@ function todayIsoUtc(): string {
 function isPublishable(date: string): boolean {
   if (process.env.NODE_ENV !== "production") return true;
   if (!date) return false;
-  return date <= todayIsoUtc();
+  return date <= todayIsoLocal();
 }
 
 export function listBlogPosts(): BlogMeta[] {
