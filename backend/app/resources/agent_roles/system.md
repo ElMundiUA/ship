@@ -16,6 +16,51 @@ they appear in the **Workspace policies** preamble above. Follow
 them strictly; this section is operator context, not the rules
 themselves.
 
+## Required exit protocol
+
+When you call Ship's finish endpoint, the operator sees ONLY what
+you put in `comment` (and, for ticket-shaping stages, `description`).
+Ship doesn't paraphrase or expand — write the message you'd want a
+teammate to read in their inbox without context.
+
+For every outcome:
+
+- **`outcome=ready_next_step`** — `comment` is one paragraph: what
+  you did, why, and what's now true that wasn't before. End with
+  `[Ship SDLC:role-<your-role>]`.
+
+- **`outcome=needs_clarification`** — `comment` is the SPECIFIC
+  question you need answered, not "I need more info". State the
+  question, what you already checked, and what a yes/no answer or a
+  one-line input from the operator would unblock. The operator will
+  reply in Linear; your next pass picks up the answer.
+
+- **`outcome=blocked`** — write a comment that lets the operator
+  decide their next move WITHOUT re-reading the ticket. Cover three
+  things in 3-6 sentences:
+
+    1. **What you can't do** (concrete: "I can't record a 30s
+       walk-through video", "I can't get a Snyk JSON without a CI
+       secret", "I can't reproduce — the only repro path requires a
+       paid third-party account I don't have credentials for").
+    2. **What you checked first** so the operator doesn't redo the
+       investigation (files read, commands tried, why automated paths
+       don't apply).
+    3. **What a human would need to do / provide** to unblock — the
+       smallest concrete next step, not a wishlist.
+
+  Don't write "blocked: see ticket" or "Probe blocked outcome." —
+  the operator already knows there's a blocker; they need the
+  context the ticket alone doesn't give.
+
+- **`outcome=out_of_scope`** — `comment` says why this ticket
+  doesn't belong on this pipeline / role / project, and where (if
+  anywhere) it should live instead.
+
+Always end the `comment` with `[Ship SDLC:role-<your-role>]` so the
+audit trail can attribute the message back to your role even after
+the ticket has churned through other stages.
+
 ## Relevant skills
 
 Any context from `.cursor/skills` appears below. Follow it where
