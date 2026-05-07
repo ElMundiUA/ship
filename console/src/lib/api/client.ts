@@ -709,82 +709,6 @@ export function activateWizardSeed(
   );
 }
 
-// --- Repo intel (P5-09 — read + manual re-harvest) -------------------------
-
-/**
- * Live ``RepoIntel`` snapshot for ``repo_id`` (P5-09).
- *
- * Mirrors :class:`backend.app.api.v1.routes.repos.RepoIntelOut`. Empty
- * dicts/lists for payload columns mean "harvest succeeded but the
- * extractor found nothing"; the absence of the row entirely surfaces
- * as a 404 from :func:`getCurrentRepoIntel`.
- */
-export interface ApiRepoIntel {
-  intel_id: string;
-  version: number;
-  is_current: boolean;
-  /** ``{"typescript": 0.62, ...}``. Floats sum to roughly 1. */
-  languages: Record<string, number>;
-  /** Lowercased canonical framework names, e.g. ``["next.js", "fastapi"]``. */
-  frameworks: string[];
-  /** Detected from manifest files, e.g. ``["npm", "uv"]``. */
-  package_managers: string[];
-  /** ``[{"path": "console/src/app/page.tsx", "kind": "page"}, …]``. */
-  entry_points: { path?: string; kind?: string; [k: string]: unknown }[];
-  /** ``{"top_level_dirs": [...], "depth_p50": 3, "file_count": 1234}``. */
-  structure: Record<string, unknown>;
-  commit_style: Record<string, unknown>;
-  visual_tokens: Record<string, unknown>;
-  harvested_at: string;
-  harvested_by: string | null;
-  harvest_duration_ms: number | null;
-  harvest_error: string | null;
-}
-
-/**
- * Fetch the live :class:`RepoIntel` snapshot.
- *
- * Throws :class:`ApiHttpError` with ``status === 404`` when no
- * harvest has landed yet — the polling badge on the post-onboarding
- * page swallows 404 and keeps polling instead of surfacing it as
- * an error.
- */
-export function getCurrentRepoIntel(
-  workspaceId: string,
-  repoId: string,
-  options: { token?: string; signal?: AbortSignal } = {},
-): Promise<ApiRepoIntel> {
-  return apiFetch<ApiRepoIntel>(
-    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/intel/current`,
-    { token: options.token, signal: options.signal },
-  );
-}
-
-export interface ApiRepoIntelHarvestHandle {
-  enqueued: boolean;
-  job_id: string | null;
-  intel_id: string | null;
-}
-
-/**
- * Manually re-trigger the intel harvest (P5-09 retry path).
- *
- * Reuses the wizard's own dispatch helper server-side so the
- * response shape mirrors :type:`ApiWizardSeedIntelHandle` — the FE
- * doesn't need to branch on whether the deployment runs an arq
- * worker or executes the harvest inline.
- */
-export function triggerRepoIntelHarvest(
-  workspaceId: string,
-  repoId: string,
-  token?: string,
-): Promise<ApiRepoIntelHarvestHandle> {
-  return apiFetch<ApiRepoIntelHarvestHandle>(
-    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/intel/harvest`,
-    { method: "POST", token },
-  );
-}
-
 /**
  * Canonical Plays bundle preview — ``GET /v1/catalog/default-bundle``.
  *
@@ -1941,31 +1865,6 @@ export function togglePipeline(
   );
 }
 
-export function runPipeline(
-  workspaceId: string,
-  pipelineId: string,
-  note?: string,
-  options?: { repoId?: string | null; token?: string },
-): Promise<ApiPipelineRun> {
-  const body: Record<string, unknown> = { note: note ?? null };
-  if (options?.repoId) body.repo_id = options.repoId;
-  return apiFetch<ApiPipelineRun>(
-    `/v1/workspaces/${encodeURIComponent(workspaceId)}/pipelines/${encodeURIComponent(pipelineId)}/runs`,
-    { method: "POST", body, token: options?.token },
-  );
-}
-
-export interface ApiPipelineInstall {
-  pr_url: string;
-  pr_number: number;
-  branch: string;
-}
-
-/**
- * POST `/v1/workspaces/{ws}/pipelines/{id}/install` — opens a PR in the
- * bound repo with the starter workflow YAML. Returns the PR URL the
- * dashboard deep-links into. Backend is admin-only.
- */
 // ---------------------------------------------------------------------
 // Lanes (RFC-0007 Phase 7)
 // ---------------------------------------------------------------------
@@ -2125,23 +2024,6 @@ export function proposeRepoConfig(
   );
 }
 
-
-export function installPipelineWorkflow(
-  workspaceId: string,
-  pipelineId: string,
-  options?: { repoId?: string | null; token?: string },
-): Promise<ApiPipelineInstall> {
-  const body: Record<string, unknown> = {};
-  if (options?.repoId) body.repo_id = options.repoId;
-  return apiFetch<ApiPipelineInstall>(
-    `/v1/workspaces/${encodeURIComponent(workspaceId)}/pipelines/${encodeURIComponent(pipelineId)}/install`,
-    {
-      method: "POST",
-      body: Object.keys(body).length > 0 ? body : undefined,
-      token: options?.token,
-    },
-  );
-}
 
 export function listPipelineRuns(
   workspaceId: string,

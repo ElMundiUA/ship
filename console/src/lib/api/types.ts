@@ -227,16 +227,6 @@ export type ApiKnowledgeBucket = {
   body?: string;
 };
 
-// --- Phase 3: scope-resolved bucket ladder ---------------------------------
-//
-// Backend route: GET /v1/workspaces/{ws}/buckets/resolved
-//   ?repo_id=...&project_id=...
-// One row per ``(scope × slug × source)`` that's visible from the
-// requested context, ordered by priority (workspace ≺ project ≺ repo
-// ⊕ user). ``effective=true`` flags the row that wins its slug in the
-// caller's current scope (what the UI should highlight). See
-// ``backend/docs/knowledge-consolidation.md`` for the scope ladder.
-
 export type ApiBucketScope = "workspace" | "project" | "repo" | "user";
 
 export type ApiBucketSource =
