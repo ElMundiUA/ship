@@ -308,6 +308,7 @@ async def sync_due_import_sources(
     now = datetime.now(timezone.utc)
     sessionmaker = get_sessionmaker()
     checked = synced = skipped = errors = 0
+    cascaded_workspaces: set[uuid.UUID] = set()
     async with sessionmaker() as session:
         stmt = (
             select(KnowledgeImportSource)
@@ -346,9 +347,29 @@ async def sync_due_import_sources(
                 )
                 await session.commit()
                 synced += 1
+                cascaded_workspaces.add(source.workspace_id)
             except Exception:  # noqa: BLE001
                 await session.rollback()
                 errors += 1
+
+    # Cascade once per workspace that actually ingested fresh notes —
+    # the route + synth advisory locks make it safe to overlap with
+    # the regular :30/:40 ticks, and skipping the cascade entirely
+    # leaves operators waiting up to ~70 min for a draft after a
+    # scheduled sync produces fresh notes.
+    if cascaded_workspaces:
+        from backend.app.services.knowledge_cascade import (
+            cascade_workspace_pipeline,
+        )
+
+        for ws_id in cascaded_workspaces:
+            try:
+                await cascade_workspace_pipeline(
+                    workspace_id=ws_id, settings=settings
+                )
+            except Exception:  # noqa: BLE001 — never fail the tick on cascade
+                errors += 1
+
     return DueSyncResult(
         checked=checked,
         synced=synced,
