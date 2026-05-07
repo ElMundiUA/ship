@@ -82,10 +82,12 @@ jobs:
           set -euo pipefail
           # Manual workflow_dispatch with a routine id bypasses the
           # cron picker — debug harness for "fire this stage now,
-          # detailed log" (PR-6's core surface).
+          # detailed log". ``--debug`` streams a per-step log so the
+          # operator can see every phase interleaved with the agent
+          # CLI's own output.
           if [ -n "$MANUAL_ROUTINE" ]; then
             echo "::group::Ship manual routine ${MANUAL_ROUTINE}${MANUAL_TICKET:+ ticket=$MANUAL_TICKET}"
-            shipctl run --routine "$MANUAL_ROUTINE" --commit-and-pr
+            shipctl run --routine "$MANUAL_ROUTINE" --commit-and-pr --debug
             echo "::endgroup::"
             exit 0
           fi

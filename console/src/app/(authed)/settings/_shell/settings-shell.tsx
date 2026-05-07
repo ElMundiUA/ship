@@ -363,6 +363,10 @@ export async function SettingsShell({
               </Card>
               <DefaultAgentCard workspace={workspace} />
               <AgentProviderCard workspace={workspace} />
+              <DispatchRoutineCard
+                workspace={workspace}
+                repos={activatedRepos}
+              />
             </div>
           )}
 
@@ -975,6 +979,89 @@ function AgentProviderCard({ workspace }: { workspace: ApiWorkspace }) {
           className="h-10 whitespace-nowrap rounded-full border border-aqua/30 bg-aqua/10 px-4 text-xs font-bold text-aqua transition hover:bg-aqua/15"
         >
           Save provider
+        </button>
+      </form>
+    </Card>
+  );
+}
+
+function DispatchRoutineCard({
+  workspace,
+  repos,
+}: {
+  workspace: ApiWorkspace;
+  repos: ApiActivatedRepo[];
+}) {
+  const hasRepo = repos.length > 0;
+  const defaultRepoId = repos[0]?.id ?? "";
+  return (
+    <Card>
+      <CardHeader
+        title="Dispatch routine (debug)"
+        subtitle="Fire any FSM routine manually against the bound provider — the GHA workflow_dispatch runs shipctl run --routine X --debug, which streams a step-by-step log into the runner output. Admin-only; consumes agent quota."
+      />
+      {!hasRepo && (
+        <div className="mb-4 rounded-xl border border-sun/30 bg-sun/[0.06] px-3 py-2 text-xs text-sun/95">
+          No activated repos yet. Activate one before dispatching.
+        </div>
+      )}
+      <form
+        action="/api/settings/dispatch-routine"
+        method="POST"
+        className="grid gap-3 sm:grid-cols-[1fr,1fr,1fr,auto]"
+      >
+        <input type="hidden" name="ws" value={workspace.id} suppressHydrationWarning />
+        <label className="flex flex-col gap-1">
+          <span className="text-[10px] font-bold uppercase tracking-widest text-white/55">
+            Repo
+          </span>
+          <select
+            name="repo"
+            defaultValue={defaultRepoId}
+            required
+            disabled={!hasRepo}
+            className="rounded border border-white/10 bg-white/[0.04] px-2 py-2 text-sm text-white outline-none focus:border-aqua/40 disabled:opacity-50"
+          >
+            {repos.map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.full_name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-[10px] font-bold uppercase tracking-widest text-white/55">
+            Routine id
+          </span>
+          <input
+            name="routine"
+            type="text"
+            placeholder="intake / dev_implementation / qa_manual …"
+            required
+            pattern="[A-Za-z0-9_-]{1,64}"
+            disabled={!hasRepo}
+            className="rounded border border-white/10 bg-white/[0.04] px-2 py-2 font-mono text-sm text-white outline-none focus:border-aqua/40 disabled:opacity-50"
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-[10px] font-bold uppercase tracking-widest text-white/55">
+            Pin ticket (optional)
+          </span>
+          <input
+            name="ticket"
+            type="text"
+            placeholder="ELS-15"
+            pattern="[A-Z0-9-]{1,32}"
+            disabled={!hasRepo}
+            className="rounded border border-white/10 bg-white/[0.04] px-2 py-2 font-mono text-sm text-white outline-none focus:border-aqua/40 disabled:opacity-50"
+          />
+        </label>
+        <button
+          type="submit"
+          disabled={!hasRepo}
+          className="h-10 self-end whitespace-nowrap rounded-full border border-aqua/30 bg-aqua/10 px-4 text-xs font-bold text-aqua transition hover:bg-aqua/15 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          Dispatch
         </button>
       </form>
     </Card>

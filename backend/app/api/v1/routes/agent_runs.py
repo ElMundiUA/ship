@@ -2284,3 +2284,116 @@ async def finish_agent_run(
         actions=actions,
         tracker_kind=tracker_kind,
     )
+
+
+# ---------------------------------------------------------------------------
+# Manual routine dispatch (PR-6 of the local-CLI swap — debug harness)
+# ---------------------------------------------------------------------------
+
+
+class RoutineDispatchIn(BaseModel):
+    """Body for ``POST /v1/workspaces/{ws}/agent-runs/dispatch``.
+
+    ``repo_id`` is the WorkspaceRepo whose ``ship-trigger-schedule.yml``
+    we fire. The routine and optional ticket map straight onto the
+    workflow_dispatch ``inputs`` (PR-4 of the local-CLI swap).
+    """
+
+    repo_id: uuid.UUID
+    routine_id: str = Field(min_length=1, max_length=64)
+    ticket_ref: str | None = Field(default=None, max_length=64)
+
+
+class RoutineDispatchOut(BaseModel):
+    accepted: bool
+    repo_full_name: str
+    workflow_file: str
+    routine_id: str
+    ticket_ref: str | None
+
+
+@router.post("/agent-runs/dispatch", response_model=RoutineDispatchOut)
+async def post_dispatch_routine(
+    workspace_id: uuid.UUID,
+    payload: RoutineDispatchIn,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> RoutineDispatchOut:
+    """Manually fire ``ship-trigger-schedule.yml`` for one routine.
+
+    Operator-driven debug path. The workflow_dispatch inputs feed
+    straight into ``shipctl run --routine X --commit-and-pr --debug``
+    on the runner so the GHA log shows every step of the pipeline
+    interleaved with the agent CLI's own output.
+
+    Admin-only — manual dispatch consumes Cursor / Codex / Claude
+    quota and opens PRs against the repo, both of which are
+    operator-tier actions.
+    """
+    from backend.app.db.models.integrations import (
+        GitHubInstallation,
+        WorkspaceRepo,
+    )
+    from backend.app.integrations.github.workflows import dispatch_workflow
+
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+
+    repo = (
+        await session.execute(
+            sa_select(WorkspaceRepo).where(
+                WorkspaceRepo.id == payload.repo_id,
+                WorkspaceRepo.workspace_id == workspace_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if repo is None:
+        raise HTTPException(status_code=404, detail="repo not in this workspace")
+    if repo.installation_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail="repo has no GitHub App installation; reinstall Ship",
+        )
+    install = await session.get(GitHubInstallation, repo.installation_id)
+    if install is None or install.suspended_at is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="GitHub App installation missing or suspended",
+        )
+
+    inputs: dict[str, str] = {"routine_id": payload.routine_id}
+    if payload.ticket_ref:
+        inputs["ticket_ref"] = payload.ticket_ref
+
+    await dispatch_workflow(
+        repo,
+        install,
+        "ship-trigger-schedule.yml",
+        inputs=inputs,
+        settings=settings,
+    )
+
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=auth.user.id,
+            actor_token_id=auth.token.id if auth.token else None,
+            action="agent_run.routine_dispatched",
+            target_kind="workspace_repo",
+            target_id=str(repo.id),
+            payload={
+                "routine_id": payload.routine_id,
+                "ticket_ref": payload.ticket_ref,
+                "workflow_file": "ship-trigger-schedule.yml",
+            },
+        )
+    )
+    await session.flush()
+
+    return RoutineDispatchOut(
+        accepted=True,
+        repo_full_name=repo.full_name,
+        workflow_file="ship-trigger-schedule.yml",
+        routine_id=payload.routine_id,
+        ticket_ref=payload.ticket_ref,
+    )
