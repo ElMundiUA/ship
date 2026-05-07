@@ -647,17 +647,31 @@ class LinearTracker:
                 f"LinearTracker can't relabel_stages for kind={ticket.kind}"
             )
 
+        # Build a unified ``stage_or_signal → label_id`` map so the
+        # endpoint accepts both FSM-stage labels (``task_intake``,
+        # ``ba_requirements``, …) AND signal labels
+        # (``needs_clarification`` and any other key registered on the
+        # workspace's Linear OAuth row). Operator wants to clear
+        # ``needs:clarification`` after answering an agent's question
+        # so the picker stops skipping the ticket — that key isn't a
+        # stage but it's exactly the same surgical-add/remove shape.
+        known_label_ids: dict[str, str] = dict(self._label_id_by_stage)
+        for key, lid in self._signal_label_ids.items():
+            # Don't let a signal key collide with a stage name — keep
+            # stage entries first; signal entries fill the rest.
+            known_label_ids.setdefault(key, lid)
+
         wanted_add_ids: dict[str, str] = {}
         for stage in (add or []):
-            lid = self._label_id_by_stage.get(stage)
+            lid = known_label_ids.get(stage)
             if not lid:
-                raise ValueError(f"unknown stage label {stage!r}")
+                raise ValueError(f"unknown stage/signal label {stage!r}")
             wanted_add_ids[stage] = lid
         wanted_remove_ids: dict[str, str] = {}
         for stage in (remove or []):
-            lid = self._label_id_by_stage.get(stage)
+            lid = known_label_ids.get(stage)
             if not lid:
-                raise ValueError(f"unknown stage label {stage!r}")
+                raise ValueError(f"unknown stage/signal label {stage!r}")
             wanted_remove_ids[stage] = lid
 
         # Read current labels so we can prune ``remove`` to only what's
