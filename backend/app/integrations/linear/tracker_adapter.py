@@ -180,6 +180,7 @@ class LinearTracker:
                   id
                   identifier
                   title
+                  description
                   url
                   state { name type }
                   project { id }
@@ -225,6 +226,13 @@ class LinearTracker:
                 {
                     "id": n.get("identifier") or n.get("id"),
                     "title": n.get("title"),
+                    # Agent prompts render the ticket body as
+                    # ``{{DESCRIPTION}}``; without this the prompt sees
+                    # ``null`` and the intake/BA roles fall back to
+                    # title-only heuristics or ``needs_clarification``
+                    # — even when the operator already wrote a full
+                    # description in Linear.
+                    "body": n.get("description"),
                     "url": n.get("url"),
                     "status": state_name,
                     "updated_at": n.get("updatedAt"),
