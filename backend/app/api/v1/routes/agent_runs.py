@@ -177,6 +177,27 @@ class WriteOut(BaseModel):
     note: str | None = None
 
 
+class ProjectSectionPatch(BaseModel):
+    """One section the decomposition agent owns and is patching this run.
+
+    Each role in the decomposition chain owns exactly one section of
+    the project body (BA → ``WBS``, tech-arch → ``Architecture``,
+    qa-arch → ``Test architecture``, qa-eng → ``QA scenarios``,
+    developer → ``Tasks``). The role prompts told agents to "patch via
+    ``upsert_project_section(...)``" — but that was a fictional tool;
+    the server now reads this list from ``FinishIn`` and applies each
+    patch via ``LinearTracker.upsert_project_section`` (existing
+    adapter method that replace-or-appends a ``## <section>`` block).
+
+    ``project_id`` is derived server-side from the anchor ticket the
+    run was working against — agents only need to declare what
+    section + body they produced, not where to write it.
+    """
+
+    section: str = Field(min_length=1, max_length=64)
+    body: str = Field(max_length=50_000)
+
+
 class FinishIn(BaseModel):
     """Payload the Cursor agent posts to ``/agent-runs/finish`` from
     inside its runtime once it's done with the work.
@@ -208,6 +229,11 @@ class FinishIn(BaseModel):
     # Risks / etc.). Linear keeps prior bodies in the issue activity
     # feed so the operator can always see what changed.
     description: str | None = Field(default=None, max_length=20_000)
+    # Decomposition stage artefacts: the role's section of the project
+    # body. Persisted via the tracker's ``upsert_project_section``
+    # adapter (replace-or-append the ``## <section>`` block). Empty
+    # for SDLC / non-decomposition runs.
+    project_sections: list[ProjectSectionPatch] = Field(default_factory=list)
     # Which process the run executed under. Defaults to the per-ticket
     # SDLC (``development``); ``decomposition`` (ELS-75) is the
     # project-anchor pipeline. The finish hook reads this to know
@@ -2233,6 +2259,77 @@ async def finish_agent_run(
             if payload.comment:
                 await resolved.gateway.comment(ref, body=payload.comment)
                 actions.append("tracker:comment")
+            # Decomposition body sections (ELS-75 write path). Each role
+            # in the decomposition chain owns one ``## <section>`` of the
+            # project body and emits its artefact here; the adapter's
+            # ``upsert_project_section`` replace-or-appends the named
+            # block, so re-running a stage cleanly overwrites just its
+            # own section. We resolve the project_id from the anchor
+            # ticket via the snapshot helper rather than trusting the
+            # agent to pass it — the anchor already carries
+            # ``project.id`` and that's the canonical source.
+            #
+            # Ordering note: sections land before ``transition`` so a
+            # downstream stage that immediately picks up this anchor
+            # already sees the section it should read; otherwise the
+            # next picker tick could race ahead of the body write.
+            #
+            # Best-effort: a ``NotImplementedError`` (adapter doesn't
+            # model projects), missing project on the anchor, or a
+            # transient Linear 5xx fails the section but doesn't sink
+            # the rest of the finish — the audit trail surfaces the
+            # specific section so the operator can re-run.
+            if payload.project_sections:
+                snapshot = await _try_ticket_snapshot(resolved.gateway, ref)
+                project_id = (snapshot or {}).get("project_id")
+                upsert = getattr(
+                    resolved.gateway, "upsert_project_section", None
+                )
+                if project_id and upsert is not None:
+                    for patch in payload.project_sections:
+                        try:
+                            await upsert(
+                                str(project_id),
+                                section=patch.section,
+                                body=patch.body,
+                            )
+                            actions.append(
+                                f"tracker:project_section:{patch.section}"
+                            )
+                        except NotImplementedError:
+                            logger.warning(
+                                "agent_run.finish: tracker_kind=%s does not "
+                                "implement upsert_project_section; "
+                                "section=%s skipped",
+                                resolved.kind,
+                                patch.section,
+                            )
+                        except Exception as exc:  # noqa: BLE001 — logged below
+                            logger.warning(
+                                "agent_run.finish: project section write "
+                                "failed ws=%s ticket=%s section=%s err=%s",
+                                workspace_id,
+                                payload.ticket_ref,
+                                patch.section,
+                                exc,
+                            )
+                            actions.append(
+                                f"tracker:project_section_failed:{patch.section}"
+                            )
+                elif not project_id:
+                    logger.warning(
+                        "agent_run.finish: anchor ticket=%s has no project; "
+                        "%d project_sections skipped",
+                        payload.ticket_ref,
+                        len(payload.project_sections),
+                    )
+                elif upsert is None:
+                    logger.warning(
+                        "agent_run.finish: tracker_kind=%s has no "
+                        "upsert_project_section adapter; %d sections skipped",
+                        resolved.kind,
+                        len(payload.project_sections),
+                    )
             # Pass ``from_state`` so the adapter adds the breadcrumb
             # label for the role that *just finished* (``fsm_stage``),
             # not the next role's. The picker for ``stage_next`` reads
