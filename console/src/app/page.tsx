@@ -117,7 +117,7 @@ export default async function CloudHomePage({
     return renderGreenfieldWelcome(result);
   }
 
-  return renderWorkspaceHome(result);
+  return renderWorkspaceHome(result, params);
 }
 
 type LiveContext = {
@@ -204,7 +204,10 @@ async function loadLiveContext(
   }
 }
 
-function renderWorkspaceHome(ctx: LiveContext) {
+function renderWorkspaceHome(
+  ctx: LiveContext,
+  params: SearchParams,
+) {
   const { workspace, data, allWorkspaces } = ctx;
   const multi = allWorkspaces.length > 1;
   return (
@@ -227,10 +230,29 @@ function renderWorkspaceHome(ctx: LiveContext) {
         summary={data}
         repos={ctx.repos}
         workspaceId={workspace.id}
+        multiWs={multi}
         inboxItems={ctx.inboxItems}
         inboxCounts={ctx.inboxCounts}
         priorities={ctx.priorities}
         liveSystem={ctx.liveSystem}
+        templateUpdate={{
+          seedPr:
+            typeof params.seed_pr === "string" && params.seed_pr.length > 0
+              ? Number.parseInt(params.seed_pr, 10) || null
+              : null,
+          seedRepo:
+            typeof params.seed_repo === "string" && params.seed_repo.length > 0
+              ? params.seed_repo
+              : null,
+          seedError:
+            typeof params.seed_error === "string"
+              ? params.seed_error
+              : null,
+          seedMerged:
+            typeof params.seed_merged === "string" && params.seed_merged.length > 0
+              ? Number.parseInt(params.seed_merged, 10) || null
+              : null,
+        }}
       />
     </AppShell>
   );

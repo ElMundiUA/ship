@@ -504,6 +504,26 @@ async def reorder_priorities(
             detail="reorder.order contains duplicate project_native_id",
         )
 
+    # Snapshot prior state per project_id so we can fire the
+    # child-ticket sync only on rows whose state actually flipped.
+    # Without this, every reorder (even a pure ordinal shuffle) would
+    # bulk-move every ticket through Linear and drop a wave of
+    # ``priorities.synced_ticket_state`` rows for no reason.
+    prior_states: dict[str, str] = {}
+    prior_rows = (
+        await session.execute(
+            select(
+                WorkspaceProjectPriority.project_native_id,
+                WorkspaceProjectPriority.state,
+            ).where(
+                WorkspaceProjectPriority.workspace_id == workspace_id
+            )
+        )
+    ).all()
+    for prior_native_id, prior_state in prior_rows:
+        if prior_state:
+            prior_states[str(prior_native_id)] = str(prior_state)
+
     # Bulk replace. The unique (workspace_id, project_native_id)
     # constraint prevents row-level duplicates, but DELETE-then-INSERT
     # is the cleanest way to express "this is the new full ordering".
@@ -542,6 +562,37 @@ async def reorder_priorities(
         )
     )
     await session.flush()
+
+    # ELS-91 sync, applied per project that actually changed state.
+    # Identical to the ``/priorities/state`` route's tail except we
+    # iterate the deltas. Best-effort — tracker errors log but DON'T
+    # roll back the reorder the operator just did.
+    flipped: list[tuple[str, str]] = []
+    for row in payload.order:
+        if prior_states.get(row.project_native_id) != row.state:
+            flipped.append((row.project_native_id, row.state))
+    if flipped:
+        from backend.app.services.tracker_resolver import resolve_for_workspace
+        from backend.app.services.agent.project_state_sync import (
+            sync_project_tickets_for_state,
+        )
+
+        resolved = await resolve_for_workspace(
+            session=session, settings=settings, workspace_id=workspace_id
+        )
+        gateway = resolved.gateway if resolved is not None else None
+        kind = resolved.kind if resolved is not None else None
+        for project_id, new_state in flipped:
+            await sync_project_tickets_for_state(
+                session,
+                workspace_id=workspace_id,
+                project_id=project_id,
+                new_state=new_state,
+                gateway=gateway,
+                tracker_kind=kind,
+                actor_user_id=auth.user.id,
+                actor_token_id=auth.token.id if auth.token else None,
+            )
 
     return await get_priorities(
         workspace_id=workspace_id,
