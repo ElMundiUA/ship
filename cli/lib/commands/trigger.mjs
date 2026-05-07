@@ -288,31 +288,68 @@ async function claimRoutine(baseUrl, token, workspaceId, repoId, event, routine)
   }
 }
 
+// Retry on transient edge 5xx (502/503/504) and on network errors —
+// Bunny CDN occasionally fails to reach origin even when origin is
+// healthy, and the GitHub-Actions cron tick that drives this CLI
+// shouldn't go red over a one-shot edge blip. Three attempts with
+// exponential backoff cover the typical 1-3 second Bunny recovery
+// window. 4xx and other 5xx codes (genuine API errors) still throw
+// on the first attempt so a real bug surfaces fast.
+const _RETRY_DELAYS_MS = [500, 1500, 4500];
+const _TRANSIENT_STATUSES = new Set([502, 503, 504]);
+
+
 async function apiRequest(baseUrl, path, method, token, body) {
   const url = `${baseUrl}${path}`;
-  let res;
-  try {
-    res = await fetch(url, {
-      method,
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: body === null ? undefined : JSON.stringify(body),
-    });
-  } catch (err) {
-    console.error(`Network error calling ${url}: ${err instanceof Error ? err.message : err}`);
-    process.exit(3);
+  let lastError = null;
+  for (let attempt = 0; attempt <= _RETRY_DELAYS_MS.length; attempt += 1) {
+    if (attempt > 0) {
+      await new Promise((r) => setTimeout(r, _RETRY_DELAYS_MS[attempt - 1]));
+    }
+    let res;
+    try {
+      res = await fetch(url, {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: body === null ? undefined : JSON.stringify(body),
+      });
+    } catch (err) {
+      // Network error (DNS, TCP, TLS). These are genuinely transient;
+      // log + retry rather than exit 3 immediately.
+      lastError = err instanceof Error ? err : new Error(String(err));
+      if (attempt < _RETRY_DELAYS_MS.length) {
+        console.error(
+          `warn: network error on ${method} ${url} (attempt ${attempt + 1}/${_RETRY_DELAYS_MS.length + 1}): ${lastError.message}`,
+        );
+        continue;
+      }
+      console.error(`Network error calling ${url}: ${lastError.message}`);
+      process.exit(3);
+    }
+    const text = await res.text();
+    let data = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      data = text;
+    }
+    if (res.ok) return data;
+    if (
+      _TRANSIENT_STATUSES.has(res.status)
+      && attempt < _RETRY_DELAYS_MS.length
+    ) {
+      console.error(
+        `warn: transient ${res.status} on ${method} ${url} (attempt ${attempt + 1}/${_RETRY_DELAYS_MS.length + 1}); retrying`,
+      );
+      continue;
+    }
+    const msg = typeof data === "string" ? data : JSON.stringify(data);
+    throw new Error(`HTTP ${res.status} ${res.statusText} on ${method} ${url}\n${msg}`);
   }
-  const text = await res.text();
-  let data = null;
-  try {
-    data = text ? JSON.parse(text) : null;
-  } catch {
-    data = text;
-  }
-  if (res.ok) return data;
-  const msg = typeof data === "string" ? data : JSON.stringify(data);
-  throw new Error(`HTTP ${res.status} ${res.statusText} on ${method} ${url}\n${msg}`);
+  // Unreachable — the loop above always returns or throws.
+  throw new Error(`apiRequest exhausted retries for ${url}`);
 }
