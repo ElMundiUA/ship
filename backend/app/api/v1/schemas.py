@@ -53,6 +53,7 @@ class WorkspaceOut(BaseModel):
     name: str
     catalog_sources: dict
     default_agent_profile: str | None = None
+    agent_provider: str
     created_at: datetime
 
 
@@ -130,6 +131,24 @@ class WorkspaceUpdate(BaseModel):
     default_agent_profile: str | None = Field(
         default=None, min_length=1, max_length=64
     )
+    # Bound autonomous-pipeline runtime. Validated against
+    # :data:`backend.app.services.agent_provider_resolver.SUPPORTED_PROVIDERS`
+    # at the route layer.
+    agent_provider: str | None = Field(default=None, min_length=1, max_length=16)
+
+
+class AgentProviderOut(BaseModel):
+    """``GET /v1/workspaces/{ws}/agent-provider`` response."""
+
+    workspace_id: uuid.UUID
+    kind: str
+    supported: list[str]
+
+
+class AgentProviderUpdate(BaseModel):
+    """``PUT /v1/workspaces/{ws}/agent-provider`` body."""
+
+    kind: str = Field(min_length=1, max_length=16)
 
 
 # --- Members ---
