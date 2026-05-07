@@ -45,6 +45,7 @@
  * (intake, BA, planner) don't push commits at all.
  */
 
+import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import path from "node:path";
 
@@ -317,6 +318,31 @@ async function _runCommandImpl(ctx, rest) {
   const provider =
     workspaceProvider || resolveProvider(config, args.routine || specialistSlug);
   const branchName = makeBranchName(runHandle, task?.ticket_ref);
+  const baseBranch = (env.githubRef || "main").trim() || "main";
+
+  // 4a) When the runner asked us to drive the full local-mode loop
+  // (``--commit-and-pr``), prep the branch ourselves before invoking
+  // the adapter so the agent's commits land on a fresh head off
+  // ``baseBranch``. Local dev runs without the flag stay in cwd —
+  // useful for prompt iteration without yanking the working tree.
+  if (args.commitAndPr) {
+    try {
+      prepareGitBranch({ branchName, baseBranch });
+    } catch (err) {
+      emit(args, {
+        status: "error",
+        routine: args.routine,
+        specialist: specialistSlug,
+        run_id: runId,
+        run_handle: runHandle,
+        stage: "prepare_branch",
+        provider,
+        branch: branchName,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      process.exit(EXIT_AGENT_FAIL);
+    }
+  }
 
   let runtime;
   try {
@@ -339,8 +365,74 @@ async function _runCommandImpl(ctx, rest) {
     process.exit(EXIT_AGENT_FAIL);
   }
 
-  // Push + PR creation happen in the workflow step after this exits;
-  // the agent has finished committing on ``branchName`` by now.
+  // 4b) Push the branch + open a PR when the runner asked us to.
+  // Skip cleanly if the agent didn't commit anything (noop run) so
+  // we don't push an empty branch and we don't open a PR with no
+  // diff. ``runtime.status === 'ERRORED'`` short-circuits the same
+  // way — we surface the error to the caller and skip the push.
+  let pushed = null;
+  let prUrl = null;
+  if (args.commitAndPr) {
+    if (runtime.status !== "FINISHED") {
+      emit(args, {
+        status: "error",
+        routine: args.routine,
+        specialist: specialistSlug,
+        run_id: runId,
+        run_handle: runHandle,
+        stage: "agent_runtime",
+        provider,
+        branch: branchName,
+        runtime_status: runtime.status,
+        exit_code: runtime.exitCode,
+        error: `agent runtime ${runtime.status} (exit=${runtime.exitCode})`,
+      });
+      process.exit(EXIT_AGENT_FAIL);
+    }
+    if (!hasNewCommits(baseBranch)) {
+      emit(args, {
+        status: "noop_no_commits",
+        routine: args.routine,
+        specialist: specialistSlug,
+        fsm_stage: fsmStage,
+        ticket_ref: task?.ticket_ref || null,
+        provider,
+        branch: branchName,
+        run_id: runId,
+        run_handle: runHandle,
+      });
+      process.exit(EXIT_OK);
+    }
+    try {
+      pushed = pushBranch({ branchName });
+      prUrl = openPullRequest({
+        branchName,
+        baseBranch,
+        title: makePrTitle({ specialist: specialistSlug, fsmStage, task }),
+        body: makePrBody({
+          specialist: specialistSlug,
+          fsmStage,
+          task,
+          provider,
+          runHandle,
+        }),
+      });
+    } catch (err) {
+      emit(args, {
+        status: "error",
+        routine: args.routine,
+        specialist: specialistSlug,
+        run_id: runId,
+        run_handle: runHandle,
+        stage: pushed ? "open_pr" : "push_branch",
+        provider,
+        branch: branchName,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      process.exit(EXIT_AGENT_FAIL);
+    }
+  }
+
   emit(args, {
     status: "completed",
     routine: args.routine,
@@ -352,10 +444,127 @@ async function _runCommandImpl(ctx, rest) {
     provider,
     runtime_status: runtime.status,
     exit_code: runtime.exitCode,
+    pushed: Boolean(pushed),
+    pr_url: prUrl,
     run_id: runId,
     run_handle: runHandle,
   });
   process.exit(EXIT_OK);
+}
+
+
+// ---------------------------------------------------------------------------
+// Git + PR helpers (used only when ``--commit-and-pr`` is set, i.e. the
+// workflow runner mode). Kept inline rather than in a separate module so
+// dev runs without ``--commit-and-pr`` don't pull these into the import
+// graph at all — local prompt iteration shouldn't shell out to git.
+// ---------------------------------------------------------------------------
+
+
+function git(args, { capture = false } = {}) {
+  const res = spawnSync("git", args, {
+    stdio: capture ? ["ignore", "pipe", "pipe"] : "inherit",
+    encoding: "utf8",
+  });
+  if (res.status !== 0) {
+    const stderr = capture ? (res.stderr || "").trim() : "";
+    throw new Error(`git ${args.join(" ")} failed (exit=${res.status}) ${stderr}`);
+  }
+  return capture ? (res.stdout || "").trim() : "";
+}
+
+
+function prepareGitBranch({ branchName, baseBranch }) {
+  // Only set committer identity if the runner hasn't already (idempotent
+  // — overwriting a workspace-level config is fine on an ephemeral CI
+  // runner; on dev this branch is unreachable because --commit-and-pr
+  // isn't passed).
+  spawnSync("git", ["config", "user.email", "ship-agent@elmundi.com"]);
+  spawnSync("git", ["config", "user.name", "Ship Agent"]);
+  // Make sure we're freshly on baseBranch, not on whatever branch the
+  // previous step left us on. The runner is one-shot but we still
+  // hard-fail loudly if HEAD is dirty (uncommitted changes from a
+  // previous tick → broken cache pollution).
+  const status = git(["status", "--porcelain"], { capture: true });
+  if (status) {
+    throw new Error(`working tree dirty before agent run: ${status.split("\n")[0]}`);
+  }
+  git(["checkout", "-B", branchName, baseBranch]);
+}
+
+
+function hasNewCommits(baseBranch) {
+  // ``git rev-list --count baseBranch..HEAD`` returns 0 when no commits
+  // were made on top of base. We use this instead of comparing diffs
+  // because the agent might have committed an empty change (rare but
+  // possible) — we still want to push that for traceability.
+  try {
+    const out = git(["rev-list", "--count", `${baseBranch}..HEAD`], { capture: true });
+    return Number(out || "0") > 0;
+  } catch {
+    return false;
+  }
+}
+
+
+function pushBranch({ branchName }) {
+  git(["push", "-u", "origin", branchName]);
+  return branchName;
+}
+
+
+function openPullRequest({ branchName, baseBranch, title, body }) {
+  // ``gh pr create`` is the cheapest path — the workflow grants
+  // ``pull-requests: write`` to GITHUB_TOKEN, which gh picks up
+  // automatically. If gh isn't on PATH we degrade quietly: the branch
+  // is pushed, the operator can open the PR by hand from the runner
+  // log's branch URL.
+  const probe = spawnSync("gh", ["--version"], { stdio: "ignore" });
+  if (probe.status !== 0) return null;
+  const res = spawnSync(
+    "gh",
+    [
+      "pr",
+      "create",
+      "--base",
+      baseBranch,
+      "--head",
+      branchName,
+      "--title",
+      title,
+      "--body",
+      body,
+    ],
+    { encoding: "utf8" },
+  );
+  if (res.status !== 0) {
+    throw new Error(
+      `gh pr create failed (exit=${res.status}) ${(res.stderr || "").trim()}`,
+    );
+  }
+  return (res.stdout || "").trim();
+}
+
+
+function makePrTitle({ specialist, fsmStage, task }) {
+  const ticket = task?.ticket_ref ? ` ${task.ticket_ref}` : "";
+  const stage = fsmStage ? ` · ${fsmStage}` : "";
+  return `agent: ${specialist}${stage}${ticket}`;
+}
+
+
+function makePrBody({ specialist, fsmStage, task, provider, runHandle }) {
+  const lines = [
+    `Autonomous agent run via Ship pipeline.`,
+    "",
+    `- specialist: \`${specialist}\``,
+    `- provider: \`${provider}\``,
+    fsmStage ? `- fsm_stage: \`${fsmStage}\`` : null,
+    task?.ticket_ref ? `- ticket: \`${task.ticket_ref}\`` : null,
+    task?.url ? `- ticket url: ${task.url}` : null,
+    `- run_handle: \`${runHandle}\``,
+  ].filter(Boolean);
+  return lines.join("\n");
 }
 
 
@@ -776,6 +985,7 @@ function parseArgs(rest) {
     json: false,
     help: false,
     dryRun: false,
+    commitAndPr: false,
   };
   const copy = [...rest];
   while (copy.length) {
@@ -783,6 +993,7 @@ function parseArgs(rest) {
     if (a === "--help" || a === "-h") { out.help = true; copy.shift(); continue; }
     if (a === "--json") { out.json = true; copy.shift(); continue; }
     if (a === "--dry-run") { out.dryRun = true; copy.shift(); continue; }
+    if (a === "--commit-and-pr") { out.commitAndPr = true; copy.shift(); continue; }
     if (a === "--routine" && copy[1] !== undefined) { out.routine = copy[1]; copy.splice(0, 2); continue; }
     if (a === "--specialist" && copy[1] !== undefined) { out.specialist = copy[1]; copy.splice(0, 2); continue; }
     if (a === "--cwd" && copy[1] !== undefined) { out.cwd = path.resolve(copy[1]); copy.splice(0, 2); continue; }
