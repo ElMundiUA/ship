@@ -21,7 +21,6 @@ from backend.app.api.v1.routes import (
     artifact_repos,
     audit,
     auth,
-    buckets_resolver,
     analytics_dora,
     catalog,
     chat,
@@ -34,8 +33,6 @@ from backend.app.api.v1.routes import (
     health,
     improvements,
     inbox,
-    inbox_groups,
-    inbox_routing,
     integrations,
     invites,
     knowledge,
@@ -79,19 +76,6 @@ api_router.include_router(knowledge_import_sources.router)
 api_router.include_router(knowledge_canon.router)
 api_router.include_router(knowledge.router)
 api_router.include_router(members.router)
-# Operational groups for inbox routing (RFC-0010 §5). Distinct from
-# WorkspaceMember roles — these are "who handles X" buckets (secops,
-# eng_managers, on_call_eng) used by inbox_routing_rules to resolve
-# symbolic handles into concrete owners.
-api_router.include_router(inbox_groups.router)
-# Inbox routing rules (RFC-0010 §6). Maps symbolic handles
-# (`secops`, `repo_maintainer`, …) to concrete users/groups/
-# strategies; consulted by services.inbox.routing.resolve_handle
-# at intake time. Admin-only mutations; preview endpoint is
-# explicitly side-effect free for "what would this do?" UX.
-# Mounted BEFORE `inbox.router` so the literal `/inbox/routing*`
-# paths win over `inbox`'s `/inbox/{item_id}` parameter capture.
-api_router.include_router(inbox_routing.router)
 # Unified inbox surface (RFC-0010 §5). List/detail/disposition over
 # inbox_items + inbox_item_events. Reassignment delegates to the
 # routing service (services.inbox.routing). Owner-or-admin RBAC for
@@ -167,11 +151,6 @@ api_router.include_router(clarifications.pipeline_router)
 # run-token ingress on /improvements/pipeline.
 api_router.include_router(improvements.router)
 api_router.include_router(improvements.pipeline_router)
-# Buckets resolver — Phase 3 of the knowledge consolidation. Included
-# BEFORE chat.router so ``/buckets/resolved`` matches the literal path
-# here instead of being captured by chat's ``/buckets/{slug}`` route.
-# See backend/docs/knowledge-consolidation.md.
-api_router.include_router(buckets_resolver.router)
 # Distiller — Phase 6 ingest surface for bucket articles. Mounted
 # BEFORE chat.router so ``/buckets/{slug}/distill`` and
 # ``/buckets/{slug}/distill/runs`` take precedence over chat's
