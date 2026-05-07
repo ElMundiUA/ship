@@ -1509,17 +1509,26 @@ class RelabelStagesIn(BaseModel):
     Both lists accept Ship FSM stage names (``task_intake``,
     ``ba_requirements``, …). The bound tracker resolves them to native
     label ids; an unknown stage 422s.
+
+    ``set_state`` is an optional Linear workflow-state name (``Todo``
+    / ``In Progress`` / ``Backlog`` / ``Done`` / ``Canceled``). When
+    set, the endpoint also moves the ticket's workflow state via the
+    legacy literal-name path. Useful for resetting state after a
+    transition we want to undo (e.g. reverting from In Progress back
+    to Todo so a prior FSM picker can re-fire).
     """
 
     ticket_ref: str = Field(min_length=1, max_length=128)
     add: list[str] = Field(default_factory=list)
     remove: list[str] = Field(default_factory=list)
+    set_state: str | None = Field(default=None, max_length=64)
 
 
 class RelabelStagesOut(BaseModel):
     ticket_ref: str
     added: list[str] = Field(default_factory=list)
     removed: list[str] = Field(default_factory=list)
+    state_changed_to: str | None = None
 
 
 class TicketCommentSnapshot(BaseModel):
@@ -2492,6 +2501,26 @@ async def post_admin_relabel_stages(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    state_changed_to: str | None = None
+    if payload.set_state:
+        # Use the legacy literal-state path on the tracker — it
+        # resolves the workflow state by name on the issue's team
+        # without touching labels. Lets the operator reset state
+        # ("Todo" / "Backlog" / "In Progress" / "Done" / "Canceled")
+        # without faking an agent finish.
+        try:
+            await resolved.gateway.transition(ref, to_state=payload.set_state)
+            state_changed_to = payload.set_state
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "code": "set_state_failed",
+                    "set_state": payload.set_state,
+                    "error": str(exc)[:300],
+                },
+            ) from exc
+
     session.add(
         AuditLog(
             workspace_id=workspace_id,
@@ -2505,6 +2534,8 @@ async def post_admin_relabel_stages(
                 "remove_requested": payload.remove,
                 "added": result.get("added") or [],
                 "removed": result.get("removed") or [],
+                "set_state": payload.set_state,
+                "state_changed_to": state_changed_to,
             },
         )
     )
@@ -2514,6 +2545,7 @@ async def post_admin_relabel_stages(
         ticket_ref=payload.ticket_ref,
         added=result.get("added") or [],
         removed=result.get("removed") or [],
+        state_changed_to=state_changed_to,
     )
 
 
