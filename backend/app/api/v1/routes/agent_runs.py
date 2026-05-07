@@ -1522,6 +1522,32 @@ class RelabelStagesOut(BaseModel):
     removed: list[str] = Field(default_factory=list)
 
 
+class TicketCommentSnapshot(BaseModel):
+    """One comment row in ``GET /admin/ticket-snapshot``."""
+
+    id: str | None = None
+    body: str = ""
+    author: str | None = None
+    created_at: str | None = None
+
+
+class TicketSnapshotOut(BaseModel):
+    """Full read-back of a ticket: title + description + state + labels +
+    comments (oldest first). Operator-driven diff tool — used to
+    capture before/after a stage agent runs without a separate
+    Linear-side query.
+    """
+
+    ticket_ref: str
+    title: str | None = None
+    description: str | None = None
+    url: str | None = None
+    state: str | None = None
+    labels: list[str] = Field(default_factory=list)
+    project_id: str | None = None
+    comments: list[TicketCommentSnapshot] = Field(default_factory=list)
+
+
 @router.post("/admin/ticket-action", response_model=TicketActionOut)
 async def post_ticket_action(
     workspace_id: uuid.UUID,
@@ -2343,6 +2369,89 @@ class RoutineDispatchOut(BaseModel):
     workflow_file: str
     routine_id: str
     ticket_ref: str | None
+
+
+@router.get(
+    "/admin/ticket-snapshot/{ticket_ref}",
+    response_model=TicketSnapshotOut,
+)
+async def get_admin_ticket_snapshot(
+    workspace_id: uuid.UUID,
+    ticket_ref: str,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> TicketSnapshotOut:
+    """Snapshot a ticket's display fields + all comments.
+
+    Operator-driven diff tool: capture the ticket state before a
+    stage agent runs, capture again after, eyeball what the agent
+    actually changed. Linear keeps the issue activity feed
+    server-side so one-shot snapshots are enough — no need for a
+    history endpoint.
+
+    Admin-only — surfaces the full description body which can carry
+    sensitive ticket text.
+    """
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+
+    resolved = await resolve_for_workspace(
+        session=session, settings=settings, workspace_id=workspace_id
+    )
+    if resolved is None:
+        raise HTTPException(status_code=422, detail="no_tracker_bound")
+
+    snapshot_fn = getattr(resolved.gateway, "get_ticket_snapshot", None)
+    if snapshot_fn is None:
+        raise HTTPException(
+            status_code=501,
+            detail={
+                "code": "ticket_snapshot_unsupported",
+                "tracker_kind": resolved.kind,
+            },
+        )
+
+    ref = _ticket_ref_from(resolved.kind, ticket_ref)
+    snap = await snapshot_fn(ref)
+    if snap is None:
+        raise HTTPException(status_code=404, detail="ticket not found")
+
+    comments_fn = getattr(resolved.gateway, "list_comments", None)
+    raw_comments: list[Any] = []
+    if comments_fn is not None:
+        try:
+            raw_comments = await comments_fn(ref)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "admin/ticket-snapshot: list_comments failed ref=%s err=%s",
+                ticket_ref,
+                exc,
+            )
+    comments: list[TicketCommentSnapshot] = []
+    for c in raw_comments or []:
+        # ``CommentRef`` is a dataclass-ish shape from gateway/tracker.py;
+        # we accept either dataclass attributes or dict keys so this
+        # endpoint stays adapter-agnostic.
+        get = (lambda obj, k: getattr(obj, k, None) if not isinstance(obj, dict) else obj.get(k))
+        comments.append(
+            TicketCommentSnapshot(
+                id=str(get(c, "id") or "") or None,
+                body=str(get(c, "body") or ""),
+                author=str(get(c, "author") or "") or None,
+                created_at=str(get(c, "created_at") or "") or None,
+            )
+        )
+
+    return TicketSnapshotOut(
+        ticket_ref=snap.get("ticket_ref") or ticket_ref,
+        title=snap.get("title"),
+        description=snap.get("description"),
+        url=snap.get("url"),
+        state=snap.get("state"),
+        labels=snap.get("labels") or [],
+        project_id=snap.get("project_id"),
+        comments=comments,
+    )
 
 
 @router.post("/admin/relabel-stages", response_model=RelabelStagesOut)
