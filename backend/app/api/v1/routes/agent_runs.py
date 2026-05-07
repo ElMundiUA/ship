@@ -1498,6 +1498,30 @@ class TicketActionOut(BaseModel):
     note: str | None = None
 
 
+class RelabelStagesIn(BaseModel):
+    """Surgical add/remove of FSM stage labels on a ticket.
+
+    Operator escape hatch for fixing a stuck breadcrumb state when a
+    prior buggy run wrote the wrong stage label (or when the
+    operator wants to fast-forward / rewind a ticket through the
+    chain manually).
+
+    Both lists accept Ship FSM stage names (``task_intake``,
+    ``ba_requirements``, …). The bound tracker resolves them to native
+    label ids; an unknown stage 422s.
+    """
+
+    ticket_ref: str = Field(min_length=1, max_length=128)
+    add: list[str] = Field(default_factory=list)
+    remove: list[str] = Field(default_factory=list)
+
+
+class RelabelStagesOut(BaseModel):
+    ticket_ref: str
+    added: list[str] = Field(default_factory=list)
+    removed: list[str] = Field(default_factory=list)
+
+
 @router.post("/admin/ticket-action", response_model=TicketActionOut)
 async def post_ticket_action(
     workspace_id: uuid.UUID,
@@ -2319,6 +2343,69 @@ class RoutineDispatchOut(BaseModel):
     workflow_file: str
     routine_id: str
     ticket_ref: str | None
+
+
+@router.post("/admin/relabel-stages", response_model=RelabelStagesOut)
+async def post_admin_relabel_stages(
+    workspace_id: uuid.UUID,
+    payload: RelabelStagesIn,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> RelabelStagesOut:
+    """Surgically add/remove FSM stage labels on a ticket.
+
+    Admin-only. Calls the bound tracker's ``relabel_stages`` —
+    available on Linear today; other adapters surface a 501 until they
+    implement it.
+    """
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+
+    resolved = await resolve_for_workspace(
+        session=session, settings=settings, workspace_id=workspace_id
+    )
+    if resolved is None:
+        raise HTTPException(status_code=422, detail="no_tracker_bound")
+
+    relabel_fn = getattr(resolved.gateway, "relabel_stages", None)
+    if relabel_fn is None:
+        raise HTTPException(
+            status_code=501,
+            detail={
+                "code": "relabel_stages_unsupported",
+                "tracker_kind": resolved.kind,
+            },
+        )
+
+    ref = _ticket_ref_from(resolved.kind, payload.ticket_ref)
+    try:
+        result = await relabel_fn(ref, add=payload.add, remove=payload.remove)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=auth.user.id,
+            actor_token_id=auth.token.id if auth.token else None,
+            action="tracker.relabel_stages",
+            target_kind="ticket",
+            target_id=payload.ticket_ref,
+            payload={
+                "add_requested": payload.add,
+                "remove_requested": payload.remove,
+                "added": result.get("added") or [],
+                "removed": result.get("removed") or [],
+            },
+        )
+    )
+    await session.flush()
+
+    return RelabelStagesOut(
+        ticket_ref=payload.ticket_ref,
+        added=result.get("added") or [],
+        removed=result.get("removed") or [],
+    )
 
 
 @router.post("/agent-runs/dispatch", response_model=RoutineDispatchOut)
