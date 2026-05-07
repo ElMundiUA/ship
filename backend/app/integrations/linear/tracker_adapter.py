@@ -1262,6 +1262,132 @@ class LinearTracker:
             )
         return out
 
+    async def list_orphan_tickets(
+        self, *, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        """List open Linear issues that aren't attached to any project.
+
+        Used by the orphan-ticket admin sweep — the audit log only
+        captures refs the picker has actively tried (limited by which
+        stages the cron has rotated through), so a comprehensive
+        cleanup needs the full set straight from the source. Filters
+        to the configured team when ``self._team_id`` is set so we
+        don't surface other teams' orphans an admin can't act on.
+
+        Linear's ``project: {null: true}`` is the canonical "no
+        project" filter on ``IssueFilter`` (NullableProjectFilter
+        pattern). Coupled with ``state.type.nin`` we drop already-
+        completed / cancelled rows so the operator's cleanup view
+        only carries actionable orphans.
+        """
+        first = max(1, min(limit, 250))
+        parts: list[dict[str, Any]] = [
+            {"state": {"type": {"nin": ["completed", "canceled"]}}},
+            {"project": {"null": True}},
+        ]
+        if self._team_id:
+            parts.append({"team": {"id": {"eq": self._team_id}}})
+        issue_filter: dict[str, Any] = {"and": parts}
+
+        query = """
+        query ShipListOrphans($first: Int!, $filter: IssueFilter!) {
+          issues(first: $first, orderBy: updatedAt, filter: $filter) {
+            nodes {
+              id
+              identifier
+              title
+              description
+              url
+              state { name type }
+              labels { nodes { name } }
+              updatedAt
+            }
+          }
+        }
+        """
+        try:
+            data = await self._gql(query, {"first": first, "filter": issue_filter})
+        except RuntimeError:
+            # Older Linear schemas without ``NullableProjectFilter``
+            # would reject ``{null: true}``. Fall back to listing the
+            # team's open issues + filtering client-side. Conservative
+            # — costs us a wider read but never misses orphans.
+            return await self._list_orphan_tickets_fallback(limit=first)
+        nodes = (data.get("issues") or {}).get("nodes") or []
+        return [
+            {
+                "ticket_ref": node.get("identifier") or node.get("id"),
+                "title": node.get("title") or "",
+                "description": node.get("description"),
+                "url": node.get("url"),
+                "state": (node.get("state") or {}).get("name"),
+                "labels": [
+                    lbl.get("name")
+                    for lbl in (node.get("labels") or {}).get("nodes") or []
+                    if lbl.get("name")
+                ],
+                "project_id": None,  # by construction
+            }
+            for node in nodes
+        ]
+
+    async def _list_orphan_tickets_fallback(
+        self, *, limit: int
+    ) -> list[dict[str, Any]]:
+        """Fallback path used when Linear rejects ``project: {null: true}``.
+
+        Pulls the team's open issues with ``project { id }`` projected
+        and filters client-side. Costs one extra round-trip for every
+        ticket the picker would have skipped on the server, but the
+        operator only runs this sweep manually so the wider read is
+        acceptable.
+        """
+        parts: list[dict[str, Any]] = [
+            {"state": {"type": {"nin": ["completed", "canceled"]}}}
+        ]
+        if self._team_id:
+            parts.append({"team": {"id": {"eq": self._team_id}}})
+        issue_filter: dict[str, Any] = {"and": parts}
+        query = """
+        query ShipListOpen($first: Int!, $filter: IssueFilter!) {
+          issues(first: $first, orderBy: updatedAt, filter: $filter) {
+            nodes {
+              id
+              identifier
+              title
+              description
+              url
+              state { name type }
+              labels { nodes { name } }
+              project { id }
+            }
+          }
+        }
+        """
+        data = await self._gql(query, {"first": limit, "filter": issue_filter})
+        nodes = (data.get("issues") or {}).get("nodes") or []
+        out: list[dict[str, Any]] = []
+        for node in nodes:
+            project = node.get("project") or {}
+            if project and project.get("id"):
+                continue
+            out.append(
+                {
+                    "ticket_ref": node.get("identifier") or node.get("id"),
+                    "title": node.get("title") or "",
+                    "description": node.get("description"),
+                    "url": node.get("url"),
+                    "state": (node.get("state") or {}).get("name"),
+                    "labels": [
+                        lbl.get("name")
+                        for lbl in (node.get("labels") or {}).get("nodes") or []
+                        if lbl.get("name")
+                    ],
+                    "project_id": None,
+                }
+            )
+        return out
+
     async def get_ticket_snapshot(
         self, ticket: TicketRef
     ) -> dict[str, Any] | None:

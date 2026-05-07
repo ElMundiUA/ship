@@ -1388,19 +1388,30 @@ async def get_orphan_tickets(
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> OrphanAuditOut:
-    """Pull the unique set of orphan ticket refs from the audit log,
-    snapshot each from Linear, plus list every existing project so the
-    operator can see where to re-home them.
+    """List every open ticket the workspace's tracker has without a
+    project association, plus the existing project list.
 
-    Reads ``agent_run.orphan_skipped`` rows for context — those are the
-    refs the picker dropped — then re-snapshots each from Linear so we
-    pick up any state / label / project changes that landed since the
-    skip was logged.
+    The earlier audit-log walk only surfaced tickets the picker had
+    actively tried (limited by which FSM stages the cron rotated
+    through), so the operator could see e.g. ELS-17/18/.../27 but
+    not orphans the picker hadn't reached yet. This now queries
+    Linear directly via ``list_orphan_tickets`` (filter
+    ``project: {null: true}``) so the cleanup view is comprehensive
+    rather than picker-driven.
     """
     from sqlalchemy import desc as sa_desc
 
     await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
 
+    resolved = await resolve_for_workspace(
+        session=session, settings=settings, workspace_id=workspace_id
+    )
+    if resolved is None:
+        return OrphanAuditOut(tickets=[], projects=[])
+
+    # Map ticket_ref → most-recent fsm_stage seen by the picker, so
+    # the operator can see "where the agent last saw it" alongside
+    # the row. Best-effort — empty audit log just means no annotation.
     rows = (
         await session.execute(
             sa_select(AuditLog)
@@ -1409,58 +1420,45 @@ async def get_orphan_tickets(
                 AuditLog.action == "agent_run.orphan_skipped",
             )
             .order_by(sa_desc(AuditLog.created_at))
-            .limit(200)
+            .limit(500)
         )
     ).scalars().all()
-    seen: dict[str, str | None] = {}
+    fsm_stage_by_ref: dict[str, str] = {}
     for r in rows:
         ticket_ref = (r.target_id or "").strip()
-        if not ticket_ref or ticket_ref in seen:
-            continue
-        seen[ticket_ref] = (r.payload or {}).get("fsm_stage")
-
-    resolved = await resolve_for_workspace(
-        session=session, settings=settings, workspace_id=workspace_id
-    )
-    if resolved is None:
-        return OrphanAuditOut(tickets=[], projects=[])
-
-    snapshot_fn = getattr(resolved.gateway, "get_ticket_snapshot", None)
-    list_projects_fn = getattr(resolved.gateway, "list_projects", None)
+        if ticket_ref and ticket_ref not in fsm_stage_by_ref:
+            stage = (r.payload or {}).get("fsm_stage")
+            if stage:
+                fsm_stage_by_ref[ticket_ref] = stage
 
     tickets_out: list[OrphanTicketRow] = []
-    if snapshot_fn is not None:
-        for ticket_ref, fsm_stage in seen.items():
-            try:
-                snap = await snapshot_fn(
-                    _ticket_ref_from(resolved.kind, ticket_ref)
-                )
-            except Exception:  # noqa: BLE001 — best effort
-                snap = None
-            if not snap:
-                continue
-            # Skip tickets that have since gained a project — they're
-            # no longer orphans, just historical audit noise. Also skip
-            # closed states (Canceled / Done) so the operator's audit
-            # view doesn't carry tickets they already disposed of.
-            if snap.get("project_id"):
-                continue
-            state_label = (snap.get("state") or "").strip().lower()
-            if state_label in {"canceled", "cancelled", "done", "completed"}:
-                continue
+    list_orphans_fn = getattr(resolved.gateway, "list_orphan_tickets", None)
+    if list_orphans_fn is not None:
+        try:
+            orphans = await list_orphans_fn(limit=200)
+        except Exception as exc:  # noqa: BLE001 — surface partial result
+            logger.warning(
+                "orphan-tickets: list_orphan_tickets failed ws=%s err=%s",
+                workspace_id,
+                exc,
+            )
+            orphans = []
+        for row in orphans:
+            ref = row.get("ticket_ref") or ""
             tickets_out.append(
                 OrphanTicketRow(
-                    ticket_ref=snap.get("ticket_ref") or ticket_ref,
-                    title=snap.get("title") or "",
-                    state=snap.get("state"),
-                    labels=list(snap.get("labels") or []),
-                    description=(snap.get("description") or "")[:1500] or None,
-                    url=snap.get("url"),
-                    fsm_stage_seen=fsm_stage,
+                    ticket_ref=ref,
+                    title=row.get("title") or "",
+                    state=row.get("state"),
+                    labels=list(row.get("labels") or []),
+                    description=(row.get("description") or "")[:1500] or None,
+                    url=row.get("url"),
+                    fsm_stage_seen=fsm_stage_by_ref.get(ref),
                 )
             )
 
     projects_out: list[TrackerProjectRow] = []
+    list_projects_fn = getattr(resolved.gateway, "list_projects", None)
     if list_projects_fn is not None:
         try:
             projects = await list_projects_fn(limit=100)
