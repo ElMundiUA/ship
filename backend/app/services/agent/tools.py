@@ -4102,6 +4102,17 @@ class ToolBox:
         if has_github_install:
             available.add("github_issues")
 
+        # Bound-tracker precedence: when the caller doesn't pin a kind,
+        # pick the workspace's canonical tracker following the same
+        # ranking ``tracker_resolver.resolve_for_workspace`` uses for
+        # the picker / agent-runs path. Without this, a workspace
+        # carrying Linear *plus* an activated GitHub repo would 422
+        # every Navigator tool call as "multiple trackers available"
+        # — even though Linear is unambiguously the bound tracker.
+        # GitHub Issues stays in ``available`` as a fallback only when
+        # nothing higher-priority is configured.
+        _PRIMARY_PRECEDENCE = ("linear", "jira", "notion", "github_issues")
+
         if preferred_kind:
             if preferred_kind not in available:
                 raise ToolInvocationError(
@@ -4111,9 +4122,13 @@ class ToolBox:
         elif len(available) == 1:
             chosen = next(iter(available))
         else:
-            raise ToolInvocationError(
-                f"multiple trackers available ({sorted(available)}); pass tracker="
-            )
+            ranked = [k for k in _PRIMARY_PRECEDENCE if k in available]
+            if ranked:
+                chosen = ranked[0]
+            else:
+                raise ToolInvocationError(
+                    f"multiple trackers available ({sorted(available)}); pass tracker="
+                )
 
         if chosen in {"linear", "notion", "jira"}:
             if chosen == "linear" and native_linear_credential is not None:
