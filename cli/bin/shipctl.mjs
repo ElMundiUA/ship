@@ -93,6 +93,12 @@ try {
     process.exit(0);
   }
 
+  if (cmd === "tracker") {
+    const { trackerCommand } = await import("../lib/commands/tracker.mjs");
+    await trackerCommand(ctx, rest);
+    process.exit(0);
+  }
+
   if (cmd === "run") {
     const { runCommand } = await import("../lib/commands/run.mjs");
     await runCommand(ctx, rest);

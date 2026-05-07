@@ -41,9 +41,29 @@ not** create tickets. Silence is the correct signal for a clean run.
 
 ## Filing a ticket
 
-For each unique **package + vulnerability (id/CVE)** combo, create
-one ticket on the tracker against `$PROJECT_ID` (use your tracker
-MCP / API surface — set `priority` per the table above):
+For each unique **package + vulnerability (id/CVE)** combo, file
+one ticket via `shipctl` against `$PROJECT_ID`. **Don't reach into
+Linear MCP directly** — Cursor's MCP often holds a different
+organisation's PAT than the workspace under audit. `shipctl
+tracker create-ticket` routes through Ship's bound OAuth.
+
+```bash
+# Dedup against existing CVE tickets
+shipctl tracker list-project-tickets --project-id "$PROJECT_ID" \
+  > /tmp/security-open.tsv
+# Search the title column for the package + CVE combo before
+# filing — don't open a duplicate.
+
+# For each unique unfiled finding:
+shipctl tracker create-ticket \
+  --project-id "$PROJECT_ID" \
+  --title "<package>@<version>: <CVE-or-id> — <one-line summary>" \
+  --priority <1=Urgent|2=High|3=Medium|4=Low per Snyk severity> \
+  --labels "source:security-officer,audit:auto,security" \
+  --body-file /tmp/security-body.md
+```
+
+Each ticket should have:
 
 - **Title** — `<package>@<version>: <CVE-or-id> — <one-line summary>`.
 - **Body** — installed version, manifest path, severity (Snyk

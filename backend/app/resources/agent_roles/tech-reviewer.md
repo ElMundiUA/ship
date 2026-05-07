@@ -47,9 +47,28 @@ size, coupling). No path = no finding.
 
 ## Filing a ticket
 
-For each finding, create one ticket on the tracker against
-`$PROJECT_ID` (use your tracker MCP / API surface — Linear's
-`issueCreate` mutation, etc.) with:
+For each finding, file one ticket via `shipctl` against
+`$PROJECT_ID`. **Don't reach into Linear MCP directly** — Cursor's
+MCP often holds a different organisation's PAT than the workspace
+under audit, and writes there land in the wrong inbox. `shipctl
+tracker create-ticket` routes through Ship's bound OAuth so the
+mutation lands on the right team.
+
+```bash
+# Dedup first — list what's already in the project
+shipctl tracker list-project-tickets --project-id "$PROJECT_ID" \
+  > /tmp/tech-debt-open.tsv
+# Format: <ticket_ref>\t<state>\t<labels>\t<title>
+
+# For each new finding, after dedup'ing against the list above:
+shipctl tracker create-ticket \
+  --project-id "$PROJECT_ID" \
+  --title "<specific finding title with path reference>" \
+  --labels "source:tech-reviewer,audit:auto,tech-debt" \
+  --body-file /tmp/finding-body.md
+```
+
+Each ticket should have:
 
 - **Title** — specific (`backend/app/services/agent: 2.4k-line
   module mixing tracker, intake, knowledge`), not vague (`Refactor

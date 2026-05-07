@@ -723,6 +723,7 @@ class LinearTracker:
         labels: list[str] | None = None,
         project_hint: str | None = None,
         project_id: str | None = None,
+        priority: int | None = None,
     ) -> CreatedTicket:
         """Create a Linear issue under the requested team.
 
@@ -765,6 +766,12 @@ class LinearTracker:
             input_payload["labelIds"] = label_ids
         if project_id:
             input_payload["projectId"] = project_id
+        if priority is not None:
+            # Linear's priority is 0..4 (0=No priority, 1=Urgent,
+            # 2=High, 3=Medium, 4=Low). Clamp defensively — the
+            # security-officer routine maps Snyk severity onto this
+            # range and a bad mapping shouldn't crash issueCreate.
+            input_payload["priority"] = max(0, min(4, int(priority)))
 
         data = await self._gql(mutation, {"input": input_payload})
         issue = ((data.get("issueCreate") or {}).get("issue")) or {}
@@ -1261,6 +1268,71 @@ class LinearTracker:
                 )
             )
         return out
+
+    async def list_project_tickets(
+        self,
+        *,
+        project_id: str,
+        open_only: bool = True,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """List tickets attached to ``project_id`` for dedup loops.
+
+        The reviewer routines (tech-reviewer / qa-reviewer /
+        security-officer) call this once per pass to figure out which
+        findings already have an open ticket so they don't re-file the
+        same finding every cron cycle. ``open_only=True`` excludes
+        ``completed`` / ``canceled`` so the dedup window is "what's
+        still pending" rather than the whole project history.
+
+        Returns a list of ``{"id", "identifier", "title", "url",
+        "state", "labels"}``. ``identifier`` is the human ref
+        (``ELS-99``) the agent uses in its dedup key.
+        """
+        if not project_id:
+            return []
+        first = max(1, min(limit, 250))
+        parts: list[dict[str, Any]] = [
+            {"project": {"id": {"eq": project_id}}},
+        ]
+        if open_only:
+            parts.append(
+                {"state": {"type": {"nin": ["completed", "canceled"]}}}
+            )
+        if self._team_id:
+            parts.append({"team": {"id": {"eq": self._team_id}}})
+        issue_filter: dict[str, Any] = {"and": parts}
+        query = """
+        query ShipListProjectTickets($first: Int!, $filter: IssueFilter!) {
+          issues(first: $first, orderBy: updatedAt, filter: $filter) {
+            nodes {
+              id
+              identifier
+              title
+              url
+              state { name type }
+              labels { nodes { name } }
+            }
+          }
+        }
+        """
+        data = await self._gql(query, {"first": first, "filter": issue_filter})
+        nodes = (data.get("issues") or {}).get("nodes") or []
+        return [
+            {
+                "id": node.get("id"),
+                "identifier": node.get("identifier") or node.get("id"),
+                "title": node.get("title") or "",
+                "url": node.get("url"),
+                "state": (node.get("state") or {}).get("name"),
+                "labels": [
+                    lbl.get("name")
+                    for lbl in (node.get("labels") or {}).get("nodes") or []
+                    if lbl.get("name")
+                ],
+            }
+            for node in nodes
+        ]
 
     async def list_orphan_tickets(
         self, *, limit: int = 100

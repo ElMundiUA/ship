@@ -1,6 +1,6 @@
 {
   "name": "ship-landing",
-  "version": "0.16.4",
+  "version": "0.16.5",
   "private": true,
   "scripts": {
     "predev": "node scripts/sync-book.mjs && node scripts/build-blog-charts.mjs",

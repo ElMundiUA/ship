@@ -46,8 +46,26 @@ path = no finding.
 
 ## Filing a ticket
 
-For each meaningful gap, create one ticket on the tracker against
-`$PROJECT_ID` (use your tracker MCP / API surface) with:
+For each meaningful gap, file one ticket via `shipctl` against
+`$PROJECT_ID`. **Don't reach into Linear MCP directly** — Cursor's
+MCP often holds a different organisation's PAT than the workspace
+under audit. `shipctl tracker create-ticket` routes through Ship's
+bound OAuth.
+
+```bash
+# Dedup first
+shipctl tracker list-project-tickets --project-id "$PROJECT_ID" \
+  > /tmp/qa-debt-open.tsv
+
+# For each new gap, after dedup:
+shipctl tracker create-ticket \
+  --project-id "$PROJECT_ID" \
+  --title "<specific gap title with file path>" \
+  --labels "source:qa-reviewer,audit:auto,qa-debt" \
+  --body-file /tmp/gap-body.md
+```
+
+Each ticket should have:
 
 - **Title** — specific (`No e2e for /inbox preview pane`), not
   vague (`Improve test coverage`).

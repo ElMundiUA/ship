@@ -1600,6 +1600,168 @@ def _parse_iso_or_none(value: object) -> "datetime | None":
         return None
 
 
+class CreateTicketIn(BaseModel):
+    """Payload an agent posts (via ``shipctl tracker create-ticket``)
+    to file a ticket in the workspace's bound tracker, attached to a
+    specific project.
+
+    Reviewer routines (tech-reviewer / qa-reviewer / security-officer)
+    use this to file findings into their dedicated holding-pen
+    project. Going through Ship instead of Linear MCP directly keeps
+    the credentials right — Cursor's MCP often holds a different
+    org's PAT than the workspace under audit, and writes there land
+    in the wrong inbox.
+    """
+
+    project_id: str = Field(min_length=1, max_length=128)
+    title: str = Field(min_length=1, max_length=300)
+    body: str = Field(min_length=1, max_length=32 * 1024)
+    labels: list[str] = Field(default_factory=list, max_length=20)
+    priority: int | None = Field(default=None, ge=0, le=4)
+
+
+class CreateTicketOut(BaseModel):
+    ok: bool = True
+    ticket_ref: str
+    url: str | None = None
+
+
+@router.post("/tracker/tickets", response_model=CreateTicketOut)
+async def post_create_ticket(
+    workspace_id: uuid.UUID,
+    payload: CreateTicketIn,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> CreateTicketOut:
+    """Create a tracker issue inside ``project_id``.
+
+    Used by the reviewer routines for finding-driven ticket creation.
+    Idempotency / dedup is the caller's responsibility — list the
+    project's open tickets first via
+    ``GET /tracker/projects/{id}/tickets`` and skip if a matching
+    finding already has an open ticket.
+    """
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+    resolved = await resolve_for_workspace(
+        session=session, settings=settings, workspace_id=workspace_id
+    )
+    if resolved is None:
+        raise HTTPException(status_code=422, detail="no_tracker_bound")
+    create_fn = getattr(resolved.gateway, "create_ticket", None)
+    if create_fn is None:
+        raise HTTPException(
+            status_code=422,
+            detail="tracker does not support ticket creation",
+        )
+    try:
+        created = await create_fn(
+            title=payload.title,
+            body=payload.body,
+            labels=payload.labels or None,
+            project_id=payload.project_id,
+            priority=payload.priority,
+        )
+    except TypeError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"adapter doesn't support kwargs: {exc}",
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=auth.user.id,
+            actor_token_id=auth.token.id if auth.token else None,
+            action="agent_run.ticket_created",
+            target_kind="ticket",
+            target_id=created.display_id,
+            payload={
+                "project_id": payload.project_id,
+                "title": payload.title[:200],
+                "labels": list(payload.labels or []),
+                "priority": payload.priority,
+            },
+        )
+    )
+    await session.flush()
+    return CreateTicketOut(
+        ok=True, ticket_ref=created.display_id, url=created.url or None
+    )
+
+
+class ProjectTicketRow(BaseModel):
+    ticket_ref: str
+    title: str
+    state: str | None
+    url: str | None = None
+    labels: list[str] = Field(default_factory=list)
+
+
+class ProjectTicketsOut(BaseModel):
+    project_id: str
+    tickets: list[ProjectTicketRow]
+
+
+@router.get(
+    "/tracker/projects/{project_id}/tickets",
+    response_model=ProjectTicketsOut,
+)
+async def get_project_tickets(
+    workspace_id: uuid.UUID,
+    project_id: str,
+    open_only: bool = True,
+    limit: int = 100,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> ProjectTicketsOut:
+    """List tickets currently in ``project_id``.
+
+    Reviewer routines call this for dedup before filing a new finding —
+    "is there already an open ticket about this CVE / coverage gap?".
+    Defaults to ``open_only=True`` so closed history doesn't bloat the
+    response.
+    """
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
+    resolved = await resolve_for_workspace(
+        session=session, settings=settings, workspace_id=workspace_id
+    )
+    if resolved is None:
+        return ProjectTicketsOut(project_id=project_id, tickets=[])
+
+    list_fn = getattr(resolved.gateway, "list_project_tickets", None)
+    if list_fn is None:
+        return ProjectTicketsOut(project_id=project_id, tickets=[])
+    try:
+        rows = await list_fn(
+            project_id=project_id, open_only=open_only, limit=limit
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "project tickets list failed ws=%s project=%s err=%s",
+            workspace_id,
+            project_id,
+            exc,
+        )
+        rows = []
+    return ProjectTicketsOut(
+        project_id=project_id,
+        tickets=[
+            ProjectTicketRow(
+                ticket_ref=str(r.get("identifier") or r.get("id") or ""),
+                title=str(r.get("title") or ""),
+                state=r.get("state"),
+                url=r.get("url"),
+                labels=list(r.get("labels") or []),
+            )
+            for r in rows
+        ],
+    )
+
+
 class FindOrCreateProjectIn(BaseModel):
     """Payload for ``shipctl project find-or-create`` — backs the
     reviewer-routine routing flow (tech-reviewer → "Tech Debt" project,
