@@ -546,64 +546,24 @@ class LinearTracker:
                 raise ValueError(
                     f"Linear state {target_state_name!r} not provisioned for this team"
                 )
-            # Build the new label set: drop all ``stage:*`` labels we
-            # know about, then add the target's. This makes the
-            # transition idempotent on re-runs.
-            other_label_ids = list(
-                set(self._label_id_by_stage.values())
-                - ({target_label_id} if target_label_id else set())
-            )
+            # Stage labels are an *accumulating* breadcrumb trail: each
+            # ``stage:<X>`` is added when role X *finished* its work, so
+            # the picker for the *next* stage can require ``some: {id:
+            # eq <previous_label>}`` (see ``_stage_filter_parts``,
+            # comment block ~line 415). Removing previous stage labels
+            # would break that chain — the next pickup would never
+            # match. We therefore *only* add the target label and move
+            # the workflow state. ``addedLabelIds`` is idempotent on
+            # duplicate add, so re-runs are safe.
+            mutation_input: dict[str, Any] = {"stateId": target_state_id}
+            if target_label_id:
+                mutation_input["addedLabelIds"] = [target_label_id]
             await self._gql(
                 """mutation ShipFsmTransition($id: String!, $input: IssueUpdateInput!) {
                   issueUpdate(id: $id, input: $input) { success }
                 }""",
-                {
-                    "id": ticket.id,
-                    "input": {
-                        "stateId": target_state_id,
-                        **(
-                            {
-                                "labelIds": [target_label_id]
-                                if target_label_id
-                                else []
-                            }
-                            if target_label_id
-                            else {}
-                        ),
-                    },
-                },
+                {"id": ticket.id, "input": mutation_input},
             )
-            # Linear's ``labelIds`` is a SET operation when present —
-            # passing the target replaces all labels with that one set,
-            # which is what we want for stage labels but loses any
-            # other labels (priority, area). Drop the simplification:
-            # use ``addedLabelIds`` + ``removedLabelIds`` if they exist
-            # in the schema. (Linear's ``IssueUpdateInput`` exposes
-            # ``addedLabelIds`` / ``removedLabelIds`` since 2023-Q3.)
-            # We re-issue here with the surgical add/remove so we don't
-            # clobber unrelated labels. The first call already moved
-            # the workflow state; this second call only adjusts labels.
-            mut = await self._gql(
-                """mutation ShipFsmLabels($id: String!, $input: IssueUpdateInput!) {
-                  issueUpdate(id: $id, input: $input) { success }
-                }""",
-                {
-                    "id": ticket.id,
-                    "input": {
-                        **(
-                            {"removedLabelIds": other_label_ids}
-                            if other_label_ids
-                            else {}
-                        ),
-                        **(
-                            {"addedLabelIds": [target_label_id]}
-                            if target_label_id
-                            else {}
-                        ),
-                    },
-                },
-            )
-            del mut
             return
 
         # Legacy path (Linear state name).
