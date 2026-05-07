@@ -1,7 +1,7 @@
 ---
 title: How we cut Ship out of elmundi
 slug: how-we-cut-ship-out-of-elmundi
-date: 2026-04-07
+date: 2026-04-16
 kicker: Origin
 description: Ship did not begin as a greenfield repo. It began as a folder inside a product called elmundi. On Apr 7 we cut it out, and twenty commits later it was a standalone thing with its own CI, its own docs, and its own CLI. This is the prequel to every other post on this blog.
 reading_time: 6

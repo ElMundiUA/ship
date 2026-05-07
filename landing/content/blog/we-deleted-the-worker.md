@@ -1,7 +1,7 @@
 ---
 title: We deleted the worker. The system got simpler.
 slug: we-deleted-the-worker
-date: 2026-04-20
+date: 2026-04-21
 kicker: Architecture
 description: Five moving parts in the morning, two by the end of the day. A worker, a Redis queue, a repo cache, and a git-sync loop — and why deleting them made the Ship Console cheaper, faster, and easier to reason about.
 reading_time: 7

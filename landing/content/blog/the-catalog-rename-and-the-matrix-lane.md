@@ -1,7 +1,7 @@
 ---
 title: The catalog rename and the matrix lane
 slug: the-catalog-rename-and-the-matrix-lane
-date: 2026-04-22
+date: 2026-04-25
 kicker: Autopsy
 description: 21 patterns renamed across 78 files. A new six-category scheme. Five duplicates deleted. Then a multi-pattern lane with three fan-out modes. RFC-0008, in the order it actually shipped, and why the matrix execution model fell out of the rename.
 reading_time: 11

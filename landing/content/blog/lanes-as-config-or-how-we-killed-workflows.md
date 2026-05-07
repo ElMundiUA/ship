@@ -1,7 +1,7 @@
 ---
 title: Lanes as config — or how we killed the workflow artifact
 slug: lanes-as-config-or-how-we-killed-workflows
-date: 2026-04-21
+date: 2026-04-23
 kicker: Architecture
 description: A full RFC, ten commits, one repo — in a single day we retired a first-class artifact kind, introduced lanes-as-config, and made shipctl run the single entry-point for everything a repo schedules. An autopsy of RFC-0007.
 reading_time: 11

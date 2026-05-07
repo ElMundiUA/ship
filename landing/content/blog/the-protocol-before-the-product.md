@@ -1,7 +1,7 @@
 ---
 title: The protocol before the product
 slug: the-protocol-before-the-product
-date: 2026-04-18
+date: 2026-04-17
 kicker: Case study
 description: Between the Apr 7 extraction and the Apr 19 cloud console, there is a quiet 11-day stretch that looks like nothing happened. One commit on a Sunday did the whole thing — shipctl v0.9. We wrote the protocol before we wrote the product; here is how and why.
 reading_time: 10
