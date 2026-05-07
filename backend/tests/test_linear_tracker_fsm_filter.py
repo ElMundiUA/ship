@@ -21,8 +21,12 @@ filter ``{"labels": {"id": {"nin": [intake_label]}}}`` does NOT
 match because the ticket has zero labels — Linear's GraphQL
 interprets it as "some label exists with id not in [intake_label]",
 and "some" of an empty collection is false. The fix uses
-``{"labels": {"none": {"id": {"eq": intake_label}}}}``: "no label
-exists with id == intake_label", which is vacuously true on empty.
+``{"labels": {"every": {"id": {"neq": intake_label}}}}``: every
+label's id differs from intake_label, which is vacuously true on
+the empty label collection. (Linear removed the ``none`` operator
+from ``IssueLabelCollectionFilter`` after this fix shipped, so the
+implementation switched to the ``every / neq`` shape; the semantic
+intent — "ticket lacks this label" — is unchanged.)
 """
 
 from __future__ import annotations
@@ -75,10 +79,12 @@ def _find_label_clauses(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [p for p in parts if "labels" in p]
 
 
-def test_intake_filter_uses_none_operator_for_own_label_exclusion() -> None:
-    """The own-label exclusion must use ``none`` (not bare ``nin``)
-    so a ticket with zero labels passes the filter — that's the
-    common shape for a freshly-filed Linear-native ticket."""
+def test_intake_filter_excludes_own_label_via_every_neq() -> None:
+    """The own-label exclusion must encode "ticket lacks this label"
+    in a way that matches the empty label collection too — that's
+    the common shape for a freshly-filed Linear-native ticket. We
+    use ``every / neq`` because Linear removed the ``none`` operator
+    from ``IssueLabelCollectionFilter``."""
     tracker = _make_tracker()
     parts = tracker._fsm_filter("task_intake")  # noqa: SLF001 - shape test
 
@@ -87,12 +93,10 @@ def test_intake_filter_uses_none_operator_for_own_label_exclusion() -> None:
     assert len(label_clauses) == 2
 
     own = label_clauses[0]
-    # ELS-90: bare ``nin`` is the bug being fixed. ``none`` is the
-    # vacuous-truth-on-empty-collection form.
-    assert "none" in own["labels"], (
-        f"intake's own-label exclusion must use ``none`` operator (got {own!r})"
+    assert "every" in own["labels"], (
+        f"intake's own-label exclusion must use ``every`` operator (got {own!r})"
     )
-    assert own["labels"]["none"] == {"id": {"eq": "lbl_intake"}}
+    assert own["labels"]["every"] == {"id": {"neq": "lbl_intake"}}
 
 
 def test_intake_filter_has_no_previous_stage_clause() -> None:
@@ -130,12 +134,12 @@ def test_ba_requirements_filter_requires_previous_stage_label() -> None:
         "ba_requirements must require the previous (intake) stage "
         "label via the ``some`` operator"
     )
-    # The own-label exclusion must still use ``none``.
-    has_none = any("none" in p["labels"] for p in label_clauses)
-    assert has_none
+    # The own-label exclusion must use ``every / neq``.
+    has_every = any("every" in p["labels"] for p in label_clauses)
+    assert has_every
 
 
-def test_needs_clarification_exclusion_uses_none_too() -> None:
+def test_needs_clarification_exclusion_uses_every_neq_too() -> None:
     """Same empty-collection issue applies to the ``needs:clarification``
     exclusion. A ticket with no labels at all must not be silently
     excluded by it."""
@@ -145,11 +149,11 @@ def test_needs_clarification_exclusion_uses_none_too() -> None:
         p
         for p in parts
         if "labels" in p
-        and "none" in p["labels"]
-        and p["labels"]["none"].get("id", {}).get("eq") == "lbl_clar"
+        and "every" in p["labels"]
+        and p["labels"]["every"].get("id", {}).get("neq") == "lbl_clar"
     ]
     assert len(clar_clauses) == 1, (
-        "``needs:clarification`` exclusion should be a single ``none.id.eq`` clause"
+        "``needs:clarification`` exclusion should be a single ``every.id.neq`` clause"
     )
 
 
