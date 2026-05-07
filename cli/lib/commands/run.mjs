@@ -952,13 +952,40 @@ curl -fsS -X POST '${apiBase}/v1/workspaces/${workspaceId}/agent-runs/finish' \\
   ${ticketLine}
   ${fsmLine}
   "stage_next": "<next FSM stage, e.g. ba_requirements>",
+  "process": "development",
   "description": "<Full rewritten ticket body in Markdown — Problem / Goal / Acceptance criteria / Scope / Non-goals / Risks / etc. — when your role's job is to shape the ticket itself (intake, BA, planner). Omit (null) when your role is not supposed to rewrite the body.>",
   "comment": "<One-paragraph audit narration of what you changed and why, ending with [Ship SDLC:${ctx?.role || "{{ROLE}}"}]. Do NOT paste the new description here — that's what the description field is for.>",
   "summary": null,
+  "project_sections": [],
   "payload": {}
 }
 JSON
 \`\`\`
+
+### \`project_sections\` (decomposition only)
+
+When your role text says you own a **project body section** (\`## WBS\`,
+\`## Architecture\`, \`## Test architecture\`, \`## Tasks\`, …), put your
+output here as a **top-level** \`project_sections\` array — NOT inside
+the \`payload\` dict. Server resolves the anchor's project_id and
+upserts only your section, leaving the others untouched.
+
+Shape:
+
+\`\`\`json
+"project_sections": [
+  { "section": "Test architecture", "body": "<your full markdown>" }
+]
+\`\`\`
+
+The server response's \`actions\` list will include
+\`tracker:project_section:<Section>\` when the upsert applied. **If you
+do not see that action in the response, your section was NOT
+persisted** — re-call finish with the field at the top level. Do not
+report success unless the corresponding \`tracker:project_section:\`
+action came back.
+
+For SDLC (non-decomposition) roles, leave the array empty.
 
 ### Outcomes
 
