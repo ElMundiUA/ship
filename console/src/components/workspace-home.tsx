@@ -1,13 +1,11 @@
 import Link from "next/link";
 
-import { DashboardLiveSystem } from "@/components/dashboard/live-system";
 import { DashboardPrioritizer } from "@/components/dashboard/prioritizer";
 import type {
   ApiActivatedRepo,
   ApiLiveSystem,
   ApiOpsBlocker,
   ApiOpsDashboard,
-  ApiOpsShippedItem,
   ApiPrioritiesResponse,
   ApiPriorityLastAction,
 } from "@/lib/api/client";
@@ -20,27 +18,27 @@ import type {
 } from "@/lib/inbox-types";
 
 /**
- * Workspace home — Dashboard v2 (PR-1).
+ * Workspace home — editorial layout (post-PR-D1 simplification).
  *
- * Layout (≥ 2xl): 12-col grid with three editorial columns at 7/3/2.
- *   - Left col (7): Status alerts → "Needs you" lede → Project
- *     prioritizer (drag-to-reorder, autonomy switch, Linear hairline,
- *     Up-next strip, Save/Revert hairline) → Active-tickets summary
- *     strip.
- *   - Middle col (3): Live System block — populated by PR-2; for now
- *     a quiet ``Live system · loading…`` placeholder so the column
- *     reads intentionally idle, not broken.
- *   - Right col (2): Last-action pinned strip → Recent activity
- *     timeline → Repo channel list.
+ * The page is a single editorial column. The earlier 7/3/2 grid was
+ * trying to be a Datadog-style mission-control panel and an editorial
+ * brief at the same time; the two genres fought each other and
+ * neither won. Telemetry (Live System, Recent activity, DORA) lives
+ * on ``/analytics`` now — the home is just "what should I do next".
  *
- * Below 2xl the middle and right columns collapse into a single
- * sticky right rail (col-span-4 at lg) so dense layouts on smaller
- * displays don't force a third tier of vertical scroll.
+ *   1. Status alerts (bundle stale + blockers) — only when something
+ *      is non-ok, so a clean workspace renders without chrome.
+ *   2. ``Needs you`` lede — h1-grade heading + decisions/PRs/shipped
+ *      stat ribbon + first 4 decisions inline.
+ *   3. Project prioritizer (Active / Drafts / Parked / Unprioritised).
+ *   4. Active-tickets summary strip (one line).
+ *
+ * A single-line ``LiveSystemStrip`` sits under the alerts so the
+ * operator can spot a system blip without leaving the page.
  *
  * Color discipline: ``aqua`` is the editorial-positive accent,
  * ``lilac`` human handoff, ``coral`` errors, ``sun`` paused/blocked,
- * ``white/40`` muted kickers. No bordered cards. Section breaks come
- * from whitespace + tinted kickers, never from box-shadow rectangles.
+ * ``white/40`` muted kickers. No bordered cards.
  */
 
 export type WorkspaceHomeProps = {
@@ -78,61 +76,132 @@ export function WorkspaceHome({
   ).length;
 
   return (
-    <div className="mx-auto max-w-6xl 2xl:max-w-screen-2xl">
-      <div className="grid grid-cols-1 gap-x-12 gap-y-10 lg:grid-cols-12 2xl:gap-x-16">
-        <div className="space-y-10 lg:col-span-8 2xl:col-span-7">
-          {(reposNeedingUpdate.length > 0 || summary.blockers.length > 0) && (
-            <StatusAlerts
-              blockers={summary.blockers}
-              reposNeedingUpdate={reposNeedingUpdate}
-              workspaceId={workspaceId}
-            />
-          )}
-
-          <NeedsYouSection
-            decisions={decisions}
-            decisionsTotal={decisionsTotal}
-            decisionsByType={inboxCounts?.by_type ?? inboxItems?.counts_by_type ?? {}}
-            prsReadyToMerge={prsReadyToMerge}
-            shippedTotal={totalShipped}
-            blockerCount={blockerCount}
+    <div className="mx-auto max-w-4xl">
+      <div className="space-y-10">
+        {(reposNeedingUpdate.length > 0 || summary.blockers.length > 0) && (
+          <StatusAlerts
+            blockers={summary.blockers}
+            reposNeedingUpdate={reposNeedingUpdate}
             workspaceId={workspaceId}
           />
+        )}
 
-          {priorities ? (
-            <DashboardPrioritizer
-              workspaceId={workspaceId}
-              initial={priorities}
-            />
-          ) : null}
+        <LiveSystemStrip data={liveSystem} workspaceId={workspaceId} />
 
-          <ActiveTicketsStrip
-            inFlight={inFlight}
-            inProgress={inProgress}
+        <NeedsYouSection
+          decisions={decisions}
+          decisionsTotal={decisionsTotal}
+          prsReadyToMerge={prsReadyToMerge}
+          shippedTotal={totalShipped}
+          blockerCount={blockerCount}
+          workspaceId={workspaceId}
+        />
+
+        {priorities ? (
+          <DashboardPrioritizer
             workspaceId={workspaceId}
+            initial={priorities}
           />
-        </div>
+        ) : null}
 
-        {/*
-          ``2xl:contents`` dissolves this wrapper at 2xl so the two
-          inner ``<aside>`` elements become direct grid children with
-          their own col-spans. Below 2xl the wrapper acts as a normal
-          col-span-4 sticky right rail with both panels stacked
-          inside.
-        */}
-        <div className="space-y-10 lg:col-span-4 lg:sticky lg:top-20 lg:self-start 2xl:contents">
-          <aside className="space-y-6 2xl:col-span-3 2xl:sticky 2xl:top-20 2xl:self-start">
-            <DashboardLiveSystem data={liveSystem} />
-          </aside>
-          <aside className="space-y-8 2xl:col-span-2 2xl:sticky 2xl:top-20 2xl:self-start">
-            <LastActionStrip lastAction={priorities?.last_action ?? null} />
-            <RecentActivity summary={summary} />
-            <RepoChannelList repos={repos} workspaceId={workspaceId} />
-          </aside>
-        </div>
+        <LastActionStrip lastAction={priorities?.last_action ?? null} />
+
+        <ActiveTicketsStrip
+          inFlight={inFlight}
+          inProgress={inProgress}
+          workspaceId={workspaceId}
+        />
       </div>
     </div>
   );
+}
+
+
+// ---------------------------------------------------------------------------
+// Live system — single-line strip under the alerts, not a widget block
+// ---------------------------------------------------------------------------
+
+
+function LiveSystemStrip({
+  data,
+  workspaceId,
+}: {
+  data: ApiLiveSystem | null;
+  workspaceId: string;
+}) {
+  const analyticsHref = `/analytics?ws=${encodeURIComponent(workspaceId)}`;
+  if (data === null) {
+    return (
+      <p className="text-[11px] text-white/35">
+        Live system · couldn&apos;t reach the aggregator on this render.
+        <Link
+          href={analyticsHref}
+          className="ml-2 font-semibold text-white/55 hover:text-white"
+        >
+          Analytics →
+        </Link>
+      </p>
+    );
+  }
+  const successPct =
+    data.masthead.success_rate_7d !== null
+      ? `${Math.round(data.masthead.success_rate_7d * 100)}%`
+      : null;
+  const last =
+    data.masthead.last_run_at !== null
+      ? `${formatRelative(data.masthead.last_run_at)} last run`
+      : "no runs yet";
+  const failures = data.masthead.failures_7d ?? 0;
+  return (
+    <p className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[11px] text-white/55">
+      <span className="text-[10px] font-bold uppercase tracking-[0.22em] text-white/40">
+        System
+      </span>
+      {successPct && (
+        <span
+          className={
+            data.masthead.last_run_status === "error"
+              ? "text-coral"
+              : "text-aqua/90"
+          }
+        >
+          {successPct}
+        </span>
+      )}
+      <span className="text-white/15">·</span>
+      <span>{last}</span>
+      {failures > 0 && (
+        <>
+          <span className="text-white/15">·</span>
+          <span className="text-coral">
+            {failures} failure{failures === 1 ? "" : "s"}
+          </span>
+        </>
+      )}
+      <span className="ml-auto">
+        <Link
+          href={analyticsHref}
+          className="font-semibold text-white/55 hover:text-white"
+        >
+          Analytics →
+        </Link>
+      </span>
+    </p>
+  );
+}
+
+
+function formatRelative(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  const diffMs = Date.now() - date.getTime();
+  const diffMin = Math.round(diffMs / 60_000);
+  if (diffMin < 1) return "just now";
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.round(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+  const diffDay = Math.round(diffHr / 24);
+  return `${diffDay}d ago`;
 }
 
 
@@ -234,7 +303,6 @@ function StatusAlerts({
 function NeedsYouSection({
   decisions,
   decisionsTotal,
-  decisionsByType,
   prsReadyToMerge,
   shippedTotal,
   blockerCount,
@@ -242,7 +310,6 @@ function NeedsYouSection({
 }: {
   decisions: InboxItem[];
   decisionsTotal: number;
-  decisionsByType: Record<string, number>;
   prsReadyToMerge: ReadyToMergePr[];
   shippedTotal: number;
   blockerCount: number;
@@ -321,7 +388,6 @@ function NeedsYouSection({
               Decisions · {decisionsTotal} waiting
             </h3>
             <div className="h-px flex-1 bg-white/[0.06]" />
-            <DecisionTypeBreakdown counts={decisionsByType} />
           </div>
           <ul className="divide-y divide-white/[0.06]">
             {decisions.map((item) => (
@@ -361,31 +427,6 @@ function NeedsYouSection({
         </div>
       )}
     </section>
-  );
-}
-
-
-function DecisionTypeBreakdown({ counts }: { counts: Record<string, number> }) {
-  const order: InboxType[] = [
-    "clarification",
-    "approval",
-    "failure",
-    "improvement",
-    "exception",
-  ];
-  const parts = order
-    .map((t) => ({ t, n: counts[t] ?? 0 }))
-    .filter((x) => x.n > 0);
-  if (parts.length === 0) return null;
-  return (
-    <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-white/45">
-      {parts.map((p, idx) => (
-        <span key={p.t}>
-          {idx > 0 && <span className="mx-1.5 text-white/15">·</span>}
-          {p.n} {p.t.slice(0, 5)}
-        </span>
-      ))}
-    </p>
   );
 }
 
@@ -568,150 +609,6 @@ function LastActionStrip({
 }
 
 
-function RecentActivity({ summary }: { summary: ApiOpsDashboard }) {
-  const rows: {
-    title: string;
-    meta: string;
-    href: string | null;
-    tone: "aqua" | "coral" | "muted";
-  }[] = [];
-
-  for (const item of summary.shipped.items.slice(0, 6)) {
-    rows.push({
-      title: item.name,
-      meta: [shippedTypeLabel(item.type), item.repo].filter(Boolean).join(" · "),
-      href: item.href,
-      tone: "aqua",
-    });
-  }
-  if (summary.system_status.failing_pipelines_count > 0) {
-    rows.push({
-      title: `${summary.system_status.failing_pipelines_count} pipeline failure${summary.system_status.failing_pipelines_count === 1 ? "" : "s"} today`,
-      meta: "system status",
-      href: null,
-      tone: "coral",
-    });
-  }
-
-  if (rows.length === 0) {
-    return (
-      <section className="space-y-2">
-        <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-white/40">
-          Recent
-        </p>
-        <p className="text-xs italic text-white/35">
-          Nothing shipped or flagged in the last 24h.
-        </p>
-      </section>
-    );
-  }
-
-  return (
-    <section className="space-y-3">
-      <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-white/40">
-        Recent · last 24h
-      </p>
-      <ul className="space-y-3 border-l border-white/10 pl-4">
-        {rows.map((row, idx) => {
-          const dot =
-            row.tone === "aqua"
-              ? "bg-aqua"
-              : row.tone === "coral"
-                ? "bg-coral"
-                : "bg-white/30";
-          const inner = (
-            <div className="relative">
-              <span
-                aria-hidden
-                className={cn(
-                  "absolute -left-[1.1rem] top-1.5 h-1.5 w-1.5 rounded-full",
-                  dot,
-                )}
-              />
-              <p className="truncate text-[12.5px] font-semibold text-white">
-                {row.title}
-              </p>
-              <p className="mt-0.5 truncate text-[10.5px] text-white/45">
-                {row.meta}
-              </p>
-            </div>
-          );
-          return (
-            <li key={`${idx}-${row.title}`}>
-              {row.href ? (
-                row.href.startsWith("http") ? (
-                  <a
-                    href={row.href}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="block hover:text-aqua"
-                  >
-                    {inner}
-                  </a>
-                ) : (
-                  <Link href={row.href} className="block hover:text-aqua">
-                    {inner}
-                  </Link>
-                )
-              ) : (
-                inner
-              )}
-            </li>
-          );
-        })}
-      </ul>
-    </section>
-  );
-}
-
-
-function RepoChannelList({
-  repos,
-  workspaceId,
-}: {
-  repos: ApiActivatedRepo[];
-  workspaceId: string;
-}) {
-  if (repos.length === 0) return null;
-  return (
-    <section className="space-y-3">
-      <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-white/40">
-        Repos
-      </p>
-      <ul className="space-y-1.5">
-        {repos.map((repo) => {
-          const stale = needsShipTemplateUpdate(repo);
-          return (
-            <li key={repo.id}>
-              <Link
-                href={`/r/${encodeURIComponent(repo.full_name.split("/")[0])}/${encodeURIComponent(repo.full_name.split("/")[1])}?ws=${encodeURIComponent(workspaceId)}`}
-                className="group flex items-baseline gap-2 text-[11px]"
-              >
-                <span
-                  aria-hidden
-                  className={cn(
-                    "h-1.5 w-1.5 rounded-full",
-                    stale ? "bg-sun/70" : "bg-white/25",
-                  )}
-                />
-                <span className="truncate text-white/75 group-hover:text-white">
-                  {repo.full_name}
-                </span>
-                {stale && (
-                  <span className="ml-auto shrink-0 text-[10px] uppercase tracking-widest text-sun/80">
-                    behind
-                  </span>
-                )}
-              </Link>
-            </li>
-          );
-        })}
-      </ul>
-    </section>
-  );
-}
-
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -758,13 +655,6 @@ function canonicalActionLabel(type: InboxType): string {
     case "report":
       return "Acknowledge";
   }
-}
-
-
-function shippedTypeLabel(type: ApiOpsShippedItem["type"]): string {
-  if (type === "feature") return "feature";
-  if (type === "fix") return "fix";
-  return "rollback";
 }
 
 
