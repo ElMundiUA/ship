@@ -2132,7 +2132,16 @@ async def finish_agent_run(
             if payload.comment:
                 await resolved.gateway.comment(ref, body=payload.comment)
                 actions.append("tracker:comment")
-            await resolved.gateway.transition(ref, to_state=payload.stage_next)
+            # Pass ``from_state`` so the adapter adds the breadcrumb
+            # label for the role that *just finished* (``fsm_stage``),
+            # not the next role's. The picker for ``stage_next`` reads
+            # the previous-stage label as its "predecessor done"
+            # signal — adding the wrong label breaks the chain.
+            await resolved.gateway.transition(
+                ref,
+                to_state=payload.stage_next,
+                from_state=payload.fsm_stage,
+            )
             actions.append(f"tracker:transition:{payload.stage_next}")
 
             # Decomposition completion hook (ELS-75 + ELS-81). When

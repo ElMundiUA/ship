@@ -519,20 +519,31 @@ class LinearTracker:
             },
         )
 
-    async def transition(self, ticket: TicketRef, *, to_state: str) -> None:
+    async def transition(
+        self,
+        ticket: TicketRef,
+        *,
+        to_state: str,
+        from_state: str | None = None,
+    ) -> None:
         """Move ``ticket`` to a Ship FSM stage (or a Linear state name).
 
-        When ``to_state`` matches a configured FSM stage:
-          - swaps the ``stage:<fsm>`` label (drops every other Ship
-            stage label, adds the target's),
-          - moves the Linear workflow state per
-            ``fsm_to_linear_state``.
+        FSM-aware path (``to_state`` matches a configured FSM stage):
+          - moves the Linear workflow state per ``fsm_to_linear_state``;
+          - adds the breadcrumb label ``stage:<from_state>`` when
+            ``from_state`` is given (the role that just finished). The
+            picker for the next stage requires that breadcrumb to be
+            present — see ``_stage_filter_parts``'s "previous role is
+            done" filter. When ``from_state`` is omitted (legacy
+            callers / re-runs without the source role) we fall back to
+            adding ``stage:<to_state>`` so existing tickets that walked
+            partway through the chain still progress.
 
-        When ``to_state`` is a literal Linear state name (e.g. ``Done``,
-        ``Canceled``), the legacy "find state by name on the issue's
-        team" path is used. Agents must NOT pass ``Done`` — only humans
-        move tickets out of Review. The adapter does not enforce this;
-        the route layer does.
+        Legacy path (``to_state`` is a literal Linear state name like
+        ``Done`` / ``Canceled``): resolves the workflow state by name
+        on the issue's team and moves it; no labels touched. Agents
+        must NOT pass ``Done`` — only humans move tickets out of
+        Review. Enforcement lives at the route layer.
         """
         if ticket.kind != "linear":
             raise ValueError(f"LinearTracker can't transition kind={ticket.kind}")
@@ -541,23 +552,32 @@ class LinearTracker:
         if to_state in self._fsm_to_linear_state:
             target_state_name = self._fsm_to_linear_state[to_state]
             target_state_id = self._state_id_by_name.get(target_state_name)
-            target_label_id = self._label_id_by_stage.get(to_state)
             if not target_state_id:
                 raise ValueError(
                     f"Linear state {target_state_name!r} not provisioned for this team"
                 )
             # Stage labels are an *accumulating* breadcrumb trail: each
-            # ``stage:<X>`` is added when role X *finished* its work, so
-            # the picker for the *next* stage can require ``some: {id:
-            # eq <previous_label>}`` (see ``_stage_filter_parts``,
-            # comment block ~line 415). Removing previous stage labels
-            # would break that chain — the next pickup would never
-            # match. We therefore *only* add the target label and move
-            # the workflow state. ``addedLabelIds`` is idempotent on
-            # duplicate add, so re-runs are safe.
+            # ``stage:<X>`` is added when role X *finished* its work,
+            # so the picker for the next stage can require ``some:
+            # {id: eq <previous_label>}`` (see ``_stage_filter_parts``,
+            # comment block ~line 415). Add the breadcrumb for the
+            # role that just finished. If the caller didn't specify
+            # ``from_state``, fall back to ``to_state`` for back-compat
+            # — wrong semantically but recoverable, and the runtime
+            # logs the case so we can clean it up.
+            breadcrumb_stage = from_state or to_state
+            breadcrumb_label_id = self._label_id_by_stage.get(breadcrumb_stage)
+            if from_state is None:
+                logger.warning(
+                    "LinearTracker.transition called without from_state "
+                    "(to_state=%s); falling back to adding stage:%s as the "
+                    "breadcrumb. Picker semantics may misfire.",
+                    to_state,
+                    breadcrumb_stage,
+                )
             mutation_input: dict[str, Any] = {"stateId": target_state_id}
-            if target_label_id:
-                mutation_input["addedLabelIds"] = [target_label_id]
+            if breadcrumb_label_id:
+                mutation_input["addedLabelIds"] = [breadcrumb_label_id]
             await self._gql(
                 """mutation ShipFsmTransition($id: String!, $input: IssueUpdateInput!) {
                   issueUpdate(id: $id, input: $input) { success }
