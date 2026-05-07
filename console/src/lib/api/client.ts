@@ -179,6 +179,7 @@ export function updateWorkspace(
     name?: string;
     catalog_sources?: Record<string, boolean>;
     default_agent_profile?: string;
+    agent_provider?: "cursor" | "codex" | "claude";
   },
   token?: string,
 ): Promise<ApiWorkspace> {
@@ -187,6 +188,40 @@ export function updateWorkspace(
     body: input,
     token,
   });
+}
+
+/**
+ * GET ``/v1/workspaces/{ws}/agent-provider`` — the dedicated read for
+ * the bound autonomous-pipeline runtime. Returns the canonical kind
+ * the resolver would produce plus the supported list (so the FE
+ * doesn't have to keep its own enum in sync with the backend's
+ * ``SUPPORTED_PROVIDERS``).
+ */
+export interface ApiAgentProvider {
+  workspace_id: string;
+  kind: "cursor" | "codex" | "claude";
+  supported: ("cursor" | "codex" | "claude")[];
+}
+
+export function getAgentProvider(
+  workspaceId: string,
+  token?: string,
+): Promise<ApiAgentProvider> {
+  return apiFetch<ApiAgentProvider>(
+    `/v1/workspaces/${workspaceId}/agent-provider`,
+    { token },
+  );
+}
+
+export function setAgentProvider(
+  workspaceId: string,
+  kind: "cursor" | "codex" | "claude",
+  token?: string,
+): Promise<ApiAgentProvider> {
+  return apiFetch<ApiAgentProvider>(
+    `/v1/workspaces/${workspaceId}/agent-provider`,
+    { method: "PUT", body: { kind }, token },
+  );
 }
 
 // --- Integrations ----------------------------------------------------------

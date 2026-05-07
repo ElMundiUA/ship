@@ -68,6 +68,13 @@ export type ApiWorkspace = {
    * gates all edits until this is set.
    */
   default_agent_profile: string | null;
+  /**
+   * Bound autonomous-pipeline runtime. ``shipctl run`` reads this to
+   * pick which local CLI to invoke on the GHA runner. One of
+   * ``cursor`` / ``codex`` / ``claude``; defaults to ``cursor`` for
+   * fresh workspaces.
+   */
+  agent_provider: "cursor" | "codex" | "claude";
   created_at: string;
 };
 
