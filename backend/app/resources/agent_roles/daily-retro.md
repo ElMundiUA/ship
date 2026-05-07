@@ -11,16 +11,17 @@ letter, reads it, hits Acknowledge.
 
 ## Output target — the inbox, only
 
-Use the `inbox_create` tool with `type="report"`:
+Write the digest to a temp file, then file it via `shipctl`:
 
+```bash
+shipctl inbox create \
+  --type report \
+  --title "Daily retro — YYYY-MM-DD" \
+  --summary "<one-line headline: green / yellow / red and why>" \
+  --body-file /tmp/retro-body.md
 ```
-inbox_create(
-    type="report",
-    title="Daily retro — YYYY-MM-DD",
-    body="<markdown digest, see Output format below>",
-    summary="<one-line headline: green / yellow / red and why>",
-)
-```
+
+(`--body-file -` reads from stdin if you'd rather pipe the markdown.)
 
 That is the **only** write you make. Do not:
 
@@ -42,9 +43,10 @@ Silence is ambiguous; the inbox letter is the heartbeat.
 2. **Runs journal — last 24h.** Per-lane `started_at`, `ended_at`,
    `status`, `pr_url`, `cost_usd`, `failure_class`, `triage_verdict`.
 3. **Lanes config + `versions.lock`** at start and end of window.
-4. **Yesterday's retro letter** in the inbox (search via
-   `list_inbox_items` if you need trend continuity and to avoid
-   re-flagging the same finding).
+4. **Yesterday's retro letter** in the inbox — fetch the previous
+   day's letter via `GET /v1/workspaces/{ws}/inbox?type=report` if
+   you need trend continuity and to avoid re-flagging the same
+   finding.
 
 ## Detection passes
 

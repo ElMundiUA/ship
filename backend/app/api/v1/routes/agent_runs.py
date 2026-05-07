@@ -131,9 +131,30 @@ class CommentIn(BaseModel):
 
 
 class InboxItemIn(BaseModel):
-    type: Literal["clarification", "improvement", "blocker", "approval"] = "improvement"
+    """Payload an agent posts (via ``shipctl inbox create``) to file an
+    item in the operator's inbox.
+
+    ``body`` carries the full markdown content the operator reads in
+    the mailbox preview pane — it lands under ``payload.body`` because
+    the InboxItem schema reserves ``summary`` for the short list-row
+    blurb (≤2KB). Reports / digests want a long body without
+    truncation; the preview pane reads ``payload.body`` first, falling
+    through to ``summary`` for legacy items.
+    """
+
+    type: Literal[
+        "clarification",
+        "improvement",
+        "blocker",
+        "approval",
+        "exception",
+        "report",
+    ] = "improvement"
     title: str = Field(min_length=1, max_length=300)
     summary: str | None = Field(default=None, max_length=2000)
+    # Markdown body for the preview pane. ≤32KB so a long retro
+    # digest fits without paginating.
+    body: str | None = Field(default=None, max_length=32 * 1024)
     payload: dict[str, Any] = Field(default_factory=dict)
     ticket_ref: str | None = None
 
@@ -1050,17 +1071,29 @@ async def post_inbox_item(
         prerequisite as an inbox item the operator can act on.
     """
     await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+    # Build the row's payload bag. ``body`` (markdown for the preview
+    # pane) lives here so the InboxItem schema can keep ``summary``
+    # capped at 2KB for the list view. When the agent didn't pass an
+    # explicit summary, derive a short one from the body so the list
+    # row isn't blank.
+    item_payload: dict[str, Any] = {
+        **payload.payload,
+        "ticket_ref": payload.ticket_ref,
+        "produced_at": datetime.now(timezone.utc).isoformat(),
+    }
+    body_text = (payload.body or "").strip() or None
+    if body_text:
+        item_payload["body"] = body_text
+    summary_text = payload.summary
+    if summary_text is None and body_text:
+        summary_text = body_text[:200]
     item = InboxItem(
         workspace_id=workspace_id,
         repo_id=None,
         type=payload.type,
         title=payload.title[:300],
-        summary=(payload.summary or "")[:2000] or None,
-        payload={
-            **payload.payload,
-            "ticket_ref": payload.ticket_ref,
-            "produced_at": datetime.now(timezone.utc).isoformat(),
-        },
+        summary=(summary_text or "")[:2000] or None,
+        payload=item_payload,
         status="new",
         intake_handle=None,
         intake_reason="agent_run",
@@ -1083,6 +1116,82 @@ async def post_inbox_item(
     )
     await session.flush()
     return WriteOut(ok=True, note=f"inbox item created (type={payload.type})")
+
+
+class FindOrCreateProjectIn(BaseModel):
+    """Payload for ``shipctl project find-or-create`` — backs the
+    reviewer-routine routing flow (tech-reviewer → "Tech Debt" project,
+    qa-reviewer → "QA Debt", security-officer → "Security"). Idempotent
+    on case-insensitive name match against the workspace's tracker.
+    """
+
+    name: str = Field(min_length=1, max_length=255)
+    body: str = Field(min_length=1, max_length=32 * 1024)
+    description: str | None = Field(default=None, max_length=240)
+
+
+class FindOrCreateProjectOut(BaseModel):
+    ok: bool = True
+    created: bool
+    project: dict[str, Any]
+
+
+@router.post(
+    "/projects/find-or-create",
+    response_model=FindOrCreateProjectOut,
+)
+async def post_find_or_create_project(
+    workspace_id: uuid.UUID,
+    payload: FindOrCreateProjectIn,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> FindOrCreateProjectOut:
+    """Find a project on the bound tracker by name or create one.
+
+    The first run for a routine ("Tech Debt", "QA Debt", "Security")
+    creates the project + Drafts priorities row; every subsequent run
+    short-circuits on the case-insensitive name match. Avoids the
+    list-then-create race the agent would otherwise need to manage on
+    its own.
+    """
+    from backend.app.services.projects_lookup import (
+        ProjectsLookupError,
+        find_or_create_project_by_name,
+    )
+
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+    try:
+        outcome = await find_or_create_project_by_name(
+            session=session,
+            settings=settings,
+            workspace_id=workspace_id,
+            name=payload.name,
+            body=payload.body,
+            description=payload.description,
+        )
+    except ProjectsLookupError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=auth.user.id,
+            actor_token_id=auth.token.id if auth.token else None,
+            action="agent_run.project_find_or_create",
+            target_kind="tracker_project",
+            target_id=None,
+            payload={
+                "name": payload.name,
+                "created": outcome.created,
+                "project_id": outcome.project.get("id"),
+            },
+        )
+    )
+    await session.flush()
+    return FindOrCreateProjectOut(
+        ok=True, created=outcome.created, project=outcome.project
+    )
 
 
 async def _flip_drafts_row_to_parked(

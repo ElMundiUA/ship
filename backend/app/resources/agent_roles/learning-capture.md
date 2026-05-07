@@ -11,15 +11,14 @@ no comments — just a typed digest the operator reads and clears.
 
 ## Output target — the inbox, only
 
-Use `inbox_create` with `type="report"`:
+Write the digest to a temp file, then file via `shipctl`:
 
-```
-inbox_create(
-    type="report",
-    title="Learning capture — YYYY-MM-DD",
-    body="<markdown digest, see Output format below>",
-    summary="<short list of the headline lessons>",
-)
+```bash
+shipctl inbox create \
+  --type report \
+  --title "Learning capture — YYYY-MM-DD" \
+  --summary "<short list of the headline lessons>" \
+  --body-file /tmp/learning-body.md
 ```
 
 Do not:
