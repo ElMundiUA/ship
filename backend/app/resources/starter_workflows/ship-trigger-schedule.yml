@@ -1,12 +1,22 @@
 name: Ship · Schedule trigger
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      routine_id:
+        description: "FSM routine to fire directly (bypasses the cron picker). Leave blank for normal cron behavior."
+        required: false
+        type: string
+      ticket_ref:
+        description: "Pin the agent to this ticket (only used with routine_id). e.g. ELS-42"
+        required: false
+        type: string
   schedule:
     - cron: "*/30 * * * *"
 
 permissions:
-  contents: read
+  contents: write
+  pull-requests: write
 
 concurrency:
   group: ship-trigger-schedule-${{ github.repository }}
@@ -15,18 +25,38 @@ concurrency:
 jobs:
   trigger:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
-      - name: Checkout
+      - name: Checkout (full history for agent introspection + branch push)
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      - name: Install shipctl
-        run: npm install -g @elmundi/ship-cli@latest
+      - name: Install shipctl + agent CLIs
+        run: |
+          npm install -g @elmundi/ship-cli@latest
+          # All three runtimes are installed unconditionally; per-tick
+          # ``shipctl run`` resolves the workspace's bound provider
+          # from /v1/workspaces/{ws}/agent-provider and only spawns
+          # one of them. Total install cost is small enough that
+          # branching by provider would only save seconds.
+          curl -fsS https://cursor.com/install | bash
+          npm install -g @anthropic-ai/claude-code @openai/codex
+          # Cursor agent installer drops binaries under ~/.local/bin
+          # but doesn't always touch PATH for non-interactive shells.
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.local/share/cursor-agent/versions" >> "$GITHUB_PATH"
+
+      - name: Configure git committer identity
+        run: |
+          git config --global user.email "ship-agent@elmundi.com"
+          git config --global user.name  "Ship Agent"
 
       - name: Compute next Ship action
         env:
@@ -34,30 +64,47 @@ jobs:
           SHIP_WORKSPACE_API_BASE: ${{ secrets.SHIP_API_BASE }}
           SHIP_API_BASE: ${{ secrets.SHIP_API_BASE }}
           SHIP_WORKSPACE_ID: ${{ secrets.SHIP_WORKSPACE_ID }}
+          # All three runtime keys; only the bound one is consumed per
+          # tick by the resolved adapter.
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # ``gh pr create`` reads GH_TOKEN; the workflow's
+          # ``pull-requests: write`` permission lets it open PRs.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SHIP_REPO: ${{ github.repository }}
           SHIP_EVENT_NAME: ${{ github.event_name }}
           SHIP_REF: ${{ github.ref }}
           SHIP_SHA: ${{ github.sha }}
+          MANUAL_ROUTINE: ${{ inputs.routine_id }}
+          MANUAL_TICKET: ${{ inputs.ticket_ref }}
         run: |
           set -euo pipefail
-          # One action per tick — drop the legacy while-loop. Trigger
-          # returns either the next due routine or, when none are due,
-          # a pipeline-pick fallback specialist. The free-tier math
-          # only works if a tick does at most one thing.
+          # Manual workflow_dispatch with a routine id bypasses the
+          # cron picker — debug harness for "fire this stage now,
+          # detailed log". ``--debug`` streams a per-step log so the
+          # operator can see every phase interleaved with the agent
+          # CLI's own output.
+          if [ -n "$MANUAL_ROUTINE" ]; then
+            echo "::group::Ship manual routine ${MANUAL_ROUTINE}${MANUAL_TICKET:+ ticket=$MANUAL_TICKET}"
+            shipctl run --routine "$MANUAL_ROUTINE" --commit-and-pr --debug
+            echo "::endgroup::"
+            exit 0
+          fi
+          # Normal cron path: trigger picks the next routine, run executes it.
           shipctl trigger --event schedule --repo "$SHIP_REPO" --pipeline-fallback --json > /tmp/ship-action.json
           ACTION=$(jq -r '.next_action.kind // "noop"' /tmp/ship-action.json)
           case "$ACTION" in
             routine)
               ROUTINE=$(jq -r '.next_action.routine_id' /tmp/ship-action.json)
               echo "::group::Ship routine ${ROUTINE}"
-              SHIP_REPO="" shipctl run --routine "$ROUTINE" --trigger schedule
+              SHIP_REPO="" shipctl run --routine "$ROUTINE" --trigger schedule --commit-and-pr
               echo "::endgroup::"
               ;;
             pipeline_pick)
               SPECIALIST=$(jq -r '.next_action.specialist' /tmp/ship-action.json)
               echo "::group::Ship pipeline pick — ${SPECIALIST}"
-              SHIP_REPO="" shipctl run --specialist "$SPECIALIST" --trigger pipeline_pick
+              SHIP_REPO="" shipctl run --specialist "$SPECIALIST" --trigger pipeline_pick --commit-and-pr
               echo "::endgroup::"
               ;;
             noop)
