@@ -303,20 +303,27 @@ async function _runCommandImpl(ctx, rest) {
     process.exit(EXIT_OK);
   }
 
-  // 4) Launch agent runtime
-  const provider = resolveProvider(config, args.routine || specialistSlug);
+  // 4) Resolve the agent runtime. Workspace binding (PR-1) wins; we
+  // fall back to ``.ship/config.yml`` ``agent.default.provider`` /
+  // ``agent.overrides.<routine>.provider`` only when the workspace
+  // call fails (offline dev / unreachable API). The local-only model
+  // means the runner has already prepared the branch in ``$PWD`` —
+  // adapters just exec the bound CLI and let it commit in place.
+  const workspaceProvider = await fetchWorkspaceAgentProvider({
+    apiBase,
+    apiToken,
+    workspaceId,
+  });
+  const provider =
+    workspaceProvider || resolveProvider(config, args.routine || specialistSlug);
   const branchName = makeBranchName(runHandle, task?.ticket_ref);
-  const repoUrl = githubRepo ? `https://github.com/${githubRepo}` : null;
-  if (!repoUrl) die(EXIT_USAGE, "GITHUB_REPOSITORY env var is required to launch agent");
 
   let runtime;
   try {
     runtime = await runAgent(provider, {
-      repoUrl,
-      ref: env.githubRef || "main",
+      workdir: process.cwd(),
       branchName,
       prompt,
-      autoCreatePr: false,
     });
   } catch (err) {
     emit(args, {
@@ -326,16 +333,14 @@ async function _runCommandImpl(ctx, rest) {
       run_id: runId,
       run_handle: runHandle,
       stage: "launch_agent",
+      provider,
       error: err instanceof Error ? err.message : String(err),
     });
     process.exit(EXIT_AGENT_FAIL);
   }
 
-  // The agent calls POST /agent-runs/finish from inside Cursor with
-  // its outcome. The CLI's job ends here — Cursor's terminal status
-  // tells us the runtime didn't crash; whether the agent actually
-  // called /finish (and what outcome it reported) is observable in
-  // the audit log + the resulting tracker state.
+  // Push + PR creation happen in the workflow step after this exits;
+  // the agent has finished committing on ``branchName`` by now.
   emit(args, {
     status: "completed",
     routine: args.routine,
@@ -344,7 +349,9 @@ async function _runCommandImpl(ctx, rest) {
     ticket_ref: task?.ticket_ref || null,
     agent_id: runtime.agentId,
     branch: runtime.branchName,
-    cursor_status: runtime.status,
+    provider,
+    runtime_status: runtime.status,
+    exit_code: runtime.exitCode,
     run_id: runId,
     run_handle: runHandle,
   });
@@ -502,6 +509,40 @@ async function getNextTask({ apiBase, apiToken, workspaceId, state }) {
   }
   const body = await res.json();
   return body.ticket || null;
+}
+
+
+/**
+ * Read the workspace's bound agent provider (PR-1's
+ * ``GET /v1/workspaces/{ws}/agent-provider``). Falls back to
+ * ``null`` on a fetch failure so the caller can degrade to the
+ * ``.ship/config.yml`` ``resolveProvider`` chain.
+ */
+async function fetchWorkspaceAgentProvider({ apiBase, apiToken, workspaceId }) {
+  if (!apiBase || !apiToken || !workspaceId) return null;
+  const url = `${apiBase}/v1/workspaces/${encodeURIComponent(workspaceId)}/agent-provider`;
+  let res;
+  try {
+    res = await fetchWithRetry(
+      () =>
+        fetch(url, {
+          headers: {
+            Accept: "application/json",
+            Authorization: `Bearer ${apiToken}`,
+          },
+        }),
+      { description: "agent-provider" },
+    );
+  } catch {
+    return null;
+  }
+  if (!res.ok) return null;
+  try {
+    const body = await res.json();
+    return body.kind || null;
+  } catch {
+    return null;
+  }
 }
 
 
