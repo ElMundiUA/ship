@@ -51,6 +51,7 @@ import path from "node:path";
 import { readConfig, findShipRoot } from "../config/io.mjs";
 import { resolveExecutable } from "../runtime/routines.mjs";
 import { resolveProvider, runAgent } from "../agents/index.mjs";
+import { fetchWithRetry } from "../retry.mjs";
 
 const SYSTEM_ROLE_SLUG = "system";
 
@@ -355,12 +356,16 @@ async function resolveAgentRole({
   const url = `${apiBase}/v1/workspaces/${encodeURIComponent(workspaceId)}/agent-roles/${encodeURIComponent(slug)}/resolve`;
   let res;
   try {
-    res = await fetch(url, {
-      headers: {
-        Accept: "application/json",
-        Authorization: `Bearer ${apiToken}`,
-      },
-    });
+    res = await fetchWithRetry(
+      () =>
+        fetch(url, {
+          headers: {
+            Accept: "application/json",
+            Authorization: `Bearer ${apiToken}`,
+          },
+        }),
+      { description: `agent-role '${slug}' resolve` },
+    );
   } catch (err) {
     if (optional) {
       console.error(
@@ -405,12 +410,16 @@ async function fetchPoliciesPreamble({ apiBase, apiToken, workspaceId, role }) {
   const url = `${apiBase}/v1/workspaces/${encodeURIComponent(workspaceId)}/policies/preamble${qs}`;
   let res;
   try {
-    res = await fetch(url, {
-      headers: {
-        Accept: "application/json",
-        Authorization: `Bearer ${apiToken}`,
-      },
-    });
+    res = await fetchWithRetry(
+      () =>
+        fetch(url, {
+          headers: {
+            Accept: "application/json",
+            Authorization: `Bearer ${apiToken}`,
+          },
+        }),
+      { description: "policies preamble fetch" },
+    );
   } catch (err) {
     console.error(
       `warn: policies preamble fetch failed (network): ${err instanceof Error ? err.message : err}`,
@@ -443,12 +452,16 @@ async function fetchPoliciesPreamble({ apiBase, apiToken, workspaceId, role }) {
 
 async function getNextTask({ apiBase, apiToken, workspaceId, state }) {
   const url = `${apiBase}/v1/workspaces/${encodeURIComponent(workspaceId)}/tracker/next?state=${encodeURIComponent(state)}`;
-  const res = await fetch(url, {
-    headers: {
-      Accept: "application/json",
-      Authorization: `Bearer ${apiToken}`,
-    },
-  });
+  const res = await fetchWithRetry(
+    () =>
+      fetch(url, {
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${apiToken}`,
+        },
+      }),
+    { description: `tracker/next?state=${state}` },
+  );
   if (!res.ok) {
     throw new Error(`tracker/next ${res.status}: ${(await res.text()).slice(0, 300)}`);
   }

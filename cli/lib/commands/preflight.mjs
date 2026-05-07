@@ -30,6 +30,7 @@ import path from "node:path";
 
 import { findShipRoot, readConfig } from "../config/io.mjs";
 import { resolveProvider } from "../agents/index.mjs";
+import { fetchWithRetry } from "../retry.mjs";
 
 const EXIT_OK = 0;
 const EXIT_USAGE = 2;
@@ -200,12 +201,16 @@ function resolveSpecialistFromRoutine(config, routineId) {
 
 async function fetchResolvedRole({ apiBase, apiToken, workspaceId, slug }) {
   const url = `${apiBase}/v1/workspaces/${encodeURIComponent(workspaceId)}/agent-roles/${encodeURIComponent(slug)}/resolve`;
-  const res = await fetch(url, {
-    headers: {
-      Accept: "application/json",
-      Authorization: `Bearer ${apiToken}`,
-    },
-  });
+  const res = await fetchWithRetry(
+    () =>
+      fetch(url, {
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${apiToken}`,
+        },
+      }),
+    { description: `agent-roles resolve '${slug}'` },
+  );
   if (!res.ok) {
     throw new Error(`agent-roles resolve ${res.status}`);
   }
