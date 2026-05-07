@@ -69,6 +69,17 @@ export function processFromRepoConfig(
   const rawProcess = asRecord(config?.parsed?.process);
   if (!rawProcess) return null;
 
+  // Repo configs serialise a single process today (the SDLC, id
+  // "development"). When the operator opens a different process — e.g.
+  // ``/process/decomposition`` for the project-anchor pipeline — the
+  // YAML overlay would otherwise replace the API's correct projection
+  // with the SDLC and the editor reads as if every process is the
+  // SDLC. Skip the YAML merge unless its id matches the process the
+  // operator actually navigated to. The API projection is canonical
+  // for processes the YAML doesn't model.
+  const yamlId = stringValue(rawProcess.id) ?? null;
+  if (yamlId && yamlId !== fallback.id) return null;
+
   const rawStates = Array.isArray(rawProcess.states) ? rawProcess.states : null;
   if (!rawStates || rawStates.length === 0) return null;
 
