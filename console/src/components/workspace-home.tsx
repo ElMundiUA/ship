@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { DashboardPrioritizer } from "@/components/dashboard/prioritizer";
+import { TemplateUpdateAlert } from "@/components/template-update-alert";
 import type {
   ApiActivatedRepo,
   ApiLiveSystem,
@@ -41,17 +42,6 @@ import type {
  * ``white/40`` muted kickers. No bordered cards.
  */
 
-export type TemplateUpdateState = {
-  /** PR number returned by the seed call — if set, render the auto-merge confirm step. */
-  seedPr: number | null;
-  /** Repo id the seed PR was opened against (needed for the merge action). */
-  seedRepo: string | null;
-  /** Error code from a failed seed/activate call (renders inline banner). */
-  seedError: string | null;
-  /** PR number that just merged — renders a success banner that the operator can dismiss. */
-  seedMerged: number | null;
-};
-
 export type WorkspaceHomeProps = {
   summary: ApiOpsDashboard;
   repos: ApiActivatedRepo[];
@@ -61,7 +51,6 @@ export type WorkspaceHomeProps = {
   inboxCounts: InboxCountsResponse | null;
   priorities: ApiPrioritiesResponse | null;
   liveSystem: ApiLiveSystem | null;
-  templateUpdate?: TemplateUpdateState;
 };
 
 export function WorkspaceHome({
@@ -73,7 +62,6 @@ export function WorkspaceHome({
   inboxCounts,
   priorities,
   liveSystem,
-  templateUpdate,
 }: WorkspaceHomeProps) {
   const reposNeedingUpdate = repos.filter(needsShipTemplateUpdate);
   const decisions = (inboxItems?.items ?? []).slice(0, 4);
@@ -93,17 +81,12 @@ export function WorkspaceHome({
   return (
     <div className="mx-auto max-w-4xl">
       <div className="space-y-10">
-        {(reposNeedingUpdate.length > 0
-          || summary.blockers.length > 0
-          || templateUpdate?.seedPr
-          || templateUpdate?.seedMerged
-          || templateUpdate?.seedError) && (
+        {(reposNeedingUpdate.length > 0 || summary.blockers.length > 0) && (
           <StatusAlerts
             blockers={summary.blockers}
             reposNeedingUpdate={reposNeedingUpdate}
             workspaceId={workspaceId}
             multiWs={multiWs}
-            templateUpdate={templateUpdate}
           />
         )}
 
@@ -236,157 +219,20 @@ function StatusAlerts({
   reposNeedingUpdate,
   workspaceId,
   multiWs,
-  templateUpdate,
 }: {
   blockers: ApiOpsBlocker[];
   reposNeedingUpdate: ApiActivatedRepo[];
   workspaceId: string;
   multiWs: boolean;
-  templateUpdate?: TemplateUpdateState;
 }) {
-  const wsScope = multiWs ? workspaceId : "";
-  const seedPr = templateUpdate?.seedPr ?? null;
-  const seedRepo = templateUpdate?.seedRepo ?? null;
-  const seedMerged = templateUpdate?.seedMerged ?? null;
-  const seedError = templateUpdate?.seedError ?? null;
-  // Pick the first stale repo by default — the dashboard never has more
-  // than one in practice for closed beta. Multi-repo case still works:
-  // operator hits the alert per repo because each lands in
-  // ``reposNeedingUpdate`` with its own row.
-  const updateRepo =
-    seedRepo
-      ? reposNeedingUpdate.find((r) => r.id === seedRepo) ?? reposNeedingUpdate[0]
-      : reposNeedingUpdate[0];
-
   return (
     <ul className="divide-y divide-white/[0.06]">
-      {seedMerged !== null && (
-        <li className="flex items-baseline justify-between gap-3 py-3">
-          <div className="min-w-0">
-            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-aqua/75">
-              Ship template
-            </p>
-            <p className="mt-1 text-sm text-white/85">
-              <span className="font-semibold text-white">Updated</span> · PR
-              #{seedMerged} merged. Bundle live on next routine tick.
-            </p>
-          </div>
-          <a
-            href={
-              wsScope
-                ? `/?ws=${encodeURIComponent(wsScope)}`
-                : "/"
-            }
-            className="shrink-0 text-xs font-semibold text-white/55 hover:text-white"
-          >
-            Dismiss
-          </a>
-        </li>
-      )}
-      {seedError !== null && (
-        <li className="flex items-baseline justify-between gap-3 py-3">
-          <div className="min-w-0">
-            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-coral/85">
-              Ship template
-            </p>
-            <p className="mt-1 text-sm text-coral/95">
-              {seedErrorMessage(seedError)}
-            </p>
-          </div>
-          <a
-            href={
-              wsScope
-                ? `/?ws=${encodeURIComponent(wsScope)}`
-                : "/"
-            }
-            className="shrink-0 text-xs font-semibold text-white/55 hover:text-white"
-          >
-            Dismiss
-          </a>
-        </li>
-      )}
-      {seedPr !== null && seedRepo && (
-        <li className="py-3">
-          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-aqua/75">
-            Ship template
-          </p>
-          <p className="mt-1 text-sm text-white/85">
-            <span className="font-semibold text-white">PR #{seedPr} opened</span>{" "}
-            · auto-merge when CI passes?
-          </p>
-          <div className="mt-2 flex items-center gap-3">
-            <form
-              action="/api/template-update/activate"
-              method="POST"
-              className="contents"
-            >
-              <input type="hidden" name="ws" value={workspaceId} />
-              <input type="hidden" name="repo_id" value={seedRepo} />
-              <input type="hidden" name="pr_number" value={String(seedPr)} />
-              <input type="hidden" name="action" value="merge" />
-              <input type="hidden" name="ws_scope" value={wsScope} />
-              <button
-                type="submit"
-                className="inline-flex items-center gap-1.5 rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-3.5 py-1.5 text-xs font-bold text-ink shadow-glow transition hover:brightness-110"
-              >
-                Yes, auto-merge
-              </button>
-            </form>
-            <form
-              action="/api/template-update/activate"
-              method="POST"
-              className="contents"
-            >
-              <input type="hidden" name="ws" value={workspaceId} />
-              <input type="hidden" name="repo_id" value={seedRepo} />
-              <input type="hidden" name="pr_number" value={String(seedPr)} />
-              <input type="hidden" name="action" value="skip" />
-              <input type="hidden" name="ws_scope" value={wsScope} />
-              <button
-                type="submit"
-                className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/[0.04] px-3 py-1.5 text-[11px] font-semibold text-white/85 transition hover:bg-white/[0.08]"
-              >
-                I&rsquo;ll merge it myself
-              </button>
-            </form>
-          </div>
-        </li>
-      )}
-      {reposNeedingUpdate.length > 0
-        && seedPr === null
-        && seedMerged === null
-        && updateRepo && (
-        <li className="flex items-baseline justify-between gap-3 py-3">
-          <div className="min-w-0">
-            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-aqua/75">
-              Ship template
-            </p>
-            <p className="mt-1 text-sm text-white/85">
-              <span className="font-semibold text-white">
-                Update available
-              </span>{" "}
-              ·{" "}
-              {reposNeedingUpdate.length === 1
-                ? reposNeedingUpdate[0].full_name
-                : `${reposNeedingUpdate.length} repos behind`}
-            </p>
-          </div>
-          <form
-            action="/api/template-update/seed"
-            method="POST"
-            className="contents"
-          >
-            <input type="hidden" name="ws" value={workspaceId} />
-            <input type="hidden" name="repo_id" value={updateRepo.id} />
-            <input type="hidden" name="ws_scope" value={wsScope} />
-            <button
-              type="submit"
-              className="shrink-0 text-xs font-semibold text-aqua hover:text-white"
-            >
-              Update →
-            </button>
-          </form>
-        </li>
+      {reposNeedingUpdate.length > 0 && (
+        <TemplateUpdateAlert
+          workspaceId={workspaceId}
+          reposNeedingUpdate={reposNeedingUpdate}
+          multiWs={multiWs}
+        />
       )}
       {blockers.map((blocker, idx) => (
         <li
@@ -846,25 +692,3 @@ function formatTime(value: string): string {
 }
 
 
-function seedErrorMessage(code: string): string {
-  switch (code) {
-    case "merge_blocked":
-      return "PR opened but GitHub wouldn't merge — branch protection or required checks aren't satisfied. Open the PR on GitHub to finish.";
-    case "github_app_missing":
-      return "Ship's GitHub App isn't installed. Reinstall it and try again.";
-    case "github_upstream_error":
-      return "GitHub rejected the merge. Open the PR and merge by hand.";
-    case "validation_failed":
-      return "The seed call failed validation. Refresh and try again.";
-    case "forbidden":
-      return "You don't have permission to update the template here.";
-    case "not_found":
-      return "Repo or workspace went missing. Refresh and try again.";
-    case "api_unavailable":
-      return "Ship API is unreachable. Try again in a moment.";
-    case "bad_input":
-      return "The action couldn't be applied — required fields were missing.";
-    default:
-      return `Couldn't update the template (${code}).`;
-  }
-}
