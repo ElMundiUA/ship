@@ -25,7 +25,7 @@ concurrency:
 jobs:
   trigger:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: Checkout (full history for agent introspection + branch push)
         uses: actions/checkout@v4
