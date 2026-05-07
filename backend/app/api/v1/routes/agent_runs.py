@@ -1545,6 +1545,25 @@ async def post_ticket_action(
                 status_code=422,
                 detail="tracker does not support project assignment",
             )
+        # Snapshot the current state BEFORE the project assign so the
+        # state-sync helper knows whether to flip Todo → Backlog (parked
+        # project) or Backlog → Todo (active project). Falls back to
+        # ``None`` if the snapshot probe fails — the helper handles a
+        # missing prior state safely.
+        prior_state: str | None = None
+        snap_fn = getattr(resolved.gateway, "get_ticket_snapshot", None)
+        ticket_uuid: str | None = None
+        if snap_fn is not None:
+            try:
+                snap = await snap_fn(ref)
+                if snap:
+                    prior_state = snap.get("state")
+                    ticket_uuid = snap.get("id") or ref.id
+            except Exception:  # noqa: BLE001 — best effort
+                pass
+        if not ticket_uuid:
+            ticket_uuid = ref.id
+
         try:
             await update_fn(ref, project_id=payload.project_id)
         except TypeError as exc:
@@ -1564,6 +1583,27 @@ async def post_ticket_action(
                     payload.ticket_ref,
                     exc,
                 )
+
+        # Bring the ticket's Linear state into line with the project's
+        # priority bucket. Active project → Backlog→Todo; parked /
+        # planning → Todo→Backlog. Best-effort — a tracker hiccup
+        # logs and audits but doesn't fail the assign.
+        from backend.app.services.agent.project_state_sync import (
+            apply_project_state_to_ticket,
+        )
+        await apply_project_state_to_ticket(
+            session,
+            workspace_id=workspace_id,
+            project_id=payload.project_id,
+            ticket_ref=payload.ticket_ref,
+            ticket_uuid=str(ticket_uuid),
+            current_linear_state=prior_state,
+            gateway=resolved.gateway,
+            tracker_kind=resolved.kind,
+            actor_user_id=auth.user.id,
+            actor_token_id=auth.token.id if auth.token else None,
+        )
+
         note = f"assigned to {payload.project_id}"
     else:
         raise HTTPException(status_code=422, detail="unknown action")
@@ -1686,6 +1726,28 @@ async def post_create_ticket(
             },
         )
     )
+
+    # New tickets land in Linear's default state (typically Backlog),
+    # which is correct when the project is Parked / Drafts. For active
+    # projects we want the ticket in Todo so the picker can take it on
+    # the next tick. Best-effort — adapter / tracker hiccups log + audit
+    # but never fail the create.
+    from backend.app.services.agent.project_state_sync import (
+        apply_project_state_to_ticket,
+    )
+    await apply_project_state_to_ticket(
+        session,
+        workspace_id=workspace_id,
+        project_id=payload.project_id,
+        ticket_ref=created.display_id,
+        ticket_uuid=str(created.ref.id),
+        current_linear_state=None,  # freshly created — let the helper transition
+        gateway=resolved.gateway,
+        tracker_kind=resolved.kind,
+        actor_user_id=auth.user.id,
+        actor_token_id=auth.token.id if auth.token else None,
+    )
+
     await session.flush()
     return CreateTicketOut(
         ok=True, ticket_ref=created.display_id, url=created.url or None

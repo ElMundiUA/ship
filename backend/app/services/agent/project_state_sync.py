@@ -233,7 +233,135 @@ async def sync_project_tickets_for_state(
     return report
 
 
+async def apply_project_state_to_ticket(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    project_id: str,
+    ticket_ref: str,
+    ticket_uuid: str,
+    current_linear_state: str | None,
+    gateway,
+    tracker_kind: str | None = None,
+    actor_user_id: uuid.UUID,
+    actor_token_id: uuid.UUID | None = None,
+) -> str | None:
+    """Single-ticket counterpart of :func:`sync_project_tickets_for_state`.
+
+    Used by ticket-write paths (``ticket-action assign``,
+    ``tracker/tickets`` create) to bring one freshly-affected ticket
+    into line with its project's priority state. The bulk variant
+    needs a project-wide ``list_project_tickets_in_state`` call;
+    here the caller already knows which ticket to move, so we skip
+    the listing and just dispatch a single ``transition`` call.
+
+    Returns the linear state name we transitioned to (``"Todo"``
+    or ``"Backlog"``) when a transition fired, or ``None`` when no
+    move was needed (state already correct, project's priority row
+    missing, transition rule unknown).
+    """
+    from sqlalchemy import select as sa_select
+
+    from backend.app.db.models.dashboard_priorities import (
+        WorkspaceProjectPriority,
+    )
+
+    if not project_id or not ticket_uuid:
+        return None
+    if gateway is None:
+        return None
+
+    priority_state = await session.scalar(
+        sa_select(WorkspaceProjectPriority.state).where(
+            WorkspaceProjectPriority.workspace_id == workspace_id,
+            WorkspaceProjectPriority.project_native_id == project_id,
+        )
+    )
+    if not priority_state:
+        return None
+
+    plan = _TRANSITION_PLAN.get(priority_state)
+    if plan is None:
+        return None
+    from_state_name, to_state_name = plan
+
+    # Skip if the ticket is already in the target state OR isn't
+    # the from-state we'd care about. ``current_linear_state`` is the
+    # caller's snapshot; an empty / unknown value still falls through
+    # to the transition since the gateway's transition is idempotent.
+    if current_linear_state and current_linear_state == to_state_name:
+        return None
+    if current_linear_state and current_linear_state != from_state_name:
+        # Ticket is mid-pipeline (In Progress / Review / Done) — never
+        # yank it back. The project state only governs Backlog ↔ Todo
+        # at the boundary; in-flight work is sacrosanct.
+        return None
+
+    if tracker_kind is None:
+        tracker_kind = _derive_tracker_kind(gateway)
+
+    try:
+        await gateway.transition(
+            TicketRef(
+                kind=tracker_kind or "linear",
+                workspace_hint=None,
+                id=str(ticket_uuid),
+            ),
+            to_state=to_state_name,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "apply_project_state_to_ticket: transition failed "
+            "workspace=%s project=%s ticket=%s to=%s err=%s",
+            workspace_id,
+            project_id,
+            ticket_ref,
+            to_state_name,
+            exc,
+        )
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=actor_user_id,
+                actor_token_id=actor_token_id,
+                action="priorities.synced_ticket_state_failed",
+                target_kind="ticket",
+                target_id=str(ticket_ref),
+                payload={
+                    "project_id": project_id,
+                    "to_linear_state": to_state_name,
+                    "trigger_state": priority_state,
+                    "trigger_source": "single_ticket_write",
+                    "error": str(exc)[:500],
+                },
+            )
+        )
+        await session.flush()
+        return None
+
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=actor_user_id,
+            actor_token_id=actor_token_id,
+            action="priorities.synced_ticket_state",
+            target_kind="ticket",
+            target_id=str(ticket_ref),
+            payload={
+                "project_id": project_id,
+                "from_linear_state": current_linear_state,
+                "to_linear_state": to_state_name,
+                "trigger_state": priority_state,
+                "trigger_source": "single_ticket_write",
+            },
+        )
+    )
+    await session.flush()
+    return to_state_name
+
+
 __all__ = [
     "ProjectSyncReport",
+    "apply_project_state_to_ticket",
     "sync_project_tickets_for_state",
 ]
