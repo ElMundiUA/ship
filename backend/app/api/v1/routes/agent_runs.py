@@ -1357,6 +1357,235 @@ async def post_sync_pull_requests(
     )
 
 
+class OrphanTicketRow(BaseModel):
+    ticket_ref: str
+    title: str
+    state: str | None
+    labels: list[str] = Field(default_factory=list)
+    description: str | None = None
+    url: str | None = None
+    fsm_stage_seen: str | None = None  # which stage's picker dropped it
+
+
+class TrackerProjectRow(BaseModel):
+    id: str
+    name: str
+    state: str | None = None
+    url: str | None = None
+
+
+class OrphanAuditOut(BaseModel):
+    """Side-channel admin view for the orphan-ticket cleanup pass."""
+
+    tickets: list[OrphanTicketRow]
+    projects: list[TrackerProjectRow]
+
+
+@router.get("/admin/orphan-tickets", response_model=OrphanAuditOut)
+async def get_orphan_tickets(
+    workspace_id: uuid.UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> OrphanAuditOut:
+    """Pull the unique set of orphan ticket refs from the audit log,
+    snapshot each from Linear, plus list every existing project so the
+    operator can see where to re-home them.
+
+    Reads ``agent_run.orphan_skipped`` rows for context — those are the
+    refs the picker dropped — then re-snapshots each from Linear so we
+    pick up any state / label / project changes that landed since the
+    skip was logged.
+    """
+    from sqlalchemy import desc as sa_desc
+
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+
+    rows = (
+        await session.execute(
+            sa_select(AuditLog)
+            .where(
+                AuditLog.workspace_id == workspace_id,
+                AuditLog.action == "agent_run.orphan_skipped",
+            )
+            .order_by(sa_desc(AuditLog.created_at))
+            .limit(200)
+        )
+    ).scalars().all()
+    seen: dict[str, str | None] = {}
+    for r in rows:
+        ticket_ref = (r.target_id or "").strip()
+        if not ticket_ref or ticket_ref in seen:
+            continue
+        seen[ticket_ref] = (r.payload or {}).get("fsm_stage")
+
+    resolved = await resolve_for_workspace(
+        session=session, settings=settings, workspace_id=workspace_id
+    )
+    if resolved is None:
+        return OrphanAuditOut(tickets=[], projects=[])
+
+    snapshot_fn = getattr(resolved.gateway, "get_ticket_snapshot", None)
+    list_projects_fn = getattr(resolved.gateway, "list_projects", None)
+
+    tickets_out: list[OrphanTicketRow] = []
+    if snapshot_fn is not None:
+        for ticket_ref, fsm_stage in seen.items():
+            try:
+                snap = await snapshot_fn(
+                    _ticket_ref_from(resolved.kind, ticket_ref)
+                )
+            except Exception:  # noqa: BLE001 — best effort
+                snap = None
+            if not snap:
+                continue
+            # Skip tickets that have since gained a project — they're
+            # no longer orphans, just historical audit noise.
+            if (snap.get("project") or {}).get("id"):
+                continue
+            tickets_out.append(
+                OrphanTicketRow(
+                    ticket_ref=snap.get("ticket_ref") or ticket_ref,
+                    title=snap.get("title") or "",
+                    state=snap.get("state"),
+                    labels=list(snap.get("labels") or []),
+                    description=(snap.get("description") or "")[:1500] or None,
+                    url=snap.get("url"),
+                    fsm_stage_seen=fsm_stage,
+                )
+            )
+
+    projects_out: list[TrackerProjectRow] = []
+    if list_projects_fn is not None:
+        try:
+            projects = await list_projects_fn(limit=100)
+        except (NotImplementedError, ValueError, Exception):  # noqa: BLE001
+            projects = []
+        for p in projects or []:
+            projects_out.append(
+                TrackerProjectRow(
+                    id=str(p.get("id") or ""),
+                    name=str(p.get("name") or ""),
+                    state=p.get("state"),
+                    url=p.get("url"),
+                )
+            )
+
+    return OrphanAuditOut(tickets=tickets_out, projects=projects_out)
+
+
+class TicketActionIn(BaseModel):
+    """One operator-driven action on an orphan ticket.
+
+    ``cancel`` transitions the ticket to ``Canceled`` (with an optional
+    audit comment); ``assign`` writes ``project_id`` onto the ticket so
+    the picker stops orphan-skipping it on the next tick.
+    """
+
+    ticket_ref: str = Field(min_length=1, max_length=128)
+    action: Literal["cancel", "assign"]
+    project_id: str | None = None
+    comment: str | None = Field(default=None, max_length=2000)
+
+
+class TicketActionOut(BaseModel):
+    ok: bool = True
+    ticket_ref: str
+    action: str
+    note: str | None = None
+
+
+@router.post("/admin/ticket-action", response_model=TicketActionOut)
+async def post_ticket_action(
+    workspace_id: uuid.UUID,
+    payload: TicketActionIn,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> TicketActionOut:
+    """One-shot action on an orphan ticket: cancel or assign-to-project."""
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+
+    resolved = await resolve_for_workspace(
+        session=session, settings=settings, workspace_id=workspace_id
+    )
+    if resolved is None:
+        raise HTTPException(
+            status_code=422, detail="no_tracker_bound"
+        )
+
+    ref = _ticket_ref_from(resolved.kind, payload.ticket_ref)
+
+    if payload.action == "cancel":
+        try:
+            await resolved.gateway.transition(ref, to_state="Canceled")
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        if payload.comment:
+            try:
+                await resolved.gateway.comment(ref, body=payload.comment)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "ticket-action: cancel comment failed ref=%s err=%s",
+                    payload.ticket_ref,
+                    exc,
+                )
+        note = "cancelled"
+    elif payload.action == "assign":
+        if not payload.project_id:
+            raise HTTPException(
+                status_code=422, detail="project_id required for assign"
+            )
+        update_fn = getattr(resolved.gateway, "update_ticket", None)
+        if update_fn is None:
+            raise HTTPException(
+                status_code=422,
+                detail="tracker does not support project assignment",
+            )
+        try:
+            await update_fn(ref, project_id=payload.project_id)
+        except TypeError as exc:
+            # Adapter that doesn't accept ``project_id`` kwarg.
+            raise HTTPException(
+                status_code=422,
+                detail=f"adapter cannot set project_id: {exc}",
+            ) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        if payload.comment:
+            try:
+                await resolved.gateway.comment(ref, body=payload.comment)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "ticket-action: assign comment failed ref=%s err=%s",
+                    payload.ticket_ref,
+                    exc,
+                )
+        note = f"assigned to {payload.project_id}"
+    else:
+        raise HTTPException(status_code=422, detail="unknown action")
+
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=auth.user.id,
+            actor_token_id=auth.token.id if auth.token else None,
+            action=f"agent_run.ticket_{payload.action}",
+            target_kind="ticket",
+            target_id=payload.ticket_ref,
+            payload={
+                "action": payload.action,
+                "project_id": payload.project_id,
+                "comment": payload.comment,
+            },
+        )
+    )
+    await session.flush()
+    return TicketActionOut(
+        ok=True, ticket_ref=payload.ticket_ref, action=payload.action, note=note
+    )
+
+
 def _parse_iso_or_none(value: object) -> "datetime | None":
     if not isinstance(value, str) or not value:
         return None

@@ -658,8 +658,9 @@ class LinearTracker:
         title: str | None = None,
         body: str | None = None,
         labels: list[str] | None = None,
+        project_id: str | None = None,
     ) -> None:
-        """Update title / body / labels in one ``issueUpdate`` call.
+        """Update title / body / labels / project in one ``issueUpdate`` call.
 
         ``None`` arguments leave the field as-is — pass ``""`` to clear
         a string field, an empty list to clear all labels.
@@ -670,6 +671,11 @@ class LinearTracker:
         Unknown labels are silently dropped (same strict policy as
         ``create_ticket`` — we don't want the LLM polluting a
         customer's Linear with freshly invented label names).
+
+        ``project_id`` (Linear project UUID) attaches the ticket to a
+        project — used by the orphan-tickets admin sweep to re-home
+        old standalone tickets that pre-date the
+        project-must-be-set picker rule (ELS-83).
 
         Used by Navigator's ``update_ticket`` tool. State transitions
         are NOT in scope here — call :meth:`transition` separately.
@@ -688,6 +694,8 @@ class LinearTracker:
             input_payload["labelIds"] = await self._resolve_label_ids(
                 team_id, labels
             )
+        if project_id is not None:
+            input_payload["projectId"] = project_id
         if not input_payload:
             return
         await self._gql(
