@@ -98,10 +98,6 @@ export function DashboardPrioritizer({ workspaceId, initial }: Props) {
   const [pending, startTransition] = useTransition();
   const [draftingPending, setDraftingPending] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  // Parked section collapses by default — visible (so the operator
-  // doesn't forget what they decided not to do) but folded so the
-  // editorial single-column rhythm of Active + Planning isn't drowned.
-  const [parkedExpanded, setParkedExpanded] = useState(false);
 
   // ELS-74: dashboard "+ New project" CTA. Opens a fresh Navigator
   // thread tagged ``intent=shape_project`` and navigates the user
@@ -504,7 +500,6 @@ export function DashboardPrioritizer({ workspaceId, initial }: Props) {
     >
       {SECTION_ORDER.map((state) => {
         const rows = rowsByState[state];
-        const collapsed = state === "parked" && !parkedExpanded;
         const showEmptyHint =
           rows.length === 0 && state === "active" && unprioritised.length > 0;
         return (
@@ -512,12 +507,6 @@ export function DashboardPrioritizer({ workspaceId, initial }: Props) {
             key={state}
             state={state}
             count={rows.length}
-            collapsed={collapsed}
-            onToggleCollapsed={
-              state === "parked"
-                ? () => setParkedExpanded((v) => !v)
-                : undefined
-            }
             dropHandlers={sectionDropHandlers(state)}
           >
             {rows
@@ -764,15 +753,11 @@ function UpNextStrip({
 function SectionGroup({
   state,
   count,
-  collapsed,
-  onToggleCollapsed,
   dropHandlers,
   children,
 }: {
   state: ApiPriorityState | null;
   count: number;
-  collapsed?: boolean;
-  onToggleCollapsed?: () => void;
   dropHandlers?: {
     onDragOver: (event: ReactDragEvent<HTMLLIElement>) => void;
     onDrop: (event: ReactDragEvent<HTMLLIElement>) => void;
@@ -816,17 +801,8 @@ function SectionGroup({
             · {headerSub}
           </span>
         </span>
-        {onToggleCollapsed ? (
-          <button
-            type="button"
-            onClick={onToggleCollapsed}
-            className="shrink-0 text-[10px] uppercase tracking-widest text-white/35 transition hover:text-white/70"
-          >
-            {collapsed ? "show ▾" : "hide ▴"}
-          </button>
-        ) : null}
       </li>
-      {!collapsed && children}
+      {children}
     </>
   );
 }
@@ -920,8 +896,6 @@ function PrioritizerRow({
   const fractionLabel = isPlanning
     ? "brief"
     : formatFraction(project.completed, project.total);
-  const showProgressBar = !isPlanning && !isParked;
-  const barFraction = computeBarFraction(project.completed, project.total);
   const dotStyle = isPlanning
     ? undefined
     : project.color
@@ -996,20 +970,7 @@ function PrioritizerRow({
       >
         {fractionLabel}
       </span>
-      {showProgressBar ? (
-        <span
-          aria-hidden
-          className="block h-1 w-20 shrink-0 rounded-sm bg-white/[0.06]"
-        >
-          <span
-            className="block h-full rounded-sm transition-all"
-            style={{
-              width: `${barFraction * 100}%`,
-              backgroundColor: project.color ?? undefined,
-            }}
-          />
-        </span>
-      ) : decomposing ? (
+      {decomposing ? (
         // Post-handoff: decomposition pipeline is running on the anchor.
         // Quiet hint so the operator knows the chain started without
         // overwhelming the row.
@@ -1080,18 +1041,6 @@ function formatFraction(completed: number | null, total: number | null): string 
   if (completed === null || total === null) return "—";
   if (total === 0) return "0/0";
   return `${completed}/${total}`;
-}
-
-
-function computeBarFraction(
-  completed: number | null,
-  total: number | null,
-): number {
-  if (completed === null || total === null || total <= 0) return 0;
-  const fraction = completed / total;
-  if (fraction < 0) return 0;
-  if (fraction > 1) return 1;
-  return fraction;
 }
 
 
