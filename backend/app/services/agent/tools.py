@@ -111,6 +111,18 @@ Runs / Coverage / Knowledge-bucket reorganisation):
   with explicit repo / bucket filters and an optional ``intel_facts``
   flag that prepends a synthesised ``repo_intel`` summary hit.
 
+ELS-62 additions (on-demand repo KB indexing):
+
+- :meth:`repo_kb_status` — read-only probe of one repo's
+  ``.ship/knowledge`` index state (chunk count, distinct paths, last
+  ``indexed_at``). Lets the agent answer "is your knowledge up to
+  date?" without firing the indexer.
+- :meth:`reindex_repo_kb` — admin-gated trigger that runs
+  :func:`backend.app.services.agent.kb_indexer.reindex_repo_kb`
+  synchronously for one repo and returns the
+  :class:`~backend.app.services.agent.kb_indexer.IndexReport` shape so
+  the operator can see "files_indexed=12, chunks_written=83" inline.
+
 The JSON schemas live next to each method (single source of truth,
 no drift). Vendors that can't consume a method share the same
 schema; the dispatch layer (:meth:`ToolBox.invoke`) lives here.
@@ -1663,6 +1675,32 @@ class ToolBox:
                 },
             ),
             ToolSpec(
+                name="repo_kb_status",
+                description=(
+                    "Read-only probe of one repo's "
+                    "``.ship/knowledge`` index state — returns chunk "
+                    "count, number of distinct source paths, and the "
+                    "most recent ``indexed_at`` timestamp. Use to "
+                    "answer 'is the repo's knowledge indexed?' or "
+                    "'when did we last reindex?' before deciding "
+                    "whether to call ``reindex_repo_kb``. "
+                    "``indexed=false`` with ``chunks=0`` means the "
+                    "repo has never been indexed (or every chunk was "
+                    "GC'd because the source files disappeared)."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "repo_id": {
+                            "type": "string",
+                            "description": "Activated-repo UUID.",
+                        },
+                    },
+                    "required": ["repo_id"],
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
                 name="knowledge_search",
                 description=(
                     "Workspace knowledge search with explicit filters "
@@ -1957,6 +1995,40 @@ class ToolBox:
                         },
                     },
                     "required": ["article_id", "reason"],
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="reindex_repo_kb",
+                description=(
+                    "Run the ``.ship/knowledge`` indexer for one "
+                    "activated repo synchronously. Embeds new / "
+                    "changed Markdown under ``.ship/knowledge/`` into "
+                    "``kb_chunks`` so the next ``search_repo_kb`` / "
+                    "``knowledge_search`` call sees them. Re-runs are "
+                    "cheap on unchanged repos (path+SHA diff skips "
+                    "embedding) but the path still costs an OpenAI "
+                    "round-trip per changed chunk — admin-only, "
+                    "audited. Use after the operator commits new KB "
+                    "docs and doesn't want to wait for the push "
+                    "webhook, or when ``repo_kb_status`` shows "
+                    "``indexed=false``. Returns the indexer's report "
+                    "shape (``files_discovered``, ``files_indexed``, "
+                    "``files_skipped_unchanged``, ``chunks_written``, "
+                    "``chunks_deleted``)."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "repo_id": {
+                            "type": "string",
+                            "description": (
+                                "UUID of the activated repo to "
+                                "reindex."
+                            ),
+                        },
+                    },
+                    "required": ["repo_id"],
                     "additionalProperties": False,
                 },
             ),
@@ -2423,6 +2495,9 @@ class ToolBox:
             "play_automate": self._tool_play_automate,
             "automation_toggle": self._tool_automation_toggle,
             "archive_bucket_article": self._tool_archive_bucket_article,
+            # ELS-62 — on-demand repo KB indexing surface
+            "repo_kb_status": self._tool_repo_kb_status,
+            "reindex_repo_kb": self._tool_reindex_repo_kb,
             "inbox_routing_upsert": self._tool_inbox_routing_upsert,
             "get_ticket": self._tool_get_ticket,
             "get_dashboard": self._tool_get_dashboard,
@@ -2494,6 +2569,128 @@ class ToolBox:
                 entry["content"] = _truncate(hit.snippet, _MAX_KB_FULL_CHUNK)
             results.append(entry)
         return _json_result({"results": results})
+
+    async def _tool_repo_kb_status(self, args: dict[str, Any]) -> str:
+        """Read-only probe of one repo's ``kb_chunks`` state (ELS-62).
+
+        Tenancy fence: a ``repo_id`` from another workspace returns
+        ``error='repo_not_found'`` rather than leaking via row counts.
+        We deliberately do *not* require a live GitHub installation
+        here — a suspended install shouldn't hide the KB state the
+        operator already paid to embed.
+        """
+        from backend.app.db.models.agent_memory import KbChunk
+
+        repo_id = _parse_uuid(args, "repo_id")
+        repo = (
+            await self._session.execute(
+                select(WorkspaceRepo).where(
+                    WorkspaceRepo.workspace_id == self._workspace_id,
+                    WorkspaceRepo.id == repo_id,
+                )
+            )
+        ).scalars().first()
+        if repo is None:
+            return _json_result(
+                {
+                    "error": "repo_not_found",
+                    "message": (
+                        f"repo {repo_id} not activated for this "
+                        "workspace"
+                    ),
+                }
+            )
+
+        row = (
+            await self._session.execute(
+                select(
+                    func.count(KbChunk.id),
+                    func.count(func.distinct(KbChunk.source_path)),
+                    func.max(KbChunk.indexed_at),
+                ).where(KbChunk.repo_id == repo.id)
+            )
+        ).one()
+        chunks = int(row[0] or 0)
+        paths = int(row[1] or 0)
+        last_indexed_at = row[2]
+
+        from backend.app.services.agent.kb_indexer import KB_ROOT
+
+        return _json_result(
+            {
+                "repo_id": str(repo.id),
+                "repo_full_name": repo.full_name,
+                "default_branch": repo.default_branch,
+                "kb_root": KB_ROOT,
+                "indexed": chunks > 0,
+                "chunks": chunks,
+                "paths": paths,
+                "last_indexed_at": (
+                    last_indexed_at.isoformat()
+                    if last_indexed_at is not None
+                    else None
+                ),
+            }
+        )
+
+    async def _tool_reindex_repo_kb(self, args: dict[str, Any]) -> str:
+        """Manually re-run :func:`reindex_repo_kb` for one repo (ELS-62).
+
+        The webhook handler is the steady-state trigger; this tool is
+        the operator escape hatch for "I just merged a knowledge doc
+        and don't want to wait for the next push" or "the original
+        webhook fired before OPENAI_API_KEY was configured". Admin-
+        gated because each call costs OpenAI tokens; the indexer
+        itself is path+SHA idempotent so repeat invocations on an
+        unchanged repo are a cheap no-op.
+        """
+        gate_err = await self._require_admin_or_error(
+            tool_name="reindex_repo_kb"
+        )
+        if gate_err is not None:
+            return _json_result(gate_err)
+
+        try:
+            repo_id = _parse_uuid(args, "repo_id")
+        except ToolInvocationError as exc:
+            return _json_result(
+                {"error": "validation_failed", "message": str(exc)}
+            )
+
+        try:
+            repo, install = await self._resolve_repo_with_install(repo_id)
+        except ToolInvocationError as exc:
+            return _json_result(
+                {"error": "repo_unavailable", "message": str(exc)}
+            )
+
+        from backend.app.services.agent.kb_indexer import reindex_repo_kb
+
+        try:
+            report = await reindex_repo_kb(
+                self._session, repo, install, settings=self._settings
+            )
+        except RuntimeError as exc:
+            # Most common: ``OPENAI_API_KEY is not configured`` from
+            # ``embed_texts``. Keep parity with ``search_repo_kb`` so
+            # the LLM recognises the same shape.
+            return _json_result(
+                {"error": "embeddings_unavailable", "message": str(exc)}
+            )
+
+        return _json_result(
+            {
+                "repo_id": str(repo.id),
+                "repo_full_name": repo.full_name,
+                "files_discovered": report.files_discovered,
+                "files_indexed": report.files_indexed,
+                "files_skipped_unchanged": report.files_skipped_unchanged,
+                "files_skipped_too_big": report.files_skipped_too_big,
+                "files_skipped_binary": report.files_skipped_binary,
+                "chunks_written": report.chunks_written,
+                "chunks_deleted": report.chunks_deleted,
+            }
+        )
 
     async def _tool_get_repo_file(self, args: dict[str, Any]) -> str:
         repo_id = _parse_uuid(args, "repo_id")
