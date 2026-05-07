@@ -535,6 +535,40 @@ async def list_chat_threads(
     return [_thread_to_summary(r) for r in rows]
 
 
+@router.get("/chat/threads/{thread_id}", response_model=ChatThreadOut)
+async def get_chat_thread(
+    workspace_id: uuid.UUID,
+    thread_id: uuid.UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> ChatThreadOut:
+    """Return one thread (active OR archived) with its full message
+    history.
+
+    Diagnostic surface — the single-window UX never lets the operator
+    flip backwards through archived threads, but admins debugging
+    Navigator quality (tool calls misfiring, hallucinated answers,
+    wrong specialist consults) need the transcript without going
+    into Postgres. Scoped to ``auth.user`` ownership for now;
+    cross-user inspection is a separate admin route if it ever
+    becomes a need.
+    """
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
+    thread = (
+        await session.execute(
+            select(ChatThread).where(
+                ChatThread.id == thread_id,
+                ChatThread.workspace_id == workspace_id,
+                ChatThread.created_by_user_id == auth.user.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if thread is None:
+        raise HTTPException(status_code=404, detail="thread not found")
+    messages = await _thread_messages(session, thread.id)
+    return _thread_to_out(thread, messages)
+
+
 # ---------------------------------------------------------------------------
 # Streaming chat
 # ---------------------------------------------------------------------------
