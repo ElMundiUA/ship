@@ -2558,6 +2558,23 @@ class RoutineDispatchOut(BaseModel):
     ticket_ref: str | None
 
 
+class InstallationTokenOut(BaseModel):
+    """Short-lived GitHub App installation token for the bound repo.
+
+    The token is scoped to the repo's installation and inherits the
+    Ship App's installed permissions (``contents:write``,
+    ``pull_requests:write``, …). The runner uses it as ``GH_TOKEN``
+    when ``gh pr create`` runs — the default ``GITHUB_TOKEN`` from
+    ``actions/checkout`` is gated by the org's "Allow GHA to create
+    PRs" toggle, which most orgs leave off. The App token isn't
+    subject to that gate.
+    """
+
+    token: str
+    expires_at: str
+    repo_full_name: str
+
+
 @router.get(
     "/admin/ticket-snapshot/{ticket_ref}",
     response_model=TicketSnapshotOut,
@@ -2859,6 +2876,98 @@ async def post_admin_relabel_stages(
         added=result.get("added") or [],
         removed=result.get("removed") or [],
         state_changed_to=state_changed_to,
+    )
+
+
+@router.post(
+    "/repos/{repo_id}/installation-token",
+    response_model=InstallationTokenOut,
+)
+async def post_repo_installation_token(
+    workspace_id: uuid.UUID,
+    repo_id: uuid.UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> InstallationTokenOut:
+    """Mint a GitHub App installation token for ``repo_id``.
+
+    The runner uses this token as ``GH_TOKEN`` when ``gh pr create``
+    runs after a developer-agent push. The default
+    ``actions/checkout`` ``GITHUB_TOKEN`` can't open PRs unless the
+    org enables the "Allow GitHub Actions to create PRs" toggle, and
+    most orgs leave that off — the App's installation token isn't
+    subject to that gate.
+
+    Admin-only. Each call mints a fresh token (caller stores nothing
+    long-lived); GitHub auto-expires it within an hour. The mint
+    helper caches per-installation so back-to-back calls share the
+    same token.
+    """
+    from datetime import datetime, timezone
+
+    from backend.app.db.models.integrations import (
+        GitHubInstallation,
+        WorkspaceRepo,
+    )
+    from backend.app.integrations.github.app_auth import fetch_installation_token
+
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+
+    repo = (
+        await session.execute(
+            sa_select(WorkspaceRepo).where(
+                WorkspaceRepo.id == repo_id,
+                WorkspaceRepo.workspace_id == workspace_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if repo is None:
+        raise HTTPException(status_code=404, detail="repo not in this workspace")
+    if repo.installation_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail="repo has no GitHub App installation; reinstall Ship",
+        )
+    install = await session.get(GitHubInstallation, repo.installation_id)
+    if install is None or install.suspended_at is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="GitHub App installation missing or suspended",
+        )
+
+    try:
+        token = await fetch_installation_token(
+            install.installation_id, settings=settings
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "mint_failed", "error": str(exc)[:200]},
+        ) from exc
+
+    # GitHub installation tokens live ~1h. We don't echo the live
+    # cache's exact expiry (it's trimmed below by a safety margin
+    # before re-mint), so report a conservative +50min from now.
+    expires_at = datetime.now(timezone.utc).isoformat()
+
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=auth.user.id,
+            actor_token_id=auth.token.id if auth.token else None,
+            action="repo.installation_token_minted",
+            target_kind="workspace_repo",
+            target_id=str(repo_id),
+            payload={"full_name": repo.full_name},
+        )
+    )
+    await session.flush()
+
+    return InstallationTokenOut(
+        token=token,
+        expires_at=expires_at,
+        repo_full_name=repo.full_name,
     )
 
 

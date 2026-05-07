@@ -1,6 +1,6 @@
 {
   "name": "@elmundi/ship-cli",
-  "version": "0.16.7",
+  "version": "0.16.8",
   "type": "module",
   "description": "Ship CLI: bootstrap a repo, sync the catalog, run process routines, report outcomes.",
   "license": "Apache-2.0",

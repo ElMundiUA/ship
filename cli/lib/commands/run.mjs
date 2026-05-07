@@ -460,6 +460,18 @@ async function _runCommandImpl(ctx, rest) {
     try {
       pushed = pushBranch({ branchName });
       step("push_branch", "ok", { branch: branchName });
+      // Mint a Ship-App installation token for ``gh pr create`` so
+      // org-level "Allow GHA to create PRs" toggle isn't a hard
+      // dependency. Fallback to env ``GH_TOKEN`` if the mint fails.
+      const ghToken = await fetchInstallationToken({
+        apiBase,
+        apiToken,
+        workspaceId,
+        githubRepo: env.githubRepo,
+      });
+      step("mint_pr_token", ghToken ? "ok" : "fallback_env", {
+        source: ghToken ? "ship_app" : "github_actions",
+      });
       prUrl = openPullRequest({
         branchName,
         baseBranch,
@@ -471,6 +483,7 @@ async function _runCommandImpl(ctx, rest) {
           provider,
           runHandle,
         }),
+        ghToken,
       });
       step("open_pr", prUrl ? "ok" : "skipped_gh_unavailable", { pr: prUrl || null });
     } catch (err) {
@@ -569,14 +582,18 @@ function pushBranch({ branchName }) {
 }
 
 
-function openPullRequest({ branchName, baseBranch, title, body }) {
-  // ``gh pr create`` is the cheapest path — the workflow grants
-  // ``pull-requests: write`` to GITHUB_TOKEN, which gh picks up
-  // automatically. If gh isn't on PATH we degrade quietly: the branch
-  // is pushed, the operator can open the PR by hand from the runner
-  // log's branch URL.
+function openPullRequest({ branchName, baseBranch, title, body, ghToken }) {
+  // ``gh pr create`` is the cheapest path. The default
+  // ``GITHUB_TOKEN`` from ``actions/checkout`` can't open PRs unless
+  // the org enables the "Allow GitHub Actions to create PRs" toggle
+  // — most orgs leave that off. When ``ghToken`` is set (Ship App
+  // installation token, fetched from
+  // ``POST /repos/{repo_id}/installation-token``), use it as
+  // ``GH_TOKEN`` for the spawn — the App token isn't subject to that
+  // gate. ``gh`` picks up ``GH_TOKEN`` from env.
   const probe = spawnSync("gh", ["--version"], { stdio: "ignore" });
   if (probe.status !== 0) return null;
+  const env = ghToken ? { ...process.env, GH_TOKEN: ghToken } : process.env;
   const res = spawnSync(
     "gh",
     [
@@ -591,7 +608,7 @@ function openPullRequest({ branchName, baseBranch, title, body }) {
       "--body",
       body,
     ],
-    { encoding: "utf8" },
+    { encoding: "utf8", env },
   );
   if (res.status !== 0) {
     throw new Error(
@@ -599,6 +616,79 @@ function openPullRequest({ branchName, baseBranch, title, body }) {
     );
   }
   return (res.stdout || "").trim();
+}
+
+
+/**
+ * Mint a Ship-App installation token for the runner's repo via the
+ * Ship server, so ``gh pr create`` doesn't need the org's
+ * ``GITHUB_TOKEN``-can-open-PRs toggle. ``githubRepo`` is the
+ * ``owner/repo`` string from ``$GITHUB_REPOSITORY``; we round-trip
+ * through ``GET /v1/workspaces/{ws}/repos`` to find the Ship repo
+ * UUID before minting. Returns ``null`` on any failure so the caller
+ * falls back to GHA's default token (which may still work if the
+ * toggle is on).
+ */
+async function fetchInstallationToken({ apiBase, apiToken, workspaceId, githubRepo }) {
+  if (!apiBase || !apiToken || !workspaceId || !githubRepo) return null;
+
+  let listRes;
+  try {
+    listRes = await fetchWithRetry(
+      () =>
+        fetch(
+          `${apiBase}/v1/workspaces/${encodeURIComponent(workspaceId)}/repos`,
+          {
+            headers: {
+              Accept: "application/json",
+              Authorization: `Bearer ${apiToken}`,
+            },
+          },
+        ),
+      { description: "list-activated-repos" },
+    );
+  } catch {
+    return null;
+  }
+  if (!listRes.ok) return null;
+  let repos;
+  try {
+    repos = await listRes.json();
+  } catch {
+    return null;
+  }
+  const wanted = githubRepo.trim().toLowerCase();
+  const repo = (Array.isArray(repos) ? repos : []).find(
+    (r) => (r.full_name || "").toLowerCase() === wanted,
+  );
+  if (!repo || !repo.id) return null;
+
+  let res;
+  try {
+    res = await fetchWithRetry(
+      () =>
+        fetch(
+          `${apiBase}/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repo.id)}/installation-token`,
+          {
+            method: "POST",
+            headers: {
+              Accept: "application/json",
+              Authorization: `Bearer ${apiToken}`,
+            },
+          },
+        ),
+      { description: "installation-token" },
+    );
+  } catch {
+    return null;
+  }
+  if (!res.ok) return null;
+  try {
+    const body = await res.json();
+    return body.token || null;
+  } catch {
+    return null;
+  }
 }
 
 
