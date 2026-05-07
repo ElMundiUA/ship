@@ -159,7 +159,7 @@ async def create_import_source(
     integration_id: uuid.UUID | None = None,
     repo_id: uuid.UUID | None = None,
     actor_user_id: uuid.UUID | None = None,
-    sync_interval_minutes: int | None = 24 * 60,
+    sync_interval_minutes: int | None = 60,
 ) -> KnowledgeImportSource:
     if kind not in KnowledgeImportSourceKind.ALL:
         raise KnowledgeIngestionError(f"unsupported source kind: {kind}")

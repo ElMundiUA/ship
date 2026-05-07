@@ -56,7 +56,15 @@ class ImportSourceCreateIn(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
     integration_id: uuid.UUID | None = None
     repo_id: uuid.UUID | None = None
-    sync_interval_minutes: int | None = Field(default=24 * 60, ge=15)
+    # 60 min is the operator-friendly default — once an hour the
+    # knowledge cache catches up with the doc-repo / Notion / Confluence
+    # source. The previous 24-hour default left the operator's freshly
+    # pushed docs invisible to agents until the next morning, which
+    # surfaced as "the source says ready · 24h ago, why isn't it
+    # syncing?". The cron sweep runs every 15 min, so 60 min is the
+    # smallest sensible cadence below which the cron would skip the
+    # row half its passes anyway.
+    sync_interval_minutes: int | None = Field(default=60, ge=15)
 
     @field_validator("kind")
     @classmethod
