@@ -322,9 +322,6 @@ stack:
   ci: gh-actions
   agents: []
   language: multi
-agent:
-  default: {}
-  overrides: {}
 lanes:
   pr_review:
     kind: event

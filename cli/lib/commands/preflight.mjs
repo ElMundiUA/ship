@@ -29,8 +29,14 @@
 import path from "node:path";
 
 import { findShipRoot, readConfig } from "../config/io.mjs";
-import { resolveProvider } from "../agents/index.mjs";
+import { DEFAULT_PROVIDER, SUPPORTED_PROVIDERS } from "../agents/index.mjs";
 import { fetchWithRetry } from "../retry.mjs";
+
+const PROVIDER_SECRET_ENV = {
+  cursor: "CURSOR_API_KEY",
+  codex: "OPENAI_API_KEY",
+  claude: "ANTHROPIC_API_KEY",
+};
 
 const EXIT_OK = 0;
 const EXIT_USAGE = 2;
@@ -55,15 +61,16 @@ export async function preflightCommand(ctx, rest) {
   if (!env.workspaceId) missingSecrets.push("SHIP_WORKSPACE_ID");
   if (!env.apiBase) missingSecrets.push("SHIP_API_BASE");
 
-  // Provider-specific secrets only when we know which provider the
-  // workflow will resolve to. ``args.routine`` / ``args.specialist``
-  // is optional — when absent we report the workspace-default
-  // provider (typically ``cursor``).
-  const provider = config
-    ? resolveProvider(config, args.routine || args.specialist)
-    : "cursor";
-  if (provider === "cursor" && !env.cursorKey) {
-    missingSecrets.push("CURSOR_API_KEY");
+  // Provider resolution moved to the workspace binding row in PR-1
+  // of the local-CLI swap. Read it from the API when we have enough
+  // env to query; degrade to ``DEFAULT_PROVIDER`` so preflight stays
+  // useful for the ``ready=false`` path even when the API is
+  // unreachable. ``provider`` always has a value so the secret check
+  // below is unconditional.
+  const provider = await resolveBoundProvider(env);
+  const providerSecret = PROVIDER_SECRET_ENV[provider];
+  if (providerSecret && !process.env[providerSecret]) {
+    missingSecrets.push(providerSecret);
   }
 
   // Role-side denial surfacing. We don't *enforce* the deny list
@@ -174,8 +181,39 @@ function readEnv() {
     ),
     apiToken: process.env.SHIP_API_TOKEN || "",
     workspaceId: process.env.SHIP_WORKSPACE_ID || "",
-    cursorKey: process.env.CURSOR_API_KEY || "",
   };
+}
+
+
+/**
+ * Resolve the workspace-bound runtime via
+ * ``GET /v1/workspaces/{ws}/agent-provider``. Returns
+ * ``DEFAULT_PROVIDER`` when env doesn't carry enough to query, or
+ * when the API call fails — preflight stays useful in the unreachable
+ * case rather than hard-failing.
+ */
+async function resolveBoundProvider({ apiBase, apiToken, workspaceId }) {
+  if (!apiBase || !apiToken || !workspaceId) return DEFAULT_PROVIDER;
+  try {
+    const res = await fetchWithRetry(
+      () =>
+        fetch(
+          `${apiBase}/v1/workspaces/${encodeURIComponent(workspaceId)}/agent-provider`,
+          {
+            headers: {
+              Accept: "application/json",
+              Authorization: `Bearer ${apiToken}`,
+            },
+          },
+        ),
+      { description: "agent-provider" },
+    );
+    if (!res.ok) return DEFAULT_PROVIDER;
+    const body = await res.json();
+    return SUPPORTED_PROVIDERS.includes(body.kind) ? body.kind : DEFAULT_PROVIDER;
+  } catch {
+    return DEFAULT_PROVIDER;
+  }
 }
 
 

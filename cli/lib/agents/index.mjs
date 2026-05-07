@@ -3,16 +3,15 @@
  *
  * The workspace binds to one of the three local CLIs via
  * ``Workspace.agent_provider`` (cursor / codex / claude); ``shipctl
- * run`` resolves that binding before invoking ``runAgent`` so the
- * runner installs and executes only the right CLI on each tick. Per-
- * routine override is still honoured via ``.ship/config.yml``
- * ``agent.overrides.<routine>.provider`` for debug runs.
+ * run`` resolves that binding through ``GET /v1/workspaces/{ws}/agent-provider``
+ * before invoking ``runAgent`` so the runner installs and executes
+ * only the right CLI on each tick.
  *
  * Each adapter expects the runner to have already checked out the
  * target branch in ``workdir`` and configured git committer identity.
  * After the adapter returns, the runner pushes the branch and opens
  * a PR via ``gh``. There is no remote service in the loop anymore —
- * the cloud-poll path was removed in PR-5 once Cursor's GitHub App
+ * the cloud-poll path was removed once Cursor's GitHub App
  * dependency proved fragile (organisation-level App removal silently
  * killed every cron tick).
  */
@@ -28,21 +27,7 @@ const RUNTIMES = {
   claude: runClaudeAgent,
 };
 
-const DEFAULT_PROVIDER = "cursor";
-
-
-export function resolveProvider(config, routineId) {
-  // Per-routine override on the customer's .ship/config.yml — used
-  // for debug pinning ("force this one routine to claude") without
-  // touching the workspace binding. The workspace-level default
-  // arrives via the API resolver path inside `shipctl run`; this
-  // function only handles the config.yml branches.
-  const override = config?.agent?.overrides?.[routineId]?.provider;
-  if (override) return String(override).toLowerCase();
-  const def = config?.agent?.default?.provider;
-  if (def) return String(def).toLowerCase();
-  return DEFAULT_PROVIDER;
-}
+export const DEFAULT_PROVIDER = "cursor";
 
 
 /**
