@@ -640,6 +640,122 @@ class ToolBox:
                 },
             ),
             ToolSpec(
+                name="find_or_create_project_by_name",
+                description=(
+                    "Idempotent project-by-name lookup. Returns an "
+                    "existing project whose name matches ``name`` "
+                    "(case-insensitive exact match), or creates a new "
+                    "one with the given ``body`` and returns its id. "
+                    "Use this for reviewer-style routing — tech-debt "
+                    "findings → ``Tech Debt`` project, qa findings → "
+                    "``QA Debt`` project, security findings → "
+                    "``Security`` project — without a race condition "
+                    "between ``list_projects`` and ``create_project``. "
+                    "The returned ``created`` flag tells you which "
+                    "branch fired."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": (
+                                "Project name to find or create (case-"
+                                "insensitive exact match against the "
+                                "tracker's existing projects)."
+                            ),
+                        },
+                        "body": {
+                            "type": "string",
+                            "description": (
+                                "Markdown body for the new project (used "
+                                "only when no existing project matches). "
+                                "Should explain the project's purpose so "
+                                "future tickets pull context from it — "
+                                "e.g. ``Holding pen for tech-debt "
+                                "findings filed by the daily tech-"
+                                "reviewer routine.``"
+                            ),
+                        },
+                        "description": {
+                            "type": "string",
+                            "description": (
+                                "Optional one-line blurb (Linear caps at "
+                                "240 chars). Used only on create."
+                            ),
+                        },
+                    },
+                    "required": ["name", "body"],
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="inbox_create",
+                description=(
+                    "Drop a new item in the operator's inbox. The inbox "
+                    "is a mailbox-style read surface — supporting "
+                    "routines (daily-retro, learning-capture, "
+                    "process-reviewer) file ``type=report`` items with a "
+                    "full markdown body the operator reads like a "
+                    "letter; agentic actions that need a yes/no go "
+                    "through the typed surface (clarification, "
+                    "approval, improvement). Use ``type=report`` when "
+                    "the only action the operator should take is "
+                    "reading and acknowledging."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "type": {
+                            "type": "string",
+                            "enum": [
+                                "report",
+                                "improvement",
+                                "approval",
+                                "exception",
+                            ],
+                            "description": (
+                                "Inbox item type. ``report`` for read-"
+                                "only digests (daily/retro/process-"
+                                "review). ``improvement`` for "
+                                "actionable suggestions. ``approval`` "
+                                "for gated decisions. ``exception`` "
+                                "for policy edge cases."
+                            ),
+                        },
+                        "title": {
+                            "type": "string",
+                            "description": (
+                                "One-line subject (≤300 chars). Like "
+                                "an email subject — operator scans "
+                                "this in the list view."
+                            ),
+                        },
+                        "body": {
+                            "type": "string",
+                            "description": (
+                                "Markdown body. Rendered as the letter "
+                                "content in the preview pane. For "
+                                "reports: digest sections, links, "
+                                "evidence. For approvals: what's being "
+                                "approved + rationale."
+                            ),
+                        },
+                        "summary": {
+                            "type": "string",
+                            "description": (
+                                "Optional short blurb shown next to "
+                                "the title in the list view (≤2KB). "
+                                "Falls back to the first 200 chars of "
+                                "``body`` when omitted."
+                            ),
+                        },
+                    },
+                    "required": ["type", "title", "body"],
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
                 name="append_project_description",
                 description=(
                     "Append markdown to an existing project's body. Use "
@@ -2257,6 +2373,8 @@ class ToolBox:
             "list_projects": self._tool_list_projects,
             "get_project": self._tool_get_project,
             "create_project": self._tool_create_project,
+            "find_or_create_project_by_name": self._tool_find_or_create_project_by_name,
+            "inbox_create": self._tool_inbox_create,
             "append_project_description": self._tool_append_project_description,
             "list_recent_activity": self._tool_list_recent_activity,
             "get_pull_request": self._tool_get_pull_request,
@@ -2884,6 +3002,107 @@ class ToolBox:
             )
         )
         await self._session.flush()
+
+    async def _tool_find_or_create_project_by_name(
+        self, args: dict[str, Any]
+    ) -> str:
+        name = _require_str(args, "name")
+        body = _require_str(args, "body")
+        description = args.get("description")
+        if description is not None and not isinstance(description, str):
+            raise ToolInvocationError("description must be a string")
+
+        tracker = await self._resolve_tracker(None, None)
+        try:
+            existing = await tracker.list_projects(limit=100)
+        except NotImplementedError as exc:
+            raise ToolInvocationError(str(exc)) from exc
+        except ValueError as exc:
+            raise ToolInvocationError(str(exc)) from exc
+
+        wanted = name.strip().casefold()
+        for project in existing:
+            project_name = project.get("name") or ""
+            if isinstance(project_name, str) and project_name.casefold() == wanted:
+                return _json_result({**dict(project), "created": False})
+
+        try:
+            created = await tracker.create_project(
+                name=name, body=body, description=description
+            )
+        except NotImplementedError as exc:
+            raise ToolInvocationError(str(exc)) from exc
+        except ValueError as exc:
+            raise ToolInvocationError(str(exc)) from exc
+
+        project_native_id = str(created.get("id") or "")
+        if project_native_id:
+            await self._ensure_drafts_priorities_row(
+                project_native_id=project_native_id
+            )
+
+        return _json_result({**dict(created), "created": True})
+
+    async def _tool_inbox_create(self, args: dict[str, Any]) -> str:
+        type_ = _require_str(args, "type")
+        if type_ not in {"report", "improvement", "approval", "exception"}:
+            raise ToolInvocationError(
+                "type must be one of report | improvement | approval | exception"
+            )
+        title = _require_str(args, "title")
+        body = _require_str(args, "body")
+        summary = args.get("summary")
+        if summary is not None and not isinstance(summary, str):
+            raise ToolInvocationError("summary must be a string")
+
+        title_clean = title.strip()
+        if not title_clean:
+            raise ToolInvocationError("title must not be blank")
+        body_clean = body.strip()
+        if not body_clean:
+            raise ToolInvocationError("body must not be blank")
+
+        from backend.app.services.inbox.intake import (
+            _SUMMARY_MAX_LEN,
+            _TITLE_MAX_LEN,
+            _truncate,
+        )
+
+        if summary is None:
+            summary_text = body_clean[:200]
+        else:
+            summary_text = summary
+
+        item = InboxItem(
+            workspace_id=self._workspace_id,
+            repo_id=self._active_repo_id,
+            type=type_,
+            title=_truncate(title_clean, _TITLE_MAX_LEN),
+            summary=_truncate(summary_text, _SUMMARY_MAX_LEN) or None,
+            payload={"body": body_clean, "source": "agent_tool"},
+            status="new",
+        )
+        self._session.add(item)
+        await self._session.flush()
+        self._session.add(
+            InboxItemEvent(
+                item_id=item.id,
+                actor_user_id=None,
+                actor_kind="agent",
+                action="created",
+                payload={"via": "inbox_create"},
+            )
+        )
+        await self._session.flush()
+
+        return _json_result(
+            {
+                "id": str(item.id),
+                "type": item.type,
+                "status": item.status,
+                "title": item.title,
+            }
+        )
 
     async def _tool_append_project_description(self, args: dict[str, Any]) -> str:
         project_id = _require_str(args, "project_id")
