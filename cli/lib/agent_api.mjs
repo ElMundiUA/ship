@@ -82,6 +82,15 @@ export async function resolveContext(opts, ctx) {
 }
 
 
+// Retry on transient edge 5xx (502/503/504) and on network errors.
+// Bunny CDN occasionally fails to reach origin; the agent shouldn't
+// drop a routine over a one-shot edge blip. Three attempts with
+// exponential backoff. 4xx and other 5xx codes still surface on
+// the first attempt.
+const _RETRY_DELAYS_MS = [500, 1500, 4500];
+const _TRANSIENT_STATUSES = new Set([502, 503, 504]);
+
+
 /**
  * @param {string} baseUrl
  * @param {string} path
@@ -91,40 +100,62 @@ export async function resolveContext(opts, ctx) {
  */
 export async function apiRequest(baseUrl, path, method, token, body) {
   const url = `${baseUrl}${path}`;
-  let res;
-  try {
-    res = await fetch(url, {
-      method,
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: body === null ? undefined : JSON.stringify(body),
-    });
-  } catch (err) {
-    console.error(
-      `Network error calling ${url}: ${err instanceof Error ? err.message : err}`,
-    );
-    process.exit(3);
+  for (let attempt = 0; attempt <= _RETRY_DELAYS_MS.length; attempt += 1) {
+    if (attempt > 0) {
+      await new Promise((r) => setTimeout(r, _RETRY_DELAYS_MS[attempt - 1]));
+    }
+    let res;
+    try {
+      res = await fetch(url, {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: body === null ? undefined : JSON.stringify(body),
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (attempt < _RETRY_DELAYS_MS.length) {
+        console.error(
+          `warn: network error on ${method} ${url} (attempt ${attempt + 1}/${_RETRY_DELAYS_MS.length + 1}): ${message}`,
+        );
+        continue;
+      }
+      console.error(`Network error calling ${url}: ${message}`);
+      process.exit(3);
+    }
+    const text = await res.text();
+    let data = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      data = text;
+    }
+    if (res.ok) return data;
+    if (
+      _TRANSIENT_STATUSES.has(res.status)
+      && attempt < _RETRY_DELAYS_MS.length
+    ) {
+      console.error(
+        `warn: transient ${res.status} on ${method} ${url} (attempt ${attempt + 1}/${_RETRY_DELAYS_MS.length + 1}); retrying`,
+      );
+      continue;
+    }
+    if (res.status === 401) {
+      console.error(
+        `HTTP 401 on ${method} ${url} — SHIP_API_TOKEN is missing, expired, or lacks workspace access.`,
+      );
+      process.exit(2);
+    }
+    const msg = typeof data === "string" ? data : JSON.stringify(data);
+    console.error(`HTTP ${res.status} ${res.statusText} on ${method} ${url}\n${msg}`);
+    process.exit(res.status >= 500 ? 3 : 1);
   }
-  const text = await res.text();
-  let data = null;
-  try {
-    data = text ? JSON.parse(text) : null;
-  } catch {
-    data = text;
-  }
-  if (res.ok) return data;
-  if (res.status === 401) {
-    console.error(
-      `HTTP 401 on ${method} ${url} — SHIP_API_TOKEN is missing, expired, or lacks workspace access.`,
-    );
-    process.exit(2);
-  }
-  const msg = typeof data === "string" ? data : JSON.stringify(data);
-  console.error(`HTTP ${res.status} ${res.statusText} on ${method} ${url}\n${msg}`);
-  process.exit(res.status >= 500 ? 3 : 1);
+  // Unreachable — the loop above always returns or exits.
+  console.error(`apiRequest exhausted retries for ${url}`);
+  process.exit(3);
 }
 
 
