@@ -43,13 +43,22 @@ export async function POST(
   const actionRaw = (form.get("action") ?? "").toString();
   const answer = (form.get("answer") ?? "").toString().trim();
   const payloadJsonRaw = (form.get("payload_json") ?? "").toString().trim();
+  // ``return_to`` lets callers (mailbox footer) bounce back to the
+  // list view with a different selection rather than the bigger
+  // detail page. Only same-origin paths starting with ``/`` are
+  // honoured; anything else falls through to the default.
+  const returnToRaw = (form.get("return_to") ?? "").toString();
+  const returnTo =
+    returnToRaw.startsWith("/") && !returnToRaw.startsWith("//")
+      ? returnToRaw
+      : null;
 
-  if (!wsId || !id) return back(origin, id, "bad_input");
+  if (!wsId || !id) return back(origin, id, "bad_input", returnTo);
   if (!VALID_ACTIONS.includes(actionRaw as InboxDispositionAction)) {
-    return back(origin, id, "bad_input");
+    return back(origin, id, "bad_input", returnTo);
   }
   const action = actionRaw as InboxDispositionAction;
-  if (!isApiConfigured()) return back(origin, id, "api_unavailable");
+  if (!isApiConfigured()) return back(origin, id, "api_unavailable", returnTo);
 
   // Build the payload bag. ``payload_json`` (advanced operators)
   // merges underneath ``answer`` so the dedicated text field always
@@ -61,10 +70,10 @@ export async function POST(
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
         payload = { ...(parsed as Record<string, unknown>) };
       } else {
-        return back(origin, id, "bad_input");
+        return back(origin, id, "bad_input", returnTo);
       }
     } catch {
-      return back(origin, id, "bad_input");
+      return back(origin, id, "bad_input", returnTo);
     }
   }
 
@@ -74,7 +83,7 @@ export async function POST(
   };
 
   if (action === "answer") {
-    if (!answer) return back(origin, id, "validation_failed");
+    if (!answer) return back(origin, id, "validation_failed", returnTo);
     body.answer = answer;
     body.payload = { ...payload, answer };
   }
@@ -88,14 +97,15 @@ export async function POST(
         303,
       );
     }
-    return back(origin, id, codeFor(err));
+    return back(origin, id, codeFor(err), returnTo);
   }
 
-  return NextResponse.redirect(new URL(`/inbox/${id}`, origin), 303);
+  const successTarget = returnTo ?? `/inbox/${id}`;
+  return NextResponse.redirect(new URL(successTarget, origin), 303);
 }
 
-function back(origin: string, id: string, code: string) {
-  const url = new URL(`/inbox/${id}`, origin);
+function back(origin: string, id: string, code: string, returnTo: string | null) {
+  const url = new URL(returnTo ?? `/inbox/${id}`, origin);
   url.searchParams.set("error", code);
   return NextResponse.redirect(url, 303);
 }

@@ -46,6 +46,13 @@ INBOX_TYPES: tuple[str, ...] = (
     "stuck",
     # Self-heal lane failed — only minted from pipeline result callback.
     "blocker",
+    # Read-only digest from supporting routines (daily / retro /
+    # process-review). Operator opens it like a letter, reads the
+    # markdown body, and the only action is "Acknowledge" — no
+    # branching, no quick-reply, no follow-up tracker work. The
+    # mailbox-style inbox UI keys off this type to render the body
+    # full-width with no buttons besides Acknowledge.
+    "report",
 )
 
 # Meta-keys that may appear inside a profile body but are NOT inbox

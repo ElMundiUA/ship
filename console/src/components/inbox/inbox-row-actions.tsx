@@ -39,6 +39,10 @@ const PRIMARY_LABEL: Record<InboxType, string | null> = {
   exception: "Acknowledge",
   stuck: "Acknowledge",
   blocker: "Acknowledge",
+  // ``report`` items are read-only digests — the inline row action is
+  // a one-tap Acknowledge so operators can clear letters from the list
+  // without opening the preview pane.
+  report: "Acknowledge",
 };
 
 const SECONDARY_LABEL: Record<InboxType, string | null> = {
@@ -49,6 +53,7 @@ const SECONDARY_LABEL: Record<InboxType, string | null> = {
   exception: null,
   stuck: null,
   blocker: null,
+  report: null,
 };
 
 const DISCUSS_TYPES = new Set<InboxType>([

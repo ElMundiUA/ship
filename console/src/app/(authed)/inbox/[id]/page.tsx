@@ -166,6 +166,14 @@ const DISPOSITION_BY_TYPE: Record<
       },
     ],
   },
+  report: {
+    // ``report`` is the read-only digest type (daily / retro / process
+    // review). The only operator action is mark-read; ``resolve``
+    // writes resolution=acknowledged via the open-ended path. No
+    // dismiss — there's nothing to refuse, just letters to read.
+    primary: { action: "resolve", label: "Acknowledge", style: "primary" },
+    secondary: [],
+  },
 };
 
 // ---------------------------------------------------------------------------

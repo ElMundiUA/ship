@@ -63,13 +63,13 @@ DEFAULT_BUNDLE: tuple[str, ...] = (
 )
 
 DEFAULT_BUNDLE_REASONS: dict[str, str] = {
-    "daily-retro": "Posts a morning summary of what shipped in the last 24 hours.",
-    "learning-capture": "Closes the day with a retro that turns recent runs into improvement notes.",
+    "daily-retro": "Files a morning digest letter in the operator's inbox — read it, hit Acknowledge.",
+    "learning-capture": "End-of-day digest of patterns worth remembering, filed as an inbox letter.",
     "workflow-self-heal": "Watches Ship workflows; opens a fix ticket or pings a human when something breaks.",
-    "tech-reviewer": "Sweeps the repo daily for tech-debt and architectural risk; files dedup tickets.",
-    "qa-reviewer": "Sweeps the repo daily for test-coverage gaps; files dedup tickets.",
-    "security-officer": "Runs the daily security review and routes actionable findings.",
-    "process-reviewer": "Suggests SDLC improvements (PR previews, CI health, branch hygiene) to the inbox.",
+    "tech-reviewer": "Sweeps the repo daily for tech-debt findings; files dedup tickets in the Tech Debt project.",
+    "qa-reviewer": "Sweeps the repo daily for test-coverage gaps; files dedup tickets in the QA Debt project.",
+    "security-officer": "Runs the daily security review; files dedup tickets in the Security project.",
+    "process-reviewer": "SDLC improvement recommendations land as inbox letters — operator decisions, not work items.",
     "intake": "Shapes new work into a structured ticket before BA picks it up.",
     "bug-triage": "Structures bug reports into reproducible tickets before BA writes the fix spec.",
     "ba": "Writes the implementation-grade specification on top of intake.",
