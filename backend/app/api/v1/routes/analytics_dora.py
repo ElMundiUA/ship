@@ -105,9 +105,10 @@ class DfPoint(BaseModel):
 
 class DeploymentFrequency(BaseModel):
     total_deploys: int
+    per_day_average: float
     per_day_median: float
     per_day_p90: float
-    label: str  # DORA performance band
+    label: str  # DORA performance band (computed off the average)
     time_series: list[DfPoint]
 
 
@@ -168,12 +169,20 @@ class DoraOut(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _label_deployment_frequency(per_day_median: float) -> str:
-    if per_day_median >= 1.0:
+def _label_deployment_frequency(per_day_average: float) -> str:
+    """DORA band off the average deploy-per-day rate.
+
+    We classify off the mean rather than the per-day median because a
+    healthy trunk-based workflow batches deploys into a few high-traffic
+    days per week — the median is then 0 even though the team ships
+    daily on aggregate. Mean tracks the cadence the operator
+    actually feels.
+    """
+    if per_day_average >= 1.0:
         return "Elite — daily or better"
-    if per_day_median >= 1 / 7:
+    if per_day_average >= 1 / 7:
         return "High — between weekly and daily"
-    if per_day_median >= 1 / 30:
+    if per_day_average >= 1 / 30:
         return "Medium — between monthly and weekly"
     return "Low — less than monthly"
 
@@ -266,13 +275,15 @@ def _compute_deployment_frequency(
         if d in counts_by_day:
             counts_by_day[d] += 1
     counts = list(counts_by_day.values())
+    average = (sum(counts) / len(counts)) if counts else 0.0
     median = float(statistics.median(counts)) if counts else 0.0
     p90 = float(_percentile([float(c) for c in counts], 90) or 0.0)
     return DeploymentFrequency(
         total_deploys=len(successful),
+        per_day_average=average,
         per_day_median=median,
         per_day_p90=p90,
-        label=_label_deployment_frequency(median),
+        label=_label_deployment_frequency(average),
         time_series=[
             DfPoint(date=d, count=c) for d, c in counts_by_day.items()
         ],

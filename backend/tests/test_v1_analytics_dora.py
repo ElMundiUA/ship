@@ -38,6 +38,7 @@ async def test_empty_workspace_returns_zero_shape(
     assert body["window_days"] == 30
     df = body["deployment_frequency"]
     assert df["total_deploys"] == 0
+    assert df["per_day_average"] == 0.0
     assert df["per_day_median"] == 0.0
     assert len(df["time_series"]) >= 30
 

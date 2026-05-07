@@ -360,7 +360,48 @@ async def get_next_task(
     # Pull extra rows so a head-of-list orphan / parked-project row
     # doesn't starve the picker — we drop the skips and pick the first
     # eligible row that remains.
-    rows = await resolved.gateway.list_tickets(state=state, limit=10)
+    #
+    # Defensive degradation: a Linear hiccup (rotated state ID, deleted
+    # label, transient API 5xx) raises RuntimeError out of the
+    # GraphQL helper. The cron tick must NOT fail the workflow over
+    # that — the next tick will retry. Surface the error in the audit
+    # log so an operator can debug, then return ``ticket=None`` so the
+    # cron noops cleanly.
+    try:
+        rows = await resolved.gateway.list_tickets(state=state, limit=10)
+    except RuntimeError as exc:
+        logger.exception(
+            "tracker/next: list_tickets failed ws=%s state=%s err=%s",
+            workspace_id,
+            state,
+            exc,
+        )
+        try:
+            session.add(
+                AuditLog(
+                    workspace_id=workspace_id,
+                    actor_user_id=auth.user.id,
+                    actor_token_id=auth.token.id if auth.token else None,
+                    action="agent_run.tracker_next_failed",
+                    target_kind="fsm_stage",
+                    target_id=state,
+                    payload={
+                        "tracker_kind": resolved.kind,
+                        "fsm_stage": state,
+                        "error": str(exc)[:500],
+                    },
+                )
+            )
+            await session.flush()
+        except Exception as audit_exc:  # noqa: BLE001 — audit failure must not sink the response
+            logger.warning(
+                "tracker/next: audit write failed ws=%s err=%s",
+                workspace_id,
+                audit_exc,
+            )
+        return TaskResponseOut(
+            ticket=None, fsm_stage=state, tracker_kind=resolved.kind
+        )
     if not rows:
         return TaskResponseOut(
             ticket=None, fsm_stage=state, tracker_kind=resolved.kind

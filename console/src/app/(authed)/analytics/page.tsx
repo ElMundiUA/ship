@@ -195,8 +195,8 @@ function DoraGrid({ dora }: { dora: ApiDoraResponse }) {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <DoraCard
           title="Deployment frequency"
-          headline={formatPerDay(dora.deployment_frequency.per_day_median)}
-          sub={`${dora.deployment_frequency.total_deploys} deploys total · p90 ${formatPerDay(dora.deployment_frequency.per_day_p90)}`}
+          headline={formatPerDay(dora.deployment_frequency.per_day_average)}
+          sub={`${dora.deployment_frequency.total_deploys} deploys total · median ${formatPerDay(dora.deployment_frequency.per_day_median)} · p90 ${formatPerDay(dora.deployment_frequency.per_day_p90)}`}
           band={dora.deployment_frequency.label}
         >
           <DfChart data={dora.deployment_frequency.time_series} />

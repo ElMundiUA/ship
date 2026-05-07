@@ -2676,6 +2676,7 @@ export interface ApiDoraResponse {
   computed_at: string;
   deployment_frequency: {
     total_deploys: number;
+    per_day_average: number;
     per_day_median: number;
     per_day_p90: number;
     label: string;
