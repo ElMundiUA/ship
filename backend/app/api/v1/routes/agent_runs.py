@@ -1725,7 +1725,7 @@ async def get_project_tickets(
     Defaults to ``open_only=True`` so closed history doesn't bloat the
     response.
     """
-    await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
     resolved = await resolve_for_workspace(
         session=session, settings=settings, workspace_id=workspace_id
     )
