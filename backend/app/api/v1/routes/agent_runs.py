@@ -582,6 +582,44 @@ async def get_next_task(
     )
 
 
+def _collect_project_sections(payload: "FinishIn") -> list["ProjectSectionPatch"]:
+    """Pull decomposition section patches from the finish payload.
+
+    Agents can land the list in two equivalent places:
+
+    1. ``project_sections`` as a top-level field on the finish JSON
+       — the canonical wire shape Pydantic validates into typed
+       ``ProjectSectionPatch`` instances at ingestion.
+    2. Inside the catch-all ``payload`` dict as
+       ``payload.project_sections`` — a tolerant fallback for agents
+       that read ``payload`` in the role prompt as "the JSON body's
+       payload" and nested it there. The wording in earlier role
+       prompts was ambiguous and Claude (correctly, by its reading)
+       sometimes places it under the dict.
+
+    The fallback re-validates each entry through
+    ``ProjectSectionPatch`` so the same length/shape rules apply
+    regardless of where the agent wrote it; malformed entries are
+    silently dropped (the audit trail will show the missing
+    ``tracker:project_section:<X>`` action so the operator can spot
+    it).
+    """
+    if payload.project_sections:
+        return list(payload.project_sections)
+    raw = (payload.payload or {}).get("project_sections")
+    if not isinstance(raw, list) or not raw:
+        return []
+    out: list[ProjectSectionPatch] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            out.append(ProjectSectionPatch(**entry))
+        except Exception:  # noqa: BLE001 — drop malformed silently
+            continue
+    return out
+
+
 def _is_planning_anchor(labels: list[Any]) -> bool:
     """Return True if ``labels`` contains the planning-anchor marker.
 
@@ -2279,14 +2317,15 @@ async def finish_agent_run(
             # transient Linear 5xx fails the section but doesn't sink
             # the rest of the finish — the audit trail surfaces the
             # specific section so the operator can re-run.
-            if payload.project_sections:
+            sections = _collect_project_sections(payload)
+            if sections:
                 snapshot = await _try_ticket_snapshot(resolved.gateway, ref)
                 project_id = (snapshot or {}).get("project_id")
                 upsert = getattr(
                     resolved.gateway, "upsert_project_section", None
                 )
                 if project_id and upsert is not None:
-                    for patch in payload.project_sections:
+                    for patch in sections:
                         try:
                             await upsert(
                                 str(project_id),
@@ -2321,14 +2360,14 @@ async def finish_agent_run(
                         "agent_run.finish: anchor ticket=%s has no project; "
                         "%d project_sections skipped",
                         payload.ticket_ref,
-                        len(payload.project_sections),
+                        len(sections),
                     )
                 elif upsert is None:
                     logger.warning(
                         "agent_run.finish: tracker_kind=%s has no "
                         "upsert_project_section adapter; %d sections skipped",
                         resolved.kind,
-                        len(payload.project_sections),
+                        len(sections),
                     )
             # Pass ``from_state`` so the adapter adds the breadcrumb
             # label for the role that *just finished* (``fsm_stage``),
