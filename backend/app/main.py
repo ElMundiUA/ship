@@ -175,6 +175,51 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Ship Methodology API", version="0.16.6", lifespan=lifespan)
+
+
+# Surface the actual error class + message on uncaught exceptions so a
+# RuntimeError from the Linear adapter (typical: GraphQL 4xx with a
+# scope/auth message in the body, or a Linear 5xx during a transition)
+# doesn't reach the client as a body-less ``Internal Server Error`` from
+# the Bunny edge. Without this the agent prompt has nothing to retry on
+# — the operator has to crack open server logs to find the actual cause.
+# We log the full traceback server-side; the JSON body returned to the
+# caller is intentionally a one-liner (class name + message) so it's
+# safe to expose on the agent's audit comment without leaking stack.
+@app.exception_handler(Exception)
+async def _surface_uncaught_exceptions(request, exc):  # type: ignore[no-untyped-def]
+    import logging as _logging
+
+    from fastapi.responses import JSONResponse
+    from starlette.exceptions import HTTPException as _StarletteHTTPException
+
+    # Defer to FastAPI/Starlette's built-in handler for HTTPException so
+    # the route-layer 4xx contracts keep their structured ``detail``
+    # payloads.
+    if isinstance(exc, _StarletteHTTPException):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail},
+            headers=exc.headers or {},
+        )
+    _logging.getLogger("ship.unhandled").exception(
+        "unhandled exception on %s %s",
+        request.method,
+        request.url.path,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": {
+                "code": "internal_error",
+                "error_class": type(exc).__name__,
+                "message": str(exc)[:500] or repr(exc)[:500],
+                "path": request.url.path,
+            },
+        },
+    )
+
+
 app.include_router(v1_api_router)
 
 
