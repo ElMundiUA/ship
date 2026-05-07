@@ -362,6 +362,7 @@ export async function SettingsShell({
                 </div>
               </Card>
               <DefaultAgentCard workspace={workspace} />
+              <AgentProviderCard workspace={workspace} />
             </div>
           )}
 
@@ -912,6 +913,68 @@ function DefaultAgentCard({ workspace }: { workspace: ApiWorkspace }) {
           className="h-10 whitespace-nowrap rounded-full border border-aqua/30 bg-aqua/10 px-4 text-xs font-bold text-aqua transition hover:bg-aqua/15"
         >
           Save default
+        </button>
+      </form>
+    </Card>
+  );
+}
+
+// Mirror of backend ``SUPPORTED_PROVIDERS``. Each option is one of the
+// three local-CLI runtimes shipctl can dispatch on the GHA runner.
+const AGENT_PROVIDER_OPTIONS: { value: "cursor" | "codex" | "claude"; label: string; hint: string }[] = [
+  {
+    value: "cursor",
+    label: "Cursor Agent",
+    hint: "Local cursor-agent CLI on the runner",
+  },
+  {
+    value: "codex",
+    label: "OpenAI Codex",
+    hint: "Local @openai/codex CLI on the runner",
+  },
+  {
+    value: "claude",
+    label: "Claude Code",
+    hint: "Local @anthropic-ai/claude-code CLI on the runner",
+  },
+];
+
+function AgentProviderCard({ workspace }: { workspace: ApiWorkspace }) {
+  const current = workspace.agent_provider ?? "cursor";
+  return (
+    <Card>
+      <CardHeader
+        title="Autonomous pipeline runtime"
+        subtitle="Which local CLI runs on the GitHub Actions runner when shipctl dispatches a routine. Switching takes effect from the next cron tick — in-flight runs finish under the previous binding."
+      />
+      <form
+        action="/api/settings/agent-provider"
+        method="POST"
+        className="flex flex-col gap-3 sm:flex-row sm:items-end"
+      >
+        <input type="hidden" name="ws" value={workspace.id} suppressHydrationWarning />
+        <label className="flex-1">
+          <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/55">
+            Provider
+          </span>
+          <select
+            name="provider"
+            defaultValue={current}
+            required
+            className="w-full rounded border border-white/10 bg-white/[0.04] px-2 py-2 text-sm text-white outline-none focus:border-aqua/40"
+          >
+            {AGENT_PROVIDER_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label} — {opt.hint}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button
+          type="submit"
+          className="h-10 whitespace-nowrap rounded-full border border-aqua/30 bg-aqua/10 px-4 text-xs font-bold text-aqua transition hover:bg-aqua/15"
+        >
+          Save provider
         </button>
       </form>
     </Card>
