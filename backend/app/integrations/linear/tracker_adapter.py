@@ -612,6 +612,91 @@ class LinearTracker:
         """
         await self._gql(mutation, {"id": ticket.id, "stateId": state_id})
 
+    async def relabel_stages(
+        self,
+        ticket: TicketRef,
+        *,
+        add: list[str] | None = None,
+        remove: list[str] | None = None,
+    ) -> dict[str, list[str]]:
+        """Surgically add/remove FSM stage labels on a ticket.
+
+        Operator escape hatch for fixing a stuck label state when the
+        breadcrumb chain got corrupted by a buggy run (e.g. the old
+        ``transition()`` that wrote the wrong stage label). Both args
+        accept Ship FSM stage names (e.g. ``task_intake``,
+        ``ba_requirements``); we resolve them to Linear label ids via
+        ``_label_id_by_stage``.
+
+        Pre-checks the issue's current label set so ``removedLabelIds``
+        only carries labels that are actually present — Linear rejects
+        the whole mutation with ``Label not on issue`` otherwise.
+        Returns ``{"added": [...], "removed": [...]}`` of stage names
+        that actually changed.
+        """
+        if ticket.kind != "linear":
+            raise ValueError(
+                f"LinearTracker can't relabel_stages for kind={ticket.kind}"
+            )
+
+        wanted_add_ids: dict[str, str] = {}
+        for stage in (add or []):
+            lid = self._label_id_by_stage.get(stage)
+            if not lid:
+                raise ValueError(f"unknown stage label {stage!r}")
+            wanted_add_ids[stage] = lid
+        wanted_remove_ids: dict[str, str] = {}
+        for stage in (remove or []):
+            lid = self._label_id_by_stage.get(stage)
+            if not lid:
+                raise ValueError(f"unknown stage label {stage!r}")
+            wanted_remove_ids[stage] = lid
+
+        # Read current labels so we can prune ``remove`` to only what's
+        # actually on the issue.
+        snapshot = await self._gql(
+            """query ShipReadLabels($id: String!) {
+              issue(id: $id) { labels { nodes { id } } }
+            }""",
+            {"id": ticket.id},
+        )
+        present_label_ids = {
+            node.get("id")
+            for node in (
+                ((snapshot.get("issue") or {}).get("labels") or {}).get("nodes")
+                or []
+            )
+            if isinstance(node, dict) and node.get("id")
+        }
+
+        actual_remove_ids = [
+            lid for stage, lid in wanted_remove_ids.items() if lid in present_label_ids
+        ]
+        actual_add_ids = [
+            lid for stage, lid in wanted_add_ids.items() if lid not in present_label_ids
+        ]
+
+        mutation_input: dict[str, Any] = {}
+        if actual_remove_ids:
+            mutation_input["removedLabelIds"] = actual_remove_ids
+        if actual_add_ids:
+            mutation_input["addedLabelIds"] = actual_add_ids
+        if mutation_input:
+            await self._gql(
+                """mutation ShipRelabel($id: String!, $input: IssueUpdateInput!) {
+                  issueUpdate(id: $id, input: $input) { success }
+                }""",
+                {"id": ticket.id, "input": mutation_input},
+            )
+
+        added_stages = [
+            stage for stage, lid in wanted_add_ids.items() if lid in actual_add_ids
+        ]
+        removed_stages = [
+            stage for stage, lid in wanted_remove_ids.items() if lid in actual_remove_ids
+        ]
+        return {"added": added_stages, "removed": removed_stages}
+
     async def set_description(self, ticket: TicketRef, *, body: str) -> None:
         """Replace the issue's description (markdown body).
 
