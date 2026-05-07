@@ -177,6 +177,31 @@ class WriteOut(BaseModel):
     note: str | None = None
 
 
+class ChildTicketCreate(BaseModel):
+    """One child ticket the decomposition developer is creating from
+    a WBS slice.
+
+    The developer's role at the ``tasks`` stage is to slice the WBS
+    into one tracker ticket per slice. The ``create_ticket`` adapter
+    method exists on Linear, but exposing it as a separate HTTP call
+    asks each agent to chain N round-trips and collect identifiers
+    before the finish call. Instead the agent declares the children
+    here and the server creates them as part of finish processing,
+    then auto-emits a ``## Tasks`` section with their identifiers so
+    the project body matches reality without the agent needing to
+    pre-substitute the IDs it cannot know.
+
+    ``project_id`` is derived server-side from the anchor ticket;
+    the agent only declares title/body for each slice. Labels and
+    priority are optional pass-throughs to the tracker adapter.
+    """
+
+    title: str = Field(min_length=1, max_length=300)
+    body: str = Field(min_length=1, max_length=32_000)
+    labels: list[str] = Field(default_factory=list, max_length=20)
+    priority: int | None = Field(default=None, ge=0, le=4)
+
+
 class ProjectSectionPatch(BaseModel):
     """One section the decomposition agent owns and is patching this run.
 
@@ -234,6 +259,12 @@ class FinishIn(BaseModel):
     # adapter (replace-or-append the ``## <section>`` block). Empty
     # for SDLC / non-decomposition runs.
     project_sections: list[ProjectSectionPatch] = Field(default_factory=list)
+    # Decomposition `tasks` stage: child tickets the developer carved
+    # out of the WBS. Server creates each under the anchor's project
+    # via the tracker's ``create_ticket`` adapter, then auto-renders a
+    # ``## Tasks`` section listing the freshly-created identifiers.
+    # Empty for every other role.
+    child_tickets: list[ChildTicketCreate] = Field(default_factory=list)
     # Which process the run executed under. Defaults to the per-ticket
     # SDLC (``development``); ``decomposition`` (ELS-75) is the
     # project-anchor pipeline. The finish hook reads this to know
@@ -2403,6 +2434,91 @@ async def finish_agent_run(
                         "upsert_project_section adapter; %d sections skipped",
                         resolved.kind,
                         len(sections),
+                    )
+            # Decomposition ``tasks`` stage: create child tickets
+            # carved out of the WBS, then auto-render the ``## Tasks``
+            # section listing their identifiers. Agents can't know
+            # the identifiers up-front, so the section here is
+            # server-built rather than agent-supplied — the agent
+            # only declares each slice's title + body.
+            #
+            # Section ordering note: this lands AFTER any explicit
+            # ``project_sections`` writes above, so a developer that
+            # mistakenly also sends ``project_sections=[{Tasks,…}]``
+            # has its hand-rolled body overwritten by the canonical
+            # auto-rendered list. That's intentional: identifiers
+            # the agent guesses are wrong by definition.
+            if payload.child_tickets:
+                snapshot = await _try_ticket_snapshot(resolved.gateway, ref)
+                project_id = (snapshot or {}).get("project_id")
+                create_fn = getattr(resolved.gateway, "create_ticket", None)
+                upsert = getattr(
+                    resolved.gateway, "upsert_project_section", None
+                )
+                if project_id and create_fn is not None:
+                    created_rows: list[tuple[str, str]] = []
+                    for child in payload.child_tickets:
+                        try:
+                            created = await create_fn(
+                                title=child.title,
+                                body=child.body,
+                                labels=list(child.labels) or None,
+                                project_id=str(project_id),
+                                priority=child.priority,
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning(
+                                "agent_run.finish: create_ticket failed "
+                                "ws=%s anchor=%s title=%r err=%s",
+                                workspace_id,
+                                payload.ticket_ref,
+                                child.title[:80],
+                                exc,
+                            )
+                            actions.append(
+                                f"tracker:ticket_create_failed:{child.title[:48]}"
+                            )
+                            continue
+                        identifier = created.display_id or str(created.ref.id)
+                        created_rows.append((identifier, child.title))
+                        actions.append(
+                            f"tracker:ticket_created:{identifier}"
+                        )
+                    if created_rows and upsert is not None:
+                        rendered = "\n".join(
+                            f"- **{ident}** — {title}"
+                            for ident, title in created_rows
+                        )
+                        try:
+                            await upsert(
+                                str(project_id),
+                                section="Tasks",
+                                body=rendered,
+                            )
+                            actions.append("tracker:project_section:Tasks")
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning(
+                                "agent_run.finish: Tasks section upsert "
+                                "failed ws=%s err=%s",
+                                workspace_id,
+                                exc,
+                            )
+                            actions.append(
+                                "tracker:project_section_failed:Tasks"
+                            )
+                elif not project_id:
+                    logger.warning(
+                        "agent_run.finish: anchor ticket=%s has no project; "
+                        "%d child_tickets skipped",
+                        payload.ticket_ref,
+                        len(payload.child_tickets),
+                    )
+                elif create_fn is None:
+                    logger.warning(
+                        "agent_run.finish: tracker_kind=%s has no "
+                        "create_ticket adapter; %d children skipped",
+                        resolved.kind,
+                        len(payload.child_tickets),
                     )
             # Pass ``from_state`` so the adapter adds the breadcrumb
             # label for the role that *just finished* (``fsm_stage``),

@@ -1047,6 +1047,7 @@ curl -fsS -X POST '${apiBase}/v1/workspaces/${workspaceId}/agent-runs/finish' \\
   "comment": "<One-paragraph audit narration of what you changed and why, ending with [Ship SDLC:${ctx?.role || "{{ROLE}}"}]. Do NOT paste the new description here — that's what the description field is for.>",
   "summary": null,
   "project_sections": [],
+  "child_tickets": [],
   "payload": {}
 }
 JSON
@@ -1076,6 +1077,34 @@ report success unless the corresponding \`tracker:project_section:\`
 action came back.
 
 For SDLC (non-decomposition) roles, leave the array empty.
+
+### \`child_tickets\` (decomposition \`tasks\` stage only)
+
+The developer at the \`tasks\` stage carves the project's WBS into
+one tracker ticket per slice. Declare each child here; the server
+creates them under the anchor's project (via the tracker's
+\`create_ticket\` adapter), then auto-renders a \`## Tasks\` section
+listing the freshly-created identifiers — you cannot guess the
+identifiers up-front, and you should NOT also send a
+\`project_sections=[{Tasks,…}]\` entry (the auto-rendered list
+overwrites yours by design).
+
+Shape:
+
+\`\`\`json
+"child_tickets": [
+  { "title": "<WBS slice name>", "body": "<3–5 line scope>" },
+  …
+]
+\`\`\`
+
+Server response \`actions\` will include one
+\`tracker:ticket_created:<id>\` per child plus
+\`tracker:project_section:Tasks\` for the auto-rendered index.
+**If those actions are not in the response, your tickets were NOT
+persisted** — re-call finish with the field at the top level.
+
+Every other role leaves the array empty.
 
 ### Outcomes
 
