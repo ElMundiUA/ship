@@ -51,6 +51,7 @@ SHIP_FSM_STAGES: tuple[str, ...] = (
     "task_intake",
     "ba_requirements",
     "tech_arch_plan",
+    "qa_arch_plan",
     "dev_implementation",
     "qa_manual",
     "pr_review",
@@ -74,6 +75,7 @@ FSM_STAGE_ORDER: tuple[str, ...] = (
     "task_intake",
     "ba_requirements",
     "tech_arch_plan",
+    "qa_arch_plan",
     "dev_implementation",
     "qa_manual",
     "pr_review",
@@ -121,6 +123,7 @@ FSM_TO_LINEAR_STATE: dict[str, str] = {
     "task_intake": "Todo",
     "ba_requirements": "Todo",
     "tech_arch_plan": "Todo",
+    "qa_arch_plan": "Todo",
     "dev_implementation": "In Progress",
     "qa_manual": "In Progress",
     # Review is human-only — agents transition INTO it but never pick
