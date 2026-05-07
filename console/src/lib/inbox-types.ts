@@ -20,6 +20,7 @@ export const INBOX_TYPES = [
   "exception",
   "stuck",
   "blocker",
+  "report",
 ] as const;
 export type InboxType = (typeof INBOX_TYPES)[number];
 
@@ -87,7 +88,31 @@ export const INBOX_TYPE_META: Record<
     blurb: "Self-heal could not recover — needs human follow-up.",
     order: 7,
   },
+  report: {
+    label: "Reports",
+    blurb: "Daily / retro / process-review digests — read-only.",
+    order: 8,
+  },
 };
+
+/**
+ * Footer kind drives the mailbox preview-pane footer:
+ *
+ *   - ``acknowledge`` — single "Acknowledge" button. Used for
+ *     ``report`` (read-only digests) — operator marks read and moves
+ *     on, no branching action.
+ *   - ``reply`` — text-area + "Send" submit, plus a Dismiss escape.
+ *     Used for ``clarification`` where the agent needs an answer.
+ *   - ``decision`` — primary + secondary disposition buttons. Used for
+ *     everything that's a yes/no/dismiss decision.
+ */
+export type InboxFooterKind = "acknowledge" | "reply" | "decision";
+
+export function inboxFooterKind(type: InboxType): InboxFooterKind {
+  if (type === "report") return "acknowledge";
+  if (type === "clarification") return "reply";
+  return "decision";
+}
 
 /**
  * One row as it appears in the inbox list. Compact: the detail view
@@ -224,6 +249,7 @@ export function inboxTier(type: InboxType): InboxTier {
       return 2;
     case "improvement":
     case "stuck":
+    case "report":
       return 3;
   }
 }

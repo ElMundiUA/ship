@@ -725,6 +725,7 @@ const INBOX_SPINE: Record<InboxType, string> = {
   blocker: "bg-coral",
   exception: "bg-coral/60",
   stuck: "bg-white/30",
+  report: "bg-white/15",
 };
 
 
@@ -736,6 +737,7 @@ const INBOX_SPINE_WIDTH: Record<InboxType, string> = {
   blocker: "w-[4px]",
   exception: "w-[2px]",
   stuck: "w-px",
+  report: "w-px",
 };
 
 
@@ -752,6 +754,8 @@ function canonicalActionLabel(type: InboxType): string {
     case "exception":
     case "blocker":
     case "stuck":
+      return "Acknowledge";
+    case "report":
       return "Acknowledge";
   }
 }

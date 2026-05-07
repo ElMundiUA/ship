@@ -1,15 +1,16 @@
 /**
- * Unified Inbox list page.
+ * Inbox — mailbox layout.
  *
- * Editorial layout: a typographic stats ribbon (mine · unassigned ·
- * all open) replaces the segmented control; type chips sit on a
- * single line with no bordered container; items group into three
- * triage tiers (Tier 1 — needs you, Tier 2 — autonomy escapes,
- * Tier 3 — later) with section kickers and a hairline rule.
+ * Outlook-style split pane: list on the left, preview on the right.
+ * URL drives selection (``?selected=<id>``); the preview pane
+ * server-fetches that item's full detail and renders the body plus a
+ * type-aware footer (acknowledge / quick-reply / decision buttons).
  *
- * Per design rec we drop the bordered Filters card, the
- * "X items" header, and the per-row card chrome. Per-row colour
- * lives on a left-edge spine inside ``InboxItemRow``.
+ * The earlier tier-sectioned editorial layout was simplified per
+ * operator feedback: less chrome, fewer cards, "I just want to read
+ * letters and click answer." Deep-link ``/inbox/[id]`` still renders
+ * the bigger detail surface (events timeline, snooze controls,
+ * reassign) for power-user flows.
  */
 
 import Link from "next/link";
@@ -17,13 +18,13 @@ import { redirect } from "next/navigation";
 
 import { ApiUnavailable } from "@/components/api-unavailable";
 import { PageBody, PageHeader } from "@/components/app-shell";
-import { InboxFiltersControlled } from "@/components/inbox/inbox-filters-controlled";
-import { InboxItemRow } from "@/components/inbox/inbox-item-row";
-import { buildInboxUrl, countActiveFilters } from "@/components/inbox/inbox-url";
-import { EmptyState } from "@/components/ui";
+import { MailboxFooter } from "@/components/inbox/mailbox-footer";
+import { StaleBadge } from "@/components/inbox/stale-badge";
+import { MarkdownBlock } from "@/components/markdown-block";
 import { cn } from "@/lib/cn";
 import {
   ApiHttpError,
+  getInboxItem,
   listInboxItems,
 } from "@/lib/api/client";
 import {
@@ -32,39 +33,24 @@ import {
 } from "@/lib/api/session-cache.server";
 import { getResolvedWorkspaceId } from "@/lib/workspace-resolve.server";
 import {
-  DEFAULT_INBOX_FILTERS,
   INBOX_LIST_DEFAULT_STATUSES,
-  INBOX_TIER_LABEL,
-  INBOX_TYPES,
-  inboxTier,
-  isInboxType,
-  type InboxFilterState,
+  INBOX_TYPE_META,
   type InboxItem,
+  type InboxItemDetail,
   type InboxListResponse,
-  type InboxTier,
   type InboxType,
 } from "@/lib/inbox-types";
-import {
-  pickWorkspace,
-  withWorkspaceQuery,
-} from "@/lib/workspace-scope";
+import { pickWorkspace, withWorkspaceQuery } from "@/lib/workspace-scope";
 
 export const dynamic = "force-dynamic";
 
-const PAGE_LIMIT = 25;
-const TIERS: InboxTier[] = [1, 2, 3];
+const PAGE_LIMIT = 50;
 
-const TIER_KICKER_TONE: Record<InboxTier, string> = {
-  1: "text-sun/80",
-  2: "text-coral/80",
-  3: "text-white/40",
-};
+type Ownership = "mine" | "unassigned" | "all";
 
 type ParsedParams = {
-  filters: InboxFilterState;
-  cursor: string | null;
-  repo: string | null;
-  play: string | null;
+  ownership: Ownership;
+  selectedId: string | null;
   errorCode: string | null;
 };
 
@@ -74,27 +60,27 @@ type Mode =
       workspaceId: string;
       multiWs: boolean;
       list: InboxListResponse;
-      filters: InboxFilterState;
-      cursor: string | null;
-      repo: string | null;
-      play: string | null;
+      detail: InboxItemDetail | null;
+      detailError: string | null;
+      ownership: Ownership;
+      selectedId: string | null;
     }
   | { source: "down"; reason: string };
 
 function errorMessage(code: string): string {
   switch (code) {
     case "forbidden":
-      return "You don't have permission to act on that inbox item.";
+      return "You don't have permission to act on that item.";
     case "not_found":
-      return "That inbox item is gone — it may have been resolved in another tab.";
-    case "bad_input":
-      return "The action couldn't be applied — required fields were missing.";
-    case "stale":
-      return "Item changed since you opened it. Refresh and try again.";
+      return "That item is gone — it may have been resolved in another tab.";
+    case "validation_failed":
+      return "Reply was empty — write something before sending.";
+    case "state_invalid":
+      return "Item state changed since you opened it. Refresh and try again.";
     case "api_unavailable":
       return "Backend is unreachable. Try again in a moment.";
     default:
-      return `Couldn't apply the change (${code}). Try again or refresh.`;
+      return `Couldn't apply the change (${code}).`;
   }
 }
 
@@ -102,38 +88,18 @@ function parseSearchParams(
   raw: Record<string, string | string[] | undefined>,
 ): ParsedParams {
   const ownershipRaw = typeof raw.ownership === "string" ? raw.ownership : null;
-  const ownership: InboxFilterState["ownership"] =
+  const ownership: Ownership =
     ownershipRaw === "mine" ||
     ownershipRaw === "unassigned" ||
     ownershipRaw === "all"
       ? ownershipRaw
-      : DEFAULT_INBOX_FILTERS.ownership;
+      : "all";
 
-  const typeRaw = raw.type;
-  const typeArr = Array.isArray(typeRaw)
-    ? typeRaw
-    : typeof typeRaw === "string"
-      ? [typeRaw]
-      : [];
-  const types = typeArr.filter(
-    (v): v is InboxType => typeof v === "string" && isInboxType(v),
-  );
-
-  const cursorRaw = typeof raw.cursor === "string" ? raw.cursor : null;
-  const cursor = cursorRaw && cursorRaw.length > 0 ? cursorRaw : null;
-  const repoRaw = typeof raw.repo === "string" ? raw.repo : null;
-  const repo = repoRaw && repoRaw.length > 0 ? repoRaw : null;
-  const playRaw = typeof raw.play === "string" ? raw.play : null;
-  const play = playRaw && playRaw.length > 0 ? playRaw : null;
+  const selectedRaw = typeof raw.selected === "string" ? raw.selected : null;
+  const selectedId = selectedRaw && selectedRaw.length > 0 ? selectedRaw : null;
   const errorCode = typeof raw.error === "string" ? raw.error : null;
 
-  return {
-    filters: { ownership, types },
-    cursor,
-    repo,
-    play,
-    errorCode,
-  };
+  return { ownership, selectedId, errorCode };
 }
 
 async function load(
@@ -149,30 +115,17 @@ async function load(
   const resolved = await getResolvedWorkspaceId(searchParams, ws);
   const workspace = pickWorkspace(ws, resolved);
 
+  let list: InboxListResponse;
   try {
-    const list = await listInboxItems(
+    list = await listInboxItems(
       workspace.id,
       {
-        ownership: parsed.filters.ownership,
-        types: parsed.filters.types,
+        ownership: parsed.ownership,
         statuses: INBOX_LIST_DEFAULT_STATUSES,
-        repo_id: parsed.repo ?? undefined,
-        play_key: parsed.play ?? undefined,
-        cursor: parsed.cursor,
         limit: PAGE_LIMIT,
       },
       token,
     );
-    return {
-      source: "live",
-      workspaceId: workspace.id,
-      multiWs: ws.length > 1,
-      list,
-      filters: parsed.filters,
-      cursor: parsed.cursor,
-      repo: parsed.repo,
-      play: parsed.play,
-    };
   } catch (err) {
     if (err instanceof ApiHttpError && err.status === 401) {
       redirect("/login?next=%2Finbox&reason=session_expired");
@@ -182,35 +135,39 @@ async function load(
       reason: err instanceof Error ? err.message : "Could not load inbox items.",
     };
   }
-}
 
-function pickTypeCounts(
-  raw: Record<string, number>,
-): Partial<Record<InboxType, number>> {
-  const out: Partial<Record<InboxType, number>> = {};
-  for (const t of INBOX_TYPES) {
-    if (typeof raw[t] === "number") out[t] = raw[t];
+  // If nothing is explicitly selected but the list is non-empty, auto-
+  // select the first row so the right pane is never blank when there's
+  // a letter ready to read. The operator can always click another row.
+  const effectiveSelected =
+    parsed.selectedId ?? (list.items[0]?.id ?? null);
+
+  let detail: InboxItemDetail | null = null;
+  let detailError: string | null = null;
+  if (effectiveSelected) {
+    try {
+      detail = await getInboxItem(workspace.id, effectiveSelected, token);
+    } catch (err) {
+      detailError =
+        err instanceof ApiHttpError && err.status === 404
+          ? "not_found"
+          : "load_failed";
+    }
   }
-  return out;
+
+  return {
+    source: "live",
+    workspaceId: workspace.id,
+    multiWs: ws.length > 1,
+    list,
+    detail,
+    detailError,
+    ownership: parsed.ownership,
+    selectedId: effectiveSelected,
+  };
 }
 
-function sumInboxTypeCounts(
-  c: Partial<Record<InboxType, number>>,
-): number {
-  let n = 0;
-  for (const t of INBOX_TYPES) n += c[t] ?? 0;
-  return n;
-}
-
-function partitionByTier(items: InboxItem[]): Record<InboxTier, InboxItem[]> {
-  const out: Record<InboxTier, InboxItem[]> = { 1: [], 2: [], 3: [] };
-  for (const item of items) {
-    out[inboxTier(item.type)].push(item);
-  }
-  return out;
-}
-
-export default async function InboxPage({
+export default async function InboxMailboxPage({
   searchParams,
 }: {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -228,9 +185,9 @@ export default async function InboxPage({
         <PageHeader kicker="attention" title="Inbox" />
         <PageBody>
           {parsed.errorCode && (
-            <div className="mb-5 text-xs text-coral/95">
+            <p className="mb-5 text-xs text-coral/95">
               {errorMessage(parsed.errorCode)}
-            </div>
+            </p>
           )}
           <ApiUnavailable scope="inbox" details={data.reason} />
         </PageBody>
@@ -238,108 +195,34 @@ export default async function InboxPage({
     );
   }
 
-  const { workspaceId, multiWs, list, filters, cursor, repo, play } = data;
-  const typeCounts = pickTypeCounts(list.counts_by_type);
-  const allTypesCount = sumInboxTypeCounts(typeCounts);
-  const activeFilterCount = countActiveFilters(filters, { repo, play });
-  const inboxWs = multiWs ? workspaceId : undefined;
-  const tiers = partitionByTier(list.items);
+  const { workspaceId, multiWs, list, detail, detailError, ownership, selectedId } =
+    data;
+  const wsScope = multiWs ? workspaceId : undefined;
 
   return (
     <>
-      <PageHeader
-        kicker="attention"
-        title="Inbox"
-        actions={
-          <RefreshButton
-            filters={filters}
-            repo={repo}
-            play={play}
-            cursor={cursor}
-            workspaceScope={inboxWs}
-          />
-        }
-      />
+      <PageHeader kicker="attention" title="Inbox" />
       <PageBody>
-        <div className="mx-auto max-w-5xl space-y-8">
-          {parsed.errorCode && (
-            <p className="text-xs text-coral/95">
-              {errorMessage(parsed.errorCode)}
-            </p>
-          )}
+        {parsed.errorCode && (
+          <p className="mb-4 text-xs text-coral/95">
+            {errorMessage(parsed.errorCode)}
+          </p>
+        )}
 
-          <OwnershipRibbon
-            current={filters.ownership}
-            filters={filters}
-            repo={repo}
-            play={play}
-            workspaceScope={inboxWs}
+        <div className="grid gap-4 lg:grid-cols-[26rem_minmax(0,1fr)]">
+          <MailboxList
+            items={list.items}
+            ownership={ownership}
+            selectedId={selectedId}
+            workspaceScope={wsScope}
           />
 
-          <InboxFiltersControlled
-            value={filters}
-            counts={{ types: typeCounts, allTypes: allTypesCount }}
-            repo={repo}
-            play={play}
-            workspaceScope={inboxWs}
-          />
-
-          {(repo || play) && (
-            <div className="flex flex-wrap items-center gap-2 text-[11px] text-white/55">
-              {repo && (
-                <span>
-                  scope:{" "}
-                  <code className="font-mono text-white/80">{repo}</code>
-                </span>
-              )}
-              {play && (
-                <span>
-                  play:{" "}
-                  <code className="font-mono text-white/80">{play}</code>
-                </span>
-              )}
-              <a
-                href={buildInboxUrl(filters, { workspaceScope: inboxWs })}
-                className="font-semibold text-sun hover:text-white"
-              >
-                clear scope
-              </a>
-            </div>
-          )}
-
-          {list.items.length === 0 ? (
-            <InboxEmpty
-              filters={filters}
-              activeFilterCount={activeFilterCount}
-              repo={repo}
-              play={play}
-              workspaceScope={inboxWs}
-            />
-          ) : (
-            <div className="space-y-10">
-              {TIERS.map((tier) => {
-                const items = tiers[tier];
-                if (items.length === 0) return null;
-                return (
-                  <TierSection
-                    key={tier}
-                    tier={tier}
-                    items={items}
-                    workspaceId={workspaceId}
-                    workspaceScope={inboxWs}
-                  />
-                );
-              })}
-            </div>
-          )}
-
-          <Pager
-            nextCursor={list.next_cursor}
-            currentCursor={cursor}
-            filters={filters}
-            repo={repo}
-            play={play}
-            workspaceScope={inboxWs}
+          <MailboxPreview
+            detail={detail}
+            detailError={detailError}
+            workspaceId={workspaceId}
+            workspaceScope={wsScope}
+            empty={list.items.length === 0}
           />
         </div>
       </PageBody>
@@ -347,282 +230,297 @@ export default async function InboxPage({
   );
 }
 
-
 // ---------------------------------------------------------------------------
-// Ownership stats ribbon — typographic
-// ---------------------------------------------------------------------------
-
-
-function OwnershipRibbon({
-  current,
-  filters,
-  repo,
-  play,
-  workspaceScope,
-}: {
-  current: InboxFilterState["ownership"];
-  filters: InboxFilterState;
-  repo: string | null;
-  play: string | null;
-  workspaceScope?: string;
-}) {
-  const lenses: { key: InboxFilterState["ownership"]; label: string }[] = [
-    { key: "mine", label: "Mine" },
-    { key: "unassigned", label: "Unassigned" },
-    { key: "all", label: "All open" },
-  ];
-  return (
-    <nav
-      aria-label="Inbox ownership"
-      className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-sm"
-    >
-      {lenses.map((lens, idx) => {
-        const active = current === lens.key;
-        const href = buildInboxUrl(
-          { ...filters, ownership: lens.key },
-          { repo, play, workspaceScope },
-        );
-        return (
-          <span key={lens.key} className="flex items-baseline">
-            <Link
-              href={href}
-              aria-current={active ? "page" : undefined}
-              className={cn(
-                "transition",
-                active
-                  ? "font-semibold text-white"
-                  : "text-white/45 hover:text-white",
-              )}
-            >
-              {lens.label}
-            </Link>
-            {idx < lenses.length - 1 && (
-              <span className="ml-3 text-white/15">·</span>
-            )}
-          </span>
-        );
-      })}
-    </nav>
-  );
-}
-
-
-// ---------------------------------------------------------------------------
-// Tier section — kicker + divide-y rows
+// Left pane: the list
 // ---------------------------------------------------------------------------
 
-
-function TierSection({
-  tier,
+function MailboxList({
   items,
-  workspaceId,
+  ownership,
+  selectedId,
   workspaceScope,
 }: {
-  tier: InboxTier;
   items: InboxItem[];
-  /** The actual workspace id — always set; passed to row actions so
-   *  POST disposition knows which workspace to act on, regardless of
-   *  whether the user happens to belong to one workspace or many. */
-  workspaceId: string;
-  /** URL-scope override — only set when the user has multiple
-   *  workspaces and we need to disambiguate via ``?ws=…`` on links. */
+  ownership: Ownership;
+  selectedId: string | null;
   workspaceScope?: string;
 }) {
   return (
-    <section>
-      <header className="mb-3 flex items-center gap-3">
-        <h2
-          className={cn(
-            "text-[11px] font-bold uppercase tracking-[0.22em]",
-            TIER_KICKER_TONE[tier],
-          )}
-        >
-          {INBOX_TIER_LABEL[tier]}
-        </h2>
-        <div className="h-px flex-1 bg-white/[0.06]" />
-        <span className="font-mono text-[11px] text-white/35">
-          {items.length}
-        </span>
-      </header>
-      <ul className="divide-y divide-white/[0.06]">
-        {items.map((item) => (
-          <li key={item.id}>
-            <InboxItemRow
-              item={item}
-              workspaceId={workspaceId}
-              href={
-                workspaceScope
-                  ? `/inbox/${item.id}?ws=${encodeURIComponent(workspaceScope)}`
-                  : `/inbox/${item.id}`
-              }
-            />
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
-}
+    <div className="flex min-h-[60vh] flex-col rounded-xl border border-white/[0.08] bg-white/[0.015]">
+      <OwnershipTabs current={ownership} workspaceScope={workspaceScope} />
 
-
-// ---------------------------------------------------------------------------
-// Empty states
-// ---------------------------------------------------------------------------
-
-
-function InboxEmpty({
-  filters,
-  activeFilterCount,
-  repo,
-  play,
-  workspaceScope,
-}: {
-  filters: InboxFilterState;
-  activeFilterCount: number;
-  repo: string | null;
-  play: string | null;
-  workspaceScope?: string;
-}) {
-  if (activeFilterCount > 0) {
-    return (
-      <EmptyState
-        title="No items match these filters"
-        body="Try widening the ownership lens to All, clearing the type chips, or dropping the repo/play scope."
-        action={
-          <Link
-            href={buildInboxUrl(DEFAULT_INBOX_FILTERS, { workspaceScope })}
-            className="text-xs font-semibold text-aqua hover:text-white"
-          >
-            Clear all filters
-          </Link>
-        }
-      />
-    );
-  }
-  if (filters.ownership === "mine") {
-    return (
-      <EmptyState
-        title="Nothing on your plate"
-        body="Either you're caught up or nobody's routing things your way. Switch to All open to see the workspace firehose."
-        action={
-          <a
-            href={buildInboxUrl(
-              { ...filters, ownership: "all" },
-              { repo, play, workspaceScope },
-            )}
-            className="text-xs font-semibold text-white/85 hover:text-white"
-          >
-            Switch to All open
-          </a>
-        }
-      />
-    );
-  }
-  return (
-    <EmptyState
-      title="Inbox empty"
-      body="Either nothing has fired or your team coverage needs attention — check who can answer under Settings → Members."
-      action={
-        <a
-          href={withWorkspaceQuery(
-            "/settings?tab=members",
-            workspaceScope ?? "",
-            Boolean(workspaceScope),
-          )}
-          className="text-xs font-semibold text-aqua hover:text-white"
-        >
-          Open Members
-        </a>
-      }
-    />
-  );
-}
-
-
-// ---------------------------------------------------------------------------
-// Pager + Refresh
-// ---------------------------------------------------------------------------
-
-
-function Pager({
-  nextCursor,
-  currentCursor,
-  filters,
-  repo,
-  play,
-  workspaceScope,
-}: {
-  nextCursor: string | null;
-  currentCursor: string | null;
-  filters: InboxFilterState;
-  repo: string | null;
-  play: string | null;
-  workspaceScope?: string;
-}) {
-  if (!nextCursor && !currentCursor) return null;
-  return (
-    <div className="flex items-center justify-between text-[11px]">
-      {currentCursor ? (
-        <a
-          href={buildInboxUrl(filters, { repo, play, workspaceScope })}
-          className="font-semibold text-white/55 hover:text-white"
-        >
-          ← First page
-        </a>
+      {items.length === 0 ? (
+        <div className="flex-1 px-4 py-10 text-center text-sm text-white/55">
+          {ownership === "mine"
+            ? "Nothing on your plate."
+            : "Inbox empty."}
+        </div>
       ) : (
-        <span />
-      )}
-      {nextCursor && (
-        <a
-          href={buildInboxUrl(filters, {
-            repo,
-            play,
-            cursor: nextCursor,
-            workspaceScope,
-          })}
-          className="font-semibold text-white/55 hover:text-white"
-        >
-          Load older →
-        </a>
+        <ul className="divide-y divide-white/[0.06] overflow-y-auto">
+          {items.map((item) => (
+            <li key={item.id}>
+              <MailboxRow
+                item={item}
+                selected={item.id === selectedId}
+                ownership={ownership}
+                workspaceScope={workspaceScope}
+              />
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );
 }
 
-
-function RefreshButton({
-  filters,
-  repo,
-  play,
-  cursor,
+function buildSelectHref({
+  id,
+  ownership,
   workspaceScope,
 }: {
-  filters: InboxFilterState;
-  repo: string | null;
-  play: string | null;
-  cursor: string | null;
+  id: string;
+  ownership: Ownership;
+  workspaceScope?: string;
+}): string {
+  const params = new URLSearchParams();
+  params.set("selected", id);
+  if (ownership !== "all") params.set("ownership", ownership);
+  if (workspaceScope) params.set("ws", workspaceScope);
+  const qs = params.toString();
+  return qs ? `/inbox?${qs}` : "/inbox";
+}
+
+function buildOwnershipHref({
+  ownership,
+  workspaceScope,
+}: {
+  ownership: Ownership;
+  workspaceScope?: string;
+}): string {
+  const params = new URLSearchParams();
+  if (ownership !== "all") params.set("ownership", ownership);
+  if (workspaceScope) params.set("ws", workspaceScope);
+  const qs = params.toString();
+  return qs ? `/inbox?${qs}` : "/inbox";
+}
+
+function OwnershipTabs({
+  current,
+  workspaceScope,
+}: {
+  current: Ownership;
   workspaceScope?: string;
 }) {
+  const tabs: { key: Ownership; label: string }[] = [
+    { key: "mine", label: "Mine" },
+    { key: "unassigned", label: "Unassigned" },
+    { key: "all", label: "All open" },
+  ];
   return (
-    <form action="/inbox" method="GET" className="contents">
-      {filters.ownership !== DEFAULT_INBOX_FILTERS.ownership && (
-        <input type="hidden" name="ownership" value={filters.ownership} />
-      )}
-      {filters.types.map((t) => (
-        <input key={t} type="hidden" name="type" value={t} />
-      ))}
-      {repo && <input type="hidden" name="repo" value={repo} />}
-      {play && <input type="hidden" name="play" value={play} />}
-      {cursor && <input type="hidden" name="cursor" value={cursor} />}
-      {workspaceScope && (
-        <input type="hidden" name="ws" value={workspaceScope} />
-      )}
-      <button
-        type="submit"
-        className="text-xs font-semibold text-white/55 transition hover:text-white"
-        title="Reload the current view"
-      >
-        ↻ Refresh
-      </button>
-    </form>
+    <div className="flex items-center gap-3 border-b border-white/[0.06] px-4 py-3 text-xs">
+      {tabs.map((tab, idx) => {
+        const active = current === tab.key;
+        return (
+          <span key={tab.key} className="flex items-baseline">
+            <Link
+              href={buildOwnershipHref({
+                ownership: tab.key,
+                workspaceScope,
+              })}
+              aria-current={active ? "page" : undefined}
+              className={cn(
+                "transition",
+                active
+                  ? "font-semibold text-white"
+                  : "text-white/50 hover:text-white",
+              )}
+            >
+              {tab.label}
+            </Link>
+            {idx < tabs.length - 1 && (
+              <span className="ml-3 text-white/15">·</span>
+            )}
+          </span>
+        );
+      })}
+    </div>
   );
+}
+
+const ROW_TONE: Record<InboxType, string> = {
+  clarification: "bg-sun",
+  approval: "bg-aqua",
+  improvement: "bg-lilac",
+  failure: "bg-coral",
+  blocker: "bg-coral",
+  exception: "bg-coral/60",
+  stuck: "bg-white/30",
+  report: "bg-white/15",
+};
+
+function MailboxRow({
+  item,
+  selected,
+  ownership,
+  workspaceScope,
+}: {
+  item: InboxItem;
+  selected: boolean;
+  ownership: Ownership;
+  workspaceScope?: string;
+}) {
+  const meta = INBOX_TYPE_META[item.type];
+  const isUnread = item.status === "new";
+  return (
+    <Link
+      href={buildSelectHref({ id: item.id, ownership, workspaceScope })}
+      className={cn(
+        "group relative flex items-start gap-3 px-4 py-3 transition",
+        selected
+          ? "bg-aqua/[0.08]"
+          : "hover:bg-white/[0.03]",
+      )}
+      aria-current={selected ? "true" : undefined}
+    >
+      <span
+        aria-hidden
+        className={cn(
+          "mt-1 inline-block h-2 w-2 shrink-0 rounded-full",
+          isUnread ? ROW_TONE[item.type] : "bg-white/15",
+        )}
+      />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.18em] text-white/40">
+          <span>{meta.label.replace(/s$/, "")}</span>
+          <StaleBadge
+            createdAt={item.created_at}
+            status={item.status}
+            snoozedUntil={item.snoozed_until}
+          />
+        </div>
+        <p
+          className={cn(
+            "mt-1 truncate text-sm",
+            selected ? "font-semibold text-white" : isUnread ? "font-semibold text-white/95" : "text-white/70",
+          )}
+        >
+          {item.title}
+        </p>
+        {item.summary && item.summary.trim().toLowerCase() !== item.title.trim().toLowerCase() && (
+          <p className="mt-0.5 truncate text-xs text-white/50">{item.summary}</p>
+        )}
+      </div>
+    </Link>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Right pane: the preview
+// ---------------------------------------------------------------------------
+
+function MailboxPreview({
+  detail,
+  detailError,
+  workspaceId,
+  workspaceScope,
+  empty,
+}: {
+  detail: InboxItemDetail | null;
+  detailError: string | null;
+  workspaceId: string;
+  workspaceScope?: string;
+  empty: boolean;
+}) {
+  if (empty) {
+    return (
+      <div className="flex min-h-[60vh] items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.015] px-6 text-center text-sm text-white/55">
+        Pick a workspace lens on the left — there&rsquo;s nothing here right now.
+      </div>
+    );
+  }
+  if (detailError === "not_found") {
+    return (
+      <div className="flex min-h-[60vh] items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.015] px-6 text-center text-sm text-white/55">
+        That item is gone — it was resolved in another tab.
+      </div>
+    );
+  }
+  if (!detail) {
+    return (
+      <div className="flex min-h-[60vh] items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.015] px-6 text-center text-sm text-white/55">
+        Pick a letter on the left to read it.
+      </div>
+    );
+  }
+
+  const meta = INBOX_TYPE_META[detail.type as InboxType];
+  const body = readBody(detail);
+  const isClosed = detail.status === "resolved" || detail.status === "dismissed";
+
+  return (
+    <div className="flex min-h-[60vh] flex-col rounded-xl border border-white/[0.08] bg-white/[0.015]">
+      <header className="border-b border-white/[0.06] px-6 py-4">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] uppercase tracking-[0.18em] text-white/45">
+          <span>{meta?.label ?? detail.type}</span>
+          {isClosed && (
+            <>
+              <span className="text-white/15">·</span>
+              <span className="text-white/55">{detail.status}</span>
+              {detail.resolution && (
+                <>
+                  <span className="text-white/15">·</span>
+                  <span className="text-white/55">{detail.resolution}</span>
+                </>
+              )}
+            </>
+          )}
+        </div>
+        <h1 className="mt-1 text-lg font-semibold text-white">{detail.title}</h1>
+        {detail.owner && (
+          <p className="mt-1 text-xs text-white/55">
+            Owner:{" "}
+            <span className="text-white/75">
+              {detail.owner.display_name?.trim() || detail.owner.email}
+            </span>
+          </p>
+        )}
+        <p className="mt-1 text-xs text-white/40">
+          <Link
+            href={withWorkspaceQuery(
+              `/inbox/${encodeURIComponent(detail.id)}`,
+              workspaceScope ?? "",
+              Boolean(workspaceScope),
+            )}
+            className="underline-offset-2 hover:text-white hover:underline"
+          >
+            Open full detail →
+          </Link>
+        </p>
+      </header>
+
+      <div className="flex-1 overflow-y-auto px-6 py-5">
+        {body ? (
+          <MarkdownBlock>{body}</MarkdownBlock>
+        ) : (
+          <p className="text-sm italic text-white/40">No body.</p>
+        )}
+      </div>
+
+      <footer className="border-t border-white/[0.06] px-6 py-4">
+        <MailboxFooter detail={detail} workspaceId={workspaceId} />
+      </footer>
+    </div>
+  );
+}
+
+function readBody(detail: InboxItemDetail): string {
+  // Agent-filed reports stash the markdown body under
+  // ``payload.body``; legacy items keep the human-readable text in
+  // ``summary``. Fall through gracefully.
+  const payloadBody = detail.payload?.["body"];
+  if (typeof payloadBody === "string" && payloadBody.trim().length > 0) {
+    return payloadBody;
+  }
+  if (detail.summary && detail.summary.trim().length > 0) return detail.summary;
+  return "";
 }

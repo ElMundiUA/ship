@@ -26,6 +26,7 @@ const SPINE_TONE: Record<InboxItem["type"], string> = {
   blocker: "bg-coral",
   exception: "bg-coral/60",
   stuck: "bg-white/30",
+  report: "bg-white/15",
 };
 
 const SPINE_WIDTH: Record<InboxItem["type"], string> = {
@@ -36,6 +37,7 @@ const SPINE_WIDTH: Record<InboxItem["type"], string> = {
   blocker: "w-[4px]",
   exception: "w-[2px]",
   stuck: "w-px",
+  report: "w-px",
 };
 
 function ownerLabel(owner: InboxItem["owner"]): string {
