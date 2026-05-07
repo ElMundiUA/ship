@@ -17,6 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.api.v1.deps import AuthContext, get_current_auth
 from backend.app.api.v1.schemas import (
+    AgentProviderOut,
+    AgentProviderUpdate,
     WorkspaceCreate,
     WorkspaceDeleteRequest,
     WorkspaceOut,
@@ -348,6 +350,21 @@ async def update_workspace(
             )
         workspace.default_agent_profile = payload.default_agent_profile
         changed["default_agent_profile"] = payload.default_agent_profile
+    if payload.agent_provider is not None:
+        from backend.app.services.agent_provider_resolver import (
+            SUPPORTED_PROVIDERS,
+        )
+
+        if payload.agent_provider not in SUPPORTED_PROVIDERS:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "agent_provider must be one of "
+                    f"{sorted(SUPPORTED_PROVIDERS)}"
+                ),
+            )
+        workspace.agent_provider = payload.agent_provider
+        changed["agent_provider"] = payload.agent_provider
 
     if changed:
         session.add(
@@ -363,6 +380,97 @@ async def update_workspace(
         )
     await session.flush()
     return WorkspaceOut.model_validate(workspace)
+
+
+@router.get(
+    "/{workspace_id}/agent-provider",
+    response_model=AgentProviderOut,
+)
+async def get_agent_provider(
+    workspace_id: uuid.UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> AgentProviderOut:
+    """Read the workspace's bound autonomous-pipeline runtime.
+
+    Mirror of the tracker-binding GET so the wizard / settings page
+    can read this value without parsing the larger ``WorkspaceOut``
+    payload. Membership-gated (read tier).
+    """
+    from backend.app.services.agent_provider_resolver import (
+        SUPPORTED_PROVIDERS,
+        resolve_for_workspace,
+    )
+
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
+    workspace = await session.get(Workspace, workspace_id)
+    if workspace is None:
+        raise HTTPException(status_code=404, detail="workspace not found")
+    resolved = await resolve_for_workspace(
+        session=session, workspace_id=workspace_id
+    )
+    return AgentProviderOut(
+        workspace_id=workspace_id,
+        kind=resolved.kind,
+        supported=sorted(SUPPORTED_PROVIDERS),
+    )
+
+
+@router.put(
+    "/{workspace_id}/agent-provider",
+    response_model=AgentProviderOut,
+)
+async def set_agent_provider(
+    workspace_id: uuid.UUID,
+    payload: AgentProviderUpdate,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> AgentProviderOut:
+    """Bind a different agent runtime to the workspace. Admin-only.
+
+    Idempotent: PUT'ing the current value returns 200 without an
+    audit row (no change == no event). The CHECK constraint on the
+    column rejects unknown values defensively even if the resolver's
+    ``SUPPORTED_PROVIDERS`` validation is bypassed.
+    """
+    from backend.app.services.agent_provider_resolver import (
+        SUPPORTED_PROVIDERS,
+    )
+
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+    if payload.kind not in SUPPORTED_PROVIDERS:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "agent_provider must be one of "
+                f"{sorted(SUPPORTED_PROVIDERS)}"
+            ),
+        )
+    workspace = await session.get(Workspace, workspace_id)
+    if workspace is None:
+        raise HTTPException(status_code=404, detail="workspace not found")
+
+    if workspace.agent_provider != payload.kind:
+        previous = workspace.agent_provider
+        workspace.agent_provider = payload.kind
+        session.add(
+            AuditLog(
+                workspace_id=workspace.id,
+                actor_user_id=auth.user.id,
+                actor_token_id=auth.token.id if auth.token else None,
+                action="workspace.agent_provider.set",
+                target_kind="workspace",
+                target_id=str(workspace.id),
+                payload={"from": previous, "to": payload.kind},
+            )
+        )
+        await session.flush()
+
+    return AgentProviderOut(
+        workspace_id=workspace_id,
+        kind=workspace.agent_provider,
+        supported=sorted(SUPPORTED_PROVIDERS),
+    )
 
 
 @router.delete(

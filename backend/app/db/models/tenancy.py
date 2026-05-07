@@ -168,6 +168,16 @@ class Workspace(Base):
     default_agent_profile: Mapped[str | None] = mapped_column(
         String(64), nullable=True
     )
+    # Bound agent runtime for the workspace's autonomous pipeline. One of
+    # ``cursor`` / ``codex`` / ``claude`` (validated at the DB by a CHECK
+    # constraint mirrored in :func:`agent_provider_resolver.resolve_for_workspace`).
+    # ``shipctl run`` resolves this row to pick which local CLI to invoke
+    # on the GHA runner — the cloud-API path is gone. ``cursor`` stays
+    # the default so existing workspaces keep working without an
+    # explicit operator choice.
+    agent_provider: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'cursor'")
+    )
 
     created_at: Mapped[datetime] = _ts_created()
     updated_at: Mapped[datetime] = _ts_updated()
