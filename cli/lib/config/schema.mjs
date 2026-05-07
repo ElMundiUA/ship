@@ -186,10 +186,6 @@ export function DEFAULT_CONFIG_V2() {
     shipctl_min: "0.12.0",
     api: v1.api,
     stack: v1.stack,
-    agent: {
-      default: { provider: null },
-      overrides: {},
-    },
     process: DEFAULT_PROCESS_CONFIG(),
     lanes: {},
     artifacts: v1.artifacts,
@@ -246,7 +242,6 @@ const KNOWN_TOP_LEVEL_V2 = new Set([
   "shipctl_min",
   "api",
   "stack",
-  "agent",
   "process",
   "lanes",
   "artifacts",
@@ -657,47 +652,12 @@ function requireOptionalString(value, prefix, errors, { required }) {
 }
 
 function validateV2Lanes(obj, errors, warnings) {
-  const agent = obj.agent;
-  if (agent !== undefined) {
-    if (!isPlainObject(agent)) {
-      errors.push("agent: must be an object");
-    } else {
-      pushUnknownKeyWarnings(agent, new Set(["default", "overrides"]), "agent", warnings);
-      if (agent.default !== undefined) {
-        if (!isPlainObject(agent.default)) {
-          errors.push("agent.default: must be an object");
-        } else {
-          pushUnknownKeyWarnings(agent.default, new Set(["provider"]), "agent.default", warnings);
-          const p = agent.default.provider;
-          if (p !== undefined && p !== null) {
-            if (typeof p !== "string" || p.length < 1 || p.length > 64) {
-              errors.push("agent.default.provider: must be a non-empty string (≤64 chars)");
-            }
-          }
-        }
-      }
-      if (agent.overrides !== undefined) {
-        if (!isPlainObject(agent.overrides)) {
-          errors.push("agent.overrides: must be a map");
-        } else {
-          for (const [laneId, override] of Object.entries(agent.overrides)) {
-            if (!LANE_ID_REGEX.test(laneId)) {
-              errors.push(`agent.overrides[${JSON.stringify(laneId)}]: invalid lane id`);
-              continue;
-            }
-            if (!isPlainObject(override)) {
-              errors.push(`agent.overrides.${laneId}: must be an object`);
-              continue;
-            }
-            const p = override.provider;
-            if (p !== undefined && p !== null && (typeof p !== "string" || p.length < 1 || p.length > 64)) {
-              errors.push(`agent.overrides.${laneId}.provider: must be a non-empty string (≤64 chars)`);
-            }
-          }
-        }
-      }
-    }
-  }
+  // Note: the legacy ``agent.default.provider`` / ``agent.overrides`` block
+  // is no longer recognised — workspace-level binding via the
+  // ``Workspace.agent_provider`` row + ``GET /v1/workspaces/{ws}/agent-provider``
+  // is the single source of truth (PR-1/PR-3 of the local-CLI swap).
+  // Repos that still carry an ``agent:`` key in .ship/config.yml see
+  // it surface as an "unknown key" warning via the top-level scan.
 
   const lanes = obj.lanes;
   if (lanes === undefined) {

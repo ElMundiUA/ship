@@ -38,7 +38,6 @@ const KEY_ORDER = {
     "shipctl_min",
     "api",
     "stack",
-    "agent",
     "lanes",
     "artifacts",
     "cache",
@@ -47,8 +46,6 @@ const KEY_ORDER = {
   api: ["base_url", "channel", "ttl_hours", "offline_ok"],
   stack: ["tracker", "ci", "agents", "agent", "language", "preset"],
   "stack.agent": ["provider"],
-  agent: ["default", "overrides"],
-  "agent.default": ["provider"],
   /* lanes.* is handled by LANE_KEY_ORDER below — each lane follows the
    * same ordering regardless of its id. */
   artifacts: ["pins", "auto_update"],
@@ -81,7 +78,7 @@ function orderForPath(pathKey) {
   return KEY_ORDER[pathKey] || [];
 }
 
-const USER_KEYED_LEAF_MAPS = new Set(["artifacts.pins", "agent.overrides"]);
+const USER_KEYED_LEAF_MAPS = new Set(["artifacts.pins"]);
 const USER_KEYED_STRUCT_MAPS = new Set(["lanes"]);
 
 function orderedCopy(obj, pathKey) {

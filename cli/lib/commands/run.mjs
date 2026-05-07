@@ -34,9 +34,11 @@
  *   - SHIP_API_BASE         — Ship server, e.g. https://api.ship.elmundi.com
  *   - SHIP_API_TOKEN        — workspace API token (admin scope; rendered
  *                             into the agent's prompt so it can call
- *                             /agent-runs/finish from inside Cursor)
+ *                             /agent-runs/finish from inside the agent)
  *   - SHIP_WORKSPACE_ID     — UUID of the workspace this run belongs to
- *   - CURSOR_API_KEY        — Cursor Cloud agent API key (when provider=cursor)
+ *   - CURSOR_API_KEY        — Cursor agent CLI auth (when provider=cursor)
+ *   - ANTHROPIC_API_KEY     — Claude Code CLI auth (when provider=claude)
+ *   - OPENAI_API_KEY        — OpenAI Codex CLI auth (when provider=codex)
  *   - GITHUB_REPOSITORY     — owner/repo (the repo the agent will check out)
  *
  * Note: there is **no SHIP_REPO_ID** — a workspace is the project, so
@@ -51,7 +53,7 @@ import path from "node:path";
 
 import { readConfig, findShipRoot } from "../config/io.mjs";
 import { resolveExecutable } from "../runtime/routines.mjs";
-import { resolveProvider, runAgent } from "../agents/index.mjs";
+import { DEFAULT_PROVIDER, runAgent } from "../agents/index.mjs";
 import { fetchWithRetry } from "../retry.mjs";
 
 const SYSTEM_ROLE_SLUG = "system";
@@ -304,19 +306,19 @@ async function _runCommandImpl(ctx, rest) {
     process.exit(EXIT_OK);
   }
 
-  // 4) Resolve the agent runtime. Workspace binding (PR-1) wins; we
-  // fall back to ``.ship/config.yml`` ``agent.default.provider`` /
-  // ``agent.overrides.<routine>.provider`` only when the workspace
-  // call fails (offline dev / unreachable API). The local-only model
-  // means the runner has already prepared the branch in ``$PWD`` —
-  // adapters just exec the bound CLI and let it commit in place.
+  // 4) Resolve the agent runtime. The workspace's bound provider
+  // (``GET /v1/workspaces/{ws}/agent-provider``) is the single source
+  // of truth — when it fails we fall straight back to the resolver's
+  // built-in ``DEFAULT_PROVIDER`` (cursor) so an unreachable API
+  // doesn't strand the runner. The legacy ``.ship/config.yml``
+  // ``agent.default.provider`` / ``agent.overrides`` block was
+  // dropped in PR-5 of the local-CLI swap.
   const workspaceProvider = await fetchWorkspaceAgentProvider({
     apiBase,
     apiToken,
     workspaceId,
   });
-  const provider =
-    workspaceProvider || resolveProvider(config, args.routine || specialistSlug);
+  const provider = workspaceProvider || DEFAULT_PROVIDER;
   const branchName = makeBranchName(runHandle, task?.ticket_ref);
   const baseBranch = (env.githubRef || "main").trim() || "main";
 
@@ -722,10 +724,10 @@ async function getNextTask({ apiBase, apiToken, workspaceId, state }) {
 
 
 /**
- * Read the workspace's bound agent provider (PR-1's
- * ``GET /v1/workspaces/{ws}/agent-provider``). Falls back to
- * ``null`` on a fetch failure so the caller can degrade to the
- * ``.ship/config.yml`` ``resolveProvider`` chain.
+ * Read the workspace's bound agent provider via
+ * ``GET /v1/workspaces/{ws}/agent-provider``. Returns ``null`` on
+ * any failure so the caller can degrade to ``DEFAULT_PROVIDER``
+ * rather than stranding the runner.
  */
 async function fetchWorkspaceAgentProvider({ apiBase, apiToken, workspaceId }) {
   if (!apiBase || !apiToken || !workspaceId) return null;
@@ -1025,10 +1027,16 @@ ENV
                        so the agent can call /agent-runs/finish itself
   SHIP_WORKSPACE_ID    UUID of the workspace (a workspace is one project)
   GITHUB_REPOSITORY    owner/repo (which checkout the agent gets)
-  CURSOR_API_KEY       Cursor Cloud API key (when agent.default.provider=cursor)
+  CURSOR_API_KEY       Cursor agent CLI auth   (when bound provider=cursor)
+  ANTHROPIC_API_KEY    Claude Code CLI auth     (when bound provider=claude)
+  OPENAI_API_KEY       OpenAI Codex CLI auth    (when bound provider=codex)
+
+  Provider is read from GET /v1/workspaces/{ws}/agent-provider.
+  Falls back to 'cursor' if the API call fails so an unreachable
+  Ship server doesn't strand the runner.
 
 EXIT
-  0  agent runtime reached a terminal state (FINISHED/CANCELLED/ERRORED).
+  0  agent runtime reached a terminal state (FINISHED/ERRORED).
      Whether the agent actually called /agent-runs/finish is observable
      in the audit log — this CLI no longer waits on that signal.
   1  usage / config error
