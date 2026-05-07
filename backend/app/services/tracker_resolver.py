@@ -52,7 +52,7 @@ from backend.app.integrations.linear.tracker_adapter import LinearTracker
 logger = logging.getLogger(__name__)
 
 
-TrackerKind = Literal["linear", "jira"]
+TrackerKind = Literal["linear", "jira", "notion"]
 
 
 @dataclass(frozen=True)
@@ -83,23 +83,23 @@ async def resolve_for_workspace(
 ) -> ResolvedTracker | None:
     """Return the workspace's bound tracker, if any.
 
-    Resolution order matches
-    :meth:`AgentToolset._resolve_tracker` so dashboard-side reads
-    pick the same row the agent is actually authenticating with:
+    A workspace binds to one tracker. We probe for the bound row in
+    this order:
 
-    1. Native ``LINEAR`` installation in ``READY`` state with a live
-       ``access_token`` credential.
-    2. Legacy ``Integration(kind='linear', repo_id IS NULL)`` row with
-       a stored ``secret_ciphertext``.
+    1. Native ``LINEAR`` installation (READY + live ``access_token``).
+    2. Native ``ATLASSIAN`` installation (READY + live ``api_token``)
+       — produces a JiraTracker.
+    3. Legacy ``Integration(kind='linear', repo_id IS NULL)`` row.
+
+    The legacy fallback exists only because ``linear_oauth.py`` still
+    writes the FSM-provisioned config (team_id / team_key /
+    state_id_by_name / label_id_by_stage) to the legacy row; native
+    installations produced before that migration land here. New
+    bindings ride exclusively on the native installation row.
     """
     del settings  # No vendor-specific knobs needed here yet.
     from backend.app.security.encryption import decrypt
 
-    # Native carries the live token; legacy carries the FSM-provisioned
-    # config (team_id / team_key / state_id_by_name / label_id_by_stage)
-    # that ``linear_oauth.py`` writes only on the legacy row. We pull
-    # the legacy config blob up front so the native path can layer it
-    # under the native token without a second resolve pass.
     legacy_row = await _load_legacy_linear_row(session, workspace_id)
     legacy_config = (legacy_row.config or {}) if legacy_row else {}
 
@@ -108,9 +108,87 @@ async def resolve_for_workspace(
     )
     if native is not None:
         return native
+
+    jira = await _resolve_native_jira(session, workspace_id, decrypt)
+    if jira is not None:
+        return jira
+
     if legacy_row is None:
         return None
     return _resolve_from_legacy_row(legacy_row, decrypt)
+
+
+async def _resolve_native_jira(
+    session: AsyncSession,
+    workspace_id: uuid.UUID,
+    decrypt,
+) -> ResolvedTracker | None:
+    from backend.app.integrations.jira.tracker_adapter import JiraTracker
+
+    install = (
+        await session.execute(
+            select(NativeIntegrationInstallation)
+            .where(
+                NativeIntegrationInstallation.workspace_id == workspace_id,
+                NativeIntegrationInstallation.provider
+                == NativeIntegrationProvider.ATLASSIAN,
+                NativeIntegrationInstallation.status
+                == NativeIntegrationStatus.READY,
+                NativeIntegrationInstallation.disabled_at.is_(None),
+            )
+            .order_by(NativeIntegrationInstallation.updated_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if install is None:
+        return None
+
+    credential = (
+        await session.execute(
+            select(NativeIntegrationCredential).where(
+                NativeIntegrationCredential.installation_id == install.id,
+                NativeIntegrationCredential.kind == "api_token",
+                NativeIntegrationCredential.revoked_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if credential is None or not credential.secret_ciphertext:
+        return None
+
+    try:
+        token = decrypt(credential.secret_ciphertext)
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "native atlassian token unreadable for installation=%s", install.id
+        )
+        return None
+    if not token:
+        return None
+
+    config = install.config or {}
+    site_url = str(config.get("site_url") or "").strip()
+    email = str(config.get("email") or "").strip()
+    if not site_url or not email:
+        logger.warning(
+            "atlassian installation=%s missing site_url/email config", install.id
+        )
+        return None
+
+    gateway = JiraTracker(
+        site_url=site_url,
+        email=email,
+        api_token=token,
+        default_project=config.get("jira_project"),
+    )
+    return ResolvedTracker(
+        kind="jira",
+        gateway=gateway,
+        scope_hint=config.get("jira_project"),
+        source="native",
+        last_health_at=install.last_health_at,
+        last_health_error=install.last_health_error,
+        scopes=tuple(install.scopes or ()),
+    )
 
 
 async def _load_legacy_linear_row(
