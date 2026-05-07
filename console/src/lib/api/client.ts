@@ -2647,6 +2647,75 @@ export function getLiveSystem(
   );
 }
 
+// ---------------------------------------------------------------------------
+// Analytics — DORA metrics over a rolling window
+// ---------------------------------------------------------------------------
+
+export interface ApiDoraDfPoint {
+  date: string;
+  count: number;
+}
+export interface ApiDoraLtPoint {
+  week_start: string;
+  median_hours: number | null;
+  sample: number;
+}
+export interface ApiDoraCfrPoint {
+  date: string;
+  total: number;
+  failed: number;
+}
+export interface ApiDoraIncident {
+  failed_at: string;
+  recovered_at: string | null;
+  hours: number | null;
+  workflow_name: string | null;
+}
+export interface ApiDoraResponse {
+  window_days: number;
+  computed_at: string;
+  deployment_frequency: {
+    total_deploys: number;
+    per_day_median: number;
+    per_day_p90: number;
+    label: string;
+    time_series: ApiDoraDfPoint[];
+  };
+  lead_time: {
+    median_hours: number | null;
+    p90_hours: number | null;
+    label: string;
+    sample_size: number;
+    time_series: ApiDoraLtPoint[];
+  };
+  change_failure_rate: {
+    rate: number;
+    label: string;
+    total_deploys: number;
+    failed_deploys: number;
+    hotfix_prs: number;
+    time_series: ApiDoraCfrPoint[];
+  };
+  mttr: {
+    median_hours: number | null;
+    p90_hours: number | null;
+    label: string;
+    incidents: ApiDoraIncident[];
+  };
+}
+
+export function getDoraAnalytics(
+  workspaceId: string,
+  days: number,
+  token?: string,
+): Promise<ApiDoraResponse> {
+  const qs = `?days=${encodeURIComponent(String(days))}`;
+  return apiFetch<ApiDoraResponse>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/analytics/dora${qs}`,
+    { token },
+  );
+}
+
 export function dismissNotification(
   workspaceId: string,
   notificationId: string,
