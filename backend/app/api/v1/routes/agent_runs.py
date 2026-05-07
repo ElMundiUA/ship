@@ -2505,6 +2505,141 @@ async def get_admin_ticket_snapshot(
     )
 
 
+class ReprovisionLinearFsmOut(BaseModel):
+    ok: bool
+    team_key: str
+    stages_provisioned: list[str]
+    new_stages: list[str]
+    signal_labels: list[str]
+
+
+@router.post(
+    "/admin/reprovision-linear-fsm", response_model=ReprovisionLinearFsmOut
+)
+async def post_admin_reprovision_linear_fsm(
+    workspace_id: uuid.UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> ReprovisionLinearFsmOut:
+    """Re-run the Linear FSM provisioner for the workspace's bound
+    team. Picks up new stages added to ``SHIP_FSM_STAGES`` since the
+    last OAuth callback (e.g. ``qa_arch_plan`` insertion between
+    ``tech_arch_plan`` and ``dev_implementation``) and creates the
+    missing ``stage:<X>`` labels on the Linear team.
+
+    Idempotent: existing labels are kept by-name; only missing stages
+    get fresh ones. ``Integration.config`` is updated in place with
+    the merged ``label_id_by_stage`` / ``state_id_by_name`` /
+    ``signal_label_ids`` so the runtime resolver picks up the new
+    entries on its next call. Admin-only — provisioning calls
+    Linear's mutating API.
+    """
+    from sqlalchemy import select as sa_select
+
+    from backend.app.db.models.tenancy import Integration
+    from backend.app.integrations.linear.tracker_adapter import LinearTracker
+    from backend.app.security.encryption import decrypt
+    from backend.app.services import linear_provisioner
+
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+
+    legacy_row = (
+        await session.execute(
+            sa_select(Integration).where(
+                Integration.workspace_id == workspace_id,
+                Integration.kind == "linear",
+                Integration.repo_id.is_(None),
+            )
+            .order_by(Integration.updated_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if legacy_row is None or not legacy_row.secret_ciphertext:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "no_linear_oauth",
+                "message": "Reconnect Linear first.",
+            },
+        )
+
+    config = legacy_row.config or {}
+    team_key = config.get("team_key")
+    if not team_key:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "no_team_picked",
+                "message": "Pick a Linear team first.",
+            },
+        )
+
+    try:
+        token = decrypt(legacy_row.secret_ciphertext)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "token_unreadable", "error": str(exc)[:200]},
+        ) from exc
+
+    live = LinearTracker(token)
+    prior_stages = set((config.get("label_id_by_stage") or {}).keys())
+    try:
+        result = await linear_provisioner.provision_team(
+            tracker=live, team_key=team_key, settings=settings
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "provision_failed", "error": str(exc)[:300]},
+        ) from exc
+
+    new_config = dict(config)
+    new_config.update(
+        {
+            "team_id": result.team_id,
+            "team_key": result.team_key,
+            "state_id_by_name": result.state_id_by_name,
+            "label_id_by_stage": result.label_id_by_stage,
+            "signal_label_ids": result.signal_label_ids,
+            "canonical_to_native": result.canonical_to_native,
+            "canonical_resolution_meta": result.canonical_resolution_meta,
+            "fsm_provisioned": True,
+        }
+    )
+    legacy_row.config = new_config
+    legacy_row.updated_at = datetime.now(timezone.utc)
+
+    new_stages = sorted(set(result.label_id_by_stage.keys()) - prior_stages)
+
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=auth.user.id,
+            actor_token_id=auth.token.id if auth.token else None,
+            action="tracker.reprovision_fsm",
+            target_kind="workspace",
+            target_id=str(workspace_id),
+            payload={
+                "team_key": result.team_key,
+                "stages_provisioned": sorted(result.label_id_by_stage.keys()),
+                "new_stages": new_stages,
+                "signal_labels": sorted(result.signal_label_ids.keys()),
+            },
+        )
+    )
+    await session.flush()
+
+    return ReprovisionLinearFsmOut(
+        ok=True,
+        team_key=result.team_key,
+        stages_provisioned=sorted(result.label_id_by_stage.keys()),
+        new_stages=new_stages,
+        signal_labels=sorted(result.signal_label_ids.keys()),
+    )
+
+
 @router.post("/admin/relabel-stages", response_model=RelabelStagesOut)
 async def post_admin_relabel_stages(
     workspace_id: uuid.UUID,
