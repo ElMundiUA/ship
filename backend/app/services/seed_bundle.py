@@ -144,7 +144,14 @@ from backend.app.services.tracker_fsm import (
 #         the seed PR merged. The ``shipctl init`` / ``sync`` /
 #         ``--copy-rules`` flow + the ``/collections`` + ``/fetch``
 #         endpoints are gone in this bundle.
-BUNDLE_VERSION: str = "0.27"
+# ``0.28`` → starter trigger workflow synced with canonical
+#         (PR-4 catch-up): installs cursor-agent + claude + codex
+#         CLIs, passes ANTHROPIC_API_KEY/OPENAI_API_KEY/GH_TOKEN to
+#         the runner, grants contents:write + pull-requests:write,
+#         runs ``shipctl run`` with ``--commit-and-pr``, and exposes
+#         ``routine_id``/``ticket_ref`` workflow_dispatch inputs for
+#         operator-driven debug runs.
+BUNDLE_VERSION: str = "0.28"
 
 # Default knowledge starters for PR 1. Empty by design: generated knowledge is
 # analyzed post-merge and proposed in a second PR. Historical callers can still
