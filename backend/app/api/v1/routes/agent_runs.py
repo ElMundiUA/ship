@@ -51,7 +51,7 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sqlalchemy import select as sa_select
@@ -64,6 +64,7 @@ from backend.app.api.v1.routes.workspaces import (
 from backend.app.core.config import Settings, get_settings
 from backend.app.db.models.dashboard_priorities import WorkspaceProjectPriority
 from backend.app.db.models.inbox import InboxItem
+from backend.app.db.models.pipelines import PullRequest
 from backend.app.db.models.tenancy import AuditLog
 from backend.app.db.session import get_session
 from backend.app.integrations.gateway.tracker import TicketRef
@@ -1157,6 +1158,214 @@ async def post_inbox_item(
     )
     await session.flush()
     return WriteOut(ok=True, note=f"inbox item created (type={payload.type})")
+
+
+# ---------------------------------------------------------------------------
+# PR cache reconciliation — admin-only sync against GitHub
+# ---------------------------------------------------------------------------
+
+
+class PrCacheSyncOut(BaseModel):
+    """Summary of a one-shot PR-cache reconciliation against GitHub.
+
+    Webhook-driven caches occasionally drift — a missed merge event,
+    a redelivery the App didn't process during a deploy, etc. Run this
+    when the dashboard's stuck-work count looks suspicious; it walks
+    every cached PR currently in ``state='open'`` and re-fetches the
+    truth from GitHub. PRs that are actually merged (or closed) get
+    their cache row updated, which lets the next dashboard refresh
+    auto-dismiss the stale ``stuck`` inbox items.
+    """
+
+    ok: bool = True
+    checked: int
+    updated: int
+    skipped_no_token: int
+    sample_updates: list[str] = Field(default_factory=list)
+
+
+@router.post("/admin/sync-pull-requests", response_model=PrCacheSyncOut)
+async def post_sync_pull_requests(
+    workspace_id: uuid.UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> PrCacheSyncOut:
+    """Reconcile cached PullRequest rows against GitHub.
+
+    For each cached PR in ``state='open'`` we round-trip
+    ``GET /repos/{owner}/{name}/pulls/{number}`` with the App's
+    installation token and overwrite the cache columns
+    (``state`` / ``merged`` / ``merged_at`` / ``closed_at`` /
+    ``updated_at_external``). The dashboard endpoint's stuck-PR
+    reconciliation then dismisses any ``stuck`` inbox items whose
+    underlying PR turned out to be merged.
+
+    Best-effort per-row: a transient 404 / 5xx is logged but doesn't
+    fail the whole sync. Workspaces without a GitHub App installation
+    skip the call cleanly (``skipped_no_token``).
+
+    Admin-only. The route returns a summary so the operator running
+    it from a script can see how many rows were touched.
+    """
+    import httpx
+
+    from backend.app.db.models.integrations import (
+        GitHubInstallation,
+        WorkspaceRepo,
+    )
+    from backend.app.integrations.github.app_auth import (
+        fetch_installation_token,
+    )
+
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+
+    open_prs = (
+        await session.execute(
+            select(PullRequest).where(
+                PullRequest.workspace_id == workspace_id,
+                PullRequest.state == "open",
+            )
+        )
+    ).scalars().all()
+    if not open_prs:
+        return PrCacheSyncOut(ok=True, checked=0, updated=0, skipped_no_token=0)
+
+    # Resolve installation_id per repo_id once. Same workspace can have
+    # multiple repos under different installations (org + personal).
+    repo_ids = {pr.repo_id for pr in open_prs if pr.repo_id is not None}
+    install_by_repo: dict[uuid.UUID, int] = {}
+    if repo_ids:
+        rows = (
+            await session.execute(
+                select(WorkspaceRepo.id, GitHubInstallation.installation_id)
+                .join(
+                    GitHubInstallation,
+                    WorkspaceRepo.installation_id == GitHubInstallation.id,
+                )
+                .where(WorkspaceRepo.id.in_(repo_ids))
+            )
+        ).all()
+        for row in rows:
+            install_by_repo[row[0]] = int(row[1])
+
+    updated = 0
+    skipped_no_token = 0
+    sample: list[str] = []
+    async with httpx.AsyncClient(timeout=httpx.Timeout(15.0)) as client:
+        for pr in open_prs:
+            installation_id = install_by_repo.get(pr.repo_id) if pr.repo_id else None
+            if installation_id is None:
+                skipped_no_token += 1
+                continue
+            try:
+                token = await fetch_installation_token(
+                    installation_id, settings=settings, client=client
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "pr-sync: token mint failed installation=%s err=%s",
+                    installation_id,
+                    exc,
+                )
+                skipped_no_token += 1
+                continue
+
+            url = (
+                f"https://api.github.com/repos/{pr.repo_full_name}/pulls/"
+                f"{pr.number}"
+            )
+            try:
+                response = await client.get(
+                    url,
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Accept": "application/vnd.github+json",
+                        "X-GitHub-Api-Version": "2022-11-28",
+                    },
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "pr-sync: GET failed url=%s err=%s",
+                    url,
+                    exc,
+                )
+                continue
+            if response.status_code != 200:
+                logger.warning(
+                    "pr-sync: %s %s on %s",
+                    response.status_code,
+                    response.reason_phrase,
+                    url,
+                )
+                continue
+            data = response.json()
+            new_state = (data.get("state") or "open").lower()
+            merged = bool(data.get("merged"))
+            if merged and new_state == "closed":
+                new_state = "merged"
+            merged_at = _parse_iso_or_none(data.get("merged_at"))
+            closed_at = _parse_iso_or_none(data.get("closed_at"))
+            updated_at_external = _parse_iso_or_none(data.get("updated_at"))
+
+            drifted = (
+                pr.state != new_state
+                or pr.merged != merged
+                or (merged_at is not None and pr.merged_at != merged_at)
+            )
+            if drifted:
+                pr.state = new_state
+                pr.merged = merged
+                if merged_at is not None:
+                    pr.merged_at = merged_at
+                if closed_at is not None:
+                    pr.closed_at = closed_at
+                if updated_at_external is not None:
+                    pr.updated_at_external = updated_at_external
+                updated += 1
+                if len(sample) < 10:
+                    sample.append(
+                        f"#{pr.number} ({pr.repo_full_name}) "
+                        f"open → {new_state}"
+                    )
+
+    if updated:
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=auth.user.id,
+                actor_token_id=auth.token.id if auth.token else None,
+                action="agent_run.pr_cache_synced",
+                target_kind="workspace",
+                target_id=str(workspace_id),
+                payload={
+                    "checked": len(open_prs),
+                    "updated": updated,
+                    "skipped_no_token": skipped_no_token,
+                    "sample": sample,
+                },
+            )
+        )
+        await session.flush()
+
+    return PrCacheSyncOut(
+        ok=True,
+        checked=len(open_prs),
+        updated=updated,
+        skipped_no_token=skipped_no_token,
+        sample_updates=sample,
+    )
+
+
+def _parse_iso_or_none(value: object) -> "datetime | None":
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        if value.endswith("Z"):
+            value = value[:-1] + "+00:00"
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
 
 
 class FindOrCreateProjectIn(BaseModel):

@@ -370,7 +370,7 @@ function RecentMerges({ summary }: { summary: ApiOpsDashboard }) {
                 rel="noreferrer"
                 className="shrink-0 text-[11px] font-semibold text-white/55 hover:text-white"
               >
-                Open →
+                View on GitHub →
               </a>
             )}
           </li>
