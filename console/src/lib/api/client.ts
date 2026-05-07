@@ -224,6 +224,32 @@ export function setAgentProvider(
   );
 }
 
+/**
+ * POST ``/v1/workspaces/{ws}/agent-runs/dispatch`` — manually fire a
+ * routine against the workspace's bound repo. Workflow_dispatch
+ * inputs feed straight into ``shipctl run --routine X --debug`` on
+ * the runner so the GHA log shows every pipeline phase interleaved
+ * with the agent CLI's own output.
+ */
+export interface ApiDispatchRoutineOut {
+  accepted: boolean;
+  repo_full_name: string;
+  workflow_file: string;
+  routine_id: string;
+  ticket_ref: string | null;
+}
+
+export function dispatchRoutine(
+  workspaceId: string,
+  body: { repo_id: string; routine_id: string; ticket_ref?: string | null },
+  token?: string,
+): Promise<ApiDispatchRoutineOut> {
+  return apiFetch<ApiDispatchRoutineOut>(
+    `/v1/workspaces/${workspaceId}/agent-runs/dispatch`,
+    { method: "POST", body, token },
+  );
+}
+
 // --- Integrations ----------------------------------------------------------
 
 export function listIntegrations(

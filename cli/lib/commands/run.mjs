@@ -111,6 +111,22 @@ async function _runCommandImpl(ctx, rest) {
     printHelp();
     process.exit(EXIT_OK);
   }
+  // ``--debug`` streams a single-line per-step log so an operator
+  // running ``shipctl run`` from the workflow_dispatch UI can see
+  // every phase of the run interleaved with the agent's own output.
+  // Each step prints a stable prefix so the GHA log is greppable
+  // (``# ship: [t+...] <stage> <status>``). Disabled by default —
+  // production cron ticks stay terse.
+  const stepStart = Date.now();
+  const step = (stage, status, kv = {}) => {
+    if (!args.debug) return;
+    const t = ((Date.now() - stepStart) / 1000).toFixed(1);
+    const pairs = Object.entries(kv)
+      .filter(([, v]) => v !== undefined && v !== null && v !== "")
+      .map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`)
+      .join(" ");
+    process.stderr.write(`# ship: [t+${t}s] ${stage} ${status}${pairs ? " " + pairs : ""}\n`);
+  };
   if (!args.routine && !args.specialist) {
     die(
       EXIT_USAGE,
@@ -179,6 +195,12 @@ async function _runCommandImpl(ctx, rest) {
     );
   }
 
+  step("resolve_args", "ok", {
+    routine: args.routine,
+    specialist: args.specialist,
+    handle: runHandle,
+  });
+
   // 2) Pull the resolved role + the shared system prompt in parallel.
   // ``resolveAgentRole`` returns the workspace override when present,
   // otherwise falls back to the Ship default. ``system`` is fetched
@@ -197,6 +219,12 @@ async function _runCommandImpl(ctx, rest) {
   if (!roleResolved) {
     die(EXIT_USAGE, `unknown agent role '${specialistSlug}' for this workspace`);
   }
+  step("resolve_role", "ok", {
+    specialist: specialistSlug,
+    role_source: roleResolved.source,
+    system_present: Boolean(systemResolved?.prompt),
+    role_len: (roleResolved.prompt || "").length,
+  });
   // Per-routine FSM stage override takes precedence over the role's
   // default. Lets one role (``ba``) drive both ``ba_requirements`` for
   // SDLC and ``wbs`` for decomposition without per-process role clones.
@@ -228,6 +256,7 @@ async function _runCommandImpl(ctx, rest) {
         state: fsmStage,
       });
       if (!task) {
+        step("tracker_next", "noop", { fsm_stage: fsmStage, reason: "no_eligible_ticket" });
         emit(args, {
           status: "noop",
           routine: args.routine,
@@ -238,7 +267,14 @@ async function _runCommandImpl(ctx, rest) {
         });
         process.exit(EXIT_NO_TASK);
       }
+      step("tracker_next", "ok", {
+        fsm_stage: fsmStage,
+        ticket: task.ticket_ref,
+        title_len: (task.title || "").length,
+      });
     }
+  } else {
+    step("tracker_next", "skipped", { reason: "no_fsm_stage" });
   }
 
   // 4) Fetch the workspace policy preamble so the agent prompt
@@ -252,6 +288,9 @@ async function _runCommandImpl(ctx, rest) {
     apiToken,
     workspaceId,
     role: specialistSlug,
+  });
+  step("policies_preamble", policiesPreamble ? "ok" : "empty", {
+    len: policiesPreamble ? policiesPreamble.length : 0,
   });
 
   // 5) Mint a run_id + render prompt with finish-protocol values
@@ -319,6 +358,7 @@ async function _runCommandImpl(ctx, rest) {
     workspaceId,
   });
   const provider = workspaceProvider || DEFAULT_PROVIDER;
+  step("resolve_provider", workspaceProvider ? "ok" : "default", { provider });
   const branchName = makeBranchName(runHandle, task?.ticket_ref);
   const baseBranch = (env.githubRef || "main").trim() || "main";
 
@@ -330,6 +370,7 @@ async function _runCommandImpl(ctx, rest) {
   if (args.commitAndPr) {
     try {
       prepareGitBranch({ branchName, baseBranch });
+      step("prepare_branch", "ok", { branch: branchName, base: baseBranch });
     } catch (err) {
       emit(args, {
         status: "error",
@@ -347,6 +388,11 @@ async function _runCommandImpl(ctx, rest) {
   }
 
   let runtime;
+  step("launch_agent", "starting", {
+    provider,
+    branch: branchName,
+    prompt_len: prompt.length,
+  });
   try {
     runtime = await runAgent(provider, {
       workdir: process.cwd(),
@@ -391,7 +437,13 @@ async function _runCommandImpl(ctx, rest) {
       });
       process.exit(EXIT_AGENT_FAIL);
     }
+    step("agent_done", "ok", {
+      provider,
+      runtime_status: runtime.status,
+      exit_code: runtime.exitCode,
+    });
     if (!hasNewCommits(baseBranch)) {
+      step("post_run", "noop", { reason: "no_commits" });
       emit(args, {
         status: "noop_no_commits",
         routine: args.routine,
@@ -407,6 +459,7 @@ async function _runCommandImpl(ctx, rest) {
     }
     try {
       pushed = pushBranch({ branchName });
+      step("push_branch", "ok", { branch: branchName });
       prUrl = openPullRequest({
         branchName,
         baseBranch,
@@ -419,6 +472,7 @@ async function _runCommandImpl(ctx, rest) {
           runHandle,
         }),
       });
+      step("open_pr", prUrl ? "ok" : "skipped_gh_unavailable", { pr: prUrl || null });
     } catch (err) {
       emit(args, {
         status: "error",
@@ -988,6 +1042,7 @@ function parseArgs(rest) {
     help: false,
     dryRun: false,
     commitAndPr: false,
+    debug: false,
   };
   const copy = [...rest];
   while (copy.length) {
@@ -996,6 +1051,7 @@ function parseArgs(rest) {
     if (a === "--json") { out.json = true; copy.shift(); continue; }
     if (a === "--dry-run") { out.dryRun = true; copy.shift(); continue; }
     if (a === "--commit-and-pr") { out.commitAndPr = true; copy.shift(); continue; }
+    if (a === "--debug") { out.debug = true; copy.shift(); continue; }
     if (a === "--routine" && copy[1] !== undefined) { out.routine = copy[1]; copy.splice(0, 2); continue; }
     if (a === "--specialist" && copy[1] !== undefined) { out.specialist = copy[1]; copy.splice(0, 2); continue; }
     if (a === "--cwd" && copy[1] !== undefined) { out.cwd = path.resolve(copy[1]); copy.splice(0, 2); continue; }
@@ -1020,6 +1076,14 @@ Run
 
   --routine     id from process.routines in .ship/config.yml (cron-driven)
   --specialist  agent-role slug from the Ship registry (pipeline-pick fallback)
+
+DEBUG
+  --debug       stream a single-line per-step log to stderr (resolve_role,
+                tracker_next, policies_preamble, resolve_provider,
+                prepare_branch, launch_agent, push_branch, open_pr).
+                Useful for workflow_dispatch debug runs — the GHA log
+                shows every phase of the pipeline interleaved with the
+                agent CLI's own output.
 
 ENV
   SHIP_API_BASE        Ship server base URL (e.g. https://api.ship.elmundi.com)
