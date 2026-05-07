@@ -4004,252 +4004,42 @@ class ToolBox:
     async def _resolve_tracker(
         self, preferred_kind: str | None, project_hint: str | None
     ) -> TrackerGateway:
-        """Pick a tracker for the workspace.
+        """Return the workspace's bound tracker.
 
-        Priority:
+        Delegates to :func:`tracker_resolver.resolve_for_workspace` so
+        Navigator, dashboard, and agent-runs all read the same row.
+        Workspaces bind to exactly one tracker (Linear today, Jira
+        tomorrow once the operator switches the native installation);
+        we don't peer-rank GitHub Issues / Notion / legacy fallbacks
+        — if the bound tracker isn't reachable, the tool surfaces
+        ``no tracker bound`` and the LLM asks the operator to fix it.
 
-        1. If ``preferred_kind`` is set, use it (fail if it's not
-           configured).
-        2. Otherwise, if the workspace has exactly one tracker-type
-           integration, use it.
-        3. Otherwise, raise — the LLM has to ask the user to pick.
-
-        ``project_hint`` is forwarded to the tracker's
-        :meth:`create_ticket`; we only use it here to choose a
-        GitHub Issues repo (``owner/repo``) when the GitHub tracker
-        kind is selected.
+        ``preferred_kind`` lets a tool pin "I want Linear" (rare). We
+        error if the bound tracker doesn't match. ``project_hint`` is
+        accepted for API compatibility but unused — the bound tracker
+        is workspace-scoped, not per-project.
         """
-        candidates: dict[str, Integration] = {}
-        integrations = (
-            await self._session.execute(
-                select(Integration).where(
-                    Integration.workspace_id == self._workspace_id
-                )
-            )
-        ).scalars().all()
-        for row in integrations:
-            if row.kind in {"linear", "notion", "jira"} and row.secret_ciphertext:
-                candidates[row.kind] = row
+        del project_hint
+        from backend.app.services.tracker_resolver import resolve_for_workspace
 
-        native_linear = (
-            await self._session.execute(
-                select(NativeIntegrationInstallation)
-                .where(
-                    NativeIntegrationInstallation.workspace_id == self._workspace_id,
-                    NativeIntegrationInstallation.provider
-                    == NativeIntegrationProvider.LINEAR,
-                    NativeIntegrationInstallation.status
-                    == NativeIntegrationStatus.READY,
-                    NativeIntegrationInstallation.disabled_at.is_(None),
-                )
-                .order_by(NativeIntegrationInstallation.updated_at.desc())
-                .limit(1)
-            )
-        ).scalars().first()
-        native_linear_credential: NativeIntegrationCredential | None = None
-        if native_linear is not None:
-            native_linear_credential = (
-                await self._session.execute(
-                    select(NativeIntegrationCredential).where(
-                        NativeIntegrationCredential.installation_id
-                        == native_linear.id,
-                        NativeIntegrationCredential.kind == "access_token",
-                        NativeIntegrationCredential.revoked_at.is_(None),
-                    )
-                )
-            ).scalar_one_or_none()
-
-        native_atlassian = (
-            await self._session.execute(
-                select(NativeIntegrationInstallation).where(
-                    NativeIntegrationInstallation.workspace_id == self._workspace_id,
-                    NativeIntegrationInstallation.provider
-                    == NativeIntegrationProvider.ATLASSIAN,
-                    NativeIntegrationInstallation.disabled_at.is_(None),
-                )
-            )
-        ).scalars().first()
-        native_atlassian_credential: NativeIntegrationCredential | None = None
-        if native_atlassian is not None:
-            native_atlassian_credential = (
-                await self._session.execute(
-                    select(NativeIntegrationCredential).where(
-                        NativeIntegrationCredential.installation_id
-                        == native_atlassian.id,
-                        NativeIntegrationCredential.kind == "api_token",
-                        NativeIntegrationCredential.revoked_at.is_(None),
-                    )
-                )
-            ).scalar_one_or_none()
-
-        # Any activated repo gives us a GitHub Issues target without
-        # a dedicated Integration row — the App installation token
-        # carries ``issues:write``.
-        has_github_install = (
-            await self._session.execute(
-                select(WorkspaceRepo.id).where(
-                    WorkspaceRepo.workspace_id == self._workspace_id,
-                    WorkspaceRepo.installation_id.is_not(None),
-                ).limit(1)
-            )
-        ).scalar_one_or_none() is not None
-
-        available = set(candidates)
-        if native_linear_credential is not None:
-            available.add("linear")
-        if native_atlassian_credential is not None:
-            available.add("jira")
-        if has_github_install:
-            available.add("github_issues")
-
-        # Bound-tracker precedence: when the caller doesn't pin a kind,
-        # pick the workspace's canonical tracker following the same
-        # ranking ``tracker_resolver.resolve_for_workspace`` uses for
-        # the picker / agent-runs path. Without this, a workspace
-        # carrying Linear *plus* an activated GitHub repo would 422
-        # every Navigator tool call as "multiple trackers available"
-        # — even though Linear is unambiguously the bound tracker.
-        # GitHub Issues stays in ``available`` as a fallback only when
-        # nothing higher-priority is configured.
-        _PRIMARY_PRECEDENCE = ("linear", "jira", "notion", "github_issues")
-
-        if preferred_kind:
-            if preferred_kind not in available:
-                raise ToolInvocationError(
-                    f"tracker {preferred_kind!r} is not configured for this workspace"
-                )
-            chosen = preferred_kind
-        elif len(available) == 1:
-            chosen = next(iter(available))
-        else:
-            ranked = [k for k in _PRIMARY_PRECEDENCE if k in available]
-            if ranked:
-                chosen = ranked[0]
-            else:
-                raise ToolInvocationError(
-                    f"multiple trackers available ({sorted(available)}); pass tracker="
-                )
-
-        if chosen in {"linear", "notion", "jira"}:
-            if chosen == "linear" and native_linear_credential is not None:
-                try:
-                    token = decrypt(native_linear_credential.secret_ciphertext)
-                except Exception as exc:  # noqa: BLE001
-                    raise ToolInvocationError(
-                        "Linear token is unreadable; reconnect Linear."
-                    ) from exc
-                # Pass through the workspace's configured default team
-                # so ``create_ticket`` without a ``project_hint`` lands
-                # in the right place. Pre-fix the Navigator dropped
-                # this config and Linear's resolver fell through to
-                # "first team", which crashed on multi-team workspaces.
-                cfg = (native_linear.config if native_linear else {}) or {}
-                return _build_linear_tracker(token, cfg)
-            if chosen == "jira" and native_atlassian_credential is not None:
-                try:
-                    token = decrypt(native_atlassian_credential.secret_ciphertext)
-                except Exception as exc:  # noqa: BLE001
-                    raise ToolInvocationError(
-                        "Atlassian token is unreadable; rotate the integration."
-                    ) from exc
-                config = native_atlassian.config or {}
-                site_url = str(config.get("site_url") or "").strip()
-                email = str(config.get("email") or "").strip()
-                if not site_url or not email:
-                    raise ToolInvocationError(
-                        "Atlassian integration is missing site_url/email config."
-                    )
-                return JiraTracker(
-                    site_url=site_url,
-                    email=email,
-                    api_token=token,
-                    default_project=config.get("jira_project"),
-                )
-            row = candidates[chosen]
-            try:
-                token = decrypt(row.secret_ciphertext or b"")
-            except Exception as exc:  # noqa: BLE001
-                raise ToolInvocationError(
-                    f"{chosen} token is unreadable; rotate the integration."
-                ) from exc
-            if chosen == "linear":
-                # Same default-team fix as the native-credential path
-                # above — see comment there.
-                return _build_linear_tracker(token, row.config or {})
-            if chosen == "jira":
-                config = row.config or {}
-                host = str(config.get("host") or config.get("site") or "").strip()
-                email = str(config.get("user") or config.get("email") or "").strip()
-                if not host or not email:
-                    raise ToolInvocationError(
-                        "Jira integration is missing host and user/email config."
-                    )
-                site_url = host if host.startswith("http") else f"https://{host}"
-                return JiraTracker(
-                    site_url=site_url,
-                    email=email,
-                    api_token=token,
-                    default_project=config.get("project"),
-                )
-            return NotionTracker(token)
-
-        # GitHub Issues path.
-        owner, repo_name = await self._resolve_github_issues_target(project_hint)
-        install_id = await self._resolve_github_install_id_for_repo(
-            owner, repo_name
-        )
-        return GitHubIssuesTracker(
-            installation_id=install_id,
-            owner=owner,
-            repo=repo_name,
+        resolved = await resolve_for_workspace(
+            session=self._session,
             settings=self._settings,
+            workspace_id=self._workspace_id,
         )
-
-    async def _resolve_github_issues_target(
-        self, project_hint: str | None
-    ) -> tuple[str, str]:
-        if project_hint and "/" in project_hint:
-            owner, _, repo = project_hint.partition("/")
-            if owner and repo:
-                return owner, repo
-        # Fall back to the single activated repo.
-        rows = (
-            await self._session.execute(
-                select(WorkspaceRepo).where(
-                    WorkspaceRepo.workspace_id == self._workspace_id,
-                    WorkspaceRepo.installation_id.is_not(None),
-                )
-            )
-        ).scalars().all()
-        if len(rows) == 1:
-            owner, _, repo = rows[0].full_name.partition("/")
-            return owner, repo
-        raise ToolInvocationError(
-            "multiple GitHub repos activated; pass project_hint='owner/repo'"
-        )
-
-    async def _resolve_github_install_id_for_repo(
-        self, owner: str, repo: str
-    ) -> int:
-        full_name = f"{owner}/{repo}"
-        row = (
-            await self._session.execute(
-                select(WorkspaceRepo).where(
-                    WorkspaceRepo.workspace_id == self._workspace_id,
-                    WorkspaceRepo.full_name == full_name,
-                )
-            )
-        ).scalars().first()
-        if row is None or row.installation_id is None:
+        if resolved is None:
             raise ToolInvocationError(
-                f"repo {full_name} is not activated for this workspace"
+                "no tracker is bound to this workspace; connect Linear "
+                "(or another supported tracker) at the workspace level "
+                "and retry."
             )
-        install = await self._session.get(GitHubInstallation, row.installation_id)
-        if install is None or install.suspended_at is not None:
+        if preferred_kind and preferred_kind != resolved.kind:
             raise ToolInvocationError(
-                f"GitHub App installation for {full_name} is missing or suspended"
+                f"tracker {preferred_kind!r} is not the workspace's "
+                f"bound tracker ({resolved.kind}); rebind it via the "
+                "workspace settings before using this tool."
             )
-        return install.installation_id
+        return resolved.gateway
 
     # ----------------------------------------------------------------
     # Phase 6 — new IA tools (Inbox, Plays, Runs, Coverage, Intel)
