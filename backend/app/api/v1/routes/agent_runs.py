@@ -1440,8 +1440,13 @@ async def get_orphan_tickets(
             if not snap:
                 continue
             # Skip tickets that have since gained a project — they're
-            # no longer orphans, just historical audit noise.
-            if (snap.get("project") or {}).get("id"):
+            # no longer orphans, just historical audit noise. Also skip
+            # closed states (Canceled / Done) so the operator's audit
+            # view doesn't carry tickets they already disposed of.
+            if snap.get("project_id"):
+                continue
+            state_label = (snap.get("state") or "").strip().lower()
+            if state_label in {"canceled", "cancelled", "done", "completed"}:
                 continue
             tickets_out.append(
                 OrphanTicketRow(
