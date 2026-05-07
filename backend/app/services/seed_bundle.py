@@ -144,7 +144,7 @@ from backend.app.services.tracker_fsm import (
 #         the seed PR merged. The ``shipctl init`` / ``sync`` /
 #         ``--copy-rules`` flow + the ``/collections`` + ``/fetch``
 #         endpoints are gone in this bundle.
-BUNDLE_VERSION: str = "0.25"
+BUNDLE_VERSION: str = "0.26"
 
 # Default knowledge starters for PR 1. Empty by design: generated knowledge is
 # analyzed post-merge and proposed in a second PR. Historical callers can still
