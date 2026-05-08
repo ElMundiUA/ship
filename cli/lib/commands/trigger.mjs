@@ -62,10 +62,21 @@ export async function triggerCommand(ctx, rest) {
     }
   }
   if (token && due.length > 0 && !opts.noClaim) {
+    // Two outcomes from the server claim:
+    //   - ``claimed``:     this runner won the window, must execute the routine.
+    //   - ``unavailable``: the window was already claimed by an earlier runner
+    //                      (or is on cool-down). Skipping is the only safe
+    //                      action — re-running would double-fire the routine
+    //                      (e.g., post a duplicate daily-retro to the inbox
+    //                      when GHA cron drift triggers two runners inside
+    //                      the same window).
+    // The previous version pushed both into ``due`` and let the workflow
+    // execute "unavailable" routines too, which is exactly the double-fire
+    // bug we're guarding against here.
     const claimed = [];
     for (const routine of due) {
       const claim = await claimRoutine(baseUrl, token, workspaceId, repoId, opts.event, routine);
-      if (claim.status === "claimed" || claim.status === "unavailable") {
+      if (claim.status === "claimed") {
         claimed.push({ ...routine, claim_status: claim.status });
       }
     }

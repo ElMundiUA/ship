@@ -49,6 +49,7 @@
 
 import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 
 import { readConfig, findShipRoot } from "../config/io.mjs";
@@ -1189,6 +1190,7 @@ function parseArgs(rest) {
     dryRun: false,
     commitAndPr: false,
     debug: false,
+    statusFile: null,
   };
   const copy = [...rest];
   while (copy.length) {
@@ -1201,6 +1203,7 @@ function parseArgs(rest) {
     if (a === "--routine" && copy[1] !== undefined) { out.routine = copy[1]; copy.splice(0, 2); continue; }
     if (a === "--specialist" && copy[1] !== undefined) { out.specialist = copy[1]; copy.splice(0, 2); continue; }
     if (a === "--cwd" && copy[1] !== undefined) { out.cwd = path.resolve(copy[1]); copy.splice(0, 2); continue; }
+    if (a === "--status-file" && copy[1] !== undefined) { out.statusFile = path.resolve(copy[1]); copy.splice(0, 2); continue; }
     // Soft-ignore legacy flags that older trigger workflows still pass —
     // the new pipeline doesn't need them and refusing would break repos
     // that haven't re-seeded yet. ``--lane`` is the back-compat spelling
@@ -1222,6 +1225,10 @@ Run
 
   --routine     id from process.routines in .ship/config.yml (cron-driven)
   --specialist  agent-role slug from the Ship registry (pipeline-pick fallback)
+  --status-file <path>  also write the final status JSON to this file (the
+                        same payload as ``--json`` stdout). The schedule
+                        workflow uses this to loop through routines and
+                        skip past noops without parsing stderr.
 
 DEBUG
   --debug       stream a single-line per-step log to stderr (resolve_role,
@@ -1261,6 +1268,18 @@ function emit(args, payload) {
   } else {
     console.error(`# ship: ${payload.status}${payload.reason ? ` reason=${payload.reason}` : ""}${payload.routine ? ` routine=${payload.routine}` : ""}`);
     if (payload.error) console.error(`#   error: ${payload.error}`);
+  }
+  // ``--status-file`` writes the same payload as a single JSON blob so a
+  // workflow loop can branch on noop / ok without parsing stderr. The
+  // schedule trigger loops through ``due_routines`` in priority order
+  // and breaks on the first non-noop — without this file the loop would
+  // need to grep stderr lines, which is fragile.
+  if (args && args.statusFile) {
+    try {
+      fs.writeFileSync(args.statusFile, JSON.stringify(payload, null, 2));
+    } catch (err) {
+      console.error(`# ship: warn: could not write status file ${args.statusFile}: ${err && err.message ? err.message : err}`);
+    }
   }
 }
 

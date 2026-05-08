@@ -119,7 +119,13 @@ process:
       trigger:
         type: schedule
         cron: 0 9 * * *
-        window: 30m
+        # GitHub Actions schedule cron drifts 30+ min during peak load
+        # (today the 9:00 slot was missed: ticks at 8:59 and 9:42 with
+        # a 43-min gap, no runner inside the old 30-min window). 4h
+        # window lets any */30 tick between 9:00 and 13:00 catch up.
+        # Server-side claim dedupes the window_key so multiple */30
+        # ticks inside the window can't double-fire the routine.
+        window: 240m
         catchup: latest
       specialist: daily-retro
     retro:
@@ -128,7 +134,7 @@ process:
       trigger:
         type: schedule
         cron: 0 18 * * *
-        window: 30m
+        window: 240m
         catchup: latest
       specialist: learning-capture
     healthcheck:
@@ -137,7 +143,7 @@ process:
       trigger:
         type: schedule
         cron: 0 */2 * * *
-        window: 30m
+        window: 90m
         catchup: latest
       specialist: workflow-self-heal
     tech_review:
@@ -146,7 +152,7 @@ process:
       trigger:
         type: schedule
         cron: 0 12 * * *
-        window: 30m
+        window: 240m
         catchup: latest
       specialist: tech-reviewer
     qa_review:
@@ -155,7 +161,7 @@ process:
       trigger:
         type: schedule
         cron: 0 15 * * *
-        window: 30m
+        window: 240m
         catchup: latest
       specialist: qa-reviewer
     security_review:
@@ -164,7 +170,7 @@ process:
       trigger:
         type: schedule
         cron: 0 6 * * *
-        window: 30m
+        window: 240m
         catchup: latest
       specialist: security-officer
     process_review:
@@ -173,7 +179,7 @@ process:
       trigger:
         type: schedule
         cron: 0 16 * * *
-        window: 30m
+        window: 240m
         catchup: latest
       specialist: process-reviewer
     intake:

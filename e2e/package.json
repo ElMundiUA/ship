@@ -1,6 +1,6 @@
 {
   "name": "@elmundi/ship-e2e",
-  "version": "0.16.9",
+  "version": "0.16.10",
   "private": true,
   "description": "Playwright E2E — Ship console onboarding and wired-repo checks (test sandbox)",
   "scripts": {

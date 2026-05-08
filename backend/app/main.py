@@ -174,7 +174,7 @@ async def lifespan(_app: FastAPI):
             pass
 
 
-app = FastAPI(title="Ship Methodology API", version="0.16.9", lifespan=lifespan)
+app = FastAPI(title="Ship Methodology API", version="0.16.10", lifespan=lifespan)
 
 
 # Surface the actual error class + message on uncaught exceptions so a
