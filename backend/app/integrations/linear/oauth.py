@@ -55,12 +55,23 @@ class LinearOAuthState:
 
 @dataclass(frozen=True, slots=True)
 class LinearTokenBundle:
-    """Subset of Linear's token response we actually persist."""
+    """Subset of Linear's token response we actually persist.
+
+    ``refresh_token`` is what makes "set and forget" possible: when
+    the ``access_token`` nears or crosses ``expires_in``, the refresh
+    flow swaps the pair for a new one without bouncing the operator
+    back through Linear's consent screen. Linear returns the refresh
+    token on both ``authorization_code`` and ``refresh_token`` grants
+    when the OAuth app is configured to issue them; ``None`` here
+    means the token is non-refreshable and the operator will have to
+    re-authorize when the access token expires.
+    """
 
     access_token: str
     token_type: str
     scope: str
-    expires_in: int | None  # Linear tokens are long-lived but API may include this
+    expires_in: int | None  # seconds, when present
+    refresh_token: str | None = None
 
 
 def _state_secret(settings: Settings) -> str:
@@ -178,11 +189,75 @@ async def exchange_code_for_token(
         raise LinearTokenExchangeFailed(
             "Linear token endpoint returned no access_token"
         )
+    refresh_raw = body.get("refresh_token")
     return LinearTokenBundle(
         access_token=str(access_token),
         token_type=str(body.get("token_type", "Bearer")),
         scope=str(body.get("scope", settings.linear_oauth_scopes)),
         expires_in=int(body["expires_in"]) if body.get("expires_in") else None,
+        refresh_token=str(refresh_raw) if refresh_raw else None,
+    )
+
+
+async def refresh_access_token(
+    refresh_token: str,
+    *,
+    settings: Settings,
+    client: httpx.AsyncClient | None = None,
+) -> LinearTokenBundle:
+    """Mint a fresh access (and rotated refresh) token from the Linear
+    token endpoint using ``grant_type=refresh_token``.
+
+    Linear rotates the refresh token on every refresh — the response
+    carries both a new ``access_token`` and a new ``refresh_token``
+    that supersedes the one we sent. The caller is responsible for
+    persisting the new pair before the next call (otherwise the next
+    refresh sees a stale refresh token and 4xxs).
+
+    Failures (revoked grant, network 5xx, 4xx with the refresh token
+    Linear no longer recognizes) raise :class:`LinearTokenExchangeFailed`
+    so the caller can decide whether to mark the integration broken
+    or surface a re-auth prompt.
+    """
+    client_id, client_secret = _require_credentials(settings)
+    payload = {
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "client_id": client_id,
+        "client_secret": client_secret,
+    }
+    owns_client = client is None
+    http = client or httpx.AsyncClient(timeout=httpx.Timeout(10.0))
+    try:
+        response = await http.post(
+            LINEAR_TOKEN_URL,
+            data=payload,
+            headers={"Accept": "application/json"},
+        )
+    finally:
+        if owns_client:
+            await http.aclose()
+    if response.status_code >= 400:
+        raise LinearTokenExchangeFailed(
+            f"Linear refresh endpoint returned HTTP {response.status_code}: "
+            f"{response.text[:200]}"
+        )
+    body = response.json()
+    access_token = body.get("access_token")
+    if not access_token:
+        raise LinearTokenExchangeFailed(
+            "Linear refresh endpoint returned no access_token"
+        )
+    refresh_raw = body.get("refresh_token")
+    return LinearTokenBundle(
+        access_token=str(access_token),
+        token_type=str(body.get("token_type", "Bearer")),
+        scope=str(body.get("scope", settings.linear_oauth_scopes)),
+        expires_in=int(body["expires_in"]) if body.get("expires_in") else None,
+        # Some OAuth providers omit refresh_token on rotation if the
+        # original one is still valid; fall back to the value the
+        # caller supplied so the credential row never empties out.
+        refresh_token=str(refresh_raw) if refresh_raw else refresh_token,
     )
 
 
@@ -197,5 +272,6 @@ __all__ = [
     "build_authorize_url",
     "build_oauth_state",
     "exchange_code_for_token",
+    "refresh_access_token",
     "verify_oauth_state",
 ]
