@@ -46,7 +46,7 @@ import hashlib
 import logging
 import struct
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -90,6 +90,33 @@ logger = logging.getLogger(__name__)
 # in a Drafts project by definition and ``planning_done`` is what
 # graduates Drafts → Parked.
 _PLANNING_ANCHOR_LABEL: str = "planning:anchor"
+
+# Auto-filed-ticket escape hatch. When reviewer-shaped routines
+# (qa-reviewer, security-reviewer, retro, learning-capture, …) open
+# coverage-gap tickets, they tag them ``needs:intake`` so the next
+# ``task_intake`` tick takes them regardless of the parent project's
+# priority state. Without this label they'd sit in Drafts/Parked
+# projects forever and just generate ``priority_skipped`` audit noise
+# every cron tick — observed today as 9 ticks × 6 tickets = 54 skips
+# from one reviewer pass. The label is dropped at the first
+# task_intake transition so the ticket inherits its parent project's
+# normal priority gate from then on.
+_NEEDS_INTAKE_LABEL: str = "needs:intake"
+
+# Audit-dedup window — a workspace's tracker is degraded when its
+# adapter starts erroring; subsequent stage picks within the window
+# all see the same failure mode and re-emitting one audit row per
+# stage (× ~13 stages × hourly cron) drowns the operator inbox. We
+# emit one audit row + one blocker letter per outage and short-
+# circuit the rest until the window elapses or the next call
+# succeeds.
+_TRACKER_FAILURE_DEDUP_WINDOW = timedelta(hours=1)
+# priority_skipped dedup window — same project priority state will
+# refuse a given ticket every tick. Keep one audit breadcrumb per
+# (ticket, hour); operator-facing breadcrumb is unchanged but the
+# audit volume drops by ~9× on workspaces with active reviewer
+# pipelines.
+_PRIORITY_SKIPPED_DEDUP_WINDOW = timedelta(hours=1)
 
 
 # ---------------------------------------------------------------------------
@@ -452,23 +479,69 @@ async def get_next_task(
             state,
             exc,
         )
+        # Outage dedup: when the tracker adapter starts erroring the
+        # next ~13 stage picks in the same hour will all hit the same
+        # error mode. Emit one ``tracker_next_failed`` audit row +
+        # one operator inbox letter on the first detection, short-
+        # circuit to None on every subsequent stage pick within the
+        # window. Keeps the audit log readable and prevents the inbox
+        # from drowning the *one* signal the operator actually needs.
         try:
-            session.add(
-                AuditLog(
-                    workspace_id=workspace_id,
-                    actor_user_id=auth.user.id,
-                    actor_token_id=auth.token.id if auth.token else None,
-                    action="agent_run.tracker_next_failed",
-                    target_kind="fsm_stage",
-                    target_id=state,
-                    payload={
-                        "tracker_kind": resolved.kind,
-                        "fsm_stage": state,
-                        "error": str(exc)[:500],
-                    },
-                )
+            already_logged = await _recent_audit_exists(
+                session,
+                workspace_id=workspace_id,
+                action="agent_run.tracker_next_failed",
+                window=_TRACKER_FAILURE_DEDUP_WINDOW,
             )
-            await session.flush()
+            if not already_logged:
+                session.add(
+                    AuditLog(
+                        workspace_id=workspace_id,
+                        actor_user_id=auth.user.id,
+                        actor_token_id=auth.token.id if auth.token else None,
+                        action="agent_run.tracker_next_failed",
+                        target_kind="fsm_stage",
+                        target_id=state,
+                        payload={
+                            "tracker_kind": resolved.kind,
+                            "fsm_stage": state,
+                            "error": str(exc)[:500],
+                        },
+                    )
+                )
+                # First detection in this window → drop one blocker
+                # row in the operator inbox. The audit-row dedup
+                # gates this same-window check, so we don't re-issue
+                # blocker letters either.
+                session.add(
+                    InboxItem(
+                        workspace_id=workspace_id,
+                        repo_id=None,
+                        type="blocker",
+                        title=(
+                            f"Tracker {resolved.kind} unreachable — "
+                            f"agents stalled"
+                        )[:300],
+                        summary=(
+                            "The bound tracker adapter is rejecting calls "
+                            "(likely an OAuth token expiry / revocation). "
+                            "Re-authorize the workspace integration to "
+                            "restore agent picks. Subsequent stage picks "
+                            "in this hour are short-circuited to keep the "
+                            "audit log readable.\n\n"
+                            f"First error: {str(exc)[:400]}"
+                        )[:2000],
+                        payload={
+                            "tracker_kind": resolved.kind,
+                            "fsm_stage": state,
+                            "error": str(exc)[:500],
+                        },
+                        status="new",
+                        intake_handle=None,
+                        intake_reason="tracker_outage",
+                    )
+                )
+                await session.flush()
         except Exception as audit_exc:  # noqa: BLE001 — audit failure must not sink the response
             logger.warning(
                 "tracker/next: audit write failed ws=%s err=%s",
@@ -505,15 +578,26 @@ async def get_next_task(
         if matched_overlays:
             skipped_overlay.append((row, matched_overlays))
             continue
-        # Planning-anchor exempt: anchors live in Drafts projects
-        # (``state='planning'``) by construction. The decomposition
-        # FSM (wbs / architecture / qa_plan / planning_done) is what
-        # *moves* a project out of Drafts (``planning_done`` flips
-        # it to Parked); gating those routines on
-        # ``priority_state='active'`` would deadlock the funnel.
-        # Auto-onboard + the priority gate below still apply to
+        # Priority-gate exemptions:
+        # 1. *Planning anchors* — anchors live in Drafts projects
+        #    (``state='planning'``) by construction. Decomposition
+        #    routines (wbs / architecture / qa_plan / planning_done)
+        #    moving the chain forward is what *graduates* the project
+        #    out of Drafts. Gating those on ``priority_state='active'``
+        #    would deadlock the funnel.
+        # 2. *needs:intake escape hatch* — reviewer-shaped routines
+        #    (qa-reviewer / security-reviewer / retro / learning-
+        #    capture) auto-file coverage tickets that need to enter
+        #    the SDLC chain via ``task_intake`` regardless of where
+        #    their parent project sits. Without this label they'd
+        #    rot in the project's priority bucket and emit
+        #    ``priority_skipped`` audit noise every cron tick.
+        # The auto-onboard + the priority gate below still apply to
         # regular tickets.
-        is_anchor = _is_planning_anchor(row.get("labels") or [])
+        labels = row.get("labels") or []
+        is_anchor = _is_planning_anchor(labels)
+        needs_intake = _has_intake_label(labels)
+        priority_exempt = is_anchor or needs_intake
         # ELS-80: WorkspaceProjectPriority gate — only ``active``
         # projects feed the picker.
         # ELS-92: when a ticket has a ``project_id`` but no priorities
@@ -528,7 +612,7 @@ async def get_next_task(
         # ``_tool_create_project`` writes the row explicitly with
         # ``state='planning'``, so this auto-onboard never overrides
         # an in-progress draft.
-        if project_id is not None and not is_anchor:
+        if project_id is not None and not priority_exempt:
             priority_state = await _project_priority_state(
                 session, workspace_id=workspace_id, project_id=str(project_id)
             )
@@ -661,6 +745,56 @@ def _collect_project_sections(payload: "FinishIn") -> list["ProjectSectionPatch"
         except Exception:  # noqa: BLE001 — drop malformed silently
             continue
     return out
+
+
+async def _recent_audit_exists(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    action: str,
+    target_kind: str | None = None,
+    target_id: str | None = None,
+    window: timedelta,
+) -> bool:
+    """True iff any ``audit_log`` row matching the (workspace, action,
+    target) filter was written within ``window``.
+
+    Used by the picker's outage / priority-skip dedup paths so the
+    first event in an outage records the breadcrumb and the subsequent
+    cron-tick fan-out short-circuits without re-emitting. The query
+    hits the ``(workspace_id, action, created_at)`` covering index so
+    cost is bounded even on workspaces with bulky audit history.
+    """
+    cutoff = datetime.now(timezone.utc) - window
+    stmt = select(AuditLog.id).where(
+        AuditLog.workspace_id == workspace_id,
+        AuditLog.action == action,
+        AuditLog.created_at >= cutoff,
+    )
+    if target_kind is not None:
+        stmt = stmt.where(AuditLog.target_kind == target_kind)
+    if target_id is not None:
+        stmt = stmt.where(AuditLog.target_id == target_id)
+    return (await session.execute(stmt.limit(1))).first() is not None
+
+
+def _has_intake_label(labels: list[Any]) -> bool:
+    """True iff ``labels`` carries the auto-intake escape-hatch label.
+
+    Reviewer-shaped routines (qa-reviewer, security-reviewer, retro,
+    learning-capture) tag freshly opened tickets with ``needs:intake``
+    so ``task_intake`` claims them next tick regardless of the parent
+    project's priority state — otherwise auto-filed coverage tickets
+    sit in Drafts/Parked projects and just generate ``priority_skipped``
+    audit noise. Match is exact + case-sensitive: the literal
+    namespaced label is the contract; arbitrary near-misses
+    (``needs-intake``, ``intake``) shouldn't accidentally bypass the
+    priority gate.
+    """
+    return any(
+        isinstance(lbl, str) and lbl == _NEEDS_INTAKE_LABEL
+        for lbl in labels
+    )
 
 
 def _is_planning_anchor(labels: list[Any]) -> bool:
@@ -859,10 +993,27 @@ async def _record_priority_skips(
     operator holds, and a one-row-per-pick inbox would flood when a
     workspace has dozens of held projects. The audit log keeps the
     why-was-this-skipped breadcrumb so debugging is still tractable.
+
+    Per-ticket dedup: the same ticket in the same priority bucket
+    will fail the gate every cron tick × every routine (~9 ticks ×
+    13 stages = >100 audit rows for a single held ticket per day).
+    Drop the audit row when an identical (workspace, ticket) skip
+    landed within :data:`_PRIORITY_SKIPPED_DEDUP_WINDOW`; first skip
+    of the hour still records so the breadcrumb is fresh.
     """
     for row, priority_state in skipped:
         ticket_ref = str(row.get("id") or "")
         if not ticket_ref:
+            continue
+        already_logged = await _recent_audit_exists(
+            session,
+            workspace_id=workspace_id,
+            action="agent_run.priority_skipped",
+            target_kind="ticket",
+            target_id=ticket_ref,
+            window=_PRIORITY_SKIPPED_DEDUP_WINDOW,
+        )
+        if already_logged:
             continue
         session.add(
             AuditLog(
@@ -1925,11 +2076,24 @@ async def post_create_ticket(
             status_code=422,
             detail="tracker does not support ticket creation",
         )
+    # Reviewer-shaped routines (qa-reviewer, security-reviewer, retro,
+    # learning-capture) tag freshly opened coverage tickets with
+    # ``audit:auto`` to mark them as agent-authored. Server side adds
+    # ``needs:intake`` to the label set so ``task_intake`` claims them
+    # next tick regardless of the parent project's priority bucket —
+    # without this, auto-filed tickets sit in Drafts/Parked projects
+    # and emit ``priority_skipped`` audit noise on every cron tick.
+    # The label is dropped at the first ``task_intake`` transition so
+    # the ticket inherits its parent project's normal priority gate
+    # from then on.
+    augmented_labels = list(payload.labels or [])
+    if "audit:auto" in augmented_labels and "needs:intake" not in augmented_labels:
+        augmented_labels.append("needs:intake")
     try:
         created = await create_fn(
             title=payload.title,
             body=payload.body,
-            labels=payload.labels or None,
+            labels=augmented_labels or None,
             project_id=payload.project_id,
             priority=payload.priority,
         )
