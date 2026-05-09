@@ -371,6 +371,18 @@ class Settings(BaseSettings):
         default="read,write,issues:create,comments:create",
         alias="LINEAR_OAUTH_SCOPES",
     )
+    # How often the ``linear_token_refresh_tick`` cron rotates each
+    # workspace's access+refresh pair via Linear's
+    # ``grant_type=refresh_token`` flow. Default 6h is well below
+    # Linear's documented expiry floor for ``actor=user`` apps and
+    # leaves four refresh attempts per day if Linear ever rotates
+    # mid-cadence.
+    linear_token_refresh_hours: int = Field(
+        default=6,
+        ge=1,
+        le=72,
+        alias="LINEAR_TOKEN_REFRESH_HOURS",
+    )
 
     # --- Notion OAuth (pilot Day 2 — tracker WOW flow) ---
     # Public Notion integration credentials from

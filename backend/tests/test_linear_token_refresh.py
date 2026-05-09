@@ -1,8 +1,9 @@
-"""Linear OAuth token refresh — pre-emptive expiry swap + parsing.
+"""Linear OAuth token refresh — cadence math + bundle parsing.
 
-Schema-level tests only — the integration-shaped DB persistence is
-exercised in the existing OAuth callback test (test_v1_linear_oauth) and
-the live refresh path is covered by the smoke runbook.
+Schema-level coverage only. The DB-persistence + Linear API roundtrip
+paths are exercised by the existing OAuth callback test
+(test_v1_linear_oauth) and the live ``linear_token_refresh_tick`` cron
+in production.
 """
 
 from __future__ import annotations
@@ -13,55 +14,47 @@ from backend.app.integrations.linear.oauth import LinearTokenBundle
 from backend.app.services.linear_token_refresh import _is_due_for_refresh
 
 
-def test_no_expiry_means_not_due() -> None:
-    """Tokens without an expiry recorded (PATs, legacy installs) should
-    never auto-refresh — those are operator-managed."""
-    assert _is_due_for_refresh(None, now=datetime.now(timezone.utc)) is False
+def test_null_last_rotated_is_due() -> None:
+    """A just-installed credential (never rotated) starts the cycle on
+    the next tick. Treated as eligible so a brand-new install isn't
+    silently skipped because ``last_rotated_at`` was NULL."""
+    assert _is_due_for_refresh(None, now=datetime.now(timezone.utc)) is True
 
 
-def test_far_future_expiry_is_not_due() -> None:
-    """A token expiring in days has plenty of life — leave alone."""
-    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    later = now + timedelta(days=3)
-    assert _is_due_for_refresh(later, now=now) is False
+def test_recently_rotated_is_not_due() -> None:
+    """A token rotated 5 minutes ago is far from the 6h threshold —
+    leave it alone."""
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    fresh = now - timedelta(minutes=5)
+    assert _is_due_for_refresh(fresh, now=now) is False
 
 
-def test_inside_lead_time_is_due() -> None:
-    """Default 5min lead — anything inside it should refresh now."""
-    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    soon = now + timedelta(minutes=2)
-    assert _is_due_for_refresh(soon, now=now) is True
+def test_past_threshold_is_due() -> None:
+    """Default 6h max age — anything rotated longer ago refreshes."""
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    stale = now - timedelta(hours=7)
+    assert _is_due_for_refresh(stale, now=now) is True
 
 
-def test_at_lead_time_boundary_is_due() -> None:
-    """Boundary inclusive — exactly 5min away triggers refresh.
-
-    Avoids a hypothetical race where the token expires between
-    "still safe" and "make the call" window.
-    """
-    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    edge = now + timedelta(minutes=5)
+def test_at_threshold_is_due() -> None:
+    """Boundary inclusive — exactly 6h since last rotation triggers
+    refresh; avoids a tick-aligned race where the next tick lands a
+    second after the boundary and we'd skip another whole period."""
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    edge = now - timedelta(hours=6)
     assert _is_due_for_refresh(edge, now=now) is True
 
 
-def test_already_expired_is_due() -> None:
-    """A token that's already past expiry refreshes — refresh_token
-    is the only material we have, the access is dead."""
-    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    past = now - timedelta(minutes=1)
-    assert _is_due_for_refresh(past, now=now) is True
-
-
-def test_custom_lead_time_overrides_default() -> None:
-    """Tighter lead time (e.g., for an integration test) is honored."""
-    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    soon = now + timedelta(seconds=30)
+def test_custom_max_age_overrides_default() -> None:
+    """Tighter cadence (e.g., for an integration test) is honored."""
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    forty_min = now - timedelta(minutes=40)
     assert (
-        _is_due_for_refresh(soon, now=now, lead_time=timedelta(seconds=10))
+        _is_due_for_refresh(forty_min, now=now, max_age=timedelta(hours=1))
         is False
     )
     assert (
-        _is_due_for_refresh(soon, now=now, lead_time=timedelta(minutes=1))
+        _is_due_for_refresh(forty_min, now=now, max_age=timedelta(minutes=30))
         is True
     )
 
@@ -80,8 +73,8 @@ def test_token_bundle_carries_refresh_token() -> None:
 
 def test_token_bundle_refresh_token_optional_for_legacy() -> None:
     """An OAuth install whose Linear app config doesn't issue refresh
-    tokens still parses cleanly — the refresh service just degrades to
-    "stale-token + log" instead of crashing."""
+    tokens still parses cleanly — the cron sweep skips that install
+    instead of crashing."""
     bundle = LinearTokenBundle(
         access_token="lin_oauth_a",
         token_type="Bearer",

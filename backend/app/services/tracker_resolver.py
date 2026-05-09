@@ -262,32 +262,16 @@ async def _resolve_native_linear(
     if not token:
         return None
 
-    # Pre-emptive refresh: if Linear's expiry on the access credential
-    # is within the safety lead time, swap the pair before handing the
-    # tracker out to the caller. Best-effort — a refresh failure (no
-    # refresh token, Linear declined) returns the existing token and
-    # logs/audits the issue so the dashboard can surface a re-auth
-    # banner. ``settings`` is threaded through from the caller; older
-    # call sites that haven't been updated skip this branch and behave
-    # as before (terminal expiry surfaces as a 401 → operator re-auth).
-    if settings is not None:
-        try:
-            from backend.app.services.linear_token_refresh import (
-                ensure_fresh_linear_access_token,
-            )
-            refreshed = await ensure_fresh_linear_access_token(
-                session,
-                workspace_id=workspace_id,
-                settings=settings,
-            )
-            if refreshed:
-                token = refreshed
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "linear refresh: ensure_fresh failed workspace=%s err=%s",
-                workspace_id,
-                exc,
-            )
+    # Token freshness is owned by the scheduled
+    # ``linear_token_refresh_tick`` cron (every
+    # ``LINEAR_TOKEN_REFRESH_HOURS`` hours), not by this hot path.
+    # Resolving in-line per-request would add a second-long Linear
+    # round-trip to the picker; doing it on a fixed cadence keeps a
+    # rolling-fresh access token in the credential row regardless of
+    # how often the workspace is hit. ``settings`` stays in the
+    # signature for any future inline knobs but is intentionally
+    # unused here.
+    del settings
 
     # ``linear_oauth.py`` writes the FSM-provisioned config (team_id /
     # team_key / state_id_by_name / label_id_by_stage / signal_label_ids)

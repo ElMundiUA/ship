@@ -481,6 +481,43 @@ async def _knowledge_decay_tick() -> None:
         )
 
 
+@cron_with_lock(
+    lock=CronLockId.LINEAR_TOKEN_REFRESH, name="linear_token_refresh"
+)
+async def _linear_token_refresh_tick() -> None:
+    """Rotate every READY Linear install's access+refresh pair.
+
+    Cadence-based: a credential whose ``last_rotated_at`` is older
+    than ``LINEAR_TOKEN_REFRESH_HOURS`` (default 6h) gets swapped via
+    Linear's ``grant_type=refresh_token`` flow. Operator's "connect
+    Linear once" stays durable — the cron keeps a rolling-fresh access
+    token in the credential row regardless of when the workspace is
+    next hit by an agent run.
+    """
+    from backend.app.core.config import get_settings
+    from backend.app.services.linear_token_refresh import (
+        refresh_all_due_linear_tokens,
+    )
+
+    settings = get_settings()
+    sm = get_sessionmaker()
+    async with sm() as session:
+        try:
+            counts = await refresh_all_due_linear_tokens(
+                session, settings=settings
+            )
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+
+    if counts.get("rotated") or counts.get("refresh_failed"):
+        log.info(
+            "linear_token_refresh tick: %s",
+            ", ".join(f"{k}={v}" for k, v in counts.items()),
+        )
+
+
 def register_all() -> None:
     """Wire every cron defined in this module into the scheduler.
 
@@ -560,6 +597,17 @@ def register_all() -> None:
         fn=_knowledge_claim_decay_tick,
         cron_expr="30 3 * * *",  # daily at 03:30 UTC
         job_id="knowledge_claim_decay",
+    )
+    # Linear token rotation runs every hour at :05; the per-install
+    # check inside ``refresh_all_due_linear_tokens`` looks at
+    # ``last_rotated_at`` against ``LINEAR_TOKEN_REFRESH_HOURS`` (default
+    # 6h) so most ticks are fast no-ops and only every Nth tick actually
+    # touches Linear. Cron expression at :05 keeps it out of the
+    # knowledge-pipeline pile-ups around :15-:45.
+    register_cron(
+        fn=_linear_token_refresh_tick,
+        cron_expr="5 * * * *",  # hourly at :05 (gated by per-install age)
+        job_id="linear_token_refresh",
     )
 
 
