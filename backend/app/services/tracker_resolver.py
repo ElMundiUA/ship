@@ -97,14 +97,21 @@ async def resolve_for_workspace(
     installations produced before that migration land here. New
     bindings ride exclusively on the native installation row.
     """
-    del settings  # No vendor-specific knobs needed here yet.
     from backend.app.security.encryption import decrypt
 
     legacy_row = await _load_legacy_linear_row(session, workspace_id)
     legacy_config = (legacy_row.config or {}) if legacy_row else {}
 
+    # ``settings`` is threaded into the native Linear path so the
+    # token-refresh service has access to LINEAR_CLIENT_ID /
+    # LINEAR_CLIENT_SECRET when it has to call Linear's token
+    # endpoint mid-resolve. Other adapters ignore it.
     native = await _resolve_native_linear(
-        session, workspace_id, decrypt, legacy_config=legacy_config
+        session,
+        workspace_id,
+        decrypt,
+        legacy_config=legacy_config,
+        settings=settings,
     )
     if native is not None:
         return native
@@ -213,6 +220,7 @@ async def _resolve_native_linear(
     decrypt,
     *,
     legacy_config: dict | None = None,
+    settings=None,
 ) -> ResolvedTracker | None:
     install = (
         await session.execute(
@@ -253,6 +261,33 @@ async def _resolve_native_linear(
         return None
     if not token:
         return None
+
+    # Pre-emptive refresh: if Linear's expiry on the access credential
+    # is within the safety lead time, swap the pair before handing the
+    # tracker out to the caller. Best-effort — a refresh failure (no
+    # refresh token, Linear declined) returns the existing token and
+    # logs/audits the issue so the dashboard can surface a re-auth
+    # banner. ``settings`` is threaded through from the caller; older
+    # call sites that haven't been updated skip this branch and behave
+    # as before (terminal expiry surfaces as a 401 → operator re-auth).
+    if settings is not None:
+        try:
+            from backend.app.services.linear_token_refresh import (
+                ensure_fresh_linear_access_token,
+            )
+            refreshed = await ensure_fresh_linear_access_token(
+                session,
+                workspace_id=workspace_id,
+                settings=settings,
+            )
+            if refreshed:
+                token = refreshed
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "linear refresh: ensure_fresh failed workspace=%s err=%s",
+                workspace_id,
+                exc,
+            )
 
     # ``linear_oauth.py`` writes the FSM-provisioned config (team_id /
     # team_key / state_id_by_name / label_id_by_stage / signal_label_ids)

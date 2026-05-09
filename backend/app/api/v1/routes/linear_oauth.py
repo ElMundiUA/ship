@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 import hashlib
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -368,6 +368,58 @@ async def linear_install_callback(
     credential.last_rotated_at = datetime.now(timezone.utc)
     credential.revoked_at = None
     credential.updated_at = datetime.now(timezone.utc)
+    # ELS: persist Linear's TTL on the credential so the refresh
+    # service can pre-emptively swap before the token actually
+    # expires. ``expires_in`` is seconds-until-expiry from Linear; we
+    # store the absolute deadline so reads don't have to track the
+    # minting moment separately.
+    if token.expires_in:
+        credential.expires_at = datetime.now(timezone.utc) + timedelta(
+            seconds=token.expires_in
+        )
+    else:
+        # Tokens without an expiry signal (e.g., long-lived app-actor
+        # tokens, or operator-pasted PATs) leave ``expires_at`` NULL —
+        # the refresh service treats NULL as "do not pre-emptively
+        # refresh", consistent with PAT semantics.
+        credential.expires_at = None
+
+    # Refresh-token credential row: separate ``kind`` so the
+    # refresh service can fetch it without confusing it with the
+    # access token. Linear rotates the refresh token on every refresh,
+    # so this row is overwritten on each successful refresh too. When
+    # Linear declines to issue a refresh token (e.g., older OAuth app
+    # config), we revoke any pre-existing refresh credential so the
+    # row never points at a stale value.
+    refresh_credential = (
+        await session.execute(
+            select(NativeIntegrationCredential).where(
+                NativeIntegrationCredential.installation_id == native.id,
+                NativeIntegrationCredential.kind == "refresh_token",
+            )
+        )
+    ).scalar_one_or_none()
+    if token.refresh_token:
+        if refresh_credential is None:
+            refresh_credential = NativeIntegrationCredential(
+                installation_id=native.id,
+                kind="refresh_token",
+                secret_ciphertext=encrypt(token.refresh_token),
+            )
+            session.add(refresh_credential)
+        else:
+            refresh_credential.secret_ciphertext = encrypt(token.refresh_token)
+        refresh_credential.secret_fingerprint = hashlib.sha256(
+            token.refresh_token.encode("utf-8")
+        ).hexdigest()
+        refresh_credential.scopes = scopes
+        refresh_credential.last_rotated_at = datetime.now(timezone.utc)
+        refresh_credential.revoked_at = None
+        refresh_credential.expires_at = None  # refresh tokens themselves don't expire on Linear
+        refresh_credential.updated_at = datetime.now(timezone.utc)
+    elif refresh_credential is not None and refresh_credential.revoked_at is None:
+        refresh_credential.revoked_at = datetime.now(timezone.utc)
+        refresh_credential.updated_at = datetime.now(timezone.utc)
 
     session.add(
         AuditLog(
