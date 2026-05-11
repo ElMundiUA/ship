@@ -49,11 +49,23 @@ logger = logging.getLogger(__name__)
 SHIP_FSM_STAGES: tuple[str, ...] = (
     # Per-ticket SDLC (the "development" process)
     "task_intake",
+    # Parallel intake — operator labels a ticket ``stage:bug_triage``
+    # to route through bug intake. Without a provisioned label, the
+    # Linear adapter's ``_fsm_filter`` silently drops its own-stage
+    # exclusion clause; the bug_triage picker then matches every Todo
+    # ticket regardless and the routine loops on the same ticket
+    # forever. Mint the label up front so the filter is exact.
+    "bug_triage",
     "ba_requirements",
     "tech_arch_plan",
     "qa_arch_plan",
     "dev_implementation",
     "qa_manual",
+    # Parallel quality lane to qa_manual — same loop hazard if the
+    # label isn't provisioned; pickers for both fan in on the same
+    # In Progress state so the missing-own-label fallback would mis-
+    # route every ticket post-dev_implementation.
+    "qa_automation",
     "pr_review",
     "self_heal",
     # Per-project decomposition (the "decomposition" process — runs on
@@ -121,11 +133,22 @@ def previous_stage(stage: str) -> str | None:
 # the label carrying the SDLC stage.
 FSM_TO_LINEAR_STATE: dict[str, str] = {
     "task_intake": "Todo",
+    # Parallel intake to task_intake — same Linear state (Todo), the
+    # bug_triage label distinguishes them. Operator labels a ticket
+    # ``stage:bug_triage`` manually to route through bug intake;
+    # without this entry the picker for bug_triage has nowhere to
+    # match and the filter degrades to "any Todo ticket".
+    "bug_triage": "Todo",
     "ba_requirements": "Todo",
     "tech_arch_plan": "Todo",
     "qa_arch_plan": "Todo",
     "dev_implementation": "In Progress",
     "qa_manual": "In Progress",
+    # Parallel quality lane to qa_manual — both pick from In Progress;
+    # the stage label is the only thing that distinguishes the two
+    # routines, so the label MUST be provisioned for the filter to
+    # work.
+    "qa_automation": "In Progress",
     # Review is human-only — agents transition INTO it but never pick
     # FROM it.
     "pr_review": "Review",

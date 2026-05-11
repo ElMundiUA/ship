@@ -470,17 +470,52 @@ class LinearTracker:
 
         parts: list[dict[str, Any]] = []
         target_state_name = self._fsm_to_linear_state.get(stage)
-        if target_state_name and target_state_name in self._state_id_by_name:
-            parts.append(
-                {"state": {"id": {"eq": self._state_id_by_name[target_state_name]}}}
-            )
+        if not target_state_name or target_state_name not in self._state_id_by_name:
+            # Stage not bound to a Linear workflow state — runs out-of-
+            # band (``self_heal`` etc). The caller falls back to a
+            # coarse ``state="open"`` filter for these; return an
+            # empty parts list so we don't accidentally start filtering.
+            return parts
+        parts.append(
+            {"state": {"id": {"eq": self._state_id_by_name[target_state_name]}}}
+        )
 
         # "this role hasn't finished yet" — never re-pick. ``every``
         # matches the empty label collection too, so unlabeled
         # Linear-native tickets at the entry stage still come through.
+        #
+        # Fail-safe: when the workspace's ``label_id_by_stage`` map
+        # doesn't carry an id for this stage (provisioner predates the
+        # stage, FSM extended without re-provisioning, manually
+        # patched integration row, …) the previous behavior silently
+        # dropped this clause and the picker matched *every* ticket in
+        # the target state. Observed in production as one routine
+        # looping on the same ticket every 30 min: the post-finish
+        # transition tries to add the same ``stage:<X>`` breadcrumb,
+        # ``label_id_by_stage.get`` returns ``None``, the mutation
+        # adds no label, the next picker tick sees the same ticket as
+        # eligible — agent re-runs, tokens burn. Surface the gap by
+        # returning a sentinel filter that matches nothing — the cron
+        # tick noops cleanly, the operator sees the missing-provision
+        # gap via the warning log instead of a token bill.
         own_label = self._label_id_by_stage.get(stage)
         if own_label:
             parts.append({"labels": {"every": {"id": {"neq": own_label}}}})
+        else:
+            logger.warning(
+                "linear adapter: stage=%s has no label_id provisioned for "
+                "team=%s; refusing to pick (operator should re-run the "
+                "Linear FSM provisioner)",
+                stage,
+                self._team_id,
+            )
+            # ``some: {id: {eq: <impossible>}}`` matches nothing for any
+            # ticket including unlabeled ones (vacuously false on
+            # empty), so the picker returns zero rows for this stage on
+            # this workspace until provisioning is repaired.
+            parts.append(
+                {"labels": {"some": {"id": {"eq": "00000000-0000-0000-0000-000000000000"}}}}
+            )
 
         # "previous role is done" — for non-entry stages.
         prev = previous_stage(stage)
