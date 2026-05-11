@@ -108,7 +108,18 @@ def test_keeps_subsections_inside_a_canonical_block() -> None:
     assert "What about caching?" in out
 
 
-def test_returns_none_when_no_canonical_sections() -> None:
+def test_free_form_body_falls_back_to_project_description() -> None:
+    """A project whose Linear ``description`` is free-form prose (no
+    canonical ``## Brief`` / ``## WBS`` / etc.) must still reach the
+    agent. The fallback wraps the entire body under a synthetic
+    ``## Project description`` heading so the role prompt's
+    ``## Project context`` block has something to read.
+
+    Reproduction: QA Debt's Linear project carried a 174-char free-form
+    description (\"Holding pen for test-coverage gaps...\"). Pre-fix,
+    ``_extract_project_sections`` returned ``None`` and the agent saw
+    an empty project-context block; the operator complained about
+    missing context."""
     body = """\
 # Project Foo
 
@@ -120,7 +131,14 @@ Body.
 
 More body.
 """
-    assert _extract_project_sections(body) is None
+    out = _extract_project_sections(body)
+    assert out is not None
+    assert out.startswith("## Project description"), (
+        "fallback must wrap free-form bodies under a synthetic "
+        "``## Project description`` heading"
+    )
+    assert "Random heading" in out
+    assert "More body." in out
 
 
 def test_returns_none_for_empty_input() -> None:

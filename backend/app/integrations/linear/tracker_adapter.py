@@ -35,6 +35,32 @@ from backend.app.integrations.gateway.tracker import (
 LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql"
 
 
+def _identifier_sort_key(row: dict[str, Any]) -> tuple[int, str, int, str]:
+    """Sort key for ``list_tickets`` rows by team + numeric suffix.
+
+    ``ELS-11`` → ``(0, "ELS", 11, "ELS-11")``; ``ELS-12`` ranks after.
+    ``ELS-101`` correctly ranks after ``ELS-99`` because the middle
+    element is parsed as an int.
+
+    The leading rank slot pushes garbage rows (missing / non-string
+    id) to the end of the list so real tickets are served first; a
+    None id would otherwise sort to position zero and starve the
+    queue. Within the "garbage" bucket order is left to the natural
+    tuple comparison so it remains deterministic.
+    """
+    ident = row.get("id")
+    if not isinstance(ident, str) or not ident:
+        return (1, "", 0, "")
+    if "-" not in ident:
+        return (0, ident, 0, ident)
+    team, suffix = ident.rsplit("-", 1)
+    try:
+        num = int(suffix)
+    except ValueError:
+        return (0, team, 0, ident)
+    return (0, team, num, ident)
+
+
 class LinearTracker:
     """Per-token adapter implementing :class:`TrackerGateway`.
 
@@ -128,9 +154,28 @@ class LinearTracker:
         query: str | None = None,
         assignee: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Most-recently-updated issues for the authorised workspace."""
+        """Most-recently-updated batch, returned sorted by identifier.
+
+        We ask Linear for the most-recently-updated slice (Linear's
+        ``orderBy`` is descending-only on the indexed fields it
+        supports) and then sort the returned rows by identifier
+        ascending — ``ELS-11`` ahead of ``ELS-12`` ahead of
+        ``ELS-101`` etc. The picker walks the result in order and
+        stops at the first eligible ticket; FIFO-by-identifier gives
+        a deterministic "older filings get worked first" feel that
+        matches operator intuition (and the way Linear's own UI
+        renders Backlog).
+
+        We deliberately fetch up to ~5× the caller's ``limit`` (capped
+        at 50) before sorting: picking the lowest identifier among the
+        10 most-recently-updated tickets is not the same as picking
+        the lowest identifier from the eligible queue, and over-fetch
+        keeps the sort meaningful when the most-recent slice is
+        skewed toward a busy ticket.
+        """
         del assignee  # Linear assignee-by-login not supported in pilot
-        first = max(1, min(limit, 50))
+        fetch_size = min(max(limit * 5, 20), 50)
+        first = max(1, fetch_size)
         issue_filter: dict[str, Any] | None = None
         parts: list[dict[str, Any]] = []
 
@@ -258,7 +303,14 @@ class LinearTracker:
                     "labels": labels,
                 }
             )
-        return out
+        # Sort by identifier ascending (FIFO by Linear filing order)
+        # then truncate to the caller's requested ``limit``. The
+        # over-fetch above ensures we're sorting from a candidate
+        # pool larger than ``limit`` so the first eligible row is
+        # truly the lowest-numbered one and not just the lowest-
+        # numbered among the freshly touched.
+        out.sort(key=_identifier_sort_key)
+        return out[:limit]
 
     async def list_project_tickets_in_state(
         self,
