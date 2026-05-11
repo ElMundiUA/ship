@@ -338,23 +338,24 @@ _INTAKE_POLICIES: tuple[SeedPolicy, ...] = (
             "pre-release project. Do not touch Backlog tickets — "
             "they aren't yours."
         ),
-        applies_to_roles=("intake", "bug-triage"),
+        applies_to_roles=("intake",),
         sort_order=28,
     ),
     SeedPolicy(
         title="Rewrite the body via `description`, not `comment`",
         body=(
             "When a ticket is shape-ready, rewrite the body via the "
-            "``description`` field on the finish payload. Use the "
-            "section list defined for your role (intake: Problem / "
-            "Goal / Expected / Scope / AC / Non-goals / Risks; "
-            "bug-triage: Summary / Steps / Expected / Actual / "
-            "Environment / Scope / Severity / Suspect / Workaround). "
-            "Use the operator's original wording where it's already "
-            "clear; tighten / restructure where it isn't. Do not "
-            "paste the rewritten spec into the ``comment``."
+            "``description`` field on the finish payload. Pick the "
+            "section list that matches the ticket's classification "
+            "— features / refactor / improvement / infra use Problem "
+            "/ Goal / Expected / Scope / AC / Non-goals / Risks; "
+            "bugs use Summary / Steps / Expected / Actual / "
+            "Environment / Severity / Scope of impact. Use the "
+            "operator's original wording where it's already clear; "
+            "tighten / restructure where it isn't. Do not paste the "
+            "rewritten spec into the ``comment``."
         ),
-        applies_to_roles=("intake", "bug-triage"),
+        applies_to_roles=("intake",),
         sort_order=29,
     ),
     SeedPolicy(
@@ -366,7 +367,7 @@ _INTAKE_POLICIES: tuple[SeedPolicy, ...] = (
             "questions in the ``comment`` — don't push the ticket "
             "forward."
         ),
-        applies_to_roles=("intake", "bug-triage"),
+        applies_to_roles=("intake",),
         sort_order=30,
     ),
 )

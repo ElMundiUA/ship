@@ -257,17 +257,21 @@ def default_development_process_config(
 ) -> dict[str, object]:
     """Return the canonical FSM process seeded into new repo configs.
 
-    Phase 1 introduced nine pipeline specialists (intake, bug-triage,
-    ba, tech-architect, qa-architect, developer, qa-engineer,
+    Phase 1 introduced eight pipeline specialists (intake, ba,
+    tech-architect, qa-architect, developer, qa-engineer,
     qa-automation, reviewer) and Phase 3 added the gates knob; this
     config now matches that canon. ``specialist.id`` carries the
     kebab-case agent-role slug — the same slug the runtime resolver
     accepts at ``/v1/.../agent-roles/{slug}/resolve``.
 
-    Bug-triage is a parallel intake stage for bugs (no transition in
-    from ``task_intake``); it converges on ``ba_requirements`` so the
-    rest of the pipeline doesn't fork. The console process editor
-    surfaces both entry stages in the planning column.
+    Intake handles both feature requests and bug reports — the
+    bug-triage stage was folded into ``task_intake`` after the
+    parallel-entry design produced an infinite loop on every feature
+    ticket (bug-triage agent would correctly refuse to fabricate a
+    bug report, but the routine kept re-picking the same ticket
+    every cron tick). Linear's native issue type is the source of
+    truth for bug-vs-feature; the intake prompt shapes the
+    description accordingly.
     """
     return {
         "id": "development",
@@ -287,19 +291,11 @@ def default_development_process_config(
                 "state": "planning",
                 "specialist": {"id": "intake", "name": "Intake"},
                 "instructions": (
-                    "Shape new feature requests into structured tickets "
-                    "before BA picks them up."
-                ),
-            },
-            {
-                "id": "bug_triage",
-                "name": "Bug triage",
-                "state": "planning",
-                "specialist": {"id": "bug-triage", "name": "Bug triage"},
-                "instructions": (
-                    "Structure bug reports into reproducible tickets "
-                    "(steps, expected, actual, env, severity) before "
-                    "BA writes the fix spec."
+                    "Shape new tickets into a structured form before BA "
+                    "writes the spec. Handles both feature requests and "
+                    "bug reports — for bugs, surface Steps / Expected / "
+                    "Actual / Environment in the description; for "
+                    "features, surface Problem / Goal / Scope / Risks."
                 ),
             },
             {
@@ -378,7 +374,6 @@ def default_development_process_config(
         ],
         "transitions": [
             {"from": "task_intake", "to": "ba_requirements"},
-            {"from": "bug_triage", "to": "ba_requirements"},
             {"from": "ba_requirements", "to": "tech_arch_plan"},
             {"from": "tech_arch_plan", "to": "qa_arch_plan"},
             {"from": "qa_arch_plan", "to": "dev_implementation"},

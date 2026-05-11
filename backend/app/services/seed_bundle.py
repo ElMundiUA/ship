@@ -151,7 +151,14 @@ from backend.app.services.tracker_fsm import (
 #         runs ``shipctl run`` with ``--commit-and-pr``, and exposes
 #         ``routine_id``/``ticket_ref`` workflow_dispatch inputs for
 #         operator-driven debug runs.
-BUNDLE_VERSION: str = "0.28"
+# ``0.29`` → bug_triage stage retired. The parallel-entry routine
+#         produced an infinite loop on feature tickets (agent
+#         correctly refused to fabricate bug-report fields, routine
+#         kept re-picking the same ticket every 30 min, burning
+#         tokens at every tick). Intake now owns both feature and
+#         bug shapes; Linear's native issue type is the source of
+#         truth for bug-vs-feature.
+BUNDLE_VERSION: str = "0.29"
 
 # Default knowledge starters for PR 1. Empty by design: generated knowledge is
 # analyzed post-merge and proposed in a second PR. Historical callers can still

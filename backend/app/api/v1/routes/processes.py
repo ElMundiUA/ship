@@ -172,15 +172,20 @@ _SEEDED_PROCESSES: tuple[dict[str, Any], ...] = (
 )
 
 _PROCESS_STATE_ORDER: tuple[str, ...] = (
-    # Phase 1.5 canon — nine pipeline stages in execution order. The
+    # Phase 1.5 canon — eight pipeline stages in execution order. The
     # dashboard's process projector iterates this tuple to render the
     # canvas; runtime aggregation skips lane keys not present here.
-    # ``bug_triage`` is a parallel intake (transitions converge on
-    # ``ba_requirements``); ``pr_review`` is kept as a legacy alias
-    # below in :data:`_PROCESS_STATE_ALIASES` so pre-v0.20 configs
-    # still project.
+    # ``pr_review`` is kept as a legacy alias below in
+    # :data:`_PROCESS_STATE_ALIASES` so pre-v0.20 configs still
+    # project. ``bug_triage`` was the parallel-intake entry; it
+    # produced an infinite loop on feature tickets (agent correctly
+    # refused to fabricate bug-report fields, then the routine kept
+    # re-picking the same ticket every tick) and the stage was
+    # folded into ``task_intake``. Legacy configs that still
+    # reference ``bug_triage`` route through the alias below so the
+    # canvas doesn't grow stale columns but the runtime aggregator
+    # doesn't drop their audit rows either.
     "task_intake",
-    "bug_triage",
     "ba_requirements",
     "tech_arch_plan",
     "qa_arch_plan",
@@ -192,10 +197,10 @@ _PROCESS_STATE_ORDER: tuple[str, ...] = (
 
 # Legacy stage ids that should still count as process states for
 # pre-v0.20 configs. Kept separate from ``_PROCESS_STATE_ORDER`` so
-# the canvas only renders the canonical nine but the runtime
+# the canvas only renders the canonical eight but the runtime
 # aggregator (``_runtime_by_state``) doesn't drop pipeline runs that
 # referenced the old id.
-_PROCESS_STATE_ALIASES: frozenset[str] = frozenset({"pr_review"})
+_PROCESS_STATE_ALIASES: frozenset[str] = frozenset({"pr_review", "bug_triage"})
 
 _ROUTINE_IDS: frozenset[str] = frozenset(
     {

@@ -47,15 +47,14 @@ logger = logging.getLogger(__name__)
 # when patterns declare them in ``spec.fsm_stage``. Order matters —
 # the adapter uses adjacency to compute "previous stage done" filters.
 SHIP_FSM_STAGES: tuple[str, ...] = (
-    # Per-ticket SDLC (the "development" process)
+    # Per-ticket SDLC (the "development" process). ``task_intake``
+    # is the only entry — the legacy ``bug_triage`` parallel entry
+    # was retired after producing an infinite loop on feature
+    # tickets (the bug agent correctly refused to fabricate bug-
+    # report fields and the routine kept re-picking the same ticket
+    # every cron tick). Bug-vs-feature is now Linear's native issue
+    # type; intake shapes the description accordingly.
     "task_intake",
-    # Parallel intake — operator labels a ticket ``stage:bug_triage``
-    # to route through bug intake. Without a provisioned label, the
-    # Linear adapter's ``_fsm_filter`` silently drops its own-stage
-    # exclusion clause; the bug_triage picker then matches every Todo
-    # ticket regardless and the routine loops on the same ticket
-    # forever. Mint the label up front so the filter is exact.
-    "bug_triage",
     "ba_requirements",
     "tech_arch_plan",
     "qa_arch_plan",
@@ -133,12 +132,6 @@ def previous_stage(stage: str) -> str | None:
 # the label carrying the SDLC stage.
 FSM_TO_LINEAR_STATE: dict[str, str] = {
     "task_intake": "Todo",
-    # Parallel intake to task_intake — same Linear state (Todo), the
-    # bug_triage label distinguishes them. Operator labels a ticket
-    # ``stage:bug_triage`` manually to route through bug intake;
-    # without this entry the picker for bug_triage has nowhere to
-    # match and the filter degrades to "any Todo ticket".
-    "bug_triage": "Todo",
     "ba_requirements": "Todo",
     "tech_arch_plan": "Todo",
     "qa_arch_plan": "Todo",

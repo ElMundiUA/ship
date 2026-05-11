@@ -82,13 +82,14 @@ def test_compose_default_bundle_emits_config_yml() -> None:
     # default — autonomous through the agent reviewer, human only at
     # PR merge. Operators who want earlier interjection edit it.
     assert "gates: after_pr" in config_body
-    # Phase 1.5: nine canonical pipeline stages, kebab-case specialist
+    # Phase 1.5: eight canonical pipeline stages, kebab-case specialist
     # slugs matching the agent-role files. Pinned so a regression in
     # ``default_development_process_config`` doesn't silently drop a
-    # stage from new wizard seeds.
+    # stage from new wizard seeds. The parallel-entry ``bug_triage``
+    # stage was retired after producing an infinite loop on feature
+    # tickets — intake now owns both feature and bug shapes.
     for state_id in (
         "task_intake",
-        "bug_triage",
         "ba_requirements",
         "tech_arch_plan",
         "qa_arch_plan",
@@ -108,11 +109,14 @@ def test_compose_default_bundle_emits_config_yml() -> None:
         "id: qa-engineer\n",
         "id: qa-automation\n",
         "id: reviewer\n",
-        "id: bug-triage\n",
     ):
         assert slug in config_body, (
             f"missing specialist {slug.strip()} in seeded YAML"
         )
+    # Sanity: the retired ``bug-triage`` specialist must not creep back
+    # into freshly seeded YAML — would re-introduce the loop.
+    assert "id: bug-triage\n" not in config_body
+    assert "fsm_stage: bug_triage" not in config_body
 
 
 def test_compose_default_bundle_emits_decomposition_routines() -> None:
@@ -197,7 +201,6 @@ def test_compose_default_bundle_emits_sdlc_routines() -> None:
 
     sdlc_routines = {
         "intake": ("intake", "task_intake"),
-        "bug_triage": ("bug-triage", "bug_triage"),
         "ba_requirements": ("ba", "ba_requirements"),
         "tech_arch_plan": ("tech-architect", "tech_arch_plan"),
         "qa_arch_plan": ("qa-architect", "qa_arch_plan"),

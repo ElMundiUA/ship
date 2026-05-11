@@ -51,8 +51,12 @@ DEFAULT_BUNDLE: tuple[str, ...] = (
     # Pipeline specialists (one ticket at a time, picked by capacity /
     # queue depth). Order mirrors the SDLC flow:
     # intake → BA → tech-arch → qa-arch → dev → QA → autoQA → reviewer.
+    # Intake handles both feature requests and bug reports; the
+    # ``bug-triage`` specialist was retired after the parallel-entry
+    # design produced infinite loops on feature tickets (the bug
+    # agent would correctly refuse to fabricate bug-report fields
+    # and the routine kept re-picking the same ticket every tick).
     "intake",
-    "bug-triage",
     "ba",
     "tech-architect",
     "qa-architect",
@@ -70,8 +74,7 @@ DEFAULT_BUNDLE_REASONS: dict[str, str] = {
     "qa-reviewer": "Sweeps the repo daily for test-coverage gaps; files dedup tickets in the QA Debt project.",
     "security-officer": "Runs the daily security review; files dedup tickets in the Security project.",
     "process-reviewer": "SDLC improvement recommendations land as inbox letters — operator decisions, not work items.",
-    "intake": "Shapes new work into a structured ticket before BA picks it up.",
-    "bug-triage": "Structures bug reports into reproducible tickets before BA writes the fix spec.",
+    "intake": "Shapes new work into a structured ticket before BA picks it up. Handles both feature requests and bug reports.",
     "ba": "Writes the implementation-grade specification on top of intake.",
     "tech-architect": "Plans the architecture for one ticket; design only, no code.",
     "qa-architect": "Plans the test coverage for one ticket; design only, no test code.",
@@ -151,12 +154,6 @@ DEFAULT_SEED_LANES: Final[dict[str, dict[str, object]]] = {
         "specialist": "intake",
         "fsm_stage": "task_intake",
     },
-    "bug_triage": {
-        "kind": "schedule",
-        "cron": "*/30 * * * *",
-        "specialist": "bug-triage",
-        "fsm_stage": "bug_triage",
-    },
     "ba_requirements": {
         "kind": "schedule",
         "cron": "*/30 * * * *",
@@ -213,7 +210,6 @@ ROUTINE_DISPLAY_LABELS: Final[dict[str, str]] = {
     "process_review": "Process review",
     # SDLC routines (per-stage ticket pickup).
     "intake": "Intake",
-    "bug_triage": "Bug triage",
     "ba_requirements": "Requirements",
     "tech_arch_plan": "Tech architecture",
     "qa_arch_plan": "Test architecture",
