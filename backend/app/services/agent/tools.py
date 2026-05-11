@@ -2353,12 +2353,12 @@ class ToolBox:
                     "architecture → ``designer``; system shape, "
                     "contracts, tradeoffs → ``tech-architect``; test "
                     "strategy + coverage → ``qa-architect``; ticket "
-                    "shape / acceptance criteria → ``ba``; prod-fault "
-                    "triage → ``bug-triage``; codebase exploration "
-                    "(read-only) → ``developer``. The subagent has no "
-                    "memory of this conversation — your ``task`` + "
-                    "``context_hint`` is everything it sees, so brief "
-                    "it like a smart colleague who just walked in."
+                    "shape / acceptance criteria → ``ba``; codebase "
+                    "exploration (read-only) → ``developer``. The "
+                    "subagent has no memory of this conversation — "
+                    "your ``task`` + ``context_hint`` is everything "
+                    "it sees, so brief it like a smart colleague who "
+                    "just walked in."
                 ),
                 parameters={
                     "type": "object",
@@ -2370,7 +2370,6 @@ class ToolBox:
                                 "tech-architect",
                                 "qa-architect",
                                 "ba",
-                                "bug-triage",
                                 "developer",
                             ],
                             "description": (
@@ -7936,7 +7935,6 @@ class ToolBox:
         "tech-architect",
         "qa-architect",
         "ba",
-        "bug-triage",
         "developer",
     )
     _SUBAGENT_MAX_TOOL_CALLS: int = 25

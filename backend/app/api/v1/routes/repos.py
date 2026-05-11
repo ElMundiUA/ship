@@ -878,7 +878,6 @@ _PIPELINE_SPECIALIST_ORDER: tuple[str, ...] = (
     "qa-architect",
     "tech-architect",
     "ba",
-    "bug-triage",
     "intake",
 )
 
