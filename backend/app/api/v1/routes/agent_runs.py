@@ -1338,10 +1338,12 @@ def _extract_project_sections(
     section — the canonical names in :data:`_PROJECT_CONTEXT_SECTIONS`
     are the recovery target.
 
-    Returns ``None`` when no canonical section is present (either
-    the project has no decomposition body or a stale layout uses
-    different heading names) — callers fall back to the per-ticket
-    body alone.
+    Falls back to a generic ``## Project description`` block when no
+    canonical heading is present — projects filed by humans with
+    free-form descriptions (e.g., "QA Debt — holding pen for test-
+    coverage gaps") would otherwise hand the agent ``None`` and lose
+    all parent-project context. Better to surface the operator's
+    own words than to render the prompt without any project anchor.
 
     Each section is independently capped per :data:`_PROJECT_CONTEXT_SECTION_CAPS`
     so a runaway WBS doesn't starve the Tasks list (which is what a
@@ -1374,7 +1376,22 @@ def _extract_project_sections(
     if current is not None and buffer:
         found[current] = buffer
     if not found:
-        return None
+        # No canonical sections — fall back to surfacing the
+        # operator-written project description as-is under a generic
+        # heading, truncated to the overall cap. This is the path
+        # for non-decomposition projects (QA Debt, Tech Debt, ad-hoc
+        # buckets) whose ``content`` is one paragraph rather than the
+        # Brief / WBS / Architecture / Test architecture / Tasks
+        # canon. The agent then has at least one sentence about what
+        # this parent project is about, instead of None.
+        stripped = content.strip()
+        if not stripped:
+            return None
+        body_lines = stripped.splitlines()
+        body_lines = _truncate_section(body_lines, overall_cap_bytes)
+        return (
+            "## Project description\n\n" + "\n".join(body_lines).rstrip()
+        )
 
     parts: list[str] = []
     for section in _PROJECT_CONTEXT_SECTIONS:
