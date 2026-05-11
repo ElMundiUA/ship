@@ -158,7 +158,18 @@ from backend.app.services.tracker_fsm import (
 #         tokens at every tick). Intake now owns both feature and
 #         bug shapes; Linear's native issue type is the source of
 #         truth for bug-vs-feature.
-BUNDLE_VERSION: str = "0.29"
+# ``0.30`` → ba_requirements stage folded into task_intake. Same
+#         context-load was feeding two LLM calls in a row to produce
+#         overlapping output shapes (intake: classify + Problem /
+#         Goal / AC / Risks; BA: Feature description / User stories
+#         / AC / Edge cases / Impacted components / Technical notes
+#         / Test plan / Risks — ~80% overlap). The merged
+#         ``task_intake`` writes the full impl-grade spec in one
+#         pass, transitioning directly to ``tech_arch_plan``. Cuts
+#         per-ticket SDLC token spend ~50% pre-architecture review.
+#         The ``ba`` specialist file stays for decomposition WBS
+#         mode + the ``consult_specialist`` sub-agent surface.
+BUNDLE_VERSION: str = "0.30"
 
 # Default knowledge starters for PR 1. Empty by design: generated knowledge is
 # analyzed post-merge and proposed in a second PR. Historical callers can still

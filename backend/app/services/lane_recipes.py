@@ -154,12 +154,11 @@ DEFAULT_SEED_LANES: Final[dict[str, dict[str, object]]] = {
         "specialist": "intake",
         "fsm_stage": "task_intake",
     },
-    "ba_requirements": {
-        "kind": "schedule",
-        "cron": "*/30 * * * *",
-        "specialist": "ba",
-        "fsm_stage": "ba_requirements",
-    },
+    # ``ba_requirements`` routine retired — intake now produces the full
+    # impl-grade spec, see ``agent_roles/intake.md``. Legacy in-flight
+    # tickets that already carry ``stage:ba_requirements`` breadcrumb
+    # advance through ``tech_arch_plan`` (which requires the
+    # ``stage:task_intake`` breadcrumb they also have).
     "tech_arch_plan": {
         "kind": "schedule",
         "cron": "*/30 * * * *",
@@ -208,9 +207,11 @@ ROUTINE_DISPLAY_LABELS: Final[dict[str, str]] = {
     "qa_review": "QA review",
     "security_review": "Security review",
     "process_review": "Process review",
-    # SDLC routines (per-stage ticket pickup).
-    "intake": "Intake",
-    "ba_requirements": "Requirements",
+    # SDLC routines (per-stage ticket pickup). ``ba_requirements`` was
+    # folded into ``intake`` — the label kept here only so legacy
+    # configs / audit rows referencing it still display.
+    "intake": "Intake & Spec",
+    "ba_requirements": "Requirements (retired)",
     "tech_arch_plan": "Tech architecture",
     "qa_arch_plan": "Test architecture",
     "dev_implementation": "Implementation",

@@ -81,10 +81,17 @@ SHIP_FSM_STAGES: tuple[str, ...] = (
 
 
 # Linear order of the SDLC stages. Self-heal is parallel to the main
-# pipeline (any open ticket) so it stays out of the chain.
+# pipeline (any open ticket) so it stays out of the chain. The legacy
+# ``ba_requirements`` stage was folded into ``task_intake`` — they were
+# doing the same context-load twice in a row to produce overlapping
+# output shapes; the merged ``task_intake`` writes the full impl-grade
+# spec in one pass. The label stays in ``SHIP_FSM_STAGES`` /
+# ``FSM_TO_LINEAR_STATE`` so legacy in-flight tickets still parse,
+# but the chain advances ``task_intake → tech_arch_plan`` now and
+# ``previous_stage("tech_arch_plan")`` returns ``"task_intake"``
+# accordingly.
 FSM_STAGE_ORDER: tuple[str, ...] = (
     "task_intake",
-    "ba_requirements",
     "tech_arch_plan",
     "qa_arch_plan",
     "dev_implementation",

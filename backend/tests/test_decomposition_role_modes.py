@@ -61,11 +61,31 @@ def test_role_carries_decomposition_block(slug: str, section: str | None) -> Non
         # Pin the owned ``## <name>`` section by literal text so a
         # rename slips into a test failure instead of a silent
         # drift that breaks ``upsert_project_section`` matching.
-        assert f'section="{section}"' in prompt, (
-            f"{slug}: Decomposition block should pin its owned section to "
-            f'``section="{section}"`` so the prompt and the tracker '
-            f"helper agree on the heading"
-        )
+        # Post-#229 the role prompts pass sections via JSON
+        # (``"section": "<name>"``) on the finish payload rather than
+        # the older ``upsert_project_section(section="<name>")`` tool
+        # call, so the test asserts the JSON shape.
+        #
+        # ``developer`` is special — the ``tasks`` stage sends
+        # ``child_tickets`` (not ``project_sections``) and the server
+        # auto-renders the ``## Tasks`` section from the created
+        # identifiers. The prompt mentions ``Tasks`` only in prose,
+        # not in a wire-shape JSON literal. We assert the prose
+        # mention instead so a rename of ``Tasks`` to something else
+        # still slips into a test failure.
+        if slug == "developer":
+            assert "Tasks" in prompt, (
+                f"{slug}: Decomposition block must mention the "
+                f"``Tasks`` section (server auto-renders it from "
+                f"``child_tickets``); a rename should slip into a "
+                f"test failure."
+            )
+        else:
+            assert f'"section": "{section}"' in prompt, (
+                f"{slug}: Decomposition block should pin its owned "
+                f'section to ``"section": "{section}"`` so the '
+                f"prompt and the tracker helper agree on the heading"
+            )
 
 
 def test_planning_process_config_emits_routines_with_fsm_stage() -> None:
