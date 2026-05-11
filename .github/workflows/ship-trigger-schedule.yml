@@ -25,7 +25,7 @@ concurrency:
 jobs:
   trigger:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
       - name: Checkout (full history for agent introspection + branch push)
         uses: actions/checkout@v4
@@ -91,51 +91,27 @@ jobs:
             echo "::endgroup::"
             exit 0
           fi
-          # Normal cron path. ``shipctl trigger`` returns *all* due routines
-          # in priority order (config order). With many ``*/30 * * * *``
-          # routines (intake, ba_requirements, tech_arch_plan, qa_arch_plan,
-          # dev_implementation, qa_manual, code_review, pr_review, plus the
-          # decomposition lanes wbs / architecture / test_architecture / tasks),
-          # the old "first due routine wins" rule starved every routine after
-          # ``intake`` — intake noop'd on every tick and the workflow exited
-          # before any later routine got a chance. Now we iterate through
-          # ``due_routines`` in order, breaking on the first one that does
-          # real work. If every due routine no-ops, fall back to the server
-          # ``pipeline_pick`` recommendation (e.g. planning anchors).
+          # Normal cron path: trigger picks the next routine, run executes it.
           shipctl trigger --event schedule --repo "$SHIP_REPO" --pipeline-fallback --json > /tmp/ship-action.json
-          jq '.due_routines[].routine_id' /tmp/ship-action.json | tr -d '"' > /tmp/ship-due-routines.txt || true
-          DID_WORK=0
-          if [ -s /tmp/ship-due-routines.txt ]; then
-            while IFS= read -r ROUTINE; do
-              [ -z "$ROUTINE" ] && continue
+          ACTION=$(jq -r '.next_action.kind // "noop"' /tmp/ship-action.json)
+          case "$ACTION" in
+            routine)
+              ROUTINE=$(jq -r '.next_action.routine_id' /tmp/ship-action.json)
               echo "::group::Ship routine ${ROUTINE}"
-              STATUS_FILE="/tmp/ship-status-${ROUTINE//\//_}.json"
-              rm -f "$STATUS_FILE"
-              SHIP_REPO="" shipctl run --routine "$ROUTINE" --trigger schedule --commit-and-pr --status-file "$STATUS_FILE"
+              SHIP_REPO="" shipctl run --routine "$ROUTINE" --trigger schedule --commit-and-pr
               echo "::endgroup::"
-              # ``shipctl run`` writes the final payload here on every exit
-              # path — noop / ok / error all produce a JSON status. If the
-              # file is missing the CLI never reached ``emit()`` (likely an
-              # earlier crash), so treat it as did-work to surface the failure.
-              STATUS=$(jq -r '.status // "ok"' "$STATUS_FILE" 2>/dev/null || echo "ok")
-              REASON=$(jq -r '.reason // ""' "$STATUS_FILE" 2>/dev/null || echo "")
-              if [ "$STATUS" = "noop" ]; then
-                echo "Ship: routine ${ROUTINE} noop (reason=${REASON}); trying next."
-                continue
-              fi
-              echo "Ship: routine ${ROUTINE} did work (status=${STATUS}); stopping (one-action-per-tick)."
-              DID_WORK=1
-              break
-            done < /tmp/ship-due-routines.txt
-          fi
-          if [ "$DID_WORK" = "0" ]; then
-            ACTION=$(jq -r '.next_action.kind // "noop"' /tmp/ship-action.json)
-            if [ "$ACTION" = "pipeline_pick" ]; then
+              ;;
+            pipeline_pick)
               SPECIALIST=$(jq -r '.next_action.specialist' /tmp/ship-action.json)
               echo "::group::Ship pipeline pick — ${SPECIALIST}"
               SHIP_REPO="" shipctl run --specialist "$SPECIALIST" --trigger pipeline_pick --commit-and-pr
               echo "::endgroup::"
-            else
-              echo "Ship: every due routine no-op'd and no pipeline pick available — nothing to do this tick."
-            fi
-          fi
+              ;;
+            noop)
+              echo "Ship: nothing to do this tick."
+              ;;
+            *)
+              echo "Ship: unrecognised next_action.kind '$ACTION'; check shipctl version." >&2
+              exit 1
+              ;;
+          esac
