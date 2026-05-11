@@ -175,6 +175,23 @@ def test_compose_default_bundle_emits_decomposition_routines() -> None:
     assert "specialist: qa-architect" in config_body
     assert "specialist: developer" in config_body
 
+    # ``pipeline_priority`` drives the CLI's drain-first picker: the
+    # later decomposition stage (``tasks`` = 40) outranks the earlier
+    # (``wbs`` = 10) so an anchor close to ``planning_done`` clears
+    # before a new WBS starts. We pin the exact numbers because the
+    # ordering is a load-bearing operator-facing contract — bumping
+    # the constants should slip into the test, not deploy silently.
+    for routine_id, priority in (
+        ("wbs", 10),
+        ("architecture", 20),
+        ("test_architecture", 30),
+        ("tasks", 40),
+    ):
+        assert f"pipeline_priority: {priority}" in config_body, (
+            f"missing pipeline_priority: {priority} on decomposition "
+            f"routine {routine_id}"
+        )
+
 
 def test_compose_default_bundle_emits_sdlc_routines() -> None:
     """SDLC routines land in ``process.routines`` so customer cron has
@@ -206,15 +223,15 @@ def test_compose_default_bundle_emits_sdlc_routines() -> None:
     config_body = next(c for p, c in bundle.files if p == CONFIG_PATH)
 
     sdlc_routines = {
-        "intake": ("intake", "task_intake"),
-        "tech_arch_plan": ("tech-architect", "tech_arch_plan"),
-        "qa_arch_plan": ("qa-architect", "qa_arch_plan"),
-        "dev_implementation": ("developer", "dev_implementation"),
-        "qa_manual": ("qa-engineer", "qa_manual"),
-        "qa_automation": ("qa-automation", "qa_automation"),
-        "code_review": ("reviewer", "code_review"),
+        "intake": ("intake", "task_intake", 10),
+        "tech_arch_plan": ("tech-architect", "tech_arch_plan", 20),
+        "qa_arch_plan": ("qa-architect", "qa_arch_plan", 30),
+        "dev_implementation": ("developer", "dev_implementation", 40),
+        "qa_manual": ("qa-engineer", "qa_manual", 50),
+        "qa_automation": ("qa-automation", "qa_automation", 60),
+        "code_review": ("reviewer", "code_review", 70),
     }
-    for routine_id, (specialist, fsm_stage) in sdlc_routines.items():
+    for routine_id, (specialist, fsm_stage, priority) in sdlc_routines.items():
         assert f"    {routine_id}:" in config_body, (
             f"missing SDLC routine {routine_id} in seeded YAML"
         )
@@ -226,6 +243,15 @@ def test_compose_default_bundle_emits_sdlc_routines() -> None:
         # decomposition); just assert presence.
         assert f"specialist: {specialist}" in config_body, (
             f"missing specialist {specialist} on SDLC routine {routine_id}"
+        )
+        # Drain-first ordering — the CLI sorts due routines by this
+        # field DESC, so ``code_review`` (70) outranks ``intake`` (10)
+        # when both are cron-due in the same window. Pin the exact
+        # numbers so a bump shows up as a test diff rather than a
+        # silent change in production scheduling behavior.
+        assert f"pipeline_priority: {priority}" in config_body, (
+            f"missing pipeline_priority: {priority} on SDLC routine "
+            f"{routine_id}"
         )
 
 

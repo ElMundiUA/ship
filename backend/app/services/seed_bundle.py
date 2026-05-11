@@ -169,7 +169,17 @@ from backend.app.services.tracker_fsm import (
 #         per-ticket SDLC token spend ~50% pre-architecture review.
 #         The ``ba`` specialist file stays for decomposition WBS
 #         mode + the ``consult_specialist`` sub-agent surface.
-BUNDLE_VERSION: str = "0.30"
+# ``0.31`` → Drain-first scheduling: every SDLC + decomposition
+#         routine carries a ``pipeline_priority`` (intake=10 … code
+#         review=70; wbs=10 … tasks=40). The CLI's ``dueRoutines``
+#         sorts by this field DESC so when multiple stages are cron-
+#         due in the same window (the common case — all SDLC routines
+#         share ``*/30 * * * *``), the LATER pipeline stage runs first.
+#         Operator-facing motivation: Lean-WIP — a code-review-eligible
+#         ticket is closer to value than an intake one, so flush the
+#         tail before feeding the head. Was: YAML iteration order →
+#         ``intake`` always won → tail of the pipeline starved.
+BUNDLE_VERSION: str = "0.31"
 
 # Default knowledge starters for PR 1. Empty by design: generated knowledge is
 # analyzed post-merge and proposed in a second PR. Historical callers can still

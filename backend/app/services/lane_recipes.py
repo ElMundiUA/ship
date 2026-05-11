@@ -145,14 +145,25 @@ DEFAULT_SEED_LANES: Final[dict[str, dict[str, object]]] = {
     #
     # 30-min cadence is the safe free-tier default (matches the
     # trigger workflow's own */30 cron). The trigger workflow
-    # picks at most ONE due routine per tick, so adding 9 stages
-    # doesn't multiply the budget — picker scans them in order
-    # and dispatches the first eligible one.
+    # picks at most ONE due routine per tick.
+    #
+    # ``pipeline_priority`` drives drain-first scheduling: when
+    # multiple SDLC routines are cron-due in the same tick (the
+    # common case, since they all share ``*/30 * * * *``), the
+    # picker sorts by priority DESC and runs the LATER pipeline
+    # stage first. Reasoning: minimize WIP, prefer flushing tickets
+    # toward Done over feeding new ones into the head of the queue.
+    # A code-review-eligible ticket waits less than an intake ticket
+    # because it's closer to delivering value. Supporting routines
+    # above carry no ``pipeline_priority`` and fall back to ``0``;
+    # daily / retro / sweeps cron once per day, so they almost never
+    # contend with the SDLC chain anyway.
     "intake": {
         "kind": "schedule",
         "cron": "*/30 * * * *",
         "specialist": "intake",
         "fsm_stage": "task_intake",
+        "pipeline_priority": 10,
     },
     # ``ba_requirements`` routine retired — intake now produces the full
     # impl-grade spec, see ``agent_roles/intake.md``. Legacy in-flight
@@ -164,36 +175,42 @@ DEFAULT_SEED_LANES: Final[dict[str, dict[str, object]]] = {
         "cron": "*/30 * * * *",
         "specialist": "tech-architect",
         "fsm_stage": "tech_arch_plan",
+        "pipeline_priority": 20,
     },
     "qa_arch_plan": {
         "kind": "schedule",
         "cron": "*/30 * * * *",
         "specialist": "qa-architect",
         "fsm_stage": "qa_arch_plan",
+        "pipeline_priority": 30,
     },
     "dev_implementation": {
         "kind": "schedule",
         "cron": "*/30 * * * *",
         "specialist": "developer",
         "fsm_stage": "dev_implementation",
+        "pipeline_priority": 40,
     },
     "qa_manual": {
         "kind": "schedule",
         "cron": "*/30 * * * *",
         "specialist": "qa-engineer",
         "fsm_stage": "qa_manual",
+        "pipeline_priority": 50,
     },
     "qa_automation": {
         "kind": "schedule",
         "cron": "*/30 * * * *",
         "specialist": "qa-automation",
         "fsm_stage": "qa_automation",
+        "pipeline_priority": 60,
     },
     "code_review": {
         "kind": "schedule",
         "cron": "*/30 * * * *",
         "specialist": "reviewer",
         "fsm_stage": "code_review",
+        "pipeline_priority": 70,
     },
 }
 

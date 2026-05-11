@@ -246,6 +246,15 @@ def bundle_routine_entries(
         # ``ba_requirements`` for SDLC and ``wbs`` for decomposition).
         if isinstance(lane.get("fsm_stage"), str):
             routine["fsm_stage"] = str(lane["fsm_stage"])
+        # ``pipeline_priority`` drives the CLI's drain-first picker
+        # (``cli/lib/runtime/routines.mjs`` sorts due routines by this
+        # field DESC so later-stage tickets fire before early-stage
+        # ones in the same tick). Lanes without an explicit priority
+        # — daily / retro / sweeps — fall through and the CLI treats
+        # them as ``0``.
+        raw_priority = lane.get("pipeline_priority")
+        if isinstance(raw_priority, int) and not isinstance(raw_priority, bool):
+            routine["pipeline_priority"] = raw_priority
         if isinstance(lane.get("description"), str):
             routine["description"] = str(lane["description"])
         routines[str(routine_id)] = routine
@@ -510,12 +519,19 @@ def default_planning_process_config() -> dict[str, object]:
         # ``planning_done`` is terminal — no routine — and the finish
         # hook on the ``tasks`` stage flips the dashboard row Drafts →
         # Parked.
+        # ``pipeline_priority`` drives drain-first ordering when
+        # multiple decomposition stages are cron-due simultaneously
+        # (the common case — they all run at ``*/30 * * * *``). The
+        # CLI sorts due routines DESC and picks the LATER stage so
+        # an anchor closest to ``planning_done`` clears before a new
+        # WBS starts. See ``cli/lib/runtime/routines.mjs::dueRoutines``.
         "routines": {
             "wbs": {
                 "name": "Decomposition WBS",
                 "enabled": True,
                 "specialist": "ba",
                 "fsm_stage": "wbs",
+                "pipeline_priority": 10,
                 "trigger": {
                     "type": "schedule",
                     "cron": "*/30 * * * *",
@@ -532,6 +548,7 @@ def default_planning_process_config() -> dict[str, object]:
                 "enabled": True,
                 "specialist": "tech-architect",
                 "fsm_stage": "architecture",
+                "pipeline_priority": 20,
                 "trigger": {
                     "type": "schedule",
                     "cron": "*/30 * * * *",
@@ -548,6 +565,7 @@ def default_planning_process_config() -> dict[str, object]:
                 "enabled": True,
                 "specialist": "qa-architect",
                 "fsm_stage": "test_architecture",
+                "pipeline_priority": 30,
                 "trigger": {
                     "type": "schedule",
                     "cron": "*/30 * * * *",
@@ -564,6 +582,7 @@ def default_planning_process_config() -> dict[str, object]:
                 "enabled": True,
                 "specialist": "developer",
                 "fsm_stage": "tasks",
+                "pipeline_priority": 40,
                 "trigger": {
                     "type": "schedule",
                     "cron": "*/30 * * * *",

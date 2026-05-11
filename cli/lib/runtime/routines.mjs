@@ -69,6 +69,15 @@ export function routineToExecutable(id, routine) {
     // single role (e.g. ``ba``) serves both SDLC (``ba_requirements``)
     // and decomposition (``wbs``) without per-process role clones.
     fsm_stage: stringOrNull(routine.fsm_stage),
+    // Drain-first scheduling: when multiple routines are cron-due in
+    // the same tick (the common case for SDLC + decomposition because
+    // every stage shares ``*/30 * * * *``), ``dueRoutines`` sorts by
+    // this DESC so the LATER pipeline stage runs first. Reasoning is
+    // Lean-WIP: a code-review-eligible ticket is closer to delivering
+    // value than an intake one, so flushing the tail of the pipeline
+    // outranks feeding the head. Routines without a priority — daily
+    // / retro / sweeps — fall through to ``0`` (effectively last).
+    pipeline_priority: numberOrZero(routine.pipeline_priority),
   };
 }
 
@@ -156,6 +165,7 @@ export function dueRoutines(config, { event, now = new Date() }) {
         window_start: slot.toISOString(),
         window_end: windowEnd.toISOString(),
         window_key: `schedule:${routineId}:${formatWindowKey(slot)}`,
+        pipeline_priority: executable.pipeline_priority,
       });
       continue;
     }
@@ -167,8 +177,20 @@ export function dueRoutines(config, { event, now = new Date() }) {
       window_start: started.toISOString(),
       window_end: started.toISOString(),
       window_key: `${event}:${routineId}:${formatWindowKey(started)}`,
+      pipeline_priority: executable.pipeline_priority,
     });
   }
+  // Drain-first ordering: highest ``pipeline_priority`` runs first
+  // when multiple routines are due in the same tick. Ties break on
+  // ``routine_id`` ascending for deterministic test output and a
+  // stable claim sequence (so two runners with clock drift don't
+  // claim the routines in different orders on the same window).
+  due.sort((a, b) => {
+    const pa = numberOrZero(a.pipeline_priority);
+    const pb = numberOrZero(b.pipeline_priority);
+    if (pa !== pb) return pb - pa;
+    return a.routine_id < b.routine_id ? -1 : a.routine_id > b.routine_id ? 1 : 0;
+  });
   return { due, skipped };
 }
 
@@ -300,4 +322,13 @@ function formatWindowKey(date) {
 
 function stringOrNull(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function numberOrZero(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number.parseFloat(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
 }
