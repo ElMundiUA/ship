@@ -118,6 +118,31 @@ _TRACKER_FAILURE_DEDUP_WINDOW = timedelta(hours=1)
 # pipelines.
 _PRIORITY_SKIPPED_DEDUP_WINDOW = timedelta(hours=1)
 
+# Picker refire cap — universal loop guard.
+#
+# A correctly-flowing ticket fires each FSM stage exactly once: the
+# routine picks, the agent finishes, the server transitions the ticket
+# forward by adding a ``stage:<X>`` breadcrumb, and the next picker
+# call for that stage excludes the ticket via its own-label filter.
+# When ANY layer between "agent finished" and "breadcrumb present"
+# silently fails — Linear adapter dropping its filter clause because
+# ``label_id_by_stage[X]`` is None (the ELS team's bug_triage label was
+# never provisioned, observed in production as ~\$200 of agent-token
+# burn over 24h), a transition mutation rejected by the tracker, the
+# breadcrumb existing but the picker filter changing shape after a
+# label rename, etc. — the same ticket re-picks every cron tick.
+#
+# The cap is universal: regardless of root cause, if the same
+# ``(workspace, fsm_stage, ticket_ref)`` triple has fired ``finish``
+# more than this many times in the dedup window, the picker refuses
+# to hand the ticket back to the routine until the cap window
+# elapses, emits one ``agent_run.refire_capped`` audit + one inbox
+# blocker letter, and stops the burn. Operator sees the letter,
+# decides whether to bump the cap or fix the underlying breadcrumb
+# bug; agent tokens are conserved either way.
+_REFIRE_CAP_LIMIT: int = 3
+_REFIRE_CAP_WINDOW = timedelta(hours=24)
+
 
 # ---------------------------------------------------------------------------
 # Schemas
@@ -667,6 +692,97 @@ async def get_next_task(
         )
 
     ticket_ref = str(pick.get("id") or "")
+
+    # Refire cap (universal loop guard). When the same
+    # ``(workspace, fsm_stage, ticket)`` triple has fired ``finish``
+    # more than ``_REFIRE_CAP_LIMIT`` times in the cap window, the
+    # breadcrumb idempotency that's supposed to prevent re-picks has
+    # silently broken somewhere downstream (label not provisioned,
+    # transition no-op, label rename, …). Stop handing the ticket
+    # back to the routine, emit one ``agent_run.refire_capped`` audit
+    # row + one ``InboxItem(type='blocker', intake_reason='refire_capped')``
+    # letter (deduped against re-emission), and return ``ticket=None``
+    # so the routine noops cleanly. Operator sees the letter, decides
+    # whether to bump the cap or fix the breadcrumb root cause.
+    if ticket_ref:
+        fire_count = await _recent_finish_count_for_stage(
+            session,
+            workspace_id=workspace_id,
+            fsm_stage=state,
+            ticket_ref=ticket_ref,
+            window=_REFIRE_CAP_WINDOW,
+        )
+        if fire_count >= _REFIRE_CAP_LIMIT:
+            already_capped = await _recent_audit_exists(
+                session,
+                workspace_id=workspace_id,
+                action="agent_run.refire_capped",
+                target_kind="ticket",
+                target_id=ticket_ref,
+                window=_REFIRE_CAP_WINDOW,
+            )
+            if not already_capped:
+                session.add(
+                    AuditLog(
+                        workspace_id=workspace_id,
+                        actor_user_id=auth.user.id,
+                        actor_token_id=auth.token.id if auth.token else None,
+                        action="agent_run.refire_capped",
+                        target_kind="ticket",
+                        target_id=ticket_ref,
+                        payload={
+                            "tracker_kind": resolved.kind,
+                            "fsm_stage": state,
+                            "fire_count": fire_count,
+                            "limit": _REFIRE_CAP_LIMIT,
+                            "window_hours": int(
+                                _REFIRE_CAP_WINDOW.total_seconds() // 3600
+                            ),
+                        },
+                    )
+                )
+                session.add(
+                    InboxItem(
+                        workspace_id=workspace_id,
+                        repo_id=None,
+                        type="blocker",
+                        title=(
+                            f"Refire cap hit on {ticket_ref} at "
+                            f"{state} — routine paused"
+                        )[:300],
+                        summary=(
+                            f"The {state} routine has finished against "
+                            f"{ticket_ref} {fire_count} times in the last "
+                            f"{int(_REFIRE_CAP_WINDOW.total_seconds() // 3600)}h. "
+                            "Agent tokens are being burnt without the "
+                            "ticket advancing — usually because the "
+                            "breadcrumb label that's supposed to exclude "
+                            "the ticket on the next pick isn't being "
+                            "added (provisioner gap, transition no-op, "
+                            "label rename). The picker is now refusing "
+                            "to hand this ticket back to the routine "
+                            f"until the {int(_REFIRE_CAP_WINDOW.total_seconds() // 3600)}h "
+                            "window elapses. Investigate the missing "
+                            "breadcrumb or move the ticket past this "
+                            "stage manually."
+                        )[:2000],
+                        payload={
+                            "tracker_kind": resolved.kind,
+                            "fsm_stage": state,
+                            "ticket_ref": ticket_ref,
+                            "fire_count": fire_count,
+                            "url": str(pick.get("url") or "") or None,
+                        },
+                        status="new",
+                        intake_handle=None,
+                        intake_reason="refire_capped",
+                    )
+                )
+                await session.flush()
+            return TaskResponseOut(
+                ticket=None, fsm_stage=state, tracker_kind=resolved.kind
+            )
+
     # ELS-86: stitch the parent project's body sections onto the task
     # so the SDLC agent sees the surrounding plan (Brief / WBS /
     # Architecture / Test architecture / Tasks). Best-effort —
@@ -745,6 +861,47 @@ def _collect_project_sections(payload: "FinishIn") -> list["ProjectSectionPatch"
         except Exception:  # noqa: BLE001 — drop malformed silently
             continue
     return out
+
+
+async def _recent_finish_count_for_stage(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    fsm_stage: str,
+    ticket_ref: str,
+    window: timedelta,
+) -> int:
+    """Count ``agent_run.finish`` audit rows for one ``(workspace,
+    fsm_stage, ticket_ref)`` triple within ``window``.
+
+    The refire cap reads this before letting the picker hand a ticket
+    back to its routine. Any value greater than :data:`_REFIRE_CAP_LIMIT`
+    means the breadcrumb-add → "this role is done" idempotency has
+    silently broken somewhere downstream of the route — a bug we can't
+    enumerate ahead of time. Capping the re-pick is the only universal
+    answer.
+
+    Counts rows with both ``target_id == ticket_ref`` (the canonical
+    shape from ``finish_agent_run``) and ``payload.ticket_ref == ticket_ref``
+    (the legacy shape from older route builds whose ``target_id`` was the
+    run_id). The union keeps the cap honest across a deploy boundary.
+    """
+    cutoff = datetime.now(timezone.utc) - window
+    stmt = (
+        select(AuditLog.id)
+        .where(
+            AuditLog.workspace_id == workspace_id,
+            AuditLog.action == "agent_run.finish",
+            AuditLog.created_at >= cutoff,
+            (
+                (AuditLog.target_id == ticket_ref)
+                | (AuditLog.payload["ticket_ref"].astext == ticket_ref)
+            ),
+            AuditLog.payload["fsm_stage"].astext == fsm_stage,
+        )
+    )
+    rows = (await session.execute(stmt)).all()
+    return len(rows)
 
 
 async def _recent_audit_exists(
