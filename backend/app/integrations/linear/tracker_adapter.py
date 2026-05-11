@@ -193,6 +193,15 @@ class LinearTracker:
             data = await self._gql(gql, {"first": first})
             nodes = (data.get("issues") or {}).get("nodes") or []
         else:
+            # ``description`` MUST stay in the projection. The picker
+            # always reaches this filtered branch in production (team_id
+            # gate alone makes ``issue_filter`` non-empty), and a
+            # missing ``description`` field here means every SDLC
+            # agent receives ``body=None`` in its prompt — observed as
+            # intake / BA opening ``needs_clarification`` saying "the
+            # ticket body is empty" on tickets that actually had a
+            # populated description in Linear. The unfiltered branch
+            # above carries it; if you edit one projection, edit both.
             gql = """
             query ShipListIssues($first: Int!, $filter: IssueFilter) {
               issues(first: $first, orderBy: updatedAt, filter: $filter) {
@@ -200,6 +209,7 @@ class LinearTracker:
                   id
                   identifier
                   title
+                  description
                   url
                   state { name type }
                   project { id }
