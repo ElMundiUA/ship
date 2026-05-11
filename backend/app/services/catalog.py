@@ -257,12 +257,14 @@ def default_development_process_config(
 ) -> dict[str, object]:
     """Return the canonical FSM process seeded into new repo configs.
 
-    Phase 1 introduced eight pipeline specialists (intake, ba,
-    tech-architect, qa-architect, developer, qa-engineer,
-    qa-automation, reviewer) and Phase 3 added the gates knob; this
-    config now matches that canon. ``specialist.id`` carries the
-    kebab-case agent-role slug — the same slug the runtime resolver
-    accepts at ``/v1/.../agent-roles/{slug}/resolve``.
+    Phase 1 introduced eight pipeline specialists; this PR collapsed
+    intake + ba into a single ``task_intake`` stage (same context-load
+    was feeding two LLM calls in a row producing overlapping output
+    shapes), leaving seven SDLC stages: intake, tech-architect, qa-
+    architect, developer, qa-engineer, qa-automation, reviewer.
+    ``specialist.id`` carries the kebab-case agent-role slug — the
+    same slug the runtime resolver accepts at
+    ``/v1/.../agent-roles/{slug}/resolve``.
 
     Intake handles both feature requests and bug reports — the
     bug-triage stage was folded into ``task_intake`` after the
@@ -291,21 +293,17 @@ def default_development_process_config(
                 "state": "planning",
                 "specialist": {"id": "intake", "name": "Intake"},
                 "instructions": (
-                    "Shape new tickets into a structured form before BA "
-                    "writes the spec. Handles both feature requests and "
-                    "bug reports — for bugs, surface Steps / Expected / "
-                    "Actual / Environment in the description; for "
-                    "features, surface Problem / Goal / Scope / Risks."
-                ),
-            },
-            {
-                "id": "ba_requirements",
-                "name": "Requirements",
-                "state": "planning",
-                "specialist": {"id": "ba", "name": "BA / specification"},
-                "instructions": (
-                    "Turn the shaped ticket into acceptance criteria, "
-                    "constraints, risks, and an explicit test plan."
+                    "Classify + produce the full impl-grade spec in one "
+                    "pass. Output sections depend on classification — "
+                    "features use Problem / Goal / Feature description / "
+                    "User stories / AC / Edge cases / Scope / Non-goals "
+                    "/ Impacted components / Technical notes / Test plan "
+                    "/ Risks; bugs use Summary / Steps / Expected / "
+                    "Actual / Environment / Severity / Scope / Suspect "
+                    "area / AC for fix. The legacy ``ba_requirements`` "
+                    "stage was folded in here — same context-load was "
+                    "feeding two LLM calls in a row, producing "
+                    "overlapping output shapes."
                 ),
             },
             {
@@ -373,8 +371,7 @@ def default_development_process_config(
             },
         ],
         "transitions": [
-            {"from": "task_intake", "to": "ba_requirements"},
-            {"from": "ba_requirements", "to": "tech_arch_plan"},
+            {"from": "task_intake", "to": "tech_arch_plan"},
             {"from": "tech_arch_plan", "to": "qa_arch_plan"},
             {"from": "qa_arch_plan", "to": "dev_implementation"},
             {"from": "dev_implementation", "to": "qa_manual"},

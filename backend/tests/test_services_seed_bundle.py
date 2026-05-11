@@ -82,15 +82,16 @@ def test_compose_default_bundle_emits_config_yml() -> None:
     # default — autonomous through the agent reviewer, human only at
     # PR merge. Operators who want earlier interjection edit it.
     assert "gates: after_pr" in config_body
-    # Phase 1.5: eight canonical pipeline stages, kebab-case specialist
+    # Phase 1.5: seven canonical pipeline stages, kebab-case specialist
     # slugs matching the agent-role files. Pinned so a regression in
     # ``default_development_process_config`` doesn't silently drop a
-    # stage from new wizard seeds. The parallel-entry ``bug_triage``
-    # stage was retired after producing an infinite loop on feature
-    # tickets — intake now owns both feature and bug shapes.
+    # stage from new wizard seeds. Retired stages:
+    # - ``bug_triage`` — parallel-intake loop on feature tickets;
+    #   intake now owns both shapes.
+    # - ``ba_requirements`` — same context-load as intake was feeding
+    #   two LLM calls in a row; intake now writes the full spec.
     for state_id in (
         "task_intake",
-        "ba_requirements",
         "tech_arch_plan",
         "qa_arch_plan",
         "dev_implementation",
@@ -102,7 +103,6 @@ def test_compose_default_bundle_emits_config_yml() -> None:
             f"missing process.states[].id={state_id} in seeded YAML"
         )
     for slug in (
-        "id: ba\n",
         "id: tech-architect\n",
         "id: qa-architect\n",
         "id: developer\n",
@@ -113,10 +113,16 @@ def test_compose_default_bundle_emits_config_yml() -> None:
         assert slug in config_body, (
             f"missing specialist {slug.strip()} in seeded YAML"
         )
-    # Sanity: the retired ``bug-triage`` specialist must not creep back
-    # into freshly seeded YAML — would re-introduce the loop.
+    # Sanity: retired stages / specialists must not creep back into
+    # freshly seeded YAML — would re-introduce the bug_triage loop
+    # or the duplicate BA-spec LLM call.
     assert "id: bug-triage\n" not in config_body
     assert "fsm_stage: bug_triage" not in config_body
+    assert "fsm_stage: ba_requirements" not in config_body
+    # ``ba`` specialist file STAYS (decomp WBS uses it, plus the
+    # consult_specialist surface). It just no longer appears as an
+    # SDLC routine — check the absence by looking for the SDLC
+    # routine pin, not the specialist line.
 
 
 def test_compose_default_bundle_emits_decomposition_routines() -> None:
@@ -201,7 +207,6 @@ def test_compose_default_bundle_emits_sdlc_routines() -> None:
 
     sdlc_routines = {
         "intake": ("intake", "task_intake"),
-        "ba_requirements": ("ba", "ba_requirements"),
         "tech_arch_plan": ("tech-architect", "tech_arch_plan"),
         "qa_arch_plan": ("qa-architect", "qa_arch_plan"),
         "dev_implementation": ("developer", "dev_implementation"),

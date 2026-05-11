@@ -123,15 +123,18 @@ def test_intake_filter_state_clause_is_todo() -> None:
     assert state_parts[0] == {"state": {"id": {"eq": "todo_state_id"}}}
 
 
-def test_ba_requirements_filter_requires_previous_stage_label() -> None:
+def test_tech_arch_plan_filter_requires_previous_stage_label() -> None:
     """Subsequent stages still depend on the previous stage's label
-    being set (intake adds ``stage:task_intake`` on transition)."""
+    being set (intake adds ``stage:task_intake`` on transition).
+    ``ba_requirements`` was folded into ``task_intake``, so the
+    first non-entry SDLC stage is now ``tech_arch_plan`` and its
+    predecessor is ``task_intake``."""
     tracker = _make_tracker()
-    parts = tracker._fsm_filter("ba_requirements")
+    parts = tracker._fsm_filter("tech_arch_plan")
     label_clauses = _find_label_clauses(parts)
     has_some = any("some" in p["labels"] for p in label_clauses)
     assert has_some, (
-        "ba_requirements must require the previous (intake) stage "
+        "tech_arch_plan must require the previous (task_intake) stage "
         "label via the ``some`` operator"
     )
     # The own-label exclusion must use ``every / neq``.
@@ -144,7 +147,7 @@ def test_needs_clarification_exclusion_uses_every_neq_too() -> None:
     exclusion. A ticket with no labels at all must not be silently
     excluded by it."""
     tracker = _make_tracker()
-    parts = tracker._fsm_filter("ba_requirements")
+    parts = tracker._fsm_filter("tech_arch_plan")
     clar_clauses = [
         p
         for p in parts
