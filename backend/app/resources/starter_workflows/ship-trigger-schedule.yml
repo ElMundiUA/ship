@@ -91,27 +91,67 @@ jobs:
             echo "::endgroup::"
             exit 0
           fi
-          # Normal cron path: trigger picks the next routine, run executes it.
+          # Normal cron path. ``shipctl trigger`` returns *all* due
+          # routines sorted drain-first (later SDLC stage outranks
+          # earlier — see ``pipeline_priority`` on each routine).
+          #
+          # We iterate the due list and run as many routines as land
+          # work within the runner's 30-min budget, NOT just the
+          # first one. Two reasons:
+          #
+          #   1. GitHub throttles ``schedule:`` workflows during peak
+          #      load — observed gaps of 4-8 hours between ticks in
+          #      production. The old "one-action-per-tick" rule
+          #      multiplied that latency by the number of stages
+          #      remaining on the pipeline.
+          #   2. A single tick that drains 4-5 tickets through their
+          #      stages fits comfortably in the runner budget
+          #      (≈4 min per agent invocation) and keeps the
+          #      pipeline moving when cron itself is unreliable.
+          #
+          # ``shipctl run`` writes a JSON status to ``--status-file``
+          # on every exit path (noop / ok / error). ``noop`` means
+          # the routine had nothing eligible — try the next one.
+          # ``ok`` means an agent run completed — still try the
+          # next one (multi-action mode). A genuine non-zero exit
+          # bubbles up via ``set -e`` and stops the tick so the
+          # operator sees the failure.
+          MAX_ACTIONS_PER_TICK=${SHIP_MAX_ACTIONS_PER_TICK:-5}
           shipctl trigger --event schedule --repo "$SHIP_REPO" --pipeline-fallback --json > /tmp/ship-action.json
-          ACTION=$(jq -r '.next_action.kind // "noop"' /tmp/ship-action.json)
-          case "$ACTION" in
-            routine)
-              ROUTINE=$(jq -r '.next_action.routine_id' /tmp/ship-action.json)
+          jq '.due_routines[].routine_id' /tmp/ship-action.json | tr -d '"' > /tmp/ship-due-routines.txt || true
+          ACTIONS_DONE=0
+          if [ -s /tmp/ship-due-routines.txt ]; then
+            while IFS= read -r ROUTINE; do
+              [ -z "$ROUTINE" ] && continue
+              if [ "$ACTIONS_DONE" -ge "$MAX_ACTIONS_PER_TICK" ]; then
+                echo "Ship: hit MAX_ACTIONS_PER_TICK=$MAX_ACTIONS_PER_TICK; remaining routines wait for next cron."
+                break
+              fi
               echo "::group::Ship routine ${ROUTINE}"
-              SHIP_REPO="" shipctl run --routine "$ROUTINE" --trigger schedule --commit-and-pr
+              STATUS_FILE="/tmp/ship-status-${ROUTINE//\//_}.json"
+              rm -f "$STATUS_FILE"
+              SHIP_REPO="" shipctl run --routine "$ROUTINE" --trigger schedule --commit-and-pr --status-file "$STATUS_FILE"
               echo "::endgroup::"
-              ;;
-            pipeline_pick)
+              STATUS=$(jq -r '.status // "ok"' "$STATUS_FILE" 2>/dev/null || echo "ok")
+              REASON=$(jq -r '.reason // ""' "$STATUS_FILE" 2>/dev/null || echo "")
+              if [ "$STATUS" = "noop" ]; then
+                echo "Ship: routine ${ROUTINE} noop (reason=${REASON}); trying next."
+                continue
+              fi
+              echo "Ship: routine ${ROUTINE} did work (status=${STATUS}); continuing through due list."
+              ACTIONS_DONE=$((ACTIONS_DONE + 1))
+            done < /tmp/ship-due-routines.txt
+          fi
+          if [ "$ACTIONS_DONE" = "0" ]; then
+            ACTION=$(jq -r '.next_action.kind // "noop"' /tmp/ship-action.json)
+            if [ "$ACTION" = "pipeline_pick" ]; then
               SPECIALIST=$(jq -r '.next_action.specialist' /tmp/ship-action.json)
               echo "::group::Ship pipeline pick — ${SPECIALIST}"
               SHIP_REPO="" shipctl run --specialist "$SPECIALIST" --trigger pipeline_pick --commit-and-pr
               echo "::endgroup::"
-              ;;
-            noop)
-              echo "Ship: nothing to do this tick."
-              ;;
-            *)
-              echo "Ship: unrecognised next_action.kind '$ACTION'; check shipctl version." >&2
-              exit 1
-              ;;
-          esac
+            else
+              echo "Ship: every due routine no-op'd and no pipeline pick available — nothing to do this tick."
+            fi
+          else
+            echo "Ship: completed ${ACTIONS_DONE} action(s) this tick."
+          fi
