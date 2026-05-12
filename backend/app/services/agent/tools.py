@@ -798,71 +798,6 @@ class ToolBox:
                 },
             ),
             ToolSpec(
-                name="list_recent_activity",
-                description=(
-                    "Return the last N pipeline runs / PRs / workflow runs "
-                    "in the workspace, newest first. Use to answer "
-                    "'what happened recently?'. Supports `since` / "
-                    "`repo_id` filters for scoped history."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "kinds": {
-                            "type": "array",
-                            "items": {
-                                "type": "string",
-                                "enum": ["pipeline_run", "pull_request", "workflow_run"],
-                            },
-                            "description": (
-                                "Restrict to specific activity kinds; omit "
-                                "for all three."
-                            ),
-                        },
-                        "repo_id": {
-                            "type": "string",
-                            "description": (
-                                "Optional UUID of an activated repo. "
-                                "Applies to PRs and workflow runs; "
-                                "pipeline runs have no repo binding."
-                            ),
-                        },
-                        "since": {
-                            "type": "string",
-                            "description": (
-                                "Optional ISO-8601 UTC timestamp "
-                                "(e.g. ``2026-04-01T00:00:00Z``). Drop "
-                                "rows older than this."
-                            ),
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": _MAX_ACTIVITY_ITEMS,
-                            "default": 10,
-                        },
-                    },
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
-                name="list_activated_repos",
-                description=(
-                    "List the repositories the workspace has activated for "
-                    "Ship, including each repo's UUID (``id``), "
-                    "``full_name`` and ``default_branch``, plus "
-                    "``kb_chunk_count`` / ``kb_last_indexed_at`` so you can "
-                    "tell whether `.ship/knowledge` is indexed. Call this "
-                    "before asking the user for a repo id — the other "
-                    "repo-scoped tools require the UUID."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
                 name="list_tickets",
                 description=(
                     "Read the most-recently-updated tickets from the "
@@ -993,31 +928,6 @@ class ToolBox:
                 },
             ),
             ToolSpec(
-                name="list_buckets",
-                description=(
-                    "Enumerate the workspace's knowledge buckets (packed "
-                    "prior conversations). Unlike ``search_buckets`` this "
-                    "is a flat list — useful when the user asks 'what do "
-                    "you remember?' or wants to pick one by name."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "include_archived": {
-                            "type": "boolean",
-                            "default": False,
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": _MAX_BUCKETS_LISTED,
-                            "default": 25,
-                        },
-                    },
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
                 name="list_pull_requests",
                 description=(
                     "List pull requests known to Ship (cached from "
@@ -1054,135 +964,6 @@ class ToolBox:
                             "default": 20,
                         },
                     },
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
-                name="get_pipeline_run",
-                description=(
-                    "Fetch one pipeline run by UUID with its summary "
-                    "and payload. Use after ``list_pipeline_runs`` when "
-                    "the user asks why a specific run failed or what "
-                    "it produced."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "run_id": {
-                            "type": "string",
-                            "description": "Pipeline run UUID.",
-                        },
-                    },
-                    "required": ["run_id"],
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
-                name="list_clarifications",
-                description=(
-                    "Return the workspace's clarification inbox "
-                    "(questions the agent has asked humans, plus "
-                    "answered/skipped history). Use to avoid re-asking "
-                    "something the user already declined, or to "
-                    "surface an open question to the user."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "status": {
-                            "type": "string",
-                            "enum": ["open", "answered", "skipped", "stale"],
-                        },
-                        "repo_id": {
-                            "type": "string",
-                            "description": (
-                                "Optional UUID of an activated repo."
-                            ),
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": _MAX_CLARIFICATIONS,
-                            "default": 20,
-                        },
-                    },
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
-                name="list_improvements",
-                description=(
-                    "Return agent-proposed improvements with their "
-                    "pending/accepted/declined/deferred decisions. "
-                    "Use to decide whether to re-propose something "
-                    "(declined ones should not resurface) or to show "
-                    "the user their current backlog."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "decision": {
-                            "type": "string",
-                            "enum": [
-                                "pending",
-                                "accepted",
-                                "declined",
-                                "deferred",
-                            ],
-                        },
-                        "repo_id": {
-                            "type": "string",
-                            "description": (
-                                "Optional UUID of an activated repo."
-                            ),
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": _MAX_IMPROVEMENTS,
-                            "default": 20,
-                        },
-                    },
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
-                name="search_code",
-                description=(
-                    "Search source code in one activated GitHub repo via "
-                    "GitHub's code search API. Use for 'where is X defined?' "
-                    "when pgvector KB search is not enough. One call per "
-                    "turn — subject to GitHub rate limits."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "repo_id": {
-                            "type": "string",
-                            "description": "UUID of the activated repo.",
-                        },
-                        "query": {
-                            "type": "string",
-                            "description": (
-                                "Search terms (GitHub code search syntax), "
-                                "e.g. ``symbol:MyClass`` or a function name."
-                            ),
-                        },
-                        "language": {
-                            "type": "string",
-                            "description": (
-                                "Optional language filter (``Python``, "
-                                "``TypeScript``, …)."
-                            ),
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": _MAX_CODE_SEARCH,
-                            "default": 15,
-                        },
-                    },
-                    "required": ["repo_id", "query"],
                     "additionalProperties": False,
                 },
             ),
@@ -1329,188 +1110,6 @@ class ToolBox:
                 },
             ),
             ToolSpec(
-                name="inbox_routing_list",
-                description=(
-                    "Workspace inbox routing rules and the configuration-"
-                    "health summary (bound / used / orphaned / unbound "
-                    "handles). Use to answer 'who picks up X?' or to "
-                    "diagnose an inbox item that landed on the wrong "
-                    "owner."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
-                name="inbox_routing_preview",
-                description=(
-                    "Side-effect-free dry run of the inbox routing "
-                    "resolver against a sample item. Tells you who an "
-                    "item with the given ``item_type`` / ``repo_id`` / "
-                    "``play_key`` would be assigned to *today* without "
-                    "creating anything. Round-robin pointers are NOT "
-                    "advanced."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "item_type": {
-                            "type": "string",
-                            "enum": [
-                                "clarification",
-                                "improvement",
-                                "failure",
-                                "approval",
-                                "exception",
-                            ],
-                            "description": (
-                                "Inbox type the hypothetical item would "
-                                "carry — used to pick the play's emit "
-                                "rule when ``play_key`` is set."
-                            ),
-                        },
-                        "handle": {
-                            "type": "string",
-                            "description": (
-                                "Optional symbolic handle to resolve "
-                                "(e.g. ``security_officer``). If set, "
-                                "wins over the play-derived handle."
-                            ),
-                        },
-                        "repo_id": {
-                            "type": "string",
-                            "description": "Optional activated-repo UUID.",
-                        },
-                        "play_key": {
-                            "type": "string",
-                            "description": (
-                                "Optional Play key whose ``inbox.profile`` "
-                                "supplies the handle when ``handle`` is "
-                                "omitted."
-                            ),
-                        },
-                        "payload": {
-                            "type": "object",
-                            "description": (
-                                "Sample ``source_row`` payload used by "
-                                "built-in handles (``requested_by`` "
-                                "etc.). Forwarded verbatim to the "
-                                "resolver."
-                            ),
-                            "additionalProperties": True,
-                        },
-                    },
-                    "required": ["item_type"],
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
-                name="plays_coverage",
-                description=(
-                    "Per-Play coverage rollup for the workspace: "
-                    "covered vs uncovered repos, coverage percentage, "
-                    "sample uncovered repo ids. Use to answer "
-                    "'where is play X missing?' or 'what critical "
-                    "plays are unconfigured?'."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "category": {
-                            "type": "string",
-                            "description": (
-                                "Optional ``spec.category`` filter "
-                                "(e.g. ``scan``, ``flow``)."
-                            ),
-                        },
-                        "critical_only": {
-                            "type": "boolean",
-                            "default": False,
-                        },
-                        "has_gaps": {
-                            "type": "boolean",
-                            "default": False,
-                            "description": (
-                                "Only return rows with "
-                                "``coverage_pct < 1.0``."
-                            ),
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": _MAX_PLAYS_COVERAGE_ROWS,
-                            "default": _DEFAULT_PLAYS_COVERAGE_ROWS,
-                        },
-                    },
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
-                name="plays_list",
-                description=(
-                    "Enumerate Plays (catalog patterns) with category / "
-                    "critical filters. Richer than "
-                    "``list_catalog_artifacts`` — surfaces "
-                    "``category``, ``secondary_categories``, "
-                    "``critical``, ``default_inbox_profile``. Use this "
-                    "when the user asks 'what Plays exist for X?'."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "category": {
-                            "type": "string",
-                            "description": (
-                                "Filter by ``spec.category``."
-                            ),
-                        },
-                        "critical_only": {
-                            "type": "boolean",
-                            "default": False,
-                        },
-                        "q": {
-                            "type": "string",
-                            "description": (
-                                "Substring matched (case-insensitive) "
-                                "against play title and key."
-                            ),
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": _MAX_PLAYS_LIST,
-                            "default": _DEFAULT_PLAYS_LIST,
-                        },
-                    },
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
-                name="plays_get",
-                description=(
-                    "Single Play (catalog pattern) detail including "
-                    "frontmatter (category / critical / inbox profile / "
-                    "includes) and the full ARTIFACT.md body. Call "
-                    "after ``plays_list`` for the playbook text."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "play_key": {
-                            "type": "string",
-                            "description": (
-                                "Play key (pattern id), e.g. "
-                                "``flow-pr-self-review``."
-                            ),
-                        },
-                    },
-                    "required": ["play_key"],
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
                 name="runs_query",
                 description=(
                     "Outcome-first list of pipeline runs across the "
@@ -1605,98 +1204,6 @@ class ToolBox:
                         },
                     },
                     "required": ["run_id"],
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
-                name="automations_list",
-                description=(
-                    "Single combined surface listing the workspace's "
-                    "pipelines, lanes (from ``.ship/config.yml``), and "
-                    "fleet_lanes (workspace-level mirror rules). Use "
-                    "for 'what automations are configured?' before "
-                    "drilling into ``runs_query``. Each row carries "
-                    "``kind=pipeline|lane|fleet_lane`` so the LLM can "
-                    "differentiate."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "scope": {
-                            "type": "string",
-                            "enum": ["all", "fleet", "repo"],
-                            "default": "all",
-                            "description": (
-                                "``fleet`` returns only ``fleet_lane`` "
-                                "rows; ``repo`` returns the per-repo "
-                                "``pipeline`` and ``lane`` rows; "
-                                "``all`` returns both."
-                            ),
-                        },
-                        "repo_id": {
-                            "type": "string",
-                            "description": "Optional activated-repo UUID.",
-                        },
-                        "enabled_only": {
-                            "type": "boolean",
-                            "default": False,
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": _MAX_AUTOMATIONS_LIST,
-                            "default": _DEFAULT_AUTOMATIONS_LIST,
-                        },
-                    },
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
-                name="repo_intel_get",
-                description=(
-                    "Return the current ``repo_intel`` snapshot for "
-                    "one activated repo (languages, frameworks, "
-                    "entry points, structure, commit style, visual "
-                    "tokens). Returns ``{error: 'not_harvested_yet'}`` "
-                    "when the repo has never been harvested. Use to "
-                    "ground answers about 'what is this repo built "
-                    "with?'."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "repo_id": {
-                            "type": "string",
-                            "description": "Activated-repo UUID.",
-                        },
-                    },
-                    "required": ["repo_id"],
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
-                name="repo_kb_status",
-                description=(
-                    "Read-only probe of one repo's "
-                    "``.ship/knowledge`` index state — returns chunk "
-                    "count, number of distinct source paths, and the "
-                    "most recent ``indexed_at`` timestamp. Use to "
-                    "answer 'is the repo's knowledge indexed?' or "
-                    "'when did we last reindex?' before deciding "
-                    "whether to call ``reindex_repo_kb``. "
-                    "``indexed=false`` with ``chunks=0`` means the "
-                    "repo has never been indexed (or every chunk was "
-                    "GC'd because the source files disappeared)."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "repo_id": {
-                            "type": "string",
-                            "description": "Activated-repo UUID.",
-                        },
-                    },
-                    "required": ["repo_id"],
                     "additionalProperties": False,
                 },
             ),
@@ -1854,251 +1361,6 @@ class ToolBox:
                         },
                     },
                     "required": ["inbox_item_id", "assignee_user_id"],
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
-                name="play_run_now",
-                description=(
-                    "Queue a manual run of a Play (lane) for one repo. "
-                    "Admin-only and audited. Returns "
-                    "``error='no_automation'`` if the Play is not yet "
-                    "automated for this repo (call ``play_automate`` "
-                    "first or run via shipctl)."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "play_key": {
-                            "type": "string",
-                            "description": (
-                                "Catalog play / lane id (matches "
-                                "``Pipeline.lane_id``)."
-                            ),
-                        },
-                        "repo_id": {
-                            "type": "string",
-                            "description": "UUID of the activated repo.",
-                        },
-                        "idempotency_key": {
-                            "type": "string",
-                            "description": (
-                                "Optional caller-provided key stored "
-                                "on the queued run for client-side "
-                                "dedup."
-                            ),
-                        },
-                    },
-                    "required": ["play_key", "repo_id"],
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
-                name="play_automate",
-                description=(
-                    "Create a Lane (the back-end automation primitive) "
-                    "for a Play. ``scope='repo'`` writes a "
-                    "``lanes`` row scoped to one repo; "
-                    "``scope='fleet'`` writes a workspace-wide "
-                    "``fleet_lanes`` row. Admin-only and audited. "
-                    "Returns ``error='conflict'`` with "
-                    "``existing_lane_id`` if a lane with the same "
-                    "``(play_key, scope, repo_id, cadence)`` is "
-                    "already present."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "play_key": {"type": "string"},
-                        "scope": {
-                            "type": "string",
-                            "enum": ["repo", "fleet"],
-                        },
-                        "repo_id": {
-                            "type": "string",
-                            "description": (
-                                "UUID — required when scope='repo'."
-                            ),
-                        },
-                        "cadence": {
-                            "type": "string",
-                            "description": (
-                                "manual | on_pr | weekly | daily | "
-                                "hourly | <5-field cron>"
-                            ),
-                        },
-                        "name": {
-                            "type": "string",
-                            "description": (
-                                "Optional human-readable label "
-                                "(defaults to the Play title)."
-                            ),
-                        },
-                    },
-                    "required": ["play_key", "scope", "cadence"],
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
-                name="automation_toggle",
-                description=(
-                    "Enable or disable one Pipeline. Admin-only and "
-                    "audited. No-op when the requested state matches "
-                    "the current state."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "pipeline_id": {"type": "string"},
-                        "enabled": {"type": "boolean"},
-                    },
-                    "required": ["pipeline_id", "enabled"],
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
-                name="archive_bucket_article",
-                description=(
-                    "Mark a published bucket article (ADR / runbook / "
-                    "facts page) as archived so readers and warmed "
-                    "memory stop seeing it. Use when the operator "
-                    "confirms the underlying decision was reverted, "
-                    "the source file was deleted, or the content has "
-                    "gone stale. Idempotent — calling twice on the "
-                    "same article is a no-op. Admin-only, audited; "
-                    "the ``reason`` is persisted on the audit row "
-                    "so future readers can answer 'why is this gone'. "
-                    "Always confirm via ``ship-choice`` before "
-                    "calling — this affects every agent that reads "
-                    "the bucket."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "article_id": {
-                            "type": "string",
-                            "description": (
-                                "UUID from ``get_knowledge_bucket`` / "
-                                "``search_buckets``."
-                            ),
-                        },
-                        "reason": {
-                            "type": "string",
-                            "description": (
-                                "Why this article is now stale. Cite "
-                                "the superseding ADR / commit / "
-                                "decision — \"obsolete\" alone is "
-                                "not enough."
-                            ),
-                            "minLength": 1,
-                            "maxLength": 2000,
-                        },
-                    },
-                    "required": ["article_id", "reason"],
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
-                name="reindex_repo_kb",
-                description=(
-                    "Run the ``.ship/knowledge`` indexer for one "
-                    "activated repo synchronously. Embeds new / "
-                    "changed Markdown under ``.ship/knowledge/`` into "
-                    "``kb_chunks`` so the next ``search_repo_kb`` / "
-                    "``knowledge_search`` call sees them. Re-runs are "
-                    "cheap on unchanged repos (path+SHA diff skips "
-                    "embedding) but the path still costs an OpenAI "
-                    "round-trip per changed chunk — admin-only, "
-                    "audited. Use after the operator commits new KB "
-                    "docs and doesn't want to wait for the push "
-                    "webhook, or when ``repo_kb_status`` shows "
-                    "``indexed=false``. Returns the indexer's report "
-                    "shape (``files_discovered``, ``files_indexed``, "
-                    "``files_skipped_unchanged``, ``chunks_written``, "
-                    "``chunks_deleted``)."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "repo_id": {
-                            "type": "string",
-                            "description": (
-                                "UUID of the activated repo to "
-                                "reindex."
-                            ),
-                        },
-                    },
-                    "required": ["repo_id"],
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
-                name="inbox_routing_upsert",
-                description=(
-                    "Insert or update one inbox routing rule. "
-                    "Admin-only and audited. ``name`` is the handle "
-                    "key (^[a-z][a-z0-9_]*$). ``then_assign_to`` is "
-                    "the dispatch target — see "
-                    "``inbox_routing_preview`` for the strategy "
-                    "vocabulary. Pass ``rule_id`` to update an "
-                    "existing row; omit to insert (returns "
-                    "``error='conflict'`` if a row already exists "
-                    "for this handle)."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "rule_id": {
-                            "type": "string",
-                            "description": (
-                                "Optional UUID of an existing rule "
-                                "to update."
-                            ),
-                        },
-                        "name": {
-                            "type": "string",
-                            "maxLength": 64,
-                            "description": (
-                                "Handle key the rule binds (becomes "
-                                "``handle_key``)."
-                            ),
-                        },
-                        "when": {
-                            "type": "object",
-                            "description": (
-                                "Free-form match shape stored under "
-                                "``strategy_config._when`` for "
-                                "forward-compatibility (resolver "
-                                "currently ignores it)."
-                            ),
-                        },
-                        "then_assign_to": {
-                            "type": "object",
-                            "description": (
-                                "{strategy: 'user'|'group'|"
-                                "'round_robin'|'oncall'|'first'|"
-                                "'codeowners'|'workspace_admin'|"
-                                "'workspace_owner'|'requested_by'|"
-                                "'first_admin'|'first_owner', "
-                                "user_id?, group_id?, "
-                                "strategy_config?}"
-                            ),
-                        },
-                        "priority": {
-                            "type": "integer",
-                            "default": 100,
-                            "description": (
-                                "Stored under "
-                                "``strategy_config._priority`` for "
-                                "forward-compatibility."
-                            ),
-                        },
-                        "enabled": {
-                            "type": "boolean",
-                            "default": True,
-                        },
-                    },
-                    "required": ["name", "then_assign_to"],
                     "additionalProperties": False,
                 },
             ),
@@ -2438,7 +1700,6 @@ class ToolBox:
             "get_repo_file": self._tool_get_repo_file,
             "list_code_map": self._tool_list_code_map,
             "repo_symbols": self._tool_repo_symbols,
-            "list_activated_repos": self._tool_list_activated_repos,
             "create_ticket": self._tool_create_ticket,
             "list_tickets": self._tool_list_tickets,
             "list_projects": self._tool_list_projects,
@@ -2447,57 +1708,28 @@ class ToolBox:
             "find_or_create_project_by_name": self._tool_find_or_create_project_by_name,
             "inbox_create": self._tool_inbox_create,
             "append_project_description": self._tool_append_project_description,
-            "list_recent_activity": self._tool_list_recent_activity,
             "get_pull_request": self._tool_get_pull_request,
-            "list_buckets": self._tool_list_buckets,
-            # ELS-77: ``search_buckets`` + ``search_workspace_kb`` are
-            # no longer in :meth:`specs` (consolidated into
-            # ``knowledge_search``) but stay in dispatch as private
-            # hooks for ``test_agent_tools_bucket_cutover`` /
-            # ``test_navigator_knowledge_tool`` — the LLM never sees
-            # them, but ``box.invoke("search_buckets", ...)`` still
-            # works for direct test calls.
-            "search_buckets": self._tool_search_buckets,
-            "search_workspace_kb": self._tool_search_workspace_kb,
             "list_pull_requests": self._tool_list_pull_requests,
-            "get_pipeline_run": self._tool_get_pipeline_run,
-            "list_clarifications": self._tool_list_clarifications,
-            "list_improvements": self._tool_list_improvements,
-            "search_code": self._tool_search_code,
             "list_workspace_members": self._tool_list_workspace_members,
             "get_knowledge_bucket": self._tool_get_knowledge_bucket,
             # Phase 6 — new IA tools (Inbox, Plays, Runs, Coverage, Intel)
             "inbox_list": self._tool_inbox_list,
             "inbox_get": self._tool_inbox_get,
-            "inbox_routing_list": self._tool_inbox_routing_list,
-            "inbox_routing_preview": self._tool_inbox_routing_preview,
-            "plays_coverage": self._tool_plays_coverage,
-            "plays_list": self._tool_plays_list,
-            "plays_get": self._tool_plays_get,
             "runs_query": self._tool_runs_query,
             "run_detail": self._tool_run_detail,
-            "automations_list": self._tool_automations_list,
-            "repo_intel_get": self._tool_repo_intel_get,
-            # ELS-77: ``knowledge_search`` is the canonical spec name
-            # (PR-B consolidation). ``knowledge_search_v2`` stays as a
-            # private dispatch alias so existing test surfaces and any
-            # in-flight role files referencing the old name keep
-            # working — the LLM only sees ``knowledge_search`` because
-            # that's the name in :meth:`specs`.
             "knowledge_search": self._tool_knowledge_search_v2,
-            "knowledge_search_v2": self._tool_knowledge_search_v2,
+            # Legacy dispatch aliases — kept invisible to the LLM (no
+            # ToolSpec) but still callable via ``box.invoke(...)`` from
+            # ``test_agent_tools_bucket_cutover``. Production callers
+            # use ``knowledge_search`` and ``get_knowledge_bucket``.
+            "search_buckets": self._tool_search_buckets,
+            "search_workspace_kb": self._tool_search_workspace_kb,
+            "list_buckets": self._tool_list_buckets,
             # Phase 6 Wave B — mutating tools (admin-gated, audited)
             "inbox_dispose": self._tool_inbox_dispose,
             "inbox_snooze": self._tool_inbox_snooze,
             "inbox_reassign": self._tool_inbox_reassign,
-            "play_run_now": self._tool_play_run_now,
-            "play_automate": self._tool_play_automate,
-            "automation_toggle": self._tool_automation_toggle,
-            "archive_bucket_article": self._tool_archive_bucket_article,
             # ELS-62 — on-demand repo KB indexing surface
-            "repo_kb_status": self._tool_repo_kb_status,
-            "reindex_repo_kb": self._tool_reindex_repo_kb,
-            "inbox_routing_upsert": self._tool_inbox_routing_upsert,
             "get_ticket": self._tool_get_ticket,
             "get_dashboard": self._tool_get_dashboard,
             "workspace_audit_search": self._tool_workspace_audit_search,
@@ -2569,127 +1801,7 @@ class ToolBox:
             results.append(entry)
         return _json_result({"results": results})
 
-    async def _tool_repo_kb_status(self, args: dict[str, Any]) -> str:
-        """Read-only probe of one repo's ``kb_chunks`` state (ELS-62).
 
-        Tenancy fence: a ``repo_id`` from another workspace returns
-        ``error='repo_not_found'`` rather than leaking via row counts.
-        We deliberately do *not* require a live GitHub installation
-        here — a suspended install shouldn't hide the KB state the
-        operator already paid to embed.
-        """
-        from backend.app.db.models.agent_memory import KbChunk
-
-        repo_id = _parse_uuid(args, "repo_id")
-        repo = (
-            await self._session.execute(
-                select(WorkspaceRepo).where(
-                    WorkspaceRepo.workspace_id == self._workspace_id,
-                    WorkspaceRepo.id == repo_id,
-                )
-            )
-        ).scalars().first()
-        if repo is None:
-            return _json_result(
-                {
-                    "error": "repo_not_found",
-                    "message": (
-                        f"repo {repo_id} not activated for this "
-                        "workspace"
-                    ),
-                }
-            )
-
-        row = (
-            await self._session.execute(
-                select(
-                    func.count(KbChunk.id),
-                    func.count(func.distinct(KbChunk.source_path)),
-                    func.max(KbChunk.indexed_at),
-                ).where(KbChunk.repo_id == repo.id)
-            )
-        ).one()
-        chunks = int(row[0] or 0)
-        paths = int(row[1] or 0)
-        last_indexed_at = row[2]
-
-        from backend.app.services.agent.kb_indexer import KB_ROOT
-
-        return _json_result(
-            {
-                "repo_id": str(repo.id),
-                "repo_full_name": repo.full_name,
-                "default_branch": repo.default_branch,
-                "kb_root": KB_ROOT,
-                "indexed": chunks > 0,
-                "chunks": chunks,
-                "paths": paths,
-                "last_indexed_at": (
-                    last_indexed_at.isoformat()
-                    if last_indexed_at is not None
-                    else None
-                ),
-            }
-        )
-
-    async def _tool_reindex_repo_kb(self, args: dict[str, Any]) -> str:
-        """Manually re-run :func:`reindex_repo_kb` for one repo (ELS-62).
-
-        The webhook handler is the steady-state trigger; this tool is
-        the operator escape hatch for "I just merged a knowledge doc
-        and don't want to wait for the next push" or "the original
-        webhook fired before OPENAI_API_KEY was configured". Admin-
-        gated because each call costs OpenAI tokens; the indexer
-        itself is path+SHA idempotent so repeat invocations on an
-        unchanged repo are a cheap no-op.
-        """
-        gate_err = await self._require_admin_or_error(
-            tool_name="reindex_repo_kb"
-        )
-        if gate_err is not None:
-            return _json_result(gate_err)
-
-        try:
-            repo_id = _parse_uuid(args, "repo_id")
-        except ToolInvocationError as exc:
-            return _json_result(
-                {"error": "validation_failed", "message": str(exc)}
-            )
-
-        try:
-            repo, install = await self._resolve_repo_with_install(repo_id)
-        except ToolInvocationError as exc:
-            return _json_result(
-                {"error": "repo_unavailable", "message": str(exc)}
-            )
-
-        from backend.app.services.agent.kb_indexer import reindex_repo_kb
-
-        try:
-            report = await reindex_repo_kb(
-                self._session, repo, install, settings=self._settings
-            )
-        except RuntimeError as exc:
-            # Most common: ``OPENAI_API_KEY is not configured`` from
-            # ``embed_texts``. Keep parity with ``search_repo_kb`` so
-            # the LLM recognises the same shape.
-            return _json_result(
-                {"error": "embeddings_unavailable", "message": str(exc)}
-            )
-
-        return _json_result(
-            {
-                "repo_id": str(repo.id),
-                "repo_full_name": repo.full_name,
-                "files_discovered": report.files_discovered,
-                "files_indexed": report.files_indexed,
-                "files_skipped_unchanged": report.files_skipped_unchanged,
-                "files_skipped_too_big": report.files_skipped_too_big,
-                "files_skipped_binary": report.files_skipped_binary,
-                "chunks_written": report.chunks_written,
-                "chunks_deleted": report.chunks_deleted,
-            }
-        )
 
     async def _tool_get_repo_file(self, args: dict[str, Any]) -> str:
         repo_id = _parse_uuid(args, "repo_id")
@@ -3305,154 +2417,7 @@ class ToolBox:
 
         return _json_result({"ok": True, "project_id": project_id})
 
-    async def _tool_list_recent_activity(self, args: dict[str, Any]) -> str:
-        limit = _clamp_int(
-            args.get("limit"), default=10, low=1, high=_MAX_ACTIVITY_ITEMS
-        )
-        kinds_raw = args.get("kinds") or ["pipeline_run", "pull_request", "workflow_run"]
-        kinds = {str(k) for k in kinds_raw}
-        repo_id_arg = args.get("repo_id")
-        repo_id: uuid.UUID | None = None
-        if repo_id_arg:
-            try:
-                repo_id = uuid.UUID(str(repo_id_arg))
-            except ValueError as exc:
-                raise ToolInvocationError(
-                    f"invalid repo_id: {repo_id_arg!r}"
-                ) from exc
-        since_dt = _parse_iso_datetime(args.get("since"), "since")
 
-        out: list[dict[str, Any]] = []
-
-        if "pipeline_run" in kinds and repo_id is None:
-            stmt = (
-                select(PipelineRun)
-                .where(PipelineRun.workspace_id == self._workspace_id)
-                .order_by(desc(PipelineRun.created_at))
-                .limit(limit)
-            )
-            if since_dt is not None:
-                stmt = stmt.where(PipelineRun.created_at >= since_dt)
-            rows = (await self._session.execute(stmt)).scalars().all()
-            for r in rows:
-                out.append(
-                    {
-                        "kind": "pipeline_run",
-                        "id": str(r.id),
-                        "status": r.status,
-                        "pipeline_id": str(r.pipeline_id),
-                        "created_at": r.created_at.isoformat()
-                        if r.created_at
-                        else None,
-                    }
-                )
-
-        if "pull_request" in kinds:
-            stmt = (
-                select(PullRequest)
-                .where(PullRequest.workspace_id == self._workspace_id)
-                .order_by(desc(PullRequest.updated_at))
-                .limit(limit)
-            )
-            if repo_id is not None:
-                stmt = stmt.where(PullRequest.repo_id == repo_id)
-            if since_dt is not None:
-                stmt = stmt.where(PullRequest.updated_at >= since_dt)
-            rows = (await self._session.execute(stmt)).scalars().all()
-            for r in rows:
-                out.append(
-                    {
-                        "kind": "pull_request",
-                        "id": str(r.id),
-                        "title": r.title,
-                        "url": r.html_url,
-                        "state": r.state,
-                        "updated_at": r.updated_at.isoformat()
-                        if r.updated_at
-                        else None,
-                    }
-                )
-
-        if "workflow_run" in kinds:
-            stmt = (
-                select(WorkflowRun)
-                .where(WorkflowRun.workspace_id == self._workspace_id)
-                .order_by(desc(WorkflowRun.updated_at))
-                .limit(limit)
-            )
-            if repo_id is not None:
-                stmt = stmt.where(WorkflowRun.repo_id == repo_id)
-            if since_dt is not None:
-                stmt = stmt.where(WorkflowRun.updated_at >= since_dt)
-            rows = (await self._session.execute(stmt)).scalars().all()
-            for r in rows:
-                out.append(
-                    {
-                        "kind": "workflow_run",
-                        "id": str(r.id),
-                        "name": r.name,
-                        "status": r.status,
-                        "conclusion": r.conclusion,
-                        "url": r.html_url,
-                        "updated_at": r.updated_at.isoformat()
-                        if r.updated_at
-                        else None,
-                    }
-                )
-
-        out.sort(
-            key=lambda x: x.get("updated_at") or x.get("created_at") or "",
-            reverse=True,
-        )
-        return _json_result({"items": out[:limit]})
-
-    async def _tool_list_activated_repos(self, args: dict[str, Any]) -> str:
-        del args  # no parameters
-        rows = (
-            await self._session.execute(
-                select(WorkspaceRepo)
-                .where(WorkspaceRepo.workspace_id == self._workspace_id)
-                .order_by(WorkspaceRepo.full_name)
-                .limit(_MAX_REPOS_LISTED)
-            )
-        ).scalars().all()
-        stats_rows = (
-            await self._session.execute(
-                select(
-                    KbChunk.repo_id,
-                    func.count(KbChunk.id).label("kb_chunk_count"),
-                    func.max(KbChunk.indexed_at).label("kb_last_indexed_at"),
-                ).where(KbChunk.workspace_id == self._workspace_id)
-                .group_by(KbChunk.repo_id)
-            )
-        ).all()
-        stats_map = {
-            str(r.repo_id): (
-                int(r.kb_chunk_count),
-                r.kb_last_indexed_at.isoformat()
-                if r.kb_last_indexed_at
-                else None,
-            )
-            for r in stats_rows
-        }
-        items = []
-        for r in rows:
-            cnt, last_ix = stats_map.get(str(r.id), (0, None))
-            items.append(
-                {
-                    "id": str(r.id),
-                    "full_name": r.full_name,
-                    "default_branch": r.default_branch,
-                    "private": bool(r.private),
-                    "html_url": r.html_url,
-                    "preset": r.preset,
-                    "provider": r.provider,
-                    "has_github_app": r.installation_id is not None,
-                    "kb_chunk_count": cnt,
-                    "kb_last_indexed_at": last_ix,
-                }
-            )
-        return _json_result({"repos": items, "count": len(items)})
 
     async def _tool_list_tickets(self, args: dict[str, Any]) -> str:
         limit = _clamp_int(
@@ -3632,54 +2597,6 @@ class ToolBox:
 
         return _json_result(summary)
 
-    async def _tool_list_buckets(self, args: dict[str, Any]) -> str:
-        include_archived = bool(args.get("include_archived", False))
-        limit = _clamp_int(
-            args.get("limit"), default=25, low=1, high=_MAX_BUCKETS_LISTED
-        )
-        stmt = (
-            select(KnowledgeBucket)
-            .where(KnowledgeBucket.workspace_id == self._workspace_id)
-            .where(KnowledgeBucket.scope_kind == BucketScope.WORKSPACE)
-            .where(KnowledgeBucket.source_kind != BucketSource.REPO_FILES)
-            .order_by(KnowledgeBucket.name)
-            .limit(limit)
-        )
-        if not include_archived:
-            stmt = stmt.where(KnowledgeBucket.archived_at.is_(None))
-        buckets = (await self._session.execute(stmt)).scalars().all()
-
-        # Phase 5d: ``summary_count`` counts published articles now
-        # (mirrored from bucket_summaries in Phase 5b). ``article_count``
-        # is the new canonical name — we expose both so the agent can
-        # pick up the new one without the old field breaking existing
-        # prompts mid-migration.
-        items: list[dict[str, Any]] = []
-        for b in buckets:
-            count_rows = (
-                await self._session.execute(
-                    select(BucketArticle.id)
-                    .where(BucketArticle.bucket_id == b.id)
-                    .where(
-                        BucketArticle.status == BucketArticleStatus.PUBLISHED
-                    )
-                    .where(BucketArticle.archived_at.is_(None))
-                )
-            ).scalars().all()
-            items.append(
-                {
-                    "slug": b.slug,
-                    "name": b.name,
-                    "description": b.description,
-                    "scope_kind": b.scope_kind,
-                    "source_kind": b.source_kind,
-                    "summary_count": len(count_rows),
-                    "article_count": len(count_rows),
-                    "archived": b.archived_at is not None,
-                    "updated_at": b.updated_at.isoformat() if b.updated_at else None,
-                }
-            )
-        return _json_result({"buckets": items, "count": len(items)})
 
     async def _tool_list_pull_requests(self, args: dict[str, Any]) -> str:
         limit = _clamp_int(
@@ -3741,169 +2658,9 @@ class ToolBox:
         ]
         return _json_result({"pull_requests": items, "count": len(items)})
 
-    async def _tool_get_pipeline_run(self, args: dict[str, Any]) -> str:
-        run_id = _parse_uuid(args, "run_id")
-        run = (
-            await self._session.execute(
-                select(PipelineRun).where(
-                    PipelineRun.workspace_id == self._workspace_id,
-                    PipelineRun.id == run_id,
-                )
-            )
-        ).scalars().first()
-        if run is None:
-            raise ToolInvocationError(
-                f"pipeline run {run_id} not found in this workspace"
-            )
-        pipeline = await self._session.get(Pipeline, run.pipeline_id)
-        return _json_result(
-            {
-                "id": str(run.id),
-                "pipeline_id": str(run.pipeline_id),
-                "pipeline_kind": pipeline.lane_id if pipeline else None,
-                "pipeline_name": pipeline.name if pipeline else None,
-                "workflow_id": pipeline.workflow_id if pipeline else None,
-                "status": run.status,
-                "trigger": run.trigger,
-                "started_at": run.started_at.isoformat() if run.started_at else None,
-                "finished_at": run.finished_at.isoformat() if run.finished_at else None,
-                "duration_seconds": (
-                    int((run.finished_at - run.started_at).total_seconds())
-                    if run.started_at and run.finished_at
-                    else None
-                ),
-                "summary": run.summary,
-                "payload": run.payload or {},
-                "created_at": run.created_at.isoformat() if run.created_at else None,
-            }
-        )
 
-    async def _tool_list_clarifications(self, args: dict[str, Any]) -> str:
-        limit = _clamp_int(
-            args.get("limit"),
-            default=20,
-            low=1,
-            high=_MAX_CLARIFICATIONS,
-        )
-        status_filter = args.get("status")
-        repo_id_arg = args.get("repo_id")
-        repo_id: uuid.UUID | None = None
-        if repo_id_arg:
-            try:
-                repo_id = uuid.UUID(str(repo_id_arg))
-            except ValueError as exc:
-                raise ToolInvocationError(
-                    f"invalid repo_id: {repo_id_arg!r}"
-                ) from exc
 
-        stmt = (
-            select(Clarification)
-            .where(Clarification.workspace_id == self._workspace_id)
-            .order_by(desc(Clarification.created_at))
-            .limit(limit)
-        )
-        if isinstance(status_filter, str) and status_filter:
-            stmt = stmt.where(Clarification.status == status_filter)
-        if repo_id is not None:
-            stmt = stmt.where(Clarification.repo_id == repo_id)
-        rows = (await self._session.execute(stmt)).scalars().all()
-        items = [
-            {
-                "id": str(r.id),
-                "status": r.status,
-                "ticket_ref": r.ticket_ref,
-                "repo_id": str(r.repo_id) if r.repo_id else None,
-                "pipeline_run_id": str(r.pipeline_run_id) if r.pipeline_run_id else None,
-                "question": _truncate(r.question, 800),
-                "answer": _truncate(r.answer, 800) if r.answer else None,
-                "created_at": r.created_at.isoformat() if r.created_at else None,
-                "answered_at": r.answered_at.isoformat() if r.answered_at else None,
-            }
-            for r in rows
-        ]
-        return _json_result({"clarifications": items, "count": len(items)})
 
-    async def _tool_list_improvements(self, args: dict[str, Any]) -> str:
-        limit = _clamp_int(
-            args.get("limit"),
-            default=20,
-            low=1,
-            high=_MAX_IMPROVEMENTS,
-        )
-        decision_filter = args.get("decision")
-        repo_id_arg = args.get("repo_id")
-        repo_id: uuid.UUID | None = None
-        if repo_id_arg:
-            try:
-                repo_id = uuid.UUID(str(repo_id_arg))
-            except ValueError as exc:
-                raise ToolInvocationError(
-                    f"invalid repo_id: {repo_id_arg!r}"
-                ) from exc
-
-        stmt = (
-            select(Improvement)
-            .where(Improvement.workspace_id == self._workspace_id)
-            .order_by(desc(Improvement.created_at))
-            .limit(limit)
-        )
-        if isinstance(decision_filter, str) and decision_filter:
-            stmt = stmt.where(Improvement.decision == decision_filter)
-        if repo_id is not None:
-            stmt = stmt.where(Improvement.repo_id == repo_id)
-        rows = (await self._session.execute(stmt)).scalars().all()
-        items = [
-            {
-                "id": str(r.id),
-                "kind": r.kind,
-                "title": r.title,
-                "body": _truncate(r.body, 800),
-                "impact": r.impact,
-                "effort": r.effort,
-                "decision": r.decision,
-                "decision_reason": r.decision_reason,
-                "next_action_url": r.next_action_url,
-                "repo_id": str(r.repo_id) if r.repo_id else None,
-                "pipeline_run_id": str(r.pipeline_run_id) if r.pipeline_run_id else None,
-                "created_at": r.created_at.isoformat() if r.created_at else None,
-                "decided_at": r.decided_at.isoformat() if r.decided_at else None,
-            }
-            for r in rows
-        ]
-        return _json_result({"improvements": items, "count": len(items)})
-
-    async def _tool_search_code(self, args: dict[str, Any]) -> str:
-        repo_id = _parse_uuid(args, "repo_id")
-        q = _require_str(args, "query")
-        language = args.get("language")
-        limit = _clamp_int(
-            args.get("limit"), default=15, low=1, high=_MAX_CODE_SEARCH
-        )
-        repo, install = await self._resolve_repo_with_install(repo_id)
-        gateway = GitHubCodeHost(install.installation_id, settings=self._settings)
-        owner, _, name = repo.full_name.partition("/")
-        ref = RepoRef(kind="github", owner=owner, repo=name)
-        lang = str(language).strip() if isinstance(language, str) else None
-        try:
-            hits = await gateway.search_code(
-                ref,
-                q,
-                language=lang or None,
-                limit=limit,
-            )
-        except Exception as exc:  # noqa: BLE001
-            raise ToolInvocationError(
-                f"code search failed (GitHub rate limit or query error): {exc}"
-            ) from exc
-        return _json_result(
-            {
-                "repo": repo.full_name,
-                "query": q,
-                "language": lang,
-                "hits": hits,
-                "count": len(hits),
-            }
-        )
 
     async def _tool_list_workspace_members(self, args: dict[str, Any]) -> str:
         from backend.app.api.v1.routes.workspaces import ROLES_READ
@@ -4150,6 +2907,205 @@ class ToolBox:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    async def _tool_list_buckets(self, args: dict[str, Any]) -> str:
+        include_archived = bool(args.get("include_archived", False))
+        limit = _clamp_int(
+            args.get("limit"), default=25, low=1, high=_MAX_BUCKETS_LISTED
+        )
+        stmt = (
+            select(KnowledgeBucket)
+            .where(KnowledgeBucket.workspace_id == self._workspace_id)
+            .where(KnowledgeBucket.scope_kind == BucketScope.WORKSPACE)
+            .where(KnowledgeBucket.source_kind != BucketSource.REPO_FILES)
+            .order_by(KnowledgeBucket.name)
+            .limit(limit)
+        )
+        if not include_archived:
+            stmt = stmt.where(KnowledgeBucket.archived_at.is_(None))
+        buckets = (await self._session.execute(stmt)).scalars().all()
+
+        # Phase 5d: ``summary_count`` counts published articles now
+        # (mirrored from bucket_summaries in Phase 5b). ``article_count``
+        # is the new canonical name — we expose both so the agent can
+        # pick up the new one without the old field breaking existing
+        # prompts mid-migration.
+        items: list[dict[str, Any]] = []
+        for b in buckets:
+            count_rows = (
+                await self._session.execute(
+                    select(BucketArticle.id)
+                    .where(BucketArticle.bucket_id == b.id)
+                    .where(
+                        BucketArticle.status == BucketArticleStatus.PUBLISHED
+                    )
+                    .where(BucketArticle.archived_at.is_(None))
+                )
+            ).scalars().all()
+            items.append(
+                {
+                    "slug": b.slug,
+                    "name": b.name,
+                    "description": b.description,
+                    "scope_kind": b.scope_kind,
+                    "source_kind": b.source_kind,
+                    "summary_count": len(count_rows),
+                    "article_count": len(count_rows),
+                    "archived": b.archived_at is not None,
+                    "updated_at": b.updated_at.isoformat() if b.updated_at else None,
+                }
+            )
+        return _json_result({"buckets": items, "count": len(items)})
+
+    async def _tool_knowledge_search_v2(
+        self, args: dict[str, Any]
+    ) -> str:
+        from backend.app.services.knowledge_search import (
+            EmbeddingsUnavailable,
+            search_workspace_knowledge,
+        )
+
+        try:
+            query = _require_str(args, "query")
+        except ToolInvocationError as exc:
+            return _json_result({
+                "error": "invalid_query",
+                "message": str(exc),
+            })
+
+        limit = _clamp_int(
+            args.get("limit"),
+            default=_DEFAULT_KNOWLEDGE_V2_RESULTS,
+            low=1,
+            high=_MAX_KNOWLEDGE_V2_RESULTS,
+        )
+
+        repo_id_arg = args.get("repo_id")
+        repo_id: uuid.UUID | None = None
+        if repo_id_arg is not None:
+            try:
+                repo_id = uuid.UUID(str(repo_id_arg))
+            except (TypeError, ValueError):
+                return _json_result({
+                    "error": "invalid_repo_id",
+                    "message": f"repo_id is not a UUID: {repo_id_arg!r}",
+                })
+            if not await self._verify_repo_in_workspace(repo_id):
+                return _json_result({
+                    "error": "repo_not_in_workspace",
+                    "message": (
+                        f"repo {repo_id} is not activated for this "
+                        "workspace"
+                    ),
+                })
+        elif self._active_repo_id is not None:
+            repo_id = self._active_repo_id
+
+        bucket_slug = args.get("bucket_slug")
+        if bucket_slug is not None and not isinstance(bucket_slug, str):
+            return _json_result({
+                "error": "invalid_bucket_slug",
+                "message": "bucket_slug must be a string when provided",
+            })
+
+        intel_facts = bool(args.get("intel_facts", False))
+
+        try:
+            hits = await search_workspace_knowledge(
+                self._session,
+                workspace_id=self._workspace_id,
+                query=query,
+                repo_id=repo_id,
+                bucket_slug=(
+                    bucket_slug.strip()
+                    if isinstance(bucket_slug, str) and bucket_slug.strip()
+                    else None
+                ),
+                limit=limit,
+                settings=self._settings,
+            )
+        except EmbeddingsUnavailable as exc:
+            return _json_result(
+                {
+                    "error": "embeddings_unavailable",
+                    "message": str(exc),
+                }
+            )
+
+        results: list[dict[str, Any]] = []
+        for hit in hits:
+            results.append(
+                {
+                    "source": hit.source,
+                    "repo_id": (
+                        str(hit.repo_id) if hit.repo_id is not None else None
+                    ),
+                    "bucket_slug": hit.bucket_slug,
+                    "source_path": hit.title,
+                    "snippet": _truncate(hit.snippet or "", 400),
+                    "score": hit.score,
+                    "rank_bucket": hit.rank_bucket,
+                }
+            )
+            if len(results) >= limit:
+                break
+
+        if intel_facts and repo_id is not None:
+            try:
+                intel_hits = await search_workspace_knowledge(
+                    self._session,
+                    workspace_id=self._workspace_id,
+                    query=query,
+                    repo_id=repo_id,
+                    bucket_slug="repository-context",
+                    limit=3,
+                    settings=self._settings,
+                )
+            except EmbeddingsUnavailable:
+                intel_hits = []
+            for hit in reversed(intel_hits):
+                results.insert(
+                    0,
+                    {
+                        "source": hit.source,
+                        "repo_id": str(hit.repo_id) if hit.repo_id is not None else None,
+                        "bucket_slug": hit.bucket_slug,
+                        "source_path": hit.title,
+                        "snippet": _truncate(hit.snippet or "", 400),
+                        "score": hit.score,
+                        "rank_bucket": "repository_context",
+                    },
+                )
+            if len(results) > limit:
+                results = results[:limit]
+
+        return _json_result(
+            {
+                "query": query,
+                "results": results,
+            }
+        )
+
+    async def _verify_repo_in_workspace(self, repo_id: uuid.UUID) -> bool:
+        """Return True iff ``repo_id`` belongs to the active workspace.
+
+        Helper shared by the Phase-6 tools that take a ``repo_id``
+        argument (inbox / runs / repo_intel / knowledge). We check
+        existence with ``LIMIT 1`` rather than fetching the full row
+        because the caller usually projects ``WorkspaceRepo.full_name``
+        in a separate batched query.
+        """
+        row = (
+            await self._session.execute(
+                select(WorkspaceRepo.id)
+                .where(
+                    WorkspaceRepo.id == repo_id,
+                    WorkspaceRepo.workspace_id == self._workspace_id,
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        return row is not None
 
     async def _require_workspace_role(
         self, accept: tuple[str, ...]
@@ -4631,669 +3587,10 @@ class ToolBox:
             }
         )
 
-    async def _tool_inbox_routing_list(self, args: dict[str, Any]) -> str:
-        rules_rows = (
-            (
-                await self._session.execute(
-                    select(InboxRoutingRule)
-                    .where(
-                        InboxRoutingRule.workspace_id == self._workspace_id
-                    )
-                    .order_by(
-                        InboxRoutingRule.handle_key.asc(),
-                        InboxRoutingRule.created_at.asc(),
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
 
-        group_rows = (
-            await self._session.execute(
-                select(MemberGroup.key, MemberGroup.id, MemberGroup.display_name)
-                .where(MemberGroup.workspace_id == self._workspace_id)
-            )
-        ).all()
-        group_key_to_id = {key: gid for key, gid, _ in group_rows}
-        group_key_to_display = {key: display for key, _, display in group_rows}
 
-        from backend.app.db.models.tenancy import User
 
-        user_ids: set[uuid.UUID] = set()
-        for r in rules_rows:
-            if r.target_type == "user":
-                try:
-                    user_ids.add(uuid.UUID(str(r.target_value)))
-                except (TypeError, ValueError):
-                    continue
-        user_emails: dict[uuid.UUID, str] = {}
-        if user_ids:
-            user_rows = (
-                await self._session.execute(
-                    select(User.id, User.email).where(User.id.in_(user_ids))
-                )
-            ).all()
-            user_emails = {uid: email for uid, email in user_rows}
 
-        rules_out: list[dict[str, Any]] = []
-        for r in rules_rows:
-            target_user_id: str | None = None
-            target_user_email: str | None = None
-            target_group_id: str | None = None
-            target_group_key: str | None = None
-            target_group_name: str | None = None
-            target_strategy: str | None = None
-            assigned_label: str
-            if r.target_type == "user":
-                try:
-                    uid = uuid.UUID(str(r.target_value))
-                    target_user_id = str(uid)
-                    target_user_email = user_emails.get(uid)
-                    assigned_label = (
-                        f"user:{target_user_email or target_user_id}"
-                    )
-                except (TypeError, ValueError):
-                    assigned_label = f"user:{r.target_value!r}"
-            elif r.target_type == "group":
-                gid = group_key_to_id.get(r.target_value)
-                target_group_id = str(gid) if gid is not None else None
-                target_group_key = r.target_value
-                target_group_name = group_key_to_display.get(r.target_value)
-                strat = r.assignment_strategy or "first"
-                assigned_label = (
-                    f"group:{target_group_key}:{strat}"
-                )
-            elif r.target_type == "strategy":
-                target_strategy = r.target_value
-                assigned_label = f"strategy:{r.target_value}"
-            else:
-                assigned_label = f"unknown:{r.target_value!r}"
-
-            rules_out.append(
-                {
-                    "id": str(r.id),
-                    "name": r.handle_key,
-                    "handle": r.handle_key,
-                    "when": {"handle": r.handle_key},
-                    "then_assign_to": assigned_label,
-                    "target_type": r.target_type,
-                    "target_user_id": target_user_id,
-                    "target_user_email": target_user_email,
-                    "target_group_id": target_group_id,
-                    "target_group_key": target_group_key,
-                    "target_group_name": target_group_name,
-                    "target_strategy": target_strategy,
-                    "assignment_strategy": r.assignment_strategy,
-                    "strategy_config": r.strategy_config or {},
-                    "priority": 0,
-                    "enabled": bool(r.is_enabled),
-                    "is_enabled": bool(r.is_enabled),
-                    "created_at": (
-                        r.created_at.isoformat()
-                        if r.created_at
-                        else None
-                    ),
-                    "updated_at": (
-                        r.updated_at.isoformat()
-                        if r.updated_at
-                        else None
-                    ),
-                }
-            )
-
-        # Build the same handles summary the HTTP route returns: bound
-        # / used / orphaned / unbound. Walking the catalog here keeps
-        # the tool self-contained (no shared service for the catalog
-        # walk; route-side helpers live in the route module).
-        from backend.app.services.inbox.profiles import (
-            INBOX_TYPES as _CATALOG_INBOX_TYPES,
-            ProfileCatalogError,
-            load_profile_catalog,
-        )
-
-        bound = {r.handle_key for r in rules_rows if r.handle_key}
-        used: set[str] = set()
-        try:
-            catalog = load_profile_catalog()
-        except ProfileCatalogError as exc:
-            logger.warning(
-                "inbox_routing_list: profile catalog unreadable (%s); "
-                "handles summary will report no used handles",
-                exc,
-            )
-            catalog = {}
-        for profile_name, body in catalog.items():
-            if profile_name == "silent" or not isinstance(body, dict):
-                continue
-            for key, rule in body.items():
-                if key == "inherits" or key not in _CATALOG_INBOX_TYPES:
-                    continue
-                if not isinstance(rule, dict):
-                    continue
-                if not rule.get("enabled"):
-                    continue
-                handle = rule.get("handle")
-                if isinstance(handle, str) and handle:
-                    used.add(handle)
-
-        return _json_result(
-            {
-                "rules": rules_out,
-                "handles": {
-                    "bound": sorted(bound),
-                    "used": sorted(used),
-                    "orphaned": sorted(bound - used),
-                    "unbound": sorted(used - bound),
-                },
-            }
-        )
-
-    async def _tool_inbox_routing_preview(
-        self, args: dict[str, Any]
-    ) -> str:
-        from backend.app.services import catalog as catalog_service
-        from backend.app.services.inbox.profiles import (
-            INBOX_TYPES,
-            ProfileCatalogError,
-            resolve_for_pattern,
-        )
-        from backend.app.services.inbox.routing import (
-            RoutingContext,
-            RoutingError,
-            resolve_handle,
-        )
-
-        item_type = args.get("item_type")
-        if not isinstance(item_type, str) or item_type not in INBOX_TYPES:
-            return _json_result({
-                "error": "invalid_item_type",
-                "message": (
-                    f"item_type must be one of {sorted(INBOX_TYPES)} "
-                    f"(got {item_type!r})"
-                ),
-            })
-
-        repo_id_arg = args.get("repo_id")
-        repo_id: uuid.UUID | None = None
-        if repo_id_arg is not None:
-            try:
-                repo_id = uuid.UUID(str(repo_id_arg))
-            except (TypeError, ValueError):
-                return _json_result({
-                    "error": "invalid_repo_id",
-                    "message": f"repo_id is not a UUID: {repo_id_arg!r}",
-                })
-            if not await self._verify_repo_in_workspace(repo_id):
-                return _json_result({
-                    "error": "repo_not_in_workspace",
-                    "message": (
-                        f"repo {repo_id} is not activated for this "
-                        "workspace"
-                    ),
-                })
-
-        play_key = args.get("play_key")
-        if play_key is not None and not isinstance(play_key, str):
-            return _json_result({
-                "error": "invalid_play_key",
-                "message": "play_key must be a string when provided",
-            })
-
-        payload = args.get("payload") or {}
-        if not isinstance(payload, dict):
-            return _json_result({
-                "error": "invalid_payload",
-                "message": "payload must be an object when provided",
-            })
-
-        attempted: list[dict[str, Any]] = []
-
-        explicit_handle = args.get("handle")
-        if explicit_handle is not None and not isinstance(
-            explicit_handle, str
-        ):
-            return _json_result({
-                "error": "invalid_handle",
-                "message": "handle must be a string when provided",
-            })
-
-        chosen_handle: str | None = None
-        if isinstance(explicit_handle, str) and explicit_handle.strip():
-            chosen_handle = explicit_handle.strip()
-            attempted.append(
-                {"source": "argument", "handle": chosen_handle}
-            )
-        elif isinstance(play_key, str) and play_key.strip():
-            try:
-                patterns: list = []  # Phase 2.4 Step D — pattern catalog retired
-            except catalog_service.CatalogError as exc:
-                return _json_result({
-                    "error": "catalog_unreadable",
-                    "message": str(exc),
-                })
-            entry = next(
-                (p for p in patterns if p.id == play_key), None
-            )
-            if entry is None:
-                return _json_result({
-                    "error": "play_not_found",
-                    "message": (
-                        f"no catalog pattern with id={play_key!r}"
-                    ),
-                })
-            try:
-                resolved_profile = resolve_for_pattern(
-                    {"id": entry.id, "spec": entry.spec},
-                )
-            except ProfileCatalogError as exc:
-                return _json_result({
-                    "error": "profile_unreadable",
-                    "message": str(exc),
-                })
-            rule = resolved_profile.rules.get(item_type)
-            if rule is None or not rule.enabled or not rule.handle:
-                return _json_result({
-                    "error": "no_handle_for_type",
-                    "message": (
-                        f"play {play_key!r} does not emit "
-                        f"{item_type!r} items (profile "
-                        f"{resolved_profile.profile_name!r})"
-                    ),
-                })
-            chosen_handle = rule.handle
-            attempted.append(
-                {
-                    "source": "play_profile",
-                    "play_key": play_key,
-                    "profile": resolved_profile.profile_name,
-                    "handle": chosen_handle,
-                }
-            )
-        else:
-            return _json_result({
-                "error": "missing_handle_source",
-                "message": (
-                    "supply either ``handle`` or ``play_key`` so the "
-                    "preview knows which symbolic handle to resolve"
-                ),
-            })
-
-        ctx = RoutingContext(
-            workspace_id=self._workspace_id,
-            repo_id=repo_id,
-            run_id=None,
-            source_row=payload,
-        )
-
-        # The resolver may UPSERT ``group_assignment_state`` on the
-        # round_robin path. Wrap the call in a SAVEPOINT so the
-        # preview never advances rotation pointers — admins lose
-        # trust in the button the moment it nudges future
-        # assignments.
-        sp = await self._session.begin_nested()
-        try:
-            try:
-                resolved = await resolve_handle(
-                    self._session, chosen_handle, ctx
-                )
-            except RoutingError as exc:
-                return _json_result({
-                    "error": "routing_error",
-                    "message": str(exc),
-                })
-        finally:
-            await sp.rollback()
-
-        from backend.app.db.models.tenancy import User
-
-        resolved_email: str | None = None
-        resolved_display: str | None = None
-        if resolved.user_id is not None:
-            user_row = await self._session.get(User, resolved.user_id)
-            if user_row is not None:
-                resolved_email = user_row.email
-                resolved_display = (
-                    user_row.display_name or user_row.email
-                )
-
-        # ``intake_reason='unresolved'`` means we walked the rule + the
-        # built-in chain and nobody owned the work — surface as
-        # ``fallback_used=True`` so the LLM can flag the gap.
-        fallback_used = (
-            resolved.intake_reason.startswith("fallback:")
-            or resolved.intake_reason == "unresolved"
-        )
-
-        # Look up the matched rule (if any) so the result tells the
-        # operator which row fired. ``intake_handle`` may have been
-        # rewritten by the fallback chain, so we look up by the
-        # ORIGINAL ``chosen_handle`` first and then by the resolved
-        # one if the fallback path did fire.
-        rule_lookup_handle = (
-            resolved.intake_handle
-            if resolved.intake_reason.startswith("rule:")
-            or resolved.intake_reason.startswith("group:")
-            else chosen_handle
-        )
-        matched_rule = (
-            await self._session.execute(
-                select(InboxRoutingRule).where(
-                    InboxRoutingRule.workspace_id == self._workspace_id,
-                    InboxRoutingRule.handle_key == rule_lookup_handle,
-                    InboxRoutingRule.is_enabled.is_(True),
-                )
-            )
-        ).scalar_one_or_none()
-
-        return _json_result(
-            {
-                "handle": chosen_handle,
-                "matched_rule_id": (
-                    str(matched_rule.id) if matched_rule else None
-                ),
-                "matched_rule_name": (
-                    matched_rule.handle_key if matched_rule else None
-                ),
-                "resolved_owner": {
-                    "user_id": (
-                        str(resolved.user_id)
-                        if resolved.user_id is not None
-                        else None
-                    ),
-                    "email": resolved_email,
-                    "display": resolved_display,
-                    "group_id": (
-                        str(resolved.group_id)
-                        if resolved.group_id is not None
-                        else None
-                    ),
-                    "fallback_used": fallback_used,
-                },
-                "intake_handle": resolved.intake_handle,
-                "intake_reason": resolved.intake_reason,
-                "attempted_strategies": attempted,
-            }
-        )
-
-    async def _tool_plays_coverage(self, args: dict[str, Any]) -> str:
-        from backend.app.services import catalog as catalog_service
-
-        category = args.get("category")
-        if category is not None and not isinstance(category, str):
-            return _json_result({
-                "error": "invalid_category",
-                "message": "category must be a string when provided",
-            })
-        critical_only = bool(args.get("critical_only", False))
-        has_gaps = bool(args.get("has_gaps", False))
-        limit = _clamp_int(
-            args.get("limit"),
-            default=_DEFAULT_PLAYS_COVERAGE_ROWS,
-            low=1,
-            high=_MAX_PLAYS_COVERAGE_ROWS,
-        )
-
-        repo_rows = (
-            (
-                await self._session.execute(
-                    select(WorkspaceRepo)
-                    .where(WorkspaceRepo.workspace_id == self._workspace_id)
-                    .order_by(WorkspaceRepo.full_name.asc())
-                )
-            )
-            .scalars()
-            .all()
-        )
-        repo_id_set: set[uuid.UUID] = {r.id for r in repo_rows}
-        activated_total = len(repo_id_set)
-
-        lanes_by_pattern: dict[str, set[uuid.UUID]] = {}
-        if repo_id_set:
-            lane_rows = (
-                (
-                    await self._session.execute(
-                        select(Lane).where(
-                            Lane.workspace_id == self._workspace_id
-                        )
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            for lane in lane_rows:
-                if lane.repo_id not in repo_id_set:
-                    continue
-                pattern_keys: set[str] = set()
-                if lane.pattern:
-                    pattern_keys.add(lane.pattern)
-                blob = lane.config_blob or {}
-                blob_patterns = (
-                    blob.get("patterns") if isinstance(blob, dict) else None
-                )
-                if isinstance(blob_patterns, list):
-                    for entry in blob_patterns:
-                        if isinstance(entry, str) and entry:
-                            pattern_keys.add(entry)
-                for key in pattern_keys:
-                    lanes_by_pattern.setdefault(key, set()).add(lane.repo_id)
-
-        try:
-            patterns: list = []  # Phase 2.4 Step D — pattern catalog retired
-        except catalog_service.CatalogError as exc:
-            return _json_result({
-                "error": "catalog_unreadable",
-                "message": str(exc),
-            })
-
-        rows: list[dict[str, Any]] = []
-        for entry in patterns:
-            inbox_cfg = (
-                entry.spec.get("inbox") if isinstance(entry.spec, dict) else None
-            )
-            if isinstance(inbox_cfg, dict):
-                profile = inbox_cfg.get("profile")
-                if isinstance(profile, str) and profile == "silent":
-                    continue
-
-            row_category = entry.category or "uncategorized"
-            row_critical = bool(
-                entry.spec.get("critical")
-                if isinstance(entry.spec, dict)
-                else False
-            )
-            covered = lanes_by_pattern.get(entry.id, set()) & repo_id_set
-            uncovered = repo_id_set - covered
-            coverage_pct = (
-                len(covered) / activated_total if activated_total else 0.0
-            )
-            rows.append(
-                {
-                    "play_key": entry.id,
-                    "play_title": entry.name or entry.id,
-                    "category": row_category,
-                    "critical": row_critical,
-                    "repos_covered_count": len(covered),
-                    "repos_uncovered_count": len(uncovered),
-                    "coverage_pct": coverage_pct,
-                    "sample_uncovered_repo_ids": [
-                        str(rid)
-                        for rid in list(uncovered)[:_INBOX_SAMPLE_UNCOVERED]
-                    ],
-                }
-            )
-
-        # Sort: critical-with-gaps first, then non-critical-with-gaps,
-        # then fully-covered alphabetical.
-        def _sort_key(r: dict[str, Any]) -> tuple[int, float, str]:
-            has_gaps_local = r["coverage_pct"] < 1.0
-            if has_gaps_local and r["critical"]:
-                bucket = 0
-            elif has_gaps_local:
-                bucket = 1
-            else:
-                bucket = 2
-            return (bucket, r["coverage_pct"], r["play_title"].lower())
-
-        rows.sort(key=_sort_key)
-
-        if isinstance(category, str):
-            rows = [r for r in rows if r["category"] == category]
-        if critical_only:
-            rows = [r for r in rows if r["critical"]]
-        if has_gaps:
-            rows = [r for r in rows if r["coverage_pct"] < 1.0]
-
-        truncated = len(rows) > limit
-        rows = rows[:limit]
-        return _json_result(
-            {
-                "rows": rows,
-                "activated_repos_total": activated_total,
-                "truncated": truncated,
-            }
-        )
-
-    async def _tool_plays_list(self, args: dict[str, Any]) -> str:
-        from backend.app.services import catalog as catalog_service
-
-        category = args.get("category")
-        if category is not None and not isinstance(category, str):
-            return _json_result({
-                "error": "invalid_category",
-                "message": "category must be a string when provided",
-            })
-        critical_only = bool(args.get("critical_only", False))
-        q = args.get("q")
-        if q is not None and not isinstance(q, str):
-            return _json_result({
-                "error": "invalid_q",
-                "message": "q must be a string when provided",
-            })
-        q_norm = q.lower().strip() if isinstance(q, str) else None
-        limit = _clamp_int(
-            args.get("limit"),
-            default=_DEFAULT_PLAYS_LIST,
-            low=1,
-            high=_MAX_PLAYS_LIST,
-        )
-
-        try:
-            patterns: list = []  # Phase 2.4 Step D — pattern catalog retired
-        except catalog_service.CatalogError as exc:
-            return _json_result({
-                "error": "catalog_unreadable",
-                "message": str(exc),
-            })
-
-        items: list[dict[str, Any]] = []
-        for entry in patterns:
-            spec = entry.spec if isinstance(entry.spec, dict) else {}
-            inbox_cfg = spec.get("inbox") if isinstance(spec, dict) else None
-            inbox_profile: str | None = None
-            if isinstance(inbox_cfg, dict):
-                profile = inbox_cfg.get("profile")
-                if isinstance(profile, str):
-                    inbox_profile = profile
-            secondary_raw = entry.raw.get("secondary_categories") or []
-            secondary: list[str] = []
-            if isinstance(secondary_raw, list):
-                secondary = [
-                    str(s) for s in secondary_raw if isinstance(s, str)
-                ]
-            row = {
-                "play_key": entry.id,
-                "title": entry.name or entry.id,
-                "category": entry.category or "uncategorized",
-                "secondary_categories": secondary,
-                "critical": bool(spec.get("critical")) if spec else False,
-                "summary": entry.description or None,
-                "default_inbox_profile": inbox_profile,
-            }
-
-            if isinstance(category, str) and row["category"] != category:
-                continue
-            if critical_only and not row["critical"]:
-                continue
-            if q_norm:
-                title_blob = (row["title"] or "").lower()
-                key_blob = (row["play_key"] or "").lower()
-                if q_norm not in title_blob and q_norm not in key_blob:
-                    continue
-            items.append(row)
-
-        items.sort(key=lambda r: (r["category"], r["play_key"]))
-        truncated = len(items) > limit
-        items = items[:limit]
-        return _json_result(
-            {"items": items, "truncated": truncated}
-        )
-
-    async def _tool_plays_get(self, args: dict[str, Any]) -> str:
-        from backend.app.services import catalog as catalog_service
-
-        play_key = args.get("play_key")
-        if not isinstance(play_key, str) or not play_key.strip():
-            return _json_result({
-                "error": "invalid_play_key",
-                "message": "play_key is required",
-            })
-
-        try:
-            patterns: list = []  # Phase 2.4 Step D — pattern catalog retired
-        except catalog_service.CatalogError as exc:
-            return _json_result({
-                "error": "catalog_unreadable",
-                "message": str(exc),
-            })
-        entry = next((p for p in patterns if p.id == play_key), None)
-        if entry is None:
-            return _json_result({
-                "error": "not_found",
-                "message": f"no catalog pattern with id={play_key!r}",
-            })
-
-        spec = entry.spec if isinstance(entry.spec, dict) else {}
-        inbox_cfg = spec.get("inbox") if isinstance(spec, dict) else None
-        inbox_profile: str | None = None
-        if isinstance(inbox_cfg, dict):
-            profile = inbox_cfg.get("profile")
-            if isinstance(profile, str):
-                inbox_profile = profile
-        secondary_raw = entry.raw.get("secondary_categories") or []
-        secondary: list[str] = []
-        if isinstance(secondary_raw, list):
-            secondary = [
-                str(s) for s in secondary_raw if isinstance(s, str)
-            ]
-        modes_raw = spec.get("modes") if isinstance(spec, dict) else None
-        modes: list[str] = []
-        if isinstance(modes_raw, list):
-            modes = [str(m) for m in modes_raw if isinstance(m, str)]
-        body = entry.body or ""
-        body_truncated = len(body) > _MAX_ARTIFACT_BODY_CHARS
-        if body_truncated:
-            body = body[:_MAX_ARTIFACT_BODY_CHARS]
-
-        return _json_result(
-            {
-                "play_key": entry.id,
-                "title": entry.name or entry.id,
-                "category": entry.category or "uncategorized",
-                "secondary_categories": secondary,
-                "critical": bool(spec.get("critical")) if spec else False,
-                "summary": entry.description or None,
-                "body": body,
-                "body_truncated": body_truncated,
-                "includes": list(entry.include),
-                "default_execution_mode": modes[0] if modes else None,
-                "modes": modes,
-                "default_inbox_profile": inbox_profile,
-                "default_trigger": entry.default_trigger,
-                "lane_id": entry.lane_id,
-                "lane_name": entry.lane_name,
-            }
-        )
 
     async def _tool_runs_query(self, args: dict[str, Any]) -> str:
         play_key = args.get("play_key")
@@ -5619,356 +3916,7 @@ class ToolBox:
             }
         )
 
-    async def _tool_automations_list(self, args: dict[str, Any]) -> str:
-        scope = args.get("scope", "all")
-        if scope not in (None, "all", "fleet", "repo"):
-            return _json_result({
-                "error": "invalid_scope",
-                "message": (
-                    f"scope must be 'all'/'fleet'/'repo' (got {scope!r})"
-                ),
-            })
-        if scope is None:
-            scope = "all"
 
-        repo_id_arg = args.get("repo_id")
-        repo_id: uuid.UUID | None = None
-        if repo_id_arg is not None:
-            try:
-                repo_id = uuid.UUID(str(repo_id_arg))
-            except (TypeError, ValueError):
-                return _json_result({
-                    "error": "invalid_repo_id",
-                    "message": f"repo_id is not a UUID: {repo_id_arg!r}",
-                })
-            if not await self._verify_repo_in_workspace(repo_id):
-                return _json_result({
-                    "error": "repo_not_in_workspace",
-                    "message": (
-                        f"repo {repo_id} is not activated for this "
-                        "workspace"
-                    ),
-                })
-
-        enabled_only = bool(args.get("enabled_only", False))
-        limit = _clamp_int(
-            args.get("limit"),
-            default=_DEFAULT_AUTOMATIONS_LIST,
-            low=1,
-            high=_MAX_AUTOMATIONS_LIST,
-        )
-
-        repo_name_map: dict[uuid.UUID, str] = {}
-        if scope in ("all", "repo"):
-            repo_rows = (
-                await self._session.execute(
-                    select(WorkspaceRepo.id, WorkspaceRepo.full_name).where(
-                        WorkspaceRepo.workspace_id == self._workspace_id
-                    )
-                )
-            ).all()
-            repo_name_map = {rid: name for rid, name in repo_rows}
-
-        items: list[dict[str, Any]] = []
-
-        if scope in ("all", "repo"):
-            pipeline_stmt = select(Pipeline).where(
-                Pipeline.workspace_id == self._workspace_id
-            )
-            if repo_id is not None:
-                pipeline_stmt = pipeline_stmt.where(
-                    Pipeline.repo_id == repo_id
-                )
-            if enabled_only:
-                pipeline_stmt = pipeline_stmt.where(Pipeline.enabled.is_(True))
-            pipeline_rows = (
-                (await self._session.execute(pipeline_stmt))
-                .scalars()
-                .all()
-            )
-            for p in pipeline_rows:
-                items.append(
-                    {
-                        "kind": "pipeline",
-                        "id": str(p.id),
-                        "name": p.name,
-                        "play_key": p.lane_id,
-                        "scope": "repo",
-                        "repo_id": (
-                            str(p.repo_id)
-                            if p.repo_id is not None
-                            else None
-                        ),
-                        "repo_name": (
-                            repo_name_map.get(p.repo_id)
-                            if p.repo_id is not None
-                            else None
-                        ),
-                        "enabled": bool(p.enabled),
-                        "last_run_id": None,
-                        "last_run_status": p.last_run_status,
-                        "last_run_at": (
-                            p.last_run_at.isoformat()
-                            if p.last_run_at
-                            else None
-                        ),
-                    }
-                )
-
-            lane_stmt = select(Lane).where(
-                Lane.workspace_id == self._workspace_id
-            )
-            if repo_id is not None:
-                lane_stmt = lane_stmt.where(Lane.repo_id == repo_id)
-            if enabled_only:
-                lane_stmt = lane_stmt.where(Lane.enabled.is_(True))
-            lane_rows = (
-                (await self._session.execute(lane_stmt)).scalars().all()
-            )
-            for ln in lane_rows:
-                items.append(
-                    {
-                        "kind": "lane",
-                        "id": str(ln.id),
-                        "name": ln.lane_id,
-                        "play_key": ln.pattern,
-                        "scope": "repo",
-                        "repo_id": (
-                            str(ln.repo_id)
-                            if ln.repo_id is not None
-                            else None
-                        ),
-                        "repo_name": (
-                            repo_name_map.get(ln.repo_id)
-                            if ln.repo_id is not None
-                            else None
-                        ),
-                        "enabled": bool(ln.enabled),
-                        "last_run_id": None,
-                        "last_run_status": ln.last_run_status,
-                        "last_run_at": (
-                            ln.last_run_at.isoformat()
-                            if ln.last_run_at
-                            else None
-                        ),
-                    }
-                )
-
-        if scope in ("all", "fleet"):
-            fleet_stmt = select(FleetLane).where(
-                FleetLane.workspace_id == self._workspace_id
-            )
-            if enabled_only:
-                fleet_stmt = fleet_stmt.where(FleetLane.enabled.is_(True))
-            fleet_rows = (
-                (await self._session.execute(fleet_stmt)).scalars().all()
-            )
-            for fl in fleet_rows:
-                items.append(
-                    {
-                        "kind": "fleet_lane",
-                        "id": str(fl.id),
-                        "name": fl.name,
-                        "play_key": fl.pattern_id,
-                        "scope": "fleet",
-                        "repo_id": None,
-                        "repo_name": None,
-                        "enabled": bool(fl.enabled),
-                        "cadence": fl.cadence,
-                        "last_run_id": None,
-                        "last_run_status": None,
-                        "last_run_at": None,
-                    }
-                )
-
-        truncated = len(items) > limit
-        items = items[:limit]
-        return _json_result(
-            {
-                "items": items,
-                "truncated": truncated,
-                "scope": scope,
-            }
-        )
-
-    async def _tool_repo_intel_get(self, args: dict[str, Any]) -> str:
-        try:
-            repo_id = _parse_uuid(args, "repo_id")
-        except ToolInvocationError as exc:
-            return _json_result({
-                "error": "invalid_repo_id",
-                "message": str(exc),
-            })
-        if not await self._verify_repo_in_workspace(repo_id):
-            return _json_result({
-                "error": "repo_not_in_workspace",
-                "message": (
-                    f"repo {repo_id} is not activated for this workspace"
-                ),
-            })
-
-        from backend.app.services.repo_intel import get_current_intel
-
-        intel = await get_current_intel(self._session, repo_id)
-        if intel is None:
-            return _json_result(
-                {
-                    "error": "not_harvested_yet",
-                    "message": (
-                        f"repo {repo_id} has no current repo_intel "
-                        "snapshot yet"
-                    ),
-                    "repo_id": str(repo_id),
-                }
-            )
-        return _json_result(
-            {
-                "repo_id": str(intel.repo_id),
-                "version": intel.version,
-                "harvested_at": (
-                    intel.harvested_at.isoformat()
-                    if intel.harvested_at
-                    else None
-                ),
-                "harvest_error": intel.harvest_error,
-                "languages": intel.languages or {},
-                "frameworks": list(intel.frameworks or []),
-                "package_managers": list(intel.package_managers or []),
-                "entry_points": list(intel.entry_points or []),
-                "structure": intel.structure or {},
-                "commit_style": intel.commit_style or {},
-                "visual_tokens": intel.visual_tokens or {},
-            }
-        )
-
-    async def _tool_knowledge_search_v2(
-        self, args: dict[str, Any]
-    ) -> str:
-        from backend.app.services.knowledge_search import (
-            EmbeddingsUnavailable,
-            search_workspace_knowledge,
-        )
-
-        try:
-            query = _require_str(args, "query")
-        except ToolInvocationError as exc:
-            return _json_result({
-                "error": "invalid_query",
-                "message": str(exc),
-            })
-
-        limit = _clamp_int(
-            args.get("limit"),
-            default=_DEFAULT_KNOWLEDGE_V2_RESULTS,
-            low=1,
-            high=_MAX_KNOWLEDGE_V2_RESULTS,
-        )
-
-        repo_id_arg = args.get("repo_id")
-        repo_id: uuid.UUID | None = None
-        if repo_id_arg is not None:
-            try:
-                repo_id = uuid.UUID(str(repo_id_arg))
-            except (TypeError, ValueError):
-                return _json_result({
-                    "error": "invalid_repo_id",
-                    "message": f"repo_id is not a UUID: {repo_id_arg!r}",
-                })
-            if not await self._verify_repo_in_workspace(repo_id):
-                return _json_result({
-                    "error": "repo_not_in_workspace",
-                    "message": (
-                        f"repo {repo_id} is not activated for this "
-                        "workspace"
-                    ),
-                })
-        elif self._active_repo_id is not None:
-            repo_id = self._active_repo_id
-
-        bucket_slug = args.get("bucket_slug")
-        if bucket_slug is not None and not isinstance(bucket_slug, str):
-            return _json_result({
-                "error": "invalid_bucket_slug",
-                "message": "bucket_slug must be a string when provided",
-            })
-
-        intel_facts = bool(args.get("intel_facts", False))
-
-        try:
-            hits = await search_workspace_knowledge(
-                self._session,
-                workspace_id=self._workspace_id,
-                query=query,
-                repo_id=repo_id,
-                bucket_slug=(
-                    bucket_slug.strip()
-                    if isinstance(bucket_slug, str) and bucket_slug.strip()
-                    else None
-                ),
-                limit=limit,
-                settings=self._settings,
-            )
-        except EmbeddingsUnavailable as exc:
-            return _json_result(
-                {
-                    "error": "embeddings_unavailable",
-                    "message": str(exc),
-                }
-            )
-
-        results: list[dict[str, Any]] = []
-        for hit in hits:
-            results.append(
-                {
-                    "source": hit.source,
-                    "repo_id": (
-                        str(hit.repo_id) if hit.repo_id is not None else None
-                    ),
-                    "bucket_slug": hit.bucket_slug,
-                    "source_path": hit.title,
-                    "snippet": _truncate(hit.snippet or "", 400),
-                    "score": hit.score,
-                    "rank_bucket": hit.rank_bucket,
-                }
-            )
-            if len(results) >= limit:
-                break
-
-        if intel_facts and repo_id is not None:
-            try:
-                intel_hits = await search_workspace_knowledge(
-                    self._session,
-                    workspace_id=self._workspace_id,
-                    query=query,
-                    repo_id=repo_id,
-                    bucket_slug="repository-context",
-                    limit=3,
-                    settings=self._settings,
-                )
-            except EmbeddingsUnavailable:
-                intel_hits = []
-            for hit in reversed(intel_hits):
-                results.insert(
-                    0,
-                    {
-                        "source": hit.source,
-                        "repo_id": str(hit.repo_id) if hit.repo_id is not None else None,
-                        "bucket_slug": hit.bucket_slug,
-                        "source_path": hit.title,
-                        "snippet": _truncate(hit.snippet or "", 400),
-                        "score": hit.score,
-                        "rank_bucket": "repository_context",
-                    },
-                )
-            if len(results) > limit:
-                results = results[:limit]
-
-        return _json_result(
-            {
-                "query": query,
-                "results": results,
-            }
-        )
 
     async def _verify_repo_in_workspace(self, repo_id: uuid.UUID) -> bool:
         """Return True iff ``repo_id`` belongs to the active workspace.
@@ -6507,859 +4455,10 @@ class ToolBox:
             }
         )
 
-    async def _tool_play_run_now(self, args: dict[str, Any]) -> str:
-        gate_err = await self._require_admin_or_error(
-            tool_name="play_run_now"
-        )
-        if gate_err is not None:
-            return _json_result(gate_err)
 
-        try:
-            play_key = _require_str(args, "play_key")
-            repo_id = _parse_uuid(args, "repo_id")
-        except ToolInvocationError as exc:
-            return _json_result({
-                "error": "validation_failed",
-                "message": str(exc),
-            })
 
-        idempotency_key = args.get("idempotency_key")
-        if idempotency_key is not None and not isinstance(
-            idempotency_key, str
-        ):
-            return _json_result({
-                "error": "validation_failed",
-                "message": "idempotency_key must be a string when provided",
-            })
 
-        if not await self._verify_repo_in_workspace(repo_id):
-            return _json_result({
-                "error": "not_found",
-                "message": (
-                    f"repo {repo_id} is not activated for this workspace"
-                ),
-            })
 
-        # Resolve play_key → Pipeline via lane_id (Wave A established
-        # the same mapping in ``_tool_runs_query``). A play that has
-        # never been automated for this repo has no Pipeline row, so
-        # we surface ``no_automation`` rather than 404 to point the
-        # caller at the right next step.
-        pipeline = (
-            await self._session.execute(
-                select(Pipeline).where(
-                    Pipeline.workspace_id == self._workspace_id,
-                    Pipeline.repo_id == repo_id,
-                    Pipeline.lane_id == play_key,
-                )
-            )
-        ).scalar_one_or_none()
-        if pipeline is None:
-            return _json_result({
-                "error": "no_automation",
-                "message": (
-                    f"Play {play_key!r} is not yet automated for this "
-                    "repo. Use play_automate first or run via shipctl."
-                ),
-            })
-        if not pipeline.enabled:
-            return _json_result({
-                "error": "conflict",
-                "message": (
-                    "pipeline is disabled; toggle it on before running"
-                ),
-            })
-
-        # Reuse the same dispatch path the HTTP "Run now" route walks
-        # so a Navigator-initiated run actually lands a
-        # ``workflow_dispatch`` on GitHub Actions. Earlier this tool
-        # only inserted a ``status='queued'`` row and left dispatch to
-        # "whichever scheduler is wired up" — but no such scheduler
-        # ever existed, so navigator-queued runs sat forever. Calling
-        # the shared helper means the run goes ``queued -> running``
-        # in one shot (or surfaces the same precondition / upstream
-        # codes the dashboard already knows how to render).
-        from fastapi import HTTPException
-
-        from backend.app.api.v1.routes.pipelines import dispatch_pipeline_run
-
-        run_payload: dict[str, Any] = {"source": "navigator"}
-        if idempotency_key:
-            run_payload["idempotency_key"] = idempotency_key
-
-        audit_extra: dict[str, Any] = {"source": "navigator"}
-        if idempotency_key:
-            audit_extra["idempotency_key"] = idempotency_key
-
-        try:
-            run = await dispatch_pipeline_run(
-                self._session,
-                self._settings,
-                pipeline,
-                trigger="manual",
-                summary=f"Navigator queued {pipeline.name or play_key}",
-                payload=run_payload,
-                actor_user_id=self._user_id,
-                explicit_repo_id=repo_id,
-                audit_extra=audit_extra,
-            )
-        except HTTPException as exc:
-            # Translate FastAPI's structured precondition / upstream
-            # errors into the JSON shape Navigator tools use so the
-            # LLM can render a useful next-step (Install workflow,
-            # Reinstall App, …) instead of a 5xx-shaped surprise.
-            detail = exc.detail if isinstance(exc.detail, dict) else {
-                "message": str(exc.detail)
-            }
-            error_code = detail.get("code") or "dispatch_failed"
-            response = {
-                "error": error_code,
-                "message": detail.get("message") or str(exc.detail),
-            }
-            for k in (
-                "workflow_file",
-                "repo_full_name",
-                "install_endpoint",
-                "upstream_status",
-                "run_id",
-            ):
-                if k in detail:
-                    response[k] = detail[k]
-            return _json_result(response)
-
-        await self._audit_navigator_tool(
-            tool_name="play_run_now",
-            payload={
-                "play_key": play_key,
-                "repo_id": str(repo_id),
-                "pipeline_id": str(pipeline.id),
-                "run_id": str(run.id),
-                "idempotency_key": idempotency_key,
-            },
-            target={"kind": "pipeline", "id": str(pipeline.id)},
-        )
-
-        return _json_result(
-            {
-                "run_id": str(run.id),
-                "pipeline_id": str(pipeline.id),
-                "status": run.status,
-                "play_key": play_key,
-                "repo_id": str(repo_id),
-            }
-        )
-
-    async def _tool_play_automate(self, args: dict[str, Any]) -> str:
-        gate_err = await self._require_admin_or_error(
-            tool_name="play_automate"
-        )
-        if gate_err is not None:
-            return _json_result(gate_err)
-
-        try:
-            play_key = _require_str(args, "play_key")
-            cadence = _require_str(args, "cadence")
-        except ToolInvocationError as exc:
-            return _json_result({
-                "error": "validation_failed",
-                "message": str(exc),
-            })
-
-        scope = args.get("scope")
-        if scope not in ("repo", "fleet"):
-            return _json_result({
-                "error": "validation_failed",
-                "message": "scope must be 'repo' or 'fleet'",
-            })
-
-        name = args.get("name")
-        if name is not None and not isinstance(name, str):
-            return _json_result({
-                "error": "validation_failed",
-                "message": "name must be a string when provided",
-            })
-
-        # Resolve the catalog pattern up front so we can stamp a
-        # human title on the row even when the caller didn't pass one.
-        try:
-            patterns: list = []  # Phase 2.4 Step D — pattern catalog retired
-        except catalog_service.CatalogError as exc:
-            return _json_result({
-                "error": "internal",
-                "message": f"catalog read failed: {exc}",
-            })
-        pattern = next((p for p in patterns if p.id == play_key), None)
-        if pattern is None:
-            return _json_result({
-                "error": "not_found",
-                "message": f"no catalog pattern with id={play_key!r}",
-            })
-        derived_name = (
-            name
-            or getattr(pattern, "title", None)
-            or play_key
-        )
-
-        # Map the free-form cadence onto Lane.kind (once / event /
-        # schedule). Cadence strings that look like a cron expression
-        # (5 whitespace-separated fields) become schedule + cron.
-        cadence_l = cadence.strip().lower()
-
-        def _classify_cadence(c: str) -> tuple[str, str | None]:
-            if c == "manual":
-                return "once", None
-            if c == "on_pr":
-                return "event", None
-            if c == "weekly":
-                return "schedule", "0 9 * * 1"
-            if c == "daily":
-                return "schedule", "0 9 * * *"
-            if c == "hourly":
-                return "schedule", "0 * * * *"
-            if len(c.split()) == 5:
-                return "schedule", c
-            return "event", None
-
-        kind, cron = _classify_cadence(cadence_l)
-
-        if scope == "repo":
-            try:
-                repo_id = _parse_uuid(args, "repo_id")
-            except ToolInvocationError as exc:
-                return _json_result({
-                    "error": "validation_failed",
-                    "message": str(exc),
-                })
-            if not await self._verify_repo_in_workspace(repo_id):
-                return _json_result({
-                    "error": "not_found",
-                    "message": (
-                        f"repo {repo_id} is not activated for this "
-                        "workspace"
-                    ),
-                })
-
-            # Synthesise a stable lane_id string keyed by the catalog
-            # pattern + cadence so re-invocations with identical args
-            # collide on the unique (repo_id, lane_id) constraint.
-            cadence_slug = "".join(
-                ch if ch.isalnum() else "_" for ch in cadence_l
-            )[:20]
-            slug_base = "".join(
-                ch if (ch.isalnum() or ch == "_") else "_"
-                for ch in play_key.lower()
-            )[:40]
-            lane_key = f"{slug_base}_{cadence_slug}"[:64]
-
-            existing_lane = (
-                await self._session.execute(
-                    select(Lane).where(
-                        Lane.repo_id == repo_id,
-                        Lane.lane_id == lane_key,
-                    )
-                )
-            ).scalar_one_or_none()
-            if existing_lane is not None:
-                return _json_result({
-                    "error": "conflict",
-                    "message": (
-                        "a Lane with this play_key + cadence already "
-                        "exists on the repo"
-                    ),
-                    "existing_lane_id": str(existing_lane.id),
-                })
-
-            row = Lane(
-                workspace_id=self._workspace_id,
-                repo_id=repo_id,
-                lane_id=lane_key,
-                kind=kind,
-                pattern=play_key[:255],
-                cron=cron,
-                idempotency_key=None,
-                enabled=True,
-                origin="manual",
-                config_blob={
-                    "name": derived_name,
-                    "play_key": play_key,
-                    "cadence": cadence,
-                    "source": "navigator",
-                },
-                sync_source="navigator",
-            )
-            self._session.add(row)
-            await self._session.flush()
-
-            await self._audit_navigator_tool(
-                tool_name="play_automate",
-                payload={
-                    "play_key": play_key,
-                    "scope": "repo",
-                    "repo_id": str(repo_id),
-                    "cadence": cadence,
-                    "name": derived_name,
-                    "lane_key": lane_key,
-                    "kind": kind,
-                },
-                target={"kind": "lane", "id": str(row.id)},
-            )
-
-            return _json_result(
-                {
-                    "lane_id": str(row.id),
-                    "lane_key": lane_key,
-                    "play_key": play_key,
-                    "scope": "repo",
-                    "repo_id": str(repo_id),
-                    "cadence": cadence,
-                    "status": "synthetic",
-                }
-            )
-
-        # scope == "fleet" — FleetLane is the workspace-wide primitive.
-        # Synthesise the same kind of stable lane_id used for repo
-        # scope so duplicate invocations collide on the unique
-        # ``(workspace_id, lane_id)`` constraint inside FleetLane.
-        cadence_slug = "".join(
-            ch if ch.isalnum() else "_" for ch in cadence_l
-        )[:20]
-        slug_base = "".join(
-            ch if (ch.isalnum() or ch == "_") else "_"
-            for ch in play_key.lower()
-        )[:40]
-        fleet_lane_key = f"{slug_base}_{cadence_slug}"[:64]
-
-        existing_fleet = (
-            await self._session.execute(
-                select(FleetLane).where(
-                    FleetLane.workspace_id == self._workspace_id,
-                    FleetLane.lane_id == fleet_lane_key,
-                )
-            )
-        ).scalar_one_or_none()
-        if existing_fleet is not None:
-            return _json_result({
-                "error": "conflict",
-                "message": (
-                    "a Fleet lane with this play_key + cadence already "
-                    "exists for the workspace"
-                ),
-                "existing_lane_id": str(existing_fleet.id),
-            })
-
-        fleet_row = FleetLane(
-            workspace_id=self._workspace_id,
-            kind="mirror_lane",
-            name=derived_name,
-            pattern_id=play_key,
-            lane_id=fleet_lane_key,
-            cadence=cadence,
-            agent_slug=None,
-            inputs={"source": "navigator"},
-            enabled=True,
-        )
-        self._session.add(fleet_row)
-        await self._session.flush()
-
-        await self._audit_navigator_tool(
-            tool_name="play_automate",
-            payload={
-                "play_key": play_key,
-                "scope": "fleet",
-                "cadence": cadence,
-                "name": derived_name,
-                "lane_key": fleet_lane_key,
-            },
-            target={"kind": "fleet_lane", "id": str(fleet_row.id)},
-        )
-
-        return _json_result(
-            {
-                "lane_id": str(fleet_row.id),
-                "lane_key": fleet_lane_key,
-                "play_key": play_key,
-                "scope": "fleet",
-                "repo_id": None,
-                "cadence": cadence,
-                "status": "synthetic",
-            }
-        )
-
-    async def _tool_automation_toggle(self, args: dict[str, Any]) -> str:
-        gate_err = await self._require_admin_or_error(
-            tool_name="automation_toggle"
-        )
-        if gate_err is not None:
-            return _json_result(gate_err)
-
-        try:
-            pipeline_id = _parse_uuid(args, "pipeline_id")
-        except ToolInvocationError as exc:
-            return _json_result({
-                "error": "validation_failed",
-                "message": str(exc),
-            })
-        enabled = args.get("enabled")
-        if not isinstance(enabled, bool):
-            return _json_result({
-                "error": "validation_failed",
-                "message": "enabled must be a boolean",
-            })
-
-        pipeline = (
-            await self._session.execute(
-                select(Pipeline).where(
-                    Pipeline.workspace_id == self._workspace_id,
-                    Pipeline.id == pipeline_id,
-                )
-            )
-        ).scalar_one_or_none()
-        if pipeline is None:
-            return _json_result({
-                "error": "not_found",
-                "message": (
-                    f"pipeline {pipeline_id} not found in this workspace"
-                ),
-            })
-
-        prior_enabled = pipeline.enabled
-        if prior_enabled != enabled:
-            from datetime import timezone as _tz
-
-            pipeline.enabled = enabled
-            pipeline.updated_at = datetime.now(_tz.utc)
-            await self._audit_navigator_tool(
-                tool_name="automation_toggle",
-                payload={
-                    "pipeline_id": str(pipeline_id),
-                    "lane_id": pipeline.lane_id,
-                    "enabled": enabled,
-                    "prior_enabled": prior_enabled,
-                },
-                target={"kind": "pipeline", "id": str(pipeline.id)},
-            )
-            await self._session.flush()
-
-        return _json_result(
-            {
-                "pipeline_id": str(pipeline.id),
-                "enabled": enabled,
-                "prior_enabled": prior_enabled,
-            }
-        )
-
-    async def _tool_archive_bucket_article(self, args: dict[str, Any]) -> str:
-        """Flip a bucket article to archived. Mirrors the HTTP route
-        ``POST /buckets/{slug}/articles/{article_id}/archive`` so the
-        same audit-row shape works regardless of which surface the
-        operator used.
-        """
-        gate_err = await self._require_admin_or_error(
-            tool_name="archive_bucket_article"
-        )
-        if gate_err is not None:
-            return _json_result(gate_err)
-
-        try:
-            article_id = _parse_uuid(args, "article_id")
-        except ToolInvocationError as exc:
-            return _json_result(
-                {"error": "validation_failed", "message": str(exc)}
-            )
-        reason_raw = args.get("reason")
-        reason = (
-            reason_raw.strip()
-            if isinstance(reason_raw, str)
-            else ""
-        )
-        if not reason:
-            return _json_result(
-                {
-                    "error": "validation_failed",
-                    "message": "reason is required and must be non-empty",
-                }
-            )
-        if len(reason) > 2000:
-            reason = reason[:2000]
-
-        # Pull article + bucket together — workspace fence on the
-        # bucket protects against cross-tenant id smuggling.
-        row = (
-            await self._session.execute(
-                select(BucketArticle, KnowledgeBucket)
-                .join(
-                    KnowledgeBucket,
-                    KnowledgeBucket.id == BucketArticle.bucket_id,
-                )
-                .where(BucketArticle.id == article_id)
-                .where(KnowledgeBucket.workspace_id == self._workspace_id)
-            )
-        ).first()
-        if row is None:
-            return _json_result(
-                {
-                    "error": "not_found",
-                    "message": (
-                        f"article {article_id} not found in this workspace"
-                    ),
-                }
-            )
-        article, bucket = row
-
-        if article.archived_at is not None:
-            # Idempotent: already archived. Audit row was written on
-            # the original archive — no second one here.
-            return _json_result(
-                {
-                    "article_id": str(article.id),
-                    "bucket_slug": bucket.slug,
-                    "article_slug": article.slug,
-                    "status": article.status,
-                    "archived_at": article.archived_at.isoformat(),
-                    "already_archived": True,
-                }
-            )
-
-        from datetime import timezone as _tz
-
-        now = datetime.now(_tz.utc)
-        prior_status = article.status
-        article.status = BucketArticleStatus.ARCHIVED
-        article.archived_at = now
-        bucket.updated_at = now
-
-        await self._audit_navigator_tool(
-            tool_name="archive_bucket_article",
-            payload={
-                "article_id": str(article.id),
-                "bucket_slug": bucket.slug,
-                "article_slug": article.slug,
-                "version": article.version,
-                "prior_status": prior_status,
-                "reason": reason,
-            },
-            target={"kind": "bucket_article", "id": str(article.id)},
-        )
-        await self._session.flush()
-
-        return _json_result(
-            {
-                "article_id": str(article.id),
-                "bucket_slug": bucket.slug,
-                "article_slug": article.slug,
-                "status": article.status,
-                "archived_at": article.archived_at.isoformat(),
-                "already_archived": False,
-            }
-        )
-
-    async def _tool_inbox_routing_upsert(self, args: dict[str, Any]) -> str:
-        gate_err = await self._require_admin_or_error(
-            tool_name="inbox_routing_upsert"
-        )
-        if gate_err is not None:
-            return _json_result(gate_err)
-
-        # Compromise: the underlying ``inbox_routing_rules`` schema
-        # doesn't have ``name`` / ``when`` / ``priority`` columns —
-        # the table is keyed by ``handle_key`` (one rule per handle
-        # per workspace) and the admin surface in
-        # ``app/api/v1/routes/inbox_routing.py`` exposes only
-        # handle / target_type / target_value / assignment_strategy /
-        # strategy_config / is_enabled. We map the spec's friendlier
-        # vocabulary onto those fields:
-        #
-        #   - ``name`` becomes the ``handle_key`` (must therefore
-        #     match the handle character class ``^[a-z][a-z0-9_]*$``).
-        #   - ``then_assign_to`` is unpacked into target_type +
-        #     target_value via the same packing rules the HTTP route
-        #     uses.
-        #   - ``when`` and ``priority`` are stored under
-        #     ``strategy_config['_when']`` / ``strategy_config['_priority']``
-        #     for forward-compatibility — the resolver currently
-        #     ignores them but the DB round-trips them so a future
-        #     migration can promote them to first-class columns.
-        name = args.get("name")
-        if not isinstance(name, str) or not name:
-            return _json_result({
-                "error": "validation_failed",
-                "message": "name is required",
-            })
-        if len(name) > 64:
-            return _json_result({
-                "error": "validation_failed",
-                "message": (
-                    "name maps to handle_key (max 64 chars)"
-                ),
-            })
-        import re
-
-        if not re.match(r"^[a-z][a-z0-9_]*$", name):
-            return _json_result({
-                "error": "validation_failed",
-                "message": (
-                    "name must match ^[a-z][a-z0-9_]*$ "
-                    "(it maps to the routing-rule handle_key)"
-                ),
-            })
-
-        when = args.get("when")
-        if when is None:
-            when = {}
-        if not isinstance(when, dict):
-            return _json_result({
-                "error": "validation_failed",
-                "message": "when must be an object",
-            })
-
-        then_assign_to = args.get("then_assign_to")
-        if not isinstance(then_assign_to, dict) or not then_assign_to:
-            return _json_result({
-                "error": "validation_failed",
-                "message": "then_assign_to is required (object)",
-            })
-        strategy = then_assign_to.get("strategy")
-        if not isinstance(strategy, str) or not strategy:
-            return _json_result({
-                "error": "validation_failed",
-                "message": (
-                    "then_assign_to.strategy is required (e.g. 'user', "
-                    "'group', 'round_robin', 'oncall', 'first', "
-                    "'codeowners', ...)"
-                ),
-            })
-
-        priority = args.get("priority", 100)
-        if not isinstance(priority, int) or isinstance(priority, bool):
-            return _json_result({
-                "error": "validation_failed",
-                "message": "priority must be an integer",
-            })
-
-        enabled = args.get("enabled", True)
-        if not isinstance(enabled, bool):
-            return _json_result({
-                "error": "validation_failed",
-                "message": "enabled must be a boolean",
-            })
-
-        # Map ``then_assign_to`` onto target_type + target_value +
-        # assignment_strategy. We mirror the strategy taxonomy from
-        # ``services.inbox.routing`` (which documents the built-in
-        # handle resolvers) plus the per-group strategies from the
-        # HTTP routing surface.
-        target_type: str
-        target_value: str
-        assignment_strategy: str | None = None
-
-        builtin_strategies = {
-            "codeowners",
-            "workspace_admin",
-            "workspace_owner",
-            "requested_by",
-            "first_admin",
-            "first_owner",
-        }
-        group_strategies = {"round_robin", "oncall", "first"}
-
-        if strategy == "user":
-            user_id_raw = then_assign_to.get("user_id")
-            if not isinstance(user_id_raw, str) or not user_id_raw:
-                return _json_result({
-                    "error": "validation_failed",
-                    "message": (
-                        "then_assign_to.strategy='user' requires user_id"
-                    ),
-                })
-            try:
-                user_uuid = uuid.UUID(user_id_raw)
-            except ValueError:
-                return _json_result({
-                    "error": "validation_failed",
-                    "message": "user_id is not a UUID",
-                })
-            member = (
-                await self._session.execute(
-                    select(WorkspaceMember).where(
-                        WorkspaceMember.workspace_id == self._workspace_id,
-                        WorkspaceMember.user_id == user_uuid,
-                    )
-                )
-            ).scalar_one_or_none()
-            if member is None:
-                return _json_result({
-                    "error": "validation_failed",
-                    "message": (
-                        "target user_id is not a member of this workspace"
-                    ),
-                })
-            target_type = "user"
-            target_value = str(user_uuid)
-
-        elif strategy == "group" or strategy in group_strategies:
-            group_id_raw = then_assign_to.get("group_id")
-            if not isinstance(group_id_raw, str) or not group_id_raw:
-                return _json_result({
-                    "error": "validation_failed",
-                    "message": (
-                        f"then_assign_to.strategy={strategy!r} requires "
-                        "group_id"
-                    ),
-                })
-            try:
-                group_uuid = uuid.UUID(group_id_raw)
-            except ValueError:
-                return _json_result({
-                    "error": "validation_failed",
-                    "message": "group_id is not a UUID",
-                })
-            group_row = (
-                await self._session.execute(
-                    select(MemberGroup).where(
-                        MemberGroup.id == group_uuid,
-                        MemberGroup.workspace_id == self._workspace_id,
-                    )
-                )
-            ).scalar_one_or_none()
-            if group_row is None:
-                return _json_result({
-                    "error": "validation_failed",
-                    "message": (
-                        "target group_id does not exist in this workspace"
-                    ),
-                })
-            target_type = "group"
-            target_value = group_row.key
-            if strategy in group_strategies:
-                assignment_strategy = strategy
-
-        elif strategy in builtin_strategies:
-            target_type = "strategy"
-            target_value = strategy
-
-        else:
-            return _json_result({
-                "error": "validation_failed",
-                "message": (
-                    f"unknown strategy {strategy!r} (allowed: 'user', "
-                    "'group', plus per-group "
-                    f"{sorted(group_strategies)} or built-in "
-                    f"{sorted(builtin_strategies)})"
-                ),
-            })
-
-        strategy_config: dict[str, Any] = {}
-        extra_cfg = then_assign_to.get("strategy_config")
-        if isinstance(extra_cfg, dict):
-            strategy_config.update(extra_cfg)
-        if when:
-            strategy_config["_when"] = when
-        if priority != 100:
-            strategy_config["_priority"] = priority
-
-        rule_id_arg = args.get("rule_id")
-        rule: InboxRoutingRule | None = None
-        if rule_id_arg is not None:
-            if not isinstance(rule_id_arg, str) or not rule_id_arg:
-                return _json_result({
-                    "error": "validation_failed",
-                    "message": "rule_id must be a UUID string when provided",
-                })
-            try:
-                rule_uuid = uuid.UUID(rule_id_arg)
-            except ValueError:
-                return _json_result({
-                    "error": "validation_failed",
-                    "message": "rule_id is not a UUID",
-                })
-            rule = (
-                await self._session.execute(
-                    select(InboxRoutingRule).where(
-                        InboxRoutingRule.id == rule_uuid,
-                        InboxRoutingRule.workspace_id == self._workspace_id,
-                    )
-                )
-            ).scalar_one_or_none()
-            if rule is None:
-                return _json_result({
-                    "error": "not_found",
-                    "message": (
-                        f"routing rule {rule_uuid} not found in this "
-                        "workspace"
-                    ),
-                })
-
-        action: str
-        if rule is None:
-            # Conflict-friendly insert — surface the dup as a 409-shaped
-            # error rather than letting an IntegrityError escape.
-            existing = (
-                await self._session.execute(
-                    select(InboxRoutingRule).where(
-                        InboxRoutingRule.workspace_id == self._workspace_id,
-                        InboxRoutingRule.handle_key == name,
-                    )
-                )
-            ).scalar_one_or_none()
-            if existing is not None:
-                return _json_result({
-                    "error": "conflict",
-                    "message": (
-                        "a routing rule for this handle already exists; "
-                        "pass its rule_id to update it instead"
-                    ),
-                    "existing_rule_id": str(existing.id),
-                })
-            rule = InboxRoutingRule(
-                workspace_id=self._workspace_id,
-                handle_key=name,
-                target_type=target_type,
-                target_value=target_value,
-                assignment_strategy=assignment_strategy,
-                strategy_config=strategy_config,
-                is_enabled=enabled,
-            )
-            self._session.add(rule)
-            await self._session.flush()
-            action = "created"
-        else:
-            rule.target_type = target_type
-            rule.target_value = target_value
-            rule.assignment_strategy = assignment_strategy
-            rule.strategy_config = strategy_config
-            rule.is_enabled = enabled
-            action = "updated"
-            await self._session.flush()
-
-        await self._audit_navigator_tool(
-            tool_name="inbox_routing_upsert",
-            payload={
-                "rule_id": str(rule.id),
-                "action": action,
-                "handle": name,
-                "target_type": target_type,
-                "target_value": target_value,
-                "assignment_strategy": assignment_strategy,
-                "strategy_config": strategy_config,
-                "is_enabled": enabled,
-            },
-            target={"kind": "inbox_routing_rule", "id": str(rule.id)},
-        )
-
-        return _json_result(
-            {
-                "rule_id": str(rule.id),
-                "action": action,
-                "name": name,
-                "priority": priority,
-                "enabled": enabled,
-            }
-        )
-
-    # ------------------------------------------------------------------
-    # Read-only tools (Navigator tool review PR-C1, ELS-78):
-    # ``get_ticket``, ``get_dashboard``, ``workspace_audit_search``.
-    # ------------------------------------------------------------------
 
     async def _tool_get_ticket(self, args: dict[str, Any]) -> str:
         ticket_ref = _require_str(args, "ticket_ref").strip()

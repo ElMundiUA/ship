@@ -48,6 +48,30 @@ _REMOVED_TOOL_NAMES: tuple[str, ...] = (
     # Phase 2.4 Step D
     "list_catalog_artifacts",
     "get_catalog_artifact",
+    # Phase 1a cleanup — Plays/Automations retired (FSM-driven routines
+    # replaced them) and bloated read-side tools moved into the session
+    # context frame (repo_intel, repo_kb_status, list_activated_repos).
+    "plays_list",
+    "plays_get",
+    "plays_coverage",
+    "play_run_now",
+    "play_automate",
+    "automation_toggle",
+    "automations_list",
+    "get_pipeline_run",
+    "list_clarifications",
+    "list_improvements",
+    "list_recent_activity",
+    "list_activated_repos",
+    "list_buckets",
+    "search_code",
+    "archive_bucket_article",
+    "reindex_repo_kb",
+    "repo_intel_get",
+    "repo_kb_status",
+    "inbox_routing_list",
+    "inbox_routing_preview",
+    "inbox_routing_upsert",
 )
 
 
