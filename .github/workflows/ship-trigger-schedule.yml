@@ -1,6 +1,15 @@
 name: Ship · Schedule trigger
 
 on:
+  # Backend-driven dispatch: Ship's own scheduler (configurable via
+  # ``WORKFLOW_DISPATCH_CRON_EXPR``, default hourly) fires this
+  # workflow via the Actions API. The previous ``schedule: */30``
+  # block was removed in bundle v0.33 because GitHub heavily
+  # throttles scheduled events under load — 4-8h gaps between
+  # ticks observed in production. Backend dispatch gives a
+  # deterministic cadence and bypasses the throttle entirely.
+  # Manual ``workflow_dispatch`` from the Actions UI stays as a
+  # debug / on-demand harness.
   workflow_dispatch:
     inputs:
       routine_id:
@@ -11,12 +20,6 @@ on:
         description: "Pin the agent to this ticket (only used with routine_id). e.g. ELS-42"
         required: false
         type: string
-  # ``schedule:`` was removed — Ship's own backend cron now
-  # dispatches this workflow via the Actions API (see
-  # ``backend/app/services/workflow_dispatch_cron.py`` and
-  # ``WORKFLOW_DISPATCH_CRON_EXPR``, default hourly). GitHub
-  # throttles ``schedule:`` events under load (4-8h gaps observed
-  # in production); backend dispatch gives a deterministic cadence.
 
 permissions:
   contents: write
@@ -97,27 +100,29 @@ jobs:
           fi
           # Normal cron path. ``shipctl trigger`` returns *all* due
           # routines sorted drain-first (later SDLC stage outranks
-          # earlier — see ``pipeline_priority``).
+          # earlier — see ``pipeline_priority`` on each routine).
           #
-          # We iterate the due list and run up to
-          # ``SHIP_MAX_ACTIONS_PER_TICK`` (default 5) routines that
-          # land work, NOT just the first. Two reasons:
+          # We iterate the due list and run as many routines as land
+          # work within the runner's 30-min budget, NOT just the
+          # first one. Two reasons:
           #
           #   1. GitHub throttles ``schedule:`` workflows during peak
           #      load — observed gaps of 4-8 hours between ticks in
-          #      production. The old one-action-per-tick rule
+          #      production. The old "one-action-per-tick" rule
           #      multiplied that latency by the number of stages
-          #      remaining on the pipeline (an 8-hour cron gap × 5
-          #      stages = 40 hours per ticket).
-          #   2. A single tick that drains 4-5 actions fits in the
-          #      runner's 30-min budget (≈4 min per agent invocation)
-          #      and keeps the pipeline moving when cron itself is
-          #      unreliable.
+          #      remaining on the pipeline.
+          #   2. A single tick that drains 4-5 tickets through their
+          #      stages fits comfortably in the runner budget
+          #      (≈4 min per agent invocation) and keeps the
+          #      pipeline moving when cron itself is unreliable.
           #
-          # ``noop`` rows are skipped fast (the routine has nothing
-          # eligible). Each ``ok`` row counts toward the cap. A
-          # genuine non-zero exit from ``shipctl run`` bubbles up
-          # via ``set -e`` and stops the tick.
+          # ``shipctl run`` writes a JSON status to ``--status-file``
+          # on every exit path (noop / ok / error). ``noop`` means
+          # the routine had nothing eligible — try the next one.
+          # ``ok`` means an agent run completed — still try the
+          # next one (multi-action mode). A genuine non-zero exit
+          # bubbles up via ``set -e`` and stops the tick so the
+          # operator sees the failure.
           MAX_ACTIONS_PER_TICK=${SHIP_MAX_ACTIONS_PER_TICK:-5}
           shipctl trigger --event schedule --repo "$SHIP_REPO" --pipeline-fallback --json > /tmp/ship-action.json
           jq '.due_routines[].routine_id' /tmp/ship-action.json | tr -d '"' > /tmp/ship-due-routines.txt || true
