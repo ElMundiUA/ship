@@ -1,13 +1,13 @@
 """Routines — materialised projection of customer ``.ship/config.yml`` routines.
 
-The backend maintains one :class:`Lane` row per ``(repo, routine_id)`` by
+The backend maintains one :class:`Routine` row per ``(repo, routine_id)`` by
 periodically (or webhook-driven) pulling ``.ship/config.yml`` from the
 customer's default branch, parsing ``process.routines``, and
 upserting. See :mod:`backend.app.services.lanes_sync` for the sync
 logic.
 
 This is *not* the authoritative source — the file in the repo is.
-Lane rows are a cache that:
+Routine rows are a cache that:
 
 - lets the Console render declared lanes (including custom,
   non-starter ones) without a GitHub round-trip per request,
@@ -181,7 +181,6 @@ _LANE_ORIGIN_VALUES: Final[tuple[str, ...]] = (
 )
 
 
-Lane = Routine
 
 
-__all__ = ["Routine", "Lane", "_LANE_ORIGIN_VALUES"]
+__all__ = ["Routine", "_LANE_ORIGIN_VALUES"]

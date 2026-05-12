@@ -180,16 +180,11 @@ class WorkspaceRepo(Base):
     description: Mapped[str | None] = mapped_column(String(1024), nullable=True)
 
     # Phase-2 catalog integration. Pre-P5-01 this column held one of
-    # 14 preset ids ("web-app", "api-backend", "mobile-app", "cli",
-    # "monorepo", "adoption-minimum", …) chosen in the wizard. Post
-    # P5-01 the catalog collapsed to a single canonical ``"default"``
-    # preset; new writes always store ``"default"`` (or ``NULL`` when
-    # the binding is cleared) and reads collapse legacy values via
-    # :func:`backend.app.services.lane_recipes.normalize_preset` so
-    # downstream lane resolution stays consistent. NO data migration
-    # was run — historical rows keep their legacy strings until a
-    # future cleanup ticket retires ``LEGACY_PRESETS``. Treat ``NULL``
-    # as "no explicit preset; use the default-shaped seed".
+    # Post-Phase-2.4 every write stores ``"default"`` (or ``NULL``
+    # when the binding is cleared). The historical 14-preset
+    # collapse helper retired in the deep-dig cleanup — Ship's
+    # registry only knows one preset. Treat ``NULL`` as "no
+    # explicit preset; use the default-shaped seed".
     preset: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     activated_at: Mapped[datetime | None] = mapped_column(

@@ -1,4 +1,4 @@
-"""Synthetic Lane sync (Wave 8b P5-07).
+"""Synthetic Routine sync (Wave 8b P5-07).
 
 Bridges the wizard seed PR composer and the post-merge
 :func:`backend.app.services.lanes_sync.sync_lanes_for_repo`. Today the
@@ -62,7 +62,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.app.db.models.lanes import Lane
+from backend.app.db.models.lanes import Routine
 from backend.app.services import catalog as catalog_service
 
 
@@ -86,7 +86,7 @@ async def synthetic_lane_sync(
     repo_id: uuid.UUID,
     bundle: tuple[str, ...],
 ) -> int:
-    """Insert :class:`Lane` rows for every pattern in ``bundle``.
+    """Insert :class:`Routine` rows for every pattern in ``bundle``.
 
     Behaviour parity with the post-merge syncer:
 
@@ -136,7 +136,7 @@ async def synthetic_lane_sync(
             # patterns; if a future refactor relaxes that we still
             # don't want to create a row that violates ck_lanes_kind.
             continue
-        row = Lane(
+        row = Routine(
             workspace_id=workspace_id,
             repo_id=repo_id,
             lane_id=lane_id,
@@ -191,9 +191,9 @@ async def reconcile_synthetic_lanes(
 
     rows = (
         await session.execute(
-            select(Lane).where(
-                Lane.repo_id == repo_id,
-                Lane.origin == ORIGIN_SYNTHETIC,
+            select(Routine).where(
+                Routine.repo_id == repo_id,
+                Routine.origin == ORIGIN_SYNTHETIC,
             )
         )
     ).scalars().all()
@@ -227,14 +227,14 @@ async def reconcile_synthetic_lanes(
 async def _existing_lane_ids(
     *, session: AsyncSession, repo_id: uuid.UUID
 ) -> set[str]:
-    """Return ``{lane_id}`` for every existing Lane on ``repo_id``.
+    """Return ``{lane_id}`` for every existing Routine on ``repo_id``.
 
     One indexed query keeps the synthetic-sync linear in (#bundle
     lanes) regardless of how many lanes the repo carries pre-call.
     """
     rows = (
         await session.execute(
-            select(Lane.lane_id).where(Lane.repo_id == repo_id)
+            select(Routine.lane_id).where(Routine.repo_id == repo_id)
         )
     ).scalars().all()
     return set(rows)
@@ -245,7 +245,7 @@ def _shape_lane_entry(
     lane_id: str,
     trigger: dict[str, Any],
 ) -> tuple[str | None, str | None, str | None, dict[str, Any]]:
-    """Project one ``bundle_lane_entries`` value into the Lane row columns.
+    """Project one ``bundle_lane_entries`` value into the Routine row columns.
 
     The ``trigger`` shape is whatever
     :func:`backend.app.services.catalog.bundle_lane_entries`

@@ -68,7 +68,7 @@ from backend.app.db.models.integrations import (
     WorkspaceRepo,
 )
 from backend.app.db.models.dashboard_priorities import WorkspaceProjectPriority
-from backend.app.db.models.lanes import Lane
+from backend.app.db.models.lanes import Routine
 from backend.app.db.models.pipelines import (
     Pipeline,
     PipelineRun,

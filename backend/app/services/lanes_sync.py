@@ -1,11 +1,11 @@
-"""Runtime sync service — pull ``.ship/config.yml`` and upsert :class:`Lane` rows.
+"""Runtime sync service — pull ``.ship/config.yml`` and upsert :class:`Routine` rows.
 
 Entry points:
 
 - :func:`sync_lanes_for_repo` — given a :class:`WorkspaceRepo` with a
   live GitHub App installation, fetch ``.ship/config.yml`` from the
   default branch, parse ``process.routines`` (or legacy ``lanes:``), and upsert
-  :class:`Lane` rows. Returns a :class:`SyncReport`.
+  :class:`Routine` rows. Returns a :class:`SyncReport`.
 - :func:`apply_workflow_run_completion` — called by the
   ``workflow_run.completed`` webhook to update a lane's
   ``last_run_at`` / ``last_run_status`` when the run's workflow file
@@ -33,7 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.config import Settings, get_settings
 from backend.app.db.models.integrations import GitHubInstallation, WorkspaceRepo
-from backend.app.db.models.lanes import Lane
+from backend.app.db.models.lanes import Routine
 from backend.app.integrations.gateway.code_host import RepoRef
 from backend.app.integrations.github.code_host_adapter import GitHubCodeHost
 
@@ -108,7 +108,7 @@ def _parse_lane_entry(
     # the single-pattern alias ``pattern: <id>``. Normalise to an
     # explicit list so the DB layer / downstream readers don't have to
     # branch; ``pattern`` (scalar) keeps the first entry so the
-    # existing ``Lane.pattern`` column stays populated for repos that
+    # existing ``Routine.pattern`` column stays populated for repos that
     # haven't migrated to the list form yet.
     raw_patterns = raw.get("patterns")
     raw_pattern = raw.get("pattern")
@@ -162,7 +162,7 @@ def _runtime_entries_from_config(parsed: dict[str, Any]) -> dict[str, Any]:
     """Return DB-compatible runtime entries from new or legacy config.
 
     New seed PRs commit ``process.routines`` only. The rest of the backend still
-    uses ``Lane`` rows as the runtime projection for Process UI and historical
+    uses ``Routine`` rows as the runtime projection for Process UI and historical
     runs, so this syncer projects routines into the same flat shape while keeping
     legacy ``lanes:`` configs readable.
     """
@@ -243,7 +243,7 @@ async def sync_lanes_for_repo(
     settings: Settings | None = None,
     http_client: httpx.AsyncClient | None = None,
 ) -> SyncReport:
-    """Fetch ``.ship/config.yml`` and upsert :class:`Lane` rows for ``repo``.
+    """Fetch ``.ship/config.yml`` and upsert :class:`Routine` rows for ``repo``.
 
     Raises ``FileNotFoundError`` when the config file is absent (the
     route layer translates to a 409 with a hint). Raises
@@ -280,7 +280,7 @@ async def sync_lanes_for_repo(
         return report
 
     # New configs use ``process.routines``. Legacy repos may still carry
-    # ``lanes:``; project both into the same Lane table until the DB/API
+    # ``lanes:``; project both into the same Routine table until the DB/API
     # runtime model is renamed.
     lanes_block = _runtime_entries_from_config(parsed)
     if not isinstance(lanes_block, dict):
@@ -315,10 +315,10 @@ async def sync_lanes_for_repo(
 
     existing_rows = (
         await session.execute(
-            select(Lane).where(Lane.repo_id == repo.id)
+            select(Routine).where(Routine.repo_id == repo.id)
         )
     ).scalars().all()
-    existing_by_id: dict[str, Lane] = {row.lane_id: row for row in existing_rows}
+    existing_by_id: dict[str, Routine] = {row.lane_id: row for row in existing_rows}
 
     now = datetime.now(timezone.utc)
     seen: set[str] = set()
@@ -357,7 +357,7 @@ async def sync_lanes_for_repo(
         )
 
         if row is None:
-            row = Lane(
+            row = Routine(
                 workspace_id=repo.workspace_id,
                 repo_id=repo.id,
                 lane_id=lane_id,
@@ -410,7 +410,7 @@ async def sync_lanes_for_repo(
             report.unchanged += 1
 
     # Remove rows for lanes no longer declared. We hard-delete rather
-    # than soft-archive because the Lane row is a pure projection —
+    # than soft-archive because the Routine row is a pure projection —
     # audit history lives on ``AuditLog`` (caller-owned) and on
     # ``PipelineRun`` (``lane_id`` FK is ``ON DELETE SET NULL``, so
     # historical runs survive the cleanup).
@@ -437,7 +437,7 @@ def extract_lane_id_from_path(path: str | None) -> str | None:
     """Return the ``lane_id`` encoded in a generated wrapper path, if any.
 
     ``shipctl lanes install`` renders ``.github/workflows/ship-<lane_id>.yml``,
-    so the webhook can reverse-engineer which Lane a run belongs to by
+    so the webhook can reverse-engineer which Routine a run belongs to by
     pattern-matching the ``path`` field of ``workflow_run`` events.
     Returns ``None`` for unrelated workflow files.
     """
@@ -470,7 +470,7 @@ async def apply_workflow_run_completion(
     workflow_path: str | None,
     conclusion: str | None,
     finished_at: datetime | None,
-) -> Lane | None:
+) -> Routine | None:
     """Update ``last_run_at`` / ``last_run_status`` for the matching lane.
 
     Returns the updated row (or ``None`` when the workflow file isn't
@@ -484,9 +484,9 @@ async def apply_workflow_run_completion(
 
     row = (
         await session.execute(
-            select(Lane).where(
-                Lane.repo_id == repo.id,
-                Lane.lane_id == lane_id,
+            select(Routine).where(
+                Routine.repo_id == repo.id,
+                Routine.lane_id == lane_id,
             )
         )
     ).scalars().first()

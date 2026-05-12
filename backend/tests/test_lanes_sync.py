@@ -166,7 +166,7 @@ process:
 async def test_sync_creates_rows_for_v2_config(
     db_session, seed_workspace, patch_gateway
 ) -> None:
-    from backend.app.db.models.lanes import Lane
+    from backend.app.db.models.lanes import Routine
 
     _workspace, install, repo = await _seed(db_session, seed_workspace)
     patch_gateway(_YAML_V2)
@@ -185,7 +185,7 @@ async def test_sync_creates_rows_for_v2_config(
         row.routine_id: row
         for row in (
             await db_session.execute(
-                Lane.__table__.select().where(Lane.repo_id == repo.id)
+                Routine.__table__.select().where(Routine.repo_id == repo.id)
             )
         ).mappings()
     }
@@ -202,7 +202,7 @@ async def test_sync_creates_rows_for_v2_config(
 async def test_sync_creates_rows_for_process_routines_config(
     db_session, seed_workspace, patch_gateway
 ) -> None:
-    from backend.app.db.models.lanes import Lane
+    from backend.app.db.models.lanes import Routine
 
     _workspace, install, repo = await _seed(db_session, seed_workspace)
     patch_gateway(_YAML_PROCESS_ROUTINES)
@@ -218,7 +218,7 @@ async def test_sync_creates_rows_for_process_routines_config(
         row["routine_id"]: row
         for row in (
             await db_session.execute(
-                Lane.__table__.select().where(Lane.repo_id == repo.id)
+                Routine.__table__.select().where(Routine.repo_id == repo.id)
             )
         ).mappings()
     }
@@ -236,7 +236,7 @@ async def test_sync_creates_rows_for_process_routines_config(
 async def test_sync_updates_and_removes(
     db_session, seed_workspace, patch_gateway
 ) -> None:
-    from backend.app.db.models.lanes import Lane
+    from backend.app.db.models.lanes import Routine
 
     _workspace, install, repo = await _seed(db_session, seed_workspace)
 
@@ -270,7 +270,7 @@ lanes:
 
     rows = (
         await db_session.execute(
-            Lane.__table__.select().where(Lane.repo_id == repo.id)
+            Routine.__table__.select().where(Routine.repo_id == repo.id)
         )
     ).mappings().all()
     ids = {row["routine_id"] for row in rows}
@@ -379,13 +379,13 @@ async def test_sync_parses_patterns_list_and_keeps_primary_in_column(
 ) -> None:
     """RFC-0008 C3.1 — ``patterns: [ids]`` is the canonical shape.
 
-    The DB column ``Lane.pattern`` stays populated with the first id
+    The DB column ``Routine.pattern`` stays populated with the first id
     (back-compat with consumers that only read the primary); the full
     list survives round-trip in ``config_blob['patterns']`` so
     downstream readers (Console Active calendar, seed derivation)
     never have to re-parse YAML.
     """
-    from backend.app.db.models.lanes import Lane
+    from backend.app.db.models.lanes import Routine
 
     _workspace, install, repo = await _seed(db_session, seed_workspace)
     patch_gateway(_YAML_V2_MULTI)
@@ -400,7 +400,7 @@ async def test_sync_parses_patterns_list_and_keeps_primary_in_column(
         row.routine_id: row
         for row in (
             await db_session.execute(
-                Lane.__table__.select().where(Lane.repo_id == repo.id)
+                Routine.__table__.select().where(Routine.repo_id == repo.id)
             )
         ).mappings()
     }
@@ -445,7 +445,7 @@ async def test_sync_preserves_fanout_field(
     Unknown values fall back to the default so a stale config doesn't
     break sync; the writer endpoint is the authority on validation.
     """
-    from backend.app.db.models.lanes import Lane
+    from backend.app.db.models.lanes import Routine
 
     _workspace, install, repo = await _seed(db_session, seed_workspace)
     patch_gateway(_YAML_V2_MULTI_SEQ)
@@ -455,7 +455,7 @@ async def test_sync_preserves_fanout_field(
     assert report.added == 1
     row = (
         await db_session.execute(
-            Lane.__table__.select().where(Lane.repo_id == repo.id)
+            Routine.__table__.select().where(Routine.repo_id == repo.id)
         )
     ).mappings().first()
     assert row["config_blob"]["fanout"] == "sequential"
@@ -469,7 +469,7 @@ async def test_sync_preserves_fanout_field(
 async def test_apply_workflow_run_completion_pins_last_run(
     db_session, seed_workspace, patch_gateway
 ) -> None:
-    from backend.app.db.models.lanes import Lane
+    from backend.app.db.models.lanes import Routine
 
     _workspace, install, repo = await _seed(db_session, seed_workspace)
     patch_gateway(_YAML_V2)

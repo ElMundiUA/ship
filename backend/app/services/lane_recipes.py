@@ -1,29 +1,27 @@
-"""Constants the seed bundle + wizard preview share.
+"""Default-bundle constants the seed flow + process preview share.
 
 Pre-Phase 2.4 this module derived its lane recipes from the
 ``artifacts/patterns/`` catalog (RFC-0008 §C3.3). Step D of Phase 2.4
-retired the catalog and inlined the few constants that survived:
+retired the catalog and inlined the two surviving constants:
 
-* :data:`DEFAULT_BUNDLE` / :data:`DEFAULT_BUNDLE_REASONS` — the agent
-  roles the wizard's "Confirm bootstrap" step previews.
+* :data:`DEFAULT_BUNDLE` / :data:`DEFAULT_BUNDLE_REASONS` — the
+  canonical agent-role list the operator sees in the wizard's
+  "Confirm bootstrap" step.
 * :data:`DEFAULT_SEED_LANES` / :func:`default_seed_lanes` — the
-  canonical routines the seed bundle writes into a fresh
-  ``.ship/config.yml``. Each entry spells the agent role with
-  ``specialist:`` (Phase 2.4 vocabulary), resolved by
-  ``shipctl run`` through ``GET /v1/.../agent-roles/{slug}/resolve``.
-* :data:`KNOWN_PRESETS` / :data:`LEGACY_PRESETS` /
-  :func:`normalize_preset` — preset-collapse helper kept for
-  back-compat with rows in ``WorkspaceRepo.preset`` and old API
-  payloads.
+  routines the seed flow writes into a fresh ``.ship/config.yml``.
+  Each entry spells the agent role with ``specialist:`` (Phase 2.4
+  vocabulary), resolved by ``shipctl run`` through
+  ``GET /v1/.../agent-roles/{slug}/resolve``.
 
-Everything else from the pre-2.4 era (``LaneRecipe`` dataclass,
+Everything else from the pre-2.4 era — the ``LaneRecipe`` dataclass,
 ``_pattern_recipes``, ``list_lane_recipes``, ``_EXTRA_RECIPES``,
 ``resolve_enabled_lane_ids``, ``seed_default_pipelines``,
 ``_flatten_default_trigger``, ``LEGACY_ROUTINE_IDS``,
-``ROUTINE_DISPLAY_LABELS``) walked the pattern catalog and is gone
-with it. ``pipelines.py`` carries an inline ``_LANE_WORKFLOW_MAP``
-for the only consumer that still needs the lane → workflow_id
-projection.
+``ROUTINE_DISPLAY_LABELS`` — walked with the pattern catalog. The
+preset-collapse helpers (``KNOWN_PRESETS``, ``LEGACY_PRESETS``,
+``normalize_preset``) followed in the next sweep: presets are
+``"default"`` for every workspace, nothing else exists, no legacy
+payloads to migrate.
 """
 
 from __future__ import annotations
@@ -217,55 +215,9 @@ def default_seed_lanes() -> dict[str, dict[str, object]]:
     return {lane_id: dict(body) for lane_id, body in DEFAULT_SEED_LANES.items()}
 
 
-# ---------------------------------------------------------------------------
-# Preset normalization (P5-01 collapse).
-# ---------------------------------------------------------------------------
-
-KNOWN_PRESETS: Final[tuple[str, ...]] = ("default",)
-
-# Legacy preset ids accepted at API boundaries; all normalize to
-# ``"default"``.
-LEGACY_PRESETS: Final[frozenset[str]] = frozenset(
-    {
-        "web-app",
-        "api-backend",
-        "mobile-app",
-        "mobile-app-deep",
-        "ml-project",
-        "platform",
-        "regulated",
-        "desktop-app",
-        "firmware",
-        "game",
-        "cli",
-        "monorepo",
-        "marketing",
-        "adoption-minimum",
-    }
-)
-
-
-def normalize_preset(preset: str | None) -> str:
-    """Canonicalize any preset string.
-
-    ``None`` and any of the historical 14 preset ids in
-    :data:`LEGACY_PRESETS` collapse to ``"default"``. Any other string
-    passes through unchanged.
-
-    Pure: no I/O, no module-level mutation, idempotent
-    (``normalize_preset(normalize_preset(x)) == normalize_preset(x)``).
-    """
-    if preset is None or preset in LEGACY_PRESETS:
-        return "default"
-    return preset
-
-
 __all__ = [
     "DEFAULT_BUNDLE",
     "DEFAULT_BUNDLE_REASONS",
     "DEFAULT_SEED_LANES",
-    "KNOWN_PRESETS",
-    "LEGACY_PRESETS",
     "default_seed_lanes",
-    "normalize_preset",
 ]

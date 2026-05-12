@@ -41,7 +41,7 @@ from backend.app.db.models.integrations import (
     NativeIntegrationSyncState,
     WorkspaceRepo,
 )
-from backend.app.db.models.lanes import Lane
+from backend.app.db.models.lanes import Routine
 from backend.app.db.models.notifications import WorkspaceNotification
 from backend.app.db.models.pipelines import (
     AgentRequest,
@@ -102,7 +102,6 @@ __all__ = [
     "KnowledgeIngestionRun",
     "KnowledgeSource",
     "KnowledgeSourceItem",
-    "Lane",
     "MemberGroup",
     "MemberGroupMember",
     "NativeIntegrationAuditEvent",
@@ -119,6 +118,7 @@ __all__ = [
     "PullRequest",
     "RepoIntel",
     "RepoIntelTriggeredBy",
+    "Routine",
     "RepoSecret",
     "RunEscalation",
     "TelegramChatLink",

@@ -41,7 +41,6 @@ from backend.app.db.models.tenancy import AuditLog
 from backend.app.db.session import get_session
 from backend.app.integrations.gateway.code_host import RepoSummary
 from backend.app.integrations.github.code_host_adapter import GitHubCodeHost
-from backend.app.services.lane_recipes import normalize_preset
 from backend.app.services.seed_bundle import BUNDLE_VERSION as _BUNDLE_VERSION
 
 
@@ -107,16 +106,10 @@ class RepoActivateIn(BaseModel):
     preset: str | None = Field(
         default=None,
         description=(
-            "Catalog preset id to attach to the activated repo(s). "
-            "Post-P5-01 the meaningful surface is the single canonical "
-            "``\"default\"`` preset. The 14 historical preset ids "
-            "(``web-app`` / ``api-backend`` / …) remain accepted at "
-            "this API boundary for backwards compatibility but are "
-            "normalized to ``\"default\"`` via "
-            ":func:`backend.app.services.lane_recipes.normalize_preset` "
-            "before being persisted to ``WorkspaceRepo.preset``. ``None`` "
-            "keeps any existing preset and otherwise resolves to "
-            "``\"default\"``."
+            "Catalog preset id attached to the activated repo(s). "
+            "Ship knows only one preset (``\"default\"``); any non-null "
+            "string passed here normalises to it. ``None`` keeps any "
+            "existing preset on the WorkspaceRepo row."
         ),
     )
 
@@ -269,13 +262,11 @@ async def activate_repos(
 
     desired_ids: set[int] = {int(x) for x in payload.external_ids}
 
-    # P5-01 collapse: legacy preset ids ("web-app", …) and ``None``
-    # collapse to ``"default"``; any other string passes through
-    # unchanged to keep the door open for catalog-authored future
-    # presets. Persistence + audit log get the normalized value.
-    preset = (
-        normalize_preset(payload.preset) if payload.preset is not None else None
-    )
+    # Preset collapsed to ``"default"`` (the only value Ship knows
+    # about today). ``None`` passes through unchanged so a payload
+    # that omits the field doesn't accidentally lock a preset on the
+    # WorkspaceRepo row.
+    preset = "default" if payload.preset is not None else None
 
     # Fetch the live picker view once so we can validate ids and grab
     # the metadata we'll persist. We *trust* the GitHub installation
@@ -621,12 +612,10 @@ async def update_repo(
 ) -> ActivatedRepoOut:
     """Mutate the preset bound to ``repo`` without touching runtime rows.
 
-    Admin-only. Post-P5-01 the meaningful preset is the single
-    ``"default"`` value; legacy preset ids passed by older Console
-    builds collapse to ``"default"`` via
-    :func:`backend.app.services.lane_recipes.normalize_preset` before
-    being persisted. ``None`` clears the binding and falls back to
-    the canonical default shape on future seeds.
+    Admin-only. Ship knows only one preset (``"default"``); any
+    non-null string normalises to it before persistence. ``None``
+    clears the binding and falls back to the canonical default
+    shape on future seeds.
     """
     await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
 
@@ -644,14 +633,9 @@ async def update_repo(
             detail="Repo not found in this workspace.",
         )
 
-    # P5-01 collapse: normalize legacy ids to ``"default"`` before
-    # persisting so the row joins the post-collapse vocabulary.
-    # ``None`` keeps its semantic of "clear the binding".
-    new_preset = (
-        normalize_preset(payload.preset)
-        if payload.preset is not None
-        else None
-    )
+    # ``"default"`` is the only preset Ship recognises today; ``None``
+    # keeps its semantic of "clear the binding".
+    new_preset = "default" if payload.preset is not None else None
 
     old_preset = repo_row.preset
     repo_row.preset = new_preset

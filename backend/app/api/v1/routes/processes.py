@@ -30,7 +30,7 @@ from backend.app.core.config import Settings, get_settings
 from backend.app.db.models.agent_surface import Clarification
 from backend.app.db.models.inbox import InboxItem
 from backend.app.db.models.integrations import WorkspaceRepo
-from backend.app.db.models.lanes import Lane
+from backend.app.db.models.lanes import Routine
 from backend.app.db.models.pipelines import Pipeline, PipelineRun
 from backend.app.db.models.tenancy import AuditLog
 from backend.app.db.session import get_session
@@ -989,7 +989,7 @@ async def _build_decomposition_process(
     """Project the decomposition FSM as a peer top-level process.
 
     Source of truth is :func:`catalog.default_planning_process_config`.
-    Today decomposition has no separate ``Lane`` / ``Pipeline`` rows
+    Today decomposition has no separate ``Routine`` / ``Pipeline`` rows
     (the planning anchor is a tracker concept, not a workspace
     pipeline), so this projection is static — runtime aggregation is
     intentionally omitted until decomposition picks up its own runs
@@ -1130,13 +1130,13 @@ async def _build_development_process(
             detail="repo not found",
         )
 
-    lane_stmt = select(Lane).where(Lane.workspace_id == workspace_id)
+    lane_stmt = select(Routine).where(Routine.workspace_id == workspace_id)
     if repo_id is not None:
-        lane_stmt = lane_stmt.where(Lane.repo_id == repo_id)
+        lane_stmt = lane_stmt.where(Routine.repo_id == repo_id)
     lanes = list(
         (
             await session.execute(
-                lane_stmt.order_by(Lane.created_at)
+                lane_stmt.order_by(Routine.created_at)
             )
         )
         .scalars()
@@ -1523,10 +1523,10 @@ def _placeholder_process_states(
     ]
 
 
-def _state_lane_ids(lanes: list[Lane], pipelines: list[Pipeline]) -> list[str]:
-    """Lane ids the canvas + routines columns project.
+def _state_lane_ids(lanes: list[Routine], pipelines: list[Pipeline]) -> list[str]:
+    """Routine ids the canvas + routines columns project.
 
-    Source of truth is :class:`Lane` (the ``routines`` table), which
+    Source of truth is :class:`Routine` (the ``routines`` table), which
     ``lanes_sync`` keeps in lockstep with the repo's
     ``.ship/config.yml`` — rows for routines that disappear from the
     config are hard-deleted on next sync. ``Pipeline`` rows are
@@ -1539,7 +1539,7 @@ def _state_lane_ids(lanes: list[Lane], pipelines: list[Pipeline]) -> list[str]:
     ``Pipeline`` for runtime data (last_run_status, run history) keep
     working — we just don't pull lane ids from it.
     """
-    del pipelines  # intentionally ignored; Lane is the source of truth
+    del pipelines  # intentionally ignored; Routine is the source of truth
     seen = {row.lane_id for row in lanes}
     ordered = list(_PROCESS_STATE_ORDER)
     extras = sorted(seen - set(ordered))
@@ -1683,7 +1683,7 @@ def _runtime_by_state(
     lane_keys: list[str],
     runs: list[PipelineRun],
     pipeline_by_id: dict[uuid.UUID, Pipeline],
-    lane_by_uuid: dict[uuid.UUID, Lane],
+    lane_by_uuid: dict[uuid.UUID, Routine],
 ) -> dict[str, ProcessStateRuntimeOut]:
     out = defaultdict(ProcessStateRuntimeOut)
     for key in lane_keys:
@@ -1710,7 +1710,7 @@ def _runtime_by_state(
 def _lane_key_for_run(
     run: PipelineRun,
     pipeline_by_id: dict[uuid.UUID, Pipeline],
-    lane_by_uuid: dict[uuid.UUID, Lane],
+    lane_by_uuid: dict[uuid.UUID, Routine],
 ) -> str | None:
     if run.lane_id and run.lane_id in lane_by_uuid:
         return lane_by_uuid[run.lane_id].lane_id
@@ -1844,7 +1844,7 @@ def _default_states(
 
 
 def _triggers_for(
-    lane: Lane | None, pipeline: Pipeline | None
+    lane: Routine | None, pipeline: Pipeline | None
 ) -> list[ProcessTriggerOut]:
     raw = lane.config_blob if lane else pipeline.config if pipeline else {}
     if lane and lane.kind == "schedule":

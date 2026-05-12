@@ -312,7 +312,7 @@ async def github_webhook(
         # DB-only knowledge: pushes to `.ship/knowledge/` are ignored.
         # Workspace buckets and articles are managed through Ship's DB APIs.
         # RFC-0007 Phase 7: same push, different mirror — re-pull
-        # ``.ship/config.yml`` into the :class:`Lane` projection when
+        # ``.ship/config.yml`` into the :class:`Routine` projection when
         # the file is in the commit diff.
         await _apply_push_event_for_lanes(session, payload, settings=settings)
         await session.flush()
@@ -879,7 +879,7 @@ async def _apply_push_event_for_lanes(
     *,
     settings: Settings,
 ) -> None:
-    """Re-sync :class:`Lane` rows when a push touches ``.ship/config.yml``.
+    """Re-sync :class:`Routine` rows when a push touches ``.ship/config.yml``.
 
     Same preconditions as :func:`_apply_push_event_for_kb`: default
     branch only, inactive repos ignored, commits array drives the
@@ -934,11 +934,11 @@ async def _apply_push_event_for_lanes(
     except FileNotFoundError:
         # Operator deleted ``.ship/config.yml`` — treat it as "zero
         # lanes declared" and drop the projection.
-        from backend.app.db.models.lanes import Lane
+        from backend.app.db.models.lanes import Routine
 
         existing = (
             await session.execute(
-                select(Lane).where(Lane.repo_id == repo_row.id)
+                select(Routine).where(Routine.repo_id == repo_row.id)
             )
         ).scalars().all()
         for row in existing:

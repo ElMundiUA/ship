@@ -411,7 +411,7 @@ async def test_wizard_seed_404_on_unknown_repo(
 
 # ---------------------------------------------------------------------------
 # P5-06 / P5-07 coverage — DEFAULT_BUNDLE collapse, CODEOWNERS routing,
-# intel harvest dispatch, synthetic Lane sync.
+# intel harvest dispatch, synthetic Routine sync.
 # ---------------------------------------------------------------------------
 
 
@@ -698,7 +698,7 @@ async def test_wizard_seed_does_not_dispatch_intel_harvest(
 async def test_wizard_seed_does_not_create_synthetic_lanes_immediately(
     monkeypatch, v1_client, db_session, seeded_wizard_repo
 ) -> None:
-    from backend.app.db.models.lanes import Lane
+    from backend.app.db.models.lanes import Routine
 
     raw, workspace, _install, repo = seeded_wizard_repo
     _patch_github(monkeypatch)
@@ -714,7 +714,7 @@ async def test_wizard_seed_does_not_create_synthetic_lanes_immediately(
 
     rows = (
         await db_session.execute(
-            select(Lane).where(Lane.repo_id == repo.id)
+            select(Routine).where(Routine.repo_id == repo.id)
         )
     ).scalars().all()
     assert rows == []
