@@ -51,7 +51,6 @@ from backend.app.db.models.agent_surface import (
     Clarification,
     Improvement,
 )
-from backend.app.db.models.fleet_lanes import FleetLane
 from backend.app.db.models.inbox import (
     InboxItem,
     InboxItemEvent,

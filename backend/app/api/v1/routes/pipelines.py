@@ -49,7 +49,6 @@ from backend.app.api.v1.routes.workspaces import (
     _require_membership,
 )
 from backend.app.core.config import Settings, get_settings
-from backend.app.db.models.fleet_lanes import FleetLane
 from backend.app.db.models.integrations import GitHubInstallation, WorkspaceRepo
 from backend.app.db.models.inbox import InboxItem
 from backend.app.db.models.pipelines import Pipeline, PipelineRun
@@ -1110,17 +1109,11 @@ async def list_pipelines(
     if scope == "repo":
         stmt = stmt.where(Pipeline.repo_id == repo_id)
     elif scope == "fleet":
-        # Project FleetLane.lane_id values into a subquery so the
-        # filter scales with the fleet-lane count, not the pipeline
-        # count. Returns no rows when the workspace hasn't declared
-        # any fleet lanes (which is the right answer — there's
-        # nothing to mirror).
-        fleet_lane_ids = (
-            select(FleetLane.lane_id)
-            .where(FleetLane.workspace_id == workspace_id)
-            .scalar_subquery()
-        )
-        stmt = stmt.where(Pipeline.lane_id.in_(fleet_lane_ids))
+        # FleetLane retired in the deep-dig cleanup — no fleet-scope
+        # pipelines remain. Returning an empty query keeps the
+        # ``scope='fleet'`` branch valid (no 422 surprise) while
+        # producing the only honest answer.
+        stmt = stmt.where(False)
     rows = (await session.execute(stmt)).scalars().all()
     return await enrich_pipelines(session, list(rows), settings=settings)
 
