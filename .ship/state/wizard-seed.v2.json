@@ -8,7 +8,6 @@
     "security-officer",
     "process-reviewer",
     "intake",
-    "bug-triage",
     "ba",
     "tech-architect",
     "qa-architect",
@@ -17,9 +16,9 @@
     "qa-automation",
     "reviewer"
   ],
-  "bundle_version": "8371a6f8695e",
+  "bundle_version": "3b1534b47fbc",
   "knowledge": [],
-  "seeded_at": "2026-05-11T12:37:33Z",
+  "seeded_at": "2026-05-12T17:16:41Z",
   "ship_version": "unknown",
   "tracker_kind": "linear"
 }

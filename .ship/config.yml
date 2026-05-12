@@ -29,24 +29,13 @@ process:
     specialist:
       id: intake
       name: Intake
-    instructions: Shape new feature requests into structured tickets before BA picks
-      them up.
-  - id: bug_triage
-    name: Bug triage
-    state: planning
-    specialist:
-      id: bug-triage
-      name: Bug triage
-    instructions: Structure bug reports into reproducible tickets (steps, expected,
-      actual, env, severity) before BA writes the fix spec.
-  - id: ba_requirements
-    name: Requirements
-    state: planning
-    specialist:
-      id: ba
-      name: BA / specification
-    instructions: Turn the shaped ticket into acceptance criteria, constraints, risks,
-      and an explicit test plan.
+    instructions: "Classify + produce the full impl-grade spec in one pass. Output sections\
+      \ depend on classification \u2014 features use Problem / Goal / Feature description\
+      \ / User stories / AC / Edge cases / Scope / Non-goals / Impacted components /\
+      \ Technical notes / Test plan / Risks; bugs use Summary / Steps / Expected / Actual\
+      \ / Environment / Severity / Scope / Suspect area / AC for fix. The legacy ``ba_requirements``\
+      \ stage was folded in here \u2014 same context-load was feeding two LLM calls\
+      \ in a row, producing overlapping output shapes."
   - id: tech_arch_plan
     name: Tech architecture
     state: planning
@@ -97,10 +86,6 @@ process:
       \ never approves. Flags blockers before the human merger sees the PR."
   transitions:
   - from: task_intake
-    to: ba_requirements
-  - from: bug_triage
-    to: ba_requirements
-  - from: ba_requirements
     to: tech_arch_plan
   - from: tech_arch_plan
     to: qa_arch_plan
@@ -186,26 +171,7 @@ process:
         catchup: latest
       specialist: intake
       fsm_stage: task_intake
-    bug_triage:
-      name: Bug Triage
-      enabled: true
-      trigger:
-        type: schedule
-        cron: '*/30 * * * *'
-        window: 30m
-        catchup: latest
-      specialist: bug-triage
-      fsm_stage: bug_triage
-    ba_requirements:
-      name: Ba Requirements
-      enabled: true
-      trigger:
-        type: schedule
-        cron: '*/30 * * * *'
-        window: 30m
-        catchup: latest
-      specialist: ba
-      fsm_stage: ba_requirements
+      pipeline_priority: 10
     tech_arch_plan:
       name: Tech Arch Plan
       enabled: true
@@ -216,6 +182,7 @@ process:
         catchup: latest
       specialist: tech-architect
       fsm_stage: tech_arch_plan
+      pipeline_priority: 20
     qa_arch_plan:
       name: Qa Arch Plan
       enabled: true
@@ -226,6 +193,7 @@ process:
         catchup: latest
       specialist: qa-architect
       fsm_stage: qa_arch_plan
+      pipeline_priority: 30
     dev_implementation:
       name: Dev Implementation
       enabled: true
@@ -236,6 +204,7 @@ process:
         catchup: latest
       specialist: developer
       fsm_stage: dev_implementation
+      pipeline_priority: 40
     qa_manual:
       name: Qa Manual
       enabled: true
@@ -246,6 +215,7 @@ process:
         catchup: latest
       specialist: qa-engineer
       fsm_stage: qa_manual
+      pipeline_priority: 50
     qa_automation:
       name: Qa Automation
       enabled: true
@@ -256,6 +226,7 @@ process:
         catchup: latest
       specialist: qa-automation
       fsm_stage: qa_automation
+      pipeline_priority: 60
     code_review:
       name: Code Review
       enabled: true
@@ -266,11 +237,13 @@ process:
         catchup: latest
       specialist: reviewer
       fsm_stage: code_review
+      pipeline_priority: 70
     wbs:
       name: Decomposition WBS
       enabled: true
       specialist: ba
       fsm_stage: wbs
+      pipeline_priority: 10
       trigger:
         type: schedule
         cron: '*/30 * * * *'
@@ -283,6 +256,7 @@ process:
       enabled: true
       specialist: tech-architect
       fsm_stage: architecture
+      pipeline_priority: 20
       trigger:
         type: schedule
         cron: '*/30 * * * *'
@@ -295,6 +269,7 @@ process:
       enabled: true
       specialist: qa-architect
       fsm_stage: test_architecture
+      pipeline_priority: 30
       trigger:
         type: schedule
         cron: '*/30 * * * *'
@@ -307,6 +282,7 @@ process:
       enabled: true
       specialist: developer
       fsm_stage: tasks
+      pipeline_priority: 40
       trigger:
         type: schedule
         cron: '*/30 * * * *'
