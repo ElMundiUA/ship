@@ -61,6 +61,39 @@ Always end the `comment` with `[Ship SDLC:role-<your-role>]` so the
 audit trail can attribute the message back to your role even after
 the ticket has churned through other stages.
 
+## Re-picking a ticket that already has an open clarification
+
+The picker keeps eligible tickets in the queue even when an earlier
+agent run paused with `outcome=needs_clarification` and Ship tagged
+the ticket with the `needs:clarification` label. That label is a
+human-facing marker, not a pipeline gate — your turn fires again on
+the next tick.
+
+**Before doing anything else, check whether the operator has
+actually answered:**
+
+1. Read the comment history end-to-end.
+2. Find the most recent comment ending in `[Ship SDLC:role-*]` (any
+   role — that's an agent comment).
+3. If there is **no** non-agent comment (no comment without that
+   marker) AFTER it, AND the ticket description hasn't been edited
+   since (compare `updatedAt` against your last comment's
+   `createdAt`), then the operator hasn't replied yet.
+
+In that case:
+
+- **Do nothing.** Return `outcome=noop`, `reason=awaiting_clarification`.
+- **Do NOT post a new comment.** A repeated question is noise — the
+  operator already saw the first one.
+- **Do NOT change labels, state, or description.**
+- **Do NOT lower your read budget to "investigate further".** You
+  already gathered everything you needed last time; the gap is on
+  the human side.
+
+If you *do* see a fresh non-agent comment or description edit since
+your last question, treat that as the answer and proceed with your
+normal stage work using the new information.
+
 ## Exploration discipline
 
 Every `Read`, `Glob`, and `Grep` call adds its result to your context

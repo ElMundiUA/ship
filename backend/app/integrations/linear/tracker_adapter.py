@@ -588,15 +588,29 @@ class LinearTracker:
                     {"labels": {"some": {"id": {"eq": prev_label}}}}
                 )
 
-        # ``needs:clarification`` is a hold signal — the agent posted a
-        # question for a human. Skip these tickets at every stage so we
-        # don't repeatedly comment on a ticket that's waiting on a human
-        # answer. The label gets cleared by the human (Linear UI) when
-        # they reply. Same ``every / neq`` shape as the own-label check
-        # above so unlabeled tickets aren't accidentally filtered out.
-        clar = self._signal_label_ids.get("needs_clarification")
-        if clar:
-            parts.append({"labels": {"every": {"id": {"neq": clar}}}})
+        # ``needs:clarification`` is a *human-facing* marker only — the
+        # agent posted a question and the operator hasn't answered yet.
+        # We intentionally do NOT gate the picker on it any more:
+        #
+        #   - The previous design ("filter out clarification tickets at
+        #     the GraphQL level") required the operator to manually
+        #     strip the label every time they replied, otherwise the
+        #     ticket stayed silently dropped from the queue. In practice
+        #     nobody remembered to do that, so answered tickets piled up
+        #     in Todo with the label stuck on them.
+        #   - The portable replacement (mirrors the elmundi pipeline)
+        #     pushes the "did the operator actually answer?" decision
+        #     into the agent's own reasoning. The role prompts now
+        #     instruct every specialist to scan comment history, look
+        #     for a non-agent comment / description edit after their
+        #     last clarification question, and return ``outcome=noop``
+        #     with ``reason=awaiting_clarification`` when nothing new
+        #     has appeared. The picker therefore keeps the ticket
+        #     eligible; the agent itself quiets the loop.
+        #   - This pattern is tracker-agnostic — Jira / GitHub Issues /
+        #     Notion all expose comments + ``updated_at`` over the
+        #     adapter interface. No tracker-specific webhook, no
+        #     polling job, no Ship-side state machine.
         return parts
 
     async def add_signal_label(self, ticket: TicketRef, *, key: str) -> None:

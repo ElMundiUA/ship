@@ -89,8 +89,11 @@ def test_intake_filter_excludes_own_label_via_every_neq() -> None:
     parts = tracker._fsm_filter("task_intake")  # noqa: SLF001 - shape test
 
     label_clauses = _find_label_clauses(parts)
-    # At minimum: own-stage exclusion + needs:clarification exclusion.
-    assert len(label_clauses) == 2
+    # Only the own-stage exclusion is a hard filter now. The
+    # ``needs:clarification`` exclusion was removed because it caused
+    # answered tickets to get stuck in Todo — the agent prompt handles
+    # the noop-on-no-reply case instead.
+    assert len(label_clauses) == 1
 
     own = label_clauses[0]
     assert "every" in own["labels"], (
@@ -142,10 +145,17 @@ def test_tech_arch_plan_filter_requires_previous_stage_label() -> None:
     assert has_every
 
 
-def test_needs_clarification_exclusion_uses_every_neq_too() -> None:
-    """Same empty-collection issue applies to the ``needs:clarification``
-    exclusion. A ticket with no labels at all must not be silently
-    excluded by it."""
+def test_needs_clarification_no_longer_gates_picker() -> None:
+    """``needs:clarification`` used to be a hard picker filter — tickets
+    with the label were silently dropped from the GraphQL response, on
+    the assumption the operator would strip the label by hand when
+    they replied. That broke every time the human answered without
+    touching the label (which was basically always), leaving stuck
+    tickets piled up in Todo. The portable replacement is "picker keeps
+    the ticket eligible; the agent itself looks at comment history and
+    returns ``outcome=noop`` if there's no fresh non-agent comment
+    after its last question". So the GraphQL filter must NOT include
+    any clause referencing the ``needs:clarification`` label id."""
     tracker = _make_tracker()
     parts = tracker._fsm_filter("tech_arch_plan")
     clar_clauses = [
@@ -155,8 +165,9 @@ def test_needs_clarification_exclusion_uses_every_neq_too() -> None:
         and "every" in p["labels"]
         and p["labels"]["every"].get("id", {}).get("neq") == "lbl_clar"
     ]
-    assert len(clar_clauses) == 1, (
-        "``needs:clarification`` exclusion should be a single ``every.id.neq`` clause"
+    assert clar_clauses == [], (
+        "needs:clarification must not appear as a picker filter — the "
+        "agent prompt is responsible for noop-on-no-reply now."
     )
 
 
@@ -230,7 +241,10 @@ def test_missing_own_label_returns_impossible_sentinel() -> None:
 
     # And crucially, no plain ``every.id.neq`` own-label exclusion —
     # that's what would silently let every ticket through if the
-    # provisioner gap was tolerated.
+    # provisioner gap was tolerated. Now that the
+    # ``needs:clarification`` exclusion was retired (the agent
+    # prompt handles awaiting-reply noops), there should be zero
+    # ``every.id.neq`` clauses on a stage with a missing own-label.
     every_neq_clauses = [
         p
         for p in parts
@@ -238,11 +252,7 @@ def test_missing_own_label_returns_impossible_sentinel() -> None:
         and "every" in p["labels"]
         and "neq" in p["labels"]["every"].get("id", {})
     ]
-    # ``needs:clarification`` exclusion is one ``every / neq`` clause;
-    # the bug_triage own-label is the second that would exist in the
-    # healthy case. Here we want exactly one (the clarification one),
-    # not two.
-    assert len(every_neq_clauses) == 1, (
-        "missing-own-label stage must not emit an own-label exclusion "
-        "clause; only the needs:clarification one is expected"
+    assert every_neq_clauses == [], (
+        "missing-own-label stage must not emit any ``every.id.neq`` "
+        "label clauses — only the impossible-id sentinel is expected"
     )
