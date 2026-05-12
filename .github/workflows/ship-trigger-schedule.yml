@@ -29,7 +29,12 @@ concurrency:
 jobs:
   trigger:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 45-min budget (was 30): one production tick hit the 30-min
+    # ceiling running 5 routines back-to-back (multi-action drain
+    # from v0.32). 4 routines × ~4-7 min agent + ~2 min setup is
+    # comfortably under 45; the higher ceiling absorbs the
+    # occasional slow run without GHA hard-killing mid-stage.
+    timeout-minutes: 45
     steps:
       - name: Checkout (full history for agent introspection + branch push)
         uses: actions/checkout@v4
@@ -100,7 +105,7 @@ jobs:
           # earlier — see ``pipeline_priority``).
           #
           # We iterate the due list and run up to
-          # ``SHIP_MAX_ACTIONS_PER_TICK`` (default 5) routines that
+          # ``SHIP_MAX_ACTIONS_PER_TICK`` (default 4) routines that
           # land work, NOT just the first. Two reasons:
           #
           #   1. GitHub throttles ``schedule:`` workflows during peak
@@ -118,7 +123,7 @@ jobs:
           # eligible). Each ``ok`` row counts toward the cap. A
           # genuine non-zero exit from ``shipctl run`` bubbles up
           # via ``set -e`` and stops the tick.
-          MAX_ACTIONS_PER_TICK=${SHIP_MAX_ACTIONS_PER_TICK:-5}
+          MAX_ACTIONS_PER_TICK=${SHIP_MAX_ACTIONS_PER_TICK:-4}
           shipctl trigger --event schedule --repo "$SHIP_REPO" --pipeline-fallback --json > /tmp/ship-action.json
           jq '.due_routines[].routine_id' /tmp/ship-action.json | tr -d '"' > /tmp/ship-due-routines.txt || true
           ACTIONS_DONE=0

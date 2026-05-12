@@ -389,8 +389,8 @@ class Settings(BaseSettings):
     # dispatches via ``workflow_dispatch`` gives operators a
     # deterministic cadence. 5-field crontab expression, UTC. Default
     # ``0 * * * *`` = every hour at :00 — pairs with the customer
-    # workflow's ``SHIP_MAX_ACTIONS_PER_TICK=5`` (5 × ~4 min ≈ 20 min,
-    # fits the 30-min runner budget).
+    # workflow's ``SHIP_MAX_ACTIONS_PER_TICK=4`` (4 × ~4-7 min ≈
+    # 16-28 min, fits the 45-min runner budget with headroom).
     workflow_dispatch_cron_expr: str = Field(
         default="0 * * * *",
         alias="WORKFLOW_DISPATCH_CRON_EXPR",
