@@ -1625,6 +1625,58 @@ class ToolBox:
                     "additionalProperties": False,
                 },
             ),
+            ToolSpec(
+                name="config_help",
+                description=(
+                    "Discover this workspace's configurable settings. "
+                    "Pass ``scope`` (e.g. ``agent.provider``, "
+                    "``agent.default_profile``, ``catalog.sources``) "
+                    "to get its JSONSchema + current value. Omit "
+                    "``scope`` to enumerate every available scope "
+                    "with a one-line description. Read-only; use "
+                    "``config_put`` to mutate."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "scope": {
+                            "type": "string",
+                            "description": (
+                                "Dotted scope slug. Omit to list all "
+                                "scopes."
+                            ),
+                        }
+                    },
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="config_put",
+                description=(
+                    "Change one workspace setting. Pass ``scope`` "
+                    "(slug from ``config_help``) and ``value`` "
+                    "matching that scope's JSONSchema. Validated + "
+                    "audited under the scope's canonical action "
+                    "name (e.g. ``workspace.agent_provider.set``). "
+                    "**Mutating; admin-only**. Always describe the "
+                    "change and wait for OK before calling."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "scope": {"type": "string"},
+                        "value": {
+                            "description": (
+                                "New value — shape depends on the "
+                                "scope. Call ``config_help(scope)`` "
+                                "first to see the JSONSchema."
+                            )
+                        },
+                    },
+                    "required": ["scope", "value"],
+                    "additionalProperties": False,
+                },
+            ),
         ]
 
     # ------------------------------------------------------------------
@@ -1703,6 +1755,8 @@ class ToolBox:
             "ticket_update": self._tool_ticket_update,
             "project_priority_set": self._tool_project_priority_set,
             "run_subagent": self._tool_run_subagent,
+            "config_help": self._tool_config_help,
+            "config_put": self._tool_config_put,
             # Legacy dispatch keys for direct test calls. Not in
             # specs() — invisible to the LLM.
             "decomposition_start": self._tool_decomposition_start,
@@ -4972,6 +5026,111 @@ class ToolBox:
                 "synced_tickets": sync_report.as_dict(),
             }
         )
+
+    async def _tool_config_help(self, args: dict[str, Any]) -> str:
+        """Discover scopes / read one. Delegates to
+        :mod:`backend.app.services.config_registry` so adding a new
+        scope is a one-line change there with no tool-surface churn."""
+        from backend.app.db.models.tenancy import Workspace
+        from backend.app.services.config_registry import (
+            help_scope,
+            list_scopes,
+        )
+
+        scope = args.get("scope")
+        if not scope:
+            return _json_result({"scopes": list_scopes()})
+        workspace = await self._session.get(Workspace, self._workspace_id)
+        if workspace is None:
+            return _json_result(
+                {
+                    "error": "workspace_not_found",
+                    "message": (
+                        "Active workspace row missing — re-auth and "
+                        "try again."
+                    ),
+                }
+            )
+        try:
+            return _json_result(await help_scope(self._session, workspace, str(scope)))
+        except KeyError:
+            return _json_result(
+                {
+                    "error": "unknown_scope",
+                    "message": (
+                        f"scope {scope!r} is not registered. Call "
+                        "``config_help`` with no args to list "
+                        "available scopes."
+                    ),
+                }
+            )
+
+    async def _tool_config_put(self, args: dict[str, Any]) -> str:
+        """Validate + write one scope. Admin-only."""
+        from backend.app.db.models.tenancy import Workspace
+        from backend.app.services.config_registry import put_scope
+
+        gate_err = await self._require_admin_or_error(tool_name="config_put")
+        if gate_err is not None:
+            return _json_result(gate_err)
+
+        scope = args.get("scope")
+        if not scope or not isinstance(scope, str):
+            return _json_result(
+                {
+                    "error": "missing_scope",
+                    "message": "scope is required (string)",
+                }
+            )
+        if "value" not in args:
+            return _json_result(
+                {
+                    "error": "missing_value",
+                    "message": (
+                        "value is required (shape depends on scope — "
+                        "call ``config_help`` first)"
+                    ),
+                }
+            )
+        workspace = await self._session.get(Workspace, self._workspace_id)
+        if workspace is None:
+            return _json_result(
+                {
+                    "error": "workspace_not_found",
+                    "message": (
+                        "Active workspace row missing — re-auth and "
+                        "try again."
+                    ),
+                }
+            )
+        try:
+            result = await put_scope(
+                self._session,
+                workspace,
+                scope,
+                args["value"],
+                actor_user_id=self._user_id,
+                actor_token_id=None,
+            )
+        except KeyError:
+            return _json_result(
+                {
+                    "error": "unknown_scope",
+                    "message": (
+                        f"scope {scope!r} is not registered. Call "
+                        "``config_help`` with no args to list "
+                        "available scopes."
+                    ),
+                }
+            )
+        except ValueError as exc:
+            return _json_result(
+                {
+                    "error": "invalid_value",
+                    "message": str(exc),
+                }
+            )
+        return _json_result(result)
 
     async def _tool_run_subagent(self, args: dict[str, Any]) -> str:
         """Polymorphic subagent spawner. Branches on ``kind`` to

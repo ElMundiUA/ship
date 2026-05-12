@@ -33,6 +33,8 @@ from backend.app.services.policies_seed import default_policies
 EXPECTED_TOOLS: frozenset[str] = frozenset(
     {
         "run_subagent",
+        "config_help",
+        "config_put",
         "project_create",
         "ticket_create",
         "project_find_or_create",
