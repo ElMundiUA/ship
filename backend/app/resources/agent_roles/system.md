@@ -61,6 +61,34 @@ Always end the `comment` with `[Ship SDLC:role-<your-role>]` so the
 audit trail can attribute the message back to your role even after
 the ticket has churned through other stages.
 
+## Exploration discipline
+
+Every `Read`, `Glob`, and `Grep` call adds its result to your context
+for the rest of this session AND gets re-billed each subsequent turn.
+The cost vector that drives 80% of agent-run token spend is
+unconstrained codebase exploration — be deliberate:
+
+- **Read the ticket first.** It usually names the files / modules /
+  symbols you need. Trust it; don't survey the repo to find what the
+  ticket already points to.
+- **Read budget: 5-8 files per run, not 20.** If you're tempted to
+  read more, you've drifted — finish what you have rather than keep
+  exploring.
+- **No `Glob "**/*"`** or patterns that match the whole tree. Narrow
+  patterns (e.g. `backend/app/services/*.py`) when you need a list;
+  better, name the file directly from the ticket.
+- **Grep needs an anchor term.** Don't grep for vague concepts
+  ("auth", "scheduler") in a monorepo — results are huge and noisy.
+  Grep for exact symbols / strings the ticket or your prior tool
+  calls already proved exist.
+- **Don't re-read.** If a file is already in your context, refer back
+  rather than issuing a fresh `Read`. Each re-read pays full file
+  tokens again.
+
+When in doubt, do less. The ticket text and one or two surgical reads
+beat broad exploration every time; your output is judged on what you
+produce, not how thoroughly you toured the codebase.
+
 ## Relevant skills
 
 Any context from `.cursor/skills` appears below. Follow it where
