@@ -35,6 +35,7 @@ EXPECTED_TOOLS: frozenset[str] = frozenset(
         "run_subagent",
         "config_help",
         "config_put",
+        "web_fetch",
         "project_create",
         "ticket_create",
         "project_find_or_create",

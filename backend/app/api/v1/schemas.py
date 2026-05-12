@@ -340,6 +340,11 @@ INTEGRATION_KINDS: tuple[str, ...] = (
     "otel",
     "webhook",
     "s3-export",
+    # Web search + URL fetch. Workspace-scoped API key — the resolver
+    # at ``backend.app.services.firecrawl_resolver`` falls back to env
+    # ``FIRECRAWL_API_KEY`` when the row is absent, so dev / single-
+    # tenant installs work without populating it.
+    "firecrawl",
 )
 
 

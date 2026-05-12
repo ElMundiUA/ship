@@ -1626,6 +1626,47 @@ class ToolBox:
                 },
             ),
             ToolSpec(
+                name="web_fetch",
+                description=(
+                    "Fetch one URL via Firecrawl and return its "
+                    "content as markdown (default), HTML, or plain "
+                    "text. Works on JS-rendered pages and PDFs out "
+                    "of the box. Use when you have a specific URL "
+                    "(from the user, from ``web_search``, from a "
+                    "ticket / doc) and need to read the body. Don't "
+                    "spam — one fetch per URL per session is usually "
+                    "enough."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "description": (
+                                "Fully-qualified URL (http:// or "
+                                "https://). Firecrawl handles "
+                                "redirects + JS rendering."
+                            ),
+                            "minLength": 4,
+                            "maxLength": 2048,
+                        },
+                        "format": {
+                            "type": "string",
+                            "enum": ["markdown", "html", "text"],
+                            "default": "markdown",
+                            "description": (
+                                "Output format. ``markdown`` is the "
+                                "token-efficient default; switch to "
+                                "``html`` only when structure matters "
+                                "and to ``text`` to strip everything."
+                            ),
+                        },
+                    },
+                    "required": ["url"],
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
                 name="config_help",
                 description=(
                     "Discover this workspace's configurable settings. "
@@ -1757,6 +1798,7 @@ class ToolBox:
             "run_subagent": self._tool_run_subagent,
             "config_help": self._tool_config_help,
             "config_put": self._tool_config_put,
+            "web_fetch": self._tool_web_fetch,
             # Legacy dispatch keys for direct test calls. Not in
             # specs() — invisible to the LLM.
             "decomposition_start": self._tool_decomposition_start,
@@ -5024,6 +5066,112 @@ class ToolBox:
                 "state": state,
                 "prior_state": prior_state,
                 "synced_tickets": sync_report.as_dict(),
+            }
+        )
+
+    async def _tool_web_fetch(self, args: dict[str, Any]) -> str:
+        """Firecrawl ``/v1/scrape``. Returns markdown by default; HTML
+        and text are opt-in via ``format``. The response body is
+        capped server-side to whatever Firecrawl returns — we don't
+        post-process beyond projecting the keys."""
+        from backend.app.services.firecrawl_client import (
+            FirecrawlClient,
+            FirecrawlError,
+        )
+        from backend.app.services.firecrawl_resolver import (
+            resolve_firecrawl_key,
+        )
+
+        url = args.get("url")
+        if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+            return _json_result(
+                {
+                    "error": "invalid_url",
+                    "message": (
+                        "url must start with http:// or https://"
+                    ),
+                }
+            )
+        fmt = args.get("format") or "markdown"
+        if fmt not in {"markdown", "html", "text"}:
+            return _json_result(
+                {
+                    "error": "invalid_format",
+                    "message": (
+                        "format must be one of 'markdown', 'html', "
+                        "'text'"
+                    ),
+                }
+            )
+        # Firecrawl uses ``rawHtml`` for raw and ``markdown`` /
+        # ``html`` for the post-extracted shapes. Map our user-facing
+        # vocab onto the wire shape.
+        firecrawl_format = {"markdown": "markdown", "html": "html", "text": "markdown"}[fmt]
+
+        resolved = await resolve_firecrawl_key(self._session, self._workspace_id)
+        if resolved is None:
+            return _json_result(
+                {
+                    "error": "firecrawl_unconfigured",
+                    "message": (
+                        "Firecrawl API key not set. Add one in "
+                        "Settings → Integrations or set "
+                        "``FIRECRAWL_API_KEY`` in the deploy env."
+                    ),
+                }
+            )
+        try:
+            async with FirecrawlClient(api_key=resolved.api_key) as client:
+                raw = await client.scrape(url=url, formats=[firecrawl_format])
+        except FirecrawlError as exc:
+            return _json_result(
+                {
+                    "error": exc.code,
+                    "message": exc.message,
+                    "status": exc.status,
+                    "url": url,
+                }
+            )
+
+        data = raw.get("data") if isinstance(raw, dict) else None
+        if not isinstance(data, dict):
+            data = {}
+        # Project safe keys only — Firecrawl's full response carries
+        # a lot of metadata we don't want streaming into the LLM
+        # context every fetch.
+        content = data.get(firecrawl_format) or ""
+        if fmt == "text" and isinstance(content, str):
+            # We asked Firecrawl for markdown but the LLM said "text" —
+            # strip the markdown noise pragmatically. Heavy stripping
+            # would live in a dedicated helper; for now, a few cheap
+            # cleanups handle the common cases.
+            import re
+
+            content = re.sub(r"!\[[^\]]*\]\([^)]+\)", "", content)  # images
+            content = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", content)  # links
+            content = re.sub(r"^#+\s+", "", content, flags=re.MULTILINE)
+        metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+        await self._audit_navigator_tool(
+            tool_name="web_fetch",
+            target={"kind": "external_url", "id": ""},
+            payload={
+                "url": url[:500],
+                "format": fmt,
+                "bytes": len(content) if isinstance(content, str) else 0,
+                "source": resolved.source,
+            },
+        )
+        return _json_result(
+            {
+                "url": url,
+                "format": fmt,
+                "content": content,
+                "metadata": {
+                    "title": metadata.get("title"),
+                    "language": metadata.get("language"),
+                    "ogTitle": metadata.get("ogTitle"),
+                    "ogDescription": metadata.get("ogDescription"),
+                },
             }
         )
 

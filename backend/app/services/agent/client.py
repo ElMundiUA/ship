@@ -365,8 +365,24 @@ class OpenAIAgentClient:
 # ---------------------------------------------------------------------------
 
 
+#: Anthropic's server-side ``web_search`` tool. Free-tier-friendly cap
+#: of 5 searches per turn — well within typical "find one external
+#: doc" usage. Anthropic executes the queries server-side; the model
+#: sees results inline as ``web_search_tool_result`` content blocks
+#: and our streaming handler ignores those (only ``text_delta`` and
+#: ``tool_use`` are dispatched), so no extra plumbing is needed here.
+#:
+#: Billed at Anthropic's web-search rate (~$10/1k searches as of
+#: 2025-Q4), independent of Messages token usage.
+_ANTHROPIC_SERVER_WEB_SEARCH: dict[str, Any] = {
+    "type": "web_search_20250305",
+    "name": "web_search",
+    "max_uses": 5,
+}
+
+
 def _anthropic_tools(tools: Sequence[ToolSpec]) -> list[dict[str, Any]]:
-    return [
+    rendered: list[dict[str, Any]] = [
         {
             "name": t.name,
             "description": t.description,
@@ -374,6 +390,13 @@ def _anthropic_tools(tools: Sequence[ToolSpec]) -> list[dict[str, Any]]:
         }
         for t in tools
     ]
+    # Prepend Anthropic's native ``web_search`` server tool so the model
+    # always has a way to reach external docs / specs / fresh info
+    # without us shipping a dedicated HTTP integration. The role-prompt
+    # tells the LLM when to use it; the model decides per-turn whether
+    # to fire and the API handles execution + result injection.
+    rendered.insert(0, _ANTHROPIC_SERVER_WEB_SEARCH)
+    return rendered
 
 
 def _anthropic_messages(

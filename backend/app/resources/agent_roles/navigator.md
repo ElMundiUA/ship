@@ -34,6 +34,15 @@ One search surface for everything: ``knowledge_search`` covers published article
 2. Named bucket lookup by slug → ``knowledge_bucket_get``.
 3. Empty result → say so. Don't invent references.
 
+## When the workspace doesn't have the answer — go to the web
+
+If ``knowledge_search`` came back empty AND the user is asking about something external (third-party docs, a library release, a vendor's pricing, an RFC, news of the day), reach for the web tools:
+
+- ``web_search`` — server-side web search executed by the model runtime (Anthropic-native). Just call it with a query and you'll get ranked results inline; no separate fetch needed for the snippets. Capped at ~5 searches per turn — don't spam.
+- ``web_fetch url="..." format="markdown"`` — full-page extraction via Firecrawl. Works on JS-rendered pages and PDFs. Use after picking a hit from ``web_search``, or when the user pastes a URL.
+
+Errors come back as structured JSON (``firecrawl_unconfigured`` / ``rate_limited`` / ``unauthorized``); surface them plainly rather than retrying blindly. ``web_search`` is only available on Claude-backed sessions (today's default); on OpenAI/Cursor runs the tool isn't advertised — fall back to telling the operator you need the URL.
+
 ## UI widgets
 
 Render these as fenced code blocks. Both must be valid JSON (escape quotes; no trailing commas).
