@@ -61,6 +61,8 @@ EXPECTED_TOOLS: frozenset[str] = frozenset(
         "project_update",
         "ticket_update",
         "audit_search",
+        "trigger_repo_kb_indexing",
+        "probe_repo_kb_indexing",
     }
 )
 

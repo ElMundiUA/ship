@@ -1287,6 +1287,86 @@ class ToolBox:
                 },
             ),
             ToolSpec(
+                name="trigger_repo_kb_indexing",
+                description=(
+                    "Enqueue a fresh ``.ship/knowledge`` re-embed for "
+                    "one activated repo. Non-blocking: returns "
+                    "``{run_id, status:'pending', trigger:'agent', "
+                    "repo_id}`` within ~200ms; the indexer runs in a "
+                    "background task and the row transitions "
+                    "``pending → running → done|error``. Probe with "
+                    "``probe_repo_kb_indexing`` to read live state. "
+                    "Concurrent triggers on the same repo serialise "
+                    "behind a per-repo advisory lock — they don't "
+                    "race. Defaults to the chat's active repo if "
+                    "``repo_id`` is omitted; returns "
+                    "``{error:'repo_id_required'}`` if neither is "
+                    "known. Repo from a different workspace returns "
+                    "``{error:'repo_not_found_in_workspace'}``. Use "
+                    "when ``.ship/knowledge`` drifted (a manual "
+                    "push whose webhook didn't fire, freshly-edited "
+                    "KB content) and you want the agent to re-embed "
+                    "before answering. Prefer ``reindex_repo_kb`` "
+                    "for an admin-gated synchronous run."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "repo_id": {
+                            "type": "string",
+                            "description": (
+                                "Activated-repo UUID. Optional — "
+                                "defaults to the chat's active repo."
+                            ),
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="probe_repo_kb_indexing",
+                description=(
+                    "Read the current / latest ``.ship/knowledge`` "
+                    "indexing run state for one repo. Without a "
+                    "``run_id``: returns ``{latest:{run_id, status, "
+                    "trigger, started_at, finished_at, stats:{…}}, "
+                    "kb_chunk_count, kb_last_indexed_at}`` — one "
+                    "call answers \"is it running and is the result "
+                    "fresh?\". ``latest`` is ``null`` for repos that "
+                    "have never been indexed. With ``run_id``: "
+                    "returns the same per-run block (or "
+                    "``{error:'run_not_found'}`` if the run id "
+                    "belongs to another repo / workspace). On "
+                    "``status='error'`` the run carries an ``error`` "
+                    "message (e.g. ``'OPENAI_API_KEY missing'``); "
+                    "neither shape raises. Defaults to the chat's "
+                    "active repo if ``repo_id`` is omitted; returns "
+                    "``{error:'repo_id_required'}`` if neither is "
+                    "known."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "repo_id": {
+                            "type": "string",
+                            "description": (
+                                "Activated-repo UUID. Optional — "
+                                "defaults to the chat's active repo."
+                            ),
+                        },
+                        "run_id": {
+                            "type": "string",
+                            "description": (
+                                "Specific run UUID to probe. Omit "
+                                "to read the most recent run for "
+                                "the repo."
+                            ),
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
                 name="ticket_get",
                 description=(
                     "Fetch one ticket's current state from the workspace's "
@@ -1709,6 +1789,8 @@ class ToolBox:
             "config_help": self._tool_config_help,
             "config_put": self._tool_config_put,
             "web_fetch": self._tool_web_fetch,
+            "trigger_repo_kb_indexing": self._tool_trigger_repo_kb_indexing,
+            "probe_repo_kb_indexing": self._tool_probe_repo_kb_indexing,
             # Legacy dispatch keys for direct test calls. Not in
             # specs() — invisible to the LLM.
             "decomposition_start": self._tool_decomposition_start,
@@ -1778,6 +1860,194 @@ class ToolBox:
         return _json_result({"results": results})
 
 
+
+    async def _tool_trigger_repo_kb_indexing(
+        self, args: dict[str, Any]
+    ) -> str:
+        """Enqueue an async KB re-embed and return the new run id (ELS-62).
+
+        Distinct from ``reindex_repo_kb`` (which is the admin-gated
+        synchronous wrapper): this tool returns immediately with a
+        ``run_id`` callers can probe. Defaults ``repo_id`` to the chat's
+        active repo so the LLM doesn't have to ask the user for an id
+        every turn — same fallback ``search_repo_kb`` uses. Errors come
+        back as structured JSON, never raises.
+        """
+        repo_id = self._resolve_repo_id_arg(args)
+        if repo_id is None:
+            return _json_result({"error": "repo_id_required"})
+        if not await self._verify_repo_in_workspace(repo_id):
+            return _json_result({"error": "repo_not_found_in_workspace"})
+        repo = await self._session.get(WorkspaceRepo, repo_id)
+        if repo is None:
+            return _json_result({"error": "repo_not_found_in_workspace"})
+
+        from backend.app.services.agent.kb_indexer import (
+            create_kb_indexing_run,
+            run_kb_indexing_background,
+        )
+        from backend.app.db.session import get_sessionmaker
+
+        run = await create_kb_indexing_run(
+            self._session,
+            workspace_id=self._workspace_id,
+            repo_id=repo.id,
+            trigger="agent",
+            created_by_user_id=self._user_id,
+        )
+        self._session.add(
+            AuditLog(
+                workspace_id=self._workspace_id,
+                actor_user_id=self._user_id,
+                actor_token_id=None,
+                action="kb_indexing.trigger",
+                target_kind="workspace_repo",
+                target_id=str(repo.id),
+                payload={
+                    "repo_id": str(repo.id),
+                    "run_id": str(run.id),
+                    "trigger": "agent",
+                },
+            )
+        )
+        # Persist the pending row + audit entry before the background
+        # task fires so probe calls on this turn see a real row, even
+        # if the per-turn session hasn't auto-committed yet.
+        await self._session.commit()
+
+        # Tools don't carry the FastAPI ``BackgroundTasks`` handle —
+        # spawn the work via ``asyncio.create_task`` instead. The
+        # background entry mints its own session so we don't piggyback
+        # on the agent's transactional session for the indexer's HTTP
+        # fan-out.
+        import asyncio
+
+        # Verify the sessionmaker is reachable; if it isn't (very
+        # unusual at chat runtime) surface the error so probe can
+        # see it instead of dropping the run on the floor.
+        try:
+            get_sessionmaker()
+        except Exception as exc:  # noqa: BLE001 — surface as error row
+            run.status = "error"
+            run.error = f"sessionmaker_unavailable: {exc}"[:4000]
+            await self._session.commit()
+            return _json_result(
+                {
+                    "run_id": str(run.id),
+                    "repo_id": str(repo.id),
+                    "status": "error",
+                    "trigger": "agent",
+                }
+            )
+
+        asyncio.create_task(run_kb_indexing_background(run.id))
+
+        return _json_result(
+            {
+                "run_id": str(run.id),
+                "repo_id": str(repo.id),
+                "status": run.status,
+                "trigger": run.trigger,
+            }
+        )
+
+    async def _tool_probe_repo_kb_indexing(
+        self, args: dict[str, Any]
+    ) -> str:
+        """Read the latest (or a specific) KB indexing run for one repo (ELS-62).
+
+        The probe shape always carries ``kb_chunk_count`` /
+        ``kb_last_indexed_at`` (workspace-level aggregates over
+        ``kb_chunks``) so a single tool call answers "is the indexer
+        running, and is the result fresh?". Errors come back as
+        structured JSON; we never raise into the LLM.
+        """
+        from backend.app.api.v1.routes.repo_kb import (
+            latest_run_for_repo,
+            stats_dict_from_row,
+            workspace_kb_aggregates_for,
+        )
+        from backend.app.db.models.agent_memory import KbIndexingRun
+
+        repo_id = self._resolve_repo_id_arg(args)
+        if repo_id is None:
+            return _json_result({"error": "repo_id_required"})
+        if not await self._verify_repo_in_workspace(repo_id):
+            return _json_result({"error": "repo_not_found_in_workspace"})
+
+        run_id_arg = args.get("run_id")
+        if run_id_arg is not None:
+            try:
+                run_id = uuid.UUID(str(run_id_arg))
+            except (TypeError, ValueError):
+                return _json_result({"error": "run_not_found"})
+            run = (
+                await self._session.execute(
+                    select(KbIndexingRun).where(
+                        KbIndexingRun.id == run_id,
+                        KbIndexingRun.workspace_id == self._workspace_id,
+                        KbIndexingRun.repo_id == repo_id,
+                    )
+                )
+            ).scalars().first()
+            if run is None:
+                return _json_result({"error": "run_not_found"})
+            chunk_count, last_indexed_at = await workspace_kb_aggregates_for(
+                self._session, repo_id=repo_id
+            )
+            return _json_result(
+                {
+                    "run": _kb_run_to_dict(run, stats_dict_from_row(run)),
+                    "kb_chunk_count": chunk_count,
+                    "kb_last_indexed_at": (
+                        last_indexed_at.isoformat()
+                        if last_indexed_at is not None
+                        else None
+                    ),
+                }
+            )
+
+        run = await latest_run_for_repo(
+            self._session,
+            workspace_id=self._workspace_id,
+            repo_id=repo_id,
+        )
+        chunk_count, last_indexed_at = await workspace_kb_aggregates_for(
+            self._session, repo_id=repo_id
+        )
+        latest_block = (
+            _kb_run_to_dict(run, stats_dict_from_row(run))
+            if run is not None
+            else None
+        )
+        return _json_result(
+            {
+                "latest": latest_block,
+                "kb_chunk_count": chunk_count,
+                "kb_last_indexed_at": (
+                    last_indexed_at.isoformat()
+                    if last_indexed_at is not None
+                    else None
+                ),
+            }
+        )
+
+    def _resolve_repo_id_arg(self, args: dict[str, Any]) -> uuid.UUID | None:
+        """Resolve a tool's optional ``repo_id`` argument to a UUID.
+
+        Tools that default to the chat's active repo (``search_repo_kb``,
+        ``get_repo_file``, the ELS-62 KB tools) share this fallback:
+        explicit ``repo_id`` arg → parse as UUID; missing → use
+        ``self._active_repo_id``; neither set → ``None`` (caller
+        surfaces ``error='repo_id_required'``).
+        """
+        raw = args.get("repo_id")
+        if raw is not None:
+            try:
+                return uuid.UUID(str(raw))
+            except (TypeError, ValueError):
+                return None
+        return self._active_repo_id
 
     async def _tool_repo_file_get(self, args: dict[str, Any]) -> str:
         repo_id = _parse_uuid(args, "repo_id")
@@ -5725,6 +5995,36 @@ def _truncate(text: str | None, max_chars: int) -> str:
     if len(text) <= max_chars:
         return text
     return text[:max_chars] + "…"
+
+
+def _kb_run_to_dict(run: Any, stats: dict[str, int]) -> dict[str, Any]:
+    """Project a :class:`KbIndexingRun` row into the probe wire shape.
+
+    Kept module-level so the trigger / probe tool methods can share
+    the same JSON projection (and so the tests can assert against a
+    single function).
+    """
+    return {
+        "run_id": str(run.id),
+        "repo_id": str(run.repo_id),
+        "status": run.status,
+        "trigger": run.trigger,
+        "started_at": (
+            run.started_at.isoformat() if run.started_at is not None else None
+        ),
+        "finished_at": (
+            run.finished_at.isoformat()
+            if run.finished_at is not None
+            else None
+        ),
+        "created_at": (
+            run.created_at.isoformat()
+            if run.created_at is not None
+            else None
+        ),
+        "stats": stats,
+        "error": run.error,
+    }
 
 
 def _json_result(payload: Any) -> str:

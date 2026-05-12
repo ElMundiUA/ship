@@ -43,17 +43,20 @@ Design notes
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
+import uuid as _uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Final
 
 import httpx
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.config import Settings, get_settings
-from backend.app.db.models.agent_memory import KbChunk
+from backend.app.db.models.agent_memory import KbChunk, KbIndexingRun
 from backend.app.db.models.integrations import GitHubInstallation, WorkspaceRepo
 from backend.app.integrations.gateway.code_host import (
     BlobContent,
@@ -270,6 +273,223 @@ async def reindex_repo_kb(
     return report
 
 
+def _report_to_stats(report: IndexReport) -> dict[str, int | str]:
+    """Project :class:`IndexReport` into the run row's ``stats`` JSONB.
+
+    Keeps the wire shape identical to what ``probe_repo_kb_indexing``
+    promises so a callers reading either path see the same keys.
+    """
+    return {
+        "files_discovered": report.files_discovered,
+        "files_indexed": report.files_indexed,
+        "files_skipped_unchanged": report.files_skipped_unchanged,
+        "files_skipped_too_big": report.files_skipped_too_big,
+        "files_skipped_binary": report.files_skipped_binary,
+        "chunks_deleted": report.chunks_deleted,
+        "chunks_written": report.chunks_written,
+    }
+
+
+def _advisory_lock_key_for_repo(repo_id: _uuid.UUID | str) -> int:
+    """Stable signed-int64 key for ``pg_advisory_xact_lock(bigint)``.
+
+    Postgres advisory-lock keys are 64-bit signed; we hash the UUID
+    bytes into the bottom 8 bytes so concurrent push + agent triggers
+    on the same repo always pick the same key (and different repos
+    almost never collide). The namespace prefix (``kb_indexer`` here)
+    keeps us from colliding with future advisory-locked features.
+    """
+    raw = str(repo_id).encode("utf-8")
+    digest = hashlib.blake2b(b"kb_indexer:" + raw, digest_size=8).digest()
+    # Convert to signed 64-bit so it fits Postgres' ``bigint`` advisory
+    # lock argument exactly (asyncpg would otherwise refuse a value
+    # outside [-2^63, 2^63-1]).
+    value = int.from_bytes(digest, "big", signed=False)
+    if value >= 1 << 63:
+        value -= 1 << 64
+    return value
+
+
+async def create_kb_indexing_run(
+    session: AsyncSession,
+    *,
+    workspace_id: _uuid.UUID,
+    repo_id: _uuid.UUID,
+    trigger: str,
+    created_by_user_id: _uuid.UUID | None = None,
+) -> KbIndexingRun:
+    """Insert a fresh ``pending`` :class:`KbIndexingRun` row.
+
+    Split out so the trigger HTTP/agent surface can return the
+    ``run_id`` immediately (AC #1: ~200 ms) while the heavy lifting
+    runs in a FastAPI background task. Caller commits.
+    """
+    if trigger not in {"agent", "push", "manual"}:
+        raise ValueError(f"unknown kb_indexing trigger: {trigger!r}")
+    run = KbIndexingRun(
+        id=_uuid.uuid4(),
+        workspace_id=workspace_id,
+        repo_id=repo_id,
+        status="pending",
+        trigger=trigger,
+        stats={},
+        created_by_user_id=created_by_user_id,
+    )
+    session.add(run)
+    await session.flush()
+    return run
+
+
+async def execute_kb_indexing_run(
+    session: AsyncSession,
+    *,
+    run_id: _uuid.UUID,
+    settings: Settings | None = None,
+    gateway: CodeHostGateway | None = None,
+) -> KbIndexingRun:
+    """Drive one ``KbIndexingRun`` row through its pending → done lifecycle.
+
+    Contract:
+
+    1. Resolve the run, its repo, and the GitHub install. Bail to
+       ``status='error'`` with a structured message if any of those
+       are gone (suspended install, repo deleted, etc.) — the row is
+       still useful as the audit trail.
+    2. ``SELECT pg_advisory_xact_lock(:k)`` on a key derived from
+       ``repo_id`` so concurrent push + agent triggers on the same
+       repo serialise (AC #7). The lock auto-releases on
+       commit/rollback because it's transaction-scoped.
+    3. Flip ``pending → running``, run :func:`reindex_repo_kb`, persist
+       the :class:`IndexReport` into ``stats``, transition to ``done``.
+       Any exception during the indexer run gets captured into
+       ``status='error'`` + ``error`` so we never bubble out of the
+       background task as an uncaught.
+
+    Caller owns commit. For background tasks see
+    :func:`run_kb_indexing_background` which mints its own session.
+    """
+    s = settings or get_settings()
+    run = await session.get(KbIndexingRun, run_id)
+    if run is None:
+        # Lost row — caller is racing with a DELETE. Nothing to do.
+        return run  # type: ignore[return-value]
+    if run.status not in ("pending", "running"):
+        # Idempotent re-entry: another worker already drove this run
+        # through its lifecycle. Don't re-run.
+        return run
+
+    now = datetime.now(timezone.utc)
+    repo = await session.get(WorkspaceRepo, run.repo_id)
+    if repo is None:
+        run.status = "error"
+        run.error = "repo_not_found"
+        run.finished_at = now
+        await session.flush()
+        return run
+    if repo.installation_id is None:
+        run.status = "error"
+        run.error = "github_install_missing"
+        run.finished_at = now
+        await session.flush()
+        return run
+    install = await session.get(GitHubInstallation, repo.installation_id)
+    if install is None or install.suspended_at is not None:
+        run.status = "error"
+        run.error = "github_install_missing"
+        run.finished_at = now
+        await session.flush()
+        return run
+
+    # Serialise with any concurrent push / agent reindex on this repo.
+    # The lock is transaction-scoped: when the outer session commits or
+    # rolls back, Postgres releases it automatically — no manual unlock
+    # path to leak.
+    lock_key = _advisory_lock_key_for_repo(repo.id)
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(:k)").bindparams(k=lock_key)
+    )
+
+    run.status = "running"
+    run.started_at = datetime.now(timezone.utc)
+    await session.flush()
+
+    try:
+        report = await reindex_repo_kb(
+            session, repo, install, settings=s, gateway=gateway
+        )
+    except Exception as exc:  # noqa: BLE001 — capture every error onto the row
+        run.status = "error"
+        run.error = f"{type(exc).__name__}: {exc}"[:4000]
+        run.finished_at = datetime.now(timezone.utc)
+        await session.flush()
+        logger.warning(
+            "kb_indexing run %s for repo %s failed: %s",
+            run.id, repo.full_name, exc,
+        )
+        return run
+
+    run.stats = _report_to_stats(report)
+    run.status = "done"
+    run.finished_at = datetime.now(timezone.utc)
+    run.error = None
+    await session.flush()
+    logger.info(
+        "kb_indexing run %s for %s: files_indexed=%d chunks_written=%d",
+        run.id,
+        repo.full_name,
+        report.files_indexed,
+        report.chunks_written,
+    )
+    return run
+
+
+async def run_kb_indexing_background(run_id: _uuid.UUID) -> None:
+    """Background-task entry point for the agent / HTTP trigger paths.
+
+    Mints its own :class:`AsyncSession` so the request connection
+    doesn't stay open through the GitHub + OpenAI fan-out (the
+    sync→async migration risk called out in the ticket).
+    Commits on success; on an uncaught error it opens a second
+    short transaction to stamp the row ``error='background task
+    crashed'`` so the per-repo advisory lock can't permanently jam
+    the next run.
+    """
+    from backend.app.db.session import get_sessionmaker
+
+    s = get_settings()
+    sessionmaker = get_sessionmaker()
+    try:
+        async with sessionmaker() as session:
+            try:
+                await execute_kb_indexing_run(
+                    session, run_id=run_id, settings=s
+                )
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+    except Exception:
+        # The advisory lock was released when the failed transaction
+        # rolled back. Stamp the row in a fresh transaction so probe
+        # surfaces something useful instead of a permanent ``running``.
+        logger.exception(
+            "kb_indexing background task crashed for run %s", run_id
+        )
+        try:
+            async with sessionmaker() as recovery:
+                run = await recovery.get(KbIndexingRun, run_id)
+                if run is not None and run.status in ("pending", "running"):
+                    run.status = "error"
+                    run.error = "background task crashed"
+                    run.finished_at = datetime.now(timezone.utc)
+                    await recovery.commit()
+        except Exception:  # noqa: BLE001 — best effort
+            logger.exception(
+                "failed to stamp run %s as crashed after background failure",
+                run_id,
+            )
+
+
 async def _delete_chunks_for_path(
     session: AsyncSession, repo_id, path: str
 ) -> int:
@@ -380,4 +600,11 @@ def _split_long_paragraph(paragraph: str) -> list[str]:
     return out
 
 
-__all__ = ["IndexReport", "KB_ROOT", "reindex_repo_kb"]
+__all__ = [
+    "IndexReport",
+    "KB_ROOT",
+    "create_kb_indexing_run",
+    "execute_kb_indexing_run",
+    "reindex_repo_kb",
+    "run_kb_indexing_background",
+]

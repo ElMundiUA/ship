@@ -48,6 +48,7 @@ from backend.app.api.v1.routes import (
     runs,
     policies,
     repo_home,
+    repo_kb,
     repo_secrets,
     repos,
     telegram,
@@ -133,6 +134,11 @@ api_router.include_router(repo_home.router)
 # (Replaced the legacy ``/v1/catalog/default-bundle`` route after
 # the catalog concept was retired in phase 2.1.)
 api_router.include_router(process_templates.router)
+# On-demand ``.ship/knowledge`` indexing surface (ELS-62). Lives under
+# /workspaces/{ws}/repos/{repo_id}/kb so it sits next to repo_home but
+# carries its own router prefix to keep the indexer state machine off
+# the otherwise read-only repo-home rollup.
+api_router.include_router(repo_kb.router)
 # Team invites (B7 — WOW onboarding team install). Admin-scoped list/
 # create/revoke under ``/workspaces/{ws}/invites``; public peek +
 # authenticated accept at ``/invites/{token}``.

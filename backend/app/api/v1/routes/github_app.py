@@ -808,7 +808,11 @@ async def _apply_push_event_for_kb(
     indexer itself is SHA-diffed so the worst case is a cheap no-op
     pass.
     """
-    from backend.app.services.agent.kb_indexer import KB_ROOT, reindex_repo_kb
+    from backend.app.services.agent.kb_indexer import (
+        KB_ROOT,
+        create_kb_indexing_run,
+        execute_kb_indexing_run,
+    )
 
     install_id = (payload.get("installation") or {}).get("id")
     repo_ext_id = (payload.get("repository") or {}).get("id")
@@ -845,23 +849,52 @@ async def _apply_push_event_for_kb(
     if install is None or install.suspended_at is not None:
         return
 
-    try:
-        report = await reindex_repo_kb(session, repo_row, install, settings=settings)
-    except RuntimeError as exc:
-        # Missing OPENAI_API_KEY, almost certainly. Don't fail the
-        # webhook — GitHub would just retry and we'd keep failing.
-        # Operator sees this in logs + the next manual reindex will
-        # surface the same error as a 412.
+    # ELS-62: route the push-driven reindex through the same wrapper as
+    # the agent / HTTP entry points so every reindex (push or manual)
+    # lands in ``kb_indexing_runs`` as one observability table. The
+    # webhook stays synchronous — we await the row's terminal state so
+    # the upstream POST returns only once the work is durable.
+    run = await create_kb_indexing_run(
+        session,
+        workspace_id=repo_row.workspace_id,
+        repo_id=repo_row.id,
+        trigger="push",
+        created_by_user_id=None,
+    )
+    session.add(
+        AuditLog(
+            workspace_id=repo_row.workspace_id,
+            actor_user_id=None,
+            actor_token_id=None,
+            action="kb_indexing.trigger",
+            target_kind="workspace_repo",
+            target_id=str(repo_row.id),
+            payload={
+                "repo_id": str(repo_row.id),
+                "run_id": str(run.id),
+                "trigger": "push",
+            },
+        )
+    )
+    await execute_kb_indexing_run(session, run_id=run.id, settings=settings)
+    if run.status == "error":
+        # Indexer captured the error onto the row; keep the webhook
+        # behaviour identical to pre-ELS-62 (don't 500, let GitHub
+        # treat the delivery as success — operator sees the run row
+        # via probe / list endpoints).
         logger.warning(
-            "push → KB reindex skipped for %s: %s", repo_row.full_name, exc
+            "push → KB reindex captured error for %s: %s",
+            repo_row.full_name,
+            run.error,
         )
         return
 
+    stats = run.stats or {}
     logger.info(
         "push → KB reindex for %s: files_indexed=%d chunks_written=%d",
         repo_row.full_name,
-        report.files_indexed,
-        report.chunks_written,
+        int(stats.get("files_indexed", 0)),
+        int(stats.get("chunks_written", 0)),
     )
 
     # KB-5 (ELS-39): repo-scoped ``repo_files`` buckets are deprecated.
