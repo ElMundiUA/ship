@@ -884,6 +884,7 @@ class TopicService:
         thread: ChatThread,
         recent_messages: Sequence[ChatMessageRow],
         new_user_message: str,
+        new_user_attachments: "Sequence[Any]" = (),
         retrieved_buckets: Sequence[BucketHit] = (),
         retrieved_kb: Sequence[KbChunk] = (),
     ) -> list[ChatMessage]:
@@ -998,7 +999,13 @@ class TopicService:
             if m.role not in {"user", "assistant"}:
                 continue
             out.append(ChatMessage(role=m.role, content=m.body or ""))
-        out.append(ChatMessage(role="user", content=new_user_message))
+        out.append(
+            ChatMessage(
+                role="user",
+                content=new_user_message,
+                attachments=list(new_user_attachments),
+            )
+        )
         return out
 
 

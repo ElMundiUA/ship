@@ -45,7 +45,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
@@ -162,18 +162,11 @@ class ChatActiveNewIn(BaseModel):
     intent: Literal["shape_project"] | None = None
 
 
-class ChatStreamIn(BaseModel):
-    body: str = Field(min_length=1, max_length=20_000)
-    # Classifier is optional — the client can disable it when the
-    # user toggled "always continue" in the header affordance.
-    classify_shift: bool = True
-    # Optional explicit thread target. The web UI never sets this —
-    # it relies on the per-user "active thread" model. Multi-thread
-    # callers (Telegram bot adapter: one thread per reply-chain in a
-    # group) need to address a specific thread by id without racing
-    # the ``last_user_activity_at`` ordering used by
-    # ``_find_or_create_active_thread``.
-    thread_id: uuid.UUID | None = None
+# ``ChatStreamIn`` retired in phase 3b — ``POST /chat/stream`` now
+# takes multipart/form-data so attachments and the text body arrive
+# in one request. Form fields: ``body`` (text), ``classify_shift``
+# (bool, default True), ``thread_id`` (optional UUID), ``files[]``
+# (UploadFile, optional). See route signature below.
 
 
 class PackThreadIn(BaseModel):
@@ -577,7 +570,10 @@ async def get_chat_thread(
 @router.post("/chat/stream")
 async def chat_stream(
     workspace_id: uuid.UUID,
-    payload: ChatStreamIn,
+    body: str = Form(..., min_length=1, max_length=20_000),
+    classify_shift: bool = Form(True),
+    thread_id: uuid.UUID | None = Form(None),
+    files: list[UploadFile] = File(default_factory=list),
     auth: AuthContext = Depends(get_current_auth),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
@@ -611,11 +607,11 @@ async def chat_stream(
     # tools inside the turn (those self-gate via ``_require_admin_or_error``
     # in :mod:`backend.app.services.agent.tools`).
     await _require_membership(session, workspace_id, auth.user.id, ROLES_MEMBER)
-    if payload.thread_id is not None:
+    if thread_id is not None:
         thread = (
             await session.execute(
                 select(ChatThread).where(
-                    ChatThread.id == payload.thread_id,
+                    ChatThread.id == thread_id,
                     ChatThread.workspace_id == workspace_id,
                     ChatThread.created_by_user_id == auth.user.id,
                 )
@@ -645,13 +641,73 @@ async def chat_stream(
         thread_id=thread.id,
         role="user",
         author_user_id=auth.user.id,
-        body=payload.body,
+        body=body,
     )
     session.add(user_msg)
     thread.last_user_activity_at = datetime.now(timezone.utc)
     await session.flush()
 
-    classify_shift = payload.classify_shift
+    # Attachments: persist + read bytes so they survive past the
+    # multipart stream's lifetime. Message-level caps (file count,
+    # total bytes) checked here; per-file caps inside
+    # ``persist_attachment``. Reject early so a 30 MiB upload doesn't
+    # spool to disk before failing.
+    in_memory_attachments: list = []
+    if files:
+        from backend.app.services.attachments import (
+            AttachmentPolicyError,
+            AttachmentPersistError,
+            MAX_FILES_PER_MESSAGE,
+            MAX_TOTAL_BYTES_PER_MESSAGE,
+            persist_attachment,
+        )
+        from backend.app.services.agent.client import MessageAttachment
+
+        if len(files) > MAX_FILES_PER_MESSAGE:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"too many files (max {MAX_FILES_PER_MESSAGE})",
+            )
+        total_bytes = 0
+        for upload in files:
+            data = await upload.read()
+            total_bytes += len(data)
+            if total_bytes > MAX_TOTAL_BYTES_PER_MESSAGE:
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail=(
+                        f"total upload exceeds {MAX_TOTAL_BYTES_PER_MESSAGE} bytes"
+                    ),
+                )
+            try:
+                row = await persist_attachment(
+                    session,
+                    workspace_id=workspace_id,
+                    message_id=user_msg.id,
+                    filename=upload.filename or "attachment",
+                    mime=upload.content_type or "application/octet-stream",
+                    data=data,
+                )
+            except AttachmentPolicyError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                    detail={"code": exc.code, "message": exc.message},
+                ) from exc
+            except AttachmentPersistError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail={"code": "storage_write_failed", "message": str(exc)},
+                ) from exc
+            in_memory_attachments.append(
+                MessageAttachment(
+                    kind=row.kind,
+                    mime=row.mime,
+                    filename=row.filename,
+                    data=data,
+                    extracted_text=row.extracted_text,
+                )
+            )
+        await session.flush()
 
     async def event_stream() -> AsyncIterator[bytes]:
         async for chunk in _run_agent_turn(
@@ -662,6 +718,7 @@ async def chat_stream(
             user_id=auth.user.id,
             thread=thread,
             user_msg=user_msg,
+            user_attachments=in_memory_attachments,
             classify_shift=classify_shift,
         ):
             yield chunk
@@ -713,6 +770,7 @@ async def _run_agent_turn(
     user_id: uuid.UUID,
     thread: ChatThread,
     user_msg: ChatMessageRow,
+    user_attachments: list,
     classify_shift: bool,
 ) -> AsyncIterator[bytes]:
     """Run one user→assistant turn end to end, emitting SSE frames.
@@ -822,6 +880,7 @@ async def _run_agent_turn(
         thread=thread,
         recent_messages=prior_messages,
         new_user_message=user_msg.body,
+        new_user_attachments=user_attachments,
         retrieved_buckets=retrieved_buckets,
     )
 

@@ -30,8 +30,12 @@ ToolBox and gives us a clean seam for cost-guards / telemetry.
 
 from __future__ import annotations
 
+import logging
 import os
 import uuid
+
+
+logger = logging.getLogger(__name__)
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, runtime_checkable
@@ -48,12 +52,41 @@ Role = Literal["system", "user", "assistant", "tool"]
 
 
 @dataclass(slots=True)
+class MessageAttachment:
+    """In-memory carrier for one chat attachment the message builder
+    converts into a vendor-specific content block.
+
+    Decoupled from the DB row (``backend.app.db.models.ChatAttachment``)
+    so the agent client doesn't take an ORM dep, and so a synthetic
+    test message can be assembled without persisting anything.
+
+    Bytes are passed eagerly because both Anthropic's vision pathway
+    and OpenAI's image_url want base64. The caller (chat-stream route)
+    reads them from storage once per turn.
+    """
+
+    kind: str            # "image" | "pdf" | "text"
+    mime: str
+    filename: str
+    data: bytes
+    # Pre-extracted text from PDF / text uploads. NULL for images in
+    # v1; the vendor message builder uses this on providers that
+    # don't support the document block (OpenAI today).
+    extracted_text: str | None = None
+
+
+@dataclass(slots=True)
 class ChatMessage:
     """One message the agent sees.
 
     ``tool_calls`` is populated on assistant messages that fanned out to
     tools (OpenAI-style). ``tool_call_id`` + ``name`` are populated on
     ``role="tool"`` messages that carry back the tool's output.
+
+    ``attachments`` is populated only on the *latest* user turn — the
+    chat-stream route loads bytes once per request and hands them to
+    the LLM. History rows replay as text only (the ``extracted_text``
+    column on past attachments is the LLM's archival view).
     """
 
     role: Role
@@ -61,6 +94,7 @@ class ChatMessage:
     name: str | None = None
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     tool_call_id: str | None = None
+    attachments: list[MessageAttachment] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -199,6 +233,22 @@ def _openai_messages(messages: Sequence[ChatMessage]) -> list[dict[str, Any]]:
                 }
             )
             continue
+        # User/assistant message with attachments → multi-part content
+        # array. OpenAI's vision pathway accepts image_url blocks
+        # alongside text; PDF / text uploads are flattened to text
+        # since OpenAI's chat.completions has no document type. The
+        # text gets a clear ``[Attached file: name]`` frame so the
+        # model knows it's user-uploaded content vs. inline prose.
+        if m.attachments:
+            parts: list[dict[str, Any]] = []
+            for att in m.attachments:
+                block = _openai_attachment_block(att)
+                if block is not None:
+                    parts.append(block)
+            if m.content:
+                parts.append({"type": "text", "text": m.content})
+            out.append({"role": m.role, "content": parts})
+            continue
         entry: dict[str, Any] = {"role": m.role, "content": m.content}
         if m.role == "assistant" and m.tool_calls:
             entry["tool_calls"] = m.tool_calls
@@ -209,6 +259,48 @@ def _openai_messages(messages: Sequence[ChatMessage]) -> list[dict[str, Any]]:
                 entry["content"] = None
         out.append(entry)
     return out
+
+
+def _openai_attachment_block(att: "MessageAttachment") -> dict[str, Any] | None:
+    """Map one attachment to an OpenAI chat.completions content part.
+
+    * ``image/*`` → ``{"type": "image_url", "image_url": {"url":
+      "data:<mime>;base64,..."}}`` — GPT-4o family reads it inline.
+    * ``pdf`` / ``text`` → text part with the extracted body, framed
+      so the model sees it's user-attached content. PDF is text-only
+      on OpenAI today; we accept the fidelity loss vs. the Anthropic
+      ``document`` path because the alternative is a separate Files
+      API upload that the streaming flow can't await.
+
+    Image-only PDFs whose ``extracted_text`` came back NULL are
+    surfaced as a stub block so the LLM at least knows an
+    attachment was sent (rather than silently swallowing the
+    upload).
+    """
+    import base64
+
+    if att.kind == "image":
+        b64 = base64.b64encode(att.data).decode("ascii")
+        return {
+            "type": "image_url",
+            "image_url": {"url": f"data:{att.mime};base64,{b64}"},
+        }
+    if att.kind in ("pdf", "text"):
+        body = att.extracted_text
+        if not body:
+            return {
+                "type": "text",
+                "text": (
+                    f"[Attached file: {att.filename} "
+                    f"— {att.mime}, no text extractable]"
+                ),
+            }
+        return {
+            "type": "text",
+            "text": f"[Attached file: {att.filename}]\n```\n{body}\n```",
+        }
+    logger.warning("unknown attachment kind %r for filename=%r", att.kind, att.filename)
+    return None
 
 
 class OpenAIAgentClient:
@@ -454,8 +546,73 @@ def _anthropic_messages(
                 )
             out.append({"role": "assistant", "content": blocks})
             continue
+        # User / assistant message with attachments → emit one content
+        # block per attachment alongside the text. Anthropic accepts
+        # ``image`` and ``document`` blocks natively; text uploads are
+        # inlined as additional text blocks so the model sees them as
+        # part of the prompt without a separate vision call.
+        if m.attachments:
+            user_blocks: list[dict[str, Any]] = []
+            for att in m.attachments:
+                block = _anthropic_attachment_block(att)
+                if block is not None:
+                    user_blocks.append(block)
+            if m.content:
+                user_blocks.append({"type": "text", "text": m.content})
+            out.append({"role": m.role, "content": user_blocks})
+            continue
         out.append({"role": m.role, "content": m.content})
     return ("\n\n".join(system_parts), out)
+
+
+def _anthropic_attachment_block(
+    att: "MessageAttachment",
+) -> dict[str, Any] | None:
+    """Map one in-memory attachment to an Anthropic content block.
+
+    * ``image/*`` → ``{"type": "image", "source": {base64, …}}`` —
+      Claude vision reads pixels directly.
+    * ``application/pdf`` → ``{"type": "document", "source": {base64, …}}``
+      — Claude has native PDF support; this is preferable to text
+      extraction because the model sees figures + layout.
+    * ``text/*`` → folded into the text block (caller adds it).
+
+    Returns ``None`` for kinds that should be handled as plain text
+    (the caller already adds ``att.extracted_text`` then). Unknown
+    kinds also return None and a warn — fail-safe rather than
+    refusing the whole message.
+    """
+    import base64
+
+    if att.kind == "image":
+        return {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": att.mime,
+                "data": base64.b64encode(att.data).decode("ascii"),
+            },
+        }
+    if att.kind == "pdf":
+        return {
+            "type": "document",
+            "source": {
+                "type": "base64",
+                "media_type": "application/pdf",
+                "data": base64.b64encode(att.data).decode("ascii"),
+            },
+        }
+    if att.kind == "text":
+        # Fold into a synthetic text block so the LLM sees the file
+        # body inline. The filename is the only frame the model has
+        # for "this came from an upload" — keep it visible.
+        body = att.extracted_text or att.data.decode("utf-8", errors="replace")
+        return {
+            "type": "text",
+            "text": f"[Attached file: {att.filename}]\n```\n{body}\n```",
+        }
+    logger.warning("unknown attachment kind %r for filename=%r", att.kind, att.filename)
+    return None
 
 
 class AnthropicAgentClient:
