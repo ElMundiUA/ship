@@ -179,7 +179,19 @@ from backend.app.services.tracker_fsm import (
 #         ticket is closer to value than an intake one, so flush the
 #         tail before feeding the head. Was: YAML iteration order →
 #         ``intake`` always won → tail of the pipeline starved.
-BUNDLE_VERSION: str = "0.31"
+# ``0.32`` → Multi-action-per-tick in the cron trigger workflow.
+#         GitHub throttles ``schedule:`` events under load —
+#         observed 4-8h gaps between ticks on customer repos in
+#         production. The previous one-action-per-tick rule
+#         multiplied that latency by the pipeline depth (8h × 5
+#         stages = 40h per ticket). The new shell iterates the
+#         drain-first ``due_routines`` and runs up to
+#         ``SHIP_MAX_ACTIONS_PER_TICK`` (default 5) routines that
+#         land work in a single tick. Fits the runner's 30-min
+#         budget (≈4 min per agent invocation), so when cron itself
+#         is unreliable the pipeline still drains 4-5 actions per
+#         tick instead of one.
+BUNDLE_VERSION: str = "0.32"
 
 # Default knowledge starters for PR 1. Empty by design: generated knowledge is
 # analyzed post-merge and proposed in a second PR. Historical callers can still
