@@ -416,18 +416,6 @@ function businessFriendlyBlurb(
     if (waiting != null) parts.push(`waiting: ${waiting}`);
     if (parts.length > 0) return parts.join(" · ");
   }
-  if (toolName.startsWith("plays_") || toolName.startsWith("play_")) {
-    const rows = obj.rows;
-    const plays = obj.plays;
-    if (Array.isArray(rows)) {
-      return `${rows.length} ${rows.length === 1 ? "play" : "plays"}`;
-    }
-    if (Array.isArray(plays)) {
-      return `${plays.length} ${plays.length === 1 ? "play" : "plays"}`;
-    }
-    const title = asString(obj.title);
-    if (title) return title;
-  }
   if (toolName.startsWith("runs_") || toolName === "run_detail") {
     const runs = obj.runs;
     if (Array.isArray(runs)) {
@@ -436,16 +424,7 @@ function businessFriendlyBlurb(
     const status = asString(obj.status);
     if (status) return `status: ${status}`;
   }
-  if (toolName.startsWith("automations_") || toolName.startsWith("automation_")) {
-    if (typeof obj.enabled === "boolean") {
-      return obj.enabled ? "enabled" : "disabled";
-    }
-    const items = obj.items ?? obj.pipelines;
-    if (Array.isArray(items)) {
-      return `${items.length} ${items.length === 1 ? "automation" : "automations"}`;
-    }
-  }
-  if (toolName.startsWith("repo_intel_") || toolName.startsWith("repo_")) {
+  if (toolName.startsWith("repo_")) {
     const repos = obj.repos ?? obj.items;
     if (Array.isArray(repos)) {
       return `${repos.length} ${repos.length === 1 ? "repo" : "repos"}`;
@@ -548,31 +527,6 @@ function truncate(s: string, max: number): string {
 
 function MetaSep() {
   return <span aria-hidden className="text-white/25">·</span>;
-}
-
-/** Inline horizontal coverage bar — mirrors `coverage-progress-bar.tsx`. */
-function CoverageBar({
-  pct,
-  critical,
-}: {
-  pct: number;
-  critical?: boolean;
-}) {
-  const clamped = Math.max(0, Math.min(1, pct));
-  const danger = critical && clamped < 1;
-  const fillCls = danger
-    ? "bg-coral"
-    : clamped >= 1
-      ? "bg-emerald-400"
-      : "bg-aqua";
-  return (
-    <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
-      <div
-        className={cn("h-1.5 rounded-full", fillCls)}
-        style={{ width: `${Math.round(clamped * 100)}%` }}
-      />
-    </div>
-  );
 }
 
 // ---------------------------------------------------------------------------
@@ -842,196 +796,6 @@ function RenderInboxDispose(result: ToolResult): ReactNode {
 }
 
 // ---------------------------------------------------------------------------
-// 4) plays_coverage
-// ---------------------------------------------------------------------------
-
-type CoverageRow = {
-  play_key: string;
-  play_title: string;
-  category: string | null;
-  critical: boolean;
-  coverage_pct: number;
-  repos_uncovered_count: number;
-  repos_covered_count: number;
-};
-
-function RenderPlaysCoverage(result: ToolResult): ReactNode {
-  const obj = asObject(result);
-  const rows = asArray<Record<string, unknown>>(obj?.rows).map(
-    (r): CoverageRow => ({
-      play_key: asString(r.play_key) ?? "",
-      play_title: asString(r.play_title) ?? asString(r.play_key) ?? "(unknown play)",
-      category: asString(r.category),
-      critical: r.critical === true,
-      coverage_pct: asNumber(r.coverage_pct) ?? 0,
-      repos_uncovered_count: asNumber(r.repos_uncovered_count) ?? 0,
-      repos_covered_count: asNumber(r.repos_covered_count) ?? 0,
-    }),
-  );
-
-  if (rows.length === 0) {
-    return (
-      <ToolCard toolName="plays_coverage">
-        <div className="text-[12px] text-white/65">
-          No coverage data — no plays match the filter.
-        </div>
-        <div className="mt-2">
-          <Chip
-            href="/process"
-            label="Open Coverage"
-            glyph="↗"
-          />
-        </div>
-      </ToolCard>
-    );
-  }
-
-  return (
-    <ToolCard toolName="plays_coverage">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <span className="text-[12px] text-white/70">
-          {pluralize(rows.length, "play")}
-        </span>
-        <Chip
-          href="/process"
-          label="Open Coverage"
-          glyph="↗"
-        />
-      </div>
-      <ul className="space-y-2">
-        {rows.map((row) => {
-          const pct = Math.round(
-            Math.max(0, Math.min(1, row.coverage_pct)) * 100,
-          );
-          const isGap =
-            row.critical && row.repos_uncovered_count > 0;
-          return (
-            <li
-              key={row.play_key}
-              className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2"
-            >
-              <div className="flex items-center gap-2">
-                {row.critical ? (
-                  <Badge tone="err" dot>
-                    Critical
-                  </Badge>
-                ) : null}
-                <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-white">
-                  {row.play_title}
-                </span>
-                <span className="shrink-0 text-[11px] tabular-nums text-white/65">
-                  {pct}%
-                </span>
-                {row.repos_uncovered_count > 0 ? (
-                  <Badge tone={isGap ? "err" : "neutral"}>
-                    {row.repos_uncovered_count} uncovered
-                  </Badge>
-                ) : (
-                  <Badge tone="ok">covered</Badge>
-                )}
-                <Chip
-                  href={`/process&play=${encodeURIComponent(
-                    row.play_key,
-                  )}`}
-                  label="Open"
-                  glyph="→"
-                  tone="muted"
-                />
-              </div>
-              <div className="mt-2">
-                <CoverageBar
-                  pct={row.coverage_pct}
-                  critical={row.critical}
-                />
-              </div>
-            </li>
-          );
-        })}
-      </ul>
-    </ToolCard>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// 5) plays_get
-// ---------------------------------------------------------------------------
-
-function RenderPlaysGet(result: ToolResult): ReactNode {
-  const obj = asObject(result);
-  if (!obj) return <JsonFallback toolName="plays_get" result={result} />;
-
-  const playKey = asString(obj.play_key) ?? "";
-  const title = asString(obj.title) ?? playKey ?? "(unknown play)";
-  const category = asString(obj.category);
-  const critical = obj.critical === true;
-  const summary = asString(obj.summary);
-  const includes = asArray<unknown>(obj.includes)
-    .map((i) => (typeof i === "string" ? i : null))
-    .filter((i): i is string => i !== null);
-
-  return (
-    <ToolCard toolName="plays_get">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            {category ? <Badge tone="neutral">{category}</Badge> : null}
-            {critical ? (
-              <Badge tone="err" dot>
-                Critical
-              </Badge>
-            ) : null}
-          </div>
-          <div className="mt-1.5 text-sm font-semibold text-white">
-            {title}
-          </div>
-          {playKey ? (
-            <code className="mt-0.5 block font-mono text-[10px] text-white/40">
-              {playKey}
-            </code>
-          ) : null}
-        </div>
-        {playKey ? (
-          <Chip
-            href={`/process`}
-            label="Open Play"
-            glyph="↗"
-          />
-        ) : null}
-      </div>
-
-      {summary ? (
-        <p className="mt-3 text-[12px] leading-relaxed text-white/80">
-          {truncate(summary, 320)}
-        </p>
-      ) : null}
-
-      {includes.length > 0 ? (
-        <div className="mt-3 border-t border-white/5 pt-2">
-          <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-white/45">
-            Includes
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {includes.slice(0, 12).map((inc) => (
-              <code
-                key={inc}
-                className="rounded-full bg-white/[0.06] px-2 py-0.5 font-mono text-[10px] text-white/75"
-              >
-                {inc}
-              </code>
-            ))}
-            {includes.length > 12 ? (
-              <span className="text-[10px] text-white/45">
-                +{includes.length - 12} more
-              </span>
-            ) : null}
-          </div>
-        </div>
-      ) : null}
-    </ToolCard>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // 6) runs_query
 // ---------------------------------------------------------------------------
 
@@ -1260,96 +1024,6 @@ function RenderRunDetail(result: ToolResult): ReactNode {
 }
 
 // ---------------------------------------------------------------------------
-// 8) play_run_now
-// ---------------------------------------------------------------------------
-
-function RenderPlayRunNow(result: ToolResult): ReactNode {
-  const obj = asObject(result);
-  if (!obj) return <JsonFallback toolName="play_run_now" result={result} />;
-
-  const runId = asString(obj.run_id);
-  const playKey = asString(obj.play_key) ?? "play";
-  const repoId = asString(obj.repo_id);
-  const status = asString(obj.status) ?? "queued";
-
-  return (
-    <ToolCard toolName="play_run_now" tone="success">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="text-sm font-semibold text-white">
-            Queued{runId ? ` — run #${runId.slice(0, 8)}` : ""} for{" "}
-            <code className="font-mono text-[12px] text-aqua">{playKey}</code>
-          </div>
-          <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-white/65">
-            <StatusChip status={status} />
-            {repoId ? (
-              <>
-                <MetaSep />
-                <span>
-                  repo ·{" "}
-                  <code className="font-mono text-white/55">{repoId}</code>
-                </span>
-              </>
-            ) : null}
-          </div>
-        </div>
-        {runId ? (
-          <Chip href={`/process`} label="Open Run" glyph="↗" />
-        ) : null}
-      </div>
-    </ToolCard>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// 9) automation_toggle
-// ---------------------------------------------------------------------------
-
-function RenderAutomationToggle(result: ToolResult): ReactNode {
-  const obj = asObject(result);
-  if (!obj)
-    return <JsonFallback toolName="automation_toggle" result={result} />;
-
-  const pipelineId = asString(obj.pipeline_id);
-  const enabled = obj.enabled === true;
-  const priorEnabled = obj.prior_enabled === true;
-  const noChange = enabled === priorEnabled;
-
-  return (
-    <ToolCard toolName="automation_toggle" tone="success">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="text-sm font-semibold text-white">
-            Automation is now{" "}
-            <span className={enabled ? "text-emerald-300" : "text-white/55"}>
-              {enabled ? "enabled" : "disabled"}
-            </span>
-          </div>
-          <div className="mt-1 text-[11px] text-white/55">
-            {noChange
-              ? "No state change — already in this state."
-              : `Was ${priorEnabled ? "enabled" : "disabled"}.`}
-            {pipelineId ? (
-              <>
-                {" · "}
-                <code className="font-mono text-white/55">{pipelineId}</code>
-              </>
-            ) : null}
-          </div>
-        </div>
-        {pipelineId ? (
-          <Chip
-            href={`/process`}
-            label="Open Automation"
-            glyph="↗"
-          />
-        ) : null}
-      </div>
-    </ToolCard>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Registry
 // ---------------------------------------------------------------------------
 
@@ -1357,12 +1031,8 @@ export const TOOL_RENDERERS: Record<string, ToolRenderer> = {
   inbox_list: RenderInboxList,
   inbox_get: RenderInboxGet,
   inbox_dispose: RenderInboxDispose,
-  plays_coverage: RenderPlaysCoverage,
-  plays_get: RenderPlaysGet,
   runs_query: RenderRunsQuery,
   run_detail: RenderRunDetail,
-  play_run_now: RenderPlayRunNow,
-  automation_toggle: RenderAutomationToggle,
 };
 
 // ---------------------------------------------------------------------------
@@ -1384,14 +1054,8 @@ export const TOOL_FRIENDLY_VERB: Record<string, string> = {
   inbox_get: "Pulling up that item…",
   inbox_counts: "Counting inbox items…",
   inbox_dispose: "Resolving the Inbox item…",
-  plays_coverage: "Computing Plays coverage…",
-  plays_get: "Reading the Play…",
-  plays_list: "Listing Plays…",
   runs_query: "Searching recent Runs…",
   run_detail: "Loading Run details…",
-  play_run_now: "Starting that Play…",
-  automation_toggle: "Toggling the Automation…",
-  automations_list: "Listing Automations…",
 };
 
 export const TOOL_FRIENDLY_VERB_FALLBACK = "Working on it…";
