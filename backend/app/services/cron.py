@@ -90,6 +90,13 @@ class CronLockId(IntEnum):
     KNOWLEDGE_TOPIC_RENDER = 1008
     KNOWLEDGE_CLAIM_DECAY = 1009
     LINEAR_TOKEN_REFRESH = 1010
+    # Ship-side scheduler — fires the customer-side trigger workflow
+    # via GitHub ``workflow_dispatch`` on a deterministic cadence.
+    # Replaces the GHA ``schedule:`` cron in the starter workflow,
+    # which GitHub heavily throttles under load (observed 4-8 hour
+    # gaps between ticks in production). Backend-driven dispatch
+    # gives operators a predictable "every N minutes" cycle.
+    WORKFLOW_DISPATCH = 1011
 
 
 # ---------------------------------------------------------------------------

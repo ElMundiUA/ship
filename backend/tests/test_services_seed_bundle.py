@@ -282,20 +282,26 @@ def test_compose_default_bundle_emits_dedup_workflows() -> None:
     assert workflow_paths
     assert ".github/workflows/ship-trigger-schedule.yml" in workflow_paths
 
-    # Phase 2 scheduler shape — the trigger workflow runs at 30-min
-    # cadence (free-tier math) and dispatches a single ``next_action``
-    # per tick (one routine OR one pipeline-pick OR noop). Pin both
-    # so a regression in the starter doesn't silently flip cadence
-    # back to 15 min or reintroduce the legacy while-loop fan-out.
+    # Scheduler shape — bundle v0.33 removed the GHA ``schedule:``
+    # cron block; the customer trigger workflow now runs ONLY on
+    # ``workflow_dispatch``, fired by Ship's backend cron at a
+    # deterministic cadence (see ``workflow_dispatch_cron.py``).
+    # GHA scheduled events were silently throttled to 4-8h gaps
+    # under load, which the operator-facing ``*/30`` made invisible.
+    # Pin both invariants so a regression can't reintroduce the
+    # throttled schedule path.
     workflow_body = next(
         c for p, c in bundle.files if p == ".github/workflows/ship-trigger-schedule.yml"
     )
-    assert 'cron: "*/30 * * * *"' in workflow_body
+    assert 'cron:' not in workflow_body, (
+        "v0.33 removed the GHA schedule block — backend dispatches "
+        "this workflow via the Actions API, no client-side cron"
+    )
+    assert "workflow_dispatch:" in workflow_body
     assert "--pipeline-fallback" in workflow_body
-    assert "next_action.kind" in workflow_body
     assert "shipctl run --specialist" in workflow_body
-    # The legacy while-loop is gone in Phase 2.
-    assert "while IFS= read -r routine" not in workflow_body
+    # Multi-action shell (v0.32) — drain the due list, not one-shot.
+    assert "MAX_ACTIONS_PER_TICK" in workflow_body
 
 
 def test_compose_omits_generated_knowledge_by_default() -> None:

@@ -1,6 +1,15 @@
 name: Ship · Schedule trigger
 
 on:
+  # Backend-driven dispatch: Ship's own scheduler (configurable via
+  # ``WORKFLOW_DISPATCH_CRON_EXPR``, default hourly) fires this
+  # workflow via the Actions API. The previous ``schedule: */30``
+  # block was removed in bundle v0.33 because GitHub heavily
+  # throttles scheduled events under load — 4-8h gaps between
+  # ticks observed in production. Backend dispatch gives a
+  # deterministic cadence and bypasses the throttle entirely.
+  # Manual ``workflow_dispatch`` from the Actions UI stays as a
+  # debug / on-demand harness.
   workflow_dispatch:
     inputs:
       routine_id:
@@ -11,8 +20,6 @@ on:
         description: "Pin the agent to this ticket (only used with routine_id). e.g. ELS-42"
         required: false
         type: string
-  schedule:
-    - cron: "*/30 * * * *"
 
 permissions:
   contents: write

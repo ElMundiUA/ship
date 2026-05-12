@@ -384,6 +384,18 @@ class Settings(BaseSettings):
         alias="LINEAR_TOKEN_REFRESH_HOURS",
     )
 
+    # Ship-side trigger-workflow scheduler. GHA throttles ``schedule:``
+    # events under load (4-8h gaps in production); a backend cron that
+    # dispatches via ``workflow_dispatch`` gives operators a
+    # deterministic cadence. 5-field crontab expression, UTC. Default
+    # ``0 * * * *`` = every hour at :00 — pairs with the customer
+    # workflow's ``SHIP_MAX_ACTIONS_PER_TICK=5`` (5 × ~4 min ≈ 20 min,
+    # fits the 30-min runner budget).
+    workflow_dispatch_cron_expr: str = Field(
+        default="0 * * * *",
+        alias="WORKFLOW_DISPATCH_CRON_EXPR",
+    )
+
     # --- Notion OAuth (pilot Day 2 — tracker WOW flow) ---
     # Public Notion integration credentials from
     # https://www.notion.so/profile/integrations . Notion calls these
