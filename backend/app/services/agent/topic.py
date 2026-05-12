@@ -1015,6 +1015,26 @@ _MAX_HISTORY_TURNS = 40
 
 
 @dataclass(frozen=True)
+class _RepoSnapshot:
+    """One activated repo, projected into the session context.
+
+    Replaces the three retired discovery tools — ``list_activated_repos``,
+    ``repo_intel_get``, ``repo_kb_status`` — by carrying their payloads
+    inline so the LLM never has to round-trip for the basics. Anything
+    that needs structured / pageable data (full intel JSONB, per-chunk
+    KB inspection) is still a tool call away.
+    """
+
+    id: str  # repo UUID, what tools accept as ``repo_id``
+    full_name: str
+    default_branch: str
+    top_languages: list[str]  # up to 3, ordered by share
+    frameworks: list[str]     # up to 4, ordered as harvested
+    kb_chunk_count: int
+    kb_last_indexed_at: datetime | None
+
+
+@dataclass(frozen=True)
 class _SessionFacts:
     """Pre-fetched context the renderer formats into the system frame.
 
@@ -1032,13 +1052,15 @@ class _SessionFacts:
     tracker_scope_hint: str | None  # Linear team key, Jira project key, etc.
     tracker_status: str  # "connected" / "error" / "disconnected"
     tracker_health_error: str | None
-    activated_repos: list[str]  # full_names; cap'd to keep the frame compact
+    repos: list[_RepoSnapshot]  # activated repos with intel + KB freshness
     inbox_open_total: int
     inbox_by_type: dict[str, int]
 
 
 _INBOX_OPEN_STATES: tuple[str, ...] = ("new", "snoozed")
 _REPOS_PREVIEW_CAP = 6  # ``+N more`` past this — frame stays under ~250 tokens
+_LANG_PREVIEW_CAP = 3   # top languages by share — keep the line compact
+_FW_PREVIEW_CAP = 4     # frameworks — same logic
 
 
 async def _collect_session_facts(
@@ -1062,18 +1084,72 @@ async def _collect_session_facts(
     from backend.app.db.models.tenancy import User, Workspace
     from backend.app.db.models.integrations import WorkspaceRepo
     from backend.app.db.models.inbox import InboxItem
+    from backend.app.db.models.agent_memory import KbChunk
+    from backend.app.db.models.repo_intel import RepoIntel
     from backend.app.services.tracker_resolver import resolve_for_workspace
 
     workspace = await session.get(Workspace, workspace_id)
     user = await session.get(User, user_id)
 
-    repos = (
+    # Pull every activated repo + its current intel snapshot + KB
+    # freshness aggregates in one go. Each scalar is null-safe so a
+    # never-harvested or never-indexed repo still surfaces with a
+    # graceful "intel: pending" / "KB: never indexed" line — the
+    # LLM should NEVER see this query throw.
+    repo_rows = (
         await session.execute(
-            _select(WorkspaceRepo.full_name)
+            _select(
+                WorkspaceRepo.id,
+                WorkspaceRepo.full_name,
+                WorkspaceRepo.default_branch,
+                RepoIntel.languages,
+                RepoIntel.frameworks,
+                func.count(KbChunk.id).label("kb_count"),
+                func.max(KbChunk.indexed_at).label("kb_last"),
+            )
+            .select_from(WorkspaceRepo)
+            .join(
+                RepoIntel,
+                (RepoIntel.repo_id == WorkspaceRepo.id)
+                & (RepoIntel.is_current.is_(True)),
+                isouter=True,
+            )
+            .join(
+                KbChunk,
+                KbChunk.repo_id == WorkspaceRepo.id,
+                isouter=True,
+            )
             .where(WorkspaceRepo.workspace_id == workspace_id)
+            .group_by(
+                WorkspaceRepo.id,
+                WorkspaceRepo.full_name,
+                WorkspaceRepo.default_branch,
+                RepoIntel.languages,
+                RepoIntel.frameworks,
+            )
             .order_by(WorkspaceRepo.full_name)
         )
-    ).scalars().all()
+    ).all()
+    repos: list[_RepoSnapshot] = []
+    for row in repo_rows:
+        # ``languages`` JSONB is ``{"python": 0.62, "typescript": 0.31, …}``;
+        # take the top N by share to keep the frame compact.
+        lang_map: dict[str, float] = dict(row.languages or {})
+        top_langs = [
+            k for k, _ in sorted(lang_map.items(), key=lambda kv: -kv[1])
+        ][:_LANG_PREVIEW_CAP]
+        fw_list = list(row.frameworks or [])[:_FW_PREVIEW_CAP]
+        repos.append(
+            _RepoSnapshot(
+                id=str(row.id),
+                full_name=str(row.full_name),
+                default_branch=str(row.default_branch),
+                top_languages=top_langs,
+                frameworks=fw_list,
+                kb_chunk_count=int(row.kb_count or 0),
+                kb_last_indexed_at=row.kb_last,
+            )
+        )
 
     inbox_total = (
         await session.execute(
@@ -1132,7 +1208,7 @@ async def _collect_session_facts(
         tracker_scope_hint=tracker_scope_hint,
         tracker_status=tracker_status,
         tracker_health_error=tracker_health_error,
-        activated_repos=[str(r) for r in repos],
+        repos=repos,
         inbox_open_total=int(inbox_total),
         inbox_by_type=inbox_by_type,
     )
@@ -1199,17 +1275,38 @@ def _render_session_context(
             lines.append(tracker_line + ".")
         else:
             lines.append("- Bound tracker: **none** — `ticket_create` / `ticket_list` will refuse until one is bound.")
-        if facts.activated_repos:
-            preview = facts.activated_repos[:_REPOS_PREVIEW_CAP]
-            tail = (
-                f" + {len(facts.activated_repos) - _REPOS_PREVIEW_CAP} more"
-                if len(facts.activated_repos) > _REPOS_PREVIEW_CAP
-                else ""
-            )
-            joined = ", ".join(f"`{r}`" for r in preview)
-            lines.append(
-                f"- Activated repos ({len(facts.activated_repos)}): {joined}{tail}."
-            )
+        if facts.repos:
+            preview = facts.repos[:_REPOS_PREVIEW_CAP]
+            lines.append(f"- Activated repos ({len(facts.repos)}):")
+            for r in preview:
+                fragments: list[str] = [r.default_branch]
+                if r.top_languages:
+                    fragments.append("/".join(r.top_languages))
+                if r.frameworks:
+                    fragments.append("/".join(r.frameworks))
+                # KB freshness — last-indexed timestamp tells the LLM
+                # whether ``knowledge_search`` is worth trusting before
+                # falling back to ``repo_file_get``. ``never indexed``
+                # is more useful than a missing line.
+                if r.kb_chunk_count == 0:
+                    fragments.append("KB: never indexed")
+                else:
+                    when = (
+                        r.kb_last_indexed_at.strftime("%Y-%m-%d")
+                        if r.kb_last_indexed_at
+                        else "?"
+                    )
+                    fragments.append(
+                        f"KB: {r.kb_chunk_count} chunks, indexed {when}"
+                    )
+                lines.append(
+                    f"  - `{r.full_name}` (id `{r.id}`) — "
+                    + " · ".join(fragments)
+                )
+            if len(facts.repos) > _REPOS_PREVIEW_CAP:
+                lines.append(
+                    f"  - … + {len(facts.repos) - _REPOS_PREVIEW_CAP} more (omitted for brevity)"
+                )
         else:
             lines.append("- Activated repos: **none** — point the operator at `/onboarding` if they want to ship code.")
         if facts.inbox_open_total > 0:

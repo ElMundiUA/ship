@@ -30,6 +30,22 @@ from datetime import datetime, timezone
 import pytest
 
 
+def _repo(name: str = "acme/api", **extra):
+    from backend.app.services.agent.topic import _RepoSnapshot
+
+    base = dict(
+        id=f"00000000-0000-0000-0000-{abs(hash(name)) % (16**12):012x}",
+        full_name=name,
+        default_branch="main",
+        top_languages=["python", "typescript"],
+        frameworks=["fastapi", "next.js"],
+        kb_chunk_count=42,
+        kb_last_indexed_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+    )
+    base.update(extra)
+    return _RepoSnapshot(**base)
+
+
 def _facts(**overrides):
     from backend.app.services.agent.topic import _SessionFacts
 
@@ -42,7 +58,7 @@ def _facts(**overrides):
         tracker_scope_hint="ENG",
         tracker_status="connected",
         tracker_health_error=None,
-        activated_repos=["acme/api", "acme/web"],
+        repos=[_repo("acme/api"), _repo("acme/web")],
         inbox_open_total=3,
         inbox_by_type={"clarification": 2, "approval": 1},
     )
@@ -132,15 +148,17 @@ def test_render_tracker_error_surfaces_health_message() -> None:
 
 
 def test_render_caps_repo_list_with_tail() -> None:
-    """Long repo lists get a ``+N more`` tail so the prefix stays
-    bounded. The agent calls ``list_activated_repos`` for the rest."""
+    """Long repo lists get a ``+N more (omitted for brevity)`` tail
+    so the prefix stays bounded. Past the cap the agent has the
+    list_count and can grep audit if it really needs to know the
+    13th repo, but the common case is the first half-dozen."""
     from backend.app.services.agent.topic import _render_session_context
 
-    repos = [f"acme/{i}" for i in range(20)]
+    repos = [_repo(f"acme/{i}") for i in range(20)]
     out = _render_session_context(
         workspace_id=uuid.uuid4(),
         now=datetime(2026, 5, 5, tzinfo=timezone.utc),
-        facts=_facts(activated_repos=repos),
+        facts=_facts(repos=repos),
     )
     assert "Activated repos (20)" in out
     assert "+ 14 more" in out  # 20 - 6-cap
@@ -218,7 +236,7 @@ async def test_collect_session_facts_reports_seeded_state(
     # Tracker — none seeded; resolver returns None and helper reports unbound
     assert facts.tracker_kind is None
     # Repos — none seeded
-    assert facts.activated_repos == []
+    assert facts.repos == []
     # Inbox — 2 open (the dismissed row is excluded)
     assert facts.inbox_open_total == 2
     assert facts.inbox_by_type == {"clarification": 1, "approval": 1}
