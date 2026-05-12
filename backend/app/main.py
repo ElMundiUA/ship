@@ -114,8 +114,7 @@ async def lifespan(_app: FastAPI):
 
     Phase 2.4 Step D retired ``/search`` and the methodology-corpus
     reindex that fed it; this lifespan no longer warms a pgvector cache.
-    ``methodology_chunks`` rows live on as orphan data until a follow-up
-    migration drops the table.
+    Migration 0065 dropped the ``methodology_chunks`` table.
     """
     try:
         get_engine()

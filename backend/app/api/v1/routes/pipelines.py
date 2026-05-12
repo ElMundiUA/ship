@@ -94,6 +94,32 @@ def _lane_id_to_workflow_id(lane_id: str) -> str | None:
     return _LANE_WORKFLOW_MAP.get(lane_id)
 
 
+def _validate_scope_repo_xor(
+    scope: str, repo_id: uuid.UUID | None
+) -> None:
+    """Enforce the ``scope`` ↔ ``repo_id`` invariant from P1-09.
+
+    * ``scope='repo'``   → ``repo_id`` is **required** (422 otherwise).
+    * ``scope='fleet'``  → ``repo_id`` must be **absent** (fleet rows
+                            are workspace-scoped, never repo-scoped).
+    * ``scope='all'``    → ``repo_id`` is **optional** legacy filter.
+
+    Raises :class:`HTTPException` with status 422 on violation.
+    """
+    if scope == "repo":
+        if repo_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="repo_id is required when scope=repo",
+            )
+        return
+    if scope == "fleet" and repo_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="repo_id is only valid when scope=repo",
+        )
+
+
 def _workflow_file_for_lane_id(lane_id: str) -> str | None:
     """Basename the customer repo will contain, via starter-workflow lookup.
 
@@ -1059,11 +1085,6 @@ async def list_pipelines(
     surfaces against this single endpoint without per-tab branching.
     """
     await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
-    # Local import to avoid cycles (lanes.py imports nothing from
-    # pipelines.py today, but the validator lives there as the
-    # canonical owner of the scope/repo_id contract).
-    from backend.app.api.v1.routes.lanes import _validate_scope_repo_xor
-
     _validate_scope_repo_xor(scope, repo_id)
 
     if scope == "repo":

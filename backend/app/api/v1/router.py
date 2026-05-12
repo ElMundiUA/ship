@@ -39,7 +39,6 @@ from backend.app.api.v1.routes import (
     knowledge,
     knowledge_canon,
     knowledge_import_sources,
-    lanes,
     linear_oauth,
     members,
     native_integrations,
@@ -173,10 +172,11 @@ api_router.include_router(notifications.router)
 # service layer syncs to GitHub so cron/push/dispatch workflows all
 # see the values as ``${{ secrets.X }}``.
 api_router.include_router(repo_secrets.router)
-# Lanes — projection of customer ``.ship/config.yml`` lanes (RFC-0007
-# Phase 7). List + per-repo sync trigger. Webhook-driven re-syncs on
-# pushes to ``.ship/config.yml`` live in ``routes.github_app``.
-api_router.include_router(lanes.router)
+# (Lanes HTTP route retired — endpoints had zero console / CLI
+# consumers. The ``.ship/config.yml`` sync still runs through
+# ``services.lanes_sync`` from the GitHub webhook in
+# ``routes.github_app``; just the human-facing list / detail /
+# admin-sync endpoints went away.)
 # Workspace prose-rule policies (Workspace policy injection) —
 # free-text standing rules ("Always work via PR", "Never commit
 # secrets") that get rendered into the agent system prompt at

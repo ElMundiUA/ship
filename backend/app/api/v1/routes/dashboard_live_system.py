@@ -134,10 +134,9 @@ _RUN_OK_STATUSES = frozenset({"succeeded", "success", "ok", "done"})
 _RUN_FAIL_STATUSES = frozenset({"failed", "error", "cancelled", "canceled"})
 _RUN_ACTIVE_STATUSES = frozenset({"running", "queued", "pending"})
 
-# Display labels for the canonical seven routine ids (mirrors
-# :data:`backend.app.services.lane_recipes.ROUTINE_DISPLAY_LABELS`,
-# kept inline so the route doesn't reach into the recipes module
-# just for cosmetics).
+# Display labels for the canonical seven routine ids. The earlier
+# shared constant in ``lane_recipes`` was retired with the rest of
+# the per-recipe metadata (see lane_recipes.py module docstring).
 _ROUTINE_LABELS: dict[str, str] = {
     "daily": "Daily",
     "retro": "Retro",

@@ -2,29 +2,28 @@
 
 Pre-Phase 2.4 this module derived its lane recipes from the
 ``artifacts/patterns/`` catalog (RFC-0008 §C3.3). Step D of Phase 2.4
-retired the catalog and inlined the few constants that are still
-load-bearing:
+retired the catalog and inlined the few constants that survived:
 
 * :data:`DEFAULT_BUNDLE` / :data:`DEFAULT_BUNDLE_REASONS` — the agent
   roles the wizard's "Confirm bootstrap" step previews.
 * :data:`DEFAULT_SEED_LANES` / :func:`default_seed_lanes` — the
-  canonical seven routines the seed bundle writes into a fresh
-  ``.ship/config.yml``. Each entry now spells the agent role with
+  canonical routines the seed bundle writes into a fresh
+  ``.ship/config.yml``. Each entry spells the agent role with
   ``specialist:`` (Phase 2.4 vocabulary), resolved by
   ``shipctl run`` through ``GET /v1/.../agent-roles/{slug}/resolve``.
 * :data:`KNOWN_PRESETS` / :data:`LEGACY_PRESETS` /
   :func:`normalize_preset` — preset-collapse helper kept for
   back-compat with rows in ``WorkspaceRepo.preset`` and old API
   payloads.
-* :data:`LEGACY_ROUTINE_IDS` / :data:`ROUTINE_DISPLAY_LABELS` —
-  drift detection + UI labels for the canonical six.
 
-Everything else (the ``LaneRecipe`` dataclass, ``_pattern_recipes``,
-``list_lane_recipes``, ``_EXTRA_RECIPES``, ``resolve_enabled_lane_ids``,
-``seed_default_pipelines``, ``_flatten_default_trigger``) walked the
-pattern catalog and is gone with it. ``pipelines.py`` now carries an
-inline ``_LANE_WORKFLOW_MAP`` for the only consumer that still needs
-the lane → workflow_id projection.
+Everything else from the pre-2.4 era (``LaneRecipe`` dataclass,
+``_pattern_recipes``, ``list_lane_recipes``, ``_EXTRA_RECIPES``,
+``resolve_enabled_lane_ids``, ``seed_default_pipelines``,
+``_flatten_default_trigger``, ``LEGACY_ROUTINE_IDS``,
+``ROUTINE_DISPLAY_LABELS``) walked the pattern catalog and is gone
+with it. ``pipelines.py`` carries an inline ``_LANE_WORKFLOW_MAP``
+for the only consumer that still needs the lane → workflow_id
+projection.
 """
 
 from __future__ import annotations
@@ -214,57 +213,6 @@ DEFAULT_SEED_LANES: Final[dict[str, dict[str, object]]] = {
     },
 }
 
-# Display labels keyed by the canonical routine id.
-ROUTINE_DISPLAY_LABELS: Final[dict[str, str]] = {
-    # Supporting routines.
-    "daily": "Daily",
-    "retro": "Retro",
-    "healthcheck": "Self-heal",
-    "tech_review": "Tech review",
-    "qa_review": "QA review",
-    "security_review": "Security review",
-    "process_review": "Process review",
-    # SDLC routines (per-stage ticket pickup). ``ba_requirements`` was
-    # folded into ``intake`` — the label kept here only so legacy
-    # configs / audit rows referencing it still display.
-    "intake": "Intake & Spec",
-    "ba_requirements": "Requirements (retired)",
-    "tech_arch_plan": "Tech architecture",
-    "qa_arch_plan": "Test architecture",
-    "dev_implementation": "Implementation",
-    "qa_manual": "Manual QA",
-    "qa_automation": "Test automation",
-    "code_review": "Code review",
-}
-
-# Legacy ids ever produced by older seed versions. Loading code logs a
-# drift warning when it sees one of these.
-LEGACY_ROUTINE_IDS: Final[frozenset[str]] = frozenset(
-    {
-        "daily_security_review",
-        "daily_digest",
-        "daily_technical_architecture_review",
-        "daily_architecture_tests_review",
-        "daily_retro",
-        "self_heal",
-        "task_intake",
-        "ba_requirements",
-        "tech_arch_plan",
-        "qa_arch_plan",
-        "dev_implementation",
-        "qa_manual",
-        "qa_automation",
-        "daily_standup",
-        "tech_debt",
-        "code_map",
-        "flow_release_notes",
-        "scan_docs_freshness",
-        "scan_license_deps",
-        "scan_security_deps",
-    }
-)
-
-
 def default_seed_lanes() -> dict[str, dict[str, object]]:
     return {lane_id: dict(body) for lane_id, body in DEFAULT_SEED_LANES.items()}
 
@@ -318,8 +266,6 @@ __all__ = [
     "DEFAULT_SEED_LANES",
     "KNOWN_PRESETS",
     "LEGACY_PRESETS",
-    "LEGACY_ROUTINE_IDS",
-    "ROUTINE_DISPLAY_LABELS",
     "default_seed_lanes",
     "normalize_preset",
 ]
