@@ -95,6 +95,10 @@ function errorMessage(code: string): string {
       return "Ship cannot open the seed PR yet because a setup precondition is missing.";
     case "slug_mismatch":
       return "Slug confirmation didn’t match. Type the workspace slug exactly as shown.";
+    case "slug_taken":
+      return "That slug is already used by another workspace in your org. Pick another.";
+    case "bad_slug":
+      return "Slug must be lowercase letters, digits, and dashes (3-64 chars, can't start or end with a dash).";
     case "api_unavailable":
       return "Backend is unreachable right now. Try again in a moment.";
     default:
@@ -104,6 +108,7 @@ function errorMessage(code: string): string {
 
 const TABS = [
   { id: "general", label: "General" },
+  { id: "workspaces", label: "Workspaces" },
   { id: "repositories", label: "Connected code" },
   { id: "registries", label: "Registries" },
   { id: "members", label: "Members" },
@@ -266,6 +271,7 @@ export async function SettingsShell({
   >;
   const data = await load(params);
   const errorCode = typeof params.error === "string" ? params.error : null;
+  const renamedFlag = params.renamed === "1";
   let requestedTab = typeof params.tab === "string" ? params.tab : null;
   if (requestedTab === "tokens") requestedTab = "api-keys";
   if (requestedTab === "repos") requestedTab = "registries";
@@ -322,6 +328,11 @@ export async function SettingsShell({
             {errorMessage(errorCode)}
           </div>
         )}
+        {!errorCode && renamedFlag && (
+          <div className="mb-5 rounded-xl border border-aqua/30 bg-aqua/[0.06] px-3 py-2 text-xs text-aqua/95">
+            Workspace renamed.
+          </div>
+        )}
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-[16rem_minmax(0,1fr)]">
           <nav className="space-y-1 text-sm">
@@ -368,6 +379,13 @@ export async function SettingsShell({
                 repos={activatedRepos}
               />
             </div>
+          )}
+
+          {activeTab === "workspaces" && (
+            <WorkspacesPanel
+              current={workspace}
+              memberships={allWorkspaces}
+            />
           )}
 
           {activeTab === "repositories" && (
@@ -1065,6 +1083,147 @@ function DispatchRoutineCard({
         </button>
       </form>
     </Card>
+  );
+}
+
+function WorkspacesPanel({
+  current,
+  memberships,
+}: {
+  current: ApiWorkspace;
+  memberships: ApiWorkspace[];
+}) {
+  // ``memberships`` already includes the current workspace; surface the
+  // others first so the operator scans visible peers without re-reading
+  // the row right above.
+  const peers = memberships.filter((w) => w.id !== current.id);
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader
+          title="Rename this workspace"
+          subtitle="Name is for humans (sidebar header, audit, invites). The slug is the URL handle and can't change after create."
+        />
+        <form
+          action="/api/settings/workspace/rename"
+          method="POST"
+          className="grid grid-cols-1 gap-4 md:grid-cols-[1fr_auto]"
+        >
+          <input type="hidden" name="ws" value={current.id} suppressHydrationWarning />
+          <label className="block">
+            <div className="mb-1 text-[10px] font-bold uppercase tracking-widest text-white/45">
+              Workspace name
+            </div>
+            <input
+              name="name"
+              defaultValue={current.name}
+              required
+              maxLength={200}
+              className="w-full rounded-lg border border-white/10 bg-white/[0.06] px-3 py-2 text-sm text-white outline-none focus:border-aqua/40"
+              suppressHydrationWarning
+            />
+            <div className="mt-1 text-[11px] text-white/45">
+              Slug: <code className="font-mono">{current.slug}</code> · ID:{" "}
+              <code className="font-mono">{current.id}</code>
+            </div>
+          </label>
+          <div className="flex items-end">
+            <button
+              type="submit"
+              className="rounded-full border border-aqua/40 bg-aqua/15 px-4 py-1.5 text-xs font-bold text-aqua transition hover:bg-aqua/25"
+            >
+              Save
+            </button>
+          </div>
+        </form>
+      </Card>
+
+      <Card>
+        <CardHeader
+          title="Your workspaces"
+          subtitle="Every workspace you're a member of. The active one stays in your URL (?ws=…) and a long-lived cookie — switching is one click."
+        />
+        {peers.length === 0 ? (
+          <p className="text-sm text-white/55">
+            You&apos;re only a member of this workspace. Create another below.
+          </p>
+        ) : (
+          <ul className="divide-y divide-white/[0.06]">
+            {peers.map((w) => (
+              <li
+                key={w.id}
+                className="flex items-center justify-between gap-3 py-2.5"
+              >
+                <div className="min-w-0">
+                  <div className="truncate text-sm text-white/90">{w.name}</div>
+                  <div className="truncate text-[11px] text-white/45">
+                    <code className="font-mono">{w.slug}</code> ·{" "}
+                    {new Date(w.created_at).toUTCString()}
+                  </div>
+                </div>
+                <Link
+                  href={`/?ws=${encodeURIComponent(w.id)}`}
+                  className="rounded-full border border-white/15 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold text-white/85 transition hover:border-aqua/40 hover:text-aqua"
+                >
+                  Switch
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+
+      <Card>
+        <CardHeader
+          title="Create a new workspace"
+          subtitle="Spins up an independent tenant in your personal org: empty knowledge bucket, default policies, you as owner. No data shared with this workspace."
+        />
+        <form
+          action="/api/settings/workspace/create"
+          method="POST"
+          className="grid grid-cols-1 gap-4 md:grid-cols-2"
+        >
+          <label className="block">
+            <div className="mb-1 text-[10px] font-bold uppercase tracking-widest text-white/45">
+              Name
+            </div>
+            <input
+              name="name"
+              required
+              maxLength={200}
+              placeholder="e.g. Acme experiments"
+              className="w-full rounded-lg border border-white/10 bg-white/[0.06] px-3 py-2 text-sm text-white outline-none focus:border-aqua/40"
+              suppressHydrationWarning
+            />
+          </label>
+          <label className="block">
+            <div className="mb-1 text-[10px] font-bold uppercase tracking-widest text-white/45">
+              Slug (URL handle)
+            </div>
+            <input
+              name="slug"
+              required
+              maxLength={64}
+              pattern="^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$"
+              placeholder="acme-experiments"
+              className="w-full rounded-lg border border-white/10 bg-white/[0.06] px-3 py-2 font-mono text-sm text-white outline-none focus:border-aqua/40"
+              suppressHydrationWarning
+            />
+            <div className="mt-1 text-[11px] text-white/45">
+              Lowercase letters, digits, dashes. Immutable after create.
+            </div>
+          </label>
+          <div className="md:col-span-2 flex items-center justify-end">
+            <button
+              type="submit"
+              className="rounded-full border border-aqua/40 bg-aqua/15 px-4 py-1.5 text-xs font-bold text-aqua transition hover:bg-aqua/25"
+            >
+              Create workspace
+            </button>
+          </div>
+        </form>
+      </Card>
+    </div>
   );
 }
 

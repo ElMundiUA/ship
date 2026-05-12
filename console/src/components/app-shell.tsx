@@ -637,6 +637,14 @@ function WorkspaceSwitcherMenu({
         </div>
       )}
       <Link
+        href={withWorkspaceHref("/settings/workspaces")}
+        onClick={onPick}
+        className="flex items-center justify-between gap-2 border-t border-white/10 bg-white/[0.02] px-4 py-2.5 text-[11px] font-semibold text-aqua hover:bg-aqua/[0.04]"
+      >
+        <span>{multiWorkspace ? "Manage workspaces" : "Create new workspace"}</span>
+        <span aria-hidden>+</span>
+      </Link>
+      <Link
         href={withWorkspaceHref("/settings")}
         className="block border-t border-white/10 bg-white/[0.02] px-4 py-2.5 text-center text-[11px] font-semibold text-aqua hover:underline"
       >
