@@ -12,6 +12,7 @@ import { cookies } from "next/headers";
 
 import { PageBody, PageHeader } from "@/components/app-shell";
 import { ApiUnavailable } from "@/components/api-unavailable";
+import { ConfigScopeCard } from "@/components/config-scope-card";
 import {
   IntegrationsWorkspaceBody,
   loadIntegrationsWorkspaceMode,
@@ -109,6 +110,7 @@ function errorMessage(code: string): string {
 const TABS = [
   { id: "general", label: "General" },
   { id: "workspaces", label: "Workspaces" },
+  { id: "config", label: "Config" },
   { id: "repositories", label: "Connected code" },
   { id: "registries", label: "Registries" },
   { id: "members", label: "Members" },
@@ -386,6 +388,10 @@ export async function SettingsShell({
               current={workspace}
               memberships={allWorkspaces}
             />
+          )}
+
+          {activeTab === "config" && (
+            <ConfigPanel workspaceId={workspace.id} />
           )}
 
           {activeTab === "repositories" && (
@@ -1085,6 +1091,57 @@ function DispatchRoutineCard({
     </Card>
   );
 }
+
+async function ConfigPanel({ workspaceId }: { workspaceId: string }) {
+  // Server-rendered list (config_help-without-scope), per-row card is
+  // a client component that does its own GET + PUT cycle. Keeps the
+  // server boundary thin — no client-side scope discovery, but the
+  // form-renderer stays interactive.
+  const token = await getCachedSessionToken();
+  if (!token) {
+    return (
+      <Card>
+        <CardHeader title="Workspace configuration" />
+        <p className="text-sm text-white/55">Sign in to view scopes.</p>
+      </Card>
+    );
+  }
+  let rows: { slug: string; description: string }[] = [];
+  let errorMsg: string | null = null;
+  try {
+    const { listConfigScopes } = await import("@/lib/api/client");
+    rows = await listConfigScopes(workspaceId, token);
+  } catch (err) {
+    errorMsg =
+      err instanceof Error ? err.message : "Couldn't load config scopes.";
+  }
+  return (
+    <Card>
+      <CardHeader
+        title="Workspace configuration"
+        subtitle="Every per-workspace setting under one roof. Adding a new ConfigScope server-side picks up here automatically — no FE change. Mutating scopes are admin-gated and audited under their canonical action name."
+      />
+      {errorMsg ? (
+        <p className="rounded-md border border-coral/30 bg-coral/[0.04] p-3 text-xs text-coral/85">
+          {errorMsg}
+        </p>
+      ) : rows.length === 0 ? (
+        <p className="text-sm text-white/55">No scopes registered.</p>
+      ) : (
+        <div className="space-y-4">
+          {rows.map((row) => (
+            <ConfigScopeCard
+              key={row.slug}
+              workspaceId={workspaceId}
+              scope={row.slug}
+            />
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 
 function WorkspacesPanel({
   current,

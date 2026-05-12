@@ -25,6 +25,7 @@ from backend.app.api.v1.routes import (
     catalog,
     chat,
     clarifications,
+    config,
     dashboard,
     dashboard_live_system,
     dashboard_priorities,
@@ -64,6 +65,7 @@ api_router.include_router(admin_invites.router)
 # Public waitlist submission from landing site (E08 T05). No auth required.
 api_router.include_router(waitlist.router)
 api_router.include_router(workspaces.router)
+api_router.include_router(config.router)
 api_router.include_router(artifact_repos.router)
 api_router.include_router(audit.router)
 api_router.include_router(integrations.public_router)

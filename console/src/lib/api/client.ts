@@ -224,6 +224,63 @@ export function setAgentProvider(
   );
 }
 
+// --- Generic per-workspace config scopes (Phase 1d / PR-CONFIG-UI) ----------
+
+/** One row in ``GET /v1/workspaces/{ws}/config`` — registry index. */
+export interface ApiConfigScopeRow {
+  slug: string;
+  description: string;
+}
+
+/** Full scope detail — drives the form renderer (Phase 4 console). */
+export interface ApiConfigScopeDetail {
+  slug: string;
+  description: string;
+  /** JSONSchema describing the value shape. */
+  json_schema: Record<string, unknown>;
+  /** Current value — type depends on the scope's schema. */
+  current_value: unknown;
+}
+
+export interface ApiConfigPutResult {
+  slug: string;
+  value: unknown;
+  audit_event: string;
+}
+
+export function listConfigScopes(
+  workspaceId: string,
+  token?: string,
+): Promise<ApiConfigScopeRow[]> {
+  return apiFetch<ApiConfigScopeRow[]>(
+    `/v1/workspaces/${workspaceId}/config`,
+    { token },
+  );
+}
+
+export function getConfigScope(
+  workspaceId: string,
+  scope: string,
+  token?: string,
+): Promise<ApiConfigScopeDetail> {
+  return apiFetch<ApiConfigScopeDetail>(
+    `/v1/workspaces/${workspaceId}/config/${encodeURIComponent(scope)}`,
+    { token },
+  );
+}
+
+export function putConfigScope(
+  workspaceId: string,
+  scope: string,
+  value: unknown,
+  token?: string,
+): Promise<ApiConfigPutResult> {
+  return apiFetch<ApiConfigPutResult>(
+    `/v1/workspaces/${workspaceId}/config/${encodeURIComponent(scope)}`,
+    { method: "PUT", body: { value }, token },
+  );
+}
+
 /**
  * POST ``/v1/workspaces/{ws}/agent-runs/dispatch`` — manually fire a
  * routine against the workspace's bound repo. Workflow_dispatch
