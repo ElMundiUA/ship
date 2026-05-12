@@ -22,7 +22,7 @@ from backend.app.api.v1.routes import (
     audit,
     auth,
     analytics_dora,
-    catalog,
+    process_templates,
     chat,
     clarifications,
     config,
@@ -128,10 +128,11 @@ api_router.include_router(analytics_dora.router)
 # /r/<slug> page renders as Now + Trends tabs without fanning out to
 # the four source endpoints client-side.
 api_router.include_router(repo_home.router)
-# Catalog read-only surface (presets / collections) backed by
-# ``artifacts/**/ARTIFACT.md``. Powers the wizard preset picker and
-# pattern/tool pickers.
-api_router.include_router(catalog.router)
+# Process-template surface — ``GET /v1/processes/default`` returns
+# the canonical agent-role bundle Ship installs in every new repo.
+# (Replaced the legacy ``/v1/catalog/default-bundle`` route after
+# the catalog concept was retired in phase 2.1.)
+api_router.include_router(process_templates.router)
 # Team invites (B7 — WOW onboarding team install). Admin-scoped list/
 # create/revoke under ``/workspaces/{ws}/invites``; public peek +
 # authenticated accept at ``/invites/{token}``.

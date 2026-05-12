@@ -828,26 +828,30 @@ export function activateWizardSeed(
 }
 
 /**
- * Canonical Plays bundle preview — ``GET /v1/catalog/default-bundle``.
+ * Default process preview — ``GET /v1/processes/default``.
  *
  * Wave-8c "Confirm bootstrap" wizard step renders this verbatim. The
  * order of ``bundle`` is the recommended display order on the
  * backend (PR-attached first, scheduled scanners next, then
  * release-time + the one-shot knowledge seed) so the FE doesn't
  * re-sort.
+ *
+ * Renamed from ``getDefaultBundle`` / ``/v1/catalog/default-bundle``
+ * after the catalog concept was retired — same shape, same role list,
+ * just a more honest path.
  */
-export interface ApiDefaultBundleEntry {
+export interface ApiDefaultProcessEntry {
   key: string;
   title: string;
   reason: string;
 }
 
-export interface ApiDefaultBundle {
-  bundle: ApiDefaultBundleEntry[];
+export interface ApiDefaultProcess {
+  bundle: ApiDefaultProcessEntry[];
 }
 
-export function getDefaultBundle(token?: string): Promise<ApiDefaultBundle> {
-  return apiFetch<ApiDefaultBundle>(`/v1/catalog/default-bundle`, { token });
+export function getDefaultProcess(token?: string): Promise<ApiDefaultProcess> {
+  return apiFetch<ApiDefaultProcess>(`/v1/processes/default`, { token });
 }
 
 // --- Team invites (B7) ------------------------------------------------------

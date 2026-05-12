@@ -23,8 +23,8 @@ import Link from "next/link";
 import {
   ApiHttpError,
   ApiUnavailableError,
-  getDefaultBundle,
-  type ApiDefaultBundleEntry,
+  getDefaultProcess,
+  type ApiDefaultProcessEntry,
 } from "@/lib/api/client";
 import { getSessionToken } from "@/lib/api/session";
 
@@ -61,10 +61,10 @@ export async function ConfirmStep({
   // render a minimal fallback list so the operator at least knows the
   // wizard will install *something*.
   const sessionToken = await getSessionToken();
-  let bundle: ApiDefaultBundleEntry[] = [];
+  let bundle: ApiDefaultProcessEntry[] = [];
   let bundleError: string | null = null;
   try {
-    const resp = await getDefaultBundle(sessionToken ?? undefined);
+    const resp = await getDefaultProcess(sessionToken ?? undefined);
     bundle = resp.bundle;
   } catch (err) {
     if (err instanceof ApiUnavailableError) {
