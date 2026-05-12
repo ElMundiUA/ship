@@ -42,7 +42,6 @@ from backend.app.db.models.integrations import (
     WorkspaceRepo,
 )
 from backend.app.db.models.lanes import Lane
-from backend.app.db.models.methodology import MethodologyChunk
 from backend.app.db.models.notifications import WorkspaceNotification
 from backend.app.db.models.pipelines import (
     AgentRequest,
@@ -104,7 +103,6 @@ __all__ = [
     "KnowledgeSource",
     "KnowledgeSourceItem",
     "Lane",
-    "MethodologyChunk",
     "MemberGroup",
     "MemberGroupMember",
     "NativeIntegrationAuditEvent",

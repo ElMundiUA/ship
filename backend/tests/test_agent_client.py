@@ -40,6 +40,9 @@ def test_openai_tools_wraps_in_function_shape() -> None:
 
 
 def test_anthropic_tools_uses_input_schema() -> None:
+    """Phase 2 injects Anthropic's server-side ``web_search_20250305``
+    in front of every custom tool list, so the test pins both the
+    custom-spec transposition AND the always-on server tool."""
     spec = ToolSpec(
         name="search_kb",
         description="search",
@@ -48,10 +51,15 @@ def test_anthropic_tools_uses_input_schema() -> None:
     out = _anthropic_tools([spec])
     assert out == [
         {
+            "type": "web_search_20250305",
+            "name": "web_search",
+            "max_uses": 5,
+        },
+        {
             "name": "search_kb",
             "description": "search",
             "input_schema": spec.parameters,
-        }
+        },
     ]
 
 
