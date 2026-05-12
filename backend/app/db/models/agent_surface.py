@@ -29,9 +29,11 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
     text,
@@ -370,6 +372,58 @@ class ChatMessage(Base):
     body: Mapped[str] = mapped_column(Text, nullable=False)
     meta: Mapped[dict] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+
+    created_at: Mapped[datetime] = _ts_created()
+
+
+class ChatAttachment(Base):
+    """An image / PDF / text file attached to a :class:`ChatMessage`.
+
+    See migration ``0064_chat_attachments`` for the column rationale.
+    The model deliberately doesn't carry the raw bytes — only a
+    storage path that :mod:`backend.app.services.attachments` knows
+    how to open (``file://`` for local-disk, ``s3://`` for the S3
+    backend once toggled on).
+
+    ``kind`` is the coarse discriminator the LLM message builder
+    branches on: image → vision block, pdf → document block (or
+    text-extracted body on non-vision providers), text → text block.
+    """
+
+    __tablename__ = "chat_attachments"
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('image', 'pdf', 'text')",
+            name="ck_chat_attachments_kind_enum",
+        ),
+        Index("ix_chat_attachments_message_id", "message_id"),
+        Index("ix_chat_attachments_workspace_id", "workspace_id"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    message_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("chat_messages.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    mime: Mapped[str] = mapped_column(String(128), nullable=False)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    storage_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    # Populated at upload time for PDFs (pypdf) and text/markdown
+    # (identity). NULL for images in v1 — Claude's vision pathway
+    # reads pixels directly. A future OCR backfill can populate this
+    # so chat threads become text-searchable across the modality.
+    extracted_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extracted_text_source: Mapped[str | None] = mapped_column(
+        String(32), nullable=True
     )
 
     created_at: Mapped[datetime] = _ts_created()

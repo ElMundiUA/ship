@@ -16,6 +16,7 @@ from backend.app.db.models.agent_memory import (
     KnowledgeBucket,
 )
 from backend.app.db.models.agent_surface import (
+    ChatAttachment,
     ChatMessage,
     ChatThread,
     Clarification,
@@ -82,6 +83,7 @@ __all__ = [
     "AuditLog",
     "BucketArticleSource",
     "BucketSummary",
+    "ChatAttachment",
     "ChatMessage",
     "ChatThread",
     "Clarification",
