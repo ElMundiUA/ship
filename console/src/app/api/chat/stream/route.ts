@@ -7,15 +7,17 @@
  * ``/v1/workspaces/{ws}/chat/stream`` endpoint, piping the
  * ``text/event-stream`` response back unchanged.
  *
- * Keeping the session token in an httpOnly cookie means the browser
- * never touches it. The only thing the caller has to supply is the
- * workspace id and the message body, which we validate minimally
- * before forwarding.
+ * Phase 3b flipped the upstream wire to multipart/form-data so an
+ * operator drag-drop carries images / PDFs / text alongside the
+ * typed message body. We accept multipart from the browser and
+ * relay it as-is — no buffering, no re-encoding — so a 30 MiB PDF
+ * doesn't double-spool through Node's heap. JSON callers keep
+ * working for back-compat: we build a synthetic FormData when the
+ * incoming content-type is ``application/json``.
  */
 
-import { NextResponse } from "next/server";
-
 import { getSessionToken } from "@/lib/api/session";
+import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
@@ -33,47 +35,89 @@ export async function POST(req: Request): Promise<Response> {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  let body: {
-    workspace_id?: string;
-    /** Composer text — forwarded as backend ``ChatStreamIn.body``. */
-    message?: string;
-    /** Alias for ``message`` (matches ``ChatStreamIn`` field name). */
-    body?: string;
-    classify_shift?: boolean;
-  } = {};
-  try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: "bad_json" }, { status: 400 });
+  // Two wire shapes:
+  //   - multipart/form-data (preferred — drag-drop + body + flags)
+  //   - application/json (legacy — no attachments)
+  // We normalize to FormData before forwarding so the backend
+  // contract is one shape.
+  const contentType = req.headers.get("content-type") || "";
+  let form: FormData;
+  let workspaceId: string | null = null;
+
+  if (contentType.includes("multipart/form-data")) {
+    try {
+      form = await req.formData();
+    } catch {
+      return NextResponse.json({ error: "bad_multipart" }, { status: 400 });
+    }
+    workspaceId = (form.get("workspace_id") as string | null) ?? null;
+    // Backend doesn't want workspace_id in the body — it lives in
+    // the URL. Strip it before forwarding so the form payload stays
+    // clean.
+    form.delete("workspace_id");
+  } else {
+    // JSON path: build a FormData on the fly so the backend always
+    // sees one wire shape. The legacy ``message`` alias maps to
+    // ``body`` for compatibility with older clients.
+    let json: {
+      workspace_id?: string;
+      message?: string;
+      body?: string;
+      classify_shift?: boolean;
+      thread_id?: string;
+    } = {};
+    try {
+      json = await req.json();
+    } catch {
+      return NextResponse.json({ error: "bad_json" }, { status: 400 });
+    }
+    workspaceId = json.workspace_id ?? null;
+    const text =
+      (typeof json.message === "string" && json.message.trim()) ||
+      (typeof json.body === "string" && json.body.trim()) ||
+      "";
+    if (!text) {
+      return NextResponse.json(
+        { error: "message_required" },
+        { status: 400 },
+      );
+    }
+    form = new FormData();
+    form.set("body", text);
+    if (typeof json.classify_shift === "boolean") {
+      form.set("classify_shift", String(json.classify_shift));
+    }
+    if (typeof json.thread_id === "string" && json.thread_id) {
+      form.set("thread_id", json.thread_id);
+    }
   }
-  const { workspace_id, message, body: bodyField, classify_shift } = body;
-  if (!workspace_id || typeof workspace_id !== "string") {
-    return NextResponse.json({ error: "workspace_id_required" }, { status: 400 });
+
+  if (!workspaceId || typeof workspaceId !== "string") {
+    return NextResponse.json(
+      { error: "workspace_id_required" },
+      { status: 400 },
+    );
   }
-  const text =
-    typeof message === "string" && message.trim().length > 0
-      ? message.trim()
-      : typeof bodyField === "string" && bodyField.trim().length > 0
-        ? bodyField.trim()
-        : "";
-  if (!text) {
-    return NextResponse.json({ error: "message_required" }, { status: 400 });
+  const bodyVal = form.get("body");
+  if (typeof bodyVal !== "string" || !bodyVal.trim()) {
+    return NextResponse.json(
+      { error: "message_required" },
+      { status: 400 },
+    );
   }
 
   const upstream = await fetch(
-    `${base}/v1/workspaces/${encodeURIComponent(workspace_id)}/chat/stream`,
+    `${base}/v1/workspaces/${encodeURIComponent(workspaceId)}/chat/stream`,
     {
       method: "POST",
       headers: {
-        "content-type": "application/json",
+        // Let fetch set the multipart boundary itself — overriding
+        // content-type strips the boundary parameter and the
+        // backend rejects the body.
         accept: "text/event-stream",
         authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({
-        body: text,
-        ...(typeof classify_shift === "boolean" ? { classify_shift } : {}),
-      }),
-      // Disable any fetch cache — this is a live stream.
+      body: form,
       cache: "no-store",
     },
   );

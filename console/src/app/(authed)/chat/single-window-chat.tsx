@@ -434,6 +434,12 @@ export function SingleWindowChat({
   // server-assigned UUID via the ``user_message`` event before
   // retrieval fires, so we always store the canonical id here.
   const lastUserIdRef = useRef<string | null>(null);
+  // Attached files staged before the next ``send``. Per-message caps
+  // and MIME whitelist mirror ``backend.app.services.attachments.policy``
+  // so the user gets a friendly error in the composer rather than a
+  // 415 from the server after upload.
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [attachError, setAttachError] = useState<string | null>(null);
   const [streaming, setStreaming] = useState(false);
   // Distinguish "user submitted, nothing back yet" from "agent
   // started streaming text". Drives the Thinking card.
@@ -932,10 +938,67 @@ export function SingleWindowChat({
     }
   }, [releaseSpacer]);
 
+  const acceptFiles = useCallback(
+    (incoming: File[]) => {
+      // Phase 3 policy mirror — keep in sync with
+      // ``backend.app.services.attachments.policy``. The client-side
+      // copy lets us reject in the composer without round-tripping a
+      // 5 MiB image to discover it was the wrong MIME.
+      const ALLOWED = new Set([
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+        "image/gif",
+        "application/pdf",
+        "text/markdown",
+        "text/plain",
+        "text/csv",
+        "application/json",
+        "application/yaml",
+        "application/x-yaml",
+      ]);
+      const MAX_FILES = 5;
+      const MAX_PER_FILE = 10 * 1024 * 1024;
+      const MAX_TOTAL = 30 * 1024 * 1024;
+      setAttachError(null);
+      const combined = [...pendingFiles, ...incoming];
+      if (combined.length > MAX_FILES) {
+        setAttachError(`Up to ${MAX_FILES} files per message.`);
+        return;
+      }
+      let total = 0;
+      for (const f of combined) {
+        if (!ALLOWED.has(f.type)) {
+          setAttachError(
+            `${f.name}: type ${f.type || "unknown"} isn't supported. ` +
+              "Allowed: jpeg/png/webp/gif, PDF, txt/md/csv/json/yaml.",
+          );
+          return;
+        }
+        if (f.size > MAX_PER_FILE) {
+          setAttachError(`${f.name}: file too large (>10 MiB).`);
+          return;
+        }
+        total += f.size;
+      }
+      if (total > MAX_TOTAL) {
+        setAttachError("Combined attachments exceed 30 MiB.");
+        return;
+      }
+      setPendingFiles(combined);
+    },
+    [pendingFiles],
+  );
+
+  const removePendingFile = useCallback((idx: number) => {
+    setPendingFiles((prev) => prev.filter((_, i) => i !== idx));
+    setAttachError(null);
+  }, []);
+
   const send = useCallback(
     async (message: string, opts: { forceNewThread?: boolean } = {}) => {
       const trimmed = message.trim();
-      if (!trimmed || streaming) return;
+      if ((!trimmed && pendingFiles.length === 0) || streaming) return;
       // Stash the prompt before we kick off so an in-flight error
       // can be retried. We store the *trimmed* body (what the
       // backend actually saw) so retry sends an identical request.
@@ -952,6 +1015,8 @@ export function SingleWindowChat({
       };
       setSegments((prev) => [...prev, optimistic]);
       setDraft("");
+      setPendingFiles([]);
+      setAttachError(null);
       streamingIdRef.current = null;
 
       // Smoothly scroll the fresh user message to (close to) the
@@ -984,15 +1049,23 @@ export function SingleWindowChat({
       const ac = new AbortController();
       abortRef.current = ac;
 
+      // Build a multipart form so the same wire shape carries text
+      // and any drag-dropped attachments. Always-multipart keeps the
+      // backend on one contract — see /api/chat/stream proxy for the
+      // legacy-JSON fallback.
+      const form = new FormData();
+      form.set("workspace_id", workspaceId);
+      form.set("body", trimmed);
+      if (opts.forceNewThread) {
+        form.set("force_new_thread", "true");
+      }
+      for (const f of pendingFiles) {
+        form.append("files", f, f.name);
+      }
       try {
         const res = await fetch("/api/chat/stream", {
           method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            workspace_id: workspaceId,
-            message: trimmed,
-            force_new_thread: !!opts.forceNewThread,
-          }),
+          body: form,
           signal: ac.signal,
         });
 
@@ -1016,7 +1089,7 @@ export function SingleWindowChat({
         setAwaitingFirstDelta(false);
       }
     },
-    [handleEvent, streaming, workspaceId],
+    [handleEvent, pendingFiles, streaming, workspaceId],
   );
 
   const onSubmit = (e: FormEvent<HTMLFormElement>) => {
@@ -1465,15 +1538,79 @@ export function SingleWindowChat({
 
       <form
         onSubmit={onSubmit}
+        onDragOver={(e) => {
+          // Only react to file drops — bail on text-only drags so we
+          // don't fight the textarea's native rich-text drop.
+          if (Array.from(e.dataTransfer.types).includes("Files")) {
+            e.preventDefault();
+          }
+        }}
+        onDrop={(e) => {
+          if (!Array.from(e.dataTransfer.types).includes("Files")) return;
+          e.preventDefault();
+          acceptFiles(Array.from(e.dataTransfer.files));
+        }}
         className="flex flex-col gap-1 border-t border-white/5 pt-3"
       >
+        {pendingFiles.length > 0 ? (
+          <ul className="flex flex-wrap gap-1.5">
+            {pendingFiles.map((f, idx) => (
+              <li
+                key={`${f.name}-${idx}-${f.size}`}
+                className="flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] text-white/75"
+              >
+                <span aria-hidden>
+                  {f.type.startsWith("image/")
+                    ? "🖼"
+                    : f.type === "application/pdf"
+                      ? "📄"
+                      : "📎"}
+                </span>
+                <span className="max-w-[180px] truncate" title={f.name}>
+                  {f.name}
+                </span>
+                <span className="text-white/40">
+                  {(f.size / 1024).toFixed(0)} KB
+                </span>
+                <button
+                  type="button"
+                  onClick={() => removePendingFile(idx)}
+                  aria-label={`Remove ${f.name}`}
+                  className="text-white/40 transition hover:text-rose-300"
+                >
+                  ✕
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {attachError ? (
+          <p className="text-[11px] text-rose-300/80">{attachError}</p>
+        ) : null}
         <div className="flex items-end gap-2">
+          <label
+            className="cursor-pointer text-sm text-white/40 transition hover:text-white"
+            title="Attach an image, PDF, or text file"
+          >
+            📎
+            <input
+              type="file"
+              multiple
+              accept="image/jpeg,image/png,image/webp,image/gif,application/pdf,text/markdown,text/plain,text/csv,application/json,application/yaml,application/x-yaml"
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files) acceptFiles(Array.from(e.target.files));
+                // Allow re-picking the same file after removing it.
+                e.target.value = "";
+              }}
+            />
+          </label>
           <textarea
             ref={textareaRef}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={onKeyDown}
-            placeholder="Ask the agent. Enter to send, Shift-Enter for newline."
+            placeholder="Ask the agent. Enter to send, Shift-Enter for newline. Drag files to attach."
             rows={2}
             disabled={streaming}
             className="min-h-[48px] flex-1 resize-none bg-transparent px-1 py-2 text-sm text-white placeholder-white/25 focus:outline-none disabled:opacity-50"
@@ -1490,7 +1627,7 @@ export function SingleWindowChat({
           ) : (
             <button
               type="submit"
-              disabled={draft.trim().length === 0}
+              disabled={draft.trim().length === 0 && pendingFiles.length === 0}
               className="text-sm font-semibold text-aqua transition hover:text-aqua/80 disabled:cursor-not-allowed disabled:text-white/25"
             >
               send ↵
