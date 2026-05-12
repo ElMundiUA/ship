@@ -202,7 +202,17 @@ from backend.app.services.tracker_fsm import (
 #         sub-second and rate-limit safe at closed-beta scale. Manual
 #         ``workflow_dispatch`` from the Actions UI stays as a debug
 #         harness.
-BUNDLE_VERSION: str = "0.33"
+# ``0.34`` → Tick budget headroom. Observed in production: one
+#         visitor-back tick hit ``timeout-minutes: 30`` running 5
+#         routines back-to-back (multi-action drain from v0.32 +
+#         per-agent slow path). Two changes:
+#           - ``timeout-minutes`` 30 → 45 on the trigger job.
+#           - ``SHIP_MAX_ACTIONS_PER_TICK`` default 5 → 4.
+#         4 × ~4-7 min ≈ 16-28 min, comfortably under 45-min ceiling.
+#         Still drains 4× more per tick than the pre-v0.32 single-
+#         action mode; just leaves headroom for the occasional 7-min
+#         agent without GHA hard-killing mid-stage.
+BUNDLE_VERSION: str = "0.34"
 
 # Default knowledge starters for PR 1. Empty by design: generated knowledge is
 # analyzed post-merge and proposed in a second PR. Historical callers can still
