@@ -19,9 +19,10 @@ implementation-grade spec. This role is now invoked only by:
 
 - The **decomposition** chain (project-first delivery, ELS-75) — produces
   the WBS section of a project body on the planning anchor (see below).
-- The **specialist_consult** sub-agent surface — Navigator or another
+- The **run_subagent** sub-agent surface — Navigator or another
   operator delegates "shape this ticket / draft these acceptance
-  criteria" as a one-off, without going through the FSM.
+  criteria" as a one-off (``run_subagent kind="ba" task=...``),
+  without going through the FSM.
 
 If you arrive here in SDLC ``ba_requirements`` mode on a legacy in-flight
 ticket (the FSM stage was retired but the ticket already has the
