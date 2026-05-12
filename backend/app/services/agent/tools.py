@@ -768,32 +768,54 @@ class ToolBox:
                 },
             ),
             ToolSpec(
-                name="project_description_append",
+                name="project_update",
                 description=(
-                    "Append markdown to an existing project's body. Use "
-                    "to accumulate PO ideas / decisions / constraints "
-                    "across planning sessions — appends, not replaces, "
-                    "so the epic body grows over time. Read the project "
-                    "first via ``get_project`` if you need to avoid "
-                    "duplicating an existing section."
+                    "Mutate an existing project. Two sub-ops, set "
+                    "either or both in the same call:\n"
+                    " * ``body_append``: append the given markdown to "
+                    "the project body (accumulates PO ideas / decisions "
+                    "/ constraints across sessions). Read the project "
+                    "first via ``project_get`` if you need to avoid "
+                    "duplicating a section.\n"
+                    " * ``priority_state``: move the project between "
+                    "dashboard buckets (``active`` / ``planning`` (UI "
+                    "label: **Drafts**) / ``parked``). Creates a "
+                    "priorities row at MAX+1 ordinal if none exists.\n"
+                    "**Mutating; admin-only**. Verify-before-mutate: "
+                    "describe the change and wait for explicit OK "
+                    "unless the user gave a direct command."
                 ),
                 parameters={
                     "type": "object",
                     "properties": {
                         "project_id": {
                             "type": "string",
-                            "description": "Project UUID.",
+                            "description": (
+                                "Project identifier — Linear project "
+                                "UUID or Jira project key. Used as "
+                                "both project_id (body_append path) "
+                                "and project_native_id (priority path)."
+                            ),
                         },
-                        "body": {
+                        "body_append": {
                             "type": "string",
                             "description": (
-                                "Markdown to append. A blank line is "
-                                "inserted between existing content and "
-                                "the new block."
+                                "Markdown to append to project body. "
+                                "A blank line is inserted between "
+                                "existing content and the new block."
+                            ),
+                        },
+                        "priority_state": {
+                            "type": "string",
+                            "enum": ["active", "planning", "parked"],
+                            "description": (
+                                "Target dashboard bucket. ``planning`` "
+                                "is the internal name for the "
+                                "**Drafts** UI label."
                             ),
                         },
                     },
-                    "required": ["project_id", "body"],
+                    "required": ["project_id"],
                     "additionalProperties": False,
                 },
             ),
@@ -1263,14 +1285,18 @@ class ToolBox:
             ),
             # Phase 6 Wave B — mutating tools (admin-gated, audited)
             ToolSpec(
-                name="inbox_dispose",
+                name="inbox_update",
                 description=(
-                    "Apply a lifecycle disposition to one inbox item "
+                    "Mutate one inbox item. ``action`` picks the shape: "
+                    "**dispose** applies a lifecycle disposition "
                     "(resolve / dismiss / approve / reject / answer / "
-                    "accept / retry / acknowledge). Admin-only and "
-                    "audited. Set ``dry_run=true`` to preview the "
-                    "transition without writing. Use ``inbox_snooze`` "
-                    "or ``inbox_reassign`` for those specific shapes."
+                    "accept / retry / acknowledge — pass via "
+                    "``disposition``); **snooze** silences the item until "
+                    "``until`` (≤ 30 days out); **reassign** hands it "
+                    "to a different workspace member named by "
+                    "``assignee_user_id``. All actions are admin-only and "
+                    "audited. ``dry_run=true`` (dispose only) previews "
+                    "the transition WITHOUT writing."
                 ),
                 parameters={
                     "type": "object",
@@ -1279,6 +1305,15 @@ class ToolBox:
                             "type": "string",
                             "description": "UUID of the inbox item.",
                         },
+                        "action": {
+                            "type": "string",
+                            "enum": ["dispose", "snooze", "reassign"],
+                            "description": (
+                                "Which kind of mutation. Determines "
+                                "which other fields are required."
+                            ),
+                        },
+                        # action=dispose
                         "disposition": {
                             "type": "string",
                             "enum": [
@@ -1291,76 +1326,53 @@ class ToolBox:
                                 "retry",
                                 "acknowledge",
                             ],
+                            "description": (
+                                "Required when action='dispose'."
+                            ),
                         },
                         "body": {
                             "type": "string",
                             "description": (
-                                "Optional comment / answer text "
-                                "(max 4000 chars). Required when "
-                                "disposition='answer'."
+                                "Optional comment / answer text for "
+                                "action='dispose' (max 4000 chars). "
+                                "Required when disposition='answer'."
                             ),
                         },
                         "dry_run": {
                             "type": "boolean",
                             "default": False,
                             "description": (
-                                "When true, validate + summarise the "
-                                "would-be transition WITHOUT writing."
+                                "action='dispose' only: validate + "
+                                "summarise the would-be transition "
+                                "WITHOUT writing."
                             ),
                         },
-                    },
-                    "required": ["inbox_item_id", "disposition"],
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
-                name="inbox_snooze",
-                description=(
-                    "Silence one inbox item until ``until`` (≤ 30 days "
-                    "out). Admin-only and audited. Item must currently "
-                    "be in status 'new' or 'snoozed'."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "inbox_item_id": {"type": "string"},
+                        # action=snooze
                         "until": {
                             "type": "string",
                             "description": (
-                                "ISO-8601 timestamp in the future."
+                                "ISO-8601 timestamp in the future. "
+                                "Required when action='snooze'."
                             ),
                         },
-                    },
-                    "required": ["inbox_item_id", "until"],
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
-                name="inbox_reassign",
-                description=(
-                    "Hand one inbox item to a different workspace "
-                    "member. Admin-only and audited. The new owner "
-                    "must already be a workspace member."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "inbox_item_id": {"type": "string"},
+                        # action=reassign
                         "assignee_user_id": {
                             "type": "string",
                             "description": (
                                 "UUID of the workspace member to "
-                                "reassign to."
+                                "reassign to. Required when "
+                                "action='reassign'."
                             ),
                         },
                         "reason": {
                             "type": "string",
                             "description": (
-                                "Optional rationale (max 500 chars)."
+                                "Optional rationale for action='reassign' "
+                                "(max 500 chars)."
                             ),
                         },
                     },
-                    "required": ["inbox_item_id", "assignee_user_id"],
+                    "required": ["inbox_item_id", "action"],
                     "additionalProperties": False,
                 },
             ),
@@ -1530,104 +1542,36 @@ class ToolBox:
                 },
             ),
             ToolSpec(
-                name="project_priority_set",
+                name="run_subagent",
                 description=(
-                    "Move a project on the dashboard between buckets: "
-                    "``active`` (agent's autonomous picker may "
-                    "consume), ``planning`` (UI label: **Drafts** — "
-                    "operator is shaping; agent-invisible), "
-                    "``parked`` (explicit hold). **Mutating; "
-                    "admin-only**. Verify-before-mutate: describe "
-                    "the move and wait for explicit OK unless the "
-                    "user gave a direct command (\"park this\", "
-                    "\"promote it\"). Creates a priorities row at "
-                    "MAX+1 ordinal if none exists yet."
+                    "Spawn a subagent. ``kind`` selects which:\n"
+                    " * ``decomposition`` — kicks off the autonomous "
+                    "BA → Architect → QA-Architect → Developer chain "
+                    "on a Drafts-bucket planning anchor. **Strict "
+                    "verify-before-mutate** — the chain runs without "
+                    "further confirmations after this call. Always "
+                    "OK with the user first.\n"
+                    " * a specialist slug (``designer``, "
+                    "``tech-architect``, ``qa-architect``, ``ba``, "
+                    "``developer``) — hands a focused task to one "
+                    "specialist subagent. The specialist runs as an "
+                    "isolated agent loop with its own role prompt and "
+                    "the same workspace tool surface (minus this "
+                    "tool, to prevent recursion) and returns one "
+                    "final report. The subagent has no memory of "
+                    "this conversation — ``task`` + ``context_hint`` "
+                    "is everything it sees.\n"
+                    "Decomposition path uses ``project_native_id``; "
+                    "specialist path uses ``task`` (+ optional "
+                    "``context_hint``)."
                 ),
                 parameters={
                     "type": "object",
                     "properties": {
-                        "project_native_id": {
-                            "type": "string",
-                            "description": (
-                                "Tracker-native project id (Linear "
-                                "project UUID, Jira project key)."
-                            ),
-                        },
-                        "state": {
-                            "type": "string",
-                            "enum": ["active", "planning", "parked"],
-                            "description": (
-                                "Target bucket. ``planning`` is the "
-                                "internal name for the **Drafts** UI "
-                                "label."
-                            ),
-                        },
-                    },
-                    "required": ["project_native_id", "state"],
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
-                name="decomposition_start",
-                description=(
-                    "Hand a Drafts-bucket project off to the "
-                    "decomposition pipeline. **Mutating; admin-"
-                    "only; strict verify-before-mutate** — the chain "
-                    "(BA → Architect → QA-Architect → Developer) "
-                    "runs autonomously after this and you can't "
-                    "easily undo. Always confirm with the user "
-                    "before calling. Walks the planning anchor into "
-                    "``stage:wbs``; the per-tick scheduler picks up "
-                    "BA, who emits the WBS section, transitions to "
-                    "``stage:architecture``, and so on through "
-                    "``stage:planning_done`` — at which point the "
-                    "project flips Drafts → Parked (the PO promotes Parked → Active manually; ELS-81) and the agent's "
-                    "autonomous picker takes over."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "project_native_id": {
-                            "type": "string",
-                            "description": (
-                                "Tracker-native project id. Must "
-                                "already be on the dashboard in the "
-                                "Drafts bucket "
-                                "(``priority_state='planning'``); "
-                                "the tool refuses for ``active`` / "
-                                "``parked`` states."
-                            ),
-                        },
-                    },
-                    "required": ["project_native_id"],
-                    "additionalProperties": False,
-                },
-            ),
-            ToolSpec(
-                name="specialist_consult",
-                description=(
-                    "Hand a focused task off to a specialist subagent. "
-                    "The specialist runs as an isolated agent loop with "
-                    "its own role prompt and the same workspace tool "
-                    "surface (minus this tool, to prevent recursion) "
-                    "and returns a single final report. Use when the "
-                    "problem fits a role's expertise: UX / information "
-                    "architecture → ``designer``; system shape, "
-                    "contracts, tradeoffs → ``tech-architect``; test "
-                    "strategy + coverage → ``qa-architect``; ticket "
-                    "shape / acceptance criteria → ``ba``; codebase "
-                    "exploration (read-only) → ``developer``. The "
-                    "subagent has no memory of this conversation — "
-                    "your ``task`` + ``context_hint`` is everything "
-                    "it sees, so brief it like a smart colleague who "
-                    "just walked in."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "specialist": {
+                        "kind": {
                             "type": "string",
                             "enum": [
+                                "decomposition",
                                 "designer",
                                 "tech-architect",
                                 "qa-architect",
@@ -1635,20 +1579,33 @@ class ToolBox:
                                 "developer",
                             ],
                             "description": (
-                                "Which role to delegate to. The slug "
-                                "matches a file in ``agent_roles/`` "
-                                "whose prompt becomes the subagent's "
-                                "system message."
+                                "What to spawn. ``decomposition`` is "
+                                "the autonomous chain; any other slug "
+                                "is a one-shot specialist consult."
                             ),
                         },
+                        # decomposition path
+                        "project_native_id": {
+                            "type": "string",
+                            "description": (
+                                "Tracker-native project id. Required "
+                                "when kind='decomposition'. Project "
+                                "must be on the dashboard in the "
+                                "Drafts bucket "
+                                "(``priority_state='planning'``); "
+                                "the call refuses for ``active`` / "
+                                "``parked`` states."
+                            ),
+                        },
+                        # specialist path
                         "task": {
                             "type": "string",
                             "description": (
-                                "Concrete task / question for the "
-                                "specialist. State scope, constraints, "
-                                "and what 'done' looks like — the "
-                                "subagent won't have your conversation "
-                                "history."
+                                "Required for specialist consults. "
+                                "Concrete task / question — state "
+                                "scope, constraints, what 'done' "
+                                "looks like. The subagent won't have "
+                                "your conversation history."
                             ),
                             "minLength": 8,
                             "maxLength": 8000,
@@ -1656,14 +1613,15 @@ class ToolBox:
                         "context_hint": {
                             "type": "string",
                             "description": (
-                                "Optional extra context (file paths, "
-                                "ticket ids, decisions already made) "
-                                "to forward verbatim to the subagent."
+                                "Optional extra context for "
+                                "specialist consults — file paths, "
+                                "ticket ids, decisions already made "
+                                "— forwarded verbatim to the subagent."
                             ),
                             "maxLength": 12000,
                         },
                     },
-                    "required": ["specialist", "task"],
+                    "required": ["kind"],
                     "additionalProperties": False,
                 },
             ),
@@ -1707,6 +1665,9 @@ class ToolBox:
             "project_create": self._tool_project_create,
             "project_find_or_create": self._tool_project_find_or_create,
             "inbox_create": self._tool_inbox_create,
+            "project_update": self._tool_project_update,
+            # Legacy dispatch keys for tests that call the sub-ops
+            # directly. Not in specs() — invisible to the LLM.
             "project_description_append": self._tool_project_description_append,
             "pr_get": self._tool_pr_get,
             "pr_list": self._tool_pr_list,
@@ -1726,6 +1687,12 @@ class ToolBox:
             "search_workspace_kb": self._tool_search_workspace_kb,
             "list_buckets": self._tool_list_buckets,
             # Phase 6 Wave B — mutating tools (admin-gated, audited)
+            "inbox_update": self._tool_inbox_update,
+            # Legacy dispatch keys — kept invisible to the LLM (no
+            # ToolSpec entry) but callable directly via ``box.invoke``
+            # so existing tests continue to work without retesting the
+            # admin-gate / dispatcher / audit-log behaviour through
+            # the polymorphic ``inbox_update`` wrapper.
             "inbox_dispose": self._tool_inbox_dispose,
             "inbox_snooze": self._tool_inbox_snooze,
             "inbox_reassign": self._tool_inbox_reassign,
@@ -1735,6 +1702,9 @@ class ToolBox:
             "audit_search": self._tool_audit_search,
             "ticket_update": self._tool_ticket_update,
             "project_priority_set": self._tool_project_priority_set,
+            "run_subagent": self._tool_run_subagent,
+            # Legacy dispatch keys for direct test calls. Not in
+            # specs() — invisible to the LLM.
             "decomposition_start": self._tool_decomposition_start,
             "specialist_consult": self._tool_specialist_consult,
         }
@@ -2402,6 +2372,53 @@ class ToolBox:
                 "title": item.title,
             }
         )
+
+    async def _tool_project_update(self, args: dict[str, Any]) -> str:
+        """Polymorphic project mutation. Two sub-ops can fire in the
+        same call: ``body_append`` (delegates to the existing append
+        path) and ``priority_state`` (delegates to the priority-set
+        path). Each underlying handler keeps its own admin gate +
+        audit-log action name so historical queries stay stable.
+
+        ``project_id`` is the same identifier the LLM gets from
+        ``project_list`` / ``project_get`` — for Linear that's the
+        project UUID, for Jira the project key. Both underlying
+        handlers happen to accept the same value under different
+        parameter names (``project_id`` vs ``project_native_id``);
+        we map it here once."""
+        project_id = args.get("project_id")
+        if not project_id or not isinstance(project_id, str):
+            return _json_result(
+                {
+                    "error": "missing_project_id",
+                    "message": "project_id is required",
+                }
+            )
+        body_append = args.get("body_append")
+        priority_state = args.get("priority_state")
+        if body_append is None and priority_state is None:
+            return _json_result(
+                {
+                    "error": "nothing_to_update",
+                    "message": (
+                        "set at least one of body_append, "
+                        "priority_state"
+                    ),
+                }
+            )
+        results: dict[str, Any] = {}
+        if body_append is not None:
+            results["body_append"] = await self._tool_project_description_append(
+                {"project_id": project_id, "body": body_append}
+            )
+        if priority_state is not None:
+            results["priority_state"] = await self._tool_project_priority_set(
+                {
+                    "project_native_id": project_id,
+                    "state": priority_state,
+                }
+            )
+        return _json_result(results)
 
     async def _tool_project_description_append(self, args: dict[str, Any]) -> str:
         project_id = _require_str(args, "project_id")
@@ -4032,6 +4049,29 @@ class ToolBox:
     # Phase 6 Wave B — mutating tools (admin-gated, audited)
     # ------------------------------------------------------------------
 
+    async def _tool_inbox_update(self, args: dict[str, Any]) -> str:
+        """Polymorphic inbox mutation. Branches on ``action`` to the
+        underlying dispose / snooze / reassign handler — each keeps its
+        own admin gate, audit-log action name (``inbox.dispose`` etc.),
+        and side-effect dispatcher so historical queries against the
+        audit table stay stable."""
+        action = args.get("action")
+        if action == "dispose":
+            return await self._tool_inbox_dispose(args)
+        if action == "snooze":
+            return await self._tool_inbox_snooze(args)
+        if action == "reassign":
+            return await self._tool_inbox_reassign(args)
+        return _json_result(
+            {
+                "error": "invalid_action",
+                "message": (
+                    f"action must be one of 'dispose', 'snooze', "
+                    f"'reassign' (got {action!r})"
+                ),
+            }
+        )
+
     async def _tool_inbox_dispose(self, args: dict[str, Any]) -> str:
         # Admin gate first so a non-admin can't even probe whether
         # an item exists by id-fishing.
@@ -4930,6 +4970,69 @@ class ToolBox:
                 "state": state,
                 "prior_state": prior_state,
                 "synced_tickets": sync_report.as_dict(),
+            }
+        )
+
+    async def _tool_run_subagent(self, args: dict[str, Any]) -> str:
+        """Polymorphic subagent spawner. Branches on ``kind`` to
+        decomposition (project-anchor chain) or specialist consult
+        (one-shot focused expert). The underlying handlers keep their
+        own admin gates + audit-log action names so callers querying
+        ``navigator.decomposition_start`` or
+        ``navigator.specialist_consult`` historically still match."""
+        kind = args.get("kind")
+        if kind == "decomposition":
+            project_native_id = args.get("project_native_id")
+            if not project_native_id:
+                return _json_result(
+                    {
+                        "error": "missing_project_native_id",
+                        "message": (
+                            "kind='decomposition' requires "
+                            "project_native_id"
+                        ),
+                    }
+                )
+            return await self._tool_decomposition_start(
+                {"project_native_id": project_native_id}
+            )
+        specialist_slugs = {
+            "designer",
+            "tech-architect",
+            "qa-architect",
+            "ba",
+            "developer",
+        }
+        if kind in specialist_slugs:
+            task = args.get("task")
+            if not task:
+                return _json_result(
+                    {
+                        "error": "missing_task",
+                        "message": (
+                            f"kind={kind!r} (specialist consult) "
+                            "requires task"
+                        ),
+                    }
+                )
+            return await self._tool_specialist_consult(
+                {
+                    "specialist": kind,
+                    "task": task,
+                    **(
+                        {"context_hint": args["context_hint"]}
+                        if "context_hint" in args
+                        else {}
+                    ),
+                }
+            )
+        return _json_result(
+            {
+                "error": "invalid_kind",
+                "message": (
+                    f"kind must be 'decomposition' or one of "
+                    f"{sorted(specialist_slugs)} (got {kind!r})"
+                ),
             }
         )
 

@@ -32,8 +32,7 @@ from backend.app.services.policies_seed import default_policies
 # add or remove a tool, update this list in the same commit.
 EXPECTED_TOOLS: frozenset[str] = frozenset(
     {
-        "project_description_append",
-        "specialist_consult",
+        "run_subagent",
         "project_create",
         "ticket_create",
         "project_find_or_create",
@@ -44,11 +43,9 @@ EXPECTED_TOOLS: frozenset[str] = frozenset(
         "repo_file_get",
         "ticket_get",
         "inbox_create",
-        "inbox_dispose",
         "inbox_get",
         "inbox_list",
-        "inbox_reassign",
-        "inbox_snooze",
+        "inbox_update",
         "knowledge_search",
         "repo_tree",
         "project_list",
@@ -58,8 +55,7 @@ EXPECTED_TOOLS: frozenset[str] = frozenset(
         "repo_symbols",
         "runs_get",
         "runs_list",
-        "project_priority_set",
-        "decomposition_start",
+        "project_update",
         "ticket_update",
         "audit_search",
     }
