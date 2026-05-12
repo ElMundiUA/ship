@@ -452,8 +452,8 @@ def compose_seed_files(
             _add(path, content)
 
     # ── Repo-intel placeholder (gated) ───────────────────────────
-    # Lives under ``.ship/knowledge/`` so the knowledge_lister sees
-    # it on day one; the harvest job overwrites it once the real
+    # Lives under ``.ship/knowledge/`` so the KB indexer picks it up
+    # on day one; the harvest job overwrites it once the real
     # summary is ready.
     if repo_intel_placeholder:
         _add(

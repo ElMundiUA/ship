@@ -12,116 +12,12 @@ The ``ToolBox`` itself is built once per chat turn — it holds the
 database session, settings, and resolved auth, so a single turn can
 make many tool calls without re-paying the resolution cost.
 
-Tool inventory (C12 Phase 2.2):
-
-- :meth:`search_repo_kb` — pgvector similarity search over the
-  ``.ship/knowledge`` corpus indexed by :mod:`kb_indexer`.
-- :meth:`get_repo_file` — raw file contents at HEAD for an activated
-  repo. Used when the agent needs to ground an answer in actual
-  source.
-- :meth:`list_code_map` — flat file list of an activated repo (what
-  the Code Map page already renders, but as a tool call).
-- :meth:`repo_symbols` — on-demand tree-sitter symbol extraction
-  (Python / TypeScript / TSX / Go). Resolves a name → file/line/
-  signature without a preindex. ELS-72.
-- :meth:`list_activated_repos` — enumerate the workspace's activated
-  repos with their UUIDs, so the LLM can call ``get_repo_file`` /
-  ``list_code_map`` without having to ask the user for an id.
-- :meth:`create_ticket` — open a ticket on the workspace's connected
-  tracker (Linear / Notion / GitHub Issues).
-- :meth:`list_tickets` — read back recently-updated tickets from the
-  connected tracker (was previously write-only).
-- :meth:`create_artifact_feedback` — file feedback against a catalog
-  artifact id (``pattern/common-base``, …). Persisted to
-  :class:`ArtifactFeedback` for the console feedback tab.
-- :meth:`list_catalog_artifacts` — enumerate the global Ship catalog
-  (patterns / tools / collections) so the agent can recommend or
-  feedback on artifacts it couldn't otherwise name.
-- :meth:`list_recent_activity` — last N pipeline runs / PR / workflow
-  events for the workspace, so the agent can ground "what's going
-  on?" answers without hitting GitHub live.
-- :meth:`get_pull_request` — detailed PR view (metadata, timeline,
-  changed files with diff hunks) via the GitHub App.
-- :meth:`list_buckets` — enumerate the workspace's knowledge buckets
-  without a semantic query (complement to :meth:`search_buckets`).
-- :meth:`search_buckets` — vector search over :class:`BucketArticle`
-  so the agent can recall previously-packed conversations.
-- :meth:`search_workspace_kb` — workspace-wide vector search across
-  every repo's ``.ship/knowledge`` + workspace-canonical buckets
-  (PR-7C), with a repo-match band that prefers hits from the chat's
-  active repo. Complements :meth:`search_repo_kb` when the question
-  is platform/organisation-wide.
-- :meth:`get_catalog_artifact` — fetch the full ``ARTIFACT.md`` body
-  for one catalog entry, for "what does this pattern actually do?"
-  follow-ups to :meth:`list_catalog_artifacts`.
-- :meth:`list_integrations` — enumerate the workspace's configured
-  integrations (Linear / Notion / GitHub / Slack / …) so the agent
-  can answer "what's connected?" without guessing.
-- :meth:`list_pull_requests` — list cached PRs from the workspace,
-  optionally filtered by repo / state / author. Complements
-  :meth:`get_pull_request` when the user asks "what's open?".
-- :meth:`list_pipelines` / :meth:`list_pipeline_runs` /
-  :meth:`get_pipeline_run` — dashboard pipeline surface: which
-  lanes are configured, their recent runs, and one run in detail.
-- :meth:`list_clarifications` — C9 inbox (open questions the agent
-  has asked humans, answered/skipped history).
-- :meth:`list_improvements` — C8 inbox (agent-proposed improvements
-  and their pending/accepted/declined decisions).
-- :meth:`search_code` — GitHub code search scoped to one activated
-  repo (symbol / string search; complements embedding-only KB search).
-- :meth:`list_audit_events` — workspace audit log (admin-only).
-- :meth:`list_workspace_members` — roster with roles.
-- :meth:`list_workspace_invites` — invite history (admin-only).
-- :meth:`get_workspace_settings` — name, slug, catalog_sources.
-- :meth:`list_workspace_artifact_repos` — custom catalog source URLs.
-- :meth:`get_knowledge_bucket` — one bucket by slug + optional
-  summaries list.
-- :meth:`list_artifact_feedback` — catalog feedback rows filed from
-  the console.
-
-Phase 6 additions (Wave A — IA tools surfacing the Inbox / Plays /
-Runs / Coverage / Knowledge-bucket reorganisation):
-
-- :meth:`inbox_list` — paginated unified Inbox list (clarifications,
-  improvements, failures, approvals, exceptions) with type / status
-  / owner / repo / play_key filters and an opaque cursor.
-- :meth:`inbox_counts` — sidebar count aggregates by status + type
-  for the workspace, scoped to ``me`` or ``all``.
-- :meth:`inbox_get` — full detail for one inbox item including its
-  event timeline.
-- :meth:`inbox_routing_list` — workspace's inbox routing rules plus
-  the configuration-health ``handles`` summary.
-- :meth:`inbox_routing_preview` — side-effect-free dry run of the
-  resolver against a sample item.
-- :meth:`plays_coverage` — per-Play coverage rollup (covered vs
-  uncovered repos, coverage %, sample uncovered ids).
-- :meth:`plays_list` — Plays catalog list (richer than
-  :meth:`list_catalog_artifacts` — exposes category, critical,
-  default inbox profile).
-- :meth:`plays_get` — single Play detail (frontmatter + body).
-- :meth:`runs_query` — outcome-first pipeline-run list with play /
-  repo / status / trigger / escalations / since filters.
-- :meth:`run_detail` — full run payload (RunSummary outcome,
-  artifacts, findings, escalations).
-- :meth:`automations_list` — combined view of pipelines, lanes,
-  and fleet_lanes for the workspace.
-- :meth:`repo_intel_get` — current ``repo_intel`` snapshot for one
-  repo (languages, frameworks, structure, …).
-- :meth:`knowledge_search_v2` — extended workspace knowledge search
-  with explicit repo / bucket filters and an optional ``intel_facts``
-  flag that prepends a synthesised ``repo_intel`` summary hit.
-
-ELS-62 additions (on-demand repo KB indexing):
-
-- :meth:`repo_kb_status` — read-only probe of one repo's
-  ``.ship/knowledge`` index state (chunk count, distinct paths, last
-  ``indexed_at``). Lets the agent answer "is your knowledge up to
-  date?" without firing the indexer.
-- :meth:`reindex_repo_kb` — admin-gated trigger that runs
-  :func:`backend.app.services.agent.kb_indexer.reindex_repo_kb`
-  synchronously for one repo and returns the
-  :class:`~backend.app.services.agent.kb_indexer.IndexReport` shape so
-  the operator can see "files_indexed=12, chunks_written=83" inline.
+The canonical tool inventory lives in :meth:`ToolBox.specs` — the
+list this docstring used to enumerate drifted out of sync every
+time a tool was added, renamed, or retired (phase 1a deleted 21,
+phase 1c collapsed 6 into 3 polymorphic CRUDs, phase 1b renamed
+22). ``test_navigator_tool_inventory.EXPECTED_TOOLS`` pins the
+current set; consult it when you need the punch list.
 
 The JSON schemas live next to each method (single source of truth,
 no drift). Vendors that can't consume a method share the same

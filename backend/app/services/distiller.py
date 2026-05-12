@@ -17,9 +17,9 @@ classifier answers one question per input:
 Phase 6a introduced the stub classifier (deterministic, no LLM)
 and the end-to-end plumbing. Phase 6b (this module) generalises
 the dispatch: :func:`run_distiller` now takes an optional
-``classifier`` callable and defaults to the stub. The LLM impl
-lives in :mod:`backend.app.services.distiller_llm` and is
-selected by the HTTP layer.
+``classifier`` callable and defaults to the stub. The LLM
+distiller branch was retired in the phase-1 cleanup sweep; the
+heuristic stub is the only path today.
 
 The module intentionally does not know about workspaces or
 RBAC — the HTTP layer in ``v1/routes/distiller.py`` owns the
@@ -55,8 +55,8 @@ logger = logging.getLogger(__name__)
 
 
 # Default slug when the caller doesn't provide a ``slug_hint`` and
-# the body contains nothing we can slugify. Mirrors the
-# ``bucket_repo_files_sync`` convention for single-article buckets.
+# the body contains nothing we can slugify. Mirrors the retired
+# repo-files-sync convention for single-article buckets (KB-5).
 _DEFAULT_SLUG = "distilled"
 
 
@@ -303,10 +303,10 @@ async def run_distiller(
     row back too.
 
     ``classifier`` defaults to :func:`classify_stub` (deterministic
-    rules). The HTTP layer can inject :func:`classify_with_llm` from
-    :mod:`backend.app.services.distiller_llm` to turn on the LLM
-    path. Any classifier that raises falls back to the stub so
-    ingest never hard-fails on a misbehaving model.
+    rules). The LLM classifier branch was retired in the phase-1
+    cleanup sweep; callers that pass a custom callable can still
+    inject their own. Any classifier that raises falls back to the
+    stub so ingest never hard-fails on a misbehaving model.
     """
     chosen = classifier or classify_stub
     now = datetime.now(timezone.utc)

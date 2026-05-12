@@ -5,8 +5,8 @@ endpoints together with the ``custom_patterns`` AI-author flow and the
 public catalog browser in the console. Phase 2.4 Step D retired the
 underlying pattern catalog. The only remaining surface is
 ``/v1/catalog/default-bundle``, which the wizard's "Confirm bootstrap"
-step calls to render a one-line preview of the Plays the seed PR will
-install.
+step calls to render a one-line preview of the agent roles the seed
+PR will install.
 
 Names are pulled from the agent-role registry
 (:mod:`backend.app.services.agent_roles`); reasons live in

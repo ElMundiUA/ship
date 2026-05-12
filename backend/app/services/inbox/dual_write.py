@@ -1,6 +1,6 @@
 """Legacy → Inbox dual-write helpers (RFC-0010 P2-08).
 
-Phase 2 of the Plays/Inbox redesign keeps ``clarifications`` /
+Phase 2 of the Inbox redesign keeps ``clarifications`` /
 ``improvements`` as the source of truth for the legacy UI but mirrors
 every NEW row (and every terminal-state PATCH) into ``inbox_items``
 so the unified Inbox surface stays in sync from day one of the

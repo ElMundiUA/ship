@@ -5,8 +5,8 @@ Pre-Phase 2.4 this module derived its lane recipes from the
 retired the catalog and inlined the few constants that are still
 load-bearing:
 
-* :data:`DEFAULT_BUNDLE` / :data:`DEFAULT_BUNDLE_REASONS` — the Plays
-  preview the wizard's "Confirm bootstrap" step renders.
+* :data:`DEFAULT_BUNDLE` / :data:`DEFAULT_BUNDLE_REASONS` — the agent
+  roles the wizard's "Confirm bootstrap" step previews.
 * :data:`DEFAULT_SEED_LANES` / :func:`default_seed_lanes` — the
   canonical seven routines the seed bundle writes into a fresh
   ``.ship/config.yml``. Each entry now spells the agent role with
@@ -33,8 +33,8 @@ from typing import Final
 
 
 # ---------------------------------------------------------------------------
-# Default bundle — the canonical Plays installed in every new repo's
-# ``.ship/config.yml``. Wave-8 wizard preview reads this tuple via
+# Default bundle — the canonical agent roles installed in every new
+# repo's ``.ship/config.yml``. Wave-8 wizard preview reads this tuple via
 # ``GET /v1/catalog/default-bundle``; ``BUNDLE_REASONS`` supplies the
 # one-line blurb each entry shows.
 # ---------------------------------------------------------------------------

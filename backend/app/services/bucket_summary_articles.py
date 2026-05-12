@@ -1,8 +1,8 @@
 """Mirror :class:`BucketSummary` rows into :class:`BucketArticle`.
 
-Phase 5b companion to :mod:`backend.app.services.bucket_repo_files_sync`.
-Where that module projects ``.ship/knowledge/*.md`` into articles, this
-one projects agent-memory packed summaries.
+Phase 5b companion to the (now-retired) repo-files-sync. Where that
+module projected ``.ship/knowledge/*.md`` into articles, this one
+projects agent-memory packed summaries.
 
 The shapes are different enough to deserve their own module:
 
