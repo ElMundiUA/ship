@@ -120,7 +120,7 @@ def test_compose_default_bundle_emits_config_yml() -> None:
     assert "fsm_stage: bug_triage" not in config_body
     assert "fsm_stage: ba_requirements" not in config_body
     # ``ba`` specialist file STAYS (decomp WBS uses it, plus the
-    # consult_specialist surface). It just no longer appears as an
+    # specialist_consult surface). It just no longer appears as an
     # SDLC routine — check the absence by looking for the SDLC
     # routine pin, not the specialist line.
 

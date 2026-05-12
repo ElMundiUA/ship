@@ -155,7 +155,7 @@ async def test_search_buckets_reads_from_articles(
     # ``article_id`` + ``article_slug`` are required so a follow-up
     # mutation tool (archive_bucket_article, etc.) can pipe straight
     # from search results without a second round-trip through
-    # get_knowledge_bucket.
+    # knowledge_bucket_get.
     assert "article_id" in hit
     uuid.UUID(hit["article_id"])  # parses as UUID
     assert hit["article_slug"]
@@ -236,7 +236,7 @@ async def test_get_knowledge_bucket_returns_articles_and_summaries(
     await db_session.flush()
 
     raw = await box.invoke(
-        "get_knowledge_bucket", {"slug": "platform", "include_summaries": True}
+        "knowledge_bucket_get", {"slug": "platform", "include_summaries": True}
     )
     out = json.loads(raw)
     assert out["slug"] == "platform"
@@ -271,7 +271,7 @@ async def test_get_knowledge_bucket_skips_superseded(
     db_session.add(_make_article(bucket, title="v2", body="new"))
     await db_session.flush()
 
-    out = json.loads(await box.invoke("get_knowledge_bucket", {"slug": "a"}))
+    out = json.loads(await box.invoke("knowledge_bucket_get", {"slug": "a"}))
     titles = {s["title"] for s in out["articles"]}
     assert titles == {"v2"}
 

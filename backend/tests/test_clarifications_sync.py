@@ -84,7 +84,7 @@ class _FakeTracker:
 
     # Protocol surface ------------------------------------------------
 
-    async def list_tickets(
+    async def ticket_list(
         self,
         *,
         limit: int = 10,
@@ -93,12 +93,12 @@ class _FakeTracker:
         query: str | None = None,
         assignee: str | None = None,
     ) -> list[dict[str, Any]]:
-        raise AssertionError("projection must not call list_tickets")
+        raise AssertionError("projection must not call ticket_list")
 
     async def transition(self, ticket: TicketRef, *, to_state: str) -> None:
         raise AssertionError("projection must not transition tickets")
 
-    async def create_ticket(self, **_kw) -> CreatedTicket:
+    async def ticket_create(self, **_kw) -> CreatedTicket:
         raise AssertionError("projection must not create tickets")
 
     async def comment(self, ticket: TicketRef, *, body: str) -> None:

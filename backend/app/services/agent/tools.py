@@ -301,14 +301,14 @@ class ToolBox:
         # tool call. ``None`` means "workspace-wide, no preferred
         # repo" which is the pre-7C behaviour of every existing tool.
         self._active_repo_id = active_repo_id
-        # ELS-74 (drafting mode): ``_tool_create_project`` writes
+        # ELS-74 (drafting mode): ``_tool_project_create`` writes
         # ``originating_thread_id`` onto the priorities row when these
         # are set, so the dashboard can later render a "Continue
         # shaping" link that re-opens the originating Navigator thread
         # instead of fragmenting the conversation. ``thread_intent``
         # is exposed so individual tools could specialise their copy
         # in drafting mode (e.g. confirmation strings) — today only
-        # ``_tool_create_project`` reads it.
+        # ``_tool_project_create`` reads it.
         self._thread_id = thread_id
         self._thread_intent = thread_intent
         # Navigator overhaul PR3: re-entry guard for ``consult_specialist``.
@@ -332,7 +332,7 @@ class ToolBox:
         """
         return [
             ToolSpec(
-                name="get_repo_file",
+                name="repo_file_get",
                 description=(
                     "Fetch the current contents of a specific file in an "
                     "activated repo. Prefer knowledge search first; only "
@@ -380,7 +380,7 @@ class ToolBox:
                 },
             ),
             ToolSpec(
-                name="list_code_map",
+                name="repo_tree",
                 description=(
                     "Return a flat list of file paths at the default branch "
                     "HEAD for an activated repo. Use for navigating an "
@@ -506,7 +506,7 @@ class ToolBox:
                 },
             ),
             ToolSpec(
-                name="create_ticket",
+                name="ticket_create",
                 description=(
                     "Open a ticket on the workspace's connected tracker "
                     "(Linear, Notion, Jira, or GitHub Issues). Only call when "
@@ -550,7 +550,7 @@ class ToolBox:
                 },
             ),
             ToolSpec(
-                name="list_projects",
+                name="project_list",
                 description=(
                     "List active projects (epics) on the workspace's "
                     "connected tracker. Use this BEFORE creating an epic "
@@ -586,7 +586,7 @@ class ToolBox:
                 },
             ),
             ToolSpec(
-                name="get_project",
+                name="project_get",
                 description=(
                     "Fetch one project's body (markdown content), short "
                     "description, lead, and recently-updated linked "
@@ -614,7 +614,7 @@ class ToolBox:
                 },
             ),
             ToolSpec(
-                name="create_project",
+                name="project_create",
                 description=(
                     "Create a new project (epic) on the workspace's "
                     "connected tracker. ``body`` is the markdown epic "
@@ -652,7 +652,7 @@ class ToolBox:
                 },
             ),
             ToolSpec(
-                name="find_or_create_project_by_name",
+                name="project_find_or_create",
                 description=(
                     "Idempotent project-by-name lookup. Returns an "
                     "existing project whose name matches ``name`` "
@@ -768,7 +768,7 @@ class ToolBox:
                 },
             ),
             ToolSpec(
-                name="append_project_description",
+                name="project_description_append",
                 description=(
                     "Append markdown to an existing project's body. Use "
                     "to accumulate PO ideas / decisions / constraints "
@@ -798,7 +798,7 @@ class ToolBox:
                 },
             ),
             ToolSpec(
-                name="list_tickets",
+                name="ticket_list",
                 description=(
                     "Read the most-recently-updated tickets from the "
                     "workspace's connected tracker (Linear / Notion / Jira / "
@@ -862,7 +862,7 @@ class ToolBox:
                 },
             ),
             ToolSpec(
-                name="get_pull_request",
+                name="pr_get",
                 description=(
                     "Fetch a rich view of one pull request: metadata "
                     "(title, state, author, labels, mergeable), the "
@@ -928,7 +928,7 @@ class ToolBox:
                 },
             ),
             ToolSpec(
-                name="list_pull_requests",
+                name="pr_list",
                 description=(
                     "List pull requests known to Ship (cached from "
                     "GitHub webhooks), newest-updated first. Supports "
@@ -968,7 +968,7 @@ class ToolBox:
                 },
             ),
             ToolSpec(
-                name="list_workspace_members",
+                name="members_list",
                 description=(
                     "List workspace members with roles and emails (same as "
                     "the team page). Any member can call."
@@ -980,7 +980,7 @@ class ToolBox:
                 },
             ),
             ToolSpec(
-                name="get_knowledge_bucket",
+                name="knowledge_bucket_get",
                 description=(
                     "Fetch one knowledge bucket by slug with optional "
                     "packed summaries. Complements ``list_buckets`` / "
@@ -1110,7 +1110,7 @@ class ToolBox:
                 },
             ),
             ToolSpec(
-                name="runs_query",
+                name="runs_list",
                 description=(
                     "Outcome-first list of pipeline runs across the "
                     "workspace. Filters by ``play_key`` (matches both "
@@ -1186,7 +1186,7 @@ class ToolBox:
                 },
             ),
             ToolSpec(
-                name="run_detail",
+                name="runs_get",
                 description=(
                     "Full detail of one pipeline run: RunSummary "
                     "outcome JSON (artifacts, findings, headline, "
@@ -1365,7 +1365,7 @@ class ToolBox:
                 },
             ),
             ToolSpec(
-                name="get_ticket",
+                name="ticket_get",
                 description=(
                     "Fetch one ticket's current state from the workspace's "
                     "bound tracker. Use when the user names an id (``ELS-99``) "
@@ -1394,7 +1394,7 @@ class ToolBox:
                 },
             ),
             ToolSpec(
-                name="get_dashboard",
+                name="dashboard_get",
                 description=(
                     "One-call denormalised snapshot of the workspace's "
                     "current state — priorities (active / drafts / parked "
@@ -1412,7 +1412,7 @@ class ToolBox:
                 },
             ),
             ToolSpec(
-                name="workspace_audit_search",
+                name="audit_search",
                 description=(
                     "Search the workspace audit log. Use to answer 'who "
                     "changed setting X?' / 'when did the priorities row "
@@ -1468,7 +1468,7 @@ class ToolBox:
                 },
             ),
             ToolSpec(
-                name="update_ticket",
+                name="ticket_update",
                 description=(
                     "Edit an existing ticket in the workspace's bound "
                     "tracker — title, body, labels, and/or workflow "
@@ -1530,7 +1530,7 @@ class ToolBox:
                 },
             ),
             ToolSpec(
-                name="set_priority_state",
+                name="project_priority_set",
                 description=(
                     "Move a project on the dashboard between buckets: "
                     "``active`` (agent's autonomous picker may "
@@ -1568,7 +1568,7 @@ class ToolBox:
                 },
             ),
             ToolSpec(
-                name="start_decomposition",
+                name="decomposition_start",
                 description=(
                     "Hand a Drafts-bucket project off to the "
                     "decomposition pipeline. **Mutating; admin-"
@@ -1604,7 +1604,7 @@ class ToolBox:
                 },
             ),
             ToolSpec(
-                name="consult_specialist",
+                name="specialist_consult",
                 description=(
                     "Hand a focused task off to a specialist subagent. "
                     "The specialist runs as an isolated agent loop with "
@@ -1697,26 +1697,26 @@ class ToolBox:
 
     def _handlers(self) -> dict[str, Callable[[dict[str, Any]], Awaitable[str]]]:
         return {
-            "get_repo_file": self._tool_get_repo_file,
-            "list_code_map": self._tool_list_code_map,
+            "repo_file_get": self._tool_repo_file_get,
+            "repo_tree": self._tool_repo_tree,
             "repo_symbols": self._tool_repo_symbols,
-            "create_ticket": self._tool_create_ticket,
-            "list_tickets": self._tool_list_tickets,
-            "list_projects": self._tool_list_projects,
-            "get_project": self._tool_get_project,
-            "create_project": self._tool_create_project,
-            "find_or_create_project_by_name": self._tool_find_or_create_project_by_name,
+            "ticket_create": self._tool_ticket_create,
+            "ticket_list": self._tool_ticket_list,
+            "project_list": self._tool_project_list,
+            "project_get": self._tool_project_get,
+            "project_create": self._tool_project_create,
+            "project_find_or_create": self._tool_project_find_or_create,
             "inbox_create": self._tool_inbox_create,
-            "append_project_description": self._tool_append_project_description,
-            "get_pull_request": self._tool_get_pull_request,
-            "list_pull_requests": self._tool_list_pull_requests,
-            "list_workspace_members": self._tool_list_workspace_members,
-            "get_knowledge_bucket": self._tool_get_knowledge_bucket,
+            "project_description_append": self._tool_project_description_append,
+            "pr_get": self._tool_pr_get,
+            "pr_list": self._tool_pr_list,
+            "members_list": self._tool_members_list,
+            "knowledge_bucket_get": self._tool_knowledge_bucket_get,
             # Phase 6 — new IA tools (Inbox, Plays, Runs, Coverage, Intel)
             "inbox_list": self._tool_inbox_list,
             "inbox_get": self._tool_inbox_get,
-            "runs_query": self._tool_runs_query,
-            "run_detail": self._tool_run_detail,
+            "runs_list": self._tool_runs_list,
+            "runs_get": self._tool_runs_get,
             "knowledge_search": self._tool_knowledge_search_v2,
             # Legacy dispatch aliases — kept invisible to the LLM (no
             # ToolSpec) but still callable via ``box.invoke(...)`` from
@@ -1730,13 +1730,13 @@ class ToolBox:
             "inbox_snooze": self._tool_inbox_snooze,
             "inbox_reassign": self._tool_inbox_reassign,
             # ELS-62 — on-demand repo KB indexing surface
-            "get_ticket": self._tool_get_ticket,
-            "get_dashboard": self._tool_get_dashboard,
-            "workspace_audit_search": self._tool_workspace_audit_search,
-            "update_ticket": self._tool_update_ticket,
-            "set_priority_state": self._tool_set_priority_state,
-            "start_decomposition": self._tool_start_decomposition,
-            "consult_specialist": self._tool_consult_specialist,
+            "ticket_get": self._tool_ticket_get,
+            "dashboard_get": self._tool_dashboard_get,
+            "audit_search": self._tool_audit_search,
+            "ticket_update": self._tool_ticket_update,
+            "project_priority_set": self._tool_project_priority_set,
+            "decomposition_start": self._tool_decomposition_start,
+            "specialist_consult": self._tool_specialist_consult,
         }
 
     # ------------------------------------------------------------------
@@ -1803,7 +1803,7 @@ class ToolBox:
 
 
 
-    async def _tool_get_repo_file(self, args: dict[str, Any]) -> str:
+    async def _tool_repo_file_get(self, args: dict[str, Any]) -> str:
         repo_id = _parse_uuid(args, "repo_id")
         path = _require_str(args, "path")
         ref_sha = args.get("ref_sha")
@@ -1872,7 +1872,7 @@ class ToolBox:
             }
         )
 
-    async def _tool_list_code_map(self, args: dict[str, Any]) -> str:
+    async def _tool_repo_tree(self, args: dict[str, Any]) -> str:
         import fnmatch
 
         repo_id = _parse_uuid(args, "repo_id")
@@ -1944,7 +1944,7 @@ class ToolBox:
         code search to find candidate files, then parses only those.
 
         No preindex, no DB writes — same fetch path
-        ``_tool_get_repo_file`` already uses. Languages in v1: Python,
+        ``_tool_repo_file_get`` already uses. Languages in v1: Python,
         TypeScript / TSX, Go.
         """
         from backend.app.services.agent.symbol_parser import (
@@ -2086,7 +2086,7 @@ class ToolBox:
             }
         )
 
-    async def _tool_create_ticket(self, args: dict[str, Any]) -> str:
+    async def _tool_ticket_create(self, args: dict[str, Any]) -> str:
         title = _require_str(args, "title")
         body = _require_str(args, "body")
         labels_raw = args.get("labels") or []
@@ -2119,7 +2119,7 @@ class ToolBox:
             }
         )
 
-    async def _tool_list_projects(self, args: dict[str, Any]) -> str:
+    async def _tool_project_list(self, args: dict[str, Any]) -> str:
         limit = _clamp_int(args.get("limit"), default=20, low=1, high=100)
         state = args.get("state")
         if state is not None and not isinstance(state, str):
@@ -2140,7 +2140,7 @@ class ToolBox:
 
         return _json_result({"projects": projects})
 
-    async def _tool_get_project(self, args: dict[str, Any]) -> str:
+    async def _tool_project_get(self, args: dict[str, Any]) -> str:
         project_id = _require_str(args, "project_id")
         issues_limit = _clamp_int(
             args.get("issues_limit"), default=25, low=1, high=50
@@ -2158,7 +2158,7 @@ class ToolBox:
 
         return _json_result(project)
 
-    async def _tool_create_project(self, args: dict[str, Any]) -> str:
+    async def _tool_project_create(self, args: dict[str, Any]) -> str:
         name = _require_str(args, "name")
         body = _require_str(args, "body")
         description = args.get("description")
@@ -2311,7 +2311,7 @@ class ToolBox:
         )
         await self._session.flush()
 
-    async def _tool_find_or_create_project_by_name(
+    async def _tool_project_find_or_create(
         self, args: dict[str, Any]
     ) -> str:
         from backend.app.services.projects_lookup import (
@@ -2403,7 +2403,7 @@ class ToolBox:
             }
         )
 
-    async def _tool_append_project_description(self, args: dict[str, Any]) -> str:
+    async def _tool_project_description_append(self, args: dict[str, Any]) -> str:
         project_id = _require_str(args, "project_id")
         body = _require_str(args, "body")
 
@@ -2419,7 +2419,7 @@ class ToolBox:
 
 
 
-    async def _tool_list_tickets(self, args: dict[str, Any]) -> str:
+    async def _tool_ticket_list(self, args: dict[str, Any]) -> str:
         limit = _clamp_int(
             args.get("limit"), default=10, low=1, high=_MAX_TICKETS
         )
@@ -2453,7 +2453,7 @@ class ToolBox:
         kind_hint = tracker_kind or _tracker_kind_of(tracker)
         return _json_result({"tracker": kind_hint, "tickets": tickets})
 
-    async def _tool_get_pull_request(self, args: dict[str, Any]) -> str:
+    async def _tool_pr_get(self, args: dict[str, Any]) -> str:
         repo_id = _parse_uuid(args, "repo_id")
         number_raw = args.get("number")
         try:
@@ -2598,7 +2598,7 @@ class ToolBox:
         return _json_result(summary)
 
 
-    async def _tool_list_pull_requests(self, args: dict[str, Any]) -> str:
+    async def _tool_pr_list(self, args: dict[str, Any]) -> str:
         limit = _clamp_int(
             args.get("limit"), default=20, low=1, high=_MAX_PRS_LISTED
         )
@@ -2662,7 +2662,7 @@ class ToolBox:
 
 
 
-    async def _tool_list_workspace_members(self, args: dict[str, Any]) -> str:
+    async def _tool_members_list(self, args: dict[str, Any]) -> str:
         from backend.app.api.v1.routes.workspaces import ROLES_READ
 
         del args
@@ -2688,7 +2688,7 @@ class ToolBox:
         ]
         return _json_result({"members": items, "count": len(items)})
 
-    async def _tool_get_knowledge_bucket(self, args: dict[str, Any]) -> str:
+    async def _tool_knowledge_bucket_get(self, args: dict[str, Any]) -> str:
         # Phase 5d: serves articles from ``bucket_articles``, keeping the
         # ``summaries`` JSON key for backwards-compat with the LLM's
         # frozen tool contract (renaming it would force a model retrain
@@ -3592,7 +3592,7 @@ class ToolBox:
 
 
 
-    async def _tool_runs_query(self, args: dict[str, Any]) -> str:
+    async def _tool_runs_list(self, args: dict[str, Any]) -> str:
         play_key = args.get("play_key")
         if play_key is not None and not isinstance(play_key, str):
             return _json_result({
@@ -3826,7 +3826,7 @@ class ToolBox:
 
         return _json_result({"runs": runs_out})
 
-    async def _tool_run_detail(self, args: dict[str, Any]) -> str:
+    async def _tool_runs_get(self, args: dict[str, Any]) -> str:
         try:
             run_id = _parse_uuid(args, "run_id")
         except ToolInvocationError as exc:
@@ -4460,7 +4460,7 @@ class ToolBox:
 
 
 
-    async def _tool_get_ticket(self, args: dict[str, Any]) -> str:
+    async def _tool_ticket_get(self, args: dict[str, Any]) -> str:
         ticket_ref = _require_str(args, "ticket_ref").strip()
         tracker = await self._resolve_tracker(None, None)
         ref = _ticket_ref_from(_tracker_kind_of(tracker), ticket_ref)
@@ -4483,7 +4483,7 @@ class ToolBox:
             )
         return _json_result(snapshot)
 
-    async def _tool_get_dashboard(self, args: dict[str, Any]) -> str:
+    async def _tool_dashboard_get(self, args: dict[str, Any]) -> str:
         """Stitch the workspace's headline state into one payload.
 
         Composes cheap queries against ``WorkspaceProjectPriority``,
@@ -4676,7 +4676,7 @@ class ToolBox:
             }
         )
 
-    async def _tool_workspace_audit_search(
+    async def _tool_audit_search(
         self, args: dict[str, Any]
     ) -> str:
         from datetime import datetime as _dt, timedelta, timezone
@@ -4746,7 +4746,7 @@ class ToolBox:
     # gating lives in the prompt.
     # ------------------------------------------------------------------
 
-    async def _tool_update_ticket(self, args: dict[str, Any]) -> str:
+    async def _tool_ticket_update(self, args: dict[str, Any]) -> str:
         from backend.app.api.v1.routes.workspaces import ROLES_ADMIN
 
         await self._require_workspace_role(ROLES_ADMIN)
@@ -4838,7 +4838,7 @@ class ToolBox:
             {"ticket_ref": ticket_ref, "actions": actions}
         )
 
-    async def _tool_set_priority_state(self, args: dict[str, Any]) -> str:
+    async def _tool_project_priority_set(self, args: dict[str, Any]) -> str:
         from backend.app.api.v1.routes.workspaces import ROLES_ADMIN
 
         from backend.app.db.models.dashboard_priorities import (
@@ -4933,7 +4933,7 @@ class ToolBox:
             }
         )
 
-    async def _tool_start_decomposition(self, args: dict[str, Any]) -> str:
+    async def _tool_decomposition_start(self, args: dict[str, Any]) -> str:
         from backend.app.api.v1.routes.workspaces import ROLES_ADMIN
 
         from backend.app.db.models.dashboard_priorities import (
@@ -5039,7 +5039,7 @@ class ToolBox:
     _SUBAGENT_MAX_TOOL_CALLS: int = 25
     _SUBAGENT_MAX_SECONDS: float = 300.0
 
-    async def _tool_consult_specialist(self, args: dict[str, Any]) -> str:
+    async def _tool_specialist_consult(self, args: dict[str, Any]) -> str:
         if self._subagent_active:
             # Defensive: tool spec is filtered out of the subagent's
             # tool list so the LLM literally can't emit this name, but
@@ -5450,7 +5450,7 @@ def _tracker_kind_of(tracker: TrackerGateway) -> str:
 def _duration_seconds(start_iso: Any, end_iso: Any) -> int | None:
     """Return ``(end - start)`` in whole seconds when both are ISO-8601.
 
-    Used by :meth:`_tool_get_pull_request` to answer "how long did the
+    Used by :meth:`_tool_pr_get` to answer "how long did the
     PR stay open?" without the model having to parse timestamps itself.
     Returns ``None`` when either side is missing or unparseable — the
     model then falls back to eyeballing the ``timeline`` dict.

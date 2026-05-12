@@ -1,4 +1,4 @@
-"""``list_tickets`` returns rows sorted by identifier ascending.
+"""``ticket_list`` returns rows sorted by identifier ascending.
 
 Operator expectation: agents work older filings first. ELS-11 should
 clear the queue before ELS-12 starts; ELS-99 before ELS-101.
@@ -16,7 +16,7 @@ from backend.app.integrations.linear.tracker_adapter import _identifier_sort_key
 
 
 def _row(identifier: str) -> dict[str, object]:
-    """Minimal shape — ``list_tickets`` rows carry more fields but
+    """Minimal shape — ``ticket_list`` rows carry more fields but
     the sort key only reads ``id``."""
     return {"id": identifier}
 

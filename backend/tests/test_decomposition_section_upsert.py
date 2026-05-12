@@ -33,14 +33,14 @@ class _RecordingTracker:
 
     async def gql(self, query: str, variables: dict[str, Any]) -> dict[str, Any]:
         # Two queries are issued by ``upsert_project_section``: a read
-        # via ``get_project`` (which executes a ``project(id:...)``
+        # via ``project_get`` (which executes a ``project(id:...)``
         # query) and a write via ``projectUpdate``. Distinguish by the
         # query string.
         if "projectUpdate" in query:
             self.calls.append({"kind": "update", "vars": variables})
             self._content = variables["content"]
             return {"projectUpdate": {"success": True}}
-        # get_project read.
+        # project_get read.
         self.calls.append({"kind": "read", "vars": variables})
         return {
             "project": {

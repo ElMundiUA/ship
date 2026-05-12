@@ -568,8 +568,8 @@ _NAVIGATOR_POLICIES: tuple[SeedPolicy, ...] = (
         title="Mutating tools require workspace admin",
         body=(
             "Mutating tools (``inbox_dispose``, ``inbox_snooze``, "
-            "``inbox_reassign``, ``update_ticket``, "
-            "``set_priority_state``, ``start_decomposition``) "
+            "``inbox_reassign``, ``ticket_update``, "
+            "``project_priority_set``, ``decomposition_start``) "
             "require workspace admin. If a call returns "
             "``{\"error\": \"forbidden\"}``, explain that admin is "
             "required; don't retry."

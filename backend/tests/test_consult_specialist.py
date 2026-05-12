@@ -1,11 +1,11 @@
-"""``consult_specialist`` subagent tool — Navigator overhaul PR3.
+"""``specialist_consult`` subagent tool — Navigator overhaul PR3.
 
 The Navigator can now hand a focused task off to a specialist
 subagent (designer / tech-architect / qa-architect / ba / bug-triage
 / developer-as-researcher). The subagent runs as an isolated
 ``astream → tool calls → astream`` loop with the role's prompt as
 its system message and the same workspace tool surface MINUS the
-``consult_specialist`` tool itself (no recursion). It returns one
+``specialist_consult`` tool itself (no recursion). It returns one
 final report which the parent Navigator then consumes.
 
 These tests cover the load-bearing invariants without requiring a
@@ -103,7 +103,7 @@ def toolbox(db_session, seed_workspace):
 def test_spec_is_present_and_advertises_allowed_specialists(
     db_session, seed_workspace
 ) -> None:
-    """The Navigator's tool list MUST include ``consult_specialist``
+    """The Navigator's tool list MUST include ``specialist_consult``
     and the spec's ``specialist`` enum MUST match the handler's
     allowlist verbatim — drift would let the LLM emit a slug the
     handler rejects, which surfaces as a useless ``unknown
@@ -120,8 +120,8 @@ def test_spec_is_present_and_advertises_allowed_specialists(
     )
     specs = tb.specs()
     by_name = {s.name: s for s in specs}
-    assert "consult_specialist" in by_name
-    enum = by_name["consult_specialist"].parameters["properties"]["specialist"][
+    assert "specialist_consult" in by_name
+    enum = by_name["specialist_consult"].parameters["properties"]["specialist"][
         "enum"
     ]
     assert sorted(enum) == sorted(tb._SUBAGENT_ALLOWED_SPECIALISTS)
@@ -139,14 +139,14 @@ async def test_handler_rejects_unknown_specialist(toolbox) -> None:
 
 @pytest.mark.asyncio
 async def test_handler_rejects_when_subagent_active(toolbox) -> None:
-    """Recursion guard: if a stray ``consult_specialist`` invocation
+    """Recursion guard: if a stray ``specialist_consult`` invocation
     fires while ``_subagent_active`` is True (defensive — the spec is
     filtered out of the subagent's tool list, so this only fires on
     LLM hallucination), the handler must refuse loudly."""
     from backend.app.services.agent.tools import ToolInvocationError
 
     toolbox._subagent_active = True
-    with pytest.raises(ToolInvocationError, match="nested consult_specialist"):
+    with pytest.raises(ToolInvocationError, match="nested specialist_consult"):
         await toolbox._tool_consult_specialist(
             {"specialist": "ba", "task": "anything"}
         )
@@ -187,8 +187,8 @@ async def test_subagent_returns_text_when_model_stops_immediately(
     assert "error" not in payload
 
     # Recursion guard: tool list passed to the stub MUST NOT include
-    # ``consult_specialist`` — otherwise the subagent could self-call.
-    assert "consult_specialist" not in stub.calls[0]["tool_names"]
+    # ``specialist_consult`` — otherwise the subagent could self-call.
+    assert "specialist_consult" not in stub.calls[0]["tool_names"]
     # Subagent's system prompt carries the role file's name + the
     # subagent framing block. We don't assert on copy, only structure.
     sys_msg = stub.calls[0]["messages"][0]
@@ -322,7 +322,7 @@ async def test_audit_log_row_inserted_on_success(
         await db_session.execute(
             select(AuditLog).where(
                 AuditLog.workspace_id == workspace.id,
-                AuditLog.action == "navigator.consult_specialist",
+                AuditLog.action == "navigator.specialist_consult",
             )
         )
     ).scalars().all()

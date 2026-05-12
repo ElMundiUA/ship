@@ -1,11 +1,11 @@
-"""Tests for ``inbox_create`` + ``find_or_create_project_by_name``.
+"""Tests for ``inbox_create`` + ``project_find_or_create``.
 
 These tools back the reviewer-routing and report-routing redesign:
 
 - ``inbox_create`` — supporting routines (daily-retro, learning-capture,
   process-reviewer) write a typed letter into the operator's mailbox
   instead of touching the repo or filing Linear noise.
-- ``find_or_create_project_by_name`` — reviewers (tech / qa / security)
+- ``project_find_or_create`` — reviewers (tech / qa / security)
   funnel findings into a dedicated project per kind, idempotent on name
   so re-runs accumulate tickets in the same Linear project rather than
   spawning a fresh one each day.
@@ -30,7 +30,7 @@ class _StubProjectsTracker:
         self.list_calls: list[dict[str, Any]] = []
         self.create_calls: list[dict[str, Any]] = []
 
-    async def list_projects(
+    async def project_list(
         self,
         *,
         limit: int = 50,
@@ -42,7 +42,7 @@ class _StubProjectsTracker:
         )
         return list(self.projects)
 
-    async def create_project(
+    async def project_create(
         self,
         *,
         name: str,
@@ -63,7 +63,7 @@ class _StubProjectsTracker:
 
     # The create-project tool helper probes for an anchor; this tracker
     # doesn't model anchors, so the helper degrades to a no-op on
-    # NotImplementedError — but ``find_or_create_project_by_name``
+    # NotImplementedError — but ``project_find_or_create``
     # doesn't even call the anchor helper, so the stub doesn't need to
     # implement it.
 
@@ -90,7 +90,7 @@ def _patch_tracker(toolbox, monkeypatch, stub: _StubProjectsTracker) -> None:
 
 
 # ---------------------------------------------------------------------------
-# find_or_create_project_by_name
+# project_find_or_create
 # ---------------------------------------------------------------------------
 
 
@@ -149,7 +149,7 @@ async def test_find_or_create_makes_new_project_when_missing(
     assert stub.create_calls[0]["description"] == "Security findings (auto-routed)."
 
     # Drafts row must be inserted so the freshly minted project shows up
-    # on the dashboard immediately, same as plain ``create_project``.
+    # on the dashboard immediately, same as plain ``project_create``.
     rows = (
         await db_session.execute(
             select(WorkspaceProjectPriority).where(
@@ -166,7 +166,7 @@ async def test_find_or_create_idempotent_on_repeat_call(
     db_session, seed_workspace, monkeypatch
 ) -> None:
     """Calling twice with the same name must not double-create — the second
-    call sees the freshly minted project in ``list_projects`` and short-
+    call sees the freshly minted project in ``project_list`` and short-
     circuits."""
     user, _, workspace = seed_workspace
     toolbox = _toolbox(db_session, workspace, user)

@@ -2,13 +2,13 @@
 
 Three tools, all read-only and DB-backed:
 
-- ``get_ticket(ticket_ref)`` — single-ticket lookup; routes through the
+- ``ticket_get(ticket_ref)`` — single-ticket lookup; routes through the
   bound tracker's ``get_ticket_snapshot``. Tested with a stub tracker
   so we don't need a live Linear connection.
-- ``get_dashboard()`` — denormalised "what's on my plate?" payload
+- ``dashboard_get()`` — denormalised "what's on my plate?" payload
   composed from priorities + inbox + PRs + recent runs. Tested
   end-to-end with a seeded workspace + fixtures.
-- ``workspace_audit_search`` — straight DB query against ``audit_log``
+- ``audit_search`` — straight DB query against ``audit_log``
   with optional ``action`` / ``target_kind`` / ``target_id`` / ``since``
   filters. Tested with seeded rows.
 
@@ -46,7 +46,7 @@ def toolbox(db_session, seed_workspace):
 
 
 # ---------------------------------------------------------------------------
-# get_ticket
+# ticket_get
 # ---------------------------------------------------------------------------
 
 
@@ -128,7 +128,7 @@ async def test_get_ticket_requires_ticket_ref(toolbox) -> None:
 
 
 # ---------------------------------------------------------------------------
-# get_dashboard
+# dashboard_get
 # ---------------------------------------------------------------------------
 
 
@@ -276,7 +276,7 @@ async def test_get_dashboard_inbox_counts(
 
 
 # ---------------------------------------------------------------------------
-# workspace_audit_search
+# audit_search
 # ---------------------------------------------------------------------------
 
 
@@ -305,7 +305,7 @@ async def test_audit_search_returns_recent_rows(
             workspace_id=workspace.id,
             actor_user_id=user.id,
             actor_token_id=None,
-            action="navigator.consult_specialist",
+            action="navigator.specialist_consult",
             target_kind="agent_role",
             target_id="designer",
             payload={"task_preview": "review the dashboard"},
@@ -317,7 +317,7 @@ async def test_audit_search_returns_recent_rows(
     payload = json.loads(raw)
     actions = [r["action"] for r in payload["audit_log"]]
     assert "dashboard.priorities.reorder" in actions
-    assert "navigator.consult_specialist" in actions
+    assert "navigator.specialist_consult" in actions
     assert payload["count"] == len(payload["audit_log"])
 
 
@@ -342,7 +342,7 @@ async def test_audit_search_filters_by_action(
         AuditLog(
             workspace_id=workspace.id,
             actor_user_id=user.id,
-            action="navigator.consult_specialist",
+            action="navigator.specialist_consult",
             target_kind="agent_role",
             target_id="ba",
             payload={},
@@ -351,11 +351,11 @@ async def test_audit_search_filters_by_action(
     await db_session.flush()
 
     raw = await toolbox._tool_workspace_audit_search(
-        {"action": "navigator.consult_specialist"}
+        {"action": "navigator.specialist_consult"}
     )
     payload = json.loads(raw)
     assert all(
-        r["action"] == "navigator.consult_specialist"
+        r["action"] == "navigator.specialist_consult"
         for r in payload["audit_log"]
     )
     assert len(payload["audit_log"]) == 1

@@ -15,7 +15,7 @@ Two invariants the picker depends on:
    stage.
 
 Reproduction case for the bug being fixed: a Linear-native ticket
-filed directly by an operator (not via Navigator's ``create_ticket``)
+filed directly by an operator (not via Navigator's ``ticket_create``)
 lands in Todo with no Ship labels. With the bare-``nin`` form, the
 filter ``{"labels": {"id": {"nin": [intake_label]}}}`` does NOT
 match because the ticket has zero labels — Linear's GraphQL

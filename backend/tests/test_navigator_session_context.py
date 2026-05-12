@@ -99,7 +99,7 @@ def test_render_falls_back_when_facts_unavailable() -> None:
 
 def test_render_unbound_tracker_says_so() -> None:
     """An unbound tracker must surface explicitly so the agent knows
-    not to call ``create_ticket`` (and not to ask the user which one
+    not to call ``ticket_create`` (and not to ask the user which one
     to use). Refusal-grade copy beats a polite null."""
     from backend.app.services.agent.topic import _render_session_context
 
@@ -110,7 +110,7 @@ def test_render_unbound_tracker_says_so() -> None:
     )
     assert "Bound tracker:" in out
     assert "none" in out.lower()
-    assert "create_ticket" in out  # explicit about what's broken
+    assert "ticket_create" in out  # explicit about what's broken
 
 
 def test_render_tracker_error_surfaces_health_message() -> None:

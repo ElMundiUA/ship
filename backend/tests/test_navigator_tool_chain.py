@@ -15,7 +15,7 @@ Specifically verifies:
 - ``inbox_dispose`` with the same args MINUS ``dry_run`` resolves
   the item, writes the audit row, and lets the side-effect
   dispatcher fire.
-- ``runs_query`` finds the seeded run after the inbox-side
+- ``runs_list`` finds the seeded run after the inbox-side
   mutations have flushed.
 - The audit log carries EXACTLY ONE
   ``navigator.tool.inbox_dispose`` entry — proves the dry_run
@@ -98,7 +98,7 @@ async def test_chat_turn_multi_tool_composition(
     db_session.add(item)
     await db_session.flush()
 
-    # 1 Pipeline + PipelineRun so ``runs_query`` has something to find.
+    # 1 Pipeline + PipelineRun so ``runs_list`` has something to find.
     repo = WorkspaceRepo(
         workspace_id=ws.id,
         installation_id=None,
@@ -201,9 +201,9 @@ async def test_chat_turn_multi_tool_composition(
     actions = {e.action for e in events}
     assert "resolved" in actions
 
-    # 5) runs_query — the seeded run is reachable after the inbox
+    # 5) runs_list — the seeded run is reachable after the inbox
     # mutations have flushed (composition smoke).
-    runs_out = json.loads(await box.invoke("runs_query", {"limit": 5}))
+    runs_out = json.loads(await box.invoke("runs_list", {"limit": 5}))
     assert any(r["id"] == str(run.id) for r in runs_out["runs"])
 
     # 6) Audit log invariant: exactly one inbox_dispose row for this

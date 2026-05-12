@@ -150,10 +150,10 @@ async def test_start_decomposition_404s_when_project_not_on_priorities(
     v1_client, seed_workspace
 ) -> None:
     """The PO can't hand off a project that has no priorities row —
-    create_project (or a manual reorder) has to run first."""
+    project_create (or a manual reorder) has to run first."""
     _, raw, ws = seed_workspace
     res = await v1_client.post(
-        f"/v1/workspaces/{ws.id}/priorities/missing-id/start_decomposition",
+        f"/v1/workspaces/{ws.id}/priorities/missing-id/decomposition_start",
         headers=_auth(raw),
         json={},
     )
@@ -183,7 +183,7 @@ async def test_start_decomposition_409s_when_not_in_drafts(
     )
     await db_session.commit()
     res = await v1_client.post(
-        f"/v1/workspaces/{ws.id}/priorities/proj-active/start_decomposition",
+        f"/v1/workspaces/{ws.id}/priorities/proj-active/decomposition_start",
         headers=_auth(raw),
         json={},
     )
@@ -214,7 +214,7 @@ async def test_start_decomposition_409s_when_no_tracker(
     )
     await db_session.commit()
     res = await v1_client.post(
-        f"/v1/workspaces/{ws.id}/priorities/proj-x/start_decomposition",
+        f"/v1/workspaces/{ws.id}/priorities/proj-x/decomposition_start",
         headers=_auth(raw),
         json={},
     )

@@ -1,4 +1,4 @@
-"""Regression tests for ELS-71: Linear ``create_ticket`` default-team fallback.
+"""Regression tests for ELS-71: Linear ``ticket_create`` default-team fallback.
 
 Two problems before the fix:
 

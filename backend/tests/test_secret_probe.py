@@ -147,7 +147,7 @@ async def test_linear_partial_scope_issues_returns_null(
     for the unauthorized field instead of a top-level ``errors``.
     Pre-fix the probe accepted this as ``ok`` and the integrations
     page kept lying to operators while every downstream
-    ``list_tickets`` call returned 401. The fix flips this to
+    ``ticket_list`` call returned 401. The fix flips this to
     ``error`` so the operator can see the partial-scope failure on
     the integrations page and re-authorise.
     """

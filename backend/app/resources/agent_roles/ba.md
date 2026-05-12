@@ -19,7 +19,7 @@ implementation-grade spec. This role is now invoked only by:
 
 - The **decomposition** chain (project-first delivery, ELS-75) — produces
   the WBS section of a project body on the planning anchor (see below).
-- The **consult_specialist** sub-agent surface — Navigator or another
+- The **specialist_consult** sub-agent surface — Navigator or another
   operator delegates "shape this ticket / draft these acceptance
   criteria" as a one-off, without going through the FSM.
 

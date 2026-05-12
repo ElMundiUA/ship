@@ -72,6 +72,31 @@ _REMOVED_TOOL_NAMES: tuple[str, ...] = (
     "inbox_routing_list",
     "inbox_routing_preview",
     "inbox_routing_upsert",
+    # Phase 1b — old VERB_NOUN names retired in favour of NOUN_VERB.
+    # Adding the OLD names here so any role prompt that re-introduces
+    # one fails CI (the NEW names are the canonical ToolBox specs).
+    "create_ticket",
+    "list_tickets",
+    "get_ticket",
+    "update_ticket",
+    "create_project",
+    "list_projects",
+    "get_project",
+    "find_or_create_project_by_name",
+    "append_project_description",
+    "set_priority_state",
+    "get_repo_file",
+    "list_code_map",
+    "get_pull_request",
+    "list_pull_requests",
+    "list_workspace_members",
+    "get_dashboard",
+    "workspace_audit_search",
+    "get_knowledge_bucket",
+    "runs_query",
+    "run_detail",
+    "start_decomposition",
+    "consult_specialist",
 )
 
 

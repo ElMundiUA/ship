@@ -2,14 +2,14 @@
 
 Three admin-gated, audited tools:
 
-- ``update_ticket(ticket_ref, title?, body?, labels?, state?)`` —
+- ``ticket_update(ticket_ref, title?, body?, labels?, state?)`` —
   edit an existing ticket on the bound tracker. Composes
-  ``tracker.update_ticket`` (one ``issueUpdate`` covering title /
+  ``tracker.ticket_update`` (one ``issueUpdate`` covering title /
   body / labels) and ``tracker.transition`` for state changes.
-- ``set_priority_state(project_native_id, state)`` — move a project
+- ``project_priority_set(project_native_id, state)`` — move a project
   between Active / Drafts (``planning`` enum) / Parked. Creates a
   priorities row at MAX+1 ordinal if none exists yet.
-- ``start_decomposition(project_native_id)`` — walk a Drafts-bucket
+- ``decomposition_start(project_native_id)`` — walk a Drafts-bucket
   project's planning anchor into ``stage:wbs`` to kick off the
   decomposition pipeline. Refuses if project is not in Drafts or
   has no anchor.
@@ -41,7 +41,7 @@ def toolbox(db_session, seed_workspace):
 
 
 # ---------------------------------------------------------------------------
-# Stub tracker — covers update_ticket, transition, get_planning_anchor
+# Stub tracker — covers ticket_update, transition, get_planning_anchor
 # ---------------------------------------------------------------------------
 
 
@@ -56,7 +56,7 @@ class _StubTracker:
         self.transition_calls: list[dict] = []
         self.anchor_calls: list[str] = []
 
-    async def update_ticket(self, ref, *, title=None, body=None, labels=None):
+    async def ticket_update(self, ref, *, title=None, body=None, labels=None):
         self.update_calls.append(
             {
                 "ref_id": ref.id,
@@ -86,7 +86,7 @@ def _patch_tracker(toolbox, monkeypatch, stub: _StubTracker) -> None:
 
 
 # ---------------------------------------------------------------------------
-# update_ticket
+# ticket_update
 # ---------------------------------------------------------------------------
 
 
@@ -131,7 +131,7 @@ async def test_update_ticket_combines_metadata_and_state(
         await db_session.execute(
             select(AuditLog).where(
                 AuditLog.workspace_id == workspace.id,
-                AuditLog.action == "navigator.update_ticket",
+                AuditLog.action == "navigator.ticket_update",
             )
         )
     ).scalars().all()
@@ -185,7 +185,7 @@ async def test_update_ticket_rejects_bad_label_type(
 
 
 # ---------------------------------------------------------------------------
-# set_priority_state
+# project_priority_set
 # ---------------------------------------------------------------------------
 
 
@@ -226,7 +226,7 @@ async def test_set_priority_state_creates_row_when_missing(
         await db_session.execute(
             select(AuditLog).where(
                 AuditLog.workspace_id == workspace.id,
-                AuditLog.action == "navigator.set_priority_state",
+                AuditLog.action == "navigator.project_priority_set",
             )
         )
     ).scalars().all()
@@ -287,7 +287,7 @@ async def test_set_priority_state_validates_enum(toolbox) -> None:
 
 
 # ---------------------------------------------------------------------------
-# start_decomposition
+# decomposition_start
 # ---------------------------------------------------------------------------
 
 
@@ -341,7 +341,7 @@ async def test_start_decomposition_transitions_anchor_to_wbs(
         await db_session.execute(
             select(AuditLog).where(
                 AuditLog.workspace_id == workspace.id,
-                AuditLog.action == "navigator.start_decomposition",
+                AuditLog.action == "navigator.decomposition_start",
             )
         )
     ).scalars().all()

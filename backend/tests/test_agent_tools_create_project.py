@@ -1,4 +1,4 @@
-"""Side-effects of the ``create_project`` tool (project-first delivery, ELS-73).
+"""Side-effects of the ``project_create`` tool (project-first delivery, ELS-73).
 
 When the agent creates a project the side-effects ride along on the same
 tool call:

@@ -1,8 +1,8 @@
 """Navigator Phase-6 runs tools (Wave A read-side).
 
-- ``runs_query`` filters across play_key, repo, status (with alias
+- ``runs_list`` filters across play_key, repo, status (with alias
   expansion ok/fail/error), trigger, and ``has_escalations``.
-- ``run_detail`` returns the canonical projection — findings,
+- ``runs_get`` returns the canonical projection — findings,
   artifacts, escalations with deeplink-friendly fields — and
   enforces workspace tenancy.
 """
@@ -234,7 +234,7 @@ async def runs_world(db_session, seed_workspace):
 
 
 # ---------------------------------------------------------------------------
-# runs_query
+# runs_list
 # ---------------------------------------------------------------------------
 
 
@@ -247,7 +247,7 @@ async def test_runs_query_by_play_key(db_session, runs_world) -> None:
     )
     out = json.loads(
         await box.invoke(
-            "runs_query", {"play_key": "scan-test-coverage"}
+            "runs_list", {"play_key": "scan-test-coverage"}
         )
     )
     ids = [r["id"] for r in out["runs"]]
@@ -264,7 +264,7 @@ async def test_runs_query_by_repo(db_session, runs_world) -> None:
     )
     out = json.loads(
         await box.invoke(
-            "runs_query", {"repo_id": str(runs_world["repo_b"].id)}
+            "runs_list", {"repo_id": str(runs_world["repo_b"].id)}
         )
     )
     ids = {r["id"] for r in out["runs"]}
@@ -280,7 +280,7 @@ async def test_runs_query_by_status_alias(db_session, runs_world) -> None:
         user_id=runs_world["user"].id,
     )
     out = json.loads(
-        await box.invoke("runs_query", {"status": "ok"})
+        await box.invoke("runs_list", {"status": "ok"})
     )
     ids = {r["id"] for r in out["runs"]}
     # Both ``run_ok`` and ``run_b`` succeeded.
@@ -300,7 +300,7 @@ async def test_runs_query_by_has_escalations(
         user_id=runs_world["user"].id,
     )
     out = json.loads(
-        await box.invoke("runs_query", {"has_escalations": True})
+        await box.invoke("runs_list", {"has_escalations": True})
     )
     ids = {r["id"] for r in out["runs"]}
     assert ids == {str(runs_world["run_fail"].id)}
@@ -312,13 +312,13 @@ async def test_runs_query_invalid_repo_id(db_session, seed_workspace) -> None:
     user, _, ws = seed_workspace
     box = _toolbox(db_session, workspace_id=ws.id, user_id=user.id)
     out = json.loads(
-        await box.invoke("runs_query", {"repo_id": "not-a-uuid"})
+        await box.invoke("runs_list", {"repo_id": "not-a-uuid"})
     )
     assert out["error"] == "invalid_repo_id"
 
 
 # ---------------------------------------------------------------------------
-# run_detail
+# runs_get
 # ---------------------------------------------------------------------------
 
 
@@ -333,7 +333,7 @@ async def test_run_detail_includes_findings_and_escalations(
     )
     out = json.loads(
         await box.invoke(
-            "run_detail", {"run_id": str(runs_world["run_fail"].id)}
+            "runs_get", {"run_id": str(runs_world["run_fail"].id)}
         )
     )
     assert out["id"] == str(runs_world["run_fail"].id)
@@ -384,7 +384,7 @@ async def test_run_detail_cross_workspace_returns_not_found(
     # ToolBox is bound to ws_a — looking up a ws_b run must miss.
     box = _toolbox(db_session, workspace_id=ws_a.id, user_id=user.id)
     out = json.loads(
-        await box.invoke("run_detail", {"run_id": str(foreign_run.id)})
+        await box.invoke("runs_get", {"run_id": str(foreign_run.id)})
     )
     assert out["error"] == "not_found"
 
@@ -394,6 +394,6 @@ async def test_run_detail_invalid_run_id(db_session, seed_workspace) -> None:
     user, _, ws = seed_workspace
     box = _toolbox(db_session, workspace_id=ws.id, user_id=user.id)
     out = json.loads(
-        await box.invoke("run_detail", {"run_id": "not-a-uuid"})
+        await box.invoke("runs_get", {"run_id": "not-a-uuid"})
     )
     assert out["error"] == "invalid_run_id"

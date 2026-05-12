@@ -47,9 +47,9 @@ def test_how_you_operate_block_exists() -> None:
         ("tool evidence", "rule 4: every claim cites a tool result"),
         # Rule 5 — verify before mutate.
         ("Verify before mutate", "rule 5: confirm side-effect tool calls"),
-        ("create_ticket", "rule 5: name the gated mutating tools explicitly"),
+        ("ticket_create", "rule 5: name the gated mutating tools explicitly"),
         # Rule 6 — delegate to specialists.
-        ("consult_specialist", "rule 6: delegate UX/architecture/QA/triage to a subagent"),
+        ("specialist_consult", "rule 6: delegate UX/architecture/QA/triage to a subagent"),
         # Rule 7 — one thread, one initiative (anti-pivot).
         ("One thread", "rule 7: don't spawn parallel intent inside one thread"),
         # Rule 8 — output discipline.

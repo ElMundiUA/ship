@@ -1198,7 +1198,7 @@ def _render_session_context(
                 tracker_line += f" ({facts.tracker_health_error[:120]})"
             lines.append(tracker_line + ".")
         else:
-            lines.append("- Bound tracker: **none** — `create_ticket` / `list_tickets` will refuse until one is bound.")
+            lines.append("- Bound tracker: **none** — `ticket_create` / `ticket_list` will refuse until one is bound.")
         if facts.activated_repos:
             preview = facts.activated_repos[:_REPOS_PREVIEW_CAP]
             tail = (

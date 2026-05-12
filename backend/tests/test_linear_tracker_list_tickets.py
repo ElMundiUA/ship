@@ -1,4 +1,4 @@
-"""Linear adapter ``list_tickets`` shape (ELS-83 + ELS-84).
+"""Linear adapter ``ticket_list`` shape (ELS-83 + ELS-84).
 
 Two invariants the agent picker depends on:
 
