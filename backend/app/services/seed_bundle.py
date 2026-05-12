@@ -191,7 +191,18 @@ from backend.app.services.tracker_fsm import (
 #         budget (≈4 min per agent invocation), so when cron itself
 #         is unreliable the pipeline still drains 4-5 actions per
 #         tick instead of one.
-BUNDLE_VERSION: str = "0.32"
+# ``0.33`` → ``schedule:`` removed from the customer trigger workflow.
+#         Ship's backend now dispatches via ``workflow_dispatch`` on
+#         a deterministic cadence (``WORKFLOW_DISPATCH_CRON_EXPR``,
+#         default hourly) — see
+#         ``backend/app/services/workflow_dispatch_cron.py``. The GHA
+#         schedule block was bypassing throttle visibility: operators
+#         thought ``*/30`` meant "every 30 min" while actual ticks
+#         happened every 4-8 hours under load. Backend dispatch is
+#         sub-second and rate-limit safe at closed-beta scale. Manual
+#         ``workflow_dispatch`` from the Actions UI stays as a debug
+#         harness.
+BUNDLE_VERSION: str = "0.33"
 
 # Default knowledge starters for PR 1. Empty by design: generated knowledge is
 # analyzed post-merge and proposed in a second PR. Historical callers can still

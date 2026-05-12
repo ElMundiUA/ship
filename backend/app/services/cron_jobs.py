@@ -482,6 +482,35 @@ async def _knowledge_decay_tick() -> None:
 
 
 @cron_with_lock(
+    lock=CronLockId.WORKFLOW_DISPATCH, name="workflow_dispatch"
+)
+async def _workflow_dispatch_tick() -> None:
+    """Fan-out the trigger workflow to every activated customer repo.
+
+    Backend-driven scheduling replaces GHA ``schedule:`` cron which
+    GitHub throttles under load (production saw 4-8h gaps).
+    Dispatching via ``workflow_dispatch`` is sub-second; per-tick
+    rate is bounded by GitHub's Actions-API limit (~5000/hour per
+    install token) which closed-beta scale is nowhere near.
+
+    Failures are logged + audited per-repo; the loop never raises so
+    one bad install (404 / token revoked) can't starve the fleet.
+    """
+    from backend.app.core.config import get_settings
+    from backend.app.services.workflow_dispatch_cron import dispatch_due_repos
+
+    settings = get_settings()
+    sm = get_sessionmaker()
+    async with sm() as session:
+        try:
+            await dispatch_due_repos(session, settings=settings)
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+
+
+@cron_with_lock(
     lock=CronLockId.LINEAR_TOKEN_REFRESH, name="linear_token_refresh"
 )
 async def _linear_token_refresh_tick() -> None:
@@ -608,6 +637,15 @@ def register_all() -> None:
         fn=_linear_token_refresh_tick,
         cron_expr="5 * * * *",  # hourly at :05 (gated by per-install age)
         job_id="linear_token_refresh",
+    )
+    # Ship-side trigger-workflow scheduler. Cadence comes from
+    # ``WORKFLOW_DISPATCH_CRON_EXPR`` so operators can tune it
+    # without redeploying. Default ``0 * * * *`` — every hour at :00.
+    settings = get_settings()
+    register_cron(
+        fn=_workflow_dispatch_tick,
+        cron_expr=settings.workflow_dispatch_cron_expr,
+        job_id="workflow_dispatch",
     )
 
 

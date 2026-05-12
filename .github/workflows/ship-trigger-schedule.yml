@@ -11,8 +11,12 @@ on:
         description: "Pin the agent to this ticket (only used with routine_id). e.g. ELS-42"
         required: false
         type: string
-  schedule:
-    - cron: "*/30 * * * *"
+  # ``schedule:`` was removed — Ship's own backend cron now
+  # dispatches this workflow via the Actions API (see
+  # ``backend/app/services/workflow_dispatch_cron.py`` and
+  # ``WORKFLOW_DISPATCH_CRON_EXPR``, default hourly). GitHub
+  # throttles ``schedule:`` events under load (4-8h gaps observed
+  # in production); backend dispatch gives a deterministic cadence.
 
 permissions:
   contents: write
