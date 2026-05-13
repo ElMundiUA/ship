@@ -3059,6 +3059,33 @@ async def finish_agent_run(
         )
     )
     await session.flush()
+
+    # ELS-122 cascade: release the per-ticket dispatch lock and
+    # immediately ask the dispatcher if the *next* stage is eligible.
+    # Linear's state-change webhook would eventually drive this via
+    # the poller, but cascading inline skips the 5-min poll delay
+    # between stages. ``maybe_dispatch`` respects the cascade-depth
+    # guard so an FSM bug can't loop forever.
+    if payload.ticket_ref:
+        from backend.app.services.dispatcher import (
+            maybe_dispatch,
+            release_lock,
+        )
+
+        await release_lock(
+            session,
+            workspace_id=workspace_id,
+            key=f"ticket:{payload.ticket_ref}",
+        )
+        await maybe_dispatch(
+            session,
+            workspace_id=workspace_id,
+            ticket_ref=payload.ticket_ref,
+            trigger_kind="cascade",
+            settings=settings,
+        )
+        await session.flush()
+
     return FinishOut(
         ok=True,
         outcome=payload.outcome,

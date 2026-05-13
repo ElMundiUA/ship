@@ -221,12 +221,16 @@ async def _write_transition_event(
     old_state: str | None,
     new_state: str,
     updated_at: str | None,
+    client: httpx.AsyncClient | None = None,
 ) -> None:
-    """Insert a ``tracker.event.received`` row in ``audit_log``.
+    """Insert a ``tracker.event.received`` row in ``audit_log`` and
+    hand the event to the dispatcher.
 
-    Dispatcher (ELS-122) reads these rows when ``SHIP_TRACKER_POLL_FIRE``
-    is on. In shadow mode they're a forensics trail for "did the poll
-    diff math match what the operator expected".
+    The dispatcher is responsible for the shadow-vs-fire decision —
+    when ``SHIP_TRACKER_POLL_FIRE`` is off it just writes an
+    ``agent_run.dispatch_shadow`` audit row and returns. So calling
+    ``maybe_dispatch`` here is safe at any time; the env flag draws
+    the production line.
     """
     session.add(
         AuditLog(
@@ -243,6 +247,19 @@ async def _write_transition_event(
                 "updated_at": updated_at,
             },
         )
+    )
+    # Hand off to the dispatcher. Importing inline because dispatcher
+    # imports from tracker_poller (lock id) and we want the dep graph
+    # one-directional at module-load time. The function itself is
+    # idempotent and never raises on shadow mode.
+    from backend.app.services.dispatcher import maybe_dispatch
+
+    await maybe_dispatch(
+        session,
+        workspace_id=workspace_id,
+        ticket_ref=ticket_ref,
+        trigger_kind="tracker_poll",
+        client=client,
     )
 
 
@@ -332,6 +349,7 @@ async def _poll_installation(
                 old_state=old_state,
                 new_state=new_state,
                 updated_at=updated_at,
+                client=client,
             )
             events += 1
         last_states[ref] = new_state
