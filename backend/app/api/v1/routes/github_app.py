@@ -488,9 +488,13 @@ async def _apply_pull_request_event(
     ).scalars().first()
 
     # Capture whether the *prior* cached state already knew this PR as
-    # merged — we only want to mint the A4 "PR merged" banner on the
-    # *transition*, not on every replayed webhook.
+    # merged / closed — we only want to fire the merge/close hooks on
+    # the *transition*, not on every replayed webhook.
     was_merged_before = bool(existing.merged) if existing is not None else False
+    was_closed_before = (
+        existing is not None
+        and existing.closed_at is not None
+    )
 
     if existing is None:
         session.add(
@@ -531,6 +535,15 @@ async def _apply_pull_request_event(
 
     head_ref = str((pr.get("head") or {}).get("ref") or "")
     just_merged = merged and state == "merged" and not was_merged_before
+    # "Closed without merge" — operator deliberately decided the work
+    # isn't shipping (wrong approach, redundant, no longer needed).
+    # Distinct from ``just_merged`` because the linked ticket should
+    # go to ``Canceled`` rather than ``Done``.
+    just_closed_unmerged = (
+        state == "closed"
+        and not merged
+        and not was_closed_before
+    )
     is_install_pr = head_ref.startswith("ship/install-")
 
     # A4 "Return-to-Ship": when a PR that *isn't* our own install PR
@@ -579,6 +592,23 @@ async def _apply_pull_request_event(
             pr_title=title,
             pr_html_url=html_url,
             pr_number=int(pr.get("number") or 0),
+            to_state="Done",
+            close_kind="merge",
+        )
+
+    # Same pattern for "closed without merge" — operator abandoned the
+    # work, so the linked ticket lands in ``Canceled`` rather than
+    # ``Done``. Skips install PRs (same reasoning) and any PR title
+    # without a parseable ticket id.
+    if just_closed_unmerged and not is_install_pr:
+        await _transition_linked_tickets_on_merge(
+            session,
+            workspace_id=repo_row.workspace_id,
+            pr_title=title,
+            pr_html_url=html_url,
+            pr_number=int(pr.get("number") or 0),
+            to_state="Canceled",
+            close_kind="close_unmerged",
         )
 
     # When a ``ship/install-*`` PR merges we own the cache that decides
@@ -665,17 +695,28 @@ async def _transition_linked_tickets_on_merge(
     pr_title: str,
     pr_html_url: str,
     pr_number: int,
+    to_state: str = "Done",
+    close_kind: str = "merge",
 ) -> None:
-    """Move every ticket whose id appears in the PR title to ``Done``.
+    """Move every ticket whose id appears in the PR title to ``to_state``.
 
-    Operator-merge is the canonical "this work shipped" signal — the
-    SDLC pipeline's remaining stages (``qa_manual`` / ``qa_automation`` /
-    ``code_review``) all collapse onto the merge for the solo-operator
-    workflow: manual QA is operator-owned, automated QA is CI, code
-    review *is* the merge. Without this hook, agent-opened tickets
-    stay in ``In Progress`` forever after the operator merges (the
-    picker also overlay-freezes them whenever ``needs:clarification``
-    is set), so the ticket queue grows monotonically.
+    Two trigger paths share this helper:
+
+    - **PR merged** (``close_kind='merge'``, ``to_state='Done'``) —
+      canonical "this work shipped" signal. The SDLC pipeline's
+      remaining stages (qa_manual / qa_automation / code_review) all
+      collapse onto the merge for the solo-operator workflow: manual
+      QA is operator-owned, automated QA is CI, code review *is* the
+      merge.
+    - **PR closed without merge** (``close_kind='close_unmerged'``,
+      ``to_state='Canceled'``) — operator deliberately abandoned the
+      work (wrong approach, redundant, no longer needed). The linked
+      ticket should reflect that the work isn't coming.
+
+    Without these hooks the agent-opened tickets stay in
+    ``In Progress`` forever (the picker also overlay-freezes them
+    whenever ``needs:clarification`` is set), so the ticket queue
+    grows monotonically.
 
     Best-effort: tracker errors are logged + swallowed; the webhook
     must still ack the GitHub delivery.
@@ -712,17 +753,26 @@ async def _transition_linked_tickets_on_merge(
         )
         return
 
+    comment_body = (
+        f"Closed by merge of {pr_html_url} (PR #{pr_number})."
+        if close_kind == "merge"
+        else f"PR closed without merge — work abandoned: {pr_html_url} (PR #{pr_number})."
+    )
+    audit_action = (
+        "pr_merge.tracker_done"
+        if close_kind == "merge"
+        else "pr_closed_unmerged.tracker_canceled"
+    )
+
     for ticket_ref in ordered_refs:
         try:
             ref_obj = _ticket_ref_from(resolved.kind, ticket_ref)
-            await resolved.gateway.comment(
-                ref_obj,
-                body=f"Closed by merge of {pr_html_url} (PR #{pr_number}).",
-            )
-            await resolved.gateway.transition(ref_obj, to_state="Done")
+            await resolved.gateway.comment(ref_obj, body=comment_body)
+            await resolved.gateway.transition(ref_obj, to_state=to_state)
         except Exception as exc:  # noqa: BLE001 — surface, never block ack
             logger.warning(
-                "pr_merge transition failed ws=%s ticket=%s pr=#%d: %s",
+                "pr_%s transition failed ws=%s ticket=%s pr=#%d: %s",
+                close_kind,
                 workspace_id,
                 ticket_ref,
                 pr_number,
@@ -734,7 +784,7 @@ async def _transition_linked_tickets_on_merge(
                 workspace_id=workspace_id,
                 actor_user_id=None,
                 actor_token_id=None,
-                action="pr_merge.tracker_done",
+                action=audit_action,
                 target_kind="ticket",
                 target_id=ticket_ref,
                 payload={
@@ -742,11 +792,14 @@ async def _transition_linked_tickets_on_merge(
                     "pr_number": pr_number,
                     "pr_html_url": pr_html_url,
                     "pr_title": pr_title[:300],
+                    "to_state": to_state,
                 },
             )
         )
         logger.info(
-            "pr_merge → tracker:transition:Done ticket=%s pr=#%d ws=%s",
+            "pr_%s → tracker:transition:%s ticket=%s pr=#%d ws=%s",
+            close_kind,
+            to_state,
             ticket_ref,
             pr_number,
             workspace_id,
