@@ -28,10 +28,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.api.v1.deps import AuthContext, get_current_auth
 from backend.app.api.v1.routes.notifications import NotificationOut, _to_out as _notif_to_out
-from backend.app.api.v1.routes.runs import (
-    RunOut,
-    _run_to_out,
-)
 from backend.app.core.config import Settings, get_settings
 from backend.app.api.v1.routes.workspaces import (
     ROLES_READ,
@@ -45,6 +41,7 @@ from backend.app.db.models.pipelines import (
     PullRequest,
     WorkflowRun,
 )
+from backend.app.db.models.tenancy import AuditLog
 from backend.app.db.session import get_session
 from backend.app.services.dashboard_tracker_wip import (
     collect_tracker_wip_candidates,
@@ -116,11 +113,32 @@ class DashboardCounts(BaseModel):
     runs_last_24h: int
 
 
+class RecentAgentRunOut(BaseModel):
+    """One row in the dashboard's "recent activity" strip.
+
+    Sourced from ``audit_log`` rows where ``action='agent_run.finish'``
+    rather than from the ``routine_runs`` table — the latter is the
+    upcoming backend-driven scheduler's surface and stays empty until
+    customer repos provision routines explicitly. The audit-log path
+    is the canonical record of what the picker + Cursor session actually
+    did, regardless of whether a Routine row exists.
+    """
+
+    id: str
+    ticket_ref: str | None
+    fsm_stage: str | None
+    stage_next: str | None
+    outcome: str | None
+    tracker_kind: str | None
+    actions: list[str]
+    created_at: datetime
+
+
 class DashboardOut(BaseModel):
     counts: DashboardCounts
     pull_requests: list[PullRequestOut]
     workflow_runs: list[WorkflowRunOut]
-    routine_runs: list[RunOut]
+    recent_agent_runs: list[RecentAgentRunOut]
     # Dismissible banner rail populated by webhook handlers (A4 "PR
     # merged", A5 "self-heal dispatched"). Capped at `_NOTIFICATION_LIMIT`
     # — the full list lives at /notifications.
@@ -637,10 +655,23 @@ async def get_dashboard(
             )
         )
     ).scalar_one()
+    # "Enabled routines" = distinct ``routine_id`` values claimed in the
+    # last 7d via ``repo.routine_run_claim`` audit-log entries. The
+    # ``routines`` table itself stays empty in prod because the
+    # backend-driven scheduler that's supposed to populate it isn't
+    # yet the source of truth (post-B1+B2 phase) — but the cron-driven
+    # GHA trigger script DOES claim routines from the API each tick,
+    # which leaves audit-log evidence of every routine the operator
+    # has actively running. That's the real "enabled" set.
+    cutoff_7d = datetime.now(timezone.utc) - timedelta(days=7)
     enabled_count = (
         await session.execute(
-            select(func.count(Routine.id)).where(
-                Routine.workspace_id == workspace_id, Routine.enabled.is_(True)
+            select(
+                func.count(func.distinct(AuditLog.payload["routine_id"].astext))
+            ).where(
+                AuditLog.workspace_id == workspace_id,
+                AuditLog.action == "repo.routine_run_claim",
+                AuditLog.created_at >= cutoff_7d,
             )
         )
     ).scalar_one()
@@ -654,12 +685,16 @@ async def get_dashboard(
     ).scalar_one()
     # 24h window. Computed in Python so the query plan stays portable
     # across the Postgres prod backend and the SQLite-backed unit tests.
+    # ``runs_last_24h`` reads ``agent_run.finish`` events (the canonical
+    # record of "Cursor session completed") rather than the empty
+    # ``routine_runs`` table.
     cutoff_24h = datetime.now(timezone.utc) - timedelta(days=1)
     runs_24h = (
         await session.execute(
-            select(func.count(RoutineRun.id)).where(
-                RoutineRun.workspace_id == workspace_id,
-                RoutineRun.created_at >= cutoff_24h,
+            select(func.count(AuditLog.id)).where(
+                AuditLog.workspace_id == workspace_id,
+                AuditLog.action == "agent_run.finish",
+                AuditLog.created_at >= cutoff_24h,
             )
         )
     ).scalar_one()
@@ -682,11 +717,20 @@ async def get_dashboard(
         )
     ).scalars().all()
 
-    routine_runs = (
+    # Recent agent activity from audit_log (canonical record of what
+    # the picker + Cursor session did). Beats reading ``routine_runs``
+    # which stays empty until the backend-driven scheduler is wired
+    # end-to-end. Both motion-bearing finishes (ticket advanced) and
+    # noop finishes (no eligible ticket) surface here — the FE
+    # filters by ``ticket_ref is not null`` for the motion-only view.
+    recent_agent_run_rows = (
         await session.execute(
-            select(RoutineRun)
-            .where(RoutineRun.workspace_id == workspace_id)
-            .order_by(desc(RoutineRun.started_at), desc(RoutineRun.created_at))
+            select(AuditLog)
+            .where(
+                AuditLog.workspace_id == workspace_id,
+                AuditLog.action == "agent_run.finish",
+            )
+            .order_by(desc(AuditLog.created_at))
             .limit(_RECENT_LIMIT)
         )
     ).scalars().all()
@@ -712,8 +756,22 @@ async def get_dashboard(
         ),
         pull_requests=[_pr_to_out(p) for p in pulls],
         workflow_runs=[_wfrun_to_out(r) for r in runs],
-        routine_runs=[_run_to_out(r) for r in routine_runs],
+        recent_agent_runs=[_audit_to_recent_run(r) for r in recent_agent_run_rows],
         notifications=[_notif_to_out(n) for n in notifications],
+    )
+
+
+def _audit_to_recent_run(row: AuditLog) -> RecentAgentRunOut:
+    p = row.payload or {}
+    return RecentAgentRunOut(
+        id=str(row.id),
+        ticket_ref=p.get("ticket_ref"),
+        fsm_stage=p.get("fsm_stage"),
+        stage_next=p.get("stage_next"),
+        outcome=p.get("outcome"),
+        tracker_kind=p.get("tracker_kind"),
+        actions=list(p.get("actions") or []),
+        created_at=row.created_at,
     )
 
 

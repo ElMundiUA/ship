@@ -50,8 +50,8 @@ from backend.app.api.v1.routes.workspaces import (
 )
 from backend.app.db.models.agent_memory import KnowledgeIngestionRun
 from backend.app.db.models.inbox import InboxItem
-from backend.app.db.models.lanes import Routine
 from backend.app.db.models.lanes import Routine, RoutineRun
+from backend.app.db.models.tenancy import AuditLog
 from backend.app.db.session import get_session
 
 
@@ -156,25 +156,44 @@ _ROUTINE_LABELS: dict[str, str] = {
 async def _masthead(
     session: AsyncSession, workspace_id: uuid.UUID, now: datetime
 ) -> MastheadOut:
+    """Compute the masthead from ``audit_log`` ``agent_run.finish`` rows.
+
+    Was reading from ``RoutineRun.status``, but ``routine_runs`` is the
+    upcoming backend-driven scheduler's surface and stays empty in
+    prod — the agent finishes themselves leave audit-log evidence
+    (``action='agent_run.finish'`` with ``payload.outcome`` carrying
+    the result). Read from there so the masthead reflects what really
+    happened, not what would have happened in the planned-but-not-yet
+    architecture.
+
+    Outcome → status mapping:
+    - ``ready_next_step`` → ``ok``
+    - ``blocked`` / ``out_of_scope`` → ``error``
+    - ``needs_clarification`` / others → neither (excluded from
+      success-rate denominator so a clarification-heavy day doesn't
+      hurt the metric).
+    """
     cutoff = now - timedelta(days=7)
     rows = (
         await session.execute(
-            select(RoutineRun.status, RoutineRun.finished_at)
-            .where(
-                RoutineRun.workspace_id == workspace_id,
-                RoutineRun.finished_at.is_not(None),
-                RoutineRun.finished_at >= cutoff,
+            select(
+                AuditLog.payload["outcome"].astext.label("outcome"),
+                AuditLog.created_at,
+            ).where(
+                AuditLog.workspace_id == workspace_id,
+                AuditLog.action == "agent_run.finish",
+                AuditLog.created_at >= cutoff,
             )
-            .order_by(desc(RoutineRun.finished_at))
+            .order_by(desc(AuditLog.created_at))
         )
     ).all()
 
     succeeded = 0
     failed = 0
-    for status, _ in rows:
-        if status in _RUN_OK_STATUSES:
+    for outcome, _ in rows:
+        if outcome == "ready_next_step":
             succeeded += 1
-        elif status in _RUN_FAIL_STATUSES:
+        elif outcome in ("blocked", "out_of_scope"):
             failed += 1
     total_finished = succeeded + failed
     success_rate: float | None = (
@@ -184,11 +203,11 @@ async def _masthead(
     last_run_at: datetime | None = None
     last_run_status: Literal["ok", "error"] | None = None
     if rows:
-        latest_status, latest_finished = rows[0]
-        last_run_at = latest_finished
-        if latest_status in _RUN_OK_STATUSES:
+        latest_outcome, latest_created = rows[0]
+        last_run_at = latest_created
+        if latest_outcome == "ready_next_step":
             last_run_status = "ok"
-        elif latest_status in _RUN_FAIL_STATUSES:
+        elif latest_outcome in ("blocked", "out_of_scope"):
             last_run_status = "error"
 
     return MastheadOut(

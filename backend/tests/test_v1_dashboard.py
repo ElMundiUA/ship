@@ -26,7 +26,7 @@ async def test_dashboard_returns_empty_state_for_fresh_workspace(
     }
     assert body["pull_requests"] == []
     assert body["workflow_runs"] == []
-    assert body["routine_runs"] == []
+    assert body["recent_agent_runs"] == []
 
 
 @pytest.mark.asyncio
@@ -147,12 +147,18 @@ async def test_dashboard_aggregates_counts_and_recent_strips(
     body = response.json()
 
     assert body["counts"]["active_repos"] == 1
-    assert body["counts"]["enabled_routines"] == 1
+    # enabled_routines now counts distinct routine_ids from audit_log
+    # repo.routine_run_claim events in last 7d, not Routine table rows.
+    # Fixture doesn't seed claim events → 0.
+    assert body["counts"]["enabled_routines"] == 0
     assert body["counts"]["open_pull_requests"] == 1
-    assert body["counts"]["runs_last_24h"] == 1
+    # runs_last_24h now reads audit_log.agent_run.finish events, not
+    # the legacy RoutineRun table — fixture doesn't seed those, so 0.
+    assert body["counts"]["runs_last_24h"] == 0
     assert {p["repo_full_name"] for p in body["pull_requests"]} == {"acme/alpha"}
     assert {r["repo_full_name"] for r in body["workflow_runs"]} == {"acme/alpha"}
-    assert len(body["routine_runs"]) == 2
+    # recent_agent_runs reads audit_log; fixture doesn't seed finishes.
+    assert body["recent_agent_runs"] == []
 
 
 @pytest.mark.asyncio

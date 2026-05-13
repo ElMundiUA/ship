@@ -1582,11 +1582,27 @@ export interface ApiWorkspaceNotification {
   created_at: string;
 }
 
+/**
+ * One row in the dashboard's "recent activity" strip. Sourced from
+ * audit_log ``agent_run.finish`` rows, not the legacy ``routine_runs``
+ * table (which stays empty until the backend-driven scheduler lands).
+ */
+export interface ApiRecentAgentRun {
+  id: string;
+  ticket_ref: string | null;
+  fsm_stage: string | null;
+  stage_next: string | null;
+  outcome: string | null;
+  tracker_kind: string | null;
+  actions: string[];
+  created_at: string;
+}
+
 export interface ApiDashboard {
   counts: ApiDashboardCounts;
   pull_requests: ApiDashboardPullRequest[];
   workflow_runs: ApiDashboardWorkflowRun[];
-  routine_runs: ApiPipelineRun[];
+  recent_agent_runs: ApiRecentAgentRun[];
   notifications: ApiWorkspaceNotification[];
 }
 
