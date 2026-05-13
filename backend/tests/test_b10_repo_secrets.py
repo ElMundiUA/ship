@@ -599,7 +599,9 @@ async def test_cron_workflow_run_creates_pipeline_run_lazily(
 ) -> None:
     """Schedule-triggered Ship workflow → webhook lazily registers RoutineRun."""
     from backend.app.db.models.lanes import RoutineRun
-    from backend.app.services.catalog import workflow_install_filename
+    from backend.app.services.starter_workflows import (
+        install_filename as workflow_install_filename,
+    )
 
     workspace, install, repo, pipeline = seed_ship_pipeline_without_run
 
