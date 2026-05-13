@@ -25,9 +25,30 @@ teammate to read in their inbox without context.
 
 For every outcome:
 
-- **`outcome=ready_next_step`** — `comment` is one paragraph: what
-  you did, why, and what's now true that wasn't before. End with
-  `[Ship SDLC:role-<your-role>]`.
+- **`outcome=ready_next_step`** — `comment` is a status report a
+  busy teammate can read in 10 seconds. **Three lines max**, plain
+  English, no implementation jargon:
+
+  ```
+  Done. <one sentence on the user-visible change>.
+  <one sentence on how — at the level "added X to do Y", not file paths>.
+  PR: <URL>     ← required; if no URL, use `outcome=blocked` instead.
+  [Ship SDLC:role-<your-role>]
+  ```
+
+  **No multi-clause implementation narrative**, no library names, no
+  commit SHAs in prose, no "registers as foo to match main's
+  NOUN_VERB convention from d33040a". The operator reading their
+  Linear inbox cares **what shipped** + **how to verify**, not the
+  archaeology of your decision. If the change is so small it doesn't
+  warrant a second sentence, write one sentence.
+
+  **PR URL is mandatory for `ready_next_step`.** If you couldn't open
+  a PR (push failed, gh fell over, network down, branch had no
+  commits), STOP — switch to `outcome=blocked` with the failure
+  reason. Calling `ready_next_step` without a PR moves the ticket
+  forward in the FSM and the next stage agent has nothing to QA
+  against — silent breakage.
 
 - **`outcome=needs_clarification`** — `comment` is the SPECIFIC
   question you need answered, not "I need more info". State the

@@ -17,7 +17,38 @@ Linear status is already **In Progress** (set by GitHub). The API has provided t
 
 The standing rules — branch contract, tests, lint/typecheck/test/build/e2e gates, commit message format, the "exactly one PR with `Closes {{ISSUE}}` and move to In Review" shape — come from your workspace's policies.
 
-End your single ticket comment (with the PR link) with: `[GitHub SDLC:developer]`
+## Finish protocol — read this before calling `finish`
+
+The Cursor/Claude session ends after your finish call; the wrapping
+runtime then tries to push the branch and open the PR. **You don't
+get a second chance after finish** — if push or PR-create fails
+later, the ticket has already moved to the next stage and the
+operator sees an empty review queue.
+
+So you have to choose between two outcomes based on what you
+actually accomplished:
+
+- **`outcome=ready_next_step`** — only when **a PR is already open**
+  with your changes. Most flows: you finish your edits, you tell the
+  runtime to push + open PR, you confirm the URL came back, and then
+  you call finish with that URL in `comment`. If you're not 100%
+  sure a PR exists, you don't get `ready_next_step`.
+
+- **`outcome=blocked`** — when the work didn't ship: push refused,
+  `gh pr create` errored, branch is empty, naming convention
+  conflict, your branch races with another one for the same ticket,
+  etc. State the specific failure in one sentence ("`gh pr create
+  failed: <stderr>`", "branch fix/{{ISSUE}}-auto has zero commits
+  vs main", "another open PR `#NNN` exists for {{ISSUE}}"). The next
+  pick will retry; the operator can intervene if it's structural.
+
+**Comment shape** (also in `system.md`): three lines max, plain
+English. No file paths in prose, no library names sprinkled through,
+no commit SHAs as narrative. Read the comment from the operator's
+inbox — "what shipped, how to verify". The implementation arch-doc
+lives in the PR body, not in the Linear comment.
+
+End your single ticket comment (with the PR link) with: `[Ship SDLC:role-developer]`
 
 ## Decomposition mode
 
