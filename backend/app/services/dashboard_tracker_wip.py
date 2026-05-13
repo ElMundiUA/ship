@@ -180,7 +180,7 @@ async def collect_tracker_wip_candidates(
         if kind != "github":
             continue
         try:
-            raw = await toolbox._tool_list_tickets(  # noqa: SLF001
+            raw = await toolbox._tool_ticket_list(  # noqa: SLF001
                 {
                     "tracker": "github_issues",
                     "project_hint": repo.full_name,
@@ -207,7 +207,7 @@ async def collect_tracker_wip_candidates(
 
     if want_linear:
         try:
-            raw = await toolbox._tool_list_tickets(  # noqa: SLF001
+            raw = await toolbox._tool_ticket_list(  # noqa: SLF001
                 {
                     "tracker": "linear",
                     "state": "open",
@@ -234,7 +234,7 @@ async def collect_tracker_wip_candidates(
 
     if want_jira:
         try:
-            raw = await toolbox._tool_list_tickets(  # noqa: SLF001
+            raw = await toolbox._tool_ticket_list(  # noqa: SLF001
                 {
                     "tracker": "jira",
                     "state": "open",

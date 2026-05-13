@@ -600,7 +600,7 @@ async def list_process_tickets(
         user_id=auth.user.id,
     )
     try:
-        raw = await toolbox._tool_list_tickets(  # noqa: SLF001 - read-only reuse of the agent gateway
+        raw = await toolbox._tool_ticket_list(  # noqa: SLF001 - read-only reuse of the agent gateway
             {
                 "tracker": tracker,
                 "project_hint": project_hint,
