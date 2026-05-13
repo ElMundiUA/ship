@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import struct
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -117,6 +118,23 @@ _TRACKER_FAILURE_DEDUP_WINDOW = timedelta(hours=1)
 # audit volume drops by ~9× on workspaces with active reviewer
 # pipelines.
 _PRIORITY_SKIPPED_DEDUP_WINDOW = timedelta(hours=1)
+
+# ELS-120 safety net: stages whose ``ready_next_step`` finish must
+# carry a PR URL in ``comment``. ``run.mjs`` splices the URL in after
+# ``gh pr create`` succeeds (sidecar flow); a finish without one means
+# the agent bypassed the sidecar and called /finish directly before
+# the runner could push — the exact bug class ELS-120 closes. Reject
+# with 422 instead of advancing the ticket to a stage that has no PR.
+_PR_AUTHORING_STAGES: frozenset[str] = frozenset(
+    {
+        "dev_implementation",
+        "qa_automation",
+        "workflow_self_heal",
+    }
+)
+_PR_URL_RE = re.compile(
+    r"https://github\.com/[^/\s]+/[^/\s]+/pull/\d+", re.IGNORECASE
+)
 
 # Picker refire cap — universal loop guard.
 #
@@ -2630,6 +2648,35 @@ async def finish_agent_run(
             run_id=payload.run_id,
             actions=["duplicate_ignored"],
             tracker_kind=(prev.payload or {}).get("tracker_kind"),
+        )
+
+    # ELS-120 safety net — fire BEFORE tracker resolution so the gate
+    # works on workspaces with no tracker bound too. A code-changing
+    # finish without a PR URL means the agent bypassed the sidecar
+    # protocol; the runner-driven flow always splices ``PR: <url>``
+    # into ``comment`` after ``gh pr create``. Reject so the ticket
+    # doesn't advance past a stage that has no PR to review against.
+    if (
+        payload.outcome == "ready_next_step"
+        and payload.ticket_ref
+        and payload.fsm_stage in _PR_AUTHORING_STAGES
+        and not _PR_URL_RE.search(payload.comment or "")
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "pr_url_required",
+                "fsm_stage": payload.fsm_stage,
+                "message": (
+                    f"finish with outcome=ready_next_step on "
+                    f"fsm_stage={payload.fsm_stage} requires a PR URL in "
+                    "``comment``. The runner appends it after "
+                    "``gh pr create`` succeeds — call /finish via the "
+                    "sidecar protocol (write ``.ship/agent-finish.json`` "
+                    "and let the runner own the finish) instead of "
+                    "curl-ing directly."
+                ),
+            },
         )
 
     actions: list[str] = []

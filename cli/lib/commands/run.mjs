@@ -414,11 +414,11 @@ async function _runCommandImpl(ctx, rest) {
     process.exit(EXIT_AGENT_FAIL);
   }
 
-  // 4b) Push the branch + open a PR when the runner asked us to.
-  // Skip cleanly if the agent didn't commit anything (noop run) so
-  // we don't push an empty branch and we don't open a PR with no
-  // diff. ``runtime.status === 'ERRORED'`` short-circuits the same
-  // way — we surface the error to the caller and skip the push.
+  // 4b) Post-runtime: read the agent's finish sidecar (ELS-120) and
+  // own the push + PR + /agent-runs/finish sequence ourselves. Falling
+  // back to the pre-ELS-120 flow (agent calls /finish directly) when
+  // no sidecar is present keeps existing role prompts working during
+  // rollout.
   let pushed = null;
   let prUrl = null;
   if (args.commitAndPr) {
@@ -443,27 +443,217 @@ async function _runCommandImpl(ctx, rest) {
       runtime_status: runtime.status,
       exit_code: runtime.exitCode,
     });
-    if (!hasNewCommits(baseBranch)) {
-      step("post_run", "noop", { reason: "no_commits" });
-      emit(args, {
-        status: "noop_no_commits",
-        routine: args.routine,
-        specialist: specialistSlug,
-        fsm_stage: fsmStage,
-        ticket_ref: task?.ticket_ref || null,
-        provider,
-        branch: branchName,
-        run_id: runId,
-        run_handle: runHandle,
+
+    const sidecar = readAgentFinishSidecar(root);
+
+    if (sidecar) {
+      // New flow — run.mjs owns finish. The branch and run-context
+      // fields (run_id, fsm_stage, process, ticket_ref) are forced
+      // from the runner's view of the world; agent-supplied values
+      // would be drift-prone (especially run_id, which the agent
+      // can't actually know — we mint it locally each tick).
+      step("agent_finish_sidecar", "found", {
+        outcome: sidecar.outcome,
+        wants_pr: Boolean(sidecar.pr),
       });
-      process.exit(EXIT_OK);
-    }
-    try {
-      pushed = pushBranch({ branchName });
-      step("push_branch", "ok", { branch: branchName });
-      // Mint a Ship-App installation token for ``gh pr create`` so
-      // org-level "Allow GHA to create PRs" toggle isn't a hard
-      // dependency. Fallback to env ``GH_TOKEN`` if the mint fails.
+
+      const basePayload = {
+        run_id: runId,
+        outcome: sidecar.outcome,
+        fsm_stage: fsmStage,
+        stage_next: sidecar.stage_next ?? null,
+        ticket_ref: ticketRefFromSidecar(sidecar, task),
+        process: sidecar.process || "development",
+        comment: sidecar.comment ?? null,
+        summary: sidecar.summary ?? null,
+        description: sidecar.description ?? null,
+        project_sections: Array.isArray(sidecar.project_sections)
+          ? sidecar.project_sections
+          : [],
+        child_tickets: Array.isArray(sidecar.child_tickets)
+          ? sidecar.child_tickets
+          : [],
+        payload:
+          sidecar.payload && typeof sidecar.payload === "object"
+            ? sidecar.payload
+            : {},
+      };
+
+      // outcome != ready_next_step → no push, no PR. Just forward.
+      if (sidecar.outcome !== "ready_next_step") {
+        const res = await postAgentFinish({
+          apiBase,
+          apiToken,
+          workspaceId,
+          payload: basePayload,
+          description: `finish ${sidecar.outcome}`,
+        });
+        step("finish_post", res.ok ? "ok" : "fail", {
+          status: res.status,
+          outcome: sidecar.outcome,
+        });
+        if (!res.ok) {
+          emit(args, {
+            status: "error",
+            routine: args.routine,
+            specialist: specialistSlug,
+            run_id: runId,
+            run_handle: runHandle,
+            stage: "finish_post",
+            provider,
+            branch: branchName,
+            error: `finish POST failed (HTTP ${res.status}) ${res.error || ""}`.trim(),
+          });
+          process.exit(EXIT_AGENT_FAIL);
+        }
+        emit(args, {
+          status: "completed",
+          routine: args.routine,
+          specialist: specialistSlug,
+          fsm_stage: fsmStage,
+          ticket_ref: ticketRefFromSidecar(sidecar, task),
+          agent_id: runtime.agentId,
+          branch: runtime.branchName,
+          provider,
+          runtime_status: runtime.status,
+          exit_code: runtime.exitCode,
+          pushed: false,
+          pr_url: null,
+          run_id: runId,
+          run_handle: runHandle,
+          outcome: sidecar.outcome,
+        });
+        process.exit(EXIT_OK);
+      }
+
+      // outcome == ready_next_step. Two branches:
+      //   - sidecar.pr === null|undefined: code-less finish (intake,
+      //     BA, project-sections, tasks). Just POST /finish.
+      //   - sidecar.pr is set: code-changing finish. Verify commits,
+      //     push, gh pr create, then POST /finish with PR URL spliced
+      //     into the comment.
+
+      const wantsPr = Boolean(
+        sidecar.pr && typeof sidecar.pr === "object" && (sidecar.pr.title || sidecar.pr.body),
+      );
+
+      if (!wantsPr) {
+        const res = await postAgentFinish({
+          apiBase,
+          apiToken,
+          workspaceId,
+          payload: basePayload,
+          description: "finish ready_next_step (no PR)",
+        });
+        step("finish_post", res.ok ? "ok" : "fail", { status: res.status });
+        if (!res.ok) {
+          emit(args, {
+            status: "error",
+            routine: args.routine,
+            specialist: specialistSlug,
+            run_id: runId,
+            run_handle: runHandle,
+            stage: "finish_post",
+            provider,
+            branch: branchName,
+            error: `finish POST failed (HTTP ${res.status}) ${res.error || ""}`.trim(),
+          });
+          process.exit(EXIT_AGENT_FAIL);
+        }
+        emit(args, {
+          status: "completed",
+          routine: args.routine,
+          specialist: specialistSlug,
+          fsm_stage: fsmStage,
+          ticket_ref: ticketRefFromSidecar(sidecar, task),
+          agent_id: runtime.agentId,
+          branch: runtime.branchName,
+          provider,
+          runtime_status: runtime.status,
+          exit_code: runtime.exitCode,
+          pushed: false,
+          pr_url: null,
+          run_id: runId,
+          run_handle: runHandle,
+          outcome: sidecar.outcome,
+        });
+        process.exit(EXIT_OK);
+      }
+
+      // PR-authoring path. If anything between here and the
+      // /finish call fails, rewrite the outcome to ``blocked`` with
+      // a structured reason and POST that — so the FSM doesn't
+      // advance past a stage that never actually produced a PR.
+      const rewriteBlocked = async (stageLabel, errMsg) => {
+        const rewrittenComment = sidecar.comment
+          ? `${sidecar.comment.trim()}\n\nrun.mjs: ${stageLabel} failed — ${errMsg}`
+          : `run.mjs: ${stageLabel} failed — ${errMsg}`;
+        const blockedPayload = {
+          ...basePayload,
+          outcome: "blocked",
+          stage_next: null,
+          comment: rewrittenComment,
+          payload: {
+            ...(basePayload.payload || {}),
+            ship_runner: {
+              rewrote_outcome: "ready_next_step → blocked",
+              failing_stage: stageLabel,
+              error: errMsg,
+            },
+          },
+        };
+        const res = await postAgentFinish({
+          apiBase,
+          apiToken,
+          workspaceId,
+          payload: blockedPayload,
+          description: `finish blocked (${stageLabel})`,
+        });
+        step("finish_post_blocked", res.ok ? "ok" : "fail", {
+          status: res.status,
+          stage: stageLabel,
+        });
+      };
+
+      if (!hasNewCommits(baseBranch)) {
+        await rewriteBlocked(
+          "verify_commits",
+          "agent declared `pr` but branch has no commits vs main",
+        );
+        emit(args, {
+          status: "error",
+          routine: args.routine,
+          specialist: specialistSlug,
+          run_id: runId,
+          run_handle: runHandle,
+          stage: "verify_commits",
+          provider,
+          branch: branchName,
+          error: "branch has no commits — outcome rewritten to blocked",
+        });
+        process.exit(EXIT_AGENT_FAIL);
+      }
+
+      try {
+        pushed = pushBranch({ branchName });
+        step("push_branch", "ok", { branch: branchName });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        await rewriteBlocked("push_branch", msg);
+        emit(args, {
+          status: "error",
+          routine: args.routine,
+          specialist: specialistSlug,
+          run_id: runId,
+          run_handle: runHandle,
+          stage: "push_branch",
+          provider,
+          branch: branchName,
+          error: msg,
+        });
+        process.exit(EXIT_AGENT_FAIL);
+      }
+
       const ghToken = await fetchInstallationToken({
         apiBase,
         apiToken,
@@ -473,33 +663,157 @@ async function _runCommandImpl(ctx, rest) {
       step("mint_pr_token", ghToken ? "ok" : "fallback_env", {
         source: ghToken ? "ship_app" : "github_actions",
       });
-      prUrl = openPullRequest({
-        branchName,
-        baseBranch,
-        title: makePrTitle({ specialist: specialistSlug, fsmStage, task }),
-        body: makePrBody({
+
+      try {
+        prUrl = openPullRequest({
+          branchName,
+          baseBranch,
+          title:
+            (sidecar.pr.title || "").trim() ||
+            makePrTitle({ specialist: specialistSlug, fsmStage, task }),
+          body: composePrBody({
+            agentBody: sidecar.pr.body || "",
+            task,
+            runHandle,
+          }),
+          ghToken,
+        });
+        step("open_pr", prUrl ? "ok" : "skipped_gh_unavailable", { pr: prUrl || null });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        await rewriteBlocked("open_pr", msg);
+        emit(args, {
+          status: "error",
+          routine: args.routine,
           specialist: specialistSlug,
-          fsmStage,
-          task,
+          run_id: runId,
+          run_handle: runHandle,
+          stage: "open_pr",
           provider,
-          runHandle,
-        }),
-        ghToken,
+          branch: branchName,
+          error: msg,
+        });
+        process.exit(EXIT_AGENT_FAIL);
+      }
+
+      if (!prUrl) {
+        // ``gh`` binary absent on this runner — degrade gracefully
+        // by surfacing the failure on the ticket. The branch is
+        // pushed; an operator can open the PR manually if they care.
+        await rewriteBlocked(
+          "open_pr",
+          "gh CLI unavailable on runner; branch pushed, manual PR needed",
+        );
+        emit(args, {
+          status: "error",
+          routine: args.routine,
+          specialist: specialistSlug,
+          run_id: runId,
+          run_handle: runHandle,
+          stage: "open_pr",
+          provider,
+          branch: branchName,
+          error: "gh unavailable",
+        });
+        process.exit(EXIT_AGENT_FAIL);
+      }
+
+      // Splice PR URL into the comment so the audit-log row carries
+      // the PR link without scraping the body.
+      const finalPayload = {
+        ...basePayload,
+        comment: appendPrUrlToComment(basePayload.comment, prUrl),
+      };
+      const res = await postAgentFinish({
+        apiBase,
+        apiToken,
+        workspaceId,
+        payload: finalPayload,
+        description: "finish ready_next_step (with PR)",
       });
-      step("open_pr", prUrl ? "ok" : "skipped_gh_unavailable", { pr: prUrl || null });
-    } catch (err) {
-      emit(args, {
-        status: "error",
-        routine: args.routine,
-        specialist: specialistSlug,
-        run_id: runId,
-        run_handle: runHandle,
-        stage: pushed ? "open_pr" : "push_branch",
-        provider,
-        branch: branchName,
-        error: err instanceof Error ? err.message : String(err),
+      step("finish_post", res.ok ? "ok" : "fail", {
+        status: res.status,
+        pr: prUrl,
       });
-      process.exit(EXIT_AGENT_FAIL);
+      if (!res.ok) {
+        emit(args, {
+          status: "error",
+          routine: args.routine,
+          specialist: specialistSlug,
+          run_id: runId,
+          run_handle: runHandle,
+          stage: "finish_post",
+          provider,
+          branch: branchName,
+          pr_url: prUrl,
+          error: `finish POST failed (HTTP ${res.status}) ${res.error || ""}`.trim(),
+        });
+        process.exit(EXIT_AGENT_FAIL);
+      }
+    } else if (PR_AUTHORING_STAGES.has(fsmStage || "")) {
+      // No sidecar AND this is a code-changing stage. Pre-ELS-120
+      // behaviour: the agent has already (we hope) called /finish
+      // directly with its outcome. We push + open a PR with the
+      // backwards-compat metadata-only body so existing prompts
+      // that haven't been rewritten still produce a PR.
+      step("agent_finish_sidecar", "missing_fallback", { stage: fsmStage });
+      if (!hasNewCommits(baseBranch)) {
+        step("post_run", "noop", { reason: "no_commits" });
+        emit(args, {
+          status: "noop_no_commits",
+          routine: args.routine,
+          specialist: specialistSlug,
+          fsm_stage: fsmStage,
+          ticket_ref: task?.ticket_ref || null,
+          provider,
+          branch: branchName,
+          run_id: runId,
+          run_handle: runHandle,
+        });
+        process.exit(EXIT_OK);
+      }
+      try {
+        pushed = pushBranch({ branchName });
+        step("push_branch", "ok", { branch: branchName });
+        const ghToken = await fetchInstallationToken({
+          apiBase,
+          apiToken,
+          workspaceId,
+          githubRepo: env.githubRepo,
+        });
+        step("mint_pr_token", ghToken ? "ok" : "fallback_env", {
+          source: ghToken ? "ship_app" : "github_actions",
+        });
+        prUrl = openPullRequest({
+          branchName,
+          baseBranch,
+          title: makePrTitle({ specialist: specialistSlug, fsmStage, task }),
+          body: composePrBody({
+            agentBody: `Autonomous agent run via Ship pipeline (no sidecar — pre-ELS-120 prompt).\n\n- specialist: \`${specialistSlug}\`\n- provider: \`${provider}\``,
+            task,
+            runHandle,
+          }),
+          ghToken,
+        });
+        step("open_pr", prUrl ? "ok" : "skipped_gh_unavailable", { pr: prUrl || null });
+      } catch (err) {
+        emit(args, {
+          status: "error",
+          routine: args.routine,
+          specialist: specialistSlug,
+          run_id: runId,
+          run_handle: runHandle,
+          stage: pushed ? "open_pr" : "push_branch",
+          provider,
+          branch: branchName,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        process.exit(EXIT_AGENT_FAIL);
+      }
+    } else {
+      // No sidecar, non-PR stage — leave to the agent's direct
+      // /finish call. Nothing for run.mjs to do here.
+      step("agent_finish_sidecar", "missing_codeless", { stage: fsmStage });
     }
   }
 
@@ -693,25 +1007,147 @@ async function fetchInstallationToken({ apiBase, apiToken, workspaceId, githubRe
 }
 
 
+// ---------------------------------------------------------------------------
+// Sidecar-driven finish (ELS-120)
+// ---------------------------------------------------------------------------
+//
+// Pre-ELS-120 the agent called ``POST /agent-runs/finish`` directly from
+// inside its Cursor/Claude session. That happens *before* run.mjs gets a
+// chance to push the branch and open the PR — if either of those later
+// steps failed, the ticket was already moved forward in the FSM with no
+// PR existing. The next stage agent (qa_manual) then had nothing to QA
+// against and the ticket silently stalled.
+//
+// New flow: the agent writes its intended finish payload to a sidecar
+// JSON file at ``.ship/agent-finish.json`` inside the repo workdir and
+// stops without hitting the API. ``run.mjs`` reads the sidecar after the
+// session ends, owns the push + PR + finish sequence, and rewrites the
+// outcome to ``blocked`` if push/PR fails — so the FSM transition is
+// gated on a real PR existing.
+//
+// Backwards compat: when no sidecar is found, ``run.mjs`` leaves the
+// pre-existing flow intact (any direct ``/finish`` call the agent made
+// stands). Backend enforces a stricter rule for code-changing stages
+// (dev_implementation / qa_automation / workflow_self_heal): a
+// ``ready_next_step`` finish there must carry a PR URL in ``comment``,
+// otherwise it's 422'd — defends against rogue agents bypassing the
+// sidecar protocol.
+
+const AGENT_FINISH_SIDECAR_PATH = ".ship/agent-finish.json";
+
+const PR_AUTHORING_STAGES = new Set([
+  "dev_implementation",
+  "qa_automation",
+  "workflow_self_heal",
+]);
+
+function readAgentFinishSidecar(repoRoot) {
+  const sidecarPath = path.join(repoRoot, AGENT_FINISH_SIDECAR_PATH);
+  if (!fs.existsSync(sidecarPath)) return null;
+  let raw;
+  try {
+    raw = fs.readFileSync(sidecarPath, "utf8");
+  } catch (err) {
+    console.error(`warn: agent-finish sidecar read failed: ${err.message}`);
+    return null;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    console.error(`warn: agent-finish sidecar parse failed: ${err.message}`);
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object" || !parsed.outcome) {
+    console.error("warn: agent-finish sidecar malformed (no outcome field)");
+    return null;
+  }
+  return parsed;
+}
+
+async function postAgentFinish({ apiBase, apiToken, workspaceId, payload, description }) {
+  // Idempotent on (run_id, outcome) server-side; the GHA cron retries
+  // a failed POST without double-applying tracker side-effects.
+  let res;
+  try {
+    res = await fetchWithRetry(
+      () =>
+        fetch(`${apiBase}/v1/workspaces/${encodeURIComponent(workspaceId)}/agent-runs/finish`, {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${apiToken}`,
+          },
+          body: JSON.stringify(payload),
+        }),
+      { description: description || "agent-runs/finish" },
+    );
+  } catch (err) {
+    return {
+      ok: false,
+      status: 0,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+  let body = null;
+  try {
+    body = await res.json();
+  } catch {
+    body = null;
+  }
+  return { ok: res.ok, status: res.status, body };
+}
+
+function appendPrUrlToComment(comment, prUrl) {
+  // The agent composed the comment before run.mjs minted the PR URL,
+  // so we splice the URL in. Try to keep the trailing role marker on
+  // its own last line so the audit-log grep (``[Ship SDLC:role-...]``)
+  // still works for downstream tooling.
+  if (!prUrl) return comment || null;
+  const existing = (comment || "").trim();
+  const prLine = `PR: ${prUrl}`;
+  if (!existing) return prLine;
+  if (existing.includes(prUrl)) return existing;
+  const markerMatch = existing.match(/(\n?\[Ship [^\]]+])\s*$/);
+  if (markerMatch) {
+    const beforeMarker = existing.slice(0, markerMatch.index).trimEnd();
+    return `${beforeMarker}\n\n${prLine}\n\n${markerMatch[1].trim()}`;
+  }
+  return `${existing}\n\n${prLine}`;
+}
+
+function composePrBody({ agentBody, task, runHandle }) {
+  // Trust the agent for the body's substance — Summary / Test plan /
+  // anything else they want to surface to the reviewer agent. We tack
+  // on a footer with the Closes-link (so GitHub closes the linked
+  // tracker reference on merge for trackers that support that idiom)
+  // and the Ship run handle (so we can grep audit logs back to the
+  // launching tick). Footer is appended after the agent's body
+  // verbatim — no merge / dedupe, agents shouldn't have to remember
+  // to omit either line.
+  const body = (agentBody || "").trim();
+  const footerLines = [];
+  if (task?.ticket_ref) {
+    footerLines.push(`Closes ${task.ticket_ref}`);
+  }
+  footerLines.push("");
+  footerLines.push("---");
+  footerLines.push(`_Ship pipeline run · \`${runHandle}\`_`);
+  const footer = footerLines.join("\n");
+  if (!body) return footer;
+  return `${body}\n\n${footer}`;
+}
+
+function ticketRefFromSidecar(sidecar, task) {
+  return sidecar?.ticket_ref || task?.ticket_ref || null;
+}
+
+
 function makePrTitle({ specialist, fsmStage, task }) {
   const ticket = task?.ticket_ref ? ` ${task.ticket_ref}` : "";
   const stage = fsmStage ? ` · ${fsmStage}` : "";
   return `agent: ${specialist}${stage}${ticket}`;
-}
-
-
-function makePrBody({ specialist, fsmStage, task, provider, runHandle }) {
-  const lines = [
-    `Autonomous agent run via Ship pipeline.`,
-    "",
-    `- specialist: \`${specialist}\``,
-    `- provider: \`${provider}\``,
-    fsmStage ? `- fsm_stage: \`${fsmStage}\`` : null,
-    task?.ticket_ref ? `- ticket: \`${task.ticket_ref}\`` : null,
-    task?.url ? `- ticket url: ${task.url}` : null,
-    `- run_handle: \`${runHandle}\``,
-  ].filter(Boolean);
-  return lines.join("\n");
 }
 
 
@@ -999,60 +1435,79 @@ function renderLifecycleHooks() {
 
 
 function renderExitProtocol(ctx) {
-  // Substitute the run-time values directly into the example so the
-  // agent doesn't have to figure out env var hookup. The token is
-  // workspace-scoped and meant for this run; the prompt warns the
-  // agent not to echo it.
-  const apiBase = ctx?.apiBase || "$SHIP_API_BASE";
-  const apiToken = ctx?.apiToken || "$SHIP_API_TOKEN";
-  const workspaceId = ctx?.workspaceId || "$SHIP_WORKSPACE_ID";
-  const runId = ctx?.runId || "<run_id>";
   const ticketRef = ctx?.ticketRef ?? null;
-  const fsm = ctx?.fsmStage ?? null;
   const ticketLine = ticketRef === null
     ? '"ticket_ref": null,'
     : `"ticket_ref": ${JSON.stringify(ticketRef)},`;
-  const fsmLine = fsm === null
-    ? '"fsm_stage": null,'
-    : `"fsm_stage": ${JSON.stringify(fsm)},`;
+  const isPrAuthoringRole = ["developer", "qa-automation", "workflow-self-heal"]
+    .includes(ctx?.role || "");
 
   return `## Required exit protocol
 
-When you finish (or determine you cannot proceed), call Ship's finish
-endpoint **once** with your outcome and stop. This is the only
-sanctioned write surface — Ship's server applies tracker side-effects
-through the workspace's existing OAuth.
+**Do not call Ship's finish API directly.** Write your finish payload
+to \`.ship/agent-finish.json\` in the repo workdir and stop. The Ship
+runner (\`run.mjs\`) reads this sidecar after your session ends,
+handles push + \`gh pr create\` for code-changing roles, and posts
+the \`/agent-runs/finish\` call on your behalf — splicing the PR URL
+into your \`comment\` on success or rewriting your outcome to
+\`blocked\` if push/PR fails.
 
-**Do not** create empty branches or commit placeholder files. If your
-role doesn't change code, no branch is required. If your role does
-change code, push the code on the branch Ship CLI named for you, then
-call finish.
+Why: your session terminates **before** the runner can push your
+branch or open the PR. If you call \`/finish\` directly with
+\`ready_next_step\`, the ticket advances in the FSM even when push
+or PR-create fails seconds later — the next stage's agent then has
+nothing to QA against and the ticket stalls silently.
 
-**Do not** call any Linear / Jira / GitHub MCP that writes. Reading
-via MCP is fine; writing is not. The finish endpoint is the only
-write surface.
+**Do not** create empty branches or commit placeholder files. If
+your role doesn't change code, leave \`pr\` null in the sidecar and
+do no git work at all. Reading via MCP is fine; writing through any
+non-sidecar path is not.
 
-\`\`\`bash
-curl -fsS -X POST '${apiBase}/v1/workspaces/${workspaceId}/agent-runs/finish' \\
-  -H 'Authorization: Bearer ${apiToken}' \\
-  -H 'Content-Type: application/json' \\
-  --data @- <<'JSON'
+\`\`\`json
 {
-  "run_id": ${JSON.stringify(runId)},
   "outcome": "ready_next_step",
-  ${ticketLine}
-  ${fsmLine}
   "stage_next": "<next FSM stage, e.g. ba_requirements>",
+  ${ticketLine}
   "process": "development",
-  "description": "<Full rewritten ticket body in Markdown — Problem / Goal / Acceptance criteria / Scope / Non-goals / Risks / etc. — when your role's job is to shape the ticket itself (intake, BA, planner). Omit (null) when your role is not supposed to rewrite the body.>",
-  "comment": "<One-paragraph audit narration of what you changed and why, ending with [Ship SDLC:${ctx?.role || "{{ROLE}}"}]. Do NOT paste the new description here — that's what the description field is for.>",
+  "comment": "<short audit narration ending with [Ship SDLC:${ctx?.role || "{{ROLE}}"}]>",
+  "description": ${
+    isPrAuthoringRole
+      ? "null"
+      : "\"<Full rewritten ticket body when your role shapes the ticket (intake, BA, planner). null otherwise.>\""
+  },
   "summary": null,
   "project_sections": [],
   "child_tickets": [],
-  "payload": {}
+  "payload": {},
+  "pr": ${
+    isPrAuthoringRole
+      ? `{
+    "title": "feat(${ticketRef || "<TICKET>"}): <one-line headline>",
+    "body": "## Summary\\n<2-4 lines>\\n\\n## Test plan\\n- [ ] <verification step>"
+  }`
+      : "null"
+  }
 }
-JSON
 \`\`\`
+
+The runner pre-fills \`run_id\` and \`fsm_stage\` from the routine
+context — don't include them in the sidecar (any values you provide
+are dropped to prevent drift). The branch name is also runner-fixed
+(\`fix/<TICKET>-auto\`).
+
+### \`pr\` field (code-changing roles only)
+
+Set \`pr\` to an object with \`title\` and \`body\` ONLY when your
+role authors code (developer / qa-automation / workflow-self-heal).
+The runner pushes your branch, opens the PR with your \`title\` /
+\`body\`, appends a \`Closes <ticket>\` footer + run-handle line, and
+splices \`PR: <url>\` into your \`comment\`.
+
+If push or \`gh pr create\` fails, the runner rewrites the outcome
+to \`blocked\` with a structured reason — you don't need to
+defensively choose \`blocked\` yourself.
+
+Every other role leaves \`pr: null\` and skips push entirely.
 
 ### \`project_sections\` (decomposition only)
 
@@ -1070,12 +1525,9 @@ Shape:
 ]
 \`\`\`
 
-The server response's \`actions\` list will include
-\`tracker:project_section:<Section>\` when the upsert applied. **If you
-do not see that action in the response, your section was NOT
-persisted** — re-call finish with the field at the top level. Do not
-report success unless the corresponding \`tracker:project_section:\`
-action came back.
+The runner posts \`/finish\` once on your behalf and surfaces the
+server's \`actions\` list in its stdout. The list will include
+\`tracker:project_section:<Section>\` when the upsert applied.
 
 For SDLC (non-decomposition) roles, leave the array empty.
 
@@ -1102,8 +1554,6 @@ Shape:
 Server response \`actions\` will include one
 \`tracker:ticket_created:<id>\` per child plus
 \`tracker:project_section:Tasks\` for the auto-rendered index.
-**If those actions are not in the response, your tickets were NOT
-persisted** — re-call finish with the field at the top level.
 
 Every other role leaves the array empty.
 
@@ -1149,8 +1599,9 @@ Every other role leaves the array empty.
 
 ### Security
 
-\`SHIP_API_TOKEN\` is rendered into this prompt so you can call the
-finish endpoint. **Do not echo it back into commit messages, PR
+\`SHIP_API_TOKEN\` is rendered into this prompt for read-only Ship
+API access during the session (ticket snapshots, project listings,
+audit-log lookups). **Do not echo it back into commit messages, PR
 descriptions, comments, logs, or any output you produce.** Treat it
 as a one-shot credential for this run.
 `;

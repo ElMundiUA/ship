@@ -18,12 +18,65 @@ themselves.
 
 ## Required exit protocol
 
-When you call Ship's finish endpoint, the operator sees ONLY what
-you put in `comment` (and, for ticket-shaping stages, `description`).
-Ship doesn't paraphrase or expand — write the message you'd want a
-teammate to read in their inbox without context.
+**Do not call Ship's finish API directly.** Write your intended
+finish payload to `.ship/agent-finish.json` in the repo workdir and
+stop. The Ship runner (`run.mjs`) reads the sidecar after your
+session ends, owns the branch push + PR creation, and posts the
+finish call on your behalf — splicing the PR URL into your comment
+so the audit log captures it.
 
-For every outcome:
+Why: your session terminates **before** the runner has a chance to
+push your branch or run `gh pr create`. If you call `/finish`
+directly with `ready_next_step`, the ticket advances in the FSM
+even when push/PR fails seconds later — the next stage's agent then
+has nothing to QA against, and the ticket stalls silently. The
+sidecar splits "what I did" (your responsibility) from "did the PR
+actually land" (the runner's responsibility) so each side can be
+right independently.
+
+### Sidecar shape
+
+```json
+{
+  "outcome": "ready_next_step",
+  "stage_next": "qa_manual",
+  "ticket_ref": "ELS-99",
+  "process": "development",
+  "comment": "<your audit narrative — see per-outcome rules below>",
+  "description": null,
+  "project_sections": [],
+  "child_tickets": [],
+  "payload": {},
+  "pr": null
+}
+```
+
+The runner pre-fills `run_id` and `fsm_stage` from the routine
+context — don't include them in the sidecar (any value you provide
+is dropped to prevent drift).
+
+### When to set `pr`
+
+Only your **code-changing** role (`dev_implementation`,
+`qa_automation`, `workflow_self_heal`) sets `pr`. Every other role
+leaves it `null`:
+
+```json
+"pr": {
+  "title": "feat(ELS-99): add foo to bar",
+  "body": "## Summary\n…\n\n## Test plan\n…"
+}
+```
+
+The runner appends a `Closes <ticket>` footer + the run handle line
+to your body, so don't bother writing them yourself. Branch name is
+fixed by the runner; don't try to override it.
+
+If your role doesn't change code (intake, BA, planners,
+project-section authors, qa_manual, reviewers, retro), set
+`pr: null` and skip push entirely.
+
+### Outcome rules
 
 - **`outcome=ready_next_step`** — `comment` is a status report a
   busy teammate can read in 10 seconds. **Three lines max**, plain
@@ -32,23 +85,22 @@ For every outcome:
   ```
   Done. <one sentence on the user-visible change>.
   <one sentence on how — at the level "added X to do Y", not file paths>.
-  PR: <URL>     ← required; if no URL, use `outcome=blocked` instead.
   [Ship SDLC:role-<your-role>]
   ```
 
-  **No multi-clause implementation narrative**, no library names, no
-  commit SHAs in prose, no "registers as foo to match main's
+  The runner appends `PR: <url>` between the body and the role
+  marker if your role authored a PR — you don't write that line.
+
+  **No multi-clause implementation narrative**, no library names,
+  no commit SHAs in prose, no "registers as foo to match main's
   NOUN_VERB convention from d33040a". The operator reading their
   Linear inbox cares **what shipped** + **how to verify**, not the
-  archaeology of your decision. If the change is so small it doesn't
-  warrant a second sentence, write one sentence.
+  archaeology of your decision. If the change is so small it
+  doesn't warrant a second sentence, write one sentence.
 
-  **PR URL is mandatory for `ready_next_step`.** If you couldn't open
-  a PR (push failed, gh fell over, network down, branch had no
-  commits), STOP — switch to `outcome=blocked` with the failure
-  reason. Calling `ready_next_step` without a PR moves the ticket
-  forward in the FSM and the next stage agent has nothing to QA
-  against — silent breakage.
+  If you tried but the work isn't actually shippable — branch is
+  empty, gates failed, the change was wrong-shaped — switch to
+  `outcome=blocked` with the specific reason. Don't fake-finish.
 
 - **`outcome=needs_clarification`** — `comment` is the SPECIFIC
   question you need answered, not "I need more info". State the

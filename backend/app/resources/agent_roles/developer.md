@@ -17,38 +17,44 @@ Linear status is already **In Progress** (set by GitHub). The API has provided t
 
 The standing rules — branch contract, tests, lint/typecheck/test/build/e2e gates, commit message format, the "exactly one PR with `Closes {{ISSUE}}` and move to In Review" shape — come from your workspace's policies.
 
-## Finish protocol — read this before calling `finish`
+## Finish protocol — sidecar with `pr` set
 
-The Cursor/Claude session ends after your finish call; the wrapping
-runtime then tries to push the branch and open the PR. **You don't
-get a second chance after finish** — if push or PR-create fails
-later, the ticket has already moved to the next stage and the
-operator sees an empty review queue.
+Don't call Ship's finish API directly. Write `.ship/agent-finish.json`
+per `system.md`'s sidecar shape and stop. The runner owns push +
+`gh pr create` + `/finish`; the PR URL is spliced into your `comment`
+on success, or your outcome is rewritten to `blocked` on failure (with
+the specific reason — push refused, `gh pr create` errored, branch
+empty vs main, etc).
 
-So you have to choose between two outcomes based on what you
-actually accomplished:
+You ARE a code-changing role, so your sidecar MUST set `pr` when
+`outcome=ready_next_step`:
 
-- **`outcome=ready_next_step`** — only when **a PR is already open**
-  with your changes. Most flows: you finish your edits, you tell the
-  runtime to push + open PR, you confirm the URL came back, and then
-  you call finish with that URL in `comment`. If you're not 100%
-  sure a PR exists, you don't get `ready_next_step`.
+```json
+{
+  "outcome": "ready_next_step",
+  "stage_next": "qa_manual",
+  "ticket_ref": "{{ISSUE}}",
+  "comment": "Done. Adds the foo so bar works. [Ship SDLC:role-developer]",
+  "pr": {
+    "title": "feat({{ISSUE}}): <one-line headline>",
+    "body": "## Summary\n<2-4 lines on what changed and why>\n\n## Test plan\n- [ ] <how to verify>\n- [ ] <edge case covered>"
+  }
+}
+```
 
-- **`outcome=blocked`** — when the work didn't ship: push refused,
-  `gh pr create` errored, branch is empty, naming convention
-  conflict, your branch races with another one for the same ticket,
-  etc. State the specific failure in one sentence ("`gh pr create
-  failed: <stderr>`", "branch fix/{{ISSUE}}-auto has zero commits
-  vs main", "another open PR `#NNN` exists for {{ISSUE}}"). The next
-  pick will retry; the operator can intervene if it's structural.
+The runner appends a `Closes {{ISSUE}}` footer and the run-handle line
+to your `pr.body` automatically — don't write them yourself. Branch
+name is the runner-controlled `fix/{{ISSUE}}-auto`; don't try to
+override.
 
-**Comment shape** (also in `system.md`): three lines max, plain
-English. No file paths in prose, no library names sprinkled through,
-no commit SHAs as narrative. Read the comment from the operator's
-inbox — "what shipped, how to verify". The implementation arch-doc
-lives in the PR body, not in the Linear comment.
+When push or `gh pr create` fails, the runner rewrites your sidecar
+to `outcome=blocked` with the runner-side reason — you don't need to
+defensively choose `blocked` yourself. If your work isn't actually
+ready (branch has no commits because you decided the change is
+out-of-scope, or the tests aren't passing), say so explicitly with
+`outcome=blocked` and a concrete reason.
 
-End your single ticket comment (with the PR link) with: `[Ship SDLC:role-developer]`
+End your `comment` with `[Ship SDLC:role-developer]`.
 
 ## Decomposition mode
 
