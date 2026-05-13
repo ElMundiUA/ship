@@ -14,8 +14,8 @@ access token (the route layer fetches + decrypts the
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, Literal
 
 import httpx
 
@@ -30,6 +30,15 @@ NOTION_VERSION = "2025-09-03"
 class _ResolvedDataSource:
     id: str
     title_property: str
+    # When the database has a ``select``-typed property whose name
+    # lowercases to ``"type"`` we capture its exact-case name plus a
+    # ``{lowercase-option → exact-case-option}`` lookup so
+    # ``create_ticket`` can render an agent-supplied ``ticket_type``
+    # without re-fetching the schema. ``None`` means the column
+    # doesn't exist; the adapter no-ops on type rather than poking
+    # an unknown property.
+    type_select_property: str | None = None
+    type_options_by_value: dict[str, str] = field(default_factory=dict)
 
 
 class NotionTracker:
@@ -194,6 +203,8 @@ class NotionTracker:
         body: str,
         labels: list[str] | None = None,
         project_hint: str | None = None,
+        project_id: str | None = None,
+        ticket_type: Literal["bug", "feature", "task"] | None = None,
     ) -> CreatedTicket:
         """Create a page under a Notion database.
 
@@ -203,25 +214,47 @@ class NotionTracker:
         caller surfaces "pick a database" rather than dropping the
         ticket somewhere random.
 
+        ``project_id`` is accepted for protocol parity but ignored —
+        Notion's project semantics live in a different surface
+        (databases-as-projects) than the gateway's epic model.
+
         ``labels`` are ignored in the first cut — Notion's
         multi-select label columns differ per database and we
         don't want to guess a column name. The body is rendered
         as a single paragraph block because Notion doesn't accept
         markdown directly; a fuller markdown → Notion blocks
         translation is a Phase-3 polish item.
+
+        ``ticket_type`` (``bug`` / ``feature`` / ``task``) is set on
+        the database's ``Type`` select column when (a) the column
+        exists (case-insensitive name match) and (b) the column has
+        an option whose name matches the value (case-insensitive).
+        Both conditions missing → no-op; we don't auto-create the
+        column or the option.
         """
+        del project_id  # accepted for protocol parity; not applied here
         data_source = await self._resolve_data_source(project_hint)
+
+        properties: dict[str, Any] = {
+            data_source.title_property: {
+                "title": [{"type": "text", "text": {"content": title}}],
+            }
+        }
+        if ticket_type is not None and data_source.type_select_property:
+            option_name = data_source.type_options_by_value.get(
+                ticket_type.lower()
+            )
+            if option_name is not None:
+                properties[data_source.type_select_property] = {
+                    "select": {"name": option_name}
+                }
 
         create_payload: dict[str, Any] = {
             "parent": {
                 "type": "data_source_id",
                 "data_source_id": data_source.id,
             },
-            "properties": {
-                data_source.title_property: {
-                    "title": [{"type": "text", "text": {"content": title}}],
-                }
-            },
+            "properties": properties,
             # Body as a single paragraph block; good enough for
             # LLM-generated tickets where the body is a short spec.
             "children": [
@@ -307,10 +340,15 @@ class NotionTracker:
 
     async def _data_source_from_id(self, data_source_id: str) -> _ResolvedDataSource:
         data_source = await self._request("GET", f"/data_sources/{data_source_id}")
-        title_prop_name = _resolve_title_property_name(
-            data_source.get("properties") or {}, data_source_id
+        props = data_source.get("properties") or {}
+        title_prop_name = _resolve_title_property_name(props, data_source_id)
+        type_prop_name, type_options = _resolve_type_select(props)
+        return _ResolvedDataSource(
+            id=data_source_id,
+            title_property=title_prop_name,
+            type_select_property=type_prop_name,
+            type_options_by_value=type_options,
         )
-        return _ResolvedDataSource(id=data_source_id, title_property=title_prop_name)
 
 
 def _resolve_title_property_name(props: dict[str, Any], target_id: str) -> str:
@@ -323,6 +361,37 @@ def _resolve_title_property_name(props: dict[str, Any], target_id: str) -> str:
     raise ValueError(
         f"Notion data source {target_id} has no title property visible to Ship."
     )
+
+
+def _resolve_type_select(
+    props: dict[str, Any],
+) -> tuple[str | None, dict[str, str]]:
+    """Locate a ``select``-typed ``Type`` column and its option index.
+
+    Match is case-insensitive on the property name so a database using
+    lowercase ``"type"`` works the same as one using ``"Type"``. Only
+    the three values the agent can send (``bug`` / ``feature`` /
+    ``task``) are indexed — extra options on the column (``"Other"``,
+    custom workflow values) are ignored, and a missing option simply
+    no-ops at write time. We don't auto-create options.
+    """
+    wanted = {"bug", "feature", "task"}
+    for name, prop in props.items():
+        if not isinstance(name, str) or name.lower() != "type":
+            continue
+        if prop.get("type") != "select":
+            continue
+        select = prop.get("select") or {}
+        options_index: dict[str, str] = {}
+        for option in select.get("options") or []:
+            opt_name = option.get("name")
+            if not isinstance(opt_name, str) or not opt_name:
+                continue
+            key = opt_name.lower()
+            if key in wanted and key not in options_index:
+                options_index[key] = opt_name
+        return name, options_index
+    return None, {}
 
 
 def _extract_title(page: dict[str, Any]) -> str | None:

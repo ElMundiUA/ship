@@ -21,7 +21,7 @@ re-resolve it per request.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
@@ -219,17 +219,35 @@ class GitHubIssuesTracker:
         body: str,
         labels: list[str] | None = None,
         project_hint: str | None = None,
+        project_id: str | None = None,
+        ticket_type: Literal["bug", "feature", "task"] | None = None,
     ) -> CreatedTicket:
         """Open an issue in ``owner/repo``.
 
         ``project_hint`` is ignored — the repo is decided at
-        construction time. ``labels`` are passed straight through;
-        GitHub silently ignores labels that don't exist on the
-        repo, which is the opposite of Linear's strictness and is
+        construction time. ``project_id`` is accepted for protocol
+        parity but not applied (GitHub Project v2 attachment is a
+        separate GraphQL surface). ``labels`` are passed straight
+        through; GitHub silently ignores labels that don't exist on
+        the repo, which is the opposite of Linear's strictness and is
         fine here because GitHub treats labels as free-form.
+
+        ``ticket_type`` (``bug`` / ``feature`` / ``task``) renders as
+        a ``type:<value>`` label prepended to ``labels``. GitHub
+        Issues has no native issue-type field today, so the label is
+        the only mechanism — same string convention as the Linear
+        fallback so a downstream dashboard filters on one key.
         """
+        del project_id  # accepted for protocol parity; not applied here
         body_payload: dict[str, Any] = {"title": title, "body": body}
-        if labels:
+        if ticket_type is not None:
+            type_label = f"type:{ticket_type}"
+            merged: list[str] = [type_label]
+            for raw in labels or []:
+                if raw.lower() != type_label:
+                    merged.append(raw)
+            body_payload["labels"] = merged
+        elif labels:
             body_payload["labels"] = labels
         response = await self._request(
             "POST",

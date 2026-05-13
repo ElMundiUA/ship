@@ -119,6 +119,36 @@ def test_dispatch_covers_every_spec() -> None:
         assert name in handlers, f"spec {name!r} has no handler in _handlers()"
 
 
+def test_ticket_create_exposes_type_enum() -> None:
+    """ELS-69: the ``ticket_create`` spec must advertise the ``type``
+    enum so the LLM knows it can classify a ticket as
+    ``bug`` / ``feature`` / ``task``. Doc-string must also mention
+    the three values explicitly — the tool-call planner reads the
+    description to decide *when* to pass the field."""
+    box = _toolbox()
+    spec = next(s for s in box.specs() if s.name == "ticket_create")
+    type_prop = spec.parameters["properties"].get("type")
+    assert type_prop is not None, "ticket_create has no 'type' parameter"
+    assert type_prop.get("type") == "string"
+    assert type_prop.get("enum") == ["bug", "feature", "task"]
+    assert type_prop.get("description"), (
+        "ticket_create.type prop lacks a description — the LLM needs "
+        "guidance on when to pass each value"
+    )
+    assert spec.parameters.get("required") == ["title", "body"], (
+        "adding 'type' to required would silently break every existing "
+        "create_ticket call — keep it optional"
+    )
+    # Description must enumerate the three values so the planner can
+    # connect "this is a bug" → ``type="bug"`` without inferring.
+    desc = spec.description.lower()
+    for value in ("bug", "feature", "task"):
+        assert value in desc, (
+            f"ticket_create description doesn't mention {value!r}; "
+            "the LLM won't know to pass it"
+        )
+
+
 def test_admin_mutating_tools_in_prompt_match_registry() -> None:
     """The Hard rules block names every admin-mutating tool so the
     LLM knows which calls require workspace admin. If a new

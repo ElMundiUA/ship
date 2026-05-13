@@ -407,7 +407,12 @@ class ToolBox:
                     "have their confirmation — never autofile. Pass "
                     "``project_id`` to attach the new ticket to an epic so "
                     "child tickets stay short and pull motivation / scope "
-                    "from the project body."
+                    "from the project body. Pass ``type`` (``bug`` / "
+                    "``feature`` / ``task``) to classify the work so "
+                    "downstream triage dashboards key off the tracker-"
+                    "native field (Jira issuetype, Linear native issue "
+                    "type when enabled, otherwise a ``type:<value>`` "
+                    "label on Linear / GitHub / Notion ``Type`` select)."
                 ),
                 parameters={
                     "type": "object",
@@ -435,6 +440,21 @@ class ToolBox:
                                 "Tracker-native project (epic) UUID. From "
                                 "``list_projects``. Omit for standalone "
                                 "tickets not part of an epic."
+                            ),
+                        },
+                        "type": {
+                            "type": "string",
+                            "enum": ["bug", "feature", "task"],
+                            "description": (
+                                "Optional classification — ``bug`` / "
+                                "``feature`` / ``task``. Maps to the "
+                                "tracker-native field where supported "
+                                "(Jira issuetype, Linear native issue "
+                                "type when enabled, Notion ``Type`` "
+                                "select); falls back to a ``type:<value>`` "
+                                "label otherwise. Omit to keep today's "
+                                "default (Jira → ``Task``, others → no "
+                                "extra label)."
                             ),
                         },
                     },
@@ -2051,6 +2071,16 @@ class ToolBox:
         project_id = args.get("project_id")
         if project_id is not None and not isinstance(project_id, str):
             raise ToolInvocationError("project_id must be a string")
+        ticket_type_raw = args.get("type")
+        if ticket_type_raw is not None and ticket_type_raw not in (
+            "bug",
+            "feature",
+            "task",
+        ):
+            raise ToolInvocationError(
+                "type must be one of 'bug', 'feature', 'task'"
+            )
+        ticket_type = ticket_type_raw
         tracker_kind = args.get("tracker")
 
         tracker = await self._resolve_tracker(tracker_kind, project_hint)
@@ -2061,6 +2091,7 @@ class ToolBox:
                 labels=labels,
                 project_hint=project_hint,
                 project_id=project_id,
+                ticket_type=ticket_type,
             )
         except ValueError as exc:
             raise ToolInvocationError(str(exc)) from exc

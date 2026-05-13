@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 
 logger = logging.getLogger(__name__)
@@ -91,6 +91,15 @@ class LinearTracker:
         self._state_id_by_name = dict(state_id_by_name or {})
         self._fsm_to_linear_state = dict(fsm_to_linear_state or {})
         self._signal_label_ids = dict(signal_label_ids or {})
+        # ``team.issueTypes`` is feature-gated on Linear's plan tier;
+        # the probe can succeed-but-empty, succeed-with-results, or
+        # fail with a GraphQL schema-level error on tokens whose
+        # workspace doesn't expose the field at all. We cache per-team
+        # so each ``create_ticket`` call doesn't re-pay the round-trip;
+        # ``None`` is the "probe failed (use label fallback)" sentinel.
+        self._issue_types_by_team: dict[
+            str, dict[str, str] | None
+        ] = {}
 
     def _auth_header(self) -> str:
         """Linear accepts two token shapes with different header
@@ -922,6 +931,7 @@ class LinearTracker:
         project_hint: str | None = None,
         project_id: str | None = None,
         priority: int | None = None,
+        ticket_type: Literal["bug", "feature", "task"] | None = None,
     ) -> CreatedTicket:
         """Create a Linear issue under the requested team.
 
@@ -941,10 +951,38 @@ class LinearTracker:
         ``project_id`` (Linear project UUID) attaches the new ticket
         to an epic so child tickets can stay short and pull motivation
         / scope / decisions from the project body.
+
+        ``ticket_type`` (``bug`` / ``feature`` / ``task``) classifies
+        the work. When the team exposes Linear's native issue-types
+        feature and has a type whose name matches case-insensitively,
+        we set ``issueTypeId``. Otherwise the value is rendered as a
+        ``type:<value>`` label alongside caller-supplied labels (de-
+        duped) so downstream dashboards filter on one label key
+        across all four trackers.
         """
         team_id = await self._resolve_team_id(project_hint)
+
+        issue_type_id: str | None = None
+        effective_labels: list[str] = list(labels or [])
+        if ticket_type is not None:
+            issue_type_id = await self._resolve_issue_type_id(
+                team_id, ticket_type
+            )
+            if issue_type_id is None:
+                # Fall back to a portable ``type:<value>`` label so the
+                # classification still surfaces. De-dup against any
+                # caller-supplied entry so we don't double-tag.
+                fallback_label = f"type:{ticket_type}"
+                if not any(
+                    existing.lower() == fallback_label
+                    for existing in effective_labels
+                ):
+                    effective_labels.append(fallback_label)
+
         label_ids = (
-            await self._resolve_label_ids(team_id, labels) if labels else []
+            await self._resolve_label_ids(team_id, effective_labels)
+            if effective_labels
+            else []
         )
 
         mutation = """
@@ -964,6 +1002,8 @@ class LinearTracker:
             input_payload["labelIds"] = label_ids
         if project_id:
             input_payload["projectId"] = project_id
+        if issue_type_id is not None:
+            input_payload["issueTypeId"] = issue_type_id
         if priority is not None:
             # Linear's priority is 0..4 (0=No priority, 1=Urgent,
             # 2=High, 3=Medium, 4=Low). Clamp defensively — the
@@ -1861,6 +1901,73 @@ class LinearTracker:
                 "the default team on the workspace's Linear integration."
             )
         return str(nodes[0]["id"])
+
+    async def _resolve_issue_type_id(
+        self,
+        team_id: str,
+        ticket_type: Literal["bug", "feature", "task"],
+    ) -> str | None:
+        """Return the team-native ``IssueType.id`` matching ``ticket_type``.
+
+        Linear's ``team.issueTypes`` is feature-gated per plan tier:
+        tokens whose workspace doesn't expose the field at all raise
+        a GraphQL schema-level error rather than returning an empty
+        list. We treat *any* failure (schema error, transport error,
+        empty result, name mismatch) as "no native type available" —
+        the caller then renders a ``type:<value>`` label as a portable
+        fallback so the classification still lands.
+
+        Cache hits on ``team_id`` (not ``team_id+ticket_type``) so two
+        sequential ``create_ticket`` calls on the same team share one
+        probe regardless of which value they pass. ``None`` is the
+        "probe failed" sentinel — distinct from "probe returned empty
+        list" because both behave the same downstream but we want to
+        debug the difference if needed.
+        """
+        cached = self._issue_types_by_team.get(team_id)
+        if cached is None and team_id in self._issue_types_by_team:
+            # Probe already ran and failed; don't retry within this
+            # adapter instance — the schema-gating is workspace-wide,
+            # not per-call.
+            return None
+        if cached is None:
+            cached = await self._probe_team_issue_types(team_id)
+            self._issue_types_by_team[team_id] = cached
+        if not cached:
+            return None
+        return cached.get(ticket_type.lower())
+
+    async def _probe_team_issue_types(
+        self, team_id: str
+    ) -> dict[str, str] | None:
+        """Fetch ``team.issueTypes`` once; ``None`` on schema error."""
+        query = """
+        query ShipIssueTypes($teamId: String!) {
+          team(id: $teamId) { issueTypes { nodes { id name } } }
+        }
+        """
+        try:
+            data = await self._gql(query, {"teamId": team_id})
+        except Exception:  # noqa: BLE001 — schema-error / transport / 4xx
+            # Any failure means we can't trust the native field;
+            # caller falls through to the ``type:<value>`` label path.
+            logger.info(
+                "linear issueTypes probe failed for team_id=%s; falling "
+                "back to type:<value> label",
+                team_id,
+            )
+            return None
+        nodes = (
+            ((data.get("team") or {}).get("issueTypes") or {}).get("nodes")
+            or []
+        )
+        mapping: dict[str, str] = {}
+        for node in nodes:
+            name = str(node.get("name") or "").strip().lower()
+            node_id = node.get("id")
+            if name and node_id:
+                mapping[name] = str(node_id)
+        return mapping
 
     async def _resolve_label_ids(
         self, team_id: str, labels: list[str]
