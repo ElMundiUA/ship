@@ -28,7 +28,8 @@ SMOKE_API ?= http://localhost:8100
         logs-console health smoke psql redis-cli migrate revision shell \
         test test-backend test-fast clean nuke status backup backup-prune ps env-check \
         dev-env-check dev-port-backend dev-port-console dev-migrate dev-backend \
-        dev-console dev-local prod-up prod-down prod-logs bunny-deploy bunny-deploy-dry
+        dev-console dev-local prod-up prod-down prod-logs \
+        k8s-apply k8s-rollout k8s-rollout-undo k8s-logs k8s-pods
 
 help: ## Show this help.
 	@awk 'BEGIN {FS = ":.*##"; printf "Targets:\n"} \
@@ -178,13 +179,27 @@ prod-down: ## Tear down the prod-overlay stack (keeps volumes).
 prod-logs: ## Tail logs for all prod-overlay services (Caddy + app).
 	$(COMPOSE) -f docker-compose.yml -f docker-compose.prod.yml logs -f --tail=200
 
-bunny-deploy: ## Roll backend + console images to Bunny Magic Containers (uses tools/scripts/bunny-deploy-platform.mjs).
-	@test -n "$(IMAGE_TAG)" || { echo "Usage: make bunny-deploy IMAGE_TAG=main-abc1234"; exit 2; }
-	IMAGE_TAG=$(IMAGE_TAG) node tools/scripts/bunny-deploy-platform.mjs
+k8s-apply: ## Apply prod Kustomize overlay to DOKS (requires kubectl context already on ship-prod).
+	kubectl apply -k infra/k8s/overlays/prod
 
-bunny-deploy-dry: ## Same as bunny-deploy but no API writes (DRY_RUN=1).
-	@test -n "$(IMAGE_TAG)" || { echo "Usage: make bunny-deploy-dry IMAGE_TAG=main-abc1234"; exit 2; }
-	DRY_RUN=1 IMAGE_TAG=$(IMAGE_TAG) node tools/scripts/bunny-deploy-platform.mjs
+k8s-rollout: ## Roll backend + console to a specific image tag. Usage: make k8s-rollout TAG=sha-abc1234
+	@test -n "$(TAG)" || { echo "Usage: make k8s-rollout TAG=sha-abc1234"; exit 2; }
+	kubectl -n ship set image deploy/ship-server  ship-server=dekus/ship-backend:$(TAG)
+	kubectl -n ship set image deploy/ship-console ship-console=dekus/ship-console:$(TAG)
+	kubectl -n ship rollout status deploy/ship-server  --timeout=5m
+	kubectl -n ship rollout status deploy/ship-console --timeout=5m
+
+k8s-rollout-undo: ## Roll back the last image bump on both Deployments.
+	kubectl -n ship rollout undo deploy/ship-server
+	kubectl -n ship rollout undo deploy/ship-console
+	kubectl -n ship rollout status deploy/ship-server  --timeout=5m
+	kubectl -n ship rollout status deploy/ship-console --timeout=5m
+
+k8s-pods: ## Show pod status across the ship namespace.
+	kubectl -n ship get pods -o wide
+
+k8s-logs: ## Tail backend pod logs. Override SVC=ship-console to follow the UI instead.
+	kubectl -n ship logs -l app.kubernetes.io/name=$(or $(SVC),ship-server) --tail=200 -f
 
 clean: ## Stop the stack and drop the docker network. Keeps volumes (DB safe).
 	$(COMPOSE) down --remove-orphans

@@ -1,4 +1,6 @@
-# Build & push every Ship Docker image, then roll out to Bunny Magic Containers.
+# Build & push every Ship Docker image, then roll out — backend +
+# console to DOKS (kubectl set image), landing to Bunny Magic
+# Containers (still CDN-fronted there).
 #
 # Three images live in this repo and they are always built together so
 # we never end up with a console expecting a backend that hasn't
@@ -10,32 +12,36 @@
 #   dekus/ship-backend  — FastAPI (`ship-server`) + arq worker (`ship-worker`)
 #                         share one image; the runtime command differs.
 #                         Dockerfile: infra/deploy/backend/Dockerfile
+#                         Runtime: DOKS Deployment ``ship-server``.
 #   dekus/ship-console  — Next.js operator UI (standalone build).
 #                         Dockerfile: infra/deploy/console/Dockerfile
+#                         Runtime: DOKS Deployment ``ship-console``.
 #   dekus/ship-docs     — Marketing landing + `/docs` manual + `/book`.
 #                         Dockerfile: ./Dockerfile (repo root)
+#                         Runtime: Bunny Magic Container (kept on Bunny CDN).
 #
 # Tagging:
 #   - `latest`              — only on `main` pushes
-#   - `sha-<7-char-sha>`    — every build (pinnable for Bunny Magic Containers)
+#   - `sha-<7-char-sha>`    — every build (pinnable for ``kubectl set image``)
 #   - `pr-<number>`         — on pull_request, push=false (smoke build only)
 #
-# Bunny rollout: every `main` push (after a successful build) PATCHes the
-# three Magic Container apps with the new `sha-<short>` tag + the
-# registry digest, then triggers a deploy. Required repo config:
+# Platform rollout (DOKS): every `main` push (after a successful build)
+# does ``doctl kubernetes cluster kubeconfig save`` then ``kubectl set
+# image`` on the two Deployments and waits for ``rollout status``.
+# Landing rollout (Bunny) stays unchanged below the platform job.
+#
+# Required repo config:
 #
 #   secrets:
-#     DOCKER_HUB_TOKEN          Docker Hub PAT with push perms
-#     BUNNY_MAIN_API_KEY        Bunny account API key (Magic Containers RW)
+#     DOCKER_HUB_TOKEN              Docker Hub PAT with push perms
+#     DIGITALOCEAN_ACCESS_TOKEN     DO API token (K8s read+write)
+#     DOKS_CLUSTER_ID               DOKS cluster UUID for ``ship-prod``
+#     BUNNY_MAIN_API_KEY            Bunny account API key (landing rollout)
 #   vars (Settings → Variables → Actions, optional unless noted):
-#     BUNNY_BACKEND_APP_ID      *required* — MC app id for ship-server
-#     BUNNY_CONSOLE_APP_ID      *required* — MC app id for ship-console
+#     DOKS_NAMESPACE            default "ship" — Deployment namespace
 #     BUNNY_APP_ID              *required* — MC app id for ship-docs (landing)
 #     SHIP_MC_APP_NAME          default "ship-docs" — MC app name for landing
-#     BUNNY_BACKEND_CONTAINER   default "ship-server" — template name in the backend MC app
-#     BUNNY_CONSOLE_CONTAINER   default "console"     — template name in the console MC app
-#     BUNNY_CONTAINER_NAME      default "Container-1" — template name in the landing MC app
-#     BUNNY_WORKER_CONTAINER    leave empty for cloud SaaS (no worker)
+#     BUNNY_CONTAINER_NAME      default "Container-1" — template name in landing MC
 #     DOCKERHUB_USERNAME        default "dekus"
 #     DOCKER_IMAGE_NAME_BACKEND default "dekus/ship-backend"
 #     DOCKER_IMAGE_NAME_CONSOLE default "dekus/ship-console"
@@ -174,95 +180,65 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   deploy-platform:
-    name: Roll out backend + console to Bunny Magic Containers
+    name: Roll out backend + console to DOKS
     needs: [build]
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      IMG_BACKEND: ${{ vars.DOCKER_IMAGE_NAME_BACKEND || 'dekus/ship-backend' }}
+      IMG_CONSOLE: ${{ vars.DOCKER_IMAGE_NAME_CONSOLE || 'dekus/ship-console' }}
+      DOKS_NAMESPACE: ${{ vars.DOKS_NAMESPACE || 'ship' }}
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - name: Resolve deploy tag (sha-<short>) + image names
+      - name: Resolve deploy tag (sha-<short>)
         id: vars
-        env:
-          IMG_BACKEND: ${{ vars.DOCKER_IMAGE_NAME_BACKEND || 'dekus/ship-backend' }}
-          IMG_CONSOLE: ${{ vars.DOCKER_IMAGE_NAME_CONSOLE || 'dekus/ship-console' }}
         run: |
           short="${GITHUB_SHA:0:7}"
           echo "tag=sha-${short}" >> "$GITHUB_OUTPUT"
-          echo "image_backend=${IMG_BACKEND}" >> "$GITHUB_OUTPUT"
-          echo "image_console=${IMG_CONSOLE}" >> "$GITHUB_OUTPUT"
 
-      - name: Resolve registry digests (Docker Hub source-of-truth)
-        id: digests
-        env:
-          TAG: ${{ steps.vars.outputs.tag }}
-          IMG_BACKEND: ${{ steps.vars.outputs.image_backend }}
-          IMG_CONSOLE: ${{ steps.vars.outputs.image_console }}
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Save kubeconfig (short-lived)
+        run: |
+          # ``--expiry-seconds 600`` issues a kubeconfig that auto-expires
+          # well before the workflow could be replayed — keeps the
+          # credential blast radius small if logs leak.
+          doctl kubernetes cluster kubeconfig save "${{ secrets.DOKS_CLUSTER_ID }}" --expiry-seconds 600
+
+      - name: Roll out new image tags
         run: |
           set -euo pipefail
-          fetch_digest() {
-            local repo="$1"
-            local token
-            token="$(curl -sS "https://auth.docker.io/token?service=registry.docker.io&scope=repository:${repo}:pull" | jq -r .token)"
-            [[ -n "$token" && "$token" != "null" ]]
-            curl -sSI \
-              -H "Authorization: Bearer ${token}" \
-              -H "Accept: application/vnd.docker.distribution.manifest.list.v2+json" \
-              -H "Accept: application/vnd.oci.image.index.v1+json" \
-              -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
-              "https://registry-1.docker.io/v2/${repo}/manifests/${TAG}" \
-              | grep -i '^docker-content-digest:' \
-              | awk '{print $2}' \
-              | tr -d '\r'
-          }
-          BACKEND_DIG="$(fetch_digest "${IMG_BACKEND}")"
-          CONSOLE_DIG="$(fetch_digest "${IMG_CONSOLE}")"
-          [[ -n "$BACKEND_DIG" && -n "$CONSOLE_DIG" ]]
-          echo "backend=${BACKEND_DIG}" >> "$GITHUB_OUTPUT"
-          echo "console=${CONSOLE_DIG}" >> "$GITHUB_OUTPUT"
-          {
-            echo "### Registry digests for ${TAG}"
-            echo "- backend: \`${BACKEND_DIG}\`"
-            echo "- console: \`${CONSOLE_DIG}\`"
-          } >> "$GITHUB_STEP_SUMMARY"
+          TAG="${{ steps.vars.outputs.tag }}"
+          kubectl -n "${DOKS_NAMESPACE}" set image deploy/ship-server "ship-server=${IMG_BACKEND}:${TAG}"
+          kubectl -n "${DOKS_NAMESPACE}" set image deploy/ship-console "ship-console=${IMG_CONSOLE}:${TAG}"
+          # Record who/what rolled this so ``kubectl rollout history`` is useful for forensics.
+          kubectl -n "${DOKS_NAMESPACE}" annotate deploy/ship-server kubernetes.io/change-cause="${TAG} via GHA ${GITHUB_RUN_ID}" --overwrite
+          kubectl -n "${DOKS_NAMESPACE}" annotate deploy/ship-console kubernetes.io/change-cause="${TAG} via GHA ${GITHUB_RUN_ID}" --overwrite
 
-      - name: Patch + roll out backend & console Bunny apps
-        env:
-          BUNNY_ACCESS_KEY: ${{ secrets.BUNNY_MAIN_API_KEY }}
-          BUNNY_BACKEND_APP_ID: ${{ vars.BUNNY_BACKEND_APP_ID }}
-          BUNNY_CONSOLE_APP_ID: ${{ vars.BUNNY_CONSOLE_APP_ID }}
-          BUNNY_BACKEND_IMAGE: ${{ steps.vars.outputs.image_backend }}
-          BUNNY_CONSOLE_IMAGE: ${{ steps.vars.outputs.image_console }}
-          BUNNY_BACKEND_CONTAINER: ${{ vars.BUNNY_BACKEND_CONTAINER || 'ship-server' }}
-          BUNNY_CONSOLE_CONTAINER: ${{ vars.BUNNY_CONSOLE_CONTAINER || 'console' }}
-          BUNNY_WORKER_CONTAINER: ${{ vars.BUNNY_WORKER_CONTAINER }}
-          BUNNY_BACKEND_DIGEST: ${{ steps.digests.outputs.backend }}
-          BUNNY_CONSOLE_DIGEST: ${{ steps.digests.outputs.console }}
-          IMAGE_TAG: ${{ steps.vars.outputs.tag }}
-          # Best-effort observability only — bunny-deploy-platform's
-          # waitForRollout no longer fails on this budget; it just stops
-          # streaming progress and trusts the PATCH + deploy nudge. 90 s
-          # is enough to catch a fast rollout in the log without burning
-          # CI minutes.
-          MAX_WAIT_S: "90"
+      - name: Wait for rollout (fail-fast on stuck pods)
         run: |
           set -euo pipefail
-          if [[ -z "${BUNNY_BACKEND_APP_ID:-}" || -z "${BUNNY_CONSOLE_APP_ID:-}" ]]; then
-            echo "::error::Set repo variables BUNNY_BACKEND_APP_ID + BUNNY_CONSOLE_APP_ID before enabling auto-deploy."
-            echo "::error::Find the IDs in the Bunny dashboard URL: /magic-containers/<id>"
-            exit 1
-          fi
-          if [[ -z "${BUNNY_ACCESS_KEY:-}" ]]; then
-            echo "::error::Set repo secret BUNNY_MAIN_API_KEY (Bunny account API key with Magic Containers RW)."
-            exit 1
-          fi
-          node tools/scripts/bunny-deploy-platform.mjs
+          # 5 min ceiling per Deployment matches our liveness probe
+          # budget — anything slower is a real failure, not a slow boot.
+          kubectl -n "${DOKS_NAMESPACE}" rollout status deploy/ship-server  --timeout=5m
+          kubectl -n "${DOKS_NAMESPACE}" rollout status deploy/ship-console --timeout=5m
+
+      - name: Smoke test (in-cluster + public)
+        run: |
+          set -euo pipefail
+          # Public smoke confirms ingress + cert + DNS + LB are all wired.
+          # Failing here means the image came up but the path through the
+          # ingress is broken — rollback is ``kubectl rollout undo`` on
+          # whichever Deployment regressed.
+          curl -fsS https://api.ship.elmundi.com/v1/health
+          echo
+          curl -fsS -o /dev/null -w "console /login → HTTP %{http_code}\n" https://app.ship.elmundi.com/login
 
       - name: Deploy summary
         if: always()
@@ -270,10 +246,11 @@ jobs:
           TAG: ${{ steps.vars.outputs.tag }}
         run: |
           {
-            echo "### Bunny rollout (platform)"
+            echo "### DOKS rollout (platform)"
             echo "- Tag: \`${TAG}\`"
-            echo "- ship-server app: \`${{ vars.BUNNY_BACKEND_APP_ID || '(unset)' }}\`"
-            echo "- ship-console app: \`${{ vars.BUNNY_CONSOLE_APP_ID || '(unset)' }}\`"
+            echo "- ship-server: \`${IMG_BACKEND}:${TAG}\`"
+            echo "- ship-console: \`${IMG_CONSOLE}:${TAG}\`"
+            echo "- Namespace: \`${DOKS_NAMESPACE}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
   deploy-landing:
