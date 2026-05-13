@@ -644,11 +644,18 @@ async def _apply_pull_request_event(
             )
 
 
-# Pull a ``ELS-99`` / ``ENG-12`` / ``ABC-1234`` style ticket id out of an
-# agent-PR title. Agent PRs follow ``agent: <role> · <stage> ELS-99`` —
-# pattern is permissive enough to catch operator-edited titles too, as
-# long as the ``LETTERS-NUMBER`` token survives.
-_TICKET_REF_PR_TITLE_RE = re.compile(r"\b([A-Z][A-Z0-9]{1,9}-\d+)\b")
+# Pull a ``ELS-99`` / ``ENG-12`` / ``ABCD-1234`` style ticket id out of
+# an agent-PR title. Agent PRs follow ``agent: <role> · <stage> ELS-99``
+# — pattern is permissive enough to catch operator-edited titles too,
+# as long as the ``LETTERS-NUMBER`` token survives.
+#
+# Require **3+ character prefix** to avoid false positives on internal
+# PR labels like ``PR-1`` / ``PR-2`` (planning pipeline markers some
+# repos add to PR titles). Linear and Jira project keys are 3+ chars
+# by convention; the small risk of a 2-char Linear team key shipping
+# in the wild is worth eating to keep the hook quiet on planning-tag
+# PRs that mention no real tracker id.
+_TICKET_REF_PR_TITLE_RE = re.compile(r"\b([A-Z][A-Z0-9]{2,9}-\d+)\b")
 
 
 async def _transition_linked_tickets_on_merge(
