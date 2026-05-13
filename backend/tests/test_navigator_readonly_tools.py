@@ -24,6 +24,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
+import pytest_asyncio
 
 
 # ---------------------------------------------------------------------------
@@ -409,3 +410,520 @@ async def test_audit_search_validates_filter_types(toolbox) -> None:
         ToolInvocationError, match="target_kind must be a string"
     ):
         await toolbox._tool_workspace_audit_search({"target_kind": 42})
+
+
+# ---------------------------------------------------------------------------
+# repo_symbols (ELS-72)
+#
+# Integration tests against the tool dispatcher. The parser itself is
+# covered by ``test_symbol_parser.py``; here we pin the handler shape:
+# mode selection (paths vs. query), bounds + truncation, ``files_failed``
+# / ``skipped_unsupported`` mapping, and the closed set of error
+# surfaces. GitHub calls are stubbed at the ``GitHubCodeHost`` boundary
+# (``get_blob`` / ``search_code``) so tests stay hermetic.
+# ---------------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture
+async def toolbox_with_repo(db_session, seed_workspace):
+    """Toolbox + an activated repo backed by a stubbed GitHub install.
+
+    Returns ``(toolbox, repo)``. The repo's ``installation_id`` points
+    at a real ``GitHubInstallation`` row so ``_resolve_repo_with_install``
+    walks the same code path production hits (the seam we monkey-patch
+    sits one layer below, at ``GitHubCodeHost``).
+    """
+    from datetime import datetime, timezone
+
+    from backend.app.core.config import get_settings
+    from backend.app.db.models.integrations import (
+        GitHubInstallation,
+        WorkspaceRepo,
+    )
+    from backend.app.services.agent.tools import ToolBox
+
+    user, _, workspace = seed_workspace
+    install = GitHubInstallation(
+        workspace_id=workspace.id,
+        installation_id=820_072,
+        account_login="acme",
+        account_type="Organization",
+        repository_selection="selected",
+        installed_at=datetime.now(timezone.utc),
+    )
+    db_session.add(install)
+    await db_session.flush()
+    repo = WorkspaceRepo(
+        workspace_id=workspace.id,
+        installation_id=install.id,
+        provider="github",
+        external_id=720_072_072,
+        full_name="acme/widgets",
+        default_branch="main",
+        private=False,
+        html_url="https://github.com/acme/widgets",
+        description=None,
+        activated_at=datetime.now(timezone.utc),
+    )
+    db_session.add(repo)
+    await db_session.flush()
+
+    toolbox = ToolBox(
+        db_session,
+        settings=get_settings(),
+        workspace_id=workspace.id,
+        user_id=user.id,
+    )
+    return toolbox, repo
+
+
+def _stub_get_blob(monkeypatch, files: dict[str, str]):
+    """Patch ``GitHubCodeHost.get_blob`` to serve ``files`` dict.
+
+    Unknown paths raise ``FileNotFoundError`` — same surface the real
+    adapter raises on a GitHub 404. ``calls`` records each fetched
+    path so tests can assert call counts (TC-N.8 / TC-N.9).
+    """
+    from backend.app.integrations.gateway.code_host import BlobContent
+
+    calls: list[str] = []
+
+    async def _get_blob(self, ref, *, path, ref_sha=None):  # noqa: ARG001
+        calls.append(path)
+        if path not in files:
+            raise FileNotFoundError(f"{ref.owner}/{ref.repo}:{path}")
+        content = files[path]
+        return BlobContent(
+            path=path,
+            ref=ref_sha or "main",
+            sha="cafef00d",
+            size=len(content.encode("utf-8")),
+            encoding="utf-8",
+            content=content,
+        )
+
+    monkeypatch.setattr(
+        "backend.app.integrations.github.code_host_adapter."
+        "GitHubCodeHost.get_blob",
+        _get_blob,
+    )
+    return calls
+
+
+_PY_SAMPLE = (
+    "VERSION = \"1.0\"\n"
+    "\n"
+    "def helper(x: int) -> int:\n"
+    "    return x + 1\n"
+    "\n"
+    "class Foo:\n"
+    "    def bar(self) -> None:\n"
+    "        return None\n"
+)
+
+
+def test_dispatcher_maps_repo_symbols_to_handler(toolbox) -> None:
+    """TC-1.2: tool name → handler binding (rename safety)."""
+    from backend.app.services.agent.tools import ToolBox
+
+    table = toolbox._handlers()
+    assert "repo_symbols" in table
+    # The bound method's ``__func__`` is the unbound class method —
+    # renaming either side breaks this assertion.
+    assert table["repo_symbols"].__func__ is ToolBox._tool_repo_symbols
+
+
+@pytest.mark.asyncio
+async def test_repo_symbols_paths_mode_fetches_then_parses(
+    toolbox_with_repo, monkeypatch
+) -> None:
+    """TC-2.1 + TC-3.2: paths drives a single ``get_blob`` per file
+    and the response keys match the documented contract."""
+    toolbox, repo = toolbox_with_repo
+    calls = _stub_get_blob(monkeypatch, {"x.py": _PY_SAMPLE})
+
+    raw = await toolbox._tool_repo_symbols(
+        {"repo_id": str(repo.id), "paths": ["x.py"]}
+    )
+    payload = json.loads(raw)
+
+    assert calls == ["x.py"]
+    # Top-level contract — every documented key present.
+    for key in (
+        "repo_id",
+        "full_name",
+        "query",
+        "kinds",
+        "supported_extensions",
+        "files_requested",
+        "files_parsed",
+        "matched",
+        "truncated",
+        "skipped_unsupported",
+        "files_failed",
+        "symbols",
+    ):
+        assert key in payload, f"missing top-level key {key!r}"
+    assert payload["full_name"] == "acme/widgets"
+    assert payload["query"] is None
+    assert payload["files_requested"] == 1
+    assert payload["files_parsed"] == 1
+    assert payload["files_failed"] is None
+    assert payload["skipped_unsupported"] is None
+    assert sorted(payload["supported_extensions"]) == [
+        ".go",
+        ".py",
+        ".ts",
+        ".tsx",
+    ]
+    names = {row["symbol"] for row in payload["symbols"]}
+    assert {"helper", "Foo", "bar", "VERSION"} <= names
+    # TC-3.1: every row has the documented keys with correct types.
+    for row in payload["symbols"]:
+        assert set(row.keys()) == {"file", "symbol", "kind", "line", "signature"}
+        assert isinstance(row["line"], int) and row["line"] >= 1
+        assert isinstance(row["signature"], str)
+        assert "\n" not in row["signature"]
+        assert len(row["signature"]) <= 240
+        assert row["kind"] in {
+            "function",
+            "class",
+            "method",
+            "interface",
+            "type",
+            "struct",
+            "enum",
+            "var",
+            "const",
+        }
+
+
+@pytest.mark.asyncio
+async def test_repo_symbols_unactivated_repo_raises(
+    toolbox_with_repo,
+) -> None:
+    """TC-2.2: a UUID not bound to this workspace surfaces the same
+    error ``_tool_repo_file_get`` raises (no partial JSON leak)."""
+    from backend.app.services.agent.tools import ToolInvocationError
+
+    toolbox, _ = toolbox_with_repo
+    bogus = uuid.uuid4()
+    with pytest.raises(ToolInvocationError, match="not activated"):
+        await toolbox._tool_repo_symbols(
+            {"repo_id": str(bogus), "paths": ["x.py"]}
+        )
+
+
+@pytest.mark.asyncio
+async def test_repo_symbols_requires_paths_or_query(
+    toolbox_with_repo,
+) -> None:
+    """TC-N.1: ``{repo_id}`` only → ``ToolInvocationError``."""
+    from backend.app.services.agent.tools import ToolInvocationError
+
+    toolbox, repo = toolbox_with_repo
+    with pytest.raises(ToolInvocationError, match="paths.*query"):
+        await toolbox._tool_repo_symbols({"repo_id": str(repo.id)})
+
+
+@pytest.mark.asyncio
+async def test_repo_symbols_whitespace_query_treated_as_empty(
+    toolbox_with_repo,
+) -> None:
+    """TC-N.15: whitespace-only ``query`` without ``paths`` is rejected
+    by the same branch that handles missing ``query``."""
+    from backend.app.services.agent.tools import ToolInvocationError
+
+    toolbox, repo = toolbox_with_repo
+    with pytest.raises(ToolInvocationError, match="paths.*query"):
+        await toolbox._tool_repo_symbols(
+            {"repo_id": str(repo.id), "query": "   "}
+        )
+
+
+@pytest.mark.asyncio
+async def test_repo_symbols_invalid_repo_id_raises(
+    toolbox_with_repo,
+) -> None:
+    """TC-N.14: bad UUID → ``ToolInvocationError`` (from ``_parse_uuid``)."""
+    from backend.app.services.agent.tools import ToolInvocationError
+
+    toolbox, _ = toolbox_with_repo
+    with pytest.raises(ToolInvocationError, match="invalid UUID"):
+        await toolbox._tool_repo_symbols(
+            {"repo_id": "not-a-uuid", "paths": ["x.py"]}
+        )
+
+
+@pytest.mark.asyncio
+async def test_repo_symbols_unsupported_paths_listed_not_parsed(
+    toolbox_with_repo, monkeypatch
+) -> None:
+    """TC-N.2: ``README.md`` lands in ``skipped_unsupported``; the
+    supported peer in the same list is parsed (no fetch for the .md)."""
+    toolbox, repo = toolbox_with_repo
+    calls = _stub_get_blob(monkeypatch, {"x.py": _PY_SAMPLE})
+
+    raw = await toolbox._tool_repo_symbols(
+        {"repo_id": str(repo.id), "paths": ["README.md", "x.py"]}
+    )
+    payload = json.loads(raw)
+    assert payload["skipped_unsupported"] == ["README.md"]
+    # README.md must NOT have been fetched — the matcher bails on
+    # extension before the gateway call.
+    assert calls == ["x.py"]
+    assert payload["files_parsed"] == 1
+    assert payload["files_failed"] is None
+
+
+@pytest.mark.asyncio
+async def test_repo_symbols_get_blob_not_found_reason(
+    toolbox_with_repo, monkeypatch
+) -> None:
+    """TC-N.3: ``FileNotFoundError`` → ``reason="not_found"``; batch continues."""
+    toolbox, repo = toolbox_with_repo
+    _stub_get_blob(monkeypatch, {"x.py": _PY_SAMPLE})  # missing 'gone.py'
+
+    raw = await toolbox._tool_repo_symbols(
+        {"repo_id": str(repo.id), "paths": ["gone.py", "x.py"]}
+    )
+    payload = json.loads(raw)
+    assert payload["files_failed"] == [
+        {"path": "gone.py", "reason": "not_found"}
+    ]
+    assert payload["files_parsed"] == 1
+
+
+@pytest.mark.asyncio
+async def test_repo_symbols_get_blob_directory_reason(
+    toolbox_with_repo, monkeypatch
+) -> None:
+    """TC-N.4: ``IsADirectoryError`` → ``reason="directory"``."""
+    toolbox, repo = toolbox_with_repo
+
+    async def _get_blob(self, ref, *, path, ref_sha=None):  # noqa: ARG001
+        raise IsADirectoryError(f"{ref.owner}/{ref.repo}:{path}")
+
+    monkeypatch.setattr(
+        "backend.app.integrations.github.code_host_adapter."
+        "GitHubCodeHost.get_blob",
+        _get_blob,
+    )
+
+    raw = await toolbox._tool_repo_symbols(
+        {"repo_id": str(repo.id), "paths": ["src/"]}
+    )
+    payload = json.loads(raw)
+    # ``src/`` has no recognised extension → it ends up in
+    # ``skipped_unsupported`` and ``get_blob`` is never even called.
+    # The handler relies on the extension check first so the directory
+    # branch is exercised by a path with a known extension that
+    # resolves to a directory server-side.
+    assert payload["skipped_unsupported"] == ["src/"]
+
+
+@pytest.mark.asyncio
+async def test_repo_symbols_get_blob_directory_with_known_extension(
+    toolbox_with_repo, monkeypatch
+) -> None:
+    """TC-N.4 (real path): a ``.py`` path that resolves to a directory
+    on GitHub maps to ``reason="directory"``."""
+    toolbox, repo = toolbox_with_repo
+
+    async def _get_blob(self, ref, *, path, ref_sha=None):  # noqa: ARG001
+        raise IsADirectoryError(f"{ref.owner}/{ref.repo}:{path}")
+
+    monkeypatch.setattr(
+        "backend.app.integrations.github.code_host_adapter."
+        "GitHubCodeHost.get_blob",
+        _get_blob,
+    )
+
+    raw = await toolbox._tool_repo_symbols(
+        {"repo_id": str(repo.id), "paths": ["pkg.py"]}
+    )
+    payload = json.loads(raw)
+    assert payload["files_failed"] == [
+        {"path": "pkg.py", "reason": "directory"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_repo_symbols_binary_blob_reason(
+    toolbox_with_repo, monkeypatch
+) -> None:
+    """TC-N.5: non-utf-8 encoding → ``reason="binary"``, no parse."""
+    from backend.app.integrations.gateway.code_host import BlobContent
+
+    toolbox, repo = toolbox_with_repo
+
+    async def _get_blob(self, ref, *, path, ref_sha=None):  # noqa: ARG001
+        return BlobContent(
+            path=path,
+            ref=ref_sha or "main",
+            sha="abc",
+            size=4,
+            encoding="base64",
+            content="AAAA",
+        )
+
+    monkeypatch.setattr(
+        "backend.app.integrations.github.code_host_adapter."
+        "GitHubCodeHost.get_blob",
+        _get_blob,
+    )
+
+    raw = await toolbox._tool_repo_symbols(
+        {"repo_id": str(repo.id), "paths": ["bin.py"]}
+    )
+    payload = json.loads(raw)
+    assert payload["files_failed"] == [{"path": "bin.py", "reason": "binary"}]
+    assert payload["symbols"] == []
+
+
+@pytest.mark.asyncio
+async def test_repo_symbols_fetch_error_reason(
+    toolbox_with_repo, monkeypatch
+) -> None:
+    """TC-N.6: arbitrary exception → ``reason="fetch_error"``."""
+    toolbox, repo = toolbox_with_repo
+
+    async def _get_blob(self, ref, *, path, ref_sha=None):  # noqa: ARG001
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(
+        "backend.app.integrations.github.code_host_adapter."
+        "GitHubCodeHost.get_blob",
+        _get_blob,
+    )
+
+    raw = await toolbox._tool_repo_symbols(
+        {"repo_id": str(repo.id), "paths": ["x.py"]}
+    )
+    payload = json.loads(raw)
+    assert payload["files_failed"] == [{"path": "x.py", "reason": "fetch_error"}]
+
+
+@pytest.mark.asyncio
+async def test_repo_symbols_search_code_failure_raises(
+    toolbox_with_repo, monkeypatch
+) -> None:
+    """TC-N.7: query mode + code-search blow-up → ``ToolInvocationError``."""
+    from backend.app.services.agent.tools import ToolInvocationError
+
+    toolbox, repo = toolbox_with_repo
+
+    async def _search_code(self, ref, *, query, limit, **_):  # noqa: ARG001
+        raise RuntimeError("rate limited")
+
+    monkeypatch.setattr(
+        "backend.app.integrations.github.code_host_adapter."
+        "GitHubCodeHost.search_code",
+        _search_code,
+    )
+
+    with pytest.raises(ToolInvocationError, match="code search failed"):
+        await toolbox._tool_repo_symbols(
+            {"repo_id": str(repo.id), "query": "Foo"}
+        )
+
+
+@pytest.mark.asyncio
+async def test_repo_symbols_query_substring_case_insensitive(
+    toolbox_with_repo, monkeypatch
+) -> None:
+    """TC-N.10: when ``paths`` + ``query`` are both set, per-row filter
+    applies (case-insensitive substring)."""
+    src = (
+        "def FooBar(): pass\n"
+        "def fooBaz(): pass\n"
+        "def Unrelated(): pass\n"
+    )
+    toolbox, repo = toolbox_with_repo
+    _stub_get_blob(monkeypatch, {"x.py": src})
+
+    raw = await toolbox._tool_repo_symbols(
+        {"repo_id": str(repo.id), "paths": ["x.py"], "query": "foo"}
+    )
+    payload = json.loads(raw)
+    names = sorted(row["symbol"] for row in payload["symbols"])
+    assert names == ["FooBar", "fooBaz"]
+    assert payload["query"] == "foo"
+
+
+@pytest.mark.asyncio
+async def test_repo_symbols_kinds_filter(
+    toolbox_with_repo, monkeypatch
+) -> None:
+    """TC-N.11: ``kinds=[function]`` drops ``class`` / ``method`` rows."""
+    toolbox, repo = toolbox_with_repo
+    _stub_get_blob(monkeypatch, {"x.py": _PY_SAMPLE})
+
+    raw = await toolbox._tool_repo_symbols(
+        {
+            "repo_id": str(repo.id),
+            "paths": ["x.py"],
+            "kinds": ["function"],
+        }
+    )
+    payload = json.loads(raw)
+    assert {r["kind"] for r in payload["symbols"]} == {"function"}
+    assert payload["kinds"] == ["function"]
+
+
+@pytest.mark.asyncio
+async def test_repo_symbols_limit_truncates_and_early_exits(
+    toolbox_with_repo, monkeypatch
+) -> None:
+    """TC-N.8: hitting ``limit`` flips ``truncated=true`` and stops the
+    outer file loop so we don't fetch files we'd discard."""
+    many = "\n".join(f"def f{i}(): pass" for i in range(200)) + "\n"
+    toolbox, repo = toolbox_with_repo
+    calls = _stub_get_blob(monkeypatch, {"a.py": many, "b.py": many})
+
+    raw = await toolbox._tool_repo_symbols(
+        {
+            "repo_id": str(repo.id),
+            "paths": ["a.py", "b.py"],
+            "limit": 5,
+        }
+    )
+    payload = json.loads(raw)
+    assert len(payload["symbols"]) == 5
+    assert payload["truncated"] is True
+    # ``b.py`` must not be fetched — the outer loop short-circuits as
+    # soon as ``a.py`` saturates the budget.
+    assert calls == ["a.py"]
+
+
+@pytest.mark.asyncio
+async def test_repo_symbols_max_files_caps_fetches(
+    toolbox_with_repo, monkeypatch
+) -> None:
+    """TC-N.9: query mode never fetches more files than ``max_files``,
+    even when code-search hands back a longer list."""
+    toolbox, repo = toolbox_with_repo
+    calls = _stub_get_blob(
+        monkeypatch,
+        {
+            "a.py": "def Foo(): pass\n",
+            "b.py": "def Foo(): pass\n",
+            "c.py": "def Foo(): pass\n",
+        },
+    )
+
+    async def _search_code(self, ref, *, query, limit, **_):  # noqa: ARG001
+        return [{"path": p} for p in ("a.py", "b.py", "c.py", "d.py")]
+
+    monkeypatch.setattr(
+        "backend.app.integrations.github.code_host_adapter."
+        "GitHubCodeHost.search_code",
+        _search_code,
+    )
+
+    raw = await toolbox._tool_repo_symbols(
+        {"repo_id": str(repo.id), "query": "Foo", "max_files": 2}
+    )
+    payload = json.loads(raw)
+    assert len(calls) <= 2
+    assert payload["files_requested"] == 2
