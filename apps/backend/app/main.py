@@ -154,6 +154,17 @@ async def lifespan(_app: FastAPI):
         logging.getLogger("ship.telegram.bot").exception(
             "telegram bot failed to start; API stays up"
         )
+    # E16 tracker poller (ELS-121). Shadow-mode by default — emits
+    # audit rows but doesn't dispatch until ``SHIP_TRACKER_POLL_FIRE``
+    # is flipped (ELS-122 cutover).
+    try:
+        from backend.app.services.tracker_poller import start_tracker_poller
+
+        start_tracker_poller()
+    except Exception:
+        logging.getLogger("ship.tracker_poll").exception(
+            "tracker poller failed to start; API stays up"
+        )
     try:
         yield
     finally:
@@ -163,6 +174,12 @@ async def lifespan(_app: FastAPI):
                 await bot_task
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
+        try:
+            from backend.app.services.tracker_poller import stop_tracker_poller
+
+            await stop_tracker_poller()
+        except Exception:  # pragma: no cover
+            pass
         try:
             await _stop_scheduler()
         except Exception:  # pragma: no cover

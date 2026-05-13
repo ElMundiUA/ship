@@ -219,6 +219,30 @@ class Settings(BaseSettings):
     # "X / N closed-beta seats taken". Read by ``/v1/public/beta-capacity``.
     closed_beta_cap: int = Field(default=50, alias="CLOSED_BETA_CAP")
 
+    # --- E16 event-driven dispatcher (ELS-121..125) ---
+    # Tracker poll interval. Backend pulls Linear updates every N
+    # seconds per workspace with a ``linear`` integration; diff
+    # against ``last_seen`` triggers ``ticket.transitioned`` events.
+    # Default 300s prod, override to 60s for local dev so manual
+    # Linear edits feed back into the dispatcher quickly.
+    tracker_poll_interval_s: int = Field(
+        default=300, alias="SHIP_TRACKER_POLL_INTERVAL_S"
+    )
+    # Per-workspace ceiling on concurrent dispatches when the
+    # workspace's own ``max_concurrent_dispatches`` is NULL. Bounds the
+    # blast radius of a knowledge-harvest fan-out that drops 50 new
+    # tickets at once.
+    default_workspace_dispatch_cap: int = Field(
+        default=4, alias="SHIP_DEFAULT_WORKSPACE_DISPATCH_CAP"
+    )
+    # Shadow / fire toggle for the dispatcher. While ``False`` the
+    # poller writes ``tracker.event.received`` rows to ``audit_log``
+    # but does NOT call ``maybe_dispatch``; flip to ``True`` after we
+    # trust the diff math against prod data (ELS-122 cutover step).
+    tracker_poll_fire: bool = Field(
+        default=False, alias="SHIP_TRACKER_POLL_FIRE"
+    )
+
     # --- Auth0 (used when auth_mode == "auth0") ---
     auth0_domain: str | None = Field(default=None, alias="AUTH0_DOMAIN")
     auth0_audience: str | None = Field(default=None, alias="AUTH0_AUDIENCE")

@@ -2,6 +2,7 @@
 so Alembic ``--autogenerate`` and `Base.metadata.create_all` see them all.
 """
 
+from backend.app.db.models.agent_dispatch import AgentDispatchLock
 from backend.app.db.models.agent_roles import AgentRole
 from backend.app.db.models.dashboard_priorities import WorkspaceProjectPriority
 from backend.app.db.models.agent_memory import (
@@ -71,6 +72,7 @@ from backend.app.db.models.tenancy import (
 )
 
 __all__ = [
+    "AgentDispatchLock",
     "AgentRequest",
     "AgentRole",
     "ApiToken",

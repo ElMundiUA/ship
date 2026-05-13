@@ -17,6 +17,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     LargeBinary,
+    SmallInteger,
     String,
     UniqueConstraint,
     text,
@@ -177,6 +178,12 @@ class Workspace(Base):
     # explicit operator choice.
     agent_provider: Mapped[str] = mapped_column(
         String(16), nullable=False, server_default=text("'cursor'")
+    )
+    # E16 dispatcher cap — null means "use the global default from
+    # ``SHIP_DEFAULT_WORKSPACE_DISPATCH_CAP``"; an integer pins the
+    # ceiling for parallel ``agent_dispatch_locks`` per this workspace.
+    max_concurrent_dispatches: Mapped[int | None] = mapped_column(
+        SmallInteger, nullable=True
     )
 
     created_at: Mapped[datetime] = _ts_created()

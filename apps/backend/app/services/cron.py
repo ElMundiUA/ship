@@ -97,6 +97,10 @@ class CronLockId(IntEnum):
     # gaps between ticks in production). Backend-driven dispatch
     # gives operators a predictable "every N minutes" cycle.
     WORKFLOW_DISPATCH = 1011
+    # E16 tracker poller (ELS-121) — diffs Linear ticket state every
+    # ``SHIP_TRACKER_POLL_INTERVAL_S`` seconds and emits
+    # ``tracker.event.received`` audit rows for the dispatcher.
+    TRACKER_POLL = 1012
 
 
 # ---------------------------------------------------------------------------
