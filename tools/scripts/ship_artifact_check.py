@@ -21,7 +21,8 @@ import re
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+# ``__file__`` = tools/scripts/ship_artifact_check.py; parents[2] = repo root.
+REPO_ROOT = Path(__file__).resolve().parents[2]
 ARTIFACTS_ROOT = REPO_ROOT / "artifacts"
 
 RED = "\033[31m"

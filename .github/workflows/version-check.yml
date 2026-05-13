@@ -5,12 +5,12 @@ on:
     paths:
       - "VERSION"
       - "package.json"
-      - "landing/package.json"
-      - "console/package.json"
-      - "cli/package.json"
+      - "apps/landing/package.json"
+      - "apps/console/package.json"
+      - "packages/cli/package.json"
       - "e2e/package.json"
-      - "backend/app/main.py"
-      - "scripts/version.mjs"
+      - "apps/backend/app/main.py"
+      - "tools/scripts/version.mjs"
       - ".github/workflows/version-check.yml"
   push:
     branches:
@@ -26,6 +26,6 @@ jobs:
           node-version: "20"
       - name: Verify all package versions match VERSION
         run: |
-          node scripts/version.mjs check
+          node tools/scripts/version.mjs check
           echo
           echo "Tip: if this failed, run \`npm run version:sync\` (or \`npm run version:bump <kind>\`)."

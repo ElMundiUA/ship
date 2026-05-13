@@ -28,7 +28,7 @@ services:
       - "${POSTGRES_PORT:-5433}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./deploy/postgres/init.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
+      - ./infra/deploy/postgres/init.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ship} -d ${POSTGRES_DB:-ship}"]
       interval: 5s
@@ -84,7 +84,7 @@ services:
   ship-server:
     build:
       context: .
-      dockerfile: deploy/backend/Dockerfile
+      dockerfile: infra/deploy/backend/Dockerfile
     restart: unless-stopped
     depends_on:
       postgres:
@@ -141,7 +141,7 @@ services:
     # This service ships only the in-app operator UI.
     build:
       context: .
-      dockerfile: deploy/console/Dockerfile
+      dockerfile: infra/deploy/console/Dockerfile
     restart: unless-stopped
     depends_on:
       ship-server:
@@ -198,7 +198,7 @@ services:
     # full local stack.
     build:
       context: .
-      dockerfile: deploy/backend/Dockerfile
+      dockerfile: infra/deploy/backend/Dockerfile
     restart: unless-stopped
     profiles: ["worker"]
     depends_on:

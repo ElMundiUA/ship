@@ -6,13 +6,15 @@ The product keeps the book's core posture: humans own intent, automation stays b
 
 ## What is in this repo
 
-- **Console** ([`console/`](console/)) — Next.js workspace UI on port 3001. It talks to the FastAPI `/v1` API and renders workspace home, onboarding, repos, Inbox, knowledge, integrations, members, policies, audit, and per-repo pages.
-- **Backend** ([`backend/`](backend/)) — FastAPI service. It serves the public methodology/catalog API plus the `/v1` cloud platform: workspaces, repos, GitHub App, trackers, dashboard, Inbox, knowledge, pipelines, policies, secrets, audit, and chat.
-- **Landing** ([`landing/`](landing/)) — marketing site, manual, book route, use cases, catalog pages, blog, and docs UI.
-- **Manual** ([`documentation/`](documentation/)) — source Markdown for `/docs/**`. The book content is separate under `landing/content/book.md`.
+- **Console** ([`apps/console/`](apps/console/)) — Next.js workspace UI on port 3001. It talks to the FastAPI `/v1` API and renders workspace home, onboarding, repos, Inbox, knowledge, integrations, members, policies, audit, and per-repo pages.
+- **Backend** ([`apps/backend/`](apps/backend/)) — FastAPI service. It serves the public methodology/catalog API plus the `/v1` cloud platform: workspaces, repos, GitHub App, trackers, dashboard, Inbox, knowledge, pipelines, policies, secrets, audit, and chat.
+- **Landing** ([`apps/landing/`](apps/landing/)) — marketing site, manual, book route, use cases, catalog pages, blog, and docs UI.
+- **Manual** ([`documentation/`](documentation/)) — source Markdown for `/docs/**`. The book content is separate under `apps/landing/content/book.md`.
 - **Artifacts** ([`artifacts/`](artifacts/)) — versioned patterns, tools, and collections consumed by the CLI, agents, catalog, and docs.
-- **CLI** ([`cli/`](cli/)) — `@elmundi/ship-cli` / `shipctl`, the developer workbench for local setup, sync, verify, config, and artifact commands.
+- **CLI** ([`packages/cli/`](packages/cli/)) — `@elmundi/ship-cli` / `shipctl`, the developer workbench for local setup, sync, verify, config, and artifact commands.
 - **E2E** ([`e2e/`](e2e/)) — Playwright coverage for public shell, console journeys, sandbox repos, GitHub App, dashboard, knowledge, integrations, and product tours.
+- **Infra** ([`infra/`](infra/)) — Dockerfiles, Caddy config, Postgres init, and deployment glue.
+- **Tools** ([`tools/scripts/`](tools/scripts/)) — operator scripts: version bump, bundle gate, Bunny deploy, smoke tests, ad-hoc data utilities.
 
 ## Product entry points
 
@@ -24,9 +26,9 @@ For readers and product owners:
 
 For developers and platform teams:
 
-- Use [`cli/README.md`](cli/README.md) for `shipctl`.
+- Use [`packages/cli/README.md`](packages/cli/README.md) for `shipctl`.
 - Use [`documentation/configuration.md`](documentation/configuration.md) for `.ship/` and config files.
-- Use [`backend/app/api/v1/router.py`](backend/app/api/v1/router.py) as the high-level API map.
+- Use [`apps/backend/app/api/v1/router.py`](apps/backend/app/api/v1/router.py) as the high-level API map.
 
 ## Local development
 
@@ -39,7 +41,7 @@ npm install
 ### Landing site
 
 ```bash
-cp landing/.env.example landing/.env.local
+cp apps/landing/.env.example apps/landing/.env.local
 npm run landing:dev
 ```
 
@@ -59,14 +61,18 @@ Run Python inside `.venv`:
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements-backend.txt
-uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8100
+PYTHONPATH=apps uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8100
 ```
+
+The `PYTHONPATH=apps` is what makes `backend.app...` importable from the
+monorepo `apps/backend/` location. `make dev-backend` and the Docker image
+both set this for you; only manual `uvicorn` invocations need the prefix.
 
 Tests:
 
 ```bash
 . .venv/bin/activate
-pytest backend/tests -q
+pytest apps/backend/tests -q
 ```
 
 ### Console
@@ -74,7 +80,7 @@ pytest backend/tests -q
 The console uses port 3001.
 
 ```bash
-npm install --prefix console
+npm install --prefix apps/console
 make dev-console
 ```
 
@@ -93,7 +99,7 @@ npm run shipctl -- help
 npm run shipctl -- doctor
 npm run shipctl -- verify
 npm run shipctl -- pattern list
-npm test --prefix cli
+npm test --prefix packages/cli
 ```
 
 Inside this repo the catalog commands can read `artifacts/**/ARTIFACT.md` from disk. Outside it, `shipctl` uses the configured Ship API.
@@ -110,7 +116,7 @@ The unversioned methodology API powers the catalog and CLI:
 | `POST /feedback` | `shipctl feedback submit` |
 | `POST /telemetry` | `shipctl telemetry flush` |
 
-The `/v1` API powers the console. The top-level include list lives in [`backend/app/api/v1/router.py`](backend/app/api/v1/router.py).
+The `/v1` API powers the console. The top-level include list lives in [`apps/backend/app/api/v1/router.py`](apps/backend/app/api/v1/router.py).
 
 ## Versioning
 

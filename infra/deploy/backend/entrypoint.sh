@@ -18,7 +18,7 @@ from backend.app.core.config import get_settings
 url = get_settings().sync_database_url
 print(f"[ship] alembic url = {re.sub(r'://([^:/?#]+):[^@]*@', r'://\1:***@', url)}")
 PY
-    alembic -c backend/alembic.ini upgrade head
+    alembic -c apps/backend/alembic.ini upgrade head
 fi
 
 exec "$@"

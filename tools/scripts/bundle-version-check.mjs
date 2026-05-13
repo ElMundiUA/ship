@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Fail if this PR touches any seed-bundle source material without
- * also bumping ``BUNDLE_VERSION`` in ``backend/app/services/seed_bundle.py``.
+ * also bumping ``BUNDLE_VERSION`` in ``apps/backend/app/services/seed_bundle.py``.
  *
  * Why: ``BUNDLE_VERSION`` is the drift signal the Console uses to
  * show "Update available →" on every previously-seeded repo card.
@@ -11,7 +11,7 @@
  * new contract.
  *
  * Usage:
- *   node scripts/bundle-version-check.mjs [--base <ref>]
+ *   node tools/scripts/bundle-version-check.mjs [--base <ref>]
  *
  *   --base <ref>   Base revision to diff against. Defaults to
  *                  ``origin/main``. In GitHub Actions we pass the
@@ -28,7 +28,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(__dirname, "..");
+// ``__dirname`` = ``<repo>/tools/scripts/`` after the monorepo refactor.
+const repoRoot = resolve(__dirname, "..", "..");
 
 // Files that feed into the bundle a tenant receives on
 // ``install_bundle`` / ``wizard_seed``. Keep this list in lockstep
@@ -36,16 +37,16 @@ const repoRoot = resolve(__dirname, "..");
 //
 // Strings are prefixes — any change under the prefix triggers.
 const BUNDLE_SOURCE_PATHS = [
-  "backend/app/services/seed_bundle.py",
-  "backend/app/services/catalog.py",
-  "backend/app/services/lane_recipes.py",
-  "backend/app/services/tracker_fsm.py",
-  "backend/app/services/starter_workflows.py",
-  "backend/app/resources/starter_workflows/",
+  "apps/backend/app/services/seed_bundle.py",
+  "apps/backend/app/services/catalog.py",
+  "apps/backend/app/services/lane_recipes.py",
+  "apps/backend/app/services/tracker_fsm.py",
+  "apps/backend/app/services/starter_workflows.py",
+  "apps/backend/app/resources/starter_workflows/",
   "artifacts/knowledge-starters/",
 ];
 
-const CONSTANT_FILE = "backend/app/services/seed_bundle.py";
+const CONSTANT_FILE = "apps/backend/app/services/seed_bundle.py";
 // Accept either ``BUNDLE_VERSION: int = 7`` or ``BUNDLE_VERSION: str = "0.7"``
 // (current spelling). Comparison runs through ``Number()`` so dotted SemVer-ish
 // strings like ``"0.7"`` order correctly against the prior baseline.

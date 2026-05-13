@@ -197,7 +197,7 @@ export E2E_SHIP_API_TOKEN=ship_...             # workspace admin
 npx playwright test --project=authenticated tests/full-journey.wired.spec.ts
 ```
 
-Тест объявлен `serial` и `@deployed`; сверяет `enabled` pipelines с `PRESET_ENABLED_KINDS` из `backend/app/services/default_pipelines.py`, а также что в `/v1/workspaces/{ws}/integrations` появился `kind=github`.
+Тест объявлен `serial` и `@deployed`; сверяет `enabled` pipelines с `PRESET_ENABLED_KINDS` из `apps/backend/app/services/default_pipelines.py`, а также что в `/v1/workspaces/{ws}/integrations` появился `kind=github`.
 
 ### Reset sandbox (повторный прогон)
 

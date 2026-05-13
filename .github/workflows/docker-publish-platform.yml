@@ -9,9 +9,9 @@
 #
 #   dekus/ship-backend  — FastAPI (`ship-server`) + arq worker (`ship-worker`)
 #                         share one image; the runtime command differs.
-#                         Dockerfile: deploy/backend/Dockerfile
+#                         Dockerfile: infra/deploy/backend/Dockerfile
 #   dekus/ship-console  — Next.js operator UI (standalone build).
-#                         Dockerfile: deploy/console/Dockerfile
+#                         Dockerfile: infra/deploy/console/Dockerfile
 #   dekus/ship-docs     — Marketing landing + `/docs` manual + `/book`.
 #                         Dockerfile: ./Dockerfile (repo root)
 #
@@ -48,12 +48,12 @@ on:
     branches: [main]
   pull_request:
     paths:
-      - "backend/**"
-      - "console/**"
-      - "landing/**"
+      - "apps/backend/**"
+      - "apps/console/**"
+      - "apps/landing/**"
       - "documentation/**"
-      - "deploy/backend/**"
-      - "deploy/console/**"
+      - "infra/deploy/backend/**"
+      - "infra/deploy/console/**"
       - "Dockerfile"
       - "requirements-backend.txt"
       - "package.json"
@@ -84,12 +84,12 @@ jobs:
           - name: backend
             image_default: dekus/ship-backend
             image_var: DOCKER_IMAGE_NAME_BACKEND
-            dockerfile: ./deploy/backend/Dockerfile
+            dockerfile: ./infra/deploy/backend/Dockerfile
             context: .
           - name: console
             image_default: dekus/ship-console
             image_var: DOCKER_IMAGE_NAME_CONSOLE
-            dockerfile: ./deploy/console/Dockerfile
+            dockerfile: ./infra/deploy/console/Dockerfile
             context: .
           - name: landing
             image_default: dekus/ship-docs
@@ -262,7 +262,7 @@ jobs:
             echo "::error::Set repo secret BUNNY_MAIN_API_KEY (Bunny account API key with Magic Containers RW)."
             exit 1
           fi
-          node scripts/bunny-deploy-platform.mjs
+          node tools/scripts/bunny-deploy-platform.mjs
 
       - name: Deploy summary
         if: always()
@@ -309,7 +309,7 @@ jobs:
           DOCKER_IMAGE_NAME: ${{ steps.vars.outputs.image }}
           MC_CONTAINER_NAME: ${{ vars.BUNNY_CONTAINER_NAME || 'Container-1' }}
           IMAGE_TAG: ${{ steps.vars.outputs.tag }}
-        run: node scripts/bunny-ship-docs.mjs ensure
+        run: node tools/scripts/bunny-ship-docs.mjs ensure
 
       # Digest from the build can differ from what Docker Hub serves (manifest list,
       # timing). Bunny compares registry digest to the template — same tag +
@@ -342,7 +342,7 @@ jobs:
           MC_CONTAINER_NAME: ${{ steps.mc.outputs.mc_container_name }}
           IMAGE_TAG: ${{ steps.vars.outputs.tag }}
           IMAGE_DIGEST: ${{ steps.hub_digest.outputs.digest }}
-        run: node scripts/bunny-patch-container.mjs
+        run: node tools/scripts/bunny-patch-container.mjs
 
       - name: Trigger Magic Container deploy (rollout)
         env:

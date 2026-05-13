@@ -2,25 +2,25 @@
 /**
  * Single source of truth for the Ship release version.
  *
- *   VERSION                          (semver, single line — the source of truth)
+ *   VERSION                              (semver, single line — source of truth)
  *     │
- *     ├─ package.json                (root)
- *     ├─ landing/package.json
- *     ├─ console/package.json
- *     ├─ cli/package.json
+ *     ├─ package.json                    (root)
+ *     ├─ apps/landing/package.json
+ *     ├─ apps/console/package.json
+ *     ├─ packages/cli/package.json
  *     ├─ e2e/package.json
- *     └─ backend/app/main.py         (FastAPI(title=…, version="…"))
+ *     └─ apps/backend/app/main.py        (FastAPI(title=…, version="…"))
  *
  * Two subcommands, both safe to run repeatedly:
  *
- *   node scripts/version.mjs sync
+ *   node tools/scripts/version.mjs sync
  *     Read VERSION and write the same value into every tracked file.
  *     Exits 0 if all files are already in sync; exits 1 if any file changed.
  *     Used by CI to fail PRs that forgot to bump.
  *
- *   node scripts/version.mjs bump <major|minor|patch|x.y.z>
+ *   node tools/scripts/version.mjs bump <major|minor|patch|x.y.z>
  *     Bump VERSION, then run sync. Prints the new version on stdout so a
- *     release script can `git tag v$(scripts/version.mjs bump patch)`.
+ *     release script can `git tag v$(tools/scripts/version.mjs bump patch)`.
  *
  * Convention: a single git tag `v<x.y.z>` is the release marker. The CLI
  * publish workflow (and any future backend image / landing build) keys off it.
@@ -30,7 +30,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(__dirname, "..");
+// ``__dirname`` = ``<repo>/tools/scripts/`` after the monorepo refactor.
+const repoRoot = resolve(__dirname, "..", "..");
 
 const VERSION_FILE = join(repoRoot, "VERSION");
 
@@ -39,11 +40,11 @@ const SEMVER_RE = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
 /** All files that must carry the canonical version, with how to read/write each one. */
 const TARGETS = [
   jsonTarget("package.json", "version"),
-  jsonTarget("landing/package.json", "version"),
-  jsonTarget("console/package.json", "version"),
-  jsonTarget("cli/package.json", "version"),
+  jsonTarget("apps/landing/package.json", "version"),
+  jsonTarget("apps/console/package.json", "version"),
+  jsonTarget("packages/cli/package.json", "version"),
   jsonTarget("e2e/package.json", "version"),
-  pythonFastApiTarget("backend/app/main.py"),
+  pythonFastApiTarget("apps/backend/app/main.py"),
 ];
 
 function readVersion() {
@@ -143,7 +144,7 @@ function syncCommand() {
 
 function bumpCommand(kind) {
   if (!kind) {
-    console.error("Usage: node scripts/version.mjs bump <major|minor|patch|x.y.z>");
+    console.error("Usage: node tools/scripts/version.mjs bump <major|minor|patch|x.y.z>");
     process.exit(2);
   }
   const current = readVersion();
@@ -171,7 +172,7 @@ function checkCommand() {
   for (const d of drifted) {
     console.error(`  ${d.label}: ${d.current}`);
   }
-  console.error(`Run: node scripts/version.mjs sync`);
+  console.error(`Run: node tools/scripts/version.mjs sync`);
   return 1;
 }
 
@@ -194,7 +195,7 @@ switch (cmd) {
     console.log(readVersion());
     break;
   default:
-    console.error(`Unknown command: ${cmd}\nUsage: scripts/version.mjs [show|sync|check|bump <kind>]`);
+    console.error(`Unknown command: ${cmd}\nUsage: tools/scripts/version.mjs [show|sync|check|bump <kind>]`);
     exit = 2;
 }
 

@@ -7,9 +7,9 @@
 # unless --force is passed.
 #
 # Usage:
-#   ./scripts/bootstrap.sh                # populate missing keys, keep existing
-#   ./scripts/bootstrap.sh --force        # regenerate JWT_SECRET / ENCRYPTION_KEY
-#   ./scripts/bootstrap.sh --auth0 \
+#   ./tools/scripts/bootstrap.sh                # populate missing keys, keep existing
+#   ./tools/scripts/bootstrap.sh --force        # regenerate JWT_SECRET / ENCRYPTION_KEY
+#   ./tools/scripts/bootstrap.sh --auth0 \
 #       --domain my-tenant.eu.auth0.com \
 #       --audience https://api.ship.local \
 #       --client-id abc --client-secret xyz
@@ -20,7 +20,7 @@
 
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 ENV_FILE="${ROOT}/.env"
 EXAMPLE_FILE="${ROOT}/.env.example"
 
@@ -156,7 +156,7 @@ Auth0 setup — full walkthrough at documentation/auth0-setup.md
   - Create an API + a Regular Web Application in your Auth0 tenant
   - Allowed Callback URLs: http://localhost:3001/auth/callback
   - Allowed Logout URLs:   http://localhost:3001
-  - Run: scripts/bootstrap.sh --auth0 --domain ... --audience ... \\
+  - Run: tools/scripts/bootstrap.sh --auth0 --domain ... --audience ... \\
                               --client-id ... --client-secret ...
   - Set SHIP_AUTH_MODE=auth0 in .env, then 'make restart'.
 SUMMARY

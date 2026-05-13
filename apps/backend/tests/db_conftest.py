@@ -85,13 +85,21 @@ def _migrated() -> None:
     from alembic import command
     from alembic.config import Config
 
+    # ``__file__`` = apps/backend/tests/db_conftest.py — walk up four
+    # levels to reach the repo root. The extra hop accounts for the
+    # ``apps/`` layer the monorepo refactor added.
     repo_root = os.path.dirname(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        )
     )
-    alembic_ini = os.path.join(repo_root, "backend", "alembic.ini")
+    alembic_ini = os.path.join(repo_root, "apps", "backend", "alembic.ini")
     cfg = Config(alembic_ini)
     cfg.set_main_option("sqlalchemy.url", _sync_url(_resolve_url()))
-    cfg.set_main_option("script_location", "backend/migrations")
+    cfg.set_main_option(
+        "script_location",
+        os.path.join(repo_root, "apps", "backend", "migrations"),
+    )
     command.upgrade(cfg, "head")
     _MIGRATION_DONE = True
 

@@ -5,19 +5,19 @@ name: bundle-version-check
 # to show "Update available →" on already-seeded tenant repos; if
 # it doesn't move, nobody notices the upgrade exists.
 #
-# The list of tracked paths lives in ``scripts/bundle-version-check.mjs``.
+# The list of tracked paths lives in ``tools/scripts/bundle-version-check.mjs``.
 
 on:
   pull_request:
     paths:
-      - "backend/app/services/seed_bundle.py"
-      - "backend/app/services/catalog.py"
-      - "backend/app/services/default_pipelines.py"
-      - "backend/app/services/tracker_fsm.py"
-      - "backend/app/services/starter_workflows.py"
-      - "backend/app/resources/starter_workflows/**"
+      - "apps/backend/app/services/seed_bundle.py"
+      - "apps/backend/app/services/catalog.py"
+      - "apps/backend/app/services/default_pipelines.py"
+      - "apps/backend/app/services/tracker_fsm.py"
+      - "apps/backend/app/services/starter_workflows.py"
+      - "apps/backend/app/resources/starter_workflows/**"
       - "artifacts/knowledge-starters/**"
-      - "scripts/bundle-version-check.mjs"
+      - "tools/scripts/bundle-version-check.mjs"
       - ".github/workflows/bundle-version-check.yml"
 
 jobs:
@@ -45,4 +45,4 @@ jobs:
           else
             BASE_REF="${BASE_SHA}"
           fi
-          node scripts/bundle-version-check.mjs --base "$BASE_REF"
+          node tools/scripts/bundle-version-check.mjs --base "$BASE_REF"

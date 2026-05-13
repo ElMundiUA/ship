@@ -36,7 +36,7 @@ help: ## Show this help.
 		$(MAKEFILE_LIST)
 
 bootstrap: ## Generate .env with random secrets + Auth0 placeholders (idempotent).
-	@./scripts/bootstrap.sh
+	@./tools/scripts/bootstrap.sh
 
 env-check: ## Fail fast if .env is missing.
 	@test -f .env || { echo "no .env — run: make bootstrap"; exit 1; }
@@ -59,22 +59,22 @@ dev-port-console: ## Fail if the local console dev port is already in use.
 	fi
 
 dev-migrate: dev-env-check ## Run Alembic from .venv against DATABASE_URL/ALEMBIC_DATABASE_URL in .env.
-	@node scripts/run-with-dotenv.mjs -- \
-		.venv/bin/alembic -c backend/alembic.ini upgrade head
+	@node tools/scripts/run-with-dotenv.mjs -- \
+		.venv/bin/alembic -c apps/backend/alembic.ini upgrade head
 
 dev-backend: dev-env-check dev-port-backend ## Run FastAPI locally from .venv using root .env.
-	@node scripts/run-with-dotenv.mjs \
+	@PYTHONPATH=apps node tools/scripts/run-with-dotenv.mjs \
 		--set SHIP_ALLOW_LOCAL_AUTH0_CALLBACKS=true \
 		--default SHIP_PUBLIC_URL=http://localhost:$(DEV_BACKEND_PORT) \
 		--default SHIP_CONSOLE_URL=http://localhost:$(DEV_CONSOLE_PORT) \
 		-- .venv/bin/uvicorn backend.app.main:app --reload --host $(DEV_BACKEND_HOST) --port $(DEV_BACKEND_PORT)
 
 dev-console: env-check dev-port-console ## Run the console locally against the local backend and root .env.
-	@node scripts/run-with-dotenv.mjs \
+	@node tools/scripts/run-with-dotenv.mjs \
 		--default SHIP_API_URL=$(DEV_API_URL) \
 		--default APP_BASE_URL=http://localhost:$(DEV_CONSOLE_PORT) \
 		--default SHIP_CONSOLE_URL=http://localhost:$(DEV_CONSOLE_PORT) \
-		-- npm run dev --prefix console
+		-- npm run dev --prefix apps/console
 
 dev-local: dev-env-check dev-port-backend dev-port-console ## Run backend + console locally against shared dev infrastructure.
 	@set -euo pipefail; \
@@ -85,16 +85,16 @@ dev-local: dev-env-check dev-port-backend dev-port-console ## Run backend + cons
 			wait >/dev/null 2>&1 || true; \
 		}; \
 		trap cleanup INT TERM EXIT; \
-		( node scripts/run-with-dotenv.mjs \
+		( PYTHONPATH=apps node tools/scripts/run-with-dotenv.mjs \
 		  --set SHIP_ALLOW_LOCAL_AUTH0_CALLBACKS=true \
 		  --default SHIP_PUBLIC_URL=http://localhost:$(DEV_BACKEND_PORT) \
 		  --default SHIP_CONSOLE_URL=http://localhost:$(DEV_CONSOLE_PORT) \
 		  -- .venv/bin/uvicorn backend.app.main:app --reload --host $(DEV_BACKEND_HOST) --port $(DEV_BACKEND_PORT) ) & backend_pid=$$!; \
-		( node scripts/run-with-dotenv.mjs \
+		( node tools/scripts/run-with-dotenv.mjs \
 		  --default SHIP_API_URL=$(DEV_API_URL) \
 		  --default APP_BASE_URL=http://localhost:$(DEV_CONSOLE_PORT) \
 		  --default SHIP_CONSOLE_URL=http://localhost:$(DEV_CONSOLE_PORT) \
-		  -- npm run dev --prefix console ) & console_pid=$$!; \
+		  -- npm run dev --prefix apps/console ) & console_pid=$$!; \
 		wait "$$backend_pid" "$$console_pid"
 
 up: env-check ## Build images + start the full stack in the background.
@@ -135,16 +135,16 @@ health: ## Curl /healthz and /v1/health on the backend.
 	@curl -fsS -o /dev/null -w "HTTP %{http_code}\n" $(SMOKE_BASE)/login
 
 smoke: env-check ## Run the Playwright onboarding smoke test against a running stack.
-	@cd scripts && npm install --silent --no-audit --no-fund
+	@cd tools/scripts && npm install --silent --no-audit --no-fund
 	SMOKE_BASE=$(SMOKE_BASE) SMOKE_API=$(SMOKE_API) \
-	    node scripts/console-repo-onboarding-smoke.mjs
+	    node tools/scripts/console-repo-onboarding-smoke.mjs
 
 migrate: env-check ## Run alembic upgrade head against the live container.
-	$(COMPOSE) exec $(BACKEND_SVC) alembic -c backend/alembic.ini upgrade head
+	$(COMPOSE) exec $(BACKEND_SVC) alembic -c apps/backend/alembic.ini upgrade head
 
 revision: env-check ## Generate a new alembic revision. Use: make revision M="add foo".
 	@test -n "$(M)" || { echo "Usage: make revision M=\"description\""; exit 2; }
-	$(COMPOSE) exec $(BACKEND_SVC) alembic -c backend/alembic.ini revision --autogenerate -m "$(M)"
+	$(COMPOSE) exec $(BACKEND_SVC) alembic -c apps/backend/alembic.ini revision --autogenerate -m "$(M)"
 
 psql: ## Open a psql shell on the running Postgres.
 	$(COMPOSE) exec $(DB_SVC) psql -U $${POSTGRES_USER:-ship} -d $${POSTGRES_DB:-ship}
@@ -156,18 +156,18 @@ shell: ## Drop into a bash shell on the backend container.
 	$(COMPOSE) exec $(BACKEND_SVC) bash
 
 test: ## Run the backend pytest suite inside the container.
-	$(COMPOSE) exec -T $(BACKEND_SVC) pytest backend/tests -x
+	$(COMPOSE) exec -T $(BACKEND_SVC) pytest apps/backend/tests -x
 
 test-backend: test ## Alias for test.
 
 test-fast: ## Run only fast unit tests (-m "not slow").
-	$(COMPOSE) exec -T $(BACKEND_SVC) pytest backend/tests -x -m "not slow"
+	$(COMPOSE) exec -T $(BACKEND_SVC) pytest apps/backend/tests -x -m "not slow"
 
 backup: ## Snapshot Postgres into ./backups/ (rotates per BACKUP_KEEP, default 14).
-	@./scripts/backup-postgres.sh
+	@./tools/scripts/backup-postgres.sh
 
 backup-prune: ## Drop old snapshots older than BACKUP_KEEP, no new dump.
-	@BACKUP_PRUNE_ONLY=1 ./scripts/backup-postgres.sh
+	@BACKUP_PRUNE_ONLY=1 ./tools/scripts/backup-postgres.sh
 
 prod-up: env-check ## Bring the stack up with the Caddy/HTTPS overlay (single-VPS prod).
 	$(COMPOSE) -f docker-compose.yml -f docker-compose.prod.yml up -d --build
@@ -178,13 +178,13 @@ prod-down: ## Tear down the prod-overlay stack (keeps volumes).
 prod-logs: ## Tail logs for all prod-overlay services (Caddy + app).
 	$(COMPOSE) -f docker-compose.yml -f docker-compose.prod.yml logs -f --tail=200
 
-bunny-deploy: ## Roll backend + console images to Bunny Magic Containers (uses scripts/bunny-deploy-platform.mjs).
+bunny-deploy: ## Roll backend + console images to Bunny Magic Containers (uses tools/scripts/bunny-deploy-platform.mjs).
 	@test -n "$(IMAGE_TAG)" || { echo "Usage: make bunny-deploy IMAGE_TAG=main-abc1234"; exit 2; }
-	IMAGE_TAG=$(IMAGE_TAG) node scripts/bunny-deploy-platform.mjs
+	IMAGE_TAG=$(IMAGE_TAG) node tools/scripts/bunny-deploy-platform.mjs
 
 bunny-deploy-dry: ## Same as bunny-deploy but no API writes (DRY_RUN=1).
 	@test -n "$(IMAGE_TAG)" || { echo "Usage: make bunny-deploy-dry IMAGE_TAG=main-abc1234"; exit 2; }
-	DRY_RUN=1 IMAGE_TAG=$(IMAGE_TAG) node scripts/bunny-deploy-platform.mjs
+	DRY_RUN=1 IMAGE_TAG=$(IMAGE_TAG) node tools/scripts/bunny-deploy-platform.mjs
 
 clean: ## Stop the stack and drop the docker network. Keeps volumes (DB safe).
 	$(COMPOSE) down --remove-orphans

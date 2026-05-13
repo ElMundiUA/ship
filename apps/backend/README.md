@@ -32,7 +32,7 @@ Instruction-first companion API for agents — and the foundation of the Ship cl
 
 Auth: `Authorization: Bearer <token>` where `<token>` is either a session JWT or a personal access token prefixed `ship_pat_`.
 
-The API version is reported by `GET /openapi.json` and matches the canonical Ship release in [`/VERSION`](../VERSION) (kept in sync by `scripts/version.mjs`).
+The API version is reported by `GET /openapi.json` and matches the canonical Ship release in [`/VERSION`](../../VERSION) (kept in sync by `tools/scripts/version.mjs`).
 
 ## Run the cloud platform locally (one command)
 
@@ -138,11 +138,11 @@ payload describing what was installed.
 ## Tests
 
 ```bash
-pytest backend/tests
+pytest apps/backend/tests
 ```
 
 Tests that depend on Postgres (the new `/v1/*` suite) automatically **skip** when no database is reachable. To run them, point `TEST_DATABASE_URL` at the local stack:
 
 ```bash
-TEST_DATABASE_URL=postgresql+asyncpg://ship:ship@localhost:5433/ship pytest backend/tests
+TEST_DATABASE_URL=postgresql+asyncpg://ship:ship@localhost:5433/ship pytest apps/backend/tests
 ```

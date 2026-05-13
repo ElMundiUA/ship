@@ -4,7 +4,7 @@ on:
   pull_request:
     paths:
       - "artifacts/**"
-      - "scripts/ship_artifact_check.py"
+      - "tools/scripts/ship_artifact_check.py"
       - ".github/workflows/artifact-check.yml"
 
 jobs:
@@ -16,4 +16,4 @@ jobs:
         with:
           python-version: "3.13"
       - name: Verify artifact content hashes
-        run: python3 scripts/ship_artifact_check.py
+        run: python3 tools/scripts/ship_artifact_check.py

@@ -7,7 +7,7 @@
 #
 # What it guards:
 #   1. Canonical release-version sync (VERSION vs package.json files
-#      vs backend/app/main.py). Same check the ``version-check`` CI
+#      vs apps/backend/app/main.py). Same check the ``version-check`` CI
 #      job runs on every PR, caught locally before push.
 #   2. Bundle-version drift, but only when the staged diff actually
 #      touches seed-bundle sources. This mirrors the
@@ -30,7 +30,7 @@ cd "$REPO_ROOT"
 
 # --- 1. Release-version sync ---------------------------------------
 # This script already exits non-zero if any target drifts.
-node scripts/version.mjs check
+node tools/scripts/version.mjs check
 
 # --- 2. Bundle-version drift ---------------------------------------
 # Only run when the staged diff mentions any of the bundle source
@@ -39,9 +39,9 @@ node scripts/version.mjs check
 # extra node process.
 STAGED="$(git diff --cached --name-only --diff-filter=ACMRTD || true)"
 
-if printf '%s\n' "$STAGED" | grep -qE '^(backend/app/services/(seed_bundle|catalog|default_pipelines|tracker_fsm|starter_workflows)\.py|backend/app/resources/starter_workflows/|artifacts/knowledge-starters/)'; then
+if printf '%s\n' "$STAGED" | grep -qE '^(apps/backend/app/services/(seed_bundle|catalog|default_pipelines|tracker_fsm|starter_workflows)\.py|apps/backend/app/resources/starter_workflows/|artifacts/knowledge-starters/)'; then
   # Diff the index against HEAD — that's what's actually about to
   # be committed. Using ``HEAD`` as the base means a partial
   # BUNDLE_VERSION bump already staged on top of HEAD counts.
-  node scripts/bundle-version-check.mjs --base HEAD
+  node tools/scripts/bundle-version-check.mjs --base HEAD
 fi

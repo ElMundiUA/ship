@@ -46,14 +46,14 @@ jobs:
       - name: Read canonical VERSION
         id: read
         run: |
-          VER="$(node scripts/version.mjs show)"
+          VER="$(node tools/scripts/version.mjs show)"
           echo "version=$VER" >> "$GITHUB_OUTPUT"
           echo "Canonical VERSION = $VER"
 
       - name: Verify all targets are in sync before tagging
         # Stops the workflow from tagging a half-bumped state where
         # some ``package.json`` still points at the old release.
-        run: node scripts/version.mjs check
+        run: node tools/scripts/version.mjs check
 
       - name: Check if tag already exists
         id: check

@@ -15,26 +15,26 @@ ENV REPO_ROOT=/app
 ENV HOSTNAME=0.0.0.0
 
 COPY package.json package-lock.json VERSION ./
-COPY landing/package.json ./landing/
-COPY cli/package.json ./cli/
+COPY apps/landing/package.json ./apps/landing/
+COPY packages/cli/package.json ./packages/cli/
 
 RUN npm ci
 
-COPY landing ./landing
+COPY apps/landing ./apps/landing
 COPY documentation ./documentation
 COPY artifacts ./artifacts
-COPY backend ./backend
-COPY scripts ./scripts
+COPY apps/backend ./apps/backend
+COPY tools/scripts ./tools/scripts
 # `/cli` page in the landing reads cli/README.md at build time via
-# readFileSync (see landing/src/app/cli/page.tsx::readCliReadme). We
-# already COPY cli/package.json above for `npm ci`; the README has to
-# land in the workspace before `next build` runs.
-COPY cli ./cli
+# readFileSync (see apps/landing/src/app/cli/page.tsx::readCliReadme).
+# We already COPY packages/cli/package.json above for `npm ci`; the
+# README has to land in the workspace before `next build` runs.
+COPY packages/cli ./packages/cli
 
 RUN npm run landing:build
 
 ENV NODE_ENV=production
-# Bunny MC template maps CDN → container port 8080 (scripts/bunny-ship-docs.mjs).
+# Bunny MC template maps CDN → container port 8080 (tools/scripts/bunny-ship-docs.mjs).
 ENV PORT=8080
 
 EXPOSE 8080

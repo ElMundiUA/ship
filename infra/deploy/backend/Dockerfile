@@ -19,17 +19,22 @@ RUN apt-get update \
 
 WORKDIR /app
 
+# Python package ``backend.app.*`` lives under ``apps/backend/`` in the
+# monorepo layout; PYTHONPATH includes ``/app/apps`` so the legacy
+# ``from backend.app...`` imports resolve without a package rename.
+ENV PYTHONPATH=/app/apps
+
 COPY requirements-backend.txt ./
 RUN pip install -r requirements-backend.txt
 
-COPY backend ./backend
+COPY apps/backend ./apps/backend
 # Phase-2 catalog lives under ``artifacts/`` at the repo root and is
 # read at runtime by :mod:`backend.app.services.catalog` (presets,
 # workflow install targets, starter YAML bodies). Bake it into the
 # image so the API can resolve workflows without a second volume mount.
 COPY artifacts ./artifacts
 COPY VERSION ./VERSION
-COPY deploy/backend/entrypoint.sh /usr/local/bin/ship-entrypoint
+COPY infra/deploy/backend/entrypoint.sh /usr/local/bin/ship-entrypoint
 RUN chmod +x /usr/local/bin/ship-entrypoint
 
 # Default command runs the API. docker-compose overrides this for the worker

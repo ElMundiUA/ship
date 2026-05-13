@@ -17,12 +17,12 @@ You only need to run it once per clone.
 
 ## What runs on `git commit`
 
-1. **Release-version sync** — `node scripts/version.mjs check`.
+1. **Release-version sync** — `node tools/scripts/version.mjs check`.
    Equivalent to the `version-check` workflow. Fails if any of
-   `VERSION`, `package.json`, `landing/package.json`,
-   `console/package.json`, `cli/package.json`, `e2e/package.json`,
-   or `backend/app/main.py` drift.
-2. **Bundle-version drift** — `node scripts/bundle-version-check.mjs`.
+   `VERSION`, `package.json`, `apps/landing/package.json`,
+   `apps/console/package.json`, `packages/cli/package.json`,
+   `e2e/package.json`, or `apps/backend/app/main.py` drift.
+2. **Bundle-version drift** — `node tools/scripts/bundle-version-check.mjs`.
    Only triggered when the staged diff touches any seed-bundle
    source (starter workflows, `catalog.py`, `seed_bundle.py`,
    etc.). Fails unless `BUNDLE_VERSION` was bumped in the same

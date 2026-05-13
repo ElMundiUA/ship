@@ -33,7 +33,7 @@ jobs:
         run: npm ci
 
       - name: Verify all components are at the same version
-        run: node scripts/version.mjs check
+        run: node tools/scripts/version.mjs check
 
       - name: Verify tag matches canonical VERSION (tag builds only)
         if: startsWith(github.ref, 'refs/tags/')

@@ -4,14 +4,14 @@ site/
 .venv-docs/
 .venv/
 node_modules/
-landing/.next/
-landing/.playwright-cli/
-landing/public/.book.tmp.html
-landing/public/.book.tmp.html.md
-landing/tsconfig.tsbuildinfo
-console/.next/
-console/tsconfig.tsbuildinfo
-console/.dockerignore.bak
+apps/landing/.next/
+apps/landing/.playwright-cli/
+apps/landing/public/.book.tmp.html
+apps/landing/public/.book.tmp.html.md
+apps/landing/tsconfig.tsbuildinfo
+apps/console/.next/
+apps/console/tsconfig.tsbuildinfo
+apps/console/.dockerignore.bak
 output/playwright/
 .env
 .env.*
@@ -30,7 +30,7 @@ agent-run-*.log
 **/.ruff_cache/
 **/.playwright-cli/
 .claude/
-backend/.chroma/
+apps/backend/.chroma/
 
 # Local-only working trees: presentation decks, scratch outputs.
 # Commit deliberately if you want any of these published.
