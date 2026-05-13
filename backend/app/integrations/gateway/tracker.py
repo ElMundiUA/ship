@@ -131,6 +131,7 @@ class TrackerGateway(Protocol):
         labels: list[str] | None = None,
         project_hint: str | None = None,
         project_id: str | None = None,
+        ticket_type: Literal["bug", "feature", "task"] | None = None,
     ) -> CreatedTicket:
         """Create a new ticket/issue/page on the connected tracker.
 
@@ -152,6 +153,18 @@ class TrackerGateway(Protocol):
         project / epic (Linear project, Jira epic, GitHub Project
         v2 item). Pulled from :meth:`list_projects`. Vendors that
         don't model epics ignore it.
+
+        ``ticket_type`` classifies the work as one of ``bug`` /
+        ``feature`` / ``task``. Each adapter renders it with the
+        most-native mechanism available — Jira maps to
+        ``issuetype.name`` (``Bug`` / ``Story`` / ``Task``), Linear
+        sets the matching team-native ``issueTypeId`` when the
+        workspace has the issue-types feature enabled, otherwise
+        falls back to a ``type:<value>`` label alongside any
+        caller-supplied labels; GitHub Issues always uses the
+        ``type:<value>`` label; Notion sets the database's ``Type``
+        select column when present. ``None`` preserves today's
+        behaviour on every adapter.
 
         Raises :class:`ValueError` on vendor-side validation errors
         (e.g. "no GitHub repo configured") so the agent can bubble

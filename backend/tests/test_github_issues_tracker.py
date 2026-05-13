@@ -97,6 +97,84 @@ async def test_transition_rejects_unknown_state() -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# ticket_type label mapping (ELS-69)
+# ---------------------------------------------------------------------------
+
+
+async def _capture_create(
+    monkeypatch, ticket_type, caller_labels
+):
+    """Spin up the tracker, fire ``create_ticket``, return the
+    decoded request body labels list (or None if absent)."""
+    import json
+
+    async def _fake_token(*_, **__):
+        return "ghs"
+
+    monkeypatch.setattr(it_module, "fetch_installation_token", _fake_token)
+
+    captured: dict = {}
+
+    def match(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode("utf-8"))
+        captured["body"] = body
+        return httpx.Response(
+            201,
+            json={
+                "number": 1,
+                "html_url": "https://github.com/acme/web/issues/1",
+            },
+        )
+
+    async with httpx.AsyncClient(transport=_MockTransport(match)) as client:
+        tracker = GitHubIssuesTracker(
+            installation_id=1,
+            owner="acme",
+            repo="web",
+            settings=_StubSettings(),  # type: ignore[arg-type]
+            client=client,
+        )
+        await tracker.create_ticket(
+            title="t",
+            body="b",
+            labels=caller_labels,
+            ticket_type=ticket_type,
+        )
+    return captured["body"].get("labels")
+
+
+@pytest.mark.asyncio
+async def test_create_ticket_bug_prepends_type_label(monkeypatch) -> None:
+    labels = await _capture_create(
+        monkeypatch, ticket_type="bug", caller_labels=["regression"]
+    )
+    # Ordered: type:bug prepended, caller-supplied second.
+    assert labels == ["type:bug", "regression"]
+
+
+@pytest.mark.asyncio
+async def test_create_ticket_dedups_explicit_type_label(monkeypatch) -> None:
+    labels = await _capture_create(
+        monkeypatch,
+        ticket_type="bug",
+        caller_labels=["type:bug", "regression"],
+    )
+    assert labels == ["type:bug", "regression"]
+
+
+@pytest.mark.asyncio
+async def test_create_ticket_default_passes_labels_unchanged(
+    monkeypatch,
+) -> None:
+    """When ``ticket_type`` is omitted, the labels list is identical to
+    today's golden — no ``type:*`` injection on the default path."""
+    labels = await _capture_create(
+        monkeypatch, ticket_type=None, caller_labels=["agent-filed"]
+    )
+    assert labels == ["agent-filed"]
+
+
 @pytest.mark.asyncio
 async def test_issue_number_parser_handles_owner_repo_prefix(monkeypatch) -> None:
     async def _fake_token(*_, **__):

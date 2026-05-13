@@ -2,11 +2,26 @@
 
 from __future__ import annotations
 
-from typing import Any
+import logging
+from typing import Any, Literal
 
 import httpx
 
 from backend.app.integrations.gateway.tracker import CreatedTicket, TicketRef
+
+
+logger = logging.getLogger(__name__)
+
+
+_JIRA_ISSUETYPE_FALLBACKS: dict[str, tuple[str, ...]] = {
+    # ``feature`` prefers Story (Jira Software default), but a project
+    # with Story disabled often still has the legacy ``New Feature``
+    # type; if both are absent we degrade to ``Task`` so the ticket
+    # actually lands rather than 400-looping.
+    "feature": ("Story", "New Feature", "Task"),
+    "bug": ("Bug", "Task"),
+    "task": ("Task",),
+}
 
 
 class JiraTracker:
@@ -144,33 +159,100 @@ class JiraTracker:
         body: str,
         labels: list[str] | None = None,
         project_hint: str | None = None,
+        project_id: str | None = None,
+        ticket_type: Literal["bug", "feature", "task"] | None = None,
     ) -> CreatedTicket:
+        del project_id  # Jira attaches via "Epic Link"; not modelled here yet.
         project = (project_hint or self._default_project or "").strip().upper()
         if not project:
             raise ValueError("Jira project is required; pass project_hint='ENG'.")
-        payload: dict[str, Any] = {
-            "fields": {
-                "project": {"key": project},
-                "summary": title,
-                "description": _adf_doc(body),
-                "issuetype": {"name": "Task"},
+
+        # Default keeps today's behaviour (everything → Task) so existing
+        # callers see no wire drift.
+        candidates = _JIRA_ISSUETYPE_FALLBACKS.get(ticket_type or "task", ("Task",))
+
+        last_error: httpx.HTTPStatusError | None = None
+        attempted: list[str] = []
+        for issuetype_name in candidates:
+            payload: dict[str, Any] = {
+                "fields": {
+                    "project": {"key": project},
+                    "summary": title,
+                    "description": _adf_doc(body),
+                    "issuetype": {"name": issuetype_name},
+                }
             }
-        }
-        if labels:
-            payload["fields"]["labels"] = labels
-        created = await self._request("POST", "/rest/api/3/issue", json=payload)
-        key = str(created.get("key") or created.get("id") or "")
-        if not key:
-            raise ValueError("Jira refused issue creation (no key returned).")
-        return CreatedTicket(
-            ref=TicketRef(kind="jira", workspace_hint=project, id=key),
-            url=f"{self._site_url}/browse/{key}",
-            display_id=key,
+            if labels:
+                payload["fields"]["labels"] = labels
+            try:
+                created = await self._request(
+                    "POST", "/rest/api/3/issue", json=payload
+                )
+            except httpx.HTTPStatusError as exc:
+                # Only retry on the specific shape Jira uses for "issue
+                # type isn't provisioned on this project" (400 +
+                # ``errors.issuetype`` populated). Any other 4xx/5xx
+                # bubbles up so we don't paper over real failures.
+                if not _is_issuetype_400(exc):
+                    raise
+                last_error = exc
+                attempted.append(issuetype_name)
+                logger.warning(
+                    "jira create_ticket: project=%s rejected issuetype=%r; "
+                    "trying next fallback",
+                    project,
+                    issuetype_name,
+                )
+                continue
+            key = str(created.get("key") or created.get("id") or "")
+            if not key:
+                raise ValueError(
+                    "Jira refused issue creation (no key returned)."
+                )
+            return CreatedTicket(
+                ref=TicketRef(kind="jira", workspace_hint=project, id=key),
+                url=f"{self._site_url}/browse/{key}",
+                display_id=key,
+            )
+
+        # Every candidate failed with an ``errors.issuetype`` 400; surface
+        # the last error so the operator sees the real Jira response.
+        assert last_error is not None  # candidates is non-empty
+        logger.warning(
+            "jira create_ticket: project=%s exhausted fallbacks=%r",
+            project,
+            attempted,
         )
+        raise last_error
 
 
 def _issue_key(raw: str) -> str:
     return raw.rsplit("/", 1)[-1].strip()
+
+
+def _is_issuetype_400(exc: httpx.HTTPStatusError) -> bool:
+    """Return True iff the error is a Jira "issuetype rejected" 400.
+
+    Jira returns ``400`` with a body shaped like
+    ``{"errorMessages": [], "errors": {"issuetype": "..."}}`` when the
+    requested issue type isn't provisioned on the project. Any other
+    400 (validation on summary, missing project, etc.) does NOT carry
+    a populated ``errors.issuetype`` and is not retryable here — we
+    propagate so the real reason surfaces.
+    """
+    response = exc.response
+    if response.status_code != 400:
+        return False
+    try:
+        body = response.json()
+    except ValueError:
+        return False
+    if not isinstance(body, dict):
+        return False
+    errors = body.get("errors")
+    if not isinstance(errors, dict):
+        return False
+    return bool(errors.get("issuetype"))
 
 
 def _adf_doc(markdown: str) -> dict[str, Any]:
