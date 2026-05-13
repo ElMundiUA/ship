@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -562,6 +563,24 @@ async def _apply_pull_request_event(
                 exc,
             )
 
+    # Operator-merge closes the SDLC loop. Agent-opened PRs carry the
+    # ticket id in the title (``agent: <role> · <stage> ELS-99``); when
+    # the operator merges, that's the canonical "done" signal — no
+    # need to keep the ticket cycling through qa_manual / qa_automation /
+    # code_review picker queries (which would noop anyway: manual QA is
+    # operator-owned, automated QA is CI, code review *is* the merge).
+    # Skip install PRs (``ship/install-*``) and any PR without a
+    # parseable ticket id; transition errors are logged and swallowed
+    # so a tracker hiccup doesn't fail the webhook ack.
+    if just_merged and not is_install_pr:
+        await _transition_linked_tickets_on_merge(
+            session,
+            workspace_id=repo_row.workspace_id,
+            pr_title=title,
+            pr_html_url=html_url,
+            pr_number=int(pr.get("number") or 0),
+        )
+
     # When a ``ship/install-*`` PR merges we own the cache that decides
     # whether the dashboard still shows "Install workflow PR →" or
     # flips to "Run now". Bust it eagerly so the next render (or the
@@ -623,6 +642,108 @@ async def _apply_pull_request_event(
                 repo_row.full_name,
                 exc,
             )
+
+
+# Pull a ``ELS-99`` / ``ENG-12`` / ``ABC-1234`` style ticket id out of an
+# agent-PR title. Agent PRs follow ``agent: <role> · <stage> ELS-99`` —
+# pattern is permissive enough to catch operator-edited titles too, as
+# long as the ``LETTERS-NUMBER`` token survives.
+_TICKET_REF_PR_TITLE_RE = re.compile(r"\b([A-Z][A-Z0-9]{1,9}-\d+)\b")
+
+
+async def _transition_linked_tickets_on_merge(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    pr_title: str,
+    pr_html_url: str,
+    pr_number: int,
+) -> None:
+    """Move every ticket whose id appears in the PR title to ``Done``.
+
+    Operator-merge is the canonical "this work shipped" signal — the
+    SDLC pipeline's remaining stages (``qa_manual`` / ``qa_automation`` /
+    ``code_review``) all collapse onto the merge for the solo-operator
+    workflow: manual QA is operator-owned, automated QA is CI, code
+    review *is* the merge. Without this hook, agent-opened tickets
+    stay in ``In Progress`` forever after the operator merges (the
+    picker also overlay-freezes them whenever ``needs:clarification``
+    is set), so the ticket queue grows monotonically.
+
+    Best-effort: tracker errors are logged + swallowed; the webhook
+    must still ack the GitHub delivery.
+    """
+    if not pr_title:
+        return
+    refs = _TICKET_REF_PR_TITLE_RE.findall(pr_title)
+    if not refs:
+        return
+    # De-dup while preserving order so the audit log reads in title order.
+    seen: set[str] = set()
+    ordered_refs: list[str] = []
+    for ref in refs:
+        if ref in seen:
+            continue
+        seen.add(ref)
+        ordered_refs.append(ref)
+
+    from backend.app.api.v1.routes.agent_runs import (
+        _ticket_ref_from,
+        resolve_for_workspace,
+    )
+    from backend.app.core.config import get_settings
+
+    resolved = await resolve_for_workspace(
+        session=session,
+        settings=get_settings(),
+        workspace_id=workspace_id,
+    )
+    if resolved is None:
+        logger.debug(
+            "pr_merge transition skipped: no tracker bound for workspace=%s",
+            workspace_id,
+        )
+        return
+
+    for ticket_ref in ordered_refs:
+        try:
+            ref_obj = _ticket_ref_from(resolved.kind, ticket_ref)
+            await resolved.gateway.comment(
+                ref_obj,
+                body=f"Closed by merge of {pr_html_url} (PR #{pr_number}).",
+            )
+            await resolved.gateway.transition(ref_obj, to_state="Done")
+        except Exception as exc:  # noqa: BLE001 — surface, never block ack
+            logger.warning(
+                "pr_merge transition failed ws=%s ticket=%s pr=#%d: %s",
+                workspace_id,
+                ticket_ref,
+                pr_number,
+                exc,
+            )
+            continue
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=None,
+                actor_token_id=None,
+                action="pr_merge.tracker_done",
+                target_kind="ticket",
+                target_id=ticket_ref,
+                payload={
+                    "tracker_kind": resolved.kind,
+                    "pr_number": pr_number,
+                    "pr_html_url": pr_html_url,
+                    "pr_title": pr_title[:300],
+                },
+            )
+        )
+        logger.info(
+            "pr_merge → tracker:transition:Done ticket=%s pr=#%d ws=%s",
+            ticket_ref,
+            pr_number,
+            workspace_id,
+        )
 
 
 async def _apply_workflow_run_event(
