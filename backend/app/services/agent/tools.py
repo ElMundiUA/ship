@@ -67,10 +67,8 @@ from backend.app.db.models.integrations import (
     WorkspaceRepo,
 )
 from backend.app.db.models.dashboard_priorities import WorkspaceProjectPriority
-from backend.app.db.models.lanes import Routine
+from backend.app.db.models.lanes import Routine, RoutineRun
 from backend.app.db.models.pipelines import (
-    Pipeline,
-    PipelineRun,
     PullRequest,
     WorkflowRun,
 )
@@ -1029,14 +1027,12 @@ class ToolBox:
             ToolSpec(
                 name="runs_list",
                 description=(
-                    "Outcome-first list of pipeline runs across the "
-                    "workspace. Filters by ``play_key`` (matches both "
-                    "``Pipeline.lane_id`` and the catalog pattern id), "
-                    "repo, status (``ok`` / ``fail`` / ``error`` / "
-                    "concrete pipeline statuses), trigger, "
-                    "``has_escalations``, and a ``since`` ISO "
-                    "timestamp. Prefer this over "
-                    "``list_pipeline_runs`` when the user asks 'what "
+                    "Outcome-first list of routine runs across the "
+                    "workspace. Filters by ``play_key`` (matches "
+                    "``Routine.lane_id``), repo, status (``ok`` / "
+                    "``fail`` / ``error`` / concrete run statuses), "
+                    "trigger, ``has_escalations``, and a ``since`` ISO "
+                    "timestamp. Prefer this when the user asks 'what "
                     "ran?' in outcome / business terms."
                 ),
                 parameters={
@@ -1046,8 +1042,7 @@ class ToolBox:
                             "type": "string",
                             "description": (
                                 "Filter by Play key — matches the "
-                                "pipeline's ``lane_id`` or the lane-"
-                                "linked pattern id."
+                                "routine's ``lane_id``."
                             ),
                         },
                         "repo_id": {
@@ -1105,7 +1100,7 @@ class ToolBox:
             ToolSpec(
                 name="runs_get",
                 description=(
-                    "Full detail of one pipeline run: RunSummary "
+                    "Full detail of one routine run: RunSummary "
                     "outcome JSON (artifacts, findings, headline, "
                     "approval), plus any inbox escalations linked via "
                     "``run_escalations``. Use after ``runs_query`` "
@@ -1117,7 +1112,7 @@ class ToolBox:
                     "properties": {
                         "run_id": {
                             "type": "string",
-                            "description": "Pipeline run UUID.",
+                            "description": "Routine run UUID.",
                         },
                     },
                     "required": ["run_id"],
@@ -3683,35 +3678,34 @@ class ToolBox:
             high=_MAX_RUNS_LIST,
         )
 
-        # Pull pipeline metadata in the same query so we can carry
-        # ``play_key`` (== Pipeline.lane_id) and ``repo_id`` without an
-        # N+1 follow-up. The ``play_key`` filter is applied
-        # post-query because Pipeline.lane_id is the "user-facing"
-        # play key and it's cheap (limit-bounded).
+        # Pull routine metadata in the same query so we can carry
+        # ``play_key`` (== Routine.lane_id) and ``repo_id`` without an
+        # N+1 follow-up. The ``play_key`` filter is applied at the
+        # WHERE level — ``Routine.lane_id`` is the user-facing play key.
         stmt = (
-            select(PipelineRun, Pipeline)
-            .join(Pipeline, Pipeline.id == PipelineRun.pipeline_id)
-            .where(PipelineRun.workspace_id == self._workspace_id)
+            select(RoutineRun, Routine)
+            .join(Routine, Routine.id == RoutineRun.routine_id)
+            .where(RoutineRun.workspace_id == self._workspace_id)
         )
         if status_in is not None:
-            stmt = stmt.where(PipelineRun.status.in_(status_in))
+            stmt = stmt.where(RoutineRun.status.in_(status_in))
         if trigger_in is not None:
-            stmt = stmt.where(PipelineRun.trigger.in_(trigger_in))
+            stmt = stmt.where(RoutineRun.trigger.in_(trigger_in))
         if repo_id is not None:
-            stmt = stmt.where(Pipeline.repo_id == repo_id)
+            stmt = stmt.where(Routine.repo_id == repo_id)
         if play_key is not None:
-            stmt = stmt.where(Pipeline.lane_id == play_key)
+            stmt = stmt.where(Routine.lane_id == play_key)
         if since_dt is not None:
             stmt = stmt.where(
                 func.coalesce(
-                    PipelineRun.started_at, PipelineRun.created_at
+                    RoutineRun.started_at, RoutineRun.created_at
                 )
                 >= since_dt
             )
         stmt = stmt.order_by(
             desc(
                 func.coalesce(
-                    PipelineRun.started_at, PipelineRun.created_at
+                    RoutineRun.started_at, RoutineRun.created_at
                 )
             )
         ).limit(limit * 4 if has_escalations else limit)
@@ -3732,7 +3726,7 @@ class ToolBox:
             ).all()
             escalation_count_map = {rid: int(c) for rid, c in esc_rows}
 
-        repo_id_set = {p.repo_id for _, p in rows if p.repo_id is not None}
+        repo_id_set = {r.repo_id for _, r in rows if r.repo_id is not None}
         repo_name_map: dict[uuid.UUID, str] = {}
         if repo_id_set:
             repo_rows = (
@@ -3745,7 +3739,7 @@ class ToolBox:
             repo_name_map = {rid: name for rid, name in repo_rows}
 
         runs_out: list[dict[str, Any]] = []
-        for run, pipeline in rows:
+        for run, routine in rows:
             esc_count = escalation_count_map.get(run.id, 0)
             if has_escalations and esc_count == 0:
                 continue
@@ -3780,16 +3774,16 @@ class ToolBox:
             runs_out.append(
                 {
                     "id": str(run.id),
-                    "pipeline_id": str(run.pipeline_id),
-                    "play_key": pipeline.lane_id if pipeline else None,
+                    "routine_id": str(run.routine_id),
+                    "play_key": routine.lane_id if routine else None,
                     "repo_id": (
-                        str(pipeline.repo_id)
-                        if pipeline and pipeline.repo_id is not None
+                        str(routine.repo_id)
+                        if routine and routine.repo_id is not None
                         else None
                     ),
                     "repo_name": (
-                        repo_name_map.get(pipeline.repo_id)
-                        if pipeline and pipeline.repo_id is not None
+                        repo_name_map.get(routine.repo_id)
+                        if routine and routine.repo_id is not None
                         else None
                     ),
                     "status": run.status,
@@ -3844,9 +3838,9 @@ class ToolBox:
             })
         run = (
             await self._session.execute(
-                select(PipelineRun).where(
-                    PipelineRun.id == run_id,
-                    PipelineRun.workspace_id == self._workspace_id,
+                select(RoutineRun).where(
+                    RoutineRun.id == run_id,
+                    RoutineRun.workspace_id == self._workspace_id,
                 )
             )
         ).scalar_one_or_none()
@@ -3855,9 +3849,9 @@ class ToolBox:
                 "error": "not_found",
                 "message": f"run {run_id} not found in this workspace",
             })
-        pipeline = await self._session.get(Pipeline, run.pipeline_id)
+        routine = await self._session.get(Routine, run.routine_id)
         repo_name: str | None = None
-        repo_id: uuid.UUID | None = pipeline.repo_id if pipeline else None
+        repo_id: uuid.UUID | None = routine.repo_id if routine else None
         if repo_id is not None:
             repo_row = await self._session.get(WorkspaceRepo, repo_id)
             repo_name = repo_row.full_name if repo_row is not None else None
@@ -3904,8 +3898,8 @@ class ToolBox:
         return _json_result(
             {
                 "id": str(run.id),
-                "pipeline_id": str(run.pipeline_id),
-                "play_key": pipeline.lane_id if pipeline else None,
+                "routine_id": str(run.routine_id),
+                "play_key": routine.lane_id if routine else None,
                 "repo_id": str(repo_id) if repo_id is not None else None,
                 "repo_name": repo_name,
                 "status": run.status,
@@ -4518,7 +4512,7 @@ class ToolBox:
         """Stitch the workspace's headline state into one payload.
 
         Composes cheap queries against ``WorkspaceProjectPriority``,
-        ``InboxItem``, ``PullRequest``, ``PipelineRun``, and
+        ``InboxItem``, ``PullRequest``, ``RoutineRun``, and
         ``WorkflowRun``. The shape is deliberately slim — the agent
         gets enough to answer "what's on my plate?" without a five-
         tool fan-out, but not the full ``/dashboard/ops`` payload
@@ -4627,26 +4621,26 @@ class ToolBox:
             )
         ).scalar_one() or 0
 
-        # Recent activity — top 5 mixed across pipeline runs + PRs +
+        # Recent activity — top 5 mixed across routine runs + PRs +
         # workflow runs in the last week. Cheap unioned listing; the
         # agent calls ``runs_query`` / ``list_pull_requests`` if it
         # needs detail beyond the headline.
         recent: list[dict[str, Any]] = []
         recent_runs = (
             await self._session.execute(
-                select(PipelineRun)
+                select(RoutineRun)
                 .where(
-                    PipelineRun.workspace_id == self._workspace_id,
-                    PipelineRun.created_at >= cutoff_recent,
+                    RoutineRun.workspace_id == self._workspace_id,
+                    RoutineRun.created_at >= cutoff_recent,
                 )
-                .order_by(desc(PipelineRun.created_at))
+                .order_by(desc(RoutineRun.created_at))
                 .limit(5)
             )
         ).scalars().all()
         for r in recent_runs:
             recent.append(
                 {
-                    "kind": "pipeline_run",
+                    "kind": "routine_run",
                     "id": str(r.id),
                     "status": r.status,
                     "trigger": r.trigger,

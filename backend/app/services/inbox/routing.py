@@ -47,7 +47,7 @@ from backend.app.db.models.inbox import (
     MemberGroup,
     MemberGroupMember,
 )
-from backend.app.db.models.pipelines import PipelineRun
+from backend.app.db.models.lanes import RoutineRun
 from backend.app.db.models.tenancy import User, WorkspaceMember
 
 logger = logging.getLogger(__name__)
@@ -539,8 +539,8 @@ async def _builtin_strategy(
     if handle == "assignee_of_run":
         if ctx.run_id is None:
             return None
-        run_stmt = select(PipelineRun.payload).where(
-            PipelineRun.id == ctx.run_id
+        run_stmt = select(RoutineRun.payload).where(
+            RoutineRun.id == ctx.run_id
         )
         payload = (await session.execute(run_stmt)).scalar_one_or_none()
         if not isinstance(payload, dict):

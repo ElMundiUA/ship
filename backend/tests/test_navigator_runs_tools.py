@@ -56,19 +56,19 @@ async def _seed_pipeline(
     db_session,
     *,
     workspace_id,
-    repo_id=None,
+    repo_id,
     lane_id: str,
     name: str | None = None,
     enabled: bool = True,
 ):
-    from backend.app.db.models.pipelines import Pipeline
+    from backend.app.db.models.lanes import Routine
 
-    p = Pipeline(
+    p = Routine(
         workspace_id=workspace_id,
         repo_id=repo_id,
         lane_id=lane_id,
-        name=name or lane_id,
-        workflow_id="pr-and-ci-gate",
+        kind="event",
+        pattern="pr-and-ci-gate",
         enabled=enabled,
     )
     db_session.add(p)
@@ -86,10 +86,10 @@ async def _seed_run(
     outcome: dict | None = None,
     started_at: datetime | None = None,
 ):
-    from backend.app.db.models.pipelines import PipelineRun
+    from backend.app.db.models.lanes import RoutineRun
 
-    run = PipelineRun(
-        pipeline_id=pipeline_id,
+    run = RoutineRun(
+        routine_id=pipeline_id,
         workspace_id=workspace_id,
         trigger=trigger,
         status=status,
@@ -372,8 +372,14 @@ async def test_run_detail_cross_workspace_returns_not_found(
     )
     await db_session.flush()
 
+    foreign_repo = await _seed_repo(
+        db_session, ws_b, external_id=300_001, full_name="acme/foreign"
+    )
     foreign_pipeline = await _seed_pipeline(
-        db_session, workspace_id=ws_b.id, lane_id="flow-other"
+        db_session,
+        workspace_id=ws_b.id,
+        repo_id=foreign_repo.id,
+        lane_id="flow-other",
     )
     foreign_run = await _seed_run(
         db_session,

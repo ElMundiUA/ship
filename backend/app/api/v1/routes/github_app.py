@@ -36,7 +36,8 @@ from backend.app.api.v1.deps import AuthContext, get_current_auth
 from backend.app.api.v1.routes.workspaces import ROLES_ADMIN, _require_membership
 from backend.app.core.config import Settings, get_settings
 from backend.app.db.models.integrations import GitHubInstallation, WorkspaceRepo
-from backend.app.db.models.pipelines import Pipeline, PipelineRun, PullRequest, WorkflowRun
+from backend.app.db.models.lanes import Routine, RoutineRun
+from backend.app.db.models.pipelines import PullRequest, WorkflowRun
 from backend.app.db.models.tenancy import AuditLog
 from backend.app.db.session import get_session
 from backend.app.integrations.github.app_auth import (
@@ -598,12 +599,12 @@ async def _apply_pull_request_event(
                     )
                 ).scalars().first()
             if install_row is not None:
-                from backend.app.api.v1.routes.pipelines import (
-                    auto_dispatch_knowledge_pipelines,
+                from backend.app.api.v1.routes.runs import (
+                    auto_dispatch_knowledge_routines,
                 )
                 from backend.app.core.config import get_settings
 
-                created = await auto_dispatch_knowledge_pipelines(
+                created = await auto_dispatch_knowledge_routines(
                     session,
                     repo_row,
                     install_row,
@@ -704,13 +705,13 @@ async def _apply_workflow_run_event(
 
     # Day-4 Phase-1: if the webhook describes a workflow we
     # dispatched (the starter file uses ``name: Ship · ...``), enrich
-    # the matching :class:`PipelineRun` with the GitHub-side run id +
+    # the matching :class:`RoutineRun` with the GitHub-side run id +
     # html_url so the dashboard can deep-link, and let the webhook
     # win the terminal-state race when the in-runner callback
     # couldn't reach us (e.g. customer egress firewalls).
     is_ship_workflow = name.startswith("Ship · ")
     if is_ship_workflow:
-        await _reconcile_pipeline_run_from_webhook(
+        await _reconcile_routine_run_from_webhook(
             session,
             repo_row,
             run,
@@ -968,7 +969,7 @@ async def _apply_push_event_for_lanes(
 
 
 # Map GitHub ``workflow_run.conclusion`` values onto our
-# :class:`PipelineRun.status` vocabulary. ``timed_out`` and ``action_required``
+# :class:`RoutineRun.status` vocabulary. ``timed_out`` and ``action_required``
 # both map to ``failed`` because the dashboard's run timeline only
 # colour-codes terminal failures vs successes; finer detail lives in
 # the linked GitHub Actions UI.
@@ -1017,11 +1018,11 @@ async def _maybe_trigger_self_heal(
 
     name = (run.get("name") or run.get("display_title") or "Workflow")[:255]
 
-    # Late import: avoids an import cycle — pipelines.py already
-    # imports from backend.app.services.notifications (via
-    # auto_dispatch_self_heal's result) and github_app is imported by
-    # pipelines.py indirectly through the webhook router registration.
-    from backend.app.api.v1.routes.pipelines import auto_dispatch_self_heal
+    # Late import: avoids an import cycle — runs.py already imports
+    # from backend.app.services.notifications (via auto_dispatch_self_heal's
+    # result) and github_app is imported by runs.py indirectly through
+    # the webhook router registration.
+    from backend.app.api.v1.routes.runs import auto_dispatch_self_heal
     from backend.app.core.config import get_settings
     from backend.app.services.notifications import (
         record_self_heal_notification,
@@ -1139,48 +1140,47 @@ def _run_path_basename(run: dict[str, Any]) -> str | None:
     return path.rsplit("/", 1)[-1] or None
 
 
-async def _lazy_create_pipeline_run_from_webhook(
+async def _lazy_create_routine_run_from_webhook(
     session: AsyncSession,
     repo_row: WorkspaceRepo,
     run: dict[str, Any],
-) -> PipelineRun | None:
-    """Create a :class:`PipelineRun` row for a cron / push / schedule run.
+) -> RoutineRun | None:
+    """Create a :class:`RoutineRun` row for a cron / push / schedule run.
 
-    Called from :func:`_reconcile_pipeline_run_from_webhook` when we
+    Called from :func:`_reconcile_routine_run_from_webhook` when we
     can't find a matching row by either ``gh_workflow_run_id`` or
     "most recent in-flight". That's the signature of a non-dispatch
     trigger (``schedule:``, ``push:``, ``pull_request:``) where the
     workflow started without our dispatcher ever creating the row.
 
     We only do this for *Ship-owned* workflows (name matches the
-    catalog's ``install_target`` for one of the workspace's
-    pipelines bound to this repo). Third-party cron workflows stay
-    in the ``WorkflowRun`` cache and never enter ``PipelineRun`` —
-    they're not ours to reason about.
+    catalog's ``install_target`` for one of the workspace's routines
+    bound to this repo). Third-party cron workflows stay in the
+    ``WorkflowRun`` cache and never enter ``RoutineRun`` — they're
+    not ours to reason about.
 
-    Returns ``None`` if we couldn't match the run to a pipeline;
-    the caller treats that as "skip enrichment" and moves on.
+    Returns ``None`` if we couldn't match the run to a routine; the
+    caller treats that as "skip enrichment" and moves on.
     """
-    # Late import to keep the starter-workflow resource IO out of
-    # webhook startup; the lookup is an O(1) dict hit so repeat calls
-    # are essentially free.
     from backend.app.services.starter_workflows import install_filename as workflow_install_filename
 
     filename = _run_path_basename(run)
     if filename is None:
         return None
 
-    pipelines = (
+    routines = (
         await session.execute(
-            select(Pipeline).where(
-                Pipeline.workspace_id == repo_row.workspace_id,
-                Pipeline.repo_id == repo_row.id,
+            select(Routine).where(
+                Routine.workspace_id == repo_row.workspace_id,
+                Routine.repo_id == repo_row.id,
             )
         )
     ).scalars().all()
-    matched: Pipeline | None = None
-    for candidate in pipelines:
-        target_filename = workflow_install_filename(candidate.workflow_id)
+    matched: Routine | None = None
+    for candidate in routines:
+        if candidate.pattern is None:
+            continue
+        target_filename = workflow_install_filename(candidate.pattern)
         if target_filename and target_filename == filename:
             matched = candidate
             break
@@ -1188,9 +1188,7 @@ async def _lazy_create_pipeline_run_from_webhook(
         return None
 
     event = (run.get("event") or "webhook")[:32]
-    # Pilot's :class:`PipelineRun.trigger` vocabulary is
-    # ``manual`` / ``webhook`` / ``cron`` / ``onboarding``. Collapse
-    # GitHub's event names so downstream filters stay meaningful.
+    # ``manual`` / ``webhook`` / ``cron`` / ``onboarding`` vocabulary.
     trigger = "cron" if event == "schedule" else "webhook"
 
     gh_run_id_raw = run.get("id")
@@ -1227,8 +1225,8 @@ async def _lazy_create_pipeline_run_from_webhook(
     if html_url:
         payload.setdefault("metrics", {})["gh_html_url"] = html_url[:1024]
 
-    pipeline_run = PipelineRun(
-        pipeline_id=matched.id,
+    routine_run = RoutineRun(
+        routine_id=matched.id,
         workspace_id=repo_row.workspace_id,
         trigger=trigger,
         status=mapped_status,
@@ -1239,36 +1237,33 @@ async def _lazy_create_pipeline_run_from_webhook(
         )[:1024],
         payload=payload,
     )
-    session.add(pipeline_run)
+    session.add(routine_run)
     await session.flush()
     logger.info(
-        "lazy-registered pipeline_run id=%s pipeline=%s event=%s repo=%s",
-        pipeline_run.id,
+        "lazy-registered routine_run id=%s routine=%s event=%s repo=%s",
+        routine_run.id,
         matched.id,
         event,
         repo_row.full_name,
     )
-    return pipeline_run
+    return routine_run
 
 
-async def _reconcile_pipeline_run_from_webhook(
+async def _reconcile_routine_run_from_webhook(
     session: AsyncSession,
     repo_row: WorkspaceRepo,
     run: dict[str, Any],
     *,
     html_url: str,
 ) -> None:
-    """Bind a GitHub ``workflow_run`` event back to our :class:`PipelineRun`.
+    """Bind a GitHub ``workflow_run`` event back to our :class:`RoutineRun`.
 
     Correlation strategy: pick the most-recent ``queued``/``running``
-    pipeline run for this workspace whose pipeline is bound to the
-    same repo. Pilot only dispatches one workflow at a time per
-    pipeline kind, so the freshest in-flight run is the right match;
-    when more than one is in flight we still bind to the freshest one
-    rather than guessing wrong with a stale row.
+    routine run for this workspace whose routine is bound to the same
+    repo. We typically dispatch one workflow at a time per routine,
+    so the freshest in-flight run is the right match.
 
-    The callback endpoint is the *primary* truth source — it carries
-    a per-pipeline summary the workflow author chose. The webhook
+    The callback endpoint is the *primary* truth source. The webhook
     only fills in fields the callback can't (the GitHub Actions
     ``html_url`` + the upstream ``conclusion`` for cases where the
     callback failed to reach us).
@@ -1281,64 +1276,47 @@ async def _reconcile_pipeline_run_from_webhook(
 
     # Try the cheap path first: is this exactly the run we already
     # know about (callback recorded gh_workflow_run_id)?
-    pipeline_run: PipelineRun | None = None
+    routine_run: RoutineRun | None = None
     if gh_run_id is not None:
         cast_id = str(gh_run_id)
-        # ``payload`` is JSONB; ``->'metrics'->>'gh_workflow_run_id'``
-        # via the ORM is awkward, so we filter in Python after a
-        # bounded "recent runs in this workspace" prefilter. Pilot
-        # volumes make this fine; we'd revisit if it ever shows up.
         candidate_stmt = (
-            select(PipelineRun)
-            .join(Pipeline, Pipeline.id == PipelineRun.pipeline_id)
-            .where(Pipeline.repo_id == repo_row.id)
-            .where(PipelineRun.workspace_id == repo_row.workspace_id)
-            .order_by(desc(PipelineRun.started_at), desc(PipelineRun.created_at))
+            select(RoutineRun)
+            .join(Routine, Routine.id == RoutineRun.routine_id)
+            .where(Routine.repo_id == repo_row.id)
+            .where(RoutineRun.workspace_id == repo_row.workspace_id)
+            .order_by(desc(RoutineRun.started_at), desc(RoutineRun.created_at))
             .limit(50)
         )
         candidates = (await session.execute(candidate_stmt)).scalars().all()
         for cand in candidates:
             metrics = (cand.payload or {}).get("metrics") or {}
             if str(metrics.get("gh_workflow_run_id") or "") == cast_id:
-                pipeline_run = cand
+                routine_run = cand
                 break
 
-    if pipeline_run is None:
-        # Fallback: most-recent in-flight run for this repo.
+    if routine_run is None:
         in_flight_stmt = (
-            select(PipelineRun)
-            .join(Pipeline, Pipeline.id == PipelineRun.pipeline_id)
-            .where(Pipeline.repo_id == repo_row.id)
-            .where(PipelineRun.workspace_id == repo_row.workspace_id)
-            .where(PipelineRun.status.in_(("queued", "running")))
-            .order_by(desc(PipelineRun.started_at), desc(PipelineRun.created_at))
+            select(RoutineRun)
+            .join(Routine, Routine.id == RoutineRun.routine_id)
+            .where(Routine.repo_id == repo_row.id)
+            .where(RoutineRun.workspace_id == repo_row.workspace_id)
+            .where(RoutineRun.status.in_(("queued", "running")))
+            .order_by(desc(RoutineRun.started_at), desc(RoutineRun.created_at))
             .limit(1)
         )
-        pipeline_run = (
+        routine_run = (
             await session.execute(in_flight_stmt)
         ).scalars().first()
 
-    if pipeline_run is None:
-        # B10 addition: the run might have been triggered by the
-        # workflow's own ``schedule:`` / ``push:`` / ``pull_request:``
-        # block, which means *no* one ever called our dispatch
-        # endpoint to pre-seed a :class:`PipelineRun`. Match the
-        # workflow file path on the run back to one of our installed
-        # pipelines; if it's a Ship-owned lane, lazily create the
-        # run row here so the dashboard's "last activity" panel
-        # surfaces the cron execution the same way it shows manual
-        # ones.
-        pipeline_run = await _lazy_create_pipeline_run_from_webhook(
+    if routine_run is None:
+        routine_run = await _lazy_create_routine_run_from_webhook(
             session, repo_row, run
         )
 
-    if pipeline_run is None:
-        # Nothing to enrich. The user might have triggered the
-        # workflow themselves via the GitHub UI, in which case we
-        # leave it at the cached ``WorkflowRun`` row.
+    if routine_run is None:
         return
 
-    payload = dict(pipeline_run.payload or {})
+    payload = dict(routine_run.payload or {})
     metrics = dict(payload.get("metrics") or {})
     if gh_run_id is not None:
         metrics.setdefault("gh_workflow_run_id", gh_run_id)
@@ -1346,35 +1324,32 @@ async def _reconcile_pipeline_run_from_webhook(
         metrics["gh_html_url"] = html_url[:1024]
     if metrics:
         payload["metrics"] = metrics
-        pipeline_run.payload = payload
+        routine_run.payload = payload
 
     gh_status = run.get("status") or ""
     gh_conclusion = run.get("conclusion") or ""
     now = datetime.now(timezone.utc)
-    pipeline_row: Pipeline | None = None
+    routine_row: Routine | None = None
 
-    if gh_status == "completed" and pipeline_run.status not in {
+    if gh_status == "completed" and routine_run.status not in {
         "succeeded",
         "failed",
         "cancelled",
     }:
-        # Callback hasn't landed (firewall, runner crash, etc.) —
-        # accept the webhook's verdict so the dashboard doesn't show
-        # "running" forever.
         mapped = _GH_CONCLUSION_TO_STATUS.get(gh_conclusion, "failed")
-        pipeline_run.status = mapped
-        pipeline_run.finished_at = (
+        routine_run.status = mapped
+        routine_run.finished_at = (
             _parse_iso(run.get("updated_at")) or now
         )
-        if not pipeline_run.summary:
-            pipeline_run.summary = (
+        if not routine_run.summary:
+            routine_run.summary = (
                 f"Reconciled from workflow_run webhook ({gh_conclusion or 'unknown'})"
             )
-        pipeline_row = await session.get(Pipeline, pipeline_run.pipeline_id)
-        if pipeline_row is not None:
-            pipeline_row.last_run_status = mapped
-            pipeline_row.last_run_at = pipeline_run.finished_at or now
-    pipeline_run.updated_at = now
+        routine_row = await session.get(Routine, routine_run.routine_id)
+        if routine_row is not None:
+            routine_row.last_run_status = mapped
+            routine_row.last_run_at = routine_run.finished_at or now
+    routine_run.updated_at = now
 
 
 __all__ = ["router", "InstallStartResponse", "InstallationOut"]

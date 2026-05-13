@@ -44,8 +44,8 @@ from backend.app.api.v1.routes import (
     native_integrations,
     notifications,
     notion_oauth,
-    pipelines,
     processes,
+    runs,
     policies,
     repo_home,
     repo_secrets,
@@ -104,13 +104,13 @@ api_router.include_router(notion_oauth.router)
 # The bot worker process talks to ``/v1/workspaces/{ws}/chat/stream``
 # directly with the service PAT minted at bind time.
 api_router.include_router(telegram.router)
-# Pipelines API + dashboard summary (pilot Day 3 — main app surface).
-# ``pipelines.router`` is workspace-scoped (RBAC); ``pipelines.public_router``
-# hosts the ``/pipelines/runs/{id}/result`` callback that dispatched
-# GitHub Actions workflows hit with a bearer ``run_token`` (no session,
-# no workspace prefix).
-api_router.include_router(pipelines.router)
-api_router.include_router(pipelines.public_router)
+# Runs API. ``runs.router`` mounts under
+# ``/v1/workspaces/{ws}/routines/{routine_id}/runs`` (workspace-scoped,
+# RBAC); ``runs.public_router`` hosts the ``/v1/runs/{run_id}/result``
+# callback that dispatched GitHub Actions workflows hit with a bearer
+# ``run_token`` (no session, no workspace prefix).
+api_router.include_router(runs.router)
+api_router.include_router(runs.public_router)
 api_router.include_router(processes.router)
 api_router.include_router(dashboard.router)
 # Dashboard v2 prioritizer surface (PR-1). GET / POST under

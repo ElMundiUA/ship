@@ -65,7 +65,7 @@ async def test_chat_turn_multi_tool_composition(
         InboxRoutingRule,
     )
     from backend.app.db.models.integrations import WorkspaceRepo
-    from backend.app.db.models.pipelines import Pipeline, PipelineRun
+    from backend.app.db.models.lanes import Routine, RoutineRun
     from backend.app.db.models.tenancy import AuditLog
 
     user, _, ws = seed_workspace
@@ -113,18 +113,18 @@ async def test_chat_turn_multi_tool_composition(
     db_session.add(repo)
     await db_session.flush()
 
-    pipeline = Pipeline(
+    pipeline = Routine(
         workspace_id=ws.id,
         repo_id=repo.id,
         lane_id="flow-pr-self-review",
-        name="PR self-review",
-        workflow_id="pr-and-ci-gate",
+        kind="event",
+        pattern="pr-and-ci-gate",
         enabled=True,
     )
     db_session.add(pipeline)
     await db_session.flush()
-    run = PipelineRun(
-        pipeline_id=pipeline.id,
+    run = RoutineRun(
+        routine_id=pipeline.id,
         workspace_id=ws.id,
         trigger="manual",
         status="succeeded",

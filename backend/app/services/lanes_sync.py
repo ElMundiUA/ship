@@ -411,9 +411,10 @@ async def sync_lanes_for_repo(
 
     # Remove rows for lanes no longer declared. We hard-delete rather
     # than soft-archive because the Routine row is a pure projection —
-    # audit history lives on ``AuditLog`` (caller-owned) and on
-    # ``PipelineRun`` (``lane_id`` FK is ``ON DELETE SET NULL``, so
-    # historical runs survive the cleanup).
+    # audit history lives on ``AuditLog`` (caller-owned). Note that
+    # routine_runs FK is ON DELETE CASCADE, so deleting a Routine here
+    # also drops its run history; that's intentional for the "lane was
+    # removed from the YAML" case.
     for lane_id, row in existing_by_id.items():
         if lane_id in seen:
             continue

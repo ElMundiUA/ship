@@ -40,13 +40,11 @@ from backend.app.db.models.integrations import (
     NativeIntegrationSyncState,
     WorkspaceRepo,
 )
-from backend.app.db.models.lanes import Routine
+from backend.app.db.models.lanes import Routine, RoutineRun
 from backend.app.db.models.notifications import WorkspaceNotification
 from backend.app.db.models.pipelines import (
     AgentRequest,
     FleetRequest,
-    Pipeline,
-    PipelineRun,
     PullRequest,
     WorkflowRun,
 )
@@ -108,14 +106,13 @@ __all__ = [
     "NativeIntegrationSyncState",
     "Org",
     "OrgMember",
-    "Pipeline",
-    "PipelineRun",
     "PlatformInvite",
     "Project",
     "PullRequest",
     "RepoIntel",
     "RepoIntelTriggeredBy",
     "Routine",
+    "RoutineRun",
     "RepoSecret",
     "RunEscalation",
     "TelegramChatLink",

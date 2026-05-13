@@ -107,7 +107,7 @@ def _make_note(workspace_id, *, body="note body", bucket_hint=None) -> Improveme
     return Improvement(
         workspace_id=workspace_id,
         repo_id=None,
-        pipeline_run_id=None,
+        routine_run_id=None,
         kind=NOTE_KIND,
         title="atom title",
         body=body,

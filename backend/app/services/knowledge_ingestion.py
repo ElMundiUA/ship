@@ -685,7 +685,7 @@ async def _ingest_documents(
             note = Improvement(
                 workspace_id=source.workspace_id,
                 repo_id=source.repo_id,
-                pipeline_run_id=None,
+                routine_run_id=None,
                 kind="knowledge_note",
                 title=(section.title or doc.title)[:512],
                 body=section.body_md[:NOTE_BODY_CAP],

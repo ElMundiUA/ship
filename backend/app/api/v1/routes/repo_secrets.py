@@ -39,7 +39,7 @@ from backend.app.api.v1.routes.workspaces import (
 )
 from backend.app.core.config import Settings, get_settings
 from backend.app.db.models.integrations import GitHubInstallation, WorkspaceRepo
-from backend.app.db.models.pipelines import Pipeline
+from backend.app.db.models.lanes import Routine
 from backend.app.db.models.repo_secrets import RepoSecret
 from backend.app.db.models.tenancy import AuditLog
 from backend.app.db.session import get_session
@@ -263,13 +263,13 @@ async def list_required_secrets(
 ) -> RequiredSecretsOut:
     """Return the ``required_secrets`` matrix for a repo.
 
-    Walks every pipeline bound to the repo, reads its catalog
-    entry's ``required_secrets``, and merges with what's stored so
-    the UI can render "missing" / "stored" / "stored but not
+    Walks every declared routine on the repo, reads its starter
+    workflow's ``required_secrets``, and merges with what's stored
+    so the UI can render "missing" / "stored" / "stored but not
     synced" indicators next to each name.
 
-    Enabled and disabled pipelines are both included: a disabled
-    lane might still need its secret if the user re-enables it,
+    Enabled and disabled routines are both included: a disabled
+    routine might still need its secret if the user re-enables it,
     and surfacing it pre-emptively saves one round trip of
     "enable lane → error → add secret → enable again".
     """
@@ -285,27 +285,29 @@ async def list_required_secrets(
     if repo is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
-    pipelines = (
+    routines = (
         await session.execute(
-            select(Pipeline).where(
-                Pipeline.workspace_id == workspace_id,
-                Pipeline.repo_id == repo.id,
+            select(Routine).where(
+                Routine.workspace_id == workspace_id,
+                Routine.repo_id == repo.id,
             )
         )
     ).scalars().all()
 
-    # Merge by secret name, collecting the set of pipeline *lane_ids*
+    # Merge by secret name, collecting the set of routine *lane_ids*
     # that demand it. ``lane_id`` (not ``id``) because the UI groups
     # "PR review needs ANTHROPIC_API_KEY" rather than per-row.
     required_by: dict[str, list[str]] = {}
-    for pipeline in pipelines:
-        entry = get_starter_workflow(pipeline.workflow_id)
+    for routine in routines:
+        if not routine.pattern:
+            continue
+        entry = get_starter_workflow(routine.pattern)
         if entry is None:
             continue
         for name in entry.required_secrets:
             bucket = required_by.setdefault(name, [])
-            if pipeline.lane_id not in bucket:
-                bucket.append(pipeline.lane_id)
+            if routine.lane_id not in bucket:
+                bucket.append(routine.lane_id)
 
     if not required_by:
         return RequiredSecretsOut(items=[])

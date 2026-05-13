@@ -57,24 +57,33 @@ async def _mint_user(db_session, *, email: str | None = None):
 
 
 async def _make_run(db_session, workspace):
-    """Insert a Pipeline + :class:`PipelineRun` for escalation linkage.
+    """Insert a Routine + :class:`RoutineRun` for escalation linkage.
 
     ``RunEscalation.run_id`` carries a real FK; faking the id would
     let the insert silently SET NULL and break the matching tests.
     """
-    from backend.app.db.models.pipelines import Pipeline, PipelineRun
+    from backend.app.db.models.integrations import WorkspaceRepo
+    from backend.app.db.models.lanes import Routine, RoutineRun
 
-    pipeline = Pipeline(
+    repo = WorkspaceRepo(
         workspace_id=workspace.id,
-        repo_id=None,
-        lane_id=f"side_effects_{uuid.uuid4().hex[:8]}",
-        name="side-effects test pipeline",
-        workflow_id="pr-and-ci-gate",
+        provider="github",
+        external_id=hash(uuid.uuid4()) & 0x7FFFFFFF,
+        full_name=f"test/side-effects-{uuid.uuid4().hex[:6]}",
     )
-    db_session.add(pipeline)
+    db_session.add(repo)
     await db_session.flush()
-    run = PipelineRun(
-        pipeline_id=pipeline.id,
+    routine = Routine(
+        workspace_id=workspace.id,
+        repo_id=repo.id,
+        lane_id=f"side_effects_{uuid.uuid4().hex[:8]}",
+        kind="event",
+        pattern="pr-and-ci-gate",
+    )
+    db_session.add(routine)
+    await db_session.flush()
+    run = RoutineRun(
+        routine_id=routine.id,
         workspace_id=workspace.id,
         trigger="manual",
         status="succeeded",

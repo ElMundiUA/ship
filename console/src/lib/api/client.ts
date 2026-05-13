@@ -975,7 +975,7 @@ export interface ApiClarification {
   id: string;
   workspace_id: string;
   repo_id: string | null;
-  pipeline_run_id: string | null;
+  routine_run_id: string | null;
   ticket_ref: string | null;
   question: string;
   answer: string | null;
@@ -1048,7 +1048,7 @@ export interface ApiImprovement {
   id: string;
   workspace_id: string;
   repo_id: string | null;
-  pipeline_run_id: string | null;
+  routine_run_id: string | null;
   kind: string;
   title: string;
   body: string;
@@ -1513,7 +1513,7 @@ export interface ApiPipeline {
 
 export interface ApiPipelineRun {
   id: string;
-  pipeline_id: string;
+  routine_id: string;
   trigger: string;
   status: string;
   started_at: string | null;
@@ -1565,7 +1565,7 @@ export interface ApiDashboardWorkflowRun {
 
 export interface ApiDashboardCounts {
   active_repos: number;
-  enabled_pipelines: number;
+  enabled_routines: number;
   open_pull_requests: number;
   runs_last_24h: number;
 }
@@ -1584,10 +1584,9 @@ export interface ApiWorkspaceNotification {
 
 export interface ApiDashboard {
   counts: ApiDashboardCounts;
-  pipelines: ApiPipeline[];
   pull_requests: ApiDashboardPullRequest[];
   workflow_runs: ApiDashboardWorkflowRun[];
-  pipeline_runs: ApiPipelineRun[];
+  routine_runs: ApiPipelineRun[];
   notifications: ApiWorkspaceNotification[];
 }
 
@@ -1965,28 +1964,6 @@ export function listProcessRoleTemplates(
   );
 }
 
-export function listPipelines(
-  workspaceId: string,
-  token?: string,
-): Promise<ApiPipeline[]> {
-  return apiFetch<ApiPipeline[]>(
-    `/v1/workspaces/${encodeURIComponent(workspaceId)}/pipelines`,
-    { token },
-  );
-}
-
-export function togglePipeline(
-  workspaceId: string,
-  pipelineId: string,
-  enabled: boolean,
-  token?: string,
-): Promise<ApiPipeline> {
-  return apiFetch<ApiPipeline>(
-    `/v1/workspaces/${encodeURIComponent(workspaceId)}/pipelines/${encodeURIComponent(pipelineId)}`,
-    { method: "PATCH", body: { enabled }, token },
-  );
-}
-
 // ---------------------------------------------------------------------
 // Lanes (RFC-0007 Phase 7)
 // ---------------------------------------------------------------------
@@ -2147,103 +2124,27 @@ export function proposeRepoConfig(
 }
 
 
-export function listPipelineRuns(
+export function listRoutineRuns(
   workspaceId: string,
-  pipelineId: string,
+  routineId: string,
   limit?: number,
   token?: string,
 ): Promise<ApiPipelineRun[]> {
   const qs = limit !== undefined ? `?limit=${limit}` : "";
   return apiFetch<ApiPipelineRun[]>(
-    `/v1/workspaces/${encodeURIComponent(workspaceId)}/pipelines/${encodeURIComponent(pipelineId)}/runs${qs}`,
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/routines/${encodeURIComponent(routineId)}/runs${qs}`,
     { token },
   );
 }
 
-/**
- * Latest pipeline run per "play key" (RFC-0010 / Wave 7 Phase 4 P4-03).
- *
- * Drives the "Last run for this play in this workspace" mini-strip
- * each ``PlayCard`` shows below its CTAs. The strip is keyed off the
- * pattern id (which mirrors ``pipeline.kind`` for every play we
- * register) so we can look it up in O(1) at render time.
- *
- * **N+1 mitigation strategy.** The backend has no batched
- * "latest-run-per-pipeline" endpoint yet. Two viable shapes:
- *
- *   1. ``getDashboard`` returns ``pipeline_runs`` for the workspace
- *      but only inside a 24-hour window; that loses every play
- *      whose last run was older than a day, which is the common
- *      case for scheduled scanners.
- *   2. Fan-out across pipelines via ``listPipelineRuns(.., 1)``.
- *      Bounded by the number of pipelines registered in the
- *      workspace — small for the pilot tenant and parallelisable
- *      via ``Promise.all``.
- *
- * We pick (2) because correctness > round-trip count for a UX
- * surface where "last run never" is a meaningful state (it's how an
- * operator notices a play hasn't been wired yet). Once the BE adds
- * ``GET /v1/workspaces/{ws}/runs/latest-by-play`` (TODO P4-?: see
- * planning doc) we can replace this loop with a single fetch.
- */
-export type LatestRunForPlay = {
-  /** Pipeline kind (matches the catalog pattern id). */
-  playKey: string;
-  /** The most-recent run row for that play in the workspace. */
-  run: ApiPipelineRun;
-  /** Parent pipeline id — needed to drill into the legacy run-detail URL. */
-  pipelineId: string;
-};
-
-export async function listLatestRunsByPlay(
+export function getRoutineRun(
   workspaceId: string,
-  token?: string,
-): Promise<Map<string, LatestRunForPlay>> {
-  let pipelines: ApiPipeline[];
-  try {
-    pipelines = await listPipelines(workspaceId, token);
-  } catch {
-    return new Map();
-  }
-  const recents = await Promise.all(
-    pipelines.map(async (p) => {
-      try {
-        const runs = await listPipelineRuns(workspaceId, p.id, 1, token);
-        return runs[0] ?? null;
-      } catch {
-        return null;
-      }
-    }),
-  );
-  const out = new Map<string, LatestRunForPlay>();
-  pipelines.forEach((p, i) => {
-    const run = recents[i];
-    if (!run) return;
-    const key = p.kind;
-    const existing = out.get(key);
-    const candidateTs = new Date(
-      run.started_at ?? run.created_at,
-    ).getTime();
-    if (existing) {
-      const existingTs = new Date(
-        existing.run.started_at ?? existing.run.created_at,
-      ).getTime();
-      if (candidateTs <= existingTs) return;
-    }
-    out.set(key, { playKey: key, run, pipelineId: p.id });
-  });
-  return out;
-}
-
-/** GET `/v1/workspaces/{ws}/pipelines/{id}/runs/{runId}` — single run for the detail page. */
-export function getPipelineRun(
-  workspaceId: string,
-  pipelineId: string,
+  routineId: string,
   runId: string,
   token?: string,
 ): Promise<ApiPipelineRun> {
   return apiFetch<ApiPipelineRun>(
-    `/v1/workspaces/${encodeURIComponent(workspaceId)}/pipelines/${encodeURIComponent(pipelineId)}/runs/${encodeURIComponent(runId)}`,
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/routines/${encodeURIComponent(routineId)}/runs/${encodeURIComponent(runId)}`,
     { token },
   );
 }
@@ -2292,28 +2193,11 @@ export type RunSummary = {
 };
 
 /**
- * Detail-view extension of {@link ApiPipelineRun}. Once sibling C's
- * client.ts changes land, ``ApiPipelineRun`` itself will carry
- * ``outcome`` + ``lane_id`` and this alias collapses to the base
- * type. Until then, the optional fields keep us forward-compatible
- * without forcing every other call-site to widen.
+ * Detail-view extension of {@link ApiPipelineRun} carrying the
+ * structured RunSummary outcome from the callback.
  */
 export type ApiPipelineRunWithOutcome = ApiPipelineRun & {
   outcome?: RunSummary;
-  lane_id?: string | null;
-};
-
-/**
- * Bundle returned by {@link getRunDetail}: the run row plus the
- * parent {@link ApiPipeline}. The pipeline ships alongside so the
- * detail page can render the play / lane / repo metadata without
- * a second client hop. ``pipeline`` is nullable because the run
- * may belong to a pipeline that's been disabled or deleted while
- * the row itself survives.
- */
-export type RunDetail = {
-  run: ApiPipelineRunWithOutcome;
-  pipeline: ApiPipeline | null;
 };
 
 /**
@@ -2347,47 +2231,6 @@ export type ApiRunEscalation = {
       | null;
   } | null;
 };
-
-/**
- * Resolve a run by id alone. The legacy detail endpoint is keyed by
- * ``(workspaceId, pipelineId, runId)`` — there is no
- * "find run by id alone" route yet (see
- * ``backend/app/api/v1/routes/pipelines.py``). We resolve the
- * parent ``pipelineId`` server-side by listing pipelines and
- * scanning each pipeline's recent runs for the matching ``runId``.
- *
- * O(pipelines × runs) and fine for the pilot tenant; once the
- * backend exposes ``GET /v1/workspaces/{ws}/runs/{runId}`` (tracked
- * separately) we can replace the loop with a single fetch.
- *
- * Returns ``null`` when no pipeline in the workspace records a run
- * with that id in the recent window. Callers render a 404 card.
- */
-export async function getRunDetail(
-  workspaceId: string,
-  runId: string,
-  token?: string,
-): Promise<RunDetail | null> {
-  const pipelines = await listPipelines(workspaceId, token);
-  for (const pipeline of pipelines) {
-    let runs: ApiPipelineRun[];
-    try {
-      runs = await listPipelineRuns(workspaceId, pipeline.id, 50, token);
-    } catch {
-      continue;
-    }
-    if (runs.some((r) => r.id === runId)) {
-      const run = await getPipelineRun(
-        workspaceId,
-        pipeline.id,
-        runId,
-        token,
-      );
-      return { run: run as ApiPipelineRunWithOutcome, pipeline };
-    }
-  }
-  return null;
-}
 
 /**
  * GET ``/v1/workspaces/{ws}/runs/{run_id}/escalations`` — pull the

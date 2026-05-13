@@ -34,10 +34,9 @@ from backend.app.api.v1.routes.workspaces import (
     _require_membership,
 )
 from backend.app.db.models.integrations import GitHubInstallation, WorkspaceRepo
+from backend.app.db.models.lanes import Routine, RoutineRun
 from backend.app.db.models.pipelines import (
     AgentRequest,
-    Pipeline,
-    PipelineRun,
     WorkflowRun,
 )
 from backend.app.db.session import get_session
@@ -251,13 +250,13 @@ async def _count_lanes(
 ) -> tuple[int, int]:
     total = (
         await session.execute(
-            select(func.count()).where(Pipeline.repo_id == repo_id)
+            select(func.count()).where(Routine.repo_id == repo_id)
         )
     ).scalar_one() or 0
     enabled = (
         await session.execute(
             select(func.count()).where(
-                Pipeline.repo_id == repo_id, Pipeline.enabled.is_(True)
+                Routine.repo_id == repo_id, Routine.enabled.is_(True)
             )
         )
     ).scalar_one() or 0
@@ -269,21 +268,19 @@ async def _fetch_pipeline_runs(
     workspace_id: uuid.UUID,
     repo_id: uuid.UUID,
     window_start: datetime,
-) -> list[tuple[PipelineRun, Pipeline]]:
+) -> list[tuple[RoutineRun, Routine]]:
     rows = (
         await session.execute(
-            select(PipelineRun, Pipeline)
-            .join(Pipeline, Pipeline.id == PipelineRun.pipeline_id)
+            select(RoutineRun, Routine)
+            .join(Routine, Routine.id == RoutineRun.routine_id)
             .where(
-                PipelineRun.workspace_id == workspace_id,
-                Pipeline.repo_id == repo_id,
-                # Either started in the window OR still open (in-flight
-                # runs can be older than window_start when the runner
-                # wedges — we still want them in the "now" tile).
-                (PipelineRun.started_at >= window_start)
-                | (PipelineRun.status.in_(("running", "queued", "dispatched"))),
+                RoutineRun.workspace_id == workspace_id,
+                Routine.repo_id == repo_id,
+                # Either started in the window OR still open.
+                (RoutineRun.started_at >= window_start)
+                | (RoutineRun.status.in_(("running", "queued", "dispatched"))),
             )
-            .order_by(desc(PipelineRun.started_at))
+            .order_by(desc(RoutineRun.started_at))
         )
     ).all()
     return [(r, p) for r, p in rows]
@@ -336,20 +333,14 @@ async def _fetch_agent_requests(
 
 
 def _pipeline_activity(
-    rows: list[tuple[PipelineRun, Pipeline]],
+    rows: list[tuple[RoutineRun, Routine]],
 ) -> list[_Activity]:
     out: list[_Activity] = []
-    for run, pipeline in rows:
+    for run, routine in rows:
         at = run.started_at or run.created_at
         status = _normalise_run_status(run.status)
-        # ``run.lane_id`` is a UUID FK to the RFC-0007 ``Lane`` table;
-        # ``pipeline.lane_id`` is the legacy string key. Operators care
-        # about the human-facing label, so fall back to the string key
-        # whenever we don't have a joined Lane row.
-        lane = (
-            str(run.lane_id) if run.lane_id is not None else pipeline.lane_id
-        ) or "(unnamed)"
-        title = pipeline.name or pipeline.workflow_id or lane
+        lane = routine.lane_id or "(unnamed)"
+        title = routine.pattern or routine.lane_id or lane
         out.append(
             _Activity(
                 kind="pipeline",

@@ -108,9 +108,9 @@ class Clarification(Base):
         ForeignKey("workspace_repos.id", ondelete="CASCADE"),
         nullable=True,
     )
-    pipeline_run_id: Mapped[uuid.UUID | None] = mapped_column(
+    routine_run_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("pipeline_runs.id", ondelete="SET NULL"),
+        ForeignKey("routine_runs.id", ondelete="SET NULL"),
         nullable=True,
     )
     ticket_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -210,9 +210,9 @@ class Improvement(Base):
         ForeignKey("workspace_repos.id", ondelete="CASCADE"),
         nullable=True,
     )
-    pipeline_run_id: Mapped[uuid.UUID | None] = mapped_column(
+    routine_run_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("pipeline_runs.id", ondelete="SET NULL"),
+        ForeignKey("routine_runs.id", ondelete="SET NULL"),
         nullable=True,
     )
     kind: Mapped[str] = mapped_column(String(32), nullable=False)

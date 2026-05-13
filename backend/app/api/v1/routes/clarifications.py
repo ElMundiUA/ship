@@ -12,7 +12,7 @@ Two call patterns share the create endpoint:
   manual question" affordance in the console.
 - **Pipeline-authored** — a dispatched GitHub Action posts here with
   its ``run_token`` bearer; the token's ``run_id`` is captured in
-  ``pipeline_run_id`` automatically so the UI can deep-link back to
+  ``routine_run_id`` automatically so the UI can deep-link back to
   the run that raised the question.
 
 Both paths share the same RBAC for reads (any workspace member) and
@@ -31,7 +31,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.api.v1.deps import AuthContext, get_current_auth
-from backend.app.api.v1.routes.pipelines import (
+from backend.app.api.v1.routes.runs import (
     RunTokenContext,
     get_run_token_context,
 )
@@ -42,7 +42,7 @@ from backend.app.api.v1.routes.workspaces import (
 )
 from backend.app.core.config import Settings, get_settings
 from backend.app.db.models.agent_surface import Clarification
-from backend.app.db.models.pipelines import PipelineRun
+from backend.app.db.models.lanes import RoutineRun
 from backend.app.db.models.tenancy import AuditLog, User
 from backend.app.db.session import get_session
 from backend.app.services import clarifications_sync
@@ -65,7 +65,7 @@ class ClarificationOut(BaseModel):
     id: uuid.UUID
     workspace_id: uuid.UUID
     repo_id: uuid.UUID | None
-    pipeline_run_id: uuid.UUID | None
+    routine_run_id: uuid.UUID | None
     ticket_ref: str | None
     question: str
     answer: str | None
@@ -87,14 +87,14 @@ class ClarificationOut(BaseModel):
 class ClarificationCreateIn(BaseModel):
     """Payload accepted by both session-auth admins and run-token pipelines.
 
-    When the caller is a pipeline, ``pipeline_run_id`` is inferred
+    When the caller is a pipeline, ``routine_run_id`` is inferred
     from the run token and any client-supplied value is ignored.
     """
 
     question: str = Field(min_length=1, max_length=10_000)
     ticket_ref: str | None = None
     repo_id: uuid.UUID | None = None
-    pipeline_run_id: uuid.UUID | None = None
+    routine_run_id: uuid.UUID | None = None
     context: dict = Field(default_factory=dict)
 
 
@@ -110,7 +110,7 @@ def _to_out(row: Clarification, answered_by_email: str | None) -> ClarificationO
         id=row.id,
         workspace_id=row.workspace_id,
         repo_id=row.repo_id,
-        pipeline_run_id=row.pipeline_run_id,
+        routine_run_id=row.routine_run_id,
         ticket_ref=row.ticket_ref,
         question=row.question,
         answer=row.answer,
@@ -209,7 +209,7 @@ async def create_clarification(
     row = Clarification(
         workspace_id=workspace_id,
         repo_id=payload.repo_id,
-        pipeline_run_id=payload.pipeline_run_id,
+        routine_run_id=payload.routine_run_id,
         ticket_ref=payload.ticket_ref,
         question=payload.question,
         context=payload.context,
@@ -416,7 +416,7 @@ pipeline_router = APIRouter(
 class PipelineClarificationIn(BaseModel):
     """Payload accepted by dispatched GitHub Actions workflows.
 
-    The run_token encodes the ``pipeline_run_id`` + ``workspace_id``
+    The run_token encodes the ``routine_run_id`` + ``workspace_id``
     so the workflow never has to guess either; we drop any client-
     supplied values for those two fields and always use the token's.
     """
@@ -441,15 +441,15 @@ async def create_from_pipeline(
     The Action's YAML makes a ``POST`` with its ``ship_run_token``
     bearer. We already validated the token in
     :func:`get_run_token_context` and resolved the matching
-    :class:`PipelineRun`, so at this point we trust ``ctx.run_id``
+    :class:`RoutineRun`, so at this point we trust ``ctx.run_id``
     and ``ctx.workspace_id`` unconditionally.
     """
-    pipeline_run = (
+    routine_run = (
         await session.execute(
-            select(PipelineRun).where(PipelineRun.id == ctx.run_id)
+            select(RoutineRun).where(RoutineRun.id == ctx.run_id)
         )
     ).scalars().first()
-    repo_id = pipeline_run.payload.get("repo_id") if pipeline_run else None
+    repo_id = routine_run.payload.get("repo_id") if routine_run else None
     if repo_id is not None:
         try:
             repo_id = uuid.UUID(str(repo_id))
@@ -459,7 +459,7 @@ async def create_from_pipeline(
     row = Clarification(
         workspace_id=ctx.workspace_id,
         repo_id=repo_id,
-        pipeline_run_id=ctx.run_id,
+        routine_run_id=ctx.run_id,
         ticket_ref=payload.ticket_ref,
         question=payload.question,
         context=payload.context,

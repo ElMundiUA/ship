@@ -27,7 +27,7 @@ from backend.app.db.models.inbox import (
     InboxItemEvent,
     RunEscalation,
 )
-from backend.app.db.models.pipelines import Pipeline, PipelineRun
+from backend.app.db.models.lanes import Routine, RoutineRun
 from backend.app.services.inbox import intake as intake_mod
 from backend.app.services.inbox.intake import (
     IntakeReport,
@@ -53,26 +53,34 @@ def _pattern_meta(profile: str | None, *, escalate: bool = False) -> dict:
 
 @pytest_asyncio.fixture
 async def seeded_run(db_session: AsyncSession, seed_workspace):
-    """Insert a Pipeline + PipelineRun so inbox FKs resolve.
+    """Insert a Routine + RoutineRun so inbox FKs resolve.
 
     Returns ``(workspace, run, user_id)``. We persist a real run
     because ``inbox_items.run_id`` carries a FK; SET NULL would
-    silently drop the link if we faked the id. ``user_id`` is the
-    workspace owner — tests that want a real owner_user_id assign
-    it via the fake resolver to keep the FK happy.
+    silently drop the link if we faked the id.
     """
+    from backend.app.db.models.integrations import WorkspaceRepo
+
     user, _raw, workspace = seed_workspace
-    pipeline = Pipeline(
+    repo = WorkspaceRepo(
         workspace_id=workspace.id,
-        repo_id=None,
-        lane_id=f"intake_test_{uuid.uuid4().hex[:8]}",
-        name="intake-test pipeline",
-        workflow_id="pr-and-ci-gate",
+        provider="github",
+        external_id=hash(uuid.uuid4()) & 0x7FFFFFFF,
+        full_name=f"test/intake-{uuid.uuid4().hex[:6]}",
     )
-    db_session.add(pipeline)
+    db_session.add(repo)
     await db_session.flush()
-    run = PipelineRun(
-        pipeline_id=pipeline.id,
+    routine = Routine(
+        workspace_id=workspace.id,
+        repo_id=repo.id,
+        lane_id=f"intake_test_{uuid.uuid4().hex[:8]}",
+        kind="event",
+        pattern="pr-and-ci-gate",
+    )
+    db_session.add(routine)
+    await db_session.flush()
+    run = RoutineRun(
+        routine_id=routine.id,
         workspace_id=workspace.id,
         trigger="manual",
         status="succeeded",

@@ -798,7 +798,7 @@ async function resolveAgentRole({
  *
  * Auth: workspace-membership token (``SHIP_API_TOKEN`` — same one
  * the rest of ``run.mjs`` uses). The companion run-token endpoint
- * at ``/v1/pipelines/runs/{run_id}/policies-preamble`` doesn't fit
+ * at ``/v1/runs/{run_id}/policies-preamble`` doesn't fit
  * this flow because the CLI mints ``run_id`` locally; the
  * workspace-scoped variant takes membership instead.
  */

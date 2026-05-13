@@ -32,7 +32,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.api.v1.deps import AuthContext, get_current_auth
-from backend.app.api.v1.routes.pipelines import (
+from backend.app.api.v1.routes.runs import (
     RunTokenContext,
     get_run_token_context,
 )
@@ -42,7 +42,7 @@ from backend.app.api.v1.routes.workspaces import (
     _require_membership,
 )
 from backend.app.db.models.agent_surface import Improvement
-from backend.app.db.models.pipelines import PipelineRun
+from backend.app.db.models.lanes import RoutineRun
 from backend.app.db.models.tenancy import AuditLog, User
 from backend.app.db.session import get_session
 from backend.app.services.inbox.dual_write import (
@@ -64,7 +64,7 @@ class ImprovementOut(BaseModel):
     id: uuid.UUID
     workspace_id: uuid.UUID
     repo_id: uuid.UUID | None
-    pipeline_run_id: uuid.UUID | None
+    routine_run_id: uuid.UUID | None
     kind: str
     title: str
     body: str
@@ -87,7 +87,7 @@ class ImprovementCreateIn(BaseModel):
     impact: str | None = None
     effort: str | None = None
     repo_id: uuid.UUID | None = None
-    pipeline_run_id: uuid.UUID | None = None
+    routine_run_id: uuid.UUID | None = None
     context: dict = Field(default_factory=dict)
 
 
@@ -102,7 +102,7 @@ def _to_out(row: Improvement, decided_by_email: str | None) -> ImprovementOut:
         id=row.id,
         workspace_id=row.workspace_id,
         repo_id=row.repo_id,
-        pipeline_run_id=row.pipeline_run_id,
+        routine_run_id=row.routine_run_id,
         kind=row.kind,
         title=row.title,
         body=row.body,
@@ -190,7 +190,7 @@ async def create_improvement(
     row = Improvement(
         workspace_id=workspace_id,
         repo_id=payload.repo_id,
-        pipeline_run_id=payload.pipeline_run_id,
+        routine_run_id=payload.routine_run_id,
         kind=payload.kind,
         title=payload.title,
         body=payload.body,
@@ -320,12 +320,12 @@ async def create_from_pipeline(
     ctx: RunTokenContext = Depends(get_run_token_context),
     session: AsyncSession = Depends(get_session),
 ) -> ImprovementOut:
-    pipeline_run = (
+    routine_run = (
         await session.execute(
-            select(PipelineRun).where(PipelineRun.id == ctx.run_id)
+            select(RoutineRun).where(RoutineRun.id == ctx.run_id)
         )
     ).scalars().first()
-    repo_id = pipeline_run.payload.get("repo_id") if pipeline_run else None
+    repo_id = routine_run.payload.get("repo_id") if routine_run else None
     if repo_id is not None:
         try:
             repo_id = uuid.UUID(str(repo_id))
@@ -335,7 +335,7 @@ async def create_from_pipeline(
     row = Improvement(
         workspace_id=ctx.workspace_id,
         repo_id=repo_id,
-        pipeline_run_id=ctx.run_id,
+        routine_run_id=ctx.run_id,
         kind=payload.kind,
         title=payload.title,
         body=payload.body,

@@ -80,14 +80,14 @@ async def seed_repo_and_install(db_session, seed_workspace):
 async def _mint_run_token_for(
     db_session, v1_client, workspace_id, raw_pat, repo_id, monkeypatch
 ):
-    """Helper: dispatch a pipeline run and re-mint a usable run-token."""
-    from backend.app.api.v1.routes import pipelines as pipelines_route
-    from backend.app.api.v1.routes.pipelines import (
+    """Helper: dispatch a routine run and re-mint a usable run-token."""
+    from backend.app.api.v1.routes import runs as runs_route
+    from backend.app.api.v1.routes.runs import (
         _hash_run_token,
         _mint_run_token,
     )
     from backend.app.core.config import get_settings
-    from backend.app.db.models.pipelines import Pipeline, PipelineRun
+    from backend.app.db.models.lanes import Routine, RoutineRun
 
     async def _probe(*_a, **_kw):
         return frozenset({"parallel-audit-lanes.yml"})
@@ -95,31 +95,29 @@ async def _mint_run_token_for(
     async def _dispatch(*_a, **_kw):
         return None
 
-    monkeypatch.setattr(pipelines_route, "list_repo_workflows", _probe)
-    monkeypatch.setattr(pipelines_route, "dispatch_workflow", _dispatch)
+    monkeypatch.setattr(runs_route, "list_repo_workflows", _probe)
+    monkeypatch.setattr(runs_route, "dispatch_workflow", _dispatch)
 
-    pipeline = Pipeline(
+    routine = Routine(
         workspace_id=workspace_id,
         repo_id=repo_id,
         lane_id="tech_debt",
-        name="dual-write pipeline",
-        workflow_id="tech-debt-scan",
-        enabled=True,
-        config={"kind": "tech_debt"},
+        kind="event",
+        pattern="parallel-audit-lanes",
     )
-    db_session.add(pipeline)
+    db_session.add(routine)
     await db_session.flush()
-    pipeline_id = pipeline.id
+    routine_id = routine.id
 
     dispatch = await v1_client.post(
-        f"/v1/workspaces/{workspace_id}/pipelines/{pipeline_id}/runs",
+        f"/v1/workspaces/{workspace_id}/routines/{routine_id}/runs",
         headers={"Authorization": f"Bearer {raw_pat}"},
     )
     assert dispatch.status_code == 202, dispatch.text
     run_json = dispatch.json()
     settings = get_settings()
     raw_token = _mint_run_token(uuid.UUID(run_json["id"]), settings)
-    run = await db_session.get(PipelineRun, uuid.UUID(run_json["id"]))
+    run = await db_session.get(RoutineRun, uuid.UUID(run_json["id"]))
     run.run_token_hash = _hash_run_token(raw_token)
     await db_session.flush()
     return raw_token, run_json

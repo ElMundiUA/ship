@@ -21,10 +21,9 @@ async def seed_repo_home(db_session, seed_workspace):
         GitHubInstallation,
         WorkspaceRepo,
     )
+    from backend.app.db.models.lanes import Routine, RoutineRun
     from backend.app.db.models.pipelines import (
         AgentRequest,
-        Pipeline,
-        PipelineRun,
         WorkflowRun,
     )
     from backend.app.services.seed_bundle import BUNDLE_VERSION
@@ -58,23 +57,21 @@ async def seed_repo_home(db_session, seed_workspace):
     db_session.add(repo)
     await db_session.flush()
 
-    pipeline = Pipeline(
+    pipeline = Routine(
         workspace_id=workspace.id,
         repo_id=repo.id,
-        name="Daily standup",
-        workflow_id="scheduled-sdlc-lane",
+        pattern="scheduled-sdlc-lane",
         lane_id="daily_standup",
+        kind="schedule",
         enabled=True,
-        config={},
     )
-    dormant_pipeline = Pipeline(
+    dormant_pipeline = Routine(
         workspace_id=workspace.id,
         repo_id=repo.id,
-        name="Dormant lane",
-        workflow_id="scheduled-sdlc-lane",
+        pattern="scheduled-sdlc-lane",
         lane_id="housekeeping",
+        kind="schedule",
         enabled=False,
-        config={},
     )
     db_session.add_all([pipeline, dormant_pipeline])
     await db_session.flush()
@@ -87,24 +84,24 @@ async def seed_repo_home(db_session, seed_workspace):
     # the latest — which it isn't here).
     db_session.add_all(
         [
-            PipelineRun(
-                pipeline_id=pipeline.id,
+            RoutineRun(
+                routine_id=pipeline.id,
                 workspace_id=workspace.id,
                 trigger="cron",
                 status="succeeded",
                 started_at=now - timedelta(hours=2),
                 finished_at=now - timedelta(hours=1, minutes=50),
             ),
-            PipelineRun(
-                pipeline_id=pipeline.id,
+            RoutineRun(
+                routine_id=pipeline.id,
                 workspace_id=workspace.id,
                 trigger="cron",
                 status="failed",
                 started_at=now - timedelta(hours=20),
                 finished_at=now - timedelta(hours=19),
             ),
-            PipelineRun(
-                pipeline_id=pipeline.id,
+            RoutineRun(
+                routine_id=pipeline.id,
                 workspace_id=workspace.id,
                 trigger="manual",
                 status="running",

@@ -163,7 +163,7 @@ async def harvest_workspace(
             improvement = Improvement(
                 workspace_id=workspace_id,
                 repo_id=clar.repo_id,
-                pipeline_run_id=None,
+                routine_run_id=None,
                 kind=NOTE_KIND,
                 title=atom.title,
                 body=atom.body,

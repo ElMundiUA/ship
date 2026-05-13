@@ -61,16 +61,24 @@ async def test_masthead_aggregates_pipeline_runs(
     v1_client, seed_workspace, db_session
 ) -> None:
     """A succeeded run + a failed run → success_rate=0.5, failures_7d=1."""
-    from backend.app.db.models.pipelines import Pipeline, PipelineRun
+    from backend.app.db.models.integrations import WorkspaceRepo
+    from backend.app.db.models.lanes import Routine, RoutineRun
 
     _, raw, ws = seed_workspace
-    pipe = Pipeline(
+    repo = WorkspaceRepo(
         workspace_id=ws.id,
-        repo_id=None,
+        provider="github",
+        external_id=hash(uuid.uuid4()) & 0x7FFFFFFF,
+        full_name=f"test/live-{uuid.uuid4().hex[:6]}",
+    )
+    db_session.add(repo)
+    await db_session.flush()
+    pipe = Routine(
+        workspace_id=ws.id,
+        repo_id=repo.id,
         lane_id="dev_implementation",
-        name="dev",
-        workflow_id="ship-dev",
-        config={},
+        kind="event",
+        pattern="ship-dev",
         enabled=True,
     )
     db_session.add(pipe)
@@ -78,8 +86,8 @@ async def test_masthead_aggregates_pipeline_runs(
 
     now = datetime.now(timezone.utc)
     db_session.add(
-        PipelineRun(
-            pipeline_id=pipe.id,
+        RoutineRun(
+            routine_id=pipe.id,
             workspace_id=ws.id,
             trigger="manual",
             status="succeeded",
@@ -88,8 +96,8 @@ async def test_masthead_aggregates_pipeline_runs(
         )
     )
     db_session.add(
-        PipelineRun(
-            pipeline_id=pipe.id,
+        RoutineRun(
+            routine_id=pipe.id,
             workspace_id=ws.id,
             trigger="manual",
             status="failed",

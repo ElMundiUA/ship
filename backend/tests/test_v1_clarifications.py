@@ -196,7 +196,7 @@ async def test_pipeline_ingress_creates_row_and_audit(
     monkeypatch, v1_client, db_session, seed_repo_and_install
 ) -> None:
     """A dispatched Action can POST a clarification via its run_token."""
-    from backend.app.api.v1.routes import pipelines as pipelines_route
+    from backend.app.api.v1.routes import runs as pipelines_route
     from backend.app.db.models.agent_surface import Clarification
     from backend.app.db.models.tenancy import AuditLog
 
@@ -213,44 +213,37 @@ async def test_pipeline_ingress_creates_row_and_audit(
     monkeypatch.setattr(pipelines_route, "list_repo_workflows", _probe)
     monkeypatch.setattr(pipelines_route, "dispatch_workflow", _dispatch)
 
-    # Create a pipeline + run to earn a run_token.
-    from backend.app.db.models.pipelines import Pipeline
+    # Create a routine + run to earn a run_token.
+    from backend.app.db.models.lanes import Routine
 
-    pipeline = Pipeline(
+    routine = Routine(
         workspace_id=workspace.id,
         repo_id=repo.id,
         lane_id="tech_debt",
-        name="Tech debt sweep",
-        workflow_id="tech-debt-scan",
-        enabled=True,
-        config={"kind": "tech_debt"},
+        kind="event",
+        pattern="parallel-audit-lanes",
     )
-    db_session.add(pipeline)
+    db_session.add(routine)
     await db_session.flush()
 
     dispatch = await v1_client.post(
-        f"/v1/workspaces/{workspace.id}/pipelines/{pipeline.id}/runs",
+        f"/v1/workspaces/{workspace.id}/routines/{routine.id}/runs",
         headers={"Authorization": f"Bearer {raw_pat}"},
     )
     assert dispatch.status_code == 202, dispatch.text
     run_json = dispatch.json()
 
-    # The dispatch path doesn't return the raw token — it's embedded
-    # in the workflow inputs. Re-mint one from the settings to drive
-    # the ingress test.
-    from backend.app.api.v1.routes.pipelines import (
+    # Re-mint a usable run_token for the ingress test.
+    from backend.app.api.v1.routes.runs import (
         _hash_run_token,
         _mint_run_token,
     )
     from backend.app.core.config import get_settings
-    from backend.app.db.models.pipelines import PipelineRun
+    from backend.app.db.models.lanes import RoutineRun
 
     settings = get_settings()
     raw_token = _mint_run_token(uuid.UUID(run_json["id"]), settings)
-    # Overwrite the stored hash with the hash of our newly-minted
-    # token so the backend recognises it. (In prod the backend mints
-    # + stores atomically; here we substitute for test convenience.)
-    run = await db_session.get(PipelineRun, uuid.UUID(run_json["id"]))
+    run = await db_session.get(RoutineRun, uuid.UUID(run_json["id"]))
     run.run_token_hash = _hash_run_token(raw_token)
     await db_session.flush()
 
@@ -267,7 +260,7 @@ async def test_pipeline_ingress_creates_row_and_audit(
     )
     assert ingress.status_code == 201, ingress.text
     body = ingress.json()
-    assert body["pipeline_run_id"] == run_json["id"]
+    assert body["routine_run_id"] == run_json["id"]
 
     db_session.expire_all()
     rows = (

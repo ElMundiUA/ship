@@ -181,6 +181,70 @@ _LANE_ORIGIN_VALUES: Final[tuple[str, ...]] = (
 )
 
 
+class RoutineRun(Base):
+    """One execution of a :class:`Routine`.
+
+    Replaces the retired ``PipelineRun`` model. Same lifecycle —
+    inserted as ``status='running'`` when the Console "Run now"
+    button fires (or when the GitHub Actions workflow_dispatch
+    hits the routine via the cron path), transitioned to
+    ``succeeded`` / ``failed`` on the callback from the GHA
+    workflow. The runner is the workflow_dispatch handler in
+    ``routes/runs.py``; this row is the audit trail + status
+    surface the dashboard renders.
+    """
+
+    __tablename__ = "routine_runs"
+    __table_args__ = (
+        Index(
+            "ix_routine_runs_routine_started",
+            "routine_id",
+            "started_at",
+        ),
+        Index("ix_routine_runs_workspace_id", "workspace_id"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    routine_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("routines.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # Denormalised for cheap "all runs in workspace" queries; the
+    # FK above carries correctness.
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # ``manual`` (button), ``webhook`` (PR / workflow_run reconcile),
+    # ``cron`` (scheduled dispatch), ``onboarding`` (auto-seed run).
+    trigger: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    summary: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    payload: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    # RFC-0010 §RunSummary outcome contract — drives the Runs list
+    # row layout + inbox intake approval / escalation decisions.
+    outcome: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    # SHA-256 of the short-lived JWT we hand to the dispatched
+    # workflow via ``inputs.ship_run_token``. The callback endpoint
+    # rejects anything that doesn't match.
+    run_token_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+
+    created_at: Mapped[datetime] = _ts_created()
+    updated_at: Mapped[datetime] = _ts_updated()
 
 
-__all__ = ["Routine", "_LANE_ORIGIN_VALUES"]
+__all__ = ["Routine", "RoutineRun", "_LANE_ORIGIN_VALUES"]

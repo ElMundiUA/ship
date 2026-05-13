@@ -185,9 +185,9 @@ async def test_reset_to_pending(v1_client, seed_workspace) -> None:
 async def test_pipeline_ingress_creates_row(
     monkeypatch, v1_client, db_session, seed_repo_and_install
 ) -> None:
-    from backend.app.api.v1.routes import pipelines as pipelines_route
+    from backend.app.api.v1.routes import runs as runs_route
     from backend.app.db.models.agent_surface import Improvement
-    from backend.app.db.models.pipelines import Pipeline, PipelineRun
+    from backend.app.db.models.lanes import Routine, RoutineRun
     from backend.app.db.models.tenancy import AuditLog
 
     raw_pat, workspace, _install, repo = seed_repo_and_install
@@ -198,29 +198,27 @@ async def test_pipeline_ingress_creates_row(
     async def _dispatch(*_a, **_kw):
         return None
 
-    monkeypatch.setattr(pipelines_route, "list_repo_workflows", _probe)
-    monkeypatch.setattr(pipelines_route, "dispatch_workflow", _dispatch)
+    monkeypatch.setattr(runs_route, "list_repo_workflows", _probe)
+    monkeypatch.setattr(runs_route, "dispatch_workflow", _dispatch)
 
-    pipeline = Pipeline(
+    routine = Routine(
         workspace_id=workspace.id,
         repo_id=repo.id,
         lane_id="tech_debt",
-        name="Tech debt sweep",
-        workflow_id="tech-debt-scan",
-        enabled=True,
-        config={"kind": "tech_debt"},
+        kind="event",
+        pattern="parallel-audit-lanes",
     )
-    db_session.add(pipeline)
+    db_session.add(routine)
     await db_session.flush()
 
     dispatch = await v1_client.post(
-        f"/v1/workspaces/{workspace.id}/pipelines/{pipeline.id}/runs",
+        f"/v1/workspaces/{workspace.id}/routines/{routine.id}/runs",
         headers={"Authorization": f"Bearer {raw_pat}"},
     )
     assert dispatch.status_code == 202, dispatch.text
     run_json = dispatch.json()
 
-    from backend.app.api.v1.routes.pipelines import (
+    from backend.app.api.v1.routes.runs import (
         _hash_run_token,
         _mint_run_token,
     )
@@ -228,7 +226,7 @@ async def test_pipeline_ingress_creates_row(
 
     settings = get_settings()
     raw_token = _mint_run_token(uuid.UUID(run_json["id"]), settings)
-    run = await db_session.get(PipelineRun, uuid.UUID(run_json["id"]))
+    run = await db_session.get(RoutineRun, uuid.UUID(run_json["id"]))
     run.run_token_hash = _hash_run_token(raw_token)
     await db_session.flush()
     workspace_id = workspace.id

@@ -31,7 +31,7 @@ from backend.app.db.models.agent_surface import Clarification
 from backend.app.db.models.inbox import InboxItem
 from backend.app.db.models.integrations import WorkspaceRepo
 from backend.app.db.models.lanes import Routine
-from backend.app.db.models.pipelines import Pipeline, PipelineRun
+from backend.app.db.models.lanes import RoutineRun
 from backend.app.db.models.tenancy import AuditLog
 from backend.app.db.session import get_session
 from backend.app.integrations.gateway.tracker import TicketRef
@@ -1143,31 +1143,19 @@ async def _build_development_process(
         .all()
     )
 
-    pipeline_stmt = select(Pipeline).where(Pipeline.workspace_id == workspace_id)
-    if repo_id is not None:
-        pipeline_stmt = pipeline_stmt.where(Pipeline.repo_id == repo_id)
-    pipelines = list(
-        (
-            await session.execute(
-                pipeline_stmt.order_by(Pipeline.created_at)
-            )
-        )
-        .scalars()
-        .all()
-    )
-    pipeline_ids = {pipeline.id for pipeline in pipelines}
-    if repo_id is not None and not pipeline_ids:
+    routine_ids = {row.id for row in lanes}
+    if repo_id is not None and not routine_ids:
         runs = []
     else:
-        run_stmt = select(PipelineRun).where(PipelineRun.workspace_id == workspace_id)
+        run_stmt = select(RoutineRun).where(RoutineRun.workspace_id == workspace_id)
         if repo_id is not None:
-            run_stmt = run_stmt.where(PipelineRun.pipeline_id.in_(pipeline_ids))
+            run_stmt = run_stmt.where(RoutineRun.routine_id.in_(routine_ids))
         runs = list(
             (
                 await session.execute(
                     run_stmt.order_by(
-                        desc(PipelineRun.started_at),
-                        desc(PipelineRun.created_at),
+                        desc(RoutineRun.started_at),
+                        desc(RoutineRun.created_at),
                     ).limit(75)
                 )
             )
@@ -1189,18 +1177,16 @@ async def _build_development_process(
         .scalars()
         .all()
     )
-    pipeline_by_id = {p.id: p for p in pipelines}
     lane_by_uuid = {lane.id: lane for lane in lanes}
-    lane_keys = _state_lane_ids(lanes, pipelines)
+    lane_keys = _state_lane_ids(lanes)
     specialists = _specialists()
-    state_runtime = _runtime_by_state(lane_keys, runs, pipeline_by_id, lane_by_uuid)
+    state_runtime = _runtime_by_state(lane_keys, runs, lane_by_uuid)
     blocked_by_state = _blocked_counts(lane_keys, inbox_items)
 
     states: list[ProcessStateOut] = []
     routines: list[ProcessRoutineOut] = []
     for lane_key in lane_keys:
         lane = next((row for row in lanes if row.lane_id == lane_key), None)
-        pipeline = next((row for row in pipelines if row.lane_id == lane_key), None)
         specialist_id = _specialist_for_lane(lane_key)
         runtime = state_runtime[lane_key]
         runtime.blocked_count = blocked_by_state[lane_key]
@@ -1210,12 +1196,6 @@ async def _build_development_process(
             lane_key in _PROCESS_STATE_ORDER or lane_key in _PROCESS_STATE_ALIASES
         )
         if not is_known_state or lane_key in _ROUTINE_IDS:
-            # Surface every routine id we find in DB pipelines — including
-            # legacy / orphan ones. Hiding them masks "I have stale
-            # pipeline rows from an old seed" which is exactly the kind
-            # of drift the operator needs to see and clean up. The FE
-            # paints non-canonical ids with a "legacy" pill so they're
-            # visually distinct from the canonical six.
             routine_text = _routine_instructions(lane_key)
             routines.append(
                 ProcessRoutineOut(
@@ -1223,11 +1203,11 @@ async def _build_development_process(
                     name=_titleize(lane_key),
                     specialist_id=specialist_id,
                     specialist_name=specialists[specialist_id].name,
-                    schedule=lane.cron if lane else _cron_from_pipeline(pipeline),
+                    schedule=lane.cron if lane else None,
                     prompt=routine_text,
                     instructions=routine_text,
                     last_run=runtime.last_execution_time,
-                    status=(lane.last_run_status if lane else pipeline.last_run_status if pipeline else None),
+                    status=lane.last_run_status if lane else None,
                     enabled=lane.enabled if lane else True,
                     description=_routine_description(lane_key),
                 )
@@ -1242,10 +1222,7 @@ async def _build_development_process(
                 specialist_name=specialists[specialist_id].name,
                 instructions=_state_instructions(lane_key),
                 state=_canonical_state_for(lane_key),
-                triggers=_triggers_for(lane, pipeline),
-                # Real conditions are configured per-state via the
-                # editor; the projection no longer fabricates these
-                # synthetic placeholders.
+                triggers=_triggers_for(lane),
                 exit_conditions=[],
                 block_conditions=[],
                 runtime=runtime,
@@ -1272,7 +1249,7 @@ async def _build_development_process(
         )
         for left, right in zip(states, states[1:])
     ]
-    tasks = _tasks_for(states, runs, inbox_items, pipeline_by_id, repos)
+    tasks = _tasks_for(states, runs, inbox_items, lane_by_uuid, repos)
     state_count = len(states)
     task_count = len(tasks)
     blocked_count = sum(1 for task in tasks if task.status == "blocked")
@@ -1523,23 +1500,14 @@ def _placeholder_process_states(
     ]
 
 
-def _state_lane_ids(lanes: list[Routine], pipelines: list[Pipeline]) -> list[str]:
+def _state_lane_ids(lanes: list[Routine]) -> list[str]:
     """Routine ids the canvas + routines columns project.
 
     Source of truth is :class:`Routine` (the ``routines`` table), which
     ``lanes_sync`` keeps in lockstep with the repo's
     ``.ship/config.yml`` — rows for routines that disappear from the
-    config are hard-deleted on next sync. ``Pipeline`` rows are
-    deliberately ignored: they were auto-seeded on first repo
-    activation and never cleaned up, so they leak legacy ids
-    (``code_map``, ``tech_debt``, ``scan_*``, ``self_heal``, …) the
-    operator never declared. Showing them as drift was the old design;
-    the new design is "show what's actually in the repo, period".
-    The ``pipelines`` parameter stays so call sites that need
-    ``Pipeline`` for runtime data (last_run_status, run history) keep
-    working — we just don't pull lane ids from it.
+    config are hard-deleted on next sync.
     """
-    del pipelines  # intentionally ignored; Routine is the source of truth
     seen = {row.lane_id for row in lanes}
     ordered = list(_PROCESS_STATE_ORDER)
     extras = sorted(seen - set(ordered))
@@ -1681,15 +1649,14 @@ def _default_schedule(states: list[ProcessStateOut]) -> ProcessScheduleOut:
 
 def _runtime_by_state(
     lane_keys: list[str],
-    runs: list[PipelineRun],
-    pipeline_by_id: dict[uuid.UUID, Pipeline],
+    runs: list[RoutineRun],
     lane_by_uuid: dict[uuid.UUID, Routine],
 ) -> dict[str, ProcessStateRuntimeOut]:
     out = defaultdict(ProcessStateRuntimeOut)
     for key in lane_keys:
         out[key] = ProcessStateRuntimeOut()
     for run in runs:
-        lane_key = _lane_key_for_run(run, pipeline_by_id, lane_by_uuid)
+        lane_key = _lane_key_for_run(run, lane_by_uuid)
         if lane_key is None:
             continue
         runtime = out[lane_key]
@@ -1708,14 +1675,11 @@ def _runtime_by_state(
 
 
 def _lane_key_for_run(
-    run: PipelineRun,
-    pipeline_by_id: dict[uuid.UUID, Pipeline],
+    run: RoutineRun,
     lane_by_uuid: dict[uuid.UUID, Routine],
 ) -> str | None:
-    if run.lane_id and run.lane_id in lane_by_uuid:
-        return lane_by_uuid[run.lane_id].lane_id
-    pipeline = pipeline_by_id.get(run.pipeline_id)
-    return pipeline.lane_id if pipeline else None
+    routine = lane_by_uuid.get(run.routine_id)
+    return routine.lane_id if routine else None
 
 
 def _blocked_counts(
@@ -1739,9 +1703,9 @@ def _blocked_counts(
 
 def _tasks_for(
     states: list[ProcessStateOut],
-    runs: list[PipelineRun],
+    runs: list[RoutineRun],
     inbox_items: list[InboxItem],
-    pipeline_by_id: dict[uuid.UUID, Pipeline],
+    lane_by_uuid: dict[uuid.UUID, Routine],
     repos: dict[uuid.UUID, str],
 ) -> list[ProcessTaskOut]:
     state_ids = [state.id for state in states]
@@ -1776,8 +1740,8 @@ def _tasks_for(
         )
 
     for run in runs[:25]:
-        pipeline = pipeline_by_id.get(run.pipeline_id)
-        state_id = pipeline.lane_id if pipeline else fallback
+        routine = lane_by_uuid.get(run.routine_id)
+        state_id = routine.lane_id if routine else fallback
         if state_id not in state_ids:
             state_id = fallback
         status_value: TaskStatus = (
@@ -1787,11 +1751,11 @@ def _tasks_for(
             if run.status in {"failed", "error", "cancelled"}
             else "active"
         )
-        repo_name = repos.get(pipeline.repo_id) if pipeline and pipeline.repo_id else None
+        repo_name = repos.get(routine.repo_id) if routine and routine.repo_id else None
         tasks.append(
             ProcessTaskOut(
                 id=str(run.id),
-                title=_run_title(run, pipeline),
+                title=_run_title(run, routine),
                 state_id=state_id,
                 status=status_value,
                 last_updated=run.finished_at or run.started_at or run.created_at,
@@ -1809,8 +1773,8 @@ def _tasks_for(
     return tasks[:40]
 
 
-def _run_title(run: PipelineRun, pipeline: Pipeline | None) -> str:
-    base = _titleize(pipeline.lane_id) if pipeline else "Execution window"
+def _run_title(run: RoutineRun, routine: Routine | None) -> str:
+    base = _titleize(routine.lane_id) if routine else "Execution window"
     if run.summary:
         return run.summary[:120]
     return f"{base} · {run.status}"
@@ -1843,10 +1807,8 @@ def _default_states(
     ]
 
 
-def _triggers_for(
-    lane: Routine | None, pipeline: Pipeline | None
-) -> list[ProcessTriggerOut]:
-    raw = lane.config_blob if lane else pipeline.config if pipeline else {}
+def _triggers_for(lane: Routine | None) -> list[ProcessTriggerOut]:
+    raw = lane.config_blob if lane else {}
     if lane and lane.kind == "schedule":
         return [ProcessTriggerOut(type="schedule", interval=lane.cron)]
     if lane and lane.kind == "event":
@@ -1855,14 +1817,6 @@ def _triggers_for(
     if lane and lane.kind == "once":
         return [ProcessTriggerOut(type="manual")]
     return [ProcessTriggerOut(type="manual")]
-
-
-def _cron_from_pipeline(pipeline: Pipeline | None) -> str | None:
-    if not pipeline:
-        return None
-    raw = pipeline.config or {}
-    cron = raw.get("cron") or raw.get("schedule")
-    return str(cron) if cron else None
 
 
 def _state_instructions(lane_id: str) -> str:

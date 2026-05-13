@@ -1893,7 +1893,7 @@ class DisconnectRepoOut(BaseModel):
 
     repo_id: uuid.UUID
     full_name: str
-    deleted_pipelines: int
+    deleted_routines: int
     deleted_runs: int
 
 
@@ -1904,18 +1904,12 @@ async def disconnect_repo(
     auth: AuthContext = Depends(get_current_auth),
     session: AsyncSession = Depends(get_session),
 ) -> DisconnectRepoOut:
-    """Unwire Ship from ``repo`` — deletes the row and every lane bound to it.
+    """Unwire Ship from ``repo`` — deletes the row and every routine bound to it.
 
-    Admin-only. The deletion order matters because ``Pipeline.repo_id``
-    is declared ``ondelete=SET NULL`` (so we can keep workspace-level
-    lanes alive when a *different* repo in the same workspace gets
-    disconnected). When the operator explicitly disconnects a repo
-    they want the Ship state gone, not nulled out — so we:
-
-    1. Collect every ``Pipeline`` with ``repo_id == repo_id``.
-    2. Delete those pipelines (cascades to ``PipelineRun``).
-    3. Delete the ``WorkspaceRepo`` row itself.
-    4. Record an :class:`AuditLog` entry with the tallies.
+    Admin-only. When the operator explicitly disconnects a repo they
+    want all Ship state gone, so we delete the ``WorkspaceRepo`` row
+    and let CASCADE drop every :class:`Routine` bound to it, which in
+    turn cascades to :class:`RoutineRun` history.
 
     We deliberately do **not** touch github.com:
 
@@ -1923,10 +1917,8 @@ async def disconnect_repo(
       requires a user-initiated flow in GitHub's UI.
     - The workflow YAMLs our install PR added live under version
       control in the customer repo — the customer owns them now.
-
-    The UI makes both caveats obvious in the confirmation modal.
     """
-    from backend.app.db.models.pipelines import Pipeline, PipelineRun
+    from backend.app.db.models.lanes import Routine, RoutineRun
 
     await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
 
@@ -1945,32 +1937,27 @@ async def disconnect_repo(
         )
 
     full_name = repo_row.full_name
-    pipeline_ids = (
+    routine_ids = (
         await session.execute(
-            select(Pipeline.id).where(Pipeline.repo_id == repo_row.id)
+            select(Routine.id).where(Routine.repo_id == repo_row.id)
         )
     ).scalars().all()
 
     run_count = 0
-    if pipeline_ids:
-        run_count = (
-            await session.execute(
-                select(PipelineRun).where(PipelineRun.pipeline_id.in_(pipeline_ids))
-            )
-        ).scalars().all()
-        run_count = len(run_count)
+    if routine_ids:
+        run_count = len(
+            (
+                await session.execute(
+                    select(RoutineRun.id).where(
+                        RoutineRun.routine_id.in_(routine_ids)
+                    )
+                )
+            ).scalars().all()
+        )
 
-        # SQLAlchemy's async session doesn't play well with DELETE …
-        # RETURNING under some drivers; do it with the ORM so cascades
-        # still fire for dependent ``PipelineRun`` rows.
-        pipelines_to_delete = (
-            await session.execute(
-                select(Pipeline).where(Pipeline.id.in_(pipeline_ids))
-            )
-        ).scalars().all()
-        for p in pipelines_to_delete:
-            await session.delete(p)
-
+    # Routine.repo_id is ON DELETE CASCADE, so deleting the WorkspaceRepo
+    # row also drops every Routine bound to it, which cascades to
+    # RoutineRun. No explicit per-routine delete loop needed.
     await session.delete(repo_row)
     session.add(
         AuditLog(
@@ -1982,7 +1969,7 @@ async def disconnect_repo(
             target_id=str(repo_id),
             payload={
                 "full_name": full_name,
-                "deleted_pipelines": len(pipeline_ids),
+                "deleted_routines": len(routine_ids),
                 "deleted_runs": run_count,
             },
         )
@@ -1992,7 +1979,7 @@ async def disconnect_repo(
     return DisconnectRepoOut(
         repo_id=repo_id,
         full_name=full_name,
-        deleted_pipelines=len(pipeline_ids),
+        deleted_routines=len(routine_ids),
         deleted_runs=run_count,
     )
 

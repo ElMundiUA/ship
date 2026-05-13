@@ -526,12 +526,12 @@ async def test_api_creates_audit_log_without_plaintext(
 
 @pytest_asyncio.fixture
 async def seed_ship_pipeline_without_run(db_session, seed_workspace):
-    """Install + repo + enabled Ship pipeline that has *no* PipelineRun yet."""
+    """Install + repo + enabled Ship routine that has *no* RoutineRun yet."""
     from backend.app.db.models.integrations import (
         GitHubInstallation,
         WorkspaceRepo,
     )
-    from backend.app.db.models.pipelines import Pipeline
+    from backend.app.db.models.lanes import Routine
 
     _, _raw, workspace = seed_workspace
     install = GitHubInstallation(
@@ -557,16 +557,13 @@ async def seed_ship_pipeline_without_run(db_session, seed_workspace):
     )
     db_session.add(repo)
     await db_session.flush()
-    # The scheduled SDLC lane is cron-triggered by design — exactly
-    # the shape we need to exercise lazy PipelineRun creation.
-    pipeline = Pipeline(
+    pipeline = Routine(
         workspace_id=workspace.id,
         repo_id=repo.id,
         lane_id="daily_standup",
-        name="Scheduled SDLC lane",
-        workflow_id="scheduled-sdlc-lane",
+        kind="schedule",
+        pattern="scheduled-sdlc-lane",
         enabled=True,
-        config={},
     )
     db_session.add(pipeline)
     await db_session.flush()
@@ -600,23 +597,19 @@ def github_app_webhook_env(monkeypatch):
 async def test_cron_workflow_run_creates_pipeline_run_lazily(
     v1_client, db_session, seed_ship_pipeline_without_run, github_app_webhook_env
 ) -> None:
-    """Schedule-triggered Ship workflow → webhook lazily registers PipelineRun."""
-    from backend.app.db.models.pipelines import PipelineRun
+    """Schedule-triggered Ship workflow → webhook lazily registers RoutineRun."""
+    from backend.app.db.models.lanes import RoutineRun
     from backend.app.services.catalog import workflow_install_filename
 
     workspace, install, repo, pipeline = seed_ship_pipeline_without_run
 
-    # Snapshot every attribute we need before the webhook call — the
-    # handler ``expire_all()``s mid-flight and accessing a relationship
-    # proxy afterwards triggers a lazy SELECT from a sync context which
-    # SQLAlchemy refuses (MissingGreenlet).
     workspace_id = workspace.id
     pipeline_id = pipeline.id
     install_id = install.installation_id
     repo_external_id = repo.external_id
     repo_full_name = repo.full_name
 
-    workflow_path = f".github/workflows/{workflow_install_filename(pipeline.workflow_id)}"
+    workflow_path = f".github/workflows/{workflow_install_filename(pipeline.pattern)}"
     payload = {
         "action": "completed",
         "installation": {"id": install_id},
@@ -651,12 +644,12 @@ async def test_cron_workflow_run_creates_pipeline_run_lazily(
     db_session.expire_all()
     rows = (
         await db_session.execute(
-            select(PipelineRun).where(PipelineRun.workspace_id == workspace_id)
+            select(RoutineRun).where(RoutineRun.workspace_id == workspace_id)
         )
     ).scalars().all()
     assert len(rows) == 1
     created = rows[0]
-    assert created.pipeline_id == pipeline_id
+    assert created.routine_id == pipeline_id
     assert created.trigger == "cron"
     # Webhook reconciliation should also close out the row on a
     # "completed + success" delivery — the lazy-create + reconcile

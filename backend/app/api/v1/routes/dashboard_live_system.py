@@ -51,7 +51,7 @@ from backend.app.api.v1.routes.workspaces import (
 from backend.app.db.models.agent_memory import KnowledgeIngestionRun
 from backend.app.db.models.inbox import InboxItem
 from backend.app.db.models.lanes import Routine
-from backend.app.db.models.pipelines import Pipeline, PipelineRun
+from backend.app.db.models.lanes import Routine, RoutineRun
 from backend.app.db.session import get_session
 
 
@@ -159,13 +159,13 @@ async def _masthead(
     cutoff = now - timedelta(days=7)
     rows = (
         await session.execute(
-            select(PipelineRun.status, PipelineRun.finished_at)
+            select(RoutineRun.status, RoutineRun.finished_at)
             .where(
-                PipelineRun.workspace_id == workspace_id,
-                PipelineRun.finished_at.is_not(None),
-                PipelineRun.finished_at >= cutoff,
+                RoutineRun.workspace_id == workspace_id,
+                RoutineRun.finished_at.is_not(None),
+                RoutineRun.finished_at >= cutoff,
             )
-            .order_by(desc(PipelineRun.finished_at))
+            .order_by(desc(RoutineRun.finished_at))
         )
     ).all()
 
@@ -336,24 +336,24 @@ async def _daily(
 async def _specialists(
     session: AsyncSession, workspace_id: uuid.UUID, now: datetime
 ) -> SpecialistsOut:
-    """Aggregate specialist health from the most recent run per pipeline.
+    """Aggregate specialist health from the most recent run per routine.
 
-    For each :class:`Pipeline` row in the workspace we look at the most
-    recent :class:`PipelineRun` (both finished and in-progress). The
-    pipeline's ``lane_id`` is mapped through :func:`_specialist_for_lane`
+    For each :class:`Routine` row in the workspace we look at the most
+    recent :class:`RoutineRun` (both finished and in-progress). The
+    routine's ``lane_id`` is mapped through :func:`_specialist_for_lane`
     to the canonical specialist; we then dedupe on the specialist
     slug and bucket it as working / errored / idle.
     """
-    pipelines = (
+    routines = (
         await session.execute(
-            select(Pipeline.id, Pipeline.lane_id).where(
-                Pipeline.workspace_id == workspace_id,
-                Pipeline.enabled.is_(True),
+            select(Routine.id, Routine.lane_id).where(
+                Routine.workspace_id == workspace_id,
+                Routine.enabled.is_(True),
             )
         )
     ).all()
 
-    if not pipelines:
+    if not routines:
         return SpecialistsOut(
             idle_count=0,
             working_count=0,
@@ -362,57 +362,49 @@ async def _specialists(
             working_name=None,
         )
 
-    pipeline_ids = [pid for pid, _ in pipelines]
-    lane_by_pipeline: dict[uuid.UUID, str] = {pid: lane for pid, lane in pipelines}
+    routine_ids = [rid for rid, _ in routines]
+    lane_by_routine: dict[uuid.UUID, str] = {rid: lane for rid, lane in routines}
 
     # Window the run lookup to last 24h so a year-old failure doesn't
-    # stick a specialist in the errored bucket forever. We order by
-    # ``finished_at`` first so still-running rows (NULL finished_at)
-    # don't accidentally outrank a just-finished one — coalesce
-    # NULL → started_at → created_at so every row sorts.
+    # stick a specialist in the errored bucket forever.
     cutoff = now - timedelta(hours=24)
     activity_at = func.coalesce(
-        PipelineRun.finished_at,
-        PipelineRun.started_at,
-        PipelineRun.created_at,
+        RoutineRun.finished_at,
+        RoutineRun.started_at,
+        RoutineRun.created_at,
     )
     runs = (
         await session.execute(
             select(
-                PipelineRun.pipeline_id,
-                PipelineRun.status,
+                RoutineRun.routine_id,
+                RoutineRun.status,
             )
             .where(
-                PipelineRun.workspace_id == workspace_id,
-                PipelineRun.pipeline_id.in_(pipeline_ids),
-                PipelineRun.created_at >= cutoff,
+                RoutineRun.workspace_id == workspace_id,
+                RoutineRun.routine_id.in_(routine_ids),
+                RoutineRun.created_at >= cutoff,
             )
             .order_by(desc(activity_at))
         )
     ).all()
 
-    # Latest status per pipeline within the window.
-    latest_per_pipeline: dict[uuid.UUID, str] = {}
-    for pid, status in runs:
-        if pid in latest_per_pipeline:
+    # Latest status per routine within the window.
+    latest_per_routine: dict[uuid.UUID, str] = {}
+    for rid, status in runs:
+        if rid in latest_per_routine:
             continue
-        latest_per_pipeline[pid] = status
+        latest_per_routine[rid] = status
 
-    # Specialist → worst-class status across its pipelines.
-    # Priority order: working > errored > idle. A specialist whose
-    # pipelines include both "running" and "failed" reads as
-    # "working" — it's actively trying again, not stuck.
     by_specialist: dict[str, str] = {}
-    for pid, lane_id in lane_by_pipeline.items():
+    for rid, lane_id in lane_by_routine.items():
         specialist = _specialist_for_lane(lane_id)
-        latest = latest_per_pipeline.get(pid)
+        latest = latest_per_routine.get(rid)
         if latest in _RUN_ACTIVE_STATUSES:
             by_specialist[specialist] = "working"
         elif latest in _RUN_FAIL_STATUSES:
             if by_specialist.get(specialist) != "working":
                 by_specialist[specialist] = "errored"
         else:
-            # No recent run, or it succeeded — idle is the default.
             by_specialist.setdefault(specialist, "idle")
 
     working = [s for s, st in by_specialist.items() if st == "working"]

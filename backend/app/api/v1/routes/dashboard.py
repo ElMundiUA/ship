@@ -1,18 +1,17 @@
-"""Workspace dashboard summary endpoint (pilot Day 3).
+"""Workspace dashboard summary endpoint.
 
 One denormalised endpoint feeds the post-onboarding dashboard so the
 console doesn't need to fan out to half a dozen others on every render.
 We return:
 
-- counts (active pipelines, activated repos, recent PRs/runs)
-- the five default-pipeline cards
+- counts (active routines, activated repos, recent PRs/runs)
 - the most-recent-N pull requests (write-through cache from the GitHub
   webhook)
 - the most-recent-N workflow runs (same source)
-- the most-recent-N pipeline runs (manual + future webhook triggers)
+- the most-recent-N routine runs (manual + future webhook triggers)
 
-Members can read; admin-only verbs (run, toggle) live on the
-``/pipelines`` router.
+Members can read; admin-only verbs (run a routine) live on the
+``/runs`` router.
 """
 
 from __future__ import annotations
@@ -29,11 +28,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.api.v1.deps import AuthContext, get_current_auth
 from backend.app.api.v1.routes.notifications import NotificationOut, _to_out as _notif_to_out
-from backend.app.api.v1.routes.pipelines import (
-    PipelineOut,
-    PipelineRunOut,
+from backend.app.api.v1.routes.runs import (
+    RunOut,
     _run_to_out,
-    enrich_pipelines,
 )
 from backend.app.core.config import Settings, get_settings
 from backend.app.api.v1.routes.workspaces import (
@@ -42,10 +39,9 @@ from backend.app.api.v1.routes.workspaces import (
 )
 from backend.app.db.models.integrations import WorkspaceRepo
 from backend.app.db.models.inbox import InboxItem
+from backend.app.db.models.lanes import Routine, RoutineRun
 from backend.app.db.models.notifications import WorkspaceNotification
 from backend.app.db.models.pipelines import (
-    Pipeline,
-    PipelineRun,
     PullRequest,
     WorkflowRun,
 )
@@ -115,17 +111,16 @@ class WorkflowRunOut(BaseModel):
 
 class DashboardCounts(BaseModel):
     active_repos: int
-    enabled_pipelines: int
+    enabled_routines: int
     open_pull_requests: int
     runs_last_24h: int
 
 
 class DashboardOut(BaseModel):
     counts: DashboardCounts
-    pipelines: list[PipelineOut]
     pull_requests: list[PullRequestOut]
     workflow_runs: list[WorkflowRunOut]
-    pipeline_runs: list[PipelineRunOut]
+    routine_runs: list[RunOut]
     # Dismissible banner rail populated by webhook handlers (A4 "PR
     # merged", A5 "self-heal dispatched"). Capped at `_NOTIFICATION_LIMIT`
     # — the full list lives at /notifications.
@@ -392,27 +387,27 @@ async def get_ops_dashboard(
 
     failed_pipeline_runs = (
         await session.execute(
-            select(PipelineRun, Pipeline)
-            .join(Pipeline, PipelineRun.pipeline_id == Pipeline.id)
+            select(RoutineRun, Routine)
+            .join(Routine, RoutineRun.routine_id == Routine.id)
             .where(
-                PipelineRun.workspace_id == workspace_id,
-                PipelineRun.status == "failed",
-                PipelineRun.created_at >= cutoff_24h,
+                RoutineRun.workspace_id == workspace_id,
+                RoutineRun.status == "failed",
+                RoutineRun.created_at >= cutoff_24h,
             )
-            .order_by(desc(PipelineRun.finished_at), desc(PipelineRun.created_at))
+            .order_by(desc(RoutineRun.finished_at), desc(RoutineRun.created_at))
             .limit(25)
         )
     ).all()
     stale_pipeline_runs = (
         await session.execute(
-            select(PipelineRun, Pipeline)
-            .join(Pipeline, PipelineRun.pipeline_id == Pipeline.id)
+            select(RoutineRun, Routine)
+            .join(Routine, RoutineRun.routine_id == Routine.id)
             .where(
-                PipelineRun.workspace_id == workspace_id,
-                PipelineRun.status.in_(("running", "queued", "in_progress")),
-                PipelineRun.created_at < stale_run_cutoff,
+                RoutineRun.workspace_id == workspace_id,
+                RoutineRun.status.in_(("running", "queued", "in_progress")),
+                RoutineRun.created_at < stale_run_cutoff,
             )
-            .order_by(PipelineRun.created_at)
+            .order_by(RoutineRun.created_at)
             .limit(10)
         )
     ).all()
@@ -454,12 +449,12 @@ async def get_ops_dashboard(
     ).scalars().all()
     recent_pipeline_runs = (
         await session.execute(
-            select(PipelineRun)
+            select(RoutineRun)
             .where(
-                PipelineRun.workspace_id == workspace_id,
-                PipelineRun.created_at >= cutoff_24h,
+                RoutineRun.workspace_id == workspace_id,
+                RoutineRun.created_at >= cutoff_24h,
             )
-            .order_by(desc(PipelineRun.created_at))
+            .order_by(desc(RoutineRun.created_at))
             .limit(500)
         )
     ).scalars().all()
@@ -644,8 +639,8 @@ async def get_dashboard(
     ).scalar_one()
     enabled_count = (
         await session.execute(
-            select(func.count(Pipeline.id)).where(
-                Pipeline.workspace_id == workspace_id, Pipeline.enabled.is_(True)
+            select(func.count(Routine.id)).where(
+                Routine.workspace_id == workspace_id, Routine.enabled.is_(True)
             )
         )
     ).scalar_one()
@@ -662,20 +657,12 @@ async def get_dashboard(
     cutoff_24h = datetime.now(timezone.utc) - timedelta(days=1)
     runs_24h = (
         await session.execute(
-            select(func.count(PipelineRun.id)).where(
-                PipelineRun.workspace_id == workspace_id,
-                PipelineRun.created_at >= cutoff_24h,
+            select(func.count(RoutineRun.id)).where(
+                RoutineRun.workspace_id == workspace_id,
+                RoutineRun.created_at >= cutoff_24h,
             )
         )
     ).scalar_one()
-
-    pipelines = (
-        await session.execute(
-            select(Pipeline)
-            .where(Pipeline.workspace_id == workspace_id)
-            .order_by(Pipeline.created_at)
-        )
-    ).scalars().all()
 
     pulls = (
         await session.execute(
@@ -695,11 +682,11 @@ async def get_dashboard(
         )
     ).scalars().all()
 
-    pipeline_runs = (
+    routine_runs = (
         await session.execute(
-            select(PipelineRun)
-            .where(PipelineRun.workspace_id == workspace_id)
-            .order_by(desc(PipelineRun.started_at), desc(PipelineRun.created_at))
+            select(RoutineRun)
+            .where(RoutineRun.workspace_id == workspace_id)
+            .order_by(desc(RoutineRun.started_at), desc(RoutineRun.created_at))
             .limit(_RECENT_LIMIT)
         )
     ).scalars().all()
@@ -719,14 +706,13 @@ async def get_dashboard(
     return DashboardOut(
         counts=DashboardCounts(
             active_repos=int(repo_count or 0),
-            enabled_pipelines=int(enabled_count or 0),
+            enabled_routines=int(enabled_count or 0),
             open_pull_requests=int(open_pr_count or 0),
             runs_last_24h=int(runs_24h or 0),
         ),
-        pipelines=await enrich_pipelines(session, list(pipelines), settings=settings),
         pull_requests=[_pr_to_out(p) for p in pulls],
         workflow_runs=[_wfrun_to_out(r) for r in runs],
-        pipeline_runs=[_run_to_out(r) for r in pipeline_runs],
+        routine_runs=[_run_to_out(r) for r in routine_runs],
         notifications=[_notif_to_out(n) for n in notifications],
     )
 

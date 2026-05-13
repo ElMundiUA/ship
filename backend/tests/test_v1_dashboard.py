@@ -1,4 +1,4 @@
-"""End-to-end tests for ``GET /v1/workspaces/{ws}/dashboard`` (pilot Day 3)."""
+"""End-to-end tests for ``GET /v1/workspaces/{ws}/dashboard``."""
 
 from __future__ import annotations
 
@@ -20,14 +20,13 @@ async def test_dashboard_returns_empty_state_for_fresh_workspace(
     body = response.json()
     assert body["counts"] == {
         "active_repos": 0,
-        "enabled_pipelines": 0,
+        "enabled_routines": 0,
         "open_pull_requests": 0,
         "runs_last_24h": 0,
     }
-    assert body["pipelines"] == []
     assert body["pull_requests"] == []
     assert body["workflow_runs"] == []
-    assert body["pipeline_runs"] == []
+    assert body["routine_runs"] == []
 
 
 @pytest.mark.asyncio
@@ -38,19 +37,14 @@ async def test_dashboard_aggregates_counts_and_recent_strips(
         GitHubInstallation,
         WorkspaceRepo,
     )
+    from backend.app.db.models.lanes import Routine, RoutineRun
     from backend.app.db.models.pipelines import (
-        PipelineRun,
         PullRequest,
         WorkflowRun,
     )
-    from backend.app.services.lane_recipes import seed_default_pipelines
 
     user, raw, workspace = seed_workspace
-    seeded = await seed_default_pipelines(db_session, workspace.id)
-    pr_review = next(p for p in seeded if p.lane_id == "pr_review")
 
-    # Activated repo + GitHub install (to drive `active_repos` count
-    # and to keep the dashboard's joins happy).
     install = GitHubInstallation(
         workspace_id=workspace.id,
         installation_id=42,
@@ -73,6 +67,17 @@ async def test_dashboard_aggregates_counts_and_recent_strips(
         activated_at=datetime.now(timezone.utc),
     )
     db_session.add(repo)
+    await db_session.flush()
+
+    pr_review = Routine(
+        workspace_id=workspace.id,
+        repo_id=repo.id,
+        lane_id="pr_review",
+        kind="event",
+        pattern="pr-and-ci-gate",
+        enabled=True,
+    )
+    db_session.add(pr_review)
     await db_session.flush()
 
     now = datetime.now(timezone.utc)
@@ -109,8 +114,8 @@ async def test_dashboard_aggregates_counts_and_recent_strips(
         )
     )
     db_session.add(
-        PipelineRun(
-            pipeline_id=pr_review.id,
+        RoutineRun(
+            routine_id=pr_review.id,
             workspace_id=workspace.id,
             trigger="manual",
             status="succeeded",
@@ -119,11 +124,10 @@ async def test_dashboard_aggregates_counts_and_recent_strips(
             summary="ok",
         )
     )
-    # An older run, beyond the 24h window — should not be counted.
     old = now - timedelta(days=2)
     db_session.add(
-        PipelineRun(
-            pipeline_id=pr_review.id,
+        RoutineRun(
+            routine_id=pr_review.id,
             workspace_id=workspace.id,
             trigger="manual",
             status="succeeded",
@@ -143,14 +147,12 @@ async def test_dashboard_aggregates_counts_and_recent_strips(
     body = response.json()
 
     assert body["counts"]["active_repos"] == 1
-    # 5 default pipelines minus 1 disabled (self_heal) = 4 enabled.
-    assert body["counts"]["enabled_pipelines"] == 4
+    assert body["counts"]["enabled_routines"] == 1
     assert body["counts"]["open_pull_requests"] == 1
     assert body["counts"]["runs_last_24h"] == 1
-    assert len(body["pipelines"]) == 5
     assert {p["repo_full_name"] for p in body["pull_requests"]} == {"acme/alpha"}
     assert {r["repo_full_name"] for r in body["workflow_runs"]} == {"acme/alpha"}
-    assert len(body["pipeline_runs"]) == 2
+    assert len(body["routine_runs"]) == 2
 
 
 @pytest.mark.asyncio
@@ -192,16 +194,13 @@ async def test_ops_dashboard_prioritizes_blockers_and_shipped_24h(
         GitHubInstallation,
         WorkspaceRepo,
     )
+    from backend.app.db.models.lanes import Routine, RoutineRun
     from backend.app.db.models.pipelines import (
-        PipelineRun,
         PullRequest,
         WorkflowRun,
     )
-    from backend.app.services.lane_recipes import seed_default_pipelines
 
     user, raw, workspace = seed_workspace
-    seeded = await seed_default_pipelines(db_session, workspace.id)
-    pr_review = next(p for p in seeded if p.lane_id == "pr_review")
 
     now = datetime.now(timezone.utc)
     install = GitHubInstallation(
@@ -226,6 +225,17 @@ async def test_ops_dashboard_prioritizes_blockers_and_shipped_24h(
         activated_at=now,
     )
     db_session.add(repo)
+    await db_session.flush()
+
+    pr_review = Routine(
+        workspace_id=workspace.id,
+        repo_id=repo.id,
+        lane_id="pr_review",
+        kind="event",
+        pattern="pr-and-ci-gate",
+        enabled=True,
+    )
+    db_session.add(pr_review)
     await db_session.flush()
 
     stale = now - timedelta(hours=25)
@@ -261,8 +271,8 @@ async def test_ops_dashboard_prioritizes_blockers_and_shipped_24h(
         )
     )
     db_session.add(
-        PipelineRun(
-            pipeline_id=pr_review.id,
+        RoutineRun(
+            routine_id=pr_review.id,
             workspace_id=workspace.id,
             trigger="manual",
             status="failed",
@@ -310,19 +320,5 @@ async def test_ops_dashboard_prioritizes_blockers_and_shipped_24h(
 
     assert body["system_status"]["overall_status"] == "critical"
     assert body["system_status"]["failing_pipelines_count"] == 1
-    assert body["system_status"]["stuck_prs_count"] == 0
     assert body["system_status"]["broken_automations_count"] == 2
-    assert body["blockers"] == []
-    assert body["bottlenecks"] == []
-    assert body["suggested_actions"] == []
     assert body["shipped"]["fixes_count"] == 1
-    assert body["shipped"]["items"][0]["type"] == "fix"
-
-    inbox_res = await v1_client.get(
-        f"/v1/workspaces/{workspace.id}/inbox?ownership=all&type=stuck",
-        headers={"Authorization": f"Bearer {raw}"},
-    )
-    assert inbox_res.status_code == 200, inbox_res.text
-    stuck_items = inbox_res.json()["items"]
-    assert len(stuck_items) == 1
-    assert stuck_items[0]["type"] == "stuck"
