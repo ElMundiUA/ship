@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ship-console
+  labels:
+    app.kubernetes.io/name: ship-console
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: ship-console
+  ports:
+    - name: http
+      port: 80
+      targetPort: 3001

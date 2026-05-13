@@ -1,0 +1,38 @@
+# 2× s-2vcpu-8gb-amd nodes ⇒ 4 vCPU / 16 GiB total. After DOKS
+# overhead (~0.5 CPU + 1 GiB per node for kubelet/system pods) the
+# usable budget is ≈ 3 CPU / 14 GiB. Backend gets the heavier share
+# because uvicorn + agent work hosts long-running requests; console
+# is mostly Next.js SSR which sips.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ship-server
+spec:
+  template:
+    spec:
+      containers:
+        - name: ship-server
+          resources:
+            requests:
+              cpu: 500m
+              memory: 768Mi
+            limits:
+              cpu: 1500m
+              memory: 1536Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ship-console
+spec:
+  template:
+    spec:
+      containers:
+        - name: ship-console
+          resources:
+            requests:
+              cpu: 150m
+              memory: 384Mi
+            limits:
+              cpu: 750m
+              memory: 768Mi

@@ -18,6 +18,9 @@ output/playwright/
 !.env.example
 !e2e/.env.deployed.example
 
+# K8s prod secrets — materialized locally from .env, never committed.
+infra/k8s/overlays/*/secrets.env
+
 .DS_Store
 agent-run-*.log
 .ship/agent-runs/

@@ -1,0 +1,30 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: ship
+
+resources:
+  - ../../base
+  - cluster-issuer.yaml
+
+# ``secrets.env`` is gitignored — owners materialize it from the
+# 1Password / Bunny env dump before running ``kubectl apply -k``.
+# Adding/removing keys here forces a Deployment rollout because the
+# secret name gets a content hash suffix (``disableNameSuffixHash:
+# false`` is the default).
+secretGenerator:
+  - name: ship-env
+    envs:
+      - secrets.env
+
+# Tag both image references with the same sha so a rollback is just
+# ``kustomize edit set image ... && kubectl apply -k``.
+images:
+  - name: dekus/ship-backend
+    newTag: latest
+  - name: dekus/ship-console
+    newTag: latest
+
+patches:
+  - path: patches/replicas.yaml
+  - path: patches/resources.yaml
