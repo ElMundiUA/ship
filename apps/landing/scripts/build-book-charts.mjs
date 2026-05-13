@@ -29,7 +29,8 @@ import * as echarts from "echarts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const landingRoot = join(__dirname, "..");
-const repoRoot = join(landingRoot, "..");
+// landingRoot = apps/landing/  →  repo root is two levels up.
+const repoRoot = join(landingRoot, "..", "..");
 const outDir = join(landingRoot, "public", "diagrams", "charts");
 mkdirSync(outDir, { recursive: true });
 

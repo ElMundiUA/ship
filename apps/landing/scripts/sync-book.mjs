@@ -12,7 +12,8 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const landingRoot = join(__dirname, "..");
-const repoRoot = join(landingRoot, "..");
+// landingRoot = apps/landing/  →  repo root is two levels up.
+const repoRoot = join(landingRoot, "..", "..");
 
 const destSvgDir = join(landingRoot, "public", "diagrams");
 const diagramSources = [
