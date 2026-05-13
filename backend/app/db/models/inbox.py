@@ -340,7 +340,7 @@ class InboxItem(Base):
     play_key: Mapped[str | None] = mapped_column(String(length=128), nullable=True)
     run_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("pipeline_runs.id", ondelete="SET NULL"),
+        ForeignKey("routine_runs.id", ondelete="SET NULL"),
         nullable=True,
     )
     title: Mapped[str] = mapped_column(String(length=255), nullable=False)
@@ -470,7 +470,7 @@ class RunEscalation(Base):
     id: Mapped[uuid.UUID] = _pk()
     run_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("pipeline_runs.id", ondelete="CASCADE"),
+        ForeignKey("routine_runs.id", ondelete="CASCADE"),
         nullable=False,
     )
     inbox_item_id: Mapped[uuid.UUID] = mapped_column(

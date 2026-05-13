@@ -70,6 +70,7 @@ async def test_masthead_aggregates_pipeline_runs(
         provider="github",
         external_id=hash(uuid.uuid4()) & 0x7FFFFFFF,
         full_name=f"test/live-{uuid.uuid4().hex[:6]}",
+        html_url=f"https://github.com/test/live-{uuid.uuid4().hex[:6]}",
     )
     db_session.add(repo)
     await db_session.flush()
