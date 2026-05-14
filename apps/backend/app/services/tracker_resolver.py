@@ -52,7 +52,7 @@ from backend.app.integrations.linear.tracker_adapter import LinearTracker
 logger = logging.getLogger(__name__)
 
 
-TrackerKind = Literal["linear", "jira", "notion"]
+TrackerKind = Literal["linear", "jira", "notion", "memory"]
 
 
 @dataclass(frozen=True)
@@ -86,6 +86,10 @@ async def resolve_for_workspace(
     A workspace binds to one tracker. We probe for the bound row in
     this order:
 
+    0. Memory adapter (laptop-offline profile —
+       ``SHIP_USE_MEMORY_ADAPTERS=true``). Short-circuits before any
+       installation lookup so the laptop never accidentally hits a
+       real Linear/Jira API with a stale token.
     1. Native ``LINEAR`` installation (READY + live ``access_token``).
     2. Native ``ATLASSIAN`` installation (READY + live ``api_token``)
        — produces a JiraTracker.
@@ -97,6 +101,13 @@ async def resolve_for_workspace(
     installations produced before that migration land here. New
     bindings ride exclusively on the native installation row.
     """
+    if getattr(settings, "use_memory_adapters", False):
+        return _resolve_memory_tracker(
+            session=session,
+            workspace_id=workspace_id,
+            console_origin=settings.console_url,
+        )
+
     from backend.app.security.encryption import decrypt
 
     legacy_row = await _load_legacy_linear_row(session, workspace_id)
@@ -374,3 +385,34 @@ def _decrypt_legacy_token(row: Integration, decrypt) -> str | None:
     except Exception:  # noqa: BLE001
         logger.warning("tracker token unreadable for integration=%s", row.id)
         return None
+
+
+def _resolve_memory_tracker(
+    *,
+    session: AsyncSession,
+    workspace_id: uuid.UUID,
+    console_origin: str,
+) -> ResolvedTracker:
+    """Construct an in-Postgres MemoryTracker for the laptop-offline profile.
+
+    No DB row needed — the adapter is purely a code-level decision
+    keyed on ``SHIP_USE_MEMORY_ADAPTERS``. Returning a Resolved row
+    keeps the downstream API stable (dashboards / pickers can render
+    "Local (memory)" the same way they render "Linear · synced 2m").
+    """
+    from backend.app.integrations.local.tracker import MemoryTracker
+
+    gateway = MemoryTracker(
+        session=session,
+        workspace_id=workspace_id,
+        console_origin=console_origin,
+    )
+    return ResolvedTracker(
+        kind="memory",
+        gateway=gateway,
+        scope_hint=None,
+        source="native",
+        last_health_at=None,
+        last_health_error=None,
+        scopes=(),
+    )

@@ -208,6 +208,15 @@ class Settings(BaseSettings):
     allow_local_auth0_callbacks: bool = Field(
         default=False, alias="SHIP_ALLOW_LOCAL_AUTH0_CALLBACKS"
     )
+    # E19 — laptop-offline profile. When ``True`` the tracker / code
+    # host / CI resolvers short-circuit to the in-Postgres Memory
+    # adapters under ``backend.app.integrations.local``, before any
+    # native installation lookup. The ``.env.shared`` baseline turns
+    # this on so the default laptop experience needs no external
+    # accounts; production .env never sets it.
+    use_memory_adapters: bool = Field(
+        default=False, alias="SHIP_USE_MEMORY_ADAPTERS"
+    )
 
     # --- Closed-beta invite gate (RFC-0011 / E08) ---
     # When ``True`` (production default) brand-new signups are gated through

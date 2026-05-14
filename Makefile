@@ -117,6 +117,7 @@ DEV_LOCAL_SETS := \
 	--set DATABASE_URL=$(DEV_LOCAL_DSN) \
 	--set ALEMBIC_DATABASE_URL=$(DEV_LOCAL_DSN_PSYCOPG) \
 	--set SHIP_AUTH_MODE=local \
+	--set SHIP_USE_MEMORY_ADAPTERS=true \
 	--set SHIP_PUBLIC_URL=http://localhost:$(DEV_BACKEND_PORT) \
 	--set SHIP_CONSOLE_URL=http://localhost:$(DEV_CONSOLE_PORT) \
 	--set APP_BASE_URL=http://localhost:$(DEV_CONSOLE_PORT)
