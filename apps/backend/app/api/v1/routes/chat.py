@@ -673,6 +673,11 @@ async def chat_stream(
     - ``{"type": "topic_shift", "decision": {...}}`` — optional;
       only when the classifier suggests a shift. The UI renders
       a banner the user can accept / dismiss.
+    - ``{"type": "drafting_intent", "verdict": "ENTER"|"EXIT",
+      "reason": "...", "suggested_title": "..." | null}`` —
+      optional; only when the drafting-intent classifier (E20-2)
+      suggests entering or exiting drafting mode. The UI renders
+      an inline CTA that POSTs to /chat/active/intent on click.
     - ``{"type": "delta", "text": "..."}`` — one chunk of the
       assistant's streaming text.
     - ``{"type": "tool_call", "id": "...", "name": "...",
@@ -960,6 +965,40 @@ async def _run_agent_turn(
                 )
         except Exception as exc:  # noqa: BLE001
             logger.warning("topic classifier errored: %s", exc)
+
+    # E20-2 — drafting-intent classifier. Suggests "switch to
+    # drafting" / "exit drafting" inline CTAs based on the user's
+    # latest message + the current mode. Runs alongside the topic-
+    # shift classifier on the same hot path so a single user turn
+    # produces at most one mode-change suggestion per direction.
+    # Never auto-flips the intent — the Console renders a CTA and
+    # the user clicks (E20-3).
+    if classify_shift:
+        try:
+            from backend.app.services.agent.drafting_intent import (
+                DraftingIntentService,
+            )
+
+            drafting_service = DraftingIntentService(
+                settings=settings, client=agent
+            )
+            verdict = await drafting_service.classify(
+                new_user_message=user_msg.body,
+                currently_drafting=(thread.intent == "shape_project"),
+                recent_messages=prior_messages,
+                running_summary=thread.topic_summary,
+            )
+            if verdict.verdict != "NEUTRAL":
+                yield _sse(
+                    {
+                        "type": "drafting_intent",
+                        "verdict": verdict.verdict,
+                        "reason": verdict.reason,
+                        "suggested_title": verdict.suggested_title,
+                    }
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("drafting-intent classifier errored: %s", exc)
 
     # E17/ELS-128 — smart-trigger mem0 retrieval.
     # The old per-turn ``retrieve_buckets`` call ran a vector search
