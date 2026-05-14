@@ -322,7 +322,8 @@ async def test_intent_flip_idempotent_same_value(
         (
             await db_session.execute(
                 select(__import__("sqlalchemy").func.count(AuditLog.id)).where(
-                    AuditLog.action == "chat.thread.intent_flipped"
+                    AuditLog.workspace_id == workspace.id,
+                    AuditLog.action == "chat.thread.intent_flipped",
                 )
             )
         ).scalar_one()
