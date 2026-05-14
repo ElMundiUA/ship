@@ -48,6 +48,118 @@ export interface NavigatorStreamResult {
 }
 
 
+/**
+ * One tool invocation observed on the SSE wire.
+ *
+ * The backend's chat handler emits ``tool_call`` when the model
+ * decides to invoke a tool, then ``tool_result`` with either
+ * ``ok=true`` and a ``result`` payload, or ``ok=false`` and an
+ * ``error`` string. We pair them up by ``id`` so the trajectory
+ * analyser can spot retry-after-failure regressions: if the model
+ * gets ``ok=false`` from a tool and the *next* event is another
+ * ``tool_call``, the agent is silently retrying — that's either a
+ * tool bug (the failure is recoverable but the agent shouldn't
+ * have hit it) or a prompt bug (the agent doesn't know to escalate
+ * to the user).
+ */
+export interface ToolInvocation {
+  id: string;
+  name: string;
+  args: unknown;
+  ok: boolean;
+  error: string | null;
+  result: unknown;
+  // Index of the matching ``tool_call`` in the parent event array,
+  // useful when callers want to inspect adjacent events.
+  callIndex: number;
+  resultIndex: number | null;
+}
+
+
+/**
+ * Result of :func:`analyseToolTrajectory`. ``retryAfterFailure``
+ * pairs spell out the regression the user asked us to flag:
+ * "agent called X, got error, then immediately tried Y" — every
+ * such occurrence is a tool or prompt bug we should fix.
+ */
+export interface ToolTrajectoryAnalysis {
+  invocations: ToolInvocation[];
+  retryAfterFailure: Array<{
+    failed: ToolInvocation;
+    retried: ToolInvocation;
+  }>;
+  // Tools that errored without any retry — agent surfaced the error
+  // and stopped. These are not necessarily bugs but worth surfacing
+  // for the test report.
+  unrecoveredFailures: ToolInvocation[];
+}
+
+
+export function analyseToolTrajectory(
+  events: NavigatorStreamEvent[],
+): ToolTrajectoryAnalysis {
+  // Build an id → call index map first so a tool_result can refer
+  // back to its initiator regardless of how many deltas interleave.
+  const callsById = new Map<string, ToolInvocation>();
+  const invocations: ToolInvocation[] = [];
+  events.forEach((evt, i) => {
+    const e = evt as Record<string, unknown>;
+    const type = typeof e.type === "string" ? e.type : "";
+    if (type === "tool_call" || type === "tool_use" || type === "tool") {
+      const id = typeof e.id === "string" ? e.id : `auto-${i}`;
+      const inv: ToolInvocation = {
+        id,
+        name: typeof e.name === "string" ? e.name : "",
+        args: e.arguments ?? e.args ?? null,
+        ok: true,
+        error: null,
+        result: null,
+        callIndex: i,
+        resultIndex: null,
+      };
+      callsById.set(id, inv);
+      invocations.push(inv);
+    } else if (type === "tool_result") {
+      const id = typeof e.id === "string" ? e.id : "";
+      const match = callsById.get(id);
+      if (!match) return;
+      match.resultIndex = i;
+      match.result = e.result ?? e.output ?? null;
+      // Backend normalises to ``{ok: bool, result|error}``. Older
+      // payloads carry ``ok`` only on success; defensively treat
+      // a missing ``ok`` with an ``error`` field as a failure.
+      const okFlag = typeof e.ok === "boolean" ? e.ok : undefined;
+      const errorStr = typeof e.error === "string" ? e.error : null;
+      if (okFlag === false || errorStr) {
+        match.ok = false;
+        match.error = errorStr ?? "tool failed without an error message";
+      }
+    }
+  });
+
+  const retryAfterFailure: Array<{
+    failed: ToolInvocation;
+    retried: ToolInvocation;
+  }> = [];
+  const unrecovered: ToolInvocation[] = [];
+  invocations.forEach((inv, idx) => {
+    if (inv.ok) return;
+    const next = invocations[idx + 1];
+    if (next) {
+      retryAfterFailure.push({ failed: inv, retried: next });
+    } else {
+      unrecovered.push(inv);
+    }
+  });
+
+  return {
+    invocations,
+    retryAfterFailure,
+    unrecoveredFailures: unrecovered,
+  };
+}
+
+
 export interface NavigatorStreamOptions {
   base: string;
   token: string;
