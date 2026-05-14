@@ -54,11 +54,23 @@ _MEM0_COLLECTION = "ship_navigator_memories"
 # Lazy singleton.
 _MEMORY_CLIENT_LOCK = threading.Lock()
 _MEMORY_CLIENT: Any | None = None
-# When mem0 init has failed once in this process we cache the failure
-# so the next 100 deletes/searches/adds don't each pay the ~3 s
-# round-trip-to-failure cost. Tests and ``shipctl knowledge`` runs
-# would otherwise stack up nginx 504s during cleanup phases.
-_MEMORY_CLIENT_DISABLED: bool = False
+# Last init failure timestamp (monotonic). Init is expensive (mem0
+# probes OpenAI + opens a psycopg pool against Postgres; the pool's
+# default 30 s timeout dominates a cold-start latency) so we hold a
+# short cooldown after a transient failure rather than retrying on
+# every chat turn. Set to ``None`` when no failure is cached.
+#
+# Critically NOT a permanent disable — Neon cold-start timeouts +
+# transient network blips are recoverable; pinning the disable would
+# leave every pod's mem0 surface dead until the next restart.
+# Permanent fatal errors (missing optional driver, etc.) still
+# percolate up but we never cache them as "disabled forever".
+_MEMORY_CLIENT_LAST_FAIL_AT: float | None = None
+# Window before we'll retry init after a transient failure. 60 s is
+# long enough that 50 row bulk-deletes don't each pay the full init
+# cost; short enough that an operator who restarts the pool can hit
+# a working mem0 surface on the next chat turn.
+_MEMORY_CLIENT_RETRY_AFTER_SECONDS: float = 60.0
 
 
 def _build_mem0_client(settings: Settings) -> Any:
@@ -121,34 +133,65 @@ def _build_mem0_client(settings: Settings) -> Any:
 
 
 def _get_memory_client(settings: Settings) -> Any:
-    """Lazy singleton accessor — built once per process.
+    """Lazy singleton accessor — built on first use, with a
+    cooldown after transient failures.
 
-    Raises the underlying ImportError / config error on the FIRST
-    call when mem0 isn't installable; subsequent calls short-circuit
-    by raising the same kind of error from the cached ``_DISABLED``
-    flag. This is what keeps a bulk delete of 50 rows from taking
-    nginx down — without the cache each call re-does mem0's full
-    init dance (OpenAI client, qdrant probe, pgvector adapter
-    import) before failing.
+    Behaviour:
+
+    - Happy path: ``_MEMORY_CLIENT`` is held singleton; subsequent
+      calls return it in microseconds.
+    - First failure: caches the failure timestamp; subsequent calls
+      inside ``_MEMORY_CLIENT_RETRY_AFTER_SECONDS`` raise immediately
+      so a bulk operation doesn't stack up 50 × 30 s pool timeouts
+      against an unhealthy backing store.
+    - After the cooldown window: next call retries the build. This
+      is what recovers from a Neon cold-start timeout — a permanent
+      disable would leave the pod's mem0 surface dead until a
+      restart.
+
+    The exception that the caller sees is the *same kind* the first
+    failure raised, repackaged. ``ImportError`` for missing drivers,
+    ``RuntimeError`` for connect timeouts, etc. — the existing
+    try/except blocks in ``add`` / ``search`` / ``delete`` catch
+    ``Exception`` and degrade gracefully either way.
     """
-    global _MEMORY_CLIENT, _MEMORY_CLIENT_DISABLED
+    import time
+
+    global _MEMORY_CLIENT, _MEMORY_CLIENT_LAST_FAIL_AT
     if _MEMORY_CLIENT is not None:
         return _MEMORY_CLIENT
-    if _MEMORY_CLIENT_DISABLED:
-        # Match the exception flavour callers expect — ImportError is
-        # what mem0's pgvector adapter raises when its driver is
-        # missing, and our callers already except-and-continue on it.
-        raise ImportError("mem0 client is disabled for this process")
+    now = time.monotonic()
+    if (
+        _MEMORY_CLIENT_LAST_FAIL_AT is not None
+        and (now - _MEMORY_CLIENT_LAST_FAIL_AT) < _MEMORY_CLIENT_RETRY_AFTER_SECONDS
+    ):
+        # In the cooldown window. Don't waste another ~30 s on a
+        # likely-still-failing init.
+        raise RuntimeError(
+            "mem0 client init failed recently; retrying after cooldown"
+        )
     with _MEMORY_CLIENT_LOCK:
         if _MEMORY_CLIENT is not None:
             return _MEMORY_CLIENT
-        if _MEMORY_CLIENT_DISABLED:
-            raise ImportError("mem0 client is disabled for this process")
+        # Re-check the cooldown under the lock — another thread may
+        # have just failed.
+        now = time.monotonic()
+        if (
+            _MEMORY_CLIENT_LAST_FAIL_AT is not None
+            and (now - _MEMORY_CLIENT_LAST_FAIL_AT) < _MEMORY_CLIENT_RETRY_AFTER_SECONDS
+        ):
+            raise RuntimeError(
+                "mem0 client init failed recently; retrying after cooldown"
+            )
         try:
             _MEMORY_CLIENT = _build_mem0_client(settings)
         except Exception:
-            _MEMORY_CLIENT_DISABLED = True
+            _MEMORY_CLIENT_LAST_FAIL_AT = time.monotonic()
             raise
+        else:
+            # Clear the failure marker — a successful init means
+            # whatever was broken is fixed.
+            _MEMORY_CLIENT_LAST_FAIL_AT = None
     return _MEMORY_CLIENT
 
 
