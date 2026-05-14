@@ -156,13 +156,19 @@ test.describe("navigator tool drill-in", () => {
     request,
   }, testInfo) => {
     const ctx = ctxOrThrow();
+    // ``runs_list`` + ``runs_get`` read from ``routine_runs`` (Ship's
+    // lane execution rows), NOT ``workflow_runs`` (GitHub Actions
+    // cache). The seed plants a routine + a failed run + a succeeded
+    // run + an in-flight run so this prompt can drive runs_list →
+    // runs_get on the failed one's id.
     const result = await streamNavigatorTurn(request, {
       base: ctx.base,
       token: ctx.token,
       workspaceId: ctx.workspaceId,
       body:
-        "Find the failed CI run on the rerank-dense branch and pull " +
-        "its full details — workflow, conclusion, logs link.",
+        "Find the most recent failed run of the 'rerank-soak' routine, " +
+        "then pull its full outcome — summary, findings, the assertion " +
+        "that tripped, finished_at.",
       freshThread: true,
     });
     if (result.status === 412) {
@@ -268,6 +274,41 @@ test.describe("navigator tool drill-in", () => {
       analysis,
       new Set(["inbox_get", "inbox_list"]),
       "inbox_get drill",
+    );
+    expect(result.text.length).toBeGreaterThan(0);
+  });
+
+  test("repo_symbols fires when asked about exported names in a file", async ({
+    request,
+  }, testInfo) => {
+    const ctx = ctxOrThrow();
+    const result = await streamNavigatorTurn(request, {
+      base: ctx.base,
+      token: ctx.token,
+      workspaceId: ctx.workspaceId,
+      body:
+        "List the functions and classes exported from src/rank.ts in " +
+        "the elmundi/ship-e2e-sandbox repo so I can see the API " +
+        "surface at a glance.",
+      freshThread: true,
+    });
+    if (result.status === 412) {
+      test.skip(true, "Agent not configured (412)");
+      return;
+    }
+    expect(result.status).toBe(200);
+    const analysis = analyseToolTrajectory(result.events);
+    annotate(testInfo, analysis);
+    assertNoRetryAfterFailure(analysis);
+    expectAnyOf(
+      testInfo,
+      analysis,
+      // ``repo_symbols`` is the rich path; falling back to
+      // ``repo_file_get`` (the agent grep'd the file then summarised
+      // symbols itself) is still acceptable — we punt on the
+      // "expected" hard-fail if neither fires.
+      new Set(["repo_symbols", "repo_file_get"]),
+      "repo_symbols drill",
     );
     expect(result.text.length).toBeGreaterThan(0);
   });

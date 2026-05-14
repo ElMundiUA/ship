@@ -45,6 +45,7 @@ from backend.app.db.models.memory_adapters import (
     MemoryTrackerTicket,
 )
 from backend.app.db.models.integrations import WorkspaceRepo
+from backend.app.db.models.lanes import Routine, RoutineRun
 from backend.app.db.models.pipelines import PullRequest, WorkflowRun
 from backend.app.db.models.tenancy import User, Workspace
 from backend.app.integrations.local.ci import MemoryCi
@@ -481,6 +482,112 @@ async def _seed_runs_cache(
     print(f"  runs cache: mirrored {len(mem_runs)} rows from MemoryCiRun")
 
 
+async def _seed_routine_runs(
+    session,
+    workspace_id: uuid.UUID,
+    ws_repo_id: uuid.UUID,
+) -> None:
+    """Plant a routine + three runs so the Navigator's ``runs_list``
+    /``runs_get`` tools (which read ``routine_runs``, NOT
+    ``workflow_runs``) have something concrete to surface.
+
+    Single routine of kind=schedule + three runs covering the
+    happy + failure + in-flight statuses gives every drill-in
+    prompt a real id to land on.
+    """
+    routine = (
+        await session.execute(
+            select(Routine).where(
+                Routine.workspace_id == workspace_id,
+                Routine.repo_id == ws_repo_id,
+                Routine.lane_id == "rerank-soak",
+            )
+        )
+    ).scalar_one_or_none()
+    if routine is None:
+        routine = Routine(
+            workspace_id=workspace_id,
+            repo_id=ws_repo_id,
+            lane_id="rerank-soak",
+            kind="schedule",
+            pattern="overnight-soak",
+            cron="0 3 * * *",
+            origin="merged",
+            config_blob={"timeout_minutes": 30, "notify_on_fail": True},
+        )
+        session.add(routine)
+        await session.flush()
+        print(f"  routines: created routine {routine.id} ({routine.lane_id})")
+    else:
+        print(f"  routines: reuse routine {routine.id} ({routine.lane_id})")
+
+    existing_runs = (
+        await session.execute(
+            select(RoutineRun).where(RoutineRun.routine_id == routine.id)
+        )
+    ).scalars().all()
+    if existing_runs:
+        print(f"  routine_runs: reuse {len(existing_runs)} runs")
+        return
+
+    now = datetime.now(timezone.utc)
+    runs = [
+        # Latest — failing run (the one drill-in tests will land on)
+        RoutineRun(
+            routine_id=routine.id,
+            workspace_id=workspace_id,
+            trigger="cron",
+            status="failed",
+            started_at=now - timedelta(hours=2),
+            finished_at=now - timedelta(hours=2) + timedelta(minutes=18),
+            summary=(
+                "Soak diverged at iteration 14 — recall@5 dropped from "
+                "0.81 to 0.66 after rerank rebuild. Failing assertion: "
+                "test_rerank_caches_per_query_digest."
+            ),
+            payload={"trigger_user": "cron"},
+            outcome={
+                "result": "failed",
+                "findings": [
+                    {
+                        "kind": "regression",
+                        "title": "recall@5 drop",
+                        "severity": "high",
+                    }
+                ],
+            },
+        ),
+        # Middle — succeeded run
+        RoutineRun(
+            routine_id=routine.id,
+            workspace_id=workspace_id,
+            trigger="cron",
+            status="succeeded",
+            started_at=now - timedelta(days=1, hours=2),
+            finished_at=now - timedelta(days=1, hours=2) + timedelta(minutes=14),
+            summary="Soak green — recall@5 = 0.79 stable across 16 iterations.",
+            payload={"trigger_user": "cron"},
+            outcome={"result": "succeeded"},
+        ),
+        # Currently running (no finished_at)
+        RoutineRun(
+            routine_id=routine.id,
+            workspace_id=workspace_id,
+            trigger="manual",
+            status="running",
+            started_at=now - timedelta(minutes=8),
+            finished_at=None,
+            summary="Re-soak after fixing the cache-key bug; iteration 4/16.",
+            payload={"trigger_user": "dev"},
+            outcome={},
+        ),
+    ]
+    for run in runs:
+        session.add(run)
+    await session.flush()
+    print(f"  routine_runs: created {len(runs)} runs (failed / succeeded / running)")
+
+
 async def _seed_inbox(
     session,
     workspace_id: uuid.UUID,
@@ -553,6 +660,7 @@ async def main() -> int:
         await _seed_ci(session, ws_id, repo)
         await _seed_pr_cache(session, ws_id, repo, ws_repo_id)
         await _seed_runs_cache(session, ws_id, repo, ws_repo_id)
+        await _seed_routine_runs(session, ws_id, ws_repo_id)
         await _seed_inbox(session, ws_id, primary_id)
         await session.commit()
         print("done.")
