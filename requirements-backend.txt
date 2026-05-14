@@ -28,6 +28,13 @@ openai>=1.50,<2
 # vendors without a rebuild.
 anthropic>=0.40,<1
 
+# --- Navigator memory layer (E17/ELS-126) ---
+# mem0 stores per-message-extracted facts on Ship's existing
+# Postgres+pgvector (no new server container). LLM = gpt-4o-mini for
+# extraction, embedder = text-embedding-3-small — both go through the
+# already-set OPENAI_API_KEY.
+mem0ai>=0.1.50,<1
+
 # --- Persistence (Postgres + pgvector everywhere; RFC-0006) ---
 SQLAlchemy[asyncio]>=2.0.30,<3
 alembic>=1.13,<2
