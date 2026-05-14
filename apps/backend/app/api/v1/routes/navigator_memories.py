@@ -38,7 +38,7 @@ from backend.app.api.v1.routes.workspaces import (
 )
 from backend.app.core.config import Settings, get_settings
 from backend.app.db.models.navigator_memory import NavigatorMemory
-from backend.app.db.models.tenancy import AuditLog
+from backend.app.db.models.tenancy import AuditLog, Workspace
 from backend.app.db.session import get_session
 from backend.app.services.agent import memory as navigator_memory
 
@@ -371,6 +371,83 @@ def _to_out(row: NavigatorMemory) -> NavigatorMemoryOut:
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
+
+
+# ---------------------------------------------------------------------------
+# E2E sandbox — direct mirror write for the Playwright suite.
+# ---------------------------------------------------------------------------
+#
+# Why this lives in the prod router (instead of behind a feature flag):
+# the e2e workspace is the *only* legitimate caller, and the gate is the
+# workspace's slug (must start with ``e2e-``). Any other workspace gets a
+# plain 404 — same as if the route didn't exist — so prod surface area
+# stays clean. The endpoint mirrors what the LLM extractor would have
+# written, minus the embedding (left NULL because we don't want test seed
+# rows polluting the ivfflat index). All other reads (list / health /
+# delete / bulk-forget) keep filtering by ``owner_user_id`` so a seed
+# row can't leak to a different user.
+
+
+class SandboxSeedIn(BaseModel):
+    """Body for the e2e sandbox seed.
+
+    Mirrors the small shape of a real LLM-extracted fact. We don't
+    accept an ``embedding`` here — leaving it NULL is fine for the
+    contract / UI assertions the suite exercises (the search-ranking
+    code-paths are covered in unit tests).
+    """
+
+    fact_text: str = Field(..., min_length=1, max_length=2048)
+    project_native_id: str | None = None
+    intent_at_capture: str | None = None
+    confidence: float = Field(default=0.9, ge=0.0, le=1.0)
+
+
+class SandboxSeedOut(BaseModel):
+    id: uuid.UUID
+
+
+@router.post(
+    "/navigator-memories/_test_seed",
+    response_model=SandboxSeedOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def seed_navigator_memory_for_tests(
+    workspace_id: uuid.UUID,
+    payload: SandboxSeedIn,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> SandboxSeedOut:
+    """E2E-only: write a fact directly into ``navigator_memories``.
+
+    Returns 404 unless the workspace slug starts with ``e2e-`` so the
+    endpoint is invisible on any production workspace. The auth /
+    membership gate is unchanged — only members of the e2e workspace
+    can call this, and the fact is bound to the caller's
+    ``owner_user_id``.
+    """
+    ws = await session.get(Workspace, workspace_id)
+    if ws is None or not ws.slug.startswith("e2e-"):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
+
+    row = NavigatorMemory(
+        workspace_id=workspace_id,
+        owner_user_id=auth.user.id,
+        # ``mem0_id`` is normally the id mem0 assigns when it stores
+        # the fact. For seed rows we fabricate a stable-enough id so
+        # the column's UNIQUE constraint is satisfied; nothing in mem0
+        # corresponds to this row, but the e2e suite only exercises
+        # the mirror table, never the vector store.
+        mem0_id=f"e2e-seed-{uuid.uuid4().hex}",
+        fact_text=payload.fact_text,
+        project_native_id=payload.project_native_id,
+        intent_at_capture=payload.intent_at_capture,
+        confidence=payload.confidence,
+    )
+    session.add(row)
+    await session.flush()
+    return SandboxSeedOut(id=row.id)
 
 
 __all__ = ["router"]

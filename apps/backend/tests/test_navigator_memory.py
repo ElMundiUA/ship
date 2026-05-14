@@ -1051,3 +1051,82 @@ async def test_health_endpoint_zero_hit_rate_calculated(
     body = response.json()
     assert body["searches_24h"] == 2
     assert body["zero_hit_rate_24h"] == 1.0
+
+
+# ---------------------------------------------------------------------------
+# E2E sandbox seed endpoint
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sandbox_seed_writes_row_when_workspace_is_e2e(
+    v1_client, db_session, seed_user_with_token, seed_user
+) -> None:
+    """``POST /navigator-memories/_test_seed`` mirrors a fact into the
+    table when the workspace slug starts with ``e2e-``."""
+    from backend.app.db.models.tenancy import Workspace, WorkspaceMember
+
+    user, raw = seed_user_with_token
+    _, org = seed_user
+    ws = Workspace(
+        org_id=org.id,
+        slug=f"e2e-{uuid.uuid4().hex[:6]}",
+        name="E2E sandbox",
+    )
+    db_session.add(ws)
+    await db_session.flush()
+    db_session.add(
+        WorkspaceMember(
+            workspace_id=ws.id,
+            user_id=user.id,
+            role="owner",
+            answer_specialist_slugs=["*"],
+        )
+    )
+    await db_session.commit()
+
+    response = await v1_client.post(
+        f"/v1/workspaces/{ws.id}/navigator-memories/_test_seed",
+        headers={"Authorization": f"Bearer {raw}"},
+        json={
+            "fact_text": "seed-fact-1",
+            "project_native_id": "PROJ-9",
+            "intent_at_capture": "shape_project",
+            "confidence": 0.42,
+        },
+    )
+    assert response.status_code == 201, response.text
+    payload = response.json()
+    assert payload["id"]
+
+    # Verify it's listable through the public list endpoint with the
+    # same auth — proves the row is owner-scoped to the caller.
+    listed = await v1_client.get(
+        f"/v1/workspaces/{ws.id}/navigator-memories?limit=10",
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert listed.status_code == 200
+    items = listed.json()["items"]
+    assert any(it["fact_text"] == "seed-fact-1" for it in items)
+    seeded = next(it for it in items if it["fact_text"] == "seed-fact-1")
+    assert seeded["project_native_id"] == "PROJ-9"
+    assert seeded["intent_at_capture"] == "shape_project"
+    assert abs(seeded["confidence"] - 0.42) < 1e-6
+
+
+@pytest.mark.asyncio
+async def test_sandbox_seed_returns_404_on_non_e2e_workspace(
+    v1_client, seed_workspace
+) -> None:
+    """The endpoint must be invisible on any production workspace —
+    ``seed_workspace`` provisions one with a ``ws-`` prefix, which
+    fails the e2e slug gate."""
+    user, raw, workspace = seed_workspace
+    assert not workspace.slug.startswith("e2e-")
+
+    response = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/navigator-memories/_test_seed",
+        headers={"Authorization": f"Bearer {raw}"},
+        json={"fact_text": "should-not-write"},
+    )
+    assert response.status_code == 404
