@@ -121,6 +121,30 @@ The **Session context** above already lists every activated repo (id, full_name,
 - Need a path / directory layout? ``repo_tree`` with ``path_prefix`` / ``glob`` / ``directories_only``.
 - 'Where is ``foo`` defined?' → ``repo_symbols`` (tree-sitter, deterministic, languages: Python / TypeScript / Go).
 
+## A note on "project"
+
+The word **"project"** appears in three different concepts in
+Ship; in this prompt it ALWAYS means a **tracker-native project**
+— a Linear project, a Jira epic, or a Memory-adapter project on
+the laptop profile. Identified by ``project_native_id``.
+
+These two are NOT what the prompt means by "project":
+
+- **Workspace** (``workspace_id``). The top-level tenant the
+  operator works inside. Many tools take ``workspace_id``
+  implicitly; never confuse it with a project id.
+- **Ship internal ``projects`` table** — a per-workspace
+  lane/preset mapping. Not surfaced as a Navigator tool; it
+  appears only via ``dashboard_priorities`` (``project_update``
+  ``priority_state`` path).
+
+When the user says "project" they usually mean the tracker-native
+one. A single workspace can host multiple tracker projects (e.g.
+Ship's own Linear has two ``Tech Debt`` projects), so name match
+is NOT a unique key — always confirm via ``project_list`` before
+acting.
+
+
 ## Memory (E17 — what Ship remembers about you)
 
 A ``{{MEMORY_CONTEXT}}`` system message sits above this prompt
@@ -135,7 +159,7 @@ Each fact carries an ``id`` (UUID), the distilled text, optional
 captured while the operator was drafting a project, so it may be
 hypothetical).
 
-### When to call ``recall(query)``
+### When to call ``recall(query, project_native_id=…)``
 
 - The conversation drifts to a topic NOT covered by the prefetched
   facts. Don't ask the operator something memory likely already
@@ -143,6 +167,14 @@ hypothetical).
 - The operator asks "what did we decide about X" / "did I tell you Y
   before" / "remind me about Z" — these are recall queries by
   intent; lean on recall before reasoning from the open chat alone.
+- **When the user names a specific project** ("the
+  memory-search-overhaul project", "ELS-103", "the auth-flow work"),
+  resolve the ``project_native_id`` first (look it up via
+  ``project_list(query=name)`` if not already in context) and pass
+  it as the optional ``project_native_id`` arg so the search hard-
+  filters to that project's tagged facts. Otherwise the cosine
+  ranker may surface a similarly-worded fact from a different
+  project — accurate vector-wise, wrong project-wise.
 
 ### When to call ``recall_context(fact_id)``
 

@@ -272,12 +272,12 @@ test.describe("navigator tool drill-in", () => {
     expect(result.text.length).toBeGreaterThan(0);
   });
 
-  test("recall_context fires on a project-tagged memory ask", async ({
+  test("recall fires with project_native_id when user names a project", async ({
     request,
   }, testInfo) => {
     const ctx = ctxOrThrow();
-    // Seed a fact tagged with the project id first so recall_context
-    // has a discriminator to filter on.
+    // Seed a project-tagged fact so the agent has something to
+    // resolve via ``recall(project_native_id=…)``.
     await request.post(
       `${ctx.base}/v1/workspaces/${encodeURIComponent(ctx.workspaceId)}/navigator-memories/_test_seed`,
       {
@@ -286,7 +286,7 @@ test.describe("navigator tool drill-in", () => {
           "Content-Type": "application/json",
         },
         data: JSON.stringify({
-          fact_text: "memory-search-overhaul scope was locked at three deliverables.",
+          fact_text: "scope was locked at three deliverables.",
           project_native_id: "memory-search-overhaul",
           intent_at_capture: "shape_project",
         }),
@@ -298,7 +298,49 @@ test.describe("navigator tool drill-in", () => {
       workspaceId: ctx.workspaceId,
       body:
         "What do we know specifically about the memory-search-overhaul " +
-        "project? Pull project-tagged facts only.",
+        "project? I want only facts tagged to that project.",
+      freshThread: true,
+    });
+    if (result.status === 412) {
+      test.skip(true, "Agent not configured (412)");
+      return;
+    }
+    expect(result.status).toBe(200);
+    const analysis = analyseToolTrajectory(result.events);
+    annotate(testInfo, analysis);
+    assertNoRetryAfterFailure(analysis);
+    expectAnyOf(testInfo, analysis, new Set(["recall"]), "project-scoped recall");
+    // recall is the right tool; the project_native_id arg is the
+    // sharpness signal. Soft-annotate when the agent skipped that
+    // arg — likely a prompt-tuning issue, not a regression.
+    const recallCall = analysis.invocations.find((i) => i.name === "recall");
+    if (recallCall) {
+      const args = recallCall.args as Record<string, unknown> | null;
+      if (!args || typeof args.project_native_id !== "string") {
+        testInfo.annotations.push({
+          type: "recall-project-arg-missing",
+          description:
+            "agent called recall without project_native_id even though the " +
+            "user named a specific project — navigator.md rule for " +
+            "project-scoped recall not landing.",
+        });
+      }
+    }
+    expect(result.text.length).toBeGreaterThan(0);
+  });
+
+  test("recall_context fires when user asks for context around a fact", async ({
+    request,
+  }, testInfo) => {
+    const ctx = ctxOrThrow();
+    const result = await streamNavigatorTurn(request, {
+      base: ctx.base,
+      token: ctx.token,
+      workspaceId: ctx.workspaceId,
+      body:
+        "Pull from memory what we said about the rerank thresholds — and " +
+        "then for the most relevant fact show me the chat conversation " +
+        "I was having when I said it (a few messages before and after).",
       freshThread: true,
     });
     if (result.status === 412) {
@@ -313,7 +355,7 @@ test.describe("navigator tool drill-in", () => {
       testInfo,
       analysis,
       new Set(["recall_context", "recall"]),
-      "recall_context drill",
+      "recall_context drill (source-message context)",
     );
     expect(result.text.length).toBeGreaterThan(0);
   });

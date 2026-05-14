@@ -564,56 +564,20 @@ class ToolBox:
                     "additionalProperties": False,
                 },
             ),
-            ToolSpec(
-                name="project_find_or_create",
-                description=(
-                    "Idempotent project-by-name lookup. Returns an "
-                    "existing project whose name matches ``name`` "
-                    "(case-insensitive exact match), or creates a new "
-                    "one with the given ``body`` and returns its id. "
-                    "Use this for reviewer-style routing — tech-debt "
-                    "findings → ``Tech Debt`` project, qa findings → "
-                    "``QA Debt`` project, security findings → "
-                    "``Security`` project — without a race condition "
-                    "between ``list_projects`` and ``create_project``. "
-                    "The returned ``created`` flag tells you which "
-                    "branch fired."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "name": {
-                            "type": "string",
-                            "description": (
-                                "Project name to find or create (case-"
-                                "insensitive exact match against the "
-                                "tracker's existing projects)."
-                            ),
-                        },
-                        "body": {
-                            "type": "string",
-                            "description": (
-                                "Markdown body for the new project (used "
-                                "only when no existing project matches). "
-                                "Should explain the project's purpose so "
-                                "future tickets pull context from it — "
-                                "e.g. ``Holding pen for tech-debt "
-                                "findings filed by the daily tech-"
-                                "reviewer routine.``"
-                            ),
-                        },
-                        "description": {
-                            "type": "string",
-                            "description": (
-                                "Optional one-line blurb (Linear caps at "
-                                "240 chars). Used only on create."
-                            ),
-                        },
-                    },
-                    "required": ["name", "body"],
-                    "additionalProperties": False,
-                },
-            ),
+            # ``project_find_or_create`` deliberately NOT advertised to
+            # the LLM planner (no ToolSpec entry). Its case-insensitive
+            # exact-match find-or-create is the right primitive for
+            # scaffolders that know the project name is unique
+            # (``tools/scripts/create_e17_*.py``, daily-retro
+            # reviewers), but a Linear workspace can legitimately host
+            # multiple projects with similar names (e.g. Ship-on-Ship's
+            # Linear has two ``Tech Debt`` projects). For the
+            # interactive Navigator flow we want the agent to do
+            # ``project_list(query=…)`` then offer the matches to the
+            # operator + create only on explicit ack — that handles
+            # the duplicate-name case the atomic tool can't. The
+            # dispatch table still exposes the handler for direct
+            # calls from scaffolder code paths.
             ToolSpec(
                 name="inbox_create",
                 description=(

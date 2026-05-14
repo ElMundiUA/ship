@@ -38,7 +38,6 @@ EXPECTED_TOOLS: frozenset[str] = frozenset(
         "web_fetch",
         "project_create",
         "ticket_create",
-        "project_find_or_create",
         "dashboard_get",
         "knowledge_bucket_get",
         "project_get",
