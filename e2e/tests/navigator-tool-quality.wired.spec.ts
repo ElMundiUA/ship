@@ -338,4 +338,277 @@ test.describe("navigator tool quality", () => {
     );
     expect(result.text.length, "agent produced a reply").toBeGreaterThan(0);
   });
+
+  // -------------------------------------------------------------------------
+  // 6) Members — small DB-only read tool, easy nudge.
+  // -------------------------------------------------------------------------
+
+  test("members prompt fires members_list", async ({ request }, testInfo) => {
+    const ctx = ctxOrThrow();
+    const result = await streamNavigatorTurn(request, {
+      base: ctx.base,
+      token: ctx.token,
+      workspaceId: ctx.workspaceId,
+      body: "List every member of this workspace with their role and email.",
+      freshThread: true,
+    });
+    if (result.status === 412) {
+      test.skip(true, "Agent not configured on backend (412)");
+      return;
+    }
+    expect(result.status).toBe(200);
+    const analysis = analyseToolTrajectory(result.events);
+    annotate(testInfo, analysis);
+    assertNoRetryAfterFailure(analysis);
+    noteToolFamily(testInfo, analysis, new Set(["members_list"]), "members");
+    expect(result.text.length, "agent produced a reply").toBeGreaterThan(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // 7) Config — config_help is read-only and self-describing; the agent
+  //    should reach for it when the user asks "what can I configure?".
+  //    config_put is admin-mutating; we drive it through the LLM but
+  //    expect the admin gate to bite (the test workspace member is
+  //    admin so the call may actually succeed — either outcome passes
+  //    as long as the agent doesn't ricochet across tools).
+  // -------------------------------------------------------------------------
+
+  test("config prompt fires config_help / config_put without retry thrash", async ({
+    request,
+  }, testInfo) => {
+    const ctx = ctxOrThrow();
+    const result = await streamNavigatorTurn(request, {
+      base: ctx.base,
+      token: ctx.token,
+      workspaceId: ctx.workspaceId,
+      body:
+        "What workspace settings can I configure? If there's a way to set " +
+        "the default agent profile, walk me through it.",
+      freshThread: true,
+    });
+    if (result.status === 412) {
+      test.skip(true, "Agent not configured on backend (412)");
+      return;
+    }
+    expect(result.status).toBe(200);
+    const analysis = analyseToolTrajectory(result.events);
+    annotate(testInfo, analysis);
+    assertNoRetryAfterFailure(analysis);
+    noteToolFamily(
+      testInfo,
+      analysis,
+      new Set(["config_help", "config_put"]),
+      "config",
+    );
+    expect(result.text.length, "agent produced a reply").toBeGreaterThan(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // 8) Project read/update — drives project_get and project_update. The
+  //    e2e workspace has no projects, so the agent's first probe (likely
+  //    project_list) will return empty. The right next move is to tell
+  //    the user "no projects yet" — NOT to bounce off into ticket_list
+  //    or something unrelated. That ricochet is the regression we're
+  //    catching.
+  // -------------------------------------------------------------------------
+
+  test("project read/update prompt stays within project_* family", async ({
+    request,
+  }, testInfo) => {
+    const ctx = ctxOrThrow();
+    const result = await streamNavigatorTurn(request, {
+      base: ctx.base,
+      token: ctx.token,
+      workspaceId: ctx.workspaceId,
+      body:
+        "Pull the details of the active project, then update its " +
+        "description to mention 'Q3 focus'.",
+      freshThread: true,
+    });
+    if (result.status === 412) {
+      test.skip(true, "Agent not configured on backend (412)");
+      return;
+    }
+    expect(result.status).toBe(200);
+    const analysis = analyseToolTrajectory(result.events);
+    annotate(testInfo, analysis);
+    assertNoRetryAfterFailure(analysis);
+    noteToolFamily(
+      testInfo,
+      analysis,
+      new Set(["project_list", "project_get", "project_update"]),
+      "project read/update",
+    );
+    expect(result.text.length, "agent produced a reply").toBeGreaterThan(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // 9) PR family — pr_list / pr_get. e2e workspace has no bound repo, so
+  //    the agent's call will likely return "no repo configured" / empty.
+  //    Agent should surface that to the user, not start guessing with
+  //    runs_list or repo_tree.
+  // -------------------------------------------------------------------------
+
+  test("PR prompt stays within pr_* family (no thrash on empty state)", async ({
+    request,
+  }, testInfo) => {
+    const ctx = ctxOrThrow();
+    const result = await streamNavigatorTurn(request, {
+      base: ctx.base,
+      token: ctx.token,
+      workspaceId: ctx.workspaceId,
+      body:
+        "Show me the open pull requests on our main repo, then drill into " +
+        "the most recent one.",
+      freshThread: true,
+    });
+    if (result.status === 412) {
+      test.skip(true, "Agent not configured on backend (412)");
+      return;
+    }
+    expect(result.status).toBe(200);
+    const analysis = analyseToolTrajectory(result.events);
+    annotate(testInfo, analysis);
+    assertNoRetryAfterFailure(analysis);
+    noteToolFamily(
+      testInfo,
+      analysis,
+      new Set(["pr_list", "pr_get"]),
+      "pull requests",
+    );
+    expect(result.text.length, "agent produced a reply").toBeGreaterThan(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // 10) Repo introspection — repo_tree / repo_file_get / repo_symbols.
+  //     Same empty-state caveat as PRs.
+  // -------------------------------------------------------------------------
+
+  test("repo prompt stays within repo_* family", async ({
+    request,
+  }, testInfo) => {
+    const ctx = ctxOrThrow();
+    const result = await streamNavigatorTurn(request, {
+      base: ctx.base,
+      token: ctx.token,
+      workspaceId: ctx.workspaceId,
+      body:
+        "What's the directory structure of the main repo? Show me the " +
+        "top-level layout.",
+      freshThread: true,
+    });
+    if (result.status === 412) {
+      test.skip(true, "Agent not configured on backend (412)");
+      return;
+    }
+    expect(result.status).toBe(200);
+    const analysis = analyseToolTrajectory(result.events);
+    annotate(testInfo, analysis);
+    assertNoRetryAfterFailure(analysis);
+    noteToolFamily(
+      testInfo,
+      analysis,
+      new Set(["repo_tree", "repo_file_get", "repo_symbols"]),
+      "repo introspection",
+    );
+    expect(result.text.length, "agent produced a reply").toBeGreaterThan(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // 11) CI runs — runs_list / runs_get.
+  // -------------------------------------------------------------------------
+
+  test("CI prompt stays within runs_* family", async ({
+    request,
+  }, testInfo) => {
+    const ctx = ctxOrThrow();
+    const result = await streamNavigatorTurn(request, {
+      base: ctx.base,
+      token: ctx.token,
+      workspaceId: ctx.workspaceId,
+      body:
+        "Pull the most recent CI runs, then show me the details of the " +
+        "latest failing one.",
+      freshThread: true,
+    });
+    if (result.status === 412) {
+      test.skip(true, "Agent not configured on backend (412)");
+      return;
+    }
+    expect(result.status).toBe(200);
+    const analysis = analyseToolTrajectory(result.events);
+    annotate(testInfo, analysis);
+    assertNoRetryAfterFailure(analysis);
+    noteToolFamily(
+      testInfo,
+      analysis,
+      new Set(["runs_list", "runs_get"]),
+      "CI runs",
+    );
+    expect(result.text.length, "agent produced a reply").toBeGreaterThan(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // 12) web_fetch — straightforward URL ask. Skipped softly if the
+  //     workspace has no firecrawl key.
+  // -------------------------------------------------------------------------
+
+  test("web fetch prompt fires web_fetch", async ({ request }, testInfo) => {
+    const ctx = ctxOrThrow();
+    const result = await streamNavigatorTurn(request, {
+      base: ctx.base,
+      token: ctx.token,
+      workspaceId: ctx.workspaceId,
+      body:
+        "Fetch https://example.com and summarise the page content for me.",
+      freshThread: true,
+    });
+    if (result.status === 412) {
+      test.skip(true, "Agent not configured on backend (412)");
+      return;
+    }
+    expect(result.status).toBe(200);
+    const analysis = analyseToolTrajectory(result.events);
+    annotate(testInfo, analysis);
+    assertNoRetryAfterFailure(analysis);
+    noteToolFamily(testInfo, analysis, new Set(["web_fetch"]), "web fetch");
+    expect(result.text.length, "agent produced a reply").toBeGreaterThan(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // 13) Sub-agent dispatch — run_subagent. Heaviest tool in the
+  //     inventory; we only check that the agent can route through it
+  //     without thrashing. The actual sub-agent run is best covered by
+  //     the dedicated decomposition / specialist suites.
+  // -------------------------------------------------------------------------
+
+  test("sub-agent prompt may fire run_subagent without thrashing", async ({
+    request,
+  }, testInfo) => {
+    const ctx = ctxOrThrow();
+    const result = await streamNavigatorTurn(request, {
+      base: ctx.base,
+      token: ctx.token,
+      workspaceId: ctx.workspaceId,
+      body:
+        "Spin up a specialist sub-agent to review our test coverage strategy " +
+        "and report back with three concrete improvements.",
+      freshThread: true,
+    });
+    if (result.status === 412) {
+      test.skip(true, "Agent not configured on backend (412)");
+      return;
+    }
+    expect(result.status).toBe(200);
+    const analysis = analyseToolTrajectory(result.events);
+    annotate(testInfo, analysis);
+    assertNoRetryAfterFailure(analysis);
+    noteToolFamily(
+      testInfo,
+      analysis,
+      new Set(["run_subagent"]),
+      "sub-agent dispatch",
+    );
+    expect(result.text.length, "agent produced a reply").toBeGreaterThan(0);
+  });
 });
