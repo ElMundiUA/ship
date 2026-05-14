@@ -3873,3 +3873,135 @@ export function bulkForgetNavigatorMemories(
     },
   );
 }
+
+
+// ---------------------------------------------------------------------------
+// Local-tracker (E19 — laptop-offline memory adapters)
+// ---------------------------------------------------------------------------
+
+export interface ApiLocalTicket {
+  display_id: string;
+  title: string;
+  body: string;
+  state: string;
+  labels: string[];
+  stage: string | null;
+  project_id: string | null;
+  ticket_type: string | null;
+  created_at: string;
+  updated_at: string;
+  url: string;
+}
+
+export interface ApiLocalProject {
+  id: string;
+  slug: string;
+  name: string;
+  state: string;
+  description: string | null;
+  body: string;
+  ticket_count: number;
+  url: string;
+}
+
+export interface ApiLocalPullRequest {
+  number: number;
+  title: string;
+  body: string;
+  head: string;
+  base: string;
+  state: string;
+  merged: boolean;
+  draft: boolean;
+  url: string;
+  created_at: string;
+}
+
+export interface ApiLocalCiRun {
+  id: string;
+  workflow_name: string;
+  status: string;
+  conclusion: string | null;
+  branch: string | null;
+  commit_sha: string | null;
+  created_at: string;
+  url: string;
+}
+
+export interface ApiLocalRepo {
+  id: string;
+  owner: string;
+  name: string;
+  default_branch: string;
+  description: string | null;
+  url: string;
+  pull_requests: ApiLocalPullRequest[];
+  recent_runs: ApiLocalCiRun[];
+}
+
+export interface ApiLocalDashboard {
+  enabled: boolean;
+  tickets: ApiLocalTicket[];
+  projects: ApiLocalProject[];
+  repos: ApiLocalRepo[];
+}
+
+export function getLocalTrackerDashboard(
+  workspaceId: string,
+  token?: string,
+): Promise<ApiLocalDashboard> {
+  return apiFetch<ApiLocalDashboard>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/local-tracker/dashboard`,
+    { token },
+  );
+}
+
+export function transitionLocalTicket(
+  workspaceId: string,
+  displayId: string,
+  toState: string,
+  token?: string,
+): Promise<ApiLocalTicket> {
+  return apiFetch<ApiLocalTicket>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/local-tracker/tickets/${encodeURIComponent(displayId)}/transition`,
+    { method: "POST", body: { to_state: toState }, token },
+  );
+}
+
+export function commentLocalTicket(
+  workspaceId: string,
+  displayId: string,
+  body: string,
+  token?: string,
+): Promise<unknown> {
+  return apiFetch<unknown>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/local-tracker/tickets/${encodeURIComponent(displayId)}/comment`,
+    { method: "POST", body: { body }, token },
+  );
+}
+
+export function mergeLocalPullRequest(
+  workspaceId: string,
+  owner: string,
+  name: string,
+  number: number,
+  token?: string,
+): Promise<ApiLocalPullRequest> {
+  return apiFetch<ApiLocalPullRequest>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/local-tracker/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/${number}/merge`,
+    { method: "POST", token },
+  );
+}
+
+export function rerunLocalCiRun(
+  workspaceId: string,
+  owner: string,
+  name: string,
+  runId: string,
+  token?: string,
+): Promise<void> {
+  return apiFetch<void>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/local-tracker/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/runs/${encodeURIComponent(runId)}/rerun`,
+    { method: "POST", token },
+  );
+}

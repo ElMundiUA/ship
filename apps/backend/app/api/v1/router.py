@@ -40,6 +40,7 @@ from backend.app.api.v1.routes import (
     knowledge_canon,
     knowledge_import_sources,
     linear_oauth,
+    local_tracker,
     members,
     native_integrations,
     navigator_memories,
@@ -206,3 +207,7 @@ api_router.include_router(tracker_binding.router)
 # bulk-forget all go through the owner_user_id filter on the
 # service layer.
 api_router.include_router(navigator_memories.router)
+# E19 — laptop-offline /local-tracker control panel. Returns 404 for
+# every endpoint when SHIP_USE_MEMORY_ADAPTERS is off, so the route
+# is invisible on production.
+api_router.include_router(local_tracker.router)
