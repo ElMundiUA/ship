@@ -98,20 +98,43 @@ def _build_mem0_client(settings: Settings) -> Any:
     if "neon.tech" in (parsed.hostname or "") or "ondigitalocean" in (parsed.hostname or ""):
         sslmode = "require"
 
+    dbname = (parsed.path or "/postgres").lstrip("/")
+    user = parsed.username or "postgres"
+    password = parsed.password or ""
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 5432
+
+    # mem0's pgvector adapter (mem0ai 0.1.x) builds the conninfo as
+    # ``postgresql://...{dbname} sslmode={mode}`` — a URI followed by
+    # a key=value pair separated by a space. psycopg3 refuses that
+    # ("unexpected spaces found in '<db> sslmode=...'"). Build a
+    # valid URI with ``sslmode`` as a query parameter ourselves and
+    # pass ``sslmode=None`` so mem0's broken concatenation branch
+    # doesn't fire.
+    from urllib.parse import quote
+
+    auth_part = f"{quote(user, safe='')}:{quote(password, safe='')}"
+    connection_string = f"postgresql://{auth_part}@{host}:{port}/{dbname}"
+    if sslmode:
+        connection_string = f"{connection_string}?sslmode={sslmode}"
+
     config = {
         "vector_store": {
             "provider": "pgvector",
             "config": {
-                "dbname": (parsed.path or "/postgres").lstrip("/"),
+                "dbname": dbname,
                 "collection_name": _MEM0_COLLECTION,
                 "embedding_model_dims": 1536,
-                "user": parsed.username or "postgres",
-                "password": parsed.password or "",
-                "host": parsed.hostname or "localhost",
-                "port": parsed.port or 5432,
+                "user": user,
+                "password": password,
+                "host": host,
+                "port": port,
                 "diskann": False,
                 "hnsw": False,
-                "sslmode": sslmode,
+                # Force the elif-connection-string branch in mem0's
+                # adapter without letting it re-append sslmode.
+                "sslmode": None,
+                "connection_string": connection_string,
             },
         },
         "llm": {
