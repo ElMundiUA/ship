@@ -6,6 +6,7 @@ namespace: ship
 resources:
   - ../../base
   - cluster-issuer.yaml
+  - ingress-nginx-tuning.yaml
 
 # ``secrets.env`` is gitignored — owners materialize it from the
 # 1Password / Bunny env dump before running ``kubectl apply -k``.

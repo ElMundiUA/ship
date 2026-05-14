@@ -1,0 +1,24 @@
+# E16 / DOKS prod — nginx-ingress proxy buffer tuning.
+#
+# Auth0 session cookies on the Ship console are encrypted JWE blobs
+# that comfortably hit 5-7 KB. nginx-ingress defaults
+# (``proxy-buffer-size: 4k``) reject the headers as "too large",
+# the upstream connection chokes mid-handshake, and the LB returns
+# 502 in ~40ms — the symptom that surfaced after the DOKS cutover
+# (Bunny had bigger defaults by accident).
+#
+# 16 KB covers the worst-case Auth0 session + ``Set-Cookie`` rewrite
+# headroom. ``proxy-buffers-number=8`` keeps response chunking
+# smooth for the big SSR pages; ``large-client-header-buffers``
+# matches the upstream-side budget so the same fix applies to the
+# request headers nginx sends to the pod.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ingress-nginx-controller
+  namespace: ingress-nginx
+data:
+  proxy-buffer-size: "16k"
+  proxy-buffers-number: "8"
+  large-client-header-buffers: "4 16k"
+  use-proxy-protocol: "false"
