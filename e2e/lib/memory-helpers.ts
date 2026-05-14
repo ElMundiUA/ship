@@ -236,24 +236,18 @@ export async function seedMemory(
  * to put the workspace in a known-empty state — the test then seeds
  * exactly the rows it needs.
  *
- * Implementation note: the bulk-forget endpoint caps at 90 days, so
- * a single call won't catch rows older than that. For the e2e suite
- * that ceiling is fine — the workspace was provisioned today. If we
- * ever leave rows around longer, switch to a paginated delete loop.
+ * Implementation note: the bulk-forget endpoint caps at 90 days. The
+ * e2e workspace is provisioned fresh each release cycle so a single
+ * 90-day call clears everything. If a fact ever lingers past that
+ * window we'd see a stale row in the next test's setup; the failure
+ * surface is loud (the seeded marker won't be unique) rather than
+ * silent.
  */
 export async function cleanAllMemories(
   request: APIRequestContext,
   ctx: AuthCtx,
 ): Promise<void> {
   await bulkForget(request, ctx, 90);
-  // Belt-and-braces — anything bulk-forget missed (rows older than 90d
-  // or seed rows added with a forward-dated created_at) we mop up
-  // one-by-one. ``listMemories`` already filters by owner, so the
-  // delete loop only touches our own rows.
-  const list = await listMemories(request, ctx, { limit: 200 });
-  for (const row of list.items) {
-    await deleteMemory(request, ctx, row.id);
-  }
 }
 
 

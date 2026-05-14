@@ -30,7 +30,9 @@ import {
 
 
 test.describe("navigator memory — tenancy isolation", () => {
-  test.describe.configure({ mode: "serial" });
+  // See navigator-memory.wired.spec.ts — cleanup of accumulated rows
+  // pushes us past the default 30s timeout. 90s gives us headroom.
+  test.describe.configure({ mode: "serial", timeout: 90_000 });
 
   test.beforeEach(() => {
     const env = memorySuiteEnv();

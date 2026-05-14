@@ -58,7 +58,13 @@ function ctxOrSkip(): AuthCtx {
 
 
 test.describe("navigator memory — API contract", () => {
-  test.describe.configure({ mode: "serial" });
+  // Cleanup hits ``POST /navigator-memories/forget`` which iterates
+  // rows + calls memory.delete (audit + mem0 client) per row — for a
+  // workspace that accumulated a few dozen leftover rows from a
+  // previous failed run the call can take 20+ seconds. Default 30s
+  // per-test timeout fights that; bump to 90s so the cleanup phase
+  // doesn't make assertions about the actual code-path flaky.
+  test.describe.configure({ mode: "serial", timeout: 90_000 });
 
   test.beforeEach(({}, testInfo) => {
     test.skip(

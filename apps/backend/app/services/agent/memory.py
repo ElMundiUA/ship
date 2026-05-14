@@ -54,6 +54,11 @@ _MEM0_COLLECTION = "ship_navigator_memories"
 # Lazy singleton.
 _MEMORY_CLIENT_LOCK = threading.Lock()
 _MEMORY_CLIENT: Any | None = None
+# When mem0 init has failed once in this process we cache the failure
+# so the next 100 deletes/searches/adds don't each pay the ~3 s
+# round-trip-to-failure cost. Tests and ``shipctl knowledge`` runs
+# would otherwise stack up nginx 504s during cleanup phases.
+_MEMORY_CLIENT_DISABLED: bool = False
 
 
 def _build_mem0_client(settings: Settings) -> Any:
@@ -116,13 +121,34 @@ def _build_mem0_client(settings: Settings) -> Any:
 
 
 def _get_memory_client(settings: Settings) -> Any:
-    """Lazy singleton accessor — built once per process."""
-    global _MEMORY_CLIENT
+    """Lazy singleton accessor — built once per process.
+
+    Raises the underlying ImportError / config error on the FIRST
+    call when mem0 isn't installable; subsequent calls short-circuit
+    by raising the same kind of error from the cached ``_DISABLED``
+    flag. This is what keeps a bulk delete of 50 rows from taking
+    nginx down — without the cache each call re-does mem0's full
+    init dance (OpenAI client, qdrant probe, pgvector adapter
+    import) before failing.
+    """
+    global _MEMORY_CLIENT, _MEMORY_CLIENT_DISABLED
     if _MEMORY_CLIENT is not None:
         return _MEMORY_CLIENT
+    if _MEMORY_CLIENT_DISABLED:
+        # Match the exception flavour callers expect — ImportError is
+        # what mem0's pgvector adapter raises when its driver is
+        # missing, and our callers already except-and-continue on it.
+        raise ImportError("mem0 client is disabled for this process")
     with _MEMORY_CLIENT_LOCK:
-        if _MEMORY_CLIENT is None:
+        if _MEMORY_CLIENT is not None:
+            return _MEMORY_CLIENT
+        if _MEMORY_CLIENT_DISABLED:
+            raise ImportError("mem0 client is disabled for this process")
+        try:
             _MEMORY_CLIENT = _build_mem0_client(settings)
+        except Exception:
+            _MEMORY_CLIENT_DISABLED = True
+            raise
     return _MEMORY_CLIENT
 
 
