@@ -193,6 +193,7 @@ export default async function ChatPage({
               status: thread.status,
               topic_summary: thread.topic_summary,
               packed_into_bucket_id: thread.packed_into_bucket_id,
+              intent: thread.intent ?? null,
               created_at: thread.created_at,
               updated_at: thread.updated_at,
               messages: thread.messages,

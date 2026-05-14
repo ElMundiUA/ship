@@ -85,6 +85,10 @@ type Thread = {
   status: "active" | "archived";
   topic_summary: string | null;
   packed_into_bucket_id: string | null;
+  // E20 — current drafting mode. ``null`` for ordinary chat,
+  // ``"shape_project"`` while the thread is in drafting mode.
+  // Flipped in place via POST /chat/active/intent (E20-1).
+  intent: "shape_project" | null;
   created_at: string;
   updated_at: string;
 };
@@ -266,6 +270,15 @@ type StreamEvent =
   | { type: "user_message"; message: Message }
   | { type: "topic_shift"; decision?: TopicShiftDecision; shift?: unknown }
   | {
+      // E20-2 — drafting-intent classifier verdict. Renders an
+      // inline CTA below the assistant's reply suggesting the user
+      // switch into / out of drafting mode in place.
+      type: "drafting_intent";
+      verdict: "ENTER" | "EXIT";
+      reason?: string;
+      suggested_title?: string | null;
+    }
+  | {
       type: "retrieved_context";
       hits?: Array<{
         bucket_slug?: string;
@@ -419,6 +432,16 @@ export function SingleWindowChat({
     hydrateSegments(thread.messages),
   );
   const [shift, setShift] = useState<TopicShift | null>(null);
+  // E20-3 — drafting-intent CTA. Backend emits a verdict once per
+  // user turn; we hold it here until the user clicks Switch / Exit
+  // or dismisses. Reset on a fresh user message so a stale CTA
+  // can't linger across turns.
+  const [draftingSuggestion, setDraftingSuggestion] = useState<{
+    verdict: "ENTER" | "EXIT";
+    reason: string;
+    suggestedTitle: string | null;
+  } | null>(null);
+  const [draftingFlipPending, setDraftingFlipPending] = useState(false);
   // Per-user-message ``retrieved_context`` payload, keyed by user
   // message id. Each turn's retrieval lookup lands here once the
   // backend emits the SSE event; the matching user row renders the
@@ -671,6 +694,9 @@ export function SingleWindowChat({
         return;
       }
       case "user_message": {
+        // Fresh user turn — drop any stale drafting-intent CTA so
+        // the next verdict can render cleanly.
+        setDraftingSuggestion(null);
         setSegments((prev) => {
           // Stamp the persisted UUID onto the most recent optimistic
           // user segment without changing its ``id`` (= React key).
@@ -740,6 +766,21 @@ export function SingleWindowChat({
             evt as unknown,
           );
         }
+        return;
+      }
+      case "drafting_intent": {
+        // E20-2 — drafting-intent classifier verdict. We stash the
+        // suggestion + render an inline CTA the user can click to
+        // flip ``thread.intent`` in place.
+        if (evt.verdict !== "ENTER" && evt.verdict !== "EXIT") return;
+        setDraftingSuggestion({
+          verdict: evt.verdict,
+          reason: typeof evt.reason === "string" ? evt.reason : "",
+          suggestedTitle:
+            typeof evt.suggested_title === "string"
+              ? evt.suggested_title
+              : null,
+        });
         return;
       }
       case "retrieved_context": {
@@ -1203,6 +1244,7 @@ export function SingleWindowChat({
       setCurrent(fresh);
       setSegments(hydrateSegments(fresh.messages ?? []));
       setShift(null);
+      setDraftingSuggestion(null);
       setRetrievedByUserId({});
       lastUserIdRef.current = null;
       streamingIdRef.current = null;
@@ -1393,6 +1435,40 @@ export function SingleWindowChat({
           {current.status === "active" ? "live" : "archived"} ·{" "}
           {userSegmentCount} msg
         </span>
+        {current.intent === "shape_project" ? (
+          // E20-3 — explicit drafting badge so the user always sees
+          // the mode (and a quick exit affordance if they didn't
+          // realise the thread had flipped).
+          <button
+            type="button"
+            data-testid="drafting-mode-badge"
+            onClick={async () => {
+              if (streaming || draftingFlipPending) return;
+              setDraftingFlipPending(true);
+              try {
+                const resp = await fetch("/api/chat/intent", {
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify({
+                    workspace_id: workspaceId,
+                    intent: null,
+                  }),
+                });
+                if (resp.ok) {
+                  const updated = (await resp.json()) as Thread;
+                  setCurrent(updated);
+                }
+              } finally {
+                setDraftingFlipPending(false);
+              }
+            }}
+            disabled={streaming || draftingFlipPending}
+            title="Click to exit drafting mode"
+            className="rounded-full bg-violet-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-violet-200/90 transition hover:bg-violet-500/25 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            drafting ✕
+          </button>
+        ) : null}
         <button
           type="button"
           onClick={() => resetConversation({})}
@@ -1418,6 +1494,42 @@ export function SingleWindowChat({
             })
           }
           onDismiss={() => setShift(null)}
+        />
+      ) : null}
+
+      {/* E20-3 — drafting-intent CTA. Same deferral logic as the
+          topic-shift banner: wait for the turn to finish so the
+          user doesn't see the suggestion jump in mid-stream. */}
+      {draftingSuggestion && !streaming ? (
+        <DraftingIntentBanner
+          verdict={draftingSuggestion.verdict}
+          reason={draftingSuggestion.reason}
+          suggestedTitle={draftingSuggestion.suggestedTitle}
+          pending={draftingFlipPending}
+          onAccept={async () => {
+            setDraftingFlipPending(true);
+            try {
+              const resp = await fetch("/api/chat/intent", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({
+                  workspace_id: workspaceId,
+                  intent:
+                    draftingSuggestion.verdict === "ENTER"
+                      ? "shape_project"
+                      : null,
+                }),
+              });
+              if (resp.ok) {
+                const updated = (await resp.json()) as Thread;
+                setCurrent(updated);
+                setDraftingSuggestion(null);
+              }
+            } finally {
+              setDraftingFlipPending(false);
+            }
+          }}
+          onDismiss={() => setDraftingSuggestion(null)}
         />
       ) : null}
 
@@ -2094,6 +2206,75 @@ function TopicShiftBanner({
     </div>
   );
 }
+
+/**
+ * E20-3 — inline "Switch to drafting" / "Exit drafting" CTA.
+ *
+ * Backend's drafting-intent classifier (E20-2) emits a verdict per
+ * user turn; we render this banner once the turn settles. Click
+ * flips ``thread.intent`` in place via POST /chat/active/intent
+ * (E20-1) — no archive, no fresh thread.
+ */
+function DraftingIntentBanner({
+  verdict,
+  reason,
+  suggestedTitle,
+  pending,
+  onAccept,
+  onDismiss,
+}: {
+  verdict: "ENTER" | "EXIT";
+  reason: string;
+  suggestedTitle: string | null;
+  pending: boolean;
+  onAccept: () => void;
+  onDismiss: () => void;
+}) {
+  const isEnter = verdict === "ENTER";
+  const headline = isEnter ? "Shape a new project?" : "Exit drafting?";
+  const cta = isEnter ? "switch to drafting" : "exit drafting";
+  const subline =
+    reason ||
+    (isEnter
+      ? "Looks like you'd like to shape something new — switch this thread into drafting mode?"
+      : "Sounds like you want to move on — step out of drafting?");
+  return (
+    <div
+      className="flex items-start gap-3 py-2 text-[12px] text-violet-200/90"
+      data-testid="drafting-intent-banner"
+      data-verdict={verdict}
+    >
+      <span className="mt-0.5 h-1 w-1 shrink-0 rounded-full bg-violet-300" />
+      <div className="flex-1">
+        <strong className="font-semibold">{headline}</strong> {subline}
+        {isEnter && suggestedTitle ? (
+          <>
+            {" "}
+            Suggested title:{" "}
+            <code className="text-violet-100">{suggestedTitle}</code>.
+          </>
+        ) : null}
+        <button
+          type="button"
+          onClick={onAccept}
+          disabled={pending}
+          className="ml-2 font-semibold text-violet-100 underline-offset-2 hover:underline disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {pending ? "flipping…" : cta}
+        </button>
+        <button
+          type="button"
+          onClick={onDismiss}
+          disabled={pending}
+          className="ml-2 text-white/40 hover:text-white/80 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          dismiss
+        </button>
+      </div>
+    </div>
+  );
+}
+
 
 /**
  * One-shot ``console.warn`` keyed by message string so contract-
