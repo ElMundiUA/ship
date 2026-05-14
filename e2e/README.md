@@ -328,6 +328,30 @@ npx playwright test navigator-memory navigator-tenancy navigator-memory-ui --wor
 E2E_RUN_NAVIGATOR_STREAM=1 npx playwright test navigator-memory --workers=1
 ```
 
+### Запуск против localhost (E19 — без прод-зависимостей)
+
+Для быстрого regression — целишь в локальный стек, поднятый `make dev-up`. Контракт + tenancy спеки идут за ~2с против Neon-free Postgres и Memory-адаптеров:
+
+```bash
+# 0) Поднять стек (один раз):
+make dev-up
+
+# 1) Засеять e2e-navigator workspace + 2 service users + 2 PATs
+#    в локальный pg (одноразово; PATs печатаются только при создании):
+DATABASE_URL=postgresql://ship:ship@localhost:5433/ship \
+  E2E_SETUP_OPERATOR_EMAIL=dev@ship.dev \
+  PYTHONPATH=apps .venv/bin/python tools/scripts/setup_e2e_navigator_workspace.py
+
+# 2) Скопировать e2e/.env.local.example → e2e/.env.local и вписать
+#    напечатанные UUID + PATs.
+
+# 3) Прогнать:
+cd e2e && set -a && source .env.local && set +a
+npx playwright test navigator-memory.wired navigator-tenancy --workers=1
+```
+
+UI-спека (`navigator-memory-ui`) на локалке не работают из коробки — `E2E_STORAGE_STATE` рассчитан на Auth0-сессию, а local-auth-mode использует свою форму. Для UI-debug либо подними Auth0-mode локально, либо гоняй UI против прода.
+
 ### Чем покрыты milestones (M1–M19)
 
 `navigator-memory.wired.spec.ts` — M1 (seed→list), M2 (list shape), M3 (delete), M4 (bulk-forget window), M5 (days clamp), M14 (project filter), M17 (delete audit), M18 (`untagged` filter), M19 (health counters). `navigator-tenancy.wired.spec.ts` — M10 (cross-user list/delete/health). `navigator-memory-ui.wired.spec.ts` — M11 (render), M12 (row delete UI), M13 (bulk-forget consent). `navigator-memory-stream.wired.spec.ts` — M6 (SSE), M7 (first-turn retrieval), M8 (`recall` tool), M9 (`recall_context`), M15 (extraction round-trip), M16 (audit log), M19 (live counters). M5b (30-min gap retrieval) покрыт юнитом в `apps/backend/tests/test_navigator_memory.py`.

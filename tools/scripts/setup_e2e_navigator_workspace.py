@@ -59,7 +59,9 @@ from backend.app.security.tokens import generate_pat, hash_pat
 # created during his Auth0 signup. We don't need a separate org for
 # the e2e workspace; an isolated workspace under the same org is
 # sufficient for tenancy testing.
-DENYS_USER_EMAIL = "denys@bodyman.io"
+DENYS_USER_EMAIL = os.environ.get(
+    "E2E_SETUP_OPERATOR_EMAIL", "denys@bodyman.io"
+)
 WORKSPACE_SLUG = "e2e-navigator"
 WORKSPACE_NAME = "E2E — Navigator suite"
 
