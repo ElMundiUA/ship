@@ -29,6 +29,7 @@ cd e2e && npm run test:deployed
 | **G — Трекер GitHub → Ship** | Issue + лейбл + коммент `@ship clarification:` → `POST …/clarifications/sync` → poll GET → опционально UI (`tracker-github-clarification.wired.spec.ts`). Нужны репа с Ship App, трекер GitHub Issues в воркспейсе, PAT с `issues:write` |
 | **H — Full journey + reset** | Сквозной Elmundi-подобный путь: GitHub App (опц.) → preset + sandbox-репо → трекер GitHub Issues → done, с проверкой seed pipelines через Ship API (`full-journey.wired.spec.ts`). Откат состояния для повторного прогона: `full-journey-reset.sandbox.spec.ts` |
 | **I — Live staging automation** | Scheduled/manual staging suite: aggregate product/API check (`live-full-journey.wired.spec.ts`), Mailosaur invite delivery (`live-mailosaur-invite.wired.spec.ts`), external provider probes (`live-integrations.sandbox.spec.ts`) |
+| **J — Navigator memory (E17)** | Isolated `e2e-navigator` workspace + 2 service users + 2 PATs. Contract API (`navigator-memory.wired.spec.ts`), cross-user isolation (`navigator-tenancy.wired.spec.ts`), Console UI (`navigator-memory-ui.wired.spec.ts`), LLM-burning SSE ring gated behind `E2E_RUN_NAVIGATOR_STREAM=1` (`navigator-memory-stream.wired.spec.ts`). Provisioning: `python tools/scripts/setup_e2e_navigator_workspace.py`. Required env: `E2E_NAVIGATOR_WORKSPACE_ID`, `E2E_NAVIGATOR_PAT_PRIMARY`, `E2E_NAVIGATOR_PAT_SECONDARY`. Detail in **Navigator memory (E17)** section below |
 
 **Регистрация в Ship не автоматизируется** — нужна уже сохранённая сессия. **Установка GitHub App** — см. фазу B2 (`tests/github-app.wired.spec.ts`). Linear/Jira/Notion/Slack/etc. покрываются отдельными live probe specs, чтобы OAuth/provider flakiness не ломала основной onboarding path.
 
@@ -283,6 +284,51 @@ Native integration secrets:
 `E2E_RESET_EXTERNAL_INTEGRATIONS=1` extends `full-journey-reset.sandbox.spec.ts`
 so it removes all workspace-level integration probe rows and disables native
 installations. Keep this flag for dedicated e2e workspaces only.
+
+## Navigator memory (E17)
+
+Покрытие memory-фичи (`mem0`-бэкенд, Console `/memory`-страница, REST `/v1/workspaces/{ws}/navigator-memories`) делится на 4 спека, разнесённые по «кольцам стоимости».
+
+| Spec | Purpose | Cost gate |
+| ---- | ------- | --------- |
+| `navigator-memory.wired.spec.ts` | Контракт REST (list / delete / forget / health / project-фильтр / `untagged`) | бесплатно — seed через `_test_seed` |
+| `navigator-tenancy.wired.spec.ts` | Изоляция между пользователями в одной workspace (primary vs secondary PAT) | бесплатно |
+| `navigator-memory-ui.wired.spec.ts` | Console `/memory` страница — render, row delete (arm/confirm), bulk-forget | бесплатно (но нужен `E2E_STORAGE_STATE`) |
+| `navigator-memory-stream.wired.spec.ts` | SSE round-trip, per-message extraction, `recall`/`recall_context` тулы — **жжёт LLM-токены** | `E2E_RUN_NAVIGATOR_STREAM=1` |
+
+### Подготовка
+
+Один раз создай изолированный workspace + двух service-юзеров + два PAT'а:
+
+```bash
+PYTHONPATH=apps python tools/scripts/setup_e2e_navigator_workspace.py
+```
+
+Скрипт вытащит workspace UUID и оба `ship_pat_…` токена. Положи в `e2e/.env`:
+
+```bash
+E2E_NAVIGATOR_WORKSPACE_ID=<uuid>
+E2E_NAVIGATOR_PAT_PRIMARY=ship_pat_…
+E2E_NAVIGATOR_PAT_SECONDARY=ship_pat_…
+```
+
+Слаг этого workspace начинается с `e2e-` — это гейт для **sandbox seed**-эндпоинта `POST /v1/workspaces/{ws}/navigator-memories/_test_seed`, через который тесты пишут детерминированные факты в обход LLM-extract'a. На прод workspace'ах эндпоинт отвечает 404.
+
+### Запуск
+
+```bash
+# Только контракт + tenancy + UI (бесплатно):
+cd e2e
+set -a && source .env && set +a
+npx playwright test navigator-memory navigator-tenancy navigator-memory-ui
+
+# Полное покрытие, включая LLM-ring (платно):
+E2E_RUN_NAVIGATOR_STREAM=1 npx playwright test navigator-memory
+```
+
+### Чем покрыты milestones (M1–M19)
+
+`navigator-memory.wired.spec.ts` — M1 (seed→list), M2 (list shape), M3 (delete), M4 (bulk-forget window), M5 (days clamp), M14 (project filter), M17 (delete audit), M18 (`untagged` filter), M19 (health counters). `navigator-tenancy.wired.spec.ts` — M10 (cross-user list/delete/health). `navigator-memory-ui.wired.spec.ts` — M11 (render), M12 (row delete UI), M13 (bulk-forget consent). `navigator-memory-stream.wired.spec.ts` — M6 (SSE), M7 (first-turn retrieval), M8 (`recall` tool), M9 (`recall_context`), M15 (extraction round-trip), M16 (audit log), M19 (live counters). M5b (30-min gap retrieval) покрыт юнитом в `apps/backend/tests/test_navigator_memory.py`.
 
 ## CI
 
