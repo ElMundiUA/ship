@@ -9,17 +9,15 @@
  * - ``MemoryRowDelete`` — per-fact delete with arm/confirm flow.
  * - ``MemoryActions`` — bulk "forget last N days" form.
  *
- * Both trigger ``router.refresh()`` on success so the
- * server-rendered list re-fetches without a full page reload.
+ * Both POST to ``/api/memory/...`` Next.js route handlers (server-side)
+ * which forward to the Ship API. We can't import the API client
+ * directly here — ``client.ts`` is ``"server-only"`` so the session
+ * token stays out of the browser bundle. After a successful mutation
+ * we call ``router.refresh()`` so the server-rendered list re-fetches.
  */
 
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-
-import {
-  bulkForgetNavigatorMemories,
-  deleteNavigatorMemory,
-} from "@/lib/api/client";
 
 
 export function MemoryActions({
@@ -39,7 +37,18 @@ export function MemoryActions({
     setError(null);
     startTransition(async () => {
       try {
-        const r = await bulkForgetNavigatorMemories(workspaceId, days);
+        const resp = await fetch("/api/memory/forget", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ workspaceId, days }),
+        });
+        if (!resp.ok) {
+          const payload = (await resp.json().catch(() => ({}))) as {
+            error?: string;
+          };
+          throw new Error(payload.error ?? `http_${resp.status}`);
+        }
+        const r = (await resp.json()) as { deleted: number };
         setConfirmed(false);
         router.refresh();
         if (r.deleted === 0) setError("Nothing to forget in that window.");
@@ -116,7 +125,12 @@ export function MemoryRowDelete({
     }
     startTransition(async () => {
       try {
-        await deleteNavigatorMemory(workspaceId, memoryId);
+        const resp = await fetch("/api/memory/delete", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ workspaceId, memoryId }),
+        });
+        if (!resp.ok) throw new Error(`http_${resp.status}`);
         router.refresh();
       } catch {
         setArmed(false);

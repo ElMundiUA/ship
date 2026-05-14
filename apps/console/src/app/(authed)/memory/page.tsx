@@ -93,8 +93,8 @@ export default async function MemoryPage({
         {items.length === 0 ? (
           <Card>
             <p className="p-4 text-sm text-muted-foreground">
-              No memories yet. Ship's Navigator extracts facts from
-              your chats automatically — keep talking and they'll
+              No memories yet. Ship&apos;s Navigator extracts facts from
+              your chats automatically — keep talking and they&apos;ll
               show up here.
             </p>
           </Card>
